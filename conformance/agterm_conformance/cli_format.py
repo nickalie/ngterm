@@ -269,6 +269,8 @@ def event(item: Mapping[str, Any]) -> str:
         return f"{clock} {kind} {name} previous={_or(payload.get('previous'), '-')}"
     if kind in ("pane.split", "pane.scratch"):
         return f"{clock} {kind} {name} {_or(payload.get('status'), '')}"
+    if kind == "pane.focused":
+        return f"{clock} {kind} {name} {_or(payload.get('pane'), '')} pane-id={_or(payload.get('paneID'), '-')}"
     if kind in ("remote.opened", "remote.closed"):
         return f"{clock} {kind} {name} host={_or(payload.get('host'), '')}"
     if kind == "app.launched":

@@ -14,6 +14,7 @@ mod navigation;
 mod outbox;
 mod overlay;
 pub mod pane;
+mod pane_focus;
 mod pane_overlay;
 mod panes;
 mod pending_close;

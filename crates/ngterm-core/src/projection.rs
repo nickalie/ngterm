@@ -313,7 +313,7 @@ fn surface_nodes(session: &Session) -> Vec<ControlSurfaceNode> {
 }
 
 /// The surface's `NGTERM_PANE_ID`, absent for an empty slot or a surface spawned without one.
-fn pane_token(slot: &SurfaceSlot) -> Option<String> {
+pub(crate) fn pane_token(slot: &SurfaceSlot) -> Option<String> {
     slot.get()
         .map(ngterm_host::Surface::pane_token)
         .filter(|token| !token.is_empty())

@@ -182,6 +182,8 @@ pub struct AppStore {
     pub(crate) ended_asks: Vec<super::ask::EndedAsk>,
     /// Remote overlays the model closed since the core last took them ([`AppStore::take_remote_overlay_closes`]).
     pub(crate) remote_overlay_closes: Vec<super::remote_overlay::RemoteOverlayClose>,
+    /// The selected pane identities `pane.focused` diffs ([`AppStore::emit_pane_focus_changes`]).
+    pub(crate) pane_focus: super::pane_focus::PaneFocusTracking,
 }
 
 impl AppStore {

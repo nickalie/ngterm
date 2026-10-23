@@ -352,8 +352,7 @@ fn format_human(event: &ControlEvent, zone: Zone) -> String {
             payload.title.as_deref().unwrap_or(name),
             payload.body.as_deref().unwrap_or_default()
         ),
-        // `pane.focused` is not emitted yet; its own form comes with its emitter
-        EventKind::SessionCreated | EventKind::SessionClosed | EventKind::TreeChanged | EventKind::PaneFocused => {
+        EventKind::SessionCreated | EventKind::SessionClosed | EventKind::TreeChanged => {
             format!("{time} {kind} {name}")
         }
         EventKind::AppLaunched => format!("{time} {kind}"),
@@ -364,6 +363,11 @@ fn format_human(event: &ControlEvent, zone: Zone) -> String {
         EventKind::PaneSplit | EventKind::PaneScratch => {
             format!("{time} {kind} {name} {}", payload.status.as_deref().unwrap_or_default())
         }
+        EventKind::PaneFocused => format!(
+            "{time} {kind} {name} {} pane-id={}",
+            payload.pane.as_deref().unwrap_or_default(),
+            payload.pane_id.as_deref().unwrap_or("-")
+        ),
         EventKind::RemoteOpened | EventKind::RemoteClosed => {
             format!(
                 "{time} {kind} {name} host={}",
@@ -788,6 +792,26 @@ mod tests {
             ),
             (json!({"kind": "app.launched"}), "00:00:00 app.launched"),
         ];
+        assert_human_forms(cases);
+    }
+
+    /// Upstream's `paneFocused` lines: the pane and its token, `-` before the pane's surface exists.
+    #[test]
+    fn the_human_form_of_pane_focused_names_the_pane_and_its_token() {
+        assert_human_forms([
+            (
+                json!({"kind": "pane.focused", "payload": {"name": "api", "pane": "right", "paneID": "tok"}}),
+                "00:00:00 pane.focused api right pane-id=tok",
+            ),
+            (
+                json!({"kind": "pane.focused", "payload": {"name": "api", "pane": "left"}}),
+                "00:00:00 pane.focused api left pane-id=-",
+            ),
+        ]);
+    }
+
+    /// Each event's human line at UTC is `expected`, and its JSON line one line that decodes back to it.
+    fn assert_human_forms<const N: usize>(cases: [(serde_json::Value, &str); N]) {
         for (seq, (fields, expected)) in (1..).zip(cases) {
             let event = wire_event(seq, fields);
             assert_eq!(format_human(&event, Zone::Offset(0)), expected, "{event:?}");

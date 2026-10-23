@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::commands;
 use crate::error::ControlError;
-use crate::events::{ControlEvents, EventRing, ReadOptions, TreeChangedTimer};
+use crate::events::{ControlEvents, EventRing, PaneFocusTimer, ReadOptions, TreeChangedTimer};
 use crate::model::PendingCloseTimer;
 use crate::model::{AppStore, WindowLibrary};
 use crate::persist::{AppSettings, DebouncedSave, LibraryPersistence};
@@ -54,6 +54,9 @@ pub struct CommitTimers {
     /// The windows' debounced `tree.changed`, for [`Core::fire_tree_changed`] after
     /// [`TREE_CHANGED_DEBOUNCE`](crate::events::TREE_CHANGED_DEBOUNCE).
     pub tree_changed: Vec<TreeChangedTimer>,
+    /// The windows whose split-pane selection moved, for [`Core::fire_pane_focus`] after
+    /// [`PANE_FOCUS_DEBOUNCE`](crate::events::PANE_FOCUS_DEBOUNCE).
+    pub pane_focused: Vec<PaneFocusTimer>,
 }
 
 /// The next step of a command that waits on the frontend: run on the main loop once its delay passed.
@@ -565,6 +568,7 @@ impl Core {
         self.sync_modals();
         self.sync_pages();
         self.settle_palette();
+        let pane_focused = self.observe_pane_focus();
         let (events, debounced, pending_closes, finalized) = if let Some(persistence) = self.persistence.as_mut() {
             let commit = persistence.commit(&mut self.library);
             (
@@ -591,6 +595,47 @@ impl Core {
             debounced,
             pending_closes,
             tree_changed,
+            pane_focused,
+        }
+    }
+
+    /// Re-arms the `pane.focused` debounce of every window whose selected split panes moved since the last commit
+    /// (upstream's store observer over `selectedPaneIdentities`).
+    fn observe_pane_focus(&mut self) -> Vec<PaneFocusTimer> {
+        let moved: Vec<Uuid> = self
+            .library
+            .open_ids()
+            .into_iter()
+            .filter(|window| {
+                self.library
+                    .store_mut(*window)
+                    .is_some_and(crate::model::AppStore::observe_pane_focus)
+            })
+            .collect();
+        moved
+            .into_iter()
+            .map(|window| self.events.arm_pane_focus(window))
+            .collect()
+    }
+
+    /// A window's `pane.focused` debounce elapsed: unless a later move re-armed it, emit one event per session whose
+    /// selected pane settled elsewhere (upstream's `emitPaneFocusChanges`). The caller commits afterwards, as after any
+    /// mutation.
+    pub fn fire_pane_focus(&mut self, timer: PaneFocusTimer) {
+        if self.events.take_pane_focus(timer)
+            && let Some(store) = self.library.store_mut(timer.window)
+        {
+            store.emit_pane_focus_changes();
+        }
+    }
+
+    /// Fires every pending `pane.focused` debounce now, in the order they were armed (upstream's
+    /// `paneFocusDebouncer.flush()`, a test seam). Commit afterwards.
+    pub fn flush_pane_focus(&mut self) {
+        for window in self.events.drain_pane_focus() {
+            if let Some(store) = self.library.store_mut(window) {
+                store.emit_pane_focus_changes();
+            }
         }
     }
 

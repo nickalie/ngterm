@@ -176,14 +176,20 @@ def _events(ctl, cursor, last):
     "event:pane.scratch",
     "event:notify",
     "event:session.closed",
+    "event:pane.focused",
 )
 def test_events_print_every_event_with_its_arguments(cli, ctl):
     cursor = ctl.events_baseline()
     with cli.spawn("events", "--run", cursor.run, "--after", str(cursor.after)) as stream:
         name = _name("events")
         sid = _new(ctl, name=name)
+        # upstream joins a new session into the pane.focused baseline only at its 100 ms debounce's check: a split
+        # before it would go unreported there
+        ctl.wait_pane_focus_settled()
         assert_ok(ctl.request("session.status", sid, status="active", blink=True, color="#ff8800", pane="left"))
         assert_ok(ctl.request("session.split", sid, mode="on"))
+        # the selection settles over 100 ms: wait for it, so the close cannot overtake it
+        ctl.wait_event(cursor, "pane.focused", {"session": sid, "payload": {"pane": "right"}})
         assert_ok(ctl.request("session.scratch", sid, mode="on"))
         assert_ok(ctl.request("notify", sid, body="cli body", title="cli title"))
         assert_ok(ctl.request("session.close", sid))
@@ -192,7 +198,12 @@ def test_events_print_every_event_with_its_arguments(cli, ctl):
         printed = [stream.line() for _ in expected]
     assert printed == [cli_format.event(item) for item in expected]
     lines = "\n".join(printed) + "\n"
-    shown = (f"pane.split {name} shown\n", f"pane.scratch {name} shown\n", "cli title: cli body\n")
+    shown = (
+        f"pane.split {name} shown\n",
+        f"pane.focused {name} right pane-id=",
+        f"pane.scratch {name} shown\n",
+        "cli title: cli body\n",
+    )
     for argument in ("previous=idle", "pane=left", "blink", "color=#ff8800", *shown):
         assert argument in lines, argument
 

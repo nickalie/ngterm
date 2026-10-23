@@ -94,6 +94,12 @@ fn a_commit_arms_its_saves_grace_timers_and_tree_changed_with_their_delays() {
     let mut timers = core.commit();
     assert_eq!(timers.debounced.len(), 1, "a selection saves debounced");
     timers.tree_changed = structural.tree_changed;
+    core.library_mut()
+        .store_mut(window)
+        .unwrap()
+        .set_split_visibility(first, true, None);
+    timers.pane_focused = core.commit().pane_focused;
+    assert_eq!(timers.pane_focused.len(), 1, "a new split moves the selected pane");
     let timer = PendingCloseTimer {
         window,
         record: Uuid::new_v4(),
@@ -106,6 +112,7 @@ fn a_commit_arms_its_saves_grace_timers_and_tree_changed_with_their_delays() {
         save: |seen: &mut Vec<String>, save| seen.push(format!("save {}", save.window)),
         finalize: |seen: &mut Vec<String>, timer| seen.push(format!("finalize {}", timer.record)),
         tree_changed: |seen: &mut Vec<String>, timer| seen.push(format!("tree {}", timer.window)),
+        pane_focused: |seen: &mut Vec<String>, timer| seen.push(format!("pane {}", timer.window)),
     };
     arm_commit(&main_loop, &timers, &handlers);
     let mut seen = Vec::new();
@@ -122,7 +129,8 @@ fn a_commit_arms_its_saves_grace_timers_and_tree_changed_with_their_delays() {
         [
             Some(SAVE_DEBOUNCE),
             Some(Duration::from_secs(3)),
-            Some(TREE_CHANGED_DEBOUNCE)
+            Some(TREE_CHANGED_DEBOUNCE),
+            Some(PANE_FOCUS_DEBOUNCE)
         ]
     );
     assert_eq!(
@@ -130,8 +138,47 @@ fn a_commit_arms_its_saves_grace_timers_and_tree_changed_with_their_delays() {
         [
             format!("save {window}"),
             format!("finalize {}", timer.record),
-            format!("tree {window}")
+            format!("tree {window}"),
+            format!("pane {window}")
         ]
+    );
+}
+
+#[test]
+fn a_settled_split_pane_selection_lands_pane_focused_when_its_timer_fires() {
+    let (mut state, window, session) = state_with_terminal();
+    let (main_loop, _held) = record(&mut state);
+    state.settle();
+    // the window's sessions are new to its pane.focused baseline until its debounce checks them
+    for (_, task) in main_loop.take() {
+        task(&mut state);
+    }
+    let _ = main_loop.take();
+    let tail = state.core.events().ring().current_sequence();
+
+    let store = state.core.library_mut().store_mut(window).unwrap();
+    store.set_split_visibility(session, true, None);
+    state.settle();
+    let posted = main_loop.take();
+    assert_eq!(posted.len(), 1, "one debounce for the window");
+    for (delay, task) in posted {
+        assert_eq!(delay, Some(PANE_FOCUS_DEBOUNCE));
+        task(&mut state);
+    }
+    let options = ReadOptions {
+        cursor: Some(EventCursor {
+            run: state.core.events().ring().run(),
+            after: tail,
+        }),
+        kinds: Some([EventKind::PaneFocused].into()),
+        ..ReadOptions::default()
+    };
+    let batch = state.core.events().read(&options).unwrap();
+    assert_eq!(batch.items.len(), 1);
+    assert_eq!(batch.items[0].payload.pane.as_deref(), Some("right"));
+    assert_eq!(
+        batch.items[0].session,
+        Some(ngterm_core::pane_env::uuid_string(session))
     );
 }
 
@@ -150,7 +197,11 @@ fn settle_sequences_events_and_lands_tree_changed_when_its_timer_fires() {
     let ring = state.core.events().ring();
     assert_eq!(ring.current_sequence(), tail + 2, "created and selected, at once");
     let posted = main_loop.take();
-    assert_eq!(posted.len(), 1);
+    assert_eq!(
+        posted.len(),
+        2,
+        "the tree.changed debounce, and the pane.focused check settling the new session"
+    );
     for (delay, task) in posted {
         assert_eq!(delay, Some(TREE_CHANGED_DEBOUNCE));
         task(&mut state);

@@ -647,6 +647,9 @@ class Ctl:
     ) -> dict[str, Any]:
         return wait.wait_event(self, cursor, kind, match, timeout)
 
+    def wait_pane_focus_settled(self, timeout: float = wait.DEFAULT_TIMEOUT) -> int:
+        return wait.wait_pane_focus_settled(self, timeout)
+
 
 @dataclass(frozen=True)
 class CliResult:

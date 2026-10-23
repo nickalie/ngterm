@@ -17,12 +17,15 @@ from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
 from agterm_conformance.client import Response
-from agterm_conformance.match import assert_subset, find_session
+from agterm_conformance.match import assert_ok, assert_subset, find_session
 
 DEFAULT_TIMEOUT = 10.0
 POLL_INTERVAL = 0.05
 # A cursor page bound; `events.read` accepts 1...1000.
 PAGE_LIMIT = 1000
+# How long one flip of `wait_pane_focus_settled`'s probe waits to be reported: past `pane.focused`'s 100 ms debounce,
+# with room for a busy main loop. A miss costs only the next flip, never the wait.
+PANE_FOCUS_FLIP_WAIT = 1.0
 _SHOWN_CHARS = 2000
 _SHOWN_EVENTS = 5
 T = TypeVar("T")
@@ -241,6 +244,38 @@ def wait_event(
             wanted = f" matching {_describe(match)}" if match is not None else ""
             raise WaitTimeout(f"no {kind} event{wanted} within {timeout}s after seq {cursor.after}; saw {seen}")
         _pause(POLL_INTERVAL)
+
+
+def wait_pane_focus_settled(client: Requester, timeout: float = DEFAULT_TIMEOUT) -> int:
+    """Wait until the frontmost window's `pane.focused` debounce has checked every session it holds now, and return
+    the sequence of the event that shows it.
+
+    Upstream's store joins a session into its selection baseline only at that debounce's check, which reports
+    nothing, so a split right after `session.new` goes unreported there. This opens a probe session after the
+    caller's, splits it and flips its selection until a flip is reported: the probe was in the baseline by then, so
+    an earlier check held every session created before it, and the reporting check reported each earlier move. The
+    probe is closed again, which reports no selection.
+    """
+    probe = assert_ok(client.request("session.new"))["id"]
+    try:
+        assert_ok(client.request("session.split", probe, mode="on"))
+        wait_mounted(client, probe, "left", "right", timeout=timeout)
+        deadline = time.monotonic() + timeout
+        pane = "left"
+        while True:
+            cursor = events_baseline(client)
+            assert_ok(client.request("session.focus", probe, pane=pane))
+            wanted = {"session": probe, "payload": {"pane": pane}}
+            try:
+                return int(wait_event(client, cursor, "pane.focused", wanted, PANE_FOCUS_FLIP_WAIT)["seq"])
+            except WaitTimeout as missed:
+                if time.monotonic() >= deadline:
+                    raise WaitTimeout(
+                        f"no flip of probe session {probe} reported as pane.focused within {timeout}s"
+                    ) from missed
+            pane = "right" if pane == "left" else "left"
+    finally:
+        assert_ok(client.request("session.close", probe))
 
 
 def _batch(response: Response, context: str) -> dict[str, Any]:

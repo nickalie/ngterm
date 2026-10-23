@@ -72,7 +72,7 @@ pub struct EventPayload {
     /// `status`: the new status; `pane.split`/`pane.scratch`: `shown` or `hidden`.
     #[serde(default)]
     pub status: Option<String>,
-    /// `status`: the pane that set it.
+    /// `status`: the pane that set it; `pane.focused`: the selected split pane, `left` or `right`.
     #[serde(default)]
     pub pane: Option<String>,
     /// `status`: whether the glyph blinks.
@@ -97,6 +97,10 @@ pub struct EventPayload {
     /// `remote.opened`/`remote.closed`: the ssh destination.
     #[serde(default)]
     pub host: Option<String>,
+    /// `pane.focused`: the selected pane's surface token, the value `tree` reports as `surfaces[].paneID`; absent
+    /// while that pane's surface does not exist yet.
+    #[serde(default, rename = "paneID")]
+    pub pane_id: Option<String>,
 }
 
 /// One immutable ring entry (upstream's `ControlEvent`). The identities are upper-case UUIDs, absent when the event
@@ -218,6 +222,31 @@ mod tests {
         };
         let text = serde_json::to_string(&event).unwrap();
         assert_eq!(text, r#"{"seq":12,"ts":12.5,"kind":"app.launched","payload":{}}"#);
+        assert_eq!(serde_json::from_str::<ControlEvent>(&text).unwrap(), event);
+    }
+
+    /// Upstream's `everyEventKindMatchesGoldenWireShape` `pane.focused` case: the selected pane and its token.
+    #[test]
+    fn pane_focused_carries_the_pane_and_its_token_as_pane_id() {
+        let event = ControlEvent {
+            seq: 13,
+            ts: 13.5,
+            kind: EventKind::PaneFocused,
+            window: Some("win".to_owned()),
+            workspace: Some("work".to_owned()),
+            session: Some("sess".to_owned()),
+            payload: EventPayload {
+                name: Some("api".to_owned()),
+                pane: Some("right".to_owned()),
+                pane_id: Some("tok".to_owned()),
+                ..EventPayload::default()
+            },
+        };
+        let text = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            text,
+            r#"{"seq":13,"ts":13.5,"kind":"pane.focused","window":"win","workspace":"work","session":"sess","payload":{"name":"api","pane":"right","paneID":"tok"}}"#
+        );
         assert_eq!(serde_json::from_str::<ControlEvent>(&text).unwrap(), event);
     }
 

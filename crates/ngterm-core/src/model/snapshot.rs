@@ -70,8 +70,9 @@ impl AppStore {
     /// persisted ids (their terminals spawn on first display), duplicate workspace ids folded into the first, a
     /// repeated session id kept once, the sidebar width clamped, stale focus members pruned, a selection naming no
     /// session cleared, the recency order re-seeded with the selection in front, and a selection the restored focus
-    /// filter hides moved into view. A reload is not a selection, so it emits no `session.selected`, and it asks for
-    /// no save of its own: only the closing repair of a hidden selection writes.
+    /// filter hides moved into view. A reload is not a selection, so it emits no `session.selected` and settles the
+    /// selected panes without a `pane.focused`, and it asks for no save of its own: only the closing repair of a
+    /// hidden selection writes.
     pub fn restore(&mut self, snapshot: &Snapshot, launch_restore: bool) {
         self.restoring_selection = true;
         self.fresh_workspace_id = None;
@@ -101,6 +102,8 @@ impl AppStore {
         self.record_recency();
         self.reselect_if_selection_hidden();
         self.restoring_selection = false;
+        // a reload is not a pane selection either
+        self.rebaseline_pane_focus();
     }
 
     /// The persisted focus set, pruned to the restored workspaces; enabled only with a member left.

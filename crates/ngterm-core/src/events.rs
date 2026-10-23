@@ -5,7 +5,8 @@
 //! The model's stores emit drafts into their outboxes; every commit hands them here in emission order
 //! ([`ControlEvents::record`]). An event is sequenced at once, except `tree.changed`: that one coalesces per window
 //! behind a [`TREE_CHANGED_DEBOUNCE`] quiet window, re-armed by every later one, so a burst of structural changes
-//! reads as one invalidation. The ring is bounded and reads are non-destructive: each consumer keeps its own cursor
+//! reads as one invalidation. A window's split-pane selection settles the same way behind [`PANE_FOCUS_DEBOUNCE`]
+//! ([`PaneFocusTimer`]) before its `pane.focused` events are emitted. The ring is bounded and reads are non-destructive: each consumer keeps its own cursor
 //! (the run id and the last sequence it saw), and a cursor the ring can no longer serve fails loudly, carrying the
 //! ring's current anchor so the consumer can rebaseline.
 
@@ -25,6 +26,9 @@ use crate::persist::parse_uuid_string;
 pub const DEFAULT_CAPACITY: usize = 4_096;
 /// The quiet window that coalesces a window's `tree.changed` events (upstream's 0.1 s debouncer).
 pub const TREE_CHANGED_DEBOUNCE: Duration = Duration::from_millis(100);
+/// The quiet window a window's split-pane selection settles over before `pane.focused` reports it (upstream's 0.1 s
+/// `paneFocusDebouncer`).
+pub const PANE_FOCUS_DEBOUNCE: Duration = Duration::from_millis(100);
 /// The page size of a read that names none.
 pub const DEFAULT_LIMIT: usize = 100;
 /// The largest page a read may ask for.
@@ -315,12 +319,22 @@ pub struct TreeChangedTimer {
     token: u64,
 }
 
+/// A window's debounced `pane.focused` check, armed on the main loop for [`PANE_FOCUS_DEBOUNCE`]; stale once a later
+/// selection move of the window re-armed the debounce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneFocusTimer {
+    pub window: Uuid,
+    token: u64,
+}
+
 /// The ring with its sink: what the model's commits feed, and what `events.read` reads.
 #[derive(Debug, Default)]
 pub struct ControlEvents {
     ring: EventRing,
     /// The live debounce of each window with a `tree.changed` pending, by token.
     pending_tree_changed: HashMap<Uuid, u64>,
+    /// The live debounce of each window with a split-pane selection move pending, by token.
+    pending_pane_focus: HashMap<Uuid, u64>,
     next_token: u64,
     /// The events sequenced since the last [`ControlEvents::take_appended`], in order: what the ring's post-append
     /// observers (the hooks) still have to see (upstream's `WindowLibrary.onControlEvent`).
@@ -336,6 +350,7 @@ impl ControlEvents {
         Self {
             ring,
             pending_tree_changed: HashMap::new(),
+            pending_pane_focus: HashMap::new(),
             next_token: 0,
             appended: Vec::new(),
             app_launch_settled: false,
@@ -399,6 +414,38 @@ impl ControlEvents {
             let event = self.ring.append(tree_changed(window));
             self.appended.push(event);
         }
+    }
+
+    /// (Re)arms window `window`'s `pane.focused` debounce: an earlier timer of the window turns stale.
+    pub fn arm_pane_focus(&mut self, window: Uuid) -> PaneFocusTimer {
+        self.next_token += 1;
+        self.pending_pane_focus.insert(window, self.next_token);
+        PaneFocusTimer {
+            window,
+            token: self.next_token,
+        }
+    }
+
+    /// A `pane.focused` debounce's quiet window elapsed: whether it is still the window's live one, which it then
+    /// consumes.
+    pub fn take_pane_focus(&mut self, timer: PaneFocusTimer) -> bool {
+        if self.pending_pane_focus.get(&timer.window) != Some(&timer.token) {
+            return false;
+        }
+        self.pending_pane_focus.remove(&timer.window);
+        true
+    }
+
+    /// Consumes every pending `pane.focused` debounce, handing back their windows in the order they were armed (the
+    /// flush test seam); their armed timers turn stale.
+    pub fn drain_pane_focus(&mut self) -> Vec<Uuid> {
+        let mut pending: Vec<(u64, Uuid)> = self
+            .pending_pane_focus
+            .drain()
+            .map(|(window, token)| (token, window))
+            .collect();
+        pending.sort_unstable();
+        pending.into_iter().map(|(_, window)| window).collect()
     }
 
     /// Sequences `app.launched` on the first call of the run, and only when `ready` (upstream's

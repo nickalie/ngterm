@@ -19,6 +19,7 @@ mod moves;
 mod overlay;
 mod overlay_page;
 mod palette;
+mod pane_focus;
 mod panes;
 mod pick;
 mod quick;

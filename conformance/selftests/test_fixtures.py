@@ -17,6 +17,7 @@ from agterm_conformance.wait import (
     WaitTimeout,
     wait_event,
     wait_frame,
+    wait_pane_focus_settled,
     wait_response,
     wait_text,
     wait_until,
@@ -723,6 +724,56 @@ def test_wait_event_fails_fast_on_a_cursor_error(ctl: Ctl) -> None:
         ctl.wait_event(Cursor(run="00000000-0000-0000-0000-000000000000", after=0), "status", timeout=5)
     assert not isinstance(caught.value, WaitTimeout)
     assert time.monotonic() - started < 2
+
+
+class PaneFocusProbeApp:
+    """A window whose `pane.focused` debounce reports a probe's flips only from flip `reported_from` on, as upstream's
+    reports nothing until its check has joined the probe into the baseline."""
+
+    def __init__(self, reported_from: int | None) -> None:
+        self.reported_from = reported_from
+        self.calls: list[tuple[str, str | None, dict[str, object]]] = []
+        self.events: list[dict[str, object]] = []
+        self.flips = 0
+
+    def request(self, cmd: str, target: str | None = None, **args: object) -> Response:
+        self.calls.append((cmd, target, args))
+        result: dict[str, object] = {}
+        if cmd == "session.new":
+            result = {"id": "probe"}
+        elif cmd == "tree":
+            probe = {"id": "probe", "active": True, "realized": True, "splitFontSize": 13}
+            result = {"workspaces": [{"id": "w1", "active": True, "sessions": [probe]}]}
+        elif cmd == "session.focus":
+            self.flips += 1
+            if self.reported_from is not None and self.flips >= self.reported_from:
+                seq = 10 + len(self.events) + 1
+                payload = {"pane": args["pane"]}
+                self.events.append({"seq": seq, "kind": "pane.focused", "session": target, "payload": payload})
+        elif cmd == "events.read":
+            after = int(str(args.get("after", 10)))
+            items = [event for event in self.events if int(str(event["seq"])) > after]
+            result = {"events": {"run": "r", "next": 10 + len(self.events), "items": items}}
+        return Response(ok=True, result=result, error=None, raw={})
+
+
+def test_wait_pane_focus_settled_flips_the_probe_until_a_flip_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("agterm_conformance.wait.PANE_FOCUS_FLIP_WAIT", 0.1)
+    app = PaneFocusProbeApp(reported_from=2)
+    assert wait_pane_focus_settled(app, timeout=5) == 11
+    flips = [args["pane"] for cmd, _, args in app.calls if cmd == "session.focus"]
+    assert flips == ["left", "right"]
+    assert ("session.split", "probe", {"mode": "on"}) in app.calls
+    assert app.calls[-1] == ("session.close", "probe", {})
+
+
+def test_wait_pane_focus_settled_times_out_and_still_closes_the_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("agterm_conformance.wait.PANE_FOCUS_FLIP_WAIT", 0.05)
+    app = PaneFocusProbeApp(reported_from=None)
+    with pytest.raises(WaitTimeout, match="no flip of probe session probe reported as pane.focused within 0.3s"):
+        wait_pane_focus_settled(app, timeout=0.3)
+    assert app.flips >= 2
+    assert app.calls[-1] == ("session.close", "probe", {})
 
 
 def test_ctl_tree_returns_the_result(ctl: Ctl) -> None:

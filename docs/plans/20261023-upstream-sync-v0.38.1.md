@@ -411,23 +411,27 @@ serialized `paneID`, after `host`), `crates/ngterm-core/src/model/store.rs` (`pa
   read-back sentinel); extend `tests/cli/test_cli_output.py::test_events_print_every_event_with_its_arguments`'s
   covers with `event:pane.focused`
 
-- [ ] proto: `pane.focused` between `pane.scratch` and `remote.opened`; `paneID` payload field
-- [ ] store: `selected_pane_identities()` maps each session to `split_pane_identity.unwrap_or(pane_identity)` when
+- [x] proto: `pane.focused` between `pane.scratch` and `remote.opened`; `paneID` payload field
+- [x] store: `selected_pane_identities()` maps each session to `split_pane_identity.unwrap_or(pane_identity)` when
       `focuses_split()`, else `pane_identity`; `emit_pane_focus_changes()` emits one per session whose identity
       moved from the baseline (workspace, session, display `name`, `pane` left/right, `paneID` = that pane's surface
-      token, absent before its surface exists); a session missing from the baseline only joins it
-- [ ] the diff lives in `Core::commit`, which every `split.focused` writer passes through; it re-arms the window's
+      token, absent before its surface exists); a session missing from the baseline only joins it (in
+      `model/pane_focus.rs`, upstream's `AppStore+PaneFocus.swift`)
+- [x] the diff lives in `Core::commit`, which every `split.focused` writer passes through; it re-arms the window's
       100 ms trailing timer whenever identities moved, and the fired timer diffs against the settled baseline (a
       move and back inside 100 ms emits nothing)
-- [ ] `restore` rebaselines; a swap, a hidden split shown again, a same-value write and a window coming forward emit
+- [x] `restore` rebaselines; a swap, a hidden split shown again, a same-value write and a window coming forward emit
       nothing; a new split emits `right`; closing the selected split emits `left` with the primary token; the
       primary exiting while the survivor was selected emits nothing; while it was selected, `left` with the
       survivor's token
-- [ ] ngtermctl human `"{time} pane.focused {name} {pane} pane-id={paneID|-}"`; `cli_format.py` in the same change
-- [ ] write tests: Rust unit tests for each Swift case above; proto golden; ngterm-ctl human lines
-- [ ] write tests: the conformance tests above
-- [ ] manual check (user): green on reference-macos
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] ngtermctl human `"{time} pane.focused {name} {pane} pane-id={paneID|-}"`; `cli_format.py` in the same change
+- [x] write tests: Rust unit tests for each Swift case above; proto golden; ngterm-ctl human lines
+- [x] write tests: the conformance tests above
+- [x] manual check (user): green on reference-macos (skipped - not automatable: reference-macos runs only in CI on
+      macOS; left for the user)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per
+      the user; the coverage gate and its selftest twin fail only on the 28 keys of later tasks; the new and changed
+      suite tests ran green in a targeted `run-linux.sh -k` run)
 
 ### Task 5: `recent list|open|clear` for File ▸ Open Recent (#744)
 

@@ -267,6 +267,14 @@ def utc() -> Iterator[None]:
         ({"kind": "session.closed", "payload": {"name": ""}, "window": WID}, "01:02:03 session.closed "),
         ({"kind": "remote.opened", "payload": {}}, "01:02:03 remote.opened - host="),
         ({"kind": "app.launched", "payload": {}}, "01:02:03 app.launched"),
+        (
+            {"kind": "pane.focused", "payload": {"name": "one", "pane": "right", "paneID": "tok"}},
+            "01:02:03 pane.focused one right pane-id=tok",
+        ),
+        (
+            {"kind": "pane.focused", "payload": {"name": "one", "pane": "left"}},
+            "01:02:03 pane.focused one left pane-id=-",
+        ),
     ],
 )
 def test_event_lines_carry_every_argument(event, expected):

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use ngterm_app::remote::{InboundGate, PresentationViewer, ProcessTransport};
 use ngterm_core::app_actions::{ActionEffect, ActionOrigin, FrontendAction};
 use ngterm_core::auto_follow::AutoFollowTimer;
-use ngterm_core::events::{TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
+use ngterm_core::events::{PANE_FOCUS_DEBOUNCE, PaneFocusTimer, TREE_CHANGED_DEBOUNCE, TreeChangedTimer};
 use ngterm_core::keymap::TypingSurface;
 use ngterm_core::link_policy::{self, ClickOrigin, Route};
 use ngterm_core::model::{PendingCloseTimer, StatusKeystroke};
@@ -120,10 +120,13 @@ pub struct TimerHandlers<S> {
     pub finalize: fn(&mut S, PendingCloseTimer),
     /// A window's `tree.changed` debounce elapsed.
     pub tree_changed: fn(&mut S, TreeChangedTimer),
+    /// A window's split-pane selection settled.
+    pub pane_focused: fn(&mut S, PaneFocusTimer),
 }
 
 /// Arms what a commit leaves to the main loop: each debounced save fires after `SAVE_DEBOUNCE`, each soft close's
-/// grace timer after its grace, each window's `tree.changed` after [`TREE_CHANGED_DEBOUNCE`]. A closed loop drops
+/// grace timer after its grace, each window's `tree.changed` after [`TREE_CHANGED_DEBOUNCE`] and its `pane.focused`
+/// check after [`PANE_FOCUS_DEBOUNCE`]. A closed loop drops
 /// them: the quit path writes everything and makes every pending close final anyway, and nobody reads the ring after.
 pub fn arm_commit<S: 'static>(main_loop: &dyn MainLoop<S>, timers: &CommitTimers, handlers: &TimerHandlers<S>) {
     arm_debounced_saves(main_loop, &timers.debounced, handlers.save);
@@ -135,6 +138,10 @@ pub fn arm_commit<S: 'static>(main_loop: &dyn MainLoop<S>, timers: &CommitTimers
         let fire = handlers.tree_changed;
         let _ = main_loop.post_after(TREE_CHANGED_DEBOUNCE, Box::new(move |state: &mut S| fire(state, timer)));
     }
+    for timer in timers.pane_focused.iter().copied() {
+        let fire = handlers.pane_focused;
+        let _ = main_loop.post_after(PANE_FOCUS_DEBOUNCE, Box::new(move |state: &mut S| fire(state, timer)));
+    }
 }
 
 /// The app state's handlers of a commit's timers.
@@ -142,6 +149,7 @@ const APP_TIMERS: TimerHandlers<AppState> = TimerHandlers {
     save: fire_debounced,
     finalize: finalize_pending_close,
     tree_changed: fire_tree_changed,
+    pane_focused: fire_pane_focus,
 };
 
 /// What the tasks since the last landing left to the frontend, which needs the app context to do it.
@@ -1167,6 +1175,14 @@ fn fire_tree_changed(state: &mut AppState, timer: TreeChangedTimer) {
     if !state.quitting {
         state.core.fire_tree_changed(timer);
     }
+}
+
+fn fire_pane_focus(state: &mut AppState, timer: PaneFocusTimer) {
+    if state.quitting {
+        return;
+    }
+    state.core.fire_pane_focus(timer);
+    state.settle();
 }
 
 fn finalize_pending_close(state: &mut AppState, timer: PendingCloseTimer) {

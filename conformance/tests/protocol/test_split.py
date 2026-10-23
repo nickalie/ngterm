@@ -207,6 +207,56 @@ def test_swap_exchanges_the_panes_and_focus_follows_the_terminal(ctl):
     }
 
 
+def _pane_focus_events(ctl, cursor, sid):
+    """Session `sid`'s `pane.focused` events after `cursor`, read once the window's selection settled
+    (`wait_pane_focus_settled`), so a late one is already in."""
+    ctl.wait_pane_focus_settled()
+    batch = assert_ok(
+        ctl.request("events.read", run=cursor.run, after=str(cursor.after), kinds=["pane.focused"], limit=1000)
+    )["events"]
+    return [event for event in batch["items"] if event["session"] == sid]
+
+
+def _settled(ctl):
+    """A mounted session of its own in the window's `pane.focused` baseline: upstream joins a new session only at the
+    debounce's check, and a split before it goes unreported there."""
+    sid = _mounted(ctl)
+    ctl.wait_pane_focus_settled()
+    return sid
+
+
+@pytest.mark.covers("event:pane.focused", "session.focus", "session.split")
+def test_pane_focused_follows_the_selected_split_pane(ctl):
+    sid = _settled(ctl)
+    cursor = ctl.events_baseline()
+
+    assert_ok(ctl.request("session.split", sid, mode="on"))
+    opened = ctl.wait_event(cursor, "pane.focused", {"session": sid})
+    assert opened["payload"]["pane"] == "right"
+    assert opened["payload"]["name"] == _node(ctl, sid)["name"]
+    ctl.wait_mounted(sid, "right")
+
+    cursor = cursor.past(opened)
+    assert_ok(ctl.request("session.focus", sid, pane="left"))
+    moved = ctl.wait_event(cursor, "pane.focused", {"session": sid})
+    assert moved["payload"]["pane"] == "left"
+    assert moved["payload"]["paneID"] == _surfaces(ctl, sid)["left"]["paneID"]
+    assert _pane_focus_events(ctl, cursor, sid) == [moved], "one settled selection per move"
+
+
+@pytest.mark.covers("event:pane.focused", "session.swap")
+def test_a_swap_keeps_the_selected_pane_silent(ctl):
+    sid = _settled(ctl)
+    opening = ctl.events_baseline()
+    assert_ok(ctl.request("session.split", sid, mode="on"))
+    ctl.wait_mounted(sid, "right")
+    cursor = opening.past(ctl.wait_event(opening, "pane.focused", {"session": sid}))
+
+    assert_ok(ctl.request("session.swap", sid))
+
+    assert _pane_focus_events(ctl, cursor, sid) == []
+
+
 @pytest.mark.covers("session.swap")
 def test_swap_reaches_a_hidden_split(ctl):
     sid = _split(ctl)
