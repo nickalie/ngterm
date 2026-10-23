@@ -331,6 +331,31 @@ def test_workspace_focus_and_filter(cli, ctl):
         ctl.request("workspace.delete", wid)
 
 
+def _session_flags(ctl, wid):
+    return [node["flagged"] for node in _workspace(ctl, wid)["sessions"]]
+
+
+@pytest.mark.covers("cli:workspace flag")
+def test_workspace_flag(cli, ctl):
+    wid = assert_ok(ctl.request("workspace.new", name=_name("cli-flag")))["id"]
+    sids = [_new(ctl, workspace=wid) for _ in range(2)]
+    try:
+        assert_ok(ctl.request("session.flag", sids[0], mode="on"))
+        _ok(cli("workspace", "flag", "--target", wid), "ok\n")
+        assert _session_flags(ctl, wid) == [True, True], "toggle on a mixed workspace flags every session"
+        assert _json(cli("workspace", "flag", "toggle", "--target", wid, "--json")) == {"id": wid}
+        assert _session_flags(ctl, wid) == [False, False]
+        _ok(cli("workspace", "flag", "on", "--target", wid), "ok\n")
+        assert _session_flags(ctl, wid) == [True, True]
+        _ok(cli("workspace", "flag", "off", "--target", wid), "ok\n")
+        assert _session_flags(ctl, wid) == [False, False]
+        _usage(cli("workspace", "flag", "clear", "--target", wid), "mode must be on, off, or toggle")
+        _refused(cli("workspace", "flag", "on", "--target", UNKNOWN), f"no such workspace: {UNKNOWN}")
+    finally:
+        ctl.request("workspace.flag", wid, mode="off")
+        ctl.request("workspace.delete", wid)
+
+
 # -- sessions
 
 

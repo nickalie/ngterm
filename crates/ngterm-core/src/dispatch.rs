@@ -1039,7 +1039,6 @@ mod tests {
     fn the_v0_38_commands_not_ported_yet_are_refused_by_name() {
         use ngterm_proto::command::SessionCmd;
         for cmd in [
-            Command::Workspace(WorkspaceCmd::Flag),
             Command::Session(SessionCmd::OverlayHide),
             Command::Session(SessionCmd::OverlayShow),
             Command::Session(SessionCmd::OverlayToggle),

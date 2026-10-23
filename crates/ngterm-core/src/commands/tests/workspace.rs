@@ -359,6 +359,101 @@ fn filter_refuses_an_unknown_mode_and_needs_an_open_window() {
     );
 }
 
+// MARK: - flag
+
+impl Fixture {
+    fn flags(&self, ids: &[Uuid]) -> Vec<bool> {
+        ids.iter()
+            .map(|id| self.store().session(*id).is_some_and(|session| session.flagged))
+            .collect()
+    }
+}
+
+/// `workspaceFlagRoutesEveryModeWithTargetAndWindow` with the store's `workspaceFlagSetsEverySessionToOneValue` behind
+/// it: each mode sets every session of the target workspace to one value, `toggle` by the batch rule, and answers the
+/// workspace id; another workspace is left alone.
+#[test]
+fn flag_sets_every_session_of_the_target_workspace_to_one_value() {
+    let mut fixture = Fixture::new(0);
+    let (target, sessions) = fixture.add_workspace("target", 3);
+    let (_, others) = fixture.add_workspace("other", 1);
+    let store = fixture.store_mut().unwrap();
+    store.set_flag(true, sessions[0]);
+    store.set_flag(true, others[0]);
+    let window = wire(fixture.window)[..8].to_owned();
+    for (mode, want) in [
+        ("toggle", true),
+        ("toggle", false),
+        ("on", true),
+        ("on", true),
+        ("off", false),
+    ] {
+        let response = fixture.workspace(
+            WorkspaceCmd::Flag,
+            Some(&wire(target)),
+            args(|a| {
+                a.mode = Some(mode.into());
+                a.window = Some(window.clone());
+            }),
+        );
+        assert_eq!(
+            serde_json::to_value(&response).unwrap(),
+            json!({"ok": true, "result": {"id": wire(target)}}),
+            "{mode}"
+        );
+        assert_eq!(fixture.flags(&sessions), [want; 3], "{mode}");
+        assert_eq!(fixture.flags(&others), [true], "{mode}");
+    }
+}
+
+/// `workspaceFlagDecodesFromItsWireNameAndDispatches` and `workspaceFlagDefaultsToToggle`: the wire form decodes, and
+/// with no mode and no target it toggles the active workspace.
+#[test]
+fn flag_decodes_from_its_wire_name_and_defaults_to_toggling_the_active_workspace() {
+    let mut fixture = Fixture::new(1);
+    let sessions = fixture.sessions.clone();
+    let request: ngterm_proto::Request = serde_json::from_value(json!({
+        "cmd": "workspace.flag", "target": wire(fixture.workspace), "args": {"mode": "on"}
+    }))
+    .unwrap();
+    assert_eq!(answered_id(&fixture.core.dispatch(&request)), Some(fixture.workspace));
+    assert_eq!(fixture.flags(&sessions), [true, true]);
+    let response = fixture.workspace(WorkspaceCmd::Flag, None, Args::default());
+    assert_eq!(answered_id(&response), Some(fixture.workspace));
+    assert_eq!(fixture.flags(&sessions), [false, false]);
+}
+
+/// `workspaceFlagRejectsUnknownModeWithoutCallingActions`: the mode is checked before the target resolves.
+#[test]
+fn flag_refuses_an_unknown_mode_before_resolving_the_target() {
+    let mut fixture = Fixture::new(0);
+    let sessions = fixture.sessions.clone();
+    for target in [Some(UNKNOWN.to_owned()), Some(wire(fixture.workspace))] {
+        let response = fixture.workspace(
+            WorkspaceCmd::Flag,
+            target.as_deref(),
+            args(|a| a.mode = Some("clear".into())),
+        );
+        assert_eq!(response, failure("invalid workspace flag mode: clear"), "{target:?}");
+    }
+    assert_eq!(fixture.flags(&sessions), [false]);
+}
+
+/// An empty workspace answers its id and changes nothing.
+#[test]
+fn flag_on_an_empty_workspace_changes_nothing() {
+    let mut fixture = Fixture::new(0);
+    let (empty, _) = fixture.add_workspace("empty", 0);
+    let response = fixture.workspace(
+        WorkspaceCmd::Flag,
+        Some(&wire(empty)),
+        args(|a| a.mode = Some("on".into())),
+    );
+    assert_eq!(answered_id(&response), Some(empty));
+    assert!(!fixture.store().all_sessions_flagged(empty));
+    assert_eq!(fixture.flags(&fixture.sessions.clone()), [false]);
+}
+
 // MARK: - collapse and expand
 
 #[test]
@@ -394,6 +489,7 @@ fn an_unknown_workspace_target_is_refused_by_every_targeted_command() {
         (WorkspaceCmd::Focus, args(|a| a.mode = Some("on".into()))),
         (WorkspaceCmd::Collapse, Args::default()),
         (WorkspaceCmd::Expand, Args::default()),
+        (WorkspaceCmd::Flag, args(|a| a.mode = Some("on".into()))),
     ] {
         let response = fixture.workspace(cmd, Some(UNKNOWN), edit);
         assert_eq!(response, failure(&format!("no such workspace: {UNKNOWN}")), "{cmd:?}");

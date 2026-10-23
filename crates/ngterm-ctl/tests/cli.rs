@@ -1632,15 +1632,36 @@ OPTIONS:
 
 ";
 
+const WORKSPACE_FLAG_HELP: &str = "\
+OVERVIEW: Flag or unflag every session in a workspace (on|off|toggle).
+
+USAGE: ngtermctl workspace flag [<mode>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+
+ARGUMENTS:
+  <mode>                  Mode: on, off, or toggle (default; unflags only when
+                          every session is flagged). (default: toggle)
+
+OPTIONS:
+  --target <target>       Target session/workspace id, unique prefix, or
+                          'active'. (default: active)
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
 #[test]
 fn workspace_help_in_the_argument_parser_layout() -> TestResult {
     let dir = short_dir()?;
-    let cases: [(&[&str], &str); 5] = [
+    let cases: [(&[&str], &str); 6] = [
         (&["workspace"], WORKSPACE_HELP),
         (&["help", "workspace"], WORKSPACE_HELP),
         (&["workspace", "new", "--help"], WORKSPACE_NEW_HELP),
         (&["workspace", "focus", "--help"], WORKSPACE_FOCUS_HELP),
         (&["help", "workspace", "filter"], WORKSPACE_FILTER_HELP),
+        (&["workspace", "flag", "--help"], WORKSPACE_FLAG_HELP),
     ];
     for (args, help) in cases {
         assert_eq!(
@@ -1666,6 +1687,12 @@ fn workspace_modes_are_refused_before_connecting() -> TestResult {
             &["workspace", "filter", "show"],
             "Error: mode must be on, off, or toggle\nUsage: ngtermctl workspace filter [<mode>] [--socket <socket>] \
              [--json] [--window <window>]\n  See 'ngtermctl workspace filter --help' for more information.\n",
+        ),
+        (
+            &["workspace", "flag", "clear"],
+            "Error: mode must be on, off, or toggle\nUsage: ngtermctl workspace flag [<mode>] [--target <target>] \
+             [--socket <socket>] [--json] [--window <window>]\n  See 'ngtermctl workspace flag --help' for more \
+             information.\n",
         ),
     ] {
         assert_eq!(

@@ -524,6 +524,7 @@ impl Sidebar {
             MenuAction::FocusMembership { workspace, member } => {
                 self.act(SidebarAction::SetFocusMembership { workspace, member });
             }
+            MenuAction::ToggleWorkspaceFlags(id) => self.act(SidebarAction::ToggleWorkspaceFlags(id)),
             MenuAction::DeleteWorkspace(id) => self.delete_workspace(id, window, cx),
         }
     }

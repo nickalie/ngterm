@@ -171,12 +171,6 @@ targeted_command!(
     "Select a workspace."
 );
 targeted_command!(
-    /// `ngtermctl workspace flag`: its mode is not ported yet.
-    Flag,
-    WorkspaceCmd::Flag,
-    "Flag or unflag every session in a workspace (on|off|toggle)."
-);
-targeted_command!(
     /// `ngtermctl workspace collapse`.
     Collapse,
     WorkspaceCmd::Collapse,
@@ -320,6 +314,47 @@ impl RequestCommand for Filter {
     }
 }
 
+/// `ngtermctl workspace flag [on|off|toggle]`: flags or unflags every session of one workspace as one value. `toggle`
+/// unflags only when all are flagged and otherwise flags all, so it is not a per-session invert; the read-back is each
+/// session's `flagged` in `tree`.
+#[derive(Debug, clap::Args)]
+#[command(about = "Flag or unflag every session in a workspace (on|off|toggle).")]
+pub struct Flag {
+    #[arg(
+        default_value = "toggle",
+        help = "Mode: on, off, or toggle (default; unflags only when every session is flagged)."
+    )]
+    mode: String,
+
+    #[command(flatten)]
+    target: TargetOptions,
+
+    #[command(flatten)]
+    options: ClientOptions,
+}
+
+impl RequestCommand for Flag {
+    fn options(&self) -> &BasicOptions {
+        &self.options.basic
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if ["on", "off", "toggle"].contains(&self.mode.as_str()) {
+            Ok(())
+        } else {
+            Err("mode must be on, off, or toggle".to_owned())
+        }
+    }
+
+    fn make_request(&self) -> Request {
+        let args = Args {
+            mode: Some(self.mode.clone()),
+            ..Args::default()
+        };
+        workspace_request(WorkspaceCmd::Flag, Some(&self.target), Some(args), &self.options)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
@@ -431,6 +466,27 @@ mod tests {
         );
     }
 
+    /// `WorkspaceCommandsTests`: toggle on the active workspace by default; mode, target and window threaded through;
+    /// a bad mode refused locally.
+    #[test]
+    fn flag_defaults_to_toggling_the_active_workspace_and_refuses_an_unknown_mode_locally() {
+        assert_eq!(
+            request(&["flag"]),
+            json!({"cmd": "workspace.flag", "target": "active", "args": {"mode": "toggle"}})
+        );
+        for mode in ["on", "off", "toggle"] {
+            assert_eq!(
+                request(&["flag", mode, "--target", "9f3c", "--window", "win"]),
+                json!({"cmd": "workspace.flag", "target": "9f3c", "args": {"mode": mode, "window": "win"}}),
+                "{mode}"
+            );
+        }
+        assert_eq!(
+            outcome(&["flag", "clear"]),
+            Err("mode must be on, off, or toggle".to_owned())
+        );
+    }
+
     #[test]
     fn only_new_echoes_the_result_id() {
         for (argv, echoes) in [
@@ -442,6 +498,7 @@ mod tests {
             (&["move", "--to", "up"], false),
             (&["focus"], false),
             (&["filter"], false),
+            (&["flag"], false),
             (&["collapse"], false),
             (&["expand"], false),
         ] {

@@ -20,6 +20,7 @@ use super::recency::RecencyStack;
 use super::recent_closed::{ClosedSessionPlace, RecentClosedList};
 use super::session::{AgentIndicator, AgentStatus, Session, SessionSeed};
 use super::workspace::{ReorderDirection, SidebarMode, Workspace};
+use crate::commands::ToggleMode;
 use crate::pane_env::uuid_string;
 use crate::persist::settings::FlaggedViewLayout;
 
@@ -1121,6 +1122,27 @@ impl AppStore {
             self.reselect_if_selection_hidden();
             self.save();
         }
+    }
+
+    /// Whether every session of workspace `id` is flagged; false for an empty or unknown workspace (upstream's
+    /// `allSessionsFlagged(inWorkspace:)`). The one predicate behind the workspace row menu's Flag All Sessions /
+    /// Unflag All Sessions label and `workspace.flag toggle`.
+    #[must_use]
+    pub fn all_sessions_flagged(&self, id: Uuid) -> bool {
+        self.workspace(id).is_some_and(|workspace| {
+            !workspace.sessions.is_empty() && workspace.sessions.iter().all(|session| session.flagged)
+        })
+    }
+
+    /// Applies one `workspace.flag` mode to every session of workspace `id`, the ones the flagged view hides included
+    /// (upstream's `applyWorkspaceFlag`). `toggle` keys on [`Self::all_sessions_flagged`], the batch rule: it unflags
+    /// all only when all are flagged and otherwise flags all, so a mixed workspace converges instead of inverting per
+    /// session. An unknown workspace is a no-op; an unflag moves the selection as [`Self::set_flags`] does.
+    pub(crate) fn apply_workspace_flag(&mut self, mode: ToggleMode, id: Uuid) {
+        let Some(workspace) = self.workspace(id) else { return };
+        let ids: Vec<Uuid> = workspace.sessions.iter().map(Session::id).collect();
+        let on = mode.desired_value(self.all_sessions_flagged(id));
+        self.set_flags(on, &ids);
     }
 
     /// Unflags every session in one write. Clearing every flag leaves the flagged view empty, so there is nowhere to

@@ -363,6 +363,53 @@ def test_filter_rejects_an_unknown_mode(ctl):
     assert_error(ctl.request("workspace.filter", mode="show"), "invalid workspace filter mode: show")
 
 
+def _flags(ctl, wid):
+    return [node["flagged"] for node in _node(ctl.tree(), wid)["sessions"]]
+
+
+@pytest.mark.covers("workspace.flag", "field:tree.session.flagged")
+def test_flag_sets_every_session_to_one_value(ctl):
+    wid, sids = _new_workspace(ctl, sessions=3)
+    other, (stranger,) = _new_workspace(ctl, sessions=1)
+    try:
+        assert_ok(ctl.request("session.flag", sids[0], mode="on"))
+        assert_ok(ctl.request("session.flag", stranger, mode="on"))
+        # `toggle` keys on every session being flagged: a mixed workspace ends up all flagged, not inverted.
+        for mode, flagged in [("toggle", True), (None, False), ("on", True), ("on", True), ("off", False)]:
+            args = {} if mode is None else {"mode": mode}
+            assert assert_ok(ctl.request("workspace.flag", wid, **args)) == {"id": wid}, mode
+            assert _flags(ctl, wid) == [flagged] * len(sids), mode
+            assert _flags(ctl, other) == [True], "another workspace's sessions are not touched"
+    finally:
+        ctl.request("workspace.flag", wid, mode="off")
+        ctl.request("workspace.flag", other, mode="off")
+
+
+@pytest.mark.covers("workspace.flag", "sidebar.mode")
+def test_flag_covers_the_sessions_the_flagged_view_hides(ctl):
+    top = ctl.tree()["tree"]
+    wid, sids = _new_workspace(ctl, sessions=2)
+    try:
+        assert_ok(ctl.request("session.flag", sids[0], mode="on"))
+        assert_ok(ctl.request("sidebar.mode", mode="flagged"))
+        assert_ok(ctl.request("sidebar.flagged-layout", mode="tree"))
+        assert assert_ok(ctl.request("workspace.flag", wid, mode="toggle")) == {"id": wid}
+        assert _flags(ctl, wid) == [True, True], "the session the flagged view hid is flagged too"
+        assert_ok(ctl.request("workspace.flag", wid, mode="toggle"))
+        assert _flags(ctl, wid) == [False, False]
+    finally:
+        ctl.request("workspace.flag", wid, mode="off")
+        ctl.request("sidebar.mode", mode=top["sidebarMode"])
+        ctl.request("sidebar.flagged-layout", mode=top["sidebarFlaggedLayout"])
+
+
+@pytest.mark.covers("workspace.flag")
+def test_flag_rejects_an_unknown_mode(ctl):
+    wid, sids = _new_workspace(ctl, sessions=1)
+    assert_error(ctl.request("workspace.flag", wid, mode="clear"), "invalid workspace flag mode: clear")
+    assert _flags(ctl, wid) == [False] * len(sids)
+
+
 @pytest.mark.covers("workspace.collapse", "workspace.expand", "field:tree.workspace.collapsed")
 def test_collapse_and_expand(ctl):
     wid, _ = _new_workspace(ctl, sessions=1)
@@ -388,6 +435,7 @@ def test_collapse_and_expand(ctl):
     "workspace.focus",
     "workspace.collapse",
     "workspace.expand",
+    "workspace.flag",
 )
 @pytest.mark.parametrize(
     ("cmd", "args"),
@@ -399,6 +447,7 @@ def test_collapse_and_expand(ctl):
         ("workspace.focus", {"mode": "on"}),
         ("workspace.collapse", {}),
         ("workspace.expand", {}),
+        ("workspace.flag", {"mode": "on"}),
     ],
 )
 def test_unknown_workspace_target(ctl, cmd, args):

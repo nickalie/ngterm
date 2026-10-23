@@ -1,10 +1,11 @@
-//! `workspace.*`: `new`, `select`, `go`, `rename`, `delete`, `move`, `focus`, `filter`, `collapse` and `expand`.
+//! `workspace.*`: `new`, `select`, `go`, `rename`, `delete`, `move`, `focus`, `filter`, `flag`, `collapse` and
+//! `expand`.
 //! Validation and its messages follow `dispatchWorkspaceCommand` in upstream's `ControlDispatcher.swift`; the effects
 //! follow `agterm/Control/ControlServer+WorkspaceCommands.swift` over the store's `AppStore.swift` and
-//! `AppStore+Focus.swift` mutators.
+//! `AppStore+Focus.swift` mutators, and `flag` over `AppStore+SessionState.swift`'s `applyWorkspaceFlag`.
 
 use ngterm_proto::command::WorkspaceCmd;
-use ngterm_proto::{Args, Command, ControlResult, Request};
+use ngterm_proto::{Args, ControlResult, Request};
 
 use super::{ToggleMode, args_of, in_placement_store, with_id, workspace_store};
 use crate::Core;
@@ -31,7 +32,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: WorkspaceCmd, request: &Request) ->
         WorkspaceCmd::Focus => WorkspaceAction::focus(args)?,
         WorkspaceCmd::Collapse => WorkspaceAction::Expand(false),
         WorkspaceCmd::Expand => WorkspaceAction::Expand(true),
-        WorkspaceCmd::Flag => return Err(ControlError::NotSupported(Command::Workspace(cmd))),
+        WorkspaceCmd::Flag => WorkspaceAction::flag(args)?,
     };
     apply(core, action, request.target.as_deref(), args.window.as_deref()).map(Some)
 }
@@ -46,6 +47,8 @@ enum WorkspaceAction {
     Focus(FocusMode),
     /// `collapse` (false) or `expand` (true).
     Expand(bool),
+    /// `flag`: every session of the workspace set to one value.
+    Flag(ToggleMode),
 }
 
 impl WorkspaceAction {
@@ -76,6 +79,16 @@ impl WorkspaceAction {
             ControlError::rejected(format!("invalid focus mode: {raw} ({})", FocusMode::valid_names_list()))
         })
     }
+
+    /// `workspace.flag`: `on`, `off` or `toggle`, `toggle` when absent.
+    fn flag(args: &Args) -> Result<Self, ControlError> {
+        ToggleMode::parse(args.mode.as_deref()).map(Self::Flag).ok_or_else(|| {
+            ControlError::rejected(format!(
+                "invalid workspace flag mode: {}",
+                args.mode.as_deref().unwrap_or("toggle")
+            ))
+        })
+    }
 }
 
 /// Resolves the workspace target (default `active`, the current workspace) and applies `action` to it.
@@ -101,6 +114,7 @@ fn apply(
         WorkspaceAction::Move(direction) => store.reorder_workspace(id, direction),
         WorkspaceAction::Focus(mode) => store.apply_focus_mode(mode, id),
         WorkspaceAction::Expand(expanded) => store.set_workspace_expanded_in_outline(id, expanded),
+        WorkspaceAction::Flag(mode) => store.apply_workspace_flag(mode, id),
     }
     Ok(with_id(id))
 }
@@ -185,6 +199,18 @@ mod tests {
         assert_eq!(
             WorkspaceAction::focus(&Args::default()),
             Ok(WorkspaceAction::Focus(FocusMode::Toggle))
+        );
+        assert_eq!(
+            WorkspaceAction::flag(&Args::default()),
+            Ok(WorkspaceAction::Flag(ToggleMode::Toggle))
+        );
+        assert_eq!(
+            WorkspaceAction::flag(&args(|a| a.mode = some("off"))),
+            Ok(WorkspaceAction::Flag(ToggleMode::Off))
+        );
+        assert_eq!(
+            WorkspaceAction::flag(&args(|a| a.mode = some("clear"))),
+            Err(ControlError::rejected("invalid workspace flag mode: clear"))
         );
         for mode in FocusMode::ALL {
             assert_eq!(

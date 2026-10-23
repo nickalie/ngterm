@@ -10,6 +10,7 @@
 use uuid::Uuid;
 
 use crate::Core;
+use crate::commands::ToggleMode;
 use crate::model::{AgentIndicator, AppStore, NewSession, NewSessionPlacement, SidebarMode};
 use crate::persist::settings::NewSessionPlacementSetting;
 
@@ -61,6 +62,9 @@ pub enum SidebarAction {
         workspace: Uuid,
         directories: Vec<String>,
     },
+    /// Workspace row menu: Flag All Sessions / Unflag All Sessions, every session of the workspace (the ones the
+    /// flagged view hides included) set to one value by `workspace.flag toggle`'s batch rule.
+    ToggleWorkspaceFlags(Uuid),
     /// Workspace row menu: Delete Workspace (confirmed by the frontend while it holds sessions).
     DeleteWorkspace(Uuid),
     /// Workspace row menu: Focus/Unfocus.
@@ -228,6 +232,15 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool) -> boo
             }
             let all_flagged = ids.iter().all(|id| store.session(*id).is_some_and(|s| s.flagged));
             store.set_flags(!all_flagged, &ids);
+        }
+        SidebarAction::ToggleWorkspaceFlags(id) => {
+            if store
+                .workspace(id)
+                .is_none_or(|workspace| workspace.sessions.is_empty())
+            {
+                return false;
+            }
+            store.apply_workspace_flag(ToggleMode::Toggle, id);
         }
         SidebarAction::ClearStatus(ids) => {
             for id in ids {
@@ -418,6 +431,26 @@ mod tests {
         f.act(SidebarAction::ToggleFlags(vec![first, second]));
         assert!(!flagged(&f, first) && !flagged(&f, second));
         assert!(!f.act(SidebarAction::ToggleFlags(vec![Uuid::new_v4()])));
+    }
+
+    /// `SidebarWorkspaceFlagTests`: the row's Flag All Sessions flags a mixed workspace whole, Unflag All Sessions
+    /// clears an all-flagged one, the flagged tree's hidden rows included, and an empty or unknown workspace is
+    /// left alone.
+    #[test]
+    fn the_workspace_row_flags_every_session_as_one_value() {
+        let mut f = fixture(AppSettings::default());
+        let [one, two] = f.workspaces;
+        let [first, ..] = f.sessions;
+        f.store_mut().set_flag(true, first);
+        f.store_mut().set_sidebar_mode(SidebarMode::Flagged);
+        let flags = |f: &Fixture| f.sessions.map(|id| f.store().session(id).unwrap().flagged);
+        assert!(f.act(SidebarAction::ToggleWorkspaceFlags(one)));
+        assert_eq!(flags(&f), [true, true, true]);
+        assert!(f.store().all_sessions_flagged(one));
+        assert!(f.act(SidebarAction::ToggleWorkspaceFlags(one)));
+        assert_eq!(flags(&f), [false, false, false]);
+        assert!(!f.act(SidebarAction::ToggleWorkspaceFlags(two)));
+        assert!(!f.act(SidebarAction::ToggleWorkspaceFlags(Uuid::new_v4())));
     }
 
     #[test]

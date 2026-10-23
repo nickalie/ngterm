@@ -117,6 +117,7 @@ fn menu_context(store: &AppStore) -> MenuContext {
             session_count: workspace.sessions.len(),
             focus_member: store.focus().ids().contains(&workspace.id()),
             sole_focus: store.is_sole_focus(workspace.id()),
+            all_flagged: store.all_sessions_flagged(workspace.id()),
         });
     }
     MenuContext {
@@ -177,6 +178,13 @@ mod tests {
         assert!(context.footer.has_flagged && !context.empty_flagged);
         assert!(context.menu.sessions[&second].flagged);
         assert_eq!(context.menu.workspaces[0].session_count, 2);
+        assert!(
+            !context.menu.workspaces[0].all_flagged,
+            "one of its two sessions is flagged"
+        );
+        store.set_flag(true, first);
+        let context = SidebarContext::take(store, &settings);
+        assert!(context.menu.workspaces[0].all_flagged);
         assert!(!context.menu.can_remove_workspace);
         assert_eq!(context.drop.locations[&second].index, 1);
         assert_eq!(context.drop.current_workspace, Some(one));

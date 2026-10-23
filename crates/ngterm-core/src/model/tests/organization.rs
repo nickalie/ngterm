@@ -15,6 +15,7 @@ use ngterm_proto::events::EventKind;
 use uuid::Uuid;
 
 use super::support::{add, add_background, ids};
+use crate::commands::ToggleMode;
 use crate::model::{
     AgentIndicator, AgentStatus, AppStore, EventPayload, ModelEvent, NewSession, NewSessionPlacement, ReorderDirection,
     SaveRequest, Session, SidebarMode, StatusPane, Workspace, WorkspaceOptions,
@@ -389,6 +390,94 @@ fn flagged_sessions_ignore_focus() {
     store.set_flag(true, b);
     store.set_focused_workspace(work); // focus is orthogonal: it must NOT shrink the flagged set
     assert_eq!(flagged_ids(&store), [a, b]);
+}
+
+// MARK: - Workspace flag (upstream's `AppStoreSessionStateTests`)
+
+/// Workspace "target" with sessions at /a, /b and /c, and workspace "other" with one session, selected last.
+fn flag_store() -> (AppStore, Uuid, [Uuid; 3], Uuid) {
+    let mut store = AppStore::new();
+    let workspace = store.add_workspace("target");
+    let sessions = ["/a", "/b", "/c"].map(|cwd| add(&mut store, workspace, cwd));
+    let other_workspace = store.add_workspace("other");
+    let other = add(&mut store, other_workspace, "/other");
+    (store, workspace, sessions, other)
+}
+
+fn flags_of(store: &AppStore, ids: &[Uuid]) -> Vec<bool> {
+    ids.iter().map(|id| store.session(*id).unwrap().flagged).collect()
+}
+
+/// `workspaceFlagSetsEverySessionToOneValue`, its seven cases.
+#[test]
+fn workspace_flag_sets_every_session_to_one_value() {
+    for (initial, mode, want) in [
+        ([false, false, false], ToggleMode::On, true),
+        ([true, false, true], ToggleMode::On, true),
+        ([true, true, true], ToggleMode::Off, false),
+        ([true, false, true], ToggleMode::Off, false),
+        ([false, false, false], ToggleMode::Toggle, true),
+        ([true, false, true], ToggleMode::Toggle, true),
+        ([true, true, true], ToggleMode::Toggle, false),
+    ] {
+        let (mut store, target, sessions, other) = flag_store();
+        for (session, flagged) in sessions.iter().zip(initial) {
+            store.set_flag(flagged, *session);
+        }
+        store.set_flag(true, other);
+
+        store.apply_workspace_flag(mode, target);
+
+        assert_eq!(flags_of(&store, &sessions), [want; 3], "{initial:?} {mode:?}");
+        assert_eq!(store.all_sessions_flagged(target), want, "{initial:?} {mode:?}");
+        assert!(
+            store.session(other).unwrap().flagged,
+            "another workspace's sessions are not touched"
+        );
+    }
+}
+
+#[test]
+fn workspace_flag_on_an_empty_or_unknown_workspace_changes_nothing() {
+    let (mut store, _, _, other) = flag_store();
+    let empty = store.add_workspace("empty");
+    store.take_outbox();
+
+    store.apply_workspace_flag(ToggleMode::On, empty);
+    store.apply_workspace_flag(ToggleMode::On, Uuid::new_v4());
+
+    assert!(!store.all_sessions_flagged(empty));
+    assert!(!store.all_sessions_flagged(Uuid::new_v4()));
+    assert!(!store.session(other).unwrap().flagged);
+    assert_eq!(
+        store.take_outbox().save,
+        SaveRequest::None,
+        "nothing changed, nothing to save"
+    );
+}
+
+#[test]
+fn workspace_flag_flags_sessions_the_flagged_view_hides() {
+    let (mut store, target, sessions, _) = flag_store();
+    store.set_flag(true, sessions[0]);
+    store.set_sidebar_mode(SidebarMode::Flagged);
+
+    store.apply_workspace_flag(ToggleMode::Toggle, target);
+
+    assert_eq!(flagged_ids(&store), sessions);
+}
+
+#[test]
+fn workspace_unflag_in_flagged_mode_reselects_a_visible_session() {
+    let (mut store, target, sessions, other) = flag_store();
+    store.apply_workspace_flag(ToggleMode::On, target);
+    store.set_flag(true, other);
+    store.select_session(Some(sessions[2]));
+    store.set_sidebar_mode(SidebarMode::Flagged);
+
+    store.apply_workspace_flag(ToggleMode::Toggle, target);
+
+    assert_eq!(store.selected_session_id(), Some(other));
 }
 
 // MARK: - Workspaces and expansion

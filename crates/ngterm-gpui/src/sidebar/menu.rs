@@ -30,6 +30,8 @@ pub struct WorkspaceFacts {
     pub focus_member: bool,
     /// The only marked workspace, with the filter applied (upstream's `isSoleFocus`).
     pub sole_focus: bool,
+    /// Every session is flagged, the ones the flagged view hides included (upstream's `allSessionsFlagged`).
+    pub all_flagged: bool,
 }
 
 /// The window as the menus and the sidebar's other handlers see it, taken on each refresh.
@@ -84,6 +86,8 @@ pub enum MenuAction {
         workspace: Uuid,
         member: bool,
     },
+    /// Flag All Sessions / Unflag All Sessions.
+    ToggleWorkspaceFlags(Uuid),
     DeleteWorkspace(Uuid),
 }
 
@@ -184,8 +188,8 @@ pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl F
     menu
 }
 
-/// A workspace row's menu: Rename, Copy Name, the session creators, the focus pair, Delete Workspace (disabled at the
-/// last workspace).
+/// A workspace row's menu: Rename, Copy Name, the session creators, the focus pair, Flag All Sessions or Unflag All
+/// Sessions (disabled for an empty workspace), Delete Workspace (disabled at the last workspace).
 #[must_use]
 pub fn workspace_menu(context: &MenuContext, id: Uuid) -> Vec<MenuEntry> {
     let facts = context.workspace(id);
@@ -194,6 +198,8 @@ pub fn workspace_menu(context: &MenuContext, id: Uuid) -> Vec<MenuEntry> {
         .filter(|name| !name.is_empty());
     let focused = facts.is_some_and(|facts| facts.sole_focus);
     let member = facts.is_some_and(|facts| facts.focus_member);
+    let all_flagged = facts.is_some_and(|facts| facts.all_flagged);
+    let has_sessions = facts.is_some_and(|facts| facts.session_count > 0);
     vec![
         MenuEntry::Item(MenuItem::new("Rename", MenuAction::Rename(id))),
         MenuEntry::Item(MenuItem::new("Copy Name", MenuAction::CopyName(name))),
@@ -211,6 +217,19 @@ pub fn workspace_menu(context: &MenuContext, id: Uuid) -> Vec<MenuEntry> {
                 member: !member,
             },
         )),
+        MenuEntry::Separator,
+        // every session of the workspace, the ones the flagged tree layout hides included
+        MenuEntry::Item(MenuItem {
+            enabled: has_sessions,
+            ..MenuItem::new(
+                if all_flagged {
+                    "Unflag All Sessions"
+                } else {
+                    "Flag All Sessions"
+                },
+                MenuAction::ToggleWorkspaceFlags(id),
+            )
+        }),
         MenuEntry::Separator,
         MenuEntry::Item(MenuItem {
             enabled: context.can_remove_workspace,
@@ -289,6 +308,7 @@ mod tests {
             session_count: count,
             focus_member: false,
             sole_focus: false,
+            all_flagged: false,
         };
         let context = MenuContext {
             selection: Vec::new(),
@@ -369,6 +389,8 @@ mod tests {
                 "Focus",
                 "Add to Focus",
                 "-",
+                "Flag All Sessions",
+                "-",
                 "Delete Workspace"
             ]
         );
@@ -379,11 +401,41 @@ mod tests {
         let menu = workspace_menu(&context, one);
         assert_eq!(
             labels(&menu)[5..],
-            ["Unfocus", "Remove from Focus", "-", "(Delete Workspace)"]
+            [
+                "Unfocus",
+                "Remove from Focus",
+                "-",
+                "Flag All Sessions",
+                "-",
+                "(Delete Workspace)"
+            ]
         );
         assert_eq!(
             menu[1],
             MenuEntry::Item(MenuItem::new("Copy Name", MenuAction::CopyName(None)))
         );
+    }
+
+    /// `SidebarWorkspaceFlagTests`: Flag All Sessions until every session is flagged, then Unflag All Sessions, both
+    /// acting on the clicked workspace; disabled for an empty workspace.
+    #[test]
+    fn a_workspace_menu_flags_or_unflags_all_its_sessions() {
+        let (mut context, [one, two], _) = context();
+        let flag_item = |context: &MenuContext, id| {
+            workspace_menu(context, id)
+                .into_iter()
+                .find_map(|entry| match entry {
+                    MenuEntry::Item(item) if item.action == MenuAction::ToggleWorkspaceFlags(id) => Some(item),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let item = flag_item(&context, one);
+        assert_eq!((item.label.as_str(), item.enabled), ("Flag All Sessions", true));
+        context.workspaces[0].all_flagged = true;
+        assert_eq!(flag_item(&context, one).label, "Unflag All Sessions");
+        context.workspaces[1].session_count = 0;
+        let item = flag_item(&context, two);
+        assert_eq!((item.label.as_str(), item.enabled), ("Flag All Sessions", false));
     }
 }
