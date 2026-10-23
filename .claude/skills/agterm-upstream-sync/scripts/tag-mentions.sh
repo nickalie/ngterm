@@ -5,8 +5,7 @@
 #
 # Classes (first matching rule wins, by path):
 #   generated  catalog.yaml, ui-ids.yaml: gen_catalog.py rewrites them; never edit by hand
-#   bump       the parity *target*: README.md, CLAUDE.md, conformance/README.md, spike-macos.yml's default tag,
-#              .revmux/profile.md's project line
+#   bump       the parity *target*: README.md, CLAUDE.md, conformance/README.md, .revmux/profile.md's project line
 #   reference  swift_macos.py's PARITY_LEVEL, the macOS reference app's level, which is the catalog's release; its
 #              mirror is the `parity_level` assert in selftests/test_impls.py::test_swift_macos_profile_follows_launch_mode.
 #              Edit both by hand (the selftest file also holds unrelated version fixtures; the script tags only
@@ -34,7 +33,7 @@ cd "$root"
 classify() {
   case "$1" in
     conformance/catalog.yaml|conformance/ui-ids.yaml) echo generated ;;
-    README.md|CLAUDE.md|conformance/README.md|.github/workflows/spike-macos.yml|.revmux/profile.md) echo bump ;;
+    README.md|CLAUDE.md|conformance/README.md|.revmux/profile.md) echo bump ;;
     conformance/agterm_conformance/impls/swift_macos.py) echo reference ;;
     build/pins.env) echo pins ;;
     crates/ngterm-app/src/integrations/mod.rs) echo resources ;;

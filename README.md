@@ -409,7 +409,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). It also runs on pushes to `ci/**`
   branches, to check a macOS or Windows form without a PR.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
-- `reference-macos.yml`, `spike-macos.yml`: the suite against upstream's macOS release.
+- `reference-macos.yml`: the suite against upstream's macOS release.
 
 ## Layout
 

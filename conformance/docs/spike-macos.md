@@ -1,26 +1,24 @@
 # Spikes on the reference
 
+Both spikes are done: `reference-macos.yml` launches the reference and drives it through the ax driver on every run,
+so their tools and the `spike-macos.yml` workflow that ran them were removed. This file is the record of what they
+found; the tools are at commit `57f0e75` (`conformance/tools/spike_a.py`, `spike_b.py`).
+
 ## Spike A: launching the reference
 
 Spike A asks one question of the reference.
 Can the harness launch an isolated instance, talk to its socket, and get a deterministic `/bin/sh` in its pane?
 
-Run it with `conformance/tools/spike_a.py`:
+It ran as `conformance/tools/spike_a.py --impl swift-macos --bin <bundle>`, over a bundle `fetch_reference.py`
+fetched. `--mechanism` chose which channel tells the instance about `/bin/sh`:
 
-```sh
-bundle=$(python conformance/tools/fetch_reference.py --tag v0.36.0 | sed -n 's/^bundle=//p')
-python conformance/tools/spike_a.py --impl swift-macos --bin "$bundle"
-```
-
-`--mechanism` chooses which channel tells the instance about `/bin/sh`:
-
-- `both` is what the adapters ship;
+- `both`, what the adapters ship;
 - `config` keeps only `command = /bin/sh` in `<state>/config/ghostty.conf`, with `SHELL` set to a decoy;
 - `env` keeps only `SHELL=/bin/sh`;
 - `none` keeps neither.
 
-The report holds the pane shell's `$0`, its `ps` comm, its parent's comm, and the shell version.
-`.github/workflows/spike-macos.yml` runs the macOS matrix.
+The report held the pane shell's `$0`, its `ps` comm, its parent's comm, and the shell version;
+`spike-macos.yml` ran the macOS matrix.
 
 ### reference-macos (confirmed 2026-10-12)
 
@@ -73,7 +71,7 @@ Upstream v0.36.0 (commit `6cef448a`) on the GitHub `macos-15` arm64 runner, not 
 ## Spike B: the ax driver on reference-macos (confirmed 2026-10-12)
 
 Spike B asks whether pyobjc's AX API can drive the reference the way the upstream XCUITests do.
-`conformance/tools/spike_b.py` runs it, the `spike-b` job of `spike-macos.yml` runs it on `macos-26`.
+`conformance/tools/spike_b.py` ran it, in the `spike-b` job of `spike-macos.yml` on `macos-26`.
 It launches the reference through `SwiftMacosAdapter` (sentinel mode) and drives it through `AxDriver`.
 
 - `add-session` is found by `AXIdentifier`.

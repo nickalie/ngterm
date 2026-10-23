@@ -164,7 +164,7 @@ because every plan task's subagent starts from this branch and must be able to r
    `unmapped` → a plan task deciding where the new resource goes. When nothing conflicted, bump the release named in
    `crates/ngterm-app/src/integrations/mod.rs`'s header.
 4. **Tag mentions**: `bash SKILL_DIR/scripts/tag-mentions.sh CURRENT TARGET --apply` rewrites the `bump` class
-   (README.md, CLAUDE.md, conformance/README.md, spike-macos.yml, .revmux/profile.md) and lists the rest with its class. Then by hand:
+   (README.md, CLAUDE.md, conformance/README.md, .revmux/profile.md) and lists the rest with its class. Then by hand:
    `reference` (swift_macos.py's `PARITY_LEVEL` with its assert in `conformance/selftests/test_impls.py`); `pins` and
    `resources` were handled above. Leave `claim` (the Rust build's `PARITY_LEVEL` and its mirrors: it states a parity
    not reached yet and unlocks `since(V)` tests, so it moves in the plan's last task) and `keep`. A `review` line has no rule: decide it, and name it in the report so the

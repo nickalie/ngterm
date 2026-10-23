@@ -219,4 +219,3 @@ that could reach it:
   the WPE crates and the app with its HTML overlays; then the staged build under the suite in the same Arch container,
   on the distribution's lavapipe, held by the ratchet, once per login shell (`conformance`, a matrix), each with
   `--must-pass live-any-shell`: bash, fish and zsh (with `--must-pass live-sessions` too).
-- `spike-macos` (`macos-26`): the launch and ax-driver spikes, when their tools change.

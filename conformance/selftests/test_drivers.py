@@ -1,4 +1,3 @@
-import importlib.util
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,14 +21,6 @@ from agterm_conformance.drivers.base import (
     parse_chord,
 )
 from upstream_adapter import UpstreamVocabularyAdapter
-
-spec = importlib.util.spec_from_file_location(
-    "spike_b", Path(__file__).resolve().parent.parent / "tools" / "spike_b.py"
-)
-assert spec is not None and spec.loader is not None
-spike = importlib.util.module_from_spec(spec)
-sys.modules["spike_b"] = spike
-spec.loader.exec_module(spike)
 
 IDS = UiIds(
     [
@@ -464,64 +455,6 @@ def test_ax_without_pyobjc_is_a_driver_error(monkeypatch: pytest.MonkeyPatch) ->
 def test_ax_refuses_an_unknown_post_mode() -> None:
     with pytest.raises(ValueError, match="post must be one of"):
         ax.AxDriver(1, IDS, post="tap")
-
-
-# -- spike B's verdict
-
-
-GOOD = {
-    "addSession": {"uiId": "add-session"},
-    "menuItemPress": 0,
-    "newSession": "s2",
-    "keystrokes": [{"landed": False}, {"landed": True}],
-}
-
-
-@pytest.mark.parametrize(
-    ("change", "ok"),
-    [
-        ({}, True),
-        ({"addSession": {"uiId": None}}, False),
-        ({"menuItemPress": -25204}, False),
-        ({"newSession": None}, False),
-        ({"keystrokes": [{"landed": False}]}, False),
-        ({"stopError": "leftover"}, False),
-    ],
-)
-def test_spike_b_passes_only_when_every_step_held(change: dict[str, Any], ok: bool) -> None:
-    assert spike.passed({**GOOD, **change}) is ok
-
-
-def test_spike_b_reports_a_socket_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    class Instance:
-        pid, version = 7, "0"
-
-        def request(self, cmd: str) -> Any:
-            raise spike.ClientError("connect failed: no such file")
-
-        def log_tail(self, lines: int) -> str:
-            return "app exited"
-
-    stopped: list[Any] = []
-
-    class Adapter:
-        def launch(self) -> Instance:
-            return Instance()
-
-        def stop(self, instance: Instance) -> None:
-            stopped.append(instance)
-
-    monkeypatch.setattr(spike, "trust", lambda: {"accessibility": True, "postEvent": True})
-    monkeypatch.setattr(spike, "AxDriver", lambda pid, timeout: None)
-    report = spike.run(Adapter(), 0.1)
-    assert report["error"] == "ClientError: connect failed: no such file"
-    assert report["logTail"] == "app exited" and len(stopped) == 1
-    assert not spike.passed(report)
-
-
-def test_spike_b_ancestry_starts_at_this_process() -> None:
-    chain = spike.ancestry()
-    assert chain and chain[0].startswith(f"{spike.os.getpid()} ")
 
 
 # -- the `ui` fixture
