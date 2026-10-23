@@ -298,14 +298,19 @@ impl LibraryPersistence {
 
     // MARK: - Saving
 
-    /// Drains the library's effects: writes the immediate saves and a changed index, and returns the events and the
-    /// debounced saves to arm.
+    /// Drains the library's effects: writes the immediate saves, a changed index and the Open Recent changes (reloading
+    /// the library's list from `recent-closed.json` after them), and returns the events and the debounced saves to arm.
     pub fn commit(&mut self, library: &mut WindowLibrary) -> Commit {
         let effects = library.drain_effects();
         for window in &effects.cancelled_saves {
             self.pending.remove(window);
         }
-        self.apply_recent_closed(&effects.recent_closed);
+        if !effects.recent_closed.is_empty() {
+            // reload as upstream's `refreshRecentClosedItems` after each `RecentClosedStore` call does, so a write that
+            // failed shows as what the file still holds rather than as the change the model made
+            self.apply_recent_closed(&effects.recent_closed);
+            library.set_recent_closed_items(self.recent_closed_store().load());
+        }
         self.remove_watermarks(&effects.removed_watermarks);
         let mut debounced = Vec::new();
         for (id, request) in effects.window_saves {

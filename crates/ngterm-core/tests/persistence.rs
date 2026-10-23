@@ -1144,6 +1144,31 @@ fn a_hard_close_is_recorded_on_disk_by_the_commit() {
 }
 
 #[test]
+fn a_menu_clear_that_cannot_be_written_keeps_the_entries_on_disk_in_the_list() {
+    let dir = state_from("upstream").unwrap();
+    let (mut persistence, mut library) = launch(dir.path());
+    let before = library.recent_closed_items();
+    assert_eq!(before.len(), 2);
+    let guard = ReadOnly::new(dir.path()).unwrap();
+
+    library.clear_recent_closed_items();
+    persistence.commit(&mut library);
+
+    assert_eq!(
+        library.recent_closed_items(),
+        before,
+        "the commit reloads what the file still holds"
+    );
+    assert_eq!(RecentClosedStore::new(dir.path()).load(), before);
+
+    drop(guard);
+    library.clear_recent_closed_items();
+    persistence.commit(&mut library);
+    assert!(library.recent_closed_items().is_empty());
+    assert!(RecentClosedStore::new(dir.path()).load().is_empty());
+}
+
+#[test]
 fn a_soft_close_keeps_the_window_file_until_undo_or_finalize() {
     let (dir, mut persistence) = fresh().unwrap();
     let mut library = persistence.bootstrap(HOME);
