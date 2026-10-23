@@ -57,7 +57,7 @@ toolkit-neutral, so another frontend can drive them.
 - Upstream is the reference for the wire protocol, command semantics, error strings, `agtermctl` behavior and output,
   on-disk formats, model, core behavior and the UI. Port from its sources and Swift unit tests (the source of exact
   strings) in `.upstream/agterm`, a read-only clone git-ignored through `.git/info/exclude`; when it is missing:
-  `git clone --depth 1 --branch v0.36.0 https://github.com/umputun/agterm .upstream/agterm`.
+  `git clone --depth 1 --branch v0.38.1 https://github.com/umputun/agterm .upstream/agterm`.
 - The terminal's reference is Ghostty at the libghostty-vt pin (`build/pins.env`), not upstream's libghostty pin:
   libghostty-vt's C API is the oracle for what the terminal does, and Ghostty's own source at that revision for what
   the library leaves to its embedder (rendering, sprites, fonts, the shell integration, config keys, the PTY

@@ -18,7 +18,7 @@ beside it (`agtermctl`, the Rust build's `ngtermctl`: the adapter's `ctl_name`).
 
 ```sh
 # upstream macOS release (a bundle or its executable); fetch_reference.py downloads and caches it by tag
-bundle=$(.venv/bin/python conformance/tools/fetch_reference.py --tag v0.36.0 | sed -n 's/^bundle=//p')
+bundle=$(.venv/bin/python conformance/tools/fetch_reference.py --tag v0.38.1 | sed -n 's/^bundle=//p')
 .venv/bin/python -m pytest conformance/tests --impl swift-macos --bin "$bundle"
 
 # the Rust build; without --bin every test skips and parity reads 0%
@@ -59,7 +59,7 @@ vocabulary) is in [docs/rust-build.md](docs/rust-build.md).
 
 ## Markers
 
-- `since("0.36.0")`: skipped as `not-yet-at-level` when the build's parity level is lower.
+- `since("0.38.1")`: skipped as `not-yet-at-level` when the build's parity level is lower.
 - `requires("capability", reason=...)`: skipped as `unsupported` when the build lacks it.
   A test that branches instead asks `adapter.has("capability")`.
   Both refuse names outside the vocabulary in `impls/base.py`.
