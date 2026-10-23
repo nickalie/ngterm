@@ -278,19 +278,21 @@ examples.md, reference.md, troubleshooting.md)
 
 **Platforms:** no OS-specific code
 
-- [ ] rebuild the copy as upstream v0.38.1's tree plus the recorded patches, in order. `0001-live-group.patch` no
+- [x] rebuild the copy as upstream v0.38.1's tree plus the recorded patches, in order. `0001-live-group.patch` no
       longer applies (`error: patch failed: SKILL.md:149`): merge by hand onto the new text, then regenerate each
       patch as `diff -u` of upstream's files and the hand-merged copy (the skill's `references/areas.md` > Vendored
       copies). New `agtermctl` calls and `zmx` names in the added text (`recent`, `session wait`, `workspace flag`,
       `session overlay hide|show|toggle`, `ask` forms, remote pages, point sizes, fish) are renamed by
       `0001`/`0002`/`0003` like the rest; links shown to users point at ngterm's own (CLAUDE.md > identity)
-- [ ] keep this build's own deviations where upstream's text is macOS-only (the keyboard chords on Linux, e.g.
+- [x] keep this build's own deviations where upstream's text is macOS-only (the keyboard chords on Linux, e.g.
       `toggle_overlay` on `ctrl+alt+shift+j` from Task 20; fish being one of several Live shells here) in
       `0004`/`0005`, not in the names patches
-- [ ] `bash .claude/skills/agterm-upstream-sync/scripts/sync-resources.sh --check v0.38.1 v0.38.1` passes
-- [ ] bump the release named in `crates/ngterm-app/src/integrations/mod.rs`'s header to v0.38.1 (the agent-status
+- [x] `bash .claude/skills/agterm-upstream-sync/scripts/sync-resources.sh --check v0.38.1 v0.38.1` passes
+- [x] bump the release named in `crates/ngterm-app/src/integrations/mod.rs`'s header to v0.38.1 (the agent-status
       copy is already at v0.38.1, `3c7e1d5`)
-- [ ] gate passes (the skill install tests in ngterm-app read the copy)
+- [x] gate passes (the skill install tests in ngterm-app read the copy; the coverage gate and its selftest twin fail
+      only on the 30 keys listed in Context; ⚠️ the unrelated WPE flake
+      `docs/backlog/the-wpe-wheel-input-test-flakes-in-the-shm-worker.md` failed `ngterm-wpe --test headless` in two of three runs)
 
 ### Task 3: Events: `app.launched` and `tree.changed` on overlay, page, HUD and remote-slot open and close (#736)
 

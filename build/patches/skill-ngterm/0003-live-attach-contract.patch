@@ -6,7 +6,7 @@ upstream's plugins/agterm/skills/agterm after every sync.
 
 --- a/reference.md
 +++ b/reference.md
-@@ -2020,7 +2020,7 @@
+@@ -2167,7 +2167,7 @@ text on the Mac showing it, and on the Mac it runs on as well.
    included. Text that starts with `-` is read as an option, and `-h` or `--help` prints help and exits 0
    with nothing copied: pipe such text on stdin, or write `ngtermctl clipboard set -- "-text"`. Refused when empty, and above about 6 MB (libghostty drops a longer clipboard write whole).
  - Needs no terminal, so an agent's shell tool can run it. It does need the pane's own environment:

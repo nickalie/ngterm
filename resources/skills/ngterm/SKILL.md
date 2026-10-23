@@ -2,22 +2,23 @@
 name: ngterm
 description: >
   Drive ngterm (upstream agterm in Rust, a GPUI terminal) via the ngtermctl CLI.
-  Use in an ngterm session when asked to control it: create, rename, close, select or
-  reorder sessions and workspaces; split panes; toggle the scratch terminal; run overlay programs
-  and read their exit status; create and show HTML pages, interactive too, URLs or dev servers in an overlay with saved logins;
-  post a HUD/caption or notification; show a picker or question dialog; show an image inline; type
+  Use in an ngterm session: create, rename, close, reopen, select or
+  reorder sessions and workspaces; split panes; toggle the scratch terminal; run, hide or show overlays;
+  read exit status; create and show HTML pages, interactive too, URLs or dev servers in an overlay with saved logins;
+  post a HUD/caption/notification; show a picker, question or input dialog; show images inline; type
   into or restart a pane by id, copy its selection, set the clipboard, search its scrollback; manage windows; set font size and
   theme; reload or edit the keymap, event hooks and ngterm-scoped ghostty config; run a custom command; read
-  a closed window's session screen; subscribe to status, notification, lifecycle, selection,
-  pane-visibility and tree-change events.
+  a closed window's session screen; subscribe to status, notify, lifecycle, selection,
+  pane, tree and launch events; wait on agent status.
   Covers window/workspace/session addressing, NGTERM_* variables,
-  attaching a session from another Mac, cookbook recipes, running version, diagnosing
-  problems and filing a bug or feature request.
+  attaching a session from another Mac, cookbook recipes, running/installed version, upgrades, diagnosing
+  problems, filing a bug or feature request.
 when_to_use: >
   Trigger on: ngterm, ngtermctl, NGTERM_SESSION_ID, and, from inside a session, plain requests such as
-  split the pane, close the overlay, show a message over the session, show a question dialog, ngtermctl ask,
+  split the pane, close the overlay, hide the overlay for a moment, show a message over the session, show a question dialog, ngtermctl ask,
+  ask the user to type a value or a message, let the user pick one or several items from a list,
   show an image inline, show this HTML page or artifact, make an HTML page or explainer for this and show
-  it, make a page that switches sessions or returns a choice, preview the report you generated, show this URL or the running dev server, keep me logged in to a page shown in an overlay, search the scrollback, run my custom command, tell me when the selected session changes, attach a session from another Mac, copy this to the clipboard, what recipes are there,
+  it, make a page that switches sessions or returns a choice, preview the report you generated, show this URL or the running dev server, keep me logged in to a page shown in an overlay, search the scrollback, flag every session in a workspace, run my custom command, tell me when the selected session changes, wait until that worker session finishes, bring back the session I just closed, attach a session from another Mac, copy this to the clipboard, was ngterm upgraded under the running app, upgrade ngterm without losing sessions, what recipes are there,
   the keymap editor will not open.
 allowed-tools: Bash(ngtermctl *)
 ---
@@ -30,7 +31,9 @@ This build is ngterm, ngterm in Rust, and its CLI is `ngtermctl`. ngterm is a na
 socket, driven by the companion CLI `ngtermctl`. Use it to build and steer terminal layouts, run
 programs in overlays, type into sessions, notify the user in the exact session you are working in,
 and subscribe to control events. Events cover status, notifications, session lifecycle, split and
-scratch pane visibility, and structural tree changes; `hooks.conf` runs a shell line on any of them. They do not stream terminal output; use `session text` to read a buffer.
+scratch pane visibility, structural tree changes (an overlay, page or HUD opening or closing included)
+and the app's launch; `hooks.conf` runs a shell line on any of them, so `on app.launched` is where a
+script recreates what a relaunch does not restore. They do not stream terminal output; use `session text` to read a buffer.
 
 ## Am I inside ngterm?
 
@@ -39,7 +42,9 @@ the control channel is available:
 
 - `NGTERM_ENABLED=1` — this shell runs inside ngterm.
 - `NGTERM_SESSION_ID` — the current session's UUID (the session this shell belongs to).
-- `NGTERM_WINDOW_ID` / `NGTERM_WORKSPACE_ID` — the owning window / workspace UUIDs.
+- `NGTERM_WINDOW_ID` / `NGTERM_WORKSPACE_ID` — the owning window / workspace UUIDs. The workspace id is
+  the one the shell started in: it is not rewritten when the session moves to another workspace, so read
+  `tree` for the current one.
 - `NGTERM_SOCKET` — the absolute path to the control socket this app bound.
 - `NGTERM_PANE` / `NGTERM_PANE_ID`: the surface's spawn role (`left`|`right`|`scratch`) and stable
   per-surface token. The role is not rewritten after promotion or swap; the token resolves the LIVE slot.
@@ -76,8 +81,8 @@ is not on PATH, the user can install it, or you invoke it by absolute path.
 - Add `--json` to any command to get the raw JSON response (machine-readable). Without it, ordinary
   mutations print `ok`, batch close/move prints the affected session count, and `tree`/`list` print a
   human listing.
-- Commands other than `events` make one request per invocation. `events` polls with a fresh connection
-  for each request. Mutating commands return the affected/new id; batch session mutations return the
+- Commands other than `events` and `session wait` make one request per invocation. Those two poll with a
+  fresh connection for each request. Mutating commands return the affected/new id; batch session mutations return the
   number actually changed. Create commands (`session new`, `session duplicate`, `workspace new`,
   `window new`) print the new id.
 
@@ -93,7 +98,9 @@ program, which is how to show the user an artifact you generated. The same sessi
 (`session hud`), a small passive panel carrying a message instead of a program. A HUD can use the
 whole session or one pane as its placement bounds. The session keeps focus and stays typable
 under it.
-One slot, so a session shows either a HUD or a program overlay, never both. Separately, the app has one
+One slot, so a session shows either a HUD or a program overlay, never both. A program or page overlay can be
+hidden without closing it (`session overlay hide|show|toggle`, ⇧⌘J for the user, `ctrl+alt+shift+j` on Linux): it keeps running and keeps
+its slot until it closes, so opening another there is refused. Separately, the app has one
 **quick terminal** (a scratch shell in a floating panel at 90% of the focused screen capped at 1100x700,
 or whatever share Settings sets instead; not part of the tree and not owned by a window).
 
@@ -150,7 +157,13 @@ you open overlays / type into whatever the user has selected, not your own sessi
 - **Fresh shells** restores the saved windows, workspaces, sessions, directories, and split layout with new shells.
 - **Re-run commands** starts each captured foreground command again. It does not reconnect to the old process.
 - **Live sessions** runs every primary and split pane through a live-session daemon and reattaches to the same process. It requires
-  zsh as the macOS login shell. Scratch, overlay, and quick terminals stay temporary.
+  zsh, fish, bash or PowerShell as the login shell. Scratch, overlay, and quick terminals stay temporary.
+
+Upgrading: with Live sessions already active, install the new version, quit ngterm and open it again. Local
+primary and split panes reattach to the same processes and no reset is needed. `ngtermctl version` adds an
+`installed:` line when the installed version or recorded commit differs from the running app. When switching
+from Fresh shells or Re-run commands to Live sessions, the current shells end at the first clean quit. The
+first Live launch starts captured foreground commands again where possible; shell state is lost.
 
 On a clean quit, ngterm leaves live daemons running and captures each open pane's foreground command as a
 fallback. A surviving daemon ignores that payload on the next launch. If an orderly machine restart removed
@@ -222,9 +235,12 @@ seen`; omitted when zero), `commandWait`/`splitCommandWait` (whether either pane
 created with `--wait` to hold open after exit, the read side of `session new --wait`; each omitted for a
 plain or non-holding pane), `overlaySizePercent` (an open overlay's floating-panel percent 1-100,
 omitted for a full-pane overlay or no overlay so gate on `overlay` first; the read side of `session
-overlay resize` for a record-then-restore zoom), `paneOverlays` (the panes covered by their own overlay —
+overlay resize` for a record-then-restore zoom of a percent-only panel), `overlayWidth`/`overlayHeight` (a floating overlay's
+content size in points as laid out, the read side of `--width`/`--height`), `paneOverlays` (the panes covered by their own overlay —
 `["left"]`, `["right"]` or `["left","right"]`, omitted when neither is; the read side of `session overlay
 open --pane`, independent of the session-wide `overlay` flag),
+`hiddenOverlays` (the hidden slots — `session`, `left`, `right` — omitted when none is hidden; the read
+side of `session overlay hide`),
 `hud` (the message panel occupying the session-wide slot — `{message, detail?, spinner, backgroundColor?,
 textColor?, sizePercent?, heightPercent?, position, pane?, hideAfter, markdown, fontSize?, sticky, frame}`, the two percents being the panel's width and height
 shares and `hideAfter` the configured auto-hide in seconds, 0 for a panel that stays — omitted when none is
@@ -232,8 +248,8 @@ up; the read side of `session hud`. `position` and `spinner`
 always report the EFFECTIVE value, `center` and a static panel's `none` included, so a caller who omitted
 them never has to know the defaults; `spinner` names the STYLE, so `none` is what a caller echoes back to
 turn one off. While a HUD is up the node's `overlay` reads `false` and `overlaySizePercent` is omitted, so a
-poll for "is a program covering this session" cannot mistake a message for one; HUD state is poll-only,
-no event announces it),
+poll for "is a program covering this session" cannot mistake a message for one; a HUD opening or closing
+emits `tree.changed`, an update emits nothing),
 `realized` (whether the session's MAIN pane has a live terminal; `false` means no shell was spawned.
 `session text` then answers `session not realized` without realizing anything; `session type` brings up a
 restored main pane still waiting its turn in a launch that replays commands, while any other unrealized
@@ -250,7 +266,8 @@ session, and never present after a relaunch because a remote session is not pers
 `presentation` (attached session only: the mirroring stream's `state` - `connecting`, `connected`,
 `unsupported`, or `failed` with `error` - not the ssh connection's - plus `mode`, `presenter` while its stream holds that role, else `mirror`),
 `presenters` (origin session: `mirrors`, the streams mirroring it without presenting, and `presenter: true`
-when one presents it) and `remoteOverlays` (origin session: overlay slots a presenting Mac holds),
+when one presents it) and `remoteOverlays` (origin session: overlay slots a presenting Mac holds, a page's
+`pageID` included; HTML pages follow the same placement, see reference.md Remote sessions),
 `hasSplit` (whether a second pane exists at all, shown or hidden; omitted when there is none — read this
 rather than `split`, which is false for a split hidden with ⌘D even though its pane is still alive),
 `splitAxis` (`vertical` for left/right or `horizontal` for top/bottom; omitted without a split),
@@ -276,7 +293,9 @@ that window, omitted when no pick is pending.
 given. Use `--json` for one bare event object per line; filter with repeatable or comma-separated
 `--kind` over `status`, `notify`, `session.created`, `session.closed`, `session.selected` (a window's
 selection moved; carries the session that lost it as `previous`), `tree.changed`, `pane.split`,
-`pane.scratch`, `remote.opened` and `remote.closed`; resume with paired `--run RUN --after SEQ`; and set
+`pane.scratch`, `pane.focused` (a session's selection moved between its two split panes; carries the
+pane and its `paneID`), `remote.opened`, `remote.closed` and `app.launched` (once per app run, when hooks and
+the socket are ready); resume with paired `--run RUN --after SEQ`; and set
 page size with `--limit 1...1000`. The app retains 4,096 events for one process run. Cursor run changes,
 expiry, and ahead-of-tail errors are fatal and are never silently rebaselined. Once the stream holds a
 cursor, a refused connection is retried with that cursor for about 30 s before the stream exits.
@@ -304,6 +323,8 @@ all with the sidebar hidden or under the flat flagged list, the ordinary tree re
 off and narrows to the members only while it is on, and the flagged tree ignores the filter — and
 `workspace filter on` with nothing marked is
 refused so the pair can never lie) ·
+`workspace flag [on|off|toggle]` (flag or unflag EVERY session of one workspace as one value; `toggle` (default)
+unflags only when all are flagged, otherwise flags all; read back from each session's `flagged`) ·
 `workspace collapse [--target W] [--window W]` · `workspace expand [--target W] [--window W]` (collapse/expand ONE workspace
 in the sidebar tree — the per-workspace pair, distinct from the all-workspace `sidebar expand`/`collapse`;
 read the open/closed state back from the tree workspace node's `collapsed` flag, `true` when collapsed and
@@ -391,10 +412,11 @@ omitted when expanded).
   them. Focus follows the terminal; axis and divider ratio stay fixed. Works on shown or hidden splits and
   under zoom/dashboard; errors when there is no split or either surface is not ready. Read the new primary
   from `tree`'s `cwd`/`title`/`foreground` and the other side from `splitCwd`/`splitForeground`.
-- `session scratch [on|off|toggle] [--command CMD]` — full-coverage third shell (hide keeps it alive; `exit`
+- `session scratch [on|off|toggle] [--command CMD] [--follow]` — full-coverage third shell (hide keeps it alive; `exit`
   recreates). `--command` (when showing) runs a program instead of a shell, run-once like `session new
   --command` (respawns the scratch if one is open). Target your own session with
-  `--target "$NGTERM_SESSION_ID"` (see Addressing).
+  `--target "$NGTERM_SESSION_ID"` (see Addressing); it opens there without switching the window to it
+  unless you pass `--follow`.
 - `session focus [primary|split|left|right|top|bottom|other]` - move focus between split panes. Role and position
   aliases select the same two live terminals; readback remains `left`/`right`.
 - `session resize --split-ratio R | --grow-left D | --grow-right D | --grow-primary D | --grow-split D | --grow-top D | --grow-bottom D` - move the split divider (the GUI only drags
@@ -404,7 +426,11 @@ omitted when expanded).
   0.05..0.95). The grow options are
   aliases for growing the primary or split pane. Prints the applied fraction.
 - `session status <idle|active|completed|blocked> [--blink] [--auto-reset] [--sound NAME] [--color #rrggbb] [--shape SHAPE] [--pane left|right|scratch] [--pane-id TOKEN]` — set the sidebar agent glyph (`--sound default` or a system sound name plays a one-shot sound; `--color` tints the glyph for this call only, reverting on the next status set without it; `--shape` (`circle`, `square`, `triangle`, `diamond`, `capsule`, `star`) picks its silhouette for this call only and reverts the same way, read back as the tree `statusShape` field; `--pane` records which pane set it — `left`=main, `right`=split, `scratch` — so foreground typing in another pane won't clear it, and while the session is `blocked` a status from another pane that is not itself `blocked` is refused with `blocked status owned by pane <pane>` so one pane's agent cannot erase the other's request for input, `idle` included since the bundled hooks emit it unprompted; any user-initiated GUI selection (auto-follow, attention-nav ⌃⌥↑/↓, plain session nav, the command palettes, a Dock-menu session, a sidebar row click) reveals that pane when the status needs attention (`blocked`/`completed`); `active` preserves the existing pane selection; the pane reads back as the tree `statusPane` field; the socket `session go next-attention` only steps the selection, it does not itself reveal the pane; `--pane-id` is the hook-forwarded stable surface token (`$NGTERM_PANE_ID`) that resolves the pane's live slot and overrides a stale `--pane` after a promote + re-split — scripts set `--pane` directly and leave `--pane-id` to the hook).
-- `session flag [on|off|toggle|clear]` — flag a session for the flagged working-set view (`clear` unflags all).
+- `session wait --until STATUS [--until STATUS ...] [--timeout SECONDS]` — block until the session's agent
+  status is one of the values, returning at once when it already is. Exit 0 and print the status on a match,
+  2 when the session closes, 124 on timeout, 1 on failure. Use it to wait for a worker started with
+  `session new --command`; in a reused session wait for `active` first. Details in reference.md.
+- `session flag [on|off|toggle|clear]` — flag a session for the flagged working-set view (`clear` unflags all; `workspace flag` covers one whole workspace).
 - `session context <TEXT|--clear> [--target] [--window W]` — set what the session is ABOUT, shown in the
   title bar: a PR number, an issue, the task in hand. Use it when you
   start work a session's name cannot describe. Exactly one of TEXT or `--clear`; a blank TEXT is an error,
@@ -441,9 +467,10 @@ omitted when expanded).
   and `clear --pane` returns the pane to the default. `--opacity` 0.0–1.0. (An image/text watermark
   renders the pane opaque, overriding window translucency, so it shows; a `color` takes no opacity and
   honors the Settings window translucency instead.)
-- `session overlay open (<command> [--cwd DIR] [--wait] [--block] | --html FILE [--cwd DIR] [--navigation | --chromeless] [--js] [--block] | --url URL [--navigation] [--js]) [--size-percent N] [--background-color #rrggbb] [--follow] [--pane left|right]` ·
-  `session overlay resize (--size-percent N | --full)` ·
+- `session overlay open (<command> [--cwd DIR] [--wait] [--block] | --html FILE [--cwd DIR] [--navigation | --chromeless] [--js] [--block] | --url URL [--navigation | --chromeless] [--js]) [--size-percent N [--width PT] [--height PT]] [--background-color #rrggbb] [--follow] [--pane left|right]` ·
+  `session overlay resize (--size-percent N [--width PT] [--height PT] | --width PT [--height PT] | --height PT | --full)` ·
   `session overlay close [--pane left|right]` ·
+  `session overlay hide|show|toggle [--pane left|right]` ·
   `session overlay reload [--current] [--pane left|right]` ·
   `session overlay navigate back|forward|browser|finder [--pane left|right]` ·
   `session overlay result [--pane left|right] | --page ID` ·
@@ -463,6 +490,7 @@ omitted when expanded).
   its own output file.
   `session overlay resize` changes an ALREADY-OPEN overlay: `--size-percent N` (1-100) makes it a floating panel,
   `--full` switches it back to the full-pane overlay; the program keeps running (no re-spawn).
+  `--width`/`--height` size a floating panel in points per axis; reference.md owns the rules.
   `--pane left|right` scopes the overlay to ONE split pane instead of the whole session, leaving the
   sibling pane live and interactive; left and right are independent and may both be open at once. A pane
   overlay is ALWAYS full-pane, so `--pane` cannot combine with `--size-percent` and `session overlay resize`
@@ -574,7 +602,8 @@ control command, the socket `dashboard` command is unchanged.
 
 **pick**: `pick [--prompt TEXT] [--query TEXT] [--select ID] [--allow-custom] [--follow] [--window W] [--no-block]`
 reads choices from stdin and opens the target window's native fuzzy picker. Supply nonblank lines (each line
-is both the id and label) or a JSON array of `{id,label,subtitle?}` items; typing matches labels only, and an
+is both the id and label) or a JSON array of `{id,label,subtitle?,status?,statusColor?,statusShape?}` items (the
+status fields draw a trailing glyph, as `session status` does); typing matches labels only, and an
 empty query keeps the supplied order, so without `--select` the caller's first item is the one Return runs. `--query` prefills
 the field and filters on open, which re-ranks and drops that order. `--select ID` opens with that item
 highlighted and scrolled into view (it must name a supplied item; a `--query` that hides it leaves the first
@@ -595,7 +624,11 @@ is accepted and keeps its ask hidden and pending. A terminal ask leaves the rest
 `--window` selects the window; `--follow` raises it without changing session selection.
 `--default ID` seeds the highlight, `--hotkey ID=LETTER` adds a shortcut, and `--destructive ID` marks a
 button that cannot be the default. `--align left|center|right` aligns the buttons; `--width N` fixes the
-panel width to 10...100 percent of its region. Exit 0 means answered, including No: inspect `.id`.
+panel width to 10...100 percent of its region. `--input line|multiline` adds a focused text field and
+`--choice ID=LABEL` (with `--multiple`, `--choice-subtitle`, `--checked`, and `--other PLACEHOLDER` for a
+free-form line) a radio or checkbox list; either defaults the buttons to OK/Cancel, Cancel returning
+`escaped`, and the answer carries `.text` or `.selected`, plus `.text` when the free-form line is selected.
+Exit 0 means answered, including No: inspect `.id`.
 Esc/Command-W on the interactive ask return `escaped` with exit 3; cancellation returns `cancelled`
 with exit 2. `--no-block` returns an id for `ask result ID` or `ask cancel ID`; explicit `--window` must
 match its owner. Tree exposes terminal asks on session nodes as `ask: {id, pane?}` and GUI asks as
@@ -650,6 +683,12 @@ settings hold, what this launch requested, what it got, whether a restart is nee
 NEXT launch; setting it changes nothing in the running app, because a pane is wrapped in a daemon or not
 at the moment it is created.
 
+**recent** - `recent list` - the File ▸ Open Recent entries, newest first, each with its full id, kind,
+title and the session ids it restores; the last 20 only · `recent open [ID] [--window W]` - reopen an
+entry by id or prefix, the newest with no id; the session keeps its id, goes to the window that already
+holds its session or workspace when one does, and the window is not raised; `complete` false means the
+entry stayed in the list · `recent clear` - empty the list. `list` and `clear` refuse a target or `--window`.
+
 **live** - `live list` - every daemon behind a live session joined against the pane that claims it, under the
 restore status as a header; a CLOSED window's panes are claimed with zero clients, which is a resting
 state rather than a leak · `live screen NAME [--all|--lines N]` - a daemon's screen as text by the name
@@ -667,7 +706,8 @@ reset ·
 `live tree [HOST]` - attachable sessions across EVERY open window, on another Mac with a HOST or this app
 without one (the bare form is exactly what the remote call runs on the far side). Each row carries the id
 `live attach` takes plus `windowID`/`windowName`, `workspaceID`/`workspaceName` (show the names, group by
-the ids: neither is unique), `context` when set, and per-pane `foreground`; only a session whose every pane
+the ids: neither is unique), `context` when set, `status`/`statusColor`/`statusShape` when not idle, and
+per-pane `foreground`; only a session whose every pane
 still has a live daemon is listed, and an empty list does NOT mean the far side is not in live mode -
 `live list` reports that · `live attach
 HOST SESSION [--window W]` - open one of them here, marked remote and carrying its split, in the
@@ -710,7 +750,9 @@ settings (no pty, stdin kept, plain session, no fork, no `RemoteCommand`) are th
 over the config. The remote needs `tic` (ncurses) and says so when it is missing.
 
 **version** — `ngtermctl version` — which ngterm is serving this socket, as `result.app` (`version`, plus
-`commit` when the build recorded one). App-global: no target, no `--window`, no window need be open, so it
+`commit` when the build recorded one), and the bundle on disk as `result.installed`, which differs from
+`app` once the app was replaced under the running one (a background `brew upgrade`) and is omitted when
+unknown. App-global: no target, no `--window`, no window need be open, so it
 works as a preflight from a keymap-launched script, which has no `$TERM_PROGRAM_VERSION`. Address the
 socket explicitly (`--socket "$NGTERM_SOCKET"`, or `"$AGT_SOCKET"` in a keymap child): a bare call
 resolves the DEFAULT socket, which may be another app. The same identity is on the tree top level as
@@ -760,9 +802,11 @@ ngtermctl session overlay reload --target "$NGTERM_SESSION_ID"   # after rewriti
   `--navigation` adds back, forward, reload, open in browser, and Show in Finder for a file or Copy Link
   for a URL; use it when the page links to other pages.
   `session overlay navigate finder` reveals the current file; scripts read a URL from `tree`'s `htmlOverlays[].page`.
-- `--chromeless` (file pages only, not with `--navigation`) drops the strip, for a dashboard or monitor
-  meant to look native. The user then closes it with ⌘W, so give such a page its own
-  `data-ngterm="session.overlay.close"` button when it is not self-evident.
+- `--chromeless` (not with `--navigation`) drops the strip, for a dashboard or monitor meant to look
+  native. The user then closes it with ⌘W, so give such a page its own
+  `data-ngterm="session.overlay.close"` button when it is not self-evident. A `--url` page takes it only
+  on 127.0.0.1, ::1 or localhost and not with `--browse`; it has no bridge, so no such button, and it
+  loads frames from its own origin only.
 - `--size-percent N` makes it a floating panel, `--pane left|right` puts it over one split pane.
 - Build the page from the terminal theme, not a palette of your own, so it looks native in a dark or
   light theme (see below). A palette the user asks for wins.
@@ -841,6 +885,11 @@ A button outside a form needs `type="button"`.
 - Rows written into the file are a snapshot. For a live list open the page with `--js` and call
   `ngterm.request(cmd, {target, args})`, which returns a promise with the reply: build rows from
   `ngterm.request('tree')` and redraw on a Refresh button.
+- A `--js` page opened with `--size-percent` can fit its panel to its content, keeping the width:
+  `ngterm.request('session.overlay.resize', {args: {height: Math.ceil(content.offsetHeight * zoom)}})` after
+  layout and `document.fonts.ready`, with `zoom` from the page's `htmlOverlays` entry in `tree`. Measure a
+  naturally sized content wrapper, never the root element, whose `scrollHeight` is floored at the viewport
+  height in CSS pixels.
 - To get a choice back, open with `--block` and give the page `session.overlay.submit` controls:
 
 ```bash

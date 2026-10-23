@@ -12,7 +12,7 @@
 //! of the XDG Base Directory spec, instead of an admin-owned `/usr/local/bin`. The
 //! agents' own configs live where upstream puts them.
 //!
-//! The payloads under the repository's `resources/` are upstream v0.36.0's `agterm/Resources/agent-status` and
+//! The payloads under the repository's `resources/` are upstream v0.38.1's `agterm/Resources/agent-status` and
 //! `plugins/agterm/skills/agterm` (MIT, `resources/LICENSE.upstream`), at `resources/agent-status` and
 //! `resources/skills/ngterm` (the skill's directory renamed with the skill), with these deviations:
 //!
@@ -42,7 +42,8 @@
 //!   `zmx`, and it is named `ngterm` (frontmatter `name`, a description that also triggers on ngterm and `ngtermctl`),
 //!   its text, examples and `show-image.sh` running `ngtermctl` wherever upstream runs `agtermctl`, the far side of a
 //!   remote attach included (`remote::tree::REMOTE_CLI`), and the rest of it is under this build's identity too (its
-//!   prose, `NGTERM_*` variables, HTML bridge, installed file names, docs and bug links: `0004-ngterm-identity.patch`):
+//!   prose, `NGTERM_*` variables, HTML bridge, installed file names, docs and bug links, and where upstream's text is
+//!   macOS-only, this build's Live login shells and the overlay hide toggle's Linux chord: `0004-ngterm-identity.patch`):
 //!   all are patches over upstream's tree (`build/patches/skill-ngterm`).
 
 pub mod cli;

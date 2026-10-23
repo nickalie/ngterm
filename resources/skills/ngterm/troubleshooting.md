@@ -112,9 +112,10 @@ Check these in order:
 
 - **Restart after selecting Live sessions.** The restore mode is fixed when ngterm starts. Changing
   **Settings ▸ General ▸ Restore sessions** affects the next process, not sessions already open.
-- **Read the eligibility reason in Settings.** Live mode requires zsh as the macOS login shell and the
-  bundled session host and zsh-integration resources. If the launch cannot use live mode, every pane starts as an
-  ordinary shell.
+- **Read the eligibility reason in Settings.** Live mode requires zsh, fish, bash or PowerShell as the login shell and the
+  bundled session host and shell-integration resources (`ZDOTDIR` for zsh, `ENV` for bash, `XDG_DATA_DIRS` for fish,
+  ngterm's own `shell-integration/pwsh` script for PowerShell). If the launch
+  cannot use live mode, every pane starts as an ordinary shell.
 - **Inspect actual backing with `tree --json`.** Primary and split surfaces report `backedByLive`; the session
   field is true only when every existing primary or split is backed. The sidebar deliberately has no live-session
   indicator.
