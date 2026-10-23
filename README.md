@@ -307,7 +307,11 @@ that drives the instance.
 
 The build uses the installed build's app id, state dir and socket: while an installed ngterm runs, launch a checkout's
 build only through `run-gpui-dev.sh`. A plain launch is forwarded to the running instance over the session bus (the
-D-Bus name above), or, with no bus between them, shares its `windows.json`.
+D-Bus name above). One that is not forwarded (no bus between them, or another `NGTERM_APP_ID`) and finds its state
+dir owned by a running instance (an exclusive lock on `ngterm.lock` there, held for the owner's life) exits 1 before
+it reads or writes the state dir (it only appends its refusal to `ngterm.log` there), with "ngterm: another instance
+is already running on <dir>; control it with ngtermctl" on stderr. The control socket's own lock (`<socket>.lock`) stays for instances on different state dirs
+that share one socket.
 
 `NGTERM_LOG` sets the log level (`tracing` filter syntax); the log is `ngterm.log` in the state dir.
 

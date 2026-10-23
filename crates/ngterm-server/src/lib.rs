@@ -4,7 +4,9 @@
 //! Transport and addressing):
 //! - ownership: an exclusive `flock` on `<socket>.lock`, taken in [`ControlServer::new`] (before any shell is
 //!   spawned, so `NGTERM_SOCKET` is right from the start) and kept until [`ControlServer::stop`]; a refused instance
-//!   never unlinks or binds the path and advertises `<socket>.unavailable` instead;
+//!   never unlinks or binds the path and advertises `<socket>.unavailable` instead. A second instance on the same
+//!   state directory never gets here: it exits at launch on the state directory's lock (`ngterm_core::state_lock`), so
+//!   this lock separates only instances on different state directories that share one socket;
 //! - each connection reads one line and writes one response within [`ConnectionDeadlines`]; a line that cannot be
 //!   read is answered `request too large or read failed`, one that does not decode `invalid request: <context>`;
 //! - the request hops to the main loop through [`ngterm_host::MainLoop`];

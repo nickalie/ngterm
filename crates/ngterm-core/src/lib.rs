@@ -1,7 +1,8 @@
 //! ngterm's platform-neutral core: the state owner and command dispatcher ([`Core`]), the window, workspace and
 //! session model ([`model`]), its `tree` read-back ([`projection`]), the app-run event ring ([`events`]), control
-//! target resolution ([`resolve`]), control errors with upstream agterm's wire strings ([`ControlError`]), the sidebar's drag-and-drop index math
-//! ([`sidebar_drop`]) and its gestures ([`sidebar_actions`]), state-dir and socket path resolution ([`paths`]), the environment of spawned shells
+//! target resolution ([`resolve`]), control errors with upstream agterm's wire strings ([`ControlError`]), the
+//! sidebar's drag-and-drop index math ([`sidebar_drop`]) and its gestures ([`sidebar_actions`]), state-dir and socket
+//! path resolution ([`paths`]), the state directory's owner lock ([`state_lock`]), the environment of spawned shells
 //! ([`pane_env`]), and what the core and the frontend exchange about on-screen windows ([`windows`]). The command
 //! groups' handlers live in the private `commands` module.
 //!
@@ -52,6 +53,7 @@ pub mod settings_model;
 pub mod sidebar_actions;
 pub mod sidebar_drop;
 pub mod sound_throttle;
+pub mod state_lock;
 pub mod theme;
 pub mod titlebar;
 pub mod watermark;

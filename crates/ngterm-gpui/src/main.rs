@@ -6,13 +6,19 @@
 //! activation token and the startup id are read while the process has one thread and before GPUI's platform exists
 //! (GPUI removes the token from the environment; the startup id is removed here), and a launch that forwards to a
 //! running ngterm exits before GPUI starts and before it reads or writes the model state (it only appends to the shared
-//! log).
+//! log). A launch that stays then claims the state directory (`ngterm_core::state_lock`) and exits 1 when another
+//! process owns it, still before any read or write there, the log aside: the log comes first so a forwarded launch
+//! and a refused one say so in it, and it only ever appends to a log another process holds (it rotates only a file
+//! whose own lock it gets, `ngterm_app::logging`). The claim comes after the bus registration, so a second launch of
+//! the same app id is still forwarded with exit 0 rather than refused.
 
 use std::ffi::OsString;
 use std::io::Write as _;
+use std::path::Path;
 use std::process::ExitCode;
 
-use ngterm_core::paths::ProcessEnv;
+use ngterm_core::paths::{self, ProcessEnv};
+use ngterm_core::state_lock::StateDirectoryLock;
 use ngterm_gpui::app::{self, Launch};
 use ngterm_gpui::instance::{self, Activation, Registration};
 
@@ -53,12 +59,31 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // held for the whole process (`exit_now` never drops it); the kernel releases it at exit, a crash included
+    let _state_lock = match claim_state_dir(&paths::state_dir(&ProcessEnv)) {
+        Ok(lock) => lock,
+        Err(status) => return status,
+    };
     let status = app::run(Launch {
         app_id,
         requests: received,
         activation,
     });
     exit_now(status)
+}
+
+/// Takes ownership of the state directory before anything reads or writes it (the log aside, see the module docs), or
+/// says why not on the log and stderr and gives the exit status 1: a second instance there would load every window file
+/// and later overwrite the owner's saves with its stale copy (upstream's `agtermApp.claimStateDirectory`, #749). A lock
+/// that cannot be taken stops the launch too: it does not show that no other process uses the directory.
+fn claim_state_dir(directory: &Path) -> Result<StateDirectoryLock, ExitCode> {
+    StateDirectoryLock::acquire(directory)
+        .claim(directory)
+        .map_err(|reason| {
+            tracing::error!("{reason}");
+            eprintln!("ngterm: {reason}");
+            ExitCode::FAILURE
+        })
 }
 
 /// Whether the arguments (without the program's name) are the build identity query alone.

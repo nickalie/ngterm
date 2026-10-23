@@ -6,6 +6,7 @@ guards refuse a launch env that points anywhere else before anything is spawned.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import os
@@ -384,6 +385,17 @@ class Instance:
         return self.env_prefix + name
 
 
+@dataclass(frozen=True)
+class Beside:
+    """What `Adapter.launch_beside` saw: the exit status (None when it had to be killed) and the output."""
+
+    returncode: int | None
+    stdout: str
+    stderr: str
+    # The control socket it was given, which a refused launch never creates.
+    socket: Path
+
+
 class Adapter:
     """One implementation under test. Subclasses supply the executable and platform env."""
 
@@ -634,6 +646,49 @@ class Adapter:
             session_bus=instance.session_bus,
         )
         return self._serving(relaunched, timeout)
+
+    def launch_beside(self, instance: Instance, timeout: float = LAUNCH_TIMEOUT) -> Beside:
+        """Run the binary once more on `instance`'s root and state directory, with an app id and a control socket of
+        its own (so neither the single-instance forwarding nor the socket lock stops it first), and wait for it to exit.
+
+        For a launch expected to stop at once (a state directory another instance owns): one still running after
+        `timeout` loses its process group to SIGKILL and reports a `returncode` of None.
+        """
+        env = dict(instance.env)
+        env[self.variable("CONTROL_SOCKET")] = os.fspath(instance.root / "beside.sock")
+        if self.needs_app_id:
+            env[self.variable("APP_ID")] = unique_app_id()
+        check_launch_env(
+            env,
+            instance.root,
+            self.needs_app_id,
+            self.needs_runtime_dir,
+            instance.compositor is not None,
+            instance.env_prefix,
+        )
+        process = subprocess.Popen(
+            self.instance_executable(instance.root),
+            env=env,
+            cwd=env["HOME"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            code: int | None = process.returncode
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+            code = None
+        return Beside(
+            returncode=code,
+            stdout=stdout.decode(errors="replace"),
+            stderr=stderr.decode(errors="replace"),
+            socket=Path(env[self.variable("CONTROL_SOCKET")]),
+        )
 
     def _serving(self, instance: Instance, timeout: float) -> Instance:
         try:

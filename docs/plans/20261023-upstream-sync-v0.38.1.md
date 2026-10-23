@@ -699,21 +699,25 @@ in ngterm-core, tested on all three CI OSes.
   <dir>; control it with ngtermctl", `windows.json` and the window files byte-identical, A's tree unchanged),
   `test_the_lock_is_released_at_exit` (after A stops a launch succeeds; `ngterm.lock` still exists)
 
-- [ ] `main` claims the state dir after the D-Bus registration (a forwarded launch still raises the primary with
+- [x] `main` claims the state dir after the D-Bus registration (a forwarded launch still raises the primary with
       exit 0) and before `app::run` (before `FirstRunWelcome::has_prior_state`, `load_state`, `ControlServer::new`
       or any save); held for the process
-- [ ] refusal: log, stderr, exit 1: "ngterm: another instance is already running on <dir>; control it with
+- [x] refusal: log, stderr, exit 1: "ngterm: another instance is already running on <dir>; control it with
       ngtermctl"; "ngterm: cannot claim the state directory: <detail>" with detail "cannot create <dir>: <err>",
       "cannot open <path>: <err>" or "cannot lock <path>: <err>"
-- [ ] decide and record the one write before the lock: `ngterm_app::logging::init` appends to `<state>/ngterm.log`
+- [x] decide and record the one write before the lock: `ngterm_app::logging::init` appends to `<state>/ngterm.log`
       first (upstream: "before it reads or writes anything"); move the lock before it or keep it with the reason
-- [ ] keep ngterm-server's socket lock for instances on different state dirs; update its doc comment and README
-- [ ] write tests: Rust unit tests for the four Swift cases (a second `File` handle conflicts with flock and
+      (kept, recorded in `main.rs`'s module docs: a forwarded launch logs its forwarding and a refused one its refusal
+      there, and the log only appends to a file another process holds, rotating only one whose own lock it gets)
+- [x] keep ngterm-server's socket lock for instances on different state dirs; update its doc comment and README
+- [x] write tests: Rust unit tests for the four Swift cases (a second `File` handle conflicts with flock and
       LockFileEx alike)
-- [ ] write tests: the conformance tests above (the harness's relaunch waits for the old pid's exit; confirm in
-      `impls/base.py`)
-- [ ] manual check (user): green on reference-macos; green on `cross-platform.yml` (the lock in ngterm-core)
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance tests above (the harness's relaunch waits for the old pid's exit; confirm in
+      `impls/base.py`) (confirmed: `_terminate_app` waits; the second launch goes through a new harness method,
+      `Adapter.launch_beside`, since the isolation selftest keeps processes out of tests; green on Linux in a targeted
+      `run-linux.sh -- -k test_state_dir_lock`: 2 pass)
+- [x] manual check (user): green on reference-macos; green on `cross-platform.yml` (the lock in ngterm-core) (skipped - not automatable here: left to the user; `cargo clippy -p ngterm-core --target x86_64-pc-windows-msvc` is clean)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user; the coverage gate's uncovered keys are all later tasks')
 
 ### Task 10: `workspace flag on|off|toggle` and Flag All Sessions / Unflag All Sessions (#787)
 

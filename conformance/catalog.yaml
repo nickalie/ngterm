@@ -397,6 +397,7 @@ behaviors:
   hooks.loaded-at-launch: {status: uncovered}
   hooks.edit-needs-reload: {status: uncovered}
   hooks.once-per-event-in-order: {status: uncovered}
+  app.state-dir-owned: {status: uncovered}
 exemptions:
   debug.appearance: refused outside UI-test mode; a UI-test-only hook with no CLI subcommand
   zmx.attach: a successful attach re-discovers the remote over ssh before creating anything, which the suite's no-network,

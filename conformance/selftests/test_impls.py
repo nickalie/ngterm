@@ -739,6 +739,40 @@ def test_relaunch_starts_the_binary_again_on_the_same_root(
     assert len(roots) == 1 and not roots[0].exists()
 
 
+@pytest.mark.parametrize("adapter_class", [UpstreamVocabularyAdapter, RustAdapter])
+def test_launch_beside_runs_the_binary_on_the_same_state_dir_with_its_own_socket_and_app_id(
+    roots: list[Path], fake_bin: Path, adapter_class: type[Adapter]
+) -> None:
+    adapter = adapter_class(fake_bin)
+    instance = adapter.launch()
+    try:
+        instance.env["FAKE_APP_MODE"] = "exit"
+        beside = adapter.launch_beside(instance)
+        assert (beside.returncode, beside.stderr) == (3, "fake app: refusing to start\n")
+        assert beside.socket == instance.root / "beside.sock" and not beside.socket.exists()
+        seen = json.loads((instance.state_dir / "fake-env.json").read_text())
+        assert seen[instance.variable("STATE_DIR")] == os.fspath(instance.state_dir)
+        assert seen[instance.variable("CONTROL_SOCKET")] == os.fspath(beside.socket)
+        assert seen.get(instance.variable("APP_ID")) != instance.app_id or instance.app_id is None
+        assert instance.request("version").ok
+    finally:
+        adapter.stop(instance)
+    assert len(roots) == 1 and not roots[0].exists()
+
+
+def test_launch_beside_kills_a_launch_that_outlives_the_timeout(roots: list[Path], fake_bin: Path) -> None:
+    adapter = RustAdapter(fake_bin)
+    instance = adapter.launch()
+    try:
+        beside = adapter.launch_beside(instance, timeout=0.5)
+        assert beside.returncode is None
+        seen = json.loads((instance.state_dir / "fake-env.json").read_text())
+        assert seen[instance.variable("APP_ID")] != instance.app_id
+        assert instance.request("version").ok
+    finally:
+        adapter.stop(instance)
+
+
 def test_relaunch_of_an_app_ignoring_sigterm_fails_and_frees_its_app_id(
     roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
