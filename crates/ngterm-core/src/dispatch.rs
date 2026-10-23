@@ -594,6 +594,15 @@ impl Core {
         }
     }
 
+    /// The launch reached the point where `app.launched` belongs: hooks loaded, the restored sessions in the tree, and
+    /// the control server started, which `ready` reports. The first call settles the run's event either way; only a
+    /// ready one appends it and runs its hooks (upstream's `emitAppLaunched(ready:)`).
+    pub fn emit_app_launched(&mut self, ready: bool) {
+        if self.events.app_launched(ready).is_some() {
+            self.run_hooks();
+        }
+    }
+
     /// A window's `tree.changed` debounce elapsed: sequence the event unless a later change re-armed it.
     pub fn fire_tree_changed(&mut self, timer: TreeChangedTimer) {
         self.events.fire_tree_changed(timer);

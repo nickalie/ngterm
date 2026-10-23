@@ -352,14 +352,11 @@ fn format_human(event: &ControlEvent, zone: Zone) -> String {
             payload.title.as_deref().unwrap_or(name),
             payload.body.as_deref().unwrap_or_default()
         ),
-        // `pane.focused` and `app.launched` are not emitted yet; their own forms come with their emitters
-        EventKind::SessionCreated
-        | EventKind::SessionClosed
-        | EventKind::TreeChanged
-        | EventKind::PaneFocused
-        | EventKind::AppLaunched => {
+        // `pane.focused` is not emitted yet; its own form comes with its emitter
+        EventKind::SessionCreated | EventKind::SessionClosed | EventKind::TreeChanged | EventKind::PaneFocused => {
             format!("{time} {kind} {name}")
         }
+        EventKind::AppLaunched => format!("{time} {kind}"),
         EventKind::SessionSelected => format!(
             "{time} {kind} {name} previous={}",
             payload.previous.as_deref().unwrap_or("-")
@@ -789,6 +786,7 @@ mod tests {
                 json!({"kind": "notify", "payload": {"name": "api"}}),
                 "00:00:00 notify api api: ",
             ),
+            (json!({"kind": "app.launched"}), "00:00:00 app.launched"),
         ];
         for (seq, (fields, expected)) in (1..).zip(cases) {
             let event = wire_event(seq, fields);

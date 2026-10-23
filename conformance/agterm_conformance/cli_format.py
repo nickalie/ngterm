@@ -271,4 +271,6 @@ def event(item: Mapping[str, Any]) -> str:
         return f"{clock} {kind} {name} {_or(payload.get('status'), '')}"
     if kind in ("remote.opened", "remote.closed"):
         return f"{clock} {kind} {name} host={_or(payload.get('host'), '')}"
+    if kind == "app.launched":
+        return f"{clock} {kind}"
     raise ValueError(f"no human form for event kind {kind!r}")

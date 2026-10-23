@@ -491,6 +491,7 @@ impl Core {
             found.overlay.active && found.overlay.generation == generation && found.overlay.close()
         });
         if closed {
+            self.library_mut().schedule_tree_changed_for(session);
             self.config_edit_ended(session, generation);
         }
         closed

@@ -791,6 +791,21 @@ fn closing_or_losing_a_handed_over_overlay_cancels_its_job() {
 }
 
 #[test]
+fn a_refused_remote_overlay_leaves_the_tree_alone() {
+    let (mut live, _, _) = presented();
+    let session = live.session;
+    let open = |live: &mut Live| {
+        overlay(&mut live.fixture, SessionCmd::OverlayOpen, session, |a| {
+            a.command = Some("sleep 9".to_owned());
+        })
+    };
+    assert!(open(&mut live).ok);
+    assert_eq!(live.fixture.core.commit().tree_changed.len(), 1, "the slot is taken");
+    assert_eq!(open(&mut live), failure("overlay already open"));
+    assert_eq!(live.fixture.core.commit().tree_changed.len(), 0);
+}
+
+#[test]
 fn without_a_following_pane_an_overlay_opens_here() {
     let (mut live, presenter) = live_unfollowed();
     let session = live.session;

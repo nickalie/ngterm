@@ -506,10 +506,14 @@ impl Core {
         let Some(found) = self.library_mut().held_session_mut(session) else {
             return false;
         };
-        found
+        let closed = found
             .pane_overlays
             .pane_of(generation)
-            .is_some_and(|pane| found.pane_overlays.slot_mut(pane).close())
+            .is_some_and(|pane| found.pane_overlays.slot_mut(pane).close());
+        if closed {
+            self.library_mut().schedule_tree_changed_for(session);
+        }
+        closed
     }
 
     /// The user focused pane overlay `generation` of session `session` (upstream's pane overlay `onFocusChange`): the
@@ -532,18 +536,23 @@ impl Core {
     }
 
     /// Drops every pane overlay that can never come up (upstream's deck re-running `dropUnrealizedPaneOverlays` on a
-    /// layout or zoom change): its pane is not laid out, no zoom claims it, and its terminal never realized.
+    /// layout or zoom change): its pane is not laid out, no zoom claims it, and its terminal never realized. A window
+    /// that lost one invalidates its tree.
     pub(crate) fn drop_stranded_pane_overlays(&mut self) {
         for window in self.library().open_ids() {
             let zoom = self.zoom_target(window);
             let Some(store) = self.library_mut().store_mut(window) else {
                 continue;
             };
+            let mut dropped = false;
             for session in store.sessions_mut() {
                 let id = session.id();
-                session.drop_unrealized_pane_overlays(|pane| {
+                dropped |= session.drop_unrealized_pane_overlays(|pane| {
                     zoom.is_some_and(|zoom| zoom.session == id && zoom.surface.overlay_pane() == Some(pane))
                 });
+            }
+            if dropped {
+                store.schedule_tree_changed();
             }
         }
     }

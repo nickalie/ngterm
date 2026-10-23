@@ -203,6 +203,7 @@ impl AppStore {
                 html: Some(overlay),
             });
             session.remote_overlays.clear_failure(Some(pane));
+            self.schedule_tree_changed();
             return Ok(());
         }
         let slot = &mut session.overlay;
@@ -223,6 +224,7 @@ impl AppStore {
         slot.html = Some(overlay);
         slot.active = true;
         session.remote_overlays.clear_failure(None);
+        self.schedule_tree_changed();
         Ok(())
     }
 

@@ -343,35 +343,39 @@ behavior).
   `event:tree.changed`, `session.overlay.open`, `session.overlay.close`: a program, an html page and a `--pane left`
   overlay each emit one on open and one on close), `tests/protocol/test_hud.py::test_hud_open_and_close_invalidate_the_tree`
 
-- [ ] proto: `EventKind::AppLaunched` = `app.launched`, declared last (upstream's `allCases` order feeds the starter
+- [x] proto: `EventKind::AppLaunched` = `app.launched`, declared last (upstream's `allCases` order feeds the starter
       hooks.conf "Kinds:" line); golden test
-- [ ] core: `Core::emit_app_launched(ready)`: the first call settles a run-once flag, only a ready first call appends
+- [x] core: `Core::emit_app_launched(ready)`: the first call settles a run-once flag, only a ready first call appends
       one window-less event with an empty payload and runs the hooks; a later call never emits
-- [ ] gpui `app.rs`: post `emit_app_launched(start.is_ok())` right after the control server's `start`, which runs
+- [x] gpui `app.rs`: post `emit_app_launched(start.is_ok())` right after the control server's `start`, which runs
       after `load_hooks_at_launch` and the `attach` post
-- [ ] tree.changed only on a real slot change, from the store method that made it: `occupy_overlay` success (a HUD
+- [x] tree.changed only on a real slot change, from the store method that made it: `occupy_overlay` success (a HUD
       replacing a HUD emits again), `close_overlay` true (close_hud, a timed HUD expiry, a page close),
       `open_html_overlay` Ok (both branches), `open_pane_overlay` Ok, `close_pane_overlay` true; `update_hud`,
       `set_hud_size`, `remeasure_hud`, `resize_overlay` and refusals emit nothing
-- [ ] the slot closes outside the store methods schedule too: `Core::overlay_exited`, `Core::pane_overlay_exited`,
+- [x] the slot closes outside the store methods schedule too: `Core::overlay_exited`, `Core::pane_overlay_exited`,
       `close_replica_overlay`, each on the owning window's store, only for a session in the tree
-- [ ] remote slots: `reserve_remote_overlay` schedules; a helper compares the slot list around
+- [x] remote slots: `reserve_remote_overlay` schedules; a helper compares the slot list around
       `end`/`surface_gone`/`remove` (finish, close, surface_closed, presenter_lost, reject, drop); a held `--wait`
       slot emits nothing on finish and once its surface closes
-- [ ] `swap_panes`/`close_primary_pane` schedule when either pane holds a pane overlay or a remote slot;
+- [x] `swap_panes`/`close_primary_pane` schedule when either pane holds a pane overlay or a remote slot;
       `close_split` when the right pane holds one; `drop_stranded_pane_overlays` on a true return; session,
       workspace and window removal add none of their own
-- [ ] ngtermctl human form `"{time} app.launched"`; `cli_format.py` the same branch in this change (it raises on an
+- [x] ngtermctl human form `"{time} app.launched"`; `cli_format.py` the same branch in this change (it raises on an
       unknown kind, and the listed `test_events_print_every_event_with_its_arguments` reads unfiltered events)
-- [ ] write tests: Rust unit tests for each Swift case (program/pane overlay open 1, refused 0, close 1, second
+- [x] write tests: Rust unit tests for each Swift case (program/pane overlay open 1, refused 0, close 1, second
       close 0; page session-wide and left 1 each; HUD open 1, update 0, close 1; app.launched once over two calls,
       reaches the hook feed and the ring with no hook; not-ready then ready = 0; close split with/without a right
       page 1/0; promote and swap with/without a page 1/0; remote reserve 1, finish 1, held finish 0 then surface
       closed 1, promotion and swap with a reservation 1, refused 0); proto golden; ngterm-ctl human line
-- [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos (`gh workflow run
+- [x] write tests: the conformance tests above
+- [x] manual check (user): the new conformance tests are green on reference-macos (`gh workflow run
       reference-macos.yml --ref upstream-sync-v0.38.1` on the pushed branch, or a pull request touching `conformance/`)
-- [ ] gate (Development Approach) passes; newly green ids added with `check_ratchet.py --add`
+      (skipped - not automatable: reference-macos runs only in CI on macOS; left for the user)
+- [x] gate (Development Approach) passes; newly green ids added with `check_ratchet.py --add` (full suite deferred
+      to the end of the plan per the user; the coverage gate and its selftest twin fail only on the 29 keys of later
+      tasks; ⚠️ the load-sensitive `ngterm-gpui --test html_overlay` frame-rate case failed twice in the workspace run
+      at load average ~18 and passed alone at 48 frames/s)
 
 ### Task 4: Events: `pane.focused` when a session's split-pane selection settles (#785)
 

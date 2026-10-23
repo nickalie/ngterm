@@ -263,7 +263,8 @@ impl AppStore {
         self.occupy_overlay(id, program, Some(mint_code_file()))
     }
 
-    /// Takes the session-wide slot for `program`, replacing a HUD, with `code_file` for its exit status.
+    /// Takes the session-wide slot for `program`, replacing a HUD, with `code_file` for its exit status. A taken slot
+    /// invalidates the tree, a HUD replacing a HUD included; a refusal does not.
     fn occupy_overlay(&mut self, id: Uuid, program: OverlayProgram, code_file: Option<PathBuf>) -> bool {
         let Some(session) = self.session_mut(id) else {
             return false;
@@ -287,6 +288,7 @@ impl AppStore {
         slot.active = true;
         // a local open starts a new result, a remote job's failure included
         session.remote_overlays.clear_failure(None);
+        self.schedule_tree_changed();
         true
     }
 
@@ -345,7 +347,11 @@ impl AppStore {
     /// Closes the session-wide slot (upstream's `closeOverlay`): its surface torn down and a HUD discarded. False with
     /// nothing open.
     pub fn close_overlay(&mut self, id: Uuid) -> bool {
-        self.session_mut(id).is_some_and(|session| session.overlay.close())
+        let closed = self.session_mut(id).is_some_and(|session| session.overlay.close());
+        if closed {
+            self.schedule_tree_changed();
+        }
+        closed
     }
 
     /// Opens a HUD in the slot (upstream's `openHud`): a live HUD is replaced (a fresh surface picks the new file up),

@@ -204,6 +204,46 @@ mod tests {
         assert_eq!(serde_json::from_str::<ControlEvent>(&text).unwrap(), event);
     }
 
+    /// Upstream's `everyEventKindMatchesGoldenWireShape` `app.launched` case: no identities, an empty payload.
+    #[test]
+    fn app_launched_carries_no_identities_and_an_empty_payload() {
+        let event = ControlEvent {
+            seq: 12,
+            ts: 12.5,
+            kind: EventKind::AppLaunched,
+            window: None,
+            workspace: None,
+            session: None,
+            payload: EventPayload::default(),
+        };
+        let text = serde_json::to_string(&event).unwrap();
+        assert_eq!(text, r#"{"seq":12,"ts":12.5,"kind":"app.launched","payload":{}}"#);
+        assert_eq!(serde_json::from_str::<ControlEvent>(&text).unwrap(), event);
+    }
+
+    /// Upstream's `ControlEventKind.allCases` order, which the starter `hooks.conf` lists as its kinds.
+    #[test]
+    fn kinds_are_declared_in_upstreams_order() {
+        let names: Vec<&str> = EventKind::iter().map(EventKind::wire_name).collect();
+        assert_eq!(
+            names,
+            [
+                "status",
+                "notify",
+                "session.created",
+                "session.closed",
+                "session.selected",
+                "tree.changed",
+                "pane.split",
+                "pane.scratch",
+                "pane.focused",
+                "remote.opened",
+                "remote.closed",
+                "app.launched",
+            ]
+        );
+    }
+
     #[test]
     fn a_batch_round_trips_and_an_event_needs_its_payload() {
         let wire = json!({"run": "CBB5E3D0-7A9B-4C96-9EA2-18B14380DDB1", "next": 42, "items": [

@@ -206,15 +206,23 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
     let attaching = poster.clone();
     post(&poster, move |state: &mut AppState| state.attach(attaching));
     let serving = Arc::clone(&shell.posting);
-    if let Err(error) = shell
+    let started = shell
         .server
         .borrow_mut()
         .start(serving, |state: &mut AppState, request: Request| {
             state.handle_request(&request)
-        })
-    {
+        });
+    if let Err(error) = &started {
         tracing::error!(%error, "the control server is not serving");
     }
+    // after `launch_core` restored the tree (`load_state`) and loaded the hooks (`install_launch_hosts`), and after the
+    // attach post: a hook on it calls back over the socket, so a launch whose server did not start emits none
+    // (upstream's `emitAppLaunched(ready:)`)
+    let ready = started.is_ok();
+    post(&poster, move |state: &mut AppState| {
+        state.core.emit_app_launched(ready);
+        state.settle();
+    });
     // last, once the windows are presented: the dialog opens over the frontmost one
     if welcome_due {
         post(&poster, AppState::request_welcome);

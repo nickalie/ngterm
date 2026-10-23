@@ -10,7 +10,15 @@ from http.server import BaseHTTPRequestHandler
 
 import pytest
 from agterm_conformance.loopback import serve
-from agterm_conformance.match import ANY, assert_absent, assert_error, assert_ok, assert_subset, find_session
+from agterm_conformance.match import (
+    ANY,
+    assert_absent,
+    assert_error,
+    assert_ok,
+    assert_subset,
+    find_session,
+    window_ids,
+)
 
 UNKNOWN = "zzz"
 HOLD = "exec cat"
@@ -717,3 +725,30 @@ def test_overlay_pane_selector_refusals(ctl, cmd, args):
 )
 def test_unknown_session_target(ctl, cmd, args):
     assert_error(ctl.request(cmd, UNKNOWN, **args), f"no such session: {UNKNOWN}")
+
+
+def _named(ctl, name):
+    """A session whose own name a terminal title never changes, its creation's `tree.changed` already seen."""
+    (window,) = window_ids(ctl.request("window.list"))
+    cursor = ctl.events_baseline()
+    sid = assert_ok(ctl.request("session.new", name=name))["id"]
+    ctl.wait_mounted(sid, "left")
+    ctl.wait_event(cursor, "tree.changed", {"window": window})
+    return window, sid
+
+
+@pytest.mark.covers("event:tree.changed", "session.overlay.open", "session.overlay.close")
+def test_program_and_page_open_and_close_invalidate_the_tree(ctl):
+    window, sid = _named(ctl, "overlay events")
+    steps = [
+        lambda: _open(ctl, sid),
+        lambda: _closed(ctl, sid),
+        lambda: _open_page(ctl, sid),
+        lambda: _closed(ctl, sid),
+        lambda: _open(ctl, sid, pane="left"),
+        lambda: _closed(ctl, sid, pane="left"),
+    ]
+    for step in steps:
+        cursor = ctl.events_baseline()
+        step()
+        ctl.wait_event(cursor, "tree.changed", {"window": window})

@@ -257,14 +257,20 @@ impl AppStore {
             html: None,
         });
         session.remote_overlays.clear_failure(Some(pane));
+        self.schedule_tree_changed();
         Ok(())
     }
 
     /// Closes `pane`'s overlay (upstream's `closePaneOverlay`): its terminal torn down, the exit status kept. False with
     /// no overlay there.
     pub fn close_pane_overlay(&mut self, id: Uuid, pane: OverlayPane) -> bool {
-        self.session_mut(id)
-            .is_some_and(|session| session.pane_overlays.slot_mut(pane).close())
+        let closed = self
+            .session_mut(id)
+            .is_some_and(|session| session.pane_overlays.slot_mut(pane).close());
+        if closed {
+            self.schedule_tree_changed();
+        }
+        closed
     }
 }
 

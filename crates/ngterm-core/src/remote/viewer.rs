@@ -677,11 +677,15 @@ impl Core {
         let Some(found) = self.library_mut().held_session_mut(session) else {
             return false;
         };
-        match replica.pane.and_then(|identity| found.pane_role_for_identity(identity)) {
+        let closed = match replica.pane.and_then(|identity| found.pane_role_for_identity(identity)) {
             Some(role) => found.pane_overlays.slot_mut(role).close(),
             None if replica.pane.is_none() && found.overlay.generation == replica.generation => found.overlay.close(),
             None => false,
+        };
+        if closed {
+            self.library_mut().schedule_tree_changed_for(session);
         }
+        closed
     }
 
     /// Resizes the session-wide replica showing the change's job (upstream's `resizeReplicaOverlay`).

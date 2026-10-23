@@ -174,14 +174,19 @@ impl Viewer {
     }
 
     /// Delivers one origin frame of `body`, in order.
-    fn frame(&mut self, mut body: Value) {
+    fn frame(&mut self, body: Value) {
+        self.frame_committed(body);
+    }
+
+    /// [`Viewer::frame`], reporting the windows whose `tree.changed` its commit armed.
+    fn frame_committed(&mut self, mut body: Value) -> usize {
         self.revision += 1;
         body["gen"] = json!(5);
         body["rev"] = json!(self.revision);
         let key = self.link().0.borrow().key.unwrap();
         let line = serde_json::to_vec(&body).unwrap();
         self.fixture.core.viewer_line(key, &line);
-        self.fixture.core.commit();
+        self.fixture.core.commit().tree_changed.len()
     }
 
     /// The origin's hello and snapshot.
@@ -506,6 +511,17 @@ fn a_handed_over_overlay_runs_the_jobs_helper_and_its_close_here_tells_the_origi
     viewer.frame(json!({"kind": "overlay.close", "overlay": {"job": "J3"}}));
     assert!(viewer.session().pane_overlay(crate::model::OverlayPane::Left).is_none());
     assert_eq!(viewer.sent("overlay.closed").last().unwrap()["overlay"]["job"], "J3");
+}
+
+#[test]
+fn a_replica_the_origin_takes_down_invalidates_the_tree() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    assert_eq!(viewer.frame_committed(overlay_request("J1", None, false)), 1);
+    let close = json!({"kind": "overlay.close", "overlay": {"job": "J1"}});
+    assert_eq!(viewer.frame_committed(close.clone()), 1);
+    assert!(!viewer.session().overlay.active);
+    assert_eq!(viewer.frame_committed(close), 0, "nothing left to close");
 }
 
 #[test]

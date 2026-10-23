@@ -7,7 +7,7 @@ import os
 import shlex
 
 import pytest
-from agterm_conformance.match import assert_ok, session_ids
+from agterm_conformance.match import assert_absent, assert_ok, session_ids
 from agterm_conformance.wait import wait_until
 
 
@@ -75,3 +75,31 @@ def test_a_hook_runs_once_per_event_in_event_order(launch):
         return [json.loads(line) for line in lines]
 
     assert wait_until(logged) == events
+
+
+@pytest.mark.covers("behavior:hooks.loaded-at-launch", "event:app.launched")
+def test_app_launched_runs_its_hook_once_per_launch(launch):
+    ctl = launch()
+    log = ctl.instance.root / "launched-log"
+    quoted = shlex.quote(os.fspath(log))
+    _hooks(ctl).write_text(f"on app.launched cat >> {quoted}; echo >> {quoted}\n")
+
+    def logged(count):
+        def check():
+            # The JSON may arrive with its own newline; the hook adds one in case it does not.
+            lines = [line for line in (log.read_text().splitlines() if log.exists() else []) if line]
+            assert len(lines) >= count, lines
+            return [json.loads(line) for line in lines]
+
+        return check
+
+    for launches in (1, 2):
+        ctl = launch.relaunch(ctl)
+        events = wait_until(logged(launches))
+        assert len(events) == launches, events
+        event = events[-1]
+        assert (event["kind"], event["payload"]) == ("app.launched", {})
+        assert_absent(event, "window", "workspace", "session")
+        run = ctl.events_baseline().run
+        ring = assert_ok(ctl.request("events.read", run=run, after="0", kinds=["app.launched"]))["events"]
+        assert [item["kind"] for item in ring["items"]] == ["app.launched"]

@@ -178,16 +178,20 @@ impl AppStore {
             Some(pane) => found.pane_overlays.slot_mut(pane).exit_code = None,
             None => found.overlay.exit_code = None,
         }
+        self.schedule_tree_changed();
         true
     }
 
     /// Records a remote job's first outcome into its slot's result, and frees the slot unless a held `--wait` surface
     /// still occupies it on the viewer (upstream's `finishRemoteOverlay`).
     pub fn finish_remote_overlay(&mut self, session: Uuid, job: &str, outcome: &RemoteOverlayOutcome) {
-        let Some(found) = self.session_mut(session) else {
+        let Some(slot) = self
+            .tracking_remote_slots(session, |overlays| overlays.end(job))
+            .flatten()
+        else {
             return;
         };
-        let Some(slot) = found.remote_overlays.end(job) else {
+        let Some(found) = self.session_mut(session) else {
             return;
         };
         match outcome {
@@ -209,16 +213,14 @@ impl AppStore {
         let Some(job) = found.remote_overlays.slot(pane).map(|slot| slot.job.clone()) else {
             return false;
         };
-        found.remote_overlays.surface_gone(&job);
+        self.tracking_remote_slots(session, |overlays| overlays.surface_gone(&job));
         self.remote_overlay_closes.push(RemoteOverlayClose { session, job });
         true
     }
 
     /// The viewer closed its surface for `job`, so a slot held only for that surface is freed.
     pub fn remote_overlay_surface_closed(&mut self, session: Uuid, job: &str) {
-        if let Some(found) = self.session_mut(session) {
-            found.remote_overlays.surface_gone(job);
-        }
+        self.tracking_remote_slots(session, |overlays| overlays.surface_gone(job));
     }
 
     /// Records the size asked of a session-wide remote overlay.
@@ -231,19 +233,14 @@ impl AppStore {
     /// The viewer presenting `session` is gone, and every overlay it held goes with it: each slot's surface counts as
     /// gone. The jobs still unclaimed, which the caller cancels, are returned.
     pub fn remote_overlay_presenter_lost(&mut self, session: Uuid) -> Vec<String> {
-        let Some(found) = self.session_mut(session) else {
-            return Vec::new();
-        };
-        let jobs: Vec<String> = found
-            .remote_overlays
-            .slots()
-            .iter()
-            .map(|slot| slot.job.clone())
-            .collect();
-        for job in &jobs {
-            found.remote_overlays.surface_gone(job);
-        }
-        jobs
+        self.tracking_remote_slots(session, |overlays| {
+            let jobs: Vec<String> = overlays.slots().iter().map(|slot| slot.job.clone()).collect();
+            for job in &jobs {
+                overlays.surface_gone(job);
+            }
+            jobs
+        })
+        .unwrap_or_default()
     }
 
     /// The presenter refused to show `job`: no surface was ever shown, so a `--wait` slot has nothing to hold it.
@@ -255,7 +252,7 @@ impl AppStore {
         if found.remote_overlays.slot_of_job(job).is_none() {
             return false;
         }
-        found.remote_overlays.surface_gone(job);
+        self.tracking_remote_slots(session, |overlays| overlays.surface_gone(job));
         true
     }
 
@@ -268,9 +265,7 @@ impl AppStore {
             .map(|slot| slot.job.clone());
         if let Some(job) = job {
             self.close_remote_overlay(session, Some(pane));
-            if let Some(found) = self.session_mut(session) {
-                found.remote_overlays.remove(&job);
-            }
+            self.tracking_remote_slots(session, |overlays| overlays.remove(&job));
         }
         if let Some(found) = self.session_mut(session) {
             found.remote_overlays.clear_failure(Some(pane));
@@ -289,6 +284,22 @@ impl AppStore {
         if let Some(found) = self.session_mut(session) {
             found.remote_overlays = RemoteOverlays::default();
         }
+    }
+
+    /// Runs `change` on session `session`'s remote overlays and invalidates the tree when it took or freed a slot
+    /// (upstream's `trackingSlots`): not every call does, as a held `--wait` slot outlives its job and a slot can be
+    /// gone already. `None` for an unknown session.
+    fn tracking_remote_slots<R>(&mut self, session: Uuid, change: impl FnOnce(&mut RemoteOverlays) -> R) -> Option<R> {
+        let found = self.session_mut(session)?;
+        let jobs = |overlays: &RemoteOverlays| -> Vec<String> {
+            overlays.slots().iter().map(|slot| slot.job.clone()).collect()
+        };
+        let before = jobs(&found.remote_overlays);
+        let result = change(&mut found.remote_overlays);
+        if jobs(&found.remote_overlays) != before {
+            self.schedule_tree_changed();
+        }
+        Some(result)
     }
 
     /// Takes the remote overlay closes since the last take, in order.

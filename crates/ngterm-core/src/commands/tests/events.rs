@@ -1,6 +1,7 @@
 //! `events.read` through the dispatcher, fed by commits of real model mutations (upstream's
 //! `ControlEventDispatcherTests` and the `AppStoreEventTests` that read the ring back).
 
+use ngterm_host::fakes::FakeSurface;
 use ngterm_proto::command::{EventsCmd, SessionCmd};
 use ngterm_proto::{Args, Command, EventKind, Response};
 use serde_json::{Value, json};
@@ -8,7 +9,7 @@ use uuid::Uuid;
 
 use super::{Fixture, args, failure, wire};
 use crate::events::{DEFAULT_CAPACITY, EventRing};
-use crate::model::WindowLibrary;
+use crate::model::{OverlayPane, OverlayProgram, WindowLibrary};
 use crate::persist::AppSettings;
 
 const RUN: Uuid = Uuid::from_u128(0xCBB5_E3D0_7A9B_4C96_9EA2_18B1_4380_DDB1);
@@ -198,4 +199,138 @@ fn refused_arguments_answer_upstreams_errors() {
     for (edit, error) in cases {
         assert_eq!(read(&mut fixture, edit), failure(error));
     }
+}
+
+// MARK: - app.launched (upstream's `appLaunched*` cases of `AppStoreEventTests`)
+
+/// The `app.launched` events a read from the ring's start returns.
+fn launches(fixture: &mut Fixture) -> Vec<Value> {
+    let page = read(fixture, |args| {
+        from(0)(args);
+        args.kinds = Some(vec!["app.launched".to_owned()]);
+    });
+    assert!(page.ok, "{page:?}");
+    events_of(&page)["items"].as_array().unwrap().clone()
+}
+
+#[test]
+fn app_launched_is_appended_once_per_run_with_no_window_or_session() {
+    let mut fixture = fixture(0);
+    fixture.core.emit_app_launched(true);
+    fixture.core.emit_app_launched(true);
+    assert_eq!(
+        launches(&mut fixture),
+        [json!({"seq": 1, "ts": 10.5, "kind": "app.launched", "payload": {}})]
+    );
+}
+
+#[test]
+fn a_launch_that_was_not_ready_never_emits_app_launched_later() {
+    let mut fixture = fixture(0);
+    fixture.core.emit_app_launched(false);
+    fixture.core.emit_app_launched(true);
+    assert_eq!(launches(&mut fixture), Vec::<Value>::new());
+}
+
+// MARK: - slot changes outside the store's methods
+
+/// Whether the next commit arms a `tree.changed` debounce, after one that drained what came before.
+fn tree_changes(fixture: &mut Fixture, action: impl FnOnce(&mut Fixture)) -> usize {
+    let _ = fixture.core.commit();
+    action(fixture);
+    fixture.core.commit().tree_changed.len()
+}
+
+fn program(command: &str) -> OverlayProgram {
+    OverlayProgram {
+        command: command.to_owned(),
+        ..OverlayProgram::default()
+    }
+}
+
+#[test]
+fn a_terminal_exit_that_closes_a_slot_invalidates_the_tree() {
+    let mut fixture = fixture(0);
+    let id = fixture.sessions[0];
+    let store = fixture.store_mut().unwrap();
+    assert!(store.open_overlay(id, program("top")));
+    store.open_pane_overlay(id, OverlayPane::Left, program("top")).unwrap();
+    let generation = fixture.store().session(id).unwrap().overlay.generation;
+    let pane_generation = fixture
+        .store()
+        .session(id)
+        .unwrap()
+        .pane_overlay(OverlayPane::Left)
+        .unwrap()
+        .generation;
+    assert_eq!(
+        tree_changes(&mut fixture, |f| assert!(!f.core.overlay_exited(id, generation + 1))),
+        0,
+        "a replaced generation"
+    );
+    assert_eq!(
+        tree_changes(&mut fixture, |f| assert!(f.core.overlay_exited(id, generation))),
+        1
+    );
+    assert_eq!(
+        tree_changes(&mut fixture, |f| assert!(
+            f.core.pane_overlay_exited(id, pane_generation)
+        )),
+        1
+    );
+    assert_eq!(
+        tree_changes(&mut fixture, |f| assert!(
+            !f.core.pane_overlay_exited(id, pane_generation)
+        )),
+        0
+    );
+}
+
+#[test]
+fn a_terminal_exit_in_a_pending_close_leaves_every_tree_alone() {
+    let mut fixture = fixture(1);
+    let id = fixture.sessions[0];
+    let store = fixture.store_mut().unwrap();
+    assert!(store.open_overlay(id, program("top")));
+    store.open_pane_overlay(id, OverlayPane::Left, program("top")).unwrap();
+    let session = fixture.store().session(id).unwrap();
+    let (generation, pane_generation) = (
+        session.overlay.generation,
+        session.pane_overlay(OverlayPane::Left).unwrap().generation,
+    );
+    assert!(fixture.store_mut().unwrap().soft_close_session(id));
+    assert_eq!(
+        tree_changes(&mut fixture, |f| {
+            assert!(f.core.overlay_exited(id, generation));
+            assert!(f.core.pane_overlay_exited(id, pane_generation));
+        }),
+        0
+    );
+}
+
+#[test]
+fn a_stranded_pane_overlay_dropped_at_the_commit_invalidates_the_tree() {
+    let mut fixture = fixture(0);
+    let id = fixture.sessions[0];
+    let store = fixture.store_mut().unwrap();
+    store.toggle_split(id, None);
+    store
+        .session_mut(id)
+        .unwrap()
+        .split_surface
+        .replace(Box::new(FakeSurface::new("R")));
+    store.open_pane_overlay(id, OverlayPane::Left, program("top")).unwrap();
+    let _ = fixture.core.commit();
+    // hiding the split behind its focused right pane un-renders the left one before its overlay realized
+    fixture.store_mut().unwrap().set_split_visibility(id, false, None);
+    let _ = fixture.store_mut().unwrap().take_outbox();
+    assert_eq!(fixture.core.commit().tree_changed.len(), 1);
+    assert!(
+        fixture
+            .store()
+            .session(id)
+            .unwrap()
+            .pane_overlay(OverlayPane::Left)
+            .is_none()
+    );
 }

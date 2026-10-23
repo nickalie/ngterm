@@ -129,7 +129,11 @@ impl AppStore {
         if !session.surface.is_present() || !session.split_surface.is_present() {
             return Err(SwapRefusal::SlotNotRealized);
         }
+        let moves_overlay = holds_pane_overlay(session);
         swap_pane_fields(session);
+        if moves_overlay {
+            self.schedule_tree_changed();
+        }
         self.save();
         Ok(())
     }
@@ -149,6 +153,7 @@ impl AppStore {
         session.split = SplitLayout::default();
         session.split_surface.teardown();
         // the right pane is gone: its overlay has nothing left to cover and nobody left to read its status
+        let drops_overlay = session.pane_overlay(OverlayPane::Right).is_some();
         session.pane_overlays.teardown(OverlayPane::Right);
         session.split_cwd = None;
         session.split_title = None;
@@ -163,6 +168,9 @@ impl AppStore {
         self.outbox.removed_watermarks.extend(removal);
         self.outbox.finalized_panes.extend(finalized);
         self.clear_indicator_owned_by(StatusPane::Right, id);
+        if drops_overlay {
+            self.schedule_tree_changed();
+        }
         if was_shown {
             self.emit_pane_visibility(EventKind::PaneSplit, id, false);
         }
@@ -183,6 +191,8 @@ impl AppStore {
         let primary_identity = self.session(id).map(|session| session.pane_identity);
         self.close_hud_owned_by(id, primary_identity);
         self.cancel_ask_owned_by(id, primary_identity);
+        // a torn-down left overlay and a right one changing role both move the tree's pane slots
+        let moves_overlay = self.session(id).is_some_and(holds_pane_overlay);
         self.drop_remote_overlay(id, OverlayPane::Left);
         let Some(session) = self.session_mut(id) else { return };
         let was_shown = session.split.shown;
@@ -191,6 +201,9 @@ impl AppStore {
         promote_split_survivor(session);
         session.remote_overlays.promote_right();
         self.outbox.removed_watermarks.extend(removal);
+        if moves_overlay {
+            self.schedule_tree_changed();
+        }
         self.retag_promoted_indicator(id);
         if was_shown {
             self.emit_pane_visibility(EventKind::PaneSplit, id, false);
@@ -380,6 +393,14 @@ fn swap_pane_fields(session: &mut Session) {
     session.split.focused = !session.split.focused;
     session.pane_overlays.swap();
     session.remote_overlays.swap_panes();
+}
+
+/// Whether either pane holds an overlay, here or handed to a viewer (upstream's `holdsPaneOverlay`): what a swap or a
+/// promotion moves.
+fn holds_pane_overlay(session: &Session) -> bool {
+    [OverlayPane::Left, OverlayPane::Right]
+        .into_iter()
+        .any(|pane| session.pane_overlay(pane).is_some() || session.remote_overlays.slot(Some(pane)).is_some())
 }
 
 /// The other pane of a split; the scratch stays.

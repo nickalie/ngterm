@@ -325,6 +325,8 @@ pub struct ControlEvents {
     /// The events sequenced since the last [`ControlEvents::take_appended`], in order: what the ring's post-append
     /// observers (the hooks) still have to see (upstream's `WindowLibrary.onControlEvent`).
     appended: Vec<ControlEvent>,
+    /// The run's `app.launched` was decided, emitted or not (upstream's `appLaunchSettled`).
+    app_launch_settled: bool,
 }
 
 impl ControlEvents {
@@ -336,6 +338,7 @@ impl ControlEvents {
             pending_tree_changed: HashMap::new(),
             next_token: 0,
             appended: Vec::new(),
+            app_launch_settled: false,
         }
     }
 
@@ -396,6 +399,24 @@ impl ControlEvents {
             let event = self.ring.append(tree_changed(window));
             self.appended.push(event);
         }
+    }
+
+    /// Sequences `app.launched` on the first call of the run, and only when `ready` (upstream's
+    /// `WindowLibrary.emitAppLaunched`): window-less, with an empty payload. A later call never emits, so a launch that
+    /// was not ready is not one later either. The event, when one was appended.
+    pub fn app_launched(&mut self, ready: bool) -> Option<ControlEvent> {
+        if std::mem::replace(&mut self.app_launch_settled, true) || !ready {
+            return None;
+        }
+        let event = self.ring.append(EventDraft {
+            kind: EventKind::AppLaunched,
+            window: None,
+            workspace: None,
+            session: None,
+            payload: EventPayload::default(),
+        });
+        self.appended.push(event.clone());
+        Some(event)
     }
 
     /// Takes the events sequenced since the last take, in sequence order.

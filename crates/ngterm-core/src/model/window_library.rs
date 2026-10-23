@@ -543,6 +543,15 @@ impl WindowLibrary {
         }
     }
 
+    /// Invalidates the tree of the open window whose tree holds `session`, after a slot change made outside the store's
+    /// own methods (a terminal's exit, a replica's close). Nothing for a session an undoable close holds: it is not in
+    /// any tree.
+    pub(crate) fn schedule_tree_changed_for(&mut self, session: Uuid) {
+        if let Some(store) = self.store_for_session_mut(session) {
+            store.schedule_tree_changed();
+        }
+    }
+
     /// The Open Recent entries, newest first.
     #[must_use]
     pub fn recent_closed_items(&self) -> Vec<RecentClosedItem> {

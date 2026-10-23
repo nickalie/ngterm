@@ -110,6 +110,42 @@ fn an_event_starts_its_hook_with_the_event_on_stdin_and_its_environment() {
 }
 
 #[test]
+fn app_launched_reaches_its_hook_once_with_no_session() {
+    let mut host = Host::new(0);
+    host.write("hooks.conf", "on app.launched cat > /dev/null\n");
+    reload(&mut host);
+    host.fixture.core.emit_app_launched(true);
+    host.fixture.core.emit_app_launched(true);
+    let launches = host.launcher.launches();
+    let [launch] = launches.as_slice() else {
+        panic!("{launches:?}")
+    };
+    let event: Value = serde_json::from_slice(launch.stdin.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (
+            &event["kind"],
+            &event["payload"],
+            event.get("window"),
+            event.get("session")
+        ),
+        (&json!("app.launched"), &json!({}), None, None)
+    );
+    let env = |key: &str| launch.env.iter().any(|(name, value)| name == key && !value.is_empty());
+    assert!(env("AGT_EVENT_KIND"));
+    assert!(!env("AGT_SESSION_ID") && !env("AGT_WINDOW_ID"));
+}
+
+#[test]
+fn a_launch_that_was_not_ready_runs_no_app_launched_hook() {
+    let mut host = Host::new(0);
+    host.write("hooks.conf", "on app.launched cat > /dev/null\n");
+    reload(&mut host);
+    host.fixture.core.emit_app_launched(false);
+    host.fixture.core.emit_app_launched(true);
+    assert!(host.launcher.launches().is_empty());
+}
+
+#[test]
 fn a_second_event_queues_behind_the_running_child() {
     let mut host = Host::new(0);
     host.write("hooks.conf", "on session.created cat > /dev/null\n");

@@ -3,7 +3,14 @@ window, so only the bounds the app clamps it to are compared, never a measured v
 waits in `cat` until its overlay is closed."""
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session
+from agterm_conformance.match import (
+    assert_absent,
+    assert_error,
+    assert_ok,
+    assert_subset,
+    find_session,
+    window_ids,
+)
 
 UNKNOWN = "zzz"
 HOLD = "exec cat"
@@ -383,3 +390,17 @@ def test_hud_font_size_range(ctl, args, error):
 )
 def test_unknown_session_target(ctl, cmd, args):
     assert_error(ctl.request(cmd, UNKNOWN, **args), f"no such session: {UNKNOWN}")
+
+
+@pytest.mark.covers("session.hud.open", "session.hud.close", "event:tree.changed")
+def test_hud_open_and_close_invalidate_the_tree(ctl):
+    (window,) = window_ids(ctl.request("window.list"))
+    cursor = ctl.events_baseline()
+    # its own name, so a terminal title renames nothing behind the HUD's back
+    sid = assert_ok(ctl.request("session.new", name="hud events"))["id"]
+    ctl.wait_mounted(sid, "left")
+    ctl.wait_event(cursor, "tree.changed", {"window": window})
+    for step in (lambda: _open(ctl, sid, "working"), lambda: _close(ctl, sid)):
+        cursor = ctl.events_baseline()
+        step()
+        ctl.wait_event(cursor, "tree.changed", {"window": window})
