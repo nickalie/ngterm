@@ -105,8 +105,9 @@ toolkit-neutral, so another frontend can drive them.
 5. Claim a capability (`version` result, rust-build.md > Rust target profile) only once its commands implement it.
 6. Gate: every check README > Test lists (format, locked metadata, clippy with `-D warnings` on the workspace and on
    the frontend without its default features, the lint report, the tracing-features check, the vendored-source
-   checks, the workspace tests headless, the suite's selftests), then a full `conformance/tools/run-linux.sh` in
-   the background; add the newly green ids to the ratchet (`check_ratchet.py`).
+   checks, the workspace tests headless, the suite's selftests). The full suite (`conformance/tools/run-linux.sh`)
+   runs once at the end of a plan, in the background, and only reports its newly green ids: add them to the ratchet
+   with `check_ratchet.py --add`.
 
 A new upstream release moves the catalog's tag (`conformance/tools/gen_catalog.py`) and `.upstream/agterm` together. The
 build runs no zmx: what an upstream release changes in its zmx (the pin, its patches) is ported into `ngterm-session` as
@@ -117,7 +118,9 @@ regenerates (`build/pins.env` names it).
 
 ## Gates
 
-- A ratchet id (`conformance/rust-passing.txt`) never goes red: a change that breaks one fixes it in the same change.
+- A ratchet id (`conformance/rust-passing.txt`) never goes red: one the end-of-plan run finds red is fixed in that plan.
+  A change of its own outside a plan (a herdr, Ghostty or toolchain bump) runs the full suite once at its end, as a
+  plan does, and fixes what it turns red in the same change.
 - No reruns: protocol, cli and behaviors tests wait on read-back, so a flaky one is a bug in the build or the test.
 - A function over a complexity limit (`clippy.toml`) is split, not excused. The only exception is an outer
   `#[expect(clippy::..., reason = "...")]` on that one item; `#[allow]` and inner `#![allow]`/`#![expect]` are refused.
