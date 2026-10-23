@@ -7,7 +7,8 @@ disagree, the code wins: check with `ls`/`grep` before naming a Rust file in the
 
 ## Contents
 
-- Behavior areas: protocol, dispatcher, app-control, cli, core
+- Behavior areas: protocol, dispatcher, app-control, cli, core, session-host
+- Platforms
 - Evidence areas: Swift tests, contract docs, upstream design notes
 - UI
 - Vendored copies and native pins
@@ -23,6 +24,7 @@ disagree, the code wins: check with `ls`/`grep` before naming a Rust file in the
 | app-control | `agterm/Control/ControlServer+<Group>.swift`, `ControlServer.swift` | `ngterm-gpui` (the app side of the group) and `ngterm-server` (socket: listen backlog, connection handling) | what the app does once the dispatcher accepted a command; socket-level changes |
 | cli | `agtermCore/Sources/agtermctlKit/*` | `ngterm-ctl/src/<group>.rs`, `usage.rs`, `output.rs`, `socket.rs`, `client.rs` | subcommands, flags, help text, output format, exit codes, retry/backoff, local (no-socket) commands |
 | core | other `agtermCore/Sources/agtermCore/*` | `ngterm-core/src/*` (model, persist, keymap, hooks, settings_model, remote, hud, palette, ...) | model and store behavior, and every on-disk format (`settings.json`, `windows.json`, keymap/hooks files, `remotes.conf`, `restore-denylist.conf`, ...): the format is part of the contract, the suite reads it back |
+| session-host | `agtermCore/Sources/SessionHostRuntime/*`, `SessionHostTrampoline/`, `AgtermResponsibility/`, `agterm-session-host/` (tests: `Tests/SessionHostRuntimeTests/`, fixtures `session-host-*`) | `ngterm-session` (server, pane runtime, endpoint, detached spawn, attach), `ngterm-pty`; attribution: `liveAttribution` in `ngterm-proto/src/tree.rs`, set in `ngterm-core/src/commands/live/launch.rs`, the Linux classifier in `commands/live/live_reset.rs`, the `Attribution` enum in `ngterm-core/src/live/reset.rs` | upstream's own session host, which spawns, supervises and lists the Live daemons: what a pane sees while it is created and attached (startup replies such as device attributes), socket and pidfile lifetime, process attribution |
 
 **The `zmx` group is `live` here.** Upstream's `zmx.*` commands, `agtermctl zmx`, `result.zmx` and `backedByZmx` are
 `live.*`, `ngtermctl live`, `result.live` and `backedByLive` in the Rust build, and its strings that name zmx speak of
@@ -37,12 +39,38 @@ upstream's zmx binary speaks (`zmx attach`, `ZMX_*`, `list`/`screen` output, the
 table): this build runs no zmx, so an upstream change to zmx or to its patches (`pins-delta.sh` reports both) is
 ported into `ngterm-session` (`cli`, `attach_tty`, `server::lead`, `server::snapshot`) under those names.
 
+**Upstream's session host is `ngterm-session` here.** `SessionHostRuntime` is the Swift supervisor in front of
+upstream's zmx daemons; this build has one server per namespace that is both (`ngterm-session`, herdr's
+architecture). A change there is ported as behavior into `ngterm-session` or `ngterm-pty`, on all three OSes: a
+startup reply a pane needs, a socket published only once it listens, a file kept from aging out of the temp dir.
+`AgtermResponsibility` is macOS's process attribution (who a Live child counts as for privacy prompts); its
+counterpart is part of `ngterm-session`'s macOS form, and the plan records what Linux and Windows need of it.
+
 **herdr is not upstream.** `ngterm-session` is herdr's session server taken as code (`HERDR_REV` in
 `build/pins.env`); a herdr change is ported into `ngterm-session` as a change of its own, never through this sync.
 
 A behavior change usually spans several of these at once (a feature commit touches protocol + dispatcher + cli +
 core + ui). The plan groups it by **command group or feature**, not by area: one task per group, holding every area
 that group's change touches. The per-commit block in the classify report ("Commits by area") is the seam to cut along.
+
+## Platforms
+
+ngterm targets macOS, Linux and Windows equally (CLAUDE.md > Platforms), and upstream is macOS only. So a behavior
+upstream builds on a macOS API is ported for all three, not dropped as "macOS only": the macOS form follows upstream,
+and the Linux and Windows forms are designed in the same task (per desktop on Linux, with a fallback for every
+compositor-specific path). A keyboard-layout API, the Command key table, a pasteboard, a Notification Center slot,
+the dock or Finder each name their counterpart per OS. Only a behavior that has no meaning on an OS (a fix for a
+Homebrew cask, an AppKit workaround for an AppKit bug) is recorded as "no counterpart on <OS>" with the reason.
+Code for an OS the dev box is not runs on CI for that OS, and `cross-platform.yml` builds and tests on macOS and
+Windows only the crates its package list names (the `any` crates of CLAUDE.md's crate map; `ngterm-gpui`,
+`ngterm-app`, `ngterm-ctl` and `ngterm-server` are not in it yet). So:
+
+- the OS-specific logic goes into an `any` crate wherever it can live there (`ngterm-core`, `ngterm-term`,
+  `ngterm-session`, `ngterm-pty`), and the frontend keeps the thin call into it;
+- that part ends with the manual check "green on `cross-platform.yml`" for the user, who runs it by opening a pull
+  request or pushing the branch as `ci/<name>` (the workflow runs on nothing else, and the sync never pushes);
+- code that has to stay in a crate the list does not hold is still written for all three OSes, but the task
+  records it as "not built on macOS/Windows by CI until `<crate>` joins `cross-platform.yml`", never as verified.
 
 ## Evidence areas
 
@@ -62,8 +90,8 @@ that group's change touches. The per-commit block in the classify report ("Commi
 `agterm/Views/*`, `agterm/Ghostty/*`, `agterm/*.swift` (menus, app actions, settings model), `agterm/Commands/*`,
 `agterm/Notifications/*` map to `ngterm-gpui` in GPUI idioms. The suite cannot see this UI on Linux, so
 each UI change becomes an item of the plan's UI-only task with its GPUI form, plus Rust unit tests where the logic lives in `ngterm-core` (palette, keymap, settings model, link policy...).
-Platform-only changes (an AppKit workaround, Finder reveal, a macOS keyboard-layout API) still need a decision:
-the Linux equivalent, or a recorded "no Linux counterpart" in the plan.
+Platform-specific changes (Finder reveal, a macOS keyboard-layout API, an AppKit workaround) follow Platforms above:
+a form per OS, or a recorded "no counterpart on <OS>" with its reason.
 
 ## Vendored copies and native pins
 

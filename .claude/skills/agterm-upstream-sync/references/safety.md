@@ -7,8 +7,9 @@ change, `CLAUDE.md` > "Never touch the user's running ngterm" changes first and 
 <!-- BEGIN HARD RULES -->
 HARD RULES (ngterm upstream sync). They hold for every command you run, no matter what the task says:
 
-1. Never touch the user's running ngterm. This session usually runs inside one of its panes, and the `NGTERM_*`
-   variables in the environment (and `ZMX_*`, where that ngterm runs its sessions on zmx) point at it.
+1. Never touch the user's running ngterm. This session usually runs inside a pane of an installed ngterm, whose
+   `NGTERM_*` variables point at it, or of an agterm, whose `AGTERM_*` variables (and `ZMX_*`, where it runs its
+   sessions on zmx) do.
    - Strip them before launching anything: `env -u NGTERM_SESSION_ID ...` is not enough, use
      `env $(env | grep -oE '^(NGTERM|AGTERM|ZMX)_[A-Z0-9_]*' | sed 's/^/-u /') <command>`, or `scripts/run-gpui-dev.sh`, or
      the suite's runners, which strip them themselves.
@@ -21,9 +22,12 @@ HARD RULES (ngterm upstream sync). They hold for every command you run, no matte
      carrying that instance's `NGTERM_LIVE_DIR`. Never `pkill ngterm-session` or `pkill zmx`, never `killall`, never
      run `ngterm-session` without that instance's `NGTERM_LIVE_DIR`.
    - GUI runs headless only: the suite's private weston and dbus (`conformance/tools/run-linux.sh`), or
-     `GDK_BACKEND=x11 xvfb-run -a cargo test --workspace`. Never a window on the user's desktop. A hand-started
-     headless weston needs `--renderer=gl` and, on NVIDIA, Mesa's EGL vendor (`__EGL_VENDOR_LIBRARY_FILENAMES`), as
-     `conformance/agterm_conformance/impls/base.py` sets it up.
+     `GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace`, which gives the tests a display and a
+     session bus of their own. Never a window on the user's desktop, never a connection to its session bus or
+     compositor. GPUI renders through Vulkan: a headless app instance renders on Mesa's lavapipe alone
+     (`scripts/fetch-lavapipe.sh`), never on the machine's GPU, and on Wayland it needs a seat, which only a recent
+     headless weston gives (`scripts/build-weston.sh`). A compositor started by hand copies the setup in
+     `conformance/agterm_conformance/impls/base.py`.
    - While an installed ngterm runs, launch a checkout's build only through `scripts/run-gpui-dev.sh` or the suite: a plain launch is forwarded to the running instance through the shared
      app id, or both write one `windows.json`.
    - If a command did reach the live instance, stop and report exactly what changed; do not undo it through the

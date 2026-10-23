@@ -44,22 +44,33 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 - Each task follows CLAUDE.md > "Porting a command group": read upstream's implementation, its Swift tests (exact
   strings, edge cases, field order), `site/commands.html` and the matching `.claude/rules/*.md`; implement in
   `ngterm-core` against the `ngterm-host` fakes with unit tests asserting upstream's full error string; wire the
-  app side (`ngterm-gpui`); add the `agtermctl` part from `agtermctlKit`; claim a capability only once its commands implement it.
+  app side (`ngterm-gpui`); add the `ngtermctl` part, ported from `agtermctlKit`; claim a capability only once its commands implement it.
 - New conformance tests follow conformance/README.md > Reference discipline: a test is accepted only when green on
   the reference. reference-macos runs only in CI on macOS (`reference-macos.yml`), so a task that adds a suite test
   marks "green on reference-macos" as a manual check for the user.
-- Gate of every task: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-  `scripts/lint-report.sh`, `GDK_BACKEND=x11 xvfb-run -a cargo test --workspace`,
-  `.venv/bin/python -m pytest conformance --coverage-gate` (until the task that closes the last uncovered key, only
-  the keys listed for later tasks may stay uncovered), then a full `conformance/tools/run-linux.sh` in the
-  background with the ratchet holding, and the newly green ids added with
+- Gate of every task: every command of README > Test's code block up to the selftests, in its order and as written
+  there (the window tests under `xvfb-run` and `dbus-run-session`), each pytest command with
+  `PYTHONPATH=conformance` in front; then
+  `PYTHONPATH=conformance .venv/bin/python -m pytest conformance --coverage-gate` (until the task that closes the
+  last uncovered key, only the keys listed for later tasks may stay uncovered); then a full
+  `conformance/tools/run-linux.sh` in the background with the ratchet holding, and the newly green ids added with
   `.venv/bin/python conformance/tools/check_ratchet.py --report conformance/reports/rust-linux/nodeids.jsonl --add`.
+- Platforms (CLAUDE.md > Platforms): macOS, Linux and Windows are equal targets and upstream is macOS only. A
+  behavior upstream builds on a macOS API is ported with its macOS form and its Linux and Windows forms in the same
+  task (on Linux per desktop, with a fallback); "no counterpart on <OS>" only for a behavior with no meaning there,
+  with the reason. CI builds macOS and Windows code only in the crates `cross-platform.yml`'s package list names:
+  the OS-specific logic goes into such a crate wherever it can, and that part ends with the manual check "green on
+  `cross-platform.yml`" for the user, who opens a pull request or pushes the branch as `ci/<name>`; code left in a
+  crate the list does not hold yet is recorded as "not built on macOS/Windows by CI until `<crate>` joins
+  `cross-platform.yml`", never as verified.
 - A ratchet id never goes red; no reruns; a function over a `clippy.toml` limit is split, not excused.
 
 ## Testing Strategy
 
 - unit: `cargo test --workspace` on the `ngterm-host` fakes; the app's tests under `xvfb-run`.
 - conformance: `run-linux.sh` (protocol, cli, behaviors); `tests/ui` skips on Linux.
+- macOS and Windows: `cross-platform.yml` builds and tests the crates its package list names there; the user runs
+  it through a pull request or a `ci/**` push of the branch.
 
 ## Progress Tracking
 
@@ -80,6 +91,9 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 
 **Rust side:** `<crates/...>` (create/modify)
 
+**Platforms:** <the mechanism per OS (macOS / Linux / Windows) for each OS-specific behavior, or "no OS-specific
+code">
+
 **Conformance:**
 - existing ids that cover it (from `coverage-map.py`): `<tests/protocol/test_x.py::test_y>` (<listed | not listed>)
 - new tests to add: `<tests/protocol/test_x.py::test_new_behavior>` covering `<catalog key>`
@@ -89,13 +103,15 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 - [ ] <behavior 2>
 - [ ] write tests: Rust unit tests on the fakes asserting upstream's full strings (<cases from the Swift tests>)
 - [ ] write tests: conformance <new test ids> with `covers(<keys>)`
-- [ ] manual check (user): the new conformance tests are green on reference-macos (`reference-macos.yml` on a pushed
-      branch)
+- [ ] manual check (user): the new conformance tests are green on reference-macos (`reference-macos.yml`, started
+      by hand on the pushed branch, `gh workflow run reference-macos.yml --ref <branch>`, or by a pull request that
+      touches `conformance/`)
 - [ ] gate (Development Approach) passes; newly green ids added with `check_ratchet.py --add`
 
 ### Task <N-1>: UI-only changes
 
-- [ ] <one item per UI change: the GPUI form, or "no Linux counterpart" with the reason>
+- [ ] <one item per UI change: the GPUI form, with its macOS, Linux and Windows mechanism where it is OS-specific,
+      or "no counterpart on <OS>" with the reason>
 - [ ] gate passes
 
 ### Task <N>: Claim <new tag> parity and update the docs

@@ -5,7 +5,8 @@
 #
 # Classes (first matching rule wins, by path):
 #   generated  catalog.yaml, ui-ids.yaml: gen_catalog.py rewrites them; never edit by hand
-#   bump       the parity *target*: README.md, CLAUDE.md, conformance/README.md, spike-macos.yml's default tag
+#   bump       the parity *target*: README.md, CLAUDE.md, conformance/README.md, spike-macos.yml's default tag,
+#              .revmux/profile.md's project line
 #   reference  swift_macos.py's PARITY_LEVEL, the macOS reference app's level, which is the catalog's release; its
 #              mirror is the `parity_level` assert in selftests/test_impls.py::test_swift_macos_profile_follows_launch_mode.
 #              Edit both by hand (the selftest file also holds unrelated version fixtures; the script tags only
@@ -15,7 +16,10 @@
 #   claim      what the Rust build *claims* to implement: PARITY_LEVEL in ngterm-proto, the tests and docs that
 #              mirror it. Bumped in the plan's last task, after the port, never in
 #              the mechanical bump: parityLevel unlocks `since(V)` tests and states a parity not yet reached
-#   keep       history and fixtures: spike-macos.md, selftests and their fixtures, example values in --help texts and tests (quick.rs)
+#   keep       history, fixtures and citations: spike-macos.md, selftests and their fixtures, example values in --help
+#              texts and tests (quick.rs), and the files that name the release code was ported from (the ghostty-vt
+#              patch taken from upstream's zmx patch and its README entry, the libghostty config counts, the HUD
+#              store tests, docs/ghostty-config-parity.md): a citation stays at the release it cites
 #   review     no rule knows this path: decide, then add a rule here
 # With NEW_TAG --apply, rewrites the `bump` lines in place (vX.Y.Z and X.Y.Z forms) and lists the rest.
 set -euo pipefail
@@ -30,7 +34,7 @@ cd "$root"
 classify() {
   case "$1" in
     conformance/catalog.yaml|conformance/ui-ids.yaml) echo generated ;;
-    README.md|CLAUDE.md|conformance/README.md|.github/workflows/spike-macos.yml) echo bump ;;
+    README.md|CLAUDE.md|conformance/README.md|.github/workflows/spike-macos.yml|.revmux/profile.md) echo bump ;;
     conformance/agterm_conformance/impls/swift_macos.py) echo reference ;;
     build/pins.env) echo pins ;;
     crates/ngterm-app/src/integrations/mod.rs) echo resources ;;
@@ -38,6 +42,9 @@ classify() {
     conformance/agterm_conformance/impls/rust.py|conformance/docs/rust-build.md) echo claim ;;
     conformance/docs/spike-macos.md) echo keep ;;
     conformance/selftests/*|conformance/tools/*.py|crates/ngterm-gpui/src/quick/tests.rs) echo keep ;;
+    build/patches/ghostty-vt/0004-formatter-unstyled-blanks.patch|build/patches/ghostty-vt/README.md) echo keep ;;
+    crates/ngterm-core/src/ghostty_config/counts_tests.rs|crates/ngterm-core/src/model/tests/hud.rs) echo keep ;;
+    docs/ghostty-config-parity.md) echo keep ;;
     *) echo review ;;
   esac
 }

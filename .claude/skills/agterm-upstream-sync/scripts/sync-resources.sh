@@ -5,8 +5,8 @@
 #
 # Each copy gets upstream's own diff, applied with `git apply --directory`, so the Linux glue a copy carries (the
 # Linux chords in ghostty-defaults.conf) survives wherever upstream did not touch the same lines. Nothing is applied partially: a diff that does not apply cleanly
-# is left out whole, saved under --patches DIR (default: a temp dir, printed), and reported as `conflict` for a plan
-# task to merge by hand. --check applies nothing.
+# is left out whole, saved under --patches DIR (default: a temp dir, printed, and removed again when no conflict
+# was saved in it), and reported as `conflict` for a plan task to merge by hand. --check applies nothing.
 #
 # A copy listed in PATCHED is instead upstream's NEW tree with the repository's own patches reapplied in order (the
 # agent-status package's Linux glue and ngterm names, build/patches/agent-status; the bundled skill's `live` and
@@ -33,7 +33,12 @@ while [[ $# -gt 0 ]]; do
 done
 [[ $# -eq 2 ]] || { echo "usage: sync-resources.sh [--upstream DIR] [--check] [--patches DIR] OLD_TAG NEW_TAG" >&2; exit 1; }
 old="$1" new="$2"
-patches="${patches:-$(mktemp -d "${TMPDIR:-/tmp}/ngterm-sync-patches.XXXXXX")}"
+own_patches=0
+conflicts=0
+if [[ -z "$patches" ]]; then
+  patches="$(mktemp -d "${TMPDIR:-/tmp}/ngterm-sync-patches.XXXXXX")"
+  own_patches=1
+fi
 mkdir -p "$patches"
 
 # upstream directory | pathspec inside it | the repository's copy
@@ -125,6 +130,7 @@ for mapping in "${MAPPINGS[@]}"; do
       continue
     fi
     echo "conflict $label -> $copy (patch: $patch, why: $(head -n 1 "$patch.err"))"
+    conflicts=1
     continue
   fi
   rm -f "$patch.err"
@@ -139,4 +145,9 @@ done
 # a new entry under agterm/Resources has no copy yet: someone has to decide where it goes
 comm -13 <(git -C "$upstream" ls-tree --name-only "$old" agterm/Resources/ | sort) \
   <(git -C "$upstream" ls-tree --name-only "$new" agterm/Resources/ | sort) | sed 's/^/unmapped (new upstream resource) /'
-echo "PATCHES=$patches"
+if [[ "$own_patches" == 1 && "$conflicts" == 0 ]]; then
+  rm -rf "$patches"
+  echo "PATCHES=none"
+else
+  echo "PATCHES=$patches"
+fi

@@ -44,7 +44,9 @@ upstream-sync-<new tag>` when the session has a scratchpad directory, else `/tmp
 From the repository root (`git rev-parse --show-toplevel`; it must hold `conformance/catalog.yaml` and
 `crates/ngterm-proto`):
 
-- `gh`, `git`, `curl`, `python3`, `patch`, `xvfb-run`, `weston`, `dbus-daemon` on `PATH`; `gh auth status` ok.
+- `gh`, `git`, `curl`, `python3`, `patch`, `xvfb-run`, `dbus-run-session`, `dbus-daemon`, `weston` on `PATH`
+  (`run-linux.sh` and the GPUI process tests start `dbus-daemon` themselves; some distributions package it apart
+  from `dbus-run-session`); `gh auth status` ok.
 - `.venv/bin/python` exists, else create it in the background: `python3 -m venv .venv && .venv/bin/pip install -e conformance`.
   In a worktree, a symlink to the main checkout's `.venv` works, but its editable install points at the main
   checkout's `conformance/`: run every pytest command with `PYTHONPATH=conformance` first (Step 5 does), so it
@@ -107,7 +109,7 @@ groups.
 **Analyse each cluster** by `references/prompts/area-analysis.md`: what changed upstream (Swift code, Swift tests for
 the exact strings, commands.html and rules for the contract), what the Rust build already has, which conformance ids
 cover it (`coverage-map.py`), and the draft task. With up to three clusters, do it yourself; with more, spawn one
-`general-purpose` subagent per cluster in a single message (at most six at a time; more clusters go in waves) with
+`general-purpose` subagent per cluster in a single message (at most four at a time; more clusters go in waves) with
 that prompt filled in, the hard-rules block pasted in. Check each answer: a STATUS of `already-ported` must cite a
 file and a test, or it is treated as `partial`; a load-bearing `absent`/`partial` claim (a whole feature missing, a
 behavior that differs) is confirmed with one `grep`/read of your own before it becomes a task, because a subagent
@@ -162,7 +164,7 @@ because every plan task's subagent starts from this branch and must be able to r
    `unmapped` → a plan task deciding where the new resource goes. When nothing conflicted, bump the release named in
    `crates/ngterm-app/src/integrations/mod.rs`'s header.
 4. **Tag mentions**: `bash SKILL_DIR/scripts/tag-mentions.sh CURRENT TARGET --apply` rewrites the `bump` class
-   (README.md, CLAUDE.md, conformance/README.md, spike-macos.yml) and lists the rest with its class. Then by hand:
+   (README.md, CLAUDE.md, conformance/README.md, spike-macos.yml, .revmux/profile.md) and lists the rest with its class. Then by hand:
    `reference` (swift_macos.py's `PARITY_LEVEL` with its assert in `conformance/selftests/test_impls.py`); `pins` and
    `resources` were handled above. Leave `claim` (the Rust build's `PARITY_LEVEL` and its mirrors: it states a parity
    not reached yet and unlocks `since(V)` tests, so it moves in the plan's last task) and `keep`. A `review` line has no rule: decide it, and name it in the report so the
@@ -176,20 +178,21 @@ because every plan task's subagent starts from this branch and must be able to r
 ## Step 5. Baseline gates
 
 Run CLAUDE.md's gate on the branch, all in the background, with `NGTERM_*`/`AGTERM_*`/`ZMX_*` stripped, each command's
-output in `WORK/<name>.log`:
+output in `WORK/<name>.log`. The commands are README > Test's code block, read from README in this run (it changes;
+do not copy them from memory or an earlier plan), in its order, plus the catalog coverage gate that
+`conformance-gate.yml` runs:
 
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-scripts/lint-report.sh
-GDK_BACKEND=x11 xvfb-run -a cargo test --workspace
-PYTHONPATH=conformance .venv/bin/python -m pytest conformance --coverage-gate
-conformance/tools/run-linux.sh          # full run, ~10 min: protocol, cli, behaviors, then the ratchet
-```
+- every command of that block up to the selftests, as written there (the window tests under `xvfb-run` *and*
+  `dbus-run-session`, never without the private bus), with `PYTHONPATH=conformance` in front of each pytest
+  command;
+- `PYTHONPATH=conformance .venv/bin/python -m pytest conformance --coverage-gate`;
+- last, the full `conformance/tools/run-linux.sh` (~10 min: protocol, cli, behaviors, then the ratchet).
 
-The cargo commands share `target/`, so chain them in one background script (`; ` between them, recording each exit
-status), then start `run-linux.sh` after it; the suite builds the release workspace and needs the vendored
-prefixes (`scripts/build-*.sh --verify`; build what is missing first).
+Without WPE WebKit, `--workspace` and the HTML-overlay feature cannot build: use the package lists README names
+instead (`scripts/lib/native.sh`), as the Ubuntu CI jobs do, and say so in the plan's Context. The cargo commands
+share `target/`, so chain them in one background script (`; ` between them, recording each exit status), then
+start `run-linux.sh` after it; the suite builds the release workspace and needs the vendored prefixes
+(`scripts/build-*.sh --verify`; build what is missing first).
 
 Read the outcome as the plan's starting point:
 
@@ -208,6 +211,8 @@ Read the outcome as the plan's starting point:
   `.venv/bin/python conformance/tools/check_ratchet.py --report conformance/reports/rust-linux/nodeids.jsonl --add`
   and commit `test: ratchet after the TARGET sync`.
 - fmt/clippy/lint-report red after a mechanical bump means a regenerated file or the bindings: fix it in the bump.
+  A vendored-source check (`scripts/vendor-*.sh --check`), the locked-metadata check or the tracing-features check
+  red is unrelated to the sync (the bump touches none of their inputs): `main` has it too; report it and stop.
 
 ## Step 6. Plan
 
@@ -220,6 +225,8 @@ the analysis, the bump and the baseline:
 - every task names its upstream implementation files, Swift tests (with the functions), contract sections, the Rust
   files, the existing and new conformance ids, and ends with the gate and "newly green ids added with
   `check_ratchet.py --add`";
+- a behavior upstream builds on a macOS API names its mechanism on macOS, Linux and Windows, and says which part
+  CI builds on those OSes and which it does not yet (`references/areas.md` > Platforms);
 - `already-ported` clusters go to Context with their evidence, so nobody ports them twice;
 - the Safety rules section holds the hard-rules block verbatim.
 
@@ -241,7 +248,9 @@ mentions, upstream's pin moves reported; each thing left out of the bump and why
 **Already in the Rust build** — clusters with no task, with the evidence.
 **No port needed** — the no-port list, one line each.
 **Next** — `/plan-exec-revmux docs/plans/<file>` from branch `upstream-sync-TARGET`; then (the user) push the branch
-and run `reference-macos.yml` for the new suite tests. Nothing was pushed.
+and start `reference-macos.yml` on it by hand for the new suite tests (`gh workflow run reference-macos.yml --ref
+upstream-sync-TARGET`), and open a pull request so `cross-platform.yml` runs (a plain branch push starts
+neither). Nothing was pushed.
 ```
 
 ## Key rules

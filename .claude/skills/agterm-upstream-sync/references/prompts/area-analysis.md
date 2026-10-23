@@ -5,7 +5,8 @@ One subagent per feature cluster (a command group, or one changelog entry with i
 of this skill. Paste the hard-rules block from `references/safety.md` where it says so.
 
 ```
-You analyse one upstream agterm change for a port into ngterm (Rust, GPUI on Linux). You do NOT implement
+You analyse one upstream agterm change for a port into ngterm (Rust, GPUI; macOS, Linux and Windows are equal
+targets, while upstream is macOS only). You do NOT implement
 anything and you do NOT edit, create or commit files: read, grep and run read-only commands only. Do not run cargo
 (build, test, clippy): the gates share target/ and are running or about to. Your answer is a draft plan task.
 
@@ -34,8 +35,11 @@ Do this:
    are in `conformance/rust-passing.txt`, and the tests still missing (propose file, function name, `covers` keys,
    and what each asserts). A UI-only behavior has no suite test on Linux: propose its UI item
    (the GPUI form) instead.
-4. Linux specifics: anything macOS-only (AppKit, Finder, NSEvent, keyboard-layout APIs) gets its GPUI/Linux
-   equivalent, or "no Linux counterpart" with the reason.
+4. Platforms (CLAUDE.md > Platforms): a behavior upstream builds on a macOS API (AppKit, Finder, NSEvent,
+   keyboard layouts, pasteboards, Notification Center) is ported for macOS, Linux and Windows: name the mechanism
+   per OS (on Linux per desktop, with its fallback). Only a behavior with no meaning on an OS (a Homebrew cask fix,
+   an AppKit bug workaround) gets "no counterpart on <OS>" with the reason. Upstream's session host
+   (`SessionHostRuntime`) maps to `ngterm-session`/`ngterm-pty`, on all three OSes.
 5. Decide STATUS per behavior: `absent` (no Rust code); `partial` (part of it missing, or the code is there but no
    Rust unit test asserts what the Swift tests assert, or no conformance id covers a suite-testable behavior: then the
    task ports the tests); `already-ported` (code and tests both there: cite them); `no-behavior-change` (a move,
@@ -55,6 +59,7 @@ EVIDENCE: <for already-ported or partial: file:line and test ids that show it>
 CONFORMANCE_EXISTING: <ids, each with listed|not-listed in rust-passing.txt>
 CONFORMANCE_NEW: <proposed new tests, or none>
 UI_ITEMS: <proposed UI-only items with their GPUI form, or none>
+PLATFORMS: <the mechanism per OS (macOS / Linux / Windows) for each OS-specific behavior, or "no OS-specific code">
 ITEMS:
 - [ ] <one behavior per line, with the exact upstream string where there is one>
 - [ ] write tests: <Rust unit tests: the cases from the Swift tests>

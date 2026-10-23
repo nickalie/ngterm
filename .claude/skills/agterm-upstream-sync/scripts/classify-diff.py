@@ -32,6 +32,12 @@ RULES: list[tuple[str, str]] = [
     ("app-control", r"^agterm/Control/"),
     ("cli", rf"^{CLI}(?P<group>\w+?)(Commands)?(\+\w+)?\.swift$"),
     ("cli", r"^agtermctl/"),
+    # upstream's session host: the supervisor that spawns and owns the Live daemons, its responsibility shim and
+    # its fixtures (ngterm-session is its counterpart)
+    ("session-host", r"^agtermCore/Sources/(SessionHost\w*|AgtermResponsibility|agterm-session-host)/"),
+    ("tests-session-host", r"^agtermCore/Sources/session-host-[\w-]+/"),
+    ("tests-session-host", r"^agtermCore/Tests/SessionHostRuntimeTests/"),
+    ("tests-cli", r"^agtermCore/Sources/[\w-]+-probe/"),
     ("core", rf"^{CORE}"),
     ("tests-core", r"^agtermCore/Tests/agtermCoreTests/"),
     ("tests-cli", r"^agtermCore/Tests/agtermctlKitTests/"),
@@ -48,6 +54,8 @@ RULES: list[tuple[str, str]] = [
     ("contract-docs", r"^\.claude/rules/"),
     ("contract-docs", r"^(docs/troubleshooting\.md|cookbook/)"),
     ("upstream-design", r"^docs/(plans|backlog)/"),
+    # the Swift package manifest and lint config: a new target or dependency shows up in the sources it builds
+    ("no-port", r"^agtermCore/(Package\.(swift|resolved)|Tests/\.swiftlint\.yml)$"),
     ("no-port", r"^(\.github/|packaging/|\.claude-plugin/|plugins/agterm/\.(claude|codex)-plugin/)"),
     # upstream's own `agterm` theme: this build ships Ghostty's themes only
     ("no-port", r"^agterm/Resources/custom-themes/"),
@@ -64,8 +72,10 @@ AREA_TITLES = {
     "app-control": "App side of the control server (`ngterm-gpui`)",
     "cli": "agtermctl (`ngterm-ctl`)",
     "core": "Core model, store and on-disk formats (`ngterm-core`)",
+    "session-host": "Upstream's session host: the Live daemons' supervisor (`ngterm-session`)",
     "tests-core": "Swift tests: agtermCore (exact strings, edge cases, field order)",
     "tests-cli": "Swift tests: agtermctlKit (CLI output and errors)",
+    "tests-session-host": "Swift tests: SessionHostRuntime and its fixtures (`ngterm-session`)",
     "tests-app": "Swift tests: app (ControlServer, views, Ghostty glue)",
     "tests-ui": "Swift UI tests (accessibility ids; the suite's ui layer)",
     "ui": "UI (`ngterm-gpui`)",
@@ -154,7 +164,7 @@ def collect(upstream: str, old: str, new: str) -> list[FileChange]:
             FileChange(path, int(added) if added != "-" else 0, int(deleted) if deleted != "-" else 0, area, group,
                        statuses.get(path, "M"))
         )
-    source_areas = {"protocol", "dispatcher", "app-control", "cli", "core"}
+    source_areas = {"protocol", "dispatcher", "app-control", "cli", "core", "session-host"}
     patches = {
         change.path: git(upstream, "diff", "-U0", old, new, "--", change.path)
         for change in changes
