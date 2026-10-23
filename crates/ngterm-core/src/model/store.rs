@@ -14,7 +14,7 @@ use ngterm_proto::events::EventKind;
 use uuid::Uuid;
 
 use super::naming::{default_workspace_name, sanitized, trimmed_or_none};
-use super::outbox::{EventPayload, ModelEvent, Outbox, SaveRequest, WatermarkRemoval};
+use super::outbox::{EventPayload, ModelEvent, Outbox, RecentClosedChange, SaveRequest, WatermarkRemoval};
 use super::pending_close::PendingCloses;
 use super::recency::RecencyStack;
 use super::recent_closed::{ClosedSessionPlace, RecentClosedList};
@@ -230,6 +230,12 @@ impl AppStore {
     /// Takes the side effects recorded since the last call.
     pub fn take_outbox(&mut self) -> Outbox {
         std::mem::take(&mut self.outbox)
+    }
+
+    /// Takes only the Open Recent changes recorded since the last drain, with their emission places, leaving the rest
+    /// of the outbox for the next one.
+    pub(crate) fn take_recent_closed_changes(&mut self) -> Vec<(u64, RecentClosedChange)> {
+        self.outbox.take_stamped_recent_closed()
     }
 
     /// The pending side effects, for inspection.

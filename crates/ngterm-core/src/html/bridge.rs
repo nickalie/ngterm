@@ -3,7 +3,9 @@
 //! what it left out is filled from where it sits, and only there, so an explicit target, `active`, window or batch
 //! resolves exactly as it would over the socket.
 
-use ngterm_proto::command::{AskCmd, BrowserCmd, FontCmd, HooksCmd, KeymapCmd, LiveCmd, SessionCmd, WindowCmd};
+use ngterm_proto::command::{
+    AskCmd, BrowserCmd, FontCmd, HooksCmd, KeymapCmd, LiveCmd, RecentCmd, SessionCmd, WindowCmd,
+};
 use ngterm_proto::{Args, Command, Request, Response};
 use serde_json::Value;
 use uuid::Uuid;
@@ -176,14 +178,21 @@ const WINDOW_TARGETED: [Command; 9] = [
     Command::Window(WindowCmd::Minimize),
 ];
 /// App-global commands that refuse any window.
-const WINDOWLESS: [Command; 4] = [
+const WINDOWLESS: [Command; 6] = [
     Command::Hooks(HooksCmd::Reload),
     Command::Hooks(HooksCmd::List),
     Command::Browser(BrowserCmd::Clear),
     Command::Browser(BrowserCmd::Links),
+    Command::Recent(RecentCmd::List),
+    Command::Recent(RecentCmd::Clear),
 ];
-/// Their ids name something else (a remote session, dashboard cells), and they still land in a local window.
-const PLACED_LOCALLY: [Command; 2] = [Command::Live(LiveCmd::Attach), Command::Dashboard];
+/// Their ids name something else (a remote session, dashboard cells, a Recent Closed entry), and they still land in a
+/// local window.
+const PLACED_LOCALLY: [Command; 3] = [
+    Command::Live(LiveCmd::Attach),
+    Command::Dashboard,
+    Command::Recent(RecentCmd::Open),
+];
 
 /// Where a requesting page sits when its request arrives (upstream's `HtmlBridgePage`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -411,7 +420,14 @@ mod tests {
     #[test]
     fn a_command_refusing_any_window_gets_none() {
         let fixture = Fixture::new();
-        for cmd in ["hooks.reload", "hooks.list", "browser.clear", "browser.links"] {
+        for cmd in [
+            "hooks.reload",
+            "hooks.list",
+            "browser.clear",
+            "browser.links",
+            "recent.list",
+            "recent.clear",
+        ] {
             let built = fixture.request(&format!(r#"{{"cmd":"{cmd}"}}"#));
             assert_eq!(built.target, None, "{cmd}");
             assert_eq!(built.args, None, "{cmd}");
@@ -490,6 +506,22 @@ mod tests {
         assert_eq!(window(&dashboard), Some("W1"));
         let elsewhere = fixture.request(r#"{"cmd":"dashboard","args":{"targets":["A"],"window":"W2"}}"#);
         assert_eq!(window(&elsewhere), Some("W2"));
+    }
+
+    /// The entry id names the entry, not where it goes: a page's `recent.open` reopens into its own window.
+    #[test]
+    fn recent_open_reopens_into_the_pages_window() {
+        let fixture = Fixture::new();
+        let newest = fixture.request(r#"{"cmd":"recent.open"}"#);
+        assert_eq!(newest.target, None);
+        assert_eq!(window(&newest), Some("W1"));
+        let targeted = fixture.request(r#"{"cmd":"recent.open","target":"ab12"}"#);
+        assert_eq!(targeted.target.as_deref(), Some("ab12"));
+        assert_eq!(window(&targeted), Some("W1"));
+        let elsewhere = fixture.request(r#"{"cmd":"recent.open","target":"ab12","args":{"window":"W2"}}"#);
+        assert_eq!(window(&elsewhere), Some("W2"));
+        let active = fixture.request(r#"{"cmd":"recent.open","args":{"window":"active"}}"#);
+        assert_eq!(window(&active), Some("active"));
     }
 
     #[test]

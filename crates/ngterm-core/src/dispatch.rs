@@ -838,9 +838,12 @@ impl Core {
             Command::Live(cmd) if commands::live::answers(cmd) => {
                 result_of(&commands::live::dispatch(self, cmd, request)?)
             }
-            // `browser.clear` and `config.reload` start through `deferred`; `recent.*` is not ported yet
-            cmd
-            @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_) | Command::Recent(_)) => {
+            Command::Recent(cmd) => match commands::recent::dispatch(self, cmd, request)? {
+                Some(result) => result_of(&result),
+                None => Ok(Response::success()),
+            },
+            // `browser.clear` and `config.reload` start through `deferred`
+            cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_)) => {
                 Err(ControlError::NotSupported(cmd))
             }
         }
@@ -850,8 +853,8 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use ngterm_proto::command::{
-        BrowserCmd, ConfigCmd, EventsCmd, HooksCmd, KeymapCmd, LiveCmd, RestoreCmd, SidebarCmd, ThemeCmd, WindowCmd,
-        WorkspaceCmd,
+        BrowserCmd, ConfigCmd, EventsCmd, HooksCmd, KeymapCmd, LiveCmd, RecentCmd, RestoreCmd, SidebarCmd, ThemeCmd,
+        WindowCmd, WorkspaceCmd,
     };
     use serde_json::json;
 
@@ -891,6 +894,9 @@ mod tests {
         // the policy reads back; a clear with no window writes nothing and answers
         Command::Restore(RestoreCmd::Mode),
         Command::Restore(RestoreCmd::Clear),
+        // app-global: an empty Recent Closed list reads back and clears; `recent.open` needs an open window
+        Command::Recent(RecentCmd::List),
+        Command::Recent(RecentCmd::Clear),
     ];
 
     #[test]
@@ -978,11 +984,8 @@ mod tests {
 
     #[test]
     fn the_v0_38_commands_not_ported_yet_are_refused_by_name() {
-        use ngterm_proto::command::{RecentCmd, SessionCmd};
+        use ngterm_proto::command::SessionCmd;
         for cmd in [
-            Command::Recent(RecentCmd::List),
-            Command::Recent(RecentCmd::Open),
-            Command::Recent(RecentCmd::Clear),
             Command::Workspace(WorkspaceCmd::Flag),
             Command::Session(SessionCmd::OverlayHide),
             Command::Session(SessionCmd::OverlayShow),

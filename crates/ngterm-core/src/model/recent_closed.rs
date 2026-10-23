@@ -98,6 +98,15 @@ impl RecentClosedRestore {
     };
 }
 
+/// What [`WindowLibrary::reopen_recent_closed_outcome`](super::WindowLibrary::reopen_recent_closed_outcome) achieved
+/// (upstream's `RecentClosedReopen`): the window the entry was restored into, and whether the entry is gone from the
+/// list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecentClosedReopen {
+    pub window: Uuid,
+    pub complete: bool,
+}
+
 /// Where a closed session sat, for its Open Recent entry.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ClosedSessionPlace<'a> {

@@ -482,31 +482,31 @@ file where the directory should be on Windows.
   `tests/cli/test_cli_output.py::test_recent_list_open_clear` (covers `cli:recent list`, `cli:recent open`,
   `cli:recent clear`)
 
-- [ ] wire: `result.recent` newest first, each `{id, kind "session"|"workspace", title, subtitle?, closedAt (Unix
+- [x] wire: `result.recent` newest first, each `{id, kind "session"|"workspace", title, subtitle?, closedAt (Unix
       seconds, converted from the file's reference-date seconds), workspaceID (the parent for a session entry, the
       workspace itself otherwise), sessionIDs}`; `result.recentOpen` `{item, window, complete}`
-- [ ] recent.list / recent.clear with a target or `args.window` are refused before anything runs: "recent.list takes
+- [x] recent.list / recent.clear with a target or `args.window` are refused before anything runs: "recent.list takes
       no target or --window" (and the recent.clear form)
-- [ ] recent.open: resolve the `--window` placement first (an unknown or closed window fails before any restore);
+- [x] recent.open: resolve the `--window` placement first (an unknown or closed window fails before any restore);
       then the target: none = newest; empty list "no recently closed items"; exact id or unique prefix, never
       `active`: "no such recent item: X", "ambiguous recent item prefix 'X' → …"; a failed restore "could not
       reopen <UUID>"; through the menu's restore path, without `take_frontmost`; the reply names the window it
       actually went to (the one holding the session or workspace wins over `--window`)
-- [ ] `complete` and recent.clear's ok are read from the reloaded list: commit, then reload through
+- [x] `complete` and recent.clear's ok are read from the reloaded list: commit, then reload through
       `RecentClosedStore::load()` when persistence is present; a failed clear "could not clear recent items" keeps
       the entries
-- [ ] HTML bridge: recent.list and recent.clear get no window; recent.open still gets the page's window (an explicit
+- [x] HTML bridge: recent.list and recent.clear get no window; recent.open still gets the page's window (an explicit
       `--window` wins)
-- [ ] ngtermctl `recent list`, `recent open [ID] [--window W]`, `recent clear` (list and clear refuse `--window`),
+- [x] ngtermctl `recent list`, `recent open [ID] [--window W]`, `recent clear` (list and clear refuse `--window`),
       upstream's help text; output rows `<full id>  <kind>  <title> (<subtitle>)`, empty `no recently closed items`,
       open `reopened <kind> <title>` plus ` (incomplete: the entry stays in the list)` when not complete
-- [ ] write tests: Rust unit tests for every Swift case above (projection, round trip, resolution incl. lowercase,
+- [x] write tests: Rust unit tests for every Swift case above (projection, round trip, resolution incl. lowercase,
       prefix, `active` and ambiguous; refusals before any action; the reopen outcome incl. workspace-owner routing
       and an unwritable removal giving incomplete; grace-window undo; clear failure; bridge window sets; clap and
       output formatting)
-- [ ] write tests: the conformance tests above
-- [ ] manual check (user): green on reference-macos
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance tests above
+- [x] manual check (user): green on reference-macos (skipped - not automatable here: reference-macos runs only in CI on macOS)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user; the 8 new ids passed in a targeted run and are added in Task 35)
 
 ### Task 6: `session scratch`: showing never selects; `--follow`; `--command` against a shown scratch (#730)
 

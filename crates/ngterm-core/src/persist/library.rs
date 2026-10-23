@@ -334,6 +334,16 @@ impl LibraryPersistence {
         RecentClosedStore::new(&self.directory)
     }
 
+    /// Writes the Open Recent changes `library` recorded since the last drain to `recent-closed.json`, then reloads the
+    /// library's list from the file, so a write that failed shows as the entry it left behind (upstream's
+    /// `refreshRecentClosedItems` after each `RecentClosedStore` call, whose `save` logs a failure and returns). The
+    /// other effects wait for the next [`LibraryPersistence::commit`].
+    pub fn sync_recent_closed(&self, library: &mut WindowLibrary) {
+        let changes = library.take_recent_closed_changes();
+        self.apply_recent_closed(&changes);
+        library.set_recent_closed_items(self.recent_closed_store().load());
+    }
+
     /// Applies the model's Open Recent changes to `recent-closed.json`, in order; a failed write is logged and the
     /// next change starts from what the file holds.
     fn apply_recent_closed(&self, changes: &[RecentClosedChange]) {

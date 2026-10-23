@@ -30,6 +30,17 @@ WID = "22FCC0D1-40EC-49AC-8CB8-D91BDD12B80B"
         ({"app": {"version": "0.36.0", "commit": "8a5f58d4"}}, False, "0.36.0 (8a5f58d4)"),
         ({"app": {"version": "0.36.0", "commit": ""}}, False, "0.36.0"),
         ({"app": {"version": "0.36.0"}}, False, "0.36.0"),
+        ({"recent": [], "app": {"version": "0.36.0"}}, False, "no recently closed items"),
+        (
+            {"recentOpen": {"item": {"kind": "workspace", "title": "infra"}, "window": WID, "complete": True}},
+            False,
+            "reopened workspace infra",
+        ),
+        (
+            {"recentOpen": {"item": {"kind": "session", "title": "api"}, "window": WID, "complete": False}},
+            False,
+            "reopened session api (incomplete: the entry stays in the list)",
+        ),
     ],
 )
 def test_human_takes_the_first_field_the_reference_formats(result, echo_id, expected):
@@ -186,6 +197,14 @@ def test_restore_status_lines():
     ]
     # the Rust build names itself
     assert cli_format.restore_status(changed, LIVE).splitlines()[2] == "restart ngterm to apply the configured mode"
+
+
+def test_recent_rows_carry_the_full_id_kind_title_and_subtitle():
+    rows = [
+        {"id": SID, "kind": "session", "title": "api", "subtitle": "project", "closedAt": 1.0},
+        {"id": WID, "kind": "workspace", "title": "project", "closedAt": 2.0},
+    ]
+    assert cli_format.human({"recent": rows}) == f"{SID}  session  api (project)\n{WID}  workspace  project"
 
 
 def test_zmx_rows_carry_owner_and_state():

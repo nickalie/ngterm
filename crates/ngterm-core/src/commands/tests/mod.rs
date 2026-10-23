@@ -23,6 +23,7 @@ mod pane_focus;
 mod panes;
 mod pick;
 mod quick;
+mod recent;
 mod remote;
 mod restart;
 mod restore;

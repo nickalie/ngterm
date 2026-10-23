@@ -7,6 +7,7 @@ use serde_with::skip_serializing_none;
 
 use crate::events::EventBatch;
 use crate::keymap::{ControlHooks, ControlKeymap};
+use crate::recent::{ControlRecentItem, ControlRecentOpen};
 
 /// A command's result object.
 #[skip_serializing_none]
@@ -100,6 +101,12 @@ pub struct ControlResult {
     /// `session.restart`: the replaced shells.
     #[serde(default)]
     pub restart: Option<ControlRestartReceipt>,
+    /// `recent.list`: the Recent Closed entries, newest first.
+    #[serde(default)]
+    pub recent: Option<Vec<ControlRecentItem>>,
+    /// `recent.open`: what it reopened and where.
+    #[serde(default)]
+    pub recent_open: Option<ControlRecentOpen>,
 }
 
 /// The restore-mode policy `restore.mode` reads (upstream's `ControlRestoreStatus`). The modes travel as raw strings,

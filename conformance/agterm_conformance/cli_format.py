@@ -56,6 +56,10 @@ def human(result: Mapping[str, Any] | None, echo_id: bool = False, vocabulary: V
         return zmx(result[vocabulary.result_key], vocabulary)
     if "restore" in result:
         return restore_status(result["restore"], vocabulary)
+    if "recent" in result:
+        return recent(result["recent"])
+    if "recentOpen" in result:
+        return recent_open(result["recentOpen"])
     if "app" in result:
         app = result["app"]
         return f"{app['version']} ({app['commit']})" if app.get("commit") else app["version"]
@@ -90,6 +94,22 @@ def restore_status(status: Mapping[str, Any], vocabulary: Vocabulary = UPSTREAM)
     if status.get("unavailableReason") is not None:
         lines.append(f"live unavailable: {status['unavailableReason']}")
     return "\n".join(lines)
+
+
+def recent(items: Sequence[Mapping[str, Any]]) -> str:
+    """`formatRecent`: one row per entry with its full id, or the empty line."""
+    if not items:
+        return "no recently closed items"
+    rows = []
+    for item in items:
+        subtitle = f" ({item['subtitle']})" if item.get("subtitle") is not None else ""
+        rows.append(f"{item['id']}  {item['kind']}  {item['title']}{subtitle}")
+    return "\n".join(rows)
+
+
+def recent_open(open_: Mapping[str, Any]) -> str:
+    reopened = f"reopened {open_['item']['kind']} {open_['item']['title']}"
+    return reopened if open_["complete"] else reopened + " (incomplete: the entry stays in the list)"
 
 
 def remote_tree(remote: Mapping[str, Any]) -> str:

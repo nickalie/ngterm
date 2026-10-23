@@ -975,6 +975,44 @@ def test_browser_and_config(cli, ctl):
     _rendered(cli("config", "reload"), reloaded)
 
 
+# -- recent
+
+
+@pytest.mark.covers("cli:recent list", "cli:recent open", "cli:recent clear")
+def test_recent_list_open_clear(cli, ctl):
+    assert_ok(ctl.request("recent.clear"))
+    _ok(cli("recent", "list"), "no recently closed items\n")
+    _refused(cli("recent", "open"), "no recently closed items")
+    wid = assert_ok(ctl.request("workspace.new", name=_name("recent")))["id"]
+    try:
+        closed = {}
+        for prefix in ("older", "newer"):
+            name = _name(prefix)
+            sid = assert_ok(ctl.request("session.new", workspace=wid, name=name))["id"]
+            assert_ok(ctl.request("session.close", sid))
+            closed[prefix] = (sid, name)
+        listing = _json(cli("recent", "list", "--json"))
+        assert [entry["sessionIDs"] for entry in listing["recent"]] == [[closed["newer"][0]], [closed["older"][0]]]
+        _rendered(cli("recent", "list"), listing)
+
+        older = listing["recent"][1]
+        opened = _json(cli("recent", "open", older["id"][:12], "--json", "--window", "active"))
+        assert opened["recentOpen"]["item"] == older and opened["recentOpen"]["complete"] is True
+        assert _node(ctl, closed["older"][0])["name"] == closed["older"][1]
+        _ok(cli("recent", "open"), f"reopened session {closed['newer'][1]}\n")
+        assert _node(ctl, closed["newer"][0])["name"] == closed["newer"][1]
+        _refused(cli("recent", "open", UNKNOWN), "no recently closed items")
+
+        assert_ok(ctl.request("session.close", closed["older"][0]))
+        _ok(cli("recent", "clear"), "ok\n")
+        assert assert_ok(ctl.request("recent.list"))["recent"] == []
+        _usage(cli("recent", "list", "--window", "active"))
+        _usage(cli("recent", "clear", "--window", "active"))
+    finally:
+        assert_ok(ctl.request("workspace.delete", wid))
+        assert_ok(ctl.request("recent.clear"))
+
+
 # -- restore and the zmx group
 
 

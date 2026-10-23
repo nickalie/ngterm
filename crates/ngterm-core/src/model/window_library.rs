@@ -16,7 +16,7 @@ use super::naming::{default_window_name, is_auto_window_name, sanitized, trimmed
 use super::navigation::{WorkspaceNavigation, wrapped};
 use super::outbox::{ModelEvent, RecentClosedChange, SaveRequest, WatermarkRemoval, next_emission};
 use super::pending_close::PendingCloseTimer;
-use super::recent_closed::RecentClosedList;
+use super::recent_closed::{RecentClosedList, RecentClosedReopen};
 use super::session::Session;
 use super::store::{AppStore, NewSession};
 use crate::persist::{RecentClosedItem, RecentClosedKind};
@@ -573,6 +573,17 @@ impl WindowLibrary {
         self.pending_recent_closed.push((next_emission(), change));
     }
 
+    /// Takes only the Open Recent changes recorded since the last drain, the library's and every open store's, in the
+    /// order they happened; the other effects wait for the next [`WindowLibrary::drain_effects`].
+    pub fn take_recent_closed_changes(&mut self) -> Vec<RecentClosedChange> {
+        let mut recent = std::mem::take(&mut self.pending_recent_closed);
+        for store in self.stores.values_mut() {
+            recent.extend(store.take_recent_closed_changes());
+        }
+        recent.sort_by_key(|(emission, _)| *emission);
+        recent.into_iter().map(|(_, change)| change).collect()
+    }
+
     /// Reopens the entry `item`; whether anything was restored. See
     /// [`WindowLibrary::reopen_recent_closed_reporting_window`].
     pub fn reopen_recent_closed(&mut self, item: Uuid, into: Option<Uuid>) -> bool {
@@ -596,6 +607,15 @@ impl WindowLibrary {
     /// with whichever window sorts first. The entry survives an incomplete restore, so a member left in no window
     /// can still be reopened.
     pub fn reopen_recent_closed_reporting_window(&mut self, item: Uuid, into: Option<Uuid>) -> Option<Uuid> {
+        self.reopen_recent_closed_outcome(item, into)
+            .map(|outcome| outcome.window)
+    }
+
+    /// [`WindowLibrary::reopen_recent_closed_reporting_window`] plus whether the entry left the list, read from the
+    /// list after the restore rather than from its coverage. The list here is the in-memory one; whether the removal
+    /// reached `recent-closed.json` is for the caller holding the persistence to read back
+    /// ([`LibraryPersistence::sync_recent_closed`](crate::persist::LibraryPersistence::sync_recent_closed)).
+    pub fn reopen_recent_closed_outcome(&mut self, item: Uuid, into: Option<Uuid>) -> Option<RecentClosedReopen> {
         let item = self.recent_closed.item(item)?;
         let window = self.restore_destination(&item, into)?;
         let occupied = self.session_ids_held_outside(window);
@@ -610,7 +630,10 @@ impl WindowLibrary {
             self.recent_closed.remove(item.id);
             self.push_recent_closed_change(RecentClosedChange::Remove(item.id));
         }
-        Some(window)
+        Some(RecentClosedReopen {
+            window,
+            complete: self.recent_closed.item(item.id).is_none(),
+        })
     }
 
     /// Which window restores `item`: the one holding the session itself, then the one holding its workspace, then

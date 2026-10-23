@@ -69,6 +69,7 @@ pub use commands::notify::{
 };
 pub use commands::overlay::LineChannel;
 pub use commands::process::{CorePoster, CoreTask, ProcessHost, widened_path};
+pub use commands::recent::NO_RECENT_ITEMS;
 pub use commands::relaunch::{EXIT_CAPTURE_BUDGET, PaneSpawn};
 pub use commands::surface::POLL_INTERVAL;
 pub use dispatch::{CommitTimers, Core, CoreConfig, CoreState, Dispatched, Resume, decode_request};

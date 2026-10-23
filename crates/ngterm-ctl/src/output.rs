@@ -11,7 +11,9 @@ use std::process::ExitCode;
 
 use ngterm_core::theme::DEFAULT_TITLE;
 use ngterm_proto::keymap::{ControlHooks, ControlKeymap};
-use ngterm_proto::{ControlRestoreStatus, ControlTree, ControlWindowNode, Response};
+use ngterm_proto::{
+    ControlRecentItem, ControlRecentOpen, ControlRestoreStatus, ControlTree, ControlWindowNode, Response,
+};
 use serde_json::Value;
 
 use crate::client::Reply;
@@ -92,7 +94,8 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
 }
 
 /// The listing branches of [`format_response`], in upstream's order: the tree, the windows, the themes, the keymap,
-/// the hooks, the restore policy. `None` when the result carries none of them.
+/// the hooks, the remote tree, the live inventory, the restore policy, the Recent Closed entries, a reopen. `None` when
+/// the result carries none of them.
 fn format_listing(result: &Value) -> Option<String> {
     // `client::send` already refused a reply whose tree does not decode, as upstream's whole-response decode does
     if let Some(tree) = result
@@ -138,10 +141,22 @@ fn format_listing(result: &Value) -> Option<String> {
     {
         return Some(crate::live::format_live(&live));
     }
-    result
+    if let Some(restore) = result
         .get("restore")
         .and_then(|restore| serde_json::from_value::<ControlRestoreStatus>(restore.clone()).ok())
-        .map(|restore| format_restore_status(&restore))
+    {
+        return Some(format_restore_status(&restore));
+    }
+    if let Some(recent) = result
+        .get("recent")
+        .and_then(|recent| serde_json::from_value::<Vec<ControlRecentItem>>(recent.clone()).ok())
+    {
+        return Some(crate::recent::format_recent(&recent));
+    }
+    result
+        .get("recentOpen")
+        .and_then(|open| serde_json::from_value::<ControlRecentOpen>(open.clone()).ok())
+        .map(|open| crate::recent::format_recent_open(&open))
 }
 
 /// `restore.mode`: what the next launch will do and what this one did, on separate lines (upstream's
@@ -576,5 +591,25 @@ mod tests {
         assert_eq!(format_response(&response, true), "abc");
         assert_eq!(format_response(&response, false), "ok");
         assert_eq!(format_response(&Response::success(), true), "ok");
+    }
+
+    /// `recent.list` and `recent.open` take their branches after the restore policy and before the version.
+    #[test]
+    fn recent_rows_and_a_reopen_render_in_upstreams_order() {
+        let item = json!({"id": "R1", "kind": "session", "title": "api", "subtitle": "project", "closedAt": 1.0,
+                          "workspaceID": "W1", "sessionIDs": ["S1"]});
+        assert_eq!(
+            format_response(&ok(json!({"recent": [item.clone()], "app": {"version": "1"}})), false),
+            "R1  session  api (project)"
+        );
+        assert_eq!(
+            format_response(&ok(json!({"recent": []})), false),
+            "no recently closed items"
+        );
+        let open = json!({"recentOpen": {"item": item, "window": "W", "complete": false}, "text": "t"});
+        assert_eq!(
+            format_response(&ok(open), false),
+            "reopened session api (incomplete: the entry stays in the list)"
+        );
     }
 }

@@ -10,6 +10,8 @@ pub enum Noun {
     Session,
     Workspace,
     Window,
+    /// A Recent Closed entry (`recent.open`, upstream's `RecentClosedTarget`).
+    RecentItem,
 }
 
 impl Noun {
@@ -20,6 +22,7 @@ impl Noun {
             Self::Session => "session",
             Self::Workspace => "workspace",
             Self::Window => "window",
+            Self::RecentItem => "recent item",
         }
     }
 }

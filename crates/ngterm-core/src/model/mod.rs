@@ -50,7 +50,7 @@ pub use pending_close::{
     PENDING_CLOSE_GRACE, PendingCloseKind, PendingCloseMember, PendingCloseSummary, PendingCloseTimer,
 };
 pub use recency::{RECENCY_LIMIT, RecencyStack};
-pub use recent_closed::RecentClosedRestore;
+pub use recent_closed::{RecentClosedReopen, RecentClosedRestore};
 pub use remote_overlay::{RemoteOverlayClose, RemoteOverlayOutcome, RemoteOverlaySlot, RemoteOverlays};
 pub use remote_presentation::{RemoteBinding, RemoteConnection, RemoteOrigin, RemotePresentationState};
 pub use search::{SearchFollowUp, SearchReport, SearchState};

@@ -4,6 +4,7 @@
 pub mod command;
 pub mod events;
 pub mod keymap;
+pub mod recent;
 pub mod request;
 pub mod response;
 pub mod result;
@@ -16,6 +17,7 @@ pub use keymap::{
     ControlHookEntry, ControlHooks, ControlKeymap, ControlKeymapAction, ControlKeymapCommand, ControlKeymapDiagnostic,
     ControlKeymapMenuItem,
 };
+pub use recent::{ControlRecentItem, ControlRecentOpen};
 pub use request::{Args, AskButton, MAX_REQUEST_LINE_BYTES, PickItem, Request};
 pub use response::Response;
 pub use result::{
