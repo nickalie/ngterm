@@ -1,9 +1,23 @@
 //! Upstream's accessibility identifiers (`conformance/ui-ids.yaml`, generated from upstream's Swift sources) are the
 //! GPUI build's element ids: a future Linux UI driver finds a control by the id upstream's UI tests use. This test
 //! holds the code to the catalog: every id is spelled as a string literal in the frontend's non-test sources, an
-//! interpolated id (`palette-item-{item}`) by the literal part before its first placeholder.
+//! interpolated id (`palette-item-{item}`) by the literal part before its first placeholder. An id the catalog gained
+//! before the element that carries it was ported waits in [`PENDING`] until that element lands.
 
 use std::path::{Path, PathBuf};
+
+/// Catalog ids whose element is not ported yet: each must still be in the catalog and must not be carried yet, so the
+/// change that adds the element also takes its id off this list.
+const PENDING: &[&str] = &[
+    // the `ask` form's text field, choice rows and free-form row
+    "ask-input",
+    "ask-choice-{id}",
+    "ask-other",
+    // the title bar's hide/show overlays button
+    "overlay-toggle",
+    // Settings' keyboard-layout lock picker
+    "settings-terminal-input-source",
+];
 
 /// The catalog's ids, both the generated (`ids:`) and the hand-maintained (`manual:`) ones.
 fn catalog() -> Vec<String> {
@@ -48,15 +62,24 @@ fn every_upstream_accessibility_id_is_an_element_id_of_the_gpui_build() {
     assert!(ids.len() > 100, "the catalog parsed: {} ids", ids.len());
     let mut files = Vec::new();
     sources(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+    let carried = |id: &str| {
+        let needle = match id.split_once('{') {
+            Some((prefix, _)) => format!("\"{prefix}"),
+            None => format!("\"{id}\""),
+        };
+        files.iter().any(|(_, text)| text.contains(&needle))
+    };
     let missing: Vec<&String> = ids
         .iter()
-        .filter(|id| {
-            let needle = match id.split_once('{') {
-                Some((prefix, _)) => format!("\"{prefix}"),
-                None => format!("\"{id}\""),
-            };
-            !files.iter().any(|(_, text)| text.contains(&needle))
-        })
+        .filter(|id| !PENDING.contains(&id.as_str()) && !carried(id))
         .collect();
     assert!(missing.is_empty(), "upstream ids no element carries: {missing:?}");
+    let stale: Vec<&&str> = PENDING
+        .iter()
+        .filter(|id| carried(id) || !ids.iter().any(|known| known == *id))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "pending ids already carried or gone from the catalog: {stale:?}"
+    );
 }

@@ -103,6 +103,26 @@
   catalog's `upstream:` names. Task 1 fixes the generator and moves all three. Until then no new catalog key exists,
   so the tasks' `covers(...)` keys below are the ones Task 1's regeneration is expected to add: Task 1 records the
   real list (`coverage-map.py --since`) in this plan.
+- Catalog after Task 1's regeneration (`coverage-map.py --since HEAD` before its commit): no key changed or removed
+  (the ui ids' `at` lines moved, nothing else); added, each with the task that covers it:
+  - commands: `recent.list`, `recent.open`, `recent.clear` (Task 5); `workspace.flag` (Task 10);
+    `session.overlay.hide`, `session.overlay.show`, `session.overlay.toggle` (Task 20); `session.overlay.page.serve`
+    (Task 23, stream mode `page-serve-stream`)
+  - fields: `field:result.recent`, `field:result.recentOpen` (Task 5); `field:result.installed` (Task 8);
+    `field:tree.session.hiddenOverlays` (Task 20); `field:tree.session.overlayWidth`,
+    `field:tree.session.overlayHeight` (Task 25)
+  - events: `event:app.launched` (Task 3); `event:pane.focused` (Task 4)
+  - cli: `cli:recent list`, `cli:recent open`, `cli:recent clear` (Task 5); `cli:session wait` (Task 7, a composite
+    with no wire of its own, `uses: [events.read, window.list, tree]`); `cli:workspace flag` (Task 10);
+    `cli:session overlay hide`, `cli:session overlay show`, `cli:session overlay toggle` (Task 20);
+    `cli:session overlay page-serve` (Task 23)
+  - ui ids: `ui:ask-input`, `ui:ask-choice-{id}`, `ui:ask-other` (Task 17; `ask-other` is a manual entry, its site
+    `agterm/Views/AskFormViews.swift:Self.otherRowID`); `ui:overlay-toggle` (Task 21);
+    `ui:settings-terminal-input-source` (Task 29)
+  - ⚠️ until the last of these keys is covered, the selftest
+    `conformance/selftests/test_coverage.py::test_committed_catalog_passes_the_ci_gate` fails with the coverage gate
+    it runs (same 30 keys, no baseline); every other selftest passes. The five ui ids wait in `PENDING` in
+    `crates/ngterm-gpui/src/ui_ids.rs` until their elements land (Tasks 17, 21, 29 take them off).
 - Every task that edits `resources/skills/ngterm` does so only for ngterm-specific text: the skill's upstream text
   for every feature of this range arrives whole in Task 2.
 - Upstream's presentation frame kinds: v0.38.1's `supportedKinds` order is `status, hud, notify, context, layout,
@@ -218,23 +238,23 @@ not-yet-implemented refusal), `crates/ngterm-ctl/src/` (subcommand skeletons)
 - `conformance/selftests/test_gen_catalog.py`: a case per new input form
 - expected newly green: none (skeletons implement nothing)
 
-- [ ] `gen_catalog.py` reads a `CLI only: a, b, c` wire line as a client-side composite: the CLI item (`cli:session
+- [x] `gen_catalog.py` reads a `CLI only: a, b, c` wire line as a client-side composite: the CLI item (`cli:session
       wait`) with no wire command of its own (control-api.md: "session wait is a client-side composite, not an
       exemption"), the listed wire names checked against the Command enum as the commands it uses
-- [ ] `gen_catalog.py` resolves an accessibility identifier built by a static helper in the same type
+- [x] `gen_catalog.py` resolves an accessibility identifier built by a static helper in the same type
       (`Self.rowID(choice.id)` → the helper's interpolated string, e.g. `ask-choice-{id}`), as it already does for
       interpolated literals; an unresolvable helper still reports `unparseable identifier argument`
-- [ ] `gen_catalog.py`: `session.overlay.page.serve` joins the stream-mode table beside `session.overlay.job.run`
+- [x] `gen_catalog.py`: `session.overlay.page.serve` joins the stream-mode table beside `session.overlay.job.run`
       (a connection that outlives its reply, Task 23)
-- [ ] regenerate: `.venv/bin/python conformance/tools/gen_catalog.py --tag v0.38.1 --repo .upstream/agterm`; keep
+- [x] regenerate: `.venv/bin/python conformance/tools/gen_catalog.py --tag v0.38.1 --repo .upstream/agterm`; keep
       hand-written exemption lines (a reflow is formatting)
-- [ ] move the reference adapter's `PARITY_LEVEL` to `0.38.1` and its assert in
+- [x] move the reference adapter's `PARITY_LEVEL` to `0.38.1` and its assert in
       `conformance/selftests/test_impls.py::test_swift_macos_profile_follows_launch_mode`, in the same commit as the
       catalog (`reference-macos.yml` fetches the catalog's tag)
-- [ ] run `.venv/bin/python .claude/skills/agterm-upstream-sync/scripts/coverage-map.py --since HEAD~1` and record
+- [x] run `.venv/bin/python .claude/skills/agterm-upstream-sync/scripts/coverage-map.py --since HEAD~1` and record
       the added, changed and removed keys in this plan's Context, each with the task below that covers it (➕ a task
       for any key no task covers)
-- [ ] skeletons, so `crates/ngterm-proto/tests/catalog.rs` and ngterm-ctl's `the_command_tree_is_the_catalogs_cli`
+- [x] skeletons, so `crates/ngterm-proto/tests/catalog.rs` and ngterm-ctl's `the_command_tree_is_the_catalogs_cli`
       are green: every new wire name (expected: `session.overlay.hide`, `session.overlay.show`,
       `session.overlay.toggle`, `session.overlay.page.serve`, `recent.list`, `recent.open`, `recent.clear`,
       `workspace.flag`) as a Command variant in upstream's order, answering the same refusal the dispatcher gives
@@ -243,9 +263,10 @@ not-yet-implemented refusal), `crates/ngterm-ctl/src/` (subcommand skeletons)
       `session overlay hide|show|toggle|page-serve`, `recent list|open|clear`, `session wait`, `workspace flag`) as
       a clap skeleton reaching that refusal (or, for `session wait`, a not-implemented error). Fields, flags and
       behavior come in their tasks
-- [ ] the coverage gate: its uncovered keys are exactly the new ones, each named for its task in Context
-- [ ] write tests: the generator selftests for both input forms and the stream mode
-- [ ] gate (Development Approach) passes; newly green ids added with `check_ratchet.py --add`
+- [x] the coverage gate: its uncovered keys are exactly the new ones, each named for its task in Context
+- [x] write tests: the generator selftests for both input forms and the stream mode
+- [x] gate (Development Approach) passes; newly green ids added with `check_ratchet.py --add` (none newly green;
+      ratchet holds; the coverage gate and its selftest twin fail only on the 30 keys listed in Context)
 
 ### Task 2: Bundled skill: merge upstream v0.38.1 into `resources/skills/ngterm`
 
@@ -1045,6 +1066,8 @@ action per OS. Not built on macOS/Windows by CI until ngterm-gpui joins `cross-p
       the window
 - [ ] the close chord with a composing editor keeps the ask (terminal and GUI ask)
 - [ ] element ids `ask-input`, `ask-choice-<id>`, `ask-other`
+- [ ] ➕ take those three ids off `PENDING` in `crates/ngterm-gpui/src/ui_ids.rs` (Task 1 parked them there; the
+      ui-ids test fails while a pending id is carried)
 - [ ] write tests: GPUI window tests (headless, lavapipe) for the AskDialogViewTests cases: focus at open; typing
       updates the draft; one-line Return, Tab to Cancel then Return → `escaped` without text; Esc; multiline Return
       and the submit chord; the cap and the forbidden-control paste; composing keeps the ask; the draft survives an
@@ -1285,6 +1308,7 @@ write_screen_file:paste; on Windows it is AltGr+Shift+J where AltGr = Ctrl+Alt, 
 - [ ] title bar: the overlay toggle after split, counted for the dividers; disabled with nothing to hide or under a
       picker, zoom or dashboard; label Hide/Show Overlays, a slashed icon while anything is hidden, id
       `overlay-toggle`
+- [ ] ➕ take `overlay-toggle` off `PENDING` in `crates/ngterm-gpui/src/ui_ids.rs` (Task 1 parked it there)
 - [ ] Settings ▸ Interface: "Hide overlays", off by default; Multiple Windows becomes the Sidebar section's last row
       as upstream (grouping parity; Settings stays the in-window popup)
 - [ ] close confirmations append " Its hidden overlays close with it." (one session) or " Their hidden overlays
@@ -1835,6 +1859,8 @@ CI); the performers are frontend code, not built on macOS/Windows by CI until ng
 - [ ] Settings ▸ Key Mapping ▸ "Keyboard Layout": a picker "Lock in terminals" (id `settings-terminal-input-source`),
       Off first, then the selectable layouts; a saved id no longer selectable shows "<id> (unavailable)"; the list
       re-read when Settings opens and when the app regains focus; disabled with the reason where no backend exists
+- [ ] ➕ take `settings-terminal-input-source` off `PENDING` in `crates/ngterm-gpui/src/ui_ids.rs` (Task 1 parked it
+      there)
 - [ ] the backends per OS as in Platforms, behind `cfg` or a runtime desktop probe, each with the disabled fallback
 - [ ] write tests: the nine InputSourceLock cases; the settings round trip; the settings-model persist/remove case; a
       key_mapping section test with the unavailable row; a backend test on the private Xvfb's XKB (two layouts,

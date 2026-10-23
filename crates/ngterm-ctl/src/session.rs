@@ -10,7 +10,7 @@ use ngterm_proto::{Args, Command, Request};
 
 use crate::{
     BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions, session_background, session_hud,
-    session_io, session_meta, session_overlay, session_panes, session_restore,
+    session_io, session_meta, session_overlay, session_panes, session_restore, session_wait,
 };
 
 /// `ngtermctl session <subcommand>`.
@@ -58,6 +58,7 @@ impl Session {
             SessionCommand::Background(group) => group.command(),
             SessionCommand::Overlay(group) => group.command(),
             SessionCommand::Hud(group) => group.command(),
+            SessionCommand::Wait(command) => command,
         }
     }
 }
@@ -94,6 +95,7 @@ enum SessionCommand {
     Background(session_background::Background),
     Overlay(session_overlay::Overlay),
     Hud(session_hud::Hud),
+    Wait(session_wait::Wait),
 }
 
 /// A request for `cmd` on `target` with `args` (`--window` folded in).

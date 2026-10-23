@@ -57,6 +57,9 @@ impl Overlay {
         match &self.command {
             OverlayCommand::Open(command) => command.as_ref(),
             OverlayCommand::Close(command) => command,
+            OverlayCommand::Hide(command) => command,
+            OverlayCommand::Show(command) => command,
+            OverlayCommand::Toggle(command) => command,
             OverlayCommand::Resize(command) => command,
             OverlayCommand::Reload(command) => command,
             OverlayCommand::Navigate(command) => command,
@@ -65,6 +68,7 @@ impl Overlay {
             OverlayCommand::Copy(command) => command,
             OverlayCommand::Text(command) => command,
             OverlayCommand::RunJob(command) => command,
+            OverlayCommand::PageServe(command) => command,
         }
     }
 }
@@ -75,6 +79,9 @@ impl Overlay {
 enum OverlayCommand {
     Open(Box<Open>),
     Close(Close),
+    Hide(Hide),
+    Show(Show),
+    Toggle(Toggle),
     Resize(Resize),
     Reload(overlay_page::Reload),
     Navigate(overlay_page::Navigate),
@@ -83,6 +90,7 @@ enum OverlayCommand {
     Copy(Copy),
     Text(Text),
     RunJob(crate::overlay_job::RunJob),
+    PageServe(PageServe),
 }
 
 /// The exit status of a program status: its low byte, as the OS keeps of an `exit(code)`.
@@ -451,6 +459,82 @@ impl RequestCommand for Resize {
             Some(args),
             &self.options,
         )
+    }
+}
+
+// MARK: - hide, show, toggle, page-serve
+
+/// Declares an overlay visibility subcommand (upstream's `Session+OverlayVisibility.swift`) sending `$cmd` to its
+/// target. `--pane` is not ported yet.
+macro_rules! visibility_command {
+    ($(#[$doc:meta])* $name:ident, $cmd:expr, $about:literal) => {
+        $(#[$doc])*
+        #[derive(Debug, clap::Args)]
+        #[command(about = $about)]
+        pub struct $name {
+            #[command(flatten)]
+            target: TargetOptions,
+
+            #[command(flatten)]
+            options: ClientOptions,
+        }
+
+        impl RequestCommand for $name {
+            fn options(&self) -> &BasicOptions {
+                &self.options.basic
+            }
+
+            fn make_request(&self) -> Request {
+                session_request($cmd, Some(self.target.target.clone()), None, &self.options)
+            }
+        }
+    };
+}
+
+visibility_command!(
+    /// `ngtermctl session overlay hide`.
+    Hide,
+    SessionCmd::OverlayHide,
+    "Hide the session's overlays without closing them."
+);
+visibility_command!(
+    /// `ngtermctl session overlay show`.
+    Show,
+    SessionCmd::OverlayShow,
+    "Show the session's hidden overlays again."
+);
+visibility_command!(
+    /// `ngtermctl session overlay toggle`.
+    Toggle,
+    SessionCmd::OverlayToggle,
+    "Hide the session's overlays if any is shown, otherwise show them all."
+);
+
+/// `ngtermctl session overlay page-serve TOKEN` (upstream's `OverlayPageServe.swift`): claims a handed-over page by
+/// its token. The channel it carries after the reply is not ported yet, so a run is one request and its reply.
+#[derive(Debug, clap::Args)]
+#[command(
+    name = "page-serve",
+    about = "Carry a handed-over page's channel between stdin/stdout and this app."
+)]
+pub struct PageServe {
+    #[arg(help = "The token the other Mac was handed with the page.")]
+    token: String,
+
+    #[command(flatten)]
+    options: BasicOptions,
+}
+
+impl RequestCommand for PageServe {
+    fn options(&self) -> &BasicOptions {
+        &self.options
+    }
+
+    fn make_request(&self) -> Request {
+        Request {
+            target: Some(self.token.clone()),
+            ..Request::new(Command::Session(SessionCmd::OverlayPageServe))
+        }
     }
 }
 

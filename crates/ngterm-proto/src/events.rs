@@ -37,10 +37,14 @@ pub enum EventKind {
     PaneSplit,
     #[strum(serialize = "pane.scratch")]
     PaneScratch,
+    #[strum(serialize = "pane.focused")]
+    PaneFocused,
     #[strum(serialize = "remote.opened")]
     RemoteOpened,
     #[strum(serialize = "remote.closed")]
     RemoteClosed,
+    #[strum(serialize = "app.launched")]
+    AppLaunched,
 }
 
 impl EventKind {

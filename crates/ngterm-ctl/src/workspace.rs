@@ -33,6 +33,7 @@ impl Workspace {
             WorkspaceCommand::Move(command) => command,
             WorkspaceCommand::Focus(command) => command,
             WorkspaceCommand::Filter(command) => command,
+            WorkspaceCommand::Flag(command) => command,
             WorkspaceCommand::Collapse(command) => command,
             WorkspaceCommand::Expand(command) => command,
         }
@@ -50,6 +51,7 @@ enum WorkspaceCommand {
     Move(Move),
     Focus(Focus),
     Filter(Filter),
+    Flag(Flag),
     Collapse(Collapse),
     Expand(Expand),
 }
@@ -167,6 +169,12 @@ targeted_command!(
     Select,
     WorkspaceCmd::Select,
     "Select a workspace."
+);
+targeted_command!(
+    /// `ngtermctl workspace flag`: its mode is not ported yet.
+    Flag,
+    WorkspaceCmd::Flag,
+    "Flag or unflag every session in a workspace (on|off|toggle)."
 );
 targeted_command!(
     /// `ngtermctl workspace collapse`.

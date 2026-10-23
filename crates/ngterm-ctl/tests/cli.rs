@@ -472,6 +472,8 @@ SUBCOMMANDS:
   pick                    Open, poll, or cancel a native fuzzy picker.
   ask                     Open, poll, or cancel a themed question dialog.
   restore                 Restore-running-command commands.
+  recent                  Recently closed sessions and workspaces (File > Open
+                          Recent).
   live                    Inspect and manage the daemons behind live sessions.
   terminfo                The terminal's terminfo entry on other hosts.
   clipboard               The clipboard of the terminals showing this pane.
@@ -1223,6 +1225,8 @@ SUBCOMMANDS:
                           terminal on a session.
   hud                     Post, update, or close a passive message panel over a
                           session.
+  wait                    Block until a session's agent status is one of the
+                          given values.
 
   See 'ngtermctl help session <subcommand>' for detailed help.
 ";
@@ -1519,6 +1523,8 @@ SUBCOMMANDS:
   focus                   Mark a workspace in the sidebar focus set
                           (on|off|toggle|add).
   filter                  Turn the sidebar workspace focus filter on or off
+                          (on|off|toggle).
+  flag                    Flag or unflag every session in a workspace
                           (on|off|toggle).
   collapse                Collapse a workspace in the sidebar tree.
   expand                  Expand a workspace in the sidebar tree.
@@ -3490,6 +3496,10 @@ SUBCOMMANDS:
                           --url.
   close                   Close the overlay terminal (destroys it; for one
                           shown on another Mac, requests its cancel).
+  hide                    Hide the session's overlays without closing them.
+  show                    Show the session's hidden overlays again.
+  toggle                  Hide the session's overlays if any is shown,
+                          otherwise show them all.
   resize                  Resize an open overlay: floating at a percent, or
                           back to full-pane.
   reload                  Reload an HTML overlay: the file or URL it was opened
@@ -3506,6 +3516,8 @@ SUBCOMMANDS:
                           TUI's drawn screen, wrapped as rendered).
   run-job                 Run a remote overlay job this app handed to another
                           Mac.
+  page-serve              Carry a handed-over page's channel between
+                          stdin/stdout and this app.
 
   See 'ngtermctl help session overlay <subcommand>' for detailed help.
 ";

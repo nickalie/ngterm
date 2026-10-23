@@ -3,10 +3,13 @@
 
 Commands come from the `Command` enum, fields from the Codable properties of `ControlResult` and the tree,
 workspace, session and window nodes, events from `ControlEventKind`, CLI subcommands from the
-`site/commands.html` synopses. Generated sections are replaced; `behaviors` and `exemptions` are kept, except
-that entries of AUTO_BEHAVIORS / AUTO_EXEMPTIONS are re-added when missing (drop one from its table to remove it).
+`site/commands.html` synopses (a card whose wire line reads `CLI only: a, b` is a client-side composite: its CLI
+items carry no wire command and list the commands they use). Generated sections are replaced; `behaviors` and
+`exemptions` are kept, except that entries of AUTO_BEHAVIORS / AUTO_EXEMPTIONS are re-added when missing (drop one
+from its table to remove it).
 UI ids (ui-ids.yaml, next to the catalog) come from the `accessibilityIdentifier(...)` and
-`setAccessibilityIdentifier(...)` calls under `agterm/`.
+`setAccessibilityIdentifier(...)` calls under `agterm/`; an argument that calls a `Self.` helper returning one string
+literal resolves to that literal.
 Anything the parser cannot read is reported and neither file is written.
 """
 
@@ -45,7 +48,7 @@ FIELD_SOURCES = (
 )
 GENERATED_SECTIONS = ("commands", "fields", "events", "cli")
 # Keys the generator owns inside an item; every other key on an item is kept across regeneration.
-GENERATED_KEYS = ("mode", "wire")
+GENERATED_KEYS = ("mode", "wire", "uses")
 UI_GENERATED_KEYS = ("at",)
 UI_WIDTH = 4096  # source paths make ui items long; keep one line each
 
@@ -54,6 +57,7 @@ UI_WIDTH = 4096  # source paths make ui items long; keep one line each
 COMMAND_MODES = {
     "zmx.present": "presentation-stream",
     "session.overlay.job.run": "job-stream",
+    "session.overlay.page.serve": "page-serve-stream",
 }
 AUTO_BEHAVIORS = {
     # `zmx tree HOST` runs the hostless form over ssh; the command itself is covered by the hostless form.
@@ -396,6 +400,8 @@ _SYNOPSIS_STYLE = ("color: #6d82f3", "font-size: 13.5px")
 _WIRE_STYLE = ("color: #6b727a", "font-size: 11.5px")
 _WORD = re.compile(r"^[a-z][a-z0-9-]*$")
 _ALTERNATION = re.compile(r"^[a-z][a-z0-9-]*(?:\|[a-z][a-z0-9-]*)+$")
+# A composite's wire line: the CLI subcommand sends no command of its own and uses the listed ones.
+_CLI_ONLY = "CLI only:"
 
 
 class _Cards(html.parser.HTMLParser):
@@ -433,23 +439,44 @@ class _Cards(html.parser.HTMLParser):
             self._current[1] += data
 
 
-def cli_subcommands(path: Path, text: str, commands: set[str], problems: list[str]) -> dict[str, dict[str, Any]]:
+@dataclass
+class _Card:
+    synopsis: str
+    line: int
+    wires: list[str] = field(default_factory=list)
+    uses: list[str] | None = None  # a client-side composite's commands
+
+
+def _cards(path: Path, text: str, commands: set[str], problems: list[str]) -> list[_Card]:
     parser = _Cards()
     parser.feed(text)
     parser.close()
-    cards: list[tuple[str, int, list[str]]] = []
+    cards: list[_Card] = []
     for kind, block, line in parser.blocks:
         if kind == "synopsis":
-            cards.append((block, line, []))
-        elif not cards or cards[-1][2]:
+            cards.append(_Card(block, line))
+            continue
+        if not cards or cards[-1].wires or cards[-1].uses is not None:
             problems.append(f"{path}:{line}: wire name without a synopsis: {block}")
+            continue
+        composite = block.startswith(_CLI_ONLY)
+        separator = "," if composite else "·"
+        body = block.removeprefix(_CLI_ONLY) if composite else block
+        names = [w.strip() for w in body.split(separator) if w.strip()]
+        for name in names:
+            if name not in commands:
+                problems.append(f"{path}:{line}: wire name {name} is not in the Command enum")
+        if composite:
+            cards[-1].uses = names
         else:
-            cards[-1][2].extend(w.strip() for w in block.split("·") if w.strip())
+            cards[-1].wires = names
+    return cards
+
+
+def cli_subcommands(path: Path, text: str, commands: set[str], problems: list[str]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
-    for synopsis, line, wires in cards:
-        for wire in wires:
-            if wire not in commands:
-                problems.append(f"{path}:{line}: wire name {wire} is not in the Command enum")
+    for card in _cards(path, text, commands, problems):
+        synopsis, line, wires = card.synopsis, card.line, card.wires
         invocations = [s.strip() for s in re.split(r"(?:^|\s)agtermctl\s+", " " + synopsis) if s.strip()]
         if not synopsis.startswith("agtermctl ") or not invocations:
             problems.append(f"{path}:{line}: synopsis does not start with agtermctl: {synopsis}")
@@ -462,7 +489,9 @@ def cli_subcommands(path: Path, text: str, commands: set[str], problems: list[st
                 if wire is None and wires:
                     problems.append(f"{path}:{line}: cannot tell which of {', '.join(wires)} `{key}` sends")
                     continue
-                entry = {"wire": wire} if wire else {}
+                entry: dict[str, Any] = {"wire": wire} if wire else {}
+                if card.uses is not None:
+                    entry["uses"] = list(card.uses)
                 if key in out and out[key] != entry:
                     problems.append(f"{path}:{line}: `{key}` maps to both {out[key]} and {entry}")
                 out[key] = entry
@@ -502,6 +531,7 @@ _TERNARY = re.compile(rf"^([^\"?:]+?)\s+\?\s+({_STRING_LIT})\s*:\s*({_STRING_LIT
 _VARIABLE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 _INTERPOLATION = re.compile(r"\\\(\s*((?:self\.)?([A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)*)\s*\)")
 _UI_ID = re.compile(r"^[\w.{}-]+$")
+_HELPER_CALL = re.compile(r"^Self\.([A-Za-z_]\w*)\s*\(")
 
 
 def _blank_strings(text: str) -> str:
@@ -527,6 +557,52 @@ def _ui_literal(literal: str) -> str | None:
     return ui_id if "\\" not in ui_id and _UI_ID.match(ui_id) else None
 
 
+def _enclosing_type(text: str, offset: int) -> tuple[int, int] | None:
+    """(brace, end) of the innermost type declaration whose body holds `offset`."""
+    best: tuple[int, int] | None = None
+    for match in _DECL.finditer(text, 0, offset):
+        brace = match.end() - 1
+        try:
+            end = _matching_close(text, brace)
+        except CatalogError:
+            continue
+        if brace < offset < end and (best is None or brace > best[0]):
+            best = (brace, end)
+    return best
+
+
+def _helper_call(arg: str) -> str | None:
+    """The helper `name` when `arg` is one bare `Self.name(...)` call whose argument list closes at its end; None
+    for anything else, a chained (`Self.name(x).uppercased()`) or compound (`Self.a(x) + Self.b(y)`) call included."""
+    if (call := _HELPER_CALL.match(arg)) is None:
+        return None
+    try:
+        close = _matching_close(arg, call.end() - 1, "(", ")")
+    except CatalogError:
+        return None
+    return call.group(1) if close == len(arg) - 1 else None
+
+
+def _helper_literal(text: str, offset: int, name: str) -> str | None:
+    """The string literal a `Self.name(...)` call at `offset` returns: the body of the `static func name(...) ->
+    String` declared directly in the enclosing type, when it is the only function of that name declared there (an
+    overload of any form makes the call's target unknowable here) and its body is a single literal; None otherwise."""
+    if (scope := _enclosing_type(text, offset)) is None:
+        return None
+    brace, end = scope
+    declaration = re.compile(rf"\b(?:static|class)\s+func\s+{re.escape(name)}\b")
+    declared = [
+        m for m in declaration.finditer(text, brace + 1, end) if _depth_between(text, brace + 1, m.start()) == 0
+    ]
+    if len(declared) != 1:
+        return None
+    helper = re.compile(
+        rf"static\s+func\s+{re.escape(name)}\s*\([^)]*\)\s*->\s*String\s*\{{\s*(?:return\s+)?({_STRING_LIT})\s*\}}"
+    )
+    found = helper.match(text, declared[0].start())
+    return found.group(1) if found is not None else None
+
+
 def ui_identifiers(path: Path, text: str, gen: Generated) -> None:
     """Add the ids set by every identifier call in `text` (comment-stripped) to `gen`."""
     for match in _UI_CALL.finditer(_blank_strings(text)):
@@ -540,6 +616,8 @@ def ui_identifiers(path: Path, text: str, gen: Generated) -> None:
             literals = [ternary.group(2), ternary.group(3)]
         elif re.fullmatch(_STRING_LIT, arg):
             literals = [arg]
+        elif (name := _helper_call(arg)) is not None and (helper := _helper_literal(text, match.start(), name)):
+            literals = [helper]
         elif _VARIABLE.match(arg):
             gen.ui_variables.setdefault(f"{path}:{arg}", []).append(where)
             continue

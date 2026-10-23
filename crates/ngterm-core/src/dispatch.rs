@@ -784,8 +784,9 @@ impl Core {
             Command::Live(cmd) if commands::live::answers(cmd) => {
                 result_of(&commands::live::dispatch(self, cmd, request)?)
             }
-            // `browser.clear` and `config.reload` start through `deferred`
-            cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_)) => {
+            // `browser.clear` and `config.reload` start through `deferred`; `recent.*` is not ported yet
+            cmd
+            @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_) | Command::Recent(_)) => {
                 Err(ControlError::NotSupported(cmd))
             }
         }
@@ -918,6 +919,28 @@ mod tests {
             // a fresh core each, so `window.new` opens no window for the commands after it
             let response = core().dispatch(&Request::new(cmd));
             assert_eq!(response.ok, ANSWERED.contains(&cmd), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn the_v0_38_commands_not_ported_yet_are_refused_by_name() {
+        use ngterm_proto::command::{RecentCmd, SessionCmd};
+        for cmd in [
+            Command::Recent(RecentCmd::List),
+            Command::Recent(RecentCmd::Open),
+            Command::Recent(RecentCmd::Clear),
+            Command::Workspace(WorkspaceCmd::Flag),
+            Command::Session(SessionCmd::OverlayHide),
+            Command::Session(SessionCmd::OverlayShow),
+            Command::Session(SessionCmd::OverlayToggle),
+            Command::Session(SessionCmd::OverlayPageServe),
+        ] {
+            let response = core().dispatch(&Request::new(cmd));
+            assert_eq!(
+                response,
+                Response::failure(format!("{cmd} is not supported by this host")),
+                "{cmd}"
+            );
         }
     }
 

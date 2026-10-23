@@ -15,6 +15,7 @@ PROTOCOL = Path("agtermCore/Sources/agtermCore/ControlProtocol.swift")
 PROJECTION = Path("agtermCore/Sources/agtermCore/ControlProjection.swift")
 ASK = Path("agterm/Views/AskDialogView.swift")
 WELCOME = Path("agterm/WelcomeAlert.swift")
+FORM = Path("agterm/Views/AskFormViews.swift")
 
 
 def _load(name: str) -> ModuleType:
@@ -44,6 +45,7 @@ COMMANDS = [
     "zmx.attach",
     "zmx.present",
     "session.overlay.job.run",
+    "session.overlay.page.serve",
     "version",
     "debug.appearance",
 ]
@@ -81,6 +83,8 @@ CLI = {
     "zmx attach": {"wire": "zmx.attach"},
     "zmx present": {"wire": "zmx.present"},
     "session overlay run-job": {"wire": "session.overlay.job.run"},
+    "session overlay page-serve": {"wire": "session.overlay.page.serve"},
+    "session wait": {"uses": ["events.read", "tree"]},
     "clipboard set": {},
     "version": {"wire": "version"},
 }
@@ -114,6 +118,7 @@ def test_stream_commands_carry_their_mode() -> None:
     gen = gc.generate(MINI)
     assert gen.commands["zmx.present"] == {"mode": "presentation-stream"}
     assert gen.commands["session.overlay.job.run"] == {"mode": "job-stream"}
+    assert gen.commands["session.overlay.page.serve"] == {"mode": "page-serve-stream"}
     assert gen.commands["zmx.tree"] == {}
     assert gen.commands["zmx.attach"] == {}
 
@@ -129,6 +134,20 @@ def test_events_from_the_event_kind_enum() -> None:
 
 def test_cli_subcommands_from_synopses() -> None:
     assert gc.generate(MINI).cli == CLI
+
+
+def test_a_cli_only_card_is_a_composite_with_no_wire_of_its_own() -> None:
+    cli = gc.generate(MINI).cli
+    assert cli["session wait"] == {"uses": ["events.read", "tree"]}
+    assert "wire" not in cli["session wait"]
+
+
+def test_a_composite_keeps_its_uses_through_a_merge() -> None:
+    old = {"cli": {"session wait": {"status": "covered", "uses": ["stale.cmd"], "note": "kept"}}}
+    gen = generated(cli={"session wait": {"uses": ["events.read", "tree"]}})
+    catalog, _ = gc.merge(old, gen, "v0.38.1")
+    assert catalog["cli"]["session wait"] == {"status": "covered", "uses": ["events.read", "tree"], "note": "kept"}
+    assert "\n  session wait: {status: covered, uses: [events.read, tree], note: kept}\n" in gc.dump(catalog)
 
 
 def test_comments_and_strings_do_not_shift_nesting() -> None:
@@ -173,12 +192,30 @@ def test_comments_and_strings_do_not_shift_nesting() -> None:
             "session.resize.v2</div>",
             "wire name session.resize.v2 is not in the Command enum",
         ),
+        (
+            Path("site/commands.html"),
+            "CLI only: events.read, tree</div>",
+            "CLI only: events.read, nope.cmd</div>",
+            "wire name nope.cmd is not in the Command enum",
+        ),
+        (
+            Path("site/commands.html"),
+            "CLI only: events.read, tree</div>",
+            "CLI only: events.read, tree</div>\n<div style=\"font-size: 11.5px; color: #6b727a\">tree</div>",
+            "wire name without a synopsis: tree",
+        ),
         (Path("site/commands.html"), "  agtermctl version", "  version", "synopsis does not start with agtermctl"),
         (
             PROTOCOL,
             '    case zmxPresent = "zmx.present"\n',
             "",
             "generator table names zmx.present, which is not in the Command enum",
+        ),
+        (
+            PROTOCOL,
+            '    case sessionOverlayPageServe = "session.overlay.page.serve"\n',
+            "",
+            "generator table names session.overlay.page.serve, which is not in the Command enum",
         ),
         (
             PROTOCOL,
@@ -390,8 +427,8 @@ def test_reads_the_tag_with_git_archive_without_touching_the_checkout(
     assert list(yaml.safe_load(catalog.read_text())["commands"]) == COMMANDS
     assert (git("rev-parse", "HEAD"), git("status", "--porcelain")) == (head, status)
     out = capsys.readouterr().out
-    assert "commands: 17 upstream, +17 new, -0 removed-upstream" in out
-    assert "ids: 7 upstream, +7 new, -0 removed-upstream" in out
+    assert "commands: 18 upstream, +18 new, -0 removed-upstream" in out
+    assert "ids: 8 upstream, +8 new, -0 removed-upstream" in out
     assert "manual: 0 ids at 0 variable sites, -0 removed-upstream" in out
     assert gc.main(["--repo", str(repo), "--tag", "v9.9.9", "--catalog", str(catalog)]) == 1
     assert "git archive v9.9.9 failed" in capsys.readouterr().err
@@ -399,8 +436,10 @@ def test_reads_the_tag_with_git_archive_without_touching_the_checkout(
 
 def test_the_committed_catalog_parses_and_names_its_tag() -> None:
     data = yaml.safe_load((TOOLS.parent / "catalog.yaml").read_text())
-    assert data["upstream"] == "v0.36.0"
-    assert len(data["commands"]) == 110
+    assert data["upstream"] == "v0.38.1"
+    assert len(data["commands"]) == 118
+    assert data["cli"]["session wait"] == {"status": "uncovered", "uses": ["events.read", "window.list", "tree"]}
+    assert data["commands"]["session.overlay.page.serve"]["mode"] == "page-serve-stream"
     assert set(gc.GENERATED_SECTIONS) | {"upstream", "behaviors", "exemptions"} == set(data)
 
 
@@ -412,6 +451,7 @@ UI_IDS = {
     "welcome-install": {"at": [f"{WELCOME}:6"]},
     "workspace-row": {"at": [f"{WELCOME}:12"]},
     "session-row": {"at": [f"{WELCOME}:12"]},
+    "ask-choice-{id}": {"at": [f"{FORM}:9"]},
 }
 
 
@@ -442,6 +482,82 @@ def test_unparseable_identifiers_are_reported(mini: Path, call: str, expected: s
     (mini / "agterm/Extra.swift").write_text(f'let v = Text("x")\n    {call}\n')
     found = problems(mini)
     assert any(f"agterm/Extra.swift:2: {expected}" in p for p in found), found
+
+
+_ROW_ID = '    static func rowID(_ id: String) -> String { "a-\\(id)" }\n'
+
+
+@pytest.mark.parametrize(
+    ("call", "helper", "expected"),
+    [
+        ("Self.rowID(choice.id)", "", "unparseable identifier argument: Self.rowID(choice.id)"),
+        (
+            "Self.rowID(choice.id)",
+            "    static func rowID(_ id: String) -> String { prefix + id }\n",
+            "unparseable identifier argument",
+        ),
+        (
+            "Self.rowID(choice.id)",
+            "    static func rowID(_ id: String) -> Int { 1 }\n",
+            "unparseable identifier argument",
+        ),
+        (
+            "Self.rowID(choice.id)",
+            _ROW_ID + '    static func rowID(_ id: Int) -> String { "b-\\(id)" }\n',
+            "unparseable identifier argument",
+        ),
+        (
+            "Self.rowID(1)",
+            _ROW_ID + "    static func rowID(_ id: Int) -> String { String(id) }\n",
+            "unparseable identifier argument: Self.rowID(1)",
+        ),
+        (
+            "Self.rowID(choice.id)",
+            "    static func rowID(_ id: Int) -> String { String(id) }\n" + _ROW_ID,
+            "unparseable identifier argument",
+        ),
+        (
+            "Self.rowID(choice.id)",
+            '    struct Inner {\n        static func rowID(_ id: String) -> String { "a-\\(id)" }\n    }\n',
+            "unparseable identifier argument",
+        ),
+        (
+            "Self.rowID(choice.id)",
+            '    static func rowID(_ id: String) -> String { "a b \\(id)" }\n',
+            "unparseable identifier literal",
+        ),
+        (
+            "Self.rowID(choice.id).uppercased()",
+            _ROW_ID,
+            "unparseable identifier argument: Self.rowID(choice.id).uppercased()",
+        ),
+        ("Self.rowID(a) + Self.rowID(b)", _ROW_ID, "unparseable identifier argument: Self.rowID(a) + Self.rowID(b)"),
+    ],
+)
+def test_an_unresolvable_helper_is_reported(mini: Path, call: str, helper: str, expected: str) -> None:
+    (mini / "agterm/Extra.swift").write_text(
+        "struct Row: View {\n    var body: some View {\n        Text(\"x\")\n"
+        f"            .accessibilityIdentifier({call})\n    }}\n" + helper + "}\n"
+    )
+    found = problems(mini)
+    assert any(f"agterm/Extra.swift:4: {expected}" in p for p in found), found
+    assert "a-{id}" not in gc.generate(mini).ui_ids
+
+
+def test_a_helper_resolves_in_the_calls_own_type(mini: Path) -> None:
+    (mini / "agterm/Extra.swift").write_text(
+        "struct Outer {\n"
+        '    static func rowID(_ id: String) -> String { "outer-\\(id)" }\n'
+        "    struct Row: View {\n"
+        '        static func rowID(_ id: String) -> String { return "row-\\(id)" }\n'
+        "        var body: some View { Text(\"x\").accessibilityIdentifier(Self.rowID(item.id)) }\n"
+        "    }\n"
+        "}\n"
+    )
+    gen = gc.generate(mini)
+    assert gen.problems == []
+    assert gen.ui_ids["row-{id}"] == {"at": ["agterm/Extra.swift:5"]}
+    assert "outer-{id}" not in gen.ui_ids
 
 
 def test_no_ui_ids_is_reported(mini: Path) -> None:
@@ -568,8 +684,9 @@ def test_ui_ids_path_can_be_given(mini: Path, tmp_path: Path) -> None:
 
 def test_the_committed_ui_ids_parse_and_name_their_tag() -> None:
     data = yaml.safe_load((TOOLS.parent / "ui-ids.yaml").read_text())
-    assert data["upstream"] == "v0.36.0"
-    assert len(data["ids"]) == 101
-    assert len(data["manual"]) == 13
+    assert data["upstream"] == "v0.38.1"
+    assert len(data["ids"]) == 105
+    assert len(data["manual"]) == 14
+    assert data["ids"]["ask-choice-{id}"]["at"] == ["agterm/Views/AskFormViews.swift:406"]
     assert all(entry["site"].startswith("agterm/") for entry in data["manual"].values())
     assert not set(data["ids"]) & set(data["manual"])

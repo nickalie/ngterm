@@ -352,7 +352,12 @@ fn format_human(event: &ControlEvent, zone: Zone) -> String {
             payload.title.as_deref().unwrap_or(name),
             payload.body.as_deref().unwrap_or_default()
         ),
-        EventKind::SessionCreated | EventKind::SessionClosed | EventKind::TreeChanged => {
+        // `pane.focused` and `app.launched` are not emitted yet; their own forms come with their emitters
+        EventKind::SessionCreated
+        | EventKind::SessionClosed
+        | EventKind::TreeChanged
+        | EventKind::PaneFocused
+        | EventKind::AppLaunched => {
             format!("{time} {kind} {name}")
         }
         EventKind::SessionSelected => format!(

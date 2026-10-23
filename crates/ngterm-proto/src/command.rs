@@ -2,7 +2,7 @@
 //!
 //! A [`Command`] is two-level: a [`Group`] (the first dotted component of the wire name) and, unless the group's
 //! only command is the bare group name (`tree`, `dashboard`, `notify`, `version`), the group's own enum. Wire names
-//! come from the `strum` derives on the group enums, so parsing is a 22-arm match on the group followed by the group
+//! come from the `strum` derives on the group enums, so parsing is a 23-arm match on the group followed by the group
 //! enum's derived parser.
 
 use std::fmt;
@@ -29,6 +29,7 @@ pub enum Group {
     Notify,
     Pick,
     Quick,
+    Recent,
     Restore,
     Session,
     Sidebar,
@@ -106,6 +107,11 @@ group_commands!(
 );
 
 group_commands!(
+    /// `recent.*`: recently closed sessions and workspaces (File > Open Recent).
+    RecentCmd { List = "recent.list", Open = "recent.open", Clear = "recent.clear" }
+);
+
+group_commands!(
     /// `restore.*`: the restore-mode policy and command capture.
     RestoreCmd { Clear = "restore.clear", Capture = "restore.capture", Mode = "restore.mode" }
 );
@@ -150,7 +156,11 @@ group_commands!(
         OverlaySubmit = "session.overlay.submit",
         OverlayCopy = "session.overlay.copy",
         OverlayText = "session.overlay.text",
+        OverlayHide = "session.overlay.hide",
+        OverlayShow = "session.overlay.show",
+        OverlayToggle = "session.overlay.toggle",
         OverlayJobRun = "session.overlay.job.run",
+        OverlayPageServe = "session.overlay.page.serve",
         HudOpen = "session.hud.open",
         HudUpdate = "session.hud.update",
         HudClose = "session.hud.close",
@@ -210,6 +220,7 @@ group_commands!(
         Filter = "workspace.filter",
         Collapse = "workspace.collapse",
         Expand = "workspace.expand",
+        Flag = "workspace.flag",
     }
 );
 
@@ -243,6 +254,7 @@ pub enum Command {
     Notify,
     Pick(PickCmd),
     Quick(QuickCmd),
+    Recent(RecentCmd),
     Restore(RestoreCmd),
     Session(SessionCmd),
     Sidebar(SidebarCmd),
@@ -272,6 +284,7 @@ impl Command {
             Self::Notify => "notify",
             Self::Pick(c) => c.into(),
             Self::Quick(c) => c.into(),
+            Self::Recent(c) => c.into(),
             Self::Restore(c) => c.into(),
             Self::Session(c) => c.into(),
             Self::Sidebar(c) => c.into(),
@@ -301,6 +314,7 @@ impl Command {
             Self::Notify => Group::Notify,
             Self::Pick(_) => Group::Pick,
             Self::Quick(_) => Group::Quick,
+            Self::Recent(_) => Group::Recent,
             Self::Restore(_) => Group::Restore,
             Self::Session(_) => Group::Session,
             Self::Sidebar(_) => Group::Sidebar,
@@ -328,6 +342,7 @@ impl Command {
         all.extend(KeymapCmd::iter().map(Self::Keymap));
         all.extend(PickCmd::iter().map(Self::Pick));
         all.extend(QuickCmd::iter().map(Self::Quick));
+        all.extend(RecentCmd::iter().map(Self::Recent));
         all.extend(RestoreCmd::iter().map(Self::Restore));
         all.extend(SessionCmd::iter().map(Self::Session));
         all.extend(SidebarCmd::iter().map(Self::Sidebar));
@@ -364,6 +379,7 @@ impl FromStr for Command {
             Group::Notify => unit(name, group, Self::Notify),
             Group::Pick => PickCmd::from_str(name).ok().map(Self::Pick),
             Group::Quick => QuickCmd::from_str(name).ok().map(Self::Quick),
+            Group::Recent => RecentCmd::from_str(name).ok().map(Self::Recent),
             Group::Restore => RestoreCmd::from_str(name).ok().map(Self::Restore),
             Group::Session => SessionCmd::from_str(name).ok().map(Self::Session),
             Group::Sidebar => SidebarCmd::from_str(name).ok().map(Self::Sidebar),
@@ -419,6 +435,11 @@ mod tests {
             Ok(Command::Session(SessionCmd::OverlayJobRun))
         );
         assert_eq!(
+            "session.overlay.page.serve".parse(),
+            Ok(Command::Session(SessionCmd::OverlayPageServe))
+        );
+        assert_eq!("recent.open".parse(), Ok(Command::Recent(RecentCmd::Open)));
+        assert_eq!(
             "sidebar.flagged-layout".parse(),
             Ok(Command::Sidebar(SidebarCmd::FlaggedLayout))
         );
@@ -451,7 +472,7 @@ mod tests {
     #[test]
     fn every_command_round_trips_through_its_wire_name() {
         let all = Command::all();
-        assert_eq!(all.len(), 110);
+        assert_eq!(all.len(), 118);
         for command in all {
             assert_eq!(command.wire_name().parse(), Ok(command));
             assert_eq!(
@@ -462,8 +483,8 @@ mod tests {
     }
 
     #[test]
-    fn has_twenty_two_groups() {
-        assert_eq!(Group::iter().count(), 22);
+    fn has_twenty_three_groups() {
+        assert_eq!(Group::iter().count(), 23);
     }
 
     #[test]

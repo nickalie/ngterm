@@ -21,6 +21,7 @@ mod overlay_job;
 mod overlay_page;
 mod pick;
 mod quick;
+mod recent;
 mod restore;
 mod session;
 mod session_background;
@@ -30,6 +31,7 @@ mod session_meta;
 mod session_overlay;
 mod session_panes;
 mod session_restore;
+mod session_wait;
 mod sidebar;
 mod socket;
 mod stream_bridge;
@@ -91,6 +93,7 @@ enum Command {
     Pick(pick::Pick),
     Ask(ask::Ask),
     Restore(restore::Restore),
+    Recent(recent::Recent),
     Live(live::Live),
     Terminfo(terminfo::Terminfo),
     Clipboard(clipboard::Clipboard),
@@ -119,6 +122,7 @@ impl Command {
             Self::Theme(command) => command.check(),
             Self::Ask(command) => command.check(),
             Self::Restore(command) => command.check(),
+            Self::Recent(command) => command.check(),
             Self::Live(command) => command.check(),
             Self::Terminfo(command) => command.check(),
             Self::Pick(_) | Self::Clipboard(_) | Self::Version(_) => Ok(()),
@@ -146,6 +150,7 @@ impl Command {
             Self::Pick(command) => command.execute(env),
             Self::Ask(command) => command.execute(env),
             Self::Restore(command) => command.execute(env),
+            Self::Recent(command) => command.execute(env),
             Self::Live(command) => command.execute(env),
             Self::Terminfo(command) => command.execute(),
             Self::Clipboard(command) => command.execute(),

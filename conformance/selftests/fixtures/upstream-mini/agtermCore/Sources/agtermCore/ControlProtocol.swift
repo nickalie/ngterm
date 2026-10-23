@@ -17,13 +17,15 @@ public enum Command: String, Codable, Sendable {
     case zmxPresent = "zmx.present"
     /// A viewer's helper claiming a remote overlay job; after an ok reply the connection carries job frames.
     case sessionOverlayJobRun = "session.overlay.job.run"
+    /// A presenter's helper serving a remote page; after an ok reply the connection carries page frames.
+    case sessionOverlayPageServe = "session.overlay.page.serve"
     case version = "version"
     /// UI-TEST-ONLY.
     case debugAppearance = "debug.appearance"
 
     public var isStreaming: Bool {
         switch self {
-        case .zmxPresent, .sessionOverlayJobRun: return true
+        case .zmxPresent, .sessionOverlayJobRun, .sessionOverlayPageServe: return true
         default: return false
         }
     }
