@@ -3,6 +3,8 @@ Vulkan, on lavapipe only, and needs a seat on its compositor."""
 
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -27,6 +29,11 @@ from agterm_conformance.vocabulary import LIVE
 # `version` -> result.conformance = {"parityLevel": "0.36.0", "capabilities": ["posix-shell", ...]}.
 # Optional: a build without it, like a run without a binary, is below every level.
 CONFORMANCE_FIELD = "conformance"
+# The staged layout's installed-build identity, relative to the stage root (scripts/stage.sh,
+# crates/ngterm-core/src/identity.rs): a version line, then a commit line.
+INSTALLED_FILE = Path("share/ngterm/app-BUILD")
+# Where an instance's private install lies in its root.
+PRIVATE_INSTALL_DIR = "install"
 
 class ProfileError(ValueError):
     pass
@@ -102,8 +109,9 @@ class RustAdapter(Adapter):
         app_id: str | None = None,
         settings: Mapping[str, Any] | None = None,
         first_run: bool = False,
+        private_install: bool = False,
     ) -> Instance:
-        instance = super().launch(timeout, app_id, settings, first_run)
+        instance = super().launch(timeout, app_id, settings, first_run, private_install)
         return instance if first_run else self._profiled(instance)
 
     def serving(self, instance: Instance, timeout: float = LAUNCH_TIMEOUT) -> Instance:
@@ -123,3 +131,60 @@ class RustAdapter(Adapter):
             return None
         sibling = Path(self.bin).parent / self.ctl_name
         return sibling if sibling.exists() else None
+
+    def instance_executable(self, root: Path, private_install: bool = False) -> list[str]:
+        """A private install is the stage mirrored under the root (`lay_out_private_install`); a relaunch on that root
+        runs from it again."""
+        install = root / PRIVATE_INSTALL_DIR
+        if private_install:
+            if self.bin is None:
+                raise LaunchError(f"{self.name}: no binary to launch")
+            lay_out_private_install(Path(self.bin), install)
+        if install.is_dir():
+            return [os.fspath(install / "bin" / Path(self.executable()[0]).name)]
+        return self.executable()
+
+    def write_installed(self, instance: Instance, version: str | None, commit: str | None = None) -> None:
+        install = instance.root / PRIVATE_INSTALL_DIR
+        if not install.is_dir():
+            raise LaunchError(f"{self.name}: the instance has no private install: launch(private_install=True)")
+        file = install / INSTALLED_FILE
+        if version is None:
+            file.unlink(missing_ok=True)
+            return
+        file.parent.mkdir(parents=True, exist_ok=True)
+        # By a rename, as scripts/stage.sh publishes it: a request never reads it half written.
+        temporary = file.with_name(f".{file.name}.tmp")
+        temporary.write_text(f"{version}\n{commit or ''}\n")
+        os.replace(temporary, file)
+
+
+def lay_out_private_install(binary: Path, install: Path) -> None:
+    """A stage of its own for one instance: `binary` (a staged `bin/ngterm`) copied (hard-linked where it can be) and
+    the installed-build identity copied, everything else of the stage linked to it. The app reads the identity beside
+    the executable it was started from, so a test rewrites this copy and never the stage under test."""
+    if binary.parent.name != "bin":
+        raise LaunchError(f"a private install needs a staged binary (bin/<name>), not {binary}")
+    _mirror(binary.parent.parent, install, Path(), {Path("bin") / binary.name, INSTALLED_FILE})
+
+
+def _mirror(stage: Path, install: Path, relative: Path, copied: set[Path]) -> None:
+    (install / relative).mkdir(parents=True, exist_ok=True)
+    for entry in sorted((stage / relative).iterdir()):
+        path = relative / entry.name
+        if path == INSTALLED_FILE:
+            shutil.copy2(entry, install / path)
+        elif path in copied:
+            _copy(entry, install / path)
+        elif any(path in item.parents for item in copied):
+            _mirror(stage, install, path, copied)
+        else:
+            os.symlink(entry, install / path)
+
+
+def _copy(source: Path, destination: Path) -> None:
+    """A hard link where the stage and the root share a filesystem: the binary is never written, only replaced."""
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copy2(source, destination)

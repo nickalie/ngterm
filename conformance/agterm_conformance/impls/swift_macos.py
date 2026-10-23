@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import plistlib
 import shutil
 import signal
 import subprocess
@@ -28,6 +29,9 @@ PARITY_LEVEL = "0.38.1"
 BASE_CAPABILITIES = frozenset({"posix-shell", "window-geometry", "window-minimize", "sidebar-min-width"})
 LAUNCH_MODES = ("uitest", "plain")
 BUNDLE_DIR = "app"
+# The bundle's build metadata keys `version`'s `installed` is read from.
+VERSION_KEY = "CFBundleShortVersionString"
+COMMIT_KEY = "GitCommit"
 
 
 class SwiftMacosAdapter(Adapter):
@@ -99,11 +103,13 @@ class SwiftMacosAdapter(Adapter):
         bundle = self.bundle()
         return root / BUNDLE_DIR / bundle.name if bundle is not None else None
 
-    def instance_executable(self, root: Path) -> list[str]:
+    def instance_executable(self, root: Path, private_install: bool = False) -> list[str]:
         """The instance's own copy of the bundle: next to a running instance of the same bundle path, a launch keeps
-        no window and binds no socket (conformance/docs/spike-macos.md)."""
+        no window and binds no socket (conformance/docs/spike-macos.md). That copy is the private install too."""
         clone = self.instance_bundle(root)
         if clone is None:
+            if private_install:
+                raise LaunchError(f"{self.name}: a private install needs a bundle, not {self.bin}")
             return self.executable()
         if not clone.exists():
             clone.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +120,26 @@ class SwiftMacosAdapter(Adapter):
             else:
                 shutil.copytree(source, clone, symlinks=True)
         return [os.fspath(clone / "Contents" / "MacOS" / "agterm")]
+
+    def write_installed(self, instance: Instance, version: str | None, commit: str | None = None) -> None:
+        """The instance's bundle copy's `Info.plist`, which upstream's `AppIdentity.installed(bundleURL:)` parses on
+        every `version`."""
+        bundle = self.instance_bundle(instance.root)
+        if bundle is None:
+            raise LaunchError(f"{self.name}: the instance runs no bundle copy")
+        plist = bundle / "Contents" / "Info.plist"
+        if version is None:
+            plist.unlink(missing_ok=True)
+            return
+        info = plistlib.loads(plist.read_bytes()) if plist.exists() else {}
+        info[VERSION_KEY] = version
+        if commit is None:
+            info.pop(COMMIT_KEY, None)
+        else:
+            info[COMMIT_KEY] = commit
+        temporary = plist.with_name(f".{plist.name}.tmp")
+        temporary.write_bytes(plistlib.dumps(info))
+        os.replace(temporary, plist)
 
     def owns_session_host(self, instance: Instance, pid: int) -> bool:
         """`pid` runs the session host of this instance's own bundle copy for its ZMX_DIR, derived from a state dir

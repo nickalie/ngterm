@@ -45,6 +45,9 @@ rustix = "1.1"
 pulldown-cmark = { version = "0.13", default-features = false }
 # Kitty graphics PNG transmissions, decoded for libghostty-vt's process-global PNG hook (ngterm-term).
 png = "0.18"
+# ngterm-core's installed identity inside a macOS app bundle, its `Contents/Info.plist` (`identity.rs`), read as
+# upstream reads it.
+plist = { version = "1.10", default-features = false }
 # A pane's PTY and child (ngterm-term), as Zed and WezTerm use it.
 portable-pty = "0.9"
 # ngterm-gpui's link detection: Ghostty's default URL and path matcher (`link-url`) over the terminal's rows, whose

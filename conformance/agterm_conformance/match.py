@@ -63,16 +63,20 @@ def assert_absent(node: Any, *paths: str) -> None:
 
 
 def assert_version_result(result: Any) -> dict[str, Any]:
-    """`app`, plus the Rust build's optional `conformance` block (docs/rust-build.md), and nothing else."""
+    """`app`, the optional `installed` (the build on disk, read at request time), plus the Rust build's optional
+    `conformance` block (docs/rust-build.md), and nothing else."""
     # Imported here: impls imports plugin, which imports this module.
     from agterm_conformance.impls.rust import ProfileError, profile_from_version
 
     result = _unwrap(result)
     assert isinstance(result, Mapping), f"version: expected an object, got {result!r}"
-    extra = sorted(set(result) - {"app", "conformance"})
+    extra = sorted(set(result) - {"app", "installed", "conformance"})
     assert not extra, f"version: unexpected keys {extra}"
-    app = result.get("app")
-    assert isinstance(app, Mapping) and isinstance(app.get("version"), str) and app["version"], f"version.app: {app!r}"
+    for key in ("app", "installed") if "installed" in result else ("app",):
+        identity = result.get(key)
+        assert (
+            isinstance(identity, Mapping) and isinstance(identity.get("version"), str) and identity["version"]
+        ), f"version.{key}: {identity!r}"
     if "conformance" in result:
         assert isinstance(result["conformance"], Mapping), f"version.conformance: {result['conformance']!r}"
         try:

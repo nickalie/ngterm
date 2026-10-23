@@ -40,7 +40,7 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
         return listing;
     }
     if let Some(app) = result.and_then(|result| result.get("app")) {
-        return format_app(app);
+        return format_version(app, result.and_then(|result| result.get("installed")));
     }
     if let Some(text) = result.and_then(|result| result.get("text")).and_then(Value::as_str) {
         return text.to_owned();
@@ -207,6 +207,25 @@ fn format_themes(themes: &[String], result: &Value) -> String {
     )
 }
 
+/// The running app, then an `installed:` line only when the build on disk is known and differs from it (upstream's
+/// `formatResponse`).
+fn format_version(app: &Value, installed: Option<&Value>) -> String {
+    match installed {
+        Some(installed) if identity_of(installed) != identity_of(app) => {
+            format!("{}\ninstalled: {}", format_app(app), format_app(installed))
+        }
+        _ => format_app(app),
+    }
+}
+
+/// An identity's version and commit, as upstream's `AppIdentity` compares them.
+fn identity_of(identity: &Value) -> (Option<&str>, Option<&str>) {
+    (
+        identity.get("version").and_then(Value::as_str),
+        identity.get("commit").and_then(Value::as_str),
+    )
+}
+
 /// `version (commit)`, or the bare version when the build recorded no commit.
 fn format_app(app: &Value) -> String {
     let version = app.get("version").and_then(Value::as_str).unwrap_or_default();
@@ -257,6 +276,32 @@ mod tests {
     fn version_prints_the_commit_in_parentheses() {
         let response = ok(json!({"app": {"version": "0.1.0", "commit": "abc1234"}, "conformance": {}}));
         assert_eq!(format_response(&response, false), "0.1.0 (abc1234)");
+    }
+
+    #[test]
+    fn version_formats_the_installed_build_only_when_it_differs_from_the_running_one() {
+        let app = json!({"version": "0.34.0", "commit": "a1b2c3d"});
+        let format = |installed: Option<Value>| {
+            let mut result = json!({"app": app, "conformance": {}});
+            if let Some(installed) = installed {
+                result["installed"] = installed;
+            }
+            format_response(&ok(result), false)
+        };
+        assert_eq!(format(None), "0.34.0 (a1b2c3d)");
+        assert_eq!(format(Some(app.clone())), "0.34.0 (a1b2c3d)");
+        assert_eq!(
+            format(Some(json!({"version": "0.35.1", "commit": "def5678"}))),
+            "0.34.0 (a1b2c3d)\ninstalled: 0.35.1 (def5678)"
+        );
+        assert_eq!(
+            format(Some(json!({"version": "0.34.0", "commit": "def5678"}))),
+            "0.34.0 (a1b2c3d)\ninstalled: 0.34.0 (def5678)"
+        );
+        assert_eq!(
+            format(Some(json!({"version": "0.35.1"}))),
+            "0.34.0 (a1b2c3d)\ninstalled: 0.35.1"
+        );
     }
 
     #[test]

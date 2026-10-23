@@ -199,8 +199,9 @@ APP = {"app": {"version": "0.36.0", "commit": "abc1234"}}
         APP,
         {**APP, "conformance": {"parityLevel": "0.36.0", "capabilities": ["posix-shell"]}},
         {**APP, "conformance": {}},
+        {**APP, "installed": {"version": "0.37.0"}, "conformance": {}},
     ],
-    ids=["reference", "rust-profile", "empty-profile"],
+    ids=["reference", "rust-profile", "empty-profile", "installed"],
 )
 def test_version_result_accepts_app_and_an_optional_profile(result: dict) -> None:
     assert assert_version_result(response({"ok": True, "result": result})) == result
@@ -215,8 +216,19 @@ def test_version_result_accepts_app_and_an_optional_profile(result: dict) -> Non
         ({**APP, "conformance": {"capabilities": "posix-shell"}}, "version.conformance"),
         ({"conformance": {"parityLevel": "0.36.0"}}, "version.app"),
         ({"app": {"version": ""}}, "version.app"),
+        ({**APP, "installed": {"version": ""}}, "version.installed"),
+        ({**APP, "installed": None}, "version.installed"),
     ],
-    ids=["extra-key", "null-profile", "bad-level", "bad-capabilities", "no-app", "empty-version"],
+    ids=[
+        "extra-key",
+        "null-profile",
+        "bad-level",
+        "bad-capabilities",
+        "no-app",
+        "empty-version",
+        "empty-installed-version",
+        "null-installed",
+    ],
 )
 def test_version_result_rejects(result: dict, text: str) -> None:
     with pytest.raises(AssertionError, match=re.escape(text)):

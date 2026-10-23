@@ -3,16 +3,22 @@
 ## `version` extension
 
 `version` is the harness's readiness probe: it is polled until it answers, and an error reply fails the launch.
-Its result is the reference's `app` block plus a `conformance` block only the Rust build reports, and no other key
-(`assert_version_result` in `agterm_conformance/match.py`):
+Its result is the reference's `app` block and its optional `installed` block, plus a `conformance` block only the
+Rust build reports, and no other key (`assert_version_result` in `agterm_conformance/match.py`):
 
 ```json
 {"app": {"version": "0.1.0", "commit": "abc1234"},
+ "installed": {"version": "0.1.0", "commit": "abc1234"},
  "conformance": {"parityLevel": "0.36.0", "capabilities": ["posix-shell", "live-sessions"]}}
 ```
 
 - `app.version`: a non-empty string; `app.commit` is optional, and the CLI's `version` prints `version (commit)`.
   `tree` carries the same object as `tree.app`.
+- `installed`: the same two values read at request time from the install the app was started from (upstream's bundle
+  `Info.plist`; the Rust build's staged `share/ngterm/app-BUILD`, or the bundle's plist inside a macOS app bundle),
+  absent when they cannot be read. The CLI's `version` prints an `installed:` line only when it differs from `app`. It
+  is not on `tree`. Its tests rewrite the file of a private install the adapter lays out
+  (`launch(private_install=True)`, `Adapter.write_installed`).
 - `conformance.parityLevel`: the upstream version whose behavior the build claims, a dotted version with an optional
   `v` (no suffix such as `-beta`).
   A test marked `since(V)` above it skips as `not-yet-at-level`.

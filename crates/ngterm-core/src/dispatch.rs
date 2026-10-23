@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::commands;
 use crate::error::ControlError;
 use crate::events::{ControlEvents, EventRing, PaneFocusTimer, ReadOptions, TreeChangedTimer};
+use crate::identity::InstalledSource;
 use crate::model::PendingCloseTimer;
 use crate::model::{AppStore, WindowLibrary};
 use crate::persist::{AppSettings, DebouncedSave, LibraryPersistence};
@@ -117,6 +118,9 @@ impl fmt::Debug for RevealHandler {
 #[derive(Debug)]
 pub struct Core {
     app: AppIdentity,
+    /// Where `version` reads the installed build from on every request ([`Core::set_installed_source`]); `None`
+    /// reports it unknown.
+    installed: Option<InstalledSource>,
     capabilities: Vec<String>,
     pub(crate) library: WindowLibrary,
     settings: AppSettings,
@@ -222,6 +226,7 @@ impl Core {
     pub fn new(config: CoreConfig, state: CoreState) -> Self {
         let mut core = Self {
             app: config.app,
+            installed: None,
             capabilities: config.capabilities,
             library: state.library,
             settings: state.settings,
@@ -704,11 +709,18 @@ impl Core {
         }
     }
 
-    /// The `version` result.
+    /// Points `version`'s `installed` at the build on disk the app was started from (upstream's `bundleURL`), read
+    /// on every request; `None` (the default) reports it unknown.
+    pub fn set_installed_source(&mut self, source: Option<InstalledSource>) {
+        self.installed = source;
+    }
+
+    /// The `version` result: the running identity fixed at launch, the installed one read from disk now.
     #[must_use]
     pub fn version(&self) -> VersionResult {
         VersionResult {
             app: self.app.clone(),
+            installed: self.installed.as_ref().and_then(InstalledSource::read),
             conformance: ConformanceProfile {
                 parity_level: PARITY_LEVEL.to_owned(),
                 capabilities: self.capabilities.clone(),
@@ -909,6 +921,47 @@ mod tests {
                 "conformance": {"parityLevel": "0.36.0", "capabilities": ["posix-shell"]}
             }})
         );
+    }
+
+    #[test]
+    fn version_rereads_the_installed_build_while_the_running_identity_stays_fixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(crate::identity::STAGED_FILE);
+        let mut core = core();
+        let running = AppIdentity::from_recorded("0.1.0", Some("abc1234"));
+        let version = |core: &mut Core| {
+            let response = core.dispatch(&Request::new(Command::Version));
+            assert!(response.ok, "{response:?}");
+            serde_json::from_value::<VersionResult>(response.result.unwrap()).unwrap()
+        };
+        let tree_app =
+            |core: &mut Core| core.dispatch(&Request::new(Command::Tree)).result.unwrap()["tree"]["app"].clone();
+        assert_eq!(version(&mut core).installed, None, "no source");
+
+        core.set_installed_source(Some(InstalledSource::Staged(file.clone())));
+        assert_eq!(version(&mut core).installed, None, "no file yet");
+
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "0.1.0\nabc1234\n").unwrap();
+        assert_eq!(version(&mut core).installed, Some(running.clone()));
+
+        std::fs::write(&file, "0.2.0\ndef5678\n").unwrap();
+        let replaced = version(&mut core);
+        assert_eq!(
+            replaced.installed,
+            Some(AppIdentity::from_recorded("0.2.0", Some("def5678")))
+        );
+        assert_eq!(replaced.app, running);
+        assert_eq!(
+            tree_app(&mut core),
+            json!({"version": "0.1.0", "commit": "abc1234"}),
+            "not on the tree"
+        );
+
+        std::fs::remove_file(&file).unwrap();
+        let removed = version(&mut core);
+        assert_eq!(removed.installed, None);
+        assert_eq!(removed.app, running);
     }
 
     #[test]

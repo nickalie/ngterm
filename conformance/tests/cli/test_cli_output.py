@@ -21,7 +21,7 @@ from agterm_conformance.match import (
     window_ids,
     workspaces,
 )
-from agterm_conformance.plugin import Ctl
+from agterm_conformance.plugin import Cli, Ctl
 from agterm_conformance.vocabulary import UPSTREAM
 from agterm_conformance.wait import WaitTimeout, wait_frame, wait_until
 
@@ -111,11 +111,27 @@ def test_version(cli, ctl):
     result = assert_version_result(ctl.request("version"))
     assert _json(cli("version", "--json")) == result
     stdout = _ok(cli("version"))
-    first, client = stdout.splitlines()
-    assert stdout == f"{first}\n{client}\n" and first == cli_format.human({"app": result["app"]})
+    *head, client = stdout.splitlines()
+    assert stdout == "".join(f"{line}\n" for line in (*head, client)) and "\n".join(head) == cli_format.human(result)
     # The CLI's own resolved executable, after the app's version: the kernel's answer, not argv[0].
     path = client.removeprefix("client: ")
     assert client.startswith("client: ") and os.path.isabs(path) and os.access(path, os.X_OK), client
+
+
+@pytest.mark.covers("cli:version")
+def test_version_prints_the_installed_build_when_it_differs(launch, adapter):
+    ctl = launch(private_install=True)
+    cli = Cli(adapter.ctl_path, ctl.instance, adapter.ctl_name)
+    app = cli_format.identity(assert_version_result(ctl.request("version"))["app"])
+
+    adapter.write_installed(ctl.instance, "99.0.0", "abc1234")
+    first, installed, client = _ok(cli("version")).splitlines()
+    assert (first, installed) == (app, "installed: 99.0.0 (abc1234)")
+    assert client.startswith("client: "), client
+
+    adapter.write_installed(ctl.instance, None)
+    first, client = _ok(cli("version")).splitlines()
+    assert first == app and client.startswith("client: "), client
 
 
 @pytest.fixture

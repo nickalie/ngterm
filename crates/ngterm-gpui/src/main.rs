@@ -8,6 +8,7 @@
 //! running ngterm exits before GPUI starts and before it reads or writes the model state (it only appends to the shared
 //! log).
 
+use std::ffi::OsString;
 use std::io::Write as _;
 use std::process::ExitCode;
 
@@ -22,6 +23,12 @@ fn main() -> ExitCode {
     // SAFETY: first thing in main, while the process has one thread.
     unsafe {
         ngterm_wpe::worker::serve_if_asked(|| ngterm_app::logging::init(&ProcessEnv));
+    }
+    // `scripts/stage.sh` asks the staged binary who it is: the answer is printed before the app reads or writes
+    // anything (no log, no bus, no window)
+    if is_build_identity_query(std::env::args_os().skip(1)) {
+        print!("{}", app::build_identity_text());
+        return ExitCode::SUCCESS;
     }
     let activation = Activation::from_env(&ProcessEnv);
     // GDK unsets it once read, so no child (a hook, a custom command, a shell) claims this launch's sequence
@@ -52,6 +59,11 @@ fn main() -> ExitCode {
         activation,
     });
     exit_now(status)
+}
+
+/// Whether the arguments (without the program's name) are the build identity query alone.
+fn is_build_identity_query(mut args: impl Iterator<Item = OsString>) -> bool {
+    args.next().is_some_and(|arg| arg == app::BUILD_IDENTITY_FLAG) && args.next().is_none()
 }
 
 /// Hands this launch to the running primary.

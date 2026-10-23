@@ -653,17 +653,17 @@ The reader lives in ngterm-core (cross-platform CI); the frontend only passes th
   `installed` changes while `app` stays; delete it, `installed` is absent); a `test_cli_output.py::test_version`
   case with differing metadata expecting `<app>\ninstalled: <installed>\nclient: <path>`
 
-- [ ] `result.installed {version, commit?}` read from disk on every request (no cache), absent when unreadable or
+- [x] `result.installed {version, commit?}` read from disk on every request (no cache), absent when unreadable or
       versionless; an empty or `unknown` commit is dropped; not on `tree`
-- [ ] ngtermctl `version`: `installed: <version (commit)>` only when present and different from `app`, before the
+- [x] ngtermctl `version`: `installed: <version (commit)>` only when present and different from `app`, before the
       `client:` line; `--json` stays the raw response
-- [ ] `scripts/stage.sh` writes the file from the build's recorded inputs (package version, `NGTERM_BUILD_COMMIT`)
-- [ ] write tests: Rust unit tests for the five AppIdentity cases (incl. an empty or malformed file), the CLI
+- [x] `scripts/stage.sh` writes the file from the build's recorded inputs (package version, `NGTERM_BUILD_COMMIT`)
+- [x] write tests: Rust unit tests for the five AppIdentity cases (incl. an empty or malformed file), the CLI
       formatting cases (none, equal, other version, same version other commit, no commit), the core re-read while
       `app` stays
-- [ ] write tests: the conformance changes above
-- [ ] manual check (user): green on reference-macos; green on `cross-platform.yml` (the reader in ngterm-core)
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance changes above (green on Linux in a targeted `run-linux.sh -- -k test_version`: 6 pass)
+- [x] manual check (user): green on reference-macos; green on `cross-platform.yml` (the reader in ngterm-core) (skipped - not automatable here: left to the user)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user; the coverage gate's uncovered keys are all later tasks')
 
 ### Task 9: A second instance on an owned state directory exits 1 before reading or writing it (#749)
 

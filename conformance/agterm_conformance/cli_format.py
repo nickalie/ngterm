@@ -61,8 +61,7 @@ def human(result: Mapping[str, Any] | None, echo_id: bool = False, vocabulary: V
     if "recentOpen" in result:
         return recent_open(result["recentOpen"])
     if "app" in result:
-        app = result["app"]
-        return f"{app['version']} ({app['commit']})" if app.get("commit") else app["version"]
+        return version(result["app"], result.get("installed"))
     if "text" in result:
         return result["text"]
     if "exitCode" in result:
@@ -82,6 +81,23 @@ def human(result: Mapping[str, Any] | None, echo_id: bool = False, vocabulary: V
     if echo_id and "id" in result:
         return result["id"]
     return "ok"
+
+
+def version(app: Mapping[str, Any], installed: Mapping[str, Any] | None = None) -> str:
+    """The running app, then an `installed:` line only when the build on disk is known and differs from it (upstream's
+    `formatResponse`)."""
+    line = identity(app)
+    if installed is not None and _identity_key(installed) != _identity_key(app):
+        line += f"\ninstalled: {identity(installed)}"
+    return line
+
+
+def identity(app: Mapping[str, Any]) -> str:
+    return f"{app['version']} ({app['commit']})" if app.get("commit") else app["version"]
+
+
+def _identity_key(app: Mapping[str, Any]) -> tuple[Any, Any]:
+    return app.get("version"), app.get("commit")
 
 
 def restore_status(status: Mapping[str, Any], vocabulary: Vocabulary = UPSTREAM) -> str:

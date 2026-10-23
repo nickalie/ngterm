@@ -79,8 +79,8 @@ def probe(bin: Path, timeout: float, args: Sequence[str] = ()) -> dict[str, Any]
             super().platform_env(env)
             env[RustAdapter.variable("LOG")] = LOG_FILTER
 
-        def instance_executable(self, root: Path) -> list[str]:
-            return [*super().instance_executable(root), *args]
+        def instance_executable(self, root: Path, private_install: bool = False) -> list[str]:
+            return [*super().instance_executable(root, private_install), *args]
 
     if not bin.is_file():
         return {"ok": False, "error": f"no ngterm at {bin}"}

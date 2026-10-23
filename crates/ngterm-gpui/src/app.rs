@@ -45,6 +45,16 @@ pub fn identity() -> AppIdentity {
     AppIdentity::from_recorded(env!("CARGO_PKG_VERSION"), option_env!("NGTERM_BUILD_COMMIT"))
 }
 
+/// The argument that makes `ngterm` print the identity this build records ([`build_identity_text`]) and end before
+/// anything of the app starts: `scripts/stage.sh` writes the staged identity file from it.
+pub const BUILD_IDENTITY_FLAG: &str = "--build-identity";
+
+/// [`identity`] as the staged layout's identity file holds it (`ngterm_core::identity::staged_text`).
+#[must_use]
+pub fn build_identity_text() -> String {
+    ngterm_core::identity::staged_text(&identity())
+}
+
 /// The socket the app binds.
 #[must_use]
 pub fn control_socket(env: &dyn Env) -> PathBuf {
@@ -96,6 +106,12 @@ fn process_host(poster: &Poster, socket: String) -> ngterm_core::ProcessHost {
 
 /// What the core reaches the host through, and the launch decisions frozen before the first terminal.
 fn install_launch_hosts(core: &mut Core, poster: &Poster, socket: String) {
+    // `version`'s `installed`: the build on disk where this executable was started from, re-read on every request
+    core.set_installed_source(
+        std::env::current_exe()
+            .ok()
+            .and_then(|executable| ngterm_core::identity::InstalledSource::of_executable(&executable)),
+    );
     core.set_config_locator(paths::ConfigLocator::capture(&ProcessEnv));
     core.set_ui_test_launch(ngterm_core::is_ui_test_launch(&ProcessEnv));
     let decision = ngterm_app::restore_launch::launch_decision(core.settings(), &ProcessEnv);

@@ -41,6 +41,26 @@ WID = "22FCC0D1-40EC-49AC-8CB8-D91BDD12B80B"
             False,
             "reopened session api (incomplete: the entry stays in the list)",
         ),
+        (
+            {"app": {"version": "0.34.0", "commit": "a1"}, "installed": {"version": "0.34.0", "commit": "a1"}},
+            False,
+            "0.34.0 (a1)",
+        ),
+        (
+            {"app": {"version": "0.34.0", "commit": "a1"}, "installed": {"version": "0.35.1", "commit": "d4"}},
+            False,
+            "0.34.0 (a1)\ninstalled: 0.35.1 (d4)",
+        ),
+        (
+            {"app": {"version": "0.34.0", "commit": "a1"}, "installed": {"version": "0.34.0", "commit": "d4"}},
+            False,
+            "0.34.0 (a1)\ninstalled: 0.34.0 (d4)",
+        ),
+        (
+            {"app": {"version": "0.34.0", "commit": "a1"}, "installed": {"version": "0.35.1"}},
+            False,
+            "0.34.0 (a1)\ninstalled: 0.35.1",
+        ),
     ],
 )
 def test_human_takes_the_first_field_the_reference_formats(result, echo_id, expected):

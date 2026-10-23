@@ -11,6 +11,8 @@ license.workspace = true
 ngterm-proto.workspace = true
 ngterm-host.workspace = true
 bitflags.workspace = true
+# the installed identity of a macOS app bundle (identity.rs)
+plist.workspace = true
 pulldown-cmark.workspace = true
 serde.workspace = true
 strum.workspace = true

@@ -60,15 +60,22 @@ where
 
 /// A core over `state`, built on its main loop's thread, which it never leaves.
 fn serve_core_with(socket: &Path, state: impl FnOnce() -> CoreState + Send + 'static) -> TestResult<Server<Core>> {
-    let main_loop = FakeMainLoop::spawn_with(move || {
-        Core::new(
-            CoreConfig {
-                app: AppIdentity::from_recorded("0.1.0", Some("abc1234")),
-                capabilities: vec!["posix-shell".to_owned()],
-            },
-            state(),
-        )
-    })?;
+    serve_built_core(socket, move || core_over(state()))
+}
+
+fn core_over(state: CoreState) -> Core {
+    Core::new(
+        CoreConfig {
+            app: AppIdentity::from_recorded("0.1.0", Some("abc1234")),
+            capabilities: vec!["posix-shell".to_owned()],
+        },
+        state,
+    )
+}
+
+/// The core `build` makes on its main loop's thread, which it never leaves.
+fn serve_built_core(socket: &Path, build: impl FnOnce() -> Core + Send + 'static) -> TestResult<Server<Core>> {
+    let main_loop = FakeMainLoop::spawn_with(build)?;
     serve_on(socket, main_loop, |core: &mut Core, request: Request| {
         core.dispatch(&request).into()
     })
@@ -157,6 +164,39 @@ fn version_prints_the_app_then_the_client() -> TestResult {
     let client = fs::canonicalize(NGTERMCTL)?;
     let expected = format!("0.1.0 (abc1234)\nclient: {}\n", client.display());
     assert_eq!(outcome(&output), (Some(0), expected, String::new()));
+    Ok(())
+}
+
+#[test]
+fn version_prints_the_installed_build_between_the_app_and_the_client_when_it_differs() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    let installed = dir.path().join(ngterm_core::identity::STAGED_FILE);
+    fs::create_dir_all(installed.parent().ok_or("no parent")?)?;
+    fs::write(&installed, "0.2.0\ndef5678\n")?;
+    let source = ngterm_core::identity::InstalledSource::Staged(installed.clone());
+    let _server = serve_built_core(&socket, move || {
+        let mut core = core_over(CoreState::default());
+        core.set_installed_source(Some(source));
+        core
+    })?;
+    let version = || {
+        run(
+            dir.path(),
+            &[],
+            [OsStr::new("version"), OsStr::new("--socket"), socket.as_os_str()],
+        )
+    };
+    let client = fs::canonicalize(NGTERMCTL)?;
+    let expected = format!(
+        "0.1.0 (abc1234)\ninstalled: 0.2.0 (def5678)\nclient: {}\n",
+        client.display()
+    );
+    assert_eq!(outcome(&version()?), (Some(0), expected, String::new()));
+    // the same build on disk: no installed line
+    fs::write(&installed, "0.1.0\nabc1234\n")?;
+    let expected = format!("0.1.0 (abc1234)\nclient: {}\n", client.display());
+    assert_eq!(outcome(&version()?), (Some(0), expected, String::new()));
     Ok(())
 }
 

@@ -452,9 +452,20 @@ class Adapter:
             raise LaunchError(f"{self.name}: no binary to launch")
         return [os.fspath(self.bin)]
 
-    def instance_executable(self, root: Path) -> list[str]:
-        """The command one instance runs, given its root; a relaunch on the same root gets the same one."""
+    def instance_executable(self, root: Path, private_install: bool = False) -> list[str]:
+        """The command one instance runs, given its root; a relaunch on the same root gets the same one.
+
+        `private_install` runs it from an install of its own under the root, whose installed-build metadata
+        (`write_installed`) a test may rewrite without touching the build under test.
+        """
+        if private_install:
+            raise LaunchError(f"{self.name}: no private install")
         return self.executable()
+
+    def write_installed(self, instance: Instance, version: str | None, commit: str | None = None) -> None:
+        """Rewrites the installed-build metadata of `instance`'s private install, the file `version`'s `installed` is
+        read from at request time; a `version` of None removes it."""
+        raise NotImplementedError(f"{self.name}: no installed-build metadata")
 
     @property
     def headless(self) -> bool:
@@ -511,12 +522,13 @@ class Adapter:
         app_id: str | None = None,
         settings: Mapping[str, Any] | None = None,
         first_run: bool = False,
+        private_install: bool = False,
     ) -> Instance:
         """`settings` seeds `<state>/settings.json`, which every implementation reads at launch (`restoreMode`, ...).
 
         `first_run` leaves out the prior-state marker and asks for the welcome dialog an isolated launch suppresses.
         The dialog is modal and holds the socket unanswered, so such a launch returns without waiting for it: the
-        caller dismisses the dialog, then calls `serving`.
+        caller dismisses the dialog, then calls `serving`. `private_install`: see `instance_executable`.
         """
         self.executable()  # refuses before anything exists
         headless = self.headless
@@ -531,7 +543,7 @@ class Adapter:
             app_id = env.get(self.variable("APP_ID"))
             state_dir = env[self.variable("STATE_DIR")]
             _prepare_tree(root, Path(env["HOME"]), Path(state_dir), self.ghostty_config(), settings, first_run)
-            command = self.instance_executable(root)
+            command = self.instance_executable(root, private_install)
             if self.needs_runtime_dir:
                 os.mkdir(env["XDG_RUNTIME_DIR"], 0o700)  # the XDG spec's mode
                 write_noop_launchers(Path(env["XDG_CONFIG_HOME"]), Path(env["XDG_DATA_HOME"]))

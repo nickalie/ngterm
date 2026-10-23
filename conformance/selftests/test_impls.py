@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import os
+import plistlib
 import pwd
 import re
 import shutil
@@ -11,6 +12,7 @@ import sys
 import threading
 import time
 import traceback
+import types
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -1490,6 +1492,64 @@ def test_swift_macos_instance_runs_its_own_copy_of_the_bundle(tmp_path: Path) ->
     assert command == [str(copy / "Contents" / "MacOS" / "agterm")]
     assert (copy / "Contents" / "MacOS" / "agterm").read_text() == "binary"
     assert adapter.instance_executable(root) == command
+
+
+def test_rust_private_install_mirrors_the_stage_with_its_own_binary_and_identity(tmp_path: Path) -> None:
+    stage = tmp_path / "stage"
+    for path, text in {"bin/ngterm": "app", "bin/ngtermctl": "ctl", "share/ngterm/app-BUILD": "0.1.0\n\n"}.items():
+        (stage / path).parent.mkdir(parents=True, exist_ok=True)
+        (stage / path).write_text(text)
+    (stage / "share" / "ngterm" / "skills").mkdir()
+    (stage / "share" / "ghostty").mkdir()
+    adapter = RustAdapter(stage / "bin" / "ngterm")
+    root = tmp_path / "root"
+    install = root / "install"
+    command = adapter.instance_executable(root, private_install=True)
+    assert command == [str(install / "bin" / "ngterm")]
+    assert adapter.instance_executable(root) == command, "a relaunch runs from it again"
+    assert not (install / "bin" / "ngterm").is_symlink() and (install / "bin" / "ngterm").read_text() == "app"
+    assert (install / "bin" / "ngtermctl").is_symlink()
+    assert (install / "share" / "ghostty").is_symlink() and (install / "share" / "ngterm" / "skills").is_symlink()
+    identity = install / "share" / "ngterm" / "app-BUILD"
+    assert not identity.is_symlink() and identity.read_text() == "0.1.0\n\n"
+
+    instance = types.SimpleNamespace(root=root)
+    adapter.write_installed(instance, "9.9.9", "abc1234")
+    assert identity.read_text() == "9.9.9\nabc1234\n"
+    adapter.write_installed(instance, "9.9.10")
+    assert identity.read_text() == "9.9.10\n\n"
+    assert (stage / "share" / "ngterm" / "app-BUILD").read_text() == "0.1.0\n\n", "the stage is untouched"
+    adapter.write_installed(instance, None)
+    assert not identity.exists() and (stage / "share" / "ngterm" / "app-BUILD").exists()
+
+    staged = RustAdapter(stage / "bin" / "ngterm")
+    assert staged.instance_executable(tmp_path / "plain") == [str(stage / "bin" / "ngterm")]
+    with pytest.raises(LaunchError, match="staged binary"):
+        RustAdapter(tmp_path / "ngterm").instance_executable(tmp_path / "loose", private_install=True)
+    with pytest.raises(LaunchError, match="private install"):
+        adapter.write_installed(types.SimpleNamespace(root=tmp_path / "plain"), "1")
+
+
+def test_swift_macos_writes_the_installed_build_into_its_bundle_copy(tmp_path: Path) -> None:
+    bundle = tmp_path / "ref" / "agterm.app"
+    (bundle / "Contents" / "MacOS").mkdir(parents=True)
+    (bundle / "Contents" / "MacOS" / "agterm").write_text("binary")
+    original = {"CFBundleShortVersionString": "0.38.1", "GitCommit": "abc", "CFBundleName": "agterm"}
+    (bundle / "Contents" / "Info.plist").write_bytes(plistlib.dumps(original))
+    adapter = SwiftMacosAdapter(bundle)
+    root = tmp_path / "root"
+    adapter.instance_executable(root, private_install=True)
+    plist = root / "app" / "agterm.app" / "Contents" / "Info.plist"
+    instance = types.SimpleNamespace(root=root)
+    adapter.write_installed(instance, "9.9.9", "def")
+    assert plistlib.loads(plist.read_bytes()) == {**original, "CFBundleShortVersionString": "9.9.9", "GitCommit": "def"}
+    adapter.write_installed(instance, "9.9.10")
+    assert plistlib.loads(plist.read_bytes()) == {"CFBundleShortVersionString": "9.9.10", "CFBundleName": "agterm"}
+    assert plistlib.loads((bundle / "Contents" / "Info.plist").read_bytes()) == original, "the bundle is untouched"
+    adapter.write_installed(instance, None)
+    assert not plist.exists()
+    with pytest.raises(LaunchError, match="needs a bundle"):
+        SwiftMacosAdapter(tmp_path / "agterm").instance_executable(tmp_path / "loose", private_install=True)
 
 
 def test_swift_macos_execs_inside_the_bundle(tmp_path: Path) -> None:

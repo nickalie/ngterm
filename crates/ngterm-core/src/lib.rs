@@ -23,6 +23,7 @@ pub mod ghostty_config;
 pub mod hooks;
 pub mod html;
 pub mod hud;
+pub mod identity;
 pub mod interrupt;
 pub mod keymap;
 pub mod keystrokes;

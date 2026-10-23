@@ -3,6 +3,7 @@
 #
 #   bin/{ngterm,ngtermctl,ngterm-session}  share/ghostty/{themes,shell-integration}  share/terminfo
 #   share/ngterm/session-BUILD (the staged ngterm-session's build id, with bin/ngterm-session)
+#   share/ngterm/app-BUILD (the staged ngterm's version and commit, with bin/ngterm)
 #   share/ngterm/{agent-status,skills/ngterm}  share/ngterm/shell-integration/pwsh/ngterm.ps1
 #
 # from cargo's target dir and the vendored prefixes, plus ngterm's PowerShell integration and the agent
@@ -55,6 +56,17 @@ for binary in ngterm ngtermctl; do
     staged+=("$binary")
   fi
 done
+# The installed build's identity `version` reports as `installed` (crates/ngterm-core/src/identity.rs): the version
+# line and the commit line the staged binary recorded when it was built, printed by that binary (`--build-identity`
+# ends before the app starts), never this shell's NGTERM_BUILD_COMMIT or the checkout's version now, so the file names
+# the binary beside it even when the two were built and staged apart.
+if [[ -x "$DEST/bin/ngterm" ]]; then
+  mkdir -p "$DEST/share/ngterm"
+  "$DEST/bin/ngterm" --build-identity >"$DEST/share/ngterm/.app-BUILD.tmp" \
+    || die "$DEST/bin/ngterm --build-identity failed"
+  [[ -n "$(head -n1 "$DEST/share/ngterm/.app-BUILD.tmp")" ]] || die "$DEST/bin/ngterm --build-identity named no version"
+  mv -f "$DEST/share/ngterm/.app-BUILD.tmp" "$DEST/share/ngterm/app-BUILD"
+fi
 # The live sessions' server and its build id (crates/ngterm-session/src/build_id.rs): the binary is published by a
 # rename, then the id, the sha256 of the staged binary, with the size and modification time of the binary it was
 # written for, the same way, so a server or client never takes the id of another binary for this one's. `install`
