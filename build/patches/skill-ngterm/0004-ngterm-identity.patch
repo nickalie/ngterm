@@ -5,7 +5,8 @@ are `ngterm-*`, its macOS bundle id and log subsystem `com.nickalie.ngterm`, the
 nickalie/ngterm, and the default theme is ghostty's built-in (this build ships no theme of its own). Where
 upstream's text is macOS-only it says what this build does: Live sessions take a zsh, fish, bash or PowerShell login
 shell, each with its own integration, and the overlay hide toggle's chord on Linux is `ctrl+alt+shift+j`. What stays
-agterm is upstream's own: its repository and cookbook. Applied after 0003-live-attach-contract.patch;
+agterm is upstream's own: its repository and cookbook, whose recipes the skill has translated to ngterm's
+names before installing them. Applied after 0003-live-attach-contract.patch;
 sync-resources.sh reapplies the series to upstream's plugins/agterm/skills/agterm after every sync, and an upstream
 change that brings new agterm names is renamed here the same way.
 
@@ -457,7 +458,7 @@ index c65cd53..1e253c0 100644
  **Filing is opt-in and draft-first.** Never run a `gh` command without the user's explicit approval.
  Decide first whether it is a bug (a supported feature misbehaving → a GitHub **issue**) or something
 diff --git a/cookbook.md b/cookbook.md
-index 485f233..3a8d9f6 100644
+index 485f233..b8142c2 100644
 --- a/cookbook.md
 +++ b/cookbook.md
 @@ -59,11 +59,11 @@ A dirty tree is not a blocker: testing a local edit is a normal case.
@@ -474,6 +475,28 @@ index 485f233..3a8d9f6 100644
  - Inside an automated preflight launched from the keymap or the palette, use
    `ngtermctl version --json --socket "$AGT_SOCKET"` and extract only `.result.app.version` with the
    JSON parser the recipe already requires. Never compare the human output: it also includes the client
+@@ -85,6 +85,21 @@ Recipes are third-party scripts that run on the user's machine against the user'
+ several close sessions or delete workspaces. Show what a recipe does and what it needs before
+ installing it. Follow the recipe's own `Setup`; never invent a procedure it does not describe.
+ 
++Recipes are written for agterm, and ngterm shares none of its names at runtime: a recipe installed as
++fetched binds into a keymap ngterm never reads and runs a CLI that is not ngterm's. Translate every
++agterm name in its `Setup` and in each payload file before showing the install and copying anything,
++and show the translated text, not the original:
++
++- `agtermctl` becomes `ngtermctl`, a script's own `AGTERMCTL` override `NGTERMCTL`.
++- `AGTERM_*` variables become `NGTERM_*` (`AGTERM_SOCKET` is `NGTERM_SOCKET`). The `AGT_*` variables of
++  a keymap or palette child keep their names: ngterm sets the same ones.
++- A path under agterm's config dir (`~/.config/agterm/keymap.conf` and the like) becomes the same file
++  under ngterm's, the dir of `result.keymap.path` that `ngtermctl keymap list --json --socket
++  "$NGTERM_SOCKET"` reports (default `~/.config/ngterm`).
++
++When something in the recipe has no ngterm counterpart (an agterm app bundle, a macOS-only path or
++tool), report that and do not install it half-adapted.
++
+ Every file an install touches is merged, never replaced:
+ 
+ - Read the file first and show the exact line or block to be added.
 diff --git a/examples.md b/examples.md
 index 3edc276..175583a 100644
 --- a/examples.md

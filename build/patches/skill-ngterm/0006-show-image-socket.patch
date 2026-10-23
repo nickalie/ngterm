@@ -1,0 +1,22 @@
+show-image.sh opens its overlay in the app that spawned the session: `ngtermctl` never reads `NGTERM_SOCKET`
+(upstream's `agtermctl` never reads `AGTERM_SOCKET` either), so the script passes it through `--socket` when it is
+set, as the skill tells every other call to, instead of letting a bare call resolve the default socket, which may
+belong to another running instance. Upstream's script has the same gap; drop this patch once upstream's passes the
+socket. Applied after 0005-restore-adapter.patch.
+
+diff --git a/scripts/show-image.sh b/scripts/show-image.sh
+index 3f1fdfb..de84154 100755
+--- a/scripts/show-image.sh
++++ b/scripts/show-image.sh
+@@ -113,5 +113,10 @@ abs=$(cd "$(dirname "$img")" && pwd)/$(basename "$img")
+ # overlay command is run via `sh -c`, so an unescaped ' in the path would otherwise abort it.
+ sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+ 
++# ngtermctl never reads NGTERM_SOCKET, and a bare call resolves the default socket, which may belong to
++# another running instance than the one that spawned this session: name the session's own socket.
++socket=()
++[ -n "${NGTERM_SOCKET:-}" ] && socket=(--socket "$NGTERM_SOCKET")
++
+ # open an overlay that re-invokes this script in --emit mode inside the overlay's pty.
+-ngtermctl session overlay open "/bin/bash $(sq "$self") --emit $(sq "$abs")" --size-percent "$size"
++ngtermctl session overlay open "/bin/bash $(sq "$self") --emit $(sq "$abs")" --size-percent "$size" ${socket[@]+"${socket[@]}"}

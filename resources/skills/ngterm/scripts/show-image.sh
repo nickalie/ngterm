@@ -113,5 +113,10 @@ abs=$(cd "$(dirname "$img")" && pwd)/$(basename "$img")
 # overlay command is run via `sh -c`, so an unescaped ' in the path would otherwise abort it.
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
+# ngtermctl never reads NGTERM_SOCKET, and a bare call resolves the default socket, which may belong to
+# another running instance than the one that spawned this session: name the session's own socket.
+socket=()
+[ -n "${NGTERM_SOCKET:-}" ] && socket=(--socket "$NGTERM_SOCKET")
+
 # open an overlay that re-invokes this script in --emit mode inside the overlay's pty.
-ngtermctl session overlay open "/bin/bash $(sq "$self") --emit $(sq "$abs")" --size-percent "$size"
+ngtermctl session overlay open "/bin/bash $(sq "$self") --emit $(sq "$abs")" --size-percent "$size" ${socket[@]+"${socket[@]}"}

@@ -85,6 +85,21 @@ Recipes are third-party scripts that run on the user's machine against the user'
 several close sessions or delete workspaces. Show what a recipe does and what it needs before
 installing it. Follow the recipe's own `Setup`; never invent a procedure it does not describe.
 
+Recipes are written for agterm, and ngterm shares none of its names at runtime: a recipe installed as
+fetched binds into a keymap ngterm never reads and runs a CLI that is not ngterm's. Translate every
+agterm name in its `Setup` and in each payload file before showing the install and copying anything,
+and show the translated text, not the original:
+
+- `agtermctl` becomes `ngtermctl`, a script's own `AGTERMCTL` override `NGTERMCTL`.
+- `AGTERM_*` variables become `NGTERM_*` (`AGTERM_SOCKET` is `NGTERM_SOCKET`). The `AGT_*` variables of
+  a keymap or palette child keep their names: ngterm sets the same ones.
+- A path under agterm's config dir (`~/.config/agterm/keymap.conf` and the like) becomes the same file
+  under ngterm's, the dir of `result.keymap.path` that `ngtermctl keymap list --json --socket
+  "$NGTERM_SOCKET"` reports (default `~/.config/ngterm`).
+
+When something in the recipe has no ngterm counterpart (an agterm app bundle, a macOS-only path or
+tool), report that and do not install it half-adapted.
+
 Every file an install touches is merged, never replaced:
 
 - Read the file first and show the exact line or block to be added.

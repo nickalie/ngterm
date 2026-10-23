@@ -181,7 +181,8 @@ listed text against the Rust sources.
 
 The bundled agent skill (`resources/skills/ngterm`) is upstream's with
 `build/patches/skill-ngterm/` applied (the `live` names, this build's `ngterm` and `ngtermctl`, then the attach
-contract's `AGTERM_LIVE_*`, then the rest of this build's identity, `NGTERM_*` among it):
+contract's `AGTERM_LIVE_*`, then the rest of this build's identity, `NGTERM_*` among it, then the restore adapter, then
+`show-image.sh` passing the pane's socket):
 `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh` rebuilds it as the new upstream tree plus those
 patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned tag verifies the copy still equals it.
 
