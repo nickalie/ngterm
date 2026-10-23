@@ -4344,3 +4344,99 @@ fn sidebar_refusals_are_usage_errors_before_connecting() -> TestResult {
     }
     Ok(())
 }
+
+/// Sends one raw request line and returns the reply line.
+fn request_line(socket: &Path, line: &str) -> TestResult<String> {
+    let mut stream = UnixStream::connect(socket)?;
+    stream.write_all(format!("{line}\n").as_bytes())?;
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply)?;
+    Ok(reply)
+}
+
+#[test]
+fn session_wait_reads_the_current_status_through_the_composite() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    let _server = serve_core_with(&socket, || CoreState {
+        library: WindowLibrary::seeded("/home/u"),
+        ..CoreState::default()
+    })?;
+    let set = request_line(&socket, r#"{"cmd":"session.status","args":{"status":"completed"}}"#)?;
+    let set: Response = serde_json::from_str(&set)?;
+    assert!(set.ok, "{set:?}");
+    let tree: Response = serde_json::from_str(&request_line(&socket, r#"{"cmd":"tree"}"#)?)?;
+    let sid = tree.result.ok_or("no result")?["tree"]["workspaces"][0]["sessions"][0]["id"]
+        .as_str()
+        .ok_or("no session id")?
+        .to_owned();
+    let wait = |extra: &[&str]| -> TestResult<Output> {
+        let argv = ["session", "wait", "--until", "completed"]
+            .iter()
+            .chain(extra)
+            .map(OsStr::new)
+            .chain([OsStr::new("--socket"), socket.as_os_str()]);
+        run(dir.path(), &[], argv)
+    };
+    assert_eq!(outcome(&wait(&[])?), (Some(0), "completed\n".to_owned(), String::new()));
+    let prefix = &sid[..8];
+    assert_eq!(
+        outcome(&wait(&["--target", prefix, "--json"])?),
+        (
+            Some(0),
+            format!("{{\"id\":\"{sid}\",\"status\":\"completed\"}}\n"),
+            String::new()
+        )
+    );
+    assert_eq!(
+        outcome(&wait(&["--target", "zzz"])?),
+        (Some(1), String::new(), "Error: no such session: zzz\n".to_owned())
+    );
+    Ok(())
+}
+
+#[test]
+fn session_wait_times_out_while_the_app_never_answers() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    // accepts every connection and never replies, as an app whose main loop is stuck
+    let listener = std::os::unix::net::UnixListener::bind(&socket)?;
+    let holder = std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => held.push(stream),
+                Err(_) => break,
+            }
+            if held.len() > 1 {
+                break;
+            }
+        }
+        held
+    });
+    let started = std::time::Instant::now();
+    let output = run(
+        dir.path(),
+        &[],
+        [
+            OsStr::new("session"),
+            OsStr::new("wait"),
+            OsStr::new("--until"),
+            OsStr::new("completed"),
+            OsStr::new("--timeout"),
+            OsStr::new("0.5"),
+            OsStr::new("--socket"),
+            socket.as_os_str(),
+        ],
+    )?;
+    let elapsed = started.elapsed();
+    assert_eq!(outcome(&output), (Some(124), String::new(), "timed out\n".to_owned()));
+    assert!(
+        elapsed >= std::time::Duration::from_millis(500) && elapsed < std::time::Duration::from_secs(10),
+        "{elapsed:?}"
+    );
+    // a second connect ends the holder, whose streams drop with it
+    drop(UnixStream::connect(&socket));
+    drop(holder.join());
+    Ok(())
+}

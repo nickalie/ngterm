@@ -1,18 +1,27 @@
-"""The two `agtermctl` subcommands that never open the socket: `clipboard set` and `terminfo install`.
+"""The `agtermctl` subcommands with no socket command of their own: `clipboard set` and `terminfo install`, which
+never open the socket, and `session wait`, which composes existing reads (`events.read`, `window.list`, `tree`).
 
-Both run through `cli.local`, without `--socket` (they refuse it) and in the instance's env, whose state directory
-variable (`AGTERM_STATE_DIR`, the Rust build's `NGTERM_STATE_DIR`) is under the temp root. `clipboard set` writes
-nothing outside a Live pane, and inside one the instance's terminals drop the OSC 52 write (`clipboard-write = deny`),
-so the desktop clipboard is never touched.
-`terminfo install` talks to a stand-in `ssh` on PATH that runs the remote command against the isolated HOME."""
+The first two run through `cli.local`, without `--socket` (they refuse it) and in the instance's env, whose state
+directory variable (`AGTERM_STATE_DIR`, the Rust build's `NGTERM_STATE_DIR`) is under the temp root. `clipboard set`
+writes nothing outside a Live pane, and inside one the instance's terminals drop the OSC 52 write
+(`clipboard-write = deny`), so the desktop clipboard is never touched.
+`terminfo install` talks to a stand-in `ssh` on PATH that runs the remote command against the isolated HOME.
+`session wait` runs against the instance's socket, or through a relay in the instance root that notes each request, so
+a test acts only once the wait has read the tree and is polling."""
 
 import base64
+import dataclasses
+import json
 import os
 import pwd
 import shlex
 import shutil
+import socket
 import stat
+import threading
+import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -196,3 +205,154 @@ def test_terminfo_install_refuses_a_destination_ssh_would_misread(cli, fake_ssh,
     result = cli.local("terminfo", "install", "--", destination, env=fake_ssh(), input="")
     _usage(result, f"destination must be a host, user@host or an ssh alias, not '{destination}'")
     assert not fake_ssh.record.exists()
+
+
+# -- session wait
+
+WAIT = ("session", "wait")
+TIMEOUT_REFUSAL = "--timeout must be a positive number of seconds"
+
+
+def _read_line(connection):
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = connection.recv(65536)
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+class _Relay:
+    """A socket in the instance root that passes each connection's request line to the instance and the reply back,
+    noting every request as it arrives."""
+
+    def __init__(self, cli):
+        self._client = cli.instance.client()
+        path = cli.instance.root / f"r{uuid.uuid4().hex[:6]}.sock"
+        self.cli = cli.on(dataclasses.replace(cli.instance, socket=path))
+        self.requests = []
+        self._lock = threading.Lock()
+        self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._server.bind(os.fspath(path))
+        self._server.listen(16)
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                connection, _ = self._server.accept()
+            except OSError:
+                return  # closed
+            threading.Thread(target=self._relay, args=(connection,), daemon=True).start()
+
+    def _relay(self, connection):
+        with connection:
+            line = _read_line(connection)
+            if not line:
+                return
+            with self._lock:
+                self.requests.append(json.loads(line))
+            # Through the instance's own client, which checks the root; the reply goes back re-encoded.
+            reply = self._client.send_line(line.rstrip(b"\n"))
+            connection.sendall(json.dumps(reply.raw, separators=(",", ":")).encode() + b"\n")
+
+    def polling(self):
+        """Whether the wait has read the tree and gone on to poll events from its cursor."""
+        with self._lock:
+            commands = [(request["cmd"], (request.get("args") or {}).get("after")) for request in self.requests]
+        trees = [index for index, (cmd, _) in enumerate(commands) if cmd == "tree"]
+        return bool(trees) and any(cmd == "events.read" and after for cmd, after in commands[trees[-1] + 1 :])
+
+    def close(self):
+        self._server.close()
+
+
+@contextmanager
+def _relay(cli):
+    relay = _Relay(cli)
+    try:
+        yield relay
+    finally:
+        relay.close()
+
+
+def _new_session(ctl):
+    return assert_ok(ctl.request("session.new"))["id"]
+
+
+@pytest.mark.covers("cli:session wait")
+def test_session_wait_returns_at_once_when_the_status_already_matches(cli, ctl):
+    sid = _new_session(ctl)
+    assert_ok(ctl.request("session.status", sid, status="completed"))
+    result = cli(*WAIT, "--until", "completed", "--target", sid)
+    assert (result.returncode, result.stdout, result.stderr) == (0, "completed\n", ""), result.argv
+    result = cli(*WAIT, "--until", "active", "--until", "completed", "--target", sid, "--json")
+    expected = json.dumps({"id": sid, "status": "completed"}, separators=(",", ":"))
+    assert (result.returncode, result.stdout, result.stderr) == (0, f"{expected}\n", ""), result.argv
+    assert_ok(ctl.request("session.close", sid))
+
+
+@pytest.mark.covers("cli:session wait")
+def test_session_wait_sees_a_later_status_event(cli, ctl):
+    worker, other = _new_session(ctl), _new_session(ctl)
+    assert_ok(ctl.request("session.status", worker, status="active"))
+    with _relay(cli) as relay:
+        args = (*WAIT, "--until", "completed", "--until", "blocked", "--target", worker)
+        with relay.cli.spawn(*args) as waiting:
+            wait_until(relay.polling)
+            # Another session's match and the worker's status outside the set leave it waiting; the other session
+            # takes a status the worker never reaches, so a wait that matched it would print `completed`.
+            assert_ok(ctl.request("session.status", other, status="completed"))
+            assert_ok(ctl.request("session.status", worker, status="active", blink=True))
+            assert waiting.process.poll() is None
+            assert_ok(ctl.request("session.status", worker, status="blocked"))
+            result = waiting.finish()
+    assert (result.returncode, result.stdout, result.stderr) == (0, "blocked\n", ""), result.argv
+    for sid in (worker, other):
+        assert_ok(ctl.request("session.close", sid))
+
+
+@pytest.mark.covers("cli:session wait")
+def test_session_wait_exits_2_when_the_session_closes(cli, ctl):
+    sid = _new_session(ctl)
+    assert_ok(ctl.request("session.status", sid, status="active"))
+    with _relay(cli) as relay:
+        with relay.cli.spawn(*WAIT, "--until", "completed", "--target", sid) as waiting:
+            wait_until(relay.polling)
+            assert_ok(ctl.request("session.close", sid))
+            result = waiting.finish()
+    assert (result.returncode, result.stdout, result.stderr) == (2, "", "session closed\n"), result.argv
+
+
+@pytest.mark.covers("cli:session wait")
+def test_session_wait_times_out_with_124(cli, ctl):
+    sid = _new_session(ctl)
+    started = time.monotonic()
+    result = cli(*WAIT, "--until", "completed", "--timeout", "0.5", "--target", sid)
+    assert time.monotonic() - started >= 0.5
+    assert (result.returncode, result.stdout, result.stderr) == (124, "", "timed out\n"), result.argv
+    assert_ok(ctl.request("session.close", sid))
+
+
+@pytest.mark.covers("cli:session wait")
+@pytest.mark.parametrize(
+    ("args", "code", "message"),
+    [
+        pytest.param([], 64, "provide at least one --until status", id="no-until"),
+        pytest.param(
+            ["--until", "done"], 64, "invalid status: done (expected idle, active, completed or blocked)", id="status"
+        ),
+        pytest.param(["--until", "completed", "--timeout", "0"], 64, TIMEOUT_REFUSAL, id="zero"),
+        # The argument parsers differ on a value that looks like an option: only the usage error is shared.
+        pytest.param(["--until", "completed", "--timeout", "-1"], 64, None, id="negative"),
+        pytest.param(["--until", "completed", "--timeout", "inf"], 64, TIMEOUT_REFUSAL, id="infinite"),
+        pytest.param(["--until", "completed", "--target", "zzzz"], 1, "no such session: zzzz", id="target"),
+    ],
+)
+def test_session_wait_refuses_bad_arguments(cli, args, code, message):
+    result = cli(*WAIT, *args)
+    if code == 64:
+        _usage(result, message)
+    else:
+        _failed(result, message, code)

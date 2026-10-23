@@ -588,24 +588,29 @@ call, so it is ready for the CLI's macOS and Windows forms.
   `test_session_wait_refuses_bad_arguments` (parametrized: no `--until`, `--until done`, `--timeout 0|-1|inf`,
   `--target DDDD` → "no such session: DDDD", exit 1)
 
-- [ ] validation before any I/O: "provide at least one --until status"; "invalid status: X (expected idle, active,
+- [x] validation before any I/O: "provide at least one --until status"; "invalid status: X (expected idle, active,
       completed or blocked)"; "--timeout must be a positive number of seconds" (finite, > 0)
-- [ ] anchor the event cursor first (`events.read` kinds `["status","session.closed"]`, no `after`), then
+- [x] anchor the event cursor first (`events.read` kinds `["status","session.closed"]`, no `after`), then
       `window.list`, then `tree --window W` per open window; resolve the target client-side (`active` = the active
       window's active session); an absent status reads as idle; a current match returns without another read
-- [ ] poll from the cursor: the target's `session.closed` → exit 2 "session closed"; a status in the set (a repeat
+- [x] poll from the cursor: the target's `session.closed` → exit 2 "session closed"; a status in the set (a repeat
       included) matches; 250 ms sleep after an empty page, clipped to the deadline; a refused connect retries through
       `StreamState.retry_delay`; a missing socket and "event run changed" fail at once (exit 1); deadline → exit 124
       "timed out"
-- [ ] output: the status word, or with `--json` one compact sorted-key `{"id","status"}` object
-- [ ] the watchdog enforces `--timeout` while a send blocks, cancelled on return
-- [ ] confirm the core emits `session.closed` on a soft close and on a window close (upstream's exit-2 contract);
-      ➕ a task if it does not
-- [ ] write tests: Rust unit tests on a fake send/sleep/now for the Swift cases; the watchdog firing while blocked
+- [x] output: the status word, or with `--json` one compact sorted-key `{"id","status"}` object
+- [x] the watchdog enforces `--timeout` while a send blocks, cancelled on return
+- [x] confirm the core emits `session.closed` on a soft close and on a window close (upstream's exit-2 contract);
+      ➕ a task if it does not (it does: soft close in `model/tests/pending_close.rs`
+      `soft_close_undo_and_finalize_emit_only_the_visible_membership_edges`, window close pinned by the new
+      `model/tests/library.rs` `closing_a_window_emits_session_closed_for_each_of_its_sessions`; no new task)
+- [x] write tests: Rust unit tests on a fake send/sleep/now for the Swift cases; the watchdog firing while blocked
       and a cancelled one not firing (inject the fire closure)
-- [ ] write tests: the conformance tests above
-- [ ] manual check (user): green on reference-macos
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance tests above (the unresolved target is `zzzz`, not `DDDD`: a hex prefix could
+      match a shared instance's random session id; the relay in the module waits until the CLI polls before acting)
+- [x] manual check (user): green on reference-macos (skipped - not automatable here: reference-macos runs only in CI
+      on macOS; left for the user)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan
+      per the user; the targeted `run-linux.sh -- -k session_wait` passed 10/10, its ids are added in Task 35)
 
 ### Task 8: `version` reports the installed build: `installed:` / `result.installed` (#723)
 

@@ -19,7 +19,7 @@ use crate::{BasicOptions, Failure};
 /// The wait before reading again after an empty page.
 const EMPTY_PAGE_WAIT: Duration = Duration::from_millis(250);
 /// The first wait after a refused connect, doubled per refusal up to [`MAX_RETRY_DELAY`].
-const FIRST_RETRY_DELAY: Duration = Duration::from_millis(250);
+pub(crate) const FIRST_RETRY_DELAY: Duration = Duration::from_millis(250);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(4);
 /// How long consecutive refused connects may last before the stream gives up, so it never waits forever on an app
 /// that is gone.
@@ -155,19 +155,7 @@ struct LiveStream {
 
 impl StreamDependencies for LiveStream {
     fn send(&mut self, request: &Request) -> Result<Response<ControlResult>, ClientError> {
-        let response = client::send(&self.socket, request)?.response;
-        // `client::send` already decoded the result as a `ControlResult`, so this cannot fail
-        let result = response
-            .result
-            .filter(|result| !result.is_null())
-            .map(serde_json::from_value::<ControlResult>)
-            .transpose()
-            .map_err(|error| ClientError::new(format!("could not decode response: {error}")))?;
-        Ok(Response {
-            ok: response.ok,
-            result,
-            error: response.error,
-        })
+        typed(client::send(&self.socket, request)?.response)
     }
 
     fn sleep(&mut self, delay: Duration) {
@@ -181,9 +169,25 @@ impl StreamDependencies for LiveStream {
     }
 }
 
+/// `response` with its result read as the shared result object. A reply from `client::send` already decoded as one,
+/// so on that path this cannot fail.
+pub(crate) fn typed(response: Response) -> Result<Response<ControlResult>, ClientError> {
+    let result = response
+        .result
+        .filter(|result| !result.is_null())
+        .map(serde_json::from_value::<ControlResult>)
+        .transpose()
+        .map_err(|error| ClientError::new(format!("could not decode response: {error}")))?;
+    Ok(Response {
+        ok: response.ok,
+        result,
+        error: response.error,
+    })
+}
+
 /// A position within one app run (upstream's `ControlEventCursor`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Cursor {
+pub(crate) struct Cursor {
     /// The run id, upper-case.
     run: String,
     /// The last sequence seen.
@@ -192,7 +196,7 @@ struct Cursor {
 
 /// The cursor, the filter and the retry bookkeeping of one stream (upstream's `EventStreamState`).
 #[derive(Debug)]
-struct StreamState {
+pub(crate) struct StreamState {
     cursor: Option<Cursor>,
     /// The kinds asked for, in declaration order without repeats; `None` asks for every kind.
     kinds: Option<Vec<EventKind>>,
@@ -203,7 +207,7 @@ struct StreamState {
 }
 
 impl StreamState {
-    fn new(cursor: Option<Cursor>, kinds: Option<&[EventKind]>, limit: Option<i64>) -> Self {
+    pub(crate) fn new(cursor: Option<Cursor>, kinds: Option<&[EventKind]>, limit: Option<i64>) -> Self {
         Self {
             cursor,
             kinds: kinds.map(|selected| EventKind::iter().filter(|kind| selected.contains(kind)).collect()),
@@ -214,7 +218,7 @@ impl StreamState {
     }
 
     /// The next read: a bare `events.read` until there is a cursor, a filter or a limit to send.
-    fn make_request(&self) -> Request {
+    pub(crate) fn make_request(&self) -> Request {
         let request = Request::new(Command::Events(EventsCmd::Read));
         if self.cursor.is_none() && self.kinds.is_none() && self.limit.is_none() {
             return request;
@@ -243,7 +247,7 @@ impl StreamState {
     /// only delays that failure by up to [`RETRY_BUDGET`], or ends in `event run changed` when a relaunched app
     /// answers first. It is kept for parity with upstream. Without a cursor there is
     /// nothing to keep, so a first read fails fast.
-    fn retry_delay(&mut self, error: &ClientError) -> Option<Duration> {
+    pub(crate) fn retry_delay(&mut self, error: &ClientError) -> Option<Duration> {
         let refused = error.connect_errno == Some(libc::ECONNREFUSED);
         if self.cursor.is_none() || !refused || self.retried_for >= RETRY_BUDGET {
             return None;
@@ -256,7 +260,7 @@ impl StreamState {
 
     /// Takes a reply's page and moves the cursor past it; any reply renews the retry budget. A refusal is the
     /// server's error text.
-    fn consume(&mut self, response: Response<ControlResult>) -> Result<Vec<ControlEvent>, String> {
+    pub(crate) fn consume(&mut self, response: Response<ControlResult>) -> Result<Vec<ControlEvent>, String> {
         self.next_retry_delay = FIRST_RETRY_DELAY;
         self.retried_for = Duration::ZERO;
         if !response.ok {

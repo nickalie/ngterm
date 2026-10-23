@@ -582,3 +582,24 @@ fn drain_effects_orders_library_events_among_store_events() {
     assert!(closed > 0, "{windows:?}");
     assert!(windows[closed..].iter().all(|id| *id == second), "{windows:?}");
 }
+
+/// `session wait` ends with exit 2 when its session leaves the open tree, its window's close included: the close emits
+/// `session.closed` for every session the window held.
+#[test]
+fn closing_a_window_emits_session_closed_for_each_of_its_sessions() {
+    let mut library = library();
+    let second = library.new_window(Some("second"));
+    let seeded = seeded_session(&library, second);
+    let added = add_to_first_workspace(&mut library, second);
+    library.drain_effects();
+
+    library.close_window(second);
+    let closed: Vec<Uuid> = library
+        .drain_effects()
+        .events
+        .into_iter()
+        .filter(|event| event.window == second && event.event.kind == ngterm_proto::EventKind::SessionClosed)
+        .filter_map(|event| event.event.session)
+        .collect();
+    assert_eq!(closed, [seeded, added]);
+}
