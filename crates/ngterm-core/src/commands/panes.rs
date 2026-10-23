@@ -267,9 +267,10 @@ fn lead(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
 
 // MARK: - scratch
 
-/// `session.scratch [on|off|toggle] [--command]`: shows, hides or toggles the scratch terminal; hiding keeps its
-/// shell. A command (when showing) runs once instead of a login shell, respawning a live scratch with it. Showing
-/// selects the session first, as the scratch takes the keyboard.
+/// `session.scratch [on|off|toggle] [--command] [--follow]`: shows, hides or toggles the scratch terminal; hiding
+/// keeps its shell. A command (when showing) runs once instead of a login shell, respawning a live scratch with it.
+/// Showing never selects; `--follow` does, as on `session.overlay.open`: the deck mounts every session, and an
+/// unselected session's scratch spawns there without taking the keyboard, which it gets once its session is selected.
 fn scratch(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let (store, id) = session_store(core, target, args.window.as_deref())?;
     let mode = ToggleMode::parse(args.mode.as_deref()).ok_or_else(|| {
@@ -293,7 +294,7 @@ fn scratch(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
             session.scratch_command = Some(command.to_owned());
         }
     }
-    if want && store.selected_session_id() != Some(id) {
+    if want && args.follow == Some(true) && store.selected_session_id() != Some(id) {
         store.select_session(Some(id));
     }
     if store.session(id).is_some_and(|session| session.scratch_active != want) {

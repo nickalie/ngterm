@@ -182,7 +182,7 @@ impl RequestCommand for Lead {
     }
 }
 
-/// `ngtermctl session scratch [on|off|toggle] [--command CMD]`.
+/// `ngtermctl session scratch [on|off|toggle] [--command CMD] [--follow]`: `follow` goes only when given.
 #[derive(Debug, clap::Args)]
 #[command(about = "Show or hide a session scratch terminal (on|off|toggle).")]
 pub struct Scratch {
@@ -198,6 +198,12 @@ pub struct Scratch {
                 the scratch if one is already open)."
     )]
     command: Option<String>,
+
+    #[arg(
+        long,
+        help = "Select (switch to) the target session when showing its scratch (default: show without switching)."
+    )]
+    follow: bool,
 
     #[command(flatten)]
     target: TargetOptions,
@@ -215,6 +221,7 @@ impl RequestCommand for Scratch {
         let args = Args {
             mode: Some(self.mode.clone()),
             command: self.command.clone(),
+            follow: self.follow.then_some(true),
             ..Args::default()
         };
         session_request(
@@ -532,6 +539,19 @@ mod tests {
             request(&["scratch", "on", "--command", "htop", "--target", "s1", "--window", "w1"]),
             json!({"cmd": "session.scratch", "target": "s1",
                    "args": {"mode": "on", "command": "htop", "window": "w1"}})
+        );
+    }
+
+    /// Upstream's `sessionScratchFollow`.
+    #[test]
+    fn scratch_sends_follow_only_when_given() {
+        assert_eq!(
+            request(&["scratch", "on", "--follow"]),
+            json!({"cmd": "session.scratch", "target": "active", "args": {"mode": "on", "follow": true}})
+        );
+        assert_eq!(
+            request(&["scratch", "on"]),
+            json!({"cmd": "session.scratch", "target": "active", "args": {"mode": "on"}})
         );
     }
 

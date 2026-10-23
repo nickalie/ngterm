@@ -1,8 +1,11 @@
 """Split panes, the scratch terminal, terminal zoom and session backgrounds. Every test splits a session of
 its own, so the module's shared instance never carries one test's panes into another."""
 
+import shlex
+
 import pytest
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session
+from agterm_conformance.wait import wait_until
 
 UNKNOWN = "zzz"
 # AppStore's split ratio bounds; a request outside them is clamped, never refused.
@@ -305,6 +308,66 @@ def test_scratch_rejects_an_unknown_mode(ctl):
     sid = _new(ctl)
     assert_error(ctl.request("session.scratch", sid, mode="show"), "invalid scratch mode: show")
     assert _node(ctl, sid)["scratch"] is False
+
+
+def _marking_command(marker):
+    """A scratch program that writes `ran` to `marker`, then stays up reading its input."""
+    return "sh -c " + shlex.quote(f"echo ran > {shlex.quote(str(marker))}; exec cat")
+
+
+def _ran(marker):
+    def ran():
+        assert marker.exists() and marker.read_text().strip() == "ran", f"{marker.name} not written yet"
+        return True
+
+    ran.__qualname__ = f"{marker.name} written"
+    return wait_until(ran)
+
+
+def _background_and_selected(ctl):
+    """Two sessions, the second selected (`session.new` selects what it creates)."""
+    background = _mounted(ctl)
+    selected = _mounted(ctl)
+    assert _node(ctl, selected)["active"] is True
+    return background, selected
+
+
+@pytest.mark.covers("session.scratch", "field:tree.session.scratch")
+def test_scratch_on_a_background_session_starts_without_switching_unless_followed(ctl):
+    background, selected = _background_and_selected(ctl)
+    marker = ctl.instance.root / "background-scratch-ran"
+    marker.unlink(missing_ok=True)
+    assert_ok(ctl.request("session.scratch", background, mode="on", command=_marking_command(marker)))
+    _ran(marker)
+    assert _node(ctl, background)["scratch"] is True
+    assert _node(ctl, selected)["active"] is True
+    assert _node(ctl, background)["active"] is False
+
+    assert_ok(ctl.request("session.scratch", background, mode="on", follow=True))
+    assert_subset(_node(ctl, background), {"active": True, "scratch": True})
+
+
+@pytest.mark.covers("session.scratch")
+def test_scratch_follow_selects_only_when_showing(ctl):
+    background, selected = _background_and_selected(ctl)
+    assert_ok(ctl.request("session.scratch", background, mode="off", follow=True))
+    assert _node(ctl, selected)["active"] is True
+    assert _node(ctl, background)["scratch"] is False
+
+    assert_ok(ctl.request("session.scratch", background, mode="on", follow=True))
+    assert_subset(_node(ctl, background), {"active": True, "scratch": True})
+
+
+@pytest.mark.covers("session.scratch")
+def test_scratch_command_replaces_a_shown_scratch(ctl):
+    sid = _mounted(ctl)
+    assert_ok(ctl.request("session.scratch", sid, mode="on"))
+    ctl.wait_mounted(sid, "scratch")
+    marker = ctl.instance.root / "replaced-scratch-ran"
+    marker.unlink(missing_ok=True)
+    assert_ok(ctl.request("session.scratch", sid, mode="on", command=_marking_command(marker)))
+    _ran(marker)
+    assert _node(ctl, sid)["scratch"] is True
 
 
 @pytest.mark.covers("surface.zoom", "field:tree.zoomedSurface", "field:result.id")

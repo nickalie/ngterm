@@ -537,20 +537,22 @@ store.selected_session_id() != Some(id)` branch), `commands/tests/panes.rs`, `cr
   selected: the marker appears, A has scratch, B stays active; then `--follow` selects A),
   `test_split.py::test_scratch_follow_selects_only_when_showing`, `test_split.py::test_scratch_command_replaces_a_shown_scratch`
 
-- [ ] `session.scratch` selects its target only when showing with `follow: true`; hiding never selects (behavior
+- [x] `session.scratch` selects its target only when showing with `follow: true`; hiding never selects (behavior
       change: the forced switch also cleared the target's unseen badge and reordered Ctrl-Tab recency; neither may
       happen now)
-- [ ] ngtermctl `--follow` ("Select (switch to) the target session when showing its scratch (default: show without
+- [x] ngtermctl `--follow` ("Select (switch to) the target session when showing its scratch (default: show without
       switching)."), sent only when given
-- [ ] confirm `--command` against a shown scratch runs the new program end to end (deck drops the torn-down token and
-      mounts a fresh scratch); port nothing for scratchGeneration unless that check fails
-- [ ] write tests: replace `showing_the_scratch_selects_its_session` with
+- [x] confirm `--command` against a shown scratch runs the new program end to end (deck drops the torn-down token and
+      mounts a fresh scratch); port nothing for scratchGeneration unless that check fails (confirmed by the deck test
+      `a_scratch_command_replaces_a_shown_scratch` and the conformance test; nothing ported)
+- [x] write tests: replace `showing_the_scratch_selects_its_session` with
       `showing_a_background_scratch_leaves_the_selection` and `follow_selects_the_target_only_when_showing`; a CLI
       parse test; a GPUI deck test that `focus_target` stays on the shown page with a background scratch mounted and
       moves to that scratch once its session is selected
-- [ ] write tests: the conformance tests above
-- [ ] manual check (user): green on reference-macos
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance tests above
+- [x] manual check (user): green on reference-macos (skipped - not automatable here: reference-macos runs only in CI on macOS)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user;
+      a targeted `run-linux.sh -- -k scratch` ran 19/19 green with the three new ids newly passing, left for Task 35's `--add`)
 
 ### Task 7: `ngtermctl session wait --until STATUS... [--timeout SEC]` (#765)
 

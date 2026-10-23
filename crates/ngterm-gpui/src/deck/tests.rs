@@ -1180,6 +1180,83 @@ fn a_terminal_ask_on_a_hidden_session_waits_and_shows_once_selected(cx: &mut Tes
     assert!(ask_focused(&mut h, ids[1]), "selected, its ask takes the keyboard");
 }
 
+/// Whether the deck's focus target is the handle of `session`'s terminal carrying `token`.
+fn focus_target_is(h: &mut Harness<'_>, session: Uuid, token: &str) -> bool {
+    h.deck.read_with(h.cx, |deck, cx| {
+        let pane = deck.terminal(session, token).map(|pane| pane.focus_handle(cx));
+        pane.is_some() && deck.focus_target(cx) == pane
+    })
+}
+
+/// Upstream's `testBackgroundSessionScratchTakesTheKeyboardOnlyOnceSelected` (#730): a background session's scratch
+/// spawns unselected and leaves the keyboard on the shown page; selecting its session hands the keyboard to it.
+#[gpui_kit::test]
+fn a_background_scratch_takes_the_keyboard_only_once_its_session_is_selected(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    h.until("the panes to start", |h| {
+        ids.iter().all(|id| h.realized(*id, StatusPane::Left))
+    });
+    let first = h.token(ids[0], StatusPane::Left);
+    h.dispatch(Command::Session(SessionCmd::Scratch), ids[1], |a| {
+        a.mode = Some("on".into());
+    });
+    h.until("the background scratch to start", |h| {
+        h.realized(ids[1], StatusPane::Scratch)
+    });
+    assert_eq!(h.store().selected_session_id(), Some(ids[0]), "showing never selects");
+    let scratch = h.token(ids[1], StatusPane::Scratch);
+    h.deck.read_with(h.cx, |deck, _| assert_eq!(deck.shown(), Some(ids[0])));
+    assert!(
+        focus_target_is(&mut h, ids[0], &first),
+        "the shown page keeps the focus target"
+    );
+    assert!(h.focused(ids[0], &first) && !h.focused(ids[1], &scratch));
+
+    h.store().select_session(Some(ids[1]));
+    h.state.settle();
+    h.turn();
+    assert!(
+        focus_target_is(&mut h, ids[1], &scratch),
+        "selected, its scratch is the target"
+    );
+    assert!(h.focused(ids[1], &scratch), "and takes the keyboard");
+}
+
+/// Upstream's `testScratchCommandReplacesAShownScratch` (#730): `--command` against a shown scratch tears the old one
+/// down and mounts a fresh terminal that runs the new program, all in one store call.
+#[gpui_kit::test]
+fn a_scratch_command_replaces_a_shown_scratch(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    h.until("the panes to start", |h| {
+        ids.iter().all(|id| h.realized(*id, StatusPane::Left))
+    });
+    h.dispatch(Command::Session(SessionCmd::Scratch), ids[0], |a| {
+        a.mode = Some("on".into());
+    });
+    h.until("the scratch to start", |h| h.realized(ids[0], StatusPane::Scratch));
+    let old = h.token(ids[0], StatusPane::Scratch);
+    h.dispatch(Command::Session(SessionCmd::Scratch), ids[0], |a| {
+        a.mode = Some("on".into());
+        a.command = Some("htop -d 5".into());
+    });
+    h.until("the replacement scratch to start", |h| {
+        h.realized(ids[0], StatusPane::Scratch) && h.token(ids[0], StatusPane::Scratch) != old
+    });
+    let fresh = h.token(ids[0], StatusPane::Scratch);
+    h.deck.read_with(h.cx, |deck, _| {
+        assert!(
+            deck.terminal(ids[0], &old).is_none(),
+            "the torn-down scratch is dropped"
+        );
+        assert!(deck.terminal(ids[0], &fresh).is_some(), "a fresh scratch is mounted");
+    });
+    assert!(h.shown(ids[0], &fresh) && h.focused(ids[0], &fresh));
+    let last = h.launches.lock().unwrap().last().cloned().expect("a launch");
+    assert_eq!(last.command.as_deref(), Some("htop -d 5"), "the new program runs");
+}
+
 /// Installs the HUD's painter and the cell estimate, as the app does at launch.
 fn install_hud(h: &mut Harness<'_>) {
     let helper = crate::hud::install_helper(h.state_dir.path()).unwrap();

@@ -533,28 +533,78 @@ fn scratch_shows_and_hides_against_its_state() {
     assert!(!session(&fixture, id).scratch_active);
 }
 
+/// Upstream's `testShowingABackgroundScratchLeavesTheSelection` and `testTheFourArgumentEntryPointShowsWithoutSelecting`:
+/// showing a background session's scratch leaves the selection, its unseen badge and the Ctrl-Tab recency alone.
 #[test]
-fn showing_the_scratch_selects_its_session() {
+fn showing_a_background_scratch_leaves_the_selection() {
     let mut fixture = Fixture::new(1);
-    let id = fixture.sessions[0];
-    assert_ne!(fixture.selected(), Some(id));
+    let (background, selected) = (fixture.sessions[0], fixture.sessions[1]);
+    fixture.store_mut().unwrap().select_session(Some(selected));
+    fixture
+        .store_mut()
+        .unwrap()
+        .session_mut(background)
+        .unwrap()
+        .unseen_count = 2;
+    let recency = fixture.store().recent_sessions(8);
+    for _ in 0..2 {
+        let response = fixture.session(
+            SessionCmd::Scratch,
+            Some(&wire(background)),
+            args(|a| a.mode = Some("on".into())),
+        );
+        ok_id(&response, background);
+        assert!(session(&fixture, background).scratch_active);
+        assert_eq!(fixture.selected(), Some(selected));
+    }
+    assert_eq!(session(&fixture, background).unseen_count, 2, "the badge stays");
+    assert_eq!(fixture.store().recent_sessions(8), recency, "the recency order stays");
+    // `follow: false` is the default spelled out
     let response = fixture.session(
         SessionCmd::Scratch,
-        Some(&wire(id)),
-        args(|a| a.mode = Some("off".into())),
+        Some(&wire(background)),
+        args(|a| {
+            a.mode = Some("toggle".into());
+            a.follow = Some(false);
+        }),
     );
-    assert!(response.ok);
-    assert_ne!(fixture.selected(), Some(id), "hiding does not select");
-    assert!(
-        fixture
-            .session(
-                SessionCmd::Scratch,
-                Some(&wire(id)),
-                args(|a| a.mode = Some("on".into()))
-            )
-            .ok
+    ok_id(&response, background);
+    assert!(!session(&fixture, background).scratch_active);
+    assert_eq!(fixture.selected(), Some(selected));
+}
+
+/// Upstream's `testFollowSelectsTheTargetOnlyWhenShowing`.
+#[test]
+fn follow_selects_the_target_only_when_showing() {
+    let mut fixture = Fixture::new(1);
+    let (background, selected) = (fixture.sessions[0], fixture.sessions[1]);
+    fixture.store_mut().unwrap().select_session(Some(selected));
+    let followed = |mode: &str| {
+        let mode = mode.to_owned();
+        args(move |a| {
+            a.mode = Some(mode);
+            a.follow = Some(true);
+        })
+    };
+    ok_id(
+        &fixture.session(SessionCmd::Scratch, Some(&wire(background)), followed("off")),
+        background,
     );
-    assert_eq!(fixture.selected(), Some(id));
+    assert_eq!(fixture.selected(), Some(selected), "hiding never selects");
+    ok_id(
+        &fixture.session(SessionCmd::Scratch, Some(&wire(background)), followed("on")),
+        background,
+    );
+    assert!(session(&fixture, background).scratch_active);
+    assert_eq!(fixture.selected(), Some(background));
+    // a toggle that hides with `--follow` leaves the selection where it is
+    fixture.store_mut().unwrap().select_session(Some(selected));
+    ok_id(
+        &fixture.session(SessionCmd::Scratch, Some(&wire(background)), followed("toggle")),
+        background,
+    );
+    assert!(!session(&fixture, background).scratch_active);
+    assert_eq!(fixture.selected(), Some(selected));
 }
 
 #[test]
