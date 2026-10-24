@@ -125,7 +125,23 @@ impl PresenterGrant {
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's.
-pub const SUPPORTED_KINDS: [&str; 6] = ["status", "hud", "notify", "context", "layout", "sound"];
+pub const SUPPORTED_KINDS: [&str; 8] = [
+    "status",
+    "hud",
+    "notify",
+    "context",
+    "layout",
+    "sound",
+    ASK_FORM_KIND,
+    ASK_OTHER_KIND,
+];
+
+/// The capability of drawing an ask's text field, choice list and cancel role (upstream's `askFormKind`). It names no
+/// frame body: an ask needing it travels as an ordinary `ask.request`, sent only to a presenter listing it.
+pub const ASK_FORM_KIND: &str = "ask.form";
+/// The capability of drawing a choice list's free-form row (upstream's `askOtherKind`); a presenter with only
+/// [`ASK_FORM_KIND`] would drop the row, so such an ask needs both.
+pub const ASK_OTHER_KIND: &str = "ask.other";
 
 /// Fans each session's presentation state out to its viewers.
 pub struct PresentationHub {
@@ -731,6 +747,72 @@ mod tests {
                 "a refused kind does not drop the presenter"
             );
         }
+    }
+
+    /// Upstream's `presenterSupportReflectsTheHelloOfTheCurrentPresenterOnly`, plus a mirror listing the kind beside a
+    /// presenter that does not.
+    #[test]
+    fn presenter_support_reflects_the_hello_of_the_current_presenter_only() {
+        for advertised in [true, false] {
+            let (mut hub, _) = hub();
+            let session = Uuid::new_v4();
+            let (presenter_sink, seen) = sink();
+            let kinds: Vec<String> = if advertised {
+                vec!["status".to_owned(), ASK_FORM_KIND.to_owned()]
+            } else {
+                vec!["status".to_owned()]
+            };
+            let asked = PresentationHello {
+                version: 1,
+                kinds: kinds.clone(),
+                mode: PresentationMode::Presenter,
+            };
+            let id = hub
+                .subscribe(session, &asked, presenter_sink, |_| PresentationSnapshot::default())
+                .unwrap();
+            let (mirror_sink, _) = sink();
+            let mirror = PresentationHello {
+                version: 1,
+                kinds: vec![ASK_FORM_KIND.to_owned(), ASK_OTHER_KIND.to_owned()],
+                mode: PresentationMode::Mirror,
+            };
+            hub.subscribe(session, &mirror, mirror_sink, |_| PresentationSnapshot::default())
+                .unwrap();
+            assert!(!hub.presenter_supports(ASK_FORM_KIND, session), "no presenter yet");
+
+            hub.receive(frame(id, Body::PresenterAcquire), id);
+
+            assert_eq!(hub.presenter_supports(ASK_FORM_KIND, session), advertised);
+            assert!(
+                !hub.presenter_supports(ASK_OTHER_KIND, session),
+                "a mirror's hello says nothing of the presenter"
+            );
+            assert_eq!(
+                bodies(&seen).first(),
+                Some(&Body::Hello(PresentationHello {
+                    version: 1,
+                    kinds,
+                    mode: PresentationMode::Presenter,
+                }))
+            );
+        }
+    }
+
+    #[test]
+    fn the_kinds_follow_upstreams_order() {
+        assert_eq!(
+            SUPPORTED_KINDS,
+            [
+                "status",
+                "hud",
+                "notify",
+                "context",
+                "layout",
+                "sound",
+                "ask.form",
+                "ask.other"
+            ]
+        );
     }
 
     #[test]

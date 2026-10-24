@@ -33,7 +33,7 @@ struct Seen {
 
 /// A presentation connection the test reads what the core sent on.
 #[derive(Clone, Default)]
-struct Viewer(Rc<RefCell<Seen>>);
+pub(super) struct Viewer(Rc<RefCell<Seen>>);
 
 impl LineChannel for Viewer {
     fn send(&self, line: Vec<u8>) -> bool {
@@ -51,7 +51,7 @@ impl LineChannel for Viewer {
 }
 
 impl Viewer {
-    fn kinds(&self) -> Vec<String> {
+    pub(super) fn kinds(&self) -> Vec<String> {
         self.0
             .borrow()
             .lines
@@ -60,7 +60,7 @@ impl Viewer {
             .collect()
     }
 
-    fn last(&self, kind: &str) -> Option<Value> {
+    pub(super) fn last(&self, kind: &str) -> Option<Value> {
         self.0
             .borrow()
             .lines
@@ -108,7 +108,7 @@ fn subscribe_listing(core: &mut Core, session: Uuid, mode: &str, kinds: &[&str])
     (serial, viewer)
 }
 
-fn frame(viewer: &Viewer, body: &Value) -> Vec<u8> {
+pub(super) fn frame(viewer: &Viewer, body: &Value) -> Vec<u8> {
     let mut frame = body.clone();
     frame["gen"] = json!(viewer.generation());
     frame["rev"] = json!(1);
@@ -117,12 +117,17 @@ fn frame(viewer: &Viewer, body: &Value) -> Vec<u8> {
 
 /// A live session whose primary pane follows a remote lead, and a presenter holding it.
 fn presented() -> (Live, u64, Viewer) {
+    presented_listing(&OLDER_KINDS)
+}
+
+/// [`presented`] with a presenter whose hello lists `kinds`.
+pub(super) fn presented_listing(kinds: &[&str]) -> (Live, u64, Viewer) {
     let mut live = live();
     let token = crate::pane_env::uuid_string(live.left);
     let nonce = spawn_live(&mut live);
     assert!(report(&mut live, &token, &nonce, "follower", 1));
     let session = live.session;
-    let (serial, presenter) = subscribe(&mut live.fixture.core, session, "presenter");
+    let (serial, presenter) = subscribe_listing(&mut live.fixture.core, session, "presenter", kinds);
     let acquire = frame(&presenter, &json!({"kind": "presenter.acquire"}));
     live.fixture.core.presentation_line(serial, &acquire);
     live.fixture.core.commit();
@@ -130,7 +135,7 @@ fn presented() -> (Live, u64, Viewer) {
     (live, serial, presenter)
 }
 
-fn node(fixture: &mut Fixture, id: Uuid) -> Value {
+pub(super) fn node(fixture: &mut Fixture, id: Uuid) -> Value {
     let response = fixture.send(Command::Tree, None, Args::default());
     let tree = response.result.expect("a tree")["tree"].clone();
     tree["workspaces"]
@@ -498,7 +503,7 @@ fn ask(core: &mut Core, session: Uuid, style: &str) -> Response {
     })
 }
 
-fn ask_result(core: &mut Core, id: &str) -> Value {
+pub(super) fn ask_result(core: &mut Core, id: &str) -> Value {
     let response = core.dispatch(&ngterm_proto::Request {
         cmd: Command::Ask(AskCmd::Result),
         target: Some(id.to_owned()),
@@ -551,39 +556,6 @@ fn an_ask_on_a_presented_session_goes_to_the_presenter_alone() {
         presenter.last("ask.dismiss").unwrap()["ask"],
         json!({"id": id, "owner": 1})
     );
-}
-
-/// Upstream's `AppStoreRemoteAskTests.aFormOrCancelRoleAskStaysHereForAPresenterWithoutTheCapability`: no presenter
-/// lists `ask.form` yet, so a form or a cancel role is drawn here and nothing reaches the presenter.
-#[test]
-fn a_form_or_cancel_role_ask_stays_here_for_a_presenter_without_the_capability() {
-    let forms: [fn(&mut ngterm_proto::Args); 2] = [
-        |a| a.input = Some("line".to_owned()),
-        |a| {
-            a.buttons = Some(vec![AskButton {
-                id: "n".to_owned(),
-                label: "No".to_owned(),
-                hotkey: None,
-            }]);
-            a.cancel_button = Some("n".to_owned());
-        },
-    ];
-    for form in forms {
-        let (mut live, _, presenter) = presented();
-        let session = live.session;
-        let opened = live.fixture.core.dispatch(&ngterm_proto::Request {
-            cmd: Command::Ask(AskCmd::Open),
-            target: Some(wire(session)),
-            args: Some(args(|a| {
-                a.title = Some("deploy?".to_owned());
-                form(a);
-            })),
-        });
-        let id = opened.result.unwrap()["id"].as_str().unwrap().to_owned();
-        live.fixture.core.commit();
-        assert!(presenter.last("ask.request").is_none());
-        assert_eq!(node(&mut live.fixture, session)["ask"], json!({"id": id}));
-    }
 }
 
 #[test]

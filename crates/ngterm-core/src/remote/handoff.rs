@@ -14,6 +14,7 @@ use super::frames::{
     Body, MAX_FRAME_BYTES, PresentationAsk, PresentationAskRef, PresentationOverlay, PresentationOverlayChange,
     PresentationPane, PresentationSound,
 };
+use super::hub::{ASK_FORM_KIND, ASK_OTHER_KIND, PresentationHub};
 use super::presentation_status_pane;
 use crate::Core;
 use crate::commands::Outcome;
@@ -186,7 +187,7 @@ impl Core {
         match body {
             Body::AskResolve(answer) => {
                 if let Some(store) = self.library_mut().store_for_session_mut(session) {
-                    store.resolve_remote_ask(session, &answer.id, answer.owner, answer.button.as_deref());
+                    store.resolve_remote_ask(session, &answer);
                 }
             }
             Body::AskRejected(reference) => {
@@ -304,25 +305,33 @@ pub(crate) fn present_ask_remotely(
     if !core.follows_remotely(found, identity) {
         return None;
     }
-    // upstream's `needsFormSupport`: a form or a cancel role needs a presenter listing `ask.form`, which this build's
-    // viewers do not list yet, so such an ask stays here
-    if ask.form.is_some() || ask.cancel_id.is_some() {
+    let owner = core.remote.hub.presenter_generation(session);
+    let request = PresentationAsk::new(ask, identity.map(PresentationPane::Identity), owner);
+    if !presenter_can_show(&core.remote.hub, &request, session) {
         return None;
     }
-    let owner = core.remote.hub.presenter_generation(session);
     let store = core.library_mut().store_mut(window)?;
     if !store.open_session_ask_owned(session, ask.clone(), identity, Some(owner)) {
         return Some(Err(ControlError::rejected("ask already pending")));
     }
     core.modals
         .register_ask(ask.id.clone(), AskOwner::Session { session, window });
-    let request = PresentationAsk::new(ask, identity.map(PresentationPane::Identity), owner);
     core.remote.hub.send_to_presenter(Body::AskRequest(request), session);
     Some(Ok(ControlResult {
         id: Some(ask.id.clone()),
         pane: resolved.map(|(_, pane)| pane.wire_name().to_owned()),
         ..ControlResult::default()
     }))
+}
+
+/// Whether `session`'s presenter can show `request` as the origin means it (upstream's gate in `presentAskRemotely`):
+/// a form or a cancel role needs a presenter listing `ask.form` and a request whose frames fit, and a choice list's
+/// free-form row needs `ask.other` too. Otherwise the ask stays here.
+fn presenter_can_show(hub: &PresentationHub, request: &PresentationAsk, session: Uuid) -> bool {
+    if request.needs_form_support() && !(hub.presenter_supports(ASK_FORM_KIND, session) && request.fits_frames()) {
+        return false;
+    }
+    !request.needs_other_support() || hub.presenter_supports(ASK_OTHER_KIND, session)
 }
 
 /// A program overlay to hand over: what `session.overlay.open` asked for.

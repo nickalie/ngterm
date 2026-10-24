@@ -26,6 +26,7 @@ mod pick;
 mod quick;
 mod recent;
 mod remote;
+mod remote_ask_form;
 mod restart;
 mod restore;
 mod session;

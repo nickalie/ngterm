@@ -8,14 +8,16 @@
 
 use std::fmt;
 
-use ngterm_proto::AskButton;
+use ngterm_proto::{AskButton, AskChoice};
 use serde::de::{self, DeserializeOwned};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::hud::{HudPosition, HudSpec, HudSpinner};
-use crate::model::{AgentStatus, AskAlignment, AskStyle, PendingAsk, StatusShape};
+use crate::model::{
+    AgentStatus, AskAlignment, AskChoiceForm, AskForm, AskInputForm, AskInputMode, AskStyle, PendingAsk, StatusShape,
+};
 use crate::pane_env::uuid_string;
 
 /// The presentation protocol version this build speaks.
@@ -303,6 +305,81 @@ mod align_wire {
     }
 }
 
+/// Serde for an ask's text field (upstream's `AskInputForm` coding): `{mode, value, placeholder?}`.
+mod input_wire {
+    use super::{AskInputForm, AskInputMode, Deserialize, Deserializer, Serialize, Serializer, de};
+
+    #[derive(Serialize, Deserialize)]
+    struct Wire {
+        mode: String,
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placeholder: Option<String>,
+    }
+
+    #[expect(clippy::ref_option, reason = "serde's `with` hands the field by reference")]
+    pub(super) fn serialize<S: Serializer>(input: &Option<AskInputForm>, serializer: S) -> Result<S::Ok, S::Error> {
+        input
+            .as_ref()
+            .map(|input| Wire {
+                mode: input.mode.wire_name().to_owned(),
+                value: input.value.clone(),
+                placeholder: input.placeholder.clone(),
+            })
+            .serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<AskInputForm>, D::Error> {
+        Option::<Wire>::deserialize(deserializer)?
+            .map(|wire| {
+                let mode = AskInputMode::from_wire(&wire.mode)
+                    .ok_or_else(|| de::Error::custom(format!("unknown input mode: {}", wire.mode)))?;
+                Ok(AskInputForm {
+                    mode,
+                    value: wire.value,
+                    placeholder: wire.placeholder,
+                })
+            })
+            .transpose()
+    }
+}
+
+/// Serde for an ask's choice list (upstream's `AskChoiceForm` coding): `{choices, multiple, checked, other?}`. A list
+/// from an origin without the free-form row carries no `other`, which reads as none.
+mod choices_wire {
+    use super::{AskChoice, AskChoiceForm, Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    struct Wire {
+        choices: Vec<AskChoice>,
+        multiple: bool,
+        checked: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        other: Option<String>,
+    }
+
+    #[expect(clippy::ref_option, reason = "serde's `with` hands the field by reference")]
+    pub(super) fn serialize<S: Serializer>(list: &Option<AskChoiceForm>, serializer: S) -> Result<S::Ok, S::Error> {
+        list.as_ref()
+            .map(|list| Wire {
+                choices: list.choices.clone(),
+                multiple: list.multiple,
+                checked: list.checked.clone(),
+                other: list.other.clone(),
+            })
+            .serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<AskChoiceForm>, D::Error> {
+        Ok(Option::<Wire>::deserialize(deserializer)?.map(|wire| AskChoiceForm {
+            choices: wire.choices,
+            multiple: wire.multiple,
+            checked: wire.checked,
+            other: wire.other,
+        }))
+    }
+}
+
 /// An ask the origin hands its presenter to draw. `owner` is the presenter generation it was handed under, and every
 /// answer echoes it, so one arriving after a handback is recognisably stale.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -326,12 +403,26 @@ pub struct PresentationAsk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane: Option<PresentationPane>,
     pub owner: i64,
+    /// The ask's text field; a presenter without `ask.form` never receives one.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "input_wire")]
+    pub input: Option<AskInputForm>,
+    /// The ask's choice list; a presenter without `ask.form` never receives one.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "choices_wire")]
+    pub choices: Option<AskChoiceForm>,
+    /// The button that resolves `escaped`.
+    #[serde(default, rename = "cancelID", skip_serializing_if = "Option::is_none")]
+    pub cancel_id: Option<String>,
 }
 
 impl PresentationAsk {
     /// `ask` as handed to the presenter of generation `owner`.
     #[must_use]
     pub fn new(ask: &PendingAsk, pane: Option<PresentationPane>, owner: i64) -> Self {
+        let (input, choices) = match &ask.form {
+            Some(AskForm::Input(input)) => (Some(input.clone()), None),
+            Some(AskForm::Choices(list)) => (None, Some(list.clone())),
+            None => (None, None),
+        };
         Self {
             id: ask.id.clone(),
             title: ask.title.clone(),
@@ -344,18 +435,96 @@ impl PresentationAsk {
             width: ask.width,
             pane,
             owner,
+            input,
+            choices,
+            cancel_id: ask.cancel_id.clone(),
         }
+    }
+
+    /// The form the request carries, the text field first should a malformed frame carry both.
+    #[must_use]
+    pub fn form(&self) -> Option<AskForm> {
+        self.input
+            .clone()
+            .map(AskForm::Input)
+            .or_else(|| self.choices.clone().map(AskForm::Choices))
+    }
+
+    /// Whether the presenter must list `ask.form` to show this ask as the origin means it (upstream's
+    /// `needsFormSupport`).
+    #[must_use]
+    pub fn needs_form_support(&self) -> bool {
+        self.input.is_some() || self.choices.is_some() || self.cancel_id.is_some()
+    }
+
+    /// Whether the presenter must also list `ask.other` to show the choice list's free-form row (upstream's
+    /// `needsOtherSupport`).
+    #[must_use]
+    pub fn needs_other_support(&self) -> bool {
+        self.choices.as_ref().is_some_and(|list| list.other.is_some())
+    }
+
+    /// Whether the request, and the largest answer it can produce, each fit one stream frame, measured through
+    /// [`encode`] with the widest counters (upstream's `fitsFrames`). A text answer is tried with every button and the
+    /// text cap of `"` characters, which escape to twice their bytes, the worst the allowed characters reach; a
+    /// selection alone names only ids the request already carried, but a checkbox list's free-form text rides beside
+    /// every id.
+    #[must_use]
+    pub fn fits_frames(&self) -> bool {
+        if !fits(Body::AskRequest(self.clone())) {
+            return false;
+        }
+        let text = "\"".repeat(AskInputForm::MAX_TEXT_BYTES);
+        let answer = |button: &AskButton, selected: Option<Vec<String>>| {
+            Body::AskResolve(PresentationAskAnswer {
+                id: self.id.clone(),
+                owner: self.owner,
+                button: Some(button.id.clone()),
+                text: Some(text.clone()),
+                selected,
+            })
+        };
+        if self.input.is_some() {
+            return self.buttons.iter().all(|button| fits(answer(button, None)));
+        }
+        let Some(list) = self.choices.as_ref().filter(|list| list.other.is_some()) else {
+            return true;
+        };
+        let selected: Vec<String> = if list.multiple {
+            list.choices.iter().map(|choice| choice.id.clone()).collect()
+        } else {
+            Vec::new()
+        };
+        self.buttons
+            .iter()
+            .all(|button| fits(answer(button, Some(selected.clone()))))
     }
 }
 
-/// The presenter's answer: a button id, or `None` for a dismissal. Only the id travels; the origin derives the label
-/// and index from the buttons it stored.
+/// Whether `body` encodes within [`MAX_FRAME_BYTES`] with the widest counters.
+fn fits(body: Body) -> bool {
+    encode(&PresentationFrame {
+        generation: i64::MAX,
+        rev: i64::MAX,
+        body,
+    })
+    .is_ok()
+}
+
+/// The presenter's answer: a button id, or `None` for a dismissal. Only the id travels for the button; the origin
+/// derives the label and index from the buttons it stored and checks `text` and `selected` against the form it stored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PresentationAskAnswer {
     pub id: String,
     pub owner: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub button: Option<String>,
+    /// The text field's content, or the selected free-form row's text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// A choice list's selected ids, in the caller's order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<Vec<String>>,
 }
 
 /// Names one handed-over ask, for a refusal or a dismissal.
@@ -735,6 +904,8 @@ pub fn negotiated_version(ours: i64, theirs: i64) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn pane() -> PresentationPane {
@@ -868,16 +1039,8 @@ mod tests {
             Body::PresenterGranted,
             Body::PresenterRefused,
             Body::AskRequest(PresentationAsk::new(&ask(), Some(pane()), 3)),
-            Body::AskResolve(PresentationAskAnswer {
-                id: "a1".to_owned(),
-                owner: 3,
-                button: Some("y".to_owned()),
-            }),
-            Body::AskResolve(PresentationAskAnswer {
-                id: "a1".to_owned(),
-                owner: 3,
-                button: None,
-            }),
+            Body::AskResolve(answer("a1", Some("y"), None, None)),
+            Body::AskResolve(answer("a1", None, None, None)),
             Body::AskRejected(reference()),
             Body::AskDismiss(reference()),
             Body::OverlayRequest(PresentationOverlay {
@@ -916,7 +1079,102 @@ mod tests {
                 name: Some("Glass".to_owned()),
             }),
             Body::Sound(PresentationSound { name: None }),
+            Body::AskRequest(PresentationAsk::new(&form_ask(), None, 3)),
+            Body::AskResolve(answer("a2", Some("ok"), Some(" mine "), Some(&["a"]))),
+            Body::AskRequest(PresentationAsk::new(
+                &PendingAsk {
+                    form: Some(AskForm::Input(AskInputForm {
+                        mode: AskInputMode::Multiline,
+                        value: "v".to_owned(),
+                        placeholder: Some("name".to_owned()),
+                    })),
+                    cancel_id: Some("y".to_owned()),
+                    ..ask()
+                },
+                Some(pane()),
+                3,
+            )),
+            Body::AskResolve(answer("a1", Some("y"), Some("é \"q\"\nb"), None)),
         ]
+    }
+
+    /// Upstream's form frame: a checkbox list with a free-form row.
+    fn form_ask() -> PendingAsk {
+        PendingAsk {
+            id: "a2".to_owned(),
+            title: "pick".to_owned(),
+            message: None,
+            buttons: vec![button("ok")],
+            default_id: None,
+            destructive_id: None,
+            style: AskStyle::Terminal,
+            align: AskAlignment::Right,
+            width: None,
+            anchor: None,
+            form: Some(AskForm::Choices(AskChoiceForm {
+                multiple: true,
+                other: Some("Other".to_owned()),
+                ..AskChoiceForm::new(vec![choice("a")])
+            })),
+            cancel_id: None,
+        }
+    }
+
+    fn button(id: &str) -> AskButton {
+        AskButton {
+            id: id.to_owned(),
+            label: id.to_uppercase(),
+            hotkey: None,
+        }
+    }
+
+    fn choice(id: &str) -> AskChoice {
+        AskChoice {
+            id: id.to_owned(),
+            label: id.to_uppercase(),
+            subtitle: None,
+        }
+    }
+
+    fn answer(id: &str, button: Option<&str>, text: Option<&str>, selected: Option<&[&str]>) -> PresentationAskAnswer {
+        PresentationAskAnswer {
+            id: id.to_owned(),
+            owner: 3,
+            button: button.map(str::to_owned),
+            text: text.map(str::to_owned),
+            selected: selected.map(|ids| ids.iter().map(|id| (*id).to_owned()).collect()),
+        }
+    }
+
+    /// An ask titled `t` answering with `buttons` and showing `form`.
+    fn sized_ask(buttons: Vec<AskButton>, form: AskForm) -> PresentationAsk {
+        PresentationAsk::new(
+            &PendingAsk {
+                id: "a".to_owned(),
+                title: "t".to_owned(),
+                message: None,
+                buttons,
+                form: Some(form),
+                ..form_ask()
+            },
+            None,
+            1,
+        )
+    }
+
+    /// The encoded length of `body` under the counters `counter`.
+    fn encoded_len(body: Body, counter: i64) -> usize {
+        encode(&PresentationFrame {
+            generation: counter,
+            rev: counter,
+            body,
+        })
+        .unwrap()
+        .len()
+    }
+
+    fn widest_text() -> String {
+        "\"".repeat(AskInputForm::MAX_TEXT_BYTES)
     }
 
     #[test]
@@ -962,6 +1220,200 @@ mod tests {
         })
         .unwrap();
         assert_eq!(marker, b"{\"kind\":\"sound\",\"gen\":1,\"rev\":2,\"sound\":{}}\n");
+    }
+
+    #[test]
+    fn a_form_request_spells_its_keys_as_upstream() {
+        let line = encode(&PresentationFrame {
+            generation: 1,
+            rev: 1,
+            body: Body::AskRequest(PresentationAsk {
+                cancel_id: Some("ok".to_owned()),
+                ..PresentationAsk::new(&form_ask(), None, 3)
+            }),
+        })
+        .unwrap();
+        let value: Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(
+            value["ask"]["choices"],
+            json!({"choices": [{"id": "a", "label": "A"}], "multiple": true, "checked": [], "other": "Other"})
+        );
+        assert_eq!(value["ask"]["cancelID"], "ok");
+        assert!(value["ask"].get("input").is_none());
+        let input = sized_ask(
+            vec![button("ok")],
+            AskForm::Input(AskInputForm::new(AskInputMode::Line)),
+        );
+        let value = serde_json::to_value(&input).unwrap();
+        assert_eq!(value["input"], json!({"mode": "line", "value": ""}));
+        assert!(value.get("choices").is_none() && value.get("cancelID").is_none());
+        let plain = serde_json::to_value(answer("a", Some("ok"), None, None)).unwrap();
+        assert_eq!(plain, json!({"id": "a", "owner": 3, "button": "ok"}));
+    }
+
+    /// Upstream's `aChoiceRequestFromAnOriginWithoutTheOtherRowDecodesWithNone`, through a whole request.
+    #[test]
+    fn a_choice_request_from_an_origin_without_the_other_row_decodes_with_none() {
+        let line = br#"{"kind":"ask.request","gen":1,"rev":1,"ask":{"id":"a","title":"t","buttons":[],"style":"gui","align":"right","owner":1,"choices":{"choices":[{"id":"a","label":"A"}],"multiple":false,"checked":[]}}}"#;
+        let Body::AskRequest(request) = decode(line).unwrap().body else {
+            panic!("not an ask request");
+        };
+        assert_eq!(request.choices, Some(AskChoiceForm::new(vec![choice("a")])));
+        assert!(!request.needs_other_support());
+        assert_eq!(
+            request.form(),
+            Some(AskForm::Choices(AskChoiceForm::new(vec![choice("a")])))
+        );
+        assert!(request.needs_form_support());
+    }
+
+    #[test]
+    fn a_request_carrying_both_forms_reads_as_its_text_field() {
+        let mut request = sized_ask(
+            vec![button("ok")],
+            AskForm::Input(AskInputForm::new(AskInputMode::Line)),
+        );
+        request.choices = Some(AskChoiceForm::new(vec![choice("a")]));
+        assert_eq!(
+            request.form(),
+            Some(AskForm::Input(AskInputForm::new(AskInputMode::Line)))
+        );
+        let plain = PresentationAsk::new(&ask(), None, 1);
+        assert!(!plain.needs_form_support() && !plain.needs_other_support());
+        assert_eq!(plain.form(), None);
+        let cancel = PresentationAsk {
+            cancel_id: Some("y".to_owned()),
+            ..plain
+        };
+        assert!(cancel.needs_form_support(), "a cancel role alone needs the capability");
+    }
+
+    /// Upstream's `anInputAskStaysHereWhenItsLongestButtonAndTheReservedTextCannotFitAnAnswer`, the frame half.
+    #[test]
+    fn an_input_ask_does_not_fit_when_its_longest_button_and_the_reserved_text_cannot_fit_an_answer() {
+        let long = AskButton {
+            id: "b".repeat(200 * 1024),
+            label: "Long".to_owned(),
+            hotkey: None,
+        };
+        let input = sized_ask(
+            vec![long.clone()],
+            AskForm::Input(AskInputForm::new(AskInputMode::Line)),
+        );
+        let list = sized_ask(vec![long], AskForm::Choices(AskChoiceForm::new(vec![choice("a")])));
+        assert!(!input.fits_frames());
+        assert!(list.fits_frames());
+    }
+
+    /// Upstream's `aFormAskWhoseFrameIsTooLargeStaysHere`, the frame half.
+    #[test]
+    fn a_request_over_the_limit_does_not_fit() {
+        let mut request = sized_ask(
+            vec![button("ok")],
+            AskForm::Input(AskInputForm::new(AskInputMode::Line)),
+        );
+        request.message = Some("m".repeat(MAX_FRAME_BYTES));
+        assert!(!request.fits_frames());
+    }
+
+    /// Upstream's `aCheckboxOtherAskReservesEveryIDPlusTheWidestText`.
+    #[test]
+    fn a_checkbox_other_ask_reserves_every_id_plus_the_widest_text() {
+        let probe = PresentationAskAnswer {
+            id: "a".to_owned(),
+            owner: 1,
+            button: Some("ok".to_owned()),
+            text: Some(widest_text()),
+            selected: Some(Vec::new()),
+        };
+        let room = MAX_FRAME_BYTES - encoded_len(Body::AskResolve(probe), i64::MAX);
+        let ask = |id_length: usize, multiple: bool| {
+            let items = (0..2)
+                .map(|index| AskChoice {
+                    id: format!("{index}{}", "i".repeat(id_length)),
+                    label: "L".to_owned(),
+                    subtitle: None,
+                })
+                .collect();
+            sized_ask(
+                vec![button("ok")],
+                AskForm::Choices(AskChoiceForm {
+                    multiple,
+                    other: Some("Other".to_owned()),
+                    ..AskChoiceForm::new(items)
+                }),
+            )
+        };
+        assert!(!ask(room / 2, true).fits_frames());
+        assert!(ask(room / 2, false).fits_frames());
+        assert!(ask(room / 8, true).fits_frames());
+    }
+
+    /// Upstream's `slashesInAButtonIDCountAsTheCodecWritesThem`: this encoder, like upstream's, writes `/` bare, so the
+    /// request with both ids fits while the answer naming the long button cannot.
+    #[test]
+    fn slashes_in_a_button_id_count_as_the_codec_writes_them() {
+        let slashes = AskButton {
+            id: "/".repeat(90 * 1024),
+            label: "Slashes".to_owned(),
+            hotkey: None,
+        };
+        let letters = AskButton {
+            id: "b".repeat(150 * 1024),
+            label: "Letters".to_owned(),
+            hotkey: None,
+        };
+        let request = sized_ask(
+            vec![slashes.clone(), letters],
+            AskForm::Input(AskInputForm::new(AskInputMode::Line)),
+        );
+        assert!(fits(Body::AskRequest(request.clone())), "a slash encodes as one byte");
+        assert!(!request.fits_frames());
+        let line = encode(&PresentationFrame {
+            generation: 1,
+            rev: 1,
+            body: Body::AskResolve(answer("a", Some(&slashes.id), None, None)),
+        })
+        .unwrap();
+        assert!(!line.windows(2).any(|pair| pair == b"\\/"));
+    }
+
+    /// Upstream's `anAnswerThatFitsOnlyWithShortCountersIsRefused`.
+    #[test]
+    fn an_answer_that_fits_only_with_short_counters_does_not_fit() {
+        let probe = PresentationAskAnswer {
+            id: "a".to_owned(),
+            owner: 1,
+            button: Some(String::new()),
+            text: Some(widest_text()),
+            selected: None,
+        };
+        let slack = MAX_FRAME_BYTES - encoded_len(Body::AskResolve(probe), 0) - 1;
+        let id = "b".repeat(slack - 5);
+        let request = sized_ask(
+            vec![AskButton {
+                id: id.clone(),
+                label: "B".to_owned(),
+                hotkey: None,
+            }],
+            AskForm::Input(AskInputForm::new(AskInputMode::Line)),
+        );
+        let answer = PresentationAskAnswer {
+            id: "a".to_owned(),
+            owner: 1,
+            button: Some(id),
+            text: Some(widest_text()),
+            selected: None,
+        };
+        assert!(
+            encode(&PresentationFrame {
+                generation: 0,
+                rev: 0,
+                body: Body::AskResolve(answer),
+            })
+            .is_ok()
+        );
+        assert!(!request.fits_frames());
     }
 
     #[test]

@@ -683,6 +683,8 @@ mod tests {
             id: "a1".to_owned(),
             owner: 2,
             button: Some("yes".to_owned()),
+            text: None,
+            selected: None,
         });
         harness.client.answer(answer.clone());
         assert_eq!(

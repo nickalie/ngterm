@@ -31,6 +31,15 @@ impl AskInputMode {
             _ => None,
         }
     }
+
+    /// The mode's wire name.
+    #[must_use]
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::Line => "line",
+            Self::Multiline => "multiline",
+        }
+    }
 }
 
 /// An ask's text field (upstream's `AskInputForm`).

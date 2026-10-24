@@ -524,8 +524,8 @@ impl Core {
     // MARK: - replica asks
 
     /// Shows an ask the origin handed over (upstream's `showReplicaAsk` and `presentReplicaAsk`): over the mapped pane or
-    /// the session, a GUI one only on a target shown on screen, as the local rule. False when it cannot be shown,
-    /// which the caller reports as a refusal.
+    /// the session, a GUI one only on a target shown on screen, as the local rule, with its form and cancel role and a
+    /// draft of its own here. False when it cannot be shown, which the caller reports as a refusal.
     fn show_replica_ask(&mut self, ask: &PresentationAsk, session: Uuid) -> bool {
         let Some(window) = self.library().window_holding_session(session) else {
             return false;
@@ -568,8 +568,8 @@ impl Core {
             align: ask.align,
             width: ask.width,
             anchor: None,
-            form: None,
-            cancel_id: None,
+            form: ask.form(),
+            cancel_id: ask.cancel_id.clone(),
         };
         self.library_mut()
             .store_mut(window)
@@ -590,8 +590,9 @@ impl Core {
         }
     }
 
-    /// Sends each ended replica's outcome to its origin (upstream's `onReplicaResolved`): the button id alone, none for
-    /// Escape, and a refusal for a cancel here, so the origin takes it back.
+    /// Sends each ended replica's outcome to its origin (upstream's `onReplicaResolved`): the button id with the form's
+    /// payload (the field text, or the selection and the free-form row's text), none for Escape or the cancel button,
+    /// and a refusal for a cancel here, so the origin takes it back.
     pub(crate) fn answer_replica_asks(&mut self, ended: &[EndedAsk]) {
         use ngterm_proto::ControlAskOutcome;
         for ask in ended {
@@ -603,11 +604,15 @@ impl Core {
                     id: ask.id.clone(),
                     owner,
                     button: ask.result.id.clone(),
+                    text: ask.result.text.clone(),
+                    selected: ask.result.selected.clone(),
                 }),
                 ControlAskOutcome::Escaped => Body::AskResolve(PresentationAskAnswer {
                     id: ask.id.clone(),
                     owner,
                     button: None,
+                    text: None,
+                    selected: None,
                 }),
                 ControlAskOutcome::Cancelled | ControlAskOutcome::Pending => Body::AskRejected(PresentationAskRef {
                     id: ask.id.clone(),

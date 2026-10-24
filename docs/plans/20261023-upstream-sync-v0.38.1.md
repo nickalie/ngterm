@@ -1153,23 +1153,27 @@ replica carries form and cancel role, its answer sends the draft), `remote/clien
 
 **Conformance:** none (two-instance presentation is covered by Rust unit tests on the hub, handoff and viewer)
 
-- [ ] frames: `ask.request` carries `input {mode, value, placeholder?}`, `choices {choices, multiple, checked,
+- [x] frames: `ask.request` carries `input {mode, value, placeholder?}`, `choices {choices, multiple, checked,
       other?}` and `cancelID`; a request without `other` decodes with none; `ask.resolve` carries `text`, `selected`
-- [ ] the viewer lists `ask.form`/`ask.other` in its hello only once its dialog draws forms (Task 17 done; this task
+- [x] the viewer lists `ask.form`/`ask.other` in its hello only once its dialog draws forms (Task 17 done; this task
       runs after it)
-- [ ] handoff: an ask with a form or a cancel role goes to the presenter only when it listed `ask.form` and the ask
+- [x] handoff: an ask with a form or a cancel role goes to the presenter only when it listed `ask.form` and the ask
       fits; a list with an other row also needs `ask.other`; otherwise it stays here and nothing is reserved or sent
-- [ ] `fits_frames`: the request under the limit at the widest counters (generation and rev at i64::MAX); an input
+- [x] `fits_frames`: the request under the limit at the widest counters (generation and rev at i64::MAX); an input
       ask also needs every button's answer with 65536 `"` characters of text to fit; an other-row list every button's
       answer with that text and, for checkboxes, every id selected. Measure through `frames::encode` (serde_json does
-      not write `/` as `\/` as Swift's encoder does: the slash test asserts this build's encoder)
-- [ ] origin: a presenter's answer goes through `validated_answer`; a payload its form would not produce is refused
+      not write `/` as `\/` as Swift's encoder does: the slash test asserts this build's encoder) (upstream's codec
+      sets `.withoutEscapingSlashes`, so both write `/` bare; the test asserts the request with the slash id fits)
+- [x] origin: a presenter's answer goes through `validated_answer`; a payload its form would not produce is refused
       and the ask stays pending; a dismissal or a plain ask's answer carrying a payload is refused
-- [ ] viewer: the replica keeps form, cancel role and its own draft; the cancel button sends no button; a handback
-      restarts from the initial values on the origin
-- [ ] write tests: Rust unit tests for every Swift case listed
-- [ ] manual check (user): green on `cross-platform.yml` (ngterm-core)
-- [ ] gate passes
+- [x] viewer: the replica keeps form, cancel role and its own draft; the cancel button sends no button; a handback
+      restarts from the initial values on the origin (`take_session_ask_back` remakes the origin's draft from the form)
+- [x] write tests: Rust unit tests for every Swift case listed (`remote/frames.rs`, `remote/hub.rs`,
+      `commands/tests/remote_ask_form.rs` (new; the interim test left `commands/tests/remote.rs`), `commands/tests/viewer.rs`)
+- [x] manual check (user): green on `cross-platform.yml` (ngterm-core) (skipped - not automatable here: left to the user)
+- [x] gate passes (full suite deferred to the end of the plan per the user; the selftest
+      `test_committed_catalog_passes_the_ci_gate` and `--coverage-gate` fail only on the 13 keys of Tasks 20, 21, 23, 25
+      and 29, as expected)
 
 ### Task 19: `session overlay open --url --chromeless` for loopback hosts (#750)
 

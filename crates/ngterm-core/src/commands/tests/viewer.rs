@@ -505,6 +505,161 @@ fn a_replica_ask_the_row_cannot_show_is_refused_and_the_origins_dismissal_takes_
     assert_eq!(viewer.sent("ask.resolve").len(), 0);
 }
 
+/// A form ask the origin hands over under owner 3, with buttons ok and cancel, `cancel` the cancel role, and `form`'s
+/// keys (`input` or `choices`).
+fn form_request(id: &str, form: &Value) -> Value {
+    let mut ask = json!({"id": id, "title": "name?", "buttons": [{"id": "ok", "label": "OK"}, {"id": "cancel", "label": "Cancel"}],
+        "style": "terminal", "align": "right", "owner": 3, "cancelID": "cancel"});
+    for (key, value) in form.as_object().unwrap() {
+        ask[key] = value.clone();
+    }
+    json!({"kind": "ask.request", "ask": ask})
+}
+
+/// Upstream's `aFormReplicaSendsItsDraftWithTheAnswerAndTheFrameSurvivesTheCodec`.
+#[test]
+fn a_form_replica_sends_its_draft_with_the_answer() {
+    use crate::model::{AskForm, AskInputForm, AskInputMode};
+    use crate::remote::frames::{self, Body, PresentationAskAnswer, PresentationFrame};
+
+    let mut viewer = viewer_with(false);
+    let hello = viewer.sent("hello");
+    let kinds = hello.last().unwrap()["hello"]["kinds"].clone();
+    assert!(
+        kinds.as_array().unwrap().contains(&json!("ask.form"))
+            && kinds.as_array().unwrap().contains(&json!("ask.other")),
+        "the viewer draws forms, so it lists both: {kinds}"
+    );
+    viewer.connect(&json!({}));
+    viewer.frame(form_request(
+        "F1",
+        &json!({"input": {"mode": "multiline", "value": "draft"}}),
+    ));
+    let pending = viewer.session().ask().unwrap();
+    assert_eq!(
+        pending.ask.form,
+        Some(AskForm::Input(AskInputForm {
+            mode: AskInputMode::Multiline,
+            value: "draft".to_owned(),
+            placeholder: None,
+        }))
+    );
+    assert_eq!(pending.ask.cancel_id.as_deref(), Some("cancel"));
+    let session = viewer.session;
+    let text = "é \"quoted\"\nsecond";
+    viewer
+        .fixture
+        .core
+        .update_session_ask_draft(session, "F1", |draft| draft.set_text(text));
+    viewer.fixture.core.answer_session_ask_button(session, "F1", 0);
+    viewer.fixture.core.commit();
+    let sent = viewer.sent("ask.resolve");
+    assert_eq!(
+        sent.last().unwrap()["ask"],
+        json!({"id": "F1", "owner": 3, "button": "ok", "text": text})
+    );
+    let expected = Body::AskResolve(PresentationAskAnswer {
+        id: "F1".to_owned(),
+        owner: 3,
+        button: Some("ok".to_owned()),
+        text: Some(text.to_owned()),
+        selected: None,
+    });
+    let line = frames::encode(&PresentationFrame {
+        generation: 1,
+        rev: 1,
+        body: expected.clone(),
+    })
+    .unwrap();
+    assert_eq!(frames::decode(&line[..line.len() - 1]).unwrap().body, expected);
+}
+
+/// Upstream's `aChoiceReplicaSendsTheSelectionAndItsCancelButtonSendsNoButton`.
+#[test]
+fn a_choice_replica_sends_the_selection_and_its_cancel_button_sends_no_button() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    let session = viewer.session;
+    let list = json!({"choices": {"choices": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "multiple": true, "checked": []}});
+    for (index, id, expected) in [
+        (
+            0,
+            "C1",
+            json!({"id": "C1", "owner": 3, "button": "ok", "selected": ["b"]}),
+        ),
+        (1, "C2", json!({"id": "C2", "owner": 3})),
+    ] {
+        viewer.frame(form_request(id, &list));
+        viewer
+            .fixture
+            .core
+            .update_session_ask_draft(session, id, |draft| draft.toggle(1));
+        viewer.fixture.core.answer_session_ask_button(session, id, index);
+        viewer.fixture.core.commit();
+        assert_eq!(viewer.sent("ask.resolve").last().unwrap()["ask"], expected);
+    }
+}
+
+/// Upstream's `anOtherRowReplicaSendsItsTextAndTheOriginAppliesIt`.
+#[test]
+fn an_other_row_replica_sends_its_text_and_the_origin_applies_it() {
+    use ngterm_proto::AskChoice;
+
+    use crate::model::{AskChoiceForm, AskForm};
+
+    for multiple in [false, true] {
+        let mut viewer = viewer_with(false);
+        viewer.connect(&json!({}));
+        let session = viewer.session;
+        viewer.frame(form_request(
+            "O1",
+            &json!({"choices": {"choices": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+                "multiple": multiple, "checked": ["a"], "other": "Other"}}),
+        ));
+        let list = AskChoiceForm {
+            multiple,
+            checked: vec!["a".to_owned()],
+            other: Some("Other".to_owned()),
+            ..AskChoiceForm::new(
+                ["a", "b"]
+                    .into_iter()
+                    .map(|id| AskChoice {
+                        id: id.to_owned(),
+                        label: id.to_uppercase(),
+                        subtitle: None,
+                    })
+                    .collect(),
+            )
+        };
+        let pending = viewer.session().ask().unwrap().ask.clone();
+        assert_eq!(pending.form, Some(AskForm::Choices(list)));
+        viewer
+            .fixture
+            .core
+            .update_session_ask_draft(session, "O1", |draft| draft.set_text(" mine "));
+        viewer.fixture.core.answer_session_ask_button(session, "O1", 0);
+        viewer.fixture.core.commit();
+        let selected: Vec<String> = if multiple { vec!["a".to_owned()] } else { Vec::new() };
+        assert_eq!(
+            viewer.sent("ask.resolve").last().unwrap()["ask"],
+            json!({"id": "O1", "owner": 3, "button": "ok", "text": " mine ", "selected": selected})
+        );
+        // the origin, holding the same ask, accepts exactly that answer
+        assert_eq!(
+            pending.validated_answer("ok", Some(" mine "), Some(&selected)),
+            Some(ControlAskResult {
+                id: Some("ok".to_owned()),
+                label: Some("OK".to_owned()),
+                index: Some(0),
+                text: Some(" mine ".to_owned()),
+                selected: Some(selected.clone()),
+                ..ControlAskResult::outcome(ControlAskOutcome::Answered)
+            })
+        );
+    }
+}
+
 // MARK: - replica overlays
 
 fn overlay_request(job: &str, pane: Option<Uuid>, wait: bool) -> Value {

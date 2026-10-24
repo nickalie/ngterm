@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use super::ask_form::{AskChoiceForm, AskDraft, AskForm, AskInputForm, AskInputMode};
 use super::{AppStore, OverlayPane, Session};
+use crate::remote::frames::PresentationAskAnswer;
 
 /// The most buttons one dialog takes (upstream's `ControlAskButton.maxButtons`).
 pub const MAX_ASK_BUTTONS: usize = 6;
@@ -307,6 +308,8 @@ impl AppStore {
     pub fn take_session_ask_back(&mut self, session: Uuid) {
         if let Some(pending) = self.session_mut(session).and_then(|found| found.ask.as_mut()) {
             pending.remote_owner = None;
+            // drawn here from the form's initial values: what the presenter typed never travelled
+            pending.draft = AskDraft::new(pending.ask.form.as_ref());
         }
     }
 
@@ -327,25 +330,30 @@ impl AppStore {
             .is_some_and(|pending| pending.ask.id == id && pending.remote_owner == Some(owner))
     }
 
-    /// Applies the presenter's answer to session `session`'s ask `id`: a button id, or `None` for a dismissal
-    /// (upstream's `resolveRemoteAsk`). Refused unless the ask is presented under `owner`, and for a button the ask
-    /// does not have; the label and index come from the stored buttons.
-    pub fn resolve_remote_ask(&mut self, session: Uuid, id: &str, owner: i64, button: Option<&str>) -> bool {
-        if !self.is_presenting_remotely(session, id, owner) {
+    /// Applies the presenter's answer to session `session`'s ask (upstream's `resolveRemoteAsk`). Refused unless it is
+    /// for the ask this session presents under that owner: a late answer after a handback, a dismissal carrying a
+    /// payload, or a button the ask does not have or a payload its form would not produce
+    /// ([`PendingAsk::validated_answer`]) changes nothing, and the ask stays pending.
+    pub fn resolve_remote_ask(&mut self, session: Uuid, answer: &PresentationAskAnswer) -> bool {
+        if !self.is_presenting_remotely(session, &answer.id, answer.owner) {
             return false;
         }
-        let Some(button) = button else {
-            return self.resolve_session_ask(session, id, ControlAskResult::outcome(ControlAskOutcome::Escaped));
+        let Some(button) = answer.button.as_deref() else {
+            if answer.text.is_some() || answer.selected.is_some() {
+                return false;
+            }
+            return self.resolve_session_ask(
+                session,
+                &answer.id,
+                ControlAskResult::outcome(ControlAskOutcome::Escaped),
+            );
         };
-        let answer = self.session(session).and_then(Session::ask).and_then(|pending| {
-            let index = pending
+        let result = self.session(session).and_then(Session::ask).and_then(|pending| {
+            pending
                 .ask
-                .buttons
-                .iter()
-                .position(|candidate| candidate.id == button)?;
-            pending.ask.answer(index, None)
+                .validated_answer(button, answer.text.as_deref(), answer.selected.as_deref())
         });
-        answer.is_some_and(|answer| self.resolve_session_ask(session, id, answer))
+        result.is_some_and(|result| self.resolve_session_ask(session, &answer.id, result))
     }
 
     /// Ends session `session`'s pending ask `id` with `result` (upstream's `resolveAsk`), keeping the outcome for the
