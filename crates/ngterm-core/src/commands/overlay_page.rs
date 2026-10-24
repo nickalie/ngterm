@@ -27,7 +27,9 @@ use crate::html::{
     HtmlHost, HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlPageInfo, HtmlPageOutcomes,
     HtmlReloadTarget, HtmlSource, errors, zoom,
 };
-use crate::model::{HtmlOverlayOpenFailure, HtmlPageSlot, OverlayPane, StatusPane};
+use crate::model::{
+    HtmlOverlayOpenFailure, HtmlPageSlot, OverlayPane, OverlayPointSize, OverlaySize, POINTS_REMOTE, StatusPane,
+};
 use crate::pane_env::uuid_string;
 use crate::remote::{REMOTE_LOOPBACK, REMOTE_TOO_LARGE, RemotePageCommand, RemotePageOpen};
 
@@ -75,13 +77,20 @@ pub(crate) struct PageOpening {
     pub flags: HtmlPageFlags,
     pub pane: Option<OverlayPane>,
     pub size_percent: Option<i64>,
+    /// The point axes overriding `size_percent`, which the dispatcher refuses without one.
+    pub points: OverlayPointSize,
     pub background_color: Option<String>,
     pub follow: bool,
 }
 
 impl PageOpening {
     /// The page `args` describe in the slot `pane`.
-    pub(crate) fn from_args(source: HtmlSource, args: &Args, pane: Option<OverlayPane>) -> Self {
+    pub(crate) fn from_args(
+        source: HtmlSource,
+        args: &Args,
+        pane: Option<OverlayPane>,
+        points: OverlayPointSize,
+    ) -> Self {
         let set = |flag: Option<bool>| flag == Some(true);
         Self {
             source,
@@ -94,6 +103,7 @@ impl PageOpening {
             },
             pane,
             size_percent: args.size_percent,
+            points,
             background_color: args.color.clone(),
             follow: set(args.follow),
         }
@@ -127,6 +137,7 @@ pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, 
         RemotePageOpen::Unsupported => Some(PRESENTER),
         RemotePageOpen::Loopback => Some(REMOTE_LOOPBACK),
         RemotePageOpen::TooLarge => Some(REMOTE_TOO_LARGE),
+        RemotePageOpen::PointsUnsupported => Some(POINTS_REMOTE),
     };
     if let Some(refusal) = refusal {
         return Err(ControlError::rejected(refusal));
@@ -155,7 +166,16 @@ pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, 
     }
     let (store, _) = session_store(core, target, window)?;
     store
-        .open_html_overlay(id, opening.pane, page, opening.size_percent, opening.background_color)
+        .open_html_overlay_sized(
+            id,
+            opening.pane,
+            page,
+            OverlaySize {
+                percent: opening.size_percent,
+                points: opening.points,
+            },
+            opening.background_color,
+        )
         .map_err(|failure| ControlError::rejected(open_failure(failure, opening.pane)))?;
     if opening.follow {
         store.select_session(Some(id));
@@ -469,6 +489,7 @@ impl Core {
             },
             pane: None,
             size_percent: None,
+            points: OverlayPointSize::default(),
             background_color: None,
             follow: false,
         };

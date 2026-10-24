@@ -785,6 +785,16 @@ impl Core {
         }
     }
 
+    /// Whether session `session`'s session-wide slot shows an overlay its origin handed over (upstream's
+    /// `overlayReplica`), which takes no point sizes: the origin sizes it by a percent.
+    pub(crate) fn shows_replica_overlay(&self, session: Uuid) -> bool {
+        self.remote.viewer.replicas.get(&session).is_some_and(|replicas| {
+            replicas
+                .iter()
+                .any(|replica| replica.pane.is_none() && self.replica_shown(session, replica))
+        })
+    }
+
     /// Whether `replica`'s slot still holds it.
     fn replica_shown(&self, session: Uuid, replica: &ReplicaOverlay) -> bool {
         let library = self.library();

@@ -54,6 +54,8 @@ pub(crate) enum RemotePageOpen {
     Loopback,
     /// The request would not fit one presentation frame.
     TooLarge,
+    /// The open carries point sizes, which the presenting machine does not take.
+    PointsUnsupported,
     Opened,
 }
 
@@ -150,6 +152,10 @@ pub(crate) fn open_remote_page(
     };
     if !core.follows_remotely(found, identity) {
         return RemotePageOpen::Local;
+    }
+    // the presentation wire carries only a percent, so nothing is reserved or sent
+    if !opening.points.is_empty() {
+        return RemotePageOpen::PointsUnsupported;
     }
     if !PAGE_KINDS
         .iter()

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use uuid::Uuid;
 
+use super::overlay_points::OverlayPointSize;
 use super::pane::SurfaceSlot;
 use super::session::Session;
 use super::store::AppStore;
@@ -80,6 +81,9 @@ pub struct OverlaySlot {
     pub wait: bool,
     /// A floating occupant's share of the pane (a HUD's WIDTH); `None` is a full-pane cover.
     pub size_percent: Option<i64>,
+    /// A floating program or page's per-axis point overrides of `size_percent` (upstream's `overlayPoints`); empty
+    /// otherwise, a HUD included. Cleared on open and close.
+    pub points: OverlayPointSize,
     /// The occupant's own `#rrggbb` background, read at creation.
     pub background_color: Option<String>,
     /// The last program's exit status, kept past its close.
@@ -178,6 +182,7 @@ impl OverlaySlot {
         self.cwd = None;
         self.wait = false;
         self.size_percent = None;
+        self.points = OverlayPointSize::default();
         self.background_color = None;
         self.discard_hud();
         true
@@ -243,6 +248,8 @@ pub struct OverlayProgram {
     pub wait: bool,
     /// A floating overlay's share of the pane, `None` for a full-pane cover; pane overlays never take one.
     pub size_percent: Option<i64>,
+    /// The point axes overriding `size_percent`; ignored without one, and by pane overlays.
+    pub points: OverlayPointSize,
     /// The overlay's own `#rrggbb` background.
     pub background_color: Option<String>,
 }
@@ -288,6 +295,11 @@ impl AppStore {
         slot.exit_code = None;
         slot.code_file = code_file;
         slot.size_percent = program.size_percent.map(|percent| percent.clamp(1, 100));
+        slot.points = if slot.size_percent.is_some() {
+            program.points
+        } else {
+            OverlayPointSize::default()
+        };
         slot.background_color = program.background_color;
         slot.active = true;
         // a local open starts a new result, a remote job's failure included
@@ -297,21 +309,36 @@ impl AppStore {
     }
 
     /// Resizes the open occupant in place (upstream's `resizeOverlay`): a program takes `size_percent` clamped into
-    /// 1...100 (`None` is full-pane); a HUD takes its own width bound and records the width as forced. False with
-    /// nothing open. The caller owes a HUD a remeasure.
+    /// 1...100 (`None` is full-pane) and drops its point sizes; a HUD takes its own width bound and records the width
+    /// as forced. False with nothing open. The caller owes a HUD a remeasure.
     pub fn resize_overlay(&mut self, id: Uuid, size_percent: Option<i64>) -> bool {
+        self.resize_overlay_with_points(id, size_percent, OverlayPointSize::default())
+    }
+
+    /// [`AppStore::resize_overlay`] with `points` replacing a program or page's point sizes whole, so an axis it omits
+    /// goes back to the percent; a full resize clears them and a HUD takes none (upstream's `resizeOverlay` `points`).
+    pub fn resize_overlay_with_points(
+        &mut self,
+        id: Uuid,
+        size_percent: Option<i64>,
+        points: OverlayPointSize,
+    ) -> bool {
         let Some(slot) = self.session_mut(id).map(|session| &mut session.overlay) else {
             return false;
         };
         if !slot.active {
             return false;
         }
-        match slot.hud.as_mut() {
-            Some(hud) => {
-                slot.size_percent = size_percent.map(|percent| hud::clamp_size_percent_for(percent, &hud.spec));
-                hud.resized_width_percent = slot.size_percent;
-            }
-            None => slot.size_percent = size_percent.map(|percent| percent.clamp(1, 100)),
+        if let Some(hud) = slot.hud.as_mut() {
+            slot.size_percent = size_percent.map(|percent| hud::clamp_size_percent_for(percent, &hud.spec));
+            hud.resized_width_percent = slot.size_percent;
+        } else {
+            slot.size_percent = size_percent.map(|percent| percent.clamp(1, 100));
+            slot.points = if slot.size_percent.is_some() {
+                points
+            } else {
+                OverlayPointSize::default()
+            };
         }
         true
     }

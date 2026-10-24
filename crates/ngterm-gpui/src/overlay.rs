@@ -53,10 +53,10 @@ const FLOATING_BORDER_OPACITY: f64 = 0.18;
 const FLOATING_SHADOW_RADIUS: f32 = 24.;
 const FLOATING_SHADOW_OPACITY: f32 = 0.45;
 
-/// Where the program panel goes in the page: its share of the page across and down, `None` for the whole page.
+/// Where the program panel goes in the page: how it floats, centered, `None` for the whole page.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProgramPlacement {
-    pub fraction: Option<f64>,
+    pub sizing: Option<ngterm_core::model::PanelSizing>,
 }
 
 /// The overlay terminal's own config: its `#rrggbb` background at the window's `opacity` (upstream's
@@ -388,9 +388,7 @@ pub fn sync_page(
     }
     let cover = live.or(page);
     let placed = |program: &crate::split::ProgramShow| Some(program.generation) == cover;
-    let placement = |program: crate::split::ProgramShow| ProgramPlacement {
-        fraction: program.fraction,
-    };
+    let placement = |program: crate::split::ProgramShow| ProgramPlacement { sizing: program.sizing };
     layer.placement = plan
         .overlays
         .program
@@ -726,7 +724,7 @@ pub fn program_element(layer: &OverlayLayer) -> Option<impl IntoElement> {
         (None, Some(page)) => page.element.clone().into_any_element(),
         (None, None) => return None,
     };
-    let floating = layer.placement.is_some_and(|placement| placement.fraction.is_some());
+    let floating = layer.placement.is_some_and(|placement| placement.sizing.is_some());
     let border = crate::chrome::color(ngterm_core::chrome::Rgb::WHITE, FLOATING_BORDER_OPACITY);
     let shadow = BoxShadow {
         color: gpui_kit::hsla(0., 0., 0., FLOATING_SHADOW_OPACITY),

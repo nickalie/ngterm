@@ -19,8 +19,9 @@ use crate::state::{AppState, Poster, post};
 
 /// The theme foreground when the terminal's is unknown (upstream's `HtmlOverlayRegistry` falls back to white).
 const FALLBACK_FOREGROUND: &str = "#ffffff";
-/// The strip's height (upstream's 28 points).
-pub const STRIP_HEIGHT: f32 = 28.;
+/// The strip's height, core's (upstream's 28 points), which the point-sized panel adds on top of a page's content.
+#[expect(clippy::cast_possible_truncation, reason = "28 points, exact in an f32")]
+pub const STRIP_HEIGHT: f32 = HtmlOverlay::STRIP_HEIGHT as f32;
 /// How many characters of the identity hold their place before the page's title gives up width.
 const IDENTITY_CHARS: usize = 24;
 

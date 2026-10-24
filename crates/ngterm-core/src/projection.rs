@@ -145,6 +145,9 @@ fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
     let slot = &session.overlay;
     node.overlay = session.cover_overlay_active();
     node.overlay_size_percent = slot.size_percent.filter(|_| session.cover_overlay_active());
+    let content = session.overlay_content_size();
+    node.overlay_width = content.map(|(width, _)| width);
+    node.overlay_height = content.map(|(_, height)| height);
     let panes = session.pane_overlays.open_panes();
     node.pane_overlays = (!panes.is_empty()).then(|| panes.iter().map(|pane| pane.wire_name().to_owned()).collect());
     node.hud = hud_node(session);

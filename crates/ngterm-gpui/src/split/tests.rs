@@ -2,7 +2,8 @@
 //! drag.
 
 use gpui_kit::{point, px};
-use ngterm_core::model::{SessionSeed, SplitLayout};
+use ngterm_core::html::HtmlOverlay;
+use ngterm_core::model::{OverlayPointSize, SessionSeed, SplitLayout};
 use ngterm_core::zoom::ZoomSurface;
 use ngterm_host::fakes::FakeSurface;
 use uuid::Uuid;
@@ -216,7 +217,7 @@ fn a_covering_program_hides_the_panes_and_takes_the_keyboard() {
         plan.overlays.program,
         Some(ProgramShow {
             generation: 1,
-            fraction: None
+            sizing: None
         })
     );
     assert!(!plan.shows(Slot::Primary) && !plan.shows(Slot::Split) && !plan.shows(Slot::Scratch));
@@ -226,7 +227,7 @@ fn a_covering_program_hides_the_panes_and_takes_the_keyboard() {
 
 #[test]
 fn a_page_takes_the_slot_as_a_program_does() {
-    use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
+    use ngterm_core::html::{HtmlPageFlags, HtmlSource};
     let page = HtmlOverlay::new(
         HtmlSource::File {
             path: "/site/index.html".to_owned(),
@@ -234,7 +235,7 @@ fn a_page_takes_the_slot_as_a_program_does() {
         },
         HtmlPageFlags::default(),
     );
-    for (size_percent, fraction) in [(None, None), (Some(50), Some(0.5))] {
+    for size_percent in [None, Some(50)] {
         let mut covered = session(Some(split(true, false)), false);
         let slot = &mut covered.overlay;
         slot.active = true;
@@ -242,14 +243,13 @@ fn a_page_takes_the_slot_as_a_program_does() {
         slot.size_percent = size_percent;
         slot.html = Some(page.clone());
         let plan = PanePlan::layout(&covered, None);
-        assert_eq!(
-            plan.overlays.program,
-            Some(ProgramShow {
-                generation: 4,
-                fraction
-            })
-        );
-        assert_eq!(plan.overlays.covers, fraction.is_none());
+        let sizing = size_percent.map(|size_percent| PanelSizing {
+            size_percent,
+            points: OverlayPointSize::default(),
+            chrome: HtmlOverlay::CHROME_HEIGHT,
+        });
+        assert_eq!(plan.overlays.program, Some(ProgramShow { generation: 4, sizing }));
+        assert_eq!(plan.overlays.covers, sizing.is_none());
         assert_eq!(plan.overlays.focus, Some(OverlayFocus::Program));
     }
 }
@@ -261,7 +261,10 @@ fn a_floating_program_leaves_the_panes_lit_but_holds_the_keyboard() {
     pane_overlay(&mut floating, OverlayPane::Right, 3);
     let plan = PanePlan::layout(&floating, None);
     assert!(!plan.overlays.covers && plan.shows(Slot::Primary) && plan.shows_divider());
-    assert_eq!(plan.overlays.program.and_then(|program| program.fraction), Some(0.4));
+    assert_eq!(
+        plan.overlays.program.and_then(|program| program.sizing),
+        Some(PanelSizing::percent(40))
+    );
     assert_eq!(plan.overlays.focus, Some(OverlayFocus::Program));
     assert_eq!(
         plan.overlays.pane(Slot::Split),
@@ -307,7 +310,7 @@ fn a_zoomed_overlay_fills_the_page() {
     program(&mut full, Some(30));
     let plan = PanePlan::layout(&full, Some(zoom(&full, ZoomSurface::Overlay)));
     assert!(plan.overlays.covers);
-    assert_eq!(plan.overlays.program.and_then(|program| program.fraction), None);
+    assert_eq!(plan.overlays.program.and_then(|program| program.sizing), None);
 
     let mut panes = session(Some(split(true, false)), false);
     pane_overlay(&mut panes, OverlayPane::Right, 4);
@@ -339,7 +342,7 @@ fn a_pane_zoomed_under_a_session_wide_overlay_shows_bare() {
 #[test]
 fn a_floating_panel_is_centered_at_its_share() {
     assert_eq!(
-        program_rect(Some(0.5), 1000, 600),
+        program_rect(Some(PanelSizing::percent(50)), 1000, 600),
         Rect {
             x: 250,
             y: 150,
@@ -349,9 +352,54 @@ fn a_floating_panel_is_centered_at_its_share() {
     );
     assert_eq!(program_rect(None, 10, 20), Rect::full(10, 20));
     assert_eq!(
-        program_rect(Some(1.5), 800, 600),
+        program_rect(Some(PanelSizing::percent(150)), 800, 600),
         Rect::full(800, 600),
         "a share past the page is the page"
+    );
+}
+
+/// Upstream's `testPointSizesReplaceOnlyTheirAxisAndAddThePageStrip`: a point axis replaces the percent on its own,
+/// and a page's strip comes on top before the 80% cap.
+#[test]
+fn point_sizes_replace_only_their_axis_and_add_the_page_strip() {
+    let program = PanelSizing {
+        size_percent: 60,
+        points: OverlayPointSize {
+            width: None,
+            height: Some(240),
+        },
+        chrome: 0.0,
+    };
+    let rect = program_rect(Some(program), 1000, 800);
+    assert_eq!((rect.width, rect.height), (600, 240));
+    assert_eq!(rect.y + rect.height / 2, 400, "centered down");
+
+    let page = PanelSizing {
+        size_percent: 60,
+        points: OverlayPointSize {
+            width: Some(5_000),
+            height: Some(240),
+        },
+        chrome: HtmlOverlay::CHROME_HEIGHT,
+    };
+    let rect = program_rect(Some(page), 1000, 800);
+    assert_eq!((rect.width, rect.height), (800, 269));
+    assert_eq!(rect.x + rect.width / 2, 500, "centered across");
+}
+
+#[test]
+fn a_floating_slot_lays_out_with_its_points_and_its_page_strip() {
+    let mut floating = session(Some(split(true, false)), false);
+    program(&mut floating, Some(60));
+    floating.overlay.points = OverlayPointSize {
+        width: None,
+        height: Some(240),
+    };
+    let plan = PanePlan::layout(&floating, None);
+    let sizing = plan.overlays.program.and_then(|program| program.sizing);
+    assert_eq!(
+        sizing.map(|sizing| (sizing.size_percent, sizing.points.height, sizing.chrome)),
+        Some((60, Some(240), 0.0))
     );
 }
 

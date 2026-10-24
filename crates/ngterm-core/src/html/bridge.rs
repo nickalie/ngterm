@@ -160,10 +160,12 @@ const SESSION_TARGETED: [Command; 5] = [
     Command::Font(FontCmd::Reset),
     Command::Keymap(KeymapCmd::Run),
 ];
-/// The page's own overlay commands, which also get its pane.
-const OWN_OVERLAY: [Command; 7] = [
+/// The page's own overlay commands, which also get its pane. Resize is one, so a pane page's own request meets the pane
+/// refusal instead of resizing the session's overlay.
+const OWN_OVERLAY: [Command; 8] = [
     Command::Session(SessionCmd::OverlayClose),
     Command::Session(SessionCmd::OverlayReload),
+    Command::Session(SessionCmd::OverlayResize),
     Command::Session(SessionCmd::OverlayNavigate),
     Command::Session(SessionCmd::OverlaySubmit),
     Command::Session(SessionCmd::OverlayHide),
@@ -564,6 +566,7 @@ mod tests {
             "session.overlay.hide",
             "session.overlay.show",
             "session.overlay.toggle",
+            "session.overlay.resize",
         ] {
             let built = fixture.request(&format!(r#"{{"cmd":"{cmd}"}}"#));
             assert_eq!(built.target, Some(fixture.session_target()), "{cmd}");

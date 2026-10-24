@@ -27,8 +27,8 @@ use crate::Core;
 use crate::error::{ControlError, Noun};
 use crate::html::{self, HtmlNavigation, HtmlSource};
 use crate::model::{
-    OVERLAY_HIDDEN, OverlayPane, OverlayProgram, OverlayVisibilityMode, PaneOverlayOpenFailure, Session,
-    is_valid_color_hex,
+    OVERLAY_HIDDEN, OverlayPane, OverlayPointResizeFailure, OverlayPointSize, OverlayProgram, OverlayVisibilityMode,
+    PaneOverlayOpenFailure, Session, is_valid_color_hex,
 };
 use crate::overlay_jobs::{EXPIRY_SLACK, LAUNCH_WINDOW, OverlayJobFrame, OverlayJobOutcome, OverlayJobs, START_WINDOW};
 use crate::remote::{RemoteOverlayOpen, RemoteProgram, VIEWER_GONE};
@@ -52,6 +52,11 @@ const PANE_ALREADY_OPEN: &str = "pane overlay already open";
 const INVALID_PANE: &str = "session.overlay: --pane must be left or right";
 const PANE_SIZE_CONFLICT: &str = "session.overlay.open: --pane is mutually exclusive with --size-percent";
 const PANE_RESIZE_UNSUPPORTED: &str = "session.overlay.resize: --pane is not supported (pane overlays are always full)";
+const PANE_POINTS_CONFLICT: &str = "session.overlay.open: --pane is mutually exclusive with --width/--height";
+/// Upstream's `OverlayPointError`, the dispatcher's half; the store's is [`OverlayPointResizeFailure`].
+const POINTS_NEED_PERCENT: &str = "session.overlay.open: --width/--height need --size-percent";
+const POINTS_NOT_POSITIVE: &str = "session.overlay: --width/--height must be positive";
+const POINTS_FULL_CONFLICT: &str = "session.overlay.resize: --full is mutually exclusive with --width/--height";
 /// Upstream's `OverlayHtmlError`.
 const COMMAND_AND_HTML: &str = "session.overlay.open takes a command or --html, not both";
 const COMMAND_AND_URL: &str = "session.overlay.open takes a command or --url, not both";
@@ -260,14 +265,9 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         return Err(ControlError::rejected(format!("invalid color: {color} (#rrggbb)")));
     }
     let pane = parse_overlay_pane(args.pane.as_deref())?;
-    if pane.is_some() && args.size_percent.is_some() {
-        return Err(ControlError::rejected(PANE_SIZE_CONFLICT));
-    }
-    if args.size_percent.is_some_and(|percent| !(1..=100).contains(&percent)) {
-        return Err(size_range("open"));
-    }
+    let points = open_points(args, pane)?;
     if let OverlayContent::Page(source) = content {
-        let opening = PageOpening::from_args(source, args, pane);
+        let opening = PageOpening::from_args(source, args, pane, points);
         return overlay_page::open(core, target, args.window.as_deref(), opening);
     }
     let program = OverlayProgram {
@@ -275,6 +275,7 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         cwd: args.cwd.clone(),
         wait: args.wait.unwrap_or(false),
         size_percent: args.size_percent,
+        points,
         background_color: args.color.clone(),
     };
     let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
@@ -296,6 +297,9 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         RemoteOverlayOpen::SlotTaken => return Err(taken()),
         RemoteOverlayOpen::PaneMissing => return Err(ControlError::rejected(PANE_NOT_VISIBLE)),
         RemoteOverlayOpen::TooLarge => return Err(ControlError::rejected(TOO_LARGE)),
+        RemoteOverlayOpen::PointsUnsupported => {
+            return Err(ControlError::rejected(OverlayPointResizeFailure::Remote.message()));
+        }
         RemoteOverlayOpen::Opened => return Ok(with_id(resolved.session)),
     }
     let (store, id) = session_store(core, target, args.window.as_deref())?;
@@ -317,6 +321,46 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         store.select_session(Some(id));
     }
     Ok(with_id(id))
+}
+
+/// The `--width`/`--height` of an open, after the size checks in upstream's order: a pane overlay takes neither a
+/// percent nor points, the percent range, positive points, and points only beside a percent.
+fn open_points(args: &Args, pane: Option<OverlayPane>) -> Result<OverlayPointSize, ControlError> {
+    let points = args_points(args);
+    if pane.is_some() && args.size_percent.is_some() {
+        return Err(ControlError::rejected(PANE_SIZE_CONFLICT));
+    }
+    if pane.is_some() && !points.is_empty() {
+        return Err(ControlError::rejected(PANE_POINTS_CONFLICT));
+    }
+    if args.size_percent.is_some_and(|percent| !(1..=100).contains(&percent)) {
+        return Err(size_range("open"));
+    }
+    refuse_bad_points(points)?;
+    if !points.is_empty() && args.size_percent.is_none() {
+        return Err(ControlError::rejected(POINTS_NEED_PERCENT));
+    }
+    Ok(points)
+}
+
+/// The point sizes `args.width`/`args.height` carry.
+fn args_points(args: &Args) -> OverlayPointSize {
+    OverlayPointSize {
+        width: args.width,
+        height: args.height,
+    }
+}
+
+/// Refuses a point size that is not positive (upstream's `overlayPointFailure`).
+fn refuse_bad_points(points: OverlayPointSize) -> Result<(), ControlError> {
+    if [points.width, points.height]
+        .into_iter()
+        .flatten()
+        .any(|axis| axis <= 0)
+    {
+        return Err(ControlError::rejected(POINTS_NOT_POSITIVE));
+    }
+    Ok(())
 }
 
 /// Refuses an open into the slot `pane` addresses while its overlay is hidden (upstream's `openSessionOverlay` check,
@@ -393,20 +437,28 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         return Err(ControlError::rejected(PANE_RESIZE_UNSUPPORTED));
     }
     let full = args.full == Some(true);
-    let size = match (full, args.size_percent) {
-        (true, Some(_)) => {
-            return Err(ControlError::rejected(
-                "session.overlay.resize: --full is mutually exclusive with --size-percent",
-            ));
-        }
-        (false, None) => {
-            return Err(ControlError::rejected(
-                "session.overlay.resize requires --size-percent or --full",
-            ));
-        }
-        (_, Some(percent)) if !(1..=100).contains(&percent) => return Err(size_range("resize")),
-        (_, percent) => percent,
-    };
+    let points = args_points(args);
+    if full && args.size_percent.is_some() {
+        return Err(ControlError::rejected(
+            "session.overlay.resize: --full is mutually exclusive with --size-percent",
+        ));
+    }
+    if full && !points.is_empty() {
+        return Err(ControlError::rejected(POINTS_FULL_CONFLICT));
+    }
+    if !full && args.size_percent.is_none() && points.is_empty() {
+        return Err(ControlError::rejected(
+            "session.overlay.resize requires --size-percent, --width/--height or --full",
+        ));
+    }
+    if args.size_percent.is_some_and(|percent| !(1..=100).contains(&percent)) {
+        return Err(size_range("resize"));
+    }
+    refuse_bad_points(points)?;
+    if !points.is_empty() {
+        return resize_in_points(core, target, args, points);
+    }
+    let size = args.size_percent;
     let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
     match core.resize_remote_overlay(resolved.session, size) {
         Some(true) => return Ok(with_id(resolved.session)),
@@ -432,6 +484,21 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     if hud {
         core.publish_hud_resize(id);
     }
+    Ok(with_id(id))
+}
+
+/// `session.overlay.resize` with `--width`/`--height` (upstream's `resizeSessionOverlay` `points`): with a percent the
+/// panel re-sizes from it keeping exactly those axes, alone they change only their axes of a panel already floating.
+/// Nothing goes to a presenter: its wire carries only a percent, so a slot shown on or for another machine refuses.
+fn resize_in_points(core: &mut Core, target: Option<&str>, args: &Args, points: OverlayPointSize) -> Outcome {
+    let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
+    if core.shows_replica_overlay(resolved.session) {
+        return Err(ControlError::rejected(OverlayPointResizeFailure::Remote.message()));
+    }
+    let (store, id) = session_store(core, target, args.window.as_deref())?;
+    store
+        .resize_overlay_in_points(id, args.size_percent, points)
+        .map_err(|failure| ControlError::rejected(failure.message()))?;
     Ok(with_id(id))
 }
 

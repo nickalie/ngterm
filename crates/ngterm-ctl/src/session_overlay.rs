@@ -176,6 +176,12 @@ pub struct Open {
     )]
     size_percent: Option<i64>,
 
+    #[arg(long, help = WIDTH_HELP)]
+    width: Option<i64>,
+
+    #[arg(long, help = HEIGHT_HELP)]
+    height: Option<i64>,
+
     #[arg(
         long,
         help = "Solid background color (#rrggbb) for the overlay pane, independent of the session's own."
@@ -325,10 +331,19 @@ impl RequestCommand for Open {
             return Err("background-color must be a #rrggbb hex value".to_owned());
         }
         validate_overlay_pane(self.pane.as_deref())?;
+        let points = self.width.is_some() || self.height.is_some();
         if self.pane.is_some() && self.size_percent.is_some() {
             return Err("--pane cannot be combined with --size-percent (pane overlays are always full)".to_owned());
         }
-        validate_size_percent(self.size_percent)
+        if self.pane.is_some() && points {
+            return Err("--pane cannot be combined with --width/--height (pane overlays are always full)".to_owned());
+        }
+        validate_size_percent(self.size_percent)?;
+        validate_points(self.width, self.height)?;
+        if points && self.size_percent.is_none() {
+            return Err("--width/--height need --size-percent".to_owned());
+        }
+        Ok(())
     }
 
     /// The open request; `--block` changes the run, not the request. A page's file and `--cwd` are made absolute
@@ -346,6 +361,8 @@ impl RequestCommand for Open {
             size_percent: self.size_percent,
             follow: flag(self.follow),
             pane: self.pane.clone(),
+            width: self.width,
+            height: self.height,
             color: self.background_color.clone(),
             html: self.html.as_deref().map(overlay_page::absolute_path),
             navigation: flag(self.navigation),
@@ -429,12 +446,37 @@ impl RequestCommand for Close {
     }
 }
 
-/// `ngtermctl session overlay resize`: exactly one of `--size-percent` and `--full`.
+/// `--width`'s help on open and resize (upstream's `Overlay.widthHelp`).
+const WIDTH_HELP: &str =
+    "Panel content width in points, in place of --size-percent's width (at most 80% of the session).";
+/// `--height`'s help on open and resize (upstream's `Overlay.heightHelp`).
+const HEIGHT_HELP: &str = "Panel content height in points, in place of --size-percent's height (at most 80% of the \
+                           session); a page's title strip is added on top.";
+
+/// Refuses a `--width`/`--height` that is not positive (upstream's `Overlay.validatePoints`).
+fn validate_points(width: Option<i64>, height: Option<i64>) -> Result<(), String> {
+    if [width, height].into_iter().flatten().any(|axis| axis <= 0) {
+        return Err("--width/--height must be positive".to_owned());
+    }
+    Ok(())
+}
+
+/// `ngtermctl session overlay resize`: `--size-percent` with or without point sizes, point sizes alone, or `--full`.
 #[derive(Debug, clap::Args)]
-#[command(about = "Resize an open overlay: floating at a percent, or back to full-pane.")]
+#[command(
+    about = "Resize an open overlay: floating at a percent or in points, or back to full-pane.",
+    long_about = "--size-percent re-sizes from that percent, keeping only the --width/--height given with it. \
+                  --width/--height alone change those axes of an overlay that is already floating."
+)]
 pub struct Resize {
     #[arg(long, help = "Resize to a floating, framed panel at PERCENT (1-100) of the pane.")]
     size_percent: Option<i64>,
+
+    #[arg(long, help = WIDTH_HELP)]
+    width: Option<i64>,
+
+    #[arg(long, help = HEIGHT_HELP)]
+    height: Option<i64>,
 
     #[arg(long, help = "Resize to full-pane (translucent, hides the session).")]
     full: bool,
@@ -451,18 +493,28 @@ impl RequestCommand for Resize {
         &self.options.basic
     }
 
+    // the dispatcher re-checks the same rules; here they are a clean usage error before any connection
     fn validate(&self) -> Result<(), String> {
-        match (self.full, self.size_percent) {
-            (true, Some(_)) => Err("--full cannot be combined with --size-percent".to_owned()),
-            (false, None) => Err("provide --size-percent PERCENT or --full".to_owned()),
-            _ => validate_size_percent(self.size_percent),
+        let points = self.width.is_some() || self.height.is_some();
+        if self.full && self.size_percent.is_some() {
+            return Err("--full cannot be combined with --size-percent".to_owned());
         }
+        if self.full && points {
+            return Err("--full cannot be combined with --width/--height".to_owned());
+        }
+        if !self.full && self.size_percent.is_none() && !points {
+            return Err("provide --size-percent PERCENT, --width/--height POINTS or --full".to_owned());
+        }
+        validate_size_percent(self.size_percent)?;
+        validate_points(self.width, self.height)
     }
 
     fn make_request(&self) -> Request {
         let args = Args {
             size_percent: self.size_percent,
             full: flag(self.full),
+            width: self.width,
+            height: self.height,
             ..Args::default()
         };
         session_request(
@@ -1138,7 +1190,10 @@ mod tests {
             json!({"cmd": "session.overlay.resize", "target": "9f3c", "args": {"sizePercent": 40}})
         );
         assert_eq!(args(&["resize", "--full"]), json!({"full": true}));
-        assert_eq!(refusal(&["resize"]), "provide --size-percent PERCENT or --full");
+        assert_eq!(
+            refusal(&["resize"]),
+            "provide --size-percent PERCENT, --width/--height POINTS or --full"
+        );
         assert_eq!(
             refusal(&["resize", "--full", "--size-percent", "50"]),
             "--full cannot be combined with --size-percent"
@@ -1148,6 +1203,59 @@ mod tests {
             "--size-percent must be between 1 and 100"
         );
         assert!(rejects(&["resize", "--full", "--pane", "left"]), "resize has no --pane");
+    }
+
+    #[test]
+    fn open_and_resize_send_point_sizes() {
+        assert_eq!(
+            args(&[
+                "open",
+                "--html",
+                "/tmp/r.html",
+                "--size-percent",
+                "60",
+                "--width",
+                "700",
+                "--height",
+                "240"
+            ]),
+            json!({"sizePercent": 60, "width": 700, "height": 240, "html": "/tmp/r.html"})
+        );
+        assert_eq!(
+            request(&["resize", "--height", "300", "--target", "s"]),
+            json!({"cmd": "session.overlay.resize", "target": "s", "args": {"height": 300}})
+        );
+        assert_eq!(
+            args(&["resize", "--size-percent", "60", "--width", "700"]),
+            json!({"sizePercent": 60, "width": 700})
+        );
+    }
+
+    #[test]
+    fn point_sizes_are_refused_before_any_connection() {
+        let cases: [(&[&str], &str); 5] = [
+            (
+                &["open", "--html", "/tmp/r.html", "--height", "240"],
+                "--width/--height need --size-percent",
+            ),
+            (
+                &["open", "cat", "--size-percent", "60", "--width", "0"],
+                "--width/--height must be positive",
+            ),
+            (
+                &["open", "cat", "--pane", "right", "--height", "240"],
+                "--pane cannot be combined with --width/--height (pane overlays are always full)",
+            ),
+            (
+                &["resize", "--full", "--height", "240"],
+                "--full cannot be combined with --width/--height",
+            ),
+            (&["resize", "--width", "0"], "--width/--height must be positive"),
+        ];
+        for (argv, message) in cases {
+            assert_eq!(refusal(argv), message, "{argv:?}");
+        }
+        assert!(rejects(&["resize", "--width", "-1"]), "a negative size is refused too");
     }
 
     #[test]

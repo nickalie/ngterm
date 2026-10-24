@@ -620,6 +620,42 @@ def test_overlay_program(cli, ctl):
     assert_ok(ctl.request("session.close", sid))
 
 
+@pytest.mark.covers("cli:session overlay open", "cli:session overlay resize")
+def test_overlay_points(cli, ctl):
+    sid = _new(ctl)
+    assert_ok(ctl.request("session.select", sid))
+    opened = cli("session", "overlay", "open", "--size-percent", "50", "--height", "100", "--target", sid, "exec cat")
+    _ok(opened, "ok\n")
+    _overlay_up(ctl, sid)
+    node = find_session(ctl.wait_tree(lambda tree: "overlayHeight" in find_session(tree, sid)), sid)
+    assert node["overlaySizePercent"] == 50 and node["overlayHeight"] == pytest.approx(100)
+    half = node["overlayWidth"]
+    _ok(cli("session", "overlay", "resize", "--width", "200", "--target", sid), "ok\n")
+    node = _node(ctl, sid)
+    assert (node["overlayWidth"], node["overlayHeight"]) == (pytest.approx(200), pytest.approx(100))
+    _ok(cli("session", "overlay", "resize", "--size-percent", "50", "--target", sid), "ok\n")
+    assert _node(ctl, sid)["overlayWidth"] == pytest.approx(half)
+    for argv, message in [
+        (("open", "--height", "240", "exec cat"), "--width/--height need --size-percent"),
+        (("open", "--size-percent", "60", "--width", "0", "exec cat"), "--width/--height must be positive"),
+        (
+            ("open", "--pane", "right", "--height", "240", "exec cat"),
+            "--pane cannot be combined with --width/--height (pane overlays are always full)",
+        ),
+        (("resize", "--full", "--height", "240"), "--full cannot be combined with --width/--height"),
+        (("resize", "--width", "0"), "--width/--height must be positive"),
+        (("resize",), "provide --size-percent PERCENT, --width/--height POINTS or --full"),
+    ]:
+        _usage(cli("session", "overlay", *argv, "--target", sid), message)
+    _ok(cli("session", "overlay", "resize", "--full", "--target", sid), "ok\n")
+    _refused(
+        cli("session", "overlay", "resize", "--height", "100", "--target", sid),
+        "session.overlay.resize: --width/--height need a floating overlay; pass --size-percent too",
+    )
+    _ok(cli("session", "overlay", "close", "--target", sid), "ok\n")
+    assert_ok(ctl.request("session.close", sid))
+
+
 @pytest.mark.covers("cli:session overlay hide", "cli:session overlay show", "cli:session overlay toggle", "cli:tree")
 def test_session_overlay_visibility(cli, ctl):
     sid = _new(ctl)

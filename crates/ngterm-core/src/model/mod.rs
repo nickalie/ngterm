@@ -14,6 +14,7 @@ pub mod naming;
 mod navigation;
 mod outbox;
 mod overlay;
+mod overlay_points;
 mod overlay_visibility;
 pub mod pane;
 mod pane_focus;
@@ -46,6 +47,10 @@ pub use html_overlay::{HtmlOverlayCommandFailure, HtmlOverlayOpenFailure, HtmlPa
 pub use navigation::{NewSessionPlacement, SessionNavigation, WorkspaceNavigation};
 pub use outbox::{EventPayload, ModelEvent, Outbox, RecentClosedChange, SaveRequest, WatermarkRemoval};
 pub use overlay::{HudOpening, HudState, OverlayPane, OverlayProgram, OverlaySlot};
+pub use overlay_points::{
+    MAX_SHARE, OverlayPointResizeFailure, OverlayPointSize, OverlaySize, POINTS_HUD, POINTS_NOT_FLOATING,
+    POINTS_REMOTE, PanelSizing, content_size, panel_size,
+};
 pub use overlay_visibility::{OVERLAY_HIDDEN, OverlayVisibilityFailure, OverlayVisibilityMode, VisibleCover};
 pub use pane::{PaneLaunch, PaneRestore, SplitAxis, SplitLayout, StatusPane, SurfaceSlot};
 pub use pane_overlay::{PaneOverlay, PaneOverlayOpenFailure, PaneOverlaySlot, PaneOverlays};

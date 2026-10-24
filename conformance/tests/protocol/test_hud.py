@@ -276,6 +276,22 @@ def test_resize_sets_the_hud_width(ctl):
 
 
 @pytest.mark.covers("session.overlay.resize", "field:tree.session.hud")
+def test_points_do_not_resize_a_hud(ctl):
+    sid = _new(ctl)
+    _open(ctl, sid)
+    for args in [{"height": 240}, {"sizePercent": 40, "width": 300}]:
+        assert_error(
+            ctl.request("session.overlay.resize", sid, **args),
+            "a hud measures its own height: --width/--height do not apply",
+        )
+    node = _node(ctl, sid)
+    # the refused percent left the width the HUD measured for its message alone
+    assert node["hud"]["message"] == "working" and node["hud"]["sizePercent"] != 40
+    assert_absent(node, "overlaySizePercent", "overlayWidth", "overlayHeight")
+    _close(ctl, sid)
+
+
+@pytest.mark.covers("session.overlay.resize", "field:tree.session.hud")
 def test_resize_lets_a_sticky_hud_span_the_pane(ctl):
     sid = _new(ctl)
     # A resize takes the HUD's own width bound: a sticky panel off center may span the pane, any other stops at 80.

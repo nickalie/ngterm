@@ -44,6 +44,8 @@ pub(crate) enum RemoteOverlayOpen {
     PaneMissing,
     /// The launch context is larger than the helper reads in one frame.
     TooLarge,
+    /// The open carries point sizes, which the presenting machine does not take.
+    PointsUnsupported,
     Opened,
 }
 
@@ -385,6 +387,10 @@ pub(crate) fn open_remote_overlay(
     };
     if !core.follows_remotely(found, identity) {
         return RemoteOverlayOpen::NotPresented;
+    }
+    // the presentation wire carries only a percent, so nothing is reserved or sent
+    if !request.program.points.is_empty() {
+        return RemoteOverlayOpen::PointsUnsupported;
     }
     let context = launch_context(core, window, found, request.program);
     let fits = OverlayJobFrame::Context {

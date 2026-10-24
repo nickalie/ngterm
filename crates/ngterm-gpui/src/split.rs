@@ -26,7 +26,7 @@ use gpui_kit::{
 };
 use ngterm_core::hud::{HudPaneFrame, HudPaneFrames};
 use ngterm_core::model::pane::{SPLIT_RATIO_DEFAULT, clamp_split_ratio};
-use ngterm_core::model::{OverlayPane, Session, SplitAxis, StatusPane};
+use ngterm_core::model::{OverlayPane, PanelSizing, Session, SplitAxis, StatusPane};
 use ngterm_core::zoom::{SurfaceId, ZoomSurface};
 
 /// The separator line between the split's panes, in pixels.
@@ -83,11 +83,11 @@ pub enum Panes {
     Alone(Slot),
 }
 
-/// The program overlay a page shows: its slot generation and its share of the page (`None`: it covers the page).
+/// The program overlay a page shows: its slot generation and how it floats (`None`: it covers the page).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProgramShow {
     pub generation: u64,
-    pub fraction: Option<f64>,
+    pub sizing: Option<PanelSizing>,
 }
 
 /// An overlay that holds the keyboard in place of a pane.
@@ -152,7 +152,7 @@ impl OverlayPlan {
             Some(ZoomSurface::Overlay) if program.is_some() => Self {
                 program: program.map(|generation| ProgramShow {
                     generation,
-                    fraction: None,
+                    sizing: None,
                 }),
                 covers: true,
                 focus: Some(OverlayFocus::Program),
@@ -171,10 +171,10 @@ impl OverlayPlan {
             }
             Some(_) => Self::default(),
             None => {
-                let fraction = slot.size_percent.map(percent_fraction);
+                let sizing = slot.panel_sizing();
                 let mut plan = Self {
-                    program: program.map(|generation| ProgramShow { generation, fraction }),
-                    covers: program.is_some() && fraction.is_none(),
+                    program: program.map(|generation| ProgramShow { generation, sizing }),
+                    covers: program.is_some() && sizing.is_none(),
                     ..Self::default()
                 };
                 if !plan.covers && !scratch_covers {
@@ -193,7 +193,7 @@ impl OverlayPlan {
                 } else {
                     None
                 };
-                plan.hidden = HiddenOverlays::of(session, panes, fraction);
+                plan.hidden = HiddenOverlays::of(session, panes, sizing);
                 plan
             }
         }
@@ -219,13 +219,13 @@ impl HiddenOverlays {
         }
     }
 
-    /// The hidden overlays of `session` laid out by `panes`: the program at its `fraction` of the page, and each laid-out
+    /// The hidden overlays of `session` laid out by `panes`: the program at its `sizing` in the page, and each laid-out
     /// pane's hidden overlay (a hidden pane overlay under a shown program or the scratch keeps its pane's frame too).
-    fn of(session: &Session, panes: Panes, fraction: Option<f64>) -> Self {
+    fn of(session: &Session, panes: Panes, sizing: Option<PanelSizing>) -> Self {
         let slot = &session.overlay;
         let program = (session.cover_overlay_active() && slot.hidden).then_some(ProgramShow {
             generation: slot.generation,
-            fraction,
+            sizing,
         });
         let hidden = |pane: OverlayPane| {
             session
@@ -239,14 +239,6 @@ impl HiddenOverlays {
             split: hidden(OverlayPane::Right),
         }
     }
-}
-
-/// A percent within 1...100 as a fraction.
-fn percent_fraction(percent: i64) -> f64 {
-    // within 1...100 by the slot's clamp, so the conversion is exact
-    #[expect(clippy::cast_precision_loss, reason = "a percent within 0...100")]
-    let percent = percent.clamp(1, 100) as f64;
-    percent / 100.0
 }
 
 /// How a session's page lays its terminals out, by pane token.
@@ -375,7 +367,7 @@ impl PanePlan {
     /// Whether a floating program washes the page behind it (upstream's `OverlayPanelStyle.backdrop`).
     #[must_use]
     pub fn backdrop(&self) -> bool {
-        self.overlays.program.is_some_and(|program| program.fraction.is_some())
+        self.overlays.program.is_some_and(|program| program.sizing.is_some())
     }
 }
 
@@ -548,21 +540,23 @@ pub fn dragged_ratio(start: f64, offset: f64, length: i32) -> f64 {
     clamp_split_ratio(start + offset / content)
 }
 
-/// The program panel's rectangle: centered at its share of the page across and down while it floats, else the page
-/// (upstream's program `OverlayPanelStyle`, always centered).
+/// The program panel's rectangle: centered at the size core's [`PanelSizing::panel_size`] gives it in the page while it
+/// floats (its percent, or points on an axis it was given them for), else the page (upstream's program
+/// `OverlayPanelStyle`, always centered).
 #[must_use]
-pub fn program_rect(fraction: Option<f64>, width: i32, height: i32) -> Rect {
-    let Some(fraction) = fraction else {
+pub fn program_rect(sizing: Option<PanelSizing>, width: i32, height: i32) -> Rect {
+    let Some(sizing) = sizing else {
         return Rect::full(width, height);
     };
-    let scaled = |extent: i32| {
-        let value = (f64::from(extent) * fraction.clamp(0.0, 1.0)).round();
+    let (panel_width, panel_height) = sizing.panel_size((f64::from(width), f64::from(height)));
+    let whole = |value: f64, extent: i32| {
+        let value = value.round().clamp(0.0, f64::from(extent));
         // within 0..=extent by the clamp, so the conversion is exact
         #[expect(clippy::cast_possible_truncation, reason = "rounded and bounded by an i32")]
         let value = value as i32;
         value
     };
-    let (panel_width, panel_height) = (scaled(width), scaled(height));
+    let (panel_width, panel_height) = (whole(panel_width, width), whole(panel_height, height));
     Rect {
         x: (width - panel_width) / 2,
         y: (height - panel_height) / 2,
@@ -654,7 +648,7 @@ impl Place {
                     .unwrap_or_default(),
                 None => placement.style.panel_frame(full),
             },
-            Self::Program(placement) => program_rect(placement.fraction, width, height),
+            Self::Program(placement) => program_rect(placement.sizing, width, height),
         }
     }
 }

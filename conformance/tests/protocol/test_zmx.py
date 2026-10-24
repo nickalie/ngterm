@@ -507,6 +507,39 @@ def test_job_run_serves_an_overlay_a_presenter_shows(live):
     assert_ok(live.request("session.close", sid))
 
 
+POINTS_REMOTE = "--width/--height are not supported for an overlay shown on another Mac"
+
+
+@LIVE
+@pytest.mark.covers("session.overlay.open", "session.overlay.resize", "field:tree.session.remoteOverlays")
+def test_points_are_refused_for_an_overlay_a_presenter_shows(live):
+    """The presentation wire carries only a percent, so point sizes are refused before a reservation or a send."""
+    sid = _live_session(live)
+    endpoint = assert_ok(live.request(live.vocabulary.command("zmx.tree")))["remote"]["endpoint"]
+    daemon = _entries(live, sid)["left"]["daemon"]
+    with live.vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
+        live.wait_tree(lambda tree: _follows(tree, sid, viewer))
+        presenter, gen = _subscribed(live, sid, "presenter")
+        with presenter:
+            presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
+            wait_frame(presenter.read, "presenter.granted", presenter.send)
+            _presenters(live, sid, {"mirrors": 0, "presenter": True})
+            refused = live.request("session.overlay.open", sid, command="true", sizePercent=60, height=240)
+            assert_error(refused, POINTS_REMOTE)
+            node = find_session(live.tree(), sid)
+            assert "remoteOverlays" not in node and node["overlay"] is False
+            assert assert_ok(live.request("session.overlay.open", sid, command="true", sizePercent=60))["id"] == sid
+            wait_frame(presenter.read, "overlay.request", presenter.send)
+            live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == [{"sizePercent": 60}])
+            resized = live.request("session.overlay.resize", sid, sizePercent=40, height=240)
+            assert_error(resized, POINTS_REMOTE)
+            assert find_session(live.tree(), sid)["remoteOverlays"] == [{"sizePercent": 60}]
+            assert_ok(live.request("session.overlay.close", sid))
+            wait_frame(presenter.read, "overlay.close", presenter.send)
+    _presenters(live, sid, None)
+    assert_ok(live.request("session.close", sid))
+
+
 def _acquired(live, sid, kinds):
     """A presenter of `sid` whose hello lists `kinds`, granted the role."""
     presenter, gen = _subscribed(live, sid, "presenter", kinds)

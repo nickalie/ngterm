@@ -10,6 +10,7 @@ use ngterm_proto::Response;
 
 use super::*;
 use crate::overlay::ProgramPlacement;
+use ngterm_core::model::PanelSizing;
 
 /// Runs each launch's command through `/bin/sh -c` in its directory with its variables, `exec cat` without one.
 fn running_launcher(launches: Arc<Mutex<Vec<Launch>>>) -> pane::Launcher {
@@ -124,7 +125,7 @@ fn a_program_overlay_covers_the_page_takes_the_keyboard_and_reports_its_exit_sta
     let placement = h
         .deck
         .read_with(h.cx, |deck, _| deck.page(session).unwrap().overlays().placement());
-    assert_eq!(placement, Some(ProgramPlacement { fraction: None }));
+    assert_eq!(placement, Some(ProgramPlacement { sizing: None }));
     h.until("the program to start", |h| program_realized(h, session));
 
     // the keys reach the program, whose end closes the overlay with its status
@@ -148,7 +149,12 @@ fn a_floating_program_shows_at_its_share_over_the_backdrop_and_hides_with_its_pa
         let page = deck.page(session).unwrap();
         (page.overlays().placement(), page.washes().backdrop.is_some())
     });
-    assert_eq!(placement, Some(ProgramPlacement { fraction: Some(0.5) }));
+    assert_eq!(
+        placement,
+        Some(ProgramPlacement {
+            sizing: Some(PanelSizing::percent(50))
+        })
+    );
     assert!(backdrop, "the backdrop washes the session behind it");
     assert!(
         h.shown(session, &token),

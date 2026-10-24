@@ -125,6 +125,13 @@ pub struct ControlSessionNode {
     pub overlay: bool,
     #[serde(default)]
     pub overlay_size_percent: Option<i64>,
+    /// A floating program or page's content size in points, after `--width`/`--height` and the cap, from the
+    /// session's last layout; a page's strip is not included. Absent for a full overlay, a HUD and a session not laid
+    /// out yet.
+    #[serde(default)]
+    pub overlay_width: Option<f64>,
+    #[serde(default)]
+    pub overlay_height: Option<f64>,
     #[serde(default)]
     pub pane_overlays: Option<Vec<String>>,
     #[serde(default)]
@@ -220,6 +227,8 @@ impl ControlSessionNode {
             split_focused: None,
             overlay: false,
             overlay_size_percent: None,
+            overlay_width: None,
+            overlay_height: None,
             pane_overlays: None,
             hud: None,
             ask: None,
@@ -460,6 +469,8 @@ mod tests {
         node.split_ratio = Some(0.5);
         node.split_focused = Some(false);
         node.overlay_size_percent = Some(1);
+        node.overlay_width = Some(600.0);
+        node.overlay_height = Some(240.0);
         node.pane_overlays = Some(vec![]);
         node.hud = Some(ControlHudNode {
             message: String::new(),
@@ -526,7 +537,7 @@ mod tests {
     }
 
     /// The catalog's `field:tree.session.*` order (its `backedByZmx` is `backedByLive` here).
-    const SESSION_FIELDS: [&str; 50] = [
+    const SESSION_FIELDS: [&str; 52] = [
         "id",
         "name",
         "cwd",
@@ -543,6 +554,8 @@ mod tests {
         "splitFocused",
         "overlay",
         "overlaySizePercent",
+        "overlayWidth",
+        "overlayHeight",
         "paneOverlays",
         "hud",
         "ask",

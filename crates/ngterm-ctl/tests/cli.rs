@@ -3586,8 +3586,8 @@ fn an_admitted_page_claim_copies_the_channel_both_ways_untouched() -> TestResult
 
 const OVERLAY_OPEN_USAGE: &str = "Usage: ngtermctl session overlay open [<options>] [<command>]\n  See 'ngtermctl session \
                                   overlay open --help' for more information.\n";
-const OVERLAY_RESIZE_USAGE: &str = "Usage: ngtermctl session overlay resize [--size-percent <size-percent>] [--full] \
-                                    [--target <target>] [--socket <socket>] [--json] [--window <window>]\n  See \
+const OVERLAY_RESIZE_USAGE: &str = "Usage: ngtermctl session overlay resize [--size-percent <size-percent>] [--width \
+                                    <width>] [--height <height>] [--full] [--target <target>] [--socket <socket>] [--json] [--window <window>]\n  See \
                                     'ngtermctl session overlay resize --help' for more information.\n";
 
 #[test]
@@ -3617,7 +3617,7 @@ fn overlay_refusals_are_usage_errors_before_connecting() -> TestResult {
         ),
         (
             &["session", "overlay", "resize", "--target", "s"],
-            "provide --size-percent PERCENT or --full",
+            "provide --size-percent PERCENT, --width/--height POINTS or --full",
             OVERLAY_RESIZE_USAGE,
         ),
         (
@@ -3734,8 +3734,8 @@ SUBCOMMANDS:
   show                    Show the session's hidden overlays again.
   toggle                  Hide the session's overlays if any is shown,
                           otherwise show them all.
-  resize                  Resize an open overlay: floating at a percent, or
-                          back to full-pane.
+  resize                  Resize an open overlay: floating at a percent or in
+                          points, or back to full-pane.
   reload                  Reload an HTML overlay: the file or URL it was opened
                           with, or with --current the page shown now.
   navigate                Step an HTML overlay's history, open it in the
@@ -3777,6 +3777,36 @@ OPTIONS:
 
 ";
 
+const OVERLAY_RESIZE_HELP: &str = "\
+OVERVIEW: Resize an open overlay: floating at a percent or in points, or back
+to full-pane.
+
+--size-percent re-sizes from that percent, keeping only the --width/--height
+given with it. --width/--height alone change those axes of an overlay that is
+already floating.
+
+USAGE: ngtermctl session overlay resize [--size-percent <size-percent>] [--width <width>] [--height <height>] [--full] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+
+OPTIONS:
+  --size-percent <size-percent>
+                          Resize to a floating, framed panel at PERCENT (1-100)
+                          of the pane.
+  --width <width>         Panel content width in points, in place of
+                          --size-percent's width (at most 80% of the session).
+  --height <height>       Panel content height in points, in place of
+                          --size-percent's height (at most 80% of the session);
+                          a page's title strip is added on top.
+  --full                  Resize to full-pane (translucent, hides the session).
+  --target <target>       Target session/workspace id, unique prefix, or
+                          'active'. (default: active)
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  --window <window>       Target window id, unique prefix, or 'active'
+                          (defaults to the frontmost).
+  -h, --help              Show help information.
+
+";
+
 const OVERLAY_RUN_JOB_HELP: &str = "\
 OVERVIEW: Run a remote overlay job this app handed to another Mac.
 
@@ -3801,9 +3831,10 @@ OPTIONS:
 #[test]
 fn overlay_help_in_the_argument_parser_layout() -> TestResult {
     let dir = short_dir()?;
-    let cases: [(&[&str], &str); 6] = [
+    let cases: [(&[&str], &str); 7] = [
         (&["session", "overlay"], OVERLAY_HELP),
         (&["help", "session", "overlay"], OVERLAY_HELP),
+        (&["session", "overlay", "resize", "--help"], OVERLAY_RESIZE_HELP),
         (&["session", "overlay", "run-job", "--help"], OVERLAY_RUN_JOB_HELP),
         (&["help", "session", "overlay", "run-job"], OVERLAY_RUN_JOB_HELP),
         (&["session", "overlay", "page-serve", "--help"], OVERLAY_PAGE_SERVE_HELP),

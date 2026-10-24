@@ -1702,42 +1702,42 @@ their tests. Building blocks: `Args.width/height` (`ngterm-proto/src/request.rs`
   `tests/protocol/test_zmx.py::test_points_are_refused_for_an_overlay_a_presenter_shows` (LIVE),
   `tests/cli/test_cli_output.py::test_overlay_points` (covers `cli:session overlay open`, `cli:session overlay resize`)
 
-- [ ] `OverlayPointSize` (per-axis `Option<i64>`, merging, `panel_size`: a point axis = min(points + chrome on height,
+- [x] `OverlayPointSize` (per-axis `Option<i64>`, merging, `panel_size`: a point axis = min(points + chrome on height,
       80% of the session), a percent axis keeps 1..100; `content_size` = panel minus chrome, floored at 0; chrome 29
       for a page with a strip, 0 for chromeless or a program)
-- [ ] slot state: points kept only beside a percent on open (program and page), cleared on close; a percent resize
+- [x] slot state: points kept only beside a percent on open (program and page), cleared on close; a percent resize
       replaces them whole; a full resize clears them
-- [ ] open order (after the percent-range check): "session.overlay.open: --pane is mutually exclusive with
+- [x] open order (after the percent-range check): "session.overlay.open: --pane is mutually exclusive with
       --width/--height", "session.overlay: --width/--height must be positive", "session.overlay.open:
       --width/--height need --size-percent"
-- [ ] resize order: the pane refusal, full+percent, "session.overlay.resize: --full is mutually exclusive with
+- [x] resize order: the pane refusal, full+percent, "session.overlay.resize: --full is mutually exclusive with
       --width/--height", "session.overlay.resize requires --size-percent, --width/--height or --full", the percent
       range, positive points; with points: an unknown session "no overlay"; a remote slot or a replica "--width/--height
       are not supported for an overlay shown on another Mac"; a HUD "a hud measures its own height: --width/--height
       do not apply"; no covering overlay "no overlay"; with a percent, those points; without one, a full overlay
       "session.overlay.resize: --width/--height need a floating overlay; pass --size-percent too", else merge only
       the given axes
-- [ ] remote: `PointsUnsupported` after the follows-remotely check and before the frame-size check (nothing reserved
+- [x] remote: `PointsUnsupported` after the follows-remotely check and before the frame-size check (nothing reserved
       or sent); the page-to-presenter refusal in Task 22's open path
-- [ ] tree: `overlayWidth`/`overlayHeight` right after `overlaySizePercent`, the content size from the last layout
+- [x] tree: `overlayWidth`/`overlayHeight` right after `overlaySizePercent`, the content size from the last layout
       for a floating covering program or page; absent for a full overlay, a HUD, an empty slot and before the first
       layout. Confirm the GPUI detail frame is in the logical points the tree reports
-- [ ] bridge: `session.overlay.resize` joins the page's own overlay commands
-- [ ] ngtermctl `--width`/`--height` on open and resize with upstream's help ("Panel content width in points, in
+- [x] bridge: `session.overlay.resize` joins the page's own overlay commands
+- [x] ngtermctl `--width`/`--height` on open and resize with upstream's help ("Panel content width in points, in
       place of --size-percent's width (at most 80% of the session)."; the height one adds "; a page's title strip is
       added on top."); usage errors "--pane cannot be combined with --width/--height (pane overlays are always full)",
       "--width/--height must be positive", "--width/--height need --size-percent", "--full cannot be combined with
       --width/--height", "provide --size-percent PERCENT, --width/--height POINTS or --full"
-- [ ] GPUI: the floating panel sized by `panel_size`, centered as now
-- [ ] write tests: the OverlayPointSize table ((∅,0)→600×480, (h240,0)→600×240, (h240,29)→600×269, (w300)→300×480,
+- [x] GPUI: the floating panel sized by `panel_size`, centered as now
+- [x] write tests: the OverlayPointSize table ((∅,0)→600×480, (h240,0)→600×240, (h240,29)→600×269, (w300)→300×480,
       (5000,5000)→800×640, (h630,29)→600×640; 95% width kept at 950), content size, merging, open/page/resize/merge/
       not-floating/HUD/replica cases, tree from the detail frame and a percent-only panel at 500×400; the dispatcher
       tables; the remote refusals with no frame sent; the bridge list; the ctl cases; a GPUI deck rect test (60% with
       height 240 in 1000×800 → 600×240 at midY 400; a page with width 5000 and height 240 → 800×269 at midX 500);
       the proto key order
-- [ ] write tests: the conformance tests above
-- [ ] manual check (user): green on reference-macos
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance tests above
+- [x] manual check (user): green on reference-macos (skipped - not automatable: reference-macos runs only in CI on macOS)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user)
 
 ### Task 26: Live replay: an interrupted restored command or `--command` leaves the login shell's prompt (#773)
 

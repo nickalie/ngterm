@@ -707,6 +707,26 @@ fn a_handed_over_overlay_runs_the_jobs_helper_and_its_close_here_tells_the_origi
     assert_eq!(viewer.sent("overlay.closed").last().unwrap()["overlay"]["job"], "J3");
 }
 
+/// Upstream's `aHandedOverOverlayTakesNoPointSizes`: the origin sizes a replica by a percent alone.
+#[test]
+fn a_handed_over_overlay_takes_no_point_sizes() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    viewer.frame(overlay_request("J1", None, false));
+    let session = wire(viewer.session);
+    let resized = viewer.fixture.session(
+        ngterm_proto::command::SessionCmd::OverlayResize,
+        Some(&session),
+        args(|a| a.height = Some(240)),
+    );
+    assert_eq!(
+        resized,
+        failure("--width/--height are not supported for an overlay shown on another Mac")
+    );
+    assert!(viewer.session().overlay.points.is_empty());
+    assert_eq!(viewer.session().overlay.size_percent, Some(60));
+}
+
 #[test]
 fn a_replica_the_origin_takes_down_invalidates_the_tree() {
     let mut viewer = viewer_with(false);

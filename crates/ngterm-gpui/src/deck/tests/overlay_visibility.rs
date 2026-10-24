@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use ngterm_core::model::OverlayPane;
+use ngterm_core::model::{OverlayPane, PanelSizing};
 
 use super::overlay::{overlay_harness, pane_overlays, program, program_realized, quoted};
 use super::*;
@@ -237,7 +237,9 @@ fn a_hidden_floating_program_drops_its_backdrop_and_keeps_its_size(cx: &mut Test
         args.size_percent = Some(50);
     });
     h.until("the program to start", |h| program_realized(h, session));
-    let half = Some(ProgramPlacement { fraction: Some(0.5) });
+    let half = Some(ProgramPlacement {
+        sizing: Some(PanelSizing::percent(50)),
+    });
     assert_eq!(program_layout(&mut h, session), (half, half, true));
     h.until("the program's grid", |h| program_cols(h, session) > 0);
     let cols = program_cols(&mut h, session);

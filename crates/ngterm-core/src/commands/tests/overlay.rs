@@ -230,7 +230,10 @@ fn resize_floats_or_covers_and_reads_back() {
             json!({"full": true, "sizePercent": 50}),
             "session.overlay.resize: --full is mutually exclusive with --size-percent",
         ),
-        (json!({}), "session.overlay.resize requires --size-percent or --full"),
+        (
+            json!({}),
+            "session.overlay.resize requires --size-percent, --width/--height or --full",
+        ),
         (
             json!({"sizePercent": 0}),
             "session.overlay.resize: --size-percent must be 1...100",

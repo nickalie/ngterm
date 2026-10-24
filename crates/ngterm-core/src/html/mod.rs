@@ -340,6 +340,21 @@ pub struct HtmlOverlay {
 }
 
 impl HtmlOverlay {
+    /// The identity strip's height in points (upstream's `stripHeight`).
+    pub const STRIP_HEIGHT: f64 = 28.0;
+    /// The strip and the rule under it (upstream's `chromeHeight`).
+    pub const CHROME_HEIGHT: f64 = Self::STRIP_HEIGHT + 1.0;
+
+    /// What the panel draws above the page: the strip and its rule, none for a chromeless page (upstream's `chrome`).
+    #[must_use]
+    pub fn chrome(&self) -> f64 {
+        if self.flags.chromeless {
+            0.0
+        } else {
+            Self::CHROME_HEIGHT
+        }
+    }
+
     /// A loading page with a fresh id.
     #[must_use]
     pub fn new(source: HtmlSource, flags: HtmlPageFlags) -> Self {

@@ -182,7 +182,7 @@ def test_overlay_size_and_resize(ctl):
             assert node["overlaySizePercent"] == size
     for args, error in [
         ({"full": True, "sizePercent": 50}, "session.overlay.resize: --full is mutually exclusive with --size-percent"),
-        ({}, "session.overlay.resize requires --size-percent or --full"),
+        ({}, "session.overlay.resize requires --size-percent, --width/--height or --full"),
         ({"sizePercent": 0}, "session.overlay.resize: --size-percent must be 1...100"),
         ({"sizePercent": 101}, "session.overlay.resize: --size-percent must be 1...100"),
         (
@@ -224,6 +224,159 @@ def test_overlay_runs_in_its_cwd(ctl):
     text = _overlay_text(ctl, sid, root.name)
     assert str(root) in text or str(root.resolve()) in text
     _closed(ctl, sid)
+
+
+# -- sizes in points
+
+POINTS_NEED_PERCENT = "session.overlay.open: --width/--height need --size-percent"
+POINTS_NOT_POSITIVE = "session.overlay: --width/--height must be positive"
+# The page strip and the rule under it, which a point height leaves out of the content and adds to the panel.
+CHROME = 29
+
+
+def _laid_out(ctl, sid):
+    """The node once the session's layout gives its floating overlay a content size."""
+
+    def sized(tree):
+        node = find_session(tree, sid)
+        return "overlayWidth" in node and "overlayHeight" in node
+
+    return find_session(ctl.wait_tree(sized), sid)
+
+
+def _detail(ctl, sid, chrome=0):
+    """The session's detail area (width, height), read back through a 50% panel's content size; `chrome` is what a
+    page's strip takes off the panel's height."""
+    node = _laid_out(ctl, sid)
+    assert node["overlaySizePercent"] == 50
+    return node["overlayWidth"] * 2, (node["overlayHeight"] + chrome) * 2
+
+
+def _content(ctl, sid, **args):
+    """Resizes the overlay with `args`: the content size it reads back, or None without one."""
+    assert assert_ok(ctl.request("session.overlay.resize", sid, **args))["id"] == sid
+    node = _node(ctl, sid)
+    if "overlayWidth" not in node:
+        assert_absent(node, "overlayHeight")
+        return None
+    return node["overlayWidth"], node["overlayHeight"]
+
+
+@pytest.mark.covers(
+    "session.overlay.open",
+    "session.overlay.resize",
+    "field:tree.session.overlayWidth",
+    "field:tree.session.overlayHeight",
+    "field:tree.session.overlaySizePercent",
+)
+def test_overlay_points_size_and_resize(ctl):
+    sid = _new(ctl)
+    assert_ok(ctl.request("session.select", sid))
+    _open(ctl, sid, sizePercent=50)
+    width, height = _detail(ctl, sid)
+    # a point axis replaces the percent on its own; alone, points change only their axes
+    assert _content(ctl, sid, height=100) == (pytest.approx(width * 0.5), pytest.approx(100))
+    assert _content(ctl, sid, width=200) == (pytest.approx(200), pytest.approx(100))
+    assert _node(ctl, sid)["overlaySizePercent"] == 50
+    # with a percent, exactly the axes given; a percent alone drops them
+    assert _content(ctl, sid, sizePercent=60, height=100) == (pytest.approx(width * 0.6), pytest.approx(100))
+    assert _content(ctl, sid, sizePercent=60) == (pytest.approx(width * 0.6), pytest.approx(height * 0.6))
+    # a point axis stops at 80% of the session
+    assert _content(ctl, sid, width=100000, height=100000) == (pytest.approx(width * 0.8), pytest.approx(height * 0.8))
+    # full drops them, and points alone then have no floating panel to change
+    assert _content(ctl, sid, full=True) is None
+    assert_absent(_node(ctl, sid), "overlaySizePercent")
+    assert_error(
+        ctl.request("session.overlay.resize", sid, height=100),
+        "session.overlay.resize: --width/--height need a floating overlay; pass --size-percent too",
+    )
+    _closed(ctl, sid)
+    # an open takes them beside its percent
+    _open(ctl, sid, sizePercent=40, width=200)
+    node = _laid_out(ctl, sid)
+    assert (node["overlayWidth"], node["overlayHeight"]) == (pytest.approx(200), pytest.approx(height * 0.4))
+    _closed(ctl, sid)
+    assert_absent(_node(ctl, sid), "overlayWidth", "overlayHeight")
+
+
+@pytest.mark.covers(
+    "session.overlay.open",
+    "session.overlay.resize",
+    "field:tree.session.overlayWidth",
+    "field:tree.session.overlayHeight",
+)
+def test_page_points_leave_out_the_strip(ctl):
+    sid = _new(ctl)
+    assert_ok(ctl.request("session.select", sid))
+    path, title = _page(ctl)
+    assert_ok(ctl.request("session.overlay.open", sid, html=str(path), sizePercent=50))
+    _loaded(ctl, sid, title)
+    width, height = _detail(ctl, sid, CHROME)
+    # a page's content is what it gets below its strip, whose height the panel adds on top of the points
+    assert _content(ctl, sid, height=100) == (pytest.approx(width * 0.5), pytest.approx(100))
+    assert _content(ctl, sid, height=100000) == (pytest.approx(width * 0.5), pytest.approx(height * 0.8 - CHROME))
+    _closed(ctl, sid)
+    # a chromeless page has no strip to leave out
+    path, title = _page(ctl)
+    assert_ok(ctl.request("session.overlay.open", sid, html=str(path), chromeless=True, sizePercent=50, height=100000))
+    _loaded(ctl, sid, title)
+    node = _laid_out(ctl, sid)
+    assert (node["overlayWidth"], node["overlayHeight"]) == (pytest.approx(width * 0.5), pytest.approx(height * 0.8))
+    _closed(ctl, sid)
+
+
+@pytest.mark.covers("session.overlay.open", "session.overlay.resize")
+@pytest.mark.parametrize(
+    ("cmd", "slot", "args", "error"),
+    [
+        pytest.param("session.overlay.open", None, {"height": 240}, POINTS_NEED_PERCENT, id="open-without-percent"),
+        pytest.param(
+            "session.overlay.open", None, {"sizePercent": 60, "height": 0}, POINTS_NOT_POSITIVE, id="open-zero"
+        ),
+        pytest.param(
+            "session.overlay.open", None, {"sizePercent": 60, "width": -5}, POINTS_NOT_POSITIVE, id="open-negative"
+        ),
+        pytest.param(
+            "session.overlay.open",
+            None,
+            {"pane": "left", "width": 300},
+            "session.overlay.open: --pane is mutually exclusive with --width/--height",
+            id="open-pane",
+        ),
+        pytest.param(
+            "session.overlay.resize",
+            50,
+            {"full": True, "height": 240},
+            "session.overlay.resize: --full is mutually exclusive with --width/--height",
+            id="resize-full",
+        ),
+        pytest.param("session.overlay.resize", 50, {"height": 0}, POINTS_NOT_POSITIVE, id="resize-zero"),
+        pytest.param(
+            "session.overlay.resize", 50, {"sizePercent": 60, "width": -5}, POINTS_NOT_POSITIVE, id="resize-negative"
+        ),
+        pytest.param(
+            "session.overlay.resize",
+            50,
+            {"pane": "left", "height": 240},
+            "session.overlay.resize: --pane is not supported (pane overlays are always full)",
+            id="resize-pane",
+        ),
+        pytest.param("session.overlay.resize", None, {"height": 240}, "no overlay", id="resize-nothing-open"),
+    ],
+)
+def test_point_size_refusals(ctl, cmd, slot, args, error):
+    sid = _new(ctl)
+    if slot is not None:
+        _open(ctl, sid, sizePercent=slot)
+    request = {"command": HOLD, **args} if cmd == "session.overlay.open" else args
+    assert_error(ctl.request(cmd, sid, **request), error)
+    node = _node(ctl, sid)
+    if slot is None:
+        assert node["overlay"] is False
+        assert_absent(node, "paneOverlays")
+    else:
+        assert node["overlaySizePercent"] == slot
+        _closed(ctl, sid)
 
 
 # -- pane overlays

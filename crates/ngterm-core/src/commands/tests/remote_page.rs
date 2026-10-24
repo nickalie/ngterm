@@ -279,6 +279,30 @@ fn a_loopback_url_is_refused_only_when_the_page_would_go_to_the_presenter() {
     assert!(origin.open("http://127.0.0.1:8080/", |_| {}).ok);
 }
 
+/// Upstream's `pointSizesAreRefusedOnlyWhenThePageWouldGoToThePresenter`: the presentation wire carries only a percent,
+/// so nothing is reserved or sent; a page the placement rule keeps here takes its points.
+#[test]
+fn point_sizes_are_refused_only_when_the_page_would_go_to_the_presenter() {
+    let mut origin = Origin::pages();
+    let sent = origin.presenter.sent();
+    let points = |a: &mut Args| {
+        a.size_percent = Some(60);
+        a.height = Some(240);
+    };
+    assert_eq!(
+        origin.open(FILE, points),
+        failure("--width/--height are not supported for an overlay shown on another Mac")
+    );
+    assert!(origin.slot_jobs().is_empty());
+    assert_eq!(origin.presenter.sent(), sent);
+    let left = origin.live.left;
+    set_lead(&mut origin.live.fixture.core, left, "leader");
+    assert!(origin.open(FILE, points).ok);
+    let session = origin.session();
+    let slot = &origin.fixture().store().session(session).unwrap().overlay;
+    assert_eq!(slot.points.height, Some(240));
+}
+
 #[test]
 fn a_request_over_one_frame_is_refused_before_anything_changes() {
     let mut origin = Origin::new(true, &SUPPORTED_KINDS);

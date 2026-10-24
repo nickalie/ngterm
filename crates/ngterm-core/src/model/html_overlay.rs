@@ -11,6 +11,7 @@
 use uuid::Uuid;
 
 use super::overlay::OverlayPane;
+use super::overlay_points::{OverlayPointSize, OverlaySize};
 use super::pane::StatusPane;
 use super::pane_overlay::PaneOverlay;
 use super::session::Session;
@@ -184,6 +185,23 @@ impl AppStore {
         size_percent: Option<i64>,
         background_color: Option<String>,
     ) -> Result<(), HtmlOverlayOpenFailure> {
+        self.open_html_overlay_sized(id, pane, overlay, OverlaySize::percent(size_percent), background_color)
+    }
+
+    /// [`AppStore::open_html_overlay`] with the session-wide slot's point sizes beside its percent: kept only beside
+    /// one, never in a pane slot (upstream's `openHtmlOverlay` `points`).
+    ///
+    /// # Errors
+    ///
+    /// Why it refused, with nothing changed.
+    pub fn open_html_overlay_sized(
+        &mut self,
+        id: Uuid,
+        pane: Option<OverlayPane>,
+        overlay: HtmlOverlay,
+        size: OverlaySize,
+        background_color: Option<String>,
+    ) -> Result<(), HtmlOverlayOpenFailure> {
         let session = self.session_mut(id).ok_or(HtmlOverlayOpenFailure::UnknownSession)?;
         if let Some(pane) = pane {
             if session.pane_overlay(pane).is_some() {
@@ -222,7 +240,12 @@ impl AppStore {
         slot.command = None;
         slot.cwd = None;
         slot.wait = false;
-        slot.size_percent = size_percent.map(|percent| percent.clamp(1, 100));
+        slot.size_percent = size.percent.map(|percent| percent.clamp(1, 100));
+        slot.points = if slot.size_percent.is_some() {
+            size.points
+        } else {
+            OverlayPointSize::default()
+        };
         slot.background_color = background_color;
         slot.html = Some(overlay);
         slot.active = true;

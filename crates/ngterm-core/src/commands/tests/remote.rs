@@ -860,6 +860,47 @@ fn a_refused_remote_overlay_leaves_the_tree_alone() {
     assert_eq!(live.fixture.core.commit().tree_changed.len(), 0);
 }
 
+const POINTS_REMOTE: &str = "--width/--height are not supported for an overlay shown on another Mac";
+
+/// Upstream's `pointSizesAreRefusedBeforeAnythingIsReserved`: the presentation wire carries only a percent.
+#[test]
+fn point_sizes_are_refused_before_anything_is_reserved() {
+    let (mut live, _, presenter) = presented();
+    let session = live.session;
+    let sent = presenter.sent();
+    let opened = overlay(&mut live.fixture, SessionCmd::OverlayOpen, session, |a| {
+        a.command = Some("revdiff".to_owned());
+        a.size_percent = Some(60);
+        a.height = Some(240);
+    });
+    assert_eq!(opened, failure(POINTS_REMOTE));
+    assert!(node(&mut live.fixture, session).get("remoteOverlays").is_none());
+    assert_eq!(presenter.sent(), sent);
+}
+
+/// Upstream's `aSlotShownOnThePresenterTakesNoPointSizes`.
+#[test]
+fn a_slot_shown_on_the_presenter_takes_no_point_sizes() {
+    let (mut live, _, presenter) = presented();
+    let session = live.session;
+    let opened = overlay(&mut live.fixture, SessionCmd::OverlayOpen, session, |a| {
+        a.command = Some("revdiff".to_owned());
+        a.size_percent = Some(60);
+    });
+    assert!(opened.ok, "{opened:?}");
+    let sent = presenter.sent();
+    let resized = overlay(&mut live.fixture, SessionCmd::OverlayResize, session, |a| {
+        a.size_percent = Some(40);
+        a.height = Some(240);
+    });
+    assert_eq!(resized, failure(POINTS_REMOTE));
+    assert_eq!(
+        node(&mut live.fixture, session)["remoteOverlays"],
+        json!([{"sizePercent": 60}])
+    );
+    assert_eq!(presenter.sent(), sent);
+}
+
 /// Upstream's `aPresentedSessionStillRefusesAnOpenIntoItsHiddenLocalSlot`: the hidden slot is checked before the
 /// remote route, so nothing is handed to the presenter or reserved for it.
 #[test]

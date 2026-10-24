@@ -1342,7 +1342,7 @@ fn with_program(element: PageElement, page: &Page) -> PageElement {
     let placement = page
         .overlays
         .frame()
-        .unwrap_or(overlay::ProgramPlacement { fraction: None });
+        .unwrap_or(overlay::ProgramPlacement { sizing: None });
     element.child(program, Place::Program(placement))
 }
 
