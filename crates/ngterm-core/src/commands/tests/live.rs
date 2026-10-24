@@ -628,6 +628,168 @@ fn a_fallback_or_ordinary_launch_runs_a_plain_shell() {
     }
 }
 
+// MARK: - the tree's backing (upstream's `AppStoreTreeProjectionTests` hidden-split cases, #762)
+
+/// Gives `id` a split hidden since the launch: it exists with its identity, laid out nowhere, no terminal mounted.
+fn hide_split_since_launch(live: &mut Live, id: Uuid) -> Uuid {
+    let store = live.fixture.store_mut().unwrap();
+    store.set_split_visibility(id, true, None);
+    store.set_split_visibility(id, false, None);
+    let session = store.session(id).unwrap();
+    assert!(session.split.exists && !session.split_surface.is_present());
+    session.split_pane_identity.expect("a hidden split")
+}
+
+/// Puts a realized terminal in `id`'s pane `role`, a live-session client or not.
+fn mount_realized(live: &mut Live, id: Uuid, role: StatusPane, backed: bool) {
+    let session = live.fixture.store_mut().unwrap().session_mut(id).unwrap();
+    let identity = match role {
+        StatusPane::Right => session.split_pane_identity.unwrap(),
+        _ => session.pane_identity,
+    };
+    let _ = session.pane_slot_mut(role).replace(Box::new(
+        FakeSurface::new(uuid_string(identity)).with_live_session(backed),
+    ));
+}
+
+/// The tree's `backedByLive` of session `id`, then of its `right` surface.
+fn tree_backing(live: &mut Live, id: Uuid) -> (Option<bool>, Option<bool>) {
+    let tree = live.core().tree(None).unwrap();
+    let node = tree
+        .workspaces
+        .iter()
+        .flat_map(|workspace| &workspace.sessions)
+        .find(|node| node.id == uuid_string(id))
+        .unwrap();
+    let right = node
+        .surfaces
+        .iter()
+        .flatten()
+        .find(|surface| surface.kind == "right")
+        .and_then(|surface| surface.backed_by_live);
+    (node.backed_by_live, right)
+}
+
+/// The tree's `liveAttribution` of session `id`, then its `splitLiveAttribution`.
+fn tree_attribution(live: &mut Live, id: Uuid) -> (Option<String>, Option<String>) {
+    let tree = live.core().tree(None).unwrap();
+    let node = tree
+        .workspaces
+        .iter()
+        .flat_map(|workspace| &workspace.sessions)
+        .find(|node| node.id == uuid_string(id))
+        .unwrap();
+    (node.live_attribution.clone(), node.split_live_attribution.clone())
+}
+
+/// Upstream reads the attribution off the pane's own view (`liveAttributions`): a pane with no terminal mounted gets
+/// none, though `backedByLive` takes its sibling's (`zmxBacking(for:)`).
+#[test]
+fn a_pane_with_no_terminal_gets_no_live_attribution() {
+    let unknown = Some("unknown".to_owned());
+    let mut live = live();
+    let session = live.session;
+    mount_realized(&mut live, session, StatusPane::Left, true);
+    hide_split_since_launch(&mut live, session);
+    assert_eq!(tree_backing(&mut live, session), (Some(true), Some(true)));
+    assert_eq!(
+        tree_attribution(&mut live, session),
+        (unknown.clone(), None),
+        "hidden split"
+    );
+    mount_realized(&mut live, session, StatusPane::Right, true);
+    let found = live.fixture.store_mut().unwrap().session_mut(session).unwrap();
+    found.split.focused = true;
+    drop(found.pane_slot_mut(StatusPane::Left).take());
+    assert_eq!(tree_backing(&mut live, session), (Some(true), Some(true)));
+    assert_eq!(tree_attribution(&mut live, session), (None, unknown), "hidden primary");
+}
+
+#[test]
+fn a_hidden_unrealized_split_takes_the_primarys_backing() {
+    for backed in [true, false] {
+        let mut live = live();
+        let session = live.session;
+        mount_realized(&mut live, session, StatusPane::Left, backed);
+        hide_split_since_launch(&mut live, session);
+        assert_eq!(
+            tree_backing(&mut live, session),
+            (Some(backed), Some(backed)),
+            "{backed}"
+        );
+    }
+}
+
+#[test]
+fn a_hidden_unrealized_primary_takes_the_focused_splits_backing() {
+    let mut live = live();
+    let session = live.session;
+    hide_split_since_launch(&mut live, session);
+    mount_realized(&mut live, session, StatusPane::Right, true);
+    let found = live.fixture.store_mut().unwrap().session_mut(session).unwrap();
+    found.split.focused = true;
+    drop(found.pane_slot_mut(StatusPane::Left).take());
+    assert_eq!(tree_backing(&mut live, session), (Some(true), Some(true)));
+}
+
+#[test]
+fn a_realized_unbacked_split_still_clears_the_session_backing() {
+    let mut live = live();
+    let session = live.session;
+    hide_split_since_launch(&mut live, session);
+    mount_realized(&mut live, session, StatusPane::Right, false);
+    assert_eq!(tree_backing(&mut live, session), (Some(false), Some(false)));
+}
+
+/// A relaunched Live session whose split stayed hidden: waking it grants its main pane alone (the deck mounts no
+/// terminal for a pane it does not lay out, so the split never asks), and the tree reads both panes as backed by the
+/// launch's disposition, dormant and woken alike, while a confirmed kill of the split's daemon closes nothing.
+#[test]
+fn a_woken_session_with_a_hidden_split_reads_as_backed() {
+    let mut live = live_with(1, RestoreMode::Live);
+    let dormant = live.fixture.sessions[1];
+    let split = hide_split_since_launch(&mut live, dormant);
+    let token = make_dormant(&mut live, dormant);
+    assert_eq!(tree_backing(&mut live, dormant), (Some(true), Some(true)), "dormant");
+    live.core().wake_session(dormant);
+    let grants: Vec<(Uuid, String)> = live
+        .core()
+        .take_spawn_grants()
+        .into_iter()
+        .map(|grant| (grant.session, grant.token))
+        .collect();
+    assert_eq!(grants, [(dormant, token)], "the main pane alone");
+    assert!(
+        !live
+            .fixture
+            .store()
+            .session(dormant)
+            .unwrap()
+            .split_surface
+            .is_present()
+    );
+    assert_eq!(tree_backing(&mut live, dormant), (Some(true), Some(true)), "woken");
+    let daemon = daemon_name(split);
+    live.host.set_record(&daemon, Some(0), Some(20), None);
+    let response = live.send(LiveCmd::Kill, Some(&uuid_string(dormant)), |a| {
+        (a.pane, a.force) = (Some("right".to_owned()), Some(true));
+    });
+    assert!(response.ok, "{response:?}");
+    let _ = live.core().commit();
+    let session = live.fixture.store().session(dormant).expect("the session stays");
+    assert!(session.split.exists, "no client of the killed daemon to close");
+}
+
+/// Outside Live a hidden split takes the primary's plain shell: the session reads as not backed.
+#[test]
+fn a_hidden_split_outside_live_reads_as_not_backed() {
+    let mut live = live_with(1, RestoreMode::None);
+    let dormant = live.fixture.sessions[1];
+    hide_split_since_launch(&mut live, dormant);
+    make_dormant(&mut live, dormant);
+    assert_eq!(tree_backing(&mut live, dormant), (Some(false), Some(false)));
+}
+
 // MARK: - the lead
 
 /// Feeds the role report `role` of the live pane's current attachment.

@@ -154,8 +154,10 @@ impl Core {
     /// read-back at the top level.
     pub(crate) fn project_live(&self, store: &crate::model::AppStore, tree: &mut ngterm_proto::ControlTree) {
         tree.live_reset = super::readback(self.live.reset.pending.as_ref(), self.live.reset.last.as_ref());
-        // a dormant pane counts by the daemon it attaches to once woken (`Core::pane_backed`)
-        let backed = |session: &crate::model::Session, role| self.pane_backed(session, role);
+        // a dormant pane counts by the daemon it attaches to once woken; an empty slot (a split hidden since the
+        // launch) counts as nothing here, upstream reading its own view (`hasWrappedPane`, `liveAttributions`), not
+        // `zmxBacking(for:)`'s sibling fallback, which only `backedByLive` takes (`project_backing`)
+        let backed = |session: &crate::model::Session, role| self.mounted_pane_backed(session, role).unwrap_or(false);
         let wrapped = store.sessions().any(|session| {
             session.remote_host().is_none() && (backed(session, StatusPane::Left) || backed(session, StatusPane::Right))
         });
@@ -195,14 +197,12 @@ impl Core {
 }
 
 /// A session's `backedByLive`, its own and its panes', through [`Core::pane_backed`]: a pane whose terminal is not up
-/// yet (a dormant one's daemon runs on unattached) reads as backed by what it attaches under.
+/// yet (a dormant one's daemon runs on unattached) reads as backed by what it attaches under, and one with no terminal
+/// yet (a split hidden since the launch, which has no pane id to match) by its sibling's. Panes match by surface kind.
 fn project_backing(core: &Core, session: &Session, node: &mut ngterm_proto::ControlSessionNode) {
     node.backed_by_live = Some(core.session_backed(session));
     for surface in node.surfaces.iter_mut().flatten() {
-        let role = surface
-            .pane_id
-            .as_deref()
-            .and_then(|token| session.pane_role_for_token(token));
+        let role = crate::zoom::ZoomSurface::from_control_name(&surface.kind).and_then(crate::zoom::ZoomSurface::pane);
         if let Some(role @ (StatusPane::Left | StatusPane::Right)) = role {
             surface.backed_by_live = Some(core.pane_backed(session, role));
         }

@@ -389,6 +389,28 @@ fn the_local_tree_offers_live_sessions_whose_daemons_run() {
     );
 }
 
+/// A split hidden since the launch has no terminal yet; its session stays on offer with both panes (#762).
+#[test]
+fn the_local_tree_keeps_a_session_whose_split_stayed_hidden() {
+    let mut live = live();
+    let session = live.session;
+    let store = live.fixture.store_mut().unwrap();
+    store.set_split_visibility(session, true, None);
+    store.set_split_visibility(session, false, None);
+    let found = store.session(session).unwrap();
+    assert!(!found.split_surface.is_present());
+    let split = found.split_pane_identity.unwrap();
+    let (left, right) = (daemon_name(live.left), daemon_name(split));
+    live.host.set_record(&left, Some(1), Some(42), None);
+    live.host.set_record(&right, Some(1), Some(43), None);
+    let offered = tree(&mut live.fixture.core, None).result.unwrap()["remote"].clone();
+    assert_eq!(offered["sessions"][0]["id"], json!(wire(session)));
+    assert_eq!(
+        offered["sessions"][0]["panes"],
+        json!([{"pane": "left", "daemon": left}, {"pane": "right", "daemon": right}])
+    );
+}
+
 #[test]
 fn the_remote_tree_runs_the_bare_form_over_ssh_and_stamps_the_host() {
     let mut fixture = Fixture::new(0);

@@ -252,22 +252,34 @@ impl Core {
         session.was_restored && !self.restore.woken.contains(&session.id())
     }
 
-    /// Whether pane `role` of `session` runs in a live-session daemon (the tree's `backedByLive`; upstream reads it off
-    /// the view's `zmxSessionName`, fixed by its disposition): a realized terminal by its attach, a mounted one not up
-    /// yet (dormant, or granted and starting) by the disposition it attaches under, its daemon running on meanwhile. A
-    /// pane with no terminal mounted, such as a hidden split, is not.
+    /// Whether pane `role` of `session` runs in a live-session daemon (the tree's `backedByLive`; upstream's
+    /// `zmxBacking(for:)`, read off the view's `zmxSessionName`, fixed by its disposition): a realized terminal by its
+    /// attach, a mounted one not up yet (dormant, or granted and starting) by the disposition it attaches under, its
+    /// daemon running on meanwhile. A pane of a split session with no terminal mounted, hidden since the launch, answers
+    /// with its sibling's: both panes take one launch's disposition, and it attaches to its daemon once shown (#762).
+    /// A realized unbacked pane still answers false.
     pub(crate) fn pane_backed(&self, session: &Session, role: StatusPane) -> bool {
-        let Some(surface) = session.pane_slot(role).get() else {
-            return false;
-        };
+        self.mounted_pane_backed(session, role)
+            .or_else(|| {
+                let sibling = role.sibling().filter(|_| session.split.exists)?;
+                self.mounted_pane_backed(session, sibling)
+            })
+            .unwrap_or(false)
+    }
+
+    /// [`Core::pane_backed`] of a pane with a terminal mounted, without the sibling fallback; `None` for an empty slot.
+    /// What upstream reads off the pane's own view (`surface?.backedByZmx`): the tree's live attribution and whether a
+    /// local pane is wrapped at all.
+    pub(crate) fn mounted_pane_backed(&self, session: &Session, role: StatusPane) -> Option<bool> {
+        let surface = session.pane_slot(role).get()?;
         if surface.is_realized() {
-            return surface.is_live_session();
+            return Some(surface.is_live_session());
         }
-        pane_key(session, role).is_some_and(|key| {
+        Some(pane_key(session, role).is_some_and(|key| {
             self.pane_disposition(Some(key), session.remote_host().is_none())
                 .disposition
                 .backed_by_live()
-        })
+        }))
     }
 
     /// Whether every pane of `session` runs in a live-session daemon (see [`Core::pane_backed`]).

@@ -860,15 +860,17 @@ line), `crates/ngterm-core/src/commands/tests/live.rs`, `conformance/tests/behav
   covers `behavior:restore.live-session-survives-relaunch`, `zmx.tree`, `field:result.remote`: split on, both backed,
   split off, relaunch; the tree's backed key is true and the `live tree` row lists both panes)
 
-- [ ] write the Rust test first (whether a woken session's hidden split gets a slot through `take_spawn_grants` is
-      unconfirmed)
-- [ ] `pane_backed(session, role)`: a pane that exists with no surface in its slot answers with the sibling's
+- [x] write the Rust test first (whether a woken session's hidden split gets a slot through `take_spawn_grants` is
+      unconfirmed; confirmed: waking grants the main pane alone, the split's slot stays empty until laid out)
+- [x] `pane_backed(session, role)`: a pane that exists with no surface in its slot answers with the sibling's
       backing (its realized attach, or its disposition when unrealized); a realized unbacked pane still clears the
       aggregate; the hidden pane's `backedByLive` reports the same
-- [ ] write tests: the three Swift cases and a `live tree` merge keeping the session
-- [ ] write tests: the conformance test above (needs `live-sessions`)
-- [ ] manual check (user): green on reference-macos
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the three Swift cases and a `live tree` merge keeping the session
+- [x] write tests: the conformance test above (needs `live-sessions`; skips on a targeted `run-linux.sh` here, no
+      `live-sessions` on this fish host until Task 27)
+- [x] manual check (user): green on reference-macos (skipped - not automatable, runs only in CI on macOS)
+- [x] gate passes (full suite deferred to the end of the plan per the user; the newly green ids are added there
+      with `check_ratchet.py --add`)
 
 ### Task 14: Status sounds play on the presenting machine: the `sound` frame and negotiated kinds (#775)
 

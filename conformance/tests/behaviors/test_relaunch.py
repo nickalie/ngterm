@@ -162,3 +162,44 @@ def test_live_session_survives_the_relaunch(launch):
     # The same shell, not a new one: its leader pid and its screen came through the quit.
     assert row["leaderPID"] == before["leaderPID"]
     ctl.wait_text(sid, rf"(?m)^{marker}$", all=True)
+
+
+@LIVE
+@pytest.mark.covers("behavior:restore.live-session-survives-relaunch", "zmx.tree", "field:result.remote")
+def test_a_live_session_with_a_hidden_split_stays_attachable_across_the_relaunch(launch):
+    """A split hidden across the relaunch builds no terminal until shown, yet its daemon runs on claimed: the session
+    still reads as backed, pane and all, and stays on offer to another machine (upstream #762)."""
+    ctl = launch(settings={"restoreMode": "live"})
+    sid = _new(ctl)
+    vocabulary = ctl.vocabulary
+    assert_ok(ctl.request("session.split", sid, mode="on"))
+    ctl.wait_mounted(sid, "right")
+
+    def both_running(response):
+        rows = assert_ok(response)[vocabulary.result_key]["entries"]
+        observed = {row["pane"]: row["observation"] for row in rows if row.get("sessionID") == sid}
+        return observed == {"left": "running", "right": "running"}
+
+    ctl.wait_response(vocabulary.command("zmx.list"), None, both_running)
+    assert_ok(ctl.request("session.split", sid, mode="off"))
+    ctl.wait_tree(lambda tree: find_session(tree, sid)["split"] is False)
+
+    ctl = launch.relaunch(ctl)
+    ctl.wait_mounted(sid, "left")
+
+    def backed(tree):
+        node = find_session(tree, sid)
+        (right,) = [surface for surface in node.get("surfaces", []) if surface["kind"] == "right"]
+        return node.get(vocabulary.backed_key) is True and right.get(vocabulary.backed_key) is True
+
+    ctl.wait_tree(backed)
+    assert find_session(ctl.tree(), sid)["hasSplit"] is True
+
+    def row(response):
+        sessions = assert_ok(response)["remote"]["sessions"]
+        return next((session for session in sessions if session["id"] == sid), None)
+
+    offered = row(ctl.wait_response(vocabulary.command("zmx.tree"), None, lambda response: row(response) is not None))
+    assert [pane["pane"] for pane in offered["panes"]] == ["left", "right"]
+    ctl.wait_response(vocabulary.command("zmx.list"), None, both_running)
+    assert_ok(ctl.request("session.close", sid))

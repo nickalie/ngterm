@@ -271,10 +271,19 @@ pub(crate) fn system_time(seconds: f64) -> Option<SystemTime> {
     }
 }
 
-/// Whether every existing primary and split pane is backed by a live-session daemon.
+/// Whether every existing primary and split pane is backed by a live-session daemon (upstream's
+/// `allPanesBackedByZmx`; the core's projection refines it with the dispositions, `Core::session_backed`).
 pub(crate) fn all_panes_backed(session: &Session) -> bool {
-    let live = |slot: &crate::model::SurfaceSlot| slot.get().is_some_and(ngterm_host::Surface::is_live_session);
-    live(&session.surface) && (!session.split.exists || live(&session.split_surface))
+    slot_backed(session, StatusPane::Left) && (!session.split.exists || slot_backed(session, StatusPane::Right))
+}
+
+/// Whether pane `role`'s terminal is a live-session client (upstream's `zmxBacking(for:)`): a pane of a split session
+/// hidden since the launch has no terminal yet and answers with its sibling's, the launch it attaches with once shown.
+fn slot_backed(session: &Session, role: StatusPane) -> bool {
+    let live = |role: StatusPane| session.pane_slot(role).get().map(ngterm_host::Surface::is_live_session);
+    live(role)
+        .or_else(|| live(role.sibling().filter(|_| session.split.exists)?))
+        .unwrap_or(false)
 }
 
 /// A pane's live font size, omitted while its terminal is not up.
@@ -293,7 +302,9 @@ fn surface_nodes(session: &Session) -> Vec<ControlSurfaceNode> {
         .filter(|kind| kind.is_available(session))
         .map(|kind| {
             let slot = kind.slot(session);
-            let backed = matches!(kind.pane(), Some(StatusPane::Left | StatusPane::Right));
+            let backed = kind
+                .pane()
+                .filter(|pane| matches!(pane, StatusPane::Left | StatusPane::Right));
             ControlSurfaceNode {
                 id: SurfaceId {
                     session: session.id(),
@@ -303,7 +314,7 @@ fn surface_nodes(session: &Session) -> Vec<ControlSurfaceNode> {
                 kind: kind.wire_name().to_owned(),
                 active: kind.is_active(session),
                 visible: kind.is_visible(session),
-                backed_by_live: backed.then(|| slot.get().is_some_and(ngterm_host::Surface::is_live_session)),
+                backed_by_live: backed.map(|pane| slot_backed(session, pane)),
                 lead: None,
                 reconnect: None,
                 pane_id: pane_token(slot),
@@ -484,6 +495,37 @@ mod tests {
 
     fn session_mut_uncover(store: &mut AppStore, sid: Uuid) {
         store.session_mut(sid).unwrap().scratch_active = false;
+    }
+
+    /// Upstream's `hiddenUnrealizedSplitTakesThePrimarysBacking` and `realizedUnbackedSplitStillClearsTheSessionBacking`.
+    #[test]
+    fn a_split_hidden_since_launch_takes_the_primarys_backing() {
+        let mut library = WindowLibrary::seeded("/home/u");
+        let store = library.active_store_mut().unwrap();
+        let sid = split_session(store);
+        let backing = |store: &AppStore| {
+            let tree = tree_json(store, &AppSettings::default(), false);
+            let node = &tree["workspaces"][0]["sessions"][1];
+            (
+                node["backedByLive"].clone(),
+                node["surfaces"][1]["backedByLive"].clone(),
+            )
+        };
+        for backed in [true, false] {
+            let session = store.session_mut(sid).unwrap();
+            (session.split.shown, session.split.focused) = (false, false);
+            session.split_surface.teardown();
+            session
+                .surface
+                .replace(Box::new(FakeSurface::new("TOKEN-L").with_live_session(backed)));
+            assert_eq!(backing(store), (json!(backed), json!(backed)), "{backed}");
+        }
+        let session = store.session_mut(sid).unwrap();
+        session
+            .surface
+            .replace(Box::new(FakeSurface::new("TOKEN-L").with_live_session(true)));
+        session.split_surface.replace(Box::new(FakeSurface::new("TOKEN-R")));
+        assert_eq!(backing(store), (json!(false), json!(false)));
     }
 
     #[test]

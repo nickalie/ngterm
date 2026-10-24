@@ -289,7 +289,8 @@ impl Core {
     /// pane whose terminal is a client of that daemon closes, as its own exit would have closed it, and the killed
     /// identity is kept out of the finalizer. A requested-live fallback pane runs a plain shell that never attached;
     /// a dormant pane counts by the daemon it would attach to (`Core::pane_backed`), or its wake would start the killed
-    /// program again.
+    /// program again. A pane with no terminal mounted (a split hidden since the launch) holds no client to close, as
+    /// upstream's missing view does not, though the tree reports it by its sibling's backing.
     pub(crate) fn apply_killed_pane_exit(&mut self, session: uuid::Uuid, identity: uuid::Uuid, pane: PaneRole) {
         let role = match pane {
             PaneRole::Left => StatusPane::Left,
@@ -299,7 +300,7 @@ impl Core {
             .library()
             .store_for_session(session)
             .and_then(|store| store.session(session))
-            .is_some_and(|found| self.pane_backed(found, role));
+            .is_some_and(|found| found.pane_slot(role).is_present() && self.pane_backed(found, role));
         if !backed {
             return;
         }

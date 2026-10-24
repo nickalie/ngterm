@@ -45,6 +45,16 @@ impl StatusPane {
             _ => None,
         }
     }
+
+    /// The other pane of a split session; the scratch has none.
+    #[must_use]
+    pub fn sibling(self) -> Option<Self> {
+        match self {
+            Self::Left => Some(Self::Right),
+            Self::Right => Some(Self::Left),
+            Self::Scratch => None,
+        }
+    }
 }
 
 /// A session-owned surface: main pane, split pane, overlay or scratch.
