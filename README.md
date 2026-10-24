@@ -25,7 +25,7 @@ Linux; the terminal core, the pane core and the live-session server under it (li
   Install Command Line Tool… links the bundled `ngtermctl` into `~/.local/bin` (an `agtermctl` there is left alone),
   and Install Agent Skill… installs the `ngterm` skill, which drives the app through `ngtermctl`, into
   `~/.claude/skills/ngterm` and `~/.codex/skills/ngterm` (an `agterm` skill there is left alone).
-- One extension beyond upstream: Live sessions in bash, fish and PowerShell login shells too (upstream: zsh only),
+- One extension beyond upstream: Live sessions in bash and PowerShell login shells too (upstream: zsh and fish),
   under the Rust-only capability `live-any-shell`; PowerShell gets ngterm's own shell integration
   (`resources/shell-integration/pwsh`), since Ghostty has none.
 - Another extension beyond upstream: Install Agent Status Hooks… also wires a restore adapter
@@ -400,8 +400,8 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   regeneration check of the WPE crates on Arch's `wpewebkit`, then the app with its overlays, see
   [WPE WebKit](#wpe-webkit)), then the staged build (HTML overlays on) under the suite in the `wpe` job's Arch
   container, on its lavapipe, held by `rust-passing.txt`, once per login shell (`conformance`, a matrix: bash, fish
-  and zsh), each with `--must-pass live-any-shell`, the zsh one with `--must-pass live-sessions` too; the bash one runs
-  the app's process tests with the overlays on first.
+  and zsh), each with `--must-pass live-any-shell`, the zsh and fish ones with `--must-pass live-sessions` too; the
+  bash one runs the app's process tests with the overlays on first.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
   `ngterm-core`, `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt`, `ngterm-pty` and `ngterm-term` so far; `ngterm-server`
   compiles for macOS too but is not run there yet and stays off Windows over `std::os::unix`, and `ngterm-ctl` builds

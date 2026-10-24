@@ -19,7 +19,11 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{Contract, EXIT_OK, default_argv, process_environment, variable};
+use ngterm_core::live::shell_integration::{
+    DATA_DIRS_VARIABLE, FISH_INTEGRATION_VARIABLE, LoginShell, merged_data_dirs,
+};
+
+use super::{Contract, EXIT_OK, default_argv, process_environment, same_variable, variable};
 use crate::attach_tty::input::{Held, InputParser, Token};
 use crate::attach_tty::owner::{Effects, Outgoing, Relay};
 use crate::attach_tty::{Tty, TtyEvent, write_out};
@@ -142,7 +146,10 @@ pub struct Prepared {
 }
 
 /// The attach of `<name> [argv]` under `contract` from `origin`, the session created with `origin`'s environment and
-/// directory and, without an argv, its `SHELL` ([`default_argv`]).
+/// directory and, without an argv, its `SHELL` ([`default_argv`]). A live fish pane's environment gets the fish
+/// integration's root in front of its `XDG_DATA_DIRS` here (`with_fish_data_dirs`): the CLI and the in-process
+/// attach both prepare through this, and a remote attach creates no fish session (its creation argv is a guard that
+/// fails).
 ///
 /// # Errors
 ///
@@ -164,6 +171,7 @@ pub fn prepare(contract: &Contract, name: &str, argv: Vec<String>, origin: Origi
     let directory = std::path::absolute(&directory).map_err(|error| Outcome::failed(error.to_string()))?;
     let name = contract.session_name(name).map_err(usage)?;
     let Origin { env, cwd, executable } = origin;
+    let env = with_fish_data_dirs(env);
     let argv = if argv.is_empty() {
         default_argv(variable(&env, "SHELL").map(std::ffi::OsStr::new))
     } else {
@@ -182,6 +190,23 @@ pub fn prepare(contract: &Contract, name: &str, argv: Vec<String>, origin: Origi
         detach_key: contract.detach_key,
         executable,
     })
+}
+
+/// `env` with the fish integration's root first in its `XDG_DATA_DIRS` ([`merged_data_dirs`]) when it is a live fish
+/// pane's: its `SHELL` is fish and it names the root ([`FISH_INTEGRATION_VARIABLE`], which a live pane's wrap sets and
+/// Ghostty's integration removes again in the shell it starts). The value merged is the pane's resolved one, a ghostty
+/// config `env` entry included, which a surface `XDG_DATA_DIRS` would replace (upstream's attach-line prelude,
+/// `ZmxSupport.fishXDGDataDirectoriesScript`). Any other environment is returned as it is.
+#[must_use]
+pub(super) fn with_fish_data_dirs(mut env: Vec<(String, String)>) -> Vec<(String, String)> {
+    let fish = variable(&env, "SHELL").and_then(LoginShell::of) == Some(LoginShell::Fish);
+    let Some(root) = variable(&env, FISH_INTEGRATION_VARIABLE).filter(|root| fish && !root.is_empty()) else {
+        return env;
+    };
+    let merged = merged_data_dirs(root, variable(&env, DATA_DIRS_VARIABLE));
+    env.retain(|(key, _)| !same_variable(key, DATA_DIRS_VARIABLE));
+    env.push((DATA_DIRS_VARIABLE.to_owned(), merged));
+    env
 }
 
 /// Attaches again to a session of `directory`'s server after its connection ended, without creating it (module

@@ -5,7 +5,7 @@ Every group command, result key, tree key and error text goes through the instan
 
 The module's shared instance runs without Live, so its daemons are only claimed, never observed: the inventory,
 prune, the hostless `zmx.tree` and every refusal are checked there. The Live tests share one instance launched with
-`restoreMode: live` seeded; a pane in it runs the account's zsh inside a live session (a zmx daemon upstream,
+`restoreMode: live` seeded; a pane in it runs the account's zsh or fish inside a live session (a zmx daemon upstream,
 a session of the Rust build's server), so a line typed there only prints a marker. Each test ends the sessions it
 opens, which ends their daemons; the harness's stop then finds no process left in the instance's namespace (under the
 vocabulary's directory variable, or the session server of the namespace).
@@ -27,7 +27,7 @@ from agterm_conformance.wait import wait_frame, wait_until
 
 UNKNOWN = "zzz"
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh login shell"
+    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
 )
 ATTRIBUTIONS = ("supervisor", "app", "orphaned", "unknown")
 PRESENTATION_VERSION = 1

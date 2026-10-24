@@ -1,7 +1,7 @@
 """Live sessions in the host's own login shell: a Rust-only extension (capability `live-any-shell`).
 
-Upstream wraps a pane in zmx only for a zsh login shell; the Rust build also wraps bash and fish, starting each with
-Ghostty's shell integration. The reference skips these tests as unsupported; the Rust CI runs them
+Upstream wraps a pane in zmx only for a zsh or fish login shell; the Rust build also wraps bash (and PowerShell),
+starting each with its shell integration. The reference skips these tests as unsupported; the Rust CI runs them
 under zsh, bash and fish login shells with `--must-pass live-any-shell`.
 
 The host picks the shell (the password database's), so every line typed here is valid in zsh, bash and fish alike."""
@@ -13,7 +13,7 @@ from agterm_conformance.match import assert_ok, find_session
 
 LIVE_ANY_SHELL = pytest.mark.requires(
     "live-any-shell",
-    reason="a Rust-only extension: upstream wraps a pane in zmx only for a zsh login shell",
+    reason="a Rust-only extension: upstream wraps a pane in zmx only for a zsh or fish login shell",
 )
 
 
@@ -84,3 +84,54 @@ def test_an_interrupted_live_command_leaves_the_login_shell_prompt(launch):
     ctl.wait_text(sid, rf"(?m)^{marker}$")
     after = _daemon_row(ctl, sid)
     assert (after["daemon"], after["observation"]) == (before["daemon"], "running"), after
+
+
+@LIVE_ANY_SHELL
+@pytest.mark.covers("behavior:restore.live-session-survives-relaunch", "config.reload")
+def test_a_live_pane_keeps_the_configs_xdg_data_dirs(launch):
+    # A ghostty config `env` entry reaches a Live pane's shell. Under fish its integration rides XDG_DATA_DIRS: the
+    # session starts with the integration's root in front of the config's value, which the integration then removes
+    # again, so fish sees the config's value with the integration active (#761); zsh and bash get it as it is.
+    ctl = launch(settings={"restoreMode": "live"})
+    config = ctl.instance.state_dir / "config" / "ghostty.conf"
+    config.write_text(config.read_text() + "env = XDG_DATA_DIRS=/conf/share\n")
+    assert assert_ok(ctl.request("config.reload")) == {"count": 0}
+    sid = assert_ok(ctl.request("session.new"))["id"]
+    ctl.wait_mounted(sid, "left")
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get(ctl.vocabulary.backed_key) is True)
+    # the integration is active: the directory comes through OSC 7
+    directory = ctl.instance.root / "xdg-cwd"
+    directory.mkdir()
+    assert_ok(ctl.request("session.type", sid, text=f"cd '{directory}'\n"))
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get("cwd") == str(directory))
+    _assert_the_configs_data_dirs(ctl, sid)
+    before = _daemon_row(ctl, sid)
+
+    # the same shell after a relaunch, its environment as it was
+    ctl = launch.relaunch(ctl)
+    ctl.wait_mounted(sid, "left")
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get(ctl.vocabulary.backed_key) is True)
+
+    def same_shell(response):
+        rows = assert_ok(response)[ctl.vocabulary.result_key]["entries"]
+        (row,) = [row for row in rows if row.get("sessionID") == sid]
+        assert (row["daemon"], row["observation"], row["leaderPID"]) == (
+            before["daemon"],
+            "running",
+            before["leaderPID"],
+        ), row
+        return row
+
+    ctl.wait_response(ctl.vocabulary.command("zmx.list"), None, same_shell)
+    _assert_the_configs_data_dirs(ctl, sid)
+
+
+def _assert_the_configs_data_dirs(ctl, sid):
+    """The pane's shell has the config's XDG_DATA_DIRS last (a login profile may put its own in front, as flatpak's
+    does) and no shell-integration directory left in it."""
+    marker = _marker()
+    line = f"printf '%s%s|%s|\\n' {marker[:4]} {marker[4:]} \"$XDG_DATA_DIRS\"\n"
+    assert_ok(ctl.request("session.type", sid, text=line))
+    entries = ctl.wait_text(sid, rf"(?m)^{marker}\|([^|\n]*)\|$").group(1).split(":")
+    assert entries[-1] == "/conf/share", entries
+    assert not any(entry.rstrip("/").endswith("shell-integration") for entry in entries), entries

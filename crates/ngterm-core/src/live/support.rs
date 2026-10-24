@@ -1,8 +1,9 @@
 //! Whether and how a pane is wrapped in a live session of the session server, `ngterm-session` (upstream's zmx daemon,
 //! `ZmxSupport.swift`): the host's eligibility walk,
 //! shared with the launch probe ([`crate::restore::mode::LiveProbe`]) so the rejection order lives once, the wrap
-//! configuration, the launch disposition and the attach command a wrapped pane's surface runs. Upstream wraps a zsh
-//! login shell only; this build also wraps bash and fish ([`super::shell_integration`], capability `live-any-shell`).
+//! configuration, the launch disposition and the attach command a wrapped pane's surface runs. Upstream wraps a zsh or
+//! fish login shell; this build also wraps bash and PowerShell ([`super::shell_integration`], capability
+//! `live-any-shell`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -178,7 +179,7 @@ pub fn configuration(inputs: &Inputs) -> Result<Configuration, LiveRejection> {
     set(SESSION_VARIABLE, "");
     set(SESSION_PREFIX_VARIABLE, "");
     set(NO_DETACH_KEY_VARIABLE, "1");
-    shell_integration::inject(eligible.kind, &eligible.resources, &inputs.inherited, &mut environment);
+    shell_integration::inject_live(eligible.kind, &eligible.resources, &inputs.inherited, &mut environment);
     // a stale value inherited from the app's own environment would opt the client in under a nonce no pane expects
     environment.remove(NONCE_VARIABLE);
     environment.remove(CLAIM_VARIABLE);
@@ -877,14 +878,15 @@ mod tests {
         windows,
         ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
     )]
-    fn a_fish_wrap_puts_the_integration_on_the_data_dirs_and_attaches_bare() {
+    fn a_fish_wrap_names_only_the_integration_root_and_attaches_bare() {
         let resources = bundled("fish/vendor_conf.d/ghostty-shell-integration.fish", "");
         let configuration = configuration(&shell_inputs(resources.path(), "/usr/bin/fish")).unwrap();
         let env = |key: &str| configuration.environment.get(key).map(String::as_str);
         let integration = resources.path().join("shell-integration").display().to_string();
         assert_eq!(env("SHELL"), Some("/usr/bin/fish"));
         assert_eq!(env("GHOSTTY_SHELL_INTEGRATION_XDG_DIR"), Some(integration.as_str()));
-        assert_eq!(env("XDG_DATA_DIRS"), Some(format!("{integration}:/usr/share").as_str()));
+        // the app's own XDG_DATA_DIRS is not copied: the attach merges the root into the pane's resolved one
+        assert_eq!(env("XDG_DATA_DIRS"), None);
         assert_eq!((env("ENV"), env("ZDOTDIR")), (None, None));
         // the attach starts fish as a login shell itself
         assert_eq!(
@@ -906,6 +908,32 @@ mod tests {
                 shell_quoted_line(&["/usr/bin/fish", "-lic", &replay::render_command_line(line, &shell)])
             )
         );
+    }
+
+    /// upstream's `testFishConfigurationKeepsOnlyAnExplicitPaneXDGDataDirectories` and
+    /// `testZshConfigurationDoesNotCopyTheInheritedXDGDataDirectories`: only a pane's own `XDG_DATA_DIRS` reaches the
+    /// surface, whatever the app inherited.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
+    )]
+    fn only_a_panes_own_data_dirs_reach_a_fish_or_zsh_surface() {
+        let fish = bundled("fish/vendor_conf.d/ghostty-shell-integration.fish", "");
+        let zsh = resources(true);
+        for (resources, shell) in [(fish.path(), "/bin/fish"), (zsh.path(), "/bin/zsh")] {
+            let mut inputs = shell_inputs(resources, shell);
+            inputs.inherited.xdg_data_dirs = Some("/inherited/one:/inherited/two".to_owned());
+            let inherited = configuration(&inputs).unwrap();
+            assert_eq!(inherited.environment.get("XDG_DATA_DIRS"), None, "{shell}");
+            inputs.base_environment = BTreeMap::from([("XDG_DATA_DIRS".to_owned(), "/pane/one:/pane/two".to_owned())]);
+            let pane = configuration(&inputs).unwrap();
+            assert_eq!(
+                pane.environment.get("XDG_DATA_DIRS").map(String::as_str),
+                Some("/pane/one:/pane/two"),
+                "{shell}"
+            );
+        }
     }
 
     /// The bash payload against a real bash: the POSIX-mode shell that runs the command reads `ENV` (the integration,

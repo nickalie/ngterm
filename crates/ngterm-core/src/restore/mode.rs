@@ -100,7 +100,7 @@ pub enum LiveRejection {
 }
 
 impl LiveRejection {
-    /// The reason `restore.mode` reports, upstream's wording; the shell names widen with the bash, fish and PowerShell
+    /// The reason `restore.mode` reports, upstream's wording; the shell names widen with the bash and PowerShell
     /// extension. Windows has no password database: its shell is the PowerShell found on the host
     /// (`ngterm-session::launch`), so there the unsupported shell is a missing PowerShell.
     #[must_use]

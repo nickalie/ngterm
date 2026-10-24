@@ -7,7 +7,11 @@
 //!   `GHOSTTY_BASH_INJECT` to rebuild bash's own startup sequence, the app's `ENV` kept as `GHOSTTY_BASH_ENV` and
 //!   `HISTFILE` pinned to `~/.bash_history` (POSIX mode's default is `~/.sh_history`);
 //! - fish through `XDG_DATA_DIRS`, the integration's `vendor_conf.d` ahead of the inherited (or the specification's
-//!   default) directories, which the integration removes again;
+//!   default) directories, which the integration removes again. A live pane's surface sets only the integration's root,
+//!   [`FISH_INTEGRATION_VARIABLE`] ([`inject_live`], upstream's #761): a surface `XDG_DATA_DIRS` would replace a
+//!   ghostty config `env` entry, so the root goes in front of the session's own value where `ngterm-session`'s attach
+//!   prepares the session's environment ([`merged_data_dirs`]), and a replay recomputes it from the value the command
+//!   left before the final shell ([`Rearm::FishDataDirs`]). A plain pane's fish is Ghostty's ([`setup`]);
 //! - PowerShell (7's `pwsh`, or Windows PowerShell 5.1's `powershell`), which Ghostty does not integrate, through this
 //!   build's own script (`resources/shell-integration/pwsh/ngterm.ps1`, staged in ngterm's own resources, the staged
 //!   root's `share/ngterm`, so a `GHOSTTY_RESOURCES_DIR` inherited from another terminal does not hide it):
@@ -16,7 +20,7 @@
 //!   so no execution policy refuses it (Windows PowerShell's default `Restricted`, `RemoteSigned` on a downloaded
 //!   copy).
 //!
-//! bash, fish and PowerShell are a Rust-only extension: upstream wraps zsh only (capability `live-any-shell`).
+//! bash and PowerShell are a Rust-only extension: upstream wraps zsh and fish only (capability `live-any-shell`).
 //! PowerShell is the shell a Windows live pane runs (`ngterm-session::launch`), and a Unix one whose login shell it
 //! is. It has no job control there, so every program it runs, in the foreground or the background, stays in the
 //! shell's own process group, led by the shell (the terminal's session leader), and nothing tells its foreground
@@ -32,7 +36,12 @@ use crate::command_restore::basename;
 use crate::paths::{self, Env};
 
 /// `XDG_DATA_DIRS` when unset, as the base directory specification defines it.
-const DEFAULT_XDG_DATA_DIRS: &str = "/usr/local/share:/usr/share";
+pub const DEFAULT_XDG_DATA_DIRS: &str = "/usr/local/share:/usr/share";
+/// The base directory specification's data directories, which fish finds its `vendor_conf.d` directories in.
+pub const DATA_DIRS_VARIABLE: &str = "XDG_DATA_DIRS";
+/// The variable naming the fish integration's root (Ghostty's `shell-integration` directory), which the integration
+/// removes from `XDG_DATA_DIRS` again once fish has read it.
+pub const FISH_INTEGRATION_VARIABLE: &str = "GHOSTTY_SHELL_INTEGRATION_XDG_DIR";
 
 /// The variable naming the PowerShell integration script a live pane's PowerShell loads ([`PWSH_LOAD`]).
 pub const PWSH_INTEGRATION_VARIABLE: &str = "NGTERM_PWSH_INTEGRATION";
@@ -258,8 +267,8 @@ pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, enviro
             } else {
                 format!("{integration}:{current}")
             };
-            set("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", integration);
-            set("XDG_DATA_DIRS", data_dirs);
+            set(FISH_INTEGRATION_VARIABLE, integration);
+            set(DATA_DIRS_VARIABLE, data_dirs);
         }
         LoginShell::Pwsh => {
             set(
@@ -268,6 +277,36 @@ pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, enviro
             );
         }
     }
+}
+
+/// [`inject`] for a live pane's surface: fish gets only [`FISH_INTEGRATION_VARIABLE`], and `XDG_DATA_DIRS` stays the
+/// pane's own (upstream's `ZmxSupport.configuration`), so a ghostty config `env` entry the launch applies under the
+/// wrap's variables keeps it; the root is merged in front of it when the session's environment is prepared
+/// ([`merged_data_dirs`]). The other shells are injected as [`inject`] injects them.
+pub fn inject_live(
+    shell: LoginShell,
+    resources: &Path,
+    inherited: &Inherited,
+    environment: &mut BTreeMap<String, String>,
+) {
+    if shell == LoginShell::Fish {
+        let root = resources.join("shell-integration").to_string_lossy().into_owned();
+        environment.insert(FISH_INTEGRATION_VARIABLE.to_owned(), root);
+        return;
+    }
+    inject(shell, resources, inherited, environment);
+}
+
+/// The `XDG_DATA_DIRS` a live fish session starts with (upstream's `fishXDGDataDirectoriesScript`): the integration's
+/// `root` first, then the entries of `value`, the pane's resolved one, else the specification's default when it is
+/// unset or empty, each empty entry and each copy of `root` left out.
+#[must_use]
+pub fn merged_data_dirs(root: &str, value: Option<&str>) -> String {
+    let value = value.filter(|value| !value.is_empty()).unwrap_or(DEFAULT_XDG_DATA_DIRS);
+    std::iter::once(root)
+        .chain(value.split(':').filter(|entry| !entry.is_empty() && *entry != root))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 /// What libghostty's automatic integration (`shell_integration.setup`, `shell-integration = detect`) makes of a plain
@@ -376,12 +415,28 @@ fn bash_command<'a>(exe: &'a str, mut words: impl Iterator<Item = &'a str>) -> O
     Some((line.join(" "), flags))
 }
 
-/// One step of re-arming the integration before a replay's final shell: export the variable with this value, or
-/// unset it.
+/// One step of re-arming the integration before a replay's final shell: export the variable with this value, unset
+/// it, or (fish only) recompute `XDG_DATA_DIRS`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rearm {
     Export(&'static str, String),
     Unset(&'static str),
+    /// fish's `XDG_DATA_DIRS` recomputed in the replay's shell from the value the command left there, as
+    /// [`merged_data_dirs`] computes it, with this integration root first (upstream's `renderFish`): a command that
+    /// changed, emptied or unset it keeps its change, and the final fish finds its integration. Only fish's re-arm
+    /// carries it.
+    FishDataDirs(String),
+}
+
+impl Rearm {
+    /// The variable the step sets or unsets.
+    #[must_use]
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::Export(key, _) | Self::Unset(key) => key,
+            Self::FishDataDirs(_) => DATA_DIRS_VARIABLE,
+        }
+    }
 }
 
 /// What a replay re-arms before it execs the final shell, read off the wrap's `environment`: the integration consumed
@@ -407,10 +462,13 @@ pub fn rearm(shell: LoginShell, environment: &BTreeMap<String, String>) -> Optio
             steps
         }
         // upstream's order: the integration's directory, then the data directories that put it on fish's path
-        LoginShell::Fish => vec![
-            required("GHOSTTY_SHELL_INTEGRATION_XDG_DIR")?,
-            required("XDG_DATA_DIRS")?,
-        ],
+        LoginShell::Fish => {
+            let root = environment.get(FISH_INTEGRATION_VARIABLE)?;
+            vec![
+                Rearm::Export(FISH_INTEGRATION_VARIABLE, root.clone()),
+                Rearm::FishDataDirs(root.clone()),
+            ]
+        }
         LoginShell::Pwsh => vec![required(PWSH_INTEGRATION_VARIABLE)?],
     };
     Some(steps)
@@ -597,6 +655,62 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the zsh, bash and fish integrations are Unix shells' and spelled with /; a Windows live pane runs PowerShell"
+    )]
+    fn a_live_fish_surface_names_only_the_integration_root() {
+        let inherited = Inherited {
+            xdg_data_dirs: Some("/opt/share".to_owned()),
+            home: Some("/home/u".to_owned()),
+            ..Inherited::default()
+        };
+        let live = |shell| {
+            let mut environment = BTreeMap::from([("NGTERM_ENABLED".to_owned(), "1".to_owned())]);
+            inject_live(shell, Path::new("/res"), &inherited, &mut environment);
+            environment
+        };
+        assert_eq!(
+            live(LoginShell::Fish),
+            pairs(&[
+                ("NGTERM_ENABLED", "1"),
+                ("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/res/shell-integration"),
+            ])
+        );
+        // the other shells are injected as a plain pane's
+        for shell in [LoginShell::Zsh, LoginShell::Bash, LoginShell::Pwsh] {
+            assert_eq!(live(shell), injected(shell, &inherited), "{}", shell.name());
+        }
+    }
+
+    #[test]
+    fn the_live_fish_data_dirs_put_the_root_first_and_drop_empty_entries_and_copies_of_it() {
+        let root = "/res/shell-integration";
+        let cases = [
+            // inherited, unset, empty
+            (Some("/custom/share"), "/res/shell-integration:/custom/share"),
+            (None, "/res/shell-integration:/usr/local/share:/usr/share"),
+            (Some(""), "/res/shell-integration:/usr/local/share:/usr/share"),
+            // the root alone, then repeated among empty entries
+            (Some(root), "/res/shell-integration"),
+            (
+                Some("::/res/shell-integration:/a::/res/shell-integration:/b:"),
+                "/res/shell-integration:/a:/b",
+            ),
+            // nothing but separators reads as no entries at all
+            (Some(":::"), "/res/shell-integration"),
+            // entries are taken as they are, spaces, quotes, backslashes and globs included
+            (
+                Some("/with space:/it's:/back\\slash:/glob/*:/q\"uote"),
+                "/res/shell-integration:/with space:/it's:/back\\slash:/glob/*:/q\"uote",
+            ),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(merged_data_dirs(root, value), expected, "{value:?}");
+        }
+    }
+
+    #[test]
     fn the_inherited_values_come_from_the_environment_and_the_home_from_the_password_database_too() {
         let env = MapEnv::new()
             .with("ZDOTDIR", "/z")
@@ -648,17 +762,25 @@ mod tests {
                 Rearm::Export("GHOSTTY_BASH_UNEXPORT_HISTFILE", "1".to_owned()),
             ]
         );
-        let fish = rearm(LoginShell::Fish, &injected(LoginShell::Fish, &Inherited::default())).unwrap();
-        assert_eq!(
-            fish,
-            [
-                Rearm::Export("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/res/shell-integration".to_owned()),
-                Rearm::Export(
-                    "XDG_DATA_DIRS",
-                    "/res/shell-integration:/usr/local/share:/usr/share".to_owned()
-                ),
-            ]
+        // fish's data directories are recomputed from the replay's live value, never a launch-time one
+        let mut live_fish = BTreeMap::new();
+        inject_live(
+            LoginShell::Fish,
+            Path::new("/res"),
+            &Inherited::default(),
+            &mut live_fish,
         );
+        for environment in [injected(LoginShell::Fish, &Inherited::default()), live_fish] {
+            assert_eq!(
+                rearm(LoginShell::Fish, &environment).unwrap(),
+                [
+                    Rearm::Export("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/res/shell-integration".to_owned()),
+                    Rearm::FishDataDirs("/res/shell-integration".to_owned()),
+                ]
+            );
+        }
+        assert_eq!(Rearm::FishDataDirs("/r".to_owned()).key(), "XDG_DATA_DIRS");
+        assert_eq!(Rearm::Unset("X").key(), "X");
         // a wrap without the integration has nothing to re-arm
         for shell in ALL {
             assert_eq!(rearm(shell, &BTreeMap::new()), None, "{}", shell.name());

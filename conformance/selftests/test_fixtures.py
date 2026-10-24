@@ -206,7 +206,7 @@ def test_skip_reason_says_why_this_host_lacks_a_capability(pytester: pytest.Pyte
         """,
         "test_live",
     )
-    why = "the password-database login shell is /bin/fish, not zsh"
+    why = "the password-database login shell is /bin/bash, not zsh or fish"
     adapter = SimpleNamespace(
         available=True, name="upstream", profile=Profile("0.36.0", frozenset(), {"live-sessions": why})
     )

@@ -1835,26 +1835,31 @@ claim is by login shell on every OS.
   `behavior:restore.live-session-survives-relaunch`, skipped unless the login shell is fish: a ghostty config `env =
   XDG_DATA_DIRS=/conf/share` reaches the pane's fish as `/conf/share` with the integration active)
 
-- [ ] claim `live-sessions` for a fish login shell as well as zsh, with its doc comment, README, rust-build.md and
+- [x] claim `live-sessions` for a fish login shell as well as zsh, with its doc comment, README, rust-build.md and
       base.py's capability text; `live-any-shell` stays the Rust-only claim adding bash and PowerShell
-- [ ] reference adapter: `login_shell_blocker` accepts zsh or fish ("the password-database login shell is not zsh or
+- [x] reference adapter: `login_shell_blocker` accepts zsh or fish ("the password-database login shell is not zsh or
       fish"); the LIVE marker reasons say zsh or fish
-- [ ] CI: the fish conformance leg runs with `--must-pass live-sessions --must-pass live-any-shell`
-- [ ] fish surface environment: only GHOSTTY_SHELL_INTEGRATION_XDG_DIR; XDG_DATA_DIRS merged when the session's
+- [x] CI: the fish conformance leg runs with `--must-pass live-sessions --must-pass live-any-shell`
+- [x] fish surface environment: only GHOSTTY_SHELL_INTEGRATION_XDG_DIR; XDG_DATA_DIRS merged when the session's
       environment is prepared: root, then the pane's resolved value (ghostty.conf `env` included), else
       `/usr/local/share:/usr/share` when unset or empty, dropping empty entries and copies of root; zsh's
       configuration does not copy XDG_DATA_DIRS. Ghostty's plain-pane fish injection stays Ghostty's
-- [ ] fish rearm recomputes XDG_DATA_DIRS from the payload's live value (upstream's `begin … builtin set --global
+- [x] fish rearm recomputes XDG_DATA_DIRS from the payload's live value (upstream's `begin … builtin set --global
       --export --path XDG_DATA_DIRS <root> $__agterm_xdg_user_dirs; end` block, with `__ngterm_` names)
-- [ ] write tests: the merge table (inherited `/custom/share`; unset; empty; a pane value overriding the inherited one;
+- [x] write tests: the merge table (inherited `/custom/share`; unset; empty; a pane value overriding the inherited one;
       root only; root repeated with empty entries; space, quote, backslash and glob entries); the fish configuration
       has no XDG_DATA_DIRS; with a real fish: failed payloads (a missing binary, `/usr/bin/false`) still reach the final
       shell with `<root>:/usr/local/share:/usr/share`; the five rearm cases (`set -gx XDG_DATA_DIRS /new/one:/new/two`
       → `<root>:/new/one:/new/two`; empty or `set -e` → the default; duplicates of root dropped; a path with a space
       kept); the selftests for the adapter's blocker
-- [ ] write tests: the conformance test above; the LIVE set passing on the fish leg
-- [ ] manual check (user): green on reference-macos; the fish leg of `rust-linux.yml` green on the pushed branch
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance test above; the LIVE set passing on the fish leg (⚠️ the test runs on every
+      login shell as `test_a_live_pane_keeps_the_configs_xdg_data_dirs`: a fish-only skip would break the bash and zsh
+      legs' `--must-pass live-any-shell`; it asserts the config's value last, since a host's fish profile such as
+      flatpak's may prepend its own; the 30 LIVE tests of test_zmx.py, test_relaunch.py, the cli files and
+      test_live_any_shell.py pass here under fish, `test_live_pane_commands`' screen comparison now waits for a
+      settled screen)
+- [x] manual check (user): green on reference-macos; the fish leg of `rust-linux.yml` green on the pushed branch (skipped - not automatable, left for the user)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user)
 
 ### Task 28: Session server: keep its namespace lock from aging out of the temp dir (#733)
 

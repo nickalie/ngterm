@@ -1088,6 +1088,39 @@ mod tests {
         assert_eq!(lookup("NGTERM_SESSION_ID"), Some("PANE"));
     }
 
+    /// A live fish pane attached in process: the wrap names only the integration's root, so the config's `env` keeps
+    /// the pane's `XDG_DATA_DIRS`, and the session is created with the root in front of it (upstream's #761).
+    #[test]
+    fn a_live_fish_panes_session_gets_the_root_ahead_of_the_configs_data_dirs() {
+        let dir = std::env::temp_dir().join("ngterm-live-test");
+        let dir = dir.to_string_lossy();
+        let wrap = [
+            ("NGTERM_LIVE_DIR", &*dir),
+            ("NGTERM_LIVE_SESSION", ""),
+            ("SHELL", "/usr/bin/fish"),
+            ("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/res/shell-integration"),
+        ];
+        let attach = LiveAttach {
+            executable: "/opt/ngterm/bin/ngterm-session".to_owned(),
+            session: "ngterm-0123".to_owned(),
+            argv: Vec::new(),
+        };
+        let app = vec![("XDG_DATA_DIRS".to_owned(), "/app/share".to_owned())];
+        let data_dirs = |host: &Host| {
+            let live = host.prepare(&session_pane(&wrap), &MapEnv::new().with("XDG_DATA_DIRS", "/app/share"));
+            let session = crate::session_io::resolve(&attach, &live.command, app.clone(), None).unwrap();
+            ngterm_session::cli::variable(&session.spec.env, "XDG_DATA_DIRS").map(str::to_owned)
+        };
+        assert_eq!(
+            data_dirs(&host_of("env = XDG_DATA_DIRS=/conf/share", None)).as_deref(),
+            Some("/res/shell-integration:/conf/share")
+        );
+        assert_eq!(
+            data_dirs(&host(None)).as_deref(),
+            Some("/res/shell-integration:/app/share")
+        );
+    }
+
     #[test]
     fn foreign_variables_are_matched_ignoring_case_where_names_do() {
         let env = MapEnv::new()

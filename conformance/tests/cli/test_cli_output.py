@@ -1247,7 +1247,7 @@ def test_page_serve_refused_claim_exits_1(cli, ctl):
 # -- Live sessions
 
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh login shell"
+    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
 )
 PRESENTATION_HELLO = {
     "kind": "hello",
@@ -1308,8 +1308,14 @@ def test_live_pane_commands(cli, live):
     live.wait_text(sid, rf"(?m)^{marker}$")
     screen = _json(cli(*vocabulary.cli("zmx", "screen", daemon, "--json")))
     assert f"\n{marker}\n" in f"\n{screen['text']}\n"
-    read = assert_ok(live.request(vocabulary.command("zmx.screen"), name=daemon))
-    _rendered(cli(*vocabulary.cli("zmx", "screen", daemon)), read)
+    # The CLI renders the screen a read gives; a prompt the shell is still drawing after the output (fish's comes a
+    # moment later, over several lines) changes the screen between the read and the CLI's own, so compare once settled.
+    live.wait_response(
+        vocabulary.command("zmx.screen"),
+        None,
+        lambda response: _rendered(cli(*vocabulary.cli("zmx", "screen", daemon)), assert_ok(response)) is not None,
+        name=daemon,
+    )
 
     # Once the pane's zmx has reported its role: before that there is no lead to take.
     live.wait_tree(

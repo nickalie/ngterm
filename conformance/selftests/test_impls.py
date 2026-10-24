@@ -1382,18 +1382,33 @@ def _passwd_shell(monkeypatch: pytest.MonkeyPatch, shell: str) -> None:
 @pytest.mark.parametrize(
     ("shell", "reason"),
     [
-        ("/usr/bin/fish", "the password-database login shell is /usr/bin/fish, not zsh"),
-        ("", "the password-database login shell is unset, not zsh"),
+        ("/bin/bash", "the password-database login shell is /bin/bash, not zsh or fish"),
+        ("", "the password-database login shell is unset, not zsh or fish"),
         ("/nonexistent/zsh", "the login shell /nonexistent/zsh is not executable"),
+        ("/nonexistent/fish", "the login shell /nonexistent/fish is not executable"),
     ],
 )
-def test_live_sessions_need_an_executable_zsh_login_shell(
+def test_live_sessions_need_an_executable_zsh_or_fish_login_shell(
     monkeypatch: pytest.MonkeyPatch, shell: str, reason: str
 ) -> None:
     _passwd_shell(monkeypatch, shell)
     adapter = SwiftMacosAdapter(None, launch_mode="plain")
     assert "live-sessions" not in adapter.capabilities
     assert adapter.profile.absent == {"live-sessions": reason}
+
+
+@pytest.mark.parametrize("name", ["zsh", "fish"])
+def test_live_sessions_run_for_an_executable_zsh_or_fish_login_shell(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+) -> None:
+    shell = tmp_path / "bin" / name
+    shell.parent.mkdir()
+    shell.write_text("#!/bin/sh\n")
+    shell.chmod(0o755)
+    _passwd_shell(monkeypatch, str(shell))
+    adapter = SwiftMacosAdapter(None, launch_mode="plain")
+    assert "live-sessions" in adapter.capabilities
+    assert adapter.profile.absent == {}
 
 
 @pytest.mark.parametrize(

@@ -144,9 +144,9 @@ CAPABILITIES: Mapping[str, str] = {
     "posix-shell": "panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic",
     "live-sessions": "restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the "
     "Rust build's one session server per instance, ngterm-session)",
-    "live-any-shell": "Rust-only: Live sessions in a zsh, bash, fish or PowerShell login shell, each started with its "
-    "shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is "
-    "one of them and ngterm-session is staged",
+    "live-any-shell": "Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, "
+    "each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the "
+    "password-database login shell is one of them and ngterm-session is staged",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",
@@ -201,10 +201,10 @@ def version_tuple(version: str) -> tuple[int, ...]:
 
 def login_shell_blocker() -> str | None:
     """Why Live sessions cannot run for this account, or None: upstream wraps a pane in zmx only when
-    the password-database login shell is zsh (`ZmxSupport.configuration`), and the pane then execs it."""
+    the password-database login shell is zsh or fish (`ZmxSupport.configuration`), and the pane then execs it."""
     shell = pwd.getpwuid(os.getuid()).pw_shell
-    if os.path.basename(shell) != "zsh":
-        return f"the password-database login shell is {shell or 'unset'}, not zsh"
+    if os.path.basename(shell) not in ("zsh", "fish"):
+        return f"the password-database login shell is {shell or 'unset'}, not zsh or fish"
     if not os.access(shell, os.X_OK):
         return f"the login shell {shell} is not executable"
     return None

@@ -6,10 +6,10 @@
 //! - **Live sessions** (upstream's `restoredRuntime` zmx wiring in `agtermApp.swift`): [`install`] hands a running
 //!   server of an older build over to the staged one (the update handoff, recorded for the outdated cutoff), gives the
 //!   core the server's `SessionHost` and this host's wrap inputs before any window mounts, then runs the launch reap
-//!   and a pending Live sessions reset; [`live_capabilities`] claims `live-sessions` (a zsh login shell, as upstream)
-//!   and `live-any-shell` (zsh, bash, fish or PowerShell) where `ngterm-session` and the shell's integration are
-//!   staged. A live pane attaches to its session in process (`ngterm-term`'s live panes), as the session's reply
-//!   owner.
+//!   and a pending Live sessions reset; [`live_capabilities`] claims `live-sessions` (a zsh or fish login shell, as
+//!   upstream) and `live-any-shell` (zsh, bash, fish or PowerShell) where `ngterm-session` and the shell's
+//!   integration are staged. A live pane attaches to its session in process (`ngterm-term`'s live panes), as the
+//!   session's reply owner.
 //! - **Config**: [`AppConfig::load`] loads the ghostty config as libghostty did for the GTK build (defaults, the
 //!   user's files, their includes; the theme under them), on the side of a dual theme the desktop's appearance picks
 //!   (`appearance.rs`); its diagnostic count is what `config.reload` answers.
@@ -40,7 +40,7 @@ use ngterm_term::{Host, Launch, Pane};
 use crate::pane::Launcher;
 use crate::terminal::{Spawn, TerminalConfig};
 
-/// The capability a host claims when its panes can run in live sessions in a zsh login shell, upstream's only one
+/// The capability a host claims when its panes can run in live sessions in a zsh or fish login shell, upstream's two
 /// (`conformance/docs/rust-build.md`).
 pub const LIVE_SESSIONS: &str = "live-sessions";
 /// The Rust-only capability a host claims when its panes can run in live sessions in its login shell, zsh, bash, fish
@@ -120,7 +120,7 @@ pub fn wrap_inputs(runtime: &Runtime) -> Inputs {
 
 /// The live capabilities this host claims: none unless it can wrap panes in live sessions (`ngterm-session` staged
 /// beside the app, a zsh, bash, fish or PowerShell login shell and that shell's bundled integration); then
-/// `live-sessions` for a zsh login shell, as upstream, and `live-any-shell` for any of them.
+/// `live-sessions` for a zsh or fish login shell, as upstream, and `live-any-shell` for any of them.
 #[must_use]
 pub fn live_capabilities(env: &dyn Env) -> Vec<&'static str> {
     claims(&Runtime::capture(env), env)
@@ -132,8 +132,12 @@ pub fn claims(runtime: &Runtime, env: &dyn Env) -> Vec<&'static str> {
     if runtime.live_probe(env).rejection().is_some() {
         return Vec::new();
     }
-    let zsh = runtime.login_shell.as_deref().and_then(LoginShell::of) == Some(LoginShell::Zsh);
-    zsh.then_some(LIVE_SESSIONS)
+    let upstreams = matches!(
+        runtime.login_shell.as_deref().and_then(LoginShell::of),
+        Some(LoginShell::Zsh | LoginShell::Fish)
+    );
+    upstreams
+        .then_some(LIVE_SESSIONS)
         .into_iter()
         .chain([LIVE_ANY_SHELL])
         .collect()
@@ -347,5 +351,39 @@ mod tests {
             inherited: ngterm_core::live::shell_integration::Inherited::default(),
         };
         assert!(claims(&runtime, &MapEnv::new()).is_empty());
+    }
+
+    /// `live-sessions` for upstream's login shells, zsh and fish (#761); `live-any-shell` for every wrapped one.
+    #[cfg(unix)]
+    #[test]
+    fn live_sessions_are_claimed_for_a_zsh_or_fish_login_shell_and_live_any_shell_for_all() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("ngterm-session");
+        ngterm_host::fakes::write_executable(&executable, "#!/bin/sh\n").unwrap();
+        let resources = root.path().join("ghostty");
+        for loader in [
+            "zsh/.zshenv",
+            "bash/ghostty.bash",
+            "fish/vendor_conf.d/ghostty-shell-integration.fish",
+        ] {
+            let path = resources.join("shell-integration").join(loader);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let claimed = |shell: &str| {
+            let runtime = Runtime {
+                executable: executable.clone(),
+                login_shell: Some(shell.to_owned()),
+                resources_dir: Some(resources.clone()),
+                own_resources_dir: None,
+                state_dir: PathBuf::from("/tmp/ngterm-state"),
+                inherited: ngterm_core::live::shell_integration::Inherited::default(),
+            };
+            claims(&runtime, &MapEnv::new())
+        };
+        assert_eq!(claimed("/bin/zsh"), [LIVE_SESSIONS, LIVE_ANY_SHELL]);
+        assert_eq!(claimed("/usr/bin/fish"), [LIVE_SESSIONS, LIVE_ANY_SHELL]);
+        assert_eq!(claimed("/bin/bash"), [LIVE_ANY_SHELL]);
+        assert!(claimed("/bin/tcsh").is_empty());
     }
 }

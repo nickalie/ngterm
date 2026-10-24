@@ -22,7 +22,9 @@
 //! fish has no aliases (its `alias` defines a function, which `builtin` bypasses, and `exec` is a reserved word no
 //! function can take), so its form is `builtin set -gx` and a plain `exec`, with fish's own quoting. The command runs
 //! through `builtin eval`, which confines an interruption to it, under `builtin status job-control full`, which also
-//! gives it a process group of its own in the pane's foreground (upstream's form).
+//! gives it a process group of its own in the pane's foreground (upstream's form). Its re-arm recomputes
+//! `XDG_DATA_DIRS` from the value the command left ([`Rearm::FishDataDirs`], upstream's `begin … end` block with
+//! `__ngterm_` names), so the final fish finds its integration and keeps what the command set.
 //!
 //! PowerShell, a Rust-only extension, has no `exec`: its replay runs in the shell `-NoExit` keeps
 //! ([`LoginShell::script_flags`]), so the script re-arms the integration's variable and loads the integration first,
@@ -39,7 +41,7 @@
 //! `msiexec`, whose own parsers no argv rebuilds exactly (`cmd.exe`'s least of all: its `/c` text is no argv).
 //! Windows PowerShell 5.1 has only the legacy passing, which loses an embedded double quote or an empty argument.
 
-use super::shell_integration::{LoginShell, PWSH_LOAD, Rearm};
+use super::shell_integration::{DEFAULT_XDG_DATA_DIRS, LoginShell, PWSH_LOAD, Rearm};
 use crate::command_restore::shell_quoted_line;
 
 /// The interactive login shell a replay ends in, and what it re-arms before the `exec`.
@@ -130,9 +132,11 @@ fn posix_final_shell(shell: &FinalShell<'_>) -> String {
     let mut steps: Vec<String> = shell
         .rearm
         .iter()
-        .map(|step| match step {
-            Rearm::Export(key, value) => format!("'builtin' 'export' {key}={}", quoted(value)),
-            Rearm::Unset(key) => format!("'builtin' 'unset' {key}"),
+        .filter_map(|step| match step {
+            Rearm::Export(key, value) => Some(format!("'builtin' 'export' {key}={}", quoted(value))),
+            Rearm::Unset(key) => Some(format!("'builtin' 'unset' {key}")),
+            // only fish's re-arm carries it
+            Rearm::FishDataDirs(_) => None,
         })
         .collect();
     steps.push(format!(
@@ -153,6 +157,7 @@ fn render_fish(statement: &str, shell: &FinalShell<'_>) -> String {
     steps.extend(shell.rearm.iter().map(|step| match step {
         Rearm::Export(key, value) => format!("builtin set -gx {key} {}", fish_quoted(value)),
         Rearm::Unset(key) => format!("builtin set -e {key}"),
+        Rearm::FishDataDirs(root) => fish_data_dirs(root),
     }));
     steps.push(format!(
         "exec {} {}",
@@ -162,14 +167,42 @@ fn render_fish(statement: &str, shell: &FinalShell<'_>) -> String {
     steps.join("; ")
 }
 
+/// The fish block that exports `XDG_DATA_DIRS` as `root`, then the entries of the value the command left (the
+/// specification's default when it is unset or empty), each empty entry and each copy of `root` left out: upstream's
+/// `renderFish` re-arm, with its variables named `__ngterm_`, local to the block, and `string` taken as the builtin.
+fn fish_data_dirs(root: &str) -> String {
+    let root = fish_quoted(root);
+    [
+        "begin".to_owned(),
+        "builtin set --local __ngterm_xdg_source".to_owned(),
+        "if builtin set -q XDG_DATA_DIRS; and builtin test -n \"$XDG_DATA_DIRS\"".to_owned(),
+        "builtin set __ngterm_xdg_source \"$XDG_DATA_DIRS\"".to_owned(),
+        "else".to_owned(),
+        format!("builtin set __ngterm_xdg_source {DEFAULT_XDG_DATA_DIRS}"),
+        "end".to_owned(),
+        "builtin set --local __ngterm_xdg_user_dirs".to_owned(),
+        "builtin set --local __ngterm_xdg_data_dir".to_owned(),
+        "for __ngterm_xdg_data_dir in (builtin string split : -- \"$__ngterm_xdg_source\")".to_owned(),
+        format!("if builtin test -n \"$__ngterm_xdg_data_dir\"; and builtin test \"$__ngterm_xdg_data_dir\" != {root}"),
+        "builtin set --append __ngterm_xdg_user_dirs \"$__ngterm_xdg_data_dir\"".to_owned(),
+        "end".to_owned(),
+        "end".to_owned(),
+        format!("builtin set --global --export --path XDG_DATA_DIRS {root} $__ngterm_xdg_user_dirs"),
+        "end".to_owned(),
+    ]
+    .join("; ")
+}
+
 /// PowerShell's replay: the re-armed variables, the integration loaded, then the command, in the shell that stays.
 fn render_powershell(statement: &str, shell: &FinalShell<'_>) -> String {
     let mut steps: Vec<String> = shell
         .rearm
         .iter()
-        .map(|step| match step {
-            Rearm::Export(key, value) => format!("$env:{key} = {}", powershell_quoted(value)),
-            Rearm::Unset(key) => format!("$env:{key} = $null"),
+        .filter_map(|step| match step {
+            Rearm::Export(key, value) => Some(format!("$env:{key} = {}", powershell_quoted(value))),
+            Rearm::Unset(key) => Some(format!("$env:{key} = $null")),
+            // only fish's re-arm carries it
+            Rearm::FishDataDirs(_) => None,
         })
         .collect();
     steps.push(PWSH_LOAD.to_owned());
@@ -217,6 +250,14 @@ mod tests {
             inherited_zdotdir.map_or(Rearm::Unset("GHOSTTY_ZSH_ZDOTDIR"), |dir| {
                 Rearm::Export("GHOSTTY_ZSH_ZDOTDIR", dir.to_owned())
             }),
+        ]
+    }
+
+    /// fish's re-arm for the integration under `root`, as `shell_integration::rearm` reads it off a wrap.
+    fn fish_rearm(root: &str) -> Vec<Rearm> {
+        vec![
+            Rearm::Export("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", root.to_owned()),
+            Rearm::FishDataDirs(root.to_owned()),
         ]
     }
 
@@ -283,16 +324,26 @@ mod tests {
 
     #[test]
     fn fish_evaluates_the_command_under_job_control_then_rearms_and_execs_fish_in_its_own_quoting() {
-        let rearm = [
-            Rearm::Export("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/res/it's".to_owned()),
-            Rearm::Export("XDG_DATA_DIRS", "/res/it's:/usr/share".to_owned()),
-        ];
+        let rearm = fish_rearm("/res/it's");
         let shell = FinalShell {
             path: "/usr/bin/fish",
             kind: LoginShell::Fish,
             rearm: &rearm,
         };
-        let tail = r"builtin set -gx GHOSTTY_SHELL_INTEGRATION_XDG_DIR '/res/it\'s'; builtin set -gx XDG_DATA_DIRS '/res/it\'s:/usr/share'; exec '/usr/bin/fish' -il";
+        // upstream's re-arm block, its variables named `__ngterm_`
+        let tail = concat!(
+            r"builtin set -gx GHOSTTY_SHELL_INTEGRATION_XDG_DIR '/res/it\'s'; ",
+            "begin; builtin set --local __ngterm_xdg_source; ",
+            r#"if builtin set -q XDG_DATA_DIRS; and builtin test -n "$XDG_DATA_DIRS"; "#,
+            r#"builtin set __ngterm_xdg_source "$XDG_DATA_DIRS"; "#,
+            "else; builtin set __ngterm_xdg_source /usr/local/share:/usr/share; end; ",
+            "builtin set --local __ngterm_xdg_user_dirs; builtin set --local __ngterm_xdg_data_dir; ",
+            r#"for __ngterm_xdg_data_dir in (builtin string split : -- "$__ngterm_xdg_source"); "#,
+            r#"if builtin test -n "$__ngterm_xdg_data_dir"; and builtin test "$__ngterm_xdg_data_dir" != '/res/it\'s'; "#,
+            r#"builtin set --append __ngterm_xdg_user_dirs "$__ngterm_xdg_data_dir"; end; end; "#,
+            r"builtin set --global --export --path XDG_DATA_DIRS '/res/it\'s' $__ngterm_xdg_user_dirs; end; ",
+            "exec '/usr/bin/fish' -il",
+        );
         // the captured words are quoted once as words, then again as the one word `eval` takes
         assert_eq!(
             render_argv(&["printf", r"a\b", "it's"], &shell),
@@ -509,9 +560,15 @@ mod tests {
         .find(|path| Path::new(path).exists())
     }
 
-    /// Runs `script` under `fish --no-config` in a throwaway home, so no user configuration is read or written.
-    fn run_fish(fish: &str, script: &str, home: &Path) -> std::process::Output {
-        Command::new(fish)
+    /// Runs `script` under `fish --no-config` in a throwaway home, so no user configuration is read or written, with
+    /// `XDG_DATA_DIRS` as `data_dirs` gives it (`None` unsets it).
+    fn run_fish(fish: &str, script: &str, home: &Path, data_dirs: Option<&str>) -> std::process::Output {
+        let mut command = Command::new(fish);
+        match data_dirs {
+            Some(value) => command.env("XDG_DATA_DIRS", value),
+            None => command.env_remove("XDG_DATA_DIRS"),
+        };
+        command
             .args(["--no-config", "-c", script])
             .env("HOME", home)
             .env("XDG_CONFIG_HOME", home.join(".config"))
@@ -557,17 +614,14 @@ mod tests {
             &printer,
             "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$XDG_DATA_DIRS\" \"$GHOSTTY_SHELL_INTEGRATION_XDG_DIR\" \"$*\"\n",
         );
-        let rearm = [
-            Rearm::Export("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/res/it's".to_owned()),
-            Rearm::Export("XDG_DATA_DIRS", "/res/it's:/usr/share".to_owned()),
-        ];
+        let rearm = fish_rearm("/res/it's");
         let printer_path = printer.display().to_string();
         let shell = FinalShell {
             path: &printer_path,
             kind: LoginShell::Fish,
             rearm: &rearm,
         };
-        let output = run_fish(fish, &render_argv(&argv, &shell), dir.path());
+        let output = run_fish(fish, &render_argv(&argv, &shell), dir.path(), Some("/usr/share"));
         assert!(output.status.success(), "{output:?}");
         assert_eq!(recorded(&result), expected);
         assert_eq!(
@@ -580,21 +634,83 @@ mod tests {
             "printf '%s' 'two words' > {0} && printf ' and more' >> {0}",
             fish_quoted(&line_result.display().to_string())
         );
-        let output = run_fish(fish, &render_command_line(&line, &shell), dir.path());
+        let output = run_fish(fish, &render_command_line(&line, &shell), dir.path(), None);
         assert!(output.status.success(), "{output:?}");
         assert_eq!(fs::read_to_string(&line_result).unwrap(), "two words and more");
-        // a failed or missing command still ends at the final shell
+        // a failed or missing command still ends at the final shell, on the default data directories when the session
+        // has none (upstream's fishReplayReachesTheFinalShellAfterFailedPayloads)
         for script in [
             render_argv(&["/usr/bin/false"], &shell),
             render_argv(&["/definitely/missing/ngterm-payload"], &shell),
             render_command_line("false; and true", &shell),
+            render_command_line("'/definitely/missing/ngterm-payload'", &shell),
         ] {
-            let output = run_fish(fish, &script, dir.path());
+            let output = run_fish(fish, &script, dir.path(), None);
             assert!(output.status.success(), "{output:?}");
             assert_eq!(
                 String::from_utf8_lossy(&output.stdout),
-                "/res/it's:/usr/share|/res/it's|-il\n",
+                "/res/it's:/usr/local/share:/usr/share|/res/it's|-il\n",
                 "{script}"
+            );
+        }
+    }
+
+    /// upstream's `fishReplayRearmsXDGDataDirectoriesFromTheLivePayloadState`: the final fish's `XDG_DATA_DIRS` is the
+    /// root, then what the command left there (the default when it emptied or unset it), copies of the root dropped.
+    #[test]
+    #[cfg_attr(windows, ignore = "runs the replay under fish, which Windows has not")]
+    fn a_fish_replay_rearms_the_data_dirs_from_what_the_command_left() {
+        let Some(fish) = fish() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let printer = dir.path().join("print-env");
+        executable(
+            &printer,
+            "#!/bin/sh\nprintf '%s|%s\\n' \"$XDG_DATA_DIRS\" \"$GHOSTTY_SHELL_INTEGRATION_XDG_DIR\"\n",
+        );
+        let root = "/integration root";
+        let rearm = fish_rearm(root);
+        let printer_path = printer.display().to_string();
+        let shell = FinalShell {
+            path: &printer_path,
+            kind: LoginShell::Fish,
+            rearm: &rearm,
+        };
+        let repeated = format!("{root}:/new/one:{root}");
+        let cases: [(&[&str], String); 6] = [
+            (
+                &["set", "-gx", "XDG_DATA_DIRS", "/new/one:/new/two"],
+                format!("{root}:/new/one:/new/two"),
+            ),
+            (
+                &["set", "-gx", "XDG_DATA_DIRS", ""],
+                format!("{root}:/usr/local/share:/usr/share"),
+            ),
+            (
+                &["set", "-e", "XDG_DATA_DIRS"],
+                format!("{root}:/usr/local/share:/usr/share"),
+            ),
+            (&["set", "-gx", "XDG_DATA_DIRS", &repeated], format!("{root}:/new/one")),
+            (
+                &["set", "-gx", "XDG_DATA_DIRS", "/new with space:/new/two"],
+                format!("{root}:/new with space:/new/two"),
+            ),
+            // a command that leaves it alone keeps the session's own, empty entries dropped
+            (&["true"], format!("{root}:/original/one:/original/two")),
+        ];
+        for (argv, expected) in cases {
+            let output = run_fish(
+                fish,
+                &render_argv(argv, &shell),
+                dir.path(),
+                Some("/original/one::/original/two:"),
+            );
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!("{expected}|{root}\n"),
+                "{argv:?}"
             );
         }
     }

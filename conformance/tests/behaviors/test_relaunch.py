@@ -9,7 +9,7 @@ import pytest
 from agterm_conformance.match import assert_absent, assert_ok, find_session, workspaces
 
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh login shell"
+    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
 )
 
 

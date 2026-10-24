@@ -66,7 +66,7 @@ else from beside `--bin`.
 ## Capability vocabulary
 
 Source of truth: `CAPABILITIES` in `agterm_conformance/impls/base.py`; `selftests/test_docs.py` keeps this table equal
-to it and to the reference's profile. `host`: claimed only where the account's login shell is zsh.
+to it and to the reference's profile. `host`: claimed only where the account's login shell is zsh or fish.
 A row with the reference column empty and a meaning starting `Rust-only` is an extension of the Rust build, see
 Rust-only extensions below.
 A capability names a divergence the platforms legitimately differ in; behavior both the reference and the Rust build
@@ -76,7 +76,7 @@ share is asserted directly, with no capability.
 |---|---|---|
 | `posix-shell` | yes | panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic |
 | `live-sessions` | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the Rust build's one session server per instance, ngterm-session) |
-| `live-any-shell` |  | Rust-only: Live sessions in a zsh, bash, fish or PowerShell login shell, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and ngterm-session is staged |
+| `live-any-shell` |  | Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and ngterm-session is staged |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
@@ -91,9 +91,9 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `posix-shell`: panes run `/bin/sh` from the harness's ghostty config, as the reference;
 - `hidden-split-holds-focus`: upstream's documented model contract (`control-api.md`, "works shown or hidden; read
   `splitFocused`", and `AppStorePaneTests`); macOS's reversion is an AppKit first-responder effect;
-- `live-sessions`: by host, where the login shell is zsh and `ngterm-session` is staged;
-- `live-any-shell`: by host, live sessions for bash, fish and PowerShell login shells too, the one Rust-only
-  extension (below): claimed together with `live-sessions` for a zsh login shell, alone for the others.
+- `live-sessions`: by host, where the login shell is zsh or fish (upstream's two) and `ngterm-session` is staged;
+- `live-any-shell`: by host, live sessions for bash and PowerShell login shells too, the one Rust-only extension
+  (below): claimed together with `live-sessions` for a zsh or fish login shell, alone for the others.
 
 It does not claim:
 
@@ -113,15 +113,16 @@ A Rust-only extension is a capability the reference does not claim, so its tests
 `unsupported` on the reference and the reference discipline holds them to nothing there: the Rust CI validates them
 instead, with `--must-pass` on the capability in every job whose host can claim it.
 Today there is one, `live-any-shell`: a Live pane runs the password database's login shell in its live session, zsh
-as upstream, bash, fish and PowerShell as well, each started with its shell integration the way libghostty starts a
-shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` for fish; ngterm's own
-script for PowerShell, which Ghostty does not integrate).
+and fish as upstream, bash and PowerShell as well, each started with its shell integration the way libghostty starts a
+shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's
+root merged in front of the pane's own value as upstream; ngterm's own script for PowerShell, which Ghostty does not
+integrate).
 Its tests are in `tests/protocol/test_live_any_shell.py`; a test that branches on Live being active
 (`test_restore.py::test_seeded_live_mode_is_requested_at_launch`) takes the fallback branch only when the build has
 neither `live-sessions` nor `live-any-shell`.
 The `conformance` job of `.github/workflows/rust-linux.yml` is a matrix over three login shells, each leg with
-`--must-pass live-any-shell`: bash, fish and zsh. The zsh leg, the one host where the build claims `live-sessions`,
-also runs with `--must-pass live-sessions`, as reference-macos.
+`--must-pass live-any-shell`: bash, fish and zsh. The zsh and fish legs, the hosts where the build claims
+`live-sessions`, also run with `--must-pass live-sessions`, as reference-macos.
 No leg runs a PowerShell login shell, so the suite does not hold PowerShell's part of the claim: below it,
 `.github/workflows/cross-platform.yml` runs `ngterm-session`'s PowerShell session tests (`tests/pwsh.rs`: the
 integration's marks and working directory, the foreground read, a replay) on Linux, macOS and Windows, and

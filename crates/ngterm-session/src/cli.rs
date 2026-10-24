@@ -30,7 +30,8 @@
 //!   latest title it holds when it paints, so there a role title the program's own title follows at once is lost.
 //!
 //! `attach <name> [argv]` is create-only: a session that exists is attached to and the argv ignored; one that does not
-//! is created running the argv (the login shell without one), in the client's working directory and environment. An
+//! is created running the argv (the login shell without one), in the client's working directory and environment (a live
+//! fish pane's with the fish integration's root put in front of its `XDG_DATA_DIRS`, `attach::with_fish_data_dirs`). An
 //! attach whose argv is a guard (`/bin/sh -c "printf '…gone'; exit 1"`, `ngterm-core::remote::ssh`) so never hands
 //! back a fresh program under a session's name that went away.
 //!

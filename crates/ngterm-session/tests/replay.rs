@@ -82,11 +82,14 @@ fn rearm(kind: LoginShell) -> Vec<Rearm> {
         ],
         LoginShell::Fish => vec![
             Rearm::Export("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/integration root".to_owned()),
-            Rearm::Export("XDG_DATA_DIRS", "/integration root:/user/share".to_owned()),
+            Rearm::FishDataDirs("/integration root".to_owned()),
         ],
         LoginShell::Pwsh => unreachable!("PowerShell has no exec: pwsh.rs covers its replay"),
     }
 }
+
+/// The `XDG_DATA_DIRS` a fish session runs with, which its re-arm puts the integration root in front of.
+const FISH_DATA_DIRS: &str = "/user/share";
 
 /// The lines the final shell records for `rearm` and `kind`'s interactive flags: `KEY=value` for an export,
 /// `KEY unset` for an unset, then `args=<flags>`.
@@ -96,6 +99,8 @@ fn expected_record(kind: LoginShell, rearm: &[Rearm]) -> String {
         .map(|step| match step {
             Rearm::Export(key, value) => format!("{key}={value}\n"),
             Rearm::Unset(key) => format!("{key} unset\n"),
+            // recomputed from the session's own value, which the command left alone
+            Rearm::FishDataDirs(root) => format!("{}={root}:{FISH_DATA_DIRS}\n", step.key()),
         })
         .collect();
     lines.push(format!("args={}\n", kind.interactive_flags().join(" ")));
@@ -107,9 +112,7 @@ fn final_shell_script(rearm: &[Rearm]) -> String {
     let checks: String = rearm
         .iter()
         .map(|step| {
-            let key = match step {
-                Rearm::Export(key, _) | Rearm::Unset(key) => key,
-            };
+            let key = step.key();
             format!(
                 "if [ -n \"${{{key}+set}}\" ]; then printf '%s\\n' \"{key}=${key}\"; else printf '%s\\n' '{key} unset'; fi\n"
             )
@@ -176,7 +179,7 @@ fn session(shell: &Shell, script: String, dir: &Path) -> TestResult<SessionSpec>
     environment.insert("SHELL".to_owned(), shell.path.to_owned());
     environment.insert("TERM".to_owned(), "xterm-256color".to_owned());
     if shell.kind.is_fish() {
-        environment.insert("XDG_DATA_DIRS".to_owned(), "/user/share".to_owned());
+        environment.insert("XDG_DATA_DIRS".to_owned(), FISH_DATA_DIRS.to_owned());
     }
     let mut argv = vec![shell.path.to_owned()];
     if shell.kind.is_fish() {

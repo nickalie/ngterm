@@ -276,10 +276,12 @@ mod tests {
         assert_eq!(bash.get("HISTFILE").map(String::as_str), Some("/home/u/.bash_history"));
         let fish = Runtime::resolve(&env, Some(&bin), Some("/usr/bin/fish".to_owned()), false);
         let fish = fish.configuration(pane, BTreeMap::new(), None).unwrap().environment;
+        // the root alone: the attach merges it into the pane's own XDG_DATA_DIRS, the app's not copied
         assert_eq!(
-            fish.get("XDG_DATA_DIRS").cloned(),
-            Some(format!("{}:/opt/share:/usr/share", resources.display()))
+            fish.get("GHOSTTY_SHELL_INTEGRATION_XDG_DIR").map(PathBuf::from),
+            Some(resources)
         );
+        assert!(!fish.contains_key("XDG_DATA_DIRS"));
         assert!(!fish.contains_key("ENV") && !fish.contains_key("ZDOTDIR"));
     }
 

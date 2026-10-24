@@ -252,3 +252,67 @@ fn a_session_without_an_argv_runs_the_shell() {
     assert!(!default_argv(None).is_empty());
     assert!(!default_argv(Some(OsStr::new(""))).is_empty());
 }
+
+fn pairs(entries: &[(&str, &str)]) -> Vec<(String, String)> {
+    entries
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
+/// The `XDG_DATA_DIRS` a session `prepare` creates from `env` gets.
+fn prepared_data_dirs(env: &[(&str, &str)]) -> Option<String> {
+    let origin = Origin {
+        env: pairs(env),
+        cwd: None,
+        executable: PathBuf::from("/opt/ngterm/bin/ngterm-session"),
+    };
+    let prepared = prepare(&contract(&[("NGTERM_LIVE_DIR", "/tmp/ns")]), "s", Vec::new(), origin).unwrap();
+    variable(&prepared.spec.env, "XDG_DATA_DIRS").map(str::to_owned)
+}
+
+#[test]
+fn a_live_fish_session_gets_the_integration_root_ahead_of_the_panes_data_dirs() {
+    let root = ("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/res/shell-integration");
+    let fish = ("SHELL", "/usr/bin/fish");
+    // the pane's resolved value: the app's own, else a later setting (a ghostty config `env` entry) over it
+    assert_eq!(
+        prepared_data_dirs(&[fish, root, ("XDG_DATA_DIRS", "/custom/share")]).as_deref(),
+        Some("/res/shell-integration:/custom/share")
+    );
+    assert_eq!(
+        prepared_data_dirs(&[
+            fish,
+            ("XDG_DATA_DIRS", "/app/share"),
+            root,
+            ("XDG_DATA_DIRS", "/conf/share")
+        ])
+        .as_deref(),
+        Some("/res/shell-integration:/conf/share")
+    );
+    assert_eq!(
+        prepared_data_dirs(&[fish, root]).as_deref(),
+        Some("/res/shell-integration:/usr/local/share:/usr/share")
+    );
+    assert_eq!(
+        prepared_data_dirs(&[fish, root, ("XDG_DATA_DIRS", "")]).as_deref(),
+        Some("/res/shell-integration:/usr/local/share:/usr/share")
+    );
+    // one setting is left, the merged one
+    let merged = attach::with_fish_data_dirs(pairs(&[fish, ("XDG_DATA_DIRS", "/a"), root, ("XDG_DATA_DIRS", "/b")]));
+    let settings: Vec<&str> = merged
+        .iter()
+        .filter(|(key, _)| key == "XDG_DATA_DIRS")
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(settings, ["/res/shell-integration:/b"]);
+    // not a live fish pane's: another shell, no root, an empty root
+    for env in [
+        &[("SHELL", "/bin/zsh"), root, ("XDG_DATA_DIRS", "/a")][..],
+        &[fish, ("XDG_DATA_DIRS", "/a")][..],
+        &[fish, ("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", ""), ("XDG_DATA_DIRS", "/a")][..],
+    ] {
+        assert_eq!(prepared_data_dirs(env).as_deref(), Some("/a"), "{env:?}");
+        assert_eq!(attach::with_fish_data_dirs(pairs(env)), pairs(env), "{env:?}");
+    }
+}
