@@ -406,9 +406,10 @@ pub fn rearm(shell: LoginShell, environment: &BTreeMap<String, String>) -> Optio
             }
             steps
         }
+        // upstream's order: the integration's directory, then the data directories that put it on fish's path
         LoginShell::Fish => vec![
-            required("XDG_DATA_DIRS")?,
             required("GHOSTTY_SHELL_INTEGRATION_XDG_DIR")?,
+            required("XDG_DATA_DIRS")?,
         ],
         LoginShell::Pwsh => vec![required(PWSH_INTEGRATION_VARIABLE)?],
     };
@@ -651,11 +652,11 @@ mod tests {
         assert_eq!(
             fish,
             [
+                Rearm::Export("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/res/shell-integration".to_owned()),
                 Rearm::Export(
                     "XDG_DATA_DIRS",
                     "/res/shell-integration:/usr/local/share:/usr/share".to_owned()
                 ),
-                Rearm::Export("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/res/shell-integration".to_owned()),
             ]
         );
         // a wrap without the integration has nothing to re-arm

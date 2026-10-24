@@ -1,9 +1,28 @@
 //! The script a wrapped pane's daemon runs a command with (upstream's `ZmxReplayScript.swift`): the command, then the
-//! shell integration re-armed and the login shell exec'd, so the pane ends at a prompt whatever the command did.
+//! shell integration re-armed and the login shell exec'd, so the pane ends at a prompt whatever the command did, a
+//! Ctrl+C included. The script runs in an interactive shell (the pane's job control and the user's startup files),
+//! which drops the rest of a plain `;` list once its foreground job is interrupted, so each shell's form keeps the
+//! re-arm and the `exec` out of the command's list.
 //!
-//! zsh and bash share the POSIX form, where every builtin is quoted, so a user's alias of `builtin`, `export` or `exec`
-//! cannot take it over. fish has no aliases (its `alias` defines a function, which `builtin` bypasses, and `exec` is a
-//! reserved word no function can take), so its form is `builtin set -gx` and a plain `exec`, with fish's own quoting.
+//! zsh and bash share the POSIX words, where every builtin is quoted, so a user's alias of `builtin`, `export`, `exec`
+//! or `trap` cannot take it over. zsh runs the re-arm and the `exec` in an `always` block (upstream's form). bash has no
+//! `always`: an interrupted job ends the `-c` string's list, and inside a loop or a list the whole string, so the
+//! re-arm and the `exec` are set as an `EXIT` trap first, and follow the command again on a line of their own for a
+//! command that returns (the `exec` leaves the trap behind unrun). bash runs an `EXIT` trap on every exit, an explicit
+//! `exit` and a hangup's included, where zsh's `always` block is skipped, so the trap execs the final shell only when
+//! the string was dropped for an interrupt: the last pipeline then reads 130 (128 + SIGINT) in `PIPESTATUS`, and `$?`
+//! reads 1, the status bash gives a dropped string. Neither alone tells: a command that returns 130 itself leaves the
+//! same `PIPESTATUS` to an `exit` right after it (the `exit` builtin runs the trap before its own status is recorded),
+//! which puts its own status in `$?`, and a hangup keeps the previous command's status in both. A hangup (the session
+//! server ending the program) or an `exit` thus ends the session, as under zsh and fish, except an `exit 1` right after
+//! a pipeline whose first command returned 130 by itself, which bash leaves nothing to tell from an interrupt. A `HUP`
+//! trap is no way to tell either: bash defers it until the foreground job ends, and forwards no hangup to the job
+//! meanwhile.
+//!
+//! fish has no aliases (its `alias` defines a function, which `builtin` bypasses, and `exec` is a reserved word no
+//! function can take), so its form is `builtin set -gx` and a plain `exec`, with fish's own quoting. The command runs
+//! through `builtin eval`, which confines an interruption to it, under `builtin status job-control full`, which also
+//! gives it a process group of its own in the pane's foreground (upstream's form).
 //!
 //! PowerShell, a Rust-only extension, has no `exec`: its replay runs in the shell `-NoExit` keeps
 //! ([`LoginShell::script_flags`]), so the script re-arms the integration's variable and loads the integration first,
@@ -71,7 +90,8 @@ fn exact_native_passing() -> &'static str {
 #[must_use]
 pub fn render_command_line(command_line: &str, shell: &FinalShell<'_>) -> String {
     let statement = if shell.kind.is_fish() {
-        format!("builtin eval {}", fish_quoted(command_line))
+        // the fish form evaluates its statement itself
+        command_line.to_owned()
     } else if shell.kind.is_powershell() {
         format!(". ([scriptblock]::Create({}))", powershell_quoted(command_line))
     } else {
@@ -81,24 +101,65 @@ pub fn render_command_line(command_line: &str, shell: &FinalShell<'_>) -> String
 }
 
 fn render(statement: &str, shell: &FinalShell<'_>) -> String {
-    if shell.kind.is_powershell() {
-        return render_powershell(statement, shell);
+    match shell.kind {
+        LoginShell::Pwsh => render_powershell(statement, shell),
+        LoginShell::Fish => render_fish(statement, shell),
+        LoginShell::Zsh => format!("{{ {statement} ; }} always {{ {} ; }}", posix_final_shell(shell)),
+        LoginShell::Bash => {
+            let final_shell = posix_final_shell(shell);
+            let on_interrupt =
+                format!("case \"${{PIPESTATUS[0]}}:$?\" in {INTERRUPTED}:{DROPPED}) {final_shell} ;; esac");
+            format!(
+                "'builtin' 'trap' -- {} EXIT\n{statement}\n{final_shell}",
+                quoted(&on_interrupt)
+            )
+        }
     }
-    let fish = shell.kind.is_fish();
-    let mut steps = vec![statement.to_owned()];
-    steps.extend(shell.rearm.iter().map(|step| match (step, fish) {
-        (Rearm::Export(key, value), false) => format!("'builtin' 'export' {key}={}", quoted(value)),
-        (Rearm::Unset(key), false) => format!("'builtin' 'unset' {key}"),
-        (Rearm::Export(key, value), true) => format!("builtin set -gx {key} {}", fish_quoted(value)),
-        (Rearm::Unset(key), true) => format!("builtin set -e {key}"),
-    }));
-    let flags = shell.kind.interactive_flags().join(" ");
-    steps.push(if fish {
-        format!("exec {} {flags}", fish_quoted(shell.path))
-    } else {
-        format!("'builtin' 'exec' -- {} {flags}", quoted(shell.path))
-    });
+}
+
+/// The status bash records for a pipeline SIGINT ended (128 + SIGINT, which is 2 on every Unix), which its `EXIT`
+/// trap reads in `PIPESTATUS` when an interrupt dropped the script.
+const INTERRUPTED: u8 = 130;
+
+/// The status bash exits with when an interrupt dropped the rest of its `-c` string, which its `EXIT` trap reads in
+/// `$?`.
+const DROPPED: u8 = 1;
+
+/// The POSIX re-arm and `exec` of the final shell, joined with ` ; `.
+fn posix_final_shell(shell: &FinalShell<'_>) -> String {
+    let mut steps: Vec<String> = shell
+        .rearm
+        .iter()
+        .map(|step| match step {
+            Rearm::Export(key, value) => format!("'builtin' 'export' {key}={}", quoted(value)),
+            Rearm::Unset(key) => format!("'builtin' 'unset' {key}"),
+        })
+        .collect();
+    steps.push(format!(
+        "'builtin' 'exec' -- {} {}",
+        quoted(shell.path),
+        shell.kind.interactive_flags().join(" ")
+    ));
     steps.join(" ; ")
+}
+
+/// fish's replay: job control on, the statement evaluated, the integration re-armed and the final shell exec'd, joined
+/// with `; `.
+fn render_fish(statement: &str, shell: &FinalShell<'_>) -> String {
+    let mut steps = vec![
+        "builtin status job-control full".to_owned(),
+        format!("builtin eval {}", fish_quoted(statement)),
+    ];
+    steps.extend(shell.rearm.iter().map(|step| match step {
+        Rearm::Export(key, value) => format!("builtin set -gx {key} {}", fish_quoted(value)),
+        Rearm::Unset(key) => format!("builtin set -e {key}"),
+    }));
+    steps.push(format!(
+        "exec {} {}",
+        fish_quoted(shell.path),
+        shell.kind.interactive_flags().join(" ")
+    ));
+    steps.join("; ")
 }
 
 /// PowerShell's replay: the re-armed variables, the integration loaded, then the command, in the shell that stays.
@@ -173,8 +234,8 @@ mod tests {
         let script = render_argv(&["printf", "a b"], &zsh(&rearm, "/bin/zsh"));
         assert_eq!(
             script,
-            "'printf' 'a b' ; 'builtin' 'export' ZDOTDIR='/Applications/ngterm resources/zsh' ; 'builtin' 'export' \
-             GHOSTTY_ZSH_ZDOTDIR='/Users/test/.config/zsh' ; 'builtin' 'exec' -- '/bin/zsh' -il"
+            "{ 'printf' 'a b' ; } always { 'builtin' 'export' ZDOTDIR='/Applications/ngterm resources/zsh' ; \
+             'builtin' 'export' GHOSTTY_ZSH_ZDOTDIR='/Users/test/.config/zsh' ; 'builtin' 'exec' -- '/bin/zsh' -il ; }"
         );
     }
 
@@ -183,8 +244,8 @@ mod tests {
         let rearm = zsh_rearm("/bundle/zsh", None);
         assert_eq!(
             render_argv(&["top"], &zsh(&rearm, "/bin/zsh")),
-            "'top' ; 'builtin' 'export' ZDOTDIR='/bundle/zsh' ; 'builtin' 'unset' GHOSTTY_ZSH_ZDOTDIR ; \
-             'builtin' 'exec' -- '/bin/zsh' -il"
+            "{ 'top' ; } always { 'builtin' 'export' ZDOTDIR='/bundle/zsh' ; 'builtin' 'unset' GHOSTTY_ZSH_ZDOTDIR ; \
+             'builtin' 'exec' -- '/bin/zsh' -il ; }"
         );
     }
 
@@ -193,12 +254,12 @@ mod tests {
         let rearm = zsh_rearm("/z", None);
         assert_eq!(
             render_command_line("a && b 'c'", &zsh(&rearm, "/bin/zsh")),
-            r"'builtin' 'eval' -- 'a && b '\''c'\''' ; 'builtin' 'export' ZDOTDIR='/z' ; 'builtin' 'unset' GHOSTTY_ZSH_ZDOTDIR ; 'builtin' 'exec' -- '/bin/zsh' -il"
+            r"{ 'builtin' 'eval' -- 'a && b '\''c'\''' ; } always { 'builtin' 'export' ZDOTDIR='/z' ; 'builtin' 'unset' GHOSTTY_ZSH_ZDOTDIR ; 'builtin' 'exec' -- '/bin/zsh' -il ; }"
         );
     }
 
     #[test]
-    fn bash_rearms_its_posix_mode_injection_and_execs_bash_in_posix_mode() {
+    fn bash_rearms_its_posix_mode_injection_and_execs_bash_in_posix_mode_from_an_interrupt_only_exit_trap_as_well() {
         let rearm = [
             Rearm::Export("ENV", "/res/bash/ghostty.bash".to_owned()),
             Rearm::Export("GHOSTTY_BASH_INJECT", "1".to_owned()),
@@ -209,59 +270,135 @@ mod tests {
             kind: LoginShell::Bash,
             rearm: &rearm,
         };
+        let final_shell = "'builtin' 'export' ENV='/res/bash/ghostty.bash' ; 'builtin' 'export' \
+                           GHOSTTY_BASH_INJECT='1' ; 'builtin' 'unset' GHOSTTY_BASH_ENV ; 'builtin' 'exec' -- \
+                           '/bin/bash' --posix -il";
+        let trap = r#"'builtin' 'trap' -- 'case "${PIPESTATUS[0]}:$?" in 130:1) '\''builtin'\'' '\''export'\'' ENV='\''/res/bash/ghostty.bash'\'' ; '\''builtin'\'' '\''export'\'' GHOSTTY_BASH_INJECT='\''1'\'' ; '\''builtin'\'' '\''unset'\'' GHOSTTY_BASH_ENV ; '\''builtin'\'' '\''exec'\'' -- '\''/bin/bash'\'' --posix -il ;; esac' EXIT"#;
+        assert_eq!(render_argv(&["top"], &shell), format!("{trap}\n'top'\n{final_shell}"));
         assert_eq!(
-            render_argv(&["top"], &shell),
-            "'top' ; 'builtin' 'export' ENV='/res/bash/ghostty.bash' ; 'builtin' 'export' GHOSTTY_BASH_INJECT='1' ; \
-             'builtin' 'unset' GHOSTTY_BASH_ENV ; 'builtin' 'exec' -- '/bin/bash' --posix -il"
+            render_command_line("a; b", &shell),
+            format!("{trap}\n'builtin' 'eval' -- 'a; b'\n{final_shell}")
         );
     }
 
     #[test]
-    fn fish_sets_its_data_dirs_with_set_and_execs_fish_in_its_own_quoting() {
+    fn fish_evaluates_the_command_under_job_control_then_rearms_and_execs_fish_in_its_own_quoting() {
         let rearm = [
-            Rearm::Export("XDG_DATA_DIRS", "/res/it's:/usr/share".to_owned()),
             Rearm::Export("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/res/it's".to_owned()),
+            Rearm::Export("XDG_DATA_DIRS", "/res/it's:/usr/share".to_owned()),
         ];
         let shell = FinalShell {
             path: "/usr/bin/fish",
             kind: LoginShell::Fish,
             rearm: &rearm,
         };
+        let tail = r"builtin set -gx GHOSTTY_SHELL_INTEGRATION_XDG_DIR '/res/it\'s'; builtin set -gx XDG_DATA_DIRS '/res/it\'s:/usr/share'; exec '/usr/bin/fish' -il";
+        // the captured words are quoted once as words, then again as the one word `eval` takes
         assert_eq!(
             render_argv(&["printf", r"a\b", "it's"], &shell),
-            r"'printf' 'a\\b' 'it\'s' ; builtin set -gx XDG_DATA_DIRS '/res/it\'s:/usr/share' ; builtin set -gx GHOSTTY_SHELL_INTEGRATION_XDG_DIR '/res/it\'s' ; exec '/usr/bin/fish' -il"
+            format!(r"builtin status job-control full; builtin eval '\'printf\' \'a\\\\b\' \'it\\\'s\''; {tail}")
         );
         assert_eq!(
             render_command_line("a && b 'c'", &shell),
-            r"builtin eval 'a && b \'c\'' ; builtin set -gx XDG_DATA_DIRS '/res/it\'s:/usr/share' ; builtin set -gx GHOSTTY_SHELL_INTEGRATION_XDG_DIR '/res/it\'s' ; exec '/usr/bin/fish' -il"
+            format!(r"builtin status job-control full; builtin eval 'a && b \'c\''; {tail}")
         );
         let unset = [Rearm::Unset("X")];
-        assert!(render_argv(&["top"], &FinalShell { rearm: &unset, ..shell }).contains(" ; builtin set -e X ; "));
+        assert!(
+            render_argv(&["top"], &FinalShell { rearm: &unset, ..shell })
+                .ends_with("; builtin set -e X; exec '/usr/bin/fish' -il")
+        );
+        // upstream's argv case: a dollar, a semicolon and a glob, spaces, a quote and an empty word
+        let argv = ["/tmp/tool $name;*", "two words", "can't", ""];
+        let statement = r"'/tmp/tool $name;*' 'two words' 'can\'t' ''";
+        assert_eq!(
+            render_argv(&argv, &shell),
+            format!(
+                "builtin status job-control full; builtin eval {}; {tail}",
+                fish_quoted(statement)
+            )
+        );
+    }
+
+    #[test]
+    fn fish_quoting_covers_required_and_hostile_arguments() {
+        let cases = [
+            (r"trailing\", r"'trailing\\'"),
+            (r"two\\slashes", r"'two\\\\slashes'"),
+            ("can't", r"'can\'t'"),
+            ("", "''"),
+            (r"\'", r"'\\\''"),
+            (r"many\\\slashes", r"'many\\\\\\slashes'"),
+            ("two words", "'two words'"),
+            (
+                "\u{e9}\u{43b}\u{435}\u{43d}\u{430}",
+                "'\u{e9}\u{43b}\u{435}\u{43d}\u{430}'",
+            ),
+            ("$literal", "'$literal'"),
+            ("(parentheses)", "'(parentheses)'"),
+            ("*.swift", "'*.swift'"),
+            ("semi;colon", "'semi;colon'"),
+            (">redirect", "'>redirect'"),
+            ("--option", "'--option'"),
+            ("line one\nline two", "'line one\nline two'"),
+        ];
+        let rearm = [Rearm::Export("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/root".to_owned())];
+        let shell = FinalShell {
+            path: "/bin/fish",
+            kind: LoginShell::Fish,
+            rearm: &rearm,
+        };
+        for (argument, expected) in cases {
+            assert_eq!(fish_quoted(argument), expected, "{argument:?}");
+            let prefix = format!(
+                "builtin status job-control full; builtin eval {}; ",
+                fish_quoted(expected)
+            );
+            assert!(render_argv(&[argument], &shell).starts_with(&prefix), "{argument:?}");
+        }
     }
 
     fn executable(path: &Path, contents: &str) {
         ngterm_host::fakes::write_executable(path, contents).unwrap();
     }
 
-    /// Runs `script` under bash: zsh is not on every CI host, and bash has the same quoted builtins, `eval --` and
-    /// `exec --` the script relies on.
-    fn run(script: &str) -> bool {
-        Command::new("/bin/bash")
-            .arg("-c")
-            .arg(script)
-            .status()
-            .unwrap()
-            .success()
+    /// The POSIX login shells this host has, each with the form it is replayed in: bash always (every Unix CI host),
+    /// zsh where it is installed.
+    fn posix_shells() -> Vec<(LoginShell, &'static str)> {
+        [
+            (LoginShell::Bash, ["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]),
+            (LoginShell::Zsh, ["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh"]),
+        ]
+        .into_iter()
+        .filter_map(|(kind, paths)| {
+            paths
+                .into_iter()
+                .find(|path| Path::new(path).exists())
+                .map(|path| (kind, path))
+        })
+        .collect()
     }
 
-    /// The `record-argv` helper in `dir`: it writes its arguments after the first, one per line, into the first.
+    /// Runs `script` under the shell at `path` without its startup files.
+    fn run(path: &str, script: &str) -> bool {
+        let flag = if path.ends_with("zsh") { "-fc" } else { "-c" };
+        Command::new(path).arg(flag).arg(script).status().unwrap().success()
+    }
+
+    /// The `record-argv` helper in `dir`: it writes its arguments after the first, each ended by a NUL, into the first.
     fn recorder(dir: &Path) -> std::path::PathBuf {
         let record = dir.join("record-argv");
         executable(
             &record,
-            "#!/bin/sh\nresult=$1\nshift\nprintf '%s\\n' \"$@\" > \"$result\"\n",
+            "#!/bin/sh\nresult=$1\nshift\nprintf '%s\\0' \"$@\" > \"$result\"\n",
         );
         record
+    }
+
+    /// The NUL-ended values the file at `path` holds.
+    fn recorded(path: &Path) -> Vec<String> {
+        let contents = fs::read_to_string(path).unwrap();
+        let values = contents.strip_suffix('\0').unwrap_or_else(|| panic!("{contents:?}"));
+        values.split('\0').map(str::to_owned).collect()
     }
 
     #[test]
@@ -270,18 +407,29 @@ mod tests {
         ignore = "runs its script with the POSIX shell /bin/sh, which Windows has not"
     )]
     fn captured_arguments_survive_the_shell_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = dir.path().join("argv");
-        let record = recorder(dir.path());
-        let expected = ["two words", "$HOME", "single'quote", "semi;colon"];
-        let mut argv = vec![record.display().to_string(), result.display().to_string()];
-        argv.extend(expected.iter().map(|arg| (*arg).to_owned()));
-        let rearm = zsh_rearm("/bundle/zsh", None);
-        assert!(run(&render_argv(&argv, &zsh(&rearm, "/usr/bin/true"))));
-        assert_eq!(
-            fs::read_to_string(&result).unwrap().lines().collect::<Vec<_>>(),
-            expected
-        );
+        let expected = [
+            "two words",
+            "$HOME",
+            "single'quote",
+            "semi;colon",
+            "",
+            "line one\nline two",
+        ];
+        for (kind, path) in posix_shells() {
+            let dir = tempfile::tempdir().unwrap();
+            let result = dir.path().join("argv");
+            let record = recorder(dir.path());
+            let mut argv = vec![record.display().to_string(), result.display().to_string()];
+            argv.extend(expected.iter().map(|arg| (*arg).to_owned()));
+            let rearm = zsh_rearm("/bundle/zsh", None);
+            let shell = FinalShell {
+                path: "/usr/bin/true",
+                kind,
+                rearm: &rearm,
+            };
+            assert!(run(path, &render_argv(&argv, &shell)), "{path}");
+            assert_eq!(recorded(&result), expected, "{path}");
+        }
     }
 
     #[test]
@@ -290,20 +438,75 @@ mod tests {
         ignore = "runs its script with the POSIX shell /bin/sh, which Windows has not"
     )]
     fn a_durable_shell_line_keeps_its_operators_and_word_parsing() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = dir.path().join("shell-line");
-        let output = shell_quoted_line(&[result.display().to_string()]);
-        let line = format!("printf '%s' 'two words' > {output} && printf ' and more' >> {output}");
-        let rearm = zsh_rearm("/bundle/zsh", None);
-        assert!(run(&render_command_line(&line, &zsh(&rearm, "/usr/bin/true"))));
-        assert_eq!(fs::read_to_string(&result).unwrap(), "two words and more");
+        for (kind, path) in posix_shells() {
+            let dir = tempfile::tempdir().unwrap();
+            let result = dir.path().join("shell-line");
+            let output = shell_quoted_line(&[result.display().to_string()]);
+            let line = format!("printf '%s' 'two words' > {output} && printf ' and more' >> {output}");
+            let rearm = zsh_rearm("/bundle/zsh", None);
+            let shell = FinalShell {
+                path: "/usr/bin/true",
+                kind,
+                rearm: &rearm,
+            };
+            assert!(run(path, &render_command_line(&line, &shell)), "{path}");
+            assert_eq!(fs::read_to_string(&result).unwrap(), "two words and more", "{path}");
+        }
+    }
+
+    /// A command that fails or is missing still ends at the final shell, which records the re-armed variables and its
+    /// flags once.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs its script with the POSIX shell /bin/sh, which Windows has not"
+    )]
+    fn a_failed_command_still_execs_the_rearmed_final_shell_once() {
+        for (kind, path) in posix_shells() {
+            let dir = tempfile::tempdir().unwrap();
+            let result = dir.path().join("final");
+            let printer = dir.path().join("final-shell");
+            executable(
+                &printer,
+                &format!(
+                    "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$ZDOTDIR\" \"${{GHOSTTY_ZSH_ZDOTDIR-unset}}\" \"$*\" >> {}\n",
+                    shell_quoted_line(&[result.display().to_string()])
+                ),
+            );
+            let rearm = zsh_rearm("/bundle/integration", Some("/user/zsh"));
+            let printer_path = printer.display().to_string();
+            let shell = FinalShell {
+                path: &printer_path,
+                kind,
+                rearm: &rearm,
+            };
+            let flags = kind.interactive_flags().join(" ");
+            for script in [
+                render_argv(&["/usr/bin/false"], &shell),
+                render_argv(&["/definitely/missing/ngterm-payload"], &shell),
+                render_command_line("false && true", &shell),
+            ] {
+                assert!(run(path, &script), "{path}: {script}");
+                assert_eq!(
+                    fs::read_to_string(&result).unwrap(),
+                    format!("/bundle/integration|/user/zsh|{flags}\n"),
+                    "{path}: {script}"
+                );
+                fs::remove_file(&result).unwrap();
+            }
+        }
     }
 
     /// fish, when this host has one (the `rust-linux` CI job installs it for this test): `None` otherwise.
     fn fish() -> Option<&'static str> {
-        ["/usr/bin/fish", "/bin/fish", "/usr/local/bin/fish"]
-            .into_iter()
-            .find(|path| Path::new(path).exists())
+        [
+            "/usr/bin/fish",
+            "/bin/fish",
+            "/usr/local/bin/fish",
+            "/opt/homebrew/bin/fish",
+        ]
+        .into_iter()
+        .find(|path| Path::new(path).exists())
     }
 
     /// Runs `script` under `fish --no-config` in a throwaway home, so no user configuration is read or written.
@@ -328,13 +531,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = dir.path().join("argv");
         let record = recorder(dir.path());
+        // upstream's hostile arguments
         let expected = [
-            "two words",
-            "$HOME",
-            "single'quote",
-            r"back\slash",
             r"trailing\",
+            r"two\\slashes",
+            "can't",
+            r"\'",
+            r"many\\\slashes",
+            "two words",
+            "\u{e9}\u{43b}\u{435}\u{43d}\u{430}",
+            "$literal",
+            "(parentheses)",
+            "*.swift",
             "semi;colon",
+            ">redirect",
+            "--option",
+            "",
+            "line one\nline two",
         ];
         let mut argv = vec![record.display().to_string(), result.display().to_string()];
         argv.extend(expected.iter().map(|arg| (*arg).to_owned()));
@@ -345,8 +558,8 @@ mod tests {
             "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$XDG_DATA_DIRS\" \"$GHOSTTY_SHELL_INTEGRATION_XDG_DIR\" \"$*\"\n",
         );
         let rearm = [
-            Rearm::Export("XDG_DATA_DIRS", "/res/it's:/usr/share".to_owned()),
             Rearm::Export("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/res/it's".to_owned()),
+            Rearm::Export("XDG_DATA_DIRS", "/res/it's:/usr/share".to_owned()),
         ];
         let printer_path = printer.display().to_string();
         let shell = FinalShell {
@@ -356,14 +569,12 @@ mod tests {
         };
         let output = run_fish(fish, &render_argv(&argv, &shell), dir.path());
         assert!(output.status.success(), "{output:?}");
-        assert_eq!(
-            fs::read_to_string(&result).unwrap().lines().collect::<Vec<_>>(),
-            expected
-        );
+        assert_eq!(recorded(&result), expected);
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
             "/res/it's:/usr/share|/res/it's|-il\n"
         );
+        // a durable line keeps its operators and fish's word parsing
         let line_result = dir.path().join("line");
         let line = format!(
             "printf '%s' 'two words' > {0} && printf ' and more' >> {0}",
@@ -372,6 +583,20 @@ mod tests {
         let output = run_fish(fish, &render_command_line(&line, &shell), dir.path());
         assert!(output.status.success(), "{output:?}");
         assert_eq!(fs::read_to_string(&line_result).unwrap(), "two words and more");
+        // a failed or missing command still ends at the final shell
+        for script in [
+            render_argv(&["/usr/bin/false"], &shell),
+            render_argv(&["/definitely/missing/ngterm-payload"], &shell),
+            render_command_line("false; and true", &shell),
+        ] {
+            let output = run_fish(fish, &script, dir.path());
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "/res/it's:/usr/share|/res/it's|-il\n",
+                "{script}"
+            );
+        }
     }
 
     fn pwsh_shell<'a>(rearm: &'a [Rearm], path: &'a str) -> FinalShell<'a> {

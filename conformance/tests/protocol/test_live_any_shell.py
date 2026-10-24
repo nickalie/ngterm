@@ -59,3 +59,28 @@ def test_a_live_pane_in_the_login_shell_reports_its_cwd_and_survives_the_relaunc
     assert _daemon_row(ctl, sid)["leaderPID"] == before["leaderPID"]
     ctl.wait_text(sid, rf"(?m)^{marker}$", all=True)
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("cwd") == str(directory))
+
+
+@LIVE_ANY_SHELL
+@pytest.mark.covers("session.new", "session.type")
+def test_an_interrupted_live_command_leaves_the_login_shell_prompt(launch):
+    ctl = launch(settings={"restoreMode": "live"})
+    sid = assert_ok(ctl.request("session.new", command="sleep 600"))["id"]
+    ctl.wait_mounted(sid, "left")
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get(ctl.vocabulary.backed_key) is True)
+
+    def sleeping(tree):
+        foreground = find_session(tree, sid).get("foreground") or []
+        assert foreground[:1] == ["sleep"], foreground
+        return True
+
+    ctl.wait_tree(sleeping)
+    before = _daemon_row(ctl, sid)
+    # Ctrl+C ends the command, not the pane: the replay goes on into the login shell (#773)
+    assert_ok(ctl.request("session.type", sid, text="\x03"))
+    ctl.wait_tree(lambda tree: (find_session(tree, sid).get("foreground") or [])[:1] != ["sleep"])
+    marker = _marker()
+    assert_ok(ctl.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:4]} {marker[4:]}\n"))
+    ctl.wait_text(sid, rf"(?m)^{marker}$")
+    after = _daemon_row(ctl, sid)
+    assert (after["daemon"], after["observation"]) == (before["daemon"], "running"), after

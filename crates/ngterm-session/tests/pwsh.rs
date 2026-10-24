@@ -387,10 +387,62 @@ fn a_live_powershell_reports_its_directory_reads_its_foreground_and_replays_a_pr
     Ok(())
 }
 
+/// A replay whose program is interrupted with Ctrl+C (#773) still leaves the integrated prompt: the integration loads
+/// before the program, and `-NoExit` keeps the shell once Ctrl+C stopped the rest of the `-Command` script. The Ctrl+C
+/// is typed into the pane as the terminal sends it: on Unix the line discipline signals the foreground group (the
+/// shell's own, PowerShell having no job control), on Windows the console raises its Ctrl+C event.
+#[test]
+fn an_interrupted_powershell_replay_leaves_the_integrated_prompt() -> TestResult {
+    let Some(shell) = pwsh()? else {
+        eprintln!("SKIPPED: no pwsh on PATH");
+        return Ok(());
+    };
+    let dir = tempfile::tempdir()?;
+    let resources = staged_resources(dir.path())?;
+    let environment = session_environment(dir.path(), &resources)?;
+    let record = dir.path().join("record.json");
+    let rearm = shell_integration::rearm(LoginShell::Pwsh, &environment).ok_or("no integration to re-arm")?;
+    let script = replay::render_argv(
+        &helper_argv()?,
+        &FinalShell {
+            path: &shell,
+            kind: LoginShell::Pwsh,
+            rearm: &rearm,
+        },
+    );
+    let mut argv = vec![shell.clone()];
+    argv.extend(LoginShell::Pwsh.script_flags().iter().map(|flag| (*flag).to_owned()));
+    argv.push(script);
+    let (pane, creator) = Pane::spawn(config(
+        "pwsh-interrupted",
+        dir.path(),
+        session(argv, &environment, dir.path()),
+    ))?;
+    let mut client = Client::new(creator);
+    // the program runs, and holds the pane until it is interrupted
+    wait_for("the helper's record", || record.exists(), |exists| *exists);
+    pane.write(b"\x03")?;
+    // the integrated prompt, with the shell still there, and a line typed at it runs
+    type_at_prompt(&pane, &mut client, 1, &exit_three())?;
+    expect_raw(&mut client, b"\x1b]133;D;3\x07");
+    assert_eq!(
+        pane.exit_status(),
+        None,
+        "the shell stays once the program was interrupted"
+    );
+    assert!(
+        !record.with_extension("done").exists(),
+        "the helper was interrupted, not left to return"
+    );
+    pane.kill(true)?;
+    Ok(())
+}
+
 /// Not a test of its own: the program
 /// [`a_live_powershell_reports_its_directory_reads_its_foreground_and_replays_a_program`] runs in its sessions, which
 /// records its arguments after `--` as JSON in the file [`RECORD`] names (written beside it and renamed into place, so
-/// it never shows up partly written), then holds the foreground until the `.stop` file beside it exists.
+/// it never shows up partly written), then holds the foreground until the `.stop` file beside it exists, and writes the
+/// `.done` file beside it once it returns, which an interrupted helper never does.
 #[test]
 #[ignore = "the PowerShell session test's child"]
 fn foreground_helper() {
@@ -406,4 +458,5 @@ fn foreground_helper() {
     while !stop.exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
+    fs::write(record.with_extension("done"), "").unwrap();
 }

@@ -232,8 +232,8 @@ def live(adapter):
         adapter.stop(instance)
 
 
-def _live_session(live, split=False):
-    sid = assert_ok(live.request("session.new"))["id"]
+def _live_session(live, split=False, **args):
+    sid = assert_ok(live.request("session.new", **args))["id"]
     live.wait_mounted(sid, "left")
     if split:
         assert_ok(live.request("session.split", sid, mode="on"))
@@ -387,6 +387,45 @@ def test_restart_replay_refuses_a_shell_at_its_prompt(live):
     assert _entries(live, sid)["left"]["leaderPID"] == before["leaderPID"]
     assert_ok(live.request("session.close", sid))
     _gone(live, before["daemon"])
+
+
+def _ctrl_c_leaves_a_prompt(live, sid, daemon):
+    """Ctrl+C on the pane's `sleep 600` ends it, and the pane's daemon goes on in its login shell: the session and its
+    pane stay, `zmx.list` lists the same daemon, and a marker typed afterwards prints (#773)."""
+
+    def sleeping(tree):
+        foreground = find_session(tree, sid).get("foreground") or []
+        assert foreground[:1] == ["sleep"], foreground
+        return True
+
+    live.wait_tree(sleeping)
+    pane_id = _pane_id(live, sid)
+    assert_ok(live.request("session.type", sid, text="\x03"))
+    live.wait_tree(lambda tree: (find_session(tree, sid).get("foreground") or [])[:1] != ["sleep"])
+    marker = f"ZMARK{next(_markers)}"
+    assert_ok(live.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:5]} {marker[5:]}\n"))
+    live.wait_text(sid, rf"(?m)^{marker}$")
+    assert _pane_id(live, sid) == pane_id
+    row = _entries(live, sid)["left"]
+    assert (row["daemon"], row["observation"]) == (daemon, "running"), row
+    assert_ok(live.request("session.close", sid))
+    _gone(live, daemon)
+
+
+@LIVE
+@pytest.mark.covers("session.restart")
+def test_restart_command_interrupted_by_ctrl_c_leaves_a_prompt(live):
+    sid = _live_session(live)
+    daemon = _entries(live, sid)["left"]["daemon"]
+    assert_ok(live.request("session.restart", sid, paneID=_pane_id(live, sid), command="sleep 600"))
+    _ctrl_c_leaves_a_prompt(live, sid, daemon)
+
+
+@LIVE
+@pytest.mark.covers("session.new")
+def test_new_command_interrupted_by_ctrl_c_leaves_a_prompt(live):
+    sid = _live_session(live, command="sleep 600")
+    _ctrl_c_leaves_a_prompt(live, sid, _entries(live, sid)["left"]["daemon"])
 
 
 @LIVE

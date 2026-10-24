@@ -162,7 +162,7 @@ mod tests {
                 &[
                     "/bin/zsh",
                     "-lic",
-                    "'builtin' 'eval' -- 'read x' ; 'builtin' 'exec' -- '/bin/zsh' -il",
+                    "{ 'builtin' 'eval' -- 'read x' ; } always { 'builtin' 'exec' -- '/bin/zsh' -il ; }",
                 ],
                 None,
                 "zsh",

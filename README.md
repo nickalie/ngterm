@@ -81,13 +81,13 @@ Linux; the terminal core, the pane core and the live-session server under it (li
   weston and bus); zsh or fish as the login shell for the Live tests of that shell.
 
 On Ubuntu 26.04, the `rust-linux` CI job's packages (the last two lines, with meson and ninja, build weston 15, which
-the GPUI runs need and 26.04 lacks; fish runs the fish replay script's test) plus `zstd` and `python3-venv`. Ubuntu
-has no WPE WebKit, so the app builds there without its HTML overlays ([WPE WebKit](#wpe-webkit)):
+the GPUI runs need and 26.04 lacks; fish and zsh run the replay scripts' tests in their shells) plus `zstd` and
+`python3-venv`. Ubuntu has no WPE WebKit, so the app builds there without its HTML overlays ([WPE WebKit](#wpe-webkit)):
 
 ```sh
 sudo apt-get install pkg-config libfontconfig-dev libfreetype-dev \
   meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
-  curl xz-utils zstd patch ncurses-bin fish fontconfig fonts-dejavu-core \
+  curl xz-utils zstd patch ncurses-bin fish zsh fontconfig fonts-dejavu-core \
   dbus-daemon weston xvfb x11-xkb-utils libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers python3-venv \
   g++ libpixman-1-dev libinput-dev libevdev-dev libudev-dev libdrm-dev libegl-dev libgles-dev libgbm-dev \
   libcairo2-dev libpango1.0-dev libpng-dev hwdata

@@ -31,7 +31,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libfontconfig-dev libfreetype-dev \
             meson ninja-build libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
-            curl xz-utils patch ncurses-bin fish fontconfig fonts-dejavu-core \
+            curl xz-utils patch ncurses-bin fish zsh fontconfig fonts-dejavu-core \
             dbus-daemon weston xvfb x11-xkb-utils libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
             g++ libpixman-1-dev libinput-dev libevdev-dev libudev-dev libdrm-dev libegl-dev libgles-dev libgbm-dev \
             libcairo2-dev libpango1.0-dev libpng-dev hwdata
@@ -89,7 +89,8 @@ jobs:
       - name: lint report
         shell: bash
         run: scripts/lint-report.sh | tee -a "$GITHUB_STEP_SUMMARY"
-      # fish is installed above so the fish replay script's unit test runs against a real fish parser
+      # fish and zsh are installed above so the replay scripts' unit tests and their interrupted-replay PTY tests
+      # (ngterm-session's tests/replay.rs) run against real fish and zsh, beside bash
       # ngterm-gpui's process tests run on their own private bus, headless weston and Xvfb, rendering on lavapipe
       # (mesa-vulkan-drivers): none may skip here (only the nested-niri check is #[ignore]d, no niri on Ubuntu). They
       # run without the HTML overlays here; the bash conformance job runs the instance tests again with them, on Arch.
