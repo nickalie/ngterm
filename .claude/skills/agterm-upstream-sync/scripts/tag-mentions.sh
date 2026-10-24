@@ -16,7 +16,8 @@
 #              mirror it. Bumped in the plan's last task, after the port, never in
 #              the mechanical bump: parityLevel unlocks `since(V)` tests and states a parity not yet reached
 #   keep       history, fixtures and citations: spike-macos.md, selftests and their fixtures, example values in --help
-#              texts and tests (quick.rs), and the files that name the release code was ported from (the ghostty-vt
+#              texts and tests (quick.rs; identity.rs's installed-version values, ported from upstream's
+#              AppIdentityTests), and the files that name the release code was ported from (the ghostty-vt
 #              patch taken from upstream's zmx patch and its README entry, the libghostty config counts, the HUD
 #              store tests, docs/ghostty-config-parity.md): a citation stays at the release it cites
 #   review     no rule knows this path: decide, then add a rule here
@@ -43,6 +44,7 @@ classify() {
     conformance/selftests/*|conformance/tools/*.py|crates/ngterm-gpui/src/quick/tests.rs) echo keep ;;
     build/patches/ghostty-vt/0004-formatter-unstyled-blanks.patch|build/patches/ghostty-vt/README.md) echo keep ;;
     crates/ngterm-core/src/ghostty_config/counts_tests.rs|crates/ngterm-core/src/model/tests/hud.rs) echo keep ;;
+    crates/ngterm-core/src/identity.rs) echo keep ;;
     docs/ghostty-config-parity.md) echo keep ;;
     *) echo review ;;
   esac

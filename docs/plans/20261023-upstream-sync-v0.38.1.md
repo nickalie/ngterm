@@ -2133,13 +2133,13 @@ under `node` with a recording reporter in place of the wrapper)
 
 ### Task 35: Claim v0.38.1 parity and update the docs
 
-- [ ] bump `PARITY_LEVEL` in `crates/ngterm-proto/src/version.rs` and its mirrors (`tag-mentions.sh v0.36.0` class
+- [x] bump `PARITY_LEVEL` in `crates/ngterm-proto/src/version.rs` and its mirrors (`tag-mentions.sh v0.36.0` class
       `claim`: the version.rs test, `ngterm-core/src/dispatch.rs` and `ngterm-server/tests/server.rs` expectations,
       `conformance/agterm_conformance/impls/rust.py`, `conformance/docs/rust-build.md`), only once every task above is
       done
-- [ ] README.md, CLAUDE.md, conformance/README.md, conformance/docs/rust-build.md describe what changed (new commands
+- [x] README.md, CLAUDE.md, conformance/README.md, conformance/docs/rust-build.md describe what changed (new commands
       `recent`, `session wait`, `workspace flag`, `session overlay hide|show|toggle|page-serve`, ask forms, point sizes,
       events `app.launched` and `pane.focused`, `live-sessions` on fish, the state-dir lock, the installed identity
       file, the keyboard-layout lock); `bash .claude/skills/agterm-upstream-sync/scripts/tag-mentions.sh v0.36.0`
       lists no `review` or stale `claim` line
-- [ ] gate passes
+- [x] gate passes (full suite run here, once, per the user: 791 pass, 0 fail, 0 skip; ratchet held at 667; 124 newly green ids added)

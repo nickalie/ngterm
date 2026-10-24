@@ -89,7 +89,9 @@ full error text directly.
 
 The Rust build is held to upstream's contract, its capability branches included: it claims the capabilities listed
 in [docs/rust-build.md](docs/rust-build.md) > Rust target profile, and where a test branches on a capability it
-takes upstream's branch unless that list says otherwise.
+takes upstream's branch unless that list says otherwise. Once a sync has landed, its parity level
+(docs/rust-build.md > `version` extension) is the catalog's release, so no `since` test skips on it as
+`not-yet-at-level`.
 The Rust build's progress is held by a ratchet: `conformance/rust-passing.txt` lists the ids that went green, and
 `run-linux.sh` fails when one of them goes red again (see rust-build.md > Ratchet).
 A Rust-only extension (today `live-any-shell`, Live sessions in bash and PowerShell login shells) is a
@@ -161,7 +163,7 @@ selections, so a task that turns on a broad area (the terminal, say) grows the l
 from an upstream tag:
 
 ```sh
-.venv/bin/python conformance/tools/gen_catalog.py --tag v0.37.0 --repo ../agterm   # or --source <extracted tree>
+.venv/bin/python conformance/tools/gen_catalog.py --tag v0.38.1 --repo ../agterm   # or --source <extracted tree>
 ```
 
 Generated sections are replaced and statuses survive; `behaviors` and `exemptions` are hand-maintained.

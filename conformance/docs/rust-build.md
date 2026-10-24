@@ -9,7 +9,7 @@ Rust build reports, and no other key (`assert_version_result` in `agterm_conform
 ```json
 {"app": {"version": "0.1.0", "commit": "abc1234"},
  "installed": {"version": "0.1.0", "commit": "abc1234"},
- "conformance": {"parityLevel": "0.36.0", "capabilities": ["posix-shell", "live-sessions"]}}
+ "conformance": {"parityLevel": "0.38.1", "capabilities": ["posix-shell", "live-sessions"]}}
 ```
 
 - `app.version`: a non-empty string; `app.commit` is optional, and the CLI's `version` prints `version (commit)`.
@@ -22,6 +22,8 @@ Rust build reports, and no other key (`assert_version_result` in `agterm_conform
 - `conformance.parityLevel`: the upstream version whose behavior the build claims, a dotted version with an optional
   `v` (no suffix such as `-beta`).
   A test marked `since(V)` above it skips as `not-yet-at-level`.
+  The Rust build claims `0.38.1` (`PARITY_LEVEL` in `ngterm-proto`), the release the catalog describes: it was
+  raised once the port of v0.37.0 to v0.38.1 had landed, never ahead of it, so every `since` test runs against it.
 - `conformance.capabilities`: names from the vocabulary below; a test whose `requires` names one missing skips as
   `unsupported`.
   Names outside the vocabulary match nothing.

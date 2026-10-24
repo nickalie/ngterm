@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
 /// The upstream version whose behavior this build claims.
-pub const PARITY_LEVEL: &str = "0.36.0";
+pub const PARITY_LEVEL: &str = "0.38.1";
 
 /// Which ngterm serves the control socket. `tree` carries the same value as `tree.app`.
 #[skip_serializing_none]
@@ -76,7 +76,7 @@ mod tests {
         assert_eq!(
             json,
             json!({"app": {"version": "0.1.0", "commit": "abc1234"},
-                   "conformance": {"parityLevel": "0.36.0", "capabilities": ["posix-shell", "live-sessions"]}})
+                   "conformance": {"parityLevel": "0.38.1", "capabilities": ["posix-shell", "live-sessions"]}})
         );
     }
 

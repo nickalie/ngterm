@@ -50,6 +50,43 @@ Linux; the terminal core, the pane core and the live-session server under it (li
   the build has none.
 - Behavior is checked by the black-box suite in [conformance/](conformance/README.md), held by a ratchet.
 
+## Parity
+
+The build claims the behavior of the upstream release `version` reports as `conformance.parityLevel`
+([rust-build.md](conformance/docs/rust-build.md) names it). What upstream brought from v0.37.0 up to that release,
+and how this build does it where the OS matters:
+
+- Commands: `recent list|open|clear` (File ▸ Open Recent: the last 20 closed sessions and workspaces), `session wait
+  --until STATUS... [--timeout SEC]` (exit 124 on the timeout), `workspace flag on|off|toggle` (Flag All Sessions /
+  Unflag All Sessions), `session overlay hide|show|toggle` (hidden overlays keep running; bound to Ctrl+Alt+Shift+J on
+  every OS, upstream's ⇧⌘J waiting for per-OS keymap defaults), point-sized floating overlays (`session overlay
+  open|resize --width/--height`, read back as `overlayWidth`/`overlayHeight`), `--url --chromeless` for loopback hosts,
+  `session scratch --follow` (showing a scratch no longer selects its session unless `--follow` is given), forms in
+  `ask` (input fields, choices with an Other answer, hotkeys resolved by keyboard layout), Mark for Attention on a
+  session's row menu, agent status in the session pickers and in `pick` items.
+- `version` reports the installed build beside the running one (`result.installed`, an `installed:` line when they
+  differ): the staged `share/ngterm/app-BUILD`, or the `Info.plist` inside a macOS app bundle.
+- Events: `app.launched` once the control server is up, `tree.changed` when an overlay, page, HUD or remote slot opens
+  or closes, `pane.focused` when a session's split-pane selection settles.
+- A second instance on a state dir another one owns exits 1 before touching it ([Build and run](#build-and-run)).
+- Remote presenters: an HTML page opened in a session shown on another machine opens there, its files and bridge
+  calls served back from the origin over a page-serve channel (`ngtermctl session overlay page-serve`, which the
+  presenter runs over ssh) and loaded under the `ngterm-page` scheme; `ask` forms show and status sounds play on the
+  presenting machine too. A status sound on Linux, which has none of macOS's named sounds, rings the display's bell
+  (Wayland's `xdg_system_bell_v1`, X11's core bell).
+- Settings ▸ Key Mapping ▸ "Lock in terminals" selects a keyboard layout while a terminal has the keyboard and
+  restores the previous one when it leaves: macOS Text Input Source Services, Windows' keyboard layouts, and on Linux
+  XKB's group lock on X11 or, on Wayland, the compositor's own control (sway, Hyprland, niri, KDE Plasma); on GNOME,
+  weston and any other compositor the setting is disabled with the reason shown
+  (`crates/ngterm-gpui/src/input_source.rs`).
+- `notify` banners get a notification slot of their own per session, replaced and cleared as upstream's
+  (freedesktop `replaces_id` and `CloseNotification` on Linux).
+- Live sessions: a fish login shell claims `live-sessions` as zsh does, with the shell integration's root merged into
+  the pane's `XDG_DATA_DIRS`; an interrupted restored command or `--command` still leaves the login shell's prompt;
+  the session server touches its namespace lock hourly, so a temp-dir cleaner never ages it out.
+- A custom command in a session whose directory is gone runs in `HOME`.
+- Selecting text stays off the system clipboard ([The selection clipboard](#the-selection-clipboard)).
+
 ## Prerequisites
 
 - Rust 1.98.1 with clippy and rustfmt, pinned by `rust-toolchain.toml` (`rustup toolchain install` reads it).

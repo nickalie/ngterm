@@ -24,7 +24,7 @@ suite and the ratchet in [conformance/README.md](conformance/README.md) and
 |---|---|---|
 | `ngterm-proto` | wire types: two-level `Command` (group → command, strum wire names), request/response, read-back results, events, `tree` projection | any |
 | `ngterm-host` | the seams a frontend implements: `MainLoop`, `Surface`, `SessionHost`, `ProcessLauncher`, `ProcessTable`; in-memory fakes behind feature `fakes` | any |
-| `ngterm-core` | model, target resolver, command dispatcher (`commands/`, one module per group), events, keymap and Ghostty's keybind actions, the Ghostty config parser and its diagnostics, hooks, persistence, settings, pane environment, live-session/restore logic | any |
+| `ngterm-core` | model, target resolver, command dispatcher (`commands/`, one module per group), events, keymap and Ghostty's keybind actions, the Ghostty config parser and its diagnostics, hooks, persistence, settings, pane environment, live-session/restore logic, the state-dir lock, the installed identity, the keyboard-layout lock's decision, the remote page-serve channel | any |
 | `ngterm-server` | AF_UNIX control server: socket ownership (`flock`), one thread per connection, main-loop hop, stream handoff | Linux, macOS |
 | `ngterm-ctl` → `ngtermctl` | clap CLI ported from upstream's `agtermctlKit`, socket resolution, output formatting | Linux |
 | `ngterm-ghostty-vt-sys` | checked-in bindgen output over libghostty-vt's official C API (`scripts/gen-ghostty-vt-bindings.sh`), links the vendored static library; not under the workspace lints | any |
@@ -35,7 +35,7 @@ suite and the ratchet in [conformance/README.md](conformance/README.md) and
 | `ngterm-app` | frontend-neutral app services: the hooks' `ProcessLauncher`, the `ProcessTable` (`ngterm-session`'s, re-exported), logging, the restore launch decision, quick-terminal placement, the agent integrations' installers, the remote presentation process and the page channel helper | Linux |
 | `ngterm-wpe-sys`, `ngterm-wpe-platform-sys`, `ngterm-wpe-javascriptcore-sys` | checked-in gir output over WPE WebKit, one crate per GObject namespace (`scripts/gen-wpe-bindings.sh`) | Linux |
 | `ngterm-wpe` | WPE WebKit host for the HTML overlays: offscreen pages on an engine thread of their own (or in a worker process), frames out as dmabufs or SHM | Linux |
-| `ngterm-gpui` → `ngterm` | GPUI/gpui-kit frontend: windows, sidebar, deck, the terminal element (grid, sprites, Kitty graphics), overlays, quick terminal (layer-shell, a window where there is none), HTML overlays over `ngterm-wpe` (feature `html`), single instance, agent integrations | Linux |
+| `ngterm-gpui` → `ngterm` | GPUI/gpui-kit frontend: windows, sidebar, deck, the terminal element (grid, sprites, Kitty graphics), overlays, quick terminal (layer-shell, a window where there is none), HTML overlays over `ngterm-wpe` (feature `html`), single instance, agent integrations, the keyboard-layout lock per OS and desktop, status sounds | Linux |
 
 The platform column is where a crate builds and works today. `any` is a crate CI builds and tests on Linux, macOS and
 Windows: the cross-platform workflow's package list is the record (README > CI), and a crate joins it in the change

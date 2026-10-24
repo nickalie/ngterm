@@ -923,7 +923,7 @@ mod tests {
             serde_json::to_value(response).unwrap(),
             json!({"ok": true, "result": {
                 "app": {"version": "0.1.0", "commit": "abc1234"},
-                "conformance": {"parityLevel": "0.36.0", "capabilities": ["posix-shell"]}
+                "conformance": {"parityLevel": "0.38.1", "capabilities": ["posix-shell"]}
             }})
         );
     }
