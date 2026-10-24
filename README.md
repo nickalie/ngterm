@@ -78,6 +78,9 @@ Linux; the terminal core, the pane core and the live-session server under it (li
   node a Mesa Vulkan driver runs; its synthetic dmabufs need read-write access to `/dev/udmabuf` (a kernel built with
   `CONFIG_UDMABUF=y`, never a module; systemd's udev rules give the device to the `kvm` group; skipped without, failed
   under `NGTERM_REQUIRE_DISPLAY_TESTS`), its hardware case GBM and EGL.
+- For the OpenCode plugin's tests (`crates/ngterm-app/tests/opencode_status.rs`): Node.js 22.7+ (or 20.19+ on the 20.x
+  line), which imports the plugin's bare ES module. A missing or older one skips them (`SKIPPED:`) unless
+  `NGTERM_REQUIRE_NODE_TESTS` is set, as CI sets it, which fails them instead.
 - For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
   weston and bus); zsh or fish as the login shell for the Live tests of that shell.
 
@@ -420,13 +423,13 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 
 ## CI
 
-- `rust-linux.yml`: `rust-linux` (format, clippy, the lint report into the job summary, `cargo test`, all on the
-  workspace without the WPE crates and the app without its HTML overlays), `wpe` (clippy, tests and the bindings'
-  regeneration check of the WPE crates on Arch's `wpewebkit`, then the app with its overlays, see
-  [WPE WebKit](#wpe-webkit)), then the staged build (HTML overlays on) under the suite in the `wpe` job's Arch
-  container, on its lavapipe, held by `rust-passing.txt`, once per login shell (`conformance`, a matrix: bash, fish
-  and zsh), each with `--must-pass live-any-shell`, the zsh and fish ones with `--must-pass live-sessions` too; the
-  bash one runs the app's process tests with the overlays on first.
+- `rust-linux.yml`: `rust-linux` (format, clippy, the lint report into the job summary, `cargo test` with node for the
+  OpenCode plugin's tests, all on the workspace without the WPE crates and the app without its HTML overlays), `wpe`
+  (clippy, tests and the bindings' regeneration check of the WPE crates on Arch's `wpewebkit`, then the app with its
+  overlays, see [WPE WebKit](#wpe-webkit)), then the staged build (HTML overlays on) under the suite in the `wpe`
+  job's Arch container, on its lavapipe, held by `rust-passing.txt`, once per login shell (`conformance`, a matrix:
+  bash, fish and zsh), each with `--must-pass live-any-shell`, the zsh and fish ones with `--must-pass live-sessions`
+  too; the bash one runs the app's process tests with the overlays on first.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
   `ngterm-core`, `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt`, `ngterm-pty` and `ngterm-term` so far; `ngterm-server`
   compiles for macOS too but is not run there yet and stays off Windows over `std::os::unix`, and `ngterm-ctl` builds

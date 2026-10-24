@@ -37,6 +37,11 @@ jobs:
             libcairo2-dev libpango1.0-dev libpng-dev hwdata
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      # ngterm-app's OpenCode plugin tests run the shipped plugin under node (22.7+, module-syntax detection), required
+      # here by NGTERM_REQUIRE_NODE_TESTS on the test step rather than skipped
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
       - uses: Swatinem/rust-cache@v2
       # The prefixes, the Zig toolchain libghostty-vt's was prepared with and the Zig global cache of its builds;
       # keyed like the prefixes themselves (`ngterm`: the share/ngterm manifest layout; native.sh holds `prefix_key`
@@ -112,6 +117,7 @@ jobs:
         shell: bash
         env:
           NGTERM_REQUIRE_DISPLAY_TESTS: "1"
+          NGTERM_REQUIRE_NODE_TESTS: "1"
         run: |
           source scripts/lib/native.sh
           cargo test "${WORKSPACE_WITHOUT_WPE[@]}"

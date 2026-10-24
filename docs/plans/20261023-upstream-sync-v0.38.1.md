@@ -2072,11 +2072,11 @@ under `node` with a recording reporter in place of the wrapper)
 
 **Platforms:** no OS-specific code (a JS plugin run by OpenCode); CI installs node rather than skipping the test
 
-- [ ] port OpenCodeStatusHookTests whole, with the reporter command lines in this build's names
-- [ ] add node to the CI jobs that run ngterm-app's tests
-- [ ] ➕ record in docs/backlog the same missing twin for the Claude, Codex and OpenCode v2 hook tests, if this task
-      does not port them too
-- [ ] gate passes
+- [x] port OpenCodeStatusHookTests whole, with the reporter command lines in this build's names
+- [x] add node to the CI jobs that run ngterm-app's tests
+- [x] ➕ record in docs/backlog the same missing twin for the Claude, Codex and OpenCode v2 hook tests, if this task
+      does not port them too (filed: `docs/backlog/claude-codex-and-opencode-v2-hook-tests-have-no-rust-twin.md`)
+- [x] gate passes (full suite deferred to the end of the plan per the user)
 
 ### Task 34: UI-only changes
 
