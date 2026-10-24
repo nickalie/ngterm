@@ -16,7 +16,9 @@
 #                  and the Kitty keyboard protocol, and a text/html clipboard offer beside or instead of the text
 #                  (Task 14 of the plan, 0001); the Wayland displays' logical geometry from xdg-output, right at a
 #                  fractional scale (Task 24, 0002); an X11 window's minimized and maximized state read back, and KWin's
-#                  blur behind a blurred X11 window (Task 33, 0003)
+#                  blur behind a blurred X11 window (Task 33, 0003); a new keymap reported as a keyboard layout
+#                  change on X11 and Wayland even when the effective layout keeps its name, so a changed layout list
+#                  reaches `on_keyboard_layout_change` (Task 29 of the upstream v0.38.1 sync, 0004)
 #
 # Each source is the crates.io archive of GPUI_VERSION, verified against SHA256 below: the release's crates.io
 # checksum (the `cksum` of its version's line in the crates.io index, https://index.crates.io/gp/ui/<crate>, also what
@@ -56,7 +58,7 @@ case "${1:-}" in
   "") ;;
   --check) mode=check ;;
   --diff) mode=diff ;;
-  -h | --help) sed -n '2,27s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  -h | --help) sed -n '2,37s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
   *) die "unknown argument: $1 (see --help)" ;;
 esac
 

@@ -4633,6 +4633,7 @@ dependencies = [
  "notify",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "png 0.18.1",
  "raw-window-handle",
@@ -4650,6 +4651,7 @@ dependencies = [
  "wayland-protocols",
  "windows-sys 0.61.2",
  "x11rb",
+ "xkbcommon",
  "zbus",
 ]
 

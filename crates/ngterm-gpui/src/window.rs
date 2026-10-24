@@ -369,6 +369,8 @@ impl WindowView {
                 check_keyboard_left(cx);
             }
             if window.is_window_active() {
+                // enabling a layout is a trip to the system's settings and back: the picker's list is re-read
+                crate::input_source::window_activated(cx);
                 let raise = answering.activated();
                 let first = fresh.take().or(raise);
                 post(&posting, move |state: &mut AppState| state.window_activated(id, first));

@@ -509,6 +509,28 @@ fn an_unchanged_value_writes_nothing() {
     assert!(!path.exists());
 }
 
+/// Upstream's `testSetTerminalInputSourcePersistsAndOffRemovesTheKey`: a layout the system does not offer is stored
+/// as picked, Off removes the key, and neither reloads the terminals (not a ghostty key).
+#[test]
+fn the_terminal_input_source_persists_and_off_removes_the_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut core = persisted_core(dir.path());
+    core.write_settings_config();
+    let set = |id: Option<&str>| SettingsChange::TerminalInputSource(id.map(str::to_owned));
+    assert!(core.change_settings(set(Some("test.source.not-enabled"))));
+    assert!(!core.take_config_reload());
+    assert_eq!(
+        SettingsStore::new(dir.path()).load().terminal_input_source.as_deref(),
+        Some("test.source.not-enabled")
+    );
+    assert!(!core.change_settings(set(Some("test.source.not-enabled"))));
+    assert!(core.change_settings(set(None)));
+    assert_eq!(SettingsStore::new(dir.path()).load().terminal_input_source, None);
+    let text = std::fs::read_to_string(SettingsStore::new(dir.path()).path()).unwrap();
+    assert!(!text.contains("terminalInputSource"), "{text}");
+    assert!(!core.change_settings(set(Some(""))), "an empty id is off");
+}
+
 #[test]
 fn the_restore_mode_is_saved_for_the_next_launch() {
     let dir = tempfile::tempdir().unwrap();

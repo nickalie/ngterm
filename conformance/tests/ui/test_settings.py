@@ -211,6 +211,7 @@ def test_agent_status_tab(seeded, ui_for):
 
 
 @pytest.mark.covers(
+    "ui:settings-terminal-input-source",
     "ui:settings-keymap-directory",
     "ui:settings-keymap-choose",
     "ui:settings-keymap-default",
@@ -226,6 +227,8 @@ def test_key_mapping_tab_reports_a_keymap_error_after_reload(seeded, ui_for):
     _check(
         ui,
         {
+            # Off by default: the keyboard layout lock's picker, listing the layouts the system can select.
+            "settings-terminal-input-source": "popup",
             "settings-keymap-choose": "button",
             "settings-keymap-default": "button",
             "settings-hooks-diagnostics": None,

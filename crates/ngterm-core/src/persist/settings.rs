@@ -312,6 +312,10 @@ pub struct AppSettings {
     pub flagged_view_layout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_open_mode: Option<String>,
+    /// The keyboard layout held while a terminal has the keyboard, `None` for off (Settings ▸ Key Mapping ▸ "Lock in
+    /// terminals"): the platform's layout id ([`crate::input_source_lock`]). Not a ghostty key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_input_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub html_overlay_zoom: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -732,6 +736,28 @@ mod tests {
         let legacy = store.load();
         assert_eq!(legacy.link_open_mode, None);
         assert_eq!(legacy.effective_link_open_mode(), LinkOpenMode::Browser);
+    }
+
+    /// Upstream's `terminalInputSourceDefaultsOffRoundTripsAndIsNotAGhosttyKey`.
+    #[test]
+    fn the_terminal_input_source_defaults_off_round_trips_and_is_not_a_ghostty_key() {
+        assert_eq!(AppSettings::default().terminal_input_source, None);
+        let settings = AppSettings {
+            terminal_input_source: Some("com.apple.keylayout.US".to_owned()),
+            ..AppSettings::default()
+        };
+        assert_eq!(
+            settings.ghostty_config_lines(),
+            AppSettings::default().ghostty_config_lines()
+        );
+        let (_dir, store) = store();
+        store.save(&settings).unwrap();
+        assert_eq!(
+            store.load().terminal_input_source.as_deref(),
+            Some("com.apple.keylayout.US")
+        );
+        seed(&store, r#"{ "fontSize": 16 }"#);
+        assert_eq!(store.load().terminal_input_source, None);
     }
 
     #[test]

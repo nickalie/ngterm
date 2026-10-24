@@ -1110,7 +1110,8 @@ impl X11Client {
                 };
                 state.xkb = xkb_state;
                 drop(state);
-                self.handle_keyboard_layout_change();
+                // a new keymap may change the layout list while the effective layout keeps its name (an ngterm patch)
+                self.handle_keyboard_layout_change(true);
             }
             Event::XkbStateNotify(event) => {
                 let mut state = self.0.borrow_mut();
@@ -1148,7 +1149,7 @@ impl X11Client {
                 }
 
                 if new_layout != old_layout {
-                    self.handle_keyboard_layout_change();
+                    self.handle_keyboard_layout_change(false);
                 }
             }
             Event::KeyPress(event) => {
@@ -1623,13 +1624,15 @@ impl X11Client {
         Some(())
     }
 
-    fn handle_keyboard_layout_change(&self) {
+    /// Notes the effective layout and reports a change of it, or, with `keymap_changed`, of the keymap itself (an
+    /// ngterm patch: a keymap that only adds or drops layouts keeps the effective layout's name).
+    fn handle_keyboard_layout_change(&self, keymap_changed: bool) {
         let mut state = self.0.borrow_mut();
         state.held_key = None;
         let layout_idx = state.xkb.serialize_layout(STATE_LAYOUT_EFFECTIVE);
         let keymap = state.xkb.get_keymap();
         let layout_name = keymap.layout_get_name(layout_idx);
-        if layout_name != state.keyboard_layout.name() {
+        if keymap_changed || layout_name != state.keyboard_layout.name() {
             state.keyboard_layout = LinuxKeyboardLayout::new(layout_name.to_string().into());
             let callback = state
                 .common

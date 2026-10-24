@@ -1929,24 +1929,29 @@ CI); the performers are frontend code, not built on macOS/Windows by CI until ng
 
 **Conformance:** none (no command); a ui id `settings-terminal-input-source` comes with Task 1's regeneration
 
-- [ ] the pure `InputSourceLock` in ngterm-core, ported from upstream
-- [ ] the setting: persisted, Off removes the key, not a ghostty config line, an older settings.json decodes to None
-- [ ] the performer re-evaluates on the next main-loop turn when a terminal (main, split, scratch, program overlay,
+- [x] the pure `InputSourceLock` in ngterm-core, ported from upstream
+- [x] the setting: persisted, Off removes the key, not a ghostty config line, an older settings.json decodes to None
+- [x] the performer re-evaluates on the next main-loop turn when a terminal (main, split, scratch, program overlay,
       quick terminal) gains or loses the keyboard, when the layout or the enabled list changes, when the setting
       changes; restores on quit; a web overlay, a text field, another app or no ngterm window holding the keyboard
       count as not focused
-- [ ] Settings ▸ Key Mapping ▸ "Keyboard Layout": a picker "Lock in terminals" (id `settings-terminal-input-source`),
+- [x] Settings ▸ Key Mapping ▸ "Keyboard Layout": a picker "Lock in terminals" (id `settings-terminal-input-source`),
       Off first, then the selectable layouts; a saved id no longer selectable shows "<id> (unavailable)"; the list
       re-read when Settings opens and when the app regains focus; disabled with the reason where no backend exists
-- [ ] ➕ take `settings-terminal-input-source` off `PENDING` in `crates/ngterm-gpui/src/ui_ids.rs` (Task 1 parked it
+- [x] ➕ take `settings-terminal-input-source` off `PENDING` in `crates/ngterm-gpui/src/ui_ids.rs` (Task 1 parked it
       there)
-- [ ] the backends per OS as in Platforms, behind `cfg` or a runtime desktop probe, each with the disabled fallback
-- [ ] write tests: the nine InputSourceLock cases; the settings round trip; the settings-model persist/remove case; a
+- [x] the backends per OS as in Platforms, behind `cfg` or a runtime desktop probe, each with the disabled fallback
+- [x] write tests: the nine InputSourceLock cases; the settings round trip; the settings-model persist/remove case; a
       key_mapping section test with the unavailable row; a backend test on the private Xvfb's XKB (two layouts,
       lockGroup switched and read back)
-- [ ] manual check (user): green on `cross-platform.yml` (the core lock); the KDE, sway, Hyprland and niri backends
-      on those desktops
-- [ ] gate passes
+- [x] manual check (user): green on `cross-platform.yml` (the core lock); the KDE, sway, Hyprland and niri backends
+      on those desktops (skipped - not automatable: for the user; the macOS and Windows performers were type-checked
+      with clippy on `x86_64-apple-darwin` and `x86_64-pc-windows-msvc` only, not built on macOS/Windows by CI until
+      ngterm-gpui joins `cross-platform.yml`; the niri backend ran against a niri nested in a private headless weston,
+      sway, Hyprland and KDE against fake servers; `tests/ui/test_settings.py` now covers the picker: green on
+      reference-macos is a manual check too)
+- [x] gate passes (full suite deferred to the end of the plan per the user; the coverage gate and
+      `test_committed_catalog_passes_the_ci_gate` are green: no uncovered key is left)
 
 ### Task 30: A custom command in a session whose directory is gone runs in HOME (#740)
 

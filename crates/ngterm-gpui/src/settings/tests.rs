@@ -42,6 +42,7 @@ fn snapshot(settings: AppSettings) -> Snapshot {
         hooks_diagnostics: vec!["line 3: unknown event".to_owned()],
         live_unavailable: None,
         session_cwd: None,
+        layouts: crate::input_source::Layouts::default(),
     }
 }
 
@@ -615,6 +616,72 @@ fn every_control_writes_through_the_core_and_reads_back() {
     }
 }
 
+/// Key Mapping opens on "Keyboard Layout": Off, the selectable layouts, and a saved layout no longer selectable as
+/// "<id> (unavailable)", still shown as the choice; a pick stores the layout's id, Off clears it; where this desktop
+/// has no way to switch layouts the picker is disabled with the reason under it.
+#[test]
+fn the_keyboard_layout_lock_picker_offers_the_layouts_and_a_saved_unavailable_one() {
+    use crate::input_source::{KeyboardLayout, Layouts};
+    let mut shown = snapshot(AppSettings {
+        terminal_input_source: Some("German".to_owned()),
+        ..AppSettings::default()
+    });
+    shown.layouts = Layouts {
+        selectable: vec![
+            KeyboardLayout {
+                id: "com.apple.keylayout.US".to_owned(),
+                name: "U.S.".to_owned(),
+            },
+            KeyboardLayout::named("Russian"),
+        ],
+        unavailable: None,
+    };
+    let sections = Tab::KeyMapping.sections(&shown, &catalogs());
+    assert_eq!(sections[0].title, Some("Keyboard Layout"));
+    let row = &sections[0].items[0];
+    assert_eq!(
+        (row.id.as_str(), row.title.as_str(), row.enabled),
+        ("settings-terminal-input-source", "Lock in terminals", true)
+    );
+    assert_eq!(sections[0].items.len(), 1, "no reason shown");
+    let Control::Picker(picker) = &row.control else {
+        panic!("not a picker");
+    };
+    assert_eq!(picker.options, ["Off", "U.S.", "Russian", "German (unavailable)"]);
+    assert_eq!(picker.label(), "German (unavailable)");
+    assert_eq!(
+        picker.pick(1),
+        Some(SettingsChange::TerminalInputSource(Some(
+            "com.apple.keylayout.US".to_owned()
+        )))
+    );
+    assert_eq!(picker.pick(0), Some(SettingsChange::TerminalInputSource(None)));
+
+    // a saved layout still selectable is not listed twice; off shows Off
+    shown.settings.terminal_input_source = Some("Russian".to_owned());
+    let sections = Tab::KeyMapping.sections(&shown, &catalogs());
+    let Control::Picker(picker) = &sections[0].items[0].control else {
+        panic!("not a picker");
+    };
+    assert_eq!((picker.options.len(), picker.label()), (3, "Russian"));
+    shown.settings.terminal_input_source = None;
+    let sections = Tab::KeyMapping.sections(&shown, &catalogs());
+    let Control::Picker(picker) = &sections[0].items[0].control else {
+        panic!("not a picker");
+    };
+    assert_eq!(picker.label(), "Off");
+
+    shown.layouts = Layouts {
+        selectable: Vec::new(),
+        unavailable: Some("Not available on GNOME.".to_owned()),
+    };
+    let sections = Tab::KeyMapping.sections(&shown, &catalogs());
+    let items = &sections[0].items;
+    assert!(!items[0].enabled, "disabled where no backend exists");
+    assert_eq!(items[1].id, "settings-terminal-input-source-unavailable");
+    assert_eq!(items[1].title, "Not available on GNOME.");
+}
+
 #[test]
 fn the_buttons_reset_the_glyphs_drop_the_config_directory_and_reload() {
     let dir = tempfile::tempdir().unwrap();
@@ -707,7 +774,7 @@ fn harness(cx: &mut TestAppContext, settings: AppSettings) -> (Harness, &mut Vis
     let weak_loop: Poster = Arc::downgrade(&posted) as Poster;
     let mut state = AppState::new(core_in(dir.path(), settings));
     state.attach(weak_loop);
-    let opening = Opening::of(&state);
+    let opening = cx.update(|cx| Opening::of(&state, cx));
     let (view, cx) = cx
         .add_window_view(move |window, cx| SettingsView::new(opening.poster, opening.snapshot, catalogs(), window, cx));
     let (width, height) = PANEL_SIZE;
@@ -799,6 +866,7 @@ fn the_window_opens_on_general_and_its_tabs_switch_pages(cx: &mut TestAppContext
         bounds(cx, shape);
     }
     h.tab(cx, Tab::KeyMapping);
+    bounds(cx, "settings-terminal-input-source");
     bounds(cx, "settings-keymap-reload");
     bounds(cx, "settings-hooks-diagnostics");
     assert!(cx.debug_bounds("settings-keymap-default").is_none(), "no directory set");

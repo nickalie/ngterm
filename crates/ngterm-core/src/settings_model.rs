@@ -63,6 +63,9 @@ pub enum SettingsChange {
     Interface(InterfaceChange),
     Notifications(NotificationsChange),
     AgentStatus(AgentStatusChange),
+    /// Key Mapping: the keyboard layout held while a terminal has the keyboard, `None` for off (upstream's
+    /// `setTerminalInputSource`); stored as picked, even one the system no longer offers.
+    TerminalInputSource(Option<String>),
     /// Key Mapping: the config directory, `None` for the default.
     ConfigDirectory(Option<String>),
     /// The first-run welcome was shown.
@@ -204,6 +207,10 @@ impl SettingsChange {
             }
             Self::AgentStatus(change) => {
                 change.apply_to(settings);
+                Effect::Live
+            }
+            Self::TerminalInputSource(id) => {
+                settings.terminal_input_source = id.filter(|id| !id.is_empty());
                 Effect::Live
             }
             Self::ConfigDirectory(path) => {

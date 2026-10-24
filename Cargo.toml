@@ -42,6 +42,9 @@ windows-sys = "0.61"
 objc2 = { version = "0.6", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std"] }
+# The Core Foundation types macOS's Text Input Source Services take and return (ngterm-gpui's keyboard-layout lock,
+# `input_source/macos.rs`), the objc2 project's crate GPUI's macOS backend already links.
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std"] }
 # The UTF-16 strings interprocess takes a named pipe's security descriptor in (ngterm-session, Windows).
 widestring = "1.2"
 # ngterm-session's server start from inside a Windows job that refuses breakaway: WMI's `Win32_Process.Create`, as
@@ -144,6 +147,9 @@ wayland-backend = { version = "0.3.17", features = ["client_system"] }
 wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
 x11rb = "0.13.2"
+# ngterm-gpui's keyboard-layout lock on Hyprland: the layout names of the main keyboard's XKB rule names, compiled with
+# the xkbcommon GPUI's Linux platform already links.
+xkbcommon = { version = "0.8.0", default-features = false }
 # ngterm-gpui's SIGTERM quit on a thread of its own (GPUI installs no signal handling).
 signal-hook = "0.4"
 # ngterm-gpui's watch on `remotes.conf`: the platform's recommended watcher, inotify on Linux, FSEvents on macOS,

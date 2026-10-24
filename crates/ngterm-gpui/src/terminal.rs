@@ -68,6 +68,7 @@ pub use clipboard::{ClipboardPrompts, REMEMBER, prompt_alert, prompt_text};
 pub use colors::{CellPaint, Mark, Palette, Pick};
 pub use element::{Layer as PaintLayer, PlacedGlyph, ShapedRow, TerminalElement};
 pub use font::{DEFAULT_FAMILIES, DEFAULT_FAMILY, Fonts, SYMBOLS_FAMILY, register_embedded as register_embedded_fonts};
+pub(crate) use keyboard::terminal_holds_keyboard;
 pub use keyboard::{key_down, typing_surface};
 pub use links::{Link, LinkKind, follow_link};
 pub use metrics::{CellMetrics, DEFAULT_DPI, FaceMetrics, Geometry, Padding, cell_metrics, points_to_px};

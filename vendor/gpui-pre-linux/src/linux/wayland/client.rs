@@ -783,7 +783,9 @@ impl WaylandClientStatePtr {
         update_ime_cursor_rectangle(&text_input, &mut state.last_ime_cursor_rectangle, bounds);
     }
 
-    pub fn handle_keyboard_layout_change(&self) {
+    /// Notes the effective layout and reports a change of it, or, with `keymap_changed`, of the keymap itself (an
+    /// ngterm patch: a keymap that only adds or drops layouts keeps the effective layout's name).
+    pub fn handle_keyboard_layout_change(&self, keymap_changed: bool) {
         let client = self.get_client();
         let mut state = client.borrow_mut();
         let changed = if let Some(keymap_state) = &state.keymap_state {
@@ -803,7 +805,7 @@ impl WaylandClientStatePtr {
             changed
         };
 
-        let callback = changed
+        let callback = (changed || keymap_changed)
             .then(|| {
                 state
                     .common
@@ -2173,7 +2175,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 state.compose_state = get_xkb_compose_state(&xkb_context);
                 drop(state);
 
-                this.handle_keyboard_layout_change();
+                // a new keymap may change the layout list while the effective layout keeps its name (an ngterm patch)
+                this.handle_keyboard_layout_change(true);
             }
             wl_keyboard::Event::Enter { surface, .. } => {
                 state.keyboard_focused_window = get_window(&mut state, &surface.id());
@@ -2230,7 +2233,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 }
 
                 if group != old_layout {
-                    this.handle_keyboard_layout_change();
+                    this.handle_keyboard_layout_change(false);
                 }
             }
             wl_keyboard::Event::Key {

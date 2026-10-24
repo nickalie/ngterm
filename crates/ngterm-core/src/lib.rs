@@ -25,6 +25,7 @@ pub mod hooks;
 pub mod html;
 pub mod hud;
 pub mod identity;
+pub mod input_source_lock;
 pub mod interrupt;
 pub mod keymap;
 pub mod keystrokes;

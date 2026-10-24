@@ -248,7 +248,7 @@ impl Windows {
         let Some((_, ui)) = self.settings_ui(cx) else {
             return;
         };
-        let snapshot = Snapshot::of(&state.core, state.applied_dark());
+        let snapshot = Snapshot::of(&state.core, state.applied_dark()).with_layouts(crate::input_source::layouts(cx));
         if ui
             .handle
             .update(cx, |view, window, cx| view.sync_settings(snapshot, window, cx))
@@ -680,7 +680,7 @@ mod tests {
         cx.run_until_parked();
         let present = |windows: &Windows, state: &AppState, host, cx: &mut gpui_kit::TestAppContext| {
             let frontmost = state.core.library().active_window_id();
-            cx.update(|cx| windows.present_settings(Opening::of(state), host, frontmost, cx));
+            cx.update(|cx| windows.present_settings(Opening::of(state, cx), host, frontmost, cx));
             cx.run_until_parked();
         };
         let popups = |windows: &Windows, cx: &mut gpui_kit::TestAppContext| {
@@ -766,7 +766,7 @@ mod tests {
         cx.run_until_parked();
         let present = |windows: &Windows, state: &AppState, host, cx: &mut gpui_kit::TestAppContext| {
             let frontmost = state.core.library().active_window_id();
-            cx.update(|cx| windows.present_settings(Opening::of(state), host, frontmost, cx));
+            cx.update(|cx| windows.present_settings(Opening::of(state, cx), host, frontmost, cx));
             cx.run_until_parked();
         };
         // who holds the keyboard of `first`'s window: (the picker, the popup)

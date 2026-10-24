@@ -69,10 +69,11 @@ Linux; the terminal core, the pane core and the live-session server under it (li
   their own instead of the desktop's.
 - For the app's process tests (`crates/ngterm-gpui/tests`): dbus-daemon, a private bus per test; the ones with a
   display also need weston, Xvfb and Mesa's lavapipe (`mesa-vulkan-drivers`, an unpacked one under the vendor dir, or
-  `NGTERM_LAVAPIPE_ICD`), the keyboard layout test `setxkbmap` (`x11-xkb-utils`). A missing one skips the test
+  `NGTERM_LAVAPIPE_ICD`), the keyboard layout tests `setxkbmap` (`x11-xkb-utils`). A missing one skips the test
   (`SKIPPED:`, shown with `--nocapture`) unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it, which fails it
-  instead. The nested-niri activation check (niri inside a headless
-  weston) is `#[ignore]`d, since CI has no niri: `cargo test -p ngterm-gpui --test instance -- --ignored`. The external texture
+  instead. The nested-niri checks (niri inside a headless weston: the activation check, the keyboard-layout lock's niri
+  backend) are `#[ignore]`d, since CI has no niri: `cargo test -p ngterm-gpui --test instance --test input_source --
+  --ignored`. The external texture
   test (`--test external_texture`, dmabufs drawn by GPUI's headless renderer) runs on lavapipe and on the first render
   node a Mesa Vulkan driver runs; its synthetic dmabufs need read-write access to `/dev/udmabuf` (a kernel built with
   `CONFIG_UDMABUF=y`, never a module; systemd's udev rules give the device to the `kvm` group; skipped without, failed

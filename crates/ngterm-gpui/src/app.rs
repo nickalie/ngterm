@@ -179,10 +179,8 @@ struct Shell {
 fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, posting: Arc<dyn MainLoop<AppState>>) {
     // before this launch writes anything: the first launch seeds a window and saves it at once
     let had_prior_state = FirstRunWelcome::has_prior_state(&paths::state_dir(&ProcessEnv));
-    gpui_kit::init(cx);
-    crate::keymap_dispatch::init(cx);
-    crate::terminal::register_embedded_fonts(cx.text_system());
     let poster: Poster = Arc::downgrade(&posting);
+    init_frontend(&poster, cx);
     let server = ControlServer::new(control_socket(&ProcessEnv));
     let identity = identity();
     let context = PaneContext {
@@ -270,6 +268,14 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
     .detach();
 }
 
+/// The frontend's app-wide parts: gpui-kit, the key monitor, the embedded fonts, the keyboard-layout lock.
+fn init_frontend(poster: &Poster, cx: &mut App) {
+    gpui_kit::init(cx);
+    crate::keymap_dispatch::init(cx);
+    crate::terminal::register_embedded_fonts(cx.text_system());
+    crate::input_source::init(poster.clone(), cx);
+}
+
 /// The core over the state the last run left, with what it reaches the host through: the theme paths and the settings'
 /// ghostty config (written before the config loads, so the first terminal has the theme), the launch hosts, the HUD's
 /// painter and the cell a HUD over a session no terminal draws yet is sized with.
@@ -347,6 +353,9 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
         }
         shell.windows.borrow_mut().sync(state, cx)
     });
+    // the setting as the core holds it now: applied at once when it changed (the launch's load, a Settings edit)
+    let locked = state.read(cx).core.settings().terminal_input_source.clone();
+    crate::input_source::set_target(locked, cx);
     if resettle {
         // a dropped replacement closed its pane, or a pane the deck focused cleared its badge: committed by the next
         // settle
@@ -379,7 +388,9 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
     }
     land_window_prompts(shell, &work, cx);
     if let Some(host) = work.settings {
-        let opening = crate::settings::Opening::of(state.read(cx));
+        // upstream's picker reads the layouts as it appears
+        crate::input_source::reload_layouts(cx);
+        let opening = crate::settings::Opening::of(state.read(cx), cx);
         let frontmost = state.read(cx).core.library().active_window_id();
         shell.windows.borrow().present_settings(opening, host, frontmost, cx);
     }
@@ -503,6 +514,8 @@ fn shut_down(shell: &Shell, cx: &mut App) {
     if shell.shut_down.replace(true) {
         return;
     }
+    // the layout the keyboard-layout lock replaced comes back before anything else goes
+    crate::input_source::stop(cx);
     // the open windows' frames, as each window's close saves its own
     let known: Vec<uuid::Uuid> = shell
         .state

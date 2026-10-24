@@ -1,0 +1,92 @@
+A keymap change reported as a keyboard layout change (Task 29 of docs/plans/20261023-upstream-sync-v0.38.1.md).
+GPUI calls `on_keyboard_layout_change` on Linux only when the effective layout's name differs from the one it noted,
+so a new keymap that only adds or drops layouts (`setxkbmap -layout us,ru` on X11; on Wayland a compositor's new
+`wl_keyboard.keymap` after its layout list changed, the first layout still selected) reaches no observer. The
+keyboard-layout lock re-reads the enabled layouts on that callback, as upstream observes macOS's enabled input
+sources. The X11 client's new-keymap events (`XkbNewKeyboardNotify`, `XkbMapNotify`) and the Wayland keyboard's
+`Keymap` event now report the change whatever the effective layout's name; a group change still reports only a new
+name. GPUI's own observer re-reads the layout and the keyboard mapper on it, which a new keymap changes too. The other
+platforms are unchanged. scripts/vendor-gpui.sh applies this to the verified crates.io archive.
+
+diff -ruN a/src/linux/wayland/client.rs b/src/linux/wayland/client.rs
+--- a/src/linux/wayland/client.rs
++++ b/src/linux/wayland/client.rs
+@@ -783,7 +783,9 @@
+         update_ime_cursor_rectangle(&text_input, &mut state.last_ime_cursor_rectangle, bounds);
+     }
+ 
+-    pub fn handle_keyboard_layout_change(&self) {
++    /// Notes the effective layout and reports a change of it, or, with `keymap_changed`, of the keymap itself (an
++    /// ngterm patch: a keymap that only adds or drops layouts keeps the effective layout's name).
++    pub fn handle_keyboard_layout_change(&self, keymap_changed: bool) {
+         let client = self.get_client();
+         let mut state = client.borrow_mut();
+         let changed = if let Some(keymap_state) = &state.keymap_state {
+@@ -803,7 +805,7 @@
+             changed
+         };
+ 
+-        let callback = changed
++        let callback = (changed || keymap_changed)
+             .then(|| {
+                 state
+                     .common
+@@ -2173,7 +2175,8 @@
+                 state.compose_state = get_xkb_compose_state(&xkb_context);
+                 drop(state);
+ 
+-                this.handle_keyboard_layout_change();
++                // a new keymap may change the layout list while the effective layout keeps its name (an ngterm patch)
++                this.handle_keyboard_layout_change(true);
+             }
+             wl_keyboard::Event::Enter { surface, .. } => {
+                 state.keyboard_focused_window = get_window(&mut state, &surface.id());
+@@ -2230,7 +2233,7 @@
+                 }
+ 
+                 if group != old_layout {
+-                    this.handle_keyboard_layout_change();
++                    this.handle_keyboard_layout_change(false);
+                 }
+             }
+             wl_keyboard::Event::Key {
+diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
+--- a/src/linux/x11/client.rs
++++ b/src/linux/x11/client.rs
+@@ -1110,7 +1110,8 @@
+                 };
+                 state.xkb = xkb_state;
+                 drop(state);
+-                self.handle_keyboard_layout_change();
++                // a new keymap may change the layout list while the effective layout keeps its name (an ngterm patch)
++                self.handle_keyboard_layout_change(true);
+             }
+             Event::XkbStateNotify(event) => {
+                 let mut state = self.0.borrow_mut();
+@@ -1148,7 +1149,7 @@
+                 }
+ 
+                 if new_layout != old_layout {
+-                    self.handle_keyboard_layout_change();
++                    self.handle_keyboard_layout_change(false);
+                 }
+             }
+             Event::KeyPress(event) => {
+@@ -1623,13 +1624,15 @@
+         Some(())
+     }
+ 
+-    fn handle_keyboard_layout_change(&self) {
++    /// Notes the effective layout and reports a change of it, or, with `keymap_changed`, of the keymap itself (an
++    /// ngterm patch: a keymap that only adds or drops layouts keeps the effective layout's name).
++    fn handle_keyboard_layout_change(&self, keymap_changed: bool) {
+         let mut state = self.0.borrow_mut();
+         state.held_key = None;
+         let layout_idx = state.xkb.serialize_layout(STATE_LAYOUT_EFFECTIVE);
+         let keymap = state.xkb.get_keymap();
+         let layout_name = keymap.layout_get_name(layout_idx);
+-        if layout_name != state.keyboard_layout.name() {
++        if keymap_changed || layout_name != state.keyboard_layout.name() {
+             state.keyboard_layout = LinuxKeyboardLayout::new(layout_name.to_string().into());
+             let callback = state
+                 .common

@@ -53,8 +53,8 @@ wayland-backend.workspace = true
 wayland-client.workspace = true
 wayland-protocols.workspace = true
 # RandR: the X11 monitors a restored window is kept on (`monitors.rs` `display_rects`), which GPUI's one display per X
-# screen spans
-x11rb = { workspace = true, features = ["randr"] }
+# screen spans; XKB: the keyboard-layout lock's groups on X11 (`input_source/linux/x11.rs`)
+x11rb = { workspace = true, features = ["randr", "xkb"] }
 zbus.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -66,17 +66,23 @@ gpui-pre-linux.workspace = true
 netlink-packet-core.workspace = true
 netlink-packet-route.workspace = true
 netlink-sys.workspace = true
+xkbcommon.workspace = true
 
-# the status sounds by name (`status_sound.rs`): NSSound and NSBeep on macOS, PlaySoundW and MessageBeep on Windows
+# the status sounds by name (`status_sound.rs`): NSSound and NSBeep on macOS, PlaySoundW and MessageBeep on Windows;
+# the keyboard-layout lock (`input_source/`): Text Input Source Services on macOS, the keyboard layout calls on Windows
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = ["NSSound", "NSGraphics"] }
 objc2-foundation = { workspace = true, features = ["NSString"] }
+objc2-core-foundation = { workspace = true, features = ["CFArray", "CFBase", "CFDictionary", "CFNumber", "CFString"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
     "Win32_Media_Audio",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_Registry",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
 
@@ -87,7 +93,7 @@ gpui-pre-wgpu.workspace = true
 # the global hotkey's and the keyboard layout's tests press their keys on a private Xvfb through XTEST
 # (tests/global_hotkey.rs, tests/keyboard_layout.rs); the window test lays monitors out on one through RandR
 # (tests/x11_window.rs)
-x11rb = { workspace = true, features = ["randr", "xtest"] }
+x11rb = { workspace = true, features = ["randr", "xkb", "xtest"] }
 
 # GPUI's headless renderer opens one GPU device per process, so the external texture cases run in a child process per
 # Vulkan driver, which this harness starts (tests/external_texture/main.rs).

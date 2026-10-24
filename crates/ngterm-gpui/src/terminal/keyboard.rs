@@ -77,6 +77,25 @@ pub(super) fn window_of(key: u64) -> Option<AnyWindowHandle> {
     })
 }
 
+/// Whether a terminal holds the keyboard of an active ngterm window: an owner view (a main, split, scratch, overlay or
+/// quick terminal) is focused in the window it painted in last and that window is active. A web overlay, a text field,
+/// another application or no ngterm window holding the keyboard is no terminal holding it. Reads the windows, so it
+/// runs outside any window's update.
+pub(crate) fn terminal_holds_keyboard(cx: &mut App) -> bool {
+    let owners: Vec<(FocusHandle, AnyWindowHandle)> = OWNERS.with_borrow(|owners| {
+        owners
+            .iter()
+            .filter(|owner| owner.shared.strong_count() > 0 && owner.view.upgrade().is_some())
+            .filter_map(|owner| Some((owner.focus.clone(), owner.window?)))
+            .collect()
+    });
+    owners.into_iter().any(|(focus, handle)| {
+        handle
+            .update(cx, |_, window, _| window.is_window_active() && focus.is_focused(window))
+            .unwrap_or(false)
+    })
+}
+
 /// The owner views of every other live terminal than `key`.
 fn other_views(key: u64) -> Vec<WeakEntity<TerminalView>> {
     OWNERS.with_borrow(|owners| {
@@ -132,6 +151,9 @@ pub(super) struct KeyState {
     queued: Vec<KeyStroke>,
     /// The focus last reported to the program; `None` before the first report.
     reported: Option<bool>,
+    /// Whether the view held its active window's keyboard when last seen, for the keyboard-layout lock
+    /// (`crate::input_source`), which re-evaluates on each change.
+    held: Option<bool>,
     subscriptions: Vec<Subscription>,
 }
 
@@ -314,6 +336,9 @@ impl TerminalView {
         let focused = self.focus.is_focused(window) && window.is_window_active();
         if self.keys.reported != Some(focused) {
             self.focus_changed();
+        }
+        if self.keys.held.replace(focused) != Some(focused) {
+            crate::input_source::request_refresh(cx);
         }
         if self.report_focus(focused) {
             cx.notify();

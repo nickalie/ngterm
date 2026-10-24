@@ -1372,7 +1372,7 @@ fn a_translucent_window_paints_its_backing_at_the_opacity_and_no_opaque_chrome(c
 impl Shell<'_> {
     /// Opens the Settings popup over the window, as the landing of Settings… does.
     fn open_settings(&mut self) {
-        let opening = crate::settings::Opening::of(&self.state);
+        let opening = self.cx.update(|_, cx| crate::settings::Opening::of(&self.state, cx));
         self.view
             .update_in(self.cx, |view, window, cx| view.open_settings(opening, window, cx));
         self.settle();

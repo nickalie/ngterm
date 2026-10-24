@@ -51,8 +51,8 @@ const WESTON_CONFIG: &str =
     "[core]\nidle-time=0\n\n[shell]\npanel-position=none\nlocking=false\n\n[input-method]\npath=\n";
 
 /// A private niri: no startup programs, no Xwayland, no hotkey overlay, no animations; stock activation policy (no
-/// `honor-xdg-activation-with-invalid-serial`).
-const NIRI_CONFIG: &str = "input {\n    keyboard {\n        xkb {\n            layout \"us\"\n        }\n    }\n}\n\
+/// `honor-xdg-activation-with-invalid-serial`); its keyboard on the XKB layouts `{layouts}` stands for.
+const NIRI_CONFIG: &str = "input {\n    keyboard {\n        xkb {\n            layout \"{layouts}\"\n        }\n    }\n}\n\
 hotkey-overlay {\n    skip-at-startup\n}\nxwayland-satellite {\n    off\n}\nanimations {\n    off\n}\nprefer-no-csd\n";
 
 /// A display the sandbox runs.
@@ -126,6 +126,11 @@ impl Sandbox {
 
     pub fn path(&self, relative: &str) -> PathBuf {
         self.root.path().join(relative)
+    }
+
+    /// The value the sandbox's environment gives `key`.
+    pub fn env_var(&self, key: &str) -> Option<&str> {
+        self.env.get(key).map(String::as_str)
     }
 
     pub fn set_env(&mut self, key: &str, value: impl Into<String>) {
@@ -235,12 +240,17 @@ impl Sandbox {
 
     /// A niri nested in the sandbox's weston; clients get its socket and IPC.
     pub fn start_nested_niri(&mut self) -> TestResult {
+        self.start_nested_niri_with_layouts("us")
+    }
+
+    /// [`Self::start_nested_niri`] with its keyboard on the XKB `layouts` (`us,ru`).
+    pub fn start_nested_niri_with_layouts(&mut self, layouts: &str) -> TestResult {
         let parent = self.start_weston()?;
         let run = self.path("niri-run");
         std::fs::create_dir_all(&run)?;
         std::fs::set_permissions(&run, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
         let config = self.path("niri.kdl");
-        std::fs::write(&config, NIRI_CONFIG)?;
+        std::fs::write(&config, NIRI_CONFIG.replace("{layouts}", layouts))?;
         let mut command = self.command("niri");
         command
             .arg("-c")

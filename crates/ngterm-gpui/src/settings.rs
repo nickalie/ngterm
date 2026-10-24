@@ -174,6 +174,9 @@ pub struct Snapshot {
     /// The active session's focused directory, where a directory chooser starts when no directory is set yet
     /// (upstream's `DirectoryPanelDefaults.url(paths:…, activeSessionCwd)`).
     pub session_cwd: Option<String>,
+    /// The keyboard layouts the "Lock in terminals" picker offers, or why it cannot work here
+    /// (`crate::input_source`).
+    pub layouts: crate::input_source::Layouts,
 }
 
 impl Snapshot {
@@ -194,7 +197,15 @@ impl Snapshot {
             hooks_diagnostics: core.hooks_diagnostics().iter().map(diagnostic_line).collect(),
             live_unavailable: core.restore_launch().live_unavailable_reason.clone(),
             session_cwd,
+            layouts: crate::input_source::Layouts::default(),
         }
+    }
+
+    /// The snapshot with the keyboard layouts the frontend read (`crate::input_source::layouts`).
+    #[must_use]
+    pub fn with_layouts(mut self, layouts: crate::input_source::Layouts) -> Self {
+        self.layouts = layouts;
+        self
     }
 
     /// Where a directory chooser starts: the first of `preferred` and the active session's directory that is a
@@ -579,10 +590,12 @@ pub struct Opening {
 }
 
 impl Opening {
+    /// What the popup opens over, the keyboard layouts as last read (the opener re-reads them first:
+    /// `crate::input_source::reload_layouts`).
     #[must_use]
-    pub fn of(state: &AppState) -> Self {
+    pub fn of(state: &AppState, cx: &App) -> Self {
         Self {
-            snapshot: Snapshot::of(&state.core, state.applied_dark()),
+            snapshot: Snapshot::of(&state.core, state.applied_dark()).with_layouts(crate::input_source::layouts(cx)),
             themes: state.core.theme_catalog().names().to_vec().into(),
             poster: state.poster().clone(),
         }
