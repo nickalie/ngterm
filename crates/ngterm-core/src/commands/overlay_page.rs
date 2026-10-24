@@ -297,6 +297,13 @@ impl Core {
         self.library_mut().close_html_overlay(id)
     }
 
+    /// Hides page `id` from its own strip with the page's scope: its pane's overlay, or every overlay of its session for
+    /// a session-wide page (upstream's `hideHtmlOverlay`); false once it left its slot or while its session sits in an
+    /// undoable close.
+    pub fn hide_html_overlay(&mut self, id: Uuid) -> bool {
+        self.library_mut().hide_html_overlay(id)
+    }
+
     /// The user focused pane page `id`: the split's focus follows the pane it covers (upstream's `onFocus`).
     pub fn html_page_focused(&mut self, id: Uuid) -> bool {
         let Some(HtmlPageSlot {

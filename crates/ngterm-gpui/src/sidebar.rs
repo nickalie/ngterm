@@ -851,24 +851,18 @@ pub fn click_selection(
     sessions.into_iter().filter(|id| chosen.contains(id)).collect()
 }
 
-/// The close confirmation's heading and body (upstream's `confirmCloseSession` and `confirmCloseSessions`).
+/// The close confirmation's heading and body (upstream's `confirmCloseSession` and `confirmCloseSessions`): the body
+/// names the hidden overlays that close with the sessions (upstream's `closeConfirmationText`).
 fn close_confirmation(context: &SidebarContext, ids: &[Uuid]) -> (String, String) {
-    let grace = context.close_grace;
+    let hidden = ids
+        .iter()
+        .any(|id| context.menu.sessions.get(id).is_some_and(|facts| facts.hidden_overlays));
+    let body = ngterm_core::app_actions::close_confirmation_body(ids.len() > 1, hidden, context.close_grace);
     if let [id] = ids {
         let name = context.menu.sessions.get(id).map_or("", |facts| facts.name.as_str());
-        let body = if grace {
-            "The session will close after a short undo window."
-        } else {
-            "The session will close immediately and can be reopened from File > Open Recent."
-        };
-        return (format!("Close “{name}”?"), body.to_owned());
+        return (format!("Close “{name}”?"), body);
     }
-    let body = if grace {
-        "The sessions will close after a short undo window."
-    } else {
-        "The sessions will close immediately and can be reopened from File > Open Recent."
-    };
-    (format!("Close {} Sessions?", ids.len()), body.to_owned())
+    (format!("Close {} Sessions?", ids.len()), body)
 }
 
 /// The delete confirmation's body (upstream's `confirmDelete`).

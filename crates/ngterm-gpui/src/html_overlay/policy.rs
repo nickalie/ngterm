@@ -342,11 +342,14 @@ pub enum StripItem {
     Files,
     /// Copy the address: a URL page's.
     CopyLink,
+    /// Hide the page with its scope, its slot keeping it running (upstream's `hideHtmlOverlay`).
+    Hide,
     Close,
 }
 
 /// The strip of `overlay` (upstream's `HtmlOverlayView.strip`): `None` for a chromeless page; navigation adds the
-/// history and reload buttons before the identity and the hand-offs after it; the close button always ends it.
+/// history and reload buttons before the identity and the hand-offs after it; the hide and close buttons always end
+/// it.
 #[must_use]
 pub fn strip_items(overlay: &HtmlOverlay) -> Option<Vec<StripItem>> {
     if overlay.flags.chromeless {
@@ -364,7 +367,7 @@ pub fn strip_items(overlay: &HtmlOverlay) -> Option<Vec<StripItem>> {
             HtmlSource::Url(_) => StripItem::CopyLink,
         });
     }
-    items.push(StripItem::Close);
+    items.extend([StripItem::Hide, StripItem::Close]);
     Some(items)
 }
 
@@ -843,10 +846,10 @@ mod tests {
 
     #[test]
     fn the_strip_follows_the_flags_and_the_source() {
-        use StripItem::{Back, Browser, Close, CopyLink, Files, Forward, Identity, Reload};
+        use StripItem::{Back, Browser, Close, CopyLink, Files, Forward, Hide, Identity, Reload};
         assert_eq!(
             strip_items(&file_page(None, HtmlPageFlags::default())),
-            Some(vec![Identity, Close])
+            Some(vec![Identity, Hide, Close])
         );
         let navigation = HtmlPageFlags {
             navigation: true,
@@ -854,11 +857,11 @@ mod tests {
         };
         assert_eq!(
             strip_items(&file_page(None, navigation)),
-            Some(vec![Back, Forward, Reload, Identity, Browser, Files, Close])
+            Some(vec![Back, Forward, Reload, Identity, Browser, Files, Hide, Close])
         );
         assert_eq!(
             strip_items(&url_page(navigation)),
-            Some(vec![Back, Forward, Reload, Identity, Browser, CopyLink, Close])
+            Some(vec![Back, Forward, Reload, Identity, Browser, CopyLink, Hide, Close])
         );
         let chromeless = HtmlPageFlags {
             chromeless: true,

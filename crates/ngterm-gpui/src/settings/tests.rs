@@ -53,7 +53,7 @@ fn every_item(snapshot: &Snapshot) -> Vec<(Tab, Item)> {
         .flat_map(|tab| {
             tab.sections(snapshot, &catalogs)
                 .into_iter()
-                .flat_map(move |section| section.items.into_iter().map(move |item| (tab, item)))
+                .flat_map(move |section| section.into_rows().map(move |item| (tab, item)))
         })
         .collect()
 }
@@ -225,6 +225,59 @@ fn every_page_but_interface_lays_its_rows_one_per_row() {
             assert_eq!(section.columns, expected, "{tab:?} {:?}", section.title);
         }
     }
+}
+
+/// Upstream's `testInterfaceTabFitsWithTheOverlaysToggle`: the overlays button is off until opted in, and the
+/// multi-window toggle is the Sidebar section's last row rather than a section of its own.
+#[test]
+fn the_interface_tab_offers_the_overlays_button_off_and_ends_the_sidebar_with_multiple_windows() {
+    let shown = snapshot(AppSettings::default());
+    let sections = Tab::Interface.sections(&shown, &catalogs());
+    let titles: Vec<Option<&str>> = sections.iter().map(|section| section.title).collect();
+    assert_eq!(titles, [Some("Title Bar"), Some("Sidebar"), Some("Quick Terminal")]);
+    let title_bar: Vec<&str> = sections[0].rows().map(|item| item.id.as_str()).collect();
+    let split = title_bar
+        .iter()
+        .position(|id| *id == "settings-interface-split")
+        .unwrap();
+    assert_eq!(title_bar[split + 1], "settings-interface-overlayToggle", "after Split");
+    let toggle = sections[0]
+        .rows()
+        .find(|item| item.id == "settings-interface-overlayToggle")
+        .unwrap();
+    assert_eq!(toggle.title, "Hide overlays");
+    assert!(
+        matches!(toggle.control, Control::Toggle { on: false, .. }),
+        "off by default"
+    );
+    let sidebar = &sections[1];
+    assert!(
+        sidebar
+            .items
+            .iter()
+            .all(|item| item.id.starts_with("settings-interface-"))
+    );
+    let trailing: Vec<&str> = sidebar.trailing.iter().map(|item| item.id.as_str()).collect();
+    assert_eq!(
+        trailing,
+        ["settings-auto-hide-inactive-sidebars"],
+        "the section's last row"
+    );
+    assert_eq!(
+        sidebar.rows().last().map(|item| item.title.as_str()),
+        Some("Show sidebar only in the active window")
+    );
+
+    let opted_in = snapshot(AppSettings {
+        shown_interface_elements: Some(vec!["overlayToggle".to_owned()]),
+        ..AppSettings::default()
+    });
+    let sections = Tab::Interface.sections(&opted_in, &catalogs());
+    let toggle = sections[0]
+        .rows()
+        .find(|item| item.id == "settings-interface-overlayToggle")
+        .unwrap();
+    assert!(matches!(toggle.control, Control::Toggle { on: true, .. }));
 }
 
 #[test]
@@ -702,7 +755,7 @@ impl Harness {
         self.view.read_with(cx, |view, _| {
             view.sections()
                 .iter()
-                .flat_map(|section| section.items.iter())
+                .flat_map(Section::rows)
                 .find(|item| item.id == id)
                 .and_then(shown)
         })
@@ -1006,7 +1059,7 @@ fn a_change_made_elsewhere_shows_in_the_open_window(cx: &mut TestAppContext) {
     let title = h.view.read_with(cx, |view, _| {
         view.sections()
             .iter()
-            .flat_map(|section| section.items.iter())
+            .flat_map(Section::rows)
             .find(|item| item.id == "settings-theme-dark")
             .map(|item| item.title.clone())
     });
@@ -1057,7 +1110,7 @@ fn a_restore_mode_pick_reads_back_the_configured_mode(cx: &mut TestAppContext) {
     let picker = h.view.read_with(cx, |view, _| {
         view.sections()
             .into_iter()
-            .flat_map(|section| section.items)
+            .flat_map(Section::into_rows)
             .find(|item| item.id == "settings-restore-mode")
             .map(|item| picker_of(&item).pick(1))
     });
@@ -1119,7 +1172,7 @@ fn the_paths_and_diagnostics_are_selectable_text(cx: &mut TestAppContext) {
     let lines = h.view.read_with(cx, |view, _| {
         view.sections()
             .into_iter()
-            .flat_map(|section| section.items)
+            .flat_map(Section::into_rows)
             .find_map(|item| match item.control {
                 crate::settings::form::Control::Diagnostics { lines } if item.id == "settings-hooks-diagnostics" => {
                     Some(lines)

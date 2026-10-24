@@ -1,5 +1,6 @@
 //! Interface: which title-bar and sidebar chrome elements show, two toggles per row as upstream lays them out, the
-//! sidebar in inactive windows, and the quick terminal's size (upstream's `InterfaceSettingsView`).
+//! sidebar in inactive windows as the Sidebar section's last row, and the quick terminal's size (upstream's
+//! `InterfaceSettingsView`).
 
 use ngterm_core::persist::settings::InterfaceElement;
 use ngterm_core::quick_metrics::SIZE_PERCENT_CHOICES;
@@ -18,16 +19,16 @@ pub fn sections(snapshot: &Snapshot) -> Vec<Section> {
     let settings = &snapshot.settings;
     vec![
         Section::new("Title Bar", elements(snapshot, true)).two_columns(),
-        Section::new("Sidebar", elements(snapshot, false)).two_columns(),
-        Section::new(
-            "Multiple Windows",
-            vec![toggle(
+        // the multi-window toggle rides the Sidebar section, as upstream's, which keeps the tab short enough to show
+        // the quick terminal's Size without scrolling there
+        Section::new("Sidebar", elements(snapshot, false))
+            .two_columns()
+            .trailing(vec![toggle(
                 "settings-auto-hide-inactive-sidebars",
                 "Show sidebar only in the active window",
                 settings.auto_hide_sidebar_inactive_windows.unwrap_or(false),
                 |on| change(InterfaceChange::AutoHideSidebarInactiveWindows(on)),
-            )],
-        ),
+            )]),
         Section::new("Quick Terminal", vec![quick_terminal_size(snapshot)]),
     ]
 }

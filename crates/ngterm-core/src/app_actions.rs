@@ -732,17 +732,23 @@ fn store_facts(store: &AppStore, layout: FlaggedViewLayout) -> PaletteFacts {
 /// last place it can be noticed.
 #[must_use]
 pub fn close_confirmation_text(sessions: &[&Session], close_grace: bool) -> String {
-    let plural = sessions.len() > 1;
+    let hidden = sessions
+        .iter()
+        .any(|session| !session.hidden_overlay_names().is_empty());
+    close_confirmation_body(sessions.len() > 1, hidden, close_grace)
+}
+
+/// [`close_confirmation_text`] from what a frontend's snapshot keeps of the closing sessions: whether there are
+/// several, and whether any of them has a hidden overlay.
+#[must_use]
+pub fn close_confirmation_body(plural: bool, hidden_overlays: bool, close_grace: bool) -> String {
     let noun = if plural { "sessions" } else { "session" };
     let base = if close_grace {
         format!("The {noun} will close after a short undo window.")
     } else {
         format!("The {noun} will close immediately and can be reopened from File > Open Recent.")
     };
-    if !sessions
-        .iter()
-        .any(|session| !session.hidden_overlay_names().is_empty())
-    {
+    if !hidden_overlays {
         return base;
     }
     let suffix = if plural {

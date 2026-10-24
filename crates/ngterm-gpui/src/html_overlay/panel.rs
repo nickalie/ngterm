@@ -259,6 +259,7 @@ fn button(id: Uuid, item: StripItem, enabled: bool, colors: &PanelColors, poster
         StripItem::Browser => ("icons/compass.svg", "Open in Browser"),
         StripItem::Files => ("icons/folder-open.svg", "Show in Files"),
         StripItem::CopyLink => ("icons/link.svg", "Copy Link"),
+        StripItem::Hide => ("icons/minus.svg", "Hide"),
         StripItem::Close | StripItem::Identity => ("icons/x.svg", "Close"),
     };
     let ink = colors.ink(if enabled { 1.0 } else { 0.3 });
@@ -304,12 +305,13 @@ pub fn accessibility_id(item: StripItem) -> &'static str {
         StripItem::Browser => "htmlOverlay.browser",
         StripItem::Files => "htmlOverlay.finder",
         StripItem::CopyLink => "htmlOverlay.copy",
+        StripItem::Hide => "htmlOverlay.hide",
         StripItem::Close => "htmlOverlay.close",
         StripItem::Identity => "htmlOverlay.identity",
     }
 }
 
-/// What a strip button does: history and hand-offs go to the page's engine page, reload and close to the model.
+/// What a strip button does: history and hand-offs go to the page's engine page, reload, hide and close to the model.
 pub fn act(id: Uuid, item: StripItem, poster: &Poster, cx: &mut App) {
     let navigation = match item {
         StripItem::Back => HtmlNavigation::Back,
@@ -320,6 +322,13 @@ pub fn act(id: Uuid, item: StripItem, poster: &Poster, cx: &mut App) {
         StripItem::Reload => {
             return post(poster, move |state: &mut AppState| {
                 if state.core.reload_html_overlay(id, HtmlReloadTarget::Current) {
+                    state.settle();
+                }
+            });
+        }
+        StripItem::Hide => {
+            return post(poster, move |state: &mut AppState| {
+                if state.core.hide_html_overlay(id) {
                     state.settle();
                 }
             });

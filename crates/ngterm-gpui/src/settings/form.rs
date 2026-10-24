@@ -25,6 +25,8 @@ pub struct Section {
     pub title: Option<&'static str>,
     pub items: Vec<Item>,
     pub columns: usize,
+    /// Rows after a two-column section's pairs, one per row (upstream's `twoColumnSection` `trailing`).
+    pub trailing: Vec<Item>,
 }
 
 impl Section {
@@ -34,6 +36,7 @@ impl Section {
             title: Some(title),
             items,
             columns: 1,
+            trailing: Vec::new(),
         }
     }
 
@@ -44,6 +47,7 @@ impl Section {
             title: None,
             items,
             columns: 1,
+            trailing: Vec::new(),
         }
     }
 
@@ -52,6 +56,23 @@ impl Section {
     pub fn two_columns(mut self) -> Self {
         self.columns = 2;
         self
+    }
+
+    /// Ends the section with `items`, a whole row each after the pairs.
+    #[must_use]
+    pub fn trailing(mut self, items: Vec<Item>) -> Self {
+        self.trailing = items;
+        self
+    }
+
+    /// Every row, the trailing ones last.
+    pub fn rows(&self) -> impl Iterator<Item = &Item> {
+        self.items.iter().chain(&self.trailing)
+    }
+
+    /// Every row, the trailing ones last, taken.
+    pub fn into_rows(self) -> impl Iterator<Item = Item> {
+        self.items.into_iter().chain(self.trailing)
     }
 }
 

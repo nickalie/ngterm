@@ -100,7 +100,8 @@ pub enum OverlayFocus {
 }
 
 /// The overlays a page shows (upstream's `overlayPanel` and `paneOverlayPanel` gates): the program, and each laid-out
-/// pane's own overlay by generation.
+/// pane's own overlay by generation. A hidden overlay shows nowhere: it lies in [`OverlayPlan::hidden`], laid out where
+/// it would show, undrawn, so it keeps running at its size and comes back without a re-host.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct OverlayPlan {
     pub program: Option<ProgramShow>,
@@ -109,6 +110,16 @@ pub struct OverlayPlan {
     pub primary: Option<u64>,
     pub split: Option<u64>,
     pub focus: Option<OverlayFocus>,
+    pub hidden: HiddenOverlays,
+}
+
+/// The hidden overlays a page keeps mounted (upstream's hosts at opacity 0): the program's frame, and each laid-out
+/// pane's hidden overlay by generation. They take no keyboard, no pointer and no wash.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct HiddenOverlays {
+    pub program: Option<ProgramShow>,
+    pub primary: Option<u64>,
+    pub split: Option<u64>,
 }
 
 impl OverlayPlan {
@@ -126,11 +137,17 @@ impl OverlayPlan {
     /// program covers the page, a zoomed pane overlay shows alone over its pane, a zoomed terminal shows bare; else
     /// the program shows at its size, and each pane laid out, uncovered, shows its own overlay. A covering program
     /// holds the keyboard, else the focused pane's overlay does unless the scratch covers it. A page in the slot is laid
-    /// out as a program is (upstream's `coverOverlayActive`).
+    /// out as a program is. Only the visible layer shows (upstream's `coverOverlayVisible` and `paneOverlayVisible`):
+    /// a hidden program or pane overlay goes to [`OverlayPlan::hidden`], and the terminal under it takes the keyboard.
     fn of(session: &Session, zoomed: Option<ZoomSurface>, panes: Panes, scratch_covers: bool) -> Self {
         let slot = &session.overlay;
-        let program = session.cover_overlay_active().then_some(slot.generation);
-        let generation = |pane: OverlayPane| session.pane_overlay(pane).map(|overlay| overlay.generation);
+        let program = session.cover_overlay_visible().then_some(slot.generation);
+        let generation = |pane: OverlayPane| {
+            session
+                .pane_overlay(pane)
+                .filter(|overlay| !overlay.hidden)
+                .map(|overlay| overlay.generation)
+        };
         match zoomed {
             Some(ZoomSurface::Overlay) if program.is_some() => Self {
                 program: program.map(|generation| ProgramShow {
@@ -176,6 +193,7 @@ impl OverlayPlan {
                 } else {
                     None
                 };
+                plan.hidden = HiddenOverlays::of(session, panes, fraction);
                 plan
             }
         }
@@ -186,6 +204,39 @@ impl OverlayPlan {
             Slot::Primary => self.primary = generation,
             Slot::Split => self.split = generation,
             Slot::Scratch => {}
+        }
+    }
+}
+
+impl HiddenOverlays {
+    /// The generation of the hidden pane overlay laid out over the pane at `slot`.
+    #[must_use]
+    pub fn pane(&self, slot: Slot) -> Option<u64> {
+        match slot {
+            Slot::Primary => self.primary,
+            Slot::Split => self.split,
+            Slot::Scratch => None,
+        }
+    }
+
+    /// The hidden overlays of `session` laid out by `panes`: the program at its `fraction` of the page, and each laid-out
+    /// pane's hidden overlay (a hidden pane overlay under a shown program or the scratch keeps its pane's frame too).
+    fn of(session: &Session, panes: Panes, fraction: Option<f64>) -> Self {
+        let slot = &session.overlay;
+        let program = (session.cover_overlay_active() && slot.hidden).then_some(ProgramShow {
+            generation: slot.generation,
+            fraction,
+        });
+        let hidden = |pane: OverlayPane| {
+            session
+                .pane_overlay(pane)
+                .filter(|overlay| overlay.hidden && lays_out(panes, Slot::of_overlay(pane)))
+                .map(|overlay| overlay.generation)
+        };
+        Self {
+            program,
+            primary: hidden(OverlayPane::Left),
+            split: hidden(OverlayPane::Right),
         }
     }
 }

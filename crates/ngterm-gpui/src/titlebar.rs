@@ -1,11 +1,11 @@
 //! The window's title bar (upstream's custom titlebar row, `WindowContentView+Titlebar.swift`, with its zoom and
 //! dashboard variants; ported from the GTK build's `titlebar.rs`): the sidebar toggle at the sidebar's trailing edge,
 //! the title's two lines at the terminal's leading edge ([`ngterm_core::titlebar::compose`]), and the trailing cluster
-//! of recent-sessions and attention buttons, scratch and split toggles, the dashboard, the quick terminal and the
-//! custom-commands button, each gated by its Settings ▸ Interface toggle, with a divider only between two groups of two
-//! or more. A terminal zoom or an open dashboard strips the bar to its title and an exit button. The app menu's button
-//! ([`crate::app_menu`], the GTK header bar's primary menu) sits at the trailing end in every mode and under every
-//! cover: Linux has no global menu bar, and Quit and the Help items have no keymap action or palette row, so the
+//! of recent-sessions and attention buttons, scratch, split and overlay toggles, the dashboard, the quick terminal and
+//! the custom-commands button, each gated by its Settings ▸ Interface toggle, with a divider only between two groups of
+//! two or more. A terminal zoom or an open dashboard strips the bar to its title and an exit button. The app menu's
+//! button ([`crate::app_menu`], the GTK header bar's primary menu) sits at the trailing end in every mode and under
+//! every cover: Linux has no global menu bar, and Quit and the Help items have no keymap action or palette row, so the
 //! button is their only path (Settings… has the action palette's row too).
 //!
 //! The bar is painted in the terminal's colors ([`crate::chrome`]): the theme's background, its foreground for the
@@ -75,7 +75,7 @@ const CONTROL: Pixels = px(30.);
 
 /// The glyphs the bar draws from gpui-kit's Lucide catalog, served to the app with gpui-kit's own component icons
 /// ([`Icons`]).
-pub const GLYPHS: [IconName; 14] = [
+pub const GLYPHS: [IconName; 16] = [
     IconName::PanelLeft,
     IconName::RotateCcwClock,
     IconName::Bell,
@@ -90,6 +90,8 @@ pub const GLYPHS: [IconName; 14] = [
     IconName::WindowRestore,
     IconName::WindowClose,
     IconName::Menu,
+    IconName::Copy,
+    IconName::CopySlash,
 ];
 
 gpui_kit::assets::icon_assets!(
@@ -109,6 +111,8 @@ gpui_kit::assets::icon_assets!(
         WindowRestore,
         WindowClose,
         Menu,
+        Copy,
+        CopySlash,
     ]
 );
 
@@ -232,6 +236,7 @@ pub struct Hints {
     pub attention: String,
     pub scratch: String,
     pub split: String,
+    pub overlays: String,
     pub dashboard: String,
     pub quick: String,
     pub custom: String,
@@ -258,6 +263,10 @@ impl Hints {
             split: model
                 .split
                 .map(|split| with(split.hint, split.action))
+                .unwrap_or_default(),
+            overlays: model
+                .overlay_toggle
+                .map(|toggle| with(toggle.label(), BuiltinAction::ToggleOverlay))
                 .unwrap_or_default(),
             dashboard: with("Dashboard", BuiltinAction::Dashboard),
             quick: with("Quick Terminal", BuiltinAction::QuickTerminal),
@@ -600,7 +609,7 @@ impl Titlebar {
         colors: ChromeColors,
         click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> gpui_kit::Stateful<Div> {
         let Button {
             id,
             glyph,
@@ -610,6 +619,7 @@ impl Titlebar {
         let text: SharedString = hint.into();
         div()
             .id(id)
+            .debug_selector(move || id.to_owned())
             // upstream's accessibility identifier, and the hover text as the button's name, for AccessKit
             .accessibility_id(id)
             .role(gpui_kit::Role::Button)
@@ -823,7 +833,7 @@ impl Titlebar {
         row
     }
 
-    /// The scratch and split toggles, their glyphs tracing the panes on screen.
+    /// The scratch and split toggles, their glyphs tracing the panes on screen, then the overlay toggle.
     fn pane_buttons(mut row: Div, bar: &Bar, glyph: Pixels, cx: &mut Context<Self>) -> Div {
         let (model, hints, colors) = (&bar.model, &bar.hints, bar.colors);
         let ink = chrome::color(colors.foreground, 1.0);
@@ -854,6 +864,23 @@ impl Titlebar {
                 |bar, _, _| bar.action(TitlebarAction::ToggleSplit),
                 cx,
             ));
+        }
+        if let Some(toggle) = model.overlay_toggle {
+            // slashed while anything is hidden, so a hidden overlay is never out of sight entirely; the label names what
+            // a click does and the value what the session holds (upstream's `overlayToggleButton`)
+            let name = if toggle.any_hidden {
+                IconName::CopySlash
+            } else {
+                IconName::Copy
+            };
+            let spec = Button {
+                id: "overlay-toggle",
+                glyph: icon(name, ink, glyph),
+                enabled: toggle.enabled,
+                hint: hints.overlays.clone(),
+            };
+            let button = Self::button(spec, colors, |bar, _, _| bar.action(TitlebarAction::ToggleOverlay), cx);
+            row = row.child(button.aria_label(toggle.label()).aria_value(toggle.state_name()));
         }
         row
     }

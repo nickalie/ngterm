@@ -686,7 +686,7 @@ def test_the_committed_ui_ids_parse_and_name_their_tag() -> None:
     data = yaml.safe_load((TOOLS.parent / "ui-ids.yaml").read_text())
     assert data["upstream"] == "v0.38.1"
     assert len(data["ids"]) == 105
-    assert len(data["manual"]) == 14
+    assert len(data["manual"]) == 15
     assert data["ids"]["ask-choice-{id}"]["at"] == ["agterm/Views/AskFormViews.swift:406"]
     assert all(entry["site"].startswith("agterm/") for entry in data["manual"].values())
     assert not set(data["ids"]) & set(data["manual"])

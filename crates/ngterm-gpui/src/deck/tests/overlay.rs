@@ -35,7 +35,7 @@ fn running_launcher(launches: Arc<Mutex<Vec<Launch>>>) -> pane::Launcher {
 }
 
 /// A deck whose terminals run their launches, the first session's pane started; its session and pane token.
-fn overlay_harness(cx: &mut TestAppContext) -> (Harness<'_>, Uuid, String) {
+pub(super) fn overlay_harness(cx: &mut TestAppContext) -> (Harness<'_>, Uuid, String) {
     let (library, window, ids) = three_sessions();
     let recorded = Arc::new(Mutex::new(Vec::new()));
     let spawner = running_launcher(Arc::clone(&recorded));
@@ -48,7 +48,7 @@ fn overlay_harness(cx: &mut TestAppContext) -> (Harness<'_>, Uuid, String) {
 }
 
 /// The session-wide program's terminal: whether it shows and whether it holds the window's keyboard.
-fn program(h: &mut Harness<'_>, session: Uuid) -> Option<(bool, bool)> {
+pub(super) fn program(h: &mut Harness<'_>, session: Uuid) -> Option<(bool, bool)> {
     let deck = h.deck.clone();
     h.cx.update(|window, cx| {
         let program = deck.read(cx).page(session)?.overlays().program()?;
@@ -58,7 +58,7 @@ fn program(h: &mut Harness<'_>, session: Uuid) -> Option<(bool, bool)> {
 }
 
 /// The pane overlays' terminals: each one's generation, whether it shows and whether it holds the keyboard.
-fn pane_overlays(h: &mut Harness<'_>, session: Uuid) -> Vec<(u64, bool, bool)> {
+pub(super) fn pane_overlays(h: &mut Harness<'_>, session: Uuid) -> Vec<(u64, bool, bool)> {
     let deck = h.deck.clone();
     h.cx.update(|window, cx| {
         deck.read(cx).page(session).map_or_else(Vec::new, |page| {
@@ -77,7 +77,7 @@ fn pane_overlays(h: &mut Harness<'_>, session: Uuid) -> Vec<(u64, bool, bool)> {
     })
 }
 
-fn program_realized(h: &Harness<'_>, session: Uuid) -> bool {
+pub(super) fn program_realized(h: &Harness<'_>, session: Uuid) -> bool {
     h.session(session)
         .overlay
         .surface
@@ -247,7 +247,7 @@ fn write_png(path: &Path) {
 }
 
 /// POSIX single quotes around `path`.
-fn quoted(path: &Path) -> String {
+pub(super) fn quoted(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
 }
 
@@ -291,7 +291,7 @@ fn show_image_draws_its_image_in_a_pty_overlay_and_closes_on_enter(cx: &mut Test
 
 /// Whether `session`'s session-wide page shows and holds the window's keyboard.
 #[cfg(all(feature = "html", target_os = "linux"))]
-fn program_page(h: &mut Harness<'_>, session: Uuid) -> Option<(bool, bool)> {
+pub(super) fn program_page(h: &mut Harness<'_>, session: Uuid) -> Option<(bool, bool)> {
     let deck = h.deck.clone();
     h.cx.update(|window, cx| {
         let page = deck.read(cx).page(session)?.overlays().program_page()?;

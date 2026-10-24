@@ -466,7 +466,7 @@ impl SettingsView {
     fn sync_selectables(&mut self, window: &mut Window, cx: &mut App) {
         use crate::selectable::Selectable;
         use form::Control;
-        for item in self.sections().into_iter().flat_map(|section| section.items) {
+        for item in self.sections().into_iter().flat_map(form::Section::into_rows) {
             let (text, line) = match &item.control {
                 Control::Path { text, .. } => (text.clone(), true),
                 Control::Diagnostics { lines } if !lines.is_empty() => (lines.join("\n"), false),

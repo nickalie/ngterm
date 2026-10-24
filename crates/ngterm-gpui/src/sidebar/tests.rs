@@ -271,6 +271,7 @@ fn confirmations_use_upstreams_words() {
             flagged: false,
             has_status: false,
             cwd: "/".into(),
+            hidden_overlays: false,
         },
     );
     assert_eq!(
@@ -287,6 +288,18 @@ fn confirmations_use_upstreams_words() {
             "Close 2 Sessions?".to_owned(),
             "The sessions will close immediately and can be reopened from File > Open Recent.".to_owned()
         )
+    );
+    // a hidden overlay goes with its session, so the confirmation names it (upstream's `closeConfirmationText`)
+    context.menu.sessions.get_mut(&id).unwrap().hidden_overlays = true;
+    assert_eq!(
+        close_confirmation(&context, &[id]).1,
+        "The session will close immediately and can be reopened from File > Open Recent. Its hidden overlays close \
+         with it."
+    );
+    context.close_grace = true;
+    assert_eq!(
+        close_confirmation(&context, &[Uuid::nil(), id]).1,
+        "The sessions will close after a short undo window. Their hidden overlays close with them."
     );
     assert_eq!(
         delete_confirmation(1, true),

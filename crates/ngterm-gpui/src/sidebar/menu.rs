@@ -19,6 +19,8 @@ pub struct SessionFacts {
     pub has_status: bool,
     /// The focused pane's cwd, what Reveal in Files shows.
     pub cwd: String,
+    /// A hidden overlay goes with the session, which its close confirmation names.
+    pub hidden_overlays: bool,
 }
 
 /// What a workspace row's menu reads of its workspace.
@@ -312,6 +314,7 @@ mod tests {
             flagged: false,
             has_status: false,
             cwd: "/tmp".to_owned(),
+            hidden_overlays: false,
         };
         let workspace = |id, name: &str, count| WorkspaceFacts {
             id,

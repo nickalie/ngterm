@@ -20,6 +20,9 @@
 //!
 //! The macOS and Windows forms are not built on macOS/Windows by CI until ngterm-gpui joins `cross-platform.yml`.
 //!
+//! The alert sound for a refusal with nothing on screen to explain it ([`alert`], upstream's `NSSound.beep()`): the
+//! display's alert bell on Linux, `NSBeep` on macOS and `MessageBeep(MB_OK)` on Windows.
+//!
 //! The bell, as GDK rings it: on Wayland the `xdg_system_bell_v1` global on GPUI's own connection, rung for the window
 //! (a compositor without it has no bell to ring); on X11 the core protocol's `Bell` on a connection of its own to the
 //! same display. A terminal's BEL rings nothing: upstream's `GHOSTTY_ACTION_RING_BELL` is not a notification source
@@ -274,6 +277,44 @@ mod system {
         // SAFETY: a plain call with a constant style.
         unsafe { MessageBeep(MB_OK) };
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The alerts sounded on this thread, for the window tests.
+    static ALERTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The alerts [`alert`] sounded on this thread so far.
+#[cfg(test)]
+pub(crate) fn alerts() -> usize {
+    ALERTS.with(std::cell::Cell::get)
+}
+
+/// Sounds the alert for `window` (upstream's `NSSound.beep()`): the display's alert bell on Linux, `NSBeep` on macOS,
+/// `MessageBeep(MB_OK)` on Windows.
+pub fn alert(window: &Window, cx: &App) {
+    #[cfg(test)]
+    ALERTS.with(|alerts| alerts.set(alerts.get() + 1));
+    alert_sound(window, cx);
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn alert_sound(window: &Window, cx: &App) {
+    ring(window, cx);
+}
+
+#[cfg(target_os = "macos")]
+fn alert_sound(_: &Window, _: &App) {
+    objc2_app_kit::NSBeep();
+}
+
+#[cfg(windows)]
+fn alert_sound(_: &Window, _: &App) {
+    use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
+    use windows_sys::Win32::UI::WindowsAndMessaging::MB_OK;
+    // SAFETY: a plain call with a constant style.
+    unsafe { MessageBeep(MB_OK) };
 }
 
 /// Rings the display's alert bell for `window`, by the display server GPUI runs on; headless, nothing.

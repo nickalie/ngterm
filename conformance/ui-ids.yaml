@@ -117,6 +117,7 @@ manual:
   htmlOverlay.browser: {status: uncovered, site: 'agterm/Views/HtmlOverlayView.swift:identifier', from: line 51}
   htmlOverlay.finder: {status: uncovered, site: 'agterm/Views/HtmlOverlayView.swift:identifier', from: line 56}
   htmlOverlay.copy: {status: uncovered, site: 'agterm/Views/HtmlOverlayView.swift:identifier', from: line 60}
+  htmlOverlay.hide: {status: uncovered, site: 'agterm/Views/HtmlOverlayView.swift:identifier', from: line 66}
   htmlOverlay.close: {status: uncovered, site: 'agterm/Views/HtmlOverlayView.swift:identifier', from: line 65}
   custom-command-top-row: {status: uncovered, site: 'agterm/Views/WindowContentView+CustomCommands.swift:accessibilityID', from: line 60}
   custom-command-row: {status: uncovered, site: 'agterm/Views/WindowContentView+CustomCommands.swift:accessibilityID', from: line 65}

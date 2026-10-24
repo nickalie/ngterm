@@ -167,6 +167,32 @@ def test_attention_button_lists_the_blocked_session(launch, ui_for):
     ui.absent("attention-session-row")
 
 
+@pytest.mark.covers("ui:overlay-toggle")
+def test_overlay_toggle_hides_and_shows_the_session_overlays(launch, ui_for):
+    # Hidden by default; once enabled it stays drawn, disabled with nothing to hide (upstream's
+    # testTheTitleBarButtonStaysVisibleAndHidesAndShowsTheSessionOverlays).
+    ctl = launch(settings={"shownInterfaceElements": ["overlayToggle"]})
+    ui = ui_for(ctl)
+    (sid,) = session_ids(ctl.tree())
+    ctl.wait_mounted(sid, "left")
+    ui.find("overlay-toggle", role="button", enabled=False)
+    assert_ok(ctl.request("session.overlay.open", sid, command="sh -c 'cat'"))
+    ui.click(ui.find("overlay-toggle", enabled=True))
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get("hiddenOverlays") == ["session"])
+    ui.find("overlay-toggle", value="hidden")
+    ui.click("overlay-toggle")
+    ctl.wait_tree(lambda tree: "hiddenOverlays" not in find_session(tree, sid))
+    ui.find("overlay-toggle", value="shown")
+    pick = assert_ok(ctl.request("pick.open", items=[{"id": "one", "label": "One"}]))["id"]
+    try:
+        # An open picker disables it, as it does the menu item.
+        ui.find("overlay-toggle", enabled=False)
+    finally:
+        assert_ok(ctl.request("pick.cancel", pick))
+    ui.find("overlay-toggle", enabled=True)
+    assert_ok(ctl.request("session.overlay.close", sid))
+
+
 def _custom_commands(ctl, count):
     lines = "".join(f'command "ui-cmd-{n}" true\n' for n in range(1, count + 1))
     (ctl.instance.state_dir / "config" / "keymap.conf").write_text(lines)

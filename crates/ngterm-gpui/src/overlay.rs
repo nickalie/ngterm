@@ -199,6 +199,9 @@ impl OverlayPage {
 pub struct OverlayLayer {
     program: Option<OverlayTerminal>,
     placement: Option<ProgramPlacement>,
+    /// Where the program is laid out: where it shows, or while it is hidden where it would show, so its terminal keeps
+    /// its size.
+    frame: Option<ProgramPlacement>,
     panes: Vec<OverlayTerminal>,
     program_page: Option<OverlayPage>,
     pane_pages: Vec<OverlayPage>,
@@ -215,6 +218,13 @@ impl OverlayLayer {
     #[must_use]
     pub fn placement(&self) -> Option<ProgramPlacement> {
         self.placement
+    }
+
+    /// Where the program is laid out: its placement, else while hidden the placement it shows at again; `None`
+    /// without either (the whole page, undrawn).
+    #[must_use]
+    pub fn frame(&self) -> Option<ProgramPlacement> {
+        self.placement.or(self.frame)
     }
 
     /// The terminal of pane overlay `generation`.
@@ -294,6 +304,7 @@ impl OverlayLayer {
     /// prompt it had goes, upstream's `setOnScreen(false)`).
     pub fn hide(&mut self, cx: &mut gpui_kit::App) {
         self.placement = None;
+        self.frame = None;
         for overlay in self.terminals() {
             overlay.show(false, cx);
         }
@@ -341,7 +352,9 @@ pub struct Mount<'a, 'w> {
 
 /// Brings the page's overlays in line with `session`: a closed or replaced program's terminal goes, an open program
 /// without one gets it (installed in its slot), and likewise for each pane overlay whose pane `plan` lays out; then
-/// each shows where `plan` puts it while the page is `shown`.
+/// each shows where `plan` puts it while the page is `shown`. Mounting follows the slots' occupancy, never what
+/// shows: a hidden program, pane overlay or page keeps its terminal or page (and its program or document) with no
+/// placement, laid out where it would show, and shows again as it was.
 pub fn sync_page(
     layer: &mut OverlayLayer,
     session: &mut Session,
@@ -374,13 +387,21 @@ pub fn sync_page(
         mount_pane(layer, session, pane, mount, plan, cx);
     }
     let cover = live.or(page);
+    let placed = |program: &crate::split::ProgramShow| Some(program.generation) == cover;
+    let placement = |program: crate::split::ProgramShow| ProgramPlacement {
+        fraction: program.fraction,
+    };
     layer.placement = plan
         .overlays
         .program
-        .filter(|program| shown && Some(program.generation) == cover)
-        .map(|program| ProgramPlacement {
-            fraction: program.fraction,
-        });
+        .filter(|program| shown && placed(program))
+        .map(placement);
+    layer.frame = plan
+        .overlays
+        .program
+        .or(plan.overlays.hidden.program)
+        .filter(placed)
+        .map(placement);
     if let Some(program) = &layer.program {
         program.show(layer.placement.is_some(), cx);
     }
@@ -456,8 +477,18 @@ pub fn slot_of(plan: &PanePlan, generation: u64) -> Option<Slot> {
         .find(|slot| plan.overlays.pane(*slot) == Some(generation))
 }
 
-/// Mounts `pane`'s overlay once `plan` lays that pane out (a pane no host lays out never gets one, as upstream's
-/// surfaces wait for a backing size): a program's terminal, or a page's element.
+/// The slot pane overlay `generation` is laid out over by `plan`: where it shows, or hidden, where it would show.
+#[must_use]
+pub fn frame_of(plan: &PanePlan, generation: u64) -> Option<Slot> {
+    slot_of(plan, generation).or_else(|| {
+        [Slot::Primary, Slot::Split]
+            .into_iter()
+            .find(|slot| plan.overlays.hidden.pane(*slot) == Some(generation))
+    })
+}
+
+/// Mounts `pane`'s overlay once `plan` lays that pane out, shown or hidden (a pane no host lays out never gets one, as
+/// upstream's surfaces wait for a backing size): a program's terminal, or a page's element.
 fn mount_pane(
     layer: &mut OverlayLayer,
     session: &mut Session,
@@ -470,7 +501,7 @@ fn mount_pane(
         return;
     };
     let generation = overlay.generation;
-    let laid_out = plan.overlays.pane(Slot::of_overlay(pane)) == Some(generation);
+    let laid_out = frame_of(plan, generation) == Some(Slot::of_overlay(pane));
     if !laid_out || layer.pane(generation).is_some() || layer.pane_page(generation).is_some() {
         return;
     }

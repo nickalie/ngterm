@@ -214,9 +214,19 @@ fn page(view: &SettingsView, look: &Look) -> Stateful<Div> {
 
 /// One section: its title over the box of its rows.
 fn render_section(section: Section, view: &SettingsView, look: &Look) -> AnyElement {
-    let Section { title, items, columns } = section;
+    let Section {
+        title,
+        items,
+        columns,
+        trailing,
+    } = section;
     let rows: Vec<AnyElement> = if columns > 1 {
-        paired(items, view, look)
+        let mut rows = paired(items, view, look);
+        for item in trailing {
+            let line = !rows.is_empty();
+            rows.push(separated(line, row(item, view, look), look));
+        }
+        rows
     } else {
         items
             .into_iter()

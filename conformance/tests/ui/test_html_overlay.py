@@ -79,6 +79,30 @@ def test_file_page_strip_names_the_page_and_closes_it(ctl, ui):
         ctl.request("session.close", sid)
 
 
+@pytest.mark.covers("ui:htmlOverlay.hide")
+def test_page_strip_hide_hides_its_own_pane(ctl, ui):
+    # The strip's Hide hides its page with the page's scope: a pane page its pane, the session overlay left as it was
+    # (upstream's testThePageStripHideButtonHidesItsOwnPane).
+    sid = _new(ctl)
+    assert_ok(ctl.request("session.split", sid, mode="on"))
+    ctl.wait_mounted(sid, "right")
+    page = ctl.instance.root / "ui-strip.html"
+    page.write_text("<!doctype html><title>UI Strip</title><body><p>strip page</p></body>")
+    try:
+        assert_ok(ctl.request("session.overlay.open", sid, command="sh -c 'cat'"))
+        assert_ok(ctl.request("session.overlay.open", sid, html=str(page), pane="right"))
+        assert assert_ok(ctl.request("session.overlay.hide", sid))["text"] == "hidden"
+        assert assert_ok(ctl.request("session.overlay.show", sid, pane="right"))["text"] == "shown"
+        _state(ctl, sid, "loaded", "UI Strip")
+        ui.click(ui.find("htmlOverlay.hide", role="button", enabled=True))
+        ctl.wait_tree(lambda tree: find_session(tree, sid).get("hiddenOverlays") == ["session", "right"])
+        ui.absent("htmlOverlay.hide")
+    finally:
+        ctl.request("session.overlay.close", sid, pane="right")
+        ctl.request("session.overlay.close", sid)
+        ctl.request("session.close", sid)
+
+
 @pytest.mark.covers("ui:htmlOverlay.copy")
 def test_url_page_offers_to_copy_its_link(ctl, ui):
     sid = _new(ctl)

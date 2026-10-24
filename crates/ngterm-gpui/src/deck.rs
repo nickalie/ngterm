@@ -1320,27 +1320,28 @@ impl Deck {
     }
 }
 
-/// `element` with `page`'s pane overlays over the panes `plan` puts them on (hidden ones at the full page, undrawn).
+/// `element` with `page`'s pane overlays over the panes `plan` puts them on: a hidden one over its pane, undrawn, and
+/// one on a pane not laid out at the full page, undrawn.
 fn with_pane_overlays(mut element: PageElement, page: &Page, plan: &PanePlan, cx: &App) -> PageElement {
     for pane_overlay in page.overlays.panes() {
-        let place = overlay::slot_of(plan, pane_overlay.generation()).map_or(Place::Full, Place::Over);
+        let place = overlay::frame_of(plan, pane_overlay.generation()).map_or(Place::Full, Place::Over);
         element = element.child(overlay::pane_element(pane_overlay, cx), place);
     }
     for pane_page in page.overlays.pane_pages() {
-        let place = overlay::slot_of(plan, pane_page.generation()).map_or(Place::Full, Place::Over);
+        let place = overlay::frame_of(plan, pane_page.generation()).map_or(Place::Full, Place::Over);
         element = element.child(overlay::pane_page_element(pane_page), place);
     }
     element
 }
 
-/// `element` with `page`'s program panel, where it shows.
+/// `element` with `page`'s program panel, where it shows (hidden, where it would show, undrawn).
 fn with_program(element: PageElement, page: &Page) -> PageElement {
     let Some(program) = overlay::program_element(&page.overlays) else {
         return element;
     };
     let placement = page
         .overlays
-        .placement()
+        .frame()
         .unwrap_or(overlay::ProgramPlacement { fraction: None });
     element.child(program, Place::Program(placement))
 }

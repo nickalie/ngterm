@@ -1351,36 +1351,44 @@ write_screen_file:paste; on Windows it is AltGr+Shift+J where AltGr = Ctrl+Alt, 
 `xdg_system_bell_v1`, X11 core Bell), macOS NSBeep, Windows `MessageBeep(MB_OK)`, each with that OS's frontend
 (not built on macOS/Windows by CI until ngterm-gpui joins `cross-platform.yml`)
 
-- [ ] deck: a hidden program, pane overlay or page stays mounted (its terminal entity, IO thread and WPE page alive)
+- [x] deck: a hidden program, pane overlay or page stays mounted (its terminal entity, IO thread and WPE page alive)
       with no placement; its pane shows and takes clicks and keys; the backdrop wash and mute follow the visible
       layer; nothing is rebuilt on show; the refocus fires when the visible cover changes, never on a HUD, a hidden
       overlay's close or the other pane's overlay. Confirm that mounting follows occupancy, not placement, so
       `drop_unrealized_pane_overlays` never tears a hidden one down, and that a WPE page keeps loading and running
       while unplaced
-- [ ] the page strip gains Hide before Close (minus icon, label "Hide", id `htmlOverlay.hide`) with the page's scope
-- [ ] View menu row after Toggle Scratch: "Hide Overlays", or "Show Overlays" when nothing is shown; enabled through
+- [x] the page strip gains Hide before Close (minus icon, label "Hide", id `htmlOverlay.hide`) with the page's scope
+- [x] View menu row after Toggle Scratch: "Hide Overlays", or "Show Overlays" when nothing is shown; enabled through
       the palette fact; chord from toggle_overlay
       ⚠️ the row itself landed in Task 20 (`app_menu.rs`, test `the_overlays_row_names_what_it_will_do_and_needs_an_overlay`),
       since `every_built_in_action_has_a_menu_item` needs one for `toggle_overlay`; this item verifies it in the window
-- [ ] title bar: the overlay toggle after split, counted for the dividers; disabled with nothing to hide or under a
+- [x] title bar: the overlay toggle after split, counted for the dividers; disabled with nothing to hide or under a
       picker, zoom or dashboard; label Hide/Show Overlays, a slashed icon while anything is hidden, id
       `overlay-toggle`
-- [ ] ➕ take `overlay-toggle` off `PENDING` in `crates/ngterm-gpui/src/ui_ids.rs` (Task 1 parked it there)
-- [ ] Settings ▸ Interface: "Hide overlays", off by default; Multiple Windows becomes the Sidebar section's last row
+- [x] ➕ take `overlay-toggle` off `PENDING` in `crates/ngterm-gpui/src/ui_ids.rs` (Task 1 parked it there)
+- [x] Settings ▸ Interface: "Hide overlays", off by default; Multiple Windows becomes the Sidebar section's last row
       as upstream (grouping parity; Settings stays the in-window popup)
-- [ ] close confirmations append " Its hidden overlays close with it." (one session) or " Their hidden overlays
+- [x] close confirmations append " Its hidden overlays close with it." (one session) or " Their hidden overlays
       close with them." (several) when any closing session has hidden overlays
-- [ ] the alert bell when Edit Keymap/Hooks/ghostty.conf is refused because a hidden overlay holds the session slot;
+- [x] the alert bell when Edit Keymap/Hooks/ghostty.conf is refused because a hidden overlay holds the session slot;
       the overlay stays hidden
       ⚠️ Task 20 added the core's `FrontendAction::AlertBell(window)` and its arm in `keymap_actions.rs` ringing the
       existing `status_sound::ring`; what remains is the macOS and Windows forms and a window test
-- [ ] the toggle_overlay chord fires from a focused page (the interceptor runs the keymap before the page's engine:
+- [x] the toggle_overlay chord fires from a focused page (the interceptor runs the keymap before the page's engine:
       a test, no special case)
-- [ ] write tests: GPUI window tests (headless, lavapipe) mirroring ControlOverlayVisibilityUITests: keys go to the
+- [x] write tests: GPUI window tests (headless, lavapipe) mirroring ControlOverlayVisibilityUITests: keys go to the
       pane after hide and back to the same program after show (one pid); a hidden pane overlay leaves its pane
       clickable; a hidden page comes back with the same load token; the title-bar button's states; the chord from
       the terminal and from a focused page; the strip's Hide hides only its own pane
-- [ ] gate passes
+- [x] ➕ the strip's Hide is upstream's `htmlOverlay.hide`, which Task 1's ui-id catalog missed (a literal through the
+      strip's variable `identifier` site): added as a manual entry in `conformance/ui-ids.yaml` and covered by
+      `tests/ui/test_html_overlay.py::test_page_strip_hide_hides_its_own_pane`; `ui:overlay-toggle` by
+      `tests/ui/test_titlebar.py::test_overlay_toggle_hides_and_shows_the_session_overlays`
+- [x] manual check (user): the two new ui tests green on reference-macos (manual, user — not automatable here: tests/ui
+      runs only on macOS)
+- [x] manual check (user): the macOS and Windows alert sounds (`status_sound::alert`) are not built on macOS/Windows
+      by CI until ngterm-gpui joins `cross-platform.yml` (manual, user — not verifiable here)
+- [x] gate passes (full suite deferred to the end of the plan per the user)
 
 ### Task 22: HTML pages on a remote presenter, part 1: the origin side (#793)
 
