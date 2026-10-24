@@ -12,3 +12,7 @@ cross-platform-sessions plan (Task 27 at a load average of 40–70, Task 28 at a
 ran beside it); both times the test passed in a quiet run. Task 28 left it as it was (unrelated to removing zmx). A fix
 starts from telling the two apart: log weston's configure for the unzoom, then either re-request the restored size when
 weston keeps the maximized one, or bound the wait by the configure rather than by time.
+
+Seen again in upstream-sync-v0.38.1 Task 30 (2026-10-24): it failed in two consecutive `cargo test --workspace` runs
+(load average about 10, 4-CPU cap, with the log ending again on the zoom's `sized size=1280x800`), and passed alone at
+about 4.

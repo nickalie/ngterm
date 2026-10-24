@@ -529,12 +529,7 @@ fn an_attention_row_raises_its_window_and_selects_the_session() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
-)]
 fn a_custom_command_row_runs_for_the_active_session() {
-    // the added session sits in /tmp, a directory that exists
     let mut host = Host::new(1);
     host.write("keymap.conf", "command \"Deploy\" ./deploy {AGT_SESSION_NAME}\n");
     host.fixture.core.reload_keymap();

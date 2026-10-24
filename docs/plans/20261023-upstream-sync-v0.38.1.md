@@ -1974,15 +1974,15 @@ separate open work (the existing `cfg_attr(windows, ignore)`)
   created in a temp dir that is then removed; a command writing `$AGT_SESSION_PWD|$PWD` gives the removed path and
   the instance's HOME, resolved through symlinks)
 
-- [ ] the cwd is the session's reported directory when it is a directory here, else HOME, for every session;
+- [x] the cwd is the session's reported directory when it is a directory here, else HOME, for every session;
       `AGT_SESSION_PWD` keeps the reported path; a real launch failure still reports "<name> did not start: <reason>"
       and the opted-in panel "<name>: <reason>"
-- [ ] write tests: replace `a_session_directory_that_is_gone_refuses_the_run` with a run in HOME (a missing path and a
+- [x] write tests: replace `a_session_directory_that_is_gone_refuses_the_run` with a run in HOME (a missing path and a
       plain file); rework the failure-panel test onto the fake launcher's `fail_with` (quiet: no panel; loud: one
       panel, "loud: " prefix)
-- [ ] write tests: the conformance test above
-- [ ] manual check (user): green on reference-macos
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance test above
+- [x] manual check (user): green on reference-macos (skipped - not automatable: reference-macos runs only in CI on macOS; left for the user)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user; the targeted run of `test_keymap_hooks.py`'s `keymap.run` tests is green, and the new id is added in Task 35)
 
 ### Task 31: `notify` banners get their own notification slot per session (#772)
 

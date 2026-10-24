@@ -2,7 +2,8 @@
 `hooks.list` read-back, plus `keymap.run`. The module shares one instance and every test leaves both files absent.
 
 Both files live in `<state>/config`, never the account's. Every custom command and hook here only writes into the
-instance root, by absolute path: a command runs in the session's directory, and a hook in the app's."""
+instance root, by absolute path: a command runs in the session's directory (HOME when that is gone), and a hook
+in the app's."""
 
 import json
 import os
@@ -191,6 +192,29 @@ def test_run_starts_the_command_for_the_addressed_session(ctl, keymap):
     finally:
         for sid in (target, active):
             ctl.request("session.close", sid)
+
+
+@pytest.mark.covers("keymap.run")
+def test_run_in_a_removed_session_directory_starts_in_home(ctl, keymap):
+    # upstream #740: a session whose directory was removed runs its custom commands in HOME, and
+    # `$AGT_SESSION_PWD` keeps the reported path
+    directory = ctl.instance.root / "run-removed-directory"
+    directory.mkdir()
+    marker = ctl.instance.root / "run-in-home"
+    tmp = _quoted(f"{marker}.tmp")
+    keymap.write_text(
+        f"command \"where\" printf '%s|%s' \"$AGT_SESSION_PWD\" \"$PWD\" > {tmp} && mv {tmp} {_quoted(marker)}\n"
+    )
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    sid = _new(ctl, cwd=os.fspath(directory))
+    try:
+        directory.rmdir()
+        assert assert_ok(ctl.request("keymap.run", sid, name="where")) == {"id": sid}
+        reported, cwd = _written(marker).split("|")
+        assert os.path.realpath(reported) == os.path.realpath(directory)
+        assert os.path.realpath(cwd) == os.path.realpath(ctl.instance.home)
+    finally:
+        ctl.request("session.close", sid)
 
 
 @pytest.mark.covers("keymap.run", "keymap.reload")

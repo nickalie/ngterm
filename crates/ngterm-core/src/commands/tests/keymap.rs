@@ -241,7 +241,7 @@ fn run_without_a_launcher_is_unavailable() {
 #[test]
 #[cfg_attr(
     windows,
-    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
+    ignore = "asserts the launch runs in the fixture session's /tmp, a directory off Windows; on Windows it is not one and the run falls back to HOME"
 )]
 fn run_starts_the_expanded_command_with_the_sessions_context() {
     let mut host = Host::new(2);
@@ -289,10 +289,6 @@ fn run_starts_the_expanded_command_with_the_sessions_context() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
-)]
 fn a_failing_run_banners_once_it_exits() {
     let mut host = Host::new(1);
     host.write("keymap.conf", "command \"boom\" --error-hud exit 3\n");
@@ -329,11 +325,7 @@ fn a_failing_run_banners_once_it_exits() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
-)]
-fn a_vanished_directory_or_a_launch_error_refuses_the_run() {
+fn a_launch_error_refuses_the_run() {
     let mut host = Host::new(1);
     host.write("keymap.conf", "command \"mark\" true\n");
     assert!(host.keymap(KeymapCmd::Reload, None, Args::default()).ok);
@@ -344,10 +336,6 @@ fn a_vanished_directory_or_a_launch_error_refuses_the_run() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
-)]
 fn a_run_counts_toward_usage_only_with_persistence() {
     // in-memory cores write nothing; the store itself is covered in `keymap::usage`
     let mut host = Host::new(1);
@@ -372,24 +360,41 @@ fn launch_writes_the_starter_once_and_reads_it_clean() {
     assert_eq!(host.fixture.core.keymap().commands()[0].name, "kept");
 }
 
+/// Upstream's `testALocalSessionWhoseDirectoryIsNotThereRunsTheCommandInHome` (#740): a session whose reported
+/// directory is not a directory here (removed, or a plain file) runs its command in HOME, and `$AGT_SESSION_PWD`
+/// keeps the reported path.
 #[test]
-fn a_session_directory_that_is_gone_refuses_the_run() {
-    // the seeded session sits at the fixture's home, which does not exist here
+fn a_session_directory_that_is_not_a_directory_here_runs_the_command_in_home() {
     let mut host = Host::new(0);
     host.write("keymap.conf", "command \"mark\" true\n");
     assert!(host.keymap(KeymapCmd::Reload, None, Args::default()).ok);
-    let response = host.keymap(KeymapCmd::Run, None, args(|a| a.name = Some("mark".into())));
-    assert_eq!(
-        response,
-        failure("mark did not start: session directory /home/u no longer exists")
-    );
-    assert!(host.launcher.launches().is_empty());
+    let file = host.dir.path().join("plain.txt");
+    std::fs::write(&file, "").unwrap();
+    let removed = host.dir.path().join("deleted");
+    let session = host.fixture.selected().unwrap();
+    let home = host.fixture.core.library().home().to_owned();
+    for reported in [removed, file] {
+        let reported = reported.to_string_lossy().into_owned();
+        host.fixture
+            .store_mut()
+            .unwrap()
+            .session_mut(session)
+            .unwrap()
+            .current_cwd = Some(reported.clone());
+        let response = host.keymap(KeymapCmd::Run, None, args(|a| a.name = Some("mark".into())));
+        assert_eq!(result(&response), json!({"id": wire(session)}), "{reported}");
+        let launches = host.launcher.launches();
+        let launch = launches.last().expect("a launch");
+        assert_eq!(launch.cwd.as_deref(), Some(std::path::Path::new(&home)), "{reported}");
+        assert_eq!(last_env(&host, "AGT_SESSION_PWD"), Some(reported));
+    }
+    assert_eq!(host.launcher.launches().len(), 2);
 }
 
-/// Upstream's `testSpawnFailurePostsOnlyWhenOptedIn`: a command that cannot start in a removed directory opens the
-/// failure panel only when its line opts in, at the line's position and pane, with no detail.
+/// Upstream's `testSpawnFailurePostsOnlyWhenOptedIn`: a command that does not start opens the failure panel only
+/// when its line opts in, at the line's position and pane, with no detail.
 #[test]
-fn a_missing_directory_opens_the_failure_panel_only_when_opted_in() {
+fn a_launch_failure_opens_the_failure_panel_only_when_opted_in() {
     let mut host = Host::new(0);
     let helper = host.dir.path().join("hud.sh");
     std::fs::write(&helper, "#!/bin/sh\n").unwrap();
@@ -400,20 +405,14 @@ fn a_missing_directory_opens_the_failure_panel_only_when_opted_in() {
          command \"loud\" --error-hud --error-position top-left --error-pane left true\n",
     );
     assert!(host.keymap(KeymapCmd::Reload, None, Args::default()).ok);
-    let missing = host.dir.path().join("missing-directory").to_string_lossy().into_owned();
+    host.launcher.fail_with(Some(std::io::ErrorKind::PermissionDenied));
     let window = host.fixture.window;
     let session = host.fixture.selected().unwrap();
-    host.fixture
-        .store_mut()
-        .unwrap()
-        .session_mut(session)
-        .unwrap()
-        .current_cwd = Some(missing.clone());
     let [quiet, loud] = host.fixture.core.keymap().commands() else {
         panic!("two commands")
     };
     let (quiet, loud) = (quiet.clone(), loud.clone());
-    let reason = format!("session directory {missing} no longer exists");
+    let reason = "fake launch of /bin/sh failed".to_owned();
     // every panel opening takes a new slot generation, so its count stands in for upstream's `posts.count`
     let generation = |host: &Host| host.fixture.store().session(session).unwrap().overlay.generation;
     let before = generation(&host);
@@ -427,15 +426,12 @@ fn a_missing_directory_opens_the_failure_panel_only_when_opted_in() {
 
     assert_eq!(
         host.fixture.core.run_custom_command(&loud, window, session),
-        Some(reason)
+        Some(reason.clone())
     );
     assert_eq!(generation(&host), before + 1, "one panel");
     let state = host.fixture.store().session(session).unwrap();
     let hud = state.overlay.hud.as_ref().expect("the failure panel");
-    assert_eq!(
-        hud.spec.message,
-        format!("loud: session directory {missing} no longer exists")
-    );
+    assert_eq!(hud.spec.message, format!("loud: {reason}"));
     assert_eq!(hud.spec.detail, None);
     assert_eq!(hud.spec.position, crate::hud::HudPosition::TopLeft);
     assert_eq!(hud.pane_identity, Some(state.pane_identity));
@@ -504,10 +500,6 @@ fn typed_in(owner: SurfaceOwner, selection: Option<&str>) -> TypingSurface {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
-)]
 fn a_chord_runs_for_the_terminal_typed_in_not_the_selected_session() {
     // a zoomed session shows and takes the keyboard without being selected: the chord is its own
     let (mut host, command, typed) = chord_host();
@@ -540,10 +532,6 @@ fn a_chord_runs_for_the_terminal_typed_in_not_the_selected_session() {
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
-)]
 fn an_overlay_chord_reads_the_overlays_selection_and_names_the_pane_underneath() {
     let (mut host, command, typed) = chord_host();
     let window = host.fixture.window;
@@ -607,10 +595,6 @@ fn an_overlay_chord_reads_the_overlays_selection_and_names_the_pane_underneath()
 }
 
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a custom command runs in its session's directory, which the fixture puts at /tmp, a path Windows has not"
-)]
 fn a_chord_off_any_session_terminal_runs_for_the_active_session_else_sessionless() {
     let (mut host, command, typed) = chord_host();
     let window = host.fixture.window;

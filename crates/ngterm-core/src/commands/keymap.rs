@@ -142,11 +142,16 @@ impl Core {
         selection: Option<String>,
     ) -> Option<String> {
         let context = self.command_context(window, session, pane, selection)?;
+        let home = self.library().home();
+        // upstream's `spawn(_:for:in:selectionSurface:pane:)` (#740): the reported directory when it is a directory
+        // here, else HOME, on every session, so a deleted one does not stop the command; `$AGT_SESSION_PWD` keeps the
+        // reported path
         let cwd = self
             .library()
             .store(window)
             .and_then(|store| store.session(session))
-            .map(|state| state.local_working_directory(&context.session_pwd, self.library().home()));
+            .map(|state| state.local_working_directory(&context.session_pwd, home))
+            .map(|cwd| if Path::new(&cwd).is_dir() { cwd } else { home.to_owned() });
         self.spawn_custom_command(command, &context, cwd)
     }
 
@@ -280,8 +285,8 @@ impl Core {
         })
     }
 
-    /// Starts the expanded command detached (upstream's `spawn(_:context:cwd:)`); a vanished working directory or a
-    /// launch error is reported at once, a non-zero exit when it comes. Why it did not start, `None` once it has.
+    /// Starts the expanded command detached (upstream's `spawn(_:context:cwd:)`); a launch error is reported at once,
+    /// a non-zero exit when it comes. Why it did not start, `None` once it has.
     fn spawn_custom_command(
         &mut self,
         command: &CustomCommand,
@@ -289,15 +294,6 @@ impl Core {
         cwd: Option<String>,
     ) -> Option<String> {
         let session = context.session_id.clone();
-        if let Some(cwd) = cwd.as_deref().filter(|cwd| !cwd.is_empty() && !Path::new(cwd).exists()) {
-            let reason = format!(
-                "session directory {} no longer exists",
-                crate::model::naming::sanitized(cwd)
-            );
-            tracing::error!(name = %command.name, %reason, "custom command not started");
-            self.report_command_failure(command, &reason, None, &session);
-            return Some(reason);
-        }
         let Some(host) = self.processes.host.clone() else {
             let reason = "custom commands are not available".to_owned();
             self.report_command_failure(command, &reason, None, &session);
