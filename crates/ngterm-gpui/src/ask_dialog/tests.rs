@@ -37,7 +37,7 @@ fn ask(style: AskStyle) -> PendingAsk {
 
 #[test]
 fn keys_map_as_upstreams_key_catcher() {
-    let key = |source: &str| ask_key(&Keystroke::parse(source).unwrap());
+    let key = |source: &str| ask_key(&Keystroke::parse(source).unwrap(), &Source::Keystroke);
     assert_eq!(key("tab"), Some(AskKey::Forward));
     assert_eq!(key("shift-tab"), Some(AskKey::Backward));
     assert_eq!(key("down"), Some(AskKey::Forward));
@@ -48,6 +48,121 @@ fn keys_map_as_upstreams_key_catcher() {
     assert_eq!(key("shift-y"), Some(AskKey::Hotkey("y".to_owned())));
     assert_eq!(key("space"), None, "Space is no ask key");
     assert_eq!(key("ctrl-y"), None, "a modified key goes on to the window");
+    assert_eq!(key("alt-y"), None, "a modified key goes on to the window");
+    assert_eq!(key("1"), None, "only a letter is a hotkey");
+    assert_eq!(
+        key("щ"),
+        None,
+        "a letter GPUI names with no key position is no ASCII hotkey"
+    );
+}
+
+/// A native key record as the patched platform reports it on Linux.
+fn native(keycode: u32, unshifted: Option<char>, ascii_layout: bool) -> Source {
+    Source::Native(input::NativeKey {
+        keycode,
+        unshifted,
+        ascii_layout,
+        text: unshifted.map(String::from).unwrap_or_default(),
+        ..input::NativeKey::default()
+    })
+}
+
+#[test]
+fn a_hotkey_on_a_non_latin_layout_resolves_by_its_us_position() {
+    // upstream's hotkeyOnANonLatinLayoutResolvesByUSPosition, on XKB keycodes: the O key, the Q key, the 1 key, the
+    // ISO key left of Z
+    for (keycode, produced, expected) in [
+        (32, Some('щ'), Some("o")),
+        (32, Some('Щ'), Some("o")),
+        (24, Some(';'), Some("q")),
+        (24, Some('/'), Some("q")),
+        (10, Some('&'), None),
+        (94, Some('\\'), None),
+        (94, Some('/'), None),
+    ] {
+        assert_eq!(
+            resolved_hotkey(keycode, produced, false).as_deref(),
+            expected,
+            "keycode {keycode} typing {produced:?}"
+        );
+    }
+}
+
+#[test]
+fn a_hotkey_on_a_latin_layout_resolves_by_its_typed_letter() {
+    // upstream's hotkeyOnALatinLayoutResolvesByTypedLetter: AZERTY's A sits on the Q key
+    for (keycode, produced, expected) in [
+        (24, Some('a'), Some("a")),
+        (38, Some('A'), Some("a")),
+        (10, Some('1'), None),
+        (61, Some('/'), None),
+        (11, Some('é'), None),
+        (32, None, None),
+        (65, Some(' '), None),
+    ] {
+        assert_eq!(
+            resolved_hotkey(keycode, produced, true).as_deref(),
+            expected,
+            "keycode {keycode} typing {produced:?}"
+        );
+    }
+}
+
+#[test]
+fn the_dialog_takes_a_hotkey_from_the_key_position_on_a_cyrillic_layout() {
+    // what GPUI names the key on a Cyrillic layout, with the platform's record of it
+    let o_key = Keystroke::parse("щ").unwrap();
+    assert_eq!(
+        ask_key(&o_key, &native(32, Some('щ'), false)),
+        Some(AskKey::Hotkey("o".to_owned()))
+    );
+    let shifted = Keystroke::parse("shift-щ").unwrap();
+    assert_eq!(
+        ask_key(&shifted, &native(32, Some('щ'), false)),
+        Some(AskKey::Hotkey("o".to_owned()))
+    );
+    // AZERTY's A on the Q key answers its own A
+    let azerty = Keystroke::parse("a").unwrap();
+    assert_eq!(
+        ask_key(&azerty, &native(24, Some('a'), true)),
+        Some(AskKey::Hotkey("a".to_owned()))
+    );
+    // the digit row stays no hotkey on either layout
+    assert_eq!(
+        ask_key(&Keystroke::parse("&").unwrap(), &native(10, Some('&'), false)),
+        None
+    );
+    // Ctrl, Alt and Super still go on to the window, whatever the key resolves to
+    for modified in ["ctrl-щ", "alt-щ", "super-щ"] {
+        assert_eq!(
+            ask_key(&Keystroke::parse(modified).unwrap(), &native(32, Some('щ'), false)),
+            None,
+            "{modified}"
+        );
+    }
+    // the navigation keys keep their meaning on any layout
+    let tab = Keystroke::parse("tab").unwrap();
+    assert_eq!(ask_key(&tab, &native(23, Some('\t'), false)), Some(AskKey::Forward));
+    let enter = Keystroke::parse("enter").unwrap();
+    assert_eq!(ask_key(&enter, &native(36, Some('\r'), false)), Some(AskKey::Activate));
+    let escape = Keystroke::parse("escape").unwrap();
+    assert_eq!(
+        ask_key(&escape, &native(9, Some('\u{1b}'), false)),
+        Some(AskKey::Cancel)
+    );
+    let space = Keystroke::parse("space").unwrap();
+    assert_eq!(
+        ask_key(&space, &native(65, Some(' '), false)),
+        None,
+        "Space is no ask key"
+    );
+    // text an input method committed resolves as GPUI names it
+    assert_eq!(
+        ask_key(&Keystroke::parse("y").unwrap(), &Source::Text),
+        Some(AskKey::Hotkey("y".to_owned()))
+    );
+    assert_eq!(ask_key(&Keystroke::parse("щ").unwrap(), &Source::Text), None);
 }
 
 #[test]

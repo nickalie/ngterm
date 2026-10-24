@@ -951,15 +951,23 @@ code (`MapVirtualKeyExW` with 0x0409). macOS and Windows come with the frontend'
 through the same `chord_key` entry the keymap and picker use (not built by CI until ngterm-gpui joins
 `cross-platform.yml`).
 
-- [ ] the dialog resolves a hotkey through `chord_key(keycode, unshifted, ascii_layout)`, then only a single a..z
+- [x] the dialog resolves a hotkey through `chord_key(keycode, unshifted, ascii_layout)`, then only a single a..z
       letter counts; Ctrl/Alt/Super keys still go on to the window; Tab/arrows/Return/Esc/Space unchanged; the
-      resolver never runs inside a text field (Task 17's fields)
-- [ ] write tests: resolver unit tests with XKB keycodes: non-Latin O key (32) with "щ"/"Щ" → "o", Q key (24) with
+      resolver never runs inside a text field (Task 17's fields) (`ask_dialog::ask_key(keystroke, source)` and
+      `resolved_hotkey`; text an input method committed resolves as GPUI names the key, as before; macOS and Windows
+      reach it through `current_source`, which gives no native record there yet: not built on macOS/Windows by CI
+      until `ngterm-gpui` joins `cross-platform.yml`)
+- [x] write tests: resolver unit tests with XKB keycodes: non-Latin O key (32) with "щ"/"Щ" → "o", Q key (24) with
       ";"/"/" → "q", the 1 key (10) with "&" → none, ISO key (94) → none; Latin: Q position typing "a" → "a", A key
       (38) with "A" → "a", "1", "/", "é", no character → none
-- [ ] write tests: `keyboard_layout.rs::an_ask_hotkey_on_a_cyrillic_layout_answers_by_key_position` (private Xvfb,
-      XKB `ru`, `--hotkey yes=o`, physical O through XTEST, `ask.result` answered `yes`)
-- [ ] gate passes
+- [x] write tests: `keyboard_layout.rs::an_ask_hotkey_on_a_cyrillic_layout_answers_by_key_position` (private Xvfb,
+      XKB `ru`, `--hotkey yes=o`, physical O through XTEST, `ask.result` answered `yes`) (➕ then XKB `gr`,
+      `--hotkey yes=q` on the Q key, which types `;`: GPUI's X11/Wayland key name already guesses the US letter for a
+      key typing a non-ASCII character, so the `ru` half passed before the fix too; the Greek half is the one that
+      fails without it)
+- [x] gate passes (full suite deferred to the end of the plan per the user; the selftest
+      `test_committed_catalog_passes_the_ci_gate` and `--coverage-gate` fail only on the 16 keys of Tasks 17, 20,
+      21, 23, 25 and 29, as expected)
 
 ### Task 16: `ask` forms: wire, validation, CLI and the core draft model (#778, #779)
 

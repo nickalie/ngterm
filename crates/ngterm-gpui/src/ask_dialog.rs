@@ -43,6 +43,7 @@ use crate::modal::{self, ButtonLook, NavKey};
 use crate::split::{AskScope, Slot};
 use crate::state::{AppState, Poster, post};
 use crate::terminal::TerminalConfig;
+use crate::terminal::input::{self, KeyStroke, Source, chord_key};
 
 /// The GUI dialog's spacing unit (upstream's `cell` for `.gui`).
 const GUI_CELL: f64 = 8.0;
@@ -123,17 +124,45 @@ pub enum AskKey {
 }
 
 /// The dialog's action for a key press (upstream's `AskKeyCatcher.key(for:)`); `None` for a key it ignores, and for
-/// any key with Ctrl, Alt or Super held, which goes on to the window.
+/// any key with Ctrl, Alt or Super held, which goes on to the window. `source` is what the platform said about the
+/// press ([`input::current_source`]): a hotkey letter resolves from the physical key through [`resolved_hotkey`], so
+/// a non-Latin layout answers by key position; text an input method committed as a key resolves as GPUI's keystroke
+/// names it (an ASCII letter counts, as before the layout rule). The dialog's own keys only: a text field of the
+/// dialog takes its keys before this runs, so a letter typed into one is never a hotkey.
 #[must_use]
-pub fn ask_key(keystroke: &gpui_kit::Keystroke) -> Option<AskKey> {
-    Some(match modal::nav_key(keystroke)? {
-        NavKey::Forward => AskKey::Forward,
-        NavKey::Backward => AskKey::Backward,
-        NavKey::Activate => AskKey::Activate,
-        NavKey::Cancel => AskKey::Cancel,
-        NavKey::Letter(letter) => AskKey::Hotkey(letter),
-        NavKey::Space => return None,
+pub fn ask_key(keystroke: &gpui_kit::Keystroke, source: &Source) -> Option<AskKey> {
+    let modifiers = &keystroke.modifiers;
+    if modifiers.control || modifiers.alt || modifiers.platform {
+        return None;
+    }
+    Some(match modal::nav_key(keystroke) {
+        Some(NavKey::Forward) => AskKey::Forward,
+        Some(NavKey::Backward) => AskKey::Backward,
+        Some(NavKey::Activate) => AskKey::Activate,
+        Some(NavKey::Cancel) => AskKey::Cancel,
+        Some(NavKey::Space) => return None,
+        Some(NavKey::Letter(_)) | None => {
+            let source = match source {
+                Source::Text => &Source::Keystroke,
+                source => source,
+            };
+            let stroke = KeyStroke::new(keystroke, source, false);
+            AskKey::Hotkey(resolved_hotkey(stroke.keycode, stroke.unshifted, stroke.ascii_layout)?)
+        }
     })
+}
+
+/// The lowercase ASCII letter a key press spells for a hotkey, `None` for any other key (upstream's
+/// `AskNavigation.resolvedHotkey`): the key resolves as keymap chords do ([`chord_key`]), so a layout that types ASCII
+/// answers by the letter it types (AZERTY's A is `a`) and any other by the US layout's letter at that position.
+#[must_use]
+pub fn resolved_hotkey(keycode: u32, produced: Option<char>, ascii_layout: bool) -> Option<String> {
+    let key = chord_key(keycode, produced, ascii_layout)?;
+    let mut chars = key.chars();
+    match (chars.next(), chars.next()) {
+        (Some(letter), None) if letter.is_ascii_lowercase() => Some(key),
+        _ => None,
+    }
 }
 
 /// A button's label (upstream's `buttonLabel`): the text, the hotkey's first case-insensitive occurrence underlined
@@ -427,7 +456,7 @@ impl AskDialog {
             return;
         }
         cx.stop_propagation();
-        if let Some(key) = ask_key(&event.keystroke) {
+        if let Some(key) = ask_key(&event.keystroke, &input::current_source(&event.keystroke)) {
             self.handle(key);
             cx.notify();
         }

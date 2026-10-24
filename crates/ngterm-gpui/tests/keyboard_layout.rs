@@ -34,6 +34,8 @@ const KEY_E: u8 = 26;
 const KEY_J: u8 = 44;
 const KEY_A: u8 = 38;
 const KEY_V: u8 = 55;
+const KEY_O: u8 = 32;
+const KEY_Q: u8 = 24;
 
 /// One control request with `args` (and `target`) to the sandbox's socket; its result, or the error it answered.
 fn request(sandbox: &Sandbox, cmd: &str, target: Option<&str>, args: &Value) -> TestResult<Value> {
@@ -70,13 +72,9 @@ exec cat > "$HOME/in$n"
 /// server, which must stay open: the server resets its keymap to the default when its last client disconnects.
 fn cyrillic_sandbox() -> TestResult<(Sandbox, X11)> {
     let mut sandbox = Sandbox::new()?;
-    let number = sandbox.start_xvfb()?;
+    sandbox.start_xvfb()?;
     let x11 = X11::connect(&sandbox)?;
-    let status = sandbox
-        .command("setxkbmap")
-        .args(["-display", &format!(":{number}"), "-layout", "ru"])
-        .status()?;
-    assert!(status.success(), "setxkbmap -layout ru: {status:?}");
+    set_layout(&sandbox, "ru")?;
     let recorder = sandbox.path("home/recorder.sh");
     std::fs::write(&recorder, RECORDER)?;
     std::fs::set_permissions(&recorder, std::fs::Permissions::from_mode(0o755))?;
@@ -96,6 +94,19 @@ fn cyrillic_sandbox() -> TestResult<(Sandbox, X11)> {
         ),
     )?;
     Ok((sandbox, x11))
+}
+
+/// Sets the sandbox's X keyboard to XKB's `layout`.
+fn set_layout(sandbox: &Sandbox, layout: &str) -> TestResult {
+    let Display::X11(number) = sandbox.display() else {
+        return Err("not an X11 sandbox".into());
+    };
+    let status = sandbox
+        .command("setxkbmap")
+        .args(["-display", &format!(":{number}"), "-layout", layout])
+        .status()?;
+    assert!(status.success(), "setxkbmap -layout {layout}: {status:?}");
+    Ok(())
 }
 
 /// The X server as the test's keyboard and window manager.
@@ -260,4 +271,68 @@ fn a_cyrillic_layout_types_its_letters_and_binds_by_key_position() -> TestResult
     sandbox.terminate(primary)?;
     assert_eq!(sandbox.wait_exit(primary, Duration::from_secs(10))?.0.code(), Some(0));
     Ok(())
+}
+
+#[test]
+fn an_ask_hotkey_on_a_cyrillic_layout_answers_by_key_position() -> TestResult {
+    if !have("Xvfb") || !have("setxkbmap") {
+        skip!("no Xvfb or setxkbmap");
+    }
+    let Some(lavapipe) = lavapipe_icd() else {
+        skip!("no lavapipe ICD (scripts/fetch-lavapipe.sh)");
+    };
+    let (mut sandbox, x11) = cyrillic_sandbox()?;
+    sandbox.use_software_rendering(&lavapipe);
+    let primary = sandbox.start_gpui_primary("primary.log")?;
+    x11.focus_app_window(&sandbox.app_id)?;
+    let sid = wait_ready(&sandbox, 1)?;
+
+    // `--hotkey yes=o` on a terminal ask over the shown session; the O key types щ on this layout
+    let answer = answer_by_key(&sandbox, &x11, &sid, "o", KEY_O)?;
+    assert_eq!(answer["result"], json!("answered"), "{answer}");
+    assert_eq!(answer["id"], json!("yes"), "{answer}");
+
+    // Greek's Q key types `;`, an ASCII character GPUI names the key by: only the layout rule reads it as the Q
+    // position; the pane receiving `;` first shows the app reads the new layout
+    set_layout(&sandbox, "gr")?;
+    x11.press(&[KEY_Q])?;
+    wait_for(|| {
+        std::fs::read(sandbox.path("home/in1"))
+            .ok()
+            .filter(|bytes| bytes.ends_with(b";"))
+    })
+    .map_err(|_| "the pane never received the Greek Q key's `;`")?;
+    let answer = answer_by_key(&sandbox, &x11, &sid, "q", KEY_Q)?;
+    assert_eq!(answer["result"], json!("answered"), "{answer}");
+    assert_eq!(answer["id"], json!("yes"), "{answer}");
+
+    sandbox.terminate(primary)?;
+    assert_eq!(sandbox.wait_exit(primary, Duration::from_secs(10))?.0.code(), Some(0));
+    Ok(())
+}
+
+/// Opens an ask over `sid` whose `yes` button has the hotkey `letter` and presses `keycode` until the ask is no
+/// longer pending; its `ask.result`. The dialog takes the keyboard on a frame after it opens: until then the key
+/// reaches the pane.
+fn answer_by_key(sandbox: &Sandbox, x11: &X11, sid: &str, letter: &str, keycode: u8) -> TestResult<Value> {
+    let buttons = json!([{ "id": "yes", "label": "Yes", "hotkey": letter }, { "id": "no", "label": "No" }]);
+    let opened = request(
+        sandbox,
+        "ask.open",
+        Some(sid),
+        &json!({ "title": "Proceed?", "buttons": buttons }),
+    )?;
+    let ask_id = opened["id"].as_str().ok_or("ask.open returned no id")?.to_owned();
+    wait_for(|| {
+        x11.press(&[keycode]).ok()?;
+        let result = request(sandbox, "ask.result", Some(&ask_id), &json!({})).ok()?;
+        (result["ask"]["result"] != json!("pending")).then(|| result["ask"].clone())
+    })
+    .map_err(|_| {
+        format!(
+            "keycode {keycode} never answered the ask:\n{}",
+            sandbox.log("primary.log")
+        )
+        .into()
+    })
 }
