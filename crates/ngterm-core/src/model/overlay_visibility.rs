@@ -4,13 +4,16 @@
 //!
 //! Each hideable slot carries its own hidden bit: the session-wide slot's ([`super::OverlaySlot::hidden`]) and each
 //! pane overlay's ([`super::PaneOverlay::hidden`]), so a pane's bit follows its overlay across a swap or a promotion.
-//! Closing a slot clears its bit, so a new occupant starts shown. Occupancy questions (`overlay`, `paneOverlays`, a
+//! Closing a slot clears its bit, so a new occupant starts shown. A page shown on the presenting machine has no bit
+//! here: a hide or show asks the presenter, and the page counts by its pending request, else by what the presenter
+//! last reported. Occupancy questions (`overlay`, `paneOverlays`, a
 //! result, the read commands, page lookup, the remote local hold) keep asking the `*_active` predicates; what covers
 //! or owns input asks the `*_visible` ones here.
 
 use uuid::Uuid;
 
 use super::overlay::OverlayPane;
+use super::remote_overlay::{RemoteOverlayChange, RemoteOverlaySlot};
 use super::session::Session;
 use super::store::AppStore;
 use super::window_library::WindowLibrary;
@@ -137,20 +140,47 @@ impl Session {
     }
 
     /// Whether a slot `pane` scopes holds a program or page that is not hidden: what a toggle hides (upstream's
-    /// `anyOverlayShown`).
+    /// `anyOverlayShown`). A page shown on the presenting machine counts by its pending request, else by its report.
     #[must_use]
     pub fn any_overlay_shown(&self, pane: Option<OverlayPane>) -> bool {
         self.hideable_overlay_slots(pane)
             .into_iter()
             .any(|slot| !self.overlay_hidden(slot))
+            || self
+                .remote_page_slots(pane)
+                .iter()
+                .any(|slot| slot.page.as_ref().is_some_and(|page| !page.effective_hidden()))
     }
 
-    /// The tree's `hiddenOverlays`: the hidden slots as `session`, `left`, `right` (upstream's `hiddenOverlayNames`).
+    /// The reserved slots `pane` scopes that hold a page shown on the presenting machine; every such slot for a `None`
+    /// scope (upstream's `remotePageSlots`).
+    #[must_use]
+    pub fn remote_page_slots(&self, pane: Option<OverlayPane>) -> Vec<&RemoteOverlaySlot> {
+        self.remote_overlays
+            .slots()
+            .iter()
+            .filter(|slot| slot.page.is_some() && (pane.is_none() || slot.pane == pane))
+            .collect()
+    }
+
+    /// The tree's `hiddenOverlays`: the hidden slots as `session`, `left`, `right`, a page shown on the presenting
+    /// machine counted as that machine reports it (upstream's `hiddenOverlayNames`).
     #[must_use]
     pub fn hidden_overlay_names(&self) -> Vec<&'static str> {
-        self.hideable_overlay_slots(None)
+        let mut hidden: Vec<Option<OverlayPane>> = self
+            .hideable_overlay_slots(None)
             .into_iter()
             .filter(|slot| self.overlay_hidden(*slot))
+            .collect();
+        hidden.extend(
+            self.remote_page_slots(None)
+                .into_iter()
+                .filter(|slot| slot.page.as_ref().is_some_and(|page| page.hidden))
+                .map(|slot| slot.pane),
+        );
+        [None, Some(OverlayPane::Left), Some(OverlayPane::Right)]
+            .into_iter()
+            .filter(|slot| hidden.contains(slot))
             .map(|slot| slot.map_or("session", OverlayPane::wire_name))
             .collect()
     }
@@ -187,7 +217,8 @@ impl Session {
 impl AppStore {
     /// Hides or shows session `id`'s overlays: one pane's, or every program and page of the session for a `None`
     /// `pane` (upstream's `setOverlaysHidden`). A hidden overlay keeps running and stays addressable. Success includes
-    /// a call that changed nothing; the tree is invalidated only by a change.
+    /// a call that changed nothing; the tree is invalidated only by a change. A page shown on the presenting machine is
+    /// asked to change, and its reported state changes when that machine answers.
     ///
     /// # Errors
     ///
@@ -200,9 +231,18 @@ impl AppStore {
     ) -> Result<(), OverlayVisibilityFailure> {
         let session = self.session_mut(id).ok_or(OverlayVisibilityFailure::UnknownSession)?;
         let slots = session.hideable_overlay_slots(pane);
-        if slots.is_empty() {
+        let pages: Vec<Option<OverlayPane>> = session
+            .remote_page_slots(pane)
+            .into_iter()
+            .map(|slot| slot.pane)
+            .collect();
+        if slots.is_empty() && pages.is_empty() {
             return Err(session.overlay_visibility_refusal(pane));
         }
+        self.request_remote_page_visibility(id, &pages, hidden);
+        let Some(session) = self.session_mut(id) else {
+            return Ok(());
+        };
         let changing: Vec<Option<OverlayPane>> = slots
             .into_iter()
             .filter(|slot| session.overlay_hidden(*slot) != hidden)
@@ -214,6 +254,36 @@ impl AppStore {
             self.schedule_tree_changed();
         }
         Ok(())
+    }
+
+    /// Asks the presenter for `hidden` on each page in `panes`' slots whose pending or reported visibility differs.
+    fn request_remote_page_visibility(&mut self, id: Uuid, panes: &[Option<OverlayPane>], hidden: bool) {
+        use crate::remote::frames::{PresentationPageAction, PresentationPageCommand};
+        let action = if hidden {
+            PresentationPageAction::Hide
+        } else {
+            PresentationPageAction::Show
+        };
+        for pane in panes {
+            let differs = self
+                .session(id)
+                .and_then(|found| found.remote_overlays.slot(*pane))
+                .and_then(|slot| slot.page.as_ref())
+                .is_some_and(|page| page.effective_hidden() != hidden);
+            if !differs {
+                continue;
+            }
+            if let Some((page, seq)) = self.number_remote_page_command(id, *pane, action) {
+                let command = PresentationPageCommand {
+                    page,
+                    seq,
+                    action,
+                    size_percent: None,
+                };
+                self.remote_overlay_changes
+                    .push(RemoteOverlayChange::PageCommand { session: id, command });
+            }
+        }
     }
 
     /// Hides the scoped overlays while any of them is shown, otherwise shows them all (upstream's

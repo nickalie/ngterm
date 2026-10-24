@@ -14,6 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
+use crate::html::HtmlLoadState;
 use crate::hud::{HudPosition, HudSpec, HudSpinner};
 use crate::model::{
     AgentStatus, AskAlignment, AskChoiceForm, AskForm, AskInputForm, AskInputMode, AskStyle, PendingAsk, StatusShape,
@@ -571,6 +572,151 @@ impl PresentationOverlayChange {
     }
 }
 
+/// A handed-over page's full source on the origin (upstream's `PresentationPageSource`): a file the presenter fetches
+/// over the page channel, with the grant bounding which files it may ask for, or a complete URL it loads itself. The
+/// wire is Swift's synthesized enum coding: `{"file": {"path", "grantRoot"?}}` or `{"url": {"_0": <address>}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PresentationPageSource {
+    File {
+        path: String,
+        #[serde(default, rename = "grantRoot", skip_serializing_if = "Option::is_none")]
+        grant_root: Option<String>,
+    },
+    Url {
+        #[serde(rename = "_0")]
+        address: String,
+    },
+}
+
+/// Asks the presenter to show a page the origin opened (upstream's `PresentationPage`). `page` is the origin's page id,
+/// which the presenter never reuses as its own; `token` claims the page channel once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "upstream's frame: the page's five independent flags and follow, each its own wire boolean"
+)]
+pub struct PresentationPage {
+    pub page: String,
+    pub token: String,
+    pub source: PresentationPageSource,
+    /// The display text the identity strip shows, never used to load anything.
+    pub identity: String,
+    pub chromeless: bool,
+    pub javascript: bool,
+    pub navigation: bool,
+    pub browse: bool,
+    pub persistent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<String>,
+    /// The origin's pane the page covers; `None` for the session-wide slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<PresentationPane>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_percent: Option<i64>,
+    pub follow: bool,
+}
+
+/// Names one handed-over page by the origin's id, with the presenter's reason when it refuses the page (upstream's
+/// `PresentationPageChange`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresentationPageChange {
+    pub page: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl PresentationPageChange {
+    #[must_use]
+    pub fn page(page: impl Into<String>) -> Self {
+        Self {
+            page: page.into(),
+            reason: None,
+        }
+    }
+}
+
+/// What the origin asks of a handed-over page (upstream's `PresentationPageAction`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PresentationPageAction {
+    Hide,
+    Show,
+    ReloadOriginal,
+    ReloadCurrent,
+    Back,
+    Forward,
+    Browser,
+    Resize,
+}
+
+/// One origin request for a handed-over page (upstream's `PresentationPageCommand`). `seq` grows per page, and the
+/// presenter echoes the last one it applied in [`PresentationPageState::applied_seq`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentationPageCommand {
+    pub page: String,
+    pub seq: i64,
+    pub action: PresentationPageAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_percent: Option<i64>,
+}
+
+/// What a handed-over page shows on the presenter (upstream's `PresentationPageState`). `address` is the origin's
+/// logical address, never the presenter's own scheme URL. [`PresentationPageState::new`] bounds the strings the page
+/// writes, so a long title cannot cost a frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentationPageState {
+    pub page: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    pub load: HtmlLoadState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub hidden: bool,
+    pub applied_seq: i64,
+}
+
+/// What a page shows and where its history goes, as a [`PresentationPageState`] carries it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PageShown {
+    pub title: Option<String>,
+    pub address: Option<String>,
+    pub load: HtmlLoadState,
+    pub error: Option<String>,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+}
+
+impl PresentationPageState {
+    pub const MAX_TITLE: usize = 1024;
+    pub const MAX_ADDRESS: usize = 8192;
+    pub const MAX_ERROR: usize = 1024;
+
+    /// The state of page `page`, each string cut to its bound in characters (upstream's `init`).
+    #[must_use]
+    pub fn new(page: impl Into<String>, shown: PageShown, hidden: bool, applied_seq: i64) -> Self {
+        let bounded = |text: Option<String>, limit: usize| text.map(|text| text.chars().take(limit).collect());
+        Self {
+            page: page.into(),
+            title: bounded(shown.title, Self::MAX_TITLE),
+            address: bounded(shown.address, Self::MAX_ADDRESS),
+            load: shown.load,
+            error: bounded(shown.error, Self::MAX_ERROR),
+            can_go_back: shown.can_go_back,
+            can_go_forward: shown.can_go_forward,
+            hidden,
+            applied_seq,
+        }
+    }
+}
+
 /// The origin's complete pane membership and arrangement, independent of surface realization (upstream's
 /// `PresentationLayout`). It decodes lossily: a bad layout reads as [`PresentationLayout::invalid`] rather than
 /// discarding the rest of a snapshot or disconnecting its stream.
@@ -695,6 +841,14 @@ pub enum Body {
     OverlayResize(PresentationOverlayChange),
     /// The viewer closed its surface, which frees a slot held only for a `--wait` surface.
     OverlayClosed(PresentationOverlayChange),
+    PageRequest(PresentationPage),
+    /// The presenter cannot show the page, so the origin ends it without waiting for a claim.
+    PageRejected(PresentationPageChange),
+    PageClose(PresentationPageChange),
+    /// The presenter took the page down, so the origin ends it, keeping an answer it recorded.
+    PageClosed(PresentationPageChange),
+    PageCommand(PresentationPageCommand),
+    PageState(PresentationPageState),
     /// A kind this build does not speak, kept with its place in the order.
     Unknown(String),
 }
@@ -726,6 +880,12 @@ impl Body {
             Self::OverlayClose(_) => "overlay.close",
             Self::OverlayResize(_) => "overlay.resize",
             Self::OverlayClosed(_) => "overlay.closed",
+            Self::PageRequest(_) => "page.request",
+            Self::PageRejected(_) => "page.rejected",
+            Self::PageClose(_) => "page.close",
+            Self::PageClosed(_) => "page.closed",
+            Self::PageCommand(_) => "page.command",
+            Self::PageState(_) => "page.state",
             Self::Unknown(kind) => kind,
         }
     }
@@ -750,6 +910,12 @@ impl Body {
             | Self::OverlayClose(change)
             | Self::OverlayResize(change)
             | Self::OverlayClosed(change) => entry("overlay", serde_json::to_value(change)),
+            Self::PageRequest(page) => entry("page", serde_json::to_value(page)),
+            Self::PageRejected(change) | Self::PageClose(change) | Self::PageClosed(change) => {
+                entry("page", serde_json::to_value(change))
+            }
+            Self::PageCommand(command) => entry("page", serde_json::to_value(command)),
+            Self::PageState(state) => entry("page", serde_json::to_value(state)),
             Self::Status(None)
             | Self::Context(None)
             | Self::Hud(None)
@@ -892,6 +1058,12 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "overlay.close" => Body::OverlayClose(required(object, "overlay")?),
         "overlay.resize" => Body::OverlayResize(required(object, "overlay")?),
         "overlay.closed" => Body::OverlayClosed(required(object, "overlay")?),
+        "page.request" => Body::PageRequest(required(object, "page")?),
+        "page.rejected" => Body::PageRejected(required(object, "page")?),
+        "page.close" => Body::PageClose(required(object, "page")?),
+        "page.closed" => Body::PageClosed(required(object, "page")?),
+        "page.command" => Body::PageCommand(required(object, "page")?),
+        "page.state" => Body::PageState(required(object, "page")?),
         other => Body::Unknown(other.to_owned()),
     })
 }
@@ -1096,6 +1268,77 @@ mod tests {
             )),
             Body::AskResolve(answer("a1", Some("y"), Some("é \"q\"\nb"), None)),
         ]
+        .into_iter()
+        .chain(page_bodies())
+        .collect()
+    }
+
+    fn page_request(id: &str, source: PresentationPageSource, pane: Option<PresentationPane>) -> PresentationPage {
+        PresentationPage {
+            page: id.to_owned(),
+            token: format!("t-{id}"),
+            source,
+            identity: "index.html".to_owned(),
+            chromeless: pane.is_some(),
+            javascript: true,
+            navigation: pane.is_none(),
+            browse: false,
+            persistent: pane.is_none(),
+            background_color: pane.map(|_| "#102030".to_owned()),
+            pane,
+            size_percent: pane.is_none().then_some(80),
+            follow: pane.is_none(),
+        }
+    }
+
+    fn page_state(hidden: bool) -> PresentationPageState {
+        let shown = PageShown {
+            title: Some("Review".to_owned()),
+            address: Some("/Users/u/docs/b.html".to_owned()),
+            load: HtmlLoadState::Loaded,
+            error: None,
+            can_go_back: true,
+            can_go_forward: false,
+        };
+        PresentationPageState::new("p1", shown, hidden, 8)
+    }
+
+    /// Upstream's page frames in `PresentationFramesTests.frames`.
+    fn page_bodies() -> Vec<Body> {
+        let url = PresentationPageSource::Url {
+            address: "https://example.com/review/42?token=abc&x=1#top".to_owned(),
+        };
+        let granted = PresentationPageSource::File {
+            path: "/Users/u/docs/index.html".to_owned(),
+            grant_root: Some("/Users/u/docs".to_owned()),
+        };
+        let bare = PresentationPageSource::File {
+            path: "/tmp/r.html".to_owned(),
+            grant_root: None,
+        };
+        let command = |seq: i64, action: PresentationPageAction, size_percent: Option<i64>| {
+            Body::PageCommand(PresentationPageCommand {
+                page: "p1".to_owned(),
+                seq,
+                action,
+                size_percent,
+            })
+        };
+        vec![
+            Body::PageRequest(page_request("p1", url, None)),
+            Body::PageRequest(page_request("p2", granted, Some(pane()))),
+            Body::PageRequest(page_request("p3", bare, None)),
+            Body::PageRejected(PresentationPageChange {
+                page: "p1".to_owned(),
+                reason: Some("slot taken".to_owned()),
+            }),
+            Body::PageClose(PresentationPageChange::page("p1")),
+            Body::PageClosed(PresentationPageChange::page("p1")),
+            command(7, PresentationPageAction::Resize, Some(50)),
+            command(8, PresentationPageAction::ReloadCurrent, None),
+            Body::PageState(page_state(true)),
+            Body::PageState(PresentationPageState::new("p1", PageShown::default(), false, 0)),
+        ]
     }
 
     /// Upstream's form frame: a checkbox list with a free-form row.
@@ -1190,6 +1433,97 @@ mod tests {
             assert!(!line[..line.len() - 1].contains(&b'\n'));
             assert_eq!(decode(&line[..line.len() - 1]).unwrap(), frame, "{}", frame.body.kind());
         }
+    }
+
+    /// The page frames' keys, as Swift's synthesized coding spells them.
+    #[test]
+    fn the_page_frames_spell_their_keys_as_upstream() {
+        let encoded = |body: Body| -> Value {
+            let line = encode(&PresentationFrame {
+                generation: 1,
+                rev: 1,
+                body,
+            })
+            .unwrap();
+            serde_json::from_slice(&line).unwrap()
+        };
+        let url = PresentationPageSource::Url {
+            address: "https://example.com/".to_owned(),
+        };
+        let request = encoded(Body::PageRequest(page_request("p1", url, None)));
+        assert_eq!(request["kind"], "page.request");
+        assert_eq!(
+            request["page"],
+            json!({"page": "p1", "token": "t-p1", "source": {"url": {"_0": "https://example.com/"}},
+                "identity": "index.html", "chromeless": false, "javascript": true, "navigation": true,
+                "browse": false, "persistent": true, "sizePercent": 80, "follow": true})
+        );
+        let file = PresentationPageSource::File {
+            path: "/tmp/r.html".to_owned(),
+            grant_root: None,
+        };
+        let request = encoded(Body::PageRequest(page_request("p2", file, Some(pane()))));
+        assert_eq!(request["page"]["source"], json!({"file": {"path": "/tmp/r.html"}}));
+        assert_eq!(request["page"]["pane"], "11111111-2222-3333-4444-555555555555");
+        assert_eq!(request["page"]["backgroundColor"], "#102030");
+        let command = encoded(Body::PageCommand(PresentationPageCommand {
+            page: "p1".to_owned(),
+            seq: 3,
+            action: PresentationPageAction::ReloadOriginal,
+            size_percent: None,
+        }));
+        assert_eq!(
+            command["page"],
+            json!({"page": "p1", "seq": 3, "action": "reloadOriginal"})
+        );
+        let state = encoded(Body::PageState(page_state(false)));
+        assert_eq!(
+            state["page"],
+            json!({"page": "p1", "title": "Review", "address": "/Users/u/docs/b.html", "load": "loaded",
+                "canGoBack": true, "canGoForward": false, "hidden": false, "appliedSeq": 8})
+        );
+        let rejected = encoded(Body::PageRejected(PresentationPageChange::page("p1")));
+        assert_eq!(rejected["page"], json!({"page": "p1"}));
+    }
+
+    /// Upstream's `PresentationFramesTests.pageStateBoundsThePagesOwnStrings`.
+    #[test]
+    fn page_state_bounds_the_pages_own_strings() {
+        let long = "x".repeat(100_000);
+        let shown = PageShown {
+            title: Some(long.clone()),
+            address: Some(long.clone()),
+            load: HtmlLoadState::Failed,
+            error: Some(long),
+            can_go_back: false,
+            can_go_forward: false,
+        };
+        let state = PresentationPageState::new("p1", shown, false, 0);
+        let count = |text: &Option<String>| text.as_deref().map(|text| text.chars().count());
+        assert_eq!(count(&state.title), Some(PresentationPageState::MAX_TITLE));
+        assert_eq!(count(&state.address), Some(PresentationPageState::MAX_ADDRESS));
+        assert_eq!(count(&state.error), Some(PresentationPageState::MAX_ERROR));
+        let line = encode(&PresentationFrame {
+            generation: i64::MAX,
+            rev: i64::MAX,
+            body: Body::PageState(state),
+        })
+        .unwrap();
+        assert!(line.len() < MAX_FRAME_BYTES);
+        let wide = PresentationPageState::new(
+            "p1",
+            PageShown {
+                title: Some("é".repeat(2000)),
+                ..PageShown::default()
+            },
+            false,
+            0,
+        );
+        assert_eq!(
+            count(&wide.title),
+            Some(PresentationPageState::MAX_TITLE),
+            "bounded in characters"
+        );
     }
 
     #[test]

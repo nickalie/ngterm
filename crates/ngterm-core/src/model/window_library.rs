@@ -90,8 +90,8 @@ pub struct WindowLibrary {
     pending_finalized_panes: Vec<Uuid>,
     /// Session asks that ended in stores no longer open, for [`WindowLibrary::take_ended_asks`].
     pending_ended_asks: Vec<EndedAsk>,
-    /// Remote overlays closed in stores no longer open, for [`WindowLibrary::take_remote_overlay_closes`].
-    pending_remote_overlay_closes: Vec<super::remote_overlay::RemoteOverlayClose>,
+    /// Remote overlay changes of stores no longer open, for [`WindowLibrary::take_remote_overlay_changes`].
+    pending_remote_overlay_changes: Vec<super::remote_overlay::RemoteOverlayChange>,
 }
 
 impl WindowLibrary {
@@ -381,8 +381,8 @@ impl WindowLibrary {
     fn retire_store(&mut self, id: Uuid, mut store: AppStore) {
         store.retire();
         self.pending_ended_asks.append(&mut store.take_ended_asks());
-        self.pending_remote_overlay_closes
-            .append(&mut store.take_remote_overlay_closes());
+        self.pending_remote_overlay_changes
+            .append(&mut store.take_remote_overlay_changes());
         let mut outbox = store.take_outbox();
         self.pending_recent_closed.extend(outbox.take_stamped_recent_closed());
         self.pending_removed_watermarks.append(&mut outbox.removed_watermarks);
@@ -424,11 +424,11 @@ impl WindowLibrary {
         ended
     }
 
-    /// Takes the remote overlays closed since the last take, from every open store and every store that closed.
-    pub fn take_remote_overlay_closes(&mut self) -> Vec<super::remote_overlay::RemoteOverlayClose> {
-        let mut closed = std::mem::take(&mut self.pending_remote_overlay_closes);
+    /// Takes the remote overlay changes since the last take, from every open store and every store that closed.
+    pub fn take_remote_overlay_changes(&mut self) -> Vec<super::remote_overlay::RemoteOverlayChange> {
+        let mut closed = std::mem::take(&mut self.pending_remote_overlay_changes);
         for store in self.stores.values_mut() {
-            closed.append(&mut store.take_remote_overlay_closes());
+            closed.append(&mut store.take_remote_overlay_changes());
         }
         closed
     }

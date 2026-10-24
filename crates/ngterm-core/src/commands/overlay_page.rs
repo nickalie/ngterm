@@ -6,6 +6,10 @@
 //! A page's outcome lives here, keyed by its id ([`HtmlPageOutcomes`]): an open registers it, a submit records the
 //! value before the close, and a page found gone from every slot of every open window (its session's undoable close
 //! included) is dismissed and handed to the frontend to release its web view, whatever path emptied the slot.
+//!
+//! A page the placement rule hands to the presenting machine (`crate::remote`'s page half) is stored, rendered and
+//! followed there: its open, submit, reload and history commands go to that machine, and its outcome is settled when
+//! it ends there or here.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -24,6 +28,7 @@ use crate::html::{
 };
 use crate::model::{HtmlOverlayOpenFailure, HtmlPageSlot, OverlayPane, StatusPane};
 use crate::pane_env::uuid_string;
+use crate::remote::{REMOTE_LOOPBACK, REMOTE_TOO_LARGE, RemotePageCommand, RemotePageOpen};
 
 /// A page that passed validation in a build with no web views (the `html` feature off).
 pub(crate) const PAGES_UNAVAILABLE: &str = "session.overlay.open: html overlays are not available in this build";
@@ -95,20 +100,42 @@ impl PageOpening {
 }
 
 /// `session.overlay.open --html|--url` once validated (upstream's `openHtmlOverlay`): the page takes its slot with the
-/// slot rules of a program and answers with its id, the one `session.overlay.result --page` reads.
+/// slot rules of a program and answers with its id, the one `session.overlay.result --page` reads. A page the
+/// placement rule hands to the presenting machine is reserved for it before any local check: nothing renders here, so
+/// neither the web views, the saved store nor `--follow` are this machine's concern.
 pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, opening: PageOpening) -> Outcome {
     let resolved = crate::resolve::Resolver::new(core.library()).session(target, window)?;
     super::overlay::refuse_hidden_slot(core, resolved.window, resolved.session, opening.pane)?;
+    let already_open = if opening.pane.is_none() {
+        ALREADY_OPEN
+    } else {
+        PANE_ALREADY_OPEN
+    };
+    let page = HtmlOverlay::new(opening.source.clone(), opening.flags);
+    let page_id = page.id;
+    let refusal = match crate::remote::open_remote_page(core, resolved.window, resolved.session, &page, &opening) {
+        RemotePageOpen::Local => None,
+        RemotePageOpen::Opened => {
+            return Ok(ControlResult {
+                page_id: Some(uuid_string(page_id)),
+                ..with_id(resolved.session)
+            });
+        }
+        RemotePageOpen::SlotTaken => Some(already_open),
+        RemotePageOpen::PaneMissing => Some(super::hud::PANE_NOT_VISIBLE),
+        RemotePageOpen::Unsupported => Some(PRESENTER),
+        RemotePageOpen::Loopback => Some(REMOTE_LOOPBACK),
+        RemotePageOpen::TooLarge => Some(REMOTE_TOO_LARGE),
+    };
+    if let Some(refusal) = refusal {
+        return Err(ControlError::rejected(refusal));
+    }
     let (store, id) = session_store(core, target, window)?;
     if store
         .session(id)
         .is_some_and(|session| session.remote_overlays().slot(opening.pane).is_some())
     {
-        return Err(ControlError::rejected(if opening.pane.is_none() {
-            ALREADY_OPEN
-        } else {
-            PANE_ALREADY_OPEN
-        }));
+        return Err(ControlError::rejected(already_open));
     }
     let Some(host) = core.pages.host.as_ref() else {
         return Err(ControlError::rejected(PAGES_UNAVAILABLE));
@@ -121,12 +148,10 @@ pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, 
     {
         return Err(ControlError::rejected(format!("session.overlay.open: {failure}")));
     }
-    // a page never takes the remote program path: it would render here, where nobody is looking
-    if core.has_presenter(id) {
+    // the store's own guard (upstream's `openHtmlOverlay`): a page placed on the presenting machine never renders here
+    if core.page_belongs_remote(id, opening.pane) {
         return Err(ControlError::rejected(PRESENTER));
     }
-    let page = HtmlOverlay::new(opening.source, opening.flags);
-    let page_id = page.id;
     let (store, _) = session_store(core, target, window)?;
     store
         .open_html_overlay(id, opening.pane, page, opening.size_percent, opening.background_color)
@@ -164,6 +189,20 @@ pub(crate) fn submit(
     value: &str,
 ) -> Outcome {
     let (store, id) = session_store(core, target, window)?;
+    // a page the presenting machine shows is answered here, then closed there (upstream's `submitHtmlOverlay`)
+    let remote = store
+        .session(id)
+        .and_then(|session| session.remote_overlays().slot(pane))
+        .and_then(|slot| slot.page.as_ref())
+        .map(|page| page.overlay.id);
+    if let Some(page_id) = remote {
+        core.pages.outcomes.submit(page_id, value);
+        if let Some(store) = core.library_mut().store_for_session_mut(id) {
+            store.close_remote_overlay(id, pane);
+        }
+        core.settle_remote_overlays();
+        return Ok(with_id(id));
+    }
     let page_id = store
         .html_overlay(id, pane)
         .map_err(|failure| ControlError::rejected(failure.message()))?
@@ -185,6 +224,10 @@ pub(crate) fn reload(
     pane: Option<OverlayPane>,
     current: bool,
 ) -> Outcome {
+    let id = session_store(core, target, window)?.1;
+    if let Some(answer) = remote_answer(core.reload_remote_page(id, pane, current), id) {
+        return answer;
+    }
     let (store, id) = session_store(core, target, window)?;
     let reload = if current {
         HtmlReloadTarget::Current
@@ -206,6 +249,10 @@ pub(crate) fn navigate(
     pane: Option<OverlayPane>,
     navigation: HtmlNavigation,
 ) -> Outcome {
+    let id = session_store(core, target, window)?.1;
+    if let Some(answer) = remote_answer(core.navigate_remote_page(id, pane, navigation), id) {
+        return answer;
+    }
     let (store, id) = session_store(core, target, window)?;
     let page_id = store
         .html_overlay(id, pane)
@@ -218,6 +265,16 @@ pub(crate) fn navigate(
         .ok_or_else(|| ControlError::rejected(errors::NOT_REALIZED))?;
     host.navigate(page_id, navigation).map_err(ControlError::rejected)?;
     Ok(with_id(id))
+}
+
+/// The answer to a page command on a page the presenting machine shows; `None` sends it on to this machine's own slot
+/// (upstream's `remotePageResponse`).
+fn remote_answer(command: RemotePageCommand, session: Uuid) -> Option<Outcome> {
+    match command {
+        RemotePageCommand::Local => None,
+        RemotePageCommand::Sent => Some(Ok(with_id(session))),
+        RemotePageCommand::Refused(error) => Some(Err(ControlError::rejected(error))),
+    }
 }
 
 /// `session.overlay.result --page` (upstream's `htmlPageResult`): where the page stands, by its id alone.
@@ -257,6 +314,16 @@ impl Core {
             self.pages.outcomes.dismiss(page);
             self.pages.released.push(page);
         }
+    }
+
+    /// Starts tracking a page handed to the presenting machine as pending; no web view of this machine's holds it.
+    pub(crate) fn register_page_outcome(&mut self, page: Uuid) {
+        self.pages.outcomes.register(page);
+    }
+
+    /// Records page `page` closed unanswered; a no-op for one already answered.
+    pub(crate) fn dismiss_page_outcome(&mut self, page: Uuid) {
+        self.pages.outcomes.dismiss(page);
     }
 
     /// Takes the pages released since the last take: their web views go.

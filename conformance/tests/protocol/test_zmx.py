@@ -13,6 +13,7 @@ vocabulary's directory variable, or the session server of the namespace).
 `zmx.reset` is refused here without `--force` only: a confirmed reset quits the app and relaunches it outside the
 harness (see the catalog exemption)."""
 
+import contextlib
 import itertools
 import os
 
@@ -567,3 +568,177 @@ def test_tree_rows_carry_the_session_status(live):
     idle = row(live.wait_response(tree_cmd, None, lambda r: row(r) is not None and "status" not in row(r)))
     assert_absent(idle, "status", "statusColor", "statusShape")
     assert_ok(live.request("session.close", sid))
+
+
+# -- pages handed to a presenter
+
+PAGE_KINDS = ["page.request", "page.rejected", "page.close", "page.closed", "page.command", "page.state"]
+# The kinds a presenter that shows pages lists, in upstream's order.
+PAGE_PRESENTER_KINDS = [*SOUND_KINDS, "ask.form", "ask.other", *PAGE_KINDS]
+NO_PAGES = "a viewer presents this session: an html overlay would open where nobody sees it"
+PAGE_NO_RESULT = "no overlay result: the slot holds an html page"
+PAGE_NO_READ = "no overlay to read: the slot holds an html page"
+
+
+@contextlib.contextmanager
+def _page_presenter(live, kinds=PAGE_PRESENTER_KINDS):
+    """A Live session whose left pane follows a viewer's client, and a presenter of it whose hello lists `kinds`:
+    `(sid, presenter stream, its generation)`. Upstream hands a page over only while the pane's own client follows."""
+    sid = _live_session(live)
+    endpoint = assert_ok(live.request(live.vocabulary.command("zmx.tree")))["remote"]["endpoint"]
+    daemon = _entries(live, sid)["left"]["daemon"]
+    with live.vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
+        live.wait_tree(lambda tree: _follows(tree, sid, viewer))
+        presenter, gen = _subscribed(live, sid, "presenter", kinds)
+        with presenter:
+            presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
+            wait_frame(presenter.read, "presenter.granted", presenter.send)
+            _presenters(live, sid, {"mirrors": 0, "presenter": True})
+            yield sid, presenter, gen
+        _presenters(live, sid, None)
+    assert_ok(live.request("session.close", sid))
+
+
+def _page_file(tmp_path):
+    path = tmp_path / "docs" / "index.html"
+    path.parent.mkdir()
+    path.write_text("<!doctype html><title>page</title><p>shown on another machine</p>")
+    return path
+
+
+def _handed_over(live, sid, presenter, **args):
+    """Opens a page that goes to the presenter: its page id and the `page.request` the presenter got."""
+    result = assert_ok(live.request("session.overlay.open", sid, **args))
+    assert result["id"] == sid
+    request = wait_frame(presenter.read, "page.request", presenter.send)["page"]
+    assert request["page"] == result["pageID"]
+    return result["pageID"], request
+
+
+def _outcome(live, page_id):
+    return assert_ok(live.request("session.overlay.result", page=page_id))["pageOutcome"]
+
+
+@LIVE
+@pytest.mark.covers("session.overlay.open")
+def test_a_presenter_without_page_kinds_keeps_the_page_refusal(live, tmp_path):
+    page = _page_file(tmp_path)
+    with _page_presenter(live, SOUND_KINDS) as (sid, _, _):
+        assert_error(live.request("session.overlay.open", sid, html=str(page)), NO_PAGES)
+        node = find_session(live.tree(), sid)
+        assert "remoteOverlays" not in node and node["overlay"] is False
+
+
+@LIVE
+@pytest.mark.covers("session.overlay.open")
+def test_a_loopback_url_bound_for_the_presenter_is_refused(live):
+    with _page_presenter(live) as (sid, _, _):
+        assert_error(
+            live.request("session.overlay.open", sid, url="http://127.0.0.1:8080/"),
+            "a loopback url names this Mac, so the Mac presenting the session cannot load it",
+        )
+        assert "remoteOverlays" not in find_session(live.tree(), sid)
+
+
+@LIVE
+@pytest.mark.covers("session.overlay.open", "field:tree.session.remoteOverlays", "field:tree.session.htmlOverlays")
+def test_a_page_goes_to_the_presenter_and_its_reports_reach_the_tree(live, tmp_path):
+    page = _page_file(tmp_path)
+    with _page_presenter(live) as (sid, presenter, gen):
+        result = assert_ok(
+            live.request("session.overlay.open", sid, html=str(page), cwd=str(page.parent), sizePercent=70)
+        )
+        page_id = result["pageID"]
+        request = wait_frame(presenter.read, "page.request", presenter.send)["page"]
+        assert_subset(
+            request,
+            {
+                "page": page_id,
+                "source": {"file": {"path": str(page), "grantRoot": str(page.parent)}},
+                "identity": "index.html",
+                "sizePercent": 70,
+                "follow": False,
+            },
+        )
+        live.wait_tree(
+            lambda tree: find_session(tree, sid).get("remoteOverlays") == [{"sizePercent": 70, "pageID": page_id}]
+        )
+        node = find_session(live.tree(), sid)
+        assert node["overlay"] is False, "nothing covers the session here"
+        [shown] = node["htmlOverlays"]
+        assert_subset(shown, {"id": page_id, "file": str(page), "cwd": str(page.parent), "remote": True})
+        assert_absent(shown, "zoom", "hidden", "replica")
+        assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "pending"}
+        # what the presenter reports is what the tree shows
+        state = {
+            "page": page_id,
+            "title": "Remote",
+            "address": str(page.parent / "b.html"),
+            "load": "loaded",
+            "canGoBack": True,
+            "canGoForward": False,
+            "hidden": True,
+            "appliedSeq": 0,
+        }
+        presenter.send({"kind": "page.state", "gen": gen, "rev": 2, "page": state})
+        live.wait_tree(lambda tree: find_session(tree, sid).get("hiddenOverlays") == ["session"])
+        assert_subset(
+            find_session(live.tree(), sid)["htmlOverlays"][0],
+            {"title": "Remote", "page": str(page.parent / "b.html"), "state": "loaded", "hidden": True, "remote": True},
+        )
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "page.close", presenter.send)
+
+
+@LIVE
+@pytest.mark.covers(
+    "session.overlay.reload",
+    "session.overlay.navigate",
+    "session.overlay.resize",
+    "session.overlay.result",
+    "session.overlay.text",
+)
+def test_origin_commands_on_a_remote_page_reach_the_presenter(live):
+    with _page_presenter(live) as (sid, presenter, _):
+        page_id, request = _handed_over(live, sid, presenter, url="https://example.com/a")
+        # Swift's synthesized coding of an unlabeled associated value
+        assert request["source"] == {"url": {"_0": "https://example.com/a"}}
+        sent = [
+            ("session.overlay.reload", {}, "reloadOriginal"),
+            ("session.overlay.reload", {"current": True}, "reloadCurrent"),
+            ("session.overlay.navigate", {"to": "back"}, "back"),
+            ("session.overlay.navigate", {"to": "forward"}, "forward"),
+            ("session.overlay.navigate", {"to": "browser"}, "browser"),
+        ]
+        for seq, (cmd, args, action) in enumerate(sent, start=1):
+            assert assert_ok(live.request(cmd, sid, **args))["id"] == sid
+            command = wait_frame(presenter.read, "page.command", presenter.send)["page"]
+            assert command == {"page": page_id, "seq": seq, "action": action}, cmd
+        assert assert_ok(live.request("session.overlay.resize", sid, sizePercent=40))["id"] == sid
+        command = wait_frame(presenter.read, "page.command", presenter.send)["page"]
+        assert command == {"page": page_id, "seq": len(sent) + 1, "action": "resize", "sizePercent": 40}
+        resized = [{"sizePercent": 40, "pageID": page_id}]
+        live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == resized)
+        # the file manager is a file page's, a page runs no program, and it has no text here
+        assert_error(live.request("session.overlay.navigate", sid, to="finder"), "show in Finder requires a file page")
+        assert_error(live.request("session.overlay.result", sid), PAGE_NO_RESULT)
+        assert_error(live.request("session.overlay.text", sid), PAGE_NO_READ)
+        assert_ok(live.request("session.overlay.close", sid))
+
+
+@LIVE
+@pytest.mark.covers("session.overlay.close", "session.overlay.result")
+def test_closing_or_rejecting_a_remote_page_ends_it_dismissed(live, tmp_path):
+    page = _page_file(tmp_path)
+    with _page_presenter(live) as (sid, presenter, gen):
+        closed, _ = _handed_over(live, sid, presenter, html=str(page))
+        assert assert_ok(live.request("session.overlay.close", sid))["id"] == sid
+        assert wait_frame(presenter.read, "page.close", presenter.send)["page"] == {"page": closed}
+        live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
+        assert _outcome(live, closed) == {"pageID": closed, "outcome": "dismissed"}
+        # the presenter refuses the next one: it ends at once, dismissed
+        rejected, _ = _handed_over(live, sid, presenter, html=str(page))
+        presenter.send({"kind": "page.rejected", "gen": gen, "rev": 2, "page": {"page": rejected, "reason": "busy"}})
+        live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
+        assert _outcome(live, rejected) == {"pageID": rejected, "outcome": "dismissed"}
+        assert_error(live.request("session.overlay.close", sid), "no overlay")

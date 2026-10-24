@@ -1,7 +1,8 @@
 //! Work handed to the viewer presenting a session, on the origin: asks (upstream's `AppStore+RemoteAsk.swift` and
 //! `ControlServer+Ask.swift`'s `presentAskRemotely`, `takeBackRemoteAsk`, `receivePresenterFrame`), program
 //! overlays (`AppStore+RemoteOverlay.swift`, `ControlServer+OverlayJobs.swift`'s `openRemoteOverlay`) and status
-//! sounds (`AppStore+Presentation.swift`'s `presentStatusSoundRemotely`).
+//! sounds (`AppStore+Presentation.swift`'s `presentStatusSoundRemotely`). Pages have a module of their own
+//! ([`super::page`]); their slots share the program overlays' reservations, closes and presenter loss here.
 //!
 //! An ask or overlay opened on a session whose panes follow a remote lead goes to its presenter: the ask keeps the
 //! session's slot and its result here, marked remote, so every cancel and teardown path that ends an ask ends it and
@@ -12,7 +13,7 @@ use uuid::Uuid;
 
 use super::frames::{
     Body, MAX_FRAME_BYTES, PresentationAsk, PresentationAskRef, PresentationOverlay, PresentationOverlayChange,
-    PresentationPane, PresentationSound,
+    PresentationPageAction, PresentationPane, PresentationSound,
 };
 use super::hub::{ASK_FORM_KIND, ASK_OTHER_KIND, PresentationHub};
 use super::presentation_status_pane;
@@ -22,8 +23,8 @@ use crate::error::ControlError;
 use crate::live::lead::LeadRole;
 use crate::modal::AskOwner;
 use crate::model::{
-    AskAnchor, AskStyle, EndedAsk, OverlayPane, OverlayProgram, PendingAsk, RemoteOverlayOutcome, RemoteOverlaySlot,
-    Session, StatusPane,
+    AskAnchor, AskStyle, EndedAsk, OverlayPane, OverlayProgram, PendingAsk, RemoteOverlayChange, RemoteOverlayOutcome,
+    RemoteOverlaySlot, Session, StatusPane,
 };
 use crate::overlay_capture::OverlayLaunchContext;
 use crate::overlay_jobs::{OverlayJobFrame, OverlayJobOutcome, OverlayJobState};
@@ -49,7 +50,7 @@ pub(crate) enum RemoteOverlayOpen {
 impl Core {
     /// Whether every pane `pane_identity` names, or each of the session's panes when `None`, follows a remote lead
     /// (upstream's `Session.followsRemotely`).
-    fn follows_remotely(&self, session: &Session, pane_identity: Option<Uuid>) -> bool {
+    pub(super) fn follows_remotely(&self, session: &Session, pane_identity: Option<Uuid>) -> bool {
         let panes: Vec<Uuid> = match pane_identity {
             Some(identity) => vec![identity],
             None => std::iter::once(session.pane_identity)
@@ -162,14 +163,18 @@ impl Core {
     }
 
     /// The viewer presenting `session` is gone: its ask comes back, and every overlay it held goes with it; a job
-    /// still unclaimed is cancelled and can no longer launch (upstream's `onPresenterLost`).
+    /// still unclaimed is cancelled and can no longer launch, and a page ends, keeping an answer it was given
+    /// (upstream's `onPresenterLost`).
     pub(crate) fn presenter_lost(&mut self, session: Uuid) {
         self.take_back_remote_ask(session);
-        let jobs = self
+        let (jobs, pages) = self
             .library_mut()
             .store_for_session_mut(session)
             .map(|store| store.remote_overlay_presenter_lost(session))
             .unwrap_or_default();
+        for page in pages {
+            self.remote_page_ended(page);
+        }
         for job in jobs {
             let unclaimed = self
                 .jobs
@@ -213,18 +218,30 @@ impl Core {
                     store.remote_overlay_surface_closed(session, &change.job);
                 }
             }
+            Body::PageState(_) | Body::PageRejected(_) | Body::PageClosed(_) => {
+                self.receive_remote_page_frame(session, &body);
+            }
             _ => {}
         }
         self.sync_modals();
     }
 
     /// The remote overlays the model closed are taken down on their presenter and their jobs cancelled, and each job
-    /// that ended records its outcome into its slot (upstream's `closeRemoteOverlay` hub half and `onFinished`).
+    /// that ended records its outcome into its slot (upstream's `closeRemoteOverlay` hub half and `onFinished`). A
+    /// page the model closed is taken down there too and its outcome dismissed unless it was answered, and a page
+    /// visibility request the model numbered (hide or show) is sent here, and only here, while the page's slot is
+    /// still held for that presenter.
     pub(crate) fn settle_remote_overlays(&mut self) {
-        for close in self.library_mut().take_remote_overlay_closes() {
-            let body = Body::OverlayClose(PresentationOverlayChange::job(close.job.clone()));
-            self.remote.hub.send_to_presenter(body, close.session);
-            self.cancel_overlay_job(&close.job);
+        for change in self.library_mut().take_remote_overlay_changes() {
+            match change {
+                RemoteOverlayChange::Closed { session, job } => {
+                    let body = Body::OverlayClose(PresentationOverlayChange::job(job.clone()));
+                    self.remote.hub.send_to_presenter(body, session);
+                    self.cancel_overlay_job(&job);
+                }
+                RemoteOverlayChange::PageClosed { session, page } => self.close_remote_page(session, page),
+                RemoteOverlayChange::PageCommand { session, command } => self.deliver_page_command(session, command),
+            }
         }
         for job in self.take_finished_overlay_jobs() {
             let OverlayJobState::Finished(outcome) = job.state else {
@@ -257,16 +274,14 @@ impl Core {
         if let Some(store) = self.library_mut().store_for_session_mut(session) {
             store.resize_remote_overlay(session, &slot.job, size);
         }
+        if slot.page.is_some() {
+            return Some(self.send_remote_page_command(session, None, PresentationPageAction::Resize, size));
+        }
         let body = Body::OverlayResize(PresentationOverlayChange {
             job: slot.job,
             size_percent: size,
         });
         Some(self.remote.hub.send_to_presenter(body, session))
-    }
-
-    /// Whether a viewer presents `session`.
-    pub(crate) fn has_presenter(&self, session: Uuid) -> bool {
-        self.remote.hub.has_presenter(session)
     }
 }
 
@@ -406,6 +421,7 @@ pub(crate) fn open_remote_overlay(
                 size_percent: size,
                 wait: request.program.wait,
                 ended: false,
+                page: None,
             },
         );
     }

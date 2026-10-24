@@ -17,14 +17,28 @@ use uuid::Uuid;
 use super::frames::{
     self, Body, PresentationAsk, PresentationAskRef, PresentationFrame, PresentationHello, PresentationHud,
     PresentationLayout, PresentationMode, PresentationNotify, PresentationOverlay, PresentationOverlayChange,
-    PresentationSound, PresentationStatus,
+    PresentationPageChange, PresentationSound, PresentationStatus,
 };
-use super::hub::SUPPORTED_KINDS;
+use super::hub::{PAGE_KINDS, SUPPORTED_KINDS};
 use super::reconnect::retry_delay;
 use crate::model::RemoteConnection;
 
 /// The origin pings every ten seconds, so three missed is a dead link and not a quiet one.
 pub const STALE_AFTER: Duration = Duration::from_secs(30);
+
+/// The reason a viewer that shows no handed-over pages refuses one with (upstream's `pagesUnsupported`).
+pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
+
+/// The kinds this viewer's hello lists: every kind the build speaks but the page kinds, as it shows no handed-over page
+/// yet. Upstream's hello lists them all; an origin then hands this viewer no page and keeps its own refusal.
+#[must_use]
+pub fn viewer_kinds() -> Vec<String> {
+    SUPPORTED_KINDS
+        .iter()
+        .filter(|kind| !PAGE_KINDS.contains(kind))
+        .map(|kind| (*kind).to_owned())
+        .collect()
+}
 
 /// One launch of the bridge, as the transport's reports name it: the row, the client (a row's client is recreated
 /// when the row comes back, and a late report from the previous one's bridge must not reach the new one) and the
@@ -274,6 +288,11 @@ impl PresentationClient {
             Body::OverlayRequest(overlay) => effects.push(ClientEffect::OverlayRequest(overlay)),
             Body::OverlayClose(change) => effects.push(ClientEffect::OverlayClose(change)),
             Body::OverlayResize(change) => effects.push(ClientEffect::OverlayResize(change)),
+            // a page an origin hands over anyway is refused, so it ends there at once
+            Body::PageRequest(page) => self.answer(Body::PageRejected(PresentationPageChange {
+                page: page.page,
+                reason: Some(PAGES_UNSUPPORTED.to_owned()),
+            })),
             Body::Hello(_)
             | Body::Ack
             | Body::PresenterAcquire
@@ -281,6 +300,11 @@ impl PresentationClient {
             | Body::AskRejected(_)
             | Body::OverlayRejected(_)
             | Body::OverlayClosed(_)
+            | Body::PageRejected(_)
+            | Body::PageClose(_)
+            | Body::PageClosed(_)
+            | Body::PageCommand(_)
+            | Body::PageState(_)
             | Body::Unknown(_) => {}
         }
     }
@@ -300,7 +324,7 @@ impl PresentationClient {
         let link = transport.open(&self.argv, key);
         let hello = PresentationHello {
             version: frames::VERSION,
-            kinds: SUPPORTED_KINDS.iter().map(|kind| (*kind).to_owned()).collect(),
+            kinds: viewer_kinds(),
             mode: PresentationMode::Presenter,
         };
         self.send(Body::Hello(hello), link.as_ref());
@@ -562,9 +586,13 @@ mod tests {
             hello,
             Body::Hello(PresentationHello {
                 version: frames::VERSION,
-                kinds: SUPPORTED_KINDS.iter().map(|kind| (*kind).to_owned()).collect(),
+                kinds: viewer_kinds(),
                 mode: PresentationMode::Presenter,
             })
+        );
+        assert!(
+            viewer_kinds().iter().all(|kind| !kind.starts_with("page.")),
+            "no page kind until this build shows pages"
         );
         assert_eq!(harness.connections(), [RemoteConnection::Connecting]);
     }
@@ -586,6 +614,51 @@ mod tests {
         );
         harness.deliver(&line(Body::PresenterGranted, 7, 2));
         assert_eq!(harness.modes(), [PresentationMode::Mirror, PresentationMode::Presenter]);
+    }
+
+    /// Until this build shows handed-over pages, a viewer refuses one at once (upstream's default `pageRequest` effect
+    /// answering `pagesUnsupported`), and a page's close or command finds nothing to act on.
+    #[test]
+    fn a_page_request_is_refused_until_pages_are_shown_here() {
+        use super::super::frames::{PresentationPage, PresentationPageSource};
+        let mut harness = Harness::started();
+        harness.connect(PresentationSnapshot::default(), 7, PresentationMode::Presenter);
+        let request = PresentationPage {
+            page: "p1".to_owned(),
+            token: "t1".to_owned(),
+            source: PresentationPageSource::Url {
+                address: "https://example.com/".to_owned(),
+            },
+            identity: "example.com".to_owned(),
+            chromeless: false,
+            javascript: false,
+            navigation: false,
+            browse: false,
+            persistent: false,
+            background_color: None,
+            pane: None,
+            size_percent: None,
+            follow: false,
+        };
+        let effects_before = harness.effects.len();
+        harness.deliver(&line(Body::PageRequest(request), 7, 2));
+        harness.deliver(&line(Body::PageClose(PresentationPageChange::page("p1")), 7, 3));
+        let last = harness
+            .transport
+            .link(0)
+            .0
+            .borrow()
+            .sent
+            .last()
+            .map(|frame| frame.body.clone());
+        assert_eq!(
+            last,
+            Some(Body::PageRejected(PresentationPageChange {
+                page: "p1".to_owned(),
+                reason: Some(PAGES_UNSUPPORTED.to_owned()),
+            }))
+        );
+        assert_eq!(harness.effects.len(), effects_before, "nothing to show");
     }
 
     #[test]

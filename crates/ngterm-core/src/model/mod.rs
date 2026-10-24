@@ -55,7 +55,7 @@ pub use pending_close::{
 };
 pub use recency::{RECENCY_LIMIT, RecencyStack};
 pub use recent_closed::{RecentClosedReopen, RecentClosedRestore};
-pub use remote_overlay::{RemoteOverlayClose, RemoteOverlayOutcome, RemoteOverlaySlot, RemoteOverlays};
+pub use remote_overlay::{RemoteOverlayChange, RemoteOverlayOutcome, RemoteOverlaySlot, RemoteOverlays, RemotePage};
 pub use remote_presentation::{RemoteBinding, RemoteConnection, RemoteOrigin, RemotePresentationState};
 pub use search::{SearchFollowUp, SearchReport, SearchState};
 pub use session::{

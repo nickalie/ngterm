@@ -383,6 +383,12 @@ pub struct ControlHtmlOverlayNode {
     /// `true` while the page's slot is hidden; absent otherwise.
     #[serde(default)]
     pub hidden: Option<bool>,
+    /// `true` for a page this machine opened that the presenting machine shows; absent otherwise.
+    #[serde(default)]
+    pub remote: Option<bool>,
+    /// `true` for a page shown here for the machine that opened it; absent otherwise.
+    #[serde(default)]
+    pub replica: Option<bool>,
 }
 
 /// An overlay slot of an origin session held by the viewer presenting it.
@@ -394,6 +400,9 @@ pub struct ControlRemoteOverlayNode {
     pub pane: Option<String>,
     #[serde(default)]
     pub size_percent: Option<i64>,
+    /// The page the slot holds, the id `htmlOverlays` reports; absent for a program overlay.
+    #[serde(default, rename = "pageID")]
+    pub page_id: Option<String>,
 }
 
 /// A viewer's presentation stream.

@@ -1445,15 +1445,15 @@ hide/show/toggle.
   `.resize`, `.result`, `.text`), `test_closing_or_rejecting_a_remote_page_ends_it_dismissed` (covers
   `session.overlay.close`, `session.overlay.result`)
 
-- [ ] frames: `page.request` (page, token, source, identity, chromeless, javascript, navigation, browse, persistent,
+- [x] frames: `page.request` (page, token, source, identity, chromeless, javascript, navigation, browse, persistent,
       backgroundColor?, pane?, sizePercent?, follow), `page.rejected`/`page.close`/`page.closed` (page, reason?),
       `page.command` (page, seq, action ∈ hide|show|reloadOriginal|reloadCurrent|back|forward|browser|resize,
       sizePercent?), `page.state` (page, title?, address?, load, error?, canGoBack, canGoForward, hidden, appliedSeq;
       title ≤ 1024, address ≤ 8192, error ≤ 1024 chars), each under the payload key `page`. Confirm the source's
       wire shape against the reference build before fixing the serde shape (Swift's synthesized enum coding)
-- [ ] `HtmlSource::Replica { path }` and `replica_of`; the replica scheme is `ngterm-page` (identity rule, never
+- [x] `HtmlSource::Replica { path }` and `replica_of`; the replica scheme is `ngterm-page` (identity rule, never
       `agterm-page`)
-- [ ] open routing before the local checks (the origin renders nothing): no presenter or not following → local; a
+- [x] open routing before the local checks (the origin renders nothing): no presenter or not following → local; a
       held slot → "overlay already open" / the pane's refusal; right pane without a split → the pane-not-visible
       refusal; placement keeps it here (this Mac leads, or the session-wide slot's roles are unknown or mixed) →
       local; a presenter lacking a page kind → the presenter refusal; a loopback `--url` → the loopback refusal; a
@@ -1461,28 +1461,28 @@ hide/show/toggle.
       HUD in the session-wide slot closes, the slot is reserved (token a new UUID, 30 s claim deadline, owner the
       presenter generation, sizePercent clamped 1..100 for the session-wide slot), the outcome registered,
       tree.changed, `page.request` sent; reply `{id, pageId}`
-- [ ] the store's own guard replaces the blanket refusal: a local open (a clicked link's browsing page) is refused
+- [x] the store's own guard replaces the blanket refusal: a local open (a clicked link's browsing page) is refused
       only when placement would hand the slot over
-- [ ] receive: `page.state` applies load/error/current/hidden (tree.changed only when hidden changed) and settles a
+- [x] receive: `page.state` applies load/error/current/hidden (tree.changed only when hidden changed) and settles a
       pending visibility request once appliedSeq ≥ its seq; `page.rejected`/`page.closed` end the page (reservation
       removed, outcome dismissed unless answered, tree.changed); the reject reason is logged
-- [ ] close sends `page.close` and ends the reservation at once; resize updates sizePercent and sends a `resize`
+- [x] close sends `page.close` and ends the reservation at once; resize updates sizePercent and sends a `resize`
       command; presenter loss and session removal end every remote page, keeping a submitted answer
-- [ ] reload [--current] → reloadOriginal/reloadCurrent; back/forward → command; browser → command for a URL page,
+- [x] reload [--current] → reloadOriginal/reloadCurrent; back/forward → command; browser → command for a URL page,
       "page is shown on another Mac" for a file page; finder → that refusal on a file page, the existing local answer
       on a URL page; a gone stream → "the viewer showing this overlay is gone"; result bare → "no overlay result: the
       slot holds an html page"; text/copy → "no overlay to read: the slot holds an html page"
-- [ ] hide/show/toggle on a remote page: requested visibility with the next seq; toggle by the pending request, else
+- [x] hide/show/toggle on a remote page: requested visibility with the next seq; toggle by the pending request, else
       the reported state; a remote program still answers "overlay is shown on another Mac"
-- [ ] read-back: htmlOverlays lists a remote page in slot order with `remote: true`, fields from the record and the
+- [x] read-back: htmlOverlays lists a remote page in slot order with `remote: true`, fields from the record and the
       last `page.state`, no zoom; hiddenOverlays counts one reported hidden; remoteOverlays gains `pageID`; field
       order … zoom, id, hidden, remote, replica; a local page omits both
-- [ ] the viewer still answers `page.rejected` until Task 24 (so this task merges on its own)
-- [ ] write tests: Rust unit tests for every origin case listed; frame round trips and the bounded strings; the
+- [x] the viewer still answers `page.rejected` until Task 24 (so this task merges on its own)
+- [x] write tests: Rust unit tests for every origin case listed; frame round trips and the bounded strings; the
       projection's omissions; refusal strings in full on the dispatcher's output
-- [ ] write tests: the conformance tests above
-- [ ] manual check (user): green on reference-macos; green on `cross-platform.yml` (ngterm-core)
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance tests above (LIVE: not run on this fish host until Task 27 claims `live-sessions`; CI's zsh leg runs them)
+- [x] manual check (user): green on reference-macos; green on `cross-platform.yml` (ngterm-core) (skipped - not automatable: needs the macOS reference and a CI push by the user)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user)
 
 ### Task 23: HTML pages on a remote presenter, part 2: the page-serve channel and `session overlay page-serve` (#793)
 

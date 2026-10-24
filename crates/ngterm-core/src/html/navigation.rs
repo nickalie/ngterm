@@ -112,6 +112,21 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
                 Cancel
             }
         }
+        // a replica loads only from its own page's origin; the machine that opened it serves what its grant allows
+        HtmlSource::Replica { .. } => {
+            if web {
+                return offer;
+            }
+            let own = action
+                .url
+                .host_str()
+                .is_some_and(|host| host.eq_ignore_ascii_case(&overlay.id.to_string()));
+            if scheme == super::REPLICA_SCHEME && own {
+                Allow
+            } else {
+                Cancel
+            }
+        }
         HtmlSource::Url(original) => {
             if !web {
                 return Cancel;
@@ -257,6 +272,40 @@ mod tests {
             let decided = decide(&action(url, target, user), &url_page(false));
             assert_eq!(decided, decision, "{url} {target:?} {user}");
         }
+    }
+
+    /// Upstream's `HtmlOverlayTests.replicaPolicyAllowsOnlyItsOwnSchemeOrigin`, on the build's `ngterm-page` scheme.
+    #[test]
+    fn a_replica_loads_only_from_its_own_scheme_origin() {
+        let mut page = HtmlOverlay::new(
+            HtmlSource::Replica {
+                path: "/origin/docs/index.html".to_owned(),
+            },
+            HtmlPageFlags::default(),
+        );
+        page.replica_of = Some(uuid::Uuid::new_v4());
+        let own = crate::pane_env::uuid_string(page.id);
+        let other = crate::pane_env::uuid_string(uuid::Uuid::new_v4());
+        for (url, target, user, decision) in [
+            (format!("ngterm-page://{own}/index.html"), MainFrame, false, Allow),
+            (
+                format!("ngterm-page://{}/sub/b.html", own.to_lowercase()),
+                Subframe,
+                false,
+                Allow,
+            ),
+            (format!("ngterm-page://{other}/index.html"), MainFrame, false, Cancel),
+            (format!("agterm-page://{own}/index.html"), MainFrame, false, Cancel),
+            ("file:///tmp/a/index.html".to_owned(), MainFrame, false, Cancel),
+            ("https://example.com/".to_owned(), MainFrame, true, OpenExternal),
+            ("https://example.com/".to_owned(), MainFrame, false, Cancel),
+            ("about:blank".to_owned(), MainFrame, false, Allow),
+        ] {
+            let decided = decide(&action(&url, target, user), &page);
+            assert_eq!(decided, decision, "{url} {target:?} {user}");
+        }
+        assert_eq!(page.identity(), "index.html");
+        assert!(page.themed() && !page.text_loaded());
     }
 
     /// Upstream's `HtmlOverlayTests.chromelessPagePolicyKeepsFramesOnItsOrigin`: a chromeless loopback page keeps

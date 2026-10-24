@@ -74,13 +74,29 @@ impl Viewer {
         self.0.borrow().closed
     }
 
+    /// Every frame of `kind`, in order.
+    pub(super) fn frames(&self, kind: &str) -> Vec<Value> {
+        self.0
+            .borrow()
+            .lines
+            .iter()
+            .filter(|frame| frame["kind"] == kind)
+            .cloned()
+            .collect()
+    }
+
+    /// How many frames the core sent.
+    pub(super) fn sent(&self) -> usize {
+        self.0.borrow().lines.len()
+    }
+
     fn generation(&self) -> i64 {
         self.last("hello").and_then(|hello| hello["gen"].as_i64()).unwrap()
     }
 }
 
 /// The kinds a viewer from before status sounds lists.
-const OLDER_KINDS: [&str; 5] = ["status", "hud", "notify", "context", "layout"];
+pub(super) const OLDER_KINDS: [&str; 5] = ["status", "hud", "notify", "context", "layout"];
 
 fn hello(mode: &str, kinds: &[&str]) -> Vec<u8> {
     serde_json::to_vec(&json!({"kind": "hello", "gen": 0, "rev": 0,
@@ -94,7 +110,7 @@ fn subscribe(core: &mut Core, session: Uuid, mode: &str) -> (u64, Viewer) {
 }
 
 /// [`subscribe`] with a hello listing `kinds`.
-fn subscribe_listing(core: &mut Core, session: Uuid, mode: &str, kinds: &[&str]) -> (u64, Viewer) {
+pub(super) fn subscribe_listing(core: &mut Core, session: Uuid, mode: &str, kinds: &[&str]) -> (u64, Viewer) {
     let response = core.dispatch(&ngterm_proto::Request {
         cmd: Command::Live(LiveCmd::Present),
         target: Some(wire(session)),
@@ -888,7 +904,7 @@ fn without_a_following_pane_an_overlay_opens_here() {
 // MARK: - status sounds handed to the presenter
 
 /// Gives `pane` a fresh attachment that reported `role` (upstream's `setLead` in `AppStorePresentationTests`).
-fn set_lead(core: &mut Core, pane: Uuid, role: &str) {
+pub(super) fn set_lead(core: &mut Core, pane: Uuid, role: &str) {
     let attachment = LeadAttachment::new(false);
     let title = format!("{}{}:{role}:1", LeadNotice::PREFIX, attachment.nonce);
     core.live.leads.begin(pane, attachment, false);

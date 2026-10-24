@@ -9,8 +9,9 @@
 //!   attached row's presentation client ([`client`]) and what its frames put on the row ([`viewer`], [`layout`]), and
 //!   the panes whose ssh lost the connection ([`reconnect`]);
 //! - the presenter's work (upstream's `AppStore+RemoteAsk.swift`, `AppStore+RemoteOverlay.swift` and the server's
-//!   `presentAskRemotely`/`takeBackRemoteAsk`/`receivePresenterFrame`): an ask or a program overlay opened on a session
-//!   whose panes follow a remote lead goes to its presenter instead of being drawn here.
+//!   `presentAskRemotely`/`takeBackRemoteAsk`/`receivePresenterFrame`): an ask, a program overlay or a page
+//!   (`page`, upstream's `AppStore+RemotePage.swift`) opened on a session whose panes follow a remote lead goes to its
+//!   presenter instead of being drawn here.
 //!
 //! The streams are the frontend's: it hands the core each adopted connection as a [`LineChannel`] and reports
 //! the lines read from it and its close, arms the hello deadline and the heartbeat, and the core does the rest (upstream's
@@ -23,6 +24,7 @@ pub mod frames;
 mod handoff;
 pub mod hub;
 mod layout;
+mod page;
 pub mod reconnect;
 pub mod remotes;
 pub mod ssh;
@@ -48,6 +50,10 @@ pub(crate) use self::handoff::{
     AskPlacement, RemoteOverlayOpen, RemoteProgram, open_remote_overlay, present_ask_remotely,
 };
 use self::hub::{CloseReason, HubEvent, PresentationHub, PresentationSink, SubscriberId};
+pub use self::page::PAGE_CLAIM_WINDOW;
+pub(crate) use self::page::{
+    REMOTE_LOOPBACK, REMOTE_TOO_LARGE, RemotePageCommand, RemotePageOpen, VIEWER_GONE, open_remote_page,
+};
 use self::tree::{ProcessRemoteRunner, RemoteCommandResult, RemoteCommandRunner, RemoteWindowProjection};
 pub(crate) use self::viewer::row_changes;
 use crate::Core;

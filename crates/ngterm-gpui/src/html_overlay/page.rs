@@ -657,6 +657,8 @@ impl Page {
                 Ok(html) => Load::Html { html, base_uri: None },
                 Err(error) => return self.fail(error.to_string()),
             },
+            // a replica's files come over its page channel, which this build does not open yet
+            HtmlSource::Replica { path } => return self.fail(format!("the page's file is on another machine: {path}")),
         };
         if let (Some(web), Some(view)) = (self.web(), self.view.get()) {
             web.load(view, load);

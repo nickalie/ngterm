@@ -161,7 +161,14 @@ pub enum HtmlSource {
     File { path: String, grant_root: Option<String> },
     /// A web page, pinned to its origin by the navigation policy.
     Url(Url),
+    /// A file page another machine opened, shown here from `ngterm-page://<page id>/` (upstream's `.replica`): `path`
+    /// is its path on that machine, whose own grant decides what else may be fetched.
+    Replica { path: String },
 }
+
+/// The URL scheme a replica page loads from (upstream's `HtmlSource.replicaScheme`, `agterm-page` there; the build's
+/// own name, as every scheme it registers).
+pub const REPLICA_SCHEME: &str = "ngterm-page";
 
 impl HtmlSource {
     /// The origin of an HTTP(S) URL without credentials, `None` for other schemes (upstream's `HtmlSource.origin`).
@@ -174,7 +181,7 @@ impl HtmlSource {
     #[must_use]
     pub fn text(&self) -> String {
         match self {
-            Self::File { path, .. } => path.clone(),
+            Self::File { path, .. } | Self::Replica { path } => path.clone(),
             Self::Url(url) => url.as_str().to_owned(),
         }
     }
@@ -216,8 +223,10 @@ pub mod zoom {
     }
 }
 
-/// The page's load progress as the frontend's web view last reported it (upstream's `HtmlLoadState`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// The page's load progress as the frontend's web view last reported it (upstream's `HtmlLoadState`). The wire spelling
+/// is also a handed-over page's `page.state` `load`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum HtmlLoadState {
     #[default]
     Loading,
@@ -282,6 +291,8 @@ pub struct HtmlPageFlags {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HtmlOverlay {
     pub id: uuid::Uuid,
+    /// The page's id on the machine that opened it, set only on a page shown here for it (upstream's `replicaOf`).
+    pub replica_of: Option<uuid::Uuid>,
     pub source: HtmlSource,
     pub flags: HtmlPageFlags,
     pub load_state: HtmlLoadState,
@@ -300,6 +311,7 @@ impl HtmlOverlay {
     pub fn new(source: HtmlSource, flags: HtmlPageFlags) -> Self {
         Self {
             id: uuid::Uuid::new_v4(),
+            replica_of: None,
             source,
             flags,
             load_state: HtmlLoadState::Loading,
@@ -310,10 +322,11 @@ impl HtmlOverlay {
         }
     }
 
-    /// Whether ngterm themes the page and gives it the bridge: a file page (upstream's `themed`).
+    /// Whether ngterm themes the page and gives it the bridge: a file page, here or shown for another machine
+    /// (upstream's `themed`).
     #[must_use]
     pub fn themed(&self) -> bool {
-        matches!(self.source, HtmlSource::File { .. })
+        matches!(self.source, HtmlSource::File { .. } | HtmlSource::Replica { .. })
     }
 
     /// Whether the page is loaded from its file's text: a file page without a grant, which sits at `about:blank`
@@ -329,7 +342,7 @@ impl HtmlOverlay {
     #[must_use]
     pub fn identity(&self) -> String {
         match &self.source {
-            HtmlSource::File { path, .. } => {
+            HtmlSource::File { path, .. } | HtmlSource::Replica { path } => {
                 let shown = self
                     .current
                     .as_ref()

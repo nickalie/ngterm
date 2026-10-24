@@ -31,7 +31,7 @@ use crate::model::{
     is_valid_color_hex,
 };
 use crate::overlay_jobs::{EXPIRY_SLACK, LAUNCH_WINDOW, OverlayJobFrame, OverlayJobOutcome, OverlayJobs, START_WINDOW};
-use crate::remote::{RemoteOverlayOpen, RemoteProgram};
+use crate::remote::{RemoteOverlayOpen, RemoteProgram, VIEWER_GONE};
 use crate::resolve::{ACTIVE, Resolver, trimmed};
 
 // MARK: - messages
@@ -84,7 +84,6 @@ const INVALID_JOB: &str = "invalid job id";
 const JOB_NOT_CLAIMABLE: &str = "job not claimable";
 /// Upstream's `OverlayResultError` for an overlay a viewer presents.
 const SHOWN_ELSEWHERE: &str = "overlay is shown on another Mac";
-const VIEWER_GONE: &str = "the viewer showing this overlay is gone";
 const TOO_LARGE: &str = "overlay command too large to show on another Mac";
 
 /// The `--size-percent` range error of `command` (`open` or `resize`).
@@ -445,7 +444,12 @@ fn result(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let session = store
         .session(id)
         .ok_or_else(|| ControlError::rejected("no such session"))?;
-    if session.remote_overlays().slot(pane).is_some_and(|slot| !slot.ended) {
+    let reserved = session.remote_overlays().slot(pane);
+    // a page the presenting machine shows runs no program either
+    if reserved.is_some_and(|slot| slot.page.is_some()) {
+        return Err(ControlError::rejected(PAGE_NO_RESULT));
+    }
+    if reserved.is_some_and(|slot| !slot.ended) {
         return Err(ControlError::rejected(STILL_RUNNING));
     }
     if session.html_covers(pane) {
@@ -492,9 +496,13 @@ fn overlay_read_surface(
     session: &Session,
     pane: Option<OverlayPane>,
 ) -> Result<&dyn ngterm_host::Surface, ControlError> {
-    // an overlay shown on another machine leaves this one nothing to read or copy
-    if session.remote_overlays().slot(pane).is_some() {
-        return Err(ControlError::rejected(SHOWN_ELSEWHERE));
+    // an overlay shown on another machine leaves this one nothing to read or copy; a page has no text anywhere
+    if let Some(slot) = session.remote_overlays().slot(pane) {
+        return Err(ControlError::rejected(if slot.page.is_some() {
+            PAGE_NO_READ
+        } else {
+            SHOWN_ELSEWHERE
+        }));
     }
     if session.html_covers(pane) {
         return Err(ControlError::rejected(PAGE_NO_READ));

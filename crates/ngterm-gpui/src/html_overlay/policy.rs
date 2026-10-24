@@ -255,11 +255,12 @@ fn file_url(path: &str) -> Option<Url> {
     Url::from_file_path(path).ok()
 }
 
-/// The source's own address: a file page's file, a URL page's URL.
+/// The source's own address: a file page's file, a URL page's URL; a replica's file is on another machine.
 fn source_url(source: &HtmlSource) -> Option<Url> {
     match source {
         HtmlSource::File { path, .. } => file_url(path),
         HtmlSource::Url(url) => Some(url.clone()),
+        HtmlSource::Replica { .. } => None,
     }
 }
 
@@ -305,6 +306,7 @@ pub fn page_info(url: &Url, title: Option<&str>, can_go_back: bool, can_go_forwa
 pub fn browser_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>) -> Option<Url> {
     match &overlay.source {
         HtmlSource::File { path, .. } => file_url(path),
+        HtmlSource::Replica { .. } => None,
         HtmlSource::Url(original) => {
             let current = if overlay.flags.browse { shown } else { web };
             Some(
@@ -360,12 +362,16 @@ pub fn strip_items(overlay: &HtmlOverlay) -> Option<Vec<StripItem>> {
         items.extend([StripItem::Back, StripItem::Forward, StripItem::Reload]);
     }
     items.push(StripItem::Identity);
-    if overlay.flags.navigation {
-        items.push(StripItem::Browser);
-        items.push(match overlay.source {
-            HtmlSource::File { .. } => StripItem::Files,
-            HtmlSource::Url(_) => StripItem::CopyLink,
-        });
+    // a replica's file is on another machine: no hand-off reaches it from here
+    let sharing = match overlay.source {
+        HtmlSource::File { .. } => Some(StripItem::Files),
+        HtmlSource::Url(_) => Some(StripItem::CopyLink),
+        HtmlSource::Replica { .. } => None,
+    };
+    if overlay.flags.navigation
+        && let Some(sharing) = sharing
+    {
+        items.extend([StripItem::Browser, sharing]);
     }
     items.extend([StripItem::Hide, StripItem::Close]);
     Some(items)
@@ -878,6 +884,20 @@ mod tests {
             },
         );
         assert_eq!(strip_items(&loopback), None);
+        // a page shown for another machine offers no hand-off of a file that is not here
+        let mut replica = HtmlOverlay::new(
+            HtmlSource::Replica {
+                path: "/origin/docs/index.html".to_owned(),
+            },
+            navigation,
+        );
+        replica.replica_of = Some(uuid::Uuid::new_v4());
+        assert_eq!(
+            strip_items(&replica),
+            Some(vec![Back, Forward, Reload, Identity, Hide, Close])
+        );
+        assert_eq!(browser_url(&replica, None, None), None);
+        assert_eq!(identity_tooltip(&replica), "/origin/docs/index.html");
     }
 
     #[test]

@@ -125,7 +125,7 @@ impl PresenterGrant {
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's.
-pub const SUPPORTED_KINDS: [&str; 8] = [
+pub const SUPPORTED_KINDS: [&str; 14] = [
     "status",
     "hud",
     "notify",
@@ -134,6 +134,22 @@ pub const SUPPORTED_KINDS: [&str; 8] = [
     "sound",
     ASK_FORM_KIND,
     ASK_OTHER_KIND,
+    PAGE_KINDS[0],
+    PAGE_KINDS[1],
+    PAGE_KINDS[2],
+    PAGE_KINDS[3],
+    PAGE_KINDS[4],
+    PAGE_KINDS[5],
+];
+
+/// The kinds a presenter must speak to be handed a page (upstream's `pageKinds`), the last of [`SUPPORTED_KINDS`].
+pub const PAGE_KINDS: [&str; 6] = [
+    "page.request",
+    "page.rejected",
+    "page.close",
+    "page.closed",
+    "page.command",
+    "page.state",
 ];
 
 /// The capability of drawing an ask's text field, choice list and cancel role (upstream's `askFormKind`). It names no
@@ -326,7 +342,13 @@ impl PresentationHub {
                 };
                 self.send(answer, from);
             }
-            body @ (Body::AskResolve(_) | Body::AskRejected(_) | Body::OverlayRejected(_) | Body::OverlayClosed(_))
+            body @ (Body::AskResolve(_)
+            | Body::AskRejected(_)
+            | Body::OverlayRejected(_)
+            | Body::OverlayClosed(_)
+            | Body::PageRejected(_)
+            | Body::PageClosed(_)
+            | Body::PageState(_))
                 if self.grant.holder(session) == Some(from) =>
             {
                 self.events.push(HubEvent::PresenterFrame(session, Box::new(body)));
@@ -810,7 +832,13 @@ mod tests {
                 "layout",
                 "sound",
                 "ask.form",
-                "ask.other"
+                "ask.other",
+                "page.request",
+                "page.rejected",
+                "page.close",
+                "page.closed",
+                "page.command",
+                "page.state"
             ]
         );
     }
@@ -948,5 +976,55 @@ mod tests {
             vec![HubEvent::PresenterFrame(session, Box::new(rejected))]
         );
         assert!(!hub.send_to_presenter(Body::Ping, Uuid::new_v4()));
+    }
+
+    /// Upstream's `AppStoreRemotePageTests.aPageReportFromAMirrorIsIgnored`: a page report reaches the owner only from
+    /// the session's presenter.
+    #[test]
+    fn a_page_report_from_a_mirror_is_ignored() {
+        use crate::remote::frames::PresentationPageChange;
+        let (mut hub, _) = hub();
+        let session = Uuid::new_v4();
+        let (presenter, _) = subscribe(&mut hub, session, PresentationMode::Presenter);
+        let (mirror, _) = subscribe(&mut hub, session, PresentationMode::Mirror);
+        hub.receive(frame(presenter, Body::PresenterAcquire), presenter);
+        let closed = Body::PageClosed(PresentationPageChange::page("p1"));
+        hub.receive(frame(mirror, closed.clone()), mirror);
+        assert!(hub.take_events().is_empty());
+        hub.receive(frame(presenter, closed.clone()), presenter);
+        assert_eq!(
+            hub.take_events(),
+            vec![HubEvent::PresenterFrame(session, Box::new(closed))]
+        );
+    }
+
+    /// A page frame is a negotiated kind: only a presenter listing it is sent one.
+    #[test]
+    fn a_page_request_reaches_only_a_presenter_listing_the_page_kinds() {
+        use crate::remote::frames::PresentationPageChange;
+        for listed in [true, false] {
+            let (mut hub, _) = hub();
+            let session = Uuid::new_v4();
+            let (sink, _) = sink();
+            let mut kinds = vec!["status".to_owned()];
+            if listed {
+                kinds.extend(PAGE_KINDS.iter().map(|kind| (*kind).to_owned()));
+            }
+            let asked = PresentationHello {
+                version: 1,
+                kinds,
+                mode: PresentationMode::Presenter,
+            };
+            let id = hub
+                .subscribe(session, &asked, sink, |_| PresentationSnapshot::default())
+                .unwrap();
+            hub.receive(frame(id, Body::PresenterAcquire), id);
+            assert_eq!(
+                PAGE_KINDS.iter().all(|kind| hub.presenter_supports(kind, session)),
+                listed
+            );
+            let close = Body::PageClose(PresentationPageChange::page("p1"));
+            assert_eq!(hub.send_to_presenter(close, session), listed);
+        }
     }
 }

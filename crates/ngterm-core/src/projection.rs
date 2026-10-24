@@ -53,7 +53,8 @@ pub fn control_tree(store: &AppStore, context: &TreeContext<'_>) -> ControlTree 
         .flat_map(|workspace| workspace.sessions.iter_mut())
         .filter_map(|session| session.html_overlays.as_mut())
         .flatten();
-    for page in pages {
+    // a page shown on the presenting machine has that machine's zoom, which is not reported
+    for page in pages.filter(|page| page.remote.is_none()) {
         page.zoom = Some(zoom);
     }
     let sidebar = store.sidebar();
@@ -147,16 +148,7 @@ fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
     let panes = session.pane_overlays.open_panes();
     node.pane_overlays = (!panes.is_empty()).then(|| panes.iter().map(|pane| pane.wire_name().to_owned()).collect());
     node.hud = hud_node(session);
-    let nodes: Vec<ControlHtmlOverlayNode> = session
-        .html_overlays()
-        .into_iter()
-        .map(|(slot, page)| {
-            let mut node = html_overlay_node(slot.map(OverlayPane::wire_name), page);
-            node.hidden = session.overlay_hidden(slot).then_some(true);
-            node
-        })
-        .collect();
-    node.html_overlays = (!nodes.is_empty()).then_some(nodes);
+    node.html_overlays = html_overlay_nodes(session);
     let hidden = session.hidden_overlay_names();
     node.hidden_overlays = (!hidden.is_empty()).then(|| hidden.into_iter().map(str::to_owned).collect());
     node.ask = session.ask().map(|pending| ControlSessionAsk {
@@ -173,17 +165,44 @@ fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
             .map(|slot| ControlRemoteOverlayNode {
                 pane: slot.pane.map(|pane| pane.wire_name().to_owned()),
                 size_percent: slot.size_percent,
+                page_id: slot.page.as_ref().map(|page| uuid_string(page.overlay.id)),
             })
             .collect()
     });
 }
 
-/// One page in an overlay slot, as upstream's `htmlOverlayNodes`: the source opened, the load state, what the web view
-/// shows once it reported, and the flags; the zoom is the app's, set by the tree.
+/// The pages in `session`'s slots, session-wide first (upstream's `htmlOverlayNodes`): a local page as its web view last
+/// reported it, a page shown on the presenting machine as that machine last reported it, marked `remote`; `None` when
+/// no slot holds one.
+fn html_overlay_nodes(session: &Session) -> Option<Vec<ControlHtmlOverlayNode>> {
+    let local = session.html_overlays();
+    let nodes: Vec<ControlHtmlOverlayNode> = [None, Some(OverlayPane::Left), Some(OverlayPane::Right)]
+        .into_iter()
+        .filter_map(|slot| {
+            let name = slot.map(OverlayPane::wire_name);
+            if let Some((_, page)) = local.iter().find(|(pane, _)| *pane == slot) {
+                let mut node = html_overlay_node(name, page);
+                node.hidden = session.overlay_hidden(slot).then_some(true);
+                return Some(node);
+            }
+            let remote = session.remote_overlays().slot(slot)?.page.as_ref()?;
+            let mut node = html_overlay_node(name, &remote.overlay);
+            node.hidden = remote.hidden.then_some(true);
+            node.remote = Some(true);
+            Some(node)
+        })
+        .collect();
+    (!nodes.is_empty()).then_some(nodes)
+}
+
+/// One page in an overlay slot, as upstream's `htmlOverlayNode`: the source opened (a replica's path on the machine
+/// that opened it, with no grant), the load state, what the web view shows once it reported, and the flags; the zoom
+/// is the app's, set by the tree.
 fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverlayNode {
     let (file, cwd, url) = match &page.source {
         HtmlSource::File { path, grant_root } => (Some(path.clone()), grant_root.clone(), None),
         HtmlSource::Url(address) => (None, None, Some(address.as_str().to_owned())),
+        HtmlSource::Replica { path } => (Some(path.clone()), None, None),
     };
     let current = page.current.as_ref();
     ControlHtmlOverlayNode {
@@ -205,6 +224,8 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         zoom: None,
         id: Some(uuid_string(page.id)),
         hidden: None,
+        remote: None,
+        replica: page.replica_of.map(|_| true),
     }
 }
 

@@ -91,6 +91,7 @@ fn slot(job: &str, pane: Option<OverlayPane>, wait: bool) -> RemoteOverlaySlot {
         size_percent: None,
         wait,
         ended: false,
+        page: None,
     }
 }
 
