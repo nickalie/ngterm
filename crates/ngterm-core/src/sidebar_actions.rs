@@ -50,6 +50,8 @@ pub enum SidebarAction {
     ToggleFlags(Vec<Uuid>),
     /// Row menu: Clear Status/Clear Statuses.
     ClearStatus(Vec<Uuid>),
+    /// Row menu: Mark for Attention, a plain `completed` on the idle targets, the rest left alone.
+    MarkForAttention(Vec<Uuid>),
     /// Row menu: Close (confirmed by the frontend when the setting asks for it).
     CloseSessions(Vec<Uuid>),
     /// Workspace row menu and its hover "+": New Session in that workspace.
@@ -247,6 +249,7 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool) -> boo
                 store.set_agent_indicator(AgentIndicator::default(), id);
             }
         }
+        SidebarAction::MarkForAttention(ids) => return store.mark_for_attention(&ids) > 0,
         SidebarAction::CloseSessions(ids) => return close_sessions(store, &ids, grace),
         SidebarAction::DeleteWorkspace(id) => return delete_workspace(store, id, grace),
         SidebarAction::ToggleFocus(id) => store.toggle_focused_workspace(id),
@@ -309,7 +312,7 @@ mod tests {
     use ngterm_proto::{AppIdentity, Args, Command, PickItem, Request};
 
     use super::*;
-    use crate::model::{WindowLibrary, Workspace};
+    use crate::model::{AgentStatus, WindowLibrary, Workspace};
     use crate::persist::AppSettings;
     use crate::{CoreConfig, CoreState};
 
@@ -459,7 +462,7 @@ mod tests {
         let [first, second, _] = f.sessions;
         for id in [first, second] {
             let indicator = AgentIndicator {
-                status: crate::model::AgentStatus::Blocked,
+                status: AgentStatus::Blocked,
                 ..AgentIndicator::default()
             };
             f.store_mut().set_agent_indicator(indicator, id);
@@ -471,6 +474,31 @@ mod tests {
                 AgentIndicator::default()
             );
         }
+    }
+
+    /// `SidebarMarkForAttentionTests`: the row's Mark for Attention gives an idle row a plain `completed`, marks only
+    /// the idle members of a mixed batch, and reports nothing done when no target is idle.
+    #[test]
+    fn mark_for_attention_marks_only_the_idle_targets() {
+        let mut f = fixture(AppSettings::default());
+        let [first, second, third] = f.sessions;
+        let plain_completed = AgentIndicator {
+            status: AgentStatus::Completed,
+            ..AgentIndicator::default()
+        };
+        assert!(f.act(SidebarAction::MarkForAttention(vec![third])));
+        assert_eq!(f.store().session(third).unwrap().agent_indicator, plain_completed);
+
+        let blocked = AgentIndicator {
+            status: AgentStatus::Blocked,
+            ..AgentIndicator::default()
+        };
+        f.store_mut().set_agent_indicator(blocked.clone(), second);
+        assert!(f.act(SidebarAction::MarkForAttention(vec![first, second])));
+        assert_eq!(f.store().session(first).unwrap().agent_indicator, plain_completed);
+        assert_eq!(f.store().session(second).unwrap().agent_indicator, blocked);
+
+        assert!(!f.act(SidebarAction::MarkForAttention(vec![second, third, Uuid::new_v4()])));
     }
 
     #[test]

@@ -780,16 +780,16 @@ in ngterm-core, tested on all three CI OSes.
 
 **Conformance:** none (a row-menu-only behavior; the suite drives no context menus)
 
-- [ ] core: `mark_for_attention(&[Uuid])` sets a plain `AgentIndicator { status: Completed, .. }` (no blink,
+- [x] core: `mark_for_attention(&[Uuid])` sets a plain `AgentIndicator { status: Completed, .. }` (no blink,
       auto-reset, color, shape or status pane) on each idle target through `set_agent_indicator` (the status event
       fires, `statusChangedAt` stamps); non-idle and unknown ids are skipped
-- [ ] row menu: when any target has a status, "Clear Status" (one) or "Clear Statuses"; when any is idle, "Mark for
+- [x] row menu: when any target has a status, "Clear Status" (one) or "Clear Statuses"; when any is idle, "Mark for
       Attention"; one separator after them when the targets have any status, so a plain idle row opens with "Mark
       for Attention", "-", "Rename"…; update the existing menu.rs expectations
-- [ ] write tests: Rust unit tests for each Swift case, including that the mark survives a visit and that a right or
+- [x] write tests: Rust unit tests for each Swift case, including that the mark survives a visit and that a right or
       scratch keystroke leaves it (an untagged status reads as the primary pane's: assert
       `clear_status_on_input` treats `status_pane: None` that way)
-- [ ] gate passes
+- [x] gate passes (full suite deferred to the end of the plan per the user; the task adds no conformance test)
 
 ### Task 12: Agent status in session pickers, drawn trailing; `pick` item status fields; `live tree` rows (#774)
 

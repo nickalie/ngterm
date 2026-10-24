@@ -66,6 +66,7 @@ impl MenuContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuAction {
     ClearStatus(Vec<Uuid>),
+    MarkForAttention(Vec<Uuid>),
     /// Start the inline rename of a row.
     Rename(Uuid),
     /// Copy a name to the clipboard; `None` (a blank workspace name) leaves the clipboard alone.
@@ -115,8 +116,9 @@ pub enum MenuEntry {
     Separator,
 }
 
-/// A session row's menu: Clear Status first while a target has a status, Rename and Copy Name and Duplicate Session
-/// for one target, Move to the workspaces the targets are not all in, Flag or Unflag, Reveal for one target, Close.
+/// A session row's menu: Clear Status first while a target has a status and Mark for Attention while one is idle,
+/// Rename and Copy Name and Duplicate Session for one target, Move to the workspaces the targets are not all in, Flag
+/// or Unflag, Reveal for one target, Close.
 #[must_use]
 pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl Fn(&str) -> bool) -> Vec<MenuEntry> {
     let targets = context.targets(clicked);
@@ -129,6 +131,15 @@ pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl F
             label,
             MenuAction::ClearStatus(targets.clone()),
         )));
+    }
+    // the idle row's counterpart of Clear Status: `session status completed` on the idle targets
+    if facts.iter().any(|facts| !facts.has_status) {
+        menu.push(MenuEntry::Item(MenuItem::new(
+            "Mark for Attention",
+            MenuAction::MarkForAttention(targets.clone()),
+        )));
+    }
+    if !facts.is_empty() {
         menu.push(MenuEntry::Separator);
     }
     if targets.len() <= 1 {
@@ -326,6 +337,8 @@ mod tests {
         assert_eq!(
             labels(&menu),
             [
+                "Mark for Attention",
+                "-",
                 "Rename",
                 "Copy Name",
                 "Duplicate Session",
@@ -345,7 +358,7 @@ mod tests {
                 }
             )],
         }));
-        assert_eq!(labels(&session_menu(&context, a, |_| false))[5], "(Reveal in Files)");
+        assert_eq!(labels(&session_menu(&context, a, |_| false))[7], "(Reveal in Files)");
     }
 
     #[test]
@@ -359,6 +372,7 @@ mod tests {
             labels(&menu),
             [
                 "Clear Statuses",
+                "Mark for Attention",
                 "-",
                 "Move to [2]",
                 "Flag Sessions",
@@ -373,6 +387,42 @@ mod tests {
         assert_eq!(context.targets(b), [b]);
         context.sessions.get_mut(&c).unwrap().flagged = true;
         assert!(labels(&session_menu(&context, a, |_| true)).contains(&"Unflag Sessions".to_owned()));
+    }
+
+    /// `SidebarMarkForAttentionTests`: an idle row offers Mark for Attention and no Clear Status, a row with a status
+    /// only Clear Status, a mixed batch both, each acting on every target (the store marks only the idle ones).
+    #[test]
+    fn mark_for_attention_sits_beside_clear_status_by_the_targets_statuses() {
+        let (mut context, _, [a, b, c]) = context();
+        let menu = session_menu(&context, a, |_| true);
+        assert_eq!(labels(&menu)[..3], ["Mark for Attention", "-", "Rename"]);
+        assert_eq!(
+            menu[0],
+            MenuEntry::Item(MenuItem::new(
+                "Mark for Attention",
+                MenuAction::MarkForAttention(vec![a])
+            ))
+        );
+
+        context.sessions.get_mut(&a).unwrap().has_status = true;
+        assert_eq!(
+            labels(&session_menu(&context, a, |_| true))[..3],
+            ["Clear Status", "-", "Rename"]
+        );
+
+        context.selection = vec![a, b];
+        let menu = session_menu(&context, b, |_| true);
+        assert_eq!(labels(&menu)[..3], ["Clear Statuses", "Mark for Attention", "-"]);
+        assert!(menu.contains(&MenuEntry::Item(MenuItem::new(
+            "Mark for Attention",
+            MenuAction::MarkForAttention(vec![a, b])
+        ))));
+        assert!(labels(&menu).contains(&"Close 2 Sessions".to_owned()));
+
+        // a row gone from the snapshot offers neither, and no separator
+        context.selection.clear();
+        context.sessions.remove(&c);
+        assert_eq!(labels(&session_menu(&context, c, |_| true))[..1], ["Rename"]);
     }
 
     #[test]

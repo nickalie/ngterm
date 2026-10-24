@@ -510,6 +510,7 @@ impl Sidebar {
     fn perform(&mut self, action: MenuAction, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             MenuAction::ClearStatus(ids) => self.act(SidebarAction::ClearStatus(ids)),
+            MenuAction::MarkForAttention(ids) => self.act(SidebarAction::MarkForAttention(ids)),
             MenuAction::Rename(id) => self.begin_rename(id, window, cx),
             MenuAction::CopyName(Some(name)) => cx.write_to_clipboard(ClipboardItem::new_string(name)),
             MenuAction::CopyName(None) => {}

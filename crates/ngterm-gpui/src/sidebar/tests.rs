@@ -805,12 +805,21 @@ fn the_row_menu_and_the_footers_add_session_menu_run_their_items(cx: &mut TestAp
     let (library, _) = library();
     let (mut h, cx) = harness(cx, library, AppSettings::default());
     let srv = h.id_of("srv", cx);
-    // Rename, Copy Name, Duplicate Session, Move to, Flag: the fifth item
-    let at = bounds(cx, "row:srv").center();
-    cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::default());
-    cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::default());
-    cx.run_until_parked();
-    cx.simulate_keystrokes("down down down down down enter");
+    // an idle row opens with Mark for Attention
+    right_click(cx, "row:srv");
+    cx.simulate_keystrokes("down enter");
+    h.settle(cx);
+    assert_eq!(
+        h.store().session(srv).unwrap().agent_indicator,
+        AgentIndicator {
+            status: AgentStatus::Completed,
+            ..AgentIndicator::default()
+        },
+        "Mark for Attention ran on the clicked row"
+    );
+    // Clear Status, Rename, Copy Name, Duplicate Session, Move to, Flag: the sixth item
+    right_click(cx, "row:srv");
+    cx.simulate_keystrokes("down down down down down down enter");
     h.settle(cx);
     assert!(h.store().session(srv).unwrap().flagged, "Flag ran on the clicked row");
 

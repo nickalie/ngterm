@@ -282,3 +282,110 @@ fn a_keystroke_clear_reports_whether_it_cleared() {
     assert!(store.clear_status_on_input(id, StatusPane::Scratch, Interrupt, Never));
     assert_eq!(status(&store, id).status, Idle);
 }
+
+// MARK: - Mark for Attention
+
+fn status_events(store: &AppStore) -> usize {
+    store
+        .outbox()
+        .events
+        .iter()
+        .filter(|event| event.kind == EventKind::Status)
+        .count()
+}
+
+/// `markForAttentionSetsAPlainCompletedOnAnIdleSession`: a plain `completed`, one status event, the session in the
+/// attention list, and the tree reading `completed` with the stamped `statusChangedAt`.
+#[test]
+fn mark_for_attention_sets_a_plain_completed_on_an_idle_session() {
+    let (mut store, id) = one_session();
+    store.take_outbox();
+
+    assert_eq!(store.mark_for_attention(&[id]), 1);
+
+    assert_eq!(*status(&store, id), indicator(Completed, None));
+    let attention: Vec<Uuid> = store.attention_sessions().iter().map(|session| session.id()).collect();
+    assert_eq!(attention, [id]);
+    let kinds: Vec<EventKind> = store.outbox().events.iter().map(|event| event.kind).collect();
+    assert_eq!(kinds, [EventKind::Status]);
+    let session = store.session(id).unwrap();
+    let node = crate::projection::session_node(session, true);
+    assert_eq!(node.status.as_deref(), Some("completed"));
+    assert!(node.status_changed_at.is_some());
+    assert_eq!(
+        node.status_changed_at,
+        session.status_changed_at.map(crate::projection::epoch_seconds)
+    );
+}
+
+/// `markForAttentionSurvivesLeavingAndRevisitingTheSession`: no auto-reset, so selection keeps the mark.
+#[test]
+fn mark_for_attention_survives_leaving_and_revisiting_the_session() {
+    let mut store = AppStore::new();
+    let workspace = store.add_workspace("work");
+    let marked = add(&mut store, workspace, "/marked");
+    let other = add(&mut store, workspace, "/other");
+    store.select_session(Some(marked));
+
+    store.mark_for_attention(&[marked]);
+    store.select_session(Some(other));
+    store.select_session(Some(marked));
+
+    assert_eq!(status(&store, marked).status, Completed);
+}
+
+/// `markForAttentionLeavesANonIdleSessionAlone` ×3: the standing indicator, its stamp and the event stream untouched.
+#[test]
+fn mark_for_attention_leaves_a_non_idle_session_alone() {
+    for standing_status in [Active, Completed, Blocked] {
+        let (mut store, id) = one_session();
+        store.session_mut(id).unwrap().split.exists = true;
+        let standing = AgentIndicator {
+            status: standing_status,
+            blink: true,
+            color: Some("#112233".to_owned()),
+            status_pane: Some(StatusPane::Left),
+            ..AgentIndicator::default()
+        };
+        store.set_agent_indicator(standing.clone(), id);
+        let stamp = store.session(id).unwrap().status_changed_at;
+        store.take_outbox();
+
+        assert_eq!(store.mark_for_attention(&[id]), 0);
+
+        assert_eq!(*status(&store, id), standing, "{standing_status:?}");
+        assert_eq!(store.session(id).unwrap().status_changed_at, stamp);
+        assert_eq!(status_events(&store), 0);
+    }
+}
+
+/// `markForAttentionMarksOnlyTheIdleMembersOfABatch`: the idle member marked, the blocked one and an unknown id
+/// skipped.
+#[test]
+fn mark_for_attention_marks_only_the_idle_members_of_a_batch() {
+    let mut store = AppStore::new();
+    let workspace = store.add_workspace("work");
+    let idle = add(&mut store, workspace, "/idle");
+    let blocked = add(&mut store, workspace, "/blocked");
+    store.set_agent_indicator(indicator(Blocked, None), blocked);
+
+    assert_eq!(store.mark_for_attention(&[idle, blocked, Uuid::new_v4()]), 1);
+
+    assert_eq!(status(&store, idle).status, Completed);
+    assert_eq!(status(&store, blocked).status, Blocked);
+}
+
+/// The mark is untagged, so it reads as the primary pane's (`notifications.md`): typing in the right pane or the
+/// scratch terminal leaves it, typing in the main pane clears it.
+#[test]
+fn mark_for_attention_clears_only_from_the_main_pane() {
+    let (mut store, id) = one_session();
+    store.session_mut(id).unwrap().split.exists = true;
+    store.mark_for_attention(&[id]);
+    assert_eq!(status(&store, id).status_pane, None);
+    assert!(!store.clear_status_on_input(id, StatusPane::Right, Other, FirstKey));
+    assert!(!store.clear_status_on_input(id, StatusPane::Scratch, Other, FirstKey));
+    assert_eq!(status(&store, id).status, Completed);
+    assert!(store.clear_status_on_input(id, StatusPane::Left, Other, FirstKey));
+    assert_eq!(*status(&store, id), AgentIndicator::default());
+}

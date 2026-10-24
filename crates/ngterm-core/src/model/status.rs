@@ -170,6 +170,29 @@ impl AppStore {
         StatusWriteResult::Applied
     }
 
+    /// The row menu's Mark for Attention (upstream's `markForAttention`): each idle session in `ids` gets a plain
+    /// `completed` so it rejoins the attention list until the usual keystroke, Clear Status or hook write clears it.
+    /// No auto-reset, or merely visiting the session would undo the mark; untagged, so it reads as the main pane's
+    /// and only typing there clears it. A non-idle session is skipped so a live `active` or `blocked` is never
+    /// overwritten, and an unknown id is ignored. Returns how many sessions it marked.
+    pub fn mark_for_attention(&mut self, ids: &[Uuid]) -> usize {
+        let mut marked = 0;
+        for &id in ids {
+            if self
+                .session(id)
+                .is_some_and(|session| session.agent_indicator.status == AgentStatus::Idle)
+            {
+                let indicator = AgentIndicator {
+                    status: AgentStatus::Completed,
+                    ..AgentIndicator::default()
+                };
+                self.set_agent_indicator(indicator, id);
+                marked += 1;
+            }
+        }
+        marked
+    }
+
     /// A keystroke in `pane` of session `id` clears its status to idle when that pane owns the status and the
     /// keystroke clears it under `reset` (upstream's `wireStatusClear` closure); returns whether it cleared.
     pub fn clear_status_on_input(
