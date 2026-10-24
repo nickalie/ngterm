@@ -87,7 +87,8 @@ pub enum PaddingColor {
 pub enum CopyOnSelect {
     /// Not copied.
     None,
-    /// To the selection clipboard (the primary selection on Linux) only; nowhere where there is none.
+    /// To the selection clipboard only: the primary selection on Linux, the app's private selection pasteboard on
+    /// macOS, an in-process buffer on Windows (the frontend's mapping).
     Primary,
     /// To the system clipboard only.
     Clipboard,
@@ -110,7 +111,8 @@ impl CopyOnSelect {
 }
 
 impl Default for CopyOnSelect {
-    /// Ghostty's default: the selection clipboard on Linux, nothing elsewhere.
+    /// Ghostty's default: the selection clipboard on Linux, nothing elsewhere (ngterm's built-in defaults set the
+    /// selection clipboard on macOS and Windows too, `defaults_text`).
     fn default() -> Self {
         if cfg!(target_os = "linux") {
             Self::Primary

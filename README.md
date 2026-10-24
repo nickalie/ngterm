@@ -316,6 +316,30 @@ that share one socket.
 
 `NGTERM_LOG` sets the log level (`tracing` filter syntax); the log is `ngterm.log` in the state dir.
 
+### The selection clipboard
+
+Selecting text with the mouse copies it to a private selection clipboard, which a middle-click pastes, and leaves the
+system clipboard alone; Ctrl+Shift+C (⌘C on macOS) puts the selection on the system clipboard. To have every selection
+land on the system clipboard as well, set `copy-on-select = both`; `clipboard` puts it on the system clipboard only,
+leaving the selection clipboard (and so a middle-click's paste) as it was, and `false` copies nothing on select. Per OS
+(`crates/ngterm-gpui/src/terminal/selection_clipboard.rs`):
+
+- Linux: the selection clipboard is the primary selection (Wayland's primary selection, X11's PRIMARY), which other
+  apps share.
+- macOS: a private pasteboard named for the app id (`<app id>.selection`), as upstream's is for its bundle id.
+- Windows, which has no selection clipboard: an app-wide buffer inside ngterm, so a middle-click pastes the last
+  selection made in any of its terminals.
+
+Ghostty's own default copies nothing on select on macOS and Windows; ngterm's built-in defaults set
+`copy-on-select = primary` there, for upstream's behavior. A program's OSC 52 write to the primary selection (`p`)
+goes to the system clipboard on macOS, as upstream's, and to the selection clipboard on Linux and Windows.
+
+The values mean what they mean in Ghostty at `LIBGHOSTTY_VT_REV`, not in the older libghostty upstream links, so two
+differ from upstream's: upstream's docs give `copy-on-select = clipboard` for "as well", which there meant both
+clipboards and here means the system clipboard only (`both` is the "as well"); and an explicit `copy-on-select = true`
+is taken by Ghostty's compatibility handler, the selection clipboard on Linux and the system clipboard only on macOS
+and Windows, where upstream's macOS meant its selection pasteboard (`primary` is that).
+
 ## Live sessions
 
 Under the restore mode `live` (Settings, or `ngtermctl restore mode`) each main and split pane runs its program in a

@@ -107,6 +107,14 @@ Restore is lazy, unlike upstream's eager deck (the user's call, 2026-10-19): onl
 session spawns at launch, the others once shown or once a command needs their terminal. No capability marks it: the
 suite already waits for a restored session only once it is selected.
 
+Ghostty config keys mean what Ghostty at `LIBGHOSTTY_VT_REV` makes of them, not upstream's older libghostty. Where
+the two differ the build follows the pin: `copy-on-select = clipboard`, both clipboards in upstream's libghostty
+(upstream's docs give it for a selection on the system clipboard "as well"), is the system clipboard only, the
+selection clipboard untouched (`both` is upstream's meaning); an explicit `copy-on-select = true`, upstream's
+selection pasteboard on macOS, goes through Ghostty's compatibility handler, the selection clipboard on Linux and the
+system clipboard only on macOS and Windows (README > The selection clipboard). No capability marks it: the harness's
+ghostty config sets `copy-on-select = false`.
+
 ## Rust-only extensions
 
 A Rust-only extension is a capability the reference does not claim, so its tests (`requires` on it) skip as

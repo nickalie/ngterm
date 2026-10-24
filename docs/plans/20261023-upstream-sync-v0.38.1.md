@@ -2047,17 +2047,17 @@ the last selection" needs `copy-on-select = primary` there, and record the devia
 `copy-on-select = primary` for macOS and Windows in the bundled defaults (`ghostty_config/mod.rs` `defaults_text`).
 Decide in the task, with the reason.
 
-- [ ] macOS: Selection reads and writes go to the private `<app id>.selection` pasteboard, Primary and Standard to
+- [x] macOS: Selection reads and writes go to the private `<app id>.selection` pasteboard, Primary and Standard to
       the general one
-- [ ] Windows: an in-process selection buffer for Selection and Primary
-- [ ] docs (README or rust-build.md, per OS): "Selecting text with the mouse copies it to a private selection
+- [x] Windows: an in-process selection buffer for Selection and Primary
+- [x] docs (README or rust-build.md, per OS): "Selecting text with the mouse copies it to a private selection
       clipboard, which a middle-click pastes, and leaves the system clipboard alone; ⌘C puts the selection on the
       system clipboard. To have every selection land on the system clipboard as well, set `copy-on-select =
       clipboard`, or `false` to copy nothing on select." (PRIMARY on Linux)
-- [ ] write tests: in input_tests.rs, a default-config mouse selection leaves `read_from_clipboard()` at its seeded
+- [x] write tests: in input_tests.rs, a default-config mouse selection leaves `read_from_clipboard()` at its seeded
       value and `copy-on-select = clipboard` puts it there; the five location-mapping cases behind `cfg(macos)` and
       `cfg(windows)`
-- [ ] gate passes
+- [x] gate passes (full suite deferred to the end of the plan per the user)
 
 ### Task 33: OpenCode status hook tests (#734)
 

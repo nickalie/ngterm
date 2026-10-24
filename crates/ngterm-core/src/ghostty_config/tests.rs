@@ -644,6 +644,21 @@ fn agterms_defaults_load_clean() {
 }
 
 #[test]
+fn the_built_in_defaults_copy_a_selection_to_the_selection_clipboard_on_every_os() {
+    // Ghostty's default on Linux, the bundled line on macOS and Windows (upstream's selection pasteboard, #792)
+    for terminfo in [true, false] {
+        assert_eq!(
+            load(&defaults_text(terminfo)).config.copy_on_select,
+            CopyOnSelect::Primary
+        );
+    }
+    assert_eq!(
+        defaults_text(true).contains("copy-on-select"),
+        cfg!(any(target_os = "macos", windows))
+    );
+}
+
+#[test]
 fn unresolved_resources_fall_back_to_xterm_256color() {
     assert!(!defaults_text(true).contains("term ="));
     assert!(defaults_text(false).ends_with("term = xterm-256color\n"));

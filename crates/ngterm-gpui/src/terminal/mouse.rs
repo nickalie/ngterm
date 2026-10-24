@@ -11,10 +11,10 @@
 //!   Ctrl+Alt for a block, autoscroll every 15 ms past an edge); Shift extends the selection; the release copies it
 //!   per `copy-on-select` (`Shared::copy_on_select`). ⚠️ `cursor-click-to-move = true` is not carried out (the C API
 //!   has no prompt-click state); ngterm's default is `false`.
-//! - The middle button follows `middle-click-action` (`primary-paste`: the primary selection, `clipboard-paste`: the
-//!   clipboard, as Ghostty reads them); the right button follows `right-click-action` (`paste`,
-//!   `copy`, `copy-or-paste`, `ignore`, or `context-menu`: the word or link under it selected and copied per
-//!   `copy-on-select`, with no menu to show).
+//! - The middle button follows `middle-click-action` (`primary-paste`: the selection clipboard, `clipboard-paste`: the
+//!   system clipboard, as Ghostty reads them; `selection_clipboard.rs` says where each lives per OS); the right button
+//!   follows `right-click-action` (`paste`, `copy`, `copy-or-paste`, `ignore`, or `context-menu`: the word or link
+//!   under it selected and copied per `copy-on-select`, with no menu to show).
 //! - Links ([`super::links`]) are refreshed on every move and modifier change, opened on a click; while the program
 //!   has the mouse, Shift is not counted (Ghostty's `mouseModsWithCapture`).
 //! - The wheel goes to `Pane::wheel` (alternate scroll, a report, or the viewport) in whole steps: precise deltas
@@ -346,18 +346,19 @@ impl TerminalView {
     }
 
     /// `middle-click-action` (Ghostty's `mouseButtonCallback` at `LIBGHOSTTY_VT_REV`): `primary-paste` pastes the
-    /// primary selection, `clipboard-paste` the clipboard, whatever `copy-on-select` is; `ignore` touches nothing.
+    /// selection clipboard, `clipboard-paste` the system clipboard, whatever `copy-on-select` is; `ignore` touches
+    /// nothing.
     fn middle_press(&self, pane: &Pane, cx: &mut Context<Self>) {
         let config = self.shared.config();
         if self.shared.is_readonly() {
             return;
         }
-        let (item, location) = match config.mouse.middle_click_action {
+        let location = match config.mouse.middle_click_action {
             MiddleClickAction::Ignore => return,
-            MiddleClickAction::PrimaryPaste => (cx.read_from_primary(), ClipboardLocation::Selection),
-            MiddleClickAction::ClipboardPaste => (cx.read_from_clipboard(), ClipboardLocation::Standard),
+            MiddleClickAction::PrimaryPaste => ClipboardLocation::Selection,
+            MiddleClickAction::ClipboardPaste => ClipboardLocation::Standard,
         };
-        let Some(text) = item.and_then(|item| item.text()) else {
+        let Some(text) = super::selection_clipboard::read(location, cx).and_then(|item| item.text()) else {
             return;
         };
         if let Err(err) = pane.paste(&text, PasteSource::Clipboard, location, true) {
@@ -467,7 +468,7 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// The left button went up: the gesture learns it, the selection goes to the primary selection, a click on a
+    /// The left button went up: the gesture learns it, the selection is copied per `copy-on-select`, a click on a
     /// live link opens it. Whether the link took the click.
     fn left_release(&mut self, pane: &Pane, (x, y): (f32, f32), cx: &mut Context<Self>) -> bool {
         let released = pane.gesture(GestureEvent::Release { x, y });

@@ -69,10 +69,11 @@ netlink-sys.workspace = true
 xkbcommon.workspace = true
 
 # the status sounds by name (`status_sound.rs`): NSSound and NSBeep on macOS, PlaySoundW and MessageBeep on Windows;
-# the keyboard-layout lock (`input_source/`): Text Input Source Services on macOS, the keyboard layout calls on Windows
+# the keyboard-layout lock (`input_source/`): Text Input Source Services on macOS, the keyboard layout calls on Windows;
+# the selection clipboard's private pasteboard on macOS (`terminal/selection_clipboard/macos.rs`)
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true
-objc2-app-kit = { workspace = true, features = ["NSSound", "NSGraphics"] }
+objc2-app-kit = { workspace = true, features = ["NSSound", "NSGraphics", "NSPasteboard"] }
 objc2-foundation = { workspace = true, features = ["NSString"] }
 objc2-core-foundation = { workspace = true, features = ["CFArray", "CFBase", "CFDictionary", "CFNumber", "CFString"] }
 

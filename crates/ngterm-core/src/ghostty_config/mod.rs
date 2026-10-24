@@ -73,13 +73,23 @@ pub fn known_keys() -> &'static [KeySpec] {
     keys::KEYS
 }
 
+/// The selection-clipboard default of macOS and Windows: Ghostty's default copies nothing on select there, while
+/// upstream's (its older libghostty's `copy-on-select = true`) copies a selection to its private selection
+/// pasteboard, which a middle-click pastes (#792); this build ships upstream's behavior. Linux needs no line: Ghostty's
+/// own default is the primary selection there.
+const SELECTION_DEFAULT: &str = if cfg!(any(target_os = "macos", windows)) {
+    "\ncopy-on-select = primary\n"
+} else {
+    ""
+};
+
 /// The built-in defaults; without ghostty's terminfo the terminal claims `xterm-256color` instead of its own.
 #[must_use]
 pub fn defaults_text(terminfo_resolved: bool) -> String {
     if terminfo_resolved {
-        DEFAULTS.to_owned()
+        format!("{DEFAULTS}{SELECTION_DEFAULT}")
     } else {
-        format!("{DEFAULTS}\nterm = xterm-256color\n")
+        format!("{DEFAULTS}{SELECTION_DEFAULT}\nterm = xterm-256color\n")
     }
 }
 

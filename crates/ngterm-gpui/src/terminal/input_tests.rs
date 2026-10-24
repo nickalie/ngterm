@@ -890,6 +890,45 @@ fn copy_on_select_false_leaves_the_primary_selection_alone(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn a_mouse_selection_leaves_the_system_clipboard_alone_unless_copy_on_select_says_clipboard(cx: &mut TestAppContext) {
+    // the defaults copy a selection to the selection clipboard only (upstream #792)
+    let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
+    let mut f = fixture(cx, script, config(""));
+    f.cx.write_to_clipboard(ClipboardItem::new_string("seeded".into()));
+    let clipboard = |f: &mut Fixture<'_>| f.cx.read_from_clipboard().and_then(|item| item.text());
+    let primary = |f: &mut Fixture<'_>| f.cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text()));
+    f.click(1, 1, Modifiers::default());
+    f.click(1, 1, Modifiers::default());
+    f.cx.run_until_parked();
+    assert_eq!(f.selection().as_deref(), Some("hello"));
+    assert_eq!(primary(&mut f).as_deref(), Some("hello"));
+    assert_eq!(clipboard(&mut f).as_deref(), Some("seeded"));
+    // `copy-on-select = clipboard` puts a selection on the system clipboard only (Ghostty's meaning at the pin; the
+    // older libghostty upstream links copied to both, README > The selection clipboard)
+    f.terminal.update(f.cx, |terminal, cx| {
+        terminal.set_config(config("copy-on-select = clipboard\n"), cx);
+    });
+    std::thread::sleep(Duration::from_millis(600));
+    f.click(8, 1, Modifiers::default());
+    f.click(8, 1, Modifiers::default());
+    f.cx.run_until_parked();
+    assert_eq!(f.selection().as_deref(), Some("world"));
+    assert_eq!(clipboard(&mut f).as_deref(), Some("world"));
+    assert_eq!(primary(&mut f).as_deref(), Some("hello"));
+    // `copy-on-select = both` puts every selection on the system clipboard as well
+    f.terminal.update(f.cx, |terminal, cx| {
+        terminal.set_config(config("copy-on-select = both\n"), cx);
+    });
+    std::thread::sleep(Duration::from_millis(600));
+    f.click(1, 0, Modifiers::default());
+    f.click(1, 0, Modifiers::default());
+    f.cx.run_until_parked();
+    assert_eq!(f.selection().as_deref(), Some("ready"));
+    assert_eq!(clipboard(&mut f).as_deref(), Some("ready"));
+    assert_eq!(primary(&mut f).as_deref(), Some("ready"));
+}
+
+#[gpui_kit::test]
 fn toggling_mouse_reporting_lasts_past_the_next_event(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nhello\\r\\n'; exec cat -v";
     let mut f = fixture(cx, script, config(""));

@@ -36,6 +36,7 @@ pub mod links;
 mod metrics;
 mod mouse;
 mod row_cache;
+mod selection_clipboard;
 pub mod sprite;
 mod surface;
 
@@ -964,19 +965,10 @@ fn run_effect(shared: &Shared, effect: Effect, cx: &mut Context<Terminal>) {
         Effect::Emit(event) => cx.emit(event),
         Effect::Spawn => shared.spawn(),
         Effect::CopyHtml { text, html } => copy_html(text, html, cx),
-        Effect::Copy(text, location) => {
-            let item = ClipboardItem::new_string(text);
-            match location {
-                ClipboardLocation::Standard => cx.write_to_clipboard(item),
-                // ghostty's "selection" clipboard is the primary selection on Linux
-                ClipboardLocation::Selection | ClipboardLocation::Primary => cx.write_to_primary(item),
-            }
-        }
+        // each location's store per OS (`selection_clipboard.rs`)
+        Effect::Copy(text, location) => selection_clipboard::write(location, ClipboardItem::new_string(text), cx),
         Effect::Paste(location) => {
-            let item = match location {
-                ClipboardLocation::Standard => cx.read_from_clipboard(),
-                ClipboardLocation::Selection | ClipboardLocation::Primary => cx.read_from_primary(),
-            };
+            let item = selection_clipboard::read(location, cx);
             let (Some(text), Some(pane)) = (item.and_then(|item| item.text()), shared.pane()) else {
                 return;
             };

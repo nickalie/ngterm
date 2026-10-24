@@ -1,9 +1,10 @@
 //! A program's own clipboard access (OSC 52, the Kitty clipboard protocol) under `clipboard-read` / `clipboard-write`
 //! and the prompt that gates it (upstream's `ClipboardPromptController.swift`, the GTK build's `clipboard.rs`).
 //!
-//! - A read is answered from the system clipboard or the primary selection (Ghostty's "selection" clipboard is the
-//!   primary on Linux), text only; a listing of the types needs no consent. The pane's reader waits for the answer, so
-//!   every read is answered: allowed with the text (none when the clipboard holds none), refused as denied.
+//! - A read is answered from the location's store (`selection_clipboard.rs`: the system clipboard, or the selection
+//!   clipboard, which is the primary selection on Linux), text only; a listing of the types needs no consent. The
+//!   pane's reader waits for the answer, so every read is answered: allowed with the text (none when the clipboard
+//!   holds none), refused as denied.
 //! - A write keeps the text representation (the GTK build served text only too).
 //! - `allow` performs, `deny` refuses silently, `ask` (the default for reads) goes to the prompt. One app-run
 //!   [`ClipboardPromptPolicy`] remembers a "this session" choice per direction across every terminal. Requests from
@@ -152,11 +153,7 @@ pub(super) fn handle(shared: &Rc<Shared>, event: &PaneEvent, cx: &mut Context<Te
 }
 
 fn read_text(location: ClipboardLocation, cx: &App) -> Option<String> {
-    let item = match location {
-        ClipboardLocation::Standard => cx.read_from_clipboard(),
-        ClipboardLocation::Selection | ClipboardLocation::Primary => cx.read_from_primary(),
-    };
-    item.and_then(|item| item.text())
+    super::selection_clipboard::read(location, cx).and_then(|item| item.text())
 }
 
 fn on_read(shared: &Rc<Shared>, read: ClipboardReadRequest, cx: &mut App) {
@@ -203,11 +200,7 @@ fn on_write(shared: &Rc<Shared>, write: &ClipboardWrite, cx: &mut App) {
         if !allowed {
             return;
         }
-        let item = ClipboardItem::new_string(text);
-        match location {
-            ClipboardLocation::Standard => cx.write_to_clipboard(item),
-            ClipboardLocation::Selection | ClipboardLocation::Primary => cx.write_to_primary(item),
-        }
+        super::selection_clipboard::write(location, ClipboardItem::new_string(text), cx);
     };
     match shared.config().clipboard.write {
         ConfigAccess::Allow => perform(true, cx),
