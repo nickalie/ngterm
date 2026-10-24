@@ -5,9 +5,10 @@
 //! element listeners, in ngterm's resolution order (`ngterm_core::ghostty_config::binds`, Technical Details >
 //! Keyboard): first the window's own keys (`window::intercept_key`: the Ctrl-Tab switcher, and the picker's, palette's
 //! and search bar's fields handing their navigation keys to their panel, as the GTK build's capture-phase controllers
-//! did), then the keymap in a registered window ([`register_window`]) — custom commands, the `map` alternatives,
-//! leaders timing out after 1.5 s, a `--repeat` tail live until 0.5 s after its release, then the built-in menu chords
-//! (except `toggle_fullscreen`'s after a half-typed leader) — then, when a terminal's own view holds the keyboard,
+//! did, and an ask's editor handing its dialog keys to its dialog, `crate::ask_dialog::intercept_key`), then the keymap
+//! in a registered window ([`register_window`]) — custom commands, the `map` alternatives, leaders timing out after
+//! 1.5 s, a `--repeat` tail live until 0.5 s after its release, then the built-in menu chords (except
+//! `toggle_fullscreen`'s after a half-typed leader) — then, when a terminal's own view holds the keyboard,
 //! ghostty's binds and the key encoder (`crate::terminal`), or when an HTML page holds it, the page's engine
 //! (`crate::html_overlay`). A key either takes stops there: GPUI's binding matcher and
 //! pending-keystroke buffering never see it, and the platform's input handler does not type it again. A focused text
@@ -196,7 +197,9 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     let stroke = KeyStroke::new(&event.keystroke, &source, false);
     // the window's own keys first: Ctrl+Tab's switcher, the picker's, palette's and search bar's fields; their release
     // is theirs too (the switcher's walk leaves the terminal the keyboard, so its key-up listener must not report it)
-    if crate::window::intercept_key(&stroke, window, cx) {
+    if crate::window::intercept_key(&stroke, window, cx)
+        || crate::ask_dialog::intercept_key(&event.keystroke, &stroke, window, cx)
+    {
         ROUTER.with_borrow_mut(|router| router.consume(stroke.identity));
         cx.stop_propagation();
         return;

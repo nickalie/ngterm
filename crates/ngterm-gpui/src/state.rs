@@ -614,6 +614,44 @@ impl AppState {
         self.settle();
     }
 
+    /// The user pressed button `index` of window `window`'s GUI ask `id`: it answers with the slot's draft, or escapes
+    /// when it is the cancel button. A stale id changes nothing.
+    pub fn answer_window_ask_button(&mut self, window: Uuid, id: &str, index: usize) {
+        if self.quitting {
+            return;
+        }
+        self.core.answer_window_ask_button(window, id, index);
+        self.settle();
+    }
+
+    /// The user edited window `window`'s GUI ask `id`: `edit` applies to the slot's draft. A stale id changes nothing.
+    pub fn edit_window_ask_draft(&mut self, window: Uuid, id: &str, edit: &crate::ask_dialog::form::DraftEdit) {
+        if self.quitting {
+            return;
+        }
+        self.core.update_window_ask_draft(window, id, |draft| edit.apply(draft));
+    }
+
+    /// The user pressed button `index` of session `session`'s terminal ask `id`: it answers with the session's draft,
+    /// or escapes when it is the cancel button. A stale id changes nothing.
+    pub fn answer_session_ask_button(&mut self, session: Uuid, id: &str, index: usize) {
+        if self.quitting {
+            return;
+        }
+        self.core.answer_session_ask_button(session, id, index);
+        self.settle();
+    }
+
+    /// The user edited session `session`'s terminal ask `id`: `edit` applies to the session's draft. A stale id changes
+    /// nothing.
+    pub fn edit_session_ask_draft(&mut self, session: Uuid, id: &str, edit: &crate::ask_dialog::form::DraftEdit) {
+        if self.quitting {
+            return;
+        }
+        self.core
+            .update_session_ask_draft(session, id, |draft| edit.apply(draft));
+    }
+
     /// The user answered session `session`'s terminal ask `id`: a button, or Escape. A stale id changes nothing.
     pub fn answer_session_ask(&mut self, session: Uuid, id: &str, outcome: ngterm_proto::ControlAskResult) {
         if self.quitting {

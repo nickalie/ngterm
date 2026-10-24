@@ -9,10 +9,6 @@ use std::path::{Path, PathBuf};
 /// Catalog ids whose element is not ported yet: each must still be in the catalog and must not be carried yet, so the
 /// change that adds the element also takes its id off this list.
 const PENDING: &[&str] = &[
-    // the `ask` form's text field, choice rows and free-form row
-    "ask-input",
-    "ask-choice-{id}",
-    "ask-other",
     // the title bar's hide/show overlays button
     "overlay-toggle",
     // Settings' keyboard-layout lock picker

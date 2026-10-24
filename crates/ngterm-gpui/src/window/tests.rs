@@ -617,6 +617,101 @@ fn a_gui_ask_takes_the_keyboard_back_from_an_alert_over_it(cx: &mut TestAppConte
     assert!(!s.state.core.modal_pending(s.window), "the ask is answered");
 }
 
+/// Opens a GUI input ask "Name?" with the generated OK and Cancel and draws it; its dialog.
+fn open_gui_input_ask(s: &mut Shell<'_>) -> Entity<AskDialog> {
+    let response = s.state.core.dispatch(&ngterm_proto::Request {
+        cmd: ngterm_proto::Command::Ask(ngterm_proto::command::AskCmd::Open),
+        target: None,
+        args: Some(ngterm_proto::Args {
+            title: Some("Name?".to_owned()),
+            style: Some("gui".to_owned()),
+            input: Some("line".to_owned()),
+            ..ngterm_proto::Args::default()
+        }),
+    });
+    assert!(response.ok, "{response:?}");
+    s.state.settle();
+    s.settle();
+    for _ in 0..4 {
+        s.cx.update(gpui_kit::Window::simulate_next_frame);
+        s.cx.run_until_parked();
+    }
+    s.view
+        .read_with(s.cx, |view, _| view.ask_dialog().cloned())
+        .expect("the GUI ask is up")
+}
+
+/// Ask `id`'s outcome, as `ask.result` reports it.
+fn gui_ask_result(s: &mut Shell<'_>, id: &str) -> ngterm_proto::ControlAskResult {
+    let response = s.state.core.dispatch(&ngterm_proto::Request {
+        cmd: ngterm_proto::Command::Ask(ngterm_proto::command::AskCmd::Result),
+        target: Some(id.to_owned()),
+        args: None,
+    });
+    assert!(response.ok, "{response:?}");
+    serde_json::from_value(response.result.expect("a result")["ask"].clone()).expect("an ask result")
+}
+
+/// Task 17: a GUI ask's editor takes the keyboard at open, typing reaches the window slot's draft, a composition keeps
+/// the close chord, Return answers with the text; the close chord escapes an ask whose editor composes nothing.
+#[gpui_kit::test]
+fn a_gui_input_ask_types_into_its_slots_draft_and_answers_with_it(cx: &mut TestAppContext) {
+    use gpui_kit::EntityInputHandler as _;
+    let mut s = shell(cx);
+    s.with_keys();
+    let dialog = open_gui_input_ask(&mut s);
+    let id = dialog.read_with(s.cx, |dialog, _| dialog.id().to_owned());
+    assert!(
+        s.cx.update(|window, cx| dialog.read(cx).editor_focused(window, cx)),
+        "the editor takes the keyboard"
+    );
+    s.cx.simulate_input("ship");
+    s.settle();
+    let text = |s: &Shell<'_>| {
+        s.state
+            .core
+            .modal_slot(s.window)
+            .and_then(ngterm_core::modal::PickController::ask_draft)
+            .map(|draft| draft.text().to_owned())
+    };
+    assert_eq!(text(&s).as_deref(), Some("ship"), "the slot keeps the draft");
+    let Some(crate::ask_dialog::form::Editor::Line(state)) =
+        dialog.read_with(s.cx, |dialog, _| dialog.editor().cloned())
+    else {
+        panic!("a one-line editor");
+    };
+    state.update_in(s.cx, |state, window, cx| {
+        state.replace_and_mark_text_in_range(None, "\u{304b}", None, window, cx);
+    });
+    s.cx.simulate_keystrokes("ctrl-shift-q");
+    s.settle();
+    assert!(
+        s.state.core.modal_pending(s.window),
+        "the close chord keeps a composing ask"
+    );
+    // the input method commits its text over the marked range, as the platforms do
+    state.update_in(s.cx, |state, window, cx| {
+        state.replace_text_in_range(None, "\u{304b}", window, cx);
+    });
+    s.cx.simulate_keystrokes("enter");
+    s.settle();
+    let result = gui_ask_result(&mut s, &id);
+    assert_eq!(result.id.as_deref(), Some("ok"));
+    assert_eq!(result.text.as_deref(), Some("ship\u{304b}"));
+    assert!(s.terminal_focused(), "the terminal has the keyboard back");
+
+    let dialog = open_gui_input_ask(&mut s);
+    let id = dialog.read_with(s.cx, |dialog, _| dialog.id().to_owned());
+    s.cx.simulate_keystrokes("ctrl-shift-q");
+    s.settle();
+    assert_eq!(
+        gui_ask_result(&mut s, &id),
+        ngterm_proto::ControlAskResult::outcome(ngterm_proto::ControlAskOutcome::Escaped),
+        "the close chord escapes the ask from its editor"
+    );
+    assert!(s.state.core.library().is_open(s.window), "and closes nothing behind it");
+}
+
 #[gpui_kit::test]
 fn a_closing_window_cancels_its_alerts(cx: &mut TestAppContext) {
     let mut s = shell(cx);

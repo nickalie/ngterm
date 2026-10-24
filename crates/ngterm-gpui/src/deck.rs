@@ -56,7 +56,7 @@ use ngterm_core::zoom::SurfaceId;
 use ngterm_core::{PaneReplacement, PaneSpawn};
 use uuid::Uuid;
 
-use crate::ask_dialog::{self, AskDialog, AskOwner};
+use crate::ask_dialog::{self, AskDialog, AskOpening, AskOwner};
 use crate::hud::{self, HudLayer};
 use crate::mute::{self, Washes};
 use crate::overlay::{self, OverlayLayer};
@@ -340,7 +340,7 @@ impl Page {
     fn ask_focus(&self, cx: &App) -> Option<(String, FocusHandle)> {
         let ask = self.ask.as_ref().filter(|ask| ask.wants_focus)?;
         let dialog = ask.dialog.read(cx);
-        Some((format!("ask:{}", dialog.id()), dialog.focus_handle().clone()))
+        Some((format!("ask:{}", dialog.id()), dialog.focus_target(cx)))
     }
 
     /// The pane's rectangle at `slot` in the page as last laid out (the page itself for `None`).
@@ -858,13 +858,14 @@ impl Deck {
         hud::sync_page(&mut page.hud, session, &context, Some(&layout), shown, cx);
         let mut mount = overlay::Mount { hud: &context, window };
         overlay::sync_page(&mut page.overlays, session, &mut mount, &layout, shown, cx);
+        let ask_shown = shown && sync.zoom.is_none();
         page.plan = Some(layout);
         page.covers = covers;
         page.show(shown, cx);
         hold_keys(page, &self.env.poster);
         let opacity = crate::chrome::translucency(cx).opacity;
         sync_watermarks(&self.env, page, session, opacity, cx);
-        sync_ask(page, session, sync, shown && sync.zoom.is_none(), &self.env.poster, cx);
+        sync_ask(page, session, sync, ask_shown, &mut mount, cx);
     }
 
     /// The app's config changed (a reload): every terminal takes it, over its own overlay; with `keep_zoom` (an
@@ -1401,9 +1402,16 @@ fn backdrop(regions: mute::Regions, opacity: f64, plan: &PanePlan, state: Rc<Pag
 }
 
 /// Brings `page`'s terminal ask in line with `session`'s: a dialog for the ask while it shows on the page (a new one
-/// per ask, as upstream's view is keyed by its id), taken down otherwise. `shown`: the page shows its session with
-/// nothing over it (selected, no zoom).
-fn sync_ask(page: &mut Page, session: &Session, sync: &PageSync, shown: bool, poster: &Poster, cx: &mut Context<Deck>) {
+/// per ask, as upstream's view is keyed by its id, starting from the session's draft), taken down otherwise. `shown`:
+/// the page shows its session with nothing over it (selected, no zoom).
+fn sync_ask(
+    page: &mut Page,
+    session: &Session,
+    sync: &PageSync,
+    shown: bool,
+    mount: &mut overlay::Mount<'_, '_>,
+    cx: &mut Context<Deck>,
+) {
     let scope = ask_dialog::shown_scope(session, shown);
     let pending = session.ask().filter(|_| scope.is_some()).map(|ask| &ask.ask);
     let (Some(scope), Some(pending)) = (scope, pending) else {
@@ -1420,8 +1428,15 @@ fn sync_ask(page: &mut Page, session: &Session, sync: &PageSync, shown: bool, po
         dialog.update(cx, |dialog, cx| dialog.set_look(look, cx));
         dialog
     } else {
-        let (owner, poster) = (AskOwner::Session(session.id()), poster.clone());
-        cx.new(|cx| AskDialog::new(pending, owner, look, poster, cx))
+        let opening = AskOpening {
+            ask: pending,
+            draft: session.ask().map(|ask| &ask.draft),
+            owner: AskOwner::Session(session.id()),
+            look,
+            poster: mount.hud.env.poster.clone(),
+        };
+        let window = &mut *mount.window;
+        cx.new(|cx| AskDialog::new(opening, window, cx))
     };
     page.ask = Some(PageAsk {
         dialog,

@@ -16,6 +16,17 @@ fn button(id: &str, label: &str, hotkey: Option<&str>) -> AskButton {
     }
 }
 
+/// What opens `pending` with no draft and no loop to answer to.
+fn opening(pending: &PendingAsk, owner: AskOwner, look: Look) -> AskOpening<'_> {
+    AskOpening {
+        ask: pending,
+        draft: None,
+        owner,
+        look,
+        poster: crate::state::detached_poster(),
+    }
+}
+
 fn ask(style: AskStyle) -> PendingAsk {
     PendingAsk {
         id: "A1".to_owned(),
@@ -42,13 +53,20 @@ fn keys_map_as_upstreams_key_catcher() {
     let key = |source: &str| ask_key(&Keystroke::parse(source).unwrap(), &Source::Keystroke);
     assert_eq!(key("tab"), Some(AskKey::Forward));
     assert_eq!(key("shift-tab"), Some(AskKey::Backward));
-    assert_eq!(key("down"), Some(AskKey::Forward));
-    assert_eq!(key("up"), Some(AskKey::Backward));
+    assert_eq!(key("right"), Some(AskKey::Forward));
+    assert_eq!(key("left"), Some(AskKey::Backward));
+    assert_eq!(key("down"), Some(AskKey::Down), "Down stands apart for a list's cursor");
+    assert_eq!(key("up"), Some(AskKey::Up));
     assert_eq!(key("enter"), Some(AskKey::Activate));
     assert_eq!(key("escape"), Some(AskKey::Cancel));
+}
+
+#[test]
+fn letters_are_hotkeys_and_modified_keys_go_to_the_window() {
+    let key = |source: &str| ask_key(&Keystroke::parse(source).unwrap(), &Source::Keystroke);
     assert_eq!(key("y"), Some(AskKey::Hotkey("y".to_owned())));
     assert_eq!(key("shift-y"), Some(AskKey::Hotkey("y".to_owned())));
-    assert_eq!(key("space"), None, "Space is no ask key");
+    assert_eq!(key("space"), Some(AskKey::Toggle), "Space flips a list's row");
     assert_eq!(key("ctrl-y"), None, "a modified key goes on to the window");
     assert_eq!(key("alt-y"), None, "a modified key goes on to the window");
     assert_eq!(key("1"), None, "only a letter is a hotkey");
@@ -156,8 +174,8 @@ fn the_dialog_takes_a_hotkey_from_the_key_position_on_a_cyrillic_layout() {
     let space = Keystroke::parse("space").unwrap();
     assert_eq!(
         ask_key(&space, &native(65, Some(' '), false)),
-        None,
-        "Space is no ask key"
+        Some(AskKey::Toggle),
+        "Space flips a list's row"
     );
     // text an input method committed resolves as GPUI names it
     assert_eq!(
@@ -230,17 +248,6 @@ fn the_look_counts_cells_from_the_font() {
     assert!((look.cell(AskStyle::Gui) - GUI_CELL).abs() < 1e-9);
     let small = Look { size: 6.0, ..look };
     assert!((small.terminal_cell() - 8.0).abs() < 1e-9, "never under 8");
-}
-
-#[test]
-fn answers_report_the_button_or_escaped() {
-    let ask = ask(AskStyle::Gui);
-    let answered = Answer::Button(1).result(&ask).unwrap();
-    assert_eq!(answered.result, ControlAskOutcome::Answered);
-    assert_eq!(answered.id.as_deref(), Some("no"));
-    assert_eq!(answered.index, Some(1));
-    assert_eq!(Answer::Button(9).result(&ask), None);
-    assert_eq!(Answer::Escaped.result(&ask).unwrap().result, ControlAskOutcome::Escaped);
 }
 
 /// What a test ask is opened over.
@@ -399,8 +406,7 @@ fn the_keyboard_brings_the_highlighted_button_into_view(cx: &mut gpui_kit::TestA
         background: Rgb::BLACK,
     };
     let owner = AskOwner::Session(Uuid::new_v4());
-    let (dialog, cx) =
-        cx.add_window_view(|_, cx| AskDialog::new(&pending, owner, look, crate::state::detached_poster(), cx));
+    let (dialog, cx) = cx.add_window_view(|window, cx| AskDialog::new(opening(&pending, owner, look), window, cx));
     cx.simulate_resize(gpui_kit::size(px(300.), px(240.)));
     cx.update(|window, cx| {
         window.activate_window();
@@ -429,8 +435,7 @@ fn a_new_ask_draws_its_panel_on_the_next_frame(cx: &mut gpui_kit::TestAppContext
         background: Rgb::BLACK,
     };
     let owner = AskOwner::Session(Uuid::new_v4());
-    let (_dialog, cx) =
-        cx.add_window_view(|_, cx| AskDialog::new(&pending, owner, look, crate::state::detached_poster(), cx));
+    let (_dialog, cx) = cx.add_window_view(|window, cx| AskDialog::new(opening(&pending, owner, look), window, cx));
     cx.run_until_parked();
     // no other event: only the frame the measured anchor asked for
     cx.update(gpui_kit::Window::simulate_next_frame);

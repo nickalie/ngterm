@@ -35,6 +35,37 @@ def test_ask_button_answers_the_ask(ctl, ui):
         ctl.request("session.close", sid)
 
 
+@pytest.mark.covers("ui:ask-input", "ui:ask-choice-{id}", "ui:ask-other")
+def test_ask_form_fields_answer_with_their_input(ctl, ui):
+    sid = _new(ctl)
+    ask = assert_ok(ctl.request("ask.open", sid, title="Name?", input="line", style="gui"))["id"]
+    try:
+        # the field takes the keyboard at open, and Return answers with what was typed
+        ui.find("ask-input")
+        ui.press("h", "i", "return")
+        text = wait_until(lambda: assert_ok(ctl.request("ask.result", ask))["ask"].get("text"))
+        assert text == "hi"
+        ui.absent("ask-dialog")
+    finally:
+        ctl.request("ask.cancel", ask)
+    choices = [{"id": "a", "label": "Alpha"}, {"id": "b", "label": "Beta"}]
+    ask = assert_ok(
+        ctl.request("ask.open", sid, title="Pick", choices=choices, multiple=True, other="Something else", style="gui")
+    )["id"]
+    try:
+        ui.find(ui.ui_ids.expand("ask-choice-{id}", id="a"))
+        ui.find(ui.ui_ids.expand("ask-choice-{id}", id="b"))
+        ui.find("ask-other")
+        # upstream's ControlAskUITests: Down and Space check the second row, Return answers with it
+        ui.press("down", "space", "return")
+        selected = wait_until(lambda: assert_ok(ctl.request("ask.result", ask))["ask"].get("selected"))
+        assert selected == ["b"]
+        ui.absent("ask-dialog")
+    finally:
+        ctl.request("ask.cancel", ask)
+        ctl.request("session.close", sid)
+
+
 def _texts(ui, ui_id):
     return [ui.text(element) for element in ui.all(ui_id)]
 

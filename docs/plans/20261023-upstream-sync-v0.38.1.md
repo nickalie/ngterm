@@ -1085,37 +1085,43 @@ action per OS. Not built on macOS/Windows by CI until ngterm-gpui joins `cross-p
 **Conformance:** none on Linux (the ui layer runs on the reference); ui ids `ask-input`, `ask-choice-<id>`,
 `ask-other` arrive with Task 1's regeneration and are honored as element ids
 
-- [ ] an input ask draws its one-line field or multiline editor (placeholder while empty) between message and
+- [x] an input ask draws its one-line field or multiline editor (placeholder while empty) between message and
       buttons, takes focus at open, and keeps input ownership as the dialog does
-- [ ] keys in the field: Tab/Shift-Tab move the button highlight; Esc escapes; one-line Return answers; multiline
+- [x] keys in the field: Tab/Shift-Tab move the button highlight; Esc escapes; one-line Return answers; multiline
       Return inserts a newline and the submit chord answers only while the editor is focused; nothing answers or
       dismisses while composing; `ask.cancel` and owner teardown still resolve
-- [ ] edits, pastes and compositions are held to 65536 UTF-8 bytes and the mode's control rule before they apply,
+- [x] edits, pastes and compositions are held to 65536 UTF-8 bytes and the mode's control rule before they apply,
       refused whole otherwise, the text keeping its end (if gpui-kit has no pre-change hook, restore the previous text
       and selection exactly)
-- [ ] the multiline editor sizes to its laid-out text, wraps included, 5..15 lines (2 when the anchor is short); a
+- [x] the multiline editor sizes to its laid-out text, wraps included, 5..15 lines (2 when the anchor is short); a
       field or list too tall scrolls between the pinned title and buttons; when even those do not fit, the panel
       scrolls
-- [ ] a choice list: radio or checkbox markers, dimmed multi-line subtitles, the cursor row marked; Up/Down cursor,
+- [x] a choice list: radio or checkbox markers, dimmed multi-line subtitles, the cursor row marked; Up/Down cursor,
       Space toggles, Tab/Left/Right buttons, Return answers with `selected`; hotkeys still answer a list ask; opens
       scrolled to the checked item; the cursor row kept in view
-- [ ] the other row: a one-line field after the items, marker dimmed until its text is non-blank; it holds the
+- [x] the other row: a one-line field after the items, marker dimmed until its text is non-blank; it holds the
       keyboard only while the cursor is on it; Space is text there, Up returns above, Down clamps; a click moves the
       cursor there; letters there never fire hotkeys; its identity is tagged, never a caller id
-- [ ] the draft lives on the slot owner in core (Task 16): hiding, remounting and layout swaps keep it; answers go
+- [x] the draft lives on the slot owner in core (Task 16): hiding, remounting and layout swaps keep it; answers go
       through core's answer-by-button from the draft; a replacement editor takes focus only when focus fell back to
       the window
-- [ ] the close chord with a composing editor keeps the ask (terminal and GUI ask)
-- [ ] element ids `ask-input`, `ask-choice-<id>`, `ask-other`
-- [ ] ➕ take those three ids off `PENDING` in `crates/ngterm-gpui/src/ui_ids.rs` (Task 1 parked them there; the
+- [x] the close chord with a composing editor keeps the ask (terminal and GUI ask)
+- [x] element ids `ask-input`, `ask-choice-<id>`, `ask-other`
+- [x] ➕ take those three ids off `PENDING` in `crates/ngterm-gpui/src/ui_ids.rs` (Task 1 parked them there; the
       ui-ids test fails while a pending id is carried)
-- [ ] write tests: GPUI window tests (headless, lavapipe) for the AskDialogViewTests cases: focus at open; typing
+- [x] write tests: GPUI window tests (headless, lavapipe) for the AskDialogViewTests cases: focus at open; typing
       updates the draft; one-line Return, Tab to Cancel then Return → `escaped` without text; Esc; multiline Return
       and the submit chord; the cap and the forbidden-control paste; composing keeps the ask; the draft survives an
       unmount and a layout swap; list keys (upstream's UI test: `--multiple a,b,c`, Down Space Down Space Return →
       `["b","c"]`); a plain ask's Up/Down still move buttons; the long list opens on its checked item; the other row
       cases; after 50 items the row is reached and scrolled into view
-- [ ] gate passes
+- [x] ➕ write tests: the reference-only ui test `tests/ui/test_dialogs.py::test_ask_form_fields_answer_with_their_input`
+      (covers `ui:ask-input`, `ui:ask-choice-{id}`, `ui:ask-other`; the ui layer skips on Linux)
+- [x] ➕ manual check (user): green on reference-macos (skipped - not automatable here: reference-macos runs only in CI on
+      macOS; left for the user)
+- [x] gate passes (full suite deferred to the end of the plan per the user; the selftest
+      `test_committed_catalog_passes_the_ci_gate` and `--coverage-gate` fail only on the keys of Tasks 20, 21, 23, 25
+      and 29, as expected)
 
 ### Task 18: `ask` forms on a remote presenter: `ask.form` / `ask.other`, frame fit, validated answers (#778, #779)
 

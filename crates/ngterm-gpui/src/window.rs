@@ -45,7 +45,7 @@ use ngterm_core::titlebar::UNTITLED;
 use ngterm_core::{Core, WindowRequest, WindowSize, WindowState};
 use uuid::Uuid;
 
-use crate::ask_dialog::{AskDialog, AskOwner};
+use crate::ask_dialog::{AskDialog, AskOpening, AskOwner};
 use crate::deck::{AnchorTarget, Deck};
 use crate::keymap_dispatch::KeyOrigin;
 use crate::modal::Metrics;
@@ -424,14 +424,22 @@ impl WindowView {
             ask.target = target;
             ask.dialog.update(cx, |dialog, cx| dialog.set_look(look, cx));
             if refocus {
-                let focus = ask.dialog.read(cx).focus_handle().clone();
+                let focus = ask.dialog.read(cx).focus_target(cx);
                 window.focus(&focus, cx);
             }
             return;
         }
-        let poster = self.poster.clone();
-        let dialog = cx.new(|cx| AskDialog::new(pending, AskOwner::Window(id), look, poster, cx));
-        let focus = dialog.read(cx).focus_handle().clone();
+        let opening = AskOpening {
+            ask: pending,
+            draft: core
+                .modal_slot(id)
+                .and_then(ngterm_core::modal::PickController::ask_draft),
+            owner: AskOwner::Window(id),
+            look,
+            poster: self.poster.clone(),
+        };
+        let dialog = cx.new(|cx| AskDialog::new(opening, window, cx));
+        let focus = dialog.read(cx).focus_target(cx);
         window.focus(&focus, cx);
         self.set_layer(Layer::Ask, Some(dialog.clone().into()), cx);
         self.ask = Some(WindowAsk { dialog, target });
@@ -803,7 +811,7 @@ impl WindowView {
             .picker
             .as_ref()
             .map(|picker| picker.read(cx).focus_handle(cx))
-            .or_else(|| self.ask.as_ref().map(|ask| ask.dialog.read(cx).focus_handle().clone()))
+            .or_else(|| self.ask.as_ref().map(|ask| ask.dialog.read(cx).focus_target(cx)))
             .or_else(|| self.palette.as_ref().map(|palette| palette.read(cx).focus_handle(cx)))
             .or_else(|| {
                 let popovers = self.popovers.read(cx);
