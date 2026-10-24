@@ -2,6 +2,7 @@
 //! status writes (upstream's `AgentStatus.swift` and `AppStore+Status.swift`, plus the sound names of the app's
 //! `StatusSoundPlayer.swift` and the color check of `WatermarkConfig.isValidColorHex`).
 
+use ngterm_proto::PickItem;
 use uuid::Uuid;
 
 use super::pane::StatusPane;
@@ -143,6 +144,24 @@ pub fn is_known_sound(name: &str) -> bool {
 pub fn is_valid_color_hex(hex: &str) -> bool {
     let digits = hex.strip_prefix('#').unwrap_or(hex);
     digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+impl AgentIndicator {
+    /// The glyph a picker row draws for `item` (upstream's `ControlPickItem.indicator`): an absent, unknown or `idle`
+    /// status is the default (no glyph), and an unknown shape falls back to the configured one. App-built items skip
+    /// `pick.open`'s check, so whatever cannot render is dropped rather than refused.
+    #[must_use]
+    pub fn of_pick_item(item: &PickItem) -> Self {
+        match item.status.as_deref().and_then(AgentStatus::from_wire) {
+            None | Some(AgentStatus::Idle) => Self::default(),
+            Some(status) => Self {
+                status,
+                color: item.status_color.clone(),
+                shape: item.status_shape.as_deref().and_then(StatusShape::from_wire),
+                ..Self::default()
+            },
+        }
+    }
 }
 
 impl AppStore {

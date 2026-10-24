@@ -171,14 +171,22 @@ pub struct Args {
     pub page: Option<String>,
 }
 
-/// One caller-provided choice for `pick.open`.
+/// One caller-provided choice for `pick.open` (upstream's `ControlPickItem`).
 #[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(remote = "Self")]
 pub struct PickItem {
     pub id: String,
     pub label: String,
     pub subtitle: Option<String>,
+    /// The row's trailing glyph in `session.status` values; absent or `idle` draws none.
+    pub status: Option<String>,
+    /// A `#rrggbb` tint for that glyph.
+    #[serde(rename = "statusColor")]
+    pub status_color: Option<String>,
+    /// A `session.status --shape` silhouette for that glyph.
+    #[serde(rename = "statusShape")]
+    pub status_shape: Option<String>,
 }
 
 /// One caller-provided dialog button for `ask.open`.
@@ -233,6 +241,38 @@ mod tests {
         let request: Request = serde_json::from_value(wire.clone()).unwrap();
         assert_eq!(request.cmd, Command::Pick(PickCmd::Open));
         assert_eq!(serde_json::to_value(&request).unwrap(), wire);
+    }
+
+    /// Upstream's `ControlPickTests.statusRoundTripsAndOmitsWhenNil`.
+    #[test]
+    fn pick_item_status_round_trips_and_is_omitted_when_none() {
+        let item = PickItem {
+            id: "s1".to_owned(),
+            label: "build".to_owned(),
+            status: Some("blocked".to_owned()),
+            status_color: Some("#ff8800".to_owned()),
+            status_shape: Some("star".to_owned()),
+            ..PickItem::default()
+        };
+        let wire = serde_json::to_value(&item).unwrap();
+        assert_eq!(
+            wire,
+            json!({"id": "s1", "label": "build", "status": "blocked", "statusColor": "#ff8800", "statusShape": "star"})
+        );
+        let keys: Vec<&str> = wire.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, ["id", "label", "status", "statusColor", "statusShape"]);
+        assert_eq!(serde_json::from_value::<PickItem>(wire).unwrap(), item);
+        let plain = PickItem {
+            id: "a".to_owned(),
+            label: "A".to_owned(),
+            ..PickItem::default()
+        };
+        let text = serde_json::to_string(&plain).unwrap();
+        assert!(!text.contains("status"), "{text}");
+        assert_eq!(
+            serde_json::from_str::<PickItem>(r#"{"id":"a","label":"A"}"#).unwrap(),
+            plain
+        );
     }
 
     #[test]

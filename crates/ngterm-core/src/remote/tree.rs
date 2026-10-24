@@ -355,6 +355,9 @@ fn remote_session(
         cwd: node.cwd.clone(),
         split_axis: if split { node.split_axis.clone() } else { None },
         panes,
+        status: node.status.clone(),
+        status_color: node.status_color.clone(),
+        status_shape: node.status_shape.clone(),
     })
 }
 
@@ -456,6 +459,56 @@ mod tests {
                 tree.sessions[0].workspace_name.as_str()
             ),
             ("main", "work")
+        );
+    }
+
+    /// Upstream's `RemoteTreeTests.aSessionCarriesItsAgentStatusAndAnIdleOneCarriesNone`.
+    #[test]
+    fn a_session_carries_its_agent_status_and_an_idle_one_carries_none() {
+        let (left, right) = (daemon_name(Uuid::new_v4()), daemon_name(Uuid::new_v4()));
+        let mut busy = node("s1", "agent", "/repo", false, Some(true));
+        busy.status = Some("blocked".to_owned());
+        busy.status_pane = Some("left".to_owned());
+        busy.status_blink = Some(true);
+        busy.status_color = Some("#ff8800".to_owned());
+        busy.status_shape = Some("star".to_owned());
+        let windows = [window(
+            "w-1",
+            "main",
+            vec![workspace(
+                "ws-1",
+                "work",
+                vec![busy, node("s2", "shell", "/tmp", false, Some(true))],
+            )],
+        )];
+        let entries = [running("s1", "left", &left), running("s2", "left", &right)];
+        let tree = candidates(&windows, &inventory(&entries, true)).unwrap();
+        let fields = |index: usize| {
+            let session = &tree.sessions[index];
+            (
+                session.status.as_deref(),
+                session.status_color.as_deref(),
+                session.status_shape.as_deref(),
+            )
+        };
+        assert_eq!(fields(0), (Some("blocked"), Some("#ff8800"), Some("star")));
+        assert_eq!(fields(1), (None, None, None));
+        let wire = serde_json::to_value(&tree.sessions[1]).unwrap();
+        assert!(wire.get("status").is_none(), "an idle row omits its status: {wire}");
+    }
+
+    /// Upstream's `RemoteTreeTests.aSessionFromAnOriginWithoutStatusDecodesWithNone`.
+    #[test]
+    fn a_session_from_an_origin_without_status_decodes_with_none() {
+        let stdout = concat!(
+            r#"{"ok":true,"result":{"remote":{"endpoint":{"executable":"/z","socketDirectory":"/t"},"#,
+            r#""sessions":[{"id":"s1","name":"build","windowID":"w","windowName":"main","workspaceID":"ws","#,
+            r#""workspaceName":"work","cwd":"/repo","panes":[{"pane":"left","daemon":"d"}]}]}}}"#
+        );
+        let session = decode(stdout).unwrap().sessions.remove(0);
+        assert_eq!(
+            (session.status, session.status_color, session.status_shape),
+            (None, None, None)
         );
     }
 
@@ -648,6 +701,9 @@ mod tests {
                     daemon: left,
                     foreground: None,
                 }],
+                status: Some("blocked".to_owned()),
+                status_color: Some("#ff8800".to_owned()),
+                status_shape: Some("star".to_owned()),
             }],
             presentation: Some(1),
         };

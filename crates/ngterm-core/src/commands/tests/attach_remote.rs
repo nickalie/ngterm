@@ -98,7 +98,8 @@ fn build_session() -> serde_json::Value {
     json!({
         "id": REMOTE_SESSION, "name": "build", "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
         "workspaceName": "work", "context": "release prep", "cwd": "/repo",
-        "panes": [{"pane": "left", "daemon": daemon, "foreground": ["/usr/bin/vim", "a.txt"]}]
+        "panes": [{"pane": "left", "daemon": daemon, "foreground": ["/usr/bin/vim", "a.txt"]}],
+        "status": "blocked", "statusColor": "#ff8800", "statusShape": "star"
     })
 }
 
@@ -432,8 +433,16 @@ fn the_progress_panel_is_gone_before_the_session_picker_and_the_attach_closes_it
     let sessions = attach.pending().unwrap();
     assert_eq!(sessions.prompt.as_deref(), Some("Attach from studio"));
     assert_eq!(
-        sessions.items[0].subtitle.as_deref(),
-        Some("main/work  ·  release prep  ·  /repo  ·  vim")
+        sessions.items,
+        [ngterm_proto::PickItem {
+            id: REMOTE_SESSION.to_owned(),
+            label: "build".to_owned(),
+            subtitle: Some("main/work  ·  release prep  ·  /repo  ·  vim".to_owned()),
+            status: Some("blocked".to_owned()),
+            status_color: Some("#ff8800".to_owned()),
+            status_shape: Some("star".to_owned()),
+        }],
+        "the row carries the far session's status for its glyph"
     );
     attach.resolve(&sessions, sessions.picked(0).unwrap());
     attach.wait_for_runs(2);
@@ -590,6 +599,7 @@ fn attach_does_nothing_while_a_modal_holds_the_window() {
             id: "a".to_owned(),
             label: "A".to_owned(),
             subtitle: None,
+            ..ngterm_proto::PickItem::default()
         }],
         prompt: None,
         query: None,

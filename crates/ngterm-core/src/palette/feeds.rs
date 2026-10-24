@@ -116,7 +116,8 @@ impl Core {
     }
 
     /// The frontmost window's navigable sessions (the flagged set in flagged mode, the marked workspaces' under the
-    /// focus filter, else all), subtitled `workspace · detail` (upstream's `paletteSessions`).
+    /// focus filter, else all), subtitled `workspace · detail`, each with its status glyph (upstream's
+    /// `paletteSessions`). The rows are rebuilt on every sync, so an open palette follows a status change.
     fn palette_sessions(&self) -> Vec<PaletteEntry> {
         let Some(store) = self
             .library()
@@ -135,6 +136,7 @@ impl Core {
                     .map_or("", |workspace| workspace.name.as_str());
                 PaletteEntry {
                     subtitle: Some(format!("{workspace} · {}", session.subtitle_detail())),
+                    indicator: Some(session.agent_indicator.clone()),
                     ..plain_entry(
                         uuid_string(id),
                         session.display_name(),

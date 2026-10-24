@@ -460,7 +460,7 @@ impl WindowView {
         };
         let (inset, metrics) = place;
         if let Some(picker) = self.picker.as_ref().filter(|picker| picker.read(cx).id() == pick.id) {
-            picker.update(cx, |picker, cx| picker.place(inset, metrics, cx));
+            picker.update(cx, |picker, cx| picker.place(core.settings(), inset, metrics, cx));
             if refocus {
                 let focus = picker.read(cx).focus_handle(cx);
                 window.focus(&focus, cx);
@@ -474,7 +474,8 @@ impl WindowView {
                 state.resolve_pick(id, &pick_id, result);
             });
         });
-        let picker = cx.new(|cx| Picker::new(pick, inset, metrics, resolve, window, cx));
+        let settings = core.settings();
+        let picker = cx.new(|cx| Picker::new(pick, settings, (inset, metrics), resolve, window, cx));
         let focus = picker.read(cx).focus_handle(cx);
         window.focus(&focus, cx);
         self.set_layer(Layer::Picker, Some(picker.clone().into()), cx);

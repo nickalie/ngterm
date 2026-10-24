@@ -303,6 +303,7 @@ fn a_gui_ask_holds_the_window_slot_beside_a_terminal_ask() {
         id: "a".into(),
         label: "Alpha".into(),
         subtitle: None,
+        ..PickItem::default()
     }];
     let pick = fixture.send(Command::Pick(PickCmd::Open), None, args(|a| a.items = Some(items)));
     assert_eq!(

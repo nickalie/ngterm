@@ -730,6 +730,7 @@ fn open_pick(s: &mut Shell<'_>) -> String {
         id: id.to_owned(),
         label: label.to_owned(),
         subtitle: None,
+        ..ngterm_proto::PickItem::default()
     };
     let response = s.state.core.dispatch(&ngterm_proto::Request {
         cmd: ngterm_proto::Command::Pick(ngterm_proto::command::PickCmd::Open),
@@ -838,6 +839,64 @@ fn a_palette_takes_the_keyboard_runs_a_row_and_its_launcher_closes_it(cx: &mut T
     s.settle();
     assert!(s.state.core.palette_mode().is_none());
     assert!(s.terminal_focused());
+}
+
+/// A session row of the open ⌃P palette draws its session's status glyph trailing and follows a status change while
+/// the palette stays open (upstream's `testASessionRowShowsTheStatusOfTheMomentUnderTheOpenPalette`).
+#[gpui_kit::test]
+fn an_open_session_palette_follows_a_status_change(cx: &mut TestAppContext) {
+    use ngterm_core::palette::PaletteMode;
+
+    let mut s = shell(cx);
+    open_palette(&mut s, PaletteMode::Sessions);
+    let glyphs = |s: &mut Shell<'_>| {
+        s.view
+            .read_with(s.cx, |view, cx| view.palette().unwrap().read(cx).glyphs())
+    };
+    assert!(glyphs(&mut s).iter().all(Option::is_none), "idle rows draw nothing");
+    let generation = s.state.core.palette_generation();
+    let session = s.session("u").unwrap();
+    let status = |s: &mut Shell<'_>, status: &str| {
+        let response = s.state.core.dispatch(&ngterm_proto::Request {
+            cmd: ngterm_proto::Command::Session(ngterm_proto::command::SessionCmd::Status),
+            target: Some(session.to_string()),
+            args: Some(ngterm_proto::Args {
+                status: Some(status.to_owned()),
+                color: Some("#00aa00".to_owned()),
+                shape: Some("star".to_owned()),
+                ..ngterm_proto::Args::default()
+            }),
+        });
+        assert!(response.ok, "{response:?}");
+        s.state.settle();
+        s.settle();
+    };
+    status(&mut s, "completed");
+    assert_eq!(
+        s.state.core.palette_generation(),
+        generation,
+        "the same palette stays open"
+    );
+    let titles = s
+        .view
+        .read_with(s.cx, |view, cx| view.palette().unwrap().read(cx).titles());
+    let row = titles.iter().position(|title| title == "u").unwrap();
+    let look = glyphs(&mut s)[row].clone().expect("the completed row draws its glyph");
+    assert_eq!(
+        (look.status, look.shape),
+        (
+            ngterm_core::model::AgentStatus::Completed,
+            ngterm_core::model::StatusShape::Star
+        )
+    );
+    let glyph = s.cx.debug_bounds("agent-status").expect("drawn");
+    let panel = s.cx.debug_bounds("command-palette").expect("the palette");
+    assert!(
+        glyph.origin.x > panel.origin.x + panel.size.width / 2.0,
+        "the glyph trails the row: {glyph:?} in {panel:?}"
+    );
+    status(&mut s, "idle");
+    assert!(glyphs(&mut s).iter().all(Option::is_none), "idle again draws nothing");
 }
 
 /// `chord` in GPUI's keystroke syntax.

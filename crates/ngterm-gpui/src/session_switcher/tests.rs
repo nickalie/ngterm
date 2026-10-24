@@ -61,6 +61,7 @@ fn candidate(title: &str) -> Candidate {
         title: title.to_owned(),
         subtitle: "work · ~".to_owned(),
         remote: false,
+        glyph: None,
     }
 }
 
@@ -97,4 +98,46 @@ fn a_walk_freezes_its_rows_and_shows_until_it_ends(cx: &mut TestAppContext) {
         assert!(switcher.press(SwitchKey::Escape, cx));
     });
     assert!(!shown(cx), "Escape ends it");
+}
+
+/// A walk's rows follow their sessions' status while it lasts, in the frozen order, and draw the glyph trailing.
+#[gpui_kit::test]
+fn a_walks_rows_follow_the_live_status(cx: &mut TestAppContext) {
+    use ngterm_core::model::{AgentIndicator, AgentStatus};
+    use ngterm_core::persist::AppSettings;
+
+    let (switcher, cx) =
+        cx.add_window_view(|_, _| SessionSwitcher::new(Uuid::new_v4(), crate::state::detached_poster()));
+    let rows = [candidate("a"), candidate("b")];
+    let blocked = status_glyph::resolve(
+        &AgentIndicator {
+            status: AgentStatus::Blocked,
+            ..AgentIndicator::default()
+        },
+        &AppSettings::default(),
+    );
+    switcher.update(cx, |switcher, cx| {
+        switcher.set_candidates(rows.to_vec(), true);
+        switcher.press(SwitchKey::Tab { reverse: false }, cx);
+        assert_eq!(switcher.glyphs(), [None, None]);
+        let mut fresh = rows.to_vec();
+        fresh.reverse();
+        fresh[0].glyph.clone_from(&blocked);
+        switcher.set_candidates(fresh, true);
+        assert_eq!(switcher.titles(), ["a", "b"], "the order stays frozen");
+        assert_eq!(
+            switcher.glyphs(),
+            [None, blocked.clone()],
+            "b's status changed mid-walk"
+        );
+    });
+    cx.run_until_parked();
+    let glyph = cx
+        .debug_bounds("agent-status")
+        .expect("the blocked row draws its glyph");
+    let panel = cx.debug_bounds("session-switcher").unwrap();
+    assert!(
+        glyph.origin.x > panel.origin.x + panel.size.width / 2.0,
+        "the glyph trails the row: {glyph:?} in {panel:?}"
+    );
 }

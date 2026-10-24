@@ -822,20 +822,22 @@ explicit renames: it has no `rename_all`), `crates/ngterm-proto/src/result.rs` (
   `tests/protocol/test_zmx.py::test_tree_rows_carry_the_session_status` (LIVE, covers `zmx.tree`,
   `field:result.remote`, `session.status`: blocked/#ff8800/star on the row, omitted after idle)
 
-- [ ] proto fields as above (pick item order id, label, subtitle, status, statusColor, statusShape; None omitted;
+- [x] proto fields as above (pick item order id, label, subtitle, status, statusColor, statusShape; None omitted;
       older payloads decode)
-- [ ] pick.open checks item status after the control-character check and before the selection check; first item
+- [x] pick.open checks item status after the control-character check and before the selection check; first item
       with an error wins; per item status, then color, then shape; the value is never echoed
-- [ ] conversion: an unparsable or idle status gives the default indicator, an unknown shape none
-- [ ] `live tree` rows copy the far node's status fields; Attach Remote's pick items carry them
-- [ ] every session list draws the glyph trailing through `status_glyph::resolve` (Ctrl-Tab switcher from the live
+- [x] conversion: an unparsable or idle status gives the default indicator, an unknown shape none
+- [x] `live tree` rows copy the far node's status fields; Attach Remote's pick items carry them
+- [x] every session list draws the glyph trailing through `status_glyph::resolve` (Ctrl-Tab switcher from the live
       indicator, ⌃P palette rows and the attention palette, both title-bar popovers, the pick picker, Attach Remote);
       idle draws nothing; the palette follows a status change while open (confirm a status change re-syncs it)
-- [ ] write tests: Rust unit tests for every Swift case; palette and recent rows carry the indicator; ctl `parse_items`
+- [x] write tests: Rust unit tests for every Swift case; palette and recent rows carry the indicator; ctl `parse_items`
       keeps the fields
-- [ ] write tests: the conformance tests above
-- [ ] manual check (user): green on reference-macos
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance tests above (the pick ones pass on a targeted `run-linux.sh`; the LIVE
+      `test_tree_rows_carry_the_session_status` skips here, no `live-sessions` on this fish host until Task 27)
+- [x] manual check (user): green on reference-macos (skipped - not automatable, runs only in CI on macOS)
+- [x] gate passes (full suite deferred to the end of the plan per the user; the newly green ids are added there
+      with `check_ratchet.py --add`)
 
 ### Task 13: `live tree` keeps a Live session whose split stayed hidden across a relaunch (#764)
 

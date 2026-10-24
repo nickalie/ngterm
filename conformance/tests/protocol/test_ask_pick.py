@@ -204,6 +204,18 @@ def test_pick_with_no_items_is_a_text_prompt(ctl):
         assert _top(ctl)["pickPending"] == pid
 
 
+@pytest.mark.covers("pick.open", "field:tree.pickPending")
+def test_pick_accepts_item_status(ctl):
+    items = [
+        {"id": "one", "label": "One", "status": "completed", "statusColor": "#00aa00", "statusShape": "star"},
+        {"id": "two", "label": "Two", "status": "idle"},
+        {"id": "three", "label": "Three"},
+    ]
+    with _cancelled(ctl, "pick.cancel", assert_ok(ctl.request("pick.open", items=items))["id"]) as pick_id:
+        assert _top(ctl)["pickPending"] == pick_id
+        assert _pick_result(ctl, pick_id) == {"result": "pending"}
+
+
 # -- refusals
 
 
@@ -305,6 +317,21 @@ def test_ask_refusals(ctl, args, error):
         pytest.param({"items": ITEMS, "selection": "c"}, "pick select must name an item id", id="selection"),
         pytest.param(
             {"items": [], "allowCustom": True, "selection": "a"}, "pick select must name an item id", id="prompt-select"
+        ),
+        pytest.param(
+            {"items": [{"id": "a", "label": "A", "status": "busy"}]},
+            "invalid pick item status (idle|active|completed|blocked)",
+            id="status-unknown",
+        ),
+        pytest.param(
+            {"items": [{"id": "a", "label": "A", "status": "blocked", "statusColor": "red"}]},
+            "invalid pick item color (expected #rrggbb)",
+            id="status-color",
+        ),
+        pytest.param(
+            {"items": [{"id": "a", "label": "A", "status": "active", "statusShape": "hexagon"}]},
+            "invalid pick item shape (circle|square|triangle|diamond|capsule|star)",
+            id="status-shape",
         ),
     ],
 )

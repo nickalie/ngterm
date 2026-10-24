@@ -182,3 +182,38 @@ fn a_button_turned_off_closes_its_popover_and_opens_none(cx: &mut TestAppContext
     h.settle(cx);
     assert!(!h.view.read_with(cx, |p, _| p.is_open()), "its button went away");
 }
+
+/// A recent row draws its session's status glyph trailing, as the sidebar does; an idle row draws none.
+#[gpui_kit::test]
+fn a_recent_row_draws_its_status_glyph_trailing(cx: &mut TestAppContext) {
+    use ngterm_core::model::{AgentIndicator, AgentStatus};
+
+    let (mut h, cx) = harness(cx);
+    h.open(PopoverKind::Recent, cx);
+    assert!(cx.debug_bounds("agent-status").is_none(), "idle rows draw no glyph");
+    h.view.update(cx, Popovers::close);
+    h.settle(cx);
+    let srv = h.sessions[1];
+    h.state
+        .core
+        .library_mut()
+        .store_mut(h.window)
+        .unwrap()
+        .set_agent_indicator(
+            AgentIndicator {
+                status: AgentStatus::Blocked,
+                ..AgentIndicator::default()
+            },
+            srv,
+        );
+    h.settle(cx);
+    h.open(PopoverKind::Recent, cx);
+    let glyph = cx
+        .debug_bounds("agent-status")
+        .expect("the blocked row draws its glyph");
+    let panel = cx.debug_bounds("popover").expect("the popover");
+    assert!(
+        glyph.origin.x > panel.origin.x + panel.size.width / 2.0,
+        "the glyph trails the row: {glyph:?} in {panel:?}"
+    );
+}

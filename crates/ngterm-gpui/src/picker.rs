@@ -3,8 +3,9 @@
 //!
 //! One per window, shown while the window's modal slot holds a pick: a scrim over the whole window (`pick-scrim`, a
 //! press on it cancels) under a palette panel near the top (`pick-palette`), centered over the terminal area, with a
-//! search field (the caller's prompt as its placeholder, its query prefilled) over the rows (a label and an optional
-//! subtitle). Typing filters and ranks the rows by their labels ([`filter_rows`]); an empty query keeps the caller's
+//! search field (the caller's prompt as its placeholder, its query prefilled) over the rows (a label, an optional
+//! subtitle and the item's status glyph trailing, as the sidebar draws it: none for an absent or idle status, see
+//! [`AgentIndicator::of_pick_item`]). Typing filters and ranks the rows by their labels ([`filter_rows`]); an empty query keeps the caller's
 //! order. The selection opens on the caller's `--select` row when the first filtered list holds it, else the first row,
 //! and goes back to the first row on every edit. Up and Down (or Ctrl+J and Ctrl+K) move it, Return or a click picks a
 //! row, Escape cancels. With `--allow-custom`, a non-empty query that matches no row offers one row, `Use "<query>"`,
@@ -31,10 +32,13 @@ use ngterm_core::chrome::ChromeColors;
 use ngterm_core::fuzzy::fuzzy_rank;
 use ngterm_core::ghostty_config::binds::Mods;
 use ngterm_core::modal::PendingPick;
+use ngterm_core::model::AgentIndicator;
 use ngterm_core::palette::{palette_search_keys, pick_custom_row_label};
+use ngterm_core::persist::AppSettings;
 use ngterm_proto::{ControlPickOutcome, ControlPickResult, PickItem};
 
 use crate::modal::{self, Metrics};
+use crate::status_glyph::{self, GlyphLook};
 use crate::terminal::input::{KeyStroke, chord, chord_key};
 
 /// The search field's placeholder without a caller's prompt (upstream's picker default).
@@ -357,12 +361,24 @@ pub fn frame(parts: Frame<'_>, dismiss: impl Fn(&MouseDownEvent, &mut Window, &m
 
 // MARK: - the view
 
+/// The status glyph each of `items` draws, in the caller's order: what its status fields can render under `settings`
+/// (upstream's `ControlPickItem.indicator` through the sidebar's helpers).
+#[must_use]
+pub fn item_glyphs(items: &[PickItem], settings: &AppSettings) -> Vec<Option<GlyphLook>> {
+    items
+        .iter()
+        .map(|item| status_glyph::resolve(&AgentIndicator::of_pick_item(item), settings))
+        .collect()
+}
+
 /// What the picker answers with: the window posts it to the core.
 pub type Resolve = Rc<dyn Fn(ControlPickResult)>;
 
 /// One open picker (module docs).
 pub struct Picker {
     pick: PendingPick,
+    /// Each item's status glyph, in the caller's order.
+    glyphs: Vec<Option<GlyphLook>>,
     field: Entity<InputState>,
     rows: Vec<PickRow>,
     selection: usize,
@@ -376,11 +392,12 @@ pub struct Picker {
 }
 
 impl Picker {
-    /// A picker for `pick`, over a terminal area `inset` from the left; `resolve` takes its one answer.
+    /// A picker for `pick`, its glyphs drawn under `settings`, over a terminal area `inset` from the left at the
+    /// interface size `metrics`; `resolve` takes its one answer.
     pub fn new(
         pick: &PendingPick,
-        inset: f64,
-        metrics: Metrics,
+        settings: &AppSettings,
+        (inset, metrics): (f64, Metrics),
         resolve: Resolve,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -405,6 +422,7 @@ impl Picker {
         scroll.scroll_to_item(selection);
         Self {
             pick: pick.clone(),
+            glyphs: item_glyphs(&pick.items, settings),
             field,
             rows,
             selection,
@@ -435,6 +453,12 @@ impl Picker {
         self.selection
     }
 
+    /// Each item's status glyph, in the caller's order.
+    #[must_use]
+    pub fn glyphs(&self) -> &[Option<GlyphLook>] {
+        &self.glyphs
+    }
+
     /// What takes the keyboard: the search field.
     #[must_use]
     pub fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -447,11 +471,13 @@ impl Picker {
         &self.field
     }
 
-    /// Follows the terminal area and the interface size.
-    pub fn place(&mut self, inset: f64, metrics: Metrics, cx: &mut Context<Self>) {
-        if (self.inset, self.metrics) != (inset, metrics) {
+    /// Follows the terminal area, the interface size and the status glyph settings.
+    pub fn place(&mut self, settings: &AppSettings, inset: f64, metrics: Metrics, cx: &mut Context<Self>) {
+        let glyphs = item_glyphs(&self.pick.items, settings);
+        if (self.inset, self.metrics) != (inset, metrics) || self.glyphs != glyphs {
             self.inset = inset;
             self.metrics = metrics;
+            self.glyphs = glyphs;
             cx.notify();
         }
     }
@@ -491,13 +517,20 @@ impl Picker {
         cx.notify();
     }
 
-    fn render_row(&self, index: usize, shown: &PickRow, colors: ChromeColors, cx: &mut Context<Self>) -> AnyElement {
-        let (id, title, subtitle) = match shown {
+    fn render_row(
+        &self,
+        index: usize,
+        shown: &PickRow,
+        (colors, animate): (ChromeColors, bool),
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (id, title, subtitle, glyph) = match shown {
             PickRow::Item(item) => {
+                let glyph = self.glyphs.get(*item).cloned().flatten();
                 let item = &self.pick.items[*item];
-                (item.id.as_str(), item.label.as_str(), item.subtitle.as_deref())
+                (item.id.as_str(), item.label.as_str(), item.subtitle.as_deref(), glyph)
             }
-            PickRow::Custom { label, .. } => ("pick-custom", label.as_str(), None),
+            PickRow::Custom { label, .. } => ("pick-custom", label.as_str(), None, None),
         };
         row(
             SharedString::from(format!("palette-item-{id}")),
@@ -507,6 +540,7 @@ impl Picker {
             colors,
         )
         .child(text_column(title, subtitle, true, self.metrics, colors))
+        .children(glyph.map(|look| status_glyph::glyph(&look, animate).into_any_element()))
         .on_click(cx.listener(move |picker, _, _, cx| {
             picker.run(index);
             cx.notify();
@@ -518,12 +552,13 @@ impl Picker {
 impl Render for Picker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = crate::chrome::current(cx);
+        let animate = status_glyph::animations_enabled(cx);
         let rows: Vec<AnyElement> = self
             .rows
             .clone()
             .iter()
             .enumerate()
-            .map(|(index, row)| self.render_row(index, row, colors, cx))
+            .map(|(index, row)| self.render_row(index, row, (colors, animate), cx))
             .collect();
         let placement = Placement::of(window.viewport_size(), self.inset, PANEL_WIDTH, self.metrics);
         let picker = cx.entity().downgrade();

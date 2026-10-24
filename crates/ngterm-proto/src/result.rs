@@ -213,6 +213,13 @@ pub struct ControlRemoteSession {
     #[serde(default)]
     pub split_axis: Option<String>,
     pub panes: Vec<ControlRemotePane>,
+    /// The far node's agent status, omitted for an idle session and from an origin that predates it.
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub status_color: Option<String>,
+    #[serde(default)]
+    pub status_shape: Option<String>,
 }
 
 /// `live.tree [HOST]` (upstream's `ControlRemoteTree`): every open window's attachable sessions and the one endpoint

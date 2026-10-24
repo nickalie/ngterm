@@ -248,7 +248,7 @@ pub struct SessionRow {
     /// "`workspace` · detail", led by the window name for an attention row while several windows are open.
     pub subtitle: String,
     pub remote: bool,
-    /// The status glyph an attention row leads with.
+    /// The session's status, drawn as the row's trailing glyph; an idle one draws nothing.
     pub indicator: Option<AgentIndicator>,
     /// A row whose window sits under a cover is inert.
     pub enabled: bool,
@@ -446,7 +446,7 @@ impl Core {
                 title: session.display_name(),
                 subtitle: session_subtitle(Some(store), session),
                 remote: session.remote_host().is_some(),
-                indicator: None,
+                indicator: Some(session.agent_indicator.clone()),
                 enabled: true,
             })
             .collect()

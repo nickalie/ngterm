@@ -40,6 +40,7 @@ fn open_pick(fixture: &mut Fixture) {
                 id: "a".to_owned(),
                 label: "Alpha".to_owned(),
                 subtitle: None,
+                ..PickItem::default()
             }]);
         }),
     );
@@ -295,6 +296,40 @@ fn the_session_palette_lists_the_navigable_sessions_with_their_workspace() {
         [wire(flagged).as_str()],
         "the flagged set in flagged mode"
     );
+}
+
+/// Upstream's `testASessionRowShowsTheStatusOfTheMomentUnderTheOpenPalette`: a session row carries its session's
+/// indicator as it is when the rows are read, per-call color and shape included, and idle again once cleared.
+#[test]
+fn a_session_row_carries_the_status_of_the_moment() {
+    let mut fixture = Fixture::new(0);
+    let session = fixture.sessions[0];
+    let row = |fixture: &Fixture| {
+        fixture
+            .core
+            .palette_entries(PaletteMode::Sessions)
+            .into_iter()
+            .find(|entry| entry.id == wire(session))
+            .and_then(|entry| entry.indicator)
+            .expect("a session row carries its indicator")
+    };
+    assert_eq!(row(&fixture), AgentIndicator::default());
+    let completed = AgentIndicator {
+        status: AgentStatus::Completed,
+        color: Some("#00aa00".to_owned()),
+        shape: Some(crate::model::StatusShape::Star),
+        ..AgentIndicator::default()
+    };
+    fixture
+        .store_mut()
+        .unwrap()
+        .set_agent_indicator(completed.clone(), session);
+    assert_eq!(row(&fixture), completed);
+    fixture
+        .store_mut()
+        .unwrap()
+        .set_agent_indicator(AgentIndicator::default(), session);
+    assert_eq!(row(&fixture).status, AgentStatus::Idle);
 }
 
 #[test]

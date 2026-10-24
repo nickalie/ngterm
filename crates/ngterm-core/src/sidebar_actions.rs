@@ -401,6 +401,7 @@ mod tests {
                     id: "a".into(),
                     label: "A".into(),
                     subtitle: None,
+                    ..PickItem::default()
                 }]),
                 ..Args::default()
             }),

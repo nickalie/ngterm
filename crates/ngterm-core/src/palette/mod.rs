@@ -96,7 +96,8 @@ pub struct PaletteEntry {
     pub shortcut: Option<PaletteShortcut>,
     /// A small trailing tag (`custom`, `current`).
     pub badge: Option<String>,
-    /// A leading status glyph: the attention palette's rows only.
+    /// The trailing status glyph of a session row (the session and attention palettes'); `None` on other rows, and
+    /// an idle one draws nothing.
     pub indicator: Option<AgentIndicator>,
     pub action: PaletteAction,
 }

@@ -254,8 +254,8 @@ pub(crate) struct AttachFlow {
     step: Step,
 }
 
-/// One remote session as a picker row: its name, then where it lives, its context, its cwd and what runs in it
-/// (upstream's `remotePickItem`).
+/// One remote session as a picker row: its name, then where it lives, its context, its cwd and what runs in it, and
+/// the far node's status for the row's trailing glyph (upstream's `remotePickItem`).
 fn pick_item(session: &ControlRemoteSession) -> PickItem {
     let programs: Vec<String> = session
         .panes
@@ -278,6 +278,9 @@ fn pick_item(session: &ControlRemoteSession) -> PickItem {
         id: session.id.clone(),
         label: session.name.clone(),
         subtitle: Some(subtitle.join("  ·  ")),
+        status: session.status.clone(),
+        status_color: session.status_color.clone(),
+        status_shape: session.status_shape.clone(),
     }
 }
 
@@ -351,6 +354,7 @@ impl Core {
                 id: remote.destination.clone(),
                 label: remote.label.clone(),
                 subtitle: (remote.label != remote.destination).then(|| remote.destination.clone()),
+                ..PickItem::default()
             })
             .collect();
         let Some(pick) = self.open_internal_pick(window, items, "Attach from which Mac?") else {

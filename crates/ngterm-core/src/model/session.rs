@@ -34,6 +34,9 @@ pub enum AgentStatus {
 }
 
 impl AgentStatus {
+    /// Every status, in upstream's declaration order (the order of the accepted-names lists).
+    pub const ALL: [Self; 4] = [Self::Idle, Self::Active, Self::Completed, Self::Blocked];
+
     /// The wire spelling.
     #[must_use]
     pub fn wire_name(self) -> &'static str {
@@ -48,9 +51,13 @@ impl AgentStatus {
     /// Parses the wire spelling; `None` for anything else.
     #[must_use]
     pub fn from_wire(name: &str) -> Option<Self> {
-        [Self::Idle, Self::Active, Self::Completed, Self::Blocked]
-            .into_iter()
-            .find(|status| status.wire_name() == name)
+        Self::ALL.into_iter().find(|status| status.wire_name() == name)
+    }
+
+    /// The accepted names pipe-joined, as a rejection names them (upstream's `AgentStatus.allCases` joined).
+    #[must_use]
+    pub fn valid_names_list() -> String {
+        Self::ALL.map(Self::wire_name).join("|")
     }
 
     /// Whether a keystroke in the session's terminal clears this glyph back to idle (upstream's

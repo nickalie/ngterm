@@ -268,6 +268,25 @@ fn recent_rows_list_the_other_sessions_most_recent_first() {
         rows.iter().all(|row| row.subtitle.starts_with("workspace 1 · ")),
         "{rows:?}"
     );
+    assert!(
+        rows.iter().all(|row| row.indicator == Some(AgentIndicator::default())),
+        "an idle row carries the idle indicator, which draws nothing"
+    );
+    let blocked = AgentIndicator {
+        status: AgentStatus::Blocked,
+        color: Some("#ff8800".to_owned()),
+        ..AgentIndicator::default()
+    };
+    core.library_mut()
+        .store_mut(window)
+        .unwrap()
+        .set_agent_indicator(blocked.clone(), first);
+    let rows = core.recent_session_rows(window);
+    assert_eq!(
+        rows[1].indicator,
+        Some(blocked),
+        "a recent row carries its session's status"
+    );
     assert_eq!(core.titlebar(window).recent, Some(Button { enabled: true }));
     core.titlebar_action(window, TitlebarAction::SelectRecent(first));
     assert_eq!(core.library().store(window).unwrap().selected_session_id(), Some(first));

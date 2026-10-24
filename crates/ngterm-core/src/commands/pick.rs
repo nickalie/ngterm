@@ -13,6 +13,7 @@ use super::{Outcome, args_of};
 use crate::Core;
 use crate::error::ControlError;
 use crate::modal::{MAX_PICK_ITEMS, PendingPick};
+use crate::model::{AgentStatus, StatusShape, is_valid_color_hex};
 use crate::pane_env::uuid_string;
 use crate::resolve::Resolver;
 use crate::windows::WindowRequest;
@@ -82,6 +83,9 @@ fn validated(request: &Request) -> Result<PendingPick, ControlError> {
     if items.iter().any(has_control_characters) {
         return Err(ControlError::rejected("item text must not contain control characters"));
     }
+    if let Some(error) = items.iter().find_map(status_error) {
+        return Err(ControlError::rejected(error));
+    }
     // checked against the caller's items, not the rows a query prefill leaves visible
     if let Some(selection) = &args.selection
         && !ids.contains(selection.as_str())
@@ -100,6 +104,36 @@ fn validated(request: &Request) -> Result<PendingPick, ControlError> {
 
 fn has_control_characters(item: &PickItem) -> bool {
     contains_control_characters(&item.label) || item.subtitle.as_deref().is_some_and(contains_control_characters)
+}
+
+/// What is wrong with `item`'s status fields, checked status, then color, then shape (upstream's
+/// `pickItemStatusError`); the message never echoes the caller's value.
+fn status_error(item: &PickItem) -> Option<String> {
+    if item
+        .status
+        .as_deref()
+        .is_some_and(|status| AgentStatus::from_wire(status).is_none())
+    {
+        return Some(format!(
+            "invalid pick item status ({})",
+            AgentStatus::valid_names_list()
+        ));
+    }
+    if item
+        .status_color
+        .as_deref()
+        .is_some_and(|color| !is_valid_color_hex(color))
+    {
+        return Some("invalid pick item color (expected #rrggbb)".to_owned());
+    }
+    if item
+        .status_shape
+        .as_deref()
+        .is_some_and(|shape| StatusShape::from_wire(shape).is_none())
+    {
+        return Some(format!("invalid pick item shape ({})", StatusShape::valid_names_list()));
+    }
+    None
 }
 
 /// The window a picker command acts on (upstream's `withPickController`): the `--window` one, else the frontmost;

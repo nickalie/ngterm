@@ -389,3 +389,40 @@ fn mark_for_attention_clears_only_from_the_main_pane() {
     assert!(store.clear_status_on_input(id, StatusPane::Left, Other, FirstKey));
     assert_eq!(*status(&store, id), AgentIndicator::default());
 }
+
+/// Upstream's `ControlPickTests.indicatorDropsWhatCannotRender`: a picker row draws what its item's status fields can
+/// render, an unknown or idle status draws nothing and an unknown shape falls back to the configured one.
+#[test]
+fn a_pick_items_indicator_drops_what_cannot_render() {
+    let item = |status: Option<&str>, color: Option<&str>, shape: Option<&str>| ngterm_proto::PickItem {
+        id: "a".to_owned(),
+        label: "A".to_owned(),
+        status: status.map(str::to_owned),
+        status_color: color.map(str::to_owned),
+        status_shape: shape.map(str::to_owned),
+        ..ngterm_proto::PickItem::default()
+    };
+    let cases = [
+        (
+            item(Some("completed"), Some("#112233"), Some("diamond")),
+            AgentIndicator {
+                status: Completed,
+                color: Some("#112233".to_owned()),
+                shape: Some(StatusShape::Diamond),
+                ..AgentIndicator::default()
+            },
+        ),
+        (item(Some("active"), None, Some("hexagon")), indicator(Active, None)),
+        (item(Some("idle"), Some("#112233"), None), AgentIndicator::default()),
+        (item(Some("busy"), None, Some("star")), AgentIndicator::default()),
+        (item(None, None, None), AgentIndicator::default()),
+    ];
+    for (item, expected) in cases {
+        assert_eq!(AgentIndicator::of_pick_item(&item), expected, "{item:?}");
+    }
+}
+
+#[test]
+fn the_status_names_list_is_upstreams() {
+    assert_eq!(AgentStatus::valid_names_list(), "idle|active|completed|blocked");
+}

@@ -11,7 +11,8 @@
 //! modifier listener; a walk also ends when the window loses the keyboard. The overlay (`session-switcher`) is a
 //! click-through panel of the candidates over a light scrim that takes no focus, so the terminal keeps the keyboard
 //! throughout. Each row is the display name (a remote session's after the cloud) over `workspace · detail`, at the
-//! Interface font size.
+//! Interface font size, with the session's status glyph trailing as the sidebar draws it (none for idle). The rows of a
+//! walk follow the sessions while it lasts (an agent finishing mid-walk updates its glyph); only their order is frozen.
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -27,6 +28,7 @@ use crate::modal::{self, Metrics};
 use crate::picker::Placement;
 use crate::row_icon::{self, Glyph};
 use crate::state::{AppState, Poster, post};
+use crate::status_glyph::{self, GlyphLook};
 use crate::terminal::input::KeyStroke;
 
 /// The most sessions a walk offers (upstream's `SessionSwitcher.maxCandidates`).
@@ -116,14 +118,16 @@ pub fn switch_key(stroke: &KeyStroke) -> Option<SwitchKey> {
     }
 }
 
-/// One candidate row: the display name over `workspace · detail`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One candidate row: the display name over `workspace · detail`, its status glyph trailing.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub id: Uuid,
     pub title: String,
     pub subtitle: String,
     /// A session attached from another machine: the title leads with the cloud.
     pub remote: bool,
+    /// The session's status glyph, `None` while idle.
+    pub glyph: Option<GlyphLook>,
 }
 
 /// Window `window`'s candidates in recency order, with their rows.
@@ -144,6 +148,7 @@ pub fn candidates(core: &Core, window: Uuid) -> Vec<Candidate> {
                 title: session.display_name(),
                 subtitle: format!("{workspace} · {}", session.switcher_detail()),
                 remote: session.remote_host().is_some(),
+                glyph: status_glyph::resolve(&session.agent_indicator, core.settings()),
             })
         })
         .collect()
@@ -241,11 +246,14 @@ impl SessionSwitcher {
     }
 
     /// Takes the window's recency order, whether it takes UI actions, the terminal area and the interface size; a walk
-    /// ends when the window stops taking UI actions.
+    /// ends when the window stops taking UI actions, and its rows take what changed in their sessions.
     pub fn sync(&mut self, core: &Core, inset: f64, cx: &mut Context<Self>) {
         let window = self.window;
         self.can_switch = core.library().active_window_id() == Some(window) && core.ui_actions_enabled(window);
         self.candidates = candidates(core, window);
+        if self.refresh_frozen() {
+            cx.notify();
+        }
         let metrics = Metrics::of(core.settings());
         if (self.inset, self.metrics) != (inset, metrics) {
             self.inset = inset;
@@ -257,28 +265,48 @@ impl SessionSwitcher {
         }
     }
 
+    /// Brings the walk's rows in line with the latest candidates, keeping their order (upstream's overlay reads each row's
+    /// session live); a row whose session left the candidates keeps what it showed. Whether a row changed.
+    fn refresh_frozen(&mut self) -> bool {
+        if !self.switcher.is_active() {
+            return false;
+        }
+        let mut changed = false;
+        for row in &mut self.frozen {
+            if let Some(fresh) = self.candidates.iter().find(|fresh| fresh.id == row.id)
+                && fresh != row
+            {
+                row.clone_from(fresh);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// The glyph of each row of the walk under way (tests).
+    #[cfg(test)]
+    pub(crate) fn glyphs(&self) -> Vec<Option<GlyphLook>> {
+        self.frozen.iter().map(|candidate| candidate.glyph.clone()).collect()
+    }
+
     /// Sets the candidates and whether the window switches, as a sync would (tests).
     #[cfg(test)]
     pub(crate) fn set_candidates(&mut self, candidates: Vec<Candidate>, can_switch: bool) {
         self.candidates = candidates;
         self.can_switch = can_switch;
+        self.refresh_frozen();
     }
 
-    fn render_row(&self, index: usize, candidate: &Candidate, colors: ChromeColors) -> AnyElement {
+    fn render_row(&self, index: usize, candidate: &Candidate, colors: ChromeColors, animate: bool) -> AnyElement {
         let metrics = self.metrics;
         let ink = crate::chrome::color(colors.foreground, 1.0);
         let dim = crate::chrome::color(colors.foreground, crate::chrome::DIM_ALPHA);
-        div()
-            .id(("session-switcher-row", index))
+        let lines = div()
             .flex()
             .flex_col()
             .gap(px(1.))
-            .px(modal::logical(metrics.scaled(12.0)))
-            .py(modal::logical(metrics.scaled(6.0)))
-            .rounded(px(6.))
-            .when(index == self.switcher.index(), |row| {
-                row.bg(crate::chrome::color(modal::ACCENT, 0.25))
-            })
+            .min_w(px(0.))
+            .flex_1()
             .child(
                 div()
                     .flex()
@@ -304,6 +332,25 @@ impl SessionSwitcher {
                     .text_size(modal::logical(metrics.secondary))
                     .text_color(dim)
                     .child(SharedString::from(candidate.subtitle.clone())),
+            );
+        div()
+            .id(("session-switcher-row", index))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(modal::logical(metrics.scaled(8.0)))
+            .px(modal::logical(metrics.scaled(12.0)))
+            .py(modal::logical(metrics.scaled(6.0)))
+            .rounded(px(6.))
+            .when(index == self.switcher.index(), |row| {
+                row.bg(crate::chrome::color(modal::ACCENT, 0.25))
+            })
+            .child(lines)
+            .children(
+                candidate
+                    .glyph
+                    .as_ref()
+                    .map(|look| status_glyph::glyph(look, animate).into_any_element()),
             )
             .into_any_element()
     }
@@ -315,12 +362,13 @@ impl Render for SessionSwitcher {
             return div().id("session-switcher-layer");
         }
         let colors = crate::chrome::current(cx);
+        let animate = status_glyph::animations_enabled(cx);
         let placement = Placement::of(window.viewport_size(), self.inset, PANEL_WIDTH, self.metrics);
         let rows: Vec<AnyElement> = self
             .frozen
             .iter()
             .enumerate()
-            .map(|(index, candidate)| self.render_row(index, candidate, colors))
+            .map(|(index, candidate)| self.render_row(index, candidate, colors, animate))
             .collect();
         // no listener and no occlusion: clicks and the pointer go through to the window
         div()

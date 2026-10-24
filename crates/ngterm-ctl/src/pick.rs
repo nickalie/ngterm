@@ -71,8 +71,8 @@ fn is_newline(c: char) -> bool {
     )
 }
 
-/// The items on stdin. Its first non-whitespace byte decides: `[` is a JSON item array, keeping caller-supplied ids
-/// and subtitles; anything else is lines, each its own id and label, blank ones dropped.
+/// The items on stdin. Its first non-whitespace byte decides: `[` is a JSON item array, keeping caller-supplied ids,
+/// subtitles and status fields; anything else is lines, each its own id and label, blank ones dropped.
 pub fn parse_items(input: &[u8]) -> Result<Vec<PickItem>, Failure> {
     let first = input.iter().find(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r'));
     if first == Some(&b'[') {
@@ -88,6 +88,7 @@ pub fn parse_items(input: &[u8]) -> Result<Vec<PickItem>, Failure> {
             id: line.to_owned(),
             label: line.to_owned(),
             subtitle: None,
+            ..PickItem::default()
         })
         .collect())
 }
@@ -250,6 +251,7 @@ mod tests {
             id: id.to_owned(),
             label: label.to_owned(),
             subtitle: None,
+            ..PickItem::default()
         }
     }
 
@@ -261,14 +263,23 @@ mod tests {
     }
 
     #[test]
-    fn a_json_array_keeps_ids_and_subtitles() {
-        let input =
-            b"  [\n {\"id\":\"one\",\"label\":\"One\",\"subtitle\":\"First\"},\n {\"id\":\"two\",\"label\":\"Two\"}\n]";
+    fn a_json_array_keeps_ids_subtitles_and_status_fields() {
+        let input = concat!(
+            "  [\n {\"id\":\"one\",\"label\":\"One\",\"subtitle\":\"First\"},\n",
+            " {\"id\":\"two\",\"label\":\"Two\",\"status\":\"blocked\",\"statusColor\":\"#ff8800\",",
+            "\"statusShape\":\"star\"}\n]"
+        );
         let first = PickItem {
             subtitle: Some("First".to_owned()),
             ..item("one", "One")
         };
-        assert_eq!(items(input), [first, item("two", "Two")]);
+        let second = PickItem {
+            status: Some("blocked".to_owned()),
+            status_color: Some("#ff8800".to_owned()),
+            status_shape: Some("star".to_owned()),
+            ..item("two", "Two")
+        };
+        assert_eq!(items(input.as_bytes()), [first, second]);
         assert!(matches!(parse_items(b"[{\"id\":\"one\""), Err(Failure::Local(_))));
     }
 

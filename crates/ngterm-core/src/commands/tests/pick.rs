@@ -14,6 +14,17 @@ fn item(id: &str, label: &str, subtitle: Option<&str>) -> PickItem {
         id: id.to_owned(),
         label: label.to_owned(),
         subtitle: subtitle.map(str::to_owned),
+        ..PickItem::default()
+    }
+}
+
+/// An item carrying the three status fields, each `None` left absent.
+fn status_item(id: &str, status: Option<&str>, color: Option<&str>, shape: Option<&str>) -> PickItem {
+    PickItem {
+        status: status.map(str::to_owned),
+        status_color: color.map(str::to_owned),
+        status_shape: shape.map(str::to_owned),
+        ..item(id, &id.to_uppercase(), None)
     }
 }
 
@@ -120,6 +131,89 @@ fn open_refusals_carry_upstreams_strings() {
             failure(&format!("unknown pick: {UNKNOWN}"))
         );
     }
+}
+
+const BAD_STATUS: &str = "invalid pick item status (idle|active|completed|blocked)";
+const BAD_COLOR: &str = "invalid pick item color (expected #rrggbb)";
+const BAD_SHAPE: &str = "invalid pick item shape (circle|square|triangle|diamond|capsule|star)";
+
+/// Upstream's `openRejectsAnInvalidItemStatusWithoutCallingHost`: a bad status, color or shape is refused with a
+/// message that never echoes the value, and no picker opens.
+#[test]
+fn an_invalid_item_status_is_refused_without_opening_a_picker() {
+    let mut fixture = Fixture::new(0);
+    let cases = [
+        (status_item("a", Some("busy"), None, None), BAD_STATUS),
+        (status_item("a", Some("blocked"), Some("red"), None), BAD_COLOR),
+        (status_item("a", Some("active"), None, Some("hexagon")), BAD_SHAPE),
+        (status_item("a", None, Some("#12345"), None), BAD_COLOR),
+        (status_item("a", None, None, Some("")), BAD_SHAPE),
+    ];
+    for (bad, error) in cases {
+        let response = fixture.send(Command::Pick(PickCmd::Open), None, args(|a| a.items = Some(vec![bad])));
+        assert_eq!(response, failure(error));
+        assert_eq!(pick_pending(&fixture), None);
+    }
+}
+
+/// The status check runs after the control-character check and before the selection check; within it the first
+/// item with an error wins, and an item's status is checked before its color and its color before its shape.
+#[test]
+fn the_item_status_check_keeps_upstreams_order() {
+    let mut fixture = Fixture::new(0);
+    let control = PickItem {
+        label: "A\u{7}".to_owned(),
+        ..status_item("a", Some("busy"), None, None)
+    };
+    let cases: Vec<(Args, &str)> = vec![
+        (
+            args(|a| a.items = Some(vec![control])),
+            "item text must not contain control characters",
+        ),
+        (
+            args(|a| {
+                a.items = Some(vec![status_item("a", Some("busy"), None, None)]);
+                a.selection = Some("zzz".into());
+            }),
+            BAD_STATUS,
+        ),
+        (
+            args(|a| {
+                a.items = Some(vec![
+                    status_item("a", None, None, Some("hexagon")),
+                    status_item("b", Some("busy"), None, None),
+                ]);
+            }),
+            BAD_SHAPE,
+        ),
+        (
+            args(|a| a.items = Some(vec![status_item("a", Some("busy"), Some("red"), Some("hexagon"))])),
+            BAD_STATUS,
+        ),
+        (
+            args(|a| a.items = Some(vec![status_item("a", Some("idle"), Some("red"), Some("hexagon"))])),
+            BAD_COLOR,
+        ),
+    ];
+    for (request, error) in cases {
+        assert_eq!(
+            fixture.send(Command::Pick(PickCmd::Open), None, request),
+            failure(error)
+        );
+    }
+}
+
+/// Upstream's `openPassesItemStatusThrough`: valid status fields reach the picker as sent, `idle` included.
+#[test]
+fn item_status_fields_reach_the_picker() {
+    let mut fixture = Fixture::new(0);
+    let sent = vec![
+        status_item("one", Some("completed"), Some("#00aa00"), Some("star")),
+        status_item("two", Some("idle"), None, None),
+    ];
+    let request = args(|a| a.items = Some(sent.clone()));
+    opened_id(&fixture.send(Command::Pick(PickCmd::Open), None, request));
+    assert_eq!(pending(&fixture, fixture.window).items, sent);
 }
 
 #[test]

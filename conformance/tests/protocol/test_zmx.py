@@ -487,3 +487,21 @@ def test_job_run_serves_an_overlay_a_presenter_shows(live):
                 assert_error(again.reply, "job not claimable")
     _presenters(live, sid, None)
     assert_ok(live.request("session.close", sid))
+
+
+@LIVE
+@pytest.mark.covers("zmx.tree", "field:result.remote", "session.status")
+def test_tree_rows_carry_the_session_status(live):
+    sid = _live_session(live)
+    tree_cmd = live.vocabulary.command("zmx.tree")
+
+    def row(response):
+        return next((session for session in assert_ok(response)["remote"]["sessions"] if session["id"] == sid), None)
+
+    assert_ok(live.request("session.status", sid, status="blocked", color="#ff8800", shape="star"))
+    blocked = row(live.wait_response(tree_cmd, None, lambda r: (row(r) or {}).get("status") == "blocked"))
+    assert_subset(blocked, {"status": "blocked", "statusColor": "#ff8800", "statusShape": "star"})
+    assert_ok(live.request("session.status", sid, status="idle"))
+    idle = row(live.wait_response(tree_cmd, None, lambda r: row(r) is not None and "status" not in row(r)))
+    assert_absent(idle, "status", "statusColor", "statusShape")
+    assert_ok(live.request("session.close", sid))

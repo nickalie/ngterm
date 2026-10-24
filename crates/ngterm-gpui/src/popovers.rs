@@ -1,6 +1,7 @@
 //! The title bar's popovers (upstream's `WindowContentView+RecentSessions.swift` and `+CustomCommands.swift`; port of
 //! the GTK build's `popovers.rs`): the recent-sessions list, the mouse twin of the session switcher; the attention list
-//! across every open window with each row's status glyph; and the custom-commands list, the mouse twin of the
+//! across every open window; both draw each session's status glyph trailing, as the sidebar does (none for idle); and
+//! the custom-commands list, the mouse twin of the
 //! custom-command palette, the most-run commands above a separator. Each lists the rows the core composed
 //! ([`ngterm_core::titlebar`]); a click on a row (or Return on the highlighted one) runs it and closes the popover.
 //!
@@ -310,7 +311,7 @@ impl Popovers {
                     .accessibility_id(id)
                     .role(Role::MenuItem)
                     .aria_label(SharedString::from(session.title.clone()));
-                session_line(row.children(glyph), session, colors)
+                session_line(row, session, colors).children(glyph)
             }
             Row::Command(command, top) => {
                 let id = if *top {
@@ -332,7 +333,7 @@ impl Popovers {
     }
 }
 
-/// A session row's two lines after its glyph: the cloud for a remote session, the title, the subtitle dimmed.
+/// A session row's two lines: the cloud for a remote session, the title, the subtitle dimmed; its status glyph trails.
 fn session_line(line: Stateful<Div>, session: &SessionRow, colors: ChromeColors) -> Stateful<Div> {
     let ink = crate::chrome::color(colors.foreground, 1.0);
     let dim = crate::chrome::color(colors.foreground, crate::chrome::DIM_ALPHA);
@@ -425,6 +426,7 @@ impl Render for Popovers {
             .child(
                 modal::panel(colors)
                     .id("popover")
+                    .debug_selector(|| "popover".to_owned())
                     .key_context("NgtermPopover")
                     .track_focus(&self.focus)
                     .on_key_down(cx.listener(Self::key_down))

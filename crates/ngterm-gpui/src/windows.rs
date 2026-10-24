@@ -793,6 +793,7 @@ mod tests {
             id: id.to_owned(),
             label: id.to_owned(),
             subtitle: None,
+            ..ngterm_proto::PickItem::default()
         };
         let response = state.core.dispatch(&ngterm_proto::Request {
             cmd: ngterm_proto::Command::Pick(ngterm_proto::command::PickCmd::Open),

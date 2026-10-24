@@ -13,6 +13,7 @@ fn item(id: &str, label: &str) -> PickItem {
         id: id.to_owned(),
         label: label.to_owned(),
         subtitle: Some(format!("{label} subtitle")),
+        ..PickItem::default()
     }
 }
 
@@ -232,8 +233,16 @@ fn the_picker_filters_moves_and_answers_once(cx: &mut TestAppContext) {
     // the caller's row is not the filter's first, so the seeding is told apart from the first-row fallback
     pending.selection = Some("nw".to_owned());
     let resolve: Resolve = Rc::new(move |result| seen.borrow_mut().push(result));
-    let (picker, cx) =
-        cx.add_window_view(move |window, cx| Picker::new(&pending, 0.0, Metrics::default(), resolve, window, cx));
+    let (picker, cx) = cx.add_window_view(move |window, cx| {
+        Picker::new(
+            &pending,
+            &AppSettings::default(),
+            (0.0, Metrics::default()),
+            resolve,
+            window,
+            cx,
+        )
+    });
     cx.run_until_parked();
     picker.read_with(cx, |picker, _| {
         assert_eq!(
@@ -268,4 +277,66 @@ fn the_picker_filters_moves_and_answers_once(cx: &mut TestAppContext) {
     let answers = answers.borrow();
     assert_eq!(answers.len(), 1, "the first answer only");
     assert_eq!(answers[0].index, Some(1), "the caller's index");
+}
+
+/// A pick item's status fields draw its glyph trailing the row through the sidebar's helpers: per-call color and shape
+/// win, an unknown shape takes the configured one, and an idle, unknown or absent status draws nothing.
+#[gpui_kit::test]
+fn an_item_with_a_status_draws_its_glyph_trailing(cx: &mut TestAppContext) {
+    use ngterm_core::model::{AgentStatus, StatusShape};
+
+    cx.update(gpui_kit::init);
+    let with = |id: &str, status: Option<&str>, color: Option<&str>, shape: Option<&str>| PickItem {
+        status: status.map(str::to_owned),
+        status_color: color.map(str::to_owned),
+        status_shape: shape.map(str::to_owned),
+        ..item(id, id)
+    };
+    let mut pending = pick(false);
+    pending.selection = None;
+    pending.items = vec![
+        with("blocked", Some("blocked"), Some("#ff8800"), Some("star")),
+        with("active", Some("active"), None, Some("hexagon")),
+        with("idle", Some("idle"), Some("#112233"), None),
+        with("busy", Some("busy"), None, None),
+        with("plain", None, None, None),
+    ];
+    let settings = AppSettings {
+        active_status_shape: Some("diamond".to_owned()),
+        ..AppSettings::default()
+    };
+    let glyphs = item_glyphs(&pending.items, &settings);
+    let looks: Vec<_> = glyphs
+        .iter()
+        .map(|glyph| glyph.as_ref().map(|look| (look.status, look.shape, look.rgb)))
+        .collect();
+    assert_eq!(
+        looks[..2],
+        [
+            Some((
+                AgentStatus::Blocked,
+                StatusShape::Star,
+                status_glyph::parse_hex("#ff8800").unwrap()
+            )),
+            Some((
+                AgentStatus::Active,
+                StatusShape::Diamond,
+                status_glyph::default_rgb(AgentStatus::Active).unwrap()
+            )),
+        ]
+    );
+    assert_eq!(looks[2..], [None, None, None]);
+
+    let resolve: Resolve = Rc::new(|_| {});
+    let (picker, cx) = cx.add_window_view(move |window, cx| {
+        Picker::new(&pending, &settings, (0.0, Metrics::default()), resolve, window, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(picker.read_with(cx, |picker, _| picker.glyphs().to_vec()), glyphs);
+    let row = cx.debug_bounds("palette-item-blocked").expect("the blocked row");
+    let glyph = cx.debug_bounds("agent-status").expect("its glyph");
+    assert!(
+        glyph.origin.x > row.origin.x + row.size.width / 2.0,
+        "the glyph trails the row: {glyph:?} in {row:?}"
+    );
 }

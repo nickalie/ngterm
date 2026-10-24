@@ -4,9 +4,10 @@
 //! The same frame as the native picker ([`crate::picker`]): a scrim over the window (`palette-scrim`, a press on it
 //! closes the palette) under a panel near the top (`command-palette`), centered over the terminal area, with a search
 //! field over the rows. A row (`palette-item-<id>`) shows its title (dimmed while it cannot run) over an optional
-//! subtitle (`palette-subtitle`), a leading status glyph on the attention palette, a trailing badge (`palette-badge`:
-//! `custom`, `current`) and its shortcut: a built-in's live chord as GTK labels accelerators, a custom command's as the
-//! user wrote it. Typing ranks the rows by title and subtitle ([`filter_entries`]): a blank query lists them A→Z, the
+//! subtitle (`palette-subtitle`), a trailing badge (`palette-badge`: `custom`, `current`), its shortcut (a built-in's
+//! live chord as GTK labels accelerators, a custom command's as the user wrote it) and, on a session row of the session
+//! and attention palettes, the session's status glyph last, as the sidebar draws it (none for idle). The rows are read
+//! afresh on every sync, so an agent finishing under an open palette updates its glyph. Typing ranks the rows by title and subtitle ([`filter_entries`]): a blank query lists them A→Z, the
 //! attention palette in its own order. Up and Down (or Ctrl+J and Ctrl+K) move the selection, Return or a click runs
 //! the row when it can run, Escape closes; a palette launcher's chord still reaches its action from the field, so the
 //! same chord closes or switches the palette. Text and lengths follow the Interface font size ([`Metrics`]).
@@ -214,6 +215,16 @@ impl Palette {
             .collect()
     }
 
+    /// The status glyph of each row shown, in order (tests).
+    #[must_use]
+    pub fn glyphs(&self) -> Vec<Option<GlyphLook>> {
+        self.shown
+            .iter()
+            .filter_map(|index| self.view.looks.get(*index))
+            .map(|look| look.glyph.clone())
+            .collect()
+    }
+
     /// The selected row.
     #[must_use]
     pub fn selection(&self) -> usize {
@@ -356,7 +367,6 @@ impl Palette {
             metrics,
             colors,
         )
-        .children(glyph)
         .child(picker::text_column(
             &entry.title,
             entry.subtitle.as_deref(),
@@ -366,6 +376,7 @@ impl Palette {
         ))
         .children(badge)
         .children(shortcut)
+        .children(glyph)
         .on_click(cx.listener(move |palette, _, _, cx| {
             palette.run(row, cx);
             cx.notify();
