@@ -741,7 +741,11 @@ impl Page {
                 } else {
                     DecisionTarget::Frame
                 };
-                policy::navigation_proceeds(uri, *new_window, || self.allows(uri, target, clicked, cx))
+                let proceeds = policy::navigation_proceeds(uri, *new_window, || self.allows(uri, target, clicked, cx));
+                if !proceeds && !*new_window && !clicked {
+                    self.state.borrow_mut().load.refused(&policy::app_uri(uri));
+                }
+                proceeds
             }
             PolicyKind::Response {
                 uri,
@@ -755,6 +759,9 @@ impl Page {
     /// A response: nothing is saved to disk (the engine reports an unshowable main resource as interrupted), and the
     /// main frame's address is checked against the policy, which a refused one fails while a load is pending.
     fn decide_response(&self, uri: &str, main: bool, mime_supported: bool, cx: &mut App) -> bool {
+        if main {
+            self.state.borrow_mut().load.responded();
+        }
         if !mime_supported {
             return false;
         }

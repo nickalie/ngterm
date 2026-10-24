@@ -5,6 +5,7 @@ outside the instance. Every page is a static file written into the instance's ow
 process on 127.0.0.1: no page loads anything from the network."""
 
 import itertools
+import threading
 import uuid
 from http.server import BaseHTTPRequestHandler
 
@@ -557,6 +558,157 @@ def test_url_page_follows_a_cross_origin_redirect_only_when_browsing(ctl, redire
     _closed(ctl, sid)
 
 
+@pytest.fixture(params=["127.0.0.1", "[::1]", "localhost"])
+def loopback_page(request):
+    """A page served by this process, addressed by one of the exact loopback hosts (localhost served on 127.0.0.1)."""
+    host = request.param
+    body = b"<!doctype html><title>Loopback Page</title><body><p>loopback</p></body>"
+    with serve(_routes({"/page.html": (200, {}, body)}), "::1" if host == "[::1]" else "127.0.0.1") as server:
+        yield f"http://{host}:{server.server_port}/page.html"
+
+
+@pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
+def test_chromeless_loopback_url_page_opens(ctl, loopback_page):
+    sid = _new(ctl)
+    result = assert_ok(
+        ctl.request("session.overlay.open", sid, url=loopback_page, chromeless=True, javascript=True, persistent=True)
+    )
+    assert result["id"] == sid
+    node = _loaded(ctl, sid, "Loopback Page")
+    (page,) = node["htmlOverlays"]
+    assert_subset(
+        page,
+        {
+            "id": result["pageID"],
+            "url": loopback_page,
+            "chromeless": True,
+            "javascript": True,
+            "persistent": True,
+            "browse": False,
+        },
+    )
+    _closed(ctl, sid)
+
+
+def _recording(routes, seen):
+    """`_routes` that also records every path asked for in `seen`."""
+    site = _routes(routes)
+
+    class Recording(site):
+        def do_GET(self):
+            seen.append(self.path)
+            super().do_GET()
+
+    return Recording
+
+
+@pytest.fixture
+def framing_sites():
+    """A parent page on 127.0.0.1 framing one page of its own origin and one of a second site on 127.0.0.1; the
+    paths each site was asked for."""
+    other_seen, own_seen = [], []
+    other = b"<!doctype html><title>Other</title><body><p>other origin frame</p></body>"
+    with serve(_recording({"/other.html": (200, {}, other)}, other_seen)) as second:
+        frame = f"http://127.0.0.1:{second.server_port}/other.html"
+        parent = (
+            '<!doctype html><title>Parent</title><body><p>parent page</p><iframe src="/inner.html"></iframe>'
+            f'<iframe src="{frame}"></iframe></body>'
+        ).encode()
+        inner = b"<!doctype html><title>Inner</title><body><p>same origin frame</p></body>"
+        routes = {"/parent.html": (200, {}, parent), "/inner.html": (200, {}, inner)}
+        with serve(_recording(routes, own_seen)) as first:
+            yield f"http://127.0.0.1:{first.server_port}/parent.html", own_seen, other_seen
+
+
+@pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
+def test_chromeless_url_page_keeps_frames_on_its_origin(ctl, framing_sites):
+    parent, own_seen, other_seen = framing_sites
+    sid = _new(ctl)
+    assert_ok(ctl.request("session.overlay.open", sid, url=parent))
+    _loaded(ctl, sid, "Parent")
+    # a page's load ends after its frames' loads
+    assert "/other.html" in other_seen, "a page with a strip loads another origin's frame"
+    _closed(ctl, sid)
+    other_seen.clear()
+    own_seen.clear()
+
+    assert_ok(ctl.request("session.overlay.open", sid, url=parent, chromeless=True))
+    (page,) = _loaded(ctl, sid, "Parent")["htmlOverlays"]
+    assert page["chromeless"] is True
+    assert "/inner.html" in own_seen, "the same-origin frame loads"
+    assert other_seen == [], "a chromeless page never asks another origin for a frame"
+    _closed(ctl, sid)
+
+
+@pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
+def test_chromeless_url_page_refuses_a_cross_origin_redirect(ctl, redirecting_sites):
+    away, target = redirecting_sites
+    sid = _new(ctl)
+    result = assert_ok(ctl.request("session.overlay.open", sid, url=away, chromeless=True))
+
+    def failed(tree):
+        (page,) = find_session(tree, sid)["htmlOverlays"]
+        assert page["state"] == "failed", page
+        return True
+
+    failed.__qualname__ = "the redirect refused"
+    (page,) = find_session(ctl.wait_tree(failed), sid)["htmlOverlays"]
+    assert_subset(
+        page, {"id": result["pageID"], "url": away, "chromeless": True, "error": f"navigation blocked: {target}"}
+    )
+    _closed(ctl, sid)
+
+
+@pytest.fixture
+def self_redirecting_sites():
+    """A page on 127.0.0.1 whose script, once the test releases it, navigates to its own `/away`, which redirects to a
+    second site's root; the page, the target and the release."""
+    release = threading.Event()
+    second_body = b"<!doctype html><title>Second Site</title><body><p>second</p></body>"
+    start = (
+        b"<!doctype html><title>Start</title><body><p>start</p><script>"
+        b"addEventListener('load', () => fetch('/go').then(() => { location.href = '/away'; }));"
+        b"</script></body>"
+    )
+    with serve(_routes({"/": (200, {}, second_body)})) as second:
+        target = f"http://127.0.0.1:{second.server_port}/"
+        site = _routes({"/start.html": (200, {}, start), "/away": (302, {"Location": target}, b"")})
+
+        class Held(site):
+            def do_GET(self):
+                if self.path == "/go":
+                    release.wait(60)
+                    self.path = "/start.html"
+                super().do_GET()
+
+        try:
+            with serve(Held) as first:
+                yield f"http://127.0.0.1:{first.server_port}/start.html", target, release
+        finally:
+            release.set()
+
+
+@pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays")
+def test_chromeless_url_page_fails_its_own_load_redirected_off_its_origin(ctl, self_redirecting_sites):
+    start, target, release = self_redirecting_sites
+    sid = _new(ctl)
+    result = assert_ok(ctl.request("session.overlay.open", sid, url=start, chromeless=True, javascript=True))
+    _loaded(ctl, sid, "Start")
+    release.set()
+
+    def failed(tree):
+        (page,) = find_session(tree, sid)["htmlOverlays"]
+        assert page["state"] == "failed", page
+        return True
+
+    failed.__qualname__ = "the page's own redirect refused"
+    (page,) = find_session(ctl.wait_tree(failed), sid)["htmlOverlays"]
+    assert_subset(
+        page, {"id": result["pageID"], "url": start, "chromeless": True, "error": f"navigation blocked: {target}"}
+    )
+    _closed(ctl, sid)
+
+
 @pytest.mark.covers("session.overlay.result")
 @pytest.mark.parametrize(
     ("page", "error"),
@@ -571,6 +723,7 @@ def test_page_result_needs_a_known_page(ctl, page, error):
 
 FILE = "/agterm-conformance/site/page.html"
 URL = "http://127.0.0.1:9/page.html"
+LOOPBACK_HOST = "session.overlay.open: --chromeless with --url requires a loopback host: 127.0.0.1, ::1 or localhost"
 
 
 @pytest.mark.covers("session.overlay.open")
@@ -615,15 +768,13 @@ URL = "http://127.0.0.1:9/page.html"
         ),
         pytest.param(
             {"command": "true", "chromeless": True},
-            "session.overlay.open: --chromeless requires --html",
+            "session.overlay.open: --chromeless requires --html or a loopback --url",
             id="chromeless-program",
         ),
-        pytest.param(
-            {"url": URL, "chromeless": True}, "session.overlay.open: --chromeless requires --html", id="chromeless-url"
-        ),
+        pytest.param({"url": "http://example.com/", "chromeless": True}, LOOPBACK_HOST, id="chromeless-url"),
         pytest.param(
             {"url": URL, "chromeless": True, "browse": True},
-            "session.overlay.open: --chromeless requires --html",
+            "session.overlay.open: --chromeless cannot be combined with --browse",
             id="chromeless-browse-url",
         ),
         pytest.param(
@@ -676,6 +827,20 @@ URL = "http://127.0.0.1:9/page.html"
             {"command": "true", "pane": "left", "sizePercent": 50},
             "session.overlay.open: --pane is mutually exclusive with --size-percent",
             id="pane-size",
+        ),
+        pytest.param(
+            {"url": "http://127.0.0.2:9/page.html", "chromeless": True}, LOOPBACK_HOST, id="chromeless-other-loopback"
+        ),
+        pytest.param({"url": "http://127.1:9/page.html", "chromeless": True}, LOOPBACK_HOST, id="chromeless-short-ip"),
+        pytest.param(
+            {"url": URL, "chromeless": True, "navigation": True},
+            "session.overlay.open: --chromeless cannot be combined with --navigation",
+            id="chromeless-navigation-url",
+        ),
+        pytest.param(
+            {"url": "localhost:5173", "chromeless": True},
+            "session.overlay.open: --url must be an absolute http or https URL",
+            id="chromeless-malformed-url",
         ),
     ],
 )

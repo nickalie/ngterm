@@ -133,12 +133,29 @@ pub enum LoadOutcome {
 
 /// Keeps a page's main-frame load ending loaded or failed (upstream's `loadPending` and `committed`): `pending` is a
 /// load in flight, explicit or started by the page, `committed` a document the web process still shows, which an
-/// interrupted load leaves in place, and `explicit` that the app started the pending load.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// interrupted load leaves in place, `explicit` that the app started the pending load, and `provisional` where the
+/// pending load stands before it commits.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoadTracker {
     pending: bool,
     committed: bool,
     explicit: bool,
+    provisional: Provisional,
+}
+
+/// A pending load before its main response, and the frame navigation the policy refused meanwhile, read as the load's
+/// own (upstream's refused main-frame navigation while `loadPending`): a redirect a chromeless page keeps off its
+/// origin, which `WebKitGTK` names no frame for. With nothing shown yet that is the only frame that can ask; over a
+/// shown document the old document's frames can ask too, which `WebKitGTK` does not tell apart, so a clicked
+/// navigation is never recorded (upstream never names a user's navigation blocked) and the load's own main response
+/// ends the window, its navigation steps being behind it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum Provisional {
+    /// No load is in flight, or its main response arrived or it committed.
+    #[default]
+    None,
+    Open,
+    Refused(String),
 }
 
 impl LoadTracker {
@@ -146,12 +163,27 @@ impl LoadTracker {
     pub fn begin(&mut self) {
         self.pending = true;
         self.explicit = true;
+        self.provisional = Provisional::Open;
     }
 
     /// Whether the web process still shows a document (upstream's `committed`).
     #[must_use]
-    pub fn committed(self) -> bool {
+    pub fn committed(&self) -> bool {
         self.committed
+    }
+
+    /// The policy refused a frame navigation to `url` the user did not click (one `WebKitGTK` names no frame for):
+    /// kept while the pending load waits for its main response, and read as that load's own (see [`Provisional`]).
+    pub fn refused(&mut self, url: &str) {
+        if self.pending && self.provisional != Provisional::None {
+            self.provisional = Provisional::Refused(url.to_owned());
+        }
+    }
+
+    /// The main frame's response arrived: the pending load's navigation steps are behind it, so a refusal recorded
+    /// before was not its own and a later one is not either.
+    pub fn responded(&mut self) {
+        self.provisional = Provisional::None;
     }
 
     /// Settles `event`.
@@ -159,18 +191,25 @@ impl LoadTracker {
         match event {
             LoadEvent::Started => {
                 self.pending = true;
+                self.provisional = Provisional::Open;
                 LoadOutcome::Loading
             }
             LoadEvent::Committed => {
                 self.committed = true;
+                self.provisional = Provisional::None;
                 LoadOutcome::None
             }
             // `WebKitGTK` also finishes a load it reported failed: the failure stands
             LoadEvent::Finished if self.pending => self.settle(),
             LoadEvent::Finished | LoadEvent::Cancelled => LoadOutcome::None,
             LoadEvent::Interrupted(_) if !self.pending => LoadOutcome::None,
-            LoadEvent::Interrupted(message) if !self.committed => self.fail(message.clone()),
-            LoadEvent::Interrupted(_) => self.settle(),
+            // a refusal of the load's own navigation fails it, as upstream does whoever started the load and whatever
+            // is shown; any other interruption fails only a load with nothing shown, the shown document staying
+            LoadEvent::Interrupted(message) => match std::mem::take(&mut self.provisional) {
+                Provisional::Refused(url) => self.fail(format!("navigation blocked: {url}")),
+                _ if !self.committed => self.fail(message.clone()),
+                _ => self.settle(),
+            },
             LoadEvent::Failed(message) => self.fail(message.clone()),
             LoadEvent::Terminated => {
                 self.committed = false;
@@ -180,8 +219,9 @@ impl LoadTracker {
     }
 
     /// The policy refused the main frame's response for `url`. `WebKitGTK` asks once the load started, where `WebKit` on
-    /// macOS refuses a page's own navigation before it starts and the shown document stays, so a load the app started,
-    /// or one with nothing shown, fails here; a page's own load over a shown document settles.
+    /// macOS refuses a page's own direct navigation before it starts and the shown document stays, so a load the app
+    /// started, or one with nothing shown, fails here; a page's own load over a shown document settles. A refused
+    /// navigation step (a redirect) fails through [`Self::refused`] instead.
     pub fn blocked(&mut self, url: &str) -> LoadOutcome {
         if !self.pending {
             return LoadOutcome::None;
@@ -194,15 +234,19 @@ impl LoadTracker {
 
     /// A failure outside `WebKit`'s events (a store or a file that cannot be read).
     pub fn fail(&mut self, message: String) -> LoadOutcome {
-        self.pending = false;
-        self.explicit = false;
+        self.end();
         LoadOutcome::Failed(message)
     }
 
     fn settle(&mut self) -> LoadOutcome {
+        self.end();
+        LoadOutcome::Loaded
+    }
+
+    fn end(&mut self) {
         self.pending = false;
         self.explicit = false;
-        LoadOutcome::Loaded
+        self.provisional = Provisional::None;
     }
 }
 
@@ -624,6 +668,74 @@ mod tests {
     }
 
     #[test]
+    fn a_navigation_refused_before_the_load_commits_names_the_interruption() {
+        let interrupted = LoadEvent::Interrupted("Frame load was interrupted".to_owned());
+        let blocked = LoadOutcome::Failed("navigation blocked: http://127.0.0.1:2/".to_owned());
+        // a chromeless page's first load redirected off its origin
+        let mut first = LoadTracker::default();
+        first.begin();
+        first.handle(&LoadEvent::Started);
+        first.refused("http://127.0.0.1:2/");
+        assert_eq!(first.handle(&interrupted), blocked);
+        // an app reload over a shown document fails the same way
+        let mut reload = LoadTracker::default();
+        reload.handle(&LoadEvent::Committed);
+        reload.handle(&LoadEvent::Finished);
+        reload.begin();
+        reload.refused("http://127.0.0.1:2/");
+        assert_eq!(reload.handle(&interrupted), blocked);
+        // after the load commits a refusal is a subframe's: an interruption keeps its own name
+        let mut framed = LoadTracker::default();
+        framed.begin();
+        framed.handle(&LoadEvent::Committed);
+        framed.refused("http://127.0.0.1:2/frame.html");
+        assert_eq!(framed.handle(&LoadEvent::Finished), LoadOutcome::Loaded);
+        let mut later = LoadTracker::default();
+        later.begin();
+        later.handle(&LoadEvent::Committed);
+        later.refused("http://127.0.0.1:2/frame.html");
+        later.handle(&LoadEvent::Started);
+        assert_eq!(
+            later.handle(&interrupted),
+            LoadOutcome::Loaded,
+            "the shown document stays"
+        );
+        // a page's own load over a shown document (a script's same-origin navigation) redirected off its origin
+        let mut own = LoadTracker::default();
+        own.begin();
+        own.handle(&LoadEvent::Started);
+        own.handle(&LoadEvent::Committed);
+        assert_eq!(own.handle(&LoadEvent::Finished), LoadOutcome::Loaded);
+        own.handle(&LoadEvent::Started);
+        own.refused("http://127.0.0.1:2/");
+        assert_eq!(own.handle(&interrupted), blocked);
+        // the load's main response ends the window: an earlier refusal was the old document's, a later one too
+        for refused_first in [true, false] {
+            let mut responded = LoadTracker::default();
+            responded.handle(&LoadEvent::Committed);
+            responded.begin();
+            if refused_first {
+                responded.refused("http://127.0.0.1:2/frame.html");
+            }
+            responded.responded();
+            responded.refused("http://127.0.0.1:2/frame.html");
+            assert_eq!(
+                responded.handle(&interrupted),
+                LoadOutcome::Loaded,
+                "an unshowable response keeps the shown document"
+            );
+        }
+        // nothing pending records nothing
+        let mut idle = LoadTracker::default();
+        idle.refused("http://127.0.0.1:2/");
+        idle.handle(&LoadEvent::Started);
+        assert_eq!(
+            idle.handle(&interrupted),
+            LoadOutcome::Failed("Frame load was interrupted".to_owned())
+        );
+    }
+
+    #[test]
     fn a_blocked_response_fails_an_app_load_or_one_with_nothing_shown() {
         let mut explicit = LoadTracker::default();
         explicit.handle(&LoadEvent::Committed);
@@ -754,6 +866,15 @@ mod tests {
             ..HtmlPageFlags::default()
         };
         assert_eq!(strip_items(&file_page(None, chromeless)), None);
+        // a chromeless loopback URL page (#750) has no strip either
+        let loopback = HtmlOverlay::new(
+            HtmlSource::Url(url("http://127.0.0.1:8792/")),
+            HtmlPageFlags {
+                chromeless: true,
+                ..HtmlPageFlags::default()
+            },
+        );
+        assert_eq!(strip_items(&loopback), None);
     }
 
     #[test]

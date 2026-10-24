@@ -1209,23 +1209,27 @@ macOS and Windows page hosts do not exist yet and will reuse it)
   (two loopback servers; a cross-origin iframe loads without `--chromeless` and is not requested with it),
   `tests/cli/test_cli_output.py::test_chromeless_url_refusals` (covers `cli:session overlay open`)
 
-- [ ] `is_loopback(text)`: true only for a well-formed web URL whose host, as written, lowercased and with IPv6
+- [x] `is_loopback(text)`: true only for a well-formed web URL whose host, as written, lowercased and with IPv6
       brackets stripped, is exactly 127.0.0.1, ::1 or localhost. Compare the raw host text, never `Url::host`
       (WHATWG normalizes 127.1, 2130706433, 0x7f.0.0.1 to 127.0.0.1, which Foundation keeps as written)
-- [ ] URL branch order: command+url, wait, cwd, then chromeless+navigation, chromeless+browse, the invalid URL, then
+- [x] URL branch order: command+url, wait, cwd, then chromeless+navigation, chromeless+browse, the invalid URL, then
       the non-loopback host (the strings above)
-- [ ] navigation policy: same origin or browse → Allow; a subframe → Allow only when not chromeless; otherwise
+- [x] navigation policy: same origin or browse → Allow; a subframe → Allow only when not chromeless; otherwise
       OpenExternal if clicked, else Cancel (about: still Allow first)
-- [ ] ngtermctl: "--chromeless requires --html or a loopback --url" (with a COMMAND), "--chromeless cannot be
+- [x] ngtermctl: "--chromeless requires --html or a loopback --url" (with a COMMAND), "--chromeless cannot be
       combined with --navigation", "--chromeless cannot be combined with --browse", the loopback-host error only for
       a well-formed URL (a malformed one goes to the server); help as upstream with ngterm names
-- [ ] write tests: the `is_loopback` table (true: 127.0.0.1, https 127.0.0.1, [::1], localhost, LOCALHOST; false:
+- [x] write tests: the `is_loopback` table (true: 127.0.0.1, https 127.0.0.1, [::1], localhost, LOCALHOST; false:
       127.0.0.2, 127.1, 2130706433, 0.0.0.0, [::ffff:127.0.0.1], localhost., app.localhost, localhost.example.com,
       example.com, ftp://127.0.0.1, "localhost:5173", ""); the chromeless policy table for a page at
       http://127.0.0.1:8792/; the dispatcher rows; the ctl argv lists
-- [ ] write tests: the conformance changes above
-- [ ] manual check (user): green on reference-macos
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance changes above
+- [x] ➕ a chromeless page refuses its own main frame's cross-origin redirect at the navigation step (WebKitGTK names
+      no frame there), so `LoadTracker` keeps a frame navigation refused before the pending load commits and names the
+      interruption `navigation blocked: <url>` as upstream does; test `test_overlay.py::test_chromeless_url_page_refuses_a_cross_origin_redirect`
+      and `policy.rs` `a_navigation_refused_before_the_load_commits_names_the_interruption`
+- [x] manual check (user): green on reference-macos (skipped - not automatable here: reference-macos runs only in CI on macOS; left for the user)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user; a targeted `run-linux.sh -- -k chromeless` ran 14 pass, ratchet holds; the 10 newly green ids are added in Task 35)
 
 ### Task 20: Hide and show overlays: wire, core model, read-back, CLI, keymap, palette and settings (#790)
 

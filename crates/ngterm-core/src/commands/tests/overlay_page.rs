@@ -727,6 +727,44 @@ fn a_url_open_routes_its_navigation_scope() {
     }
 }
 
+/// Upstream's `urlOpenRoutesAChromelessLoopbackPage`: a URL page on an exact loopback host drops its strip and keeps
+/// its other flags.
+#[test]
+fn a_url_open_routes_a_chromeless_loopback_page() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let id = fixture.sessions[0];
+    for text in [
+        "http://127.0.0.1:8792/",
+        "http://[::1]:8792/",
+        "http://localhost:5173/app",
+    ] {
+        let opened = overlay(&mut fixture, SessionCmd::OverlayOpen, id, |a| {
+            a.url = Some(text.to_owned());
+            a.javascript = Some(true);
+            a.chromeless = Some(true);
+            a.persistent = Some(true);
+        });
+        assert_eq!(answered_id(&opened), Some(id), "{text}");
+        let page = slot_page(&fixture, id).unwrap();
+        assert_eq!(
+            page.source,
+            crate::html::HtmlSource::Url(url::Url::parse(text).unwrap())
+        );
+        assert_eq!(
+            page.flags,
+            crate::html::HtmlPageFlags {
+                javascript: true,
+                chromeless: true,
+                persistent: true,
+                ..crate::html::HtmlPageFlags::default()
+            },
+            "{text}"
+        );
+        assert_eq!(node(&mut fixture, id)["htmlOverlays"][0]["chromeless"], json!(true));
+        assert!(overlay(&mut fixture, SessionCmd::OverlayClose, id, |_| {}).ok);
+    }
+}
+
 /// Upstream's `aBrowsingPageCoverNamesTheSiteShown`.
 #[test]
 fn a_browsing_page_cover_names_the_site_shown() {

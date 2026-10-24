@@ -9,6 +9,7 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
+use ngterm_core::html;
 use ngterm_core::model::is_valid_color_hex;
 use ngterm_core::paths::Env;
 use ngterm_proto::command::SessionCmd;
@@ -139,7 +140,8 @@ pub struct Open {
 
     #[arg(
         long,
-        help = "With --html, show the page without ngterm's strip naming it; ⌘W or session overlay close closes it."
+        help = "With --html, or --url on 127.0.0.1, ::1 or localhost, show the page without ngterm's strip naming \
+                it; ⌘W or session overlay close closes it."
     )]
     chromeless: bool,
 
@@ -195,6 +197,12 @@ pub struct Open {
     options: ClientOptions,
 }
 
+/// A well-formed `--url` whose host is not one of the exact loopback hosts (upstream checks the host only for a URL
+/// `HtmlSource.webURL` accepts, leaving a malformed one for the server to name).
+fn names_another_host(url: &str) -> bool {
+    html::web_url(url).is_some() && !html::is_loopback(url)
+}
+
 impl Open {
     /// What the overlay shows: exactly one of COMMAND, `--html` and `--url`, and the options that belong to it.
     fn validate_content(&self) -> Result<(), &'static str> {
@@ -218,10 +226,14 @@ impl Open {
 
     /// The options of one kind of page only.
     fn validate_page_options(&self) -> Result<(), &'static str> {
-        let refusal = if self.chromeless && self.html.is_none() {
-            "--chromeless requires --html"
+        let refusal = if self.chromeless && self.command.is_some() {
+            "--chromeless requires --html or a loopback --url"
         } else if self.chromeless && self.navigation {
             "--chromeless cannot be combined with --navigation"
+        } else if self.chromeless && self.browse {
+            "--chromeless cannot be combined with --browse"
+        } else if self.chromeless && self.url.as_deref().is_some_and(names_another_host) {
+            "--chromeless with --url requires a loopback host: 127.0.0.1, ::1 or localhost"
         } else if self.persistent && self.url.is_none() {
             "--persistent requires --url"
         } else if self.browse && self.url.is_none() {
@@ -898,6 +910,19 @@ mod tests {
             json!({"url": "http://localhost:5173/", "browse": true, "javascript": true, "navigation": true,
                    "persistent": true})
         );
+        // upstream's urlOpenSendsChromelessForALoopbackHost
+        for url in ["http://127.0.0.1:8792/", "http://[::1]:8792/", "http://localhost:5173/"] {
+            assert_eq!(
+                args(&["open", "--url", url, "--chromeless", "--js", "--persistent"]),
+                json!({"url": url, "chromeless": true, "javascript": true, "persistent": true}),
+                "{url}"
+            );
+        }
+        // upstream's aMalformedChromelessUrlIsLeftForTheServerToName
+        assert_eq!(
+            args(&["open", "--url", "localhost:5173", "--chromeless"]),
+            json!({"url": "localhost:5173", "chromeless": true})
+        );
         // a program's --cwd goes as typed
         assert_eq!(
             args(&["open", "revdiff", "--cwd", "repo"]),
@@ -912,7 +937,7 @@ mod tests {
 
     #[test]
     fn open_refuses_a_missing_or_conflicting_content() {
-        let cases: [&[&str]; 19] = [
+        let cases: [&[&str]; 22] = [
             &["open"],
             &["open", "revdiff", "--html", "/tmp/r.html"],
             &["open", "--html", "/tmp/r.html", "--wait"],
@@ -920,7 +945,16 @@ mod tests {
             &["open", "revdiff", "--navigation"],
             &["open", "revdiff", "--js"],
             &["open", "revdiff", "--chromeless"],
-            &["open", "--url", "http://localhost:5173/", "--chromeless"],
+            &["open", "--url", "http://example.com/", "--chromeless"],
+            &["open", "--url", "http://127.0.0.2:8792/", "--chromeless"],
+            &["open", "--url", "http://localhost:5173/", "--chromeless", "--browse"],
+            &[
+                "open",
+                "--url",
+                "http://localhost:5173/",
+                "--chromeless",
+                "--navigation",
+            ],
             &["open", "--html", "/tmp/r.html", "--chromeless", "--navigation"],
             &["open", "revdiff", "--persistent"],
             &["open", "--html", "/tmp/r.html", "--persistent"],
@@ -940,7 +974,37 @@ mod tests {
 
     #[test]
     fn open_refusals_name_what_is_wrong() {
-        let cases: [(&[&str], &str); 10] = [
+        let cases: [(&[&str], &str); 16] = [
+            (
+                &["open", "revdiff", "--chromeless"],
+                "--chromeless requires --html or a loopback --url",
+            ),
+            (
+                &[
+                    "open",
+                    "--url",
+                    "http://localhost:5173/",
+                    "--chromeless",
+                    "--navigation",
+                ],
+                "--chromeless cannot be combined with --navigation",
+            ),
+            (
+                &["open", "--url", "http://localhost:5173/", "--chromeless", "--browse"],
+                "--chromeless cannot be combined with --browse",
+            ),
+            (
+                &["open", "--url", "http://example.com/", "--chromeless"],
+                "--chromeless with --url requires a loopback host: 127.0.0.1, ::1 or localhost",
+            ),
+            (
+                &["open", "--url", "http://127.0.0.2:8792/", "--chromeless"],
+                "--chromeless with --url requires a loopback host: 127.0.0.1, ::1 or localhost",
+            ),
+            (
+                &["open", "--url", "http://127.1/", "--chromeless"],
+                "--chromeless with --url requires a loopback host: 127.0.0.1, ::1 or localhost",
+            ),
             (
                 &["open", "cmd", "--block", "--wait"],
                 "--block cannot be combined with --wait",

@@ -1,6 +1,7 @@
 //! Where a page may go (upstream's `HtmlOrigin`, `HtmlNavigationAction`, `HtmlNavigationPolicy` in
-//! `HtmlOverlay.swift`): a file page stays inside its grant, a URL page's main frame on its origin, a browsing page's
-//! main frame on any HTTP(S) origin; anything else a user clicked is offered to the web browser, the rest is cancelled.
+//! `HtmlOverlay.swift`): a file page stays inside its grant, a URL page's main frame on its origin (a chromeless one's
+//! subframes too), a browsing page's main frame on any HTTP(S) origin; anything else a user clicked is offered to the
+//! web browser, the rest is cancelled.
 
 use url::Url;
 
@@ -83,7 +84,8 @@ pub enum HtmlNavigationDecision {
 }
 
 /// Decides `action` for `overlay` (upstream's `HtmlNavigationPolicy.decide`): file navigation bounded by its grant,
-/// URL main-frame navigation by its origin unless the page browses.
+/// URL main-frame navigation by its origin unless the page browses, and a chromeless URL page's subframes by its origin
+/// too.
 #[must_use]
 pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavigationDecision {
     use HtmlNavigationDecision::{Allow, Cancel, OpenExternal};
@@ -114,12 +116,14 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
             if !web {
                 return Cancel;
             }
-            let same_origin = HtmlOrigin::new(&action.url) == HtmlOrigin::new(original);
-            if overlay.flags.browse || action.target == HtmlNavigationTarget::Subframe || same_origin {
-                Allow
-            } else {
-                offer
+            if HtmlOrigin::new(&action.url) == HtmlOrigin::new(original) || overlay.flags.browse {
+                return Allow;
             }
+            // a chromeless page keeps its frames on its origin too: nothing names another origin's content in it
+            if action.target == HtmlNavigationTarget::Subframe && !overlay.flags.chromeless {
+                return Allow;
+            }
+            offer
         }
     }
 }
@@ -251,6 +255,32 @@ mod tests {
             ("mailto:a@example.com", MainFrame, true, Cancel),
         ] {
             let decided = decide(&action(url, target, user), &url_page(false));
+            assert_eq!(decided, decision, "{url} {target:?} {user}");
+        }
+    }
+
+    /// Upstream's `HtmlOverlayTests.chromelessPagePolicyKeepsFramesOnItsOrigin`: a chromeless loopback page keeps
+    /// its subframes on its origin.
+    #[test]
+    fn a_chromeless_url_page_keeps_frames_on_its_origin() {
+        let page = HtmlOverlay::new(
+            HtmlSource::Url(Url::parse("http://127.0.0.1:8792/").unwrap()),
+            HtmlPageFlags {
+                chromeless: true,
+                ..HtmlPageFlags::default()
+            },
+        );
+        for (url, target, user, decision) in [
+            ("http://127.0.0.1:8792/frame.html", Subframe, false, Allow),
+            ("http://127.0.0.1:8792/next", MainFrame, false, Allow),
+            ("https://example.com/embed", Subframe, false, Cancel),
+            ("https://example.com/embed", Subframe, true, OpenExternal),
+            ("http://localhost:8792/frame.html", Subframe, false, Cancel),
+            ("http://127.0.0.1:8793/frame.html", Subframe, false, Cancel),
+            ("https://example.com/", MainFrame, false, Cancel),
+            ("about:srcdoc", Subframe, false, Allow),
+        ] {
+            let decided = decide(&action(url, target, user), &page);
             assert_eq!(decided, decision, "{url} {target:?} {user}");
         }
     }

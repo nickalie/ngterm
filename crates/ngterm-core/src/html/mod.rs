@@ -89,6 +89,34 @@ pub fn web_url(text: &str) -> Option<Url> {
     (web && url.host_str().is_some_and(|host| !host.is_empty())).then_some(url)
 }
 
+/// Whether `--url` names this machine by one of three exact hosts: 127.0.0.1, `::1` or localhost (upstream's
+/// `HtmlSource.isLoopback`). Ranges and aliases never match, so the web view cannot read an accepted host as a
+/// different one. The host is compared as written, lowercased and with IPv6 brackets stripped: the URL standard
+/// [`Url`] follows rewrites `127.1`, `2130706433` or `0x7f.0.0.1` to `127.0.0.1`, which Foundation, upstream's
+/// parser, keeps as written.
+#[must_use]
+pub fn is_loopback(text: &str) -> bool {
+    const HOSTS: [&str; 3] = ["127.0.0.1", "::1", "localhost"];
+    // the host the web view will load must be one too: the URL standard reads `\` as `/`, so a raw `a\@localhost`
+    // names `localhost` as written but loads `a`
+    let Some(parsed) = web_url(text).as_ref().and_then(HtmlOrigin::new) else {
+        return false;
+    };
+    if !HOSTS.contains(&parsed.host.as_str()) {
+        return false;
+    }
+    let Some((_, rest)) = text.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = match host_port.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']').map_or(bracketed, |(host, _)| host),
+        None => host_port.split_once(':').map_or(host_port, |(host, _)| host),
+    };
+    HOSTS.contains(&host.to_ascii_lowercase().as_str())
+}
+
 /// Where `session.overlay.navigate` takes a page (upstream's `HtmlNavigation`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HtmlNavigation {
@@ -240,7 +268,7 @@ pub struct HtmlPageFlags {
     pub navigation: bool,
     /// The page runs its own scripts; ngterm's theme script runs either way.
     pub javascript: bool,
-    /// No identity strip, file pages only: the strip is what names a URL page's origin.
+    /// No identity strip: a file page, or a URL page on a loopback host whose frames stay on its origin.
     pub chromeless: bool,
     /// A URL page on the saved browser store; every other page gets an in-memory one of its own.
     pub persistent: bool,
@@ -503,6 +531,41 @@ mod tests {
             (" http://example.com", false),
         ] {
             assert_eq!(web_url(text).is_some(), valid, "{text}");
+        }
+    }
+
+    /// Upstream's `HtmlOverlayTests.isLoopbackMatchesOnlyTheExactLoopbackHosts`, plus spellings the URL standard
+    /// would rewrite to 127.0.0.1 and a user-info part.
+    #[test]
+    fn is_loopback_matches_only_the_exact_loopback_hosts() {
+        for (text, loopback) in [
+            ("http://127.0.0.1:8792/", true),
+            ("https://127.0.0.1/app", true),
+            ("http://[::1]:8792/", true),
+            ("http://localhost:5173/", true),
+            ("http://LOCALHOST/", true),
+            ("http://127.0.0.2/", false),
+            ("http://127.1/", false),
+            ("http://2130706433/", false),
+            ("http://0.0.0.0:8792/", false),
+            ("http://[::ffff:127.0.0.1]/", false),
+            ("http://localhost./", false),
+            ("http://app.localhost/", false),
+            ("http://localhost.example.com/", false),
+            ("http://example.com/", false),
+            ("ftp://127.0.0.1/", false),
+            ("localhost:5173", false),
+            ("", false),
+            // beyond upstream's table: what WHATWG normalizes stays refused, the host after user info counts
+            ("http://0x7f.0.0.1/", false),
+            ("http://[0:0:0:0:0:0:0:1]/", false),
+            ("http://127.0.0.1@example.com/", false),
+            ("http://user@localhost:5173/", true),
+            ("http://localhost?x=1", true),
+            ("http://localhost#top", true),
+            ("http://example.com\\@localhost/", false),
+        ] {
+            assert_eq!(is_loopback(text), loopback, "{text}");
         }
     }
 

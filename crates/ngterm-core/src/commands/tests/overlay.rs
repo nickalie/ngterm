@@ -296,14 +296,6 @@ fn open_refusals_name_the_flag_combination() {
             "session.overlay.open: --js requires --html or --url",
         ),
         (
-            json!({"url": url, "chromeless": true}),
-            "session.overlay.open: --chromeless requires --html",
-        ),
-        (
-            json!({"url": url, "chromeless": true, "browse": true}),
-            "session.overlay.open: --chromeless requires --html",
-        ),
-        (
             json!({"command": "true", "browse": true}),
             "session.overlay.open: --browse requires --url",
         ),
@@ -326,6 +318,46 @@ fn open_refusals_name_the_flag_combination() {
         (
             json!({"command": "true", "pane": "left", "cwd": "/tmp\u{0}x"}),
             "session.overlay.open: --cwd must not contain a NUL byte",
+        ),
+    ]);
+}
+
+/// A chromeless URL page: an exact loopback host, no `--navigation`, no `--browse` (#750).
+#[test]
+fn open_refusals_check_a_chromeless_url_page() {
+    let url = "http://127.0.0.1:9/page.html";
+    assert_open_refusals(&[
+        (
+            json!({"command": "true", "chromeless": true}),
+            "session.overlay.open: --chromeless requires --html or a loopback --url",
+        ),
+        (
+            json!({"url": "http://example.com/", "chromeless": true}),
+            "session.overlay.open: --chromeless with --url requires a loopback host: 127.0.0.1, ::1 or localhost",
+        ),
+        (
+            json!({"url": "http://127.0.0.2:8792/", "chromeless": true}),
+            "session.overlay.open: --chromeless with --url requires a loopback host: 127.0.0.1, ::1 or localhost",
+        ),
+        (
+            json!({"url": "http://127.1/", "chromeless": true}),
+            "session.overlay.open: --chromeless with --url requires a loopback host: 127.0.0.1, ::1 or localhost",
+        ),
+        (
+            json!({"url": url, "chromeless": true, "navigation": true}),
+            "session.overlay.open: --chromeless cannot be combined with --navigation",
+        ),
+        (
+            json!({"url": url, "chromeless": true, "browse": true}),
+            "session.overlay.open: --chromeless cannot be combined with --browse",
+        ),
+        (
+            json!({"url": "localhost:5173", "chromeless": true}),
+            "session.overlay.open: --url must be an absolute http or https URL",
+        ),
+        (
+            json!({"url": "http://example.com/", "chromeless": true, "cwd": "/tmp"}),
+            "session.overlay.open: --cwd cannot be combined with --url",
         ),
     ]);
 }

@@ -667,6 +667,34 @@ def test_overlay_page_dismissed_exits_2(cli, ctl):
     assert_ok(ctl.request("session.close", sid))
 
 
+@pytest.mark.covers("cli:session overlay open")
+def test_chromeless_url_refusals(cli, ctl):
+    sid = _new(ctl)
+    loopback = "--chromeless with --url requires a loopback host: 127.0.0.1, ::1 or localhost"
+    for args, message in [
+        (["true", "--chromeless"], "--chromeless requires --html or a loopback --url"),
+        (
+            ["--url", "http://localhost:5173/", "--chromeless", "--navigation"],
+            "--chromeless cannot be combined with --navigation",
+        ),
+        (
+            ["--url", "http://localhost:5173/", "--chromeless", "--browse"],
+            "--chromeless cannot be combined with --browse",
+        ),
+        (["--url", "http://example.com/", "--chromeless"], loopback),
+        (["--url", "http://127.0.0.2:8792/", "--chromeless"], loopback),
+        (["--url", "http://127.1/", "--chromeless"], loopback),
+    ]:
+        _usage(cli("session", "overlay", "open", *args, "--target", sid), message)
+    # a malformed URL is left for the server to name
+    _refused(
+        cli("session", "overlay", "open", "--url", "localhost:5173", "--chromeless", "--target", sid),
+        "session.overlay.open: --url must be an absolute http or https URL",
+    )
+    assert _node(ctl, sid)["overlay"] is False
+    assert_ok(ctl.request("session.close", sid))
+
+
 @pytest.mark.covers("cli:session hud", "cli:session hud update", "cli:session hud close")
 def test_hud(cli, ctl):
     sid = _new(ctl)

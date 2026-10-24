@@ -1,7 +1,8 @@
-"""An HTTP server on 127.0.0.1 for pages a test serves itself."""
+"""An HTTP server on 127.0.0.1 (or ::1) for pages a test serves itself."""
 
 from __future__ import annotations
 
+import socket
 import socketserver
 import threading
 from collections.abc import Iterator
@@ -18,9 +19,14 @@ class LoopbackServer(ThreadingHTTPServer):
         self.server_name, self.server_port = str(host), int(port)
 
 
+class LoopbackServer6(LoopbackServer):
+    address_family = socket.AF_INET6
+
+
 @contextmanager
-def serve(handler: type[BaseHTTPRequestHandler]) -> Iterator[LoopbackServer]:
-    server = LoopbackServer(("127.0.0.1", 0), handler)
+def serve(handler: type[BaseHTTPRequestHandler], host: str = "127.0.0.1") -> Iterator[LoopbackServer]:
+    """Serves `handler` on a free port of `host`, 127.0.0.1 or ::1."""
+    server = (LoopbackServer6 if ":" in host else LoopbackServer)((host, 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

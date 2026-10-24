@@ -59,8 +59,12 @@ const CWD_WITH_URL: &str = "session.overlay.open: --cwd cannot be combined with 
 const INVALID_URL: &str = "session.overlay.open: --url must be an absolute http or https URL";
 const NAVIGATION_WITHOUT_PAGE: &str = "session.overlay.open: --navigation requires --html or --url";
 const JAVASCRIPT_WITHOUT_PAGE: &str = "session.overlay.open: --js requires --html or --url";
-const CHROMELESS_REQUIRES_FILE: &str = "session.overlay.open: --chromeless requires --html";
+const CHROMELESS_REQUIRES_FILE: &str = "session.overlay.open: --chromeless requires --html or a loopback --url";
+/// The strip is what names a URL page's origin, so only this machine's may drop it.
+const CHROMELESS_REQUIRES_LOOPBACK: &str =
+    "session.overlay.open: --chromeless with --url requires a loopback host: 127.0.0.1, ::1 or localhost";
 const CHROMELESS_WITH_NAVIGATION: &str = "session.overlay.open: --chromeless cannot be combined with --navigation";
+const CHROMELESS_WITH_BROWSE: &str = "session.overlay.open: --chromeless cannot be combined with --browse";
 const PERSISTENT_REQUIRES_URL: &str = "session.overlay.open: --persistent requires --url";
 const BROWSE_REQUIRES_URL: &str = "session.overlay.open: --browse requires --url";
 const NAVIGATION: &str = "session.overlay.navigate requires back, forward, browser or finder";
@@ -190,25 +194,38 @@ fn overlay_content(command: &str, args: &Args, home: &str) -> Result<OverlayCont
                 grant_root: args.cwd.clone(),
             }))
         }
-        (None, Some(url)) => {
-            if !command.is_empty() {
-                return reject(COMMAND_AND_URL);
-            }
-            if set(args.wait) {
-                return reject(WAIT_WITH_URL);
-            }
-            if args.cwd.is_some() {
-                return reject(CWD_WITH_URL);
-            }
-            if set(args.chromeless) {
-                return reject(CHROMELESS_REQUIRES_FILE);
-            }
-            let Some(url) = html::web_url(url) else {
-                return reject(INVALID_URL);
-            };
-            Ok(OverlayContent::Page(HtmlSource::Url(url)))
-        }
+        (None, Some(url)) => url_content(command, url, args),
     }
+}
+
+/// The URL branch of [`overlay_content`]: a chromeless URL page only on a loopback host, never with `--navigation`
+/// or `--browse` (upstream's `overlayContent` `.url` arm).
+fn url_content(command: &str, text: &str, args: &Args) -> Result<OverlayContent, ControlError> {
+    let reject = |message: &str| Err(ControlError::rejected(message));
+    let set = |flag: Option<bool>| flag == Some(true);
+    if !command.is_empty() {
+        return reject(COMMAND_AND_URL);
+    }
+    if set(args.wait) {
+        return reject(WAIT_WITH_URL);
+    }
+    if args.cwd.is_some() {
+        return reject(CWD_WITH_URL);
+    }
+    let chromeless = set(args.chromeless);
+    if chromeless && set(args.navigation) {
+        return reject(CHROMELESS_WITH_NAVIGATION);
+    }
+    if chromeless && set(args.browse) {
+        return reject(CHROMELESS_WITH_BROWSE);
+    }
+    let Some(url) = html::web_url(text) else {
+        return reject(INVALID_URL);
+    };
+    if chromeless && !html::is_loopback(text) {
+        return reject(CHROMELESS_REQUIRES_LOOPBACK);
+    }
+    Ok(OverlayContent::Page(HtmlSource::Url(url)))
 }
 
 // MARK: - open, close, resize
