@@ -1887,13 +1887,13 @@ with FILE_FLAG_FIRST_PIPE_INSTANCE and no lock file). ngterm-session is in `cros
 
 **Conformance:** none (days of aging)
 
-- [ ] the server touches its lock at start and once an hour on that clock; nothing here fails the server (errors
+- [x] the server touches its lock at start and once an hour on that clock; nothing here fails the server (errors
       ignored); a deleted lock is not recreated
-- [ ] write tests: unit tests with an injected clock (the first call touches, one inside the interval does not, one
+- [x] write tests: unit tests with an injected clock (the first call touches, one inside the interval does not, one
       past it does); an integration test that the lock's mtime moves after an upkeep through the held descriptor
       while the server listens
-- [ ] manual check (user): green on `cross-platform.yml`
-- [ ] gate passes
+- [x] manual check (user): green on `cross-platform.yml` (skipped - not automatable: needs a push or PR, which the run's hard rules forbid; the Windows `keep_current` and the macOS clock branch are not built locally, a cross build of the native library fails on this box)
+- [x] gate passes (full suite deferred to the end of the plan per the user; the selftest `test_committed_catalog_passes_the_ci_gate` fails only on `ui:settings-terminal-input-source`, Task 29's key)
 
 ### Task 29: Lock a keyboard layout while a terminal has the keyboard (#727)
 

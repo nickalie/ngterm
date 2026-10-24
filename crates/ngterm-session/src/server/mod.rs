@@ -10,9 +10,10 @@
 //! starts with the handshake, and drops what it cannot serve. Changed: threads only, with the stop decided by a
 //! coordinator waiting on [`lifecycle::Lifecycle`]'s deadline instead of herdr's tokio loop and stop flag; the
 //! handshake is ngterm's stable control layer ([`crate::protocol`]); the server leaves its launcher's working
-//! directory ([`working_directory`]); and it reports whether it runs detached from its launcher
+//! directory ([`working_directory`]); it reports whether it runs detached from its launcher
 //! ([`CAPABILITY_DETACHED`], herdr's `detached_server_daemon` status) so the client that started it can check that
-//! the server outlives it.
+//! the server outlives it; and the coordinator also keeps the namespace's lock file current, at the start and hourly
+//! ([`upkeep`], ngterm's addition after upstream agterm's #733).
 //!
 //! # Panes
 //!
@@ -54,6 +55,7 @@ pub mod recovery;
 pub mod replies;
 pub mod snapshot;
 pub mod spawn;
+pub mod upkeep;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -76,6 +78,7 @@ use clients::ResyncBudget;
 use handoff::Support;
 use lifecycle::{Graces, Lifecycle, StopReason};
 use pane::{Limits, Panes};
+use upkeep::{UPKEEP_INTERVAL, UPKEEP_POLL, Upkeep};
 
 /// The build id a server without a staged id reports in its welcome ([`crate::build_id::UNSTAGED`]).
 pub const BUILD_ID: &str = crate::build_id::UNSTAGED;
@@ -449,23 +452,55 @@ impl Shared {
         lock(&self.listener).upgrade()
     }
 
-    /// Waits until the lifecycle decides to stop.
+    /// Waits until the lifecycle decides to stop, keeping the endpoint's files current meanwhile ([`upkeep`]): at once,
+    /// then whenever the next upkeep falls due, which the wait also wakes for.
     fn wait_for_stop(&self) -> StopReason {
+        self.wait_for_stop_with(
+            Upkeep::new(UPKEEP_INTERVAL, UPKEEP_POLL),
+            upkeep::time_including_sleep,
+            || self.keep_endpoint_current(),
+        )
+    }
+
+    /// [`Shared::wait_for_stop`] on `upkeep`'s schedule, read on `clock`, `keep_current` running each upkeep. The wait
+    /// runs on a clock that stops while the machine sleeps, so it lasts no longer than [`Upkeep::wait`]'s slice before
+    /// `clock` is read again, and an upkeep a sleep made due runs soon after the machine wakes.
+    fn wait_for_stop_with(
+        &self,
+        mut upkeep: Upkeep,
+        clock: impl Fn() -> Duration,
+        mut keep_current: impl FnMut(),
+    ) -> StopReason {
         let mut lifecycle = self.lock();
         loop {
             let now = Instant::now();
             if let Some(reason) = lifecycle.poll(now) {
                 return reason;
             }
-            lifecycle = match lifecycle.deadline() {
-                Some(deadline) => {
-                    self.changed
-                        .wait_timeout(lifecycle, deadline.saturating_duration_since(now))
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0
-                }
-                None => self.changed.wait(lifecycle).unwrap_or_else(PoisonError::into_inner),
-            };
+            let time = clock();
+            if upkeep.due(time) {
+                keep_current();
+            }
+            let until_upkeep = upkeep.wait(time);
+            let timeout = lifecycle.deadline().map_or(until_upkeep, |deadline| {
+                deadline.saturating_duration_since(now).min(until_upkeep)
+            });
+            lifecycle = self
+                .changed
+                .wait_timeout(lifecycle, timeout)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Touches the namespace's lock file through the listener's descriptor ([`Listener::keep_current`]). A failure
+    /// only leaves the file to age: it never stops the server, whose exit would end every session it holds.
+    fn keep_endpoint_current(&self) {
+        let Some(listener) = self.listener() else {
+            return;
+        };
+        if let Err(err) = listener.keep_current() {
+            tracing::debug!(%err, "the namespace's lock file could not be kept current");
         }
     }
 
@@ -732,6 +767,44 @@ mod tests {
         assert_eq!(fresh, admitted + 1);
         let (stream, _other) = connection(&root.path().join("fresh"));
         assert_eq!(shared.register(&stream, fresh).operate(|| "ran"), Some("ran"));
+    }
+
+    /// The coordinator's wait does not count sleep: a clock that jumps four days ahead while it waits, with nothing
+    /// notifying it (a session holds the server, so the lifecycle sets no deadline), still gets its upkeep within a
+    /// poll slice, not after the rest of an interval of awake time; a clock that stands still gets none.
+    #[test]
+    fn the_coordinator_sees_a_sleep_that_made_the_upkeep_due_within_a_poll_slice() {
+        const POLL: Duration = Duration::from_millis(10);
+        let root = tempfile::tempdir().unwrap();
+        let shared = Shared::new(&Endpoint::new(root.path().join("live")), &ServerConfig::default());
+        assert!(shared.lock().session_started());
+        let clock = Arc::new(AtomicU64::new(1_000));
+        let (upkeeps, upkept) = mpsc::channel();
+        let coordinator = {
+            let shared = Arc::clone(&shared);
+            let clock = Arc::clone(&clock);
+            thread::spawn(move || {
+                shared.wait_for_stop_with(
+                    Upkeep::new(UPKEEP_INTERVAL, POLL),
+                    || Duration::from_secs(clock.load(Ordering::Acquire)),
+                    || upkeeps.send(()).unwrap(),
+                )
+            })
+        };
+        let patience = Duration::from_secs(10);
+        upkept.recv_timeout(patience).expect("the first upkeep runs at once");
+        // many poll slices on a clock that stands still: no upkeep is due
+        thread::sleep(POLL * 20);
+        assert!(upkept.try_recv().is_err(), "no upkeep before the interval");
+        // the machine slept four days: the sleep-counting clock moved, the coordinator's wait did not see it
+        clock.fetch_add(UPKEEP_INTERVAL.as_secs() * 96, Ordering::AcqRel);
+        upkept
+            .recv_timeout(patience)
+            .expect("the upkeep a sleep made due runs within a poll slice of waking");
+        shared.lock().hand_over();
+        shared.changed.notify_all();
+        assert_eq!(coordinator.join().unwrap(), StopReason::HandedOver);
+        assert!(upkept.try_recv().is_err(), "one upkeep for the whole gap");
     }
 
     #[test]

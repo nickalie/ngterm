@@ -1,5 +1,5 @@
 //! The endpoint on a real socket or pipe, in a private temporary namespace: a server and a client exchange frames,
-//! one endpoint has one server, and what is left behind is cleaned up or refused.
+//! one endpoint has one server, what is left behind is cleaned up or refused, and a server keeps its lock file current.
 //!
 //! herdr: the tests of `src/ipc.rs` and `src/server/socket_paths.rs` at `HERDR_REV` (`build/pins.env`), licensed
 //! under the Apache License 2.0, modified: ngterm's namespace and its checks.
@@ -126,11 +126,14 @@ fn closed_connection_errors_are_recognized() {
 #[cfg(unix)]
 mod unix {
     use std::fs;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt, symlink};
     use std::os::unix::net::UnixListener;
     use std::sync::{Arc, Barrier};
+    use std::time::{Instant, SystemTime};
 
     use ngterm_session::endpoint::LOCK_FILE_NAME;
+    use ngterm_session::server::lifecycle::{Graces, StopReason};
+    use ngterm_session::server::{self, ServerConfig};
 
     use super::*;
 
@@ -250,6 +253,94 @@ mod unix {
         drop(listener);
         assert_eq!(fs::read(endpoint.socket_path()).unwrap(), b"a replacement's");
     }
+
+    /// Four days back: past macOS's three-day `/tmp` cleaner.
+    const AGED: Duration = Duration::from_hours(4 * 24);
+
+    fn age(path: &std::path::Path) -> TestResult {
+        let then = SystemTime::now().checked_sub(AGED).ok_or("no time four days back")?;
+        fs::File::open(path)?.set_times(fs::FileTimes::new().set_accessed(then).set_modified(then))?;
+        Ok(())
+    }
+
+    /// Whether `path` was modified within the last minute.
+    fn is_fresh(path: &std::path::Path) -> TestResult<bool> {
+        let modified = fs::metadata(path)?.modified()?;
+        Ok(SystemTime::now()
+            .duration_since(modified)
+            .is_ok_and(|age| age < Duration::from_secs(60)))
+    }
+
+    fn inode(path: &std::path::Path) -> TestResult<u64> {
+        Ok(fs::metadata(path)?.ino())
+    }
+
+    #[test]
+    fn the_lock_is_kept_current_through_the_held_descriptor() {
+        let (_root, endpoint) = namespace().unwrap();
+        let listener = endpoint.bind().unwrap();
+        let lock = endpoint.directory().join(LOCK_FILE_NAME);
+        let held = inode(&lock).unwrap();
+        age(&lock).unwrap();
+        assert!(!is_fresh(&lock).unwrap());
+
+        listener.keep_current().unwrap();
+
+        assert!(is_fresh(&lock).unwrap());
+        let accessed = fs::metadata(&lock).unwrap().accessed().unwrap();
+        assert!(SystemTime::now().duration_since(accessed).unwrap_or_default() < Duration::from_secs(60));
+        assert_eq!(inode(&lock).unwrap(), held, "the lock file was replaced");
+        let second = fs::File::open(&lock).unwrap();
+        assert!(second.try_lock().is_err(), "the listener no longer holds the lock");
+        let accept = thread::spawn(move || listener.accept().map(drop));
+        let _client = endpoint.connect().unwrap();
+        accept.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn a_deleted_lock_is_not_brought_back() {
+        let (_root, endpoint) = namespace().unwrap();
+        let listener = endpoint.bind().unwrap();
+        let lock = endpoint.directory().join(LOCK_FILE_NAME);
+        fs::remove_file(&lock).unwrap();
+
+        listener.keep_current().unwrap();
+
+        assert!(!lock.exists());
+    }
+
+    /// A server that reuses a lock file left days ago touches it at its start, through the descriptor it locked, while
+    /// it listens.
+    #[test]
+    fn a_server_touches_a_reused_stale_lock_as_it_starts() {
+        let (_root, endpoint) = namespace().unwrap();
+        fs::DirBuilder::new().mode(0o700).create(endpoint.directory()).unwrap();
+        let lock = endpoint.directory().join(LOCK_FILE_NAME);
+        fs::write(&lock, b"").unwrap();
+        age(&lock).unwrap();
+        let left = inode(&lock).unwrap();
+        let directory = endpoint.directory().to_path_buf();
+        let config = ServerConfig {
+            graces: Graces {
+                startup: Duration::from_secs(2),
+                idle: Duration::from_millis(100),
+            },
+            ..ServerConfig::default()
+        };
+        let server = thread::spawn(move || server::run(&directory, &config));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !is_fresh(&lock).unwrap() {
+            assert!(Instant::now() < deadline, "the server never touched its lock");
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(inode(&lock).unwrap(), left, "the lock file was replaced");
+        assert!(
+            fs::File::open(&lock).unwrap().try_lock().is_err(),
+            "the server does not hold the lock"
+        );
+        assert_eq!(server.join().unwrap().unwrap(), StopReason::Idle);
+    }
 }
 
 #[cfg(windows)]
@@ -279,5 +370,14 @@ mod windows {
             .unwrap();
         let error = endpoint.bind().unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::AddrInUse, "{error}");
+    }
+
+    /// No lock file to keep current: the namespace's directory holds nothing the server touches.
+    #[test]
+    fn keeping_the_endpoint_current_is_a_no_op() {
+        let (_root, endpoint) = namespace().unwrap();
+        let listener = endpoint.bind().unwrap();
+        listener.keep_current().unwrap();
+        assert_eq!(std::fs::read_dir(endpoint.directory()).unwrap().count(), 0);
     }
 }

@@ -12,7 +12,9 @@
 //! Windows derives the pipe's name from the namespace directory instead of writing a marker file, creates it with
 //! `FILE_FLAG_FIRST_PIPE_INSTANCE` (ngterm's addition, which `interprocess` sets on a listener's first instance); a
 //! Unix server holds the namespace's `flock` from before the stale-socket check for as long as it listens (ngterm's
-//! addition, so two racing servers cannot both bind); and a client checks that the server runs as its own user.
+//! addition, so two racing servers cannot both bind) and keeps the lock file's times current while it listens
+//! ([`Listener::keep_current`], ngterm's addition after upstream agterm's #733, so a temp-dir cleaner does not age the
+//! file out from under the namespace's guard); and a client checks that the server runs as its own user.
 //!
 //! # Namespace
 //!
@@ -232,6 +234,30 @@ impl Listener {
     pub fn claim(&self) {
         #[cfg(unix)]
         self.owns_socket.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Moves the namespace's lock file's access and modification times to now, through the descriptor the listener
+    /// holds, so a temp-dir cleaner that deletes files untouched for days (macOS's three-day `/tmp` cleaner,
+    /// systemd-tmpfiles' `/tmp` aging) leaves it to a server that runs that long (upstream agterm's #733, which touches
+    /// its host's lock the same way). The server calls it at its start and hourly (`crate::server`). The file is
+    /// never replaced or created: a lock file deleted already stays deleted, its descriptor still holding the lock.
+    /// Nothing on Windows, whose namespace holds no lock file (the pipe's first instance guards it) and lives under
+    /// `%LOCALAPPDATA%`, which no cleaner ages.
+    ///
+    /// # Errors
+    ///
+    /// The times could not be set; the server ignores it, since its exit would end every session it holds.
+    pub fn keep_current(&self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            let now = std::time::SystemTime::now();
+            self.lock
+                .set_times(std::fs::FileTimes::new().set_accessed(now).set_modified(now))
+        }
+        #[cfg(windows)]
+        {
+            Ok(())
+        }
     }
 }
 
