@@ -223,8 +223,9 @@ the analysis, the bump and the baseline:
   gives: new wire names and CLI skeletons first when the catalog gained any, then the groups, then vendored-copy
   conflicts and pin work, then the UI-only task, then "Claim TARGET parity and update the docs" last;
 - every task names its upstream implementation files, Swift tests (with the functions), contract sections, the Rust
-  files, the existing and new conformance ids, and ends with the gate and "newly green ids added with
-  `check_ratchet.py --add`";
+  files, the existing and new conformance ids, and ends with the gate; the full `run-linux.sh` and the
+  `check_ratchet.py --add` belong to the last task only (the baseline above is this skill's own one run), never to
+  each task's gate;
 - a behavior upstream builds on a macOS API names its mechanism on macOS, Linux and Windows, and says which part
   CI builds on those OSes and which it does not yet (`references/areas.md` > Platforms);
 - `already-ported` clusters go to Context with their evidence, so nobody ports them twice;

@@ -52,8 +52,11 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
   there (the window tests under `xvfb-run` and `dbus-run-session`), each pytest command with
   `PYTHONPATH=conformance` in front; then
   `PYTHONPATH=conformance .venv/bin/python -m pytest conformance --coverage-gate` (until the task that closes the
-  last uncovered key, only the keys listed for later tasks may stay uncovered); then a full
-  `conformance/tools/run-linux.sh` in the background with the ratchet holding, and the newly green ids added with
+  last uncovered key, only the keys listed for later tasks may stay uncovered). A task that adds or changes suite
+  tests runs just those in a targeted `conformance/tools/run-linux.sh -- -k <tests>`.
+- The full `conformance/tools/run-linux.sh` runs once, in the last task (CLAUDE.md > Porting a command group, step 6),
+  not in each task's gate: it takes 30–60 min under the CPU cap and would dominate the run. That task fixes any
+  ratchet id it finds red and adds the newly green ids with
   `.venv/bin/python conformance/tools/check_ratchet.py --report conformance/reports/rust-linux/nodeids.jsonl --add`.
 - Platforms (CLAUDE.md > Platforms): macOS, Linux and Windows are equal targets and upstream is macOS only. A
   behavior upstream builds on a macOS API is ported with its macOS form and its Linux and Windows forms in the same
@@ -106,7 +109,7 @@ code">
 - [ ] manual check (user): the new conformance tests are green on reference-macos (`reference-macos.yml`, started
       by hand on the pushed branch, `gh workflow run reference-macos.yml --ref <branch>`, or by a pull request that
       touches `conformance/`)
-- [ ] gate (Development Approach) passes; newly green ids added with `check_ratchet.py --add`
+- [ ] gate (Development Approach) passes; the new suite tests green in a targeted `run-linux.sh -k` run
 
 ### Task <N-1>: UI-only changes
 
@@ -123,6 +126,8 @@ code">
 - [ ] README.md, CLAUDE.md, conformance/README.md, conformance/docs/rust-build.md describe what changed (new
       capabilities, commands, on-disk files); `tag-mentions.sh <old>` lists no `review` or stale `claim` line
 - [ ] gate passes
+- [ ] the plan's one full `conformance/tools/run-linux.sh`, in the background: every ratchet id it finds red fixed
+      in this plan; newly green ids added with `check_ratchet.py --add`
 ````
 
 ## Writing the tasks
