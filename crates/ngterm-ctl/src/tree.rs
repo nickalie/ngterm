@@ -55,7 +55,12 @@ fn format_session(session: &ControlSessionNode) -> String {
         tags.push_str(" (not realized)");
     }
     if session.overlay {
-        tags.push_str(" (overlay)");
+        // a hidden session-wide overlay still occupies the slot; a hidden pane overlay leaves the tag alone
+        let hidden = session
+            .hidden_overlays
+            .as_ref()
+            .is_some_and(|slots| slots.iter().any(|slot| slot == "session"));
+        tags.push_str(if hidden { " (overlay hidden)" } else { " (overlay)" });
     }
     if session.scratch {
         tags.push_str(" (scratch)");
@@ -153,6 +158,26 @@ mod tests {
         assert_eq!(lines[1], "    shown (split)  [shown]  /w");
         assert_eq!(lines[2], "    hidden (split hidden) (not realized)  [hidden]  /w");
         assert_eq!(lines[3], "    covered (overlay) (scratch)  [covered]  /w");
+    }
+
+    /// Upstream's `formatTreeTagsAHiddenSessionOverlay`.
+    #[test]
+    fn a_hidden_session_overlay_is_tagged_apart() {
+        for (hidden, tag) in [
+            (None, " (overlay)"),
+            (Some(json!(["session"])), " (overlay hidden)"),
+            (Some(json!(["left"])), " (overlay)"),
+        ] {
+            let extra = match hidden {
+                Some(hidden) => json!({"active": true, "overlay": true, "hiddenOverlays": hidden}),
+                None => json!({"active": true, "overlay": true}),
+            };
+            let rendered = format_tree(&tree(
+                json!({"workspaces": [{"id": "w1", "name": "work", "active": true,
+                                                                     "sessions": [session("s1", extra)]}]}),
+            ));
+            assert_eq!(rendered.lines().nth(1), Some(format!("  * s1{tag}  [s1]  /w").as_str()));
+        }
     }
 
     #[test]

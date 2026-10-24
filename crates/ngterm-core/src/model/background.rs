@@ -219,7 +219,8 @@ impl Session {
             OverlayPane::Left => StatusPane::Left,
             OverlayPane::Right => StatusPane::Right,
         };
-        match self.pane_overlay(pane) {
+        // a hidden overlay paints nothing, so the pane's own color shows through
+        match self.pane_overlay(pane).filter(|overlay| !overlay.hidden) {
             // through the renderer's own predicate, so the wash matches what it painted
             Some(overlay) => overlay
                 .background_color
@@ -459,6 +460,7 @@ mod tests {
             generation: 1,
             code_file: None,
             html: None,
+            hidden: false,
         }
     }
 
@@ -510,6 +512,21 @@ mod tests {
                 region(Some(OverlayPane::Right), None),
             ]
         );
+    }
+
+    /// Upstream's `backdropRegionsSkipAHiddenPaneOverlaysBackground`: a hidden overlay paints nothing, so the pane's
+    /// own color shows.
+    #[test]
+    fn backdrop_regions_skip_a_hidden_pane_overlays_background() {
+        let store = with_session(|session| {
+            session.pane_backgrounds.left = Some(color("#201414"));
+            let mut overlay = pane_overlay(Some("#0a0b0c"));
+            overlay.hidden = true;
+            session.pane_overlays.slot_mut(OverlayPane::Left).overlay = Some(overlay);
+        });
+        let regions = regions(&store);
+        assert_eq!(regions[0], region(None, None));
+        assert_eq!(regions[1], region(Some(OverlayPane::Left), Some("#201414")));
     }
 
     #[test]

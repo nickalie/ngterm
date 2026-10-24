@@ -135,10 +135,10 @@ pub enum DashboardCover {
 
 impl Session {
     /// The cover over `pane` (upstream's `dashboardCover(for:)`): a full session-wide program or page first, then the
-    /// pane's own overlay. A HUD and a floating overlay leave the panes lit, so they cover nothing.
+    /// pane's own overlay. A HUD, a floating overlay and a hidden one leave the panes lit, so they cover nothing.
     #[must_use]
     pub fn dashboard_cover(&self, pane: OverlayPane) -> Option<DashboardCover> {
-        if self.full_overlay_active() {
+        if self.full_overlay_visible() {
             if let Some(page) = self.overlay.html.as_ref() {
                 return Some(page_cover(page));
             }
@@ -146,7 +146,8 @@ impl Session {
                 command: self.overlay.command.clone(),
             });
         }
-        self.pane_overlay(pane).map(|overlay| match overlay.html.as_ref() {
+        let overlay = self.pane_overlay(pane).filter(|overlay| !overlay.hidden);
+        overlay.map(|overlay| match overlay.html.as_ref() {
             Some(html) => page_cover(html),
             None => DashboardCover::Program {
                 command: Some(overlay.command.clone()),

@@ -193,6 +193,10 @@ pub struct ControlSessionNode {
     pub remote_overlays: Option<Vec<ControlRemoteOverlayNode>>,
     #[serde(default)]
     pub html_overlays: Option<Vec<ControlHtmlOverlayNode>>,
+    /// The hidden slots as `session`, `left`, `right`; absent when none is hidden. A hidden slot still counts in
+    /// `overlay` and `paneOverlays`, which report occupancy.
+    #[serde(default)]
+    pub hidden_overlays: Option<Vec<String>>,
 }
 
 impl ControlSessionNode {
@@ -249,6 +253,7 @@ impl ControlSessionNode {
             presenters: None,
             remote_overlays: None,
             html_overlays: None,
+            hidden_overlays: None,
         }
     }
 }
@@ -375,6 +380,9 @@ pub struct ControlHtmlOverlayNode {
     pub zoom: Option<f64>,
     #[serde(default)]
     pub id: Option<String>,
+    /// `true` while the page's slot is hidden; absent otherwise.
+    #[serde(default)]
+    pub hidden: Option<bool>,
 }
 
 /// An overlay slot of an origin session held by the viewer presenting it.
@@ -501,6 +509,7 @@ mod tests {
         });
         node.remote_overlays = Some(vec![]);
         node.html_overlays = Some(vec![]);
+        node.hidden_overlays = Some(vec![]);
         let value = serde_json::to_value(&node).unwrap();
         assert_eq!(keys(&value), SESSION_FIELDS);
         let back: ControlSessionNode = serde_json::from_value(value).unwrap();
@@ -508,7 +517,7 @@ mod tests {
     }
 
     /// The catalog's `field:tree.session.*` order (its `backedByZmx` is `backedByLive` here).
-    const SESSION_FIELDS: [&str; 49] = [
+    const SESSION_FIELDS: [&str; 50] = [
         "id",
         "name",
         "cwd",
@@ -558,6 +567,7 @@ mod tests {
         "presenters",
         "remoteOverlays",
         "htmlOverlays",
+        "hiddenOverlays",
     ];
 
     #[test]
@@ -625,6 +635,13 @@ mod tests {
         let page: ControlHtmlOverlayNode =
             serde_json::from_value(json!({"state": "loaded", "javascript": true})).unwrap();
         assert!(page.javascript && !page.chromeless && !page.persistent && !page.browse);
+        assert_eq!(page.hidden, None, "an older server sends no hidden flag");
+        // upstream's `aSessionNodeFromAnOlderServerDecodesWithNoHiddenOverlays`
+        let session: ControlSessionNode = serde_json::from_value(json!({"id": "x", "name": "n", "cwd": "/",
+            "active": true, "split": false, "overlay": true, "scratch": false, "flagged": false}))
+        .unwrap();
+        assert_eq!(session.hidden_overlays, None);
+        assert!(session.overlay);
         let surface: ControlSurfaceNode = serde_json::from_value(
             json!({"id": "surface:S:left", "kind": "left", "active": true, "visible": true, "paneID": "P"}),
         )

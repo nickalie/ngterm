@@ -97,6 +97,8 @@ impl PageOpening {
 /// `session.overlay.open --html|--url` once validated (upstream's `openHtmlOverlay`): the page takes its slot with the
 /// slot rules of a program and answers with its id, the one `session.overlay.result --page` reads.
 pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, opening: PageOpening) -> Outcome {
+    let resolved = crate::resolve::Resolver::new(core.library()).session(target, window)?;
+    super::overlay::refuse_hidden_slot(core, resolved.window, resolved.session, opening.pane)?;
     let (store, id) = session_store(core, target, window)?;
     if store
         .session(id)

@@ -26,7 +26,10 @@ use super::{Outcome, args_of, session_store, with_id};
 use crate::Core;
 use crate::error::{ControlError, Noun};
 use crate::html::{self, HtmlNavigation, HtmlSource};
-use crate::model::{OverlayPane, OverlayProgram, PaneOverlayOpenFailure, Session, is_valid_color_hex};
+use crate::model::{
+    OVERLAY_HIDDEN, OverlayPane, OverlayProgram, OverlayVisibilityMode, PaneOverlayOpenFailure, Session,
+    is_valid_color_hex,
+};
 use crate::overlay_jobs::{EXPIRY_SLACK, LAUNCH_WINDOW, OverlayJobFrame, OverlayJobOutcome, OverlayJobs, START_WINDOW};
 use crate::remote::{RemoteOverlayOpen, RemoteProgram};
 use crate::resolve::{ACTIVE, Resolver, trimmed};
@@ -124,6 +127,9 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         }
         SessionCmd::OverlayCopy => copy(core, target, window, parse_overlay_pane(args.pane.as_deref())?),
         SessionCmd::OverlayText => text(core, target, args),
+        SessionCmd::OverlayHide => visibility(core, target, args, OverlayVisibilityMode::Hide),
+        SessionCmd::OverlayShow => visibility(core, target, args, OverlayVisibilityMode::Show),
+        SessionCmd::OverlayToggle => visibility(core, target, args, OverlayVisibilityMode::Toggle),
         SessionCmd::OverlayJobRun => claim_job(core, target),
         other => Err(ControlError::NotSupported(ngterm_proto::Command::Session(other))),
     }
@@ -268,6 +274,7 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         background_color: args.color.clone(),
     };
     let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
+    refuse_hidden_slot(core, resolved.window, resolved.session, pane)?;
     let remote = RemoteProgram {
         pane,
         program: &program,
@@ -306,6 +313,42 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         store.select_session(Some(id));
     }
     Ok(with_id(id))
+}
+
+/// Refuses an open into the slot `pane` addresses while its overlay is hidden (upstream's `openSessionOverlay` check,
+/// before the page and remote routes): the hidden overlay still holds the slot, running. A session-wide open checks
+/// the session slot only, so a hidden pane overlay leaves it free.
+pub(crate) fn refuse_hidden_slot(
+    core: &Core,
+    window: Uuid,
+    session: Uuid,
+    pane: Option<OverlayPane>,
+) -> Result<(), ControlError> {
+    let hidden = core
+        .library()
+        .store(window)
+        .and_then(|store| store.session(session))
+        .is_some_and(|found| found.overlay_hidden(pane));
+    if hidden {
+        return Err(ControlError::rejected(OVERLAY_HIDDEN));
+    }
+    Ok(())
+}
+
+/// `session.overlay.hide|show|toggle` (upstream's dispatcher arm, then `setSessionOverlayVisibility`): the pane is
+/// parsed before the session resolves; `result.text` names the state the scoped overlays were left in, `shown` while
+/// any is still shown, else `hidden`, which is how a toggle reports the way it went.
+fn visibility(core: &mut Core, target: Option<&str>, args: &Args, mode: OverlayVisibilityMode) -> Outcome {
+    let pane = parse_overlay_pane(args.pane.as_deref())?;
+    let (store, id) = session_store(core, target, args.window.as_deref())?;
+    store
+        .apply_overlay_visibility(id, pane, mode)
+        .map_err(|failure| ControlError::rejected(failure.message()))?;
+    let shown = store.session(id).is_some_and(|session| session.any_overlay_shown(pane));
+    Ok(ControlResult {
+        text: Some((if shown { "shown" } else { "hidden" }).to_owned()),
+        ..with_id(id)
+    })
 }
 
 /// The error of a refused pane overlay open (upstream's `paneOverlayFailure`).

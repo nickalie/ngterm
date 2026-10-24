@@ -2,7 +2,8 @@
 //! session-wide slot or one pane's slot with the slot rules of a program, answers a submit, reloads, and records what
 //! the frontend's web view reports, wherever the page sits now, a session an undoable close holds included.
 //!
-//! A page has no terminal: it never counts as a program (`program_active`), only as a cover (`cover_overlay_active`).
+//! A page has no terminal: it never counts as a program (`program_active`), only as a cover (`cover_overlay_active`,
+//! and `cover_overlay_visible` while it is not hidden).
 //! Its outcome is the core's ([`crate::html::HtmlPageOutcomes`]): the core registers a page it opens, records a
 //! submit's answer, and settles a page that left every slot as dismissed at the next commit, leaving an answered page
 //! alone; closing a slot records nothing.
@@ -75,24 +76,25 @@ impl Session {
     }
 
     /// Whether a page covers the terminal a `--pane` font command addresses (upstream's `htmlHidesTerminal`): the
-    /// session-wide page covers both panes and a shown scratch, a pane page only its own pane.
+    /// session-wide page covers both panes and a shown scratch, a pane page only its own pane, a hidden page nothing.
     #[must_use]
     pub fn html_hides_terminal(&self, pane: Option<StatusPane>) -> bool {
+        let pane_page = |pane: OverlayPane| self.pane_overlay_visible(pane) && self.pane_overlay_is_html(pane);
         match pane {
-            Some(StatusPane::Scratch) => self.html_overlay_active() && self.scratch_active,
-            None | Some(StatusPane::Left) => self.html_overlay_active() || self.pane_overlay_is_html(OverlayPane::Left),
-            Some(StatusPane::Right) => self.html_overlay_active() || self.pane_overlay_is_html(OverlayPane::Right),
+            Some(StatusPane::Scratch) => self.html_overlay_visible() && self.scratch_active,
+            None | Some(StatusPane::Left) => self.html_overlay_visible() || pane_page(OverlayPane::Left),
+            Some(StatusPane::Right) => self.html_overlay_visible() || pane_page(OverlayPane::Right),
         }
     }
 
     /// The page that takes the keyboard when focus returns to this session, in the order covers resolve; `None` when a
-    /// terminal is on top (upstream's `topmostHtmlOverlay`).
+    /// terminal is on top (upstream's `topmostHtmlOverlay`). A hidden page never does.
     #[must_use]
     pub fn topmost_html_overlay(&self) -> Option<&HtmlOverlay> {
-        if let Some(page) = self.overlay.page() {
-            return Some(page);
+        if self.html_overlay_visible() {
+            return self.overlay.page();
         }
-        if self.overlay.program_active() || self.scratch_active {
+        if self.program_overlay_visible() || self.scratch_active {
             return None;
         }
         self.focused_overlay_pane()
@@ -201,6 +203,7 @@ impl AppStore {
                 generation,
                 code_file: None,
                 html: Some(overlay),
+                hidden: false,
             });
             session.remote_overlays.clear_failure(Some(pane));
             self.schedule_tree_changed();

@@ -744,6 +744,29 @@ fn a_held_replica_closes_when_its_stream_goes_and_a_running_one_when_its_ssh_end
     assert!(!viewer.session().overlay.active);
 }
 
+/// Upstream's `aReplicaUpdateKeepsItsSlotHidden`: a replica's bookkeeping sits beside its slot here, so its program
+/// ending under a held surface leaves the slot hidden, session-wide and over a pane alike.
+#[test]
+fn a_replica_update_keeps_its_slot_hidden() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    let session = viewer.session;
+    let origin_pane = viewer.origin.0;
+    viewer.frame(overlay_request("WIDE", None, true));
+    viewer.frame(overlay_request("PANE", Some(origin_pane), true));
+    let left = crate::model::OverlayPane::Left;
+    let store = viewer.fixture.store_mut().unwrap();
+    store.set_overlays_hidden(session, None, true).unwrap();
+    let wide = viewer.session().overlay.generation;
+    let pane = viewer.session().pane_overlay(left).unwrap().generation;
+    assert!(viewer.fixture.core.replica_overlay_held(session, None, wide));
+    assert!(viewer.fixture.core.replica_overlay_held(session, Some(left), pane));
+    viewer.fixture.core.commit();
+    let found = viewer.session();
+    assert_eq!(found.hidden_overlay_names(), ["session", "left"]);
+    assert!(found.overlay.program_active() && found.pane_overlay(left).is_some());
+}
+
 // MARK: - layout
 
 #[test]

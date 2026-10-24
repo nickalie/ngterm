@@ -71,7 +71,8 @@ def test_list_without_a_file_reports_the_builtins_alone(ctl, keymap):
     assert listing["path"] == os.fspath(keymap)
     assert listing["commands"] == [] and listing["diagnostics"] == []
     names = [action["action"] for action in listing["actions"]]
-    assert {"new_session", "close_session", "toggle_split"} <= set(names)
+    assert {"new_session", "close_session", "toggle_split", "toggle_overlay"} <= set(names)
+    assert "chord" in _action(listing, "toggle_overlay"), "it ships with a default"
     assert len(names) == len(set(names))
     for action in listing["actions"]:
         assert_absent(action, "overridden", "repeats")
@@ -139,6 +140,36 @@ def test_attach_remote_ships_a_default_that_an_existing_binding_keeps(ctl, keyma
     assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
     assert _action(_listed(ctl), "attach_remote") == {
         "action": "attach_remote",
+        "chord": "ctrl+shift+y",
+        "overridden": True,
+    }
+
+
+@pytest.mark.covers("keymap.list", "keymap.reload", "field:result.keymap", "field:result.count")
+def test_a_file_binding_the_toggle_overlay_chord_keeps_it(ctl, keymap):
+    """`toggle_overlay` came after files could already bind its chord (cmd+shift+j on macOS, ctrl+alt+shift+j on
+    Linux): a file that binds it keeps it, with no diagnostic, and the action is left unbound unless the file maps it.
+    The chord is the platform's, so it is read back."""
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    shipped = _action(_listed(ctl), "toggle_overlay")
+    assert_absent(shipped, "overridden")
+    chord = shipped["chord"]
+
+    keymap.write_text(f"map {chord} toggle_workspace_filter\n")
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    listing = _listed(ctl)
+    assert listing["diagnostics"] == []
+    assert _action(listing, "toggle_workspace_filter") == {
+        "action": "toggle_workspace_filter",
+        "chord": chord,
+        "overridden": True,
+    }
+    assert _action(listing, "toggle_overlay") == {"action": "toggle_overlay", "overridden": True}
+
+    keymap.write_text("map ctrl+shift+y toggle_overlay\n")
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    assert _action(_listed(ctl), "toggle_overlay") == {
+        "action": "toggle_overlay",
         "chord": "ctrl+shift+y",
         "overridden": True,
     }

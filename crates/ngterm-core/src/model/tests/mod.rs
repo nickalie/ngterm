@@ -8,6 +8,7 @@ mod library;
 mod navigation;
 mod organization;
 mod overlay_events;
+mod overlay_visibility;
 mod panes;
 mod pending_close;
 mod recent_closed;

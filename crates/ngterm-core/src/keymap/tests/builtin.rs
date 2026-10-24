@@ -46,10 +46,11 @@ fn names_are_the_kitty_style_names() {
         (A::PreviousWindow, "previous_window"),
         (A::NextWindow, "next_window"),
         (A::AttachRemote, "attach_remote"),
+        (A::ToggleOverlay, "toggle_overlay"),
     ] {
         assert_eq!(action.name(), name);
     }
-    assert_eq!(BuiltinAction::all().count(), 49);
+    assert_eq!(BuiltinAction::all().count(), 50);
 }
 
 #[test]
@@ -115,6 +116,7 @@ fn the_default_chord_matches_the_shipped_table() {
         (A::ToggleHorizontalSplit, Some(chord(CMD | SHIFT, "d"))),
         (A::ToggleScratch, Some(chord(CMD, "j"))),
         (A::ToggleTerminalZoom, Some(chord(CMD | SHIFT, "return"))),
+        (A::ToggleOverlay, Some(chord(CMD | SHIFT, "j"))),
         (A::ToggleSearch, Some(chord(CMD, "f"))),
         (A::ToggleSidebar, Some(chord(CMD | CTRL, "s"))),
         (A::SelectTheme, None),
@@ -142,13 +144,18 @@ fn the_default_chord_matches_the_shipped_table() {
         (A::Dashboard, Some(chord(CMD | SHIFT, "g"))),
         (A::AttachRemote, Some(chord(CMD | SHIFT, "r"))),
     ];
-    assert_eq!(expected.len(), 49);
+    assert_eq!(expected.len(), 50);
     for (action, chord) in expected {
         assert_eq!(default_chord(action), chord, "{}", action.name());
     }
     assert_eq!(
         ShippedDefaults::upstream().vacate_when_used(),
-        [A::ToggleHorizontalSplit, A::Dashboard, A::AttachRemote]
+        [
+            A::ToggleHorizontalSplit,
+            A::Dashboard,
+            A::AttachRemote,
+            A::ToggleOverlay
+        ]
     );
 }
 

@@ -3548,6 +3548,78 @@ fn overlay_refusals_are_usage_errors_before_connecting() -> TestResult {
     Ok(())
 }
 
+/// Upstream's `visibilityCommandsSendTheirCommandPaneAndTarget`, plus the state the server leaves printed as is.
+#[test]
+fn visibility_commands_send_their_command_pane_and_target() -> TestResult {
+    let dir = short_dir()?;
+    for (verb, text_left) in [("hide", "hidden"), ("show", "shown"), ("toggle", "hidden")] {
+        let cmd = format!("session.overlay.{verb}");
+        let whole = dir.path().join(format!("{verb}-whole.sock"));
+        let _whole = scripted(
+            &whole,
+            serde_json::json!({"cmd": cmd, "target": "s"}),
+            serde_json::json!({"id": "s", "text": text_left}),
+        )?;
+        assert_eq!(
+            outcome(&run_on(
+                dir.path(),
+                &whole,
+                &["session", "overlay", verb, "--target", "s"]
+            )?),
+            (Some(0), format!("{text_left}\n"), String::new()),
+            "{verb}"
+        );
+        let pane = dir.path().join(format!("{verb}-pane.sock"));
+        let _pane = scripted(
+            &pane,
+            serde_json::json!({"cmd": cmd, "target": "active", "args": {"pane": "right", "window": "w"}}),
+            serde_json::json!({"id": "s", "text": text_left}),
+        )?;
+        let args = ["session", "overlay", verb, "--pane", "right", "--window", "w"];
+        assert_eq!(outcome(&run_on(dir.path(), &pane, &args)?).0, Some(0), "{verb}");
+        // nothing listens on the whole-session socket's sibling: a refused pane never connects
+        let refused = run_on(
+            dir.path(),
+            &dir.path().join("nobody.sock"),
+            &["session", "overlay", verb, "--pane", "scratch"],
+        )?;
+        assert_eq!(refused.status.code(), Some(64), "{verb}");
+        assert!(
+            text(&refused.stderr).starts_with("Error: --pane must be left or right\n"),
+            "{}",
+            text(&refused.stderr)
+        );
+    }
+    Ok(())
+}
+
+/// Upstream's `visibilityHelpStatesTheSessionScopeAndTheToggleRule`.
+#[test]
+fn visibility_help_states_the_session_scope_and_the_toggle_rule() -> TestResult {
+    let dir = short_dir()?;
+    let mut helps = Vec::new();
+    for verb in ["hide", "show", "toggle"] {
+        let output = run(
+            dir.path(),
+            &[("COLUMNS", Path::new("400"))],
+            ["session", "overlay", verb, "--help"],
+        )?;
+        assert_eq!(output.status.code(), Some(0), "{verb}");
+        helps.push(text(&output.stdout));
+    }
+    for help in &helps {
+        assert!(help.contains("every overlay of the session"), "{help}");
+        assert!(help.contains("--pane"), "{help}");
+    }
+    assert!(
+        helps[2].contains("if any is shown, otherwise show them all"),
+        "{}",
+        helps[2]
+    );
+    assert!(helps[0].contains("stays in `tree` (hiddenOverlays)"), "{}", helps[0]);
+    Ok(())
+}
+
 const OVERLAY_HELP: &str = "\
 OVERVIEW: Open, read, resize, or close an ephemeral overlay terminal on a
 session.

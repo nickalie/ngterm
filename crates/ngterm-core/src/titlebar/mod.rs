@@ -116,7 +116,7 @@ fn capped_workspace_name(name: &str) -> Option<String> {
 /// or across an empty middle group.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GroupDividers {
-    /// Between the jump group (recent, attention) and the pane group (scratch, split).
+    /// Between the jump group (recent, attention) and the pane group (scratch, split, overlay toggle).
     pub after_jump: bool,
     /// Between the pane group and the window group (dashboard, quick terminal, custom commands).
     pub after_panes: bool,
@@ -215,6 +215,52 @@ pub struct ScratchButton {
     pub enabled: bool,
 }
 
+/// The overlay toggle (upstream's `overlayToggleButton`): hides the active session's overlays, or shows them again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OverlayToggleButton {
+    /// A program or page is up to hide or show, and no picker, zoom or dashboard covers the window.
+    pub enabled: bool,
+    /// Something is shown: the button hides ("Hide Overlays"), else it shows ("Show Overlays").
+    pub any_shown: bool,
+    /// Something is hidden: the glyph is slashed, so a hidden overlay is never out of sight entirely.
+    pub any_hidden: bool,
+}
+
+impl OverlayToggleButton {
+    /// The button for `active`; `covered` while a picker, a zoom or the dashboard holds the window.
+    #[must_use]
+    pub fn of(active: Option<&Session>, covered: bool) -> Self {
+        let hideable = active.is_some_and(|session| !session.hideable_overlay_slots(None).is_empty());
+        Self {
+            enabled: hideable && !covered,
+            any_shown: active.is_some_and(|session| session.any_overlay_shown(None)),
+            any_hidden: active.is_some_and(|session| !session.hidden_overlay_names().is_empty()),
+        }
+    }
+
+    /// The label and hover text: what a click does now.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        if self.any_shown {
+            "Hide Overlays"
+        } else {
+            "Show Overlays"
+        }
+    }
+
+    /// The accessibility value: `hidden` while anything is, else `shown`, or `none` with nothing to hide.
+    #[must_use]
+    pub fn state_name(self) -> &'static str {
+        if self.any_hidden {
+            "hidden"
+        } else if self.any_shown {
+            "shown"
+        } else {
+            "none"
+        }
+    }
+}
+
 /// The bell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AttentionButton {
@@ -232,6 +278,7 @@ pub struct Titlebar {
     pub attention: Option<AttentionButton>,
     pub scratch: Option<ScratchButton>,
     pub split: Option<SplitButton>,
+    pub overlay_toggle: Option<OverlayToggleButton>,
     pub dashboard: Option<Button>,
     pub quick_terminal: Option<Button>,
     pub custom_commands: Option<Button>,
@@ -269,6 +316,8 @@ pub enum TitlebarAction {
     ToggleScratch,
     /// Toggle the split on the session's own axis (upstream's `toggleCurrentSplit`).
     ToggleSplit,
+    /// Hide the active session's overlays, or show them again (upstream's `toggleOverlays`).
+    ToggleOverlay,
     Dashboard,
     QuickTerminal,
     /// A recent-sessions row.
@@ -357,6 +406,9 @@ impl Core {
             enabled: has_session,
         });
         let split = shows(InterfaceElement::Split).then(|| split_button(active));
+        // this window's own covers, the set the palette's modal fact holds for it
+        let covered = modal || self.zoom_target(window).is_some() || self.dashboard(window).is_some();
+        let overlay_toggle = shows(InterfaceElement::OverlayToggle).then(|| OverlayToggleButton::of(active, covered));
         let dashboard = shows(InterfaceElement::Dashboard).then_some(Button { enabled: has_session });
         let quick_terminal = shows(InterfaceElement::QuickTerminal).then_some(Button { enabled: !modal });
         let custom_commands = shows(InterfaceElement::CustomCommands).then(|| Button {
@@ -365,7 +417,7 @@ impl Core {
         let count = |buttons: &[bool]| buttons.iter().filter(|shown| **shown).count();
         let dividers = group_dividers(
             count(&[recent.is_some(), attention.is_some()]),
-            count(&[scratch.is_some(), split.is_some()]),
+            count(&[scratch.is_some(), split.is_some(), overlay_toggle.is_some()]),
             count(&[dashboard.is_some(), quick_terminal.is_some(), custom_commands.is_some()]),
         );
         Titlebar {
@@ -376,6 +428,7 @@ impl Core {
             attention,
             scratch,
             split,
+            overlay_toggle,
             dashboard,
             quick_terminal,
             custom_commands,
@@ -512,6 +565,7 @@ impl Core {
                 let active = self.library().store(window).and_then(AppStore::active_session);
                 builtin(self, split_button(active).action)
             }
+            TitlebarAction::ToggleOverlay => builtin(self, BuiltinAction::ToggleOverlay),
             TitlebarAction::Dashboard => builtin(self, BuiltinAction::Dashboard),
             TitlebarAction::QuickTerminal => builtin(self, BuiltinAction::QuickTerminal),
             TitlebarAction::SelectRecent(session) => {

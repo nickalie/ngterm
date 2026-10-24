@@ -106,6 +106,7 @@ const VIEW: &[&[Item]] = &[
         Item::Row(PaletteCommand::ToggleHorizontalSplit),
         Item::Row(PaletteCommand::SwapPanes),
         Item::Row(PaletteCommand::ToggleScratch),
+        Item::Row(PaletteCommand::ToggleOverlay),
         Item::Row(PaletteCommand::Find),
         Item::Row(PaletteCommand::QuickTerminal),
         Item::Row(PaletteCommand::ToggleTerminalZoom),
@@ -175,6 +176,8 @@ impl Item {
             Self::Row(PaletteCommand::ToggleSidebar) => "Show Sidebar",
             Self::Row(PaletteCommand::ToggleScratch) if toggles.scratch_shown => "Hide Scratch",
             Self::Row(PaletteCommand::ToggleScratch) => "Show Scratch",
+            Self::Row(PaletteCommand::ToggleOverlay) if toggles.overlays_shown => "Hide Overlays",
+            Self::Row(PaletteCommand::ToggleOverlay) => "Show Overlays",
             Self::Row(PaletteCommand::FocusWorkspace) if toggles.sole_focus => "Unfocus Workspace",
             Self::Row(command) => command.title(&context),
         }
@@ -196,12 +199,18 @@ impl Item {
     }
 }
 
-/// The window's state the toggling items name: Hide/Show Sidebar and Scratch, and Focus Workspace reading Unfocus
-/// Workspace while the current workspace is the sole focus (upstream's `isCurrentWorkspaceSoleFocus`).
+/// The window's state the toggling items name: Hide/Show Sidebar, Scratch and Overlays, and Focus Workspace reading
+/// Unfocus Workspace while the current workspace is the sole focus (upstream's `isCurrentWorkspaceSoleFocus`).
 #[derive(Debug, Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one fact per toggling menu item, each read by its own title"
+)]
 struct Toggles {
     sidebar_shown: bool,
     scratch_shown: bool,
+    /// Something of the active session is shown, or no session is active (upstream's `anyOverlayShown ?? true`).
+    overlays_shown: bool,
     sole_focus: bool,
 }
 
@@ -292,6 +301,9 @@ impl AppMenu {
             scratch_shown: store
                 .and_then(|store| store.active_session())
                 .is_some_and(|session| session.scratch_active),
+            overlays_shown: store
+                .and_then(|store| store.active_session())
+                .is_none_or(|session| session.any_overlay_shown(None)),
             sole_focus: store.is_some_and(ngterm_core::model::AppStore::is_current_workspace_sole_focus),
         };
         let live = Live {

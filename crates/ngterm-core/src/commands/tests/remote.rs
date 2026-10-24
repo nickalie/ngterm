@@ -844,6 +844,35 @@ fn a_refused_remote_overlay_leaves_the_tree_alone() {
     assert_eq!(live.fixture.core.commit().tree_changed.len(), 0);
 }
 
+/// Upstream's `aPresentedSessionStillRefusesAnOpenIntoItsHiddenLocalSlot`: the hidden slot is checked before the
+/// remote route, so nothing is handed to the presenter or reserved for it.
+#[test]
+fn a_presented_session_still_refuses_an_open_into_its_hidden_local_slot() {
+    let (mut live, _, presenter) = presented();
+    let session = live.session;
+    let program = crate::model::OverlayProgram {
+        command: "true".to_owned(),
+        ..crate::model::OverlayProgram::default()
+    };
+    let store = live.fixture.store_mut().unwrap();
+    assert!(store.open_overlay(session, program));
+    store.set_overlays_hidden(session, None, true).unwrap();
+    let opened = overlay(&mut live.fixture, SessionCmd::OverlayOpen, session, |a| {
+        a.command = Some("true".to_owned());
+    });
+    assert_eq!(opened, failure("overlay hidden"));
+    assert!(presenter.last("overlay.request").is_none());
+    assert!(
+        live.fixture
+            .store()
+            .session(session)
+            .unwrap()
+            .remote_overlays()
+            .slot(None)
+            .is_none()
+    );
+}
+
 #[test]
 fn without_a_following_pane_an_overlay_opens_here() {
     let (mut live, presenter) = live_unfollowed();

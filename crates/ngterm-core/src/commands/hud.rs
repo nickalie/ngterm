@@ -606,6 +606,10 @@ pub(crate) fn open(
         .store(resolved.window)
         .and_then(|store| store.session(id))
         .ok_or_else(|| ControlError::rejected("no such session"))?;
+    // a hidden program or page still holds the session slot; a hidden pane overlay leaves it to the HUD
+    if session.overlay_hidden(None) {
+        return Err(ControlError::rejected(crate::model::OVERLAY_HIDDEN));
+    }
     let (Some(command), Some(file)) = (core.hud.helper_command(), core.hud.body_file(id)) else {
         return Err(ControlError::rejected("hud helper is not bundled in this build"));
     };

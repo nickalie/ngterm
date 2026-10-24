@@ -202,6 +202,7 @@ pub(crate) fn pane_overlay(session: &mut Session, pane: OverlayPane, generation:
         generation,
         code_file: None,
         html: None,
+        hidden: false,
     });
 }
 

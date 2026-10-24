@@ -620,6 +620,40 @@ def test_overlay_program(cli, ctl):
     assert_ok(ctl.request("session.close", sid))
 
 
+@pytest.mark.covers("cli:session overlay hide", "cli:session overlay show", "cli:session overlay toggle", "cli:tree")
+def test_session_overlay_visibility(cli, ctl):
+    sid = _new(ctl)
+    _ok(cli("session", "overlay", "open", "--target", sid, "exec cat"), "ok\n")
+    _overlay_up(ctl, sid)
+    _ok(cli("session", "overlay", "hide", "--target", sid), "hidden\n")
+    assert _node(ctl, sid)["hiddenOverlays"] == ["session"]
+    top = _json(cli("tree", "--json"))["tree"]
+    human = _ok(cli("tree"))
+    assert human == cli_format.tree(top) + "\n"
+    (line,) = [line for line in human.splitlines() if f"[{sid}]" in line]
+    assert " (overlay hidden)  [" in line, line
+    _ok(cli("session", "overlay", "show", "--target", sid), "shown\n")
+    assert " (overlay)  [" in [line for line in _ok(cli("tree")).splitlines() if f"[{sid}]" in line][0]
+    _ok(cli("session", "overlay", "toggle", "--target", sid), "hidden\n")
+    assert _json(cli("session", "overlay", "toggle", "--target", sid, "--json")) == {"id": sid, "text": "shown"}
+    _usage(cli("session", "overlay", "hide", "--pane", "scratch", "--target", sid), "--pane must be left or right")
+    _refused(cli("session", "overlay", "hide", "--pane", "left", "--target", sid), "no overlay")
+    _refused(cli("session", "overlay", "show", "--target", UNKNOWN), f"no such session: {UNKNOWN}")
+    # a pane-scoped hide names its pane in the read-back and leaves the session's tag plain
+    assert_ok(ctl.request("session.split", sid, mode="on"))
+    ctl.wait_mounted(sid, "right")
+    _ok(cli("session", "overlay", "open", "--pane", "left", "--target", sid, "exec cat"), "ok\n")
+    ctl.wait_tree(lambda tree: find_session(tree, sid).get("paneOverlays") == ["left"])
+    _ok(cli("session", "overlay", "hide", "--pane", "left", "--target", sid), "hidden\n")
+    assert _node(ctl, sid)["hiddenOverlays"] == ["left"]
+    top = _json(cli("tree", "--json"))["tree"]
+    human = _ok(cli("tree"))
+    assert human == cli_format.tree(top) + "\n"
+    (line,) = [line for line in human.splitlines() if f"[{sid}]" in line]
+    assert " (overlay)  [" in line and " (overlay hidden)" not in line, line
+    assert_ok(ctl.request("session.close", sid))
+
+
 def _page(ctl, name):
     path = ctl.instance.root / f"{name}.html"
     path.write_text(f"<!doctype html><title>{name}</title><body><p>{name}</p></body>")

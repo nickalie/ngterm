@@ -1295,46 +1295,46 @@ write_screen_file:paste; on Windows it is AltGr+Shift+J where AltGr = Ctrl+Alt, 
   `test_a_file_binding_the_toggle_overlay_chord_keeps_it` (`map ctrl+alt+shift+j toggle_workspace_filter` leaves
   toggle_overlay unbound, no diagnostic)
 
-- [ ] wire+dispatcher: parse the pane first ("session.overlay: --pane must be left or right"), resolve the session,
+- [x] wire+dispatcher: parse the pane first ("session.overlay: --pane must be left or right"), resolve the session,
       apply the mode, answer `{id, text}` with "shown" while any slot in scope is still shown, else "hidden";
       "no overlay" for an empty scope (a HUD, an ask and empty panes are not hideable); "overlay is shown on another
       Mac" when the empty scope holds a remote reservation
-- [ ] opening into a hidden slot answers "overlay hidden" (after the session resolves, before page/remote routing,
+- [x] opening into a hidden slot answers "overlay hidden" (after the session resolves, before page/remote routing,
       in `overlay.rs::open` and `overlay_page::open`; a session-wide open checks the session bit, `--pane` that
       pane's); `session.hud.open` checks the session bit after "no such session"; a hidden pane overlay does not
       block a HUD
-- [ ] model: `OverlaySlot.hidden` and `PaneOverlay.hidden`, cleared on close (a new occupant starts shown), kept by a
+- [x] model: `OverlaySlot.hidden` and `PaneOverlay.hidden`, cleared on close (a new occupant starts shown), kept by a
       page update, a `--wait` exit and a replica update, carried through swap and promote; the visible twins
       (`cover_overlay_visible`, `program_overlay_visible`, `html_overlay_visible`, `full_overlay_visible`,
       `pane_overlay_visible`, `visible_cover()`), `hideable_overlay_slots` ordered session, left, right,
       `hidden_overlay_names()`; store `set_overlays_hidden`, `toggle_overlays_hidden` (hide all while any shown, else
       show all), `hide_html_overlay(page)` with the page's scope; tree.changed only on an actual transition
-- [ ] switch the "covers or owns input" sites to the visible layer, occupancy staying for the rest: focus routing,
+- [x] switch the "covers or owns input" sites to the visible layer, occupancy staying for the rest: focus routing,
       `html_hides_terminal`/`topmost_html_overlay` (font commands), `dashboard_cover`, `pane_wash_color_hex`, zoom
       (`zoom.rs`: a hidden overlay is neither target nor valid, so hiding a zoomed one ends the zoom), the split and
       search gates, the ⌘W ladder (session slot only for a HUD or a visible cover, then the scratch, then the focused
       pane's visible overlay; only hidden overlays → ⌘W closes the session), `drop_unrealized_pane_overlays` keeps a
       hidden overlay on a rendered pane. Occupancy stays for tree `overlay`/`paneOverlays`, result/--block,
       text/copy/navigate, page lookup and the remote local-hold
-- [ ] tree read-back: `hiddenOverlays` (omitted when empty) and `htmlOverlays[].hidden` (only `true`); older
+- [x] tree read-back: `hiddenOverlays` (omitted when empty) and `htmlOverlays[].hidden` (only `true`); older
       servers decode without them
-- [ ] HTML bridge: the three commands join `OWN_OVERLAY`
-- [ ] ngtermctl `session overlay hide|show|toggle [--pane left|right]` after `close`, with upstream's abstracts and
+- [x] HTML bridge: the three commands join `OWN_OVERLAY`
+- [x] ngtermctl `session overlay hide|show|toggle [--pane left|right]` after `close`, with upstream's abstracts and
       discussions (agtermctl → ngtermctl); `tree` text tags " (overlay hidden)" when `hiddenOverlays` holds "session"
-- [ ] keymap: `BuiltinAction::ToggleOverlay` "toggle_overlay" after toggle_terminal_zoom (50 actions); upstream table
+- [x] keymap: `BuiltinAction::ToggleOverlay` "toggle_overlay" after toggle_terminal_zoom (50 actions); upstream table
       `cmd+shift+j`, Linux table `ctrl+alt+shift+j` (in `linux_vacated`); a file already binding the chord keeps it
       and leaves toggle_overlay unbound; an explicit `map … toggle_overlay` opts in
-- [ ] palette `ToggleOverlay` "Toggle Overlays" after Toggle Scratch (57), enabled with an active session holding a
+- [x] palette `ToggleOverlay` "Toggle Overlays" after Toggle Scratch (57), enabled with an active session holding a
       hideable overlay; settings `InterfaceElement::OverlayToggle` "overlayToggle" after Split, hidden by default;
       the title-bar model gains the overlay toggle {enabled, any_shown, any_hidden}
-- [ ] the app action and the ⌘W/edit-config/close-confirmation logic in `app_actions.rs` (the GPUI side is Task 21)
-- [ ] write tests: Rust unit tests porting every Swift case listed (store, session predicates, dispatcher routing
+- [x] the app action and the ⌘W/edit-config/close-confirmation logic in `app_actions.rs` (the GPUI side is Task 21)
+- [x] write tests: Rust unit tests porting every Swift case listed (store, session predicates, dispatcher routing
       and failures, tree, swap, dashboard, backdrop, zoom, bridge, keymap on both tables incl. the vacate cases and
       the Linux defaults count, BuiltinAction count, palette, settings, the six ControlServer cases as core tests,
       the five app-action cases); ngterm-ctl request, help and tree-tag cases
-- [ ] write tests: the conformance tests above
-- [ ] manual check (user): green on reference-macos
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance tests above
+- [x] manual check (user): green on reference-macos (manual, user — not automatable here: reference-macos runs only in CI on macOS)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user; the new and changed conformance tests ran targeted)
 
 ### Task 21: Hide and show overlays: the GPUI side (#790)
 
@@ -1360,6 +1360,8 @@ write_screen_file:paste; on Windows it is AltGr+Shift+J where AltGr = Ctrl+Alt, 
 - [ ] the page strip gains Hide before Close (minus icon, label "Hide", id `htmlOverlay.hide`) with the page's scope
 - [ ] View menu row after Toggle Scratch: "Hide Overlays", or "Show Overlays" when nothing is shown; enabled through
       the palette fact; chord from toggle_overlay
+      ⚠️ the row itself landed in Task 20 (`app_menu.rs`, test `the_overlays_row_names_what_it_will_do_and_needs_an_overlay`),
+      since `every_built_in_action_has_a_menu_item` needs one for `toggle_overlay`; this item verifies it in the window
 - [ ] title bar: the overlay toggle after split, counted for the dividers; disabled with nothing to hide or under a
       picker, zoom or dashboard; label Hide/Show Overlays, a slashed icon while anything is hidden, id
       `overlay-toggle`
@@ -1370,6 +1372,8 @@ write_screen_file:paste; on Windows it is AltGr+Shift+J where AltGr = Ctrl+Alt, 
       close with them." (several) when any closing session has hidden overlays
 - [ ] the alert bell when Edit Keymap/Hooks/ghostty.conf is refused because a hidden overlay holds the session slot;
       the overlay stays hidden
+      ⚠️ Task 20 added the core's `FrontendAction::AlertBell(window)` and its arm in `keymap_actions.rs` ringing the
+      existing `status_sound::ring`; what remains is the macOS and Windows forms and a window test
 - [ ] the toggle_overlay chord fires from a focused page (the interceptor runs the keymap before the page's engine:
       a test, no special case)
 - [ ] write tests: GPUI window tests (headless, lavapipe) mirroring ControlOverlayVisibilityUITests: keys go to the

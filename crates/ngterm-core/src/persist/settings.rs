@@ -188,6 +188,7 @@ raw_enum! {
         RecentSessions => "recentSessions",
         Scratch => "scratch",
         Split => "split",
+        OverlayToggle => "overlayToggle",
         Dashboard => "dashboard",
         QuickTerminal => "quickTerminal",
         CustomCommands => "customCommands",
@@ -203,7 +204,7 @@ impl InterfaceElement {
     /// Whether the element starts hidden, so showing it is the opt-in.
     #[must_use]
     pub fn hidden_by_default(self) -> bool {
-        matches!(self, Self::CustomCommands | Self::WorkspaceName)
+        matches!(self, Self::CustomCommands | Self::WorkspaceName | Self::OverlayToggle)
     }
 }
 
@@ -738,13 +739,34 @@ mod tests {
         let mut settings = AppSettings::default();
         assert_eq!(
             settings.resolved_hidden_interface_elements(),
-            [InterfaceElement::WorkspaceName, InterfaceElement::CustomCommands]
+            [
+                InterfaceElement::WorkspaceName,
+                InterfaceElement::OverlayToggle,
+                InterfaceElement::CustomCommands
+            ]
         );
         settings.hidden_interface_elements = Some(vec!["split".to_owned(), "nope".to_owned()]);
         settings.shown_interface_elements = Some(vec!["workspaceName".to_owned()]);
         assert_eq!(
             settings.resolved_hidden_interface_elements(),
-            [InterfaceElement::Split, InterfaceElement::CustomCommands]
+            [
+                InterfaceElement::Split,
+                InterfaceElement::OverlayToggle,
+                InterfaceElement::CustomCommands
+            ]
+        );
+        let hidden_by_default: Vec<InterfaceElement> = InterfaceElement::ALL
+            .iter()
+            .copied()
+            .filter(|element| element.hidden_by_default())
+            .collect();
+        assert_eq!(
+            hidden_by_default,
+            [
+                InterfaceElement::WorkspaceName,
+                InterfaceElement::OverlayToggle,
+                InterfaceElement::CustomCommands
+            ]
         );
     }
 

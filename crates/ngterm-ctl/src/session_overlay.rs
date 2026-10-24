@@ -476,14 +476,24 @@ impl RequestCommand for Resize {
 
 // MARK: - hide, show, toggle, page-serve
 
+/// Upstream's `Session.Overlay.visibilityScope`, a literal so the discussions can `concat!` it.
+macro_rules! visibility_scope {
+    () => {
+        "Without --pane this acts on every overlay of the session: the session-wide one and both pane overlays."
+    };
+}
+
 /// Declares an overlay visibility subcommand (upstream's `Session+OverlayVisibility.swift`) sending `$cmd` to its
-/// target. `--pane` is not ported yet.
+/// target, scoped to one pane with `--pane`.
 macro_rules! visibility_command {
-    ($(#[$doc:meta])* $name:ident, $cmd:expr, $about:literal) => {
+    ($(#[$doc:meta])* $name:ident, $cmd:expr, $about:literal, $discussion:expr) => {
         $(#[$doc])*
         #[derive(Debug, clap::Args)]
-        #[command(about = $about)]
+        #[command(about = $about, long_about = $discussion)]
         pub struct $name {
+            #[arg(long, help = "Only that split pane's overlay (primary/left/top or split/right/bottom).")]
+            pane: Option<String>,
+
             #[command(flatten)]
             target: TargetOptions,
 
@@ -496,8 +506,12 @@ macro_rules! visibility_command {
                 &self.options.basic
             }
 
+            fn validate(&self) -> Result<(), String> {
+                validate_overlay_pane(self.pane.as_deref())
+            }
+
             fn make_request(&self) -> Request {
-                session_request($cmd, Some(self.target.target.clone()), None, &self.options)
+                session_request($cmd, Some(self.target.target.clone()), pane_args(self.pane.as_ref()), &self.options)
             }
         }
     };
@@ -507,19 +521,25 @@ visibility_command!(
     /// `ngtermctl session overlay hide`.
     Hide,
     SessionCmd::OverlayHide,
-    "Hide the session's overlays without closing them."
+    "Hide the session's overlays without closing them.",
+    concat!(
+        "A hidden overlay keeps running and stays in `tree` (hiddenOverlays); the terminal under it takes input. ",
+        visibility_scope!()
+    )
 );
 visibility_command!(
     /// `ngtermctl session overlay show`.
     Show,
     SessionCmd::OverlayShow,
-    "Show the session's hidden overlays again."
+    "Show the session's hidden overlays again.",
+    visibility_scope!()
 );
 visibility_command!(
     /// `ngtermctl session overlay toggle`.
     Toggle,
     SessionCmd::OverlayToggle,
-    "Hide the session's overlays if any is shown, otherwise show them all."
+    "Hide the session's overlays if any is shown, otherwise show them all.",
+    concat!("Prints the state left behind, hidden or shown. ", visibility_scope!())
 );
 
 /// `ngtermctl session overlay page-serve TOKEN` (upstream's `OverlayPageServe.swift`): claims a handed-over page by

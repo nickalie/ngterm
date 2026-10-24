@@ -57,6 +57,12 @@ pub fn perform(poster: &Poster, action: FrontendAction, close_grace: bool, cx: &
             });
         }
         FrontendAction::RenameWindow { window, name } => rename_window(poster, window, &name, cx),
+        // the status sounds' bell, rung over the window whose Edit item a hidden overlay refused
+        FrontendAction::AlertBell(window) => {
+            if let Some(handle) = keymap_dispatch::window_of(KeyOrigin::Window(window)) {
+                let _ = handle.update(cx, |_, window, cx| crate::status_sound::ring(window, cx));
+            }
+        }
     }
 }
 

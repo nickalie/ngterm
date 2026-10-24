@@ -95,6 +95,9 @@ pub struct OverlaySlot {
     pub hud: Option<HudState>,
     /// The page the slot shows instead of running a program (upstream's `htmlOverlay`); `command` is then unset.
     pub html: Option<HtmlOverlay>,
+    /// The program or page keeps running while it covers nothing (upstream's `overlayHidden`); cleared on close, so a
+    /// new occupant starts shown. A HUD is never hidden.
+    pub hidden: bool,
 }
 
 impl OverlaySlot {
@@ -165,6 +168,7 @@ impl OverlaySlot {
             return false;
         }
         self.active = false;
+        self.hidden = false;
         self.surface.teardown();
         if let Some(code) = self.code_file.take().and_then(|file| take_exit_code(&file)) {
             self.exit_code = Some(code);

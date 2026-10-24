@@ -66,7 +66,8 @@ impl ZoomSurface {
     }
 
     /// Whether the slot is addressable: a session can be while its terminal has yet to come up. A HUD is not: it
-    /// takes no input, and `tree` reports the slot as no overlay while one is up.
+    /// takes no input, and `tree` reports the slot as no overlay while one is up. A hidden overlay is not either, so
+    /// hiding a zoomed one ends the zoom.
     #[must_use]
     pub fn is_available(self, session: &Session) -> bool {
         match self {
@@ -76,7 +77,7 @@ impl ZoomSurface {
             }
             Self::Split => session.split.exists || session.split_surface.is_present(),
             Self::Scratch => session.scratch_active || session.scratch_surface.is_present(),
-            Self::Overlay => session.overlay.program_active(),
+            Self::Overlay => session.program_overlay_visible(),
             Self::OverlayLeft => program_covers(session, OverlayPane::Left),
             Self::OverlayRight => program_covers(session, OverlayPane::Right),
         }
@@ -126,15 +127,15 @@ impl ZoomSurface {
     /// Whether this is the session's active surface; at most one kind is (upstream's `isActive`).
     #[must_use]
     pub fn is_active(self, session: &Session) -> bool {
-        let uncovered = !session.cover_overlay_active() && !session.scratch_active;
+        let uncovered = !session.cover_overlay_visible() && !session.scratch_active;
         let focused = session.focused_overlay_pane_role();
-        let covered = |pane: OverlayPane| session.pane_overlay(pane).is_some();
+        let covered = |pane: OverlayPane| session.pane_overlay_visible(pane);
         let program = |pane: OverlayPane| program_covers(session, pane);
         match self {
             Self::Primary => uncovered && focused == OverlayPane::Left && !covered(OverlayPane::Left),
             Self::Split => uncovered && focused == OverlayPane::Right && !covered(OverlayPane::Right),
-            Self::Scratch => !session.cover_overlay_active() && session.scratch_active,
-            Self::Overlay => session.overlay.program_active(),
+            Self::Scratch => !session.cover_overlay_visible() && session.scratch_active,
+            Self::Overlay => session.program_overlay_visible(),
             Self::OverlayLeft => uncovered && focused == OverlayPane::Left && program(OverlayPane::Left),
             Self::OverlayRight => uncovered && focused == OverlayPane::Right && program(OverlayPane::Right),
         }
@@ -145,26 +146,27 @@ impl ZoomSurface {
     #[must_use]
     pub fn is_visible(self, session: &Session) -> bool {
         let pane_visible = |pane: OverlayPane| {
-            !session.cover_overlay_active() && !session.scratch_active && session.renders_overlay_pane(pane)
+            !session.cover_overlay_visible() && !session.scratch_active && session.renders_overlay_pane(pane)
         };
-        let covered = |pane: OverlayPane| session.pane_overlay(pane).is_some();
+        let covered = |pane: OverlayPane| session.pane_overlay_visible(pane);
         let program = |pane: OverlayPane| program_covers(session, pane);
         match self {
             Self::Primary => pane_visible(OverlayPane::Left) && !covered(OverlayPane::Left),
             Self::Split => pane_visible(OverlayPane::Right) && !covered(OverlayPane::Right),
-            Self::Scratch => !session.cover_overlay_active() && session.scratch_active,
-            Self::Overlay => session.overlay.program_active(),
+            Self::Scratch => !session.cover_overlay_visible() && session.scratch_active,
+            Self::Overlay => session.program_overlay_visible(),
             Self::OverlayLeft => pane_visible(OverlayPane::Left) && program(OverlayPane::Left),
             Self::OverlayRight => pane_visible(OverlayPane::Right) && program(OverlayPane::Right),
         }
     }
 }
 
-/// Whether `pane`'s own overlay runs a program (upstream: a pane overlay that is not a page).
+/// Whether `pane`'s own overlay runs a program and covers the pane now (upstream: a visible pane overlay that is not a
+/// page).
 fn program_covers(session: &Session, pane: OverlayPane) -> bool {
     session
         .pane_overlay(pane)
-        .is_some_and(crate::model::PaneOverlay::is_program)
+        .is_some_and(|overlay| overlay.is_program() && !overlay.hidden)
 }
 
 /// A surface id, `surface:<SESSION-ID>:<kind>` (upstream's `TerminalSurfaceID`).

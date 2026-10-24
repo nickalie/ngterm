@@ -30,6 +30,7 @@ pub enum BuiltinAction {
     ToggleHorizontalSplit,
     ToggleScratch,
     ToggleTerminalZoom,
+    ToggleOverlay,
     ToggleSearch,
     ToggleSidebar,
     SelectTheme,
@@ -82,11 +83,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn forty_nine_actions_with_upstreams_names() {
+    fn fifty_actions_with_upstreams_names() {
         let names: Vec<&str> = BuiltinAction::all().map(BuiltinAction::name).collect();
-        assert_eq!(names.len(), 49);
+        assert_eq!(names.len(), 50);
         assert_eq!(names[0], "new_window");
-        assert_eq!(names[48], "attach_remote");
+        assert_eq!(names[49], "attach_remote");
+        assert_eq!(BuiltinAction::ToggleOverlay.name(), "toggle_overlay");
+        assert_eq!(
+            names[23], "toggle_overlay",
+            "after toggle_terminal_zoom, as upstream declares it"
+        );
         assert!(names.contains(&"toggle_horizontal_split"));
         assert!(names.contains(&"previous_attention_session"));
         for name in names {

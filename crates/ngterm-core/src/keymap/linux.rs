@@ -42,6 +42,9 @@ fn linux_table() -> Vec<(BuiltinAction, Chord)> {
         (A::ToggleSplit, chord(CTRL_SHIFT, "d")),
         (A::ToggleHorizontalSplit, chord(CTRL_SHIFT, "h")),
         (A::ToggleScratch, chord(CTRL_SHIFT, "j")),
+        // upstream's ⇧⌘J beside ⌘J: Alt joins where the letter is taken. It shadows Ghostty's Linux default
+        // write_screen_file:open, as upstream's shadows write_screen_file:paste
+        (A::ToggleOverlay, chord(CTRL_ALT_SHIFT, "j")),
         (A::ToggleTerminalZoom, chord(CTRL_SHIFT, "return")),
         (A::ToggleSearch, chord(CTRL_SHIFT, "f")),
         (A::ToggleSidebar, chord(CTRL_SHIFT, "s")),
@@ -63,8 +66,9 @@ fn linux_table() -> Vec<(BuiltinAction, Chord)> {
     ]
 }
 
-/// The defaults added after the table's first letters (or fixed keys before), plus the `attach_remote` exception.
-fn linux_vacated() -> [BuiltinAction; 15] {
+/// The defaults added after the table's first letters (or fixed keys before), plus the `attach_remote` and
+/// `toggle_overlay` exceptions.
+fn linux_vacated() -> [BuiltinAction; 16] {
     use BuiltinAction as A;
     [
         A::ReopenRecent,
@@ -82,6 +86,7 @@ fn linux_vacated() -> [BuiltinAction; 15] {
         A::PreviousAttentionSession,
         A::NextAttentionSession,
         A::AttachRemote,
+        A::ToggleOverlay,
     ]
 }
 
@@ -126,7 +131,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(seen.len(), 31);
+        assert_eq!(seen.len(), 32);
     }
 
     #[test]
@@ -207,6 +212,60 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(keymap.commands()[0].shortcut, "ctrl+shift+r");
         assert_eq!(attach_chord(&keymap), None);
+    }
+
+    fn overlay_chord(keymap: &crate::keymap::Keymap) -> Option<String> {
+        keymap
+            .equivalent(BuiltinAction::ToggleOverlay)
+            .map(Chord::display_string)
+    }
+
+    /// Upstream's `toggleOverlayShipsOnCmdShiftJAndCanBeRemapped`, on the Linux chord.
+    #[test]
+    fn toggle_overlay_ships_on_ctrl_alt_shift_j_and_can_be_remapped() {
+        let shipped = overlay_chord(&parse_keymap("", &linux_defaults()).0);
+        assert_eq!(
+            parse_keybind(shipped.as_deref().unwrap_or_default()),
+            Some(vec![Chord::new(CTRL_ALT_SHIFT, "j")])
+        );
+        let (keymap, diagnostics) = parse_keymap("map ctrl+shift+y toggle_overlay", &linux_defaults());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(overlay_chord(&keymap).as_deref(), Some("ctrl+shift+y"));
+    }
+
+    /// Upstream's `anExistingCmdShiftJBindingIsNotBrokenByTheToggleOverlayDefault`, on the Linux chord.
+    #[test]
+    fn an_existing_ctrl_alt_shift_j_binding_keeps_it_and_leaves_toggle_overlay_unbound() {
+        let (keymap, diagnostics) = parse_keymap("map ctrl+alt+shift+j toggle_workspace_filter", &linux_defaults());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(
+            keymap.equivalent(BuiltinAction::ToggleWorkspaceFilter),
+            Some(&Chord::new(CTRL_ALT_SHIFT, "j"))
+        );
+        assert_eq!(overlay_chord(&keymap), None);
+        assert!(keymap.builtin_unbound().contains(&BuiltinAction::ToggleOverlay));
+
+        let (keymap, diagnostics) = parse_keymap("command \"Old binding\" ctrl+alt+shift+j echo ok", &linux_defaults());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(keymap.equivalent(BuiltinAction::ToggleWorkspaceFilter), None);
+        assert_eq!(
+            parse_keybind(&keymap.commands()[0].shortcut),
+            Some(vec![Chord::new(CTRL_ALT_SHIFT, "j")])
+        );
+        assert_eq!(overlay_chord(&keymap), None);
+    }
+
+    #[test]
+    fn an_explicit_toggle_overlay_map_opts_in_over_an_old_command_on_its_chord() {
+        let (keymap, _) = parse_keymap(
+            "map ctrl+alt+shift+j toggle_overlay\ncommand \"Old binding\" ctrl+alt+shift+j echo ok",
+            &linux_defaults(),
+        );
+        assert_eq!(
+            keymap.equivalent(BuiltinAction::ToggleOverlay),
+            Some(&Chord::new(CTRL_ALT_SHIFT, "j"))
+        );
+        assert!(keymap.commands()[0].shortcut.is_empty());
     }
 
     #[test]

@@ -48,6 +48,8 @@ bitflags! {
         const DASHBOARD_OPEN = 1 << 18;
         /// A control picker or a GUI ask holds the window's modal slot.
         const PICKER_ACTIVE = 1 << 19;
+        /// The active session holds a program or page that can be hidden or shown.
+        const ACTIVE_SESSION_HAS_OVERLAY = 1 << 20;
     }
 }
 
@@ -134,6 +136,7 @@ pub enum PaletteCommand {
     CloseSplit,
     SwapPanes,
     ToggleScratch,
+    ToggleOverlay,
     ToggleTerminalZoom,
     ToggleSidebar,
     ToggleFlag,
@@ -212,6 +215,9 @@ impl PaletteCommand {
             | Self::FirstSession
             | Self::LastSession => context.has(PaletteFacts::HAS_ACTIVE_SESSION),
             Self::SwapPanes => context.has(PaletteFacts::HAS_ACTIVE_SESSION | PaletteFacts::ACTIVE_SESSION_HAS_SPLIT),
+            Self::ToggleOverlay => {
+                context.has(PaletteFacts::HAS_ACTIVE_SESSION | PaletteFacts::ACTIVE_SESSION_HAS_OVERLAY)
+            }
             Self::RenameWorkspace
             | Self::FocusWorkspace
             | Self::AddWorkspaceToFocus
@@ -320,6 +326,7 @@ impl PaletteCommand {
             Self::CloseSplit => "Close Split",
             Self::SwapPanes => "Swap Panes",
             Self::ToggleScratch => "Toggle Scratch",
+            Self::ToggleOverlay => "Toggle Overlays",
             Self::ToggleTerminalZoom => "Toggle Terminal Zoom",
             Self::ToggleSidebar => "Toggle Sidebar",
             Self::ToggleFlag => "Flag Session",
@@ -382,6 +389,7 @@ impl PaletteCommand {
             Self::ToggleSplit => BuiltinAction::ToggleSplit,
             Self::ToggleHorizontalSplit => BuiltinAction::ToggleHorizontalSplit,
             Self::ToggleScratch => BuiltinAction::ToggleScratch,
+            Self::ToggleOverlay => BuiltinAction::ToggleOverlay,
             Self::ToggleTerminalZoom => BuiltinAction::ToggleTerminalZoom,
             Self::ToggleSidebar => BuiltinAction::ToggleSidebar,
             Self::ToggleFlag => BuiltinAction::ToggleFlag,
@@ -444,7 +452,8 @@ mod tests {
         .union(F::HAS_RECENT_CLOSED)
         .union(F::HAS_ACTIVE_SESSION)
         .union(F::HAS_CURRENT_WORKSPACE)
-        .union(F::HAS_REMOTES);
+        .union(F::HAS_REMOTES)
+        .union(F::ACTIVE_SESSION_HAS_OVERLAY);
 
     /// The commands whose menu item carries no modal term at all.
     const COVER_PROOF: [PaletteCommand; 8] = [
@@ -458,7 +467,7 @@ mod tests {
         PaletteCommand::ToggleTerminalZoom,
     ];
 
-    const NEED_SESSION: [PaletteCommand; 15] = [
+    const NEED_SESSION: [PaletteCommand; 16] = [
         PaletteCommand::RenameSession,
         PaletteCommand::DuplicateSession,
         PaletteCommand::ClearStatus,
@@ -467,6 +476,7 @@ mod tests {
         PaletteCommand::ToggleHorizontalSplit,
         PaletteCommand::SwapPanes,
         PaletteCommand::ToggleScratch,
+        PaletteCommand::ToggleOverlay,
         PaletteCommand::Find,
         PaletteCommand::PreviousSession,
         PaletteCommand::NextSession,
@@ -514,6 +524,7 @@ mod tests {
                 "Close Split",
                 "Swap Panes",
                 "Toggle Scratch",
+                "Toggle Overlays",
                 "Toggle Terminal Zoom",
                 "Toggle Sidebar",
                 "Flag Session",
@@ -553,7 +564,7 @@ mod tests {
 
     #[test]
     fn catalog_has_the_expected_static_command_count() {
-        assert_eq!(PaletteCommand::all().count(), 56);
+        assert_eq!(PaletteCommand::all().count(), 57);
     }
 
     #[test]
@@ -752,6 +763,25 @@ mod tests {
         assert_eq!(
             PaletteCommand::AttachRemote.builtin_action(),
             Some(BuiltinAction::AttachRemote)
+        );
+    }
+
+    /// Upstream's `toggleOverlayNeedsAnOverlayToHideOrShow`.
+    #[test]
+    fn toggle_overlay_needs_an_overlay_to_hide_or_show() {
+        let facts = F::HAS_ACTIVE_SESSION | F::HAS_CURRENT_WORKSPACE;
+        let without = ctx(facts);
+        assert!(
+            PaletteCommand::ToggleOverlay.is_visible(&without),
+            "stays listed, inert"
+        );
+        assert!(!PaletteCommand::ToggleOverlay.is_enabled(&without));
+        let with = facts | F::ACTIVE_SESSION_HAS_OVERLAY;
+        assert!(PaletteCommand::ToggleOverlay.is_enabled(&ctx(with)));
+        assert!(!PaletteCommand::ToggleOverlay.is_enabled(&ctx(with | F::PICKER_ACTIVE)));
+        assert_eq!(
+            PaletteCommand::ToggleOverlay.builtin_action(),
+            Some(BuiltinAction::ToggleOverlay)
         );
     }
 

@@ -377,6 +377,37 @@ fn an_explicit_attach_remote_map_keeps_the_chord_over_an_old_command_on_it() {
     assert_eq!(shortcuts(&keymap), [""]);
 }
 
+/// Upstream's `toggleOverlayShipsOnCmdShiftJAndCanBeRemapped`.
+#[test]
+fn toggle_overlay_ships_on_cmd_shift_j_and_can_be_remapped() {
+    assert_eq!(parse("").0.equivalent(A::ToggleOverlay), Some(&chord(CMD | SHIFT, "j")));
+    let (keymap, diagnostics) = parse("map ctrl+shift+y toggle_overlay");
+    assert!(diagnostics.is_empty());
+    assert_eq!(keymap.equivalent(A::ToggleOverlay), Some(&chord(CTRL | SHIFT, "y")));
+}
+
+/// Upstream's `anExistingCmdShiftJBindingIsNotBrokenByTheToggleOverlayDefault`, both of its lines.
+#[test]
+fn an_existing_cmd_shift_j_binding_is_not_broken_by_the_toggle_overlay_default() {
+    for line in [
+        "map cmd+shift+j toggle_workspace_filter",
+        "command \"Old binding\" cmd+shift+j echo ok",
+    ] {
+        let (keymap, diagnostics) = parse(line);
+        assert!(diagnostics.is_empty(), "{line}: {diagnostics:?}");
+        assert_eq!(keymap.equivalent(A::ToggleOverlay), None, "{line}");
+        let mapped = line.starts_with("map");
+        assert_eq!(
+            keymap.equivalent(A::ToggleWorkspaceFilter),
+            mapped.then(|| chord(CMD | SHIFT, "j")).as_ref(),
+            "{line}"
+        );
+        if !mapped {
+            assert_eq!(shortcuts(&keymap), ["cmd+shift+j"]);
+        }
+    }
+}
+
 #[test]
 fn a_vacated_default_is_also_freed_by_another_maps_monitor_alternative() {
     let (keymap, diagnostics) = parse("map cmd+t|cmd+shift+g>x toggle_split");

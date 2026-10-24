@@ -19,6 +19,7 @@ mod metadata;
 mod moves;
 mod overlay;
 mod overlay_page;
+mod overlay_visibility;
 mod palette;
 mod pane_focus;
 mod panes;

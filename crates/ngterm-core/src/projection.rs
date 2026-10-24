@@ -138,7 +138,8 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
 }
 
 /// The overlay read-back: `overlay` and its size for a caller's program, `hud` for a HUD, never both; `paneOverlays`
-/// names the panes covered by their own overlay, omitted when neither is.
+/// names the panes covered by their own overlay, omitted when neither is. Both report occupancy, a hidden overlay
+/// included; `hiddenOverlays` names the hidden slots.
 fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
     let slot = &session.overlay;
     node.overlay = session.cover_overlay_active();
@@ -149,9 +150,15 @@ fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
     let nodes: Vec<ControlHtmlOverlayNode> = session
         .html_overlays()
         .into_iter()
-        .map(|(slot, page)| html_overlay_node(slot.map(OverlayPane::wire_name), page))
+        .map(|(slot, page)| {
+            let mut node = html_overlay_node(slot.map(OverlayPane::wire_name), page);
+            node.hidden = session.overlay_hidden(slot).then_some(true);
+            node
+        })
         .collect();
     node.html_overlays = (!nodes.is_empty()).then_some(nodes);
+    let hidden = session.hidden_overlay_names();
+    node.hidden_overlays = (!hidden.is_empty()).then(|| hidden.into_iter().map(str::to_owned).collect());
     node.ask = session.ask().map(|pending| ControlSessionAsk {
         id: pending.ask.id.clone(),
         pane: session.ask_target_pane().map(|pane| pane.wire_name().to_owned()),
@@ -197,6 +204,7 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         browse: page.flags.browse,
         zoom: None,
         id: Some(uuid_string(page.id)),
+        hidden: None,
     }
 }
 

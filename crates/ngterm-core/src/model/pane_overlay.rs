@@ -35,6 +35,9 @@ pub struct PaneOverlay {
     pub code_file: Option<PathBuf>,
     /// The page this overlay shows instead of running `command` (upstream's `PaneOverlay.html`).
     pub html: Option<HtmlOverlay>,
+    /// The overlay keeps running while it covers nothing (upstream's `PaneOverlay.hidden`); a new occupant starts
+    /// shown, and the bit moves with the overlay across a swap or a promotion.
+    pub hidden: bool,
 }
 
 impl PaneOverlay {
@@ -181,22 +184,24 @@ impl Session {
         }
     }
 
-    /// The focused pane, when its overlay slot is taken (upstream's `focusedOverlayPane`).
+    /// The focused pane, when an overlay covers it now: neither an empty slot nor a hidden overlay counts (upstream's
+    /// `focusedOverlayPane`).
     #[must_use]
     pub fn focused_overlay_pane(&self) -> Option<OverlayPane> {
         let pane = self.focused_overlay_pane_role();
-        self.pane_overlay(pane).is_some().then_some(pane)
+        self.pane_overlay_visible(pane).then_some(pane)
     }
 
-    /// Whether a caller's program or page covers the session and owns its input (upstream's `coverOverlayActive`), the
-    /// input-exclusion question; terminal-surface questions ask [`super::OverlaySlot::program_active`].
+    /// Whether a caller's program or page holds the session-wide slot, hidden or not (upstream's
+    /// `coverOverlayActive`): input exclusion asks [`Session::cover_overlay_visible`], terminal-surface questions
+    /// [`super::OverlaySlot::program_active`].
     #[must_use]
     pub fn cover_overlay_active(&self) -> bool {
         self.overlay.program_active() || self.overlay.html_active()
     }
 
-    /// Whether a program or page covers the whole session, no size given (upstream's `fullOverlayActive`): it hides
-    /// the panes and a shown scratch. A HUD never does.
+    /// Whether a program or page fills the whole session slot, no size given (upstream's `fullOverlayActive`). Shown
+    /// ([`Session::full_overlay_visible`]), it hides the panes and a shown scratch. A HUD never counts.
     #[must_use]
     pub fn full_overlay_active(&self) -> bool {
         self.cover_overlay_active() && self.overlay.size_percent.is_none()
@@ -255,6 +260,7 @@ impl AppStore {
             generation,
             code_file: Some(mint_code_file()),
             html: None,
+            hidden: false,
         });
         session.remote_overlays.clear_failure(Some(pane));
         self.schedule_tree_changed();

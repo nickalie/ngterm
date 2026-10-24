@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::Core;
 use crate::keymap::BuiltinAction;
-use crate::model::{AppStore, SidebarMode};
+use crate::model::{AppStore, Session, SidebarMode};
 use crate::palette::PaletteMode;
 use crate::palette_catalog::{PaletteCommand, PaletteContext, PaletteFacts};
 use crate::pane_env::uuid_string;
@@ -57,6 +57,9 @@ pub enum FrontendAction {
     ToggleFullscreen(Uuid),
     /// Open the Settings popup over the window, or bring the open one to the front (the palette's Settings…).
     OpenSettings(Uuid),
+    /// Ring the alert bell over the window: an Edit item was refused because a hidden overlay holds the session slot,
+    /// the one refusal with nothing on screen to explain it (upstream's `beepIfHiddenOverlayRefused`).
+    AlertBell(Uuid),
 }
 
 /// A config file the menu's Edit items open in an editor overlay.
@@ -150,9 +153,9 @@ impl Core {
                 self.reload_hooks();
             }
             PaletteCommand::ReloadConfig => self.request_config_reload(),
-            PaletteCommand::EditKeymap => self.edit_config_file(window, ConfigFile::Keymap),
-            PaletteCommand::EditHooks => self.edit_config_file(window, ConfigFile::Hooks),
-            PaletteCommand::EditGhosttyConfig => self.edit_config_file(window, ConfigFile::Ghostty),
+            PaletteCommand::EditKeymap => return self.edit_config_file(window, ConfigFile::Keymap),
+            PaletteCommand::EditHooks => return self.edit_config_file(window, ConfigFile::Hooks),
+            PaletteCommand::EditGhosttyConfig => return self.edit_config_file(window, ConfigFile::Ghostty),
             _ => self.perform_store_command(window, command),
         }
         ActionEffect::Done
@@ -191,10 +194,11 @@ impl Core {
     }
 
     /// Edit Keymap/Hooks/ghostty.conf (upstream's `editKeymap`): the file, a commented starter when missing, opened in
-    /// the user's editor in a 95% overlay over the active session; the editor's exit reloads it.
-    fn edit_config_file(&mut self, window: Uuid, file: ConfigFile) {
+    /// the user's editor in a 95% overlay over the active session; the editor's exit reloads it. A refusal because a
+    /// hidden overlay holds the session slot rings the bell and leaves that overlay hidden.
+    fn edit_config_file(&mut self, window: Uuid, file: ConfigFile) -> ActionEffect {
         let Some(session) = self.active_session_of(window) else {
-            return;
+            return ActionEffect::Done;
         };
         let path = match file {
             ConfigFile::Keymap => {
@@ -222,7 +226,16 @@ impl Core {
             window_args(window, args),
         );
         if !opened {
-            return;
+            let hidden = self
+                .library()
+                .store(window)
+                .and_then(|store| store.session(session))
+                .is_some_and(|state| state.overlay_hidden(None));
+            return if hidden {
+                frontend(FrontendAction::AlertBell(window))
+            } else {
+                ActionEffect::Done
+            };
         }
         let generation = self
             .library()
@@ -234,6 +247,7 @@ impl Core {
             self.config_edits.0.retain(|(edited, _, _)| *edited != session);
             self.config_edits.0.push((session, generation, file));
         }
+        ActionEffect::Done
     }
 
     /// An overlay of `session` at slot generation `generation` ended: an editor the Edit items opened reloads its file.
@@ -439,6 +453,11 @@ impl Core {
             BuiltinAction::ToggleTerminalZoom => {
                 self.run_request(Command::Surface(SurfaceCmd::Zoom), None, on(Args::default()));
             }
+            // the menu, palette, title-bar button and chord share `session.overlay.toggle` (upstream's
+            // `toggleOverlays`): every program and page of the session hidden while any is shown, else all shown
+            BuiltinAction::ToggleOverlay => {
+                self.run_request(Command::Session(SessionCmd::OverlayToggle), target, on(Args::default()));
+            }
             BuiltinAction::ToggleSearch => self.toggle_search(window, session),
             BuiltinAction::FocusLeftPane | BuiltinAction::FocusRightPane => {
                 let pane = if action == BuiltinAction::FocusLeftPane {
@@ -460,7 +479,7 @@ impl Core {
         ActionEffect::Done
     }
 
-    /// Toggle Split (upstream's `toggleSplit(axis:)`): inert under a full overlay; a shown scratch is dismissed
+    /// Toggle Split (upstream's `toggleSplit(axis:)`): inert under a shown full overlay; a shown scratch is dismissed
     /// instead, so the panes come into view first.
     fn toggle_split_action(&mut self, window: Uuid, session: Uuid, horizontal: bool) {
         let Some(store) = self.library_mut().store_mut(window) else {
@@ -469,7 +488,7 @@ impl Core {
         let Some(state) = store.session(session) else {
             return;
         };
-        if state.full_overlay_active() {
+        if state.full_overlay_visible() {
             return;
         }
         if state.scratch_active {
@@ -610,8 +629,9 @@ impl Core {
         })
     }
 
-    /// The session's own covers, topmost first: its overlay, its scratch, the focused pane's overlay. Whether one
-    /// closed.
+    /// The session's own covers, topmost first: its HUD or shown overlay, its scratch, the focused pane's shown overlay
+    /// (upstream's `closeActiveSession` rungs). A hidden overlay is not in front of the user, so it is skipped: with
+    /// only hidden ones, Close Session closes the session. Whether one closed.
     fn close_session_cover(&mut self, window: Uuid, session: Uuid) -> bool {
         let Some(store) = self.library_mut().store_mut(window) else {
             return false;
@@ -619,7 +639,7 @@ impl Core {
         let Some(state) = store.session(session) else {
             return false;
         };
-        if state.overlay.active {
+        if state.overlay.hud_active() || state.cover_overlay_visible() {
             return store.close_overlay(session);
         }
         if state.scratch_active {
@@ -694,6 +714,10 @@ fn store_facts(store: &AppStore, layout: FlaggedViewLayout) -> PaletteFacts {
         PaletteFacts::ACTIVE_SESSION_HAS_SPLIT,
         active.is_some_and(|session| session.split.exists),
     );
+    facts.set(
+        PaletteFacts::ACTIVE_SESSION_HAS_OVERLAY,
+        active.is_some_and(|session| !session.hideable_overlay_slots(None).is_empty()),
+    );
     facts.set(PaletteFacts::HAS_PENDING_CLOSE, store.pending_close_summary().is_some());
     facts.set(PaletteFacts::HAS_ACTIVE_SESSION, active.is_some());
     facts.set(
@@ -701,6 +725,32 @@ fn store_facts(store: &AppStore, layout: FlaggedViewLayout) -> PaletteFacts {
         store.current_workspace_id().is_some(),
     );
     facts
+}
+
+/// The close confirmation's body for `sessions` (upstream's `closeConfirmationText(for:)`): the soft-close setting's
+/// sentence, then the hidden overlays that go with them, since a hidden overlay is out of sight and the alert is the
+/// last place it can be noticed.
+#[must_use]
+pub fn close_confirmation_text(sessions: &[&Session], close_grace: bool) -> String {
+    let plural = sessions.len() > 1;
+    let noun = if plural { "sessions" } else { "session" };
+    let base = if close_grace {
+        format!("The {noun} will close after a short undo window.")
+    } else {
+        format!("The {noun} will close immediately and can be reopened from File > Open Recent.")
+    };
+    if !sessions
+        .iter()
+        .any(|session| !session.hidden_overlay_names().is_empty())
+    {
+        return base;
+    }
+    let suffix = if plural {
+        " Their hidden overlays close with them."
+    } else {
+        " Its hidden overlays close with it."
+    };
+    base + suffix
 }
 
 fn frontend(action: FrontendAction) -> ActionEffect {

@@ -159,11 +159,14 @@ const SESSION_TARGETED: [Command; 5] = [
     Command::Keymap(KeymapCmd::Run),
 ];
 /// The page's own overlay commands, which also get its pane.
-const OWN_OVERLAY: [Command; 4] = [
+const OWN_OVERLAY: [Command; 7] = [
     Command::Session(SessionCmd::OverlayClose),
     Command::Session(SessionCmd::OverlayReload),
     Command::Session(SessionCmd::OverlayNavigate),
     Command::Session(SessionCmd::OverlaySubmit),
+    Command::Session(SessionCmd::OverlayHide),
+    Command::Session(SessionCmd::OverlayShow),
+    Command::Session(SessionCmd::OverlayToggle),
 ];
 /// These take their window as `target`, not as `args.window`.
 const WINDOW_TARGETED: [Command; 9] = [
@@ -532,6 +535,9 @@ mod tests {
             "session.overlay.reload",
             "session.overlay.navigate",
             "session.overlay.submit",
+            "session.overlay.hide",
+            "session.overlay.show",
+            "session.overlay.toggle",
         ] {
             let built = fixture.request(&format!(r#"{{"cmd":"{cmd}"}}"#));
             assert_eq!(built.target, Some(fixture.session_target()), "{cmd}");

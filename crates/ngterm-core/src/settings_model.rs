@@ -607,6 +607,7 @@ impl InterfaceElement {
             Self::RecentSessions => "Recent sessions",
             Self::Scratch => "Scratch terminal",
             Self::Split => "Split view",
+            Self::OverlayToggle => "Hide overlays",
             Self::Dashboard => "Dashboard",
             Self::QuickTerminal => "Quick terminal",
             Self::CustomCommands => "Custom commands",

@@ -262,7 +262,9 @@ def tree(top: Mapping[str, Any]) -> str:
         for session in workspace["sessions"]:
             split = " (split)" if session["split"] else (" (split hidden)" if session.get("hasSplit") is True else "")
             tags = split + (" (not realized)" if session.get("realized") is False else "")
-            tags += (" (overlay)" if session["overlay"] else "") + (" (scratch)" if session["scratch"] else "")
+            hidden = "session" in (session.get("hiddenOverlays") or [])
+            overlay = (" (overlay hidden)" if hidden else " (overlay)") if session["overlay"] else ""
+            tags += overlay + (" (scratch)" if session["scratch"] else "")
             split_cwd = session.get("splitCwd")
             suffix = f"  split cwd: {split_cwd}" if split_cwd is not None and split_cwd != session["cwd"] else ""
             if session.get("title") is not None:

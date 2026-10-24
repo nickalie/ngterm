@@ -18,8 +18,8 @@ pub struct ShippedDefaults {
 }
 
 impl ShippedDefaults {
-    /// Upstream agterm's macOS table verbatim, vacating `toggle_horizontal_split`, `dashboard` and
-    /// `attach_remote` (each a default added after files could already bind its chord).
+    /// Upstream agterm's macOS table verbatim, vacating `toggle_horizontal_split`, `dashboard`, `attach_remote` and
+    /// `toggle_overlay` (each a default added after files could already bind its chord).
     #[must_use]
     pub fn upstream() -> Self {
         Self::from_table(
@@ -28,6 +28,7 @@ impl ShippedDefaults {
                 BuiltinAction::ToggleHorizontalSplit,
                 BuiltinAction::Dashboard,
                 BuiltinAction::AttachRemote,
+                BuiltinAction::ToggleOverlay,
             ],
         )
     }
@@ -79,6 +80,8 @@ fn upstream_table() -> Vec<(BuiltinAction, Chord)> {
         (A::ToggleSplit, cmd, "d"),
         (A::ToggleHorizontalSplit, cmd | shift, "d"),
         (A::ToggleScratch, cmd, "j"),
+        // shadows libghostty's default write_screen_file:paste, as ⌘J shadows its scroll_to_selection
+        (A::ToggleOverlay, cmd | shift, "j"),
         (A::ToggleTerminalZoom, cmd | shift, "return"),
         (A::ToggleSearch, cmd, "f"),
         (A::ToggleSidebar, cmd | ctrl, "s"),

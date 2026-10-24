@@ -317,8 +317,24 @@ fn chrome_elements_split_between_title_bar_and_sidebar() {
             .iter()
             .filter(|element| element.in_title_bar())
             .count(),
-        12
+        13
     );
+}
+
+/// Upstream's `overlayToggleIsAHiddenByDefaultTitleBarElement`.
+#[test]
+fn the_overlay_toggle_is_a_hidden_by_default_title_bar_element() {
+    let element = InterfaceElement::OverlayToggle;
+    assert!(element.in_title_bar());
+    assert!(element.hidden_by_default());
+    assert_eq!(element.display_name(), "Hide overlays");
+    assert_eq!(element.raw(), "overlayToggle");
+    assert!(AppSettings::default().is_interface_element_hidden(element));
+    let shown = AppSettings {
+        shown_interface_elements: Some(vec!["overlayToggle".into()]),
+        ..AppSettings::default()
+    };
+    assert!(!shown.is_interface_element_hidden(element));
 }
 
 #[test]

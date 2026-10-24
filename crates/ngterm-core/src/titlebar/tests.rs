@@ -188,6 +188,57 @@ fn the_default_bar_shows_every_button_but_the_opt_in_ones() {
     assert_eq!(bar.label.title, "u");
 }
 
+/// Upstream's `overlayToggleButton`: opt-in, disabled with nothing to hide or under a cover, slashed while anything
+/// is hidden, and counted with the pane group for the dividers.
+#[test]
+fn the_overlay_toggle_is_opt_in_and_follows_what_the_session_holds() {
+    let (core, window) = core_with(AppSettings::default());
+    assert!(core.titlebar(window).overlay_toggle.is_none(), "hidden by default");
+    let settings = AppSettings {
+        shown_interface_elements: Some(vec!["overlayToggle".into()]),
+        ..AppSettings::default()
+    };
+    let (mut core, window) = core_with(settings);
+    let session = core.library().store(window).unwrap().active_session().unwrap().id();
+    let toggle = |core: &Core| core.titlebar(window).overlay_toggle.unwrap();
+    let empty = toggle(&core);
+    assert_eq!(
+        empty,
+        OverlayToggleButton {
+            enabled: false,
+            any_shown: false,
+            any_hidden: false
+        }
+    );
+    assert_eq!((empty.label(), empty.state_name()), ("Show Overlays", "none"));
+    // scratch, split and the toggle: three in the pane group, so it divides from the window group
+    assert!(core.titlebar(window).dividers.after_panes);
+
+    let program = crate::model::OverlayProgram {
+        command: "less".to_owned(),
+        ..crate::model::OverlayProgram::default()
+    };
+    assert!(
+        core.library_mut()
+            .store_mut(window)
+            .unwrap()
+            .open_overlay(session, program)
+    );
+    let shown = toggle(&core);
+    assert!(shown.enabled && shown.any_shown && !shown.any_hidden);
+    assert_eq!((shown.label(), shown.state_name()), ("Hide Overlays", "shown"));
+
+    core.titlebar_action(window, TitlebarAction::ToggleOverlay);
+    let hidden = toggle(&core);
+    assert!(hidden.enabled && !hidden.any_shown && hidden.any_hidden);
+    assert_eq!((hidden.label(), hidden.state_name()), ("Show Overlays", "hidden"));
+    core.titlebar_action(window, TitlebarAction::ToggleOverlay);
+    assert!(toggle(&core).any_shown, "the same button shows them again");
+
+    core.titlebar_action(window, TitlebarAction::Dashboard);
+    assert!(!toggle(&core).enabled, "the dashboard covers the window");
+}
+
 #[test]
 fn hidden_elements_drop_their_buttons_and_parts() {
     let settings = AppSettings {

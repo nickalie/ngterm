@@ -852,7 +852,14 @@ def test_open_refusals(ctl, args, error):
     assert_absent(node, "paneOverlays", "htmlOverlays")
 
 
-@pytest.mark.covers("session.overlay.close", "session.overlay.result", "session.overlay.text")
+@pytest.mark.covers(
+    "session.overlay.close",
+    "session.overlay.result",
+    "session.overlay.text",
+    "session.overlay.hide",
+    "session.overlay.show",
+    "session.overlay.toggle",
+)
 @pytest.mark.parametrize(
     ("cmd", "args"),
     [
@@ -861,6 +868,9 @@ def test_open_refusals(ctl, args, error):
         ("session.overlay.text", {"pane": "scratch"}),
         ("session.overlay.reload", {"pane": "scratch"}),
         ("session.overlay.submit", {"pane": "scratch", "value": "x"}),
+        ("session.overlay.hide", {"pane": "scratch"}),
+        ("session.overlay.show", {"pane": "scratch"}),
+        ("session.overlay.toggle", {"pane": "scratch"}),
     ],
 )
 def test_overlay_pane_selector_refusals(ctl, cmd, args):
@@ -875,6 +885,9 @@ def test_overlay_pane_selector_refusals(ctl, cmd, args):
     "session.overlay.text",
     "session.overlay.submit",
     "session.overlay.reload",
+    "session.overlay.hide",
+    "session.overlay.show",
+    "session.overlay.toggle",
 )
 @pytest.mark.parametrize(
     ("cmd", "args"),
@@ -886,10 +899,124 @@ def test_overlay_pane_selector_refusals(ctl, cmd, args):
         ("session.overlay.text", {}),
         ("session.overlay.submit", {"value": "x"}),
         ("session.overlay.reload", {}),
+        ("session.overlay.hide", {}),
+        ("session.overlay.show", {}),
+        ("session.overlay.toggle", {}),
     ],
 )
 def test_unknown_session_target(ctl, cmd, args):
     assert_error(ctl.request(cmd, UNKNOWN, **args), f"no such session: {UNKNOWN}")
+
+
+# -- hidden overlays
+
+VISIBILITY = ("session.overlay.hide", "session.overlay.show", "session.overlay.toggle")
+
+
+def _left(ctl, cmd, sid, text, **args):
+    """A hide, show or toggle answers the state it left the scoped overlays in."""
+    assert assert_ok(ctl.request(cmd, sid, **args)) == {"id": sid, "text": text}
+
+
+@pytest.mark.covers(
+    "session.overlay.hide",
+    "session.overlay.show",
+    "session.overlay.toggle",
+    "field:tree.session.hiddenOverlays",
+    "field:tree.session.overlay",
+    "field:tree.session.paneOverlays",
+)
+def test_hide_show_and_toggle_keep_the_overlays_running(ctl):
+    sid = _split(ctl)
+    marker = f"HIDDEN-{uuid.uuid4().hex[:8].upper()}"
+    _open(ctl, sid, f"echo {marker}; exec cat")
+    _open(ctl, sid, pane="right")
+    _overlay_text(ctl, sid, marker)
+
+    _left(ctl, "session.overlay.hide", sid, "hidden")
+    node = _node(ctl, sid)
+    assert node["hiddenOverlays"] == ["session", "right"]
+    # occupancy stays: the slots still hold their programs, running
+    assert node["overlay"] is True and node["paneOverlays"] == ["right"]
+    assert marker in assert_ok(ctl.request("session.overlay.text", sid))["text"]
+    assert_error(ctl.request("session.overlay.result", sid), "overlay still running")
+
+    _left(ctl, "session.overlay.show", sid, "shown")
+    assert_absent(_node(ctl, sid), "hiddenOverlays")
+    _left(ctl, "session.overlay.toggle", sid, "hidden", pane="right")
+    assert _node(ctl, sid)["hiddenOverlays"] == ["right"]
+    # a bare toggle hides everything while anything is shown, then shows it all
+    _left(ctl, "session.overlay.toggle", sid, "hidden")
+    assert _node(ctl, sid)["hiddenOverlays"] == ["session", "right"]
+    _left(ctl, "session.overlay.toggle", sid, "shown")
+    assert_absent(_node(ctl, sid), "hiddenOverlays")
+    _closed(ctl, sid, pane="right")
+    _closed(ctl, sid)
+
+
+@pytest.mark.covers("session.overlay.hide", "session.overlay.show", "session.overlay.toggle")
+def test_visibility_refusals(ctl):
+    sid = _split(ctl)
+    for cmd in VISIBILITY:
+        assert_error(ctl.request(cmd, sid), "no overlay")
+    _open(ctl, sid, pane="right")
+    for cmd in VISIBILITY:
+        assert_error(ctl.request(cmd, sid, pane="left"), "no overlay")
+    _closed(ctl, sid, pane="right")
+
+    # a HUD takes no input and holds nothing to hide
+    hud = _new(ctl)
+    assert_ok(ctl.request("session.hud.open", hud, message="hud alone"))
+    for cmd in VISIBILITY:
+        assert_error(ctl.request(cmd, hud), "no overlay")
+    assert_absent(_node(ctl, hud), "hiddenOverlays")
+    assert_ok(ctl.request("session.hud.close", hud))
+
+
+@pytest.mark.covers("session.overlay.open", "session.overlay.hide", "session.hud.open", "field:tree.session.hiddenOverlays")
+def test_opening_into_a_hidden_slot_is_refused(ctl):
+    sid = _split(ctl)
+    _open(ctl, sid)
+    _left(ctl, "session.overlay.hide", sid, "hidden")
+    path, _ = _page(ctl)
+    assert_error(ctl.request("session.overlay.open", sid, command=HOLD), "overlay hidden")
+    assert_error(ctl.request("session.overlay.open", sid, html=str(path)), "overlay hidden")
+    assert_error(ctl.request("session.hud.open", sid, message="over a hidden program"), "overlay hidden")
+    assert_absent(_node(ctl, sid), "hud")
+    # closing frees the slot, and a new occupant starts shown
+    _closed(ctl, sid)
+    _open(ctl, sid)
+    assert_absent(_node(ctl, sid), "hiddenOverlays")
+    _closed(ctl, sid)
+
+    # a hidden pane overlay holds its own pane's slot only
+    _open(ctl, sid, pane="left")
+    _left(ctl, "session.overlay.hide", sid, "hidden", pane="left")
+    assert_error(ctl.request("session.overlay.open", sid, command=HOLD, pane="left"), "overlay hidden")
+    assert assert_ok(ctl.request("session.hud.open", sid, message="over a hidden pane"))["id"] == sid
+    assert_ok(ctl.request("session.hud.close", sid))
+    _open(ctl, sid)
+    assert _node(ctl, sid)["hiddenOverlays"] == ["left"]
+    _closed(ctl, sid)
+    _closed(ctl, sid, pane="left")
+    _open(ctl, sid, pane="left")
+    assert_absent(_node(ctl, sid), "hiddenOverlays")
+    _closed(ctl, sid, pane="left")
+
+
+@pytest.mark.covers("session.overlay.hide", "session.overlay.show", "field:tree.session.htmlOverlays")
+def test_a_hidden_page_reads_back_hidden(ctl):
+    sid = _new(ctl)
+    _, title, page_id = _open_page(ctl, sid)
+    _loaded(ctl, sid, title)
+    _left(ctl, "session.overlay.hide", sid, "hidden")
+    (page,) = _node(ctl, sid)["htmlOverlays"]
+    assert page["hidden"] is True and page["id"] == page_id
+    _left(ctl, "session.overlay.show", sid, "shown")
+    (page,) = _node(ctl, sid)["htmlOverlays"]
+    assert page["id"] == page_id
+    assert_absent(page, "hidden")
+    _closed(ctl, sid)
 
 
 def _named(ctl, name):

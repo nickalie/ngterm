@@ -213,6 +213,32 @@ fn the_toggles_name_what_they_will_do() {
     assert_eq!(find(&menu, PaletteCommand::ResetFontSize.id()).title, "Actual Size");
 }
 
+/// Upstream's View ▸ Hide Overlays row: after Toggle Scratch, named for what it will do, enabled through the palette.
+#[test]
+fn the_overlays_row_names_what_it_will_do_and_needs_an_overlay() {
+    let (mut core, window) = seeded();
+    let menu = AppMenu::of(&core, window);
+    let row = find(&menu, PaletteCommand::ToggleOverlay.id());
+    assert_eq!((row.title.as_str(), row.enabled), ("Show Overlays", false));
+    let all = all_titles(&menu);
+    let position = |label: &str| all.iter().position(|title| title == label);
+    assert_eq!(position("Show Overlays"), position("Show Scratch").map(|at| at + 1));
+
+    let store = core.library_mut().store_mut(window).unwrap();
+    let session = store.active_session().unwrap().id();
+    let program = ngterm_core::model::OverlayProgram {
+        command: "less".to_owned(),
+        ..ngterm_core::model::OverlayProgram::default()
+    };
+    assert!(store.open_overlay(session, program));
+    let row = find(&AppMenu::of(&core, window), PaletteCommand::ToggleOverlay.id()).clone();
+    assert_eq!((row.title.as_str(), row.enabled), ("Hide Overlays", true));
+    let store = core.library_mut().store_mut(window).unwrap();
+    store.set_overlays_hidden(session, None, true).unwrap();
+    let row = find(&AppMenu::of(&core, window), PaletteCommand::ToggleOverlay.id()).clone();
+    assert_eq!((row.title.as_str(), row.enabled), ("Show Overlays", true));
+}
+
 #[test]
 fn items_carry_their_live_chords_and_reopen_carries_none() {
     let (mut core, window) = seeded();
