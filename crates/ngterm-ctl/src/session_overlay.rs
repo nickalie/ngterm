@@ -543,11 +543,15 @@ visibility_command!(
 );
 
 /// `ngtermctl session overlay page-serve TOKEN` (upstream's `OverlayPageServe.swift`): claims a handed-over page by
-/// its token. The channel it carries after the reply is not ported yet, so a run is one request and its reply.
+/// its token and then carries the page's channel between stdin/stdout and the app untouched.
 #[derive(Debug, clap::Args)]
 #[command(
     name = "page-serve",
-    about = "Carry a handed-over page's channel between stdin/stdout and this app."
+    about = "Carry a handed-over page's channel between stdin/stdout and this app.",
+    long_about = "Run on this Mac by the ngterm on another Mac, over ssh, when it shows one of this app's pages: it \
+                  claims the page with its single-use token and then copies the channel both ways untouched, so the \
+                  page's files and bridge requests are served by this app. It is not meant to be run by hand. A \
+                  refused token exits 1 with the reason on stderr."
 )]
 pub struct PageServe {
     #[arg(help = "The token the other Mac was handed with the page.")]
@@ -567,6 +571,19 @@ impl RequestCommand for PageServe {
             target: Some(self.token.clone()),
             ..Request::new(Command::Session(SessionCmd::OverlayPageServe))
         }
+    }
+
+    /// Claims the page and bridges its channel until either side ends (upstream's `PageServe.run`): a refused claim
+    /// prints `error: <reason>` and exits 1, having written nothing to stdout.
+    fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
+        let socket = crate::client::connect(&self.options.socket_path(env))?;
+        let bridge = crate::stream_bridge::StreamBridge::new(socket, libc::STDIN_FILENO, libc::STDOUT_FILENO);
+        if let Err(error) = bridge.open(&self.make_request()) {
+            eprintln!("error: {error}");
+            return Err(Failure::Exit(ExitCode::FAILURE));
+        }
+        bridge.pump();
+        Ok(())
     }
 }
 
@@ -1172,6 +1189,20 @@ mod tests {
         assert_eq!(
             refusal(&["navigate", "up"]),
             "step must be back, forward, browser, or finder"
+        );
+    }
+
+    /// Upstream's `OverlayPageServeTests`: the token is the request's target, and required.
+    #[test]
+    fn page_serve_names_the_token_as_its_target() {
+        assert_eq!(
+            request(&["page-serve", "tok-1"]),
+            json!({"cmd": "session.overlay.page.serve", "target": "tok-1"})
+        );
+        assert!(rejects(&["page-serve"]), "page-serve needs a token");
+        assert!(
+            rejects(&["page-serve", "tok-1", "--window", "w1"]),
+            "page-serve takes no window"
         );
     }
 

@@ -805,7 +805,8 @@ impl Core {
                 | SessionCmd::OverlayHide
                 | SessionCmd::OverlayShow
                 | SessionCmd::OverlayToggle
-                | SessionCmd::OverlayJobRun),
+                | SessionCmd::OverlayJobRun
+                | SessionCmd::OverlayPageServe),
             ) => result_of(&commands::overlay::dispatch(self, cmd, request)?),
             Command::Notify => result_of(&commands::notify::dispatch(self, request)?),
             Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
@@ -1036,17 +1037,6 @@ mod tests {
             let response = core().dispatch(&Request::new(cmd));
             assert_eq!(response.ok, ANSWERED.contains(&cmd), "{cmd}");
         }
-    }
-
-    #[test]
-    fn the_v0_38_commands_not_ported_yet_are_refused_by_name() {
-        let cmd = Command::Session(ngterm_proto::command::SessionCmd::OverlayPageServe);
-        let response = core().dispatch(&Request::new(cmd));
-        assert_eq!(
-            response,
-            Response::failure(format!("{cmd} is not supported by this host")),
-            "{cmd}"
-        );
     }
 
     /// The cases of `test_undecodable_request_is_refused` (`conformance/tests/protocol/test_addressing.py`), with the

@@ -11,6 +11,10 @@ license.workspace = true
 ngterm-proto.workspace = true
 ngterm-host.workspace = true
 bitflags.workspace = true
+# a page-serve channel's chunk bodies (remote/page_serve.rs), as Foundation encodes `Data`
+base64.workspace = true
+# a page-serve channel's MIME types by extension (remote/page_serve.rs)
+mime_guess.workspace = true
 # the installed identity of a macOS app bundle (identity.rs)
 plist.workspace = true
 pulldown-cmark.workspace = true

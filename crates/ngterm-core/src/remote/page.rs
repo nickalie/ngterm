@@ -25,6 +25,8 @@ use crate::pane_env::uuid_string;
 
 /// How long a handed-over file page waits for its channel to be claimed (upstream's `pageClaimWindow`).
 pub const PAGE_CLAIM_WINDOW: Duration = Duration::from_secs(30);
+/// How long after the claim window the expiry runs, so a claim made at its deadline is not raced (upstream's `+ 0.1`).
+const CLAIM_EXPIRY_SLACK: Duration = Duration::from_millis(100);
 
 /// Upstream's `OverlayHtmlError.remotePage`: the file manager and the browser are refused for a file page shown on the
 /// presenting machine.
@@ -199,7 +201,21 @@ pub(crate) fn open_remote_page(
     );
     core.register_page_outcome(overlay.id);
     core.remote.hub.send_to_presenter(request, session);
+    if matches!(overlay.source, HtmlSource::File { .. }) {
+        core.remote
+            .page_serve
+            .expiries
+            .push(PAGE_CLAIM_WINDOW + CLAIM_EXPIRY_SLACK);
+    }
     RemotePageOpen::Opened
+}
+
+/// Where a page handed to the presenter is reserved now (upstream's `remotePagePlace`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RemotePagePlace {
+    pub window: Uuid,
+    pub session: Uuid,
+    pub pane: Option<OverlayPane>,
 }
 
 impl Core {
@@ -359,5 +375,115 @@ impl Core {
     /// outcome is dismissed unless it was answered (upstream's `endRemotePage` and `RemotePageEnds`).
     pub(super) fn remote_page_ended(&mut self, page: Uuid) {
         self.dismiss_page_outcome(page);
+        self.shut_page_serve_channel(page);
+    }
+
+    /// Where page `page` is reserved now, `None` once it ended or its presenter changed (upstream's
+    /// `remotePagePlace`): a swap moves the slot, and a new presenter generation means the page belongs to a stream
+    /// that is gone.
+    pub(crate) fn remote_page_place(&self, page: Uuid) -> Option<RemotePagePlace> {
+        let job = uuid_string(page);
+        let library = self.library();
+        library.open_ids().into_iter().find_map(|window| {
+            library.store(window)?.sessions().find_map(|session| {
+                let slot = session.remote_overlays().slot_of_job(&job)?;
+                let hub = &self.remote.hub;
+                let held = slot.page.is_some()
+                    && hub.has_presenter(session.id())
+                    && hub.presenter_generation(session.id()) == slot.owner;
+                held.then_some(RemotePagePlace {
+                    window,
+                    session: session.id(),
+                    pane: slot.pane,
+                })
+            })
+        })
+    }
+
+    /// Ends page `page` wherever its reservation sits, which also tells the presenter (upstream's server-side
+    /// `endRemotePage`): the slot is closed as `session.overlay.close` closes it.
+    pub(super) fn end_remote_page_anywhere(&mut self, page: Uuid) {
+        let job = uuid_string(page);
+        let library = self.library();
+        let found = library.open_ids().into_iter().find_map(|window| {
+            library.store(window)?.sessions().find_map(|session| {
+                let slot = session.remote_overlays().slot_of_job(&job)?;
+                Some((window, session.id(), slot.pane))
+            })
+        });
+        if let Some((window, session, pane)) = found
+            && let Some(store) = self.library_mut().store_mut(window)
+        {
+            store.close_remote_overlay(session, pane);
+            self.settle_remote_overlays();
+        }
+    }
+
+    /// Admits the page channel `token` names (upstream's `claimRemotePage`): unclaimed, inside its deadline at `now`,
+    /// and still held for the presenter it was handed to. A token claims once. The page's id and the source its
+    /// channel serves.
+    pub(crate) fn claim_remote_page(&mut self, token: &str, now: Instant) -> Option<(Uuid, HtmlSource)> {
+        let library = self.library();
+        let hub = &self.remote.hub;
+        let found = library.open_ids().into_iter().find_map(|window| {
+            library.store(window)?.sessions().find_map(|session| {
+                let id = session.id();
+                let slot = session
+                    .remote_overlays()
+                    .slots()
+                    .iter()
+                    .find(|slot| slot.page.as_ref().is_some_and(|page| page.token == token))?;
+                let page = slot.page.as_ref()?;
+                let admissible = !page.claimed
+                    && now <= page.claim_deadline
+                    && hub.has_presenter(id)
+                    && hub.presenter_generation(id) == slot.owner;
+                admissible.then(|| {
+                    (
+                        window,
+                        id,
+                        slot.job.clone(),
+                        page.overlay.id,
+                        page.overlay.source.clone(),
+                    )
+                })
+            })
+        });
+        let (window, session, job, page, source) = found?;
+        self.library_mut().store_mut(window)?.claim_remote_page(session, &job);
+        Some((page, source))
+    }
+
+    /// Ends every file page whose channel was not claimed by `now` (upstream's `expireRemotePageClaims`); a URL page
+    /// loads on the presenter with no channel and never expires.
+    pub(crate) fn expire_remote_page_claims_at(&mut self, now: Instant) {
+        let library = self.library();
+        let expired: Vec<(Uuid, Uuid, Option<OverlayPane>)> = library
+            .open_ids()
+            .into_iter()
+            .filter_map(|window| library.store(window).map(|store| (window, store)))
+            .flat_map(|(window, store)| {
+                store.sessions().flat_map(move |session| {
+                    session.remote_overlays().slots().iter().filter_map(move |slot| {
+                        let page = slot.page.as_ref()?;
+                        let unclaimed = !page.claimed
+                            && now > page.claim_deadline
+                            && matches!(page.overlay.source, HtmlSource::File { .. });
+                        unclaimed.then_some((window, session.id(), slot.pane))
+                    })
+                })
+            })
+            .collect();
+        for (window, session, pane) in expired {
+            if let Some(store) = self.library_mut().store_mut(window) {
+                store.close_remote_overlay(session, pane);
+            }
+        }
+        self.settle_remote_overlays();
+    }
+
+    /// Runs the claim expiry, at a deadline the frontend armed from [`Core::take_page_claim_expiries`].
+    pub fn expire_remote_page_claims(&mut self) {
+        self.expire_remote_page_claims_at(Instant::now());
     }
 }

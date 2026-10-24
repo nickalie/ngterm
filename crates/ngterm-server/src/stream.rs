@@ -1,6 +1,6 @@
 //! The stream handoff seam: a handler's reply may claim the connection once its response is written, for commands
-//! that keep streaming after the first `ok` (`live.present`, `session.overlay.job.run`; `events.read` is a plain read
-//! that `ngtermctl events` polls, as upstream's).
+//! that keep streaming after the first `ok` (`live.present`, `session.overlay.job.run`, `session.overlay.page.serve`;
+//! `events.read` is a plain read that `ngtermctl events` polls, as upstream's).
 //!
 //! [`LineStream`] is what such an owner usually runs on the connection: newline-delimited lines both ways, ported
 //! from upstream's `agterm/Control/ControlStreamOwner.swift`.
@@ -200,7 +200,8 @@ pub struct LineStream {
 struct Shared {
     limits: LineStreamLimits,
     state: Mutex<State>,
-    /// Wakes the writer: a line was queued or the stream is closing.
+    /// Every queue change and the close wake all its waiters: the writer waiting for a line and the producers
+    /// waiting for room ([`LineStream::send_waiting`]) share it.
     wake: Condvar,
 }
 
@@ -244,7 +245,26 @@ impl LineStream {
         }
         line.push(b'\n');
         state.queue.push_back(line);
-        self.shared.wake.notify_one();
+        self.shared.wake.notify_all();
+        true
+    }
+
+    /// Queues one line, without its newline, waiting while the queue is full (upstream's `sendWaiting`). False once the
+    /// stream is closing. It blocks its thread, so only a producer off the main loop uses it, one that must not outrun
+    /// the peer (a page channel's file transfers); the write timeout still drops a peer that stopped reading.
+    #[must_use = "a refused line means the stream is closing"]
+    pub fn send_waiting(&self, mut line: Vec<u8>) -> bool {
+        let shared = &self.shared;
+        let mut state = shared.lock();
+        while !state.closing && state.queue.len() >= shared.limits.max_pending_lines {
+            state = shared.wake.wait(state).unwrap_or_else(PoisonError::into_inner);
+        }
+        if state.closing {
+            return false;
+        }
+        line.push(b'\n');
+        state.queue.push_back(line);
+        shared.wake.notify_all();
         true
     }
 
@@ -396,13 +416,19 @@ impl Shared {
         }
     }
 
-    /// The next line to write, waiting for one; `None` once the stream is closing.
+    /// The next line to write, waiting for one; `None` once the stream is closing. Taking it makes room, which wakes a
+    /// producer waiting for some.
     fn next_line(&self) -> Option<Vec<u8>> {
         let mut state = self.lock();
         while state.queue.is_empty() && !state.closing {
             state = self.wake.wait(state).unwrap_or_else(PoisonError::into_inner);
         }
-        if state.closing { None } else { state.queue.pop_front() }
+        if state.closing {
+            return None;
+        }
+        let line = state.queue.pop_front();
+        self.wake.notify_all();
+        line
     }
 }
 

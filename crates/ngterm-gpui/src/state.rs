@@ -22,6 +22,7 @@ use ngterm_core::keymap::TypingSurface;
 use ngterm_core::link_policy::{self, ClickOrigin, Route};
 use ngterm_core::model::{PendingCloseTimer, StatusKeystroke};
 use ngterm_core::persist::{DebouncedSave, arm_debounced_saves};
+use ngterm_core::remote::page_serve::{self, BridgeReply, PageChannel, PageServeStream, PageServeWork};
 use ngterm_core::sidebar_actions::SidebarAction;
 use ngterm_core::{CommitTimers, ControlError, Core, Dispatched, PaneReport, PaneSpawn, Resume};
 use ngterm_host::MainLoop;
@@ -65,7 +66,15 @@ const PRESENTATION_LIMITS: LineStreamLimits = LineStreamLimits {
     write_timeout: ngterm_core::remote::WRITE_TIMEOUT,
 };
 
-/// An adopted streaming connection (an overlay job's helper, a viewer's presentation stream) as the core sends to it.
+/// The bounds of a page channel (upstream's `pageServeLimits`).
+const PAGE_SERVE_LIMITS: LineStreamLimits = LineStreamLimits {
+    max_line_bytes: page_serve::MAX_FRAME_BYTES,
+    max_pending_lines: page_serve::MAX_PENDING_LINES,
+    write_timeout: page_serve::WRITE_TIMEOUT,
+};
+
+/// An adopted streaming connection (an overlay job's helper, a viewer's presentation stream, a page channel) as the
+/// core sends to it.
 struct StreamLines(LineStream);
 
 impl ngterm_core::LineChannel for StreamLines {
@@ -78,10 +87,26 @@ impl ngterm_core::LineChannel for StreamLines {
     }
 }
 
-/// Who waits for a deferred answer: a control connection, or a page's bridge request (by its token).
+impl PageChannel for StreamLines {
+    fn send(&self, line: Vec<u8>) -> bool {
+        self.0.send(line)
+    }
+
+    fn send_waiting(&self, line: Vec<u8>) -> bool {
+        self.0.send_waiting(line)
+    }
+
+    fn shutdown(&self) {
+        self.0.shutdown();
+    }
+}
+
+/// Who waits for a deferred answer: a control connection, a page's bridge request (by its token), or a bridge request
+/// a presenter's page sent over its page channel.
 enum Waiter {
     Socket(ReplySender),
     Page(u64),
+    PageServe(BridgeReply),
 }
 
 impl Waiter {
@@ -89,6 +114,7 @@ impl Waiter {
         match self {
             Self::Socket(sender) => sender.send(response),
             Self::Page(token) => crate::html_overlay::answer(token, &response),
+            Self::PageServe(reply) => reply.answer(&response),
         }
     }
 }
@@ -469,6 +495,7 @@ impl AppState {
         self.arm_auto_follow();
         self.arm_hud_timers();
         self.arm_job_expiries();
+        self.arm_page_claim_expiries();
         self.arm_remote_tick();
     }
 
@@ -738,6 +765,11 @@ impl AppState {
             Dispatched::Done(response) if request.cmd == Command::Live(LiveCmd::Present) && response.ok => {
                 self.presentation_stream(response)
             }
+            Dispatched::Done(response)
+                if request.cmd == Command::Session(SessionCmd::OverlayPageServe) && response.ok =>
+            {
+                self.page_serve_stream(response)
+            }
             other => {
                 self.settle();
                 return self.reply(request, other);
@@ -853,6 +885,80 @@ impl AppState {
             presentation_closer(self.poster.clone(), serial),
         );
         Reply::streaming(response, Box::new(owner))
+    }
+
+    /// The answer to an admitted page claim, which keeps the connection (upstream's `adoptPageServeStream`): the
+    /// presenter's helper's page channel, adopted by the core. Each line is taken on the connection's thread, so a
+    /// cancel applies at once; what it leaves for the main loop (a bridge call, the page's end) and the close are posted
+    /// as tasks. A claim whose reply cannot be written closes the stream unrun, which ends the page; a page that ended
+    /// before the adoption gets a stream shut at once.
+    fn page_serve_stream(&mut self, response: ngterm_proto::Response) -> Reply {
+        let Some(page) = result_id(&response) else {
+            return response.into();
+        };
+        let stream = LineStream::new(PAGE_SERVE_LIMITS);
+        let channel = std::sync::Arc::new(StreamLines(stream.clone()));
+        let Some(serve) = self.core.adopt_page_serve_stream(&page, channel) else {
+            return Reply::streaming(response, Box::new(LineStreamOwner::new(stream, |_| {}, || {})));
+        };
+        let (lines, closes) = (self.poster.clone(), self.poster.clone());
+        let reader = std::sync::Arc::clone(&serve);
+        let owner = LineStreamOwner::new(
+            stream,
+            move |line| {
+                if let Some(work) = reader.take(&line) {
+                    post(&lines, move |state: &mut Self| state.run_page_serve_work(work));
+                }
+            },
+            move || {
+                post(&closes, move |state: &mut Self| page_serve_closed(state, &serve));
+            },
+        );
+        Reply::streaming(response, Box::new(owner))
+    }
+
+    /// Runs what a page channel left for the main loop: a bridge call is dispatched in this same turn, against the page
+    /// where it sits now, and answered on the channel as the socket answers a request.
+    fn run_page_serve_work(&mut self, work: PageServeWork) {
+        if self.quitting {
+            return;
+        }
+        let Some(call) = self.core.page_serve_work(work) else {
+            self.settle();
+            return;
+        };
+        let cmd = call.request.cmd;
+        let dispatched = panic::catch_unwind(AssertUnwindSafe(|| self.core.begin(&call.request)));
+        self.settle();
+        match dispatched {
+            Ok(Dispatched::Done(response)) => call.reply.answer(&response),
+            Ok(Dispatched::Pending { after, resume }) => {
+                self.schedule(cmd, after, resume, Waiter::PageServe(call.reply));
+            }
+            Err(_) => {
+                tracing::error!(%cmd, "control handler panicked on a page channel's request");
+                call.reply.answer(&ControlError::HandlerPanicked(cmd).into());
+            }
+        }
+    }
+
+    /// Arms the page claim expiries the core asked for since the last arm.
+    fn arm_page_claim_expiries(&mut self) {
+        let delays = self.core.take_page_claim_expiries();
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        for delay in delays {
+            let task = Box::new(|state: &mut Self| {
+                if !state.quitting {
+                    state.core.expire_remote_page_claims();
+                    state.settle();
+                }
+            });
+            if main_loop.post_after(delay, task).is_err() {
+                tracing::debug!("page claim expiry dropped: the loop is closed");
+            }
+        }
     }
 
     /// Arms the presentation heartbeat unless it is armed (upstream's `startPresentationHeartbeat`); it re-arms itself
@@ -1200,6 +1306,14 @@ fn presentation_closer(poster: Poster, serial: u64) -> impl FnOnce() + Send + 's
                 state.settle();
             }
         });
+    }
+}
+
+/// A page channel's close: the core ends the page unless its end was already under way.
+fn page_serve_closed(state: &mut AppState, stream: &std::sync::Arc<PageServeStream>) {
+    if !state.quitting {
+        state.core.page_serve_closed(stream);
+        state.settle();
     }
 }
 

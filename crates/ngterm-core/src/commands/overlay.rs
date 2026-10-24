@@ -82,6 +82,10 @@ const CWD_NUL: &str = "session.overlay.open: --cwd must not contain a NUL byte";
 const JOB_REQUIRED: &str = "session.overlay.job.run requires a job id";
 const INVALID_JOB: &str = "invalid job id";
 const JOB_NOT_CLAIMABLE: &str = "job not claimable";
+/// Upstream's `session.overlay.page.serve` refusals.
+const PAGE_TOKEN_REQUIRED: &str = "session.overlay.page.serve requires a page token";
+const INVALID_PAGE_TOKEN: &str = "invalid page token";
+const PAGE_NOT_CLAIMABLE: &str = "page not claimable";
 /// Upstream's `OverlayResultError` for an overlay a viewer presents.
 const SHOWN_ELSEWHERE: &str = "overlay is shown on another Mac";
 const TOO_LARGE: &str = "overlay command too large to show on another Mac";
@@ -130,6 +134,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::OverlayShow => visibility(core, target, args, OverlayVisibilityMode::Show),
         SessionCmd::OverlayToggle => visibility(core, target, args, OverlayVisibilityMode::Toggle),
         SessionCmd::OverlayJobRun => claim_job(core, target),
+        SessionCmd::OverlayPageServe => claim_page_serve(core, target),
         other => Err(ControlError::NotSupported(ngterm_proto::Command::Session(other))),
     }
 }
@@ -678,6 +683,20 @@ fn claim_job(core: &mut Core, target: Option<&str>) -> Outcome {
     }
     core.jobs.expiries.push(START_WINDOW + EXPIRY_SLACK);
     Ok(ControlResult::id(job))
+}
+
+/// `session.overlay.page.serve` (upstream's dispatcher arm and `claimPageServe`): the request is the claim of a
+/// handed-over page's channel by its single-use token; the frontend then hands the connection to
+/// [`Core::adopt_page_serve_stream`]. The core owns the claim, so every host answers it: upstream's "not supported on
+/// this platform" default for other hosts has no counterpart here.
+fn claim_page_serve(core: &mut Core, target: Option<&str>) -> Outcome {
+    let token = trimmed(target).ok_or_else(|| ControlError::rejected(PAGE_TOKEN_REQUIRED))?;
+    crate::remote::frames::parse_uuid(token).ok_or_else(|| ControlError::rejected(INVALID_PAGE_TOKEN))?;
+    let (page, source) = core
+        .claim_remote_page(token, std::time::Instant::now())
+        .ok_or_else(|| ControlError::rejected(PAGE_NOT_CLAIMABLE))?;
+    core.remote.page_serve.claimed(page, source);
+    Ok(ControlResult::id(crate::pane_env::uuid_string(page)))
 }
 
 impl Core {

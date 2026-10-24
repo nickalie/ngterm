@@ -57,6 +57,28 @@ pub fn run_job_command(host: &str, job: &str) -> Result<Vec<String>, InvocationE
     Ok(argv)
 }
 
+/// One ssh invocation carrying the channel of `token`'s page, a page the origin handed to this machine, for as long as
+/// the page is shown (upstream's `pageServeCommand`): `-T`, as frames travel on plain stdio a pty would mangle, the
+/// same PATH chain as the presentation stream, and `exec` so the far shell does not linger between ssh and the helper.
+/// A Windows origin needs its own remote form, as the presentation stream and the overlay job do.
+///
+/// # Errors
+///
+/// A host ssh may not take, or a token that is not one plain token.
+pub fn page_serve_command(host: &str, token: &str) -> Result<Vec<String>, InvocationError> {
+    validate(host)?;
+    if !is_plain(token) {
+        return Err(InvocationError::InvalidSession);
+    }
+    let tail = format!(
+        "exec {REMOTE_CLI} session overlay page-serve {}",
+        shell_quoted_line(&[token])
+    );
+    let mut argv = ssh_arguments(host, 5, false);
+    argv.push(remote_cli_chain(&tail));
+    Ok(argv)
+}
+
 /// The create-only guard after the attach: an existing daemon ignores it, a vanished one runs it and fails, so the
 /// attach never hands back a fresh shell wearing the old session's name.
 const GONE_GUARD: &str = "printf '%s\\n' 'ngterm: remote session is gone'; exit 1";
@@ -243,6 +265,55 @@ mod tests {
         assert!(argv.last().unwrap().contains("exec ngtermctl session overlay run-job "));
         assert!(argv.last().unwrap().contains("$HOME/.local/bin"));
         assert_eq!(run_job_command("buildbox", "j 1"), Err(InvocationError::InvalidSession));
+    }
+
+    /// Upstream's `pageServeUsesPlainStdioAndReachesTheInstalledCli`, `pageServeRefusesATokenThatIsNotAPlainToken` and
+    /// `pageServeRefusesAnInvalidHost`.
+    #[test]
+    fn page_serve_uses_plain_stdio_and_reaches_the_installed_cli() {
+        let argv = page_serve_command("buildbox", "tok-1").unwrap();
+        assert_eq!(
+            &argv[..7],
+            ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "buildbox"]
+        );
+        assert_eq!(argv.len(), 8);
+        assert!(argv[7].contains("$HOME/.local/bin"), "{}", argv[7]);
+        for bad in ["", "t 1", "t1\u{1b}[31m"] {
+            assert_eq!(
+                page_serve_command("buildbox", bad),
+                Err(InvocationError::InvalidSession),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(
+            page_serve_command("-oProxyCommand=x", "t1"),
+            Err(InvocationError::InvalidHost)
+        );
+    }
+
+    /// Upstream's `pageServeRunsTheHelperForExactlyThatToken`: the far shell hands the helper the token as one word,
+    /// whatever it holds. Unix only: the far side's shell is `/bin/sh`.
+    #[cfg(unix)]
+    #[test]
+    fn page_serve_runs_the_helper_for_exactly_that_token() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = "#!/bin/sh\nfor word in \"$@\"; do printf '[%s]' \"$word\"; done\n";
+        ngterm_host::fakes::write_executable(&bin.join("ngtermctl"), script).unwrap();
+        let line = page_serve_command("buildbox", "t1;rm").unwrap().pop().unwrap();
+        let ran = Command::new("/bin/sh")
+            .args(["-c", &line])
+            .env_clear()
+            .env("HOME", home.path())
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        assert_eq!(ran.status.code(), Some(0), "{ran:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&ran.stdout),
+            "[session][overlay][page-serve][t1;rm]"
+        );
     }
 
     #[test]

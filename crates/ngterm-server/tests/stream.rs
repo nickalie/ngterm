@@ -267,6 +267,57 @@ fn lines_queued_before_run_are_bounded_and_written_once_it_runs() -> TestResult 
     Ok(())
 }
 
+/// Upstream's `ControlStreamOwner.sendWaiting`: a producer off the main loop waits for room instead of being refused,
+/// and the writer draining the queue wakes it.
+#[test]
+fn a_waiting_send_waits_for_room_and_the_writer_makes_it() -> TestResult {
+    let stream = LineStream::new(LineStreamLimits {
+        max_pending_lines: 1,
+        ..LIMITS
+    });
+    assert!(stream.send(b"a".to_vec()));
+    let producer = stream.clone();
+    let (sent_tx, sent) = mpsc::channel();
+    let waiting = thread::spawn(move || {
+        for line in [b"b".to_vec(), b"c".to_vec()] {
+            sent_tx.send(producer.send_waiting(line)).ok();
+        }
+    });
+    assert_eq!(
+        sent.recv_timeout(Duration::from_millis(200)),
+        Err(RecvTimeoutError::Timeout),
+        "a full queue took a line"
+    );
+    let (mut peer, opened, runner) = run_on_pair(&stream)?;
+    for line in ["a\n", "b\n", "c\n"] {
+        assert_eq!(peer.line()?, line);
+    }
+    assert!(sent.recv_timeout(TIMEOUT)?);
+    assert!(sent.recv_timeout(TIMEOUT)?);
+    waiting.join().map_err(|_| "producer panicked")?;
+    stream.shutdown();
+    assert_eq!(peer.line()?, "");
+    opened.assert_closed_once()?;
+    runner.join().map_err(|_| "runner panicked")?;
+    Ok(())
+}
+
+#[test]
+fn a_waiting_send_returns_false_once_the_stream_closes() -> TestResult {
+    let stream = LineStream::new(LineStreamLimits {
+        max_pending_lines: 1,
+        ..LIMITS
+    });
+    assert!(stream.send(b"a".to_vec()));
+    let producer = stream.clone();
+    let waiting = thread::spawn(move || producer.send_waiting(b"b".to_vec()));
+    thread::sleep(Duration::from_millis(100));
+    stream.shutdown();
+    assert!(!waiting.join().map_err(|_| "producer panicked")?);
+    assert!(!stream.send_waiting(b"late".to_vec()));
+    Ok(())
+}
+
 #[test]
 fn shutdown_before_run_closes_at_once() -> TestResult {
     let stream = LineStream::new(LIMITS);

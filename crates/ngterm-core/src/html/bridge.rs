@@ -139,16 +139,18 @@ pub const HELPER_SCRIPT: &str = r"(() => {
 })();";
 
 /// Each needs more than one request and reply: a stream handed over, or work done after the reply.
-const REFUSED: [Command; 3] = [
+const REFUSED: [Command; 4] = [
     Command::Live(LiveCmd::Present),
     Command::Session(SessionCmd::OverlayJobRun),
+    Command::Session(SessionCmd::OverlayPageServe),
     Command::Live(LiveCmd::Reset),
 ];
 /// Commands that address no session, or address it some other way than by `target`.
-const NOT_SESSION_TARGETED: [Command; 3] = [
+const NOT_SESSION_TARGETED: [Command; 4] = [
     Command::Session(SessionCmd::New),
     Command::Session(SessionCmd::Go),
     Command::Session(SessionCmd::OverlayJobRun),
+    Command::Session(SessionCmd::OverlayPageServe),
 ];
 /// Session commands outside the `session.` names; `ask.open` joins them unless it asks in the window's GUI.
 const SESSION_TARGETED: [Command; 5] = [
@@ -571,7 +573,12 @@ mod tests {
     #[test]
     fn stream_and_after_reply_commands_are_refused() {
         let fixture = Fixture::new();
-        for cmd in ["live.present", "session.overlay.job.run", "live.reset"] {
+        for cmd in [
+            "live.present",
+            "session.overlay.job.run",
+            "session.overlay.page.serve",
+            "live.reset",
+        ] {
             let error = fixture.build(&format!(r#"{{"cmd":"{cmd}"}}"#)).unwrap_err();
             assert_eq!(error.message, format!("{cmd} cannot be sent from a page"));
         }

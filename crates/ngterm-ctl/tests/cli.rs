@@ -3489,6 +3489,101 @@ fn an_unclaimable_job_exits_1_having_launched_nothing() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn a_refused_page_claim_exits_1_with_the_reason_on_stderr() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    let _server = serve(&socket, (), |(), request| {
+        let sent = serde_json::to_value(&request).unwrap_or_default();
+        if sent == serde_json::json!({"cmd": "session.overlay.page.serve", "target": "T1"}) {
+            Response::failure("page not claimable").into()
+        } else {
+            Response::failure(format!("unexpected request: {sent}")).into()
+        }
+    })?;
+    assert_eq!(
+        outcome(&run_on(
+            dir.path(),
+            &socket,
+            &["session", "overlay", "page-serve", "T1"]
+        )?),
+        (Some(1), String::new(), "error: page not claimable\n".to_owned())
+    );
+    Ok(())
+}
+
+/// The app's end of an admitted page claim: it echoes the first line it gets, raw, and reports what followed once
+/// the helper hangs up.
+struct EchoPage(std::sync::mpsc::Sender<Vec<u8>>);
+
+impl ngterm_server::StreamOwner for EchoPage {
+    fn adopt(self: Box<Self>, socket: UnixStream, pending: Vec<u8>) {
+        let mut reader = BufReader::new(io::Read::chain(&pending[..], &socket));
+        let mut line = Vec::new();
+        if reader.read_until(b'\n', &mut line).is_err() {
+            return;
+        }
+        let mut echo = b"echo:".to_vec();
+        echo.extend_from_slice(&line);
+        if (&socket).write_all(&echo).is_err() {
+            return;
+        }
+        let mut rest = Vec::new();
+        let _ = io::Read::read_to_end(&mut reader, &mut rest);
+        let _ = self.0.send(rest);
+    }
+}
+
+#[test]
+fn an_admitted_page_claim_copies_the_channel_both_ways_untouched() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    let (rest_tx, rest) = std::sync::mpsc::channel();
+    let rest_tx = std::sync::Mutex::new(rest_tx);
+    let _server = serve(&socket, (), move |(), request| {
+        let sent = serde_json::to_value(&request).unwrap_or_default();
+        if sent != serde_json::json!({"cmd": "session.overlay.page.serve", "target": "T1"}) {
+            return Response::failure(format!("unexpected request: {sent}")).into();
+        }
+        let tx = rest_tx.lock().map(|tx| tx.clone());
+        let Ok(tx) = tx else {
+            return Response::failure("poisoned").into();
+        };
+        let result = serde_json::json!({"id": "P1"});
+        Reply::streaming(Response::with_result(result), Box::new(EchoPage(tx)))
+    })?;
+    let mut command = Command::new(NGTERMCTL);
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("NGTERM_") || name.to_string_lossy().starts_with("AGTERM_") {
+            command.env_remove(name);
+        }
+    }
+    command
+        .envs(isolated(dir.path()))
+        .args(["session", "overlay", "page-serve", "T1", "--socket"])
+        .arg(&socket)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let mut stdin = child.stdin.take().ok_or("no stdin")?;
+    // not JSON, and with a byte JSON would escape: a bridge passes it as it is
+    stdin.write_all(b"frame \x01 one\n")?;
+    let mut stdout = BufReader::new(child.stdout.take().ok_or("no stdout")?);
+    let mut echoed = Vec::new();
+    stdout.read_until(b'\n', &mut echoed)?;
+    assert_eq!(
+        echoed, b"echo:frame \x01 one\n",
+        "nothing but the channel reaches stdout"
+    );
+    stdin.write_all(b"tail")?;
+    drop(stdin);
+    let output = child.wait_with_output()?;
+    assert_eq!((output.status.code(), text(&output.stderr)), (Some(0), String::new()));
+    assert_eq!(rest.recv_timeout(std::time::Duration::from_secs(20))?, b"tail");
+    Ok(())
+}
+
 const OVERLAY_OPEN_USAGE: &str = "Usage: ngtermctl session overlay open [<options>] [<command>]\n  See 'ngtermctl session \
                                   overlay open --help' for more information.\n";
 const OVERLAY_RESIZE_USAGE: &str = "Usage: ngtermctl session overlay resize [--size-percent <size-percent>] [--full] \
@@ -3661,6 +3756,27 @@ SUBCOMMANDS:
   See 'ngtermctl help session overlay <subcommand>' for detailed help.
 ";
 
+const OVERLAY_PAGE_SERVE_HELP: &str = "\
+OVERVIEW: Carry a handed-over page's channel between stdin/stdout and this app.
+
+Run on this Mac by the ngterm on another Mac, over ssh, when it shows one of
+this app's pages: it claims the page with its single-use token and then copies
+the channel both ways untouched, so the page's files and bridge requests are
+served by this app. It is not meant to be run by hand. A refused token exits 1
+with the reason on stderr.
+
+USAGE: ngtermctl session overlay page-serve <token> [--socket <socket>] [--json]
+
+ARGUMENTS:
+  <token>                 The token the other Mac was handed with the page.
+
+OPTIONS:
+  --socket <socket>       Override the control socket path.
+  --json                  Print the raw JSON response.
+  -h, --help              Show help information.
+
+";
+
 const OVERLAY_RUN_JOB_HELP: &str = "\
 OVERVIEW: Run a remote overlay job this app handed to another Mac.
 
@@ -3685,11 +3801,13 @@ OPTIONS:
 #[test]
 fn overlay_help_in_the_argument_parser_layout() -> TestResult {
     let dir = short_dir()?;
-    let cases: [(&[&str], &str); 4] = [
+    let cases: [(&[&str], &str); 6] = [
         (&["session", "overlay"], OVERLAY_HELP),
         (&["help", "session", "overlay"], OVERLAY_HELP),
         (&["session", "overlay", "run-job", "--help"], OVERLAY_RUN_JOB_HELP),
         (&["help", "session", "overlay", "run-job"], OVERLAY_RUN_JOB_HELP),
+        (&["session", "overlay", "page-serve", "--help"], OVERLAY_PAGE_SERVE_HELP),
+        (&["help", "session", "overlay", "page-serve"], OVERLAY_PAGE_SERVE_HELP),
     ];
     for (args, help) in cases {
         assert_eq!(

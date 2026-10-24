@@ -4549,7 +4549,9 @@ dependencies = [
 name = "ngterm-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "bitflags 2.13.2",
+ "mime_guess",
  "ngterm-host",
  "ngterm-proto",
  "plist",

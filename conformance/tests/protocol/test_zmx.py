@@ -13,11 +13,14 @@ vocabulary's directory variable, or the session server of the namespace).
 `zmx.reset` is refused here without `--force` only: a confirmed reset quits the app and relaunches it outside the
 harness (see the catalog exemption)."""
 
+import base64
 import contextlib
 import itertools
+import json
 import os
 
 import pytest
+from agterm_conformance.client import NoResponse
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session, session_ids
 from agterm_conformance.plugin import Ctl
 from agterm_conformance.wait import wait_frame, wait_until
@@ -183,7 +186,7 @@ def test_present_refuses_without_a_session(ctl):
         assert_error(stream.reply, ctl.vocabulary.text("zmx.present requires a session"))
 
 
-@pytest.mark.covers("zmx.present", "session.overlay.job.run")
+@pytest.mark.covers("zmx.present", "session.overlay.job.run", "session.overlay.page.serve")
 @pytest.mark.parametrize(
     ("cmd", "target", "error"),
     [
@@ -194,6 +197,16 @@ def test_present_refuses_without_a_session(ctl):
         pytest.param("session.overlay.job.run", UNKNOWN, "invalid job id", id="job-invalid"),
         pytest.param(
             "session.overlay.job.run", "00000000-0000-0000-0000-000000000000", "job not claimable", id="job-unknown"
+        ),
+        pytest.param(
+            "session.overlay.page.serve",
+            None,
+            "session.overlay.page.serve requires a page token",
+            id="page-no-token",
+        ),
+        pytest.param("session.overlay.page.serve", UNKNOWN, "invalid page token", id="page-invalid"),
+        pytest.param(
+            "session.overlay.page.serve", "00000000-0000-0000-0000-000000000000", "page not claimable", id="page-unknown"
         ),
     ],
 )
@@ -742,3 +755,91 @@ def test_closing_or_rejecting_a_remote_page_ends_it_dismissed(live, tmp_path):
         live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
         assert _outcome(live, rejected) == {"pageID": rejected, "outcome": "dismissed"}
         assert_error(live.request("session.overlay.close", sid), "no overlay")
+
+
+def _claimed_page(live, sid, presenter, tmp_path):
+    """A file page granted its folder, handed to the presenter and its channel claimed with the request's token:
+    `(page id, page file, token, helper stream)`. The folder also holds a file larger than one chunk."""
+    page = _page_file(tmp_path)
+    (page.parent / "big.bin").write_bytes(bytes(range(256)) * 600)
+    page_id, request = _handed_over(live, sid, presenter, html=str(page), cwd=str(page.parent))
+    helper = live.stream("session.overlay.page.serve", request["token"])
+    assert helper.reply.ok, helper.reply.raw
+    assert helper.reply.result == {"id": page_id}
+    return page_id, page, request["token"], helper
+
+
+def _transfer(helper, request_id):
+    """The frames answering resource `request_id`: its MIME type, its body and its failure."""
+    mime, body = None, b""
+    while True:
+        frame = helper.read()
+        assert frame["id"] == request_id, frame
+        if frame["kind"] == "head":
+            mime = frame["mimeType"]
+        elif frame["kind"] == "chunk":
+            data = base64.b64decode(frame["data"])
+            assert len(data) <= 64 * 1024
+            body += data
+        elif frame["kind"] == "end":
+            return mime, body, None
+        elif frame["kind"] == "failure":
+            return mime, body, frame["error"]
+        else:
+            raise AssertionError(frame)
+
+
+def _until_closed(helper):
+    """The `reply` frames a helper reads until the origin closes its channel."""
+    replies = []
+    while True:
+        try:
+            frame = helper.read()
+        except NoResponse:
+            return replies
+        if frame.get("kind") == "reply":
+            replies.append(frame)
+
+
+@LIVE
+@pytest.mark.covers(
+    "session.overlay.page.serve",
+    "session.overlay.submit",
+    "session.overlay.result",
+    streams=("session.overlay.page.serve",),
+)
+def test_page_serve_serves_a_page_a_presenter_shows(live, tmp_path):
+    with _page_presenter(live) as (sid, presenter, _):
+        page_id, page, token, helper = _claimed_page(live, sid, presenter, tmp_path)
+        with helper:
+            # a token claims once
+            with live.stream("session.overlay.page.serve", token) as again:
+                assert_error(again.reply, "page not claimable")
+            helper.send({"kind": "resource", "id": 1, "path": str(page)})
+            assert _transfer(helper, 1) == ("text/html", page.read_bytes(), None)
+            big = page.parent / "big.bin"
+            helper.send({"kind": "resource", "id": 2, "path": str(big)})
+            assert _transfer(helper, 2)[1:] == (big.read_bytes(), None)
+            helper.send({"kind": "resource", "id": 3, "path": str(page.parent.parent / "elsewhere.txt")})
+            assert _transfer(helper, 3) == (None, b"", "file is outside the page's folder")
+            # a bridge call runs here, against the page's own session: the submit closes the page and its channel
+            submit = {"cmd": "session.overlay.submit", "args": {"value": "done"}}
+            helper.send({"kind": "bridge", "id": 4, "request": json.dumps(submit)})
+            assert wait_frame(presenter.read, "page.close", presenter.send)["page"] == {"page": page_id}
+            replies = _until_closed(helper)
+            assert all(json.loads(frame["response"])["ok"] is True for frame in replies), replies
+        live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
+        assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "submitted", "value": "done"}
+
+
+@LIVE
+@pytest.mark.covers("session.overlay.page.serve", streams=("session.overlay.page.serve",))
+def test_losing_the_page_helper_ends_only_the_page(live, tmp_path):
+    with _page_presenter(live) as (sid, presenter, _):
+        page_id, _, _, helper = _claimed_page(live, sid, presenter, tmp_path)
+        helper.close()
+        assert wait_frame(presenter.read, "page.close", presenter.send)["page"] == {"page": page_id}
+        live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
+        assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "dismissed"}
+        _presenters(live, sid, {"mirrors": 0, "presenter": True})
+

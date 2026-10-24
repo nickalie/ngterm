@@ -20,6 +20,9 @@ mod moves;
 mod overlay;
 mod overlay_page;
 mod overlay_visibility;
+// a file page takes a POSIX path (`html::grant_error`), so the channel's file cases need a Unix temporary directory
+#[cfg(unix)]
+mod page_serve;
 mod palette;
 mod pane_focus;
 mod panes;

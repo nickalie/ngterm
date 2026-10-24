@@ -346,6 +346,14 @@ impl AppStore {
         Some(page)
     }
 
+    /// Marks the page held under `job` claimed, so its token admits no second channel (upstream's
+    /// `claimRemotePage` model half).
+    pub(crate) fn claim_remote_page(&mut self, session: Uuid, job: &str) {
+        if let Some(found) = self.session_mut(session) {
+            found.remote_overlays.update_page(job, |page| page.claimed = true);
+        }
+    }
+
     /// Applies what the presenter reported about page `state.page` (upstream's `receiveRemotePageFrame` state arm):
     /// the tree changes only when the reported visibility did.
     pub fn apply_remote_page_state(&mut self, session: Uuid, state: &PresentationPageState) {

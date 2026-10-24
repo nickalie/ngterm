@@ -1202,6 +1202,12 @@ def test_zmx_commands_refused_before_acting(cli, ctl):
     _refused(cli("session", "overlay", "run-job", UNKNOWN), "invalid job id")
 
 
+@pytest.mark.covers("cli:session overlay page-serve")
+def test_page_serve_refused_claim_exits_1(cli, ctl):
+    _refused(cli("session", "overlay", "page-serve", "00000000-0000-0000-0000-000000000000"), "page not claimable")
+    _refused(cli("session", "overlay", "page-serve", UNKNOWN), "invalid page token")
+
+
 # -- Live sessions
 
 LIVE = pytest.mark.requires(

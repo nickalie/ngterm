@@ -42,19 +42,19 @@ impl HtmlHost for Host {
 
 /// A presented live session (upstream's `origin`): its panes (both, with `split`) follow a remote lead, and a
 /// presenter whose hello lists `kinds` holds it.
-struct Origin {
-    live: Live,
-    serial: u64,
-    presenter: Viewer,
+pub(super) struct Origin {
+    pub(super) live: Live,
+    pub(super) serial: u64,
+    pub(super) presenter: Viewer,
 }
 
 impl Origin {
-    fn new(split: bool, kinds: &[&str]) -> Self {
+    pub(super) fn new(split: bool, kinds: &[&str]) -> Self {
         Self::build(split, kinds, true)
     }
 
     /// [`Origin::new`], with web views here only with `host`.
-    fn build(split: bool, kinds: &[&str], host: bool) -> Self {
+    pub(super) fn build(split: bool, kinds: &[&str], host: bool) -> Self {
         let mut live = live();
         if host {
             live.fixture.core.set_html_host(Box::new(Host));
@@ -78,25 +78,25 @@ impl Origin {
         }
     }
 
-    fn pages() -> Self {
+    pub(super) fn pages() -> Self {
         Self::new(false, &SUPPORTED_KINDS)
     }
 
-    fn session(&self) -> Uuid {
+    pub(super) fn session(&self) -> Uuid {
         self.live.session
     }
 
-    fn fixture(&mut self) -> &mut Fixture {
+    pub(super) fn fixture(&mut self) -> &mut Fixture {
         &mut self.live.fixture
     }
 
-    fn overlay(&mut self, cmd: SessionCmd, edit: impl FnOnce(&mut Args)) -> Response {
+    pub(super) fn overlay(&mut self, cmd: SessionCmd, edit: impl FnOnce(&mut Args)) -> Response {
         let session = wire(self.session());
         self.live.fixture.session(cmd, Some(&session), args(edit))
     }
 
     /// Opens a page with `edit` applied to a `--follow` open of `source`.
-    fn open(&mut self, source: &str, edit: impl FnOnce(&mut Args)) -> Response {
+    pub(super) fn open(&mut self, source: &str, edit: impl FnOnce(&mut Args)) -> Response {
         self.overlay(SessionCmd::OverlayOpen, |a| {
             if source.starts_with('/') {
                 a.html = Some(source.to_owned());
@@ -111,7 +111,7 @@ impl Origin {
     }
 
     /// Opens `source` and expects it handed over; its page id.
-    fn opened(&mut self, source: &str, edit: impl FnOnce(&mut Args)) -> String {
+    pub(super) fn opened(&mut self, source: &str, edit: impl FnOnce(&mut Args)) -> String {
         let response = self.open(source, edit);
         assert!(response.ok, "{response:?}");
         let result = response.result.unwrap();
@@ -125,14 +125,14 @@ impl Origin {
     }
 
     /// Sends what the presenter would, as the presenter; the `tree.changed` the commit after it fires.
-    fn report(&mut self, body: &Value) -> usize {
+    pub(super) fn report(&mut self, body: &Value) -> usize {
         let line = frame(&self.presenter, body);
         self.live.fixture.core.presentation_line(self.serial, &line);
         self.live.fixture.core.commit().tree_changed.len()
     }
 
     /// The presenter's `page.state` for `page`; the `tree.changed` it fires.
-    fn state(&mut self, page: &str, hidden: bool, seq: i64, title: Option<&str>) -> usize {
+    pub(super) fn state(&mut self, page: &str, hidden: bool, seq: i64, title: Option<&str>) -> usize {
         let mut state = json!({"page": page, "address": "/tmp/docs/b.html", "load": "loaded",
             "canGoBack": true, "canGoForward": false, "hidden": hidden, "appliedSeq": seq});
         if let Some(title) = title {
@@ -141,12 +141,12 @@ impl Origin {
         self.report(&json!({"kind": "page.state", "page": state}))
     }
 
-    fn node(&mut self) -> Value {
+    pub(super) fn node(&mut self) -> Value {
         let session = self.session();
         node(&mut self.live.fixture, session)
     }
 
-    fn outcome(&mut self, page: &str) -> Value {
+    pub(super) fn outcome(&mut self, page: &str) -> Value {
         let response = self.live.fixture.session(
             SessionCmd::OverlayResult,
             None,
@@ -156,7 +156,7 @@ impl Origin {
     }
 
     /// The `page.command` payloads the presenter got, in order.
-    fn commands(&self) -> Vec<Value> {
+    pub(super) fn commands(&self) -> Vec<Value> {
         self.presenter
             .frames("page.command")
             .into_iter()
@@ -164,21 +164,21 @@ impl Origin {
             .collect()
     }
 
-    fn actions(&self) -> Vec<String> {
+    pub(super) fn actions(&self) -> Vec<String> {
         self.commands()
             .iter()
             .map(|command| command["action"].as_str().unwrap().to_owned())
             .collect()
     }
 
-    fn visibility(&mut self, cmd: SessionCmd) -> String {
+    pub(super) fn visibility(&mut self, cmd: SessionCmd) -> String {
         let response = self.overlay(cmd, |_| {});
         self.live.fixture.core.commit();
         assert!(response.ok, "{response:?}");
         response.result.unwrap()["text"].as_str().unwrap().to_owned()
     }
 
-    fn slot_jobs(&self) -> Vec<String> {
+    pub(super) fn slot_jobs(&self) -> Vec<String> {
         self.live
             .fixture
             .store()
@@ -191,7 +191,7 @@ impl Origin {
             .collect()
     }
 
-    fn tree_changes(&mut self) -> usize {
+    pub(super) fn tree_changes(&mut self) -> usize {
         self.live.fixture.core.commit().tree_changed.len()
     }
 }

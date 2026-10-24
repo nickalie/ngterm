@@ -1534,39 +1534,40 @@ overlay page-serve <token>"'`), so a Windows origin needs its own remote form, a
   `tests/cli/test_cli_output.py::test_page_serve_refused_claim_exits_1` (covers `cli:session overlay page-serve`:
   exit 1, `error: page not claimable` on stderr; check the prefix against the reference)
 
-- [ ] `session.overlay.page.serve` (target = token): blank → "session.overlay.page.serve requires a page token", not
+- [x] `session.overlay.page.serve` (target = token): blank → "session.overlay.page.serve requires a page token", not
       a UUID → "invalid page token", no admissible claim → "page not claimable"; a claim admitted once, within 30 s,
       only while the slot's owner is still the session's presenter generation; ok `{id: <pageId>}`, then the
       connection is adopted as the page's channel; a page that ended between claim and adoption has its connection
       shut; a claim whose reply could not be written ends the page
-- [ ] claim expiry: 30 s (+0.1 s) after a file page's open, every unclaimed file page past its deadline ends (by
+- [x] claim expiry: 30 s (+0.1 s) after a file page's open, every unclaimed file page past its deadline ends (by
       close, so `page.close` goes out); a URL page never expires
-- [ ] frames as JSON lines (sorted keys): resource{id,path}, head{id,mimeType}, chunk{id,data base64},
+- [x] frames as JSON lines (sorted keys): resource{id,path}, head{id,mimeType}, chunk{id,data base64},
       end{id}, failure{id,error}, cancel{id}, bridge{id,request}, reply{id,response}; unknown kind or missing field →
       malformed; a line over the frame limit or a chunk over 64 KiB refused both ways; "too many requests in flight",
       "cancelled"
-- [ ] resource resolution: absolute only; no grant → only the page's own file; a grant → a file inside the canonical
+- [x] resource resolution: absolute only; no grant → only the page's own file; a grant → a file inside the canonical
       grant, not the grant itself; `..` and symlink escapes refused; a URL page serves nothing
-- [ ] origin stream: cancel marks a transfer cancelled; resource and bridge each take one of 8 slots or get `failure
+- [x] origin stream: cancel marks a transfer cancelled; resource and bridge each take one of 8 slots or get `failure
       busy`, and when the writer queue (8 lines, 5 s write timeout) cannot take that refusal the page ends; a frame
       only the origin sends, or a malformed one, ends the page and keeps the presenter; a transfer ends in one
       terminal frame ("file is outside the page's folder", "file cannot be read", head+chunks+end, or "cancelled");
       bridge requests dispatch in the same main-loop turn through the page bridge against the page's place at that
       moment ("page closed", "control is unavailable", "answer too large for the channel"); helper EOF ends only the
       page; a page ended elsewhere shuts its channel once
-- [ ] decide whether upstream's "session.overlay.page.serve is not supported on this platform" default has a
-      counterpart (the core owns the claim here) and record it
-- [ ] `LineStream`: a blocking send that waits while the queue is full and returns false once closing
-- [ ] ngtermctl `session overlay page-serve <token>` (upstream's about, long text and argument help, ngterm names),
+- [x] decide whether upstream's "session.overlay.page.serve is not supported on this platform" default has a
+      counterpart (the core owns the claim here) and record it (decided: no counterpart; the core answers the claim
+      for every host, `claim_page_serve`'s doc records it)
+- [x] `LineStream`: a blocking send that waits while the queue is full and returns false once closing
+- [x] ngtermctl `session overlay page-serve <token>` (upstream's about, long text and argument help, ngterm names),
       the socket options, a refused claim prints `error: <reason>` and exits 1, an accepted one pumps stdio untouched
-- [ ] `page_serve_command(host, token)`: validate the host (refuse `-oProxyCommand=x`), the token plain (refuse "",
+- [x] `page_serve_command(host, token)`: validate the host (refuse `-oProxyCommand=x`), the token plain (refuse "",
       "t 1", escapes; quote "t1;rm"), `-T`, the PATH chain as `live present`
-- [ ] write tests: Rust unit tests for every PageServeFrames, RemotePageResources, RemoteSession page-serve,
+- [x] write tests: Rust unit tests for every PageServeFrames, RemotePageResources, RemoteSession page-serve,
       dispatcher and bridge case; the claim and expiry cases; the channel cases from ControlServerPageServeTests as
       core tests over fake line sinks and a temp dir; ngterm-ctl request, missing token, refused claim, help snapshot
-- [ ] write tests: the conformance tests above
-- [ ] manual check (user): green on reference-macos; green on `cross-platform.yml` (ngterm-core)
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance tests above (the two new `test_zmx.py` tests are LIVE: not run on this fish host until Task 27 claims `live-sessions`; CI's zsh leg runs them)
+- [x] manual check (user): green on reference-macos; green on `cross-platform.yml` (ngterm-core) (skipped - not automatable: needs the macOS reference and a CI push by the user)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user)
 
 ### Task 24: HTML pages on a remote presenter, part 3: replica pages and the `ngterm-page` scheme (#793)
 

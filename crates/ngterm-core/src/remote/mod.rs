@@ -11,7 +11,8 @@
 //! - the presenter's work (upstream's `AppStore+RemoteAsk.swift`, `AppStore+RemoteOverlay.swift` and the server's
 //!   `presentAskRemotely`/`takeBackRemoteAsk`/`receivePresenterFrame`): an ask, a program overlay or a page
 //!   (`page`, upstream's `AppStore+RemotePage.swift`) opened on a session whose panes follow a remote lead goes to its
-//!   presenter instead of being drawn here.
+//!   presenter instead of being drawn here; a handed-over page's files and bridge calls come back over the channel its
+//!   presenter's helper claims ([`page_serve`]).
 //!
 //! The streams are the frontend's: it hands the core each adopted connection as a [`LineChannel`] and reports
 //! the lines read from it and its close, arms the hello deadline and the heartbeat, and the core does the rest (upstream's
@@ -25,6 +26,7 @@ mod handoff;
 pub mod hub;
 mod layout;
 mod page;
+pub mod page_serve;
 pub mod reconnect;
 pub mod remotes;
 pub mod ssh;
@@ -145,6 +147,8 @@ pub(crate) struct PresentationRuntime {
     pub(crate) viewer: viewer::ViewerRuntime,
     /// `remotes.conf`, the machines File ▸ Attach Remote offers.
     pub(crate) remotes: remotes::RemotesState,
+    /// The page-serve channels of the pages handed to presenters, and their pending claims.
+    pub(crate) page_serve: page_serve::PageServeRuntime,
 }
 
 impl Default for PresentationRuntime {
@@ -158,6 +162,7 @@ impl Default for PresentationRuntime {
             runner: Arc::new(ProcessRemoteRunner),
             viewer: viewer::ViewerRuntime::default(),
             remotes: remotes::RemotesState::default(),
+            page_serve: page_serve::PageServeRuntime::default(),
         }
     }
 }
@@ -170,6 +175,7 @@ impl fmt::Debug for PresentationRuntime {
             .field("huds", &self.huds)
             .field("viewer", &self.viewer)
             .field("remotes", &self.remotes)
+            .field("page_serve", &self.page_serve)
             .finish_non_exhaustive()
     }
 }

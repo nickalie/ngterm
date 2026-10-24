@@ -31,6 +31,8 @@ base64 = "0.23"
 bitflags = "2"
 clap = { version = "4.6", features = ["derive"] }
 libc = "0.2"
+# A page-serve channel's MIME types by file extension (ngterm-core's `remote/page_serve.rs`), the standard crate.
+mime_guess = "2.0.5"
 # Windows APIs, features per crate: ngterm-session's endpoint (the named pipe's security descriptor and its
 # server-process check), its job and process tables.
 windows-sys = "0.61"
