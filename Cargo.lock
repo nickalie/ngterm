@@ -4562,6 +4562,7 @@ dependencies = [
  "tracing",
  "unicase",
  "unicode-normalization",
+ "unicode-segmentation",
  "url",
  "uuid",
  "windows-sys 0.61.2",

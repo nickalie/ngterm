@@ -1,6 +1,7 @@
 //! Model tests ported from upstream's `AppStore*Tests`, `RecencyStackTests`, `RecentClosedTests` and
 //! `WindowLibraryTests`.
 
+mod ask_draft;
 mod duplicate;
 mod hud;
 mod library;

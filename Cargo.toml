@@ -80,6 +80,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Unicode full case folding: ghostty's keybind character triggers compare folded.
 unicase = "2.10"
 unicode-normalization = "0.1"
+# Extended grapheme clusters: the ask field's byte cap cuts between user-perceived characters, as Swift's do.
+unicode-segmentation = "1.13"
 url = "2.5"
 uuid = { version = "1", features = ["v4", "serde"] }
 # ngterm-wpe's build script asks the pkg-config the link used where WPE WebKit lives (scripts/pkg-config.sh).

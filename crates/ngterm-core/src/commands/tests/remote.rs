@@ -553,6 +553,39 @@ fn an_ask_on_a_presented_session_goes_to_the_presenter_alone() {
     );
 }
 
+/// Upstream's `AppStoreRemoteAskTests.aFormOrCancelRoleAskStaysHereForAPresenterWithoutTheCapability`: no presenter
+/// lists `ask.form` yet, so a form or a cancel role is drawn here and nothing reaches the presenter.
+#[test]
+fn a_form_or_cancel_role_ask_stays_here_for_a_presenter_without_the_capability() {
+    let forms: [fn(&mut ngterm_proto::Args); 2] = [
+        |a| a.input = Some("line".to_owned()),
+        |a| {
+            a.buttons = Some(vec![AskButton {
+                id: "n".to_owned(),
+                label: "No".to_owned(),
+                hotkey: None,
+            }]);
+            a.cancel_button = Some("n".to_owned());
+        },
+    ];
+    for form in forms {
+        let (mut live, _, presenter) = presented();
+        let session = live.session;
+        let opened = live.fixture.core.dispatch(&ngterm_proto::Request {
+            cmd: Command::Ask(AskCmd::Open),
+            target: Some(wire(session)),
+            args: Some(args(|a| {
+                a.title = Some("deploy?".to_owned());
+                form(a);
+            })),
+        });
+        let id = opened.result.unwrap()["id"].as_str().unwrap().to_owned();
+        live.fixture.core.commit();
+        assert!(presenter.last("ask.request").is_none());
+        assert_eq!(node(&mut live.fixture, session)["ask"], json!({"id": id}));
+    }
+}
+
 #[test]
 fn a_cancel_here_tells_the_presenter_and_a_local_ask_stays_without_a_follower() {
     let (mut live, _, presenter) = presented();

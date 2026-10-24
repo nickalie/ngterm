@@ -788,6 +788,8 @@ mod tests {
             align: AskAlignment::Center,
             width: Some(40),
             anchor: None,
+            form: None,
+            cancel_id: None,
         }
     }
 

@@ -446,7 +446,7 @@ fn a_handed_over_ask_is_shown_as_a_replica_and_its_answer_goes_to_the_origin() {
         viewer.node()["ask"],
         json!({"id": "A1", "pane": "left", "replica": true})
     );
-    let answer = viewer.session().ask().unwrap().ask.answer(0).unwrap();
+    let answer = viewer.session().ask().unwrap().ask.answer(0, None).unwrap();
     let session = viewer.session;
     viewer.fixture.core.answer_session_ask(session, "A1", answer);
     viewer.fixture.core.commit();

@@ -50,7 +50,7 @@ macro_rules! object_only_serde {
     )+};
 }
 
-object_only_serde!(Request, Args, PickItem, AskButton);
+object_only_serde!(Request, Args, PickItem, AskButton, AskChoice);
 
 /// One control request. A request that is not a JSON object, whose `cmd` is unknown, or whose fields carry a wrong
 /// JSON type fails to decode as a whole; unknown keys are ignored.
@@ -142,6 +142,20 @@ pub struct Args {
     pub style: Option<String>,
     pub align: Option<String>,
     pub destructive_button: Option<String>,
+    /// `ask.open`: the button that resolves `escaped`, as Esc does.
+    pub cancel_button: Option<String>,
+    /// `ask.open`: `line` or `multiline`, giving the dialog a text field.
+    pub input: Option<String>,
+    /// `ask.open`: the hint an empty text field shows.
+    pub placeholder: Option<String>,
+    /// `ask.open`: a radio or checkbox list, in the caller's order.
+    pub choices: Option<Vec<AskChoice>>,
+    /// `ask.open`: the choice list is checkboxes instead of radio buttons.
+    pub multiple: Option<bool>,
+    /// `ask.open`: the choice ids selected at open.
+    pub checked: Option<Vec<String>>,
+    /// `ask.open`: a free-form row after the choice list; the value is its placeholder.
+    pub other: Option<String>,
     pub window: Option<String>,
     pub width: Option<i64>,
     pub height: Option<i64>,
@@ -167,6 +181,8 @@ pub struct Args {
     pub chromeless: Option<bool>,
     pub persistent: Option<bool>,
     pub browse: Option<bool>,
+    /// The answer `session.overlay.submit` hands back from a page (empty is a real answer), or the initial text of an
+    /// `ask.open` text field.
     pub value: Option<String>,
     pub page: Option<String>,
 }
@@ -198,6 +214,19 @@ pub struct AskButton {
     pub label: String,
     /// An optional ASCII letter that activates the button.
     pub hotkey: Option<String>,
+}
+
+/// One caller-provided item of an `ask.open` choice list (upstream's `ControlAskChoice`).
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(remote = "Self")]
+pub struct AskChoice {
+    /// The item's id in `checked` and in the answered `selected` list.
+    pub id: String,
+    /// The item's one-line text.
+    pub label: String,
+    /// An optional description drawn dimmed under the label; it may span lines.
+    pub subtitle: Option<String>,
 }
 
 #[cfg(test)]
@@ -273,6 +302,58 @@ mod tests {
             serde_json::from_str::<PickItem>(r#"{"id":"a","label":"A"}"#).unwrap(),
             plain
         );
+    }
+
+    #[test]
+    fn ask_form_args_round_trip_in_upstreams_order() {
+        let wire = json!({
+            "cmd": "ask.open",
+            "args": {"defaultButton": "ok", "destructiveButton": "no", "cancelButton": "cancel", "input": "line",
+                     "placeholder": "type", "choices": [{"id": "a", "label": "A", "subtitle": "s\nt"}, {"id": "b", "label": "B"}],
+                     "multiple": true, "checked": ["b"], "other": "Something else", "title": "T", "value": "x"}
+        });
+        let request: Request = serde_json::from_value(wire.clone()).unwrap();
+        let args = request.args.clone().unwrap();
+        assert_eq!(
+            args.choices.as_deref(),
+            Some(
+                &[
+                    AskChoice {
+                        id: "a".into(),
+                        label: "A".into(),
+                        subtitle: Some("s\nt".into())
+                    },
+                    AskChoice {
+                        id: "b".into(),
+                        label: "B".into(),
+                        subtitle: None
+                    },
+                ][..]
+            )
+        );
+        assert_eq!(args.cancel_button.as_deref(), Some("cancel"));
+        assert_eq!(serde_json::to_value(&request).unwrap(), wire);
+        let Value::Object(map) = serde_json::to_value(args).unwrap() else {
+            panic!("args is not an object")
+        };
+        let keys: Vec<&str> = map.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            [
+                "title",
+                "defaultButton",
+                "destructiveButton",
+                "cancelButton",
+                "input",
+                "placeholder",
+                "choices",
+                "multiple",
+                "checked",
+                "other",
+                "value"
+            ]
+        );
+        assert!(serde_json::from_str::<Request>(r#"{"cmd":"ask.open","args":{"choices":[["a","A",null]]}}"#).is_err());
     }
 
     #[test]

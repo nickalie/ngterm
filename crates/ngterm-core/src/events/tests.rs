@@ -246,7 +246,7 @@ fn the_cursor_kinds_and_the_maximum_limit_parse() {
 
 #[test]
 fn refused_requests_carry_upstreams_text() {
-    let cases: [(Args, &str); 11] = [
+    let cases: Vec<(Args, &str)> = vec![
         (
             args(Some(RUN_TEXT), None, None, None),
             "events.read requires --run and --after together",

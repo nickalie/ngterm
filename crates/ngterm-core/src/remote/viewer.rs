@@ -568,6 +568,8 @@ impl Core {
             align: ask.align,
             width: ask.width,
             anchor: None,
+            form: None,
+            cancel_id: None,
         };
         self.library_mut()
             .store_mut(window)

@@ -834,6 +834,32 @@ def test_ask_without_blocking(cli, ctl):
     assert_ok(ctl.request("session.close", sid))
 
 
+@pytest.mark.covers("cli:ask")
+def test_ask_form_options(cli, ctl):
+    sid = _new(ctl)
+    opened = cli("ask", "--no-block", "--input", "line", "--value", "draft", "--target", sid, "Name?")
+    ask_id = json.loads(_ok(opened))["id"]
+    assert _node(ctl, sid)["ask"]["id"] == ask_id
+    _ok(cli("ask", "cancel", ask_id), "ok\n")
+    _usage(
+        cli("ask", "--no-block", "--button", "y", "--choice-subtitle", "a=x", "Q"),
+        "--choice-subtitle requires --choice",
+    )
+    _usage(
+        cli("ask", "--no-block", "--choice", "a", "--choice-subtitle", "a", "Q"), "--choice-subtitle requires ID=TEXT"
+    )
+    _usage(cli("ask", "--no-block", "--choice", "a", "--choice-subtitle", "b=x", "Q"), "unknown subtitle choice: b")
+    _usage(
+        cli("ask", "--no-block", "--choice", "a", "--choice-subtitle", "a=x", "--choice-subtitle", "a=y", "Q"),
+        "subtitle already set for choice: a",
+    )
+    _usage(cli("ask", "--no-block", "--input", "line", "--hotkey", "ok=o", "Q"), "--hotkey requires --button")
+    _usage(cli("ask", "--no-block", "--button", "y", "--other", "x", "Q"), "--other requires --choice")
+    _refused(cli("ask", "--no-block", "--input", "wide", "--target", sid, "Q"), "unknown input")
+    assert_absent(_node(ctl, sid), "ask")
+    assert_ok(ctl.request("session.close", sid))
+
+
 @pytest.mark.covers("cli:ask", "cli:ask cancel")
 def test_ask_blocks_until_cancelled(cli, ctl):
     sid = _new(ctl)

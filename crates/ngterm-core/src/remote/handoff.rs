@@ -118,14 +118,11 @@ impl Core {
             }
             return;
         }
-        let local = PendingAsk {
-            anchor: Some(AskAnchor {
-                session,
-                pane: found.ask_target_pane(),
-                pane_identity: pending.pane_identity,
-            }),
-            ..pending.ask.clone()
-        };
+        let local = pending.ask.anchored(Some(AskAnchor {
+            session,
+            pane: found.ask_target_pane(),
+            pane_identity: pending.pane_identity,
+        }));
         let fits = self.gui_ask_fits(found, window);
         let moved = fits && self.modals.open_window_ask(window, local).is_ok();
         let Some(store) = self.library_mut().store_mut(window) else {
@@ -305,6 +302,11 @@ pub(crate) fn present_ask_remotely(
     };
     let identity = resolved.map(|(identity, _)| identity);
     if !core.follows_remotely(found, identity) {
+        return None;
+    }
+    // upstream's `needsFormSupport`: a form or a cancel role needs a presenter listing `ask.form`, which this build's
+    // viewers do not list yet, so such an ask stays here
+    if ask.form.is_some() || ask.cancel_id.is_some() {
         return None;
     }
     let owner = core.remote.hub.presenter_generation(session);

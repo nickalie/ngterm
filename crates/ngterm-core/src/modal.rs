@@ -11,7 +11,7 @@ use std::collections::{HashMap, VecDeque};
 use ngterm_proto::{ControlAskOutcome, ControlAskResult, ControlPickOutcome, ControlPickResult, PickItem};
 use uuid::Uuid;
 
-use crate::model::{EndedAsk, PendingAsk};
+use crate::model::{AskDraft, EndedAsk, PendingAsk};
 
 /// The most items one picker takes (upstream's `ControlPickItem.maxItems`).
 pub const MAX_PICK_ITEMS: usize = 1_000;
@@ -80,6 +80,8 @@ struct ResolvedPick {
 pub struct PickController {
     pending: Option<PendingPick>,
     pending_ask: Option<PendingAsk>,
+    /// The pending GUI ask's unsubmitted text or selection (upstream's `askDraft`).
+    ask_draft: Option<AskDraft>,
     /// Terminal results, oldest first.
     recent: VecDeque<ResolvedPick>,
 }
@@ -95,6 +97,12 @@ impl PickController {
     #[must_use]
     pub fn pending_ask(&self) -> Option<&PendingAsk> {
         self.pending_ask.as_ref()
+    }
+
+    /// The pending GUI ask's draft, kept while its dialog is hidden.
+    #[must_use]
+    pub fn ask_draft(&self) -> Option<&AskDraft> {
+        self.ask_draft.as_ref()
     }
 
     /// Whether a picker or a GUI ask holds the slot.
@@ -269,9 +277,23 @@ impl Modals {
         if let Some(held) = held_by(controller) {
             return Err(held);
         }
+        controller.ask_draft = Some(AskDraft::new(ask.form.as_ref()));
         controller.pending_ask = Some(ask);
         self.register_ask(id, AskOwner::Window(window));
         Ok(())
+    }
+
+    /// Edits window `window`'s draft of GUI ask `id` (upstream's `PickController.updateAskDraft`); a stale id changes
+    /// nothing.
+    pub(crate) fn update_window_ask_draft(&mut self, window: Uuid, id: &str, change: impl FnOnce(&mut AskDraft)) {
+        let Some(controller) = self.controllers.get_mut(&window) else {
+            return;
+        };
+        if controller.pending_ask.as_ref().is_some_and(|ask| ask.id == id)
+            && let Some(draft) = controller.ask_draft.as_mut()
+        {
+            change(draft);
+        }
     }
 
     /// Ends window `window`'s GUI ask with `outcome`, retaining it before the slot frees (upstream's `resolveAsk`).
@@ -279,13 +301,13 @@ impl Modals {
         if outcome.result == ControlAskOutcome::Pending {
             return;
         }
-        let Some(ask) = self
-            .controllers
-            .get_mut(&window)
-            .and_then(|controller| controller.pending_ask.take())
-        else {
+        let Some(controller) = self.controllers.get_mut(&window) else {
             return;
         };
+        let Some(ask) = controller.pending_ask.take() else {
+            return;
+        };
+        controller.ask_draft = None;
         if self.ask_owners.get(&ask.id) == Some(&AskOwner::Window(window)) {
             self.retain_ask(&ask.id, outcome, window);
         }
@@ -402,6 +424,49 @@ impl crate::Core {
         if self.modals.window_ask(window).is_some_and(|ask| ask.id == id) {
             self.modals.resolve_window_ask(window, outcome);
             self.sync_modals();
+        }
+    }
+
+    /// The user edited window `window`'s GUI ask `id`: `change` applies to its draft. A stale id changes nothing.
+    pub fn update_window_ask_draft(&mut self, window: Uuid, id: &str, change: impl FnOnce(&mut AskDraft)) {
+        self.modals.update_window_ask_draft(window, id, change);
+    }
+
+    /// The user pressed the button at `index` of window `window`'s GUI ask `id`: it answers with the slot's draft
+    /// (upstream's `PickController.answerAsk`). A stale id or a button past the last is ignored. Commit afterwards.
+    pub fn answer_window_ask_button(&mut self, window: Uuid, id: &str, index: usize) {
+        let Some(controller) = self.modals.controller(window) else {
+            return;
+        };
+        let answer = controller
+            .pending_ask()
+            .filter(|ask| ask.id == id)
+            .and_then(|ask| ask.answer(index, controller.ask_draft()));
+        if let Some(answer) = answer {
+            self.answer_window_ask(window, id, answer);
+        }
+    }
+
+    /// The user edited session `session`'s terminal ask `id`: `change` applies to its draft. A stale id changes
+    /// nothing.
+    pub fn update_session_ask_draft(&mut self, session: Uuid, id: &str, change: impl FnOnce(&mut AskDraft)) {
+        if let Some(store) = self.library_mut().store_for_session_mut(session) {
+            store.update_session_ask_draft(session, id, change);
+        }
+    }
+
+    /// The user pressed the button at `index` of session `session`'s terminal ask `id`: it answers with the session's
+    /// draft (upstream's `Session.answerAsk`). A stale id or a button past the last is ignored. Commit afterwards.
+    pub fn answer_session_ask_button(&mut self, session: Uuid, id: &str, index: usize) {
+        let answer = self
+            .library()
+            .store_for_session(session)
+            .and_then(|store| store.session(session))
+            .and_then(crate::model::Session::ask)
+            .filter(|pending| pending.ask.id == id)
+            .and_then(|pending| pending.ask.answer(index, Some(&pending.draft)));
+        if let Some(answer) = answer {
+            self.answer_session_ask(session, id, answer);
         }
     }
 
@@ -551,6 +616,8 @@ mod tests {
             align: AskAlignment::Right,
             width: None,
             anchor: None,
+            form: None,
+            cancel_id: None,
         }
     }
 

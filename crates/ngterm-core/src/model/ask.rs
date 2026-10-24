@@ -9,6 +9,7 @@
 use ngterm_proto::{AskButton, ControlAskOutcome, ControlAskResult};
 use uuid::Uuid;
 
+use super::ask_form::{AskChoiceForm, AskDraft, AskForm, AskInputForm, AskInputMode};
 use super::{AppStore, OverlayPane, Session};
 
 /// The most buttons one dialog takes (upstream's `ControlAskButton.maxButtons`).
@@ -86,20 +87,108 @@ pub struct PendingAsk {
     pub width: Option<i64>,
     /// A GUI ask's session or pane; a terminal ask's placement lives on its session.
     pub anchor: Option<AskAnchor>,
+    /// The text field or choice list shown above the buttons; `None` for a plain button ask.
+    pub form: Option<AskForm>,
+    /// The button that resolves `escaped`, as Esc does.
+    pub cancel_id: Option<String>,
 }
 
 impl PendingAsk {
-    /// The outcome of answering with the button at `index`; `None` past the last button.
+    /// The outcome of pressing the button at `index` with `draft` as the form's input (upstream's `answer(buttonAt:
+    /// draft:)`): the cancel button escapes with no payload, any other answers with the field text, or the selected
+    /// ids plus the selected free-form row's text. Without a draft the form's initial values answer; `None` past the
+    /// last button.
     #[must_use]
-    pub fn answer(&self, index: usize) -> Option<ControlAskResult> {
+    pub fn answer(&self, index: usize, draft: Option<&AskDraft>) -> Option<ControlAskResult> {
         let button = self.buttons.get(index)?;
+        if self.cancel_id.as_ref() == Some(&button.id) {
+            return Some(ControlAskResult::outcome(ControlAskOutcome::Escaped));
+        }
+        let initial;
+        let input = if let Some(draft) = draft {
+            draft
+        } else {
+            initial = AskDraft::new(self.form.as_ref());
+            &initial
+        };
+        let (text, selected) = match &self.form {
+            Some(AskForm::Input(_)) => (Some(input.text().to_owned()), None),
+            Some(AskForm::Choices(_)) => (input.other_text().map(str::to_owned), Some(input.selected())),
+            None => (None, None),
+        };
         Some(ControlAskResult {
+            text,
+            selected,
+            ..self.answered(index)
+        })
+    }
+
+    /// Checks an answer that arrived from elsewhere against this ask (upstream's `validatedAnswer`): a known button,
+    /// the cancel role applied here, and a payload matching the form: text within the cap, or known ids in the
+    /// caller's order plus the free-form row's non-blank text, exactly one of them for radio. Text follows its
+    /// field's control-character rule. `None` refuses the answer.
+    #[must_use]
+    pub fn validated_answer(
+        &self,
+        button_id: &str,
+        text: Option<&str>,
+        selected: Option<&[String]>,
+    ) -> Option<ControlAskResult> {
+        let index = self.buttons.iter().position(|button| button.id == button_id)?;
+        if self.cancel_id.as_deref() == Some(button_id) {
+            return (text.is_none() && selected.is_none())
+                .then(|| ControlAskResult::outcome(ControlAskOutcome::Escaped));
+        }
+        let valid = match &self.form {
+            Some(AskForm::Input(input)) => selected.is_none() && text.is_some_and(|text| fits_field(text, input.mode)),
+            Some(AskForm::Choices(list)) => selected.is_some_and(|selected| valid_selection(list, text, selected)),
+            None => text.is_none() && selected.is_none(),
+        };
+        valid.then(|| ControlAskResult {
+            text: text.map(str::to_owned),
+            selected: selected.map(<[String]>::to_vec),
+            ..self.answered(index)
+        })
+    }
+
+    /// The same dialog anchored at `anchor`, everything else kept (upstream's `anchored(at:)`).
+    #[must_use]
+    pub fn anchored(&self, anchor: Option<AskAnchor>) -> Self {
+        Self { anchor, ..self.clone() }
+    }
+
+    /// An answer with the button at `index`, which exists, and no payload.
+    fn answered(&self, index: usize) -> ControlAskResult {
+        let button = &self.buttons[index];
+        ControlAskResult {
             id: Some(button.id.clone()),
             label: Some(button.label.clone()),
             index: i64::try_from(index).ok(),
             ..ControlAskResult::outcome(ControlAskOutcome::Answered)
-        })
+        }
     }
+}
+
+/// Text a field of `mode` could hold: within the cap and its control rule.
+fn fits_field(text: &str, mode: AskInputMode) -> bool {
+    text.len() <= AskInputForm::MAX_TEXT_BYTES && !AskInputForm::has_forbidden_controls(text, mode)
+}
+
+/// Whether `selected` and the free-form `text` are an answer `list` could produce.
+fn valid_selection(list: &AskChoiceForm, text: Option<&str>, selected: &[String]) -> bool {
+    if let Some(text) = text
+        && (list.other.is_none() || AskChoiceForm::is_blank(text) || !fits_field(text, AskInputMode::Line))
+    {
+        return false;
+    }
+    let in_caller_order = list
+        .choices
+        .iter()
+        .map(|choice| &choice.id)
+        .filter(|id| selected.contains(id))
+        .eq(selected.iter());
+    let picks = selected.len() + usize::from(text.is_some());
+    in_caller_order && (list.multiple || picks == 1)
 }
 
 /// A terminal ask waiting in its session's slot, and the pane it covers.
@@ -115,6 +204,9 @@ pub struct SessionAsk {
     /// On a viewer, the origin's presenter generation of an ask the origin handed over (upstream's `askReplica`):
     /// drawn and answered here, but owned and resolved on the origin, which its outcome is sent to.
     pub replica: Option<i64>,
+    /// The user's unsubmitted input (upstream's `Session.askDraft`): made from the form at open, kept while the dialog
+    /// is hidden, gone with the slot.
+    pub draft: AskDraft,
 }
 
 /// A session's ask that ended, waiting for the core's registry to retain its outcome.
@@ -169,13 +261,27 @@ impl AppStore {
         if session.ask.is_some() {
             return false;
         }
+        let draft = AskDraft::new(ask.form.as_ref());
         session.ask = Some(SessionAsk {
             ask,
             pane_identity,
             remote_owner,
             replica: None,
+            draft,
         });
         true
+    }
+
+    /// Edits session `session`'s draft of ask `id` (upstream's `updateAskDraft`); a stale id, from a dialog already
+    /// resolved, changes nothing.
+    pub fn update_session_ask_draft(&mut self, session: Uuid, id: &str, change: impl FnOnce(&mut AskDraft)) {
+        if let Some(pending) = self
+            .session_mut(session)
+            .and_then(|found| found.ask.as_mut())
+            .filter(|pending| pending.ask.id == id)
+        {
+            change(&mut pending.draft);
+        }
     }
 
     /// Reserves session `session`'s ask slot for a replica of an ask its origin handed over under presenter generation
@@ -237,7 +343,7 @@ impl AppStore {
                 .buttons
                 .iter()
                 .position(|candidate| candidate.id == button)?;
-            pending.ask.answer(index)
+            pending.ask.answer(index, None)
         });
         answer.is_some_and(|answer| self.resolve_session_ask(session, id, answer))
     }

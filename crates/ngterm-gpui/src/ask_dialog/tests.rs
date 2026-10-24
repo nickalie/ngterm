@@ -32,6 +32,8 @@ fn ask(style: AskStyle) -> PendingAsk {
         align: AskAlignment::Right,
         width: None,
         anchor: None,
+        form: None,
+        cancel_id: None,
     }
 }
 

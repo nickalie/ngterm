@@ -1015,8 +1015,8 @@ GUI ask's draft), `crates/ngterm-core/src/commands/ask.rs`, `commands/tests/ask.
   "unknown subtitle choice: b", "subtitle already set for choice: a", "--hotkey requires --button", "--other requires
   --choice"; `--input wide` refused by the app with "unknown input")
 
-- [ ] wire fields as above, camelCase; a plain result encodes as before
-- [ ] dispatcher order (upstream's `dispatchAskOpen`): title; then the form: "input and choices are exclusive";
+- [x] wire fields as above, camelCase; a plain result encodes as before
+- [x] dispatcher order (upstream's `dispatchAskOpen`): title; then the form: "input and choices are exclusive";
       without input "value requires input", "placeholder requires input"; without choices "checked requires
       choices", "multiple requires choices", "other requires choices"; input: "unknown input", "ask text too long
       (max 65536 bytes)", "ask text must not contain control characters" (placeholder: any control; value: a line
@@ -1024,29 +1024,37 @@ GUI ask's draft), `crates/ngterm-core/src/commands/ask.rs`, `commands/tests/ask.
       label must not be empty", "ask choice ids must be unique", the control rule (label any, subtitle all but \n),
       "ask checked ids must be unique", "unknown checked choice: <id>", "radio choices accept one checked id";
       other: "ask other placeholder must not be blank", then the control rule
-- [ ] then buttons: a form without caller buttons gets `[ok=OK, cancel=Cancel]` with defaultButton ok and
+- [x] then buttons: a form without caller buttons gets `[ok=OK, cancel=Cancel]` with defaultButton ok and
       cancelButton cancel (only for that generated pair); a plain ask still answers "ask.open requires buttons";
       roles default, destructive, cancel ("unknown cancel button: <id>", "default button must not be destructive");
       then "ask input does not take hotkeys" (an input form only)
-- [ ] core `AskDraft` as upstream: text clamped to 65536 bytes at a char boundary; radio starts on the first checked,
+- [x] core `AskDraft` as upstream: text clamped to 65536 bytes at a char boundary; radio starts on the first checked,
       else the first item; the cursor on the first checked in caller order, clamped, the other row last; radio picks
       one, checkbox flips; a non-blank other edit selects the row, a blank one unselects it; a radio list restores the
       pick the row took over from; the row's marker toggles only while enabled; selected = caller ids in caller order;
       other text only while selected and non-blank
-- [ ] core `PendingAsk.answer(index, draft)`: the cancel button gives `escaped` with no payload; input answers
+- [x] core `PendingAsk.answer(index, draft)`: the cancel button gives `escaped` with no payload; input answers
       `text`, choices answer `selected` plus the row's text; without a draft, the form's initial values;
       `validated_answer` for remote answers (Task 18)
-- [ ] the slot owner keeps the draft (session slot and window slot): created at open, kept while the dialog is
+- [x] the slot owner keeps the draft (session slot and window slot): created at open, kept while the dialog is
       hidden, edited and answered by ask id (a stale id changes nothing), dropped at release and resolve; a Core API
-      for the frontend (update the draft; answer with a button from the draft)
-- [ ] ngtermctl: `--cancel`, `--input`, `--value`, `--placeholder`, `--choice`, `--choice-subtitle`, `--multiple`,
+      for the frontend (update the draft; answer with a button from the draft) (`Core::update_session_ask_draft`,
+      `answer_session_ask_button`, `update_window_ask_draft`, `answer_window_ask_button`; the GPUI dialog still
+      answers through `PendingAsk::answer(index, None)` until Task 17 wires the draft)
+- [x] ➕ a form or a cancel-role ask stays on the origin when its session is presented: no presenter lists `ask.form`
+      yet (upstream's `needsFormSupport` gate without the capability; Task 18 replaces it with the capability and fit
+      check) (`remote/handoff.rs`, test `a_form_or_cancel_role_ask_stays_here_for_a_presenter_without_the_capability`)
+- [x] ngtermctl: `--cancel`, `--input`, `--value`, `--placeholder`, `--choice`, `--choice-subtitle`, `--multiple`,
       `--checked`, `--other` with upstream's help, the usage errors above in upstream's order, the answer printing
       `text`/`selected` with exit 0
-- [ ] write tests: Rust unit tests for every Swift case listed (full strings on the dispatcher's output, nothing
+- [x] write tests: Rust unit tests for every Swift case listed (full strings on the dispatcher's output, nothing
       reaching the slot); proto serde (plain result, form round trip); ctl parse, mapping and output
-- [ ] write tests: the conformance tests above
-- [ ] manual check (user): green on reference-macos
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance tests above
+- [x] manual check (user): green on reference-macos (skipped - not automatable here: reference-macos runs only in CI on macOS; left for the user)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan
+      per the user; the selftest `test_committed_catalog_passes_the_ci_gate` and `--coverage-gate` fail only on the 16
+      keys of Tasks 17, 20, 21, 23, 25 and 29, as expected; the new and changed tests ran green in a targeted
+      `run-linux.sh -k` run)
 
 ### Task 17: `ask` forms: the GPUI dialog (#778, #779)
 

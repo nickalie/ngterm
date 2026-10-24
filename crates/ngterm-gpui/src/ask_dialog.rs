@@ -275,7 +275,7 @@ impl Answer {
     #[must_use]
     pub fn result(self, ask: &PendingAsk) -> Option<ControlAskResult> {
         match self {
-            Self::Button(index) => ask.answer(index),
+            Self::Button(index) => ask.answer(index, None),
             Self::Escaped => Some(ControlAskResult::outcome(ControlAskOutcome::Escaped)),
         }
     }

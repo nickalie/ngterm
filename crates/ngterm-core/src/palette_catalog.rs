@@ -817,6 +817,8 @@ mod tests {
             align: AskAlignment::Right,
             width: None,
             anchor: None,
+            form: None,
+            cancel_id: None,
         };
         modals.open_window_ask(window, ask).unwrap();
         let pending = modals.controller(window).unwrap().modal_pending();

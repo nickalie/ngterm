@@ -2,10 +2,12 @@
 //! buttons. `open` is the group's default subcommand, so `ngtermctl ask TITLE --button ...` opens one; a title that is
 //! itself `open`, `result` or `cancel` needs the explicit `ask open TITLE`.
 
+use std::collections::HashMap;
+
 use ngterm_core::model::OverlayPane;
 use ngterm_core::paths::Env;
 use ngterm_proto::command::AskCmd;
-use ngterm_proto::{Args, AskButton, Command, Request};
+use ngterm_proto::{Args, AskButton, AskChoice, Command, Request};
 
 use crate::modal::{Family, LiveIo, ModalIo, ModalRunner};
 use crate::{BasicOptions, ClientOptions, Failure, RequestCommand};
@@ -73,7 +75,12 @@ fn split_pair(token: &str) -> Option<(&str, &str)> {
 
 /// `ngtermctl ask [open] TITLE --button ...`: opens the dialog, then waits for the answer unless `--no-block`.
 #[derive(Debug, clap::Args)]
-#[command(about = "Ask a question and wait for its button answer.")]
+#[command(
+    about = "Ask a question and wait for its button answer.",
+    long_about = "--input adds a text field and --choice a radio list (checkboxes with --multiple); either form \
+                  defaults its buttons to ok=OK and cancel=Cancel, Cancel ending like Esc. The answer carries the \
+                  field's text or the selected ids, plus the --other row's text when it is selected."
+)]
 pub struct Open {
     #[arg(help = "Dialog title.")]
     title: String,
@@ -117,6 +124,51 @@ pub struct Open {
 
     #[arg(long = "destructive", help = "ID of the destructive button.")]
     destructive_button: Option<String>,
+
+    #[arg(
+        long = "cancel",
+        help = "ID of the button that ends the dialog like Esc, returning nothing."
+    )]
+    cancel_button: Option<String>,
+
+    #[arg(long, help = "Add a text field: line or multiline.")]
+    input: Option<String>,
+
+    #[arg(long, help = "Initial text of the --input field.")]
+    value: Option<String>,
+
+    #[arg(long, help = "Hint shown while the --input field is empty.")]
+    placeholder: Option<String>,
+
+    #[arg(
+        long = "choice",
+        action = clap::ArgAction::Append,
+        help = "List item ID=LABEL, or one token for both. Repeat for each item (max 50)."
+    )]
+    choices: Vec<String>,
+
+    #[arg(
+        long = "choice-subtitle",
+        action = clap::ArgAction::Append,
+        help = "Item description ID=TEXT, drawn dimmed under its label."
+    )]
+    choice_subtitles: Vec<String>,
+
+    #[arg(long, help = "Make the --choice list checkboxes instead of radio buttons.")]
+    multiple: bool,
+
+    #[arg(
+        long = "checked",
+        action = clap::ArgAction::Append,
+        help = "ID of an item selected at open. Repeat with --multiple."
+    )]
+    checked: Vec<String>,
+
+    #[arg(
+        long,
+        help = "Add a free-form row after the --choice list, with this placeholder; its text answers as `text`."
+    )]
+    other: Option<String>,
 
     #[arg(
         long,
@@ -170,6 +222,7 @@ impl Open {
         }
         self.parsed_width()?;
         self.parsed_buttons()?;
+        self.parsed_choices()?;
         Ok(())
     }
 
@@ -184,10 +237,17 @@ impl Open {
         }
     }
 
-    /// The buttons in command-line order, each `--hotkey` assigned to the button it names.
-    fn parsed_buttons(&self) -> Result<Vec<AskButton>, String> {
+    /// The buttons in command-line order, each `--hotkey` assigned to the button it names; none for a form without
+    /// `--button`, which the app gives OK and Cancel.
+    fn parsed_buttons(&self) -> Result<Option<Vec<AskButton>>, String> {
         if self.buttons.is_empty() {
-            return Err("ask requires at least one --button".to_owned());
+            if self.input.is_none() && self.choices.is_empty() {
+                return Err("ask requires at least one --button".to_owned());
+            }
+            if !self.hotkeys.is_empty() {
+                return Err("--hotkey requires --button".to_owned());
+            }
+            return Ok(None);
         }
         let mut choices: Vec<AskButton> = self
             .buttons
@@ -212,7 +272,44 @@ impl Open {
             }
             button.hotkey = Some(letter.to_owned());
         }
-        Ok(choices)
+        Ok(Some(choices))
+    }
+
+    /// The `--choice` items in command-line order, each `--choice-subtitle` assigned to the item it names.
+    fn parsed_choices(&self) -> Result<Option<Vec<AskChoice>>, String> {
+        if self.choices.is_empty() {
+            if !self.choice_subtitles.is_empty() {
+                return Err("--choice-subtitle requires --choice".to_owned());
+            }
+            if self.other.is_some() {
+                return Err("--other requires --choice".to_owned());
+            }
+            return Ok(None);
+        }
+        let items: Vec<(&str, &str)> = self
+            .choices
+            .iter()
+            .map(|token| split_pair(token).unwrap_or((token, token)))
+            .collect();
+        let mut subtitles: HashMap<&str, &str> = HashMap::new();
+        for token in &self.choice_subtitles {
+            let (id, text) = split_pair(token).ok_or_else(|| "--choice-subtitle requires ID=TEXT".to_owned())?;
+            if !items.iter().any(|(item, _)| *item == id) {
+                return Err(format!("unknown subtitle choice: {id}"));
+            }
+            if subtitles.insert(id, text).is_some() {
+                return Err(format!("subtitle already set for choice: {id}"));
+            }
+        }
+        let items = items
+            .into_iter()
+            .map(|(id, label)| AskChoice {
+                id: id.to_owned(),
+                label: label.to_owned(),
+                subtitle: subtitles.get(id).map(|text| (*text).to_owned()),
+            })
+            .collect();
+        Ok(Some(items))
     }
 
     /// The open request; validation already refused what would fail here.
@@ -220,9 +317,17 @@ impl Open {
         let args = Args {
             follow: self.follow.then_some(true),
             message: self.message.clone(),
-            buttons: Some(self.parsed_buttons().map_err(Failure::Usage)?),
+            buttons: self.parsed_buttons().map_err(Failure::Usage)?,
             default_button: self.default_button.clone(),
             destructive_button: self.destructive_button.clone(),
+            cancel_button: self.cancel_button.clone(),
+            input: self.input.clone(),
+            placeholder: self.placeholder.clone(),
+            choices: self.parsed_choices().map_err(Failure::Usage)?,
+            multiple: self.multiple.then_some(true),
+            checked: (!self.checked.is_empty()).then(|| self.checked.clone()),
+            other: self.other.clone(),
+            value: self.value.clone(),
             style: Some(self.style.clone()),
             align: Some(self.align.clone()),
             pane: self.pane.clone(),
@@ -515,6 +620,52 @@ mod tests {
         }
     }
 
+    /// Upstream's `AskCommandsTests.rootRejectsInvalidSyntax`, the form rows.
+    #[test]
+    fn invalid_form_options_are_refused_before_sending() {
+        let cases: [(&[&str], &str); 7] = [
+            (
+                &["Question", "--button", "ok", "--choice-subtitle", "a=x"],
+                "--choice-subtitle requires --choice",
+            ),
+            (
+                &["Question", "--choice", "a", "--choice-subtitle", "a"],
+                "--choice-subtitle requires ID=TEXT",
+            ),
+            (
+                &["Question", "--choice", "a", "--choice-subtitle", "b=x"],
+                "unknown subtitle choice: b",
+            ),
+            (
+                &[
+                    "Question",
+                    "--choice",
+                    "a",
+                    "--choice-subtitle",
+                    "a=x",
+                    "--choice-subtitle",
+                    "a=y",
+                ],
+                "subtitle already set for choice: a",
+            ),
+            (
+                &["Question", "--input", "line", "--hotkey", "ok=o"],
+                "--hotkey requires --button",
+            ),
+            (
+                &["Question", "--button", "ok", "--other", "x"],
+                "--other requires --choice",
+            ),
+            (
+                &["Question", "--input", "line", "--other", "x"],
+                "--other requires --choice",
+            ),
+        ];
+        for (argv, message) in cases {
+            assert_eq!(parse(argv).err(), Some(message.to_owned()), "{argv:?}");
+        }
+    }
+
     #[test]
     fn result_and_cancel_send_the_id_and_window() {
         let Ok(AskCommand::Result(result)) = parse(&["result", "ask-id", "--window", "w"]) else {
@@ -603,6 +754,14 @@ mod tests {
             (json!({"result": "cancelled"}), Some(2)),
             (json!({"result": "cancelled", "reason": "presentation-lost"}), Some(2)),
             (json!({"result": "escaped"}), Some(3)),
+            (
+                json!({"result": "answered", "id": "ok", "label": "OK", "index": 0, "text": "two\nlines"}),
+                None,
+            ),
+            (
+                json!({"result": "answered", "id": "ok", "label": "OK", "index": 0, "selected": ["395", "398"]}),
+                None,
+            ),
         ];
         for (ask, status) in cases {
             let mut io = FakeIo::new(|_: &Request| Ok(answer(&json!({"ask": ask}))));
@@ -624,6 +783,105 @@ mod tests {
             let printed: Value = serde_json::from_str(&io.lines[0]).unwrap();
             assert_eq!((io.lines.len(), printed), (1, ask));
         }
+    }
+
+    /// Upstream's `AskCommandsTests.inputFormNeedsNoButtonsAndMapsItsOptions`.
+    #[test]
+    fn an_input_form_needs_no_buttons_and_maps_its_options() {
+        let argv = [
+            "Name",
+            "--input",
+            "multiline",
+            "--value",
+            "draft",
+            "--placeholder",
+            "type here",
+            "--cancel",
+            "cancel",
+        ];
+        assert_eq!(
+            open_request(&argv),
+            json!({"cmd": "ask.open", "args": {
+                "style": "terminal", "align": "right", "cancelButton": "cancel", "input": "multiline",
+                "placeholder": "type here", "title": "Name", "value": "draft"}})
+        );
+    }
+
+    /// Upstream's `AskCommandsTests.choiceFormMapsItemsSubtitlesAndChecks`.
+    #[test]
+    fn a_choice_form_maps_items_subtitles_and_checks() {
+        let request = open_request(&[
+            "Review",
+            "--choice",
+            "398=issue #398",
+            "--choice",
+            "395",
+            "--choice-subtitle",
+            "398=waits on you",
+            "--multiple",
+            "--checked",
+            "395",
+            "--checked",
+            "398",
+        ]);
+        let args = &request["args"];
+        assert_eq!(args.get("buttons"), None);
+        assert_eq!(
+            args["choices"],
+            json!([{"id": "398", "label": "issue #398", "subtitle": "waits on you"}, {"id": "395", "label": "395"}])
+        );
+        assert_eq!(args["multiple"], json!(true));
+        assert_eq!(args["checked"], json!(["395", "398"]));
+    }
+
+    /// Upstream's `AskCommandsTests.otherMapsItsPlaceholderBesideTheChoices`.
+    #[test]
+    fn other_maps_its_placeholder_beside_the_choices() {
+        let args = &open_request(&["Review", "--choice", "a", "--other", "Something else"])["args"];
+        assert_eq!(args["other"], json!("Something else"));
+        assert_eq!(args["choices"], json!([{"id": "a", "label": "a"}]));
+        assert_eq!(open_request(&["Review", "--choice", "a"])["args"].get("other"), None);
+    }
+
+    /// Upstream's `AskCommandsTests.answerWithOtherTextPrintsTheSelectionAndTheText`.
+    #[test]
+    fn an_answer_with_other_text_prints_the_selection_and_the_text() {
+        let answered = json!({"result": "answered", "id": "ok", "label": "OK", "index": 0, "text": " mine ",
+                              "selected": ["a"]});
+        let mut io = FakeIo::new(|request: &Request| {
+            if request.cmd == Command::Ask(AskCmd::Open) {
+                Ok(answer(&json!({"id": "ask-id"})))
+            } else {
+                Ok(answer(&json!({"ask": answered})))
+            }
+        });
+        let outcome = open(&["Review", "--choice", "a", "--multiple", "--other", "Something else"]).execute(&mut io);
+        assert!(outcome.is_ok());
+        assert_eq!(io.lines.len(), 1);
+        assert_eq!(serde_json::from_str::<Value>(&io.lines[0]).unwrap(), answered);
+    }
+
+    /// Upstream's `AskCommandsTests.formKeepsCallerButtons`.
+    #[test]
+    fn a_form_keeps_the_callers_buttons() {
+        let args = &open_request(&[
+            "Name",
+            "--input",
+            "line",
+            "--button",
+            "save=Save",
+            "--button",
+            "skip=Skip",
+            "--cancel",
+            "skip",
+        ])["args"];
+        assert_eq!(
+            args["buttons"],
+            json!([{"id": "save", "label": "Save"}, {"id": "skip", "label": "Skip"}])
+        );
+        assert_eq!(args["cancelButton"], json!("skip"));
+        assert_eq!(args.get("multiple"), None);
+        assert_eq!(args.get("checked"), None);
     }
 
     #[test]

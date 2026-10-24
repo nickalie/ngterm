@@ -414,7 +414,9 @@ fn a_user_answer_and_escape_end_the_ask_with_their_outcome() {
     let sid = fixture.sessions[0];
     let terminal = opened_id(&open(&mut fixture, Some(sid), |_| {}));
     let ask = fixture.store().session(sid).unwrap().ask().unwrap().ask.clone();
-    fixture.core.answer_session_ask(sid, &terminal, ask.answer(1).unwrap());
+    fixture
+        .core
+        .answer_session_ask(sid, &terminal, ask.answer(1, None).unwrap());
     assert_eq!(
         outcome(&mut fixture, &terminal),
         json!({"result": "answered", "id": "no", "label": "No", "index": 1})
@@ -504,6 +506,8 @@ fn navigation_starts_on_the_default_else_the_first_safe_button_and_wraps() {
         align: crate::model::AskAlignment::Right,
         width: None,
         anchor: None,
+        form: None,
+        cancel_id: None,
     };
     assert_eq!(AskNavigation::new(&ask(Some("c"), None)).highlighted(), Some(2));
     assert_eq!(AskNavigation::new(&ask(None, Some("a"))).highlighted(), Some(1));

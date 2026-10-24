@@ -461,6 +461,14 @@ pub struct ControlAskResult {
     /// Why a cancelled dialog ended, absent for an ordinary cancel.
     #[serde(default)]
     pub reason: Option<String>,
+    /// On an answer, an input ask's field text, or a choice list's selected free-form row text; whitespace and
+    /// newlines kept.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// On an answer, a choice ask's checked ids in the caller's order: a radio list's one, or none when its
+    /// free-form row answers through `text`.
+    #[serde(default)]
+    pub selected: Option<Vec<String>>,
 }
 
 impl ControlAskResult {
@@ -473,6 +481,8 @@ impl ControlAskResult {
             label: None,
             index: None,
             reason: None,
+            text: None,
+            selected: None,
         }
     }
 }
@@ -574,6 +584,50 @@ mod tests {
         assert_eq!(
             decoded.ask.and_then(|ask| ask.reason).as_deref(),
             Some("presentation-lost")
+        );
+    }
+
+    /// Upstream's `AskTests.aPlainResultEncodesWithoutFormFields`.
+    #[test]
+    fn a_plain_ask_result_encodes_without_form_fields() {
+        let plain = ControlAskResult {
+            id: Some("ok".into()),
+            label: Some("OK".into()),
+            index: Some(0),
+            ..ControlAskResult::outcome(ControlAskOutcome::Answered)
+        };
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"result":"answered","id":"ok","label":"OK","index":0}"#
+        );
+    }
+
+    /// Upstream's `AskTests.formResultsRoundTrip`, with the fields after `reason` in upstream's order.
+    #[test]
+    fn form_ask_results_round_trip() {
+        let answered = |text: Option<&str>, selected: Option<Vec<String>>| ControlAskResult {
+            id: Some("ok".into()),
+            label: Some("OK".into()),
+            index: Some(0),
+            text: text.map(str::to_owned),
+            selected,
+            ..ControlAskResult::outcome(ControlAskOutcome::Answered)
+        };
+        for result in [
+            answered(Some("a \"q\"\n\\"), None),
+            answered(None, Some(Vec::new())),
+            answered(Some(" mine "), Some(vec!["a".into()])),
+        ] {
+            let wire = serde_json::to_string(&result).unwrap();
+            assert_eq!(
+                serde_json::from_str::<ControlAskResult>(&wire).unwrap(),
+                result,
+                "{wire}"
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&answered(Some("t"), Some(vec!["a".into()]))).unwrap(),
+            r#"{"result":"answered","id":"ok","label":"OK","index":0,"text":"t","selected":["a"]}"#
         );
     }
 

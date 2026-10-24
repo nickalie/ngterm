@@ -5,6 +5,7 @@
 //! store's [`Outbox`]; the library drains them for the event ring and persistence.
 
 mod ask;
+mod ask_form;
 mod background;
 mod duplicate;
 mod focus;
@@ -35,6 +36,7 @@ mod workspace;
 mod tests;
 
 pub use ask::{AskAlignment, AskAnchor, AskNavigation, AskStyle, EndedAsk, MAX_ASK_BUTTONS, PendingAsk, SessionAsk};
+pub use ask_form::{AskChoiceForm, AskDraft, AskForm, AskInputForm, AskInputMode, MAX_ASK_CHOICES};
 pub use background::{
     BackdropWashRegion, BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition,
 };

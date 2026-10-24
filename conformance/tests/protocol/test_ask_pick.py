@@ -10,6 +10,7 @@ from agterm_conformance.match import assert_absent, assert_error, assert_ok, fin
 UNKNOWN = "zzz"
 YES_NO = [{"id": "yes", "label": "Yes", "hotkey": "Y"}, {"id": "no", "label": "No"}]
 ITEMS = [{"id": "a", "label": "Alpha", "subtitle": "first"}, {"id": "b", "label": "Beta"}]
+CHOICES = [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]
 
 
 def _new(ctl):
@@ -81,6 +82,28 @@ def test_terminal_ask_waits_on_its_session(ctl):
         # A finished ask cancels as a no-op and keeps its result.
         assert_ok(ctl.request("ask.cancel", ask_id))
         assert _ask_result(ctl, ask_id) == {"result": "cancelled"}
+
+
+@pytest.mark.covers("ask.open", "ask.cancel", "field:tree.session.ask", "field:result.ask")
+def test_a_form_needs_no_buttons(ctl):
+    sid = _new(ctl)
+    forms = [
+        {"input": "multiline", "value": "a\nb\tc", "placeholder": "type here"},
+        {
+            "choices": [{"id": "a", "label": "A", "subtitle": "one\ntwo"}, {"id": "b", "label": "B"}],
+            "multiple": True,
+            "checked": ["b"],
+            "other": "Something else",
+        },
+    ]
+    for form in forms:
+        ask_id = assert_ok(ctl.request("ask.open", sid, title="Proceed?", **form))["id"]
+        with _cancelled(ctl, "ask.cancel", ask_id):
+            assert _node(ctl, sid)["ask"] == {"id": ask_id}
+            assert _ask_result(ctl, ask_id) == {"result": "pending"}
+            assert_ok(ctl.request("ask.cancel", ask_id))
+            assert _ask_result(ctl, ask_id) == {"result": "cancelled"}
+            assert_absent(_node(ctl, sid), "ask")
 
 
 @pytest.mark.covers("ask.open", "field:tree.session.ask")
@@ -284,6 +307,106 @@ def test_pick_accepts_item_status(ctl):
             id="hotkey-twice",
         ),
         pytest.param({"title": "Q", "pane": "scratch", "buttons": YES_NO}, "--pane must be left or right", id="pane"),
+        pytest.param(
+            {"title": "Q", "input": "line", "choices": CHOICES}, "input and choices are exclusive", id="input-choices"
+        ),
+        pytest.param({"title": "Q", "input": "wide"}, "unknown input", id="input-unknown"),
+        pytest.param({"title": "Q", "buttons": YES_NO, "value": "x"}, "value requires input", id="value-alone"),
+        pytest.param(
+            {"title": "Q", "buttons": YES_NO, "placeholder": "x"}, "placeholder requires input", id="placeholder-alone"
+        ),
+        pytest.param(
+            {"title": "Q", "input": "line", "checked": ["a"]}, "checked requires choices", id="checked-alone"
+        ),
+        pytest.param(
+            {"title": "Q", "input": "line", "multiple": True}, "multiple requires choices", id="multiple-alone"
+        ),
+        pytest.param({"title": "Q", "input": "line", "other": "x"}, "other requires choices", id="other-input"),
+        pytest.param({"title": "Q", "buttons": YES_NO, "other": "x"}, "other requires choices", id="other-buttons"),
+        pytest.param({"title": "Q", "choices": []}, "ask choices must be 1 to 50", id="choices-empty"),
+        pytest.param(
+            {"title": "Q", "choices": [{"id": str(n), "label": str(n)} for n in range(51)]},
+            "ask choices must be 1 to 50",
+            id="choices-many",
+        ),
+        pytest.param(
+            {"title": "Q", "choices": [{"id": "a", "label": ""}]},
+            "ask choice label must not be empty",
+            id="choice-label",
+        ),
+        pytest.param(
+            {"title": "Q", "choices": [{"id": "a", "label": "A"}, {"id": "a", "label": "B"}]},
+            "ask choice ids must be unique",
+            id="choice-ids",
+        ),
+        pytest.param(
+            {"title": "Q", "choices": CHOICES, "multiple": True, "checked": ["a", "a"]},
+            "ask checked ids must be unique",
+            id="checked-twice",
+        ),
+        pytest.param(
+            {"title": "Q", "choices": [{"id": "a", "label": "A"}], "checked": ["b"]},
+            "unknown checked choice: b",
+            id="checked-unknown",
+        ),
+        pytest.param(
+            {"title": "Q", "choices": CHOICES, "checked": ["a", "b"]},
+            "radio choices accept one checked id",
+            id="radio-checked",
+        ),
+        pytest.param(
+            {"title": "Q", "choices": CHOICES, "other": "  "},
+            "ask other placeholder must not be blank",
+            id="other-blank",
+        ),
+        pytest.param(
+            {"title": "Q", "input": "line", "value": "a\tb"},
+            "ask text must not contain control characters",
+            id="value-line-tab",
+        ),
+        pytest.param(
+            {"title": "Q", "input": "line", "value": "a\nb"},
+            "ask text must not contain control characters",
+            id="value-line-newline",
+        ),
+        pytest.param(
+            {"title": "Q", "input": "multiline", "value": "a\x07b"},
+            "ask text must not contain control characters",
+            id="value-multiline-bell",
+        ),
+        pytest.param(
+            {"title": "Q", "input": "multiline", "placeholder": "a\nb"},
+            "ask text must not contain control characters",
+            id="placeholder-newline",
+        ),
+        pytest.param(
+            {"title": "Q", "choices": [{"id": "a", "label": "A\nB"}]},
+            "ask text must not contain control characters",
+            id="choice-label-newline",
+        ),
+        pytest.param(
+            {"title": "Q", "choices": [{"id": "a", "label": "A", "subtitle": "x\ty"}]},
+            "ask text must not contain control characters",
+            id="choice-subtitle-tab",
+        ),
+        pytest.param(
+            {"title": "Q", "choices": CHOICES, "other": "a\tb"},
+            "ask text must not contain control characters",
+            id="other-tab",
+        ),
+        pytest.param(
+            {"title": "Q", "input": "line", "value": "\u00e9" * 32768 + "x"},
+            "ask text too long (max 65536 bytes)",
+            id="value-long",
+        ),
+        pytest.param(
+            {"title": "Q", "input": "line", "cancelButton": "nope"}, "unknown cancel button: nope", id="cancel-unknown"
+        ),
+        pytest.param(
+            {"title": "Q", "input": "line", "buttons": [{"id": "ok", "label": "OK", "hotkey": "o"}]},
+            "ask input does not take hotkeys",
+            id="input-hotkey",
+        ),
     ],
 )
 def test_ask_refusals(ctl, args, error):

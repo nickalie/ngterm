@@ -16,7 +16,10 @@ use super::{Outcome, args_of};
 use crate::Core;
 use crate::error::ControlError;
 use crate::modal::AskOwner;
-use crate::model::{AskAlignment, AskAnchor, AskStyle, MAX_ASK_BUTTONS, OverlayPane, PendingAsk};
+use crate::model::{
+    AskAlignment, AskAnchor, AskChoiceForm, AskForm, AskInputForm, AskInputMode, AskStyle, MAX_ASK_BUTTONS,
+    MAX_ASK_CHOICES, OverlayPane, PendingAsk,
+};
 use crate::pane_env::uuid_string;
 use crate::remote::AskPlacement;
 use crate::resolve::Resolver;
@@ -63,21 +66,8 @@ fn validated(target: Option<&str>, args: &Args) -> Result<(PendingAsk, Option<Ov
         .as_deref()
         .filter(|title| !title.trim().is_empty())
         .ok_or_else(|| ControlError::rejected("ask.open requires a title"))?;
-    let buttons = validated_buttons(args.buttons.as_deref(), title, args.message.as_deref())?;
-    let ids: HashSet<&str> = buttons.iter().map(|button| button.id.as_str()).collect();
-    for (role, id) in [
-        ("default", &args.default_button),
-        ("destructive", &args.destructive_button),
-    ] {
-        if let Some(id) = id
-            && !ids.contains(id.as_str())
-        {
-            return Err(ControlError::rejected(format!("unknown {role} button: {id}")));
-        }
-    }
-    if args.destructive_button.is_some() && args.default_button == args.destructive_button {
-        return Err(ControlError::rejected("default button must not be destructive"));
-    }
+    let form = parse_form(args)?;
+    let roles = validated_buttons(args, form.as_ref(), title)?;
     let style = AskStyle::from_wire(args.style.as_deref().unwrap_or("terminal"))
         .ok_or_else(|| ControlError::rejected("unknown style"))?;
     let align = AskAlignment::from_wire(args.align.as_deref().unwrap_or("right"))
@@ -85,7 +75,7 @@ fn validated(target: Option<&str>, args: &Args) -> Result<(PendingAsk, Option<Ov
     if args.width.is_some_and(|width| !(10..=100).contains(&width)) {
         return Err(ControlError::rejected("width must be 10 to 100"));
     }
-    validate_hotkeys(&buttons)?;
+    validate_hotkeys(&roles.buttons)?;
     if style == AskStyle::Gui && (args.pane.is_some() || args.pane_id.is_some()) && target.is_none() {
         return Err(ControlError::rejected("--pane requires a session"));
     }
@@ -100,30 +90,90 @@ fn validated(target: Option<&str>, args: &Args) -> Result<(PendingAsk, Option<Ov
         id: uuid_string(Uuid::new_v4()),
         title: title.to_owned(),
         message: args.message.clone(),
-        buttons: buttons
+        buttons: roles
+            .buttons
             .into_iter()
             .map(|button| AskButton {
                 hotkey: button.hotkey.map(|key| key.to_lowercase()),
                 ..button
             })
             .collect(),
-        default_id: args.default_button.clone(),
+        default_id: roles.default_id,
         destructive_id: args.destructive_button.clone(),
         style,
         align,
         width: args.width,
         anchor: None,
+        form,
+        cancel_id: roles.cancel_id,
     };
     Ok((ask, pane))
 }
 
+/// The buttons a form gets when the caller names none (upstream's `askFormButtons`).
+fn form_buttons() -> Vec<AskButton> {
+    [("ok", "OK"), ("cancel", "Cancel")]
+        .into_iter()
+        .map(|(id, label)| AskButton {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            hotkey: None,
+        })
+        .collect()
+}
+
+/// The validated buttons and the roles that name them.
+struct ButtonRoles {
+    buttons: Vec<AskButton>,
+    default_id: Option<String>,
+    cancel_id: Option<String>,
+}
+
+/// The button list, generated for a form without caller buttons, checked with its roles: a generated pair defaults
+/// to `ok` and cancels with `cancel`, and an input form takes no hotkeys.
+fn validated_buttons(args: &Args, form: Option<&AskForm>, title: &str) -> Result<ButtonRoles, ControlError> {
+    let generated = args.buttons.is_none() && form.is_some();
+    let buttons = match &args.buttons {
+        Some(buttons) => buttons.clone(),
+        None if generated => form_buttons(),
+        None => return Err(ControlError::rejected("ask.open requires buttons")),
+    };
+    let default_id = args
+        .default_button
+        .clone()
+        .or_else(|| generated.then(|| "ok".to_owned()));
+    let cancel_id = args
+        .cancel_button
+        .clone()
+        .or_else(|| generated.then(|| "cancel".to_owned()));
+    validate_button_list(&buttons, title, args.message.as_deref())?;
+    let ids: HashSet<&str> = buttons.iter().map(|button| button.id.as_str()).collect();
+    for (role, id) in [
+        ("default", &default_id),
+        ("destructive", &args.destructive_button),
+        ("cancel", &cancel_id),
+    ] {
+        if let Some(id) = id
+            && !ids.contains(id.as_str())
+        {
+            return Err(ControlError::rejected(format!("unknown {role} button: {id}")));
+        }
+    }
+    if args.destructive_button.is_some() && default_id == args.destructive_button {
+        return Err(ControlError::rejected("default button must not be destructive"));
+    }
+    if matches!(form, Some(AskForm::Input(_))) && buttons.iter().any(|button| button.hotkey.is_some()) {
+        return Err(ControlError::rejected("ask input does not take hotkeys"));
+    }
+    Ok(ButtonRoles {
+        buttons,
+        default_id,
+        cancel_id,
+    })
+}
+
 /// The button list's own checks, and the control-character check over every text the dialog shows.
-fn validated_buttons(
-    buttons: Option<&[AskButton]>,
-    title: &str,
-    message: Option<&str>,
-) -> Result<Vec<AskButton>, ControlError> {
-    let buttons = buttons.ok_or_else(|| ControlError::rejected("ask.open requires buttons"))?;
+fn validate_button_list(buttons: &[AskButton], title: &str, message: Option<&str>) -> Result<(), ControlError> {
     if buttons.is_empty() {
         return Err(ControlError::rejected("ask.open requires at least one button"));
     }
@@ -143,9 +193,118 @@ fn validated_buttons(
         || contains_control_characters(message.unwrap_or_default())
         || buttons.iter().any(|button| contains_control_characters(&button.label))
     {
-        return Err(ControlError::rejected("ask text must not contain control characters"));
+        return Err(control_characters());
     }
-    Ok(buttons.to_vec())
+    Ok(())
+}
+
+fn control_characters() -> ControlError {
+    ControlError::rejected("ask text must not contain control characters")
+}
+
+/// The optional text field or choice list (upstream's `parseAskForm`), refusing the other form's arguments.
+fn parse_form(args: &Args) -> Result<Option<AskForm>, ControlError> {
+    if args.input.is_some() && args.choices.is_some() {
+        return Err(ControlError::rejected("input and choices are exclusive"));
+    }
+    // each argument of one form, present while that form is absent
+    let strays = [
+        ("value", "input", args.input.is_none() && args.value.is_some()),
+        (
+            "placeholder",
+            "input",
+            args.input.is_none() && args.placeholder.is_some(),
+        ),
+        ("checked", "choices", args.choices.is_none() && args.checked.is_some()),
+        ("multiple", "choices", args.choices.is_none() && args.multiple.is_some()),
+        ("other", "choices", args.choices.is_none() && args.other.is_some()),
+    ];
+    if let Some((name, form, _)) = strays.iter().find(|(.., stray)| *stray) {
+        return Err(ControlError::rejected(format!("{name} requires {form}")));
+    }
+    if let Some(input) = &args.input {
+        return parse_input(
+            input,
+            args.value.as_deref().unwrap_or_default(),
+            args.placeholder.as_deref(),
+        )
+        .map(Some);
+    }
+    if let Some(choices) = &args.choices {
+        let list = AskChoiceForm {
+            choices: choices.clone(),
+            multiple: args.multiple.unwrap_or(false),
+            checked: args.checked.clone().unwrap_or_default(),
+            other: args.other.clone(),
+        };
+        validate_choices(&list)?;
+        return Ok(Some(AskForm::Choices(list)));
+    }
+    Ok(None)
+}
+
+/// Upstream's `parseAskInput`: a known mode, the prefill within the cap, and each text's control rule.
+fn parse_input(input: &str, value: &str, placeholder: Option<&str>) -> Result<AskForm, ControlError> {
+    let mode = AskInputMode::from_wire(input).ok_or_else(|| ControlError::rejected("unknown input"))?;
+    if value.len() > AskInputForm::MAX_TEXT_BYTES {
+        return Err(ControlError::rejected(format!(
+            "ask text too long (max {} bytes)",
+            AskInputForm::MAX_TEXT_BYTES
+        )));
+    }
+    if contains_control_characters(placeholder.unwrap_or_default()) || AskInputForm::has_forbidden_controls(value, mode)
+    {
+        return Err(control_characters());
+    }
+    Ok(AskForm::Input(AskInputForm {
+        mode,
+        value: value.to_owned(),
+        placeholder: placeholder.map(str::to_owned),
+    }))
+}
+
+/// Upstream's `parseAskChoices`, in its order.
+fn validate_choices(list: &AskChoiceForm) -> Result<(), ControlError> {
+    if !(1..=MAX_ASK_CHOICES).contains(&list.choices.len()) {
+        return Err(ControlError::rejected(format!(
+            "ask choices must be 1 to {MAX_ASK_CHOICES}"
+        )));
+    }
+    if list.choices.iter().any(|choice| choice.label.is_empty()) {
+        return Err(ControlError::rejected("ask choice label must not be empty"));
+    }
+    let mut ids = HashSet::new();
+    if !list.choices.iter().all(|choice| ids.insert(choice.id.as_str())) {
+        return Err(ControlError::rejected("ask choice ids must be unique"));
+    }
+    if list.choices.iter().any(|choice| {
+        contains_control_characters(&choice.label)
+            || choice
+                .subtitle
+                .as_deref()
+                .is_some_and(|subtitle| subtitle.chars().any(|ch| ch != '\n' && is_control(ch)))
+    }) {
+        return Err(control_characters());
+    }
+    let mut seen = HashSet::new();
+    if !list.checked.iter().all(|id| seen.insert(id.as_str())) {
+        return Err(ControlError::rejected("ask checked ids must be unique"));
+    }
+    if let Some(unknown) = list.checked.iter().find(|id| !ids.contains(id.as_str())) {
+        return Err(ControlError::rejected(format!("unknown checked choice: {unknown}")));
+    }
+    if !list.multiple && list.checked.len() > 1 {
+        return Err(ControlError::rejected("radio choices accept one checked id"));
+    }
+    if let Some(other) = &list.other {
+        if AskChoiceForm::is_blank(other) {
+            return Err(ControlError::rejected("ask other placeholder must not be blank"));
+        }
+        if contains_control_characters(other) {
+            return Err(control_characters());
+        }
+    }
+    Ok(())
 }
 
 /// Each hotkey is one ASCII letter, unique case-insensitively.
@@ -164,7 +323,11 @@ fn validate_hotkeys(buttons: &[AskButton]) -> Result<(), ControlError> {
 
 /// Whether `text` carries a C0 control character or DEL (upstream's `containsControlCharacters`).
 pub(crate) fn contains_control_characters(text: &str) -> bool {
-    text.chars().any(|ch| u32::from(ch) < 0x20 || u32::from(ch) == 0x7f)
+    text.chars().any(is_control)
+}
+
+fn is_control(ch: char) -> bool {
+    u32::from(ch) < 0x20 || ch == '\u{7f}'
 }
 
 // MARK: - open
