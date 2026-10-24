@@ -104,7 +104,7 @@ impl Live {
     }
 
     /// Adds a shown split whose terminal is live, and returns its identity.
-    fn split(&mut self) -> Uuid {
+    pub(super) fn split(&mut self) -> Uuid {
         let session = self.session;
         let store = self.fixture.store_mut().unwrap();
         store.set_split_visibility(session, true, None);

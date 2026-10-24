@@ -250,6 +250,16 @@ pub struct PresentationNotify {
     pub source: String,
 }
 
+/// A status sound the origin hands its presenter to play instead of playing it itself (upstream's
+/// `PresentationSound`): a one-shot event, never part of a snapshot. A `None` name is the blocked-default marker, which
+/// the presenter plays as its own Settings blocked sound, so each machine's choice applies where it plays; it encodes
+/// as `{}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresentationSound {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
 /// Serde for an ask style by its wire spelling.
 mod style_wire {
     use super::{AskStyle, Deserialize, Deserializer, Serializer, de};
@@ -497,6 +507,7 @@ pub enum Body {
     Layout(PresentationLayout),
     Hud(Option<PresentationHud>),
     Notify(PresentationNotify),
+    Sound(PresentationSound),
     /// A viewer asking to be the session's sole presenter; sent only after the origin's hello offered it.
     PresenterAcquire,
     PresenterGranted,
@@ -533,6 +544,7 @@ impl Body {
             Self::Layout(_) => "layout",
             Self::Hud(_) => "hud",
             Self::Notify(_) => "notify",
+            Self::Sound(_) => "sound",
             Self::PresenterAcquire => "presenter.acquire",
             Self::PresenterGranted => "presenter.granted",
             Self::PresenterRefused => "presenter.refused",
@@ -560,6 +572,7 @@ impl Body {
             Self::Layout(layout) => entry("layout", serde_json::to_value(layout)),
             Self::Hud(Some(hud)) => entry("hud", serde_json::to_value(hud)),
             Self::Notify(notify) => entry("notify", serde_json::to_value(notify)),
+            Self::Sound(sound) => entry("sound", serde_json::to_value(sound)),
             Self::AskRequest(ask) => entry("ask", serde_json::to_value(ask)),
             Self::AskResolve(answer) => entry("ask", serde_json::to_value(answer)),
             Self::AskRejected(reference) | Self::AskDismiss(reference) => entry("ask", serde_json::to_value(reference)),
@@ -697,6 +710,7 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         ),
         "hud" => Body::Hud(optional(object, "hud")?),
         "notify" => Body::Notify(required(object, "notify")?),
+        "sound" => Body::Sound(required(object, "sound")?),
         "presenter.acquire" => Body::PresenterAcquire,
         "presenter.granted" => Body::PresenterGranted,
         "presenter.refused" => Body::PresenterRefused,
@@ -896,6 +910,10 @@ mod tests {
                 axis: Some("vertical".to_owned()),
                 shown: true,
             }),
+            Body::Sound(PresentationSound {
+                name: Some("Glass".to_owned()),
+            }),
+            Body::Sound(PresentationSound { name: None }),
         ]
     }
 
@@ -935,6 +953,13 @@ mod tests {
         })
         .unwrap();
         assert_eq!(none, b"{\"kind\":\"status\",\"gen\":1,\"rev\":1}\n");
+        let marker = encode(&PresentationFrame {
+            generation: 1,
+            rev: 2,
+            body: Body::Sound(PresentationSound { name: None }),
+        })
+        .unwrap();
+        assert_eq!(marker, b"{\"kind\":\"sound\",\"gen\":1,\"rev\":2,\"sound\":{}}\n");
     }
 
     #[test]

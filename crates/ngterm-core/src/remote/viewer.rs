@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::client::{ClientEffect, LinkKey, PresentationClient, PresentationTransport};
 use super::frames::{
     Body, PresentationAsk, PresentationAskAnswer, PresentationAskRef, PresentationHud, PresentationNotify,
-    PresentationOverlay, PresentationOverlayChange,
+    PresentationOverlay, PresentationOverlayChange, PresentationSound,
 };
 use super::reconnect::{ReconnectBook, RemoteLinkNotice};
 use super::tree::{RemoteCommandResult, RemoteCommandRunner};
@@ -381,6 +381,7 @@ impl Core {
             ClientEffect::Connection(connection) => self.set_remote_connection(session, connection),
             ClientEffect::Hud(hud) => self.show_remote_hud(hud.as_ref(), session),
             ClientEffect::Notify(notify) => self.mirror_notification(session, &notify),
+            ClientEffect::Sound(sound) => self.play_remote_sound(session, sound),
             ClientEffect::Layout(layout) => self.apply_remote_layout(&layout, session),
             ClientEffect::AskRequest(ask) => {
                 if !self.show_replica_ask(&ask, session) {
@@ -452,6 +453,28 @@ impl Core {
         };
         let pane = crate::commands::notify::PaneRole::Main;
         self.deliver_notification(window, session, pane, &notify.title, &notify.body);
+    }
+
+    /// Plays a status sound `session`'s origin handed over instead of playing it (upstream's `playRemoteSound`): the
+    /// frame's name, or for the blocked marker this machine's own blocked sound, none or empty playing nothing. The
+    /// origin checked the name against its own sounds and stayed silent, so one unknown here plays the alert sound.
+    fn play_remote_sound(&mut self, session: Uuid, sound: PresentationSound) {
+        if self.presented_session(session).is_none() {
+            return;
+        }
+        let Some(name) = sound
+            .name
+            .or_else(|| self.settings().blocked_status_sound_name.clone())
+            .filter(|name| !name.is_empty())
+        else {
+            return;
+        };
+        if crate::model::is_known_sound(&name) {
+            self.play_status_sound(name);
+        } else {
+            tracing::info!(%session, sound = %name, "a status sound from the origin is unknown here, playing the alert");
+            self.play_status_sound("default".to_owned());
+        }
     }
 
     /// Shows, updates or removes the HUD mirrored from `session`'s origin (upstream's `showRemoteHud`): only a panel the

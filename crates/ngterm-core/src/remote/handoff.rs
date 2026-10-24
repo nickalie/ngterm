@@ -1,6 +1,7 @@
 //! Work handed to the viewer presenting a session, on the origin: asks (upstream's `AppStore+RemoteAsk.swift` and
-//! `ControlServer+Ask.swift`'s `presentAskRemotely`, `takeBackRemoteAsk`, `receivePresenterFrame`) and program
-//! overlays (`AppStore+RemoteOverlay.swift`, `ControlServer+OverlayJobs.swift`'s `openRemoteOverlay`).
+//! `ControlServer+Ask.swift`'s `presentAskRemotely`, `takeBackRemoteAsk`, `receivePresenterFrame`), program
+//! overlays (`AppStore+RemoteOverlay.swift`, `ControlServer+OverlayJobs.swift`'s `openRemoteOverlay`) and status
+//! sounds (`AppStore+Presentation.swift`'s `presentStatusSoundRemotely`).
 //!
 //! An ask or overlay opened on a session whose panes follow a remote lead goes to its presenter: the ask keeps the
 //! session's slot and its result here, marked remote, so every cancel and teardown path that ends an ask ends it and
@@ -11,8 +12,9 @@ use uuid::Uuid;
 
 use super::frames::{
     Body, MAX_FRAME_BYTES, PresentationAsk, PresentationAskRef, PresentationOverlay, PresentationOverlayChange,
-    PresentationPane,
+    PresentationPane, PresentationSound,
 };
+use super::presentation_status_pane;
 use crate::Core;
 use crate::commands::Outcome;
 use crate::error::ControlError;
@@ -20,7 +22,7 @@ use crate::live::lead::LeadRole;
 use crate::modal::AskOwner;
 use crate::model::{
     AskAnchor, AskStyle, EndedAsk, OverlayPane, OverlayProgram, PendingAsk, RemoteOverlayOutcome, RemoteOverlaySlot,
-    Session,
+    Session, StatusPane,
 };
 use crate::overlay_capture::OverlayLaunchContext;
 use crate::overlay_jobs::{OverlayJobFrame, OverlayJobOutcome, OverlayJobState};
@@ -56,6 +58,31 @@ impl Core {
         panes
             .iter()
             .all(|pane| self.live.leads.role(*pane) == Some(LeadRole::Follower))
+    }
+
+    /// Hands a status sound to the presenter of session `session` instead of playing it here (upstream's
+    /// `presentStatusSoundRemotely`): only while a viewer presents the session, the status pane `pane` names (none or
+    /// left the primary, right the split or the primary without one) follows a remote lead, and the presenter's hello
+    /// listed `sound`. A scratch status stays here, as its pane has no daemon. False when the sound plays here.
+    pub(crate) fn present_status_sound_remotely(
+        &mut self,
+        sound: PresentationSound,
+        session: Uuid,
+        pane: Option<StatusPane>,
+    ) -> bool {
+        if !self.remote.hub.has_presenter(session) {
+            return false;
+        }
+        let Some(found) = self.presented_session(session) else {
+            return false;
+        };
+        let PresentationPane::Identity(identity) = presentation_status_pane(pane, found) else {
+            return false;
+        };
+        if !self.follows_remotely(found, Some(identity)) {
+            return false;
+        }
+        self.remote.hub.send_to_presenter(Body::Sound(sound), session)
     }
 
     /// Tells each ended ask's presenter to take its dialog down; an ask that never left this instance has none.

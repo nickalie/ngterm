@@ -262,23 +262,27 @@ fn presentation_status(session: &Session) -> Option<PresentationStatus> {
     if indicator.status == AgentStatus::Idle {
         return None;
     }
-    // an unspecified owner is the primary pane, and a swap rewrites it to a role without publishing, so it travels as
-    // that pane's identity from the start
-    let pane = match indicator.status_pane {
-        None | Some(StatusPane::Left) => PresentationPane::Identity(session.pane_identity),
-        Some(StatusPane::Right) => {
-            PresentationPane::Identity(session.split_pane_identity.unwrap_or(session.pane_identity))
-        }
-        Some(StatusPane::Scratch) => PresentationPane::Scratch,
-    };
     Some(PresentationStatus {
         status: indicator.status,
         blink: indicator.blink,
         color: indicator.color.clone(),
         shape: indicator.shape,
-        pane: Some(pane),
+        pane: Some(presentation_status_pane(indicator.status_pane, session)),
         changed_at: session.status_changed_at.map(crate::projection::epoch_seconds),
     })
+}
+
+/// A status owner as the stable identity a viewer can follow across a swap or promotion on either machine (upstream's
+/// `presentationStatusPane`). An unspecified owner is the primary pane, and a swap rewrites it to a role without
+/// publishing, so it travels as that pane's identity from the start; the right pane without a split is the primary.
+fn presentation_status_pane(pane: Option<StatusPane>, session: &Session) -> PresentationPane {
+    match pane {
+        None | Some(StatusPane::Left) => PresentationPane::Identity(session.pane_identity),
+        Some(StatusPane::Right) => {
+            PresentationPane::Identity(session.split_pane_identity.unwrap_or(session.pane_identity))
+        }
+        Some(StatusPane::Scratch) => PresentationPane::Scratch,
+    }
 }
 
 /// The session's pane membership and arrangement (upstream's `presentationLayout`); `None` for a remote session.

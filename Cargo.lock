@@ -4628,6 +4628,9 @@ dependencies = [
  "ngterm-term",
  "ngterm-wpe",
  "notify",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "png 0.18.1",
  "raw-window-handle",
  "serde",
@@ -4642,6 +4645,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
+ "windows-sys 0.61.2",
  "x11rb",
  "zbus",
 ]

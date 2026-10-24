@@ -910,21 +910,21 @@ macOS/Windows by CI until ngterm-gpui joins `cross-platform.yml`".
   staying blocked → none before a `session.context set` fence; a presenter without `sound` gets none; a reconnect
   while blocked gets no sound)
 
-- [ ] frames, hub and kept kinds as above (the hub's kind order follows upstream's final list, Context)
-- [ ] origin: `present_status_sound_remotely` is true only when a presenter holds the session, the status pane maps
+- [x] frames, hub and kept kinds as above (the hub's kind order follows upstream's final list, Context)
+- [x] origin: `present_status_sound_remotely` is true only when a presenter holds the session, the status pane maps
       (none/left → primary; right → split, or the primary without a split; scratch stays local), that pane follows
       remotely, and the send succeeds
-- [ ] `session.status`: after a successful apply, when an explicit sound was given, or the status entered blocked
+- [x] `session.status`: after a successful apply, when an explicit sound was given, or the status entered blocked
       (independent of the origin's own blocked setting), try the handoff with that name (none = the marker); handed
       over → no local play; a refused write sends nothing
-- [ ] viewer: plays the frame's name, or its own blocked setting for the marker; empty or none plays nothing; an
+- [x] viewer: plays the frame's name, or its own blocked setting for the marker; empty or none plays nothing; an
       unknown name logs and plays `default`; nothing is sent back
-- [ ] write tests: Rust unit tests for every Swift case (the lead matrix, scratch, right without a split, no
+- [x] write tests: Rust unit tests for every Swift case (the lead matrix, scratch, right without a split, no
       presenter, older presenter, reconnect snapshot with no sound, the hub gate with an ask still sent, the client
       effect order, the viewer cases, `status()` with a follower, blocked marker once)
-- [ ] write tests: the conformance test above
-- [ ] manual check (user): green on reference-macos; green on `cross-platform.yml` (ngterm-core)
-- [ ] gate passes; newly green ids added with `check_ratchet.py --add`
+- [x] write tests: the conformance test above (LIVE: skipped on this host until Task 27 claims `live-sessions` on fish; not seen green locally)
+- [x] manual check (user): green on reference-macos; green on `cross-platform.yml` (ngterm-core) (skipped - not automatable here: left to the user; the macOS/Windows playback in `ngterm-gpui/src/status_sound.rs` is not built on macOS/Windows by CI until ngterm-gpui joins `cross-platform.yml`)
+- [x] gate passes; newly green ids added with `check_ratchet.py --add` (full suite deferred to the end of the plan per the user; the coverage gate's only uncovered keys are later tasks')
 
 ### Task 15: `ask --hotkey` letters resolved by keyboard layout (#771)
 

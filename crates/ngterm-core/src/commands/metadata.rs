@@ -4,7 +4,9 @@
 //! `markSessionSeen` in `agterm/Control/ControlServer+SessionActions.swift`.
 //!
 //! Status sounds are queued for the frontend ([`Core::take_status_sounds`]); upstream resolves a name with
-//! `NSSound(named:)`, here a name is known when it is `default`, `beep` or one of upstream's standard names.
+//! `NSSound(named:)`, here a name is known when it is `default`, `beep` or one of upstream's standard names. While a
+//! viewer presents the session and the status pane follows its lead, the sound goes to that presenter instead
+//! (`present_status_sound_remotely`, upstream's `presentStatusSoundRemotely`).
 
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Command, ControlResult, Request};
@@ -16,6 +18,7 @@ use crate::model::{
     AgentIndicator, AgentStatus, STANDARD_SOUND_NAMES, StatusPane, StatusShape, StatusWriteResult, is_known_sound,
     is_valid_color_hex, validate_context,
 };
+use crate::remote::frames::PresentationSound;
 use crate::resolve::ACTIVE;
 
 /// Answers a session metadata command; `None` is a bare `ok` (`session.flag --mode clear`).
@@ -96,7 +99,9 @@ impl<'a> StatusUpdate<'a> {
 /// `session.status`: a fresh indicator per call, so an override the call leaves out is gone. An unknown sound is
 /// refused before the target resolves and leaves the status unchanged; a write another pane's block refuses plays
 /// nothing. A sound plays on apply: the per-call one, else the configured blocked sound on a transition INTO
-/// `blocked`.
+/// `blocked`. Either goes to the session's presenter instead when the status pane follows it: the per-call name, or
+/// on a transition into `blocked` the marker the presenter plays as its own blocked sound, sent even when this
+/// instance has none configured.
 fn status(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let update = StatusUpdate::parse(args)?;
     if let Some(sound) = update.sound
@@ -131,6 +136,18 @@ fn status(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
             "blocked status owned by pane {} (write from that pane to change it)",
             owner.as_str()
         )));
+    }
+    let entered_blocked = update.status == AgentStatus::Blocked && !was_blocked;
+    if (update.sound.is_some() || entered_blocked)
+        && core.present_status_sound_remotely(
+            PresentationSound {
+                name: update.sound.map(str::to_owned),
+            },
+            id,
+            status_pane,
+        )
+    {
+        return Ok(with_id(id));
     }
     let blocked_default = blocked_default.as_deref().filter(|_| !was_blocked);
     if let Some(sound) = update.status.effective_sound(update.sound, blocked_default) {

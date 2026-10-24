@@ -17,7 +17,7 @@ use uuid::Uuid;
 use super::frames::{
     self, Body, PresentationAsk, PresentationAskRef, PresentationFrame, PresentationHello, PresentationHud,
     PresentationLayout, PresentationMode, PresentationNotify, PresentationOverlay, PresentationOverlayChange,
-    PresentationStatus,
+    PresentationSound, PresentationStatus,
 };
 use super::hub::SUPPORTED_KINDS;
 use super::reconnect::retry_delay;
@@ -58,6 +58,8 @@ pub enum ClientEffect {
     SnapshotStatus(Option<PresentationStatus>),
     Hud(Option<PresentationHud>),
     Notify(PresentationNotify),
+    /// A status sound the origin handed over instead of playing it; nothing is sent back.
+    Sound(PresentationSound),
     Connection(RemoteConnection),
     Context(Option<String>),
     Layout(PresentationLayout),
@@ -261,6 +263,7 @@ impl PresentationClient {
             Body::Layout(layout) => apply_layout(layout, effects),
             Body::Hud(hud) => effects.push(ClientEffect::Hud(hud)),
             Body::Notify(notify) => effects.push(ClientEffect::Notify(notify)),
+            Body::Sound(sound) => effects.push(ClientEffect::Sound(sound)),
             Body::Ping => self.answer(Body::Ack),
             // an origin that predates the role answers mirror, and nothing is asked of it
             Body::Hello(answer) if answer.mode == PresentationMode::Presenter => self.answer(Body::PresenterAcquire),
@@ -631,6 +634,39 @@ mod tests {
             Some(Body::PresenterAcquire)
         );
         assert_eq!(harness.modes().last(), Some(&PresentationMode::Presenter));
+    }
+
+    /// Upstream's `aHandedOverSoundReachesTheAppAndNothingIsSentBack`.
+    #[test]
+    fn a_handed_over_sound_reaches_the_owner_and_nothing_is_sent_back() {
+        let mut harness = Harness::started();
+        harness.connect(PresentationSnapshot::default(), 7, PresentationMode::Presenter);
+        let glass = PresentationSound {
+            name: Some("Glass".to_owned()),
+        };
+        let marker = PresentationSound { name: None };
+        harness.deliver(&line(Body::Sound(glass.clone()), 7, 2));
+        harness.deliver(&line(Body::Sound(marker.clone()), 7, 3));
+        let sounds: Vec<&PresentationSound> = harness
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+                ClientEffect::Sound(sound) => Some(sound),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sounds, [&glass, &marker]);
+        assert_eq!(
+            harness
+                .transport
+                .link(0)
+                .0
+                .borrow()
+                .sent
+                .last()
+                .map(|frame| frame.body.clone()),
+            Some(Body::PresenterAcquire)
+        );
     }
 
     #[test]

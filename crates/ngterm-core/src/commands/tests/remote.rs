@@ -16,7 +16,11 @@ use super::live::{Live, live, report, spawn_live};
 use super::{Fixture, UNKNOWN, args, failure, wire};
 use crate::Core;
 use crate::live::daemon_name;
+use crate::live::lead::{LeadAttachment, LeadNotice};
+use crate::model::{AgentStatus, StatusPane};
 use crate::remote::LineChannel;
+use crate::remote::frames::PresentationSound;
+use crate::remote::hub::SUPPORTED_KINDS;
 use crate::remote::tree::{RemoteCommandResult, RemoteCommandRunner};
 
 // MARK: - a fake stream
@@ -75,14 +79,22 @@ impl Viewer {
     }
 }
 
-fn hello(mode: &str) -> Vec<u8> {
+/// The kinds a viewer from before status sounds lists.
+const OLDER_KINDS: [&str; 5] = ["status", "hud", "notify", "context", "layout"];
+
+fn hello(mode: &str, kinds: &[&str]) -> Vec<u8> {
     serde_json::to_vec(&json!({"kind": "hello", "gen": 0, "rev": 0,
-        "hello": {"version": 1, "kinds": ["status", "hud", "notify", "context", "layout"], "mode": mode}}))
+        "hello": {"version": 1, "kinds": kinds, "mode": mode}}))
     .unwrap()
 }
 
 /// Opens `live.present` on `session`, adopts its stream and says hello as `mode`.
 fn subscribe(core: &mut Core, session: Uuid, mode: &str) -> (u64, Viewer) {
+    subscribe_listing(core, session, mode, &OLDER_KINDS)
+}
+
+/// [`subscribe`] with a hello listing `kinds`.
+fn subscribe_listing(core: &mut Core, session: Uuid, mode: &str, kinds: &[&str]) -> (u64, Viewer) {
     let response = core.dispatch(&ngterm_proto::Request {
         cmd: Command::Live(LiveCmd::Present),
         target: Some(wire(session)),
@@ -91,7 +103,7 @@ fn subscribe(core: &mut Core, session: Uuid, mode: &str) -> (u64, Viewer) {
     assert_eq!(response.result, Some(json!({"id": wire(session)})), "{response:?}");
     let viewer = Viewer::default();
     let serial = core.adopt_presentation_stream(&wire(session), Box::new(viewer.clone()));
-    core.presentation_line(serial, &hello(mode));
+    core.presentation_line(serial, &hello(mode, kinds));
     core.commit();
     (serial, viewer)
 }
@@ -837,4 +849,240 @@ fn without_a_following_pane_an_overlay_opens_here() {
     assert!(opened.ok);
     assert!(presenter.last("overlay.request").is_none());
     assert_eq!(node(&mut live.fixture, session)["overlay"], true);
+}
+
+// MARK: - status sounds handed to the presenter
+
+/// Gives `pane` a fresh attachment that reported `role` (upstream's `setLead` in `AppStorePresentationTests`).
+fn set_lead(core: &mut Core, pane: Uuid, role: &str) {
+    let attachment = LeadAttachment::new(false);
+    let title = format!("{}{}:{role}:1", LeadNotice::PREFIX, attachment.nonce);
+    core.live.leads.begin(pane, attachment, false);
+    core.live.leads.apply(pane, &LeadNotice::parse(&title).unwrap());
+}
+
+/// A live session whose panes (both, with `split`) follow a remote lead, with a presenter whose hello lists `kinds`
+/// and a mirror (upstream's `AppStorePresentationTests.origin`). The presenter and the mirror, `None` unpresented.
+fn sound_origin(split: bool, kinds: &[&str], with_presenter: bool) -> (Live, Option<(Viewer, Viewer)>) {
+    let mut live = live();
+    let left = live.left;
+    set_lead(&mut live.fixture.core, left, "follower");
+    if split {
+        let right = live.split();
+        set_lead(&mut live.fixture.core, right, "follower");
+    }
+    if !with_presenter {
+        return (live, None);
+    }
+    let session = live.session;
+    let (serial, presenter) = subscribe_listing(&mut live.fixture.core, session, "presenter", kinds);
+    let (_, mirror) = subscribe_listing(&mut live.fixture.core, session, "mirror", kinds);
+    let acquire = frame(&presenter, &json!({"kind": "presenter.acquire"}));
+    live.fixture.core.presentation_line(serial, &acquire);
+    live.fixture.core.commit();
+    (live, Some((presenter, mirror)))
+}
+
+impl Viewer {
+    /// The `sound` frames' payloads, in order.
+    fn sounds(&self) -> Vec<Value> {
+        self.0
+            .borrow()
+            .lines
+            .iter()
+            .filter(|frame| frame["kind"] == "sound")
+            .map(|frame| frame["sound"].clone())
+            .collect()
+    }
+}
+
+fn glass() -> PresentationSound {
+    PresentationSound {
+        name: Some("Glass".to_owned()),
+    }
+}
+
+/// Upstream's `aStatusSoundFollowsOnlyTheLeadOfThePaneThatSetIt`.
+#[test]
+fn a_status_sound_follows_only_the_lead_of_the_pane_that_set_it() {
+    for pane in [None, Some(StatusPane::Left), Some(StatusPane::Right)] {
+        for role in ["unowned", "leader", "follower"] {
+            let (mut live, viewers) = sound_origin(true, &SUPPORTED_KINDS, true);
+            let (presenter, mirror) = viewers.unwrap();
+            let session = live.session;
+            let (left, right) = (
+                live.left,
+                live.fixture
+                    .store()
+                    .session(session)
+                    .unwrap()
+                    .split_pane_identity
+                    .unwrap(),
+            );
+            let (setter, other) = if pane == Some(StatusPane::Right) {
+                (right, left)
+            } else {
+                (left, right)
+            };
+            set_lead(&mut live.fixture.core, setter, role);
+            set_lead(&mut live.fixture.core, other, "leader");
+            let handed = live.fixture.core.present_status_sound_remotely(glass(), session, pane);
+            assert_eq!(handed, role == "follower", "{pane:?} {role}");
+            let expected: Vec<Value> = if handed {
+                vec![json!({"name": "Glass"})]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(presenter.sounds(), expected, "{pane:?} {role}");
+            assert!(mirror.sounds().is_empty(), "a mirror never gets one");
+        }
+    }
+}
+
+/// Upstream's `aScratchStatusSoundStaysLocal`.
+#[test]
+fn a_scratch_status_sound_stays_local() {
+    let (mut live, viewers) = sound_origin(true, &SUPPORTED_KINDS, true);
+    let (presenter, _) = viewers.unwrap();
+    let session = live.session;
+    assert!(
+        !live
+            .fixture
+            .core
+            .present_status_sound_remotely(glass(), session, Some(StatusPane::Scratch))
+    );
+    assert!(presenter.sounds().is_empty());
+}
+
+/// Upstream's `aRightPaneSoundWithoutASplitFollowsTheMainPaneLikeItsStatus`.
+#[test]
+fn a_right_pane_sound_without_a_split_follows_the_main_pane_like_its_status() {
+    let (mut live, viewers) = sound_origin(false, &SUPPORTED_KINDS, true);
+    let (presenter, _) = viewers.unwrap();
+    let session = live.session;
+    assert!(
+        live.fixture
+            .core
+            .present_status_sound_remotely(glass(), session, Some(StatusPane::Right))
+    );
+    assert_eq!(presenter.sounds(), [json!({"name": "Glass"})]);
+}
+
+/// Upstream's `aSoundStaysLocalWithoutAPresenter`, and a mirror alone is no presenter.
+#[test]
+fn a_sound_stays_local_without_a_presenter() {
+    let (mut live, _) = sound_origin(true, &SUPPORTED_KINDS, false);
+    let session = live.session;
+    assert!(!live.fixture.core.present_status_sound_remotely(glass(), session, None));
+    let (_, mirror) = subscribe_listing(&mut live.fixture.core, session, "mirror", &SUPPORTED_KINDS);
+    assert!(!live.fixture.core.present_status_sound_remotely(glass(), session, None));
+    assert!(mirror.sounds().is_empty());
+}
+
+/// Upstream's `aPresenterTooOldForSoundLeavesItLocal`.
+#[test]
+fn a_presenter_too_old_for_sound_leaves_it_local() {
+    let (mut live, viewers) = sound_origin(true, &["status", "hud", "notify"], true);
+    let (presenter, _) = viewers.unwrap();
+    let session = live.session;
+    let marker = PresentationSound { name: None };
+    assert!(!live.fixture.core.present_status_sound_remotely(marker, session, None));
+    assert!(presenter.sounds().is_empty());
+    assert!(!presenter.closed(), "the refused kind leaves the presenter connected");
+}
+
+/// Upstream's `aReconnectSnapshotCarriesNoSound`.
+#[test]
+fn a_reconnect_snapshot_carries_no_sound() {
+    let (mut live, _) = sound_origin(true, &SUPPORTED_KINDS, true);
+    let session = live.session;
+    assert!(set_status(&mut live, "blocked", |_| {}).ok);
+    live.fixture.core.commit();
+    let (_, late) = subscribe_listing(&mut live.fixture.core, session, "presenter", &SUPPORTED_KINDS);
+    assert!(late.sounds().is_empty());
+    assert_eq!(late.kinds(), ["hello", "snapshot"]);
+    assert_eq!(
+        late.last("snapshot").unwrap()["snapshot"]["status"]["status"],
+        "blocked"
+    );
+}
+
+fn set_status(live: &mut Live, status: &str, edit: impl FnOnce(&mut Args)) -> Response {
+    let session = live.session;
+    live.fixture.session(
+        SessionCmd::Status,
+        Some(&wire(session)),
+        args(|a| {
+            a.status = Some(status.to_owned());
+            edit(a);
+        }),
+    )
+}
+
+/// Upstream's `testAFollowingPanesSoundPlaysOnThePresenterInsteadOfHere`.
+#[test]
+fn a_following_panes_sound_plays_on_the_presenter_instead_of_here() {
+    let (mut live, viewers) = sound_origin(false, &SUPPORTED_KINDS, true);
+    let (presenter, _) = viewers.unwrap();
+    assert!(set_status(&mut live, "blocked", |a| a.sound = Some("Tink".to_owned())).ok);
+    let session = live.session;
+    let indicator = &live.fixture.store().session(session).unwrap().agent_indicator;
+    assert_eq!(indicator.status, AgentStatus::Blocked);
+    assert_eq!(presenter.sounds(), [json!({"name": "Tink"})]);
+    assert!(live.fixture.core.take_status_sounds().is_empty(), "nothing plays here");
+}
+
+/// Upstream's `testEnteringBlockedSendsTheMarkerEvenWithNoBlockedSoundHere`, and an empty per-call sound counting as
+/// none.
+#[test]
+fn entering_blocked_sends_the_marker_even_with_no_blocked_sound_here() {
+    let (mut live, viewers) = sound_origin(false, &SUPPORTED_KINDS, true);
+    let (presenter, _) = viewers.unwrap();
+    assert!(live.fixture.core.settings().blocked_status_sound_name.is_none());
+    assert!(set_status(&mut live, "blocked", |a| a.sound = Some(String::new())).ok);
+    assert_eq!(presenter.sounds(), [json!({})]);
+    assert!(set_status(&mut live, "blocked", |_| {}).ok);
+    assert_eq!(presenter.sounds(), [json!({})], "staying blocked plays nothing");
+    assert!(set_status(&mut live, "completed", |_| {}).ok);
+    assert_eq!(presenter.sounds(), [json!({})]);
+    assert!(live.fixture.core.take_status_sounds().is_empty());
+}
+
+/// Upstream's `testARefusedStatusSendsNoSound`.
+#[test]
+fn a_refused_status_sends_no_sound() {
+    let (mut live, viewers) = sound_origin(true, &SUPPORTED_KINDS, true);
+    let (presenter, _) = viewers.unwrap();
+    assert!(set_status(&mut live, "blocked", |a| a.pane = Some("right".to_owned())).ok);
+    let sent = presenter.sounds().len();
+    let refused = set_status(&mut live, "completed", |a| {
+        a.pane = Some("left".to_owned());
+        a.sound = Some("Tink".to_owned());
+    });
+    assert_eq!(
+        refused,
+        failure("blocked status owned by pane right (write from that pane to change it)")
+    );
+    assert_eq!(presenter.sounds().len(), sent);
+    assert!(live.fixture.core.take_status_sounds().is_empty());
+}
+
+/// Upstream's `testAPaneLeadingHerePlaysTheSoundHere`, and a presenter too old for sound leaving both kinds here.
+#[test]
+fn a_pane_leading_here_plays_the_sound_here() {
+    let (mut live, viewers) = sound_origin(false, &SUPPORTED_KINDS, true);
+    let (presenter, _) = viewers.unwrap();
+    let left = live.left;
+    set_lead(&mut live.fixture.core, left, "leader");
+    assert!(set_status(&mut live, "blocked", |a| a.sound = Some("Tink".to_owned())).ok);
+    assert!(presenter.sounds().is_empty());
+    assert_eq!(live.fixture.core.take_status_sounds(), ["Tink"]);
+
+    let (mut older, _) = sound_origin(false, &OLDER_KINDS, true);
+    older
+        .fixture
+        .core
+        .update_settings(|settings| settings.blocked_status_sound_name = Some("Funk".to_owned()));
+    assert!(set_status(&mut older, "blocked", |_| {}).ok);
+    assert_eq!(older.fixture.core.take_status_sounds(), ["Funk"]);
 }

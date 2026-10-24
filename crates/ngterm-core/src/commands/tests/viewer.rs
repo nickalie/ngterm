@@ -392,6 +392,39 @@ fn the_snapshot_and_deltas_land_on_the_row_and_losing_the_stream_withdraws_them(
     assert_eq!(viewer.transport.0.borrow().len(), 2);
 }
 
+// MARK: - status sounds
+
+/// Upstream's `testAHandedOverSoundPlaysHere`, `testTheBlockedMarkerPlaysThisMacsOwnBlockedSound`,
+/// `testASoundThisMacLacksPlaysTheSystemAlert` and `testTheBlockedMarkerWithNoBlockedSoundHereStaysSilent`: a handed
+/// over sound plays here under its name, the marker as this machine's own blocked sound, one unknown here as the alert,
+/// and none or an empty one plays nothing; nothing goes back to the origin.
+#[test]
+fn a_handed_over_sound_plays_here_and_nothing_goes_back() {
+    let cases: [(Value, Option<&str>, &[&str]); 7] = [
+        (json!({"name": "Glass"}), Some("Frog"), &["Glass"]),
+        (json!({}), Some("Frog"), &["Frog"]),
+        (json!({"name": "MyChime"}), None, &["default"]),
+        (json!({}), Some("Gone"), &["default"]),
+        (json!({}), None, &[]),
+        (json!({}), Some(""), &[]),
+        (json!({"name": ""}), Some("Frog"), &[]),
+    ];
+    for (sound, blocked, played) in cases {
+        let mut viewer = viewer_with(false);
+        viewer.connect(&json!({}));
+        viewer.frame(json!({"kind": "presenter.granted"}));
+        let blocked = blocked.map(str::to_owned);
+        viewer
+            .fixture
+            .core
+            .update_settings(|settings| settings.blocked_status_sound_name = blocked);
+        let sent = viewer.link().0.borrow().sent.len();
+        viewer.frame(json!({"kind": "sound", "sound": sound}));
+        assert_eq!(viewer.fixture.core.take_status_sounds(), played, "{sound}");
+        assert_eq!(viewer.link().0.borrow().sent.len(), sent, "nothing is sent back");
+    }
+}
+
 // MARK: - replica asks
 
 fn ask_request(id: &str, pane: Option<Uuid>) -> Value {

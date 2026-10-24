@@ -66,6 +66,10 @@ pub enum HubEvent {
 struct Subscriber {
     session: Uuid,
     sink: Box<dyn PresentationSink>,
+    /// The [`SUPPORTED_KINDS`] its hello listed. Work handed to it as the presenter
+    /// ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed there but missing here; published
+    /// state goes to every viewer whatever its hello listed.
+    kinds: Vec<String>,
     revision: i64,
     last_ack: Instant,
     /// Deltas published while the snapshot is being taken, held so they land after it.
@@ -117,8 +121,11 @@ impl PresenterGrant {
     }
 }
 
-/// The frame kinds this origin produces.
-pub const SUPPORTED_KINDS: [&str; 5] = ["status", "hud", "notify", "context", "layout"];
+/// The frame kinds this origin produces, in upstream's order; a hello's kinds are filtered through it. Work handed to a
+/// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
+/// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
+/// goes to every viewer whatever its hello listed, as upstream's.
+pub const SUPPORTED_KINDS: [&str; 6] = ["status", "hud", "notify", "context", "layout", "sound"];
 
 /// Fans each session's presentation state out to its viewers.
 pub struct PresentationHub {
@@ -176,11 +183,17 @@ impl PresentationHub {
         self.last_generation += 1;
         let id = SubscriberId(self.last_generation);
         let now = (self.now)();
+        let kinds: Vec<String> = SUPPORTED_KINDS
+            .iter()
+            .filter(|kind| hello.kinds.iter().any(|theirs| theirs == *kind))
+            .map(|kind| (*kind).to_owned())
+            .collect();
         self.subscribers.insert(
             id,
             Subscriber {
                 session,
                 sink,
+                kinds: kinds.clone(),
                 revision: 0,
                 last_ack: now,
                 held: Some(Vec::new()),
@@ -198,11 +211,7 @@ impl PresentationHub {
         // presenter is offered only to a viewer that asked for it, so an older viewer stays a mirror
         let answer = PresentationHello {
             version,
-            kinds: SUPPORTED_KINDS
-                .iter()
-                .filter(|kind| hello.kinds.iter().any(|theirs| theirs == *kind))
-                .map(|kind| (*kind).to_owned())
-                .collect(),
+            kinds,
             mode: hello.mode,
         };
         for body in [Body::Hello(answer), Body::Snapshot(state)].into_iter().chain(held) {
@@ -221,12 +230,31 @@ impl PresentationHub {
         self.release(id);
     }
 
-    /// Sends `body` to `session`'s presenter alone. False when there is none, or it stalled and was dropped.
+    /// Sends `body` to `session`'s presenter alone. False when there is none, it stalled and was dropped, or `body` is
+    /// a negotiated kind ([`SUPPORTED_KINDS`]) its hello did not list, which an older presenter would skip.
     pub fn send_to_presenter(&mut self, body: Body, session: Uuid) -> bool {
-        match self.grant.holder(session) {
-            Some(holder) => self.send(body, holder),
-            None => false,
+        let Some(holder) = self.grant.holder(session) else {
+            return false;
+        };
+        if SUPPORTED_KINDS.contains(&body.kind()) && !self.holder_supports(holder, body.kind()) {
+            return false;
         }
+        self.send(body, holder)
+    }
+
+    /// Whether `session` has a presenter whose hello listed `kind` (upstream's `presenterSupports`). A hello's kinds
+    /// are filtered through [`SUPPORTED_KINDS`], so a kind outside it always answers false.
+    #[must_use]
+    pub fn presenter_supports(&self, kind: &str, session: Uuid) -> bool {
+        self.grant
+            .holder(session)
+            .is_some_and(|holder| self.holder_supports(holder, kind))
+    }
+
+    fn holder_supports(&self, holder: SubscriberId, kind: &str) -> bool {
+        self.subscribers
+            .get(&holder)
+            .is_some_and(|subscriber| subscriber.kinds.iter().any(|listed| listed == kind))
     }
 
     /// Publishes `layout` to `session`'s viewers when it differs from the last one they got.
@@ -658,6 +686,51 @@ mod tests {
                 mode: PresentationMode::Presenter,
             }))
         );
+    }
+
+    /// Upstream's `aNegotiatedKindReachesOnlyAPresenterThatAdvertisedIt`.
+    #[test]
+    fn a_negotiated_kind_reaches_only_a_presenter_that_advertised_it() {
+        for advertised in [true, false] {
+            let (mut hub, _) = hub();
+            let session = Uuid::new_v4();
+            let (sink, seen) = sink();
+            let mut kinds = vec!["status".to_owned()];
+            if advertised {
+                kinds.push("sound".to_owned());
+            }
+            let asked = PresentationHello {
+                version: 1,
+                kinds,
+                mode: PresentationMode::Presenter,
+            };
+            let id = hub
+                .subscribe(session, &asked, sink, |_| PresentationSnapshot::default())
+                .unwrap();
+            assert!(!hub.presenter_supports("sound", session), "no presenter yet");
+            hub.receive(frame(id, Body::PresenterAcquire), id);
+            let sound = Body::Sound(crate::remote::frames::PresentationSound {
+                name: Some("Glass".to_owned()),
+            });
+            // an ask kind is not negotiated, so every presenter is sent it, though none advertised it
+            let ask = Body::AskDismiss(crate::remote::frames::PresentationAskRef {
+                id: "a1".to_owned(),
+                owner: 1,
+            });
+            assert_eq!(hub.presenter_supports("sound", session), advertised);
+            assert!(
+                !hub.presenter_supports("ask.dismiss", session),
+                "a kind outside the supported list is never advertised"
+            );
+            assert_eq!(hub.send_to_presenter(sound.clone(), session), advertised);
+            assert!(hub.send_to_presenter(ask.clone(), session));
+            assert_eq!(bodies(&seen).contains(&sound), advertised);
+            assert_eq!(bodies(&seen).last(), Some(&ask));
+            assert!(
+                seen.borrow().closed.is_none(),
+                "a refused kind does not drop the presenter"
+            );
+        }
     }
 
     #[test]

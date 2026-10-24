@@ -67,6 +67,19 @@ netlink-packet-core.workspace = true
 netlink-packet-route.workspace = true
 netlink-sys.workspace = true
 
+# the status sounds by name (`status_sound.rs`): NSSound and NSBeep on macOS, PlaySoundW and MessageBeep on Windows
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = ["NSSound", "NSGraphics"] }
+objc2-foundation = { workspace = true, features = ["NSString"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Media_Audio",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 ngterm-host = { workspace = true, features = ["fakes"] }
 gpui-kit = { workspace = true, features = ["test-support"] }

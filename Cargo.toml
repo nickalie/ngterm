@@ -34,6 +34,12 @@ libc = "0.2"
 # Windows APIs, features per crate: ngterm-session's endpoint (the named pipe's security descriptor and its
 # server-process check), its job and process tables.
 windows-sys = "0.61"
+# macOS system sounds by name for the status sounds (ngterm-gpui's `status_sound.rs`), features per crate: the AppKit
+# and Foundation bindings of the objc2 project, and the runtime crate for the retained sound the player keeps, the
+# versions GPUI's macOS backend already links.
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std"] }
 # The UTF-16 strings interprocess takes a named pipe's security descriptor in (ngterm-session, Windows).
 widestring = "1.2"
 # ngterm-session's server start from inside a Windows job that refuses breakaway: WMI's `Win32_Process.Create`, as

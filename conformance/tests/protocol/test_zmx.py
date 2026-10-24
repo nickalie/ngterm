@@ -390,8 +390,12 @@ def test_kill_ends_the_daemon_and_closes_its_pane(live):
 # -- presentation streams
 
 
-def _hello(mode):
-    kinds = ["status", "hud", "notify", "context", "layout"]
+# The kinds a viewer from before status sounds lists, and one that plays them.
+OLDER_KINDS = ["status", "hud", "notify", "context", "layout"]
+SOUND_KINDS = [*OLDER_KINDS, "sound"]
+
+
+def _hello(mode, kinds=OLDER_KINDS):
     return {
         "kind": "hello",
         "gen": 0,
@@ -400,11 +404,11 @@ def _hello(mode):
     }
 
 
-def _subscribed(live, sid, mode):
+def _subscribed(live, sid, mode, kinds=OLDER_KINDS):
     stream = live.stream(live.vocabulary.command("zmx.present"), sid)
     assert stream.reply.ok, stream.reply.raw
     assert stream.reply.result == {"id": sid}
-    stream.send(_hello(mode))
+    stream.send(_hello(mode, kinds))
     hello = wait_frame(stream.read, "hello", stream.send)
     assert hello["hello"]["mode"] == mode and hello["hello"]["version"] == PRESENTATION_VERSION
     wait_frame(stream.read, "snapshot", stream.send)
@@ -486,6 +490,64 @@ def test_job_run_serves_an_overlay_a_presenter_shows(live):
             with live.stream("session.overlay.job.run", job) as again:
                 assert_error(again.reply, "job not claimable")
     _presenters(live, sid, None)
+    assert_ok(live.request("session.close", sid))
+
+
+def _acquired(live, sid, kinds):
+    """A presenter of `sid` whose hello lists `kinds`, granted the role."""
+    presenter, gen = _subscribed(live, sid, "presenter", kinds)
+    presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
+    wait_frame(presenter.read, "presenter.granted", presenter.send)
+    _presenters(live, sid, {"mirrors": 0, "presenter": True})
+    return presenter
+
+
+def _sounds_before_fence(live, sid, stream, fence):
+    """The `sound` payloads `stream` got before the context frame a `session.context set fence` publishes: the origin
+    sends a sound while it answers `session.status`, so one sent by an earlier request precedes the fence."""
+    assert_ok(live.request("session.context", sid, mode="set", text=fence))
+    frames = []
+
+    def read(timeout):
+        frame = stream.read(timeout)
+        frames.append(frame)
+        return frame
+
+    while wait_frame(read, "context", stream.send).get("context") != fence:
+        pass
+    return [frame.get("sound") for frame in frames if frame.get("kind") == "sound"]
+
+
+@LIVE
+@pytest.mark.covers("session.status", "zmx.present", "field:tree.session.presenters", streams=("zmx.present",))
+def test_status_sound_goes_to_a_following_presenter(live):
+    sid = _live_session(live)
+    endpoint = assert_ok(live.request(live.vocabulary.command("zmx.tree")))["remote"]["endpoint"]
+    # A status sound goes to the presenter only while the status pane's own client follows.
+    daemon = _entries(live, sid)["left"]["daemon"]
+    with live.vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
+        live.wait_tree(lambda tree: _follows(tree, sid, viewer))
+        with _acquired(live, sid, SOUND_KINDS) as presenter:
+            assert_ok(live.request("session.status", sid, status="blocked", sound="Glass"))
+            assert _sounds_before_fence(live, sid, presenter, "fence 1") == [{"name": "Glass"}]
+            # entering blocked without a sound sends the marker the presenter plays as its own blocked sound
+            assert_ok(live.request("session.status", sid, status="idle"))
+            assert_ok(live.request("session.status", sid, status="blocked"))
+            assert _sounds_before_fence(live, sid, presenter, "fence 2") == [{}]
+            # staying blocked plays nothing
+            assert_ok(live.request("session.status", sid, status="blocked"))
+            assert _sounds_before_fence(live, sid, presenter, "fence 3") == []
+        _presenters(live, sid, None)
+        # a sound is never part of a snapshot, so a reconnect while blocked replays none
+        with _acquired(live, sid, SOUND_KINDS) as presenter:
+            assert _sounds_before_fence(live, sid, presenter, "fence 4") == []
+        _presenters(live, sid, None)
+        # a presenter whose hello omits the kind never gets one
+        with _acquired(live, sid, OLDER_KINDS) as presenter:
+            assert_ok(live.request("session.status", sid, status="idle"))
+            assert_ok(live.request("session.status", sid, status="blocked", sound="Glass"))
+            assert _sounds_before_fence(live, sid, presenter, "fence 5") == []
+        _presenters(live, sid, None)
     assert_ok(live.request("session.close", sid))
 
 
