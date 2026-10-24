@@ -456,6 +456,13 @@ impl Page {
         };
         let token = registry::park(message.token);
         let id = self.id;
+        // a page shown for another machine acts there: its request goes as sent, and that machine fills the defaults
+        if matches!(self.overlay().source, HtmlSource::Replica { .. }) {
+            if !registry::relay(id, body, token) {
+                super::reject(token, "page closed");
+            }
+            return;
+        }
         post(&self.poster, move |state: &mut AppState| {
             match state.core.html_bridge_request(id, body.as_bytes()) {
                 Ok(request) => state.handle_page_request(&request, token),
@@ -657,8 +664,11 @@ impl Page {
                 Ok(html) => Load::Html { html, base_uri: None },
                 Err(error) => return self.fail(error.to_string()),
             },
-            // a replica's files come over its page channel, which this build does not open yet
-            HtmlSource::Replica { path } => return self.fail(format!("the page's file is on another machine: {path}")),
+            // a replica's files come from the machine that opened it, read through the replica scheme
+            HtmlSource::Replica { path } => match policy::replica_uri(self.id, &path) {
+                Some(uri) => Load::Uri(uri),
+                None => return self.fail(errors::REMOTE_FILE.to_owned()),
+            },
         };
         if let (Some(web), Some(view)) = (self.web(), self.view.get()) {
             web.load(view, load);
@@ -675,6 +685,11 @@ impl Page {
 
     /// A history step or hand-off (upstream's `navigate`).
     pub(super) fn navigate(&self, navigation: HtmlNavigation) -> Result<(), String> {
+        if let Some(refusal) =
+            ngterm_core::remote::replica_page::replica_navigation_refusal(&self.overlay(), navigation)
+        {
+            return Err(refusal.to_owned());
+        }
         let (web, view) = (self.web(), self.view.get());
         let engine = self.state.borrow().engine.clone();
         match navigation {

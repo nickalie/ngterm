@@ -14,6 +14,7 @@ use std::rc::Rc;
 use std::sync::Weak;
 use std::time::{Duration, Instant};
 
+use ngterm_app::page_channel::{PageHelperOwner, PageHelperProcess};
 use ngterm_app::remote::{InboundGate, PresentationViewer, ProcessTransport};
 use ngterm_core::app_actions::{ActionEffect, ActionOrigin, FrontendAction};
 use ngterm_core::auto_follow::AutoFollowTimer;
@@ -269,6 +270,23 @@ impl PresentationViewer for AppState {
     }
 }
 
+/// The helpers carrying the channels of pages origins handed over ([`ngterm_app::page_channel`]).
+impl PageHelperOwner for AppState {
+    fn page_helper_line(&mut self, key: ngterm_core::remote::replica_page::HelperKey, line: &[u8]) {
+        if !self.quitting {
+            self.core.page_helper_line(key, line);
+            self.settle();
+        }
+    }
+
+    fn page_helper_closed(&mut self, key: ngterm_core::remote::replica_page::HelperKey, reason: &str) {
+        if !self.quitting {
+            self.core.page_helper_closed(key, reason);
+            self.settle();
+        }
+    }
+}
+
 impl AppState {
     #[must_use]
     pub fn new(mut core: Core) -> Self {
@@ -317,6 +335,9 @@ impl AppState {
         // the attached rows' presentation bridges run as children reporting back through the loop
         self.core
             .set_presentation_transport(std::rc::Rc::new(ProcessTransport::new(poster.clone())));
+        // and the pages their origins hand over fetch through helpers of their own
+        self.core
+            .set_page_helper_launcher(std::rc::Rc::new(PageHelperProcess::new(poster.clone())));
         self.poster = poster;
         self.settle();
     }

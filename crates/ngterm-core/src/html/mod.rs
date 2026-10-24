@@ -170,6 +170,40 @@ pub enum HtmlSource {
 /// own name, as every scheme it registers).
 pub const REPLICA_SCHEME: &str = "ngterm-page";
 
+/// The address replica `page` loads `path` from, `path` being the file's path on the machine that opened it (upstream's
+/// `HtmlPageSchemeHandler.url`): the page's own id, lowercased, is the host, so a relative address resolves inside it.
+/// The path is a file name, not an address: a literal `%` in it is escaped (as `URLComponents.path` does), so
+/// [`replica_path`] gives back the same file; `set_path` escapes the rest (space, `?`, `#`).
+#[must_use]
+pub fn replica_url(page: uuid::Uuid, path: &str) -> Option<Url> {
+    let mut url = Url::parse(&format!("{REPLICA_SCHEME}://{}/", page.hyphenated())).ok()?;
+    let escaped = path.replace('%', "%25");
+    if escaped.starts_with('/') {
+        url.set_path(&escaped);
+    } else {
+        url.set_path(&format!("/{escaped}"));
+    }
+    Some(url)
+}
+
+/// The file a replica-scheme address names on the machine that opened the page, its path decoded; `None` for an address
+/// of another scheme.
+#[must_use]
+pub fn replica_path(url: &Url) -> Option<String> {
+    (url.scheme() == REPLICA_SCHEME)
+        .then(|| crate::link_policy::percent_decode(url.path()).unwrap_or_else(|| url.path().to_owned()))
+}
+
+/// Whether a replica-scheme address belongs to page `page`: its host is the page's id, in any case (upstream's handler
+/// check), so a read naming another page never reaches this one's origin.
+#[must_use]
+pub fn replica_url_of(url: &Url, page: uuid::Uuid) -> bool {
+    url.scheme() == REPLICA_SCHEME
+        && url
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case(&page.hyphenated().to_string()))
+}
+
 impl HtmlSource {
     /// The origin of an HTTP(S) URL without credentials, `None` for other schemes (upstream's `HtmlSource.origin`).
     #[must_use]
@@ -447,6 +481,12 @@ pub mod errors {
     /// The saved store is being emptied: neither a second clear nor a persistent page may use it (upstream's
     /// `BrowserClearError.clearing`).
     pub const CLEARING: &str = "browser storage is being cleared";
+    /// A file page shown for another machine has no file here to reveal or open (upstream's
+    /// `OverlayHtmlError.remoteFile`).
+    pub const REMOTE_FILE: &str = "the page's file is on another Mac";
+    /// A page shown here for another machine is answered there, through the page itself (upstream's
+    /// `OverlayHtmlError.replicaSubmit`).
+    pub const REPLICA_SUBMIT: &str = "submit on the Mac that opened the page";
 
     /// Persistent pages still hold the saved store and would write their logins back (upstream's
     /// `BrowserClearError.pagesOpen`).
@@ -593,5 +633,52 @@ mod tests {
             assert_eq!(HtmlNavigation::from_wire(navigation.wire_name()), Some(navigation));
         }
         assert_eq!(HtmlNavigation::from_wire("sideways"), None);
+    }
+
+    /// Upstream's `HtmlPageSchemeHandler.url` and its handler's host check.
+    #[test]
+    fn a_replica_address_names_its_page_and_carries_the_origin_path() {
+        let page = uuid::Uuid::new_v4();
+        let url = replica_url(page, "/Users/u/my docs/é.html").unwrap();
+        assert_eq!(url.scheme(), REPLICA_SCHEME);
+        assert_eq!(url.host_str(), Some(page.hyphenated().to_string().as_str()));
+        assert_eq!(replica_path(&url).as_deref(), Some("/Users/u/my docs/é.html"));
+        assert!(replica_url_of(&url, page));
+        let relative = url.join("img/a b.png").unwrap();
+        assert_eq!(replica_path(&relative).as_deref(), Some("/Users/u/my docs/img/a b.png"));
+        assert!(replica_url_of(&relative, page));
+        let upper = Url::parse(&format!(
+            "{REPLICA_SCHEME}://{}/a.css",
+            page.hyphenated().to_string().to_uppercase()
+        ))
+        .unwrap();
+        assert!(replica_url_of(&upper, page), "the host compares in any case");
+        assert!(!replica_url_of(&url, uuid::Uuid::new_v4()), "another page's address");
+        let other = Url::parse("ngterm-file:///Users/u/a.html").unwrap();
+        assert!(replica_path(&other).is_none() && !replica_url_of(&other, page));
+        assert_eq!(
+            replica_url(page, "index.html")
+                .map(|url| url.path().to_owned())
+                .as_deref(),
+            Some("/index.html")
+        );
+    }
+
+    /// A file name is not an address: escapes and URL delimiters in it name the same file again.
+    #[test]
+    fn a_replica_address_keeps_a_file_name_with_escapes_and_delimiters() {
+        let page = uuid::Uuid::new_v4();
+        for path in [
+            "/docs/a%20b.html",
+            "/docs/100%.html",
+            "/docs/q?x=1#frag.html",
+            "/docs/%E9 é.html",
+        ] {
+            let url = replica_url(page, path).unwrap();
+            assert_eq!(replica_path(&url).as_deref(), Some(path), "{url}");
+            assert!(url.query().is_none() && url.fragment().is_none(), "{url}");
+        }
+        let url = replica_url(page, "/docs/a%20b.html").unwrap();
+        assert_eq!(url.path(), "/docs/a%2520b.html");
     }
 }

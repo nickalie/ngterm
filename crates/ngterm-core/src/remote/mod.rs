@@ -12,7 +12,9 @@
 //!   `presentAskRemotely`/`takeBackRemoteAsk`/`receivePresenterFrame`): an ask, a program overlay or a page
 //!   (`page`, upstream's `AppStore+RemotePage.swift`) opened on a session whose panes follow a remote lead goes to its
 //!   presenter instead of being drawn here; a handed-over page's files and bridge calls come back over the channel its
-//!   presenter's helper claims ([`page_serve`]).
+//!   presenter's helper claims ([`page_serve`]);
+//! - on the presenter, the pages an origin handed over ([`replica_page`]) and their end of that channel
+//!   ([`page_channel`]).
 //!
 //! The streams are the frontend's: it hands the core each adopted connection as a [`LineChannel`] and reports
 //! the lines read from it and its close, arms the hello deadline and the heartbeat, and the core does the rest (upstream's
@@ -26,9 +28,11 @@ mod handoff;
 pub mod hub;
 mod layout;
 mod page;
+pub mod page_channel;
 pub mod page_serve;
 pub mod reconnect;
 pub mod remotes;
+pub mod replica_page;
 pub mod ssh;
 pub mod tree;
 mod viewer;

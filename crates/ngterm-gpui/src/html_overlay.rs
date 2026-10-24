@@ -42,7 +42,10 @@ mod view;
 #[cfg(all(feature = "html", target_os = "linux"))]
 pub use panel::TerminalColors;
 #[cfg(all(feature = "html", target_os = "linux"))]
-pub use registry::{answer, apply, init, install, key_down, mount, refresh_themes, reject, settle, shutdown};
+pub use registry::{
+    ReplicaLink, answer, answer_resource, answer_value, apply, init, install, key_down, mount, refresh_themes, reject,
+    set_replica_link, settle, shutdown,
+};
 #[cfg(all(feature = "html", target_os = "linux"))]
 pub use view::{FrameStats, PageView};
 

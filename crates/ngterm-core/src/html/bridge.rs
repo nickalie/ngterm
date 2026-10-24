@@ -294,6 +294,30 @@ pub fn reply(response: &Response) -> Result<Value, String> {
     })
 }
 
+/// The answer a page shown for another machine gets from the reply that machine sent as JSON text (upstream's
+/// `HtmlOverlayBridge.reply(raw:)`): read untyped, so a result field this build does not know still reaches the page.
+///
+/// # Errors
+///
+/// `invalid reply` for text that is not a JSON object; the reply's error, `request failed` when it has none, for one
+/// that is not ok.
+pub fn shape_raw_reply(raw: &str) -> Result<Value, String> {
+    let Ok(Value::Object(envelope)) = serde_json::from_str::<Value>(raw) else {
+        return Err("invalid reply".to_owned());
+    };
+    if envelope.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(envelope
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("request failed")
+            .to_owned());
+    }
+    Ok(envelope
+        .get("result")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new())))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -630,5 +654,23 @@ mod tests {
             error: None,
         };
         assert_eq!(reply(&unexplained), Err("request failed".to_owned()));
+    }
+
+    /// Upstream's `HtmlOverlayBridge.reply(raw:)` as `RemotePageChannelTests.testABridgeReplyComesBackAsTheOriginSentIt`
+    /// and the linked replica's bridge use it.
+    #[test]
+    fn a_raw_reply_keeps_unknown_fields_and_shapes_its_failures() {
+        assert_eq!(
+            shape_raw_reply(r#"{"ok":true,"result":{"extra":{"nested":"kept"}}}"#),
+            Ok(json!({"extra": {"nested": "kept"}}))
+        );
+        assert_eq!(shape_raw_reply(r#"{"ok":true}"#), Ok(json!({})));
+        assert_eq!(shape_raw_reply("[1]"), Err("invalid reply".to_owned()));
+        assert_eq!(shape_raw_reply("nope"), Err("invalid reply".to_owned()));
+        assert_eq!(
+            shape_raw_reply(r#"{"ok":false,"error":"no such session"}"#),
+            Err("no such session".to_owned())
+        );
+        assert_eq!(shape_raw_reply(r#"{"ok":false}"#), Err("request failed".to_owned()));
     }
 }

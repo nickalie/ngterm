@@ -23,6 +23,10 @@ pub const CASES: &[(&str, Case)] = &[
     ("a_running_page_falls_back_to_shm_and_goes_on_drawing", fallback),
     ("scheme_pages_are_served_by_the_consumer", schemes),
     (
+        "a_scheme_site_loads_its_stylesheet_image_modules_fetch_and_history",
+        scheme_site,
+    ),
+    (
         "the_script_bridge_round_trips_in_the_page_world_and_a_script_world",
         bridge,
     ),
@@ -244,6 +248,94 @@ fn schemes(h: &Harness, context: &Context) -> Outcome {
         error.kind == LoadErrorKind::Failed && error.message.contains("outside the grant"),
         || format!("the refusal reads {error:?}"),
     )?;
+    h.host.close_view(view);
+    Ok(())
+}
+
+/// The files of a site served from the consumer's scheme (upstream's `HtmlPageSchemeHandlerTests.files`).
+const SITE: [(&str, &str, &str); 6] = [
+    (
+        "/index.html",
+        "text/html",
+        "<!doctype html><html><head><link rel='stylesheet' href='style.css'>\
+         <script type='module' src='main.js'></script></head>\
+         <body><img id='dot' src='img/dot.svg'></body></html>",
+    ),
+    ("/style.css", "text/css", "body { color: rgb(1, 2, 3); }"),
+    (
+        "/main.js",
+        "text/javascript",
+        "import { dep } from './lib/dep.js'; window.moduleRan = dep;",
+    ),
+    ("/lib/dep.js", "text/javascript", "export const dep = 'dep-ok';"),
+    ("/data.txt", "text/plain", "fetched-ok"),
+    (
+        "/img/dot.svg",
+        "image/svg+xml",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>",
+    ),
+];
+
+/// Answers the reads of the site's host from [`SITE`], whole, as a replica page's answers arrive; a path it does not
+/// hold is not found.
+fn serve_site(h: &Harness, event: &Event) {
+    let Event::SchemeRequest(request) = event else { return };
+    let prefix = format!("{SCHEME}://site");
+    let Some(path) = request.uri.strip_prefix(&prefix) else {
+        return;
+    };
+    let response = SITE.iter().find(|(file, _, _)| *file == path).map_or_else(
+        || SchemeResponse::Error {
+            kind: SchemeError::NotFound,
+            message: format!("no {path}"),
+        },
+        |(_, mime, body)| SchemeResponse::Bytes {
+            data: body.as_bytes().to_vec(),
+            mime: (*mime).to_owned(),
+        },
+    );
+    h.host.finish_scheme_request(request.token, response);
+}
+
+/// Serves the site until `script` evaluates to `expected` in `view`.
+fn served_until(h: &Harness, view: ngterm_wpe::ViewId, script: &str, expected: &str) -> Outcome {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        h.idle(Duration::from_millis(30), |event| {
+            serve_site(h, event);
+            None
+        })?;
+        let value = h.evaluate(view, script, None)?;
+        if value.as_deref() == Some(expected) {
+            return Ok(());
+        }
+        if std::time::Instant::now() > deadline {
+            return Err(format!("{script} reads {value:?}, not {expected}"));
+        }
+    }
+}
+
+/// A page whose files all come from the consumer's scheme loads like a local one: a relative stylesheet, an image and
+/// ES modules, a `fetch`, and `pushState` with back and forward (upstream's `HtmlPageSchemeHandlerTests`, the transport
+/// a page shown for another machine relies on: every answer arrives whole, as `SchemeResponse::Bytes`).
+fn scheme_site(h: &Harness, _: &Context) -> Outcome {
+    let view = h.view(h.ephemeral(), Settings::overlay(true));
+    h.host.load(view, Load::Uri(format!("{SCHEME}://site/index.html")));
+    served_until(h, view, "window.moduleRan", "\"dep-ok\"")?;
+    served_until(h, view, "document.getElementById('dot').naturalWidth", "1")?;
+    served_until(h, view, "getComputedStyle(document.body).color", "\"rgb(1, 2, 3)\"")?;
+    h.evaluate(
+        view,
+        "fetch('data.txt').then(r => r.text()).then(t => window.fetched = t); 0",
+        None,
+    )?;
+    served_until(h, view, "window.fetched", "\"fetched-ok\"")?;
+    h.evaluate(view, "history.pushState({}, '', 'second'); 0", None)?;
+    served_until(h, view, "location.pathname", "\"/second\"")?;
+    h.host.go_back(view);
+    served_until(h, view, "location.pathname", "\"/index.html\"")?;
+    h.host.go_forward(view);
+    served_until(h, view, "location.pathname", "\"/second\"")?;
     h.host.close_view(view);
     Ok(())
 }

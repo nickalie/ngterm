@@ -117,11 +117,7 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
             if web {
                 return offer;
             }
-            let own = action
-                .url
-                .host_str()
-                .is_some_and(|host| host.eq_ignore_ascii_case(&overlay.id.to_string()));
-            if scheme == super::REPLICA_SCHEME && own {
+            if super::replica_url_of(&action.url, overlay.id) {
                 Allow
             } else {
                 Cancel

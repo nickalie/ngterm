@@ -1609,50 +1609,53 @@ new helper adds no Unix-only code without a cfg'd Windows form.
 
 **Conformance:** none in the suite (it runs no ssh); headless WPE tests in ngterm-gpui and core tests instead
 
-- [ ] client: `page.request` → show it or answer `page.rejected{page, reason}` ("pages are not shown on this Mac" for
+- [x] client: `page.request` → show it or answer `page.rejected{page, reason}` ("pages are not shown on this Mac" for
       a host that shows none); `page.close` → take the replica down; `page.command` → apply it; the viewer
       advertises the page kinds only when this build can show pages (feature `html` on and web views available): a
-      deviation from upstream's static hello, recorded in the task
-- [ ] present a replica: "no such session" (not a remote-presented session), "invalid page id", a file source →
+      deviation from upstream's static hello, recorded in the task (recorded in `remote/replica_page.rs`'s module doc
+      and `client::viewer_kinds`)
+- [x] present a replica: "no such session" (not a remote-presented session), "invalid page id", a file source →
       `HtmlSource::Replica{path}` (grant dropped), a URL that must parse as http(s) ("invalid url"), a pane mapped to
       the local role that must render ("pane not visible"); opened under a new local id with `replica_of` = origin
       id through the ordinary open (its refusals come back as the reason), no outcome registered; `follow` selects
       the session
-- [ ] app side: a file page needs the session's remote host and a valid `page_serve_command` ("the origin cannot be
+- [x] app side: a file page needs the session's remote host and a valid `page_serve_command` ("the origin cannot be
       reached for this page"); a `--persistent` URL page checks the saved store first; "page not shown" when it
       cannot be found again; a file page starts its ssh helper and closes with the channel; a URL page loads directly
       with this machine's store
-- [ ] origin commands on a replica: hide/show that slot only; reload/back/forward/browser to the page (a refusal is
+- [x] origin commands on a replica: hide/show that slot only; reload/back/forward/browser to the page (a refusal is
       logged); resize only for the session-wide slot; applied_seq = max; a state report queued
-- [ ] state reports: `page.state` with the origin id, title, address (the origin path for a file replica, never the
+- [x] state reports: `page.state` with the origin id, title, address (the origin path for a file replica, never the
       `ngterm-page` URL), load, error, history, hidden, applied_seq, coalesced to one per page per main-loop turn
-- [ ] release: every way a replica leaves its slot sends `pageClosed` once and closes its channel; stream loss
+- [x] release: every way a replica leaves its slot sends `pageClosed` once and closes its channel; stream loss
       closes every replica of the session
-- [ ] a socket `session.overlay.submit` on a replica → "submit on the Mac that opened the page" (it stays open);
+- [x] a socket `session.overlay.submit` on a replica → "submit on the Mac that opened the page" (it stays open);
       presenter-side navigate browser/finder on a file replica → "the page's file is on another Mac"; browser opens
       a URL replica
-- [ ] replica navigation policy: a web URL → open externally when user-activated, else cancel; `ngterm-page` with
+- [x] replica navigation policy: a web URL → open externally when user-activated, else cancel; `ngterm-page` with
       the page's own id as host (case-insensitive) → allow; anything else → cancel; about:blank allowed
-- [ ] read-back on the presenter: `replica: true`, file = origin path, no cwd
-- [ ] page channel client: ≤ 8 resource and ≤ 8 bridge requests in flight, the rest queue; a slot freed only by that
+- [x] read-back on the presenter: `replica: true`, file = origin path, no cwd
+- [x] page channel client: ≤ 8 resource and ≤ 8 bridge requests in flight, the rest queue; a slot freed only by that
       request's terminal frame; a cancel before head sends `cancel` and keeps the slot until the origin ends it; a
       cancel while queued sends nothing; 64 inbound permits, a chunk keeps its permit until consumed; an answer for a
       load the page left is dropped; a bridge reply reaches the page raw; an oversized bridge request fails alone
       ("request too large for the page channel"); failures before head keep the channel; close fails pending calls
       with "page channel closed"; helper exit closes once; a frame only the origin sends, or a malformed one, closes it
-- [ ] a linked replica's bridge forwards the request unchanged and shapes the reply ("invalid reply"; ok false → its
+- [x] a linked replica's bridge forwards the request unchanged and shapes the reply ("invalid reply"; ok false → its
       error or "request failed"; else its result, unknown fields kept)
-- [ ] toolbar: a replica shows no Open in Browser, Show in Finder or Copy Link; the tooltip shows the origin path; a
+- [x] toolbar: a replica shows no Open in Browser, Show in Finder or Copy Link; the tooltip shows the origin path; a
       file replica wears the theme like a local file page, a URL replica keeps the opaque canvas
-- [ ] write tests: Rust unit tests for every AppStoreReplicaPageTests and RemotePageChannelTests case and the replica
+- [x] write tests: Rust unit tests for every AppStoreReplicaPageTests and RemotePageChannelTests case and the replica
       policy and projection; headless WPE tests (lavapipe, private display and bus, as the existing html_overlay
       tests) for the scheme handler cases (stylesheet, image, ES modules; fetch and pushState/back; a stopped request
       cancelling its source; another page id never reaching it), a file replica loading an asset through a fake
       channel, a bridge reply keeping unknown fields, a tagged control relaying with `--js` off; a two-role in-process
       test (origin and presenter over a fake transport instead of ssh) for the three ControlServerRemotePresentation
-      cases
-- [ ] manual check (user): green on `cross-platform.yml` (ngterm-core)
-- [ ] gate passes
+      cases (⚠️ "a stopped request cancelling its source" has no counterpart: `WebKit`'s GLib ports tell a scheme handler
+      nothing of a read stopped before its answer; a read for a load the page left is withdrawn by the channel instead,
+      and the slow read's half is covered)
+- [x] manual check (user): green on `cross-platform.yml` (ngterm-core) (skipped - not automatable: needs a CI push by the user)
+- [x] gate passes (full suite deferred to the end of the plan per the user)
 
 ### Task 25: Point-sized floating overlays: `--width`/`--height`, `overlayWidth`/`overlayHeight` (#798)
 

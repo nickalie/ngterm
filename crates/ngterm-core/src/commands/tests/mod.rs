@@ -32,6 +32,8 @@ mod recent;
 mod remote;
 mod remote_ask_form;
 mod remote_page;
+mod remote_roles;
+mod replica_page;
 mod restart;
 mod restore;
 mod session;

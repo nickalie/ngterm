@@ -9,7 +9,8 @@
 //!
 //! A page the placement rule hands to the presenting machine (`crate::remote`'s page half) is stored, rendered and
 //! followed there: its open, submit, reload and history commands go to that machine, and its outcome is settled when
-//! it ends there or here.
+//! it ends there or here. On that machine the page is a replica (`crate::remote::replica_page`): a socket submit is
+//! refused there, its release tells the origin, and its file is never handed to the browser or the file manager.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -168,7 +169,7 @@ pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, 
 }
 
 /// The error of a refused page open (upstream's `HtmlOverlayOpenFailure.message(pane:)`).
-fn open_failure(failure: HtmlOverlayOpenFailure, pane: Option<OverlayPane>) -> &'static str {
+pub(crate) fn open_failure(failure: HtmlOverlayOpenFailure, pane: Option<OverlayPane>) -> &'static str {
     match failure {
         HtmlOverlayOpenFailure::UnknownSession => "no such session",
         HtmlOverlayOpenFailure::AlreadyOpen if pane.is_none() => ALREADY_OPEN,
@@ -203,10 +204,14 @@ pub(crate) fn submit(
         core.settle_remote_overlays();
         return Ok(with_id(id));
     }
-    let page_id = store
+    let shown = store
         .html_overlay(id, pane)
-        .map_err(|failure| ControlError::rejected(failure.message()))?
-        .id;
+        .map_err(|failure| ControlError::rejected(failure.message()))?;
+    // a page shown here for another machine is answered there, through the page itself
+    if shown.replica_of.is_some() {
+        return Err(ControlError::rejected(errors::REPLICA_SUBMIT));
+    }
+    let page_id = shown.id;
     match pane {
         Some(pane) => store.close_pane_overlay(id, pane),
         None => store.close_overlay(id),
@@ -254,10 +259,13 @@ pub(crate) fn navigate(
         return answer;
     }
     let (store, id) = session_store(core, target, window)?;
-    let page_id = store
+    let shown = store
         .html_overlay(id, pane)
-        .map_err(|failure| ControlError::rejected(failure.message()))?
-        .id;
+        .map_err(|failure| ControlError::rejected(failure.message()))?;
+    if let Some(refusal) = crate::remote::replica_page::replica_navigation_refusal(shown, navigation) {
+        return Err(ControlError::rejected(refusal));
+    }
+    let page_id = shown.id;
     let host = core
         .pages
         .host
@@ -313,7 +321,14 @@ impl Core {
             self.pages.known.remove(&page);
             self.pages.outcomes.dismiss(page);
             self.pages.released.push(page);
+            self.replica_page_released(page);
         }
+    }
+
+    /// Starts following page `page`, which a web view of this machine's shows but whose outcome is another machine's
+    /// (a page shown here for its origin): its release reaches the frontend, and an outcome is never registered.
+    pub(crate) fn track_page(&mut self, page: Uuid) {
+        self.pages.known.insert(page);
     }
 
     /// Starts tracking a page handed to the presenting machine as pending; no web view of this machine's holds it.

@@ -572,6 +572,7 @@ impl Core {
         self.sync_replica_overlays();
         self.sync_modals();
         self.sync_pages();
+        self.sync_replica_pages();
         self.settle_palette();
         let pane_focused = self.observe_pane_focus();
         let (events, debounced, pending_closes, finalized) = if let Some(persistence) = self.persistence.as_mut() {

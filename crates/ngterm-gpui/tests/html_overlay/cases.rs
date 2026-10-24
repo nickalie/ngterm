@@ -3,18 +3,23 @@
 //! A [`Fixture`] is a headless GPUI app with one window whose root shows a page's element; every turn runs GPUI's
 //! tasks (the engine's events arrive through the overlay's pump), renders a frame and reads it back.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AppContext as _, Context, Entity, HeadlessAppContext, IntoElement, NoopTextSystem, ParentElement as _, Render,
-    Styled as _, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
+    AppContext as _, Context, Entity, HeadlessAppContext, InputEvent as _, IntoElement, NoopTextSystem,
+    ParentElement as _, Render, Styled as _, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px, size,
 };
 use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
+use ngterm_core::remote::replica_page::PageResource;
 use ngterm_gpui::external_texture::{FrameSource, negotiate};
-use ngterm_gpui::html_overlay::{self, FrameStats, PageView};
+use ngterm_gpui::html_overlay::{self, FrameStats, PageView, ReplicaLink};
+use uuid::Uuid;
 
 /// What a case runs with.
 pub struct Gpu {
@@ -23,13 +28,24 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 4] = [
+pub const CASES: [(&str, Case); 9] = [
     ("the_engine_renders_on_the_renderers_gpu_in_its_mode", mode),
     ("a_page_loads_and_its_frames_reach_the_screen", loads),
     ("a_page_moved_to_another_window_draws_there", moved),
     (
         "an_animation_keeps_its_frame_rate_on_dmabufs_without_falling_back",
         animation,
+    ),
+    (
+        "a_file_replica_loads_its_page_and_an_asset_through_its_channel",
+        replica_loads,
+    ),
+    ("a_replica_reads_nothing_of_another_page", replica_other_page),
+    ("a_slow_replica_read_blocks_no_other", replica_slow),
+    ("a_replicas_bridge_reply_keeps_unknown_fields", replica_bridge),
+    (
+        "a_tagged_control_on_a_replica_relays_with_page_script_off",
+        replica_tagged,
     ),
 ];
 
@@ -142,6 +158,71 @@ impl Fixture {
                 ..HtmlPageFlags::default()
             },
         ))
+    }
+
+    /// A chromeless file page shown here for another machine, whose files come from `origin`.
+    fn replica(origin: &Rc<FakeOrigin>, javascript: bool) -> HtmlOverlay {
+        html_overlay::set_replica_link(Rc::clone(origin) as Rc<dyn ReplicaLink>);
+        let mut overlay = HtmlOverlay::new(
+            HtmlSource::Replica {
+                path: "/docs/index.html".to_owned(),
+            },
+            HtmlPageFlags {
+                chromeless: true,
+                javascript,
+                ..HtmlPageFlags::default()
+            },
+        );
+        overlay.replica_of = Some(Uuid::new_v4());
+        overlay
+    }
+
+    /// Turns until `done` holds, or fails naming `what`.
+    fn wait(&mut self, what: &str, mut done: impl FnMut() -> bool) -> Result<(), String> {
+        let deadline = Instant::now() + WAIT;
+        while !done() {
+            if Instant::now() > deadline {
+                return Err(format!("timed out waiting for {what}"));
+            }
+            self.frame()?;
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        Ok(())
+    }
+
+    /// Clicks the window at `position`, as the platform would: a move there, a press and a release.
+    fn click(&mut self, position: gpui_kit::Point<gpui_kit::Pixels>) -> Result<(), String> {
+        let handle = self.window.into();
+        self.cx
+            .update_window(handle, |_, window, cx| {
+                let events = [
+                    gpui_kit::MouseMoveEvent {
+                        position,
+                        pressed_button: None,
+                        modifiers: gpui_kit::Modifiers::default(),
+                    }
+                    .to_platform_input(),
+                    gpui_kit::MouseDownEvent {
+                        button: gpui_kit::MouseButton::Left,
+                        position,
+                        modifiers: gpui_kit::Modifiers::default(),
+                        click_count: 1,
+                        first_mouse: false,
+                    }
+                    .to_platform_input(),
+                    gpui_kit::MouseUpEvent {
+                        button: gpui_kit::MouseButton::Left,
+                        position,
+                        modifiers: gpui_kit::Modifiers::default(),
+                        click_count: 1,
+                    }
+                    .to_platform_input(),
+                ];
+                for event in events {
+                    window.dispatch_event(event, cx);
+                }
+            })
+            .map_err(|error| format!("clicking: {error:#}"))
     }
 
     /// Mounts `overlay` in a new window `width` x `height`, made the fixture's, and shows it there.
@@ -328,6 +409,194 @@ fn animation(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
             format!("{fps:.1} frames/s in SHM, {after:?}")
         })
     }
+}
+
+// MARK: - pages shown for another machine
+
+/// The machine that opened a replica page, as its channel answers (`ngterm_core::remote::page_serve` on the far side):
+/// files from a map, every bridge request answered with one reply, and every request recorded.
+pub struct FakeOrigin {
+    files: HashMap<&'static str, (&'static str, String)>,
+    reply: &'static str,
+    requested: RefCell<Vec<String>>,
+    bridged: RefCell<Vec<String>>,
+    /// A path read but left unanswered, as a large file still on its way.
+    held: Option<&'static str>,
+    parked: RefCell<Vec<ngterm_wpe::SchemeToken>>,
+}
+
+impl FakeOrigin {
+    fn new(files: &[(&'static str, &'static str, String)]) -> Rc<Self> {
+        Rc::new(Self {
+            files: files
+                .iter()
+                .map(|(path, mime, body)| (*path, (*mime, body.clone())))
+                .collect(),
+            reply: r#"{"ok":true,"result":{"extra":{"nested":"kept"},"text":"done"}}"#,
+            requested: RefCell::default(),
+            bridged: RefCell::default(),
+            held: None,
+            parked: RefCell::default(),
+        })
+    }
+}
+
+impl ReplicaLink for FakeOrigin {
+    fn fetch(&self, _: Uuid, path: String, token: ngterm_wpe::SchemeToken) {
+        if self.held == Some(path.as_str()) {
+            self.requested.borrow_mut().push(path);
+            self.parked.borrow_mut().push(token);
+            return;
+        }
+        let result = self
+            .files
+            .get(path.as_str())
+            .map(|(mime, body)| PageResource {
+                mime_type: (*mime).to_owned(),
+                body: body.as_bytes().to_vec(),
+            })
+            .ok_or_else(|| "file cannot be read".to_owned());
+        self.requested.borrow_mut().push(path);
+        html_overlay::answer_resource(token, result);
+    }
+
+    fn bridge(&self, _: Uuid, body: String, reply: u64) {
+        self.bridged.borrow_mut().push(body);
+        html_overlay::answer_value(reply, ngterm_core::html::bridge::shape_raw_reply(self.reply));
+    }
+}
+
+/// A file replica's page and its stylesheet both come over its channel: the stylesheet's color on screen
+/// (`ControlServerRemotePageTests.testAFileReplicaLoadsItsPageAndAnAssetThroughItsChannel`).
+fn replica_loads(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let origin = FakeOrigin::new(&[
+        (
+            "/docs/index.html",
+            "text/html",
+            "<link rel='stylesheet' href='style.css'><body style='margin:0'><p>x</p></body>".to_owned(),
+        ),
+        ("/docs/style.css", "text/css", "body { background: #c03030 }".to_owned()),
+    ]);
+    let overlay = Fixture::replica(&origin, false);
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    fixture.until("the stylesheet's color on screen", &element, |_, width, pixels| {
+        close(pixel(pixels, width, width / 2, 200), RED)
+    })?;
+    let requested = origin.requested.borrow().clone();
+    check(requested == ["/docs/index.html", "/docs/style.css"], || {
+        format!("the channel was asked for {requested:?}")
+    })
+}
+
+/// A read naming another page's id fails without reaching the origin (`HtmlPageSchemeHandlerTests.
+/// testARequestForAnotherPageNeverReachesTheSource`): the image's failure paints the page.
+fn replica_other_page(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let other = Uuid::new_v4();
+    let origin = FakeOrigin::new(&[
+        (
+            "/docs/index.html",
+            "text/html",
+            format!(
+                "<body style='margin:0'><img src='ngterm-page://{other}/docs/data.txt' \
+                 onerror=\"document.body.style.background = '#c03030'\"></body>"
+            ),
+        ),
+        ("/docs/data.txt", "text/plain", "data".to_owned()),
+    ]);
+    let overlay = Fixture::replica(&origin, true);
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    fixture.until("the refused read's failure on screen", &element, |_, width, pixels| {
+        close(pixel(pixels, width, width / 2, 200), RED)
+    })?;
+    let requested = origin.requested.borrow().clone();
+    check(requested == ["/docs/index.html"], || {
+        format!("another page's read reached the channel: {requested:?}")
+    })
+}
+
+/// A read still on its way holds up no other read of the page (`HtmlPageSchemeHandlerTests.
+/// testAStoppedRequestCancelsItsSourceAndASlowOneBlocksNoOther`, its second half: `WebKit`'s `GLib` ports tell a scheme
+/// handler nothing of a read stopped before its answer, so the first half has no counterpart here).
+fn replica_slow(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let mut origin = FakeOrigin::new(&[
+        (
+            "/docs/index.html",
+            "text/html",
+            "<body style='margin:0'><script>fetch('slow.bin'); fetch('data.txt').then(r => r.text()).then(t => { \
+             if (t === 'data') document.body.style.background = '#c03030'; })</script></body>"
+                .to_owned(),
+        ),
+        ("/docs/data.txt", "text/plain", "data".to_owned()),
+    ]);
+    Rc::get_mut(&mut origin).ok_or("the origin is shared")?.held = Some("/docs/slow.bin");
+    let overlay = Fixture::replica(&origin, true);
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    fixture.until("the second read's answer on screen", &element, |_, width, pixels| {
+        close(pixel(pixels, width, width / 2, 200), RED)
+    })?;
+    let parked = origin.parked.borrow().len();
+    for token in origin.parked.borrow_mut().drain(..) {
+        html_overlay::answer_resource(token, Err("cancelled".to_owned()));
+    }
+    check(parked == 1, || format!("{parked} reads were held"))
+}
+
+/// The page's script asks over the bridge; the request goes to the origin as sent and the reply keeps a field this
+/// build does not know (`ControlServerRemotePageTests.testThePageScriptsBridgeRelaysToTheOriginAndKeepsUnknownFields`).
+fn replica_bridge(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let origin = FakeOrigin::new(&[(
+        "/docs/index.html",
+        "text/html",
+        "<body style='margin:0'><script>ngterm.request('tree').then(r => { \
+         if (r.extra && r.extra.nested === 'kept') document.body.style.background = '#c03030'; })</script></body>"
+            .to_owned(),
+    )]);
+    let overlay = Fixture::replica(&origin, true);
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    fixture.until("the reply's field on screen", &element, |_, width, pixels| {
+        close(pixel(pixels, width, width / 2, 200), RED)
+    })?;
+    let bridged = origin.bridged.borrow().clone();
+    check(bridged.len() == 1 && bridged[0].contains(r#""cmd":"tree""#), || {
+        format!("the origin got {bridged:?}")
+    })
+}
+
+/// A tagged control relays through the bridge with the page's own scripts off
+/// (`ControlServerRemotePageTests.testATaggedControlRelaysWithPageScriptOff`).
+fn replica_tagged(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let origin = FakeOrigin::new(&[
+        (
+            "/docs/index.html",
+            "text/html",
+            "<link rel='stylesheet' href='style.css'><body>\
+             <div role='button' id='b' data-ngterm='session.select' data-ngterm-target='3F2A' \
+             data-ngterm-into='#out'>go</div><p id='out'></p></body>"
+                .to_owned(),
+        ),
+        (
+            "/docs/style.css",
+            "text/css",
+            "body { margin: 0; background: #c03030 } \
+             #b { position: fixed; left: 0; top: 0; width: 200px; height: 150px }"
+                .to_owned(),
+        ),
+    ]);
+    let overlay = Fixture::replica(&origin, false);
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    fixture.until("the page on screen", &element, |_, width, pixels| {
+        close(pixel(pixels, width, width / 2, 200), RED)
+    })?;
+    fixture.click(point(px(50.), px(50.)))?;
+    let seen = Rc::clone(&origin);
+    fixture.wait("the tagged control's request at the origin", || {
+        !seen.bridged.borrow().is_empty()
+    })?;
+    let bridged = origin.bridged.borrow().clone();
+    check(
+        bridged.len() == 1 && bridged[0].contains("session.select") && bridged[0].contains("3F2A"),
+        || format!("the origin got {bridged:?}"),
+    )
 }
 
 fn check(condition: bool, message: impl FnOnce() -> String) -> Result<(), String> {

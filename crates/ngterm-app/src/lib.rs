@@ -8,10 +8,12 @@
 //! - [`quick_placement`]: the quick terminal's host and placement decisions.
 //! - [`integrations`]: the agent integrations' planners and installers.
 //! - [`remote`]: the presentation bridge to an attached row's origin as a child process.
+//! - [`page_channel`]: the helper carrying a handed-over page's channel to its origin as a child process.
 
 pub mod hook_runner;
 pub mod integrations;
 pub mod logging;
+pub mod page_channel;
 pub mod process_table;
 pub mod quick_placement;
 pub mod remote;

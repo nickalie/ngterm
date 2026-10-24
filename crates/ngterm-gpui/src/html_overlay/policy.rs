@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use ngterm_core::html::navigation::file_path;
 use ngterm_core::html::{
     HtmlNavigationAction, HtmlNavigationTarget, HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlSource,
+    REPLICA_SCHEME, replica_path, replica_url_of,
 };
 use url::Url;
 
@@ -82,6 +83,30 @@ pub fn granted_uri(path: &str) -> Option<String> {
     let file = Url::from_file_path(path).ok()?;
     let rest = file.as_str().strip_prefix("file:")?;
     Some(format!("{GRANT_SCHEME}:{rest}"))
+}
+
+/// Why the replica scheme's handler refuses a read: it names another page, or the page is no replica.
+pub const NOT_THIS_PAGE: &str = "not a file of this page";
+
+/// Whether `uri` reads the replica scheme, which a page shown for another machine loads from.
+#[must_use]
+pub fn is_replica_uri(uri: &str) -> bool {
+    uri.strip_prefix(REPLICA_SCHEME)
+        .is_some_and(|rest| rest.starts_with(':'))
+}
+
+/// The file on the machine that opened page `page` a replica-scheme read of `uri` asks for; `None` for an address that
+/// names another page (upstream's `HtmlPageSchemeHandler` host check).
+#[must_use]
+pub fn replica_read(uri: &str, page: uuid::Uuid) -> Option<String> {
+    let url = Url::parse(uri).ok()?;
+    replica_url_of(&url, page).then(|| replica_path(&url)).flatten()
+}
+
+/// The address a replica page loads its file from (upstream's `HtmlPageSchemeHandler.url(pageID:path:)`).
+#[must_use]
+pub fn replica_uri(page: uuid::Uuid, path: &str) -> Option<String> {
+    ngterm_core::html::replica_url(page, path).map(String::from)
 }
 
 /// Why the grant's handler refuses a read.
@@ -255,17 +280,17 @@ fn file_url(path: &str) -> Option<Url> {
     Url::from_file_path(path).ok()
 }
 
-/// The source's own address: a file page's file, a URL page's URL; a replica's file is on another machine.
+/// The source's own address: a file page's file (a replica's on the machine that opened it), a URL page's URL.
 fn source_url(source: &HtmlSource) -> Option<Url> {
     match source {
-        HtmlSource::File { path, .. } => file_url(path),
+        HtmlSource::File { path, .. } | HtmlSource::Replica { path } => file_url(path),
         HtmlSource::Url(url) => Some(url.clone()),
-        HtmlSource::Replica { .. } => None,
     }
 }
 
 /// What the page shows (upstream's `pageURL`): a browsing page the address taken at commit (its source before one), a
-/// text-loaded file page its file, else the web view's address unless it is an `about:` one, else the source.
+/// text-loaded file page its file, a replica's scheme address the file it names on the machine that opened the page,
+/// else the web view's address unless it is an `about:` one, else the source.
 /// `web` is the web view's address as the app spells it.
 #[must_use]
 pub fn page_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>) -> Option<Url> {
@@ -278,6 +303,10 @@ pub fn page_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>) -
         && let HtmlSource::File { path, .. } = &overlay.source
     {
         return file_url(path);
+    }
+    // a replica's scheme address names this machine's page id; what it shows is that path on the other machine
+    if let Some(path) = web.and_then(replica_path) {
+        return file_url(&path);
     }
     if let Some(web) = web.filter(|web| web.scheme() != "about") {
         return Some(web.clone());
@@ -898,6 +927,40 @@ mod tests {
         );
         assert_eq!(browser_url(&replica, None, None), None);
         assert_eq!(identity_tooltip(&replica), "/origin/docs/index.html");
+    }
+
+    /// A replica loads from its page's own `ngterm-page` address, and reports the origin's path as what it shows, never
+    /// that address (upstream's `pageURL` on a replica's scheme URL); a read naming another page's id is not its own.
+    #[test]
+    fn a_replica_shows_the_origin_path_and_reads_only_its_own_addresses() {
+        let page = uuid::Uuid::new_v4();
+        let mut replica = HtmlOverlay::new(
+            HtmlSource::Replica {
+                path: "/origin/my docs/index.html".to_owned(),
+            },
+            HtmlPageFlags::default(),
+        );
+        replica.id = page;
+        let address = replica_uri(page, "/origin/my docs/index.html").unwrap();
+        assert!(is_replica_uri(&address) && !is_replica_uri("ngterm-pages://x/y") && !is_replica_uri(GRANT_SCHEME));
+        let web = Url::parse(&address).unwrap();
+        let shown = page_url(&replica, None, Some(&web)).unwrap();
+        assert_eq!(
+            page_info(&shown, Some("Docs"), false, false).page,
+            "/origin/my docs/index.html"
+        );
+        assert_eq!(
+            page_url(&replica, None, None).map(|url| file_path(&url)).as_deref(),
+            Some("/origin/my docs/index.html"),
+            "before its first load it shows its source"
+        );
+        let asset = web.join("img/a.png").unwrap();
+        assert_eq!(
+            replica_read(asset.as_str(), page).as_deref(),
+            Some("/origin/my docs/img/a.png")
+        );
+        assert_eq!(replica_read(asset.as_str(), uuid::Uuid::new_v4()), None);
+        assert_eq!(replica_read("ngterm-file:///origin/my%20docs/a.png", page), None);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "ngterm-app"
-description = "ngterm's frontend-neutral app services: process launcher, process table, logging, restore launch, quick-terminal placement, agent integrations, the remote presentation process"
+description = "ngterm's frontend-neutral app services: process launcher, process table, logging, restore launch, quick-terminal placement, agent integrations, the remote presentation process and page channel helper"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

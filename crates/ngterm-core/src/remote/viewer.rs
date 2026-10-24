@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::client::{ClientEffect, LinkKey, PresentationClient, PresentationTransport};
 use super::frames::{
     Body, PresentationAsk, PresentationAskAnswer, PresentationAskRef, PresentationHud, PresentationNotify,
-    PresentationOverlay, PresentationOverlayChange, PresentationSound,
+    PresentationOverlay, PresentationOverlayChange, PresentationPageChange, PresentationSound,
 };
 use super::reconnect::{ReconnectBook, RemoteLinkNotice};
 use super::tree::{RemoteCommandResult, RemoteCommandRunner};
@@ -94,6 +94,8 @@ pub(crate) struct ViewerRuntime {
     replicas: HashMap<Uuid, Vec<ReplicaOverlay>>,
     /// The File ▸ Attach Remote flows in progress ([`super::attach`]).
     pub(crate) attach_flows: Vec<super::attach::AttachFlow>,
+    /// The pages origins handed to this machine ([`super::replica_page`]).
+    pub(crate) pages: super::replica_page::ReplicaPages,
     /// The id of the last client made, so a row's recreated client never reuses an earlier one's link keys.
     last_client: u64,
 }
@@ -104,6 +106,7 @@ impl std::fmt::Debug for ViewerRuntime {
             .field("clients", &self.clients.keys().collect::<Vec<_>>())
             .field("reconnects", &self.reconnects)
             .field("replicas", &self.replicas)
+            .field("pages", &self.pages)
             .finish_non_exhaustive()
     }
 }
@@ -207,8 +210,10 @@ impl Core {
         self.remote_tick(now);
     }
 
-    /// Ends every presentation stream of an attached row (the quit path).
+    /// Ends every presentation stream of an attached row and the channels of the pages its origin handed over (the quit
+    /// path).
     pub fn shutdown_remote_presentations(&mut self) {
+        self.shutdown_replica_channels();
         for client in self.remote.viewer.clients.values_mut() {
             client.stop();
         }
@@ -289,10 +294,14 @@ impl Core {
         }
     }
 
-    /// A row leaving (soft close, close, window removal) closes every replica overlay its origin handed over, and the
-    /// origin hears `overlay.closed` while the stream is still up, so an undo brings none of them back (the replica
-    /// half of upstream's `releaseLeavingSession`; its replica ask is cancelled with the session's ask).
+    /// A row leaving (soft close, close, window removal) closes every replica overlay and page its origin handed over,
+    /// and the origin hears `overlay.closed` and `page.closed` while the stream is still up, so an undo brings none of
+    /// them back (the replica half of upstream's `releaseLeavingSession`; its replica ask is cancelled with the
+    /// session's ask).
     fn release_leaving_row(&mut self, session: Uuid) {
+        // its pages go too, the origin told while the stream is still up
+        self.close_replica_pages(session);
+        self.sync_pages();
         let jobs: Vec<String> = self
             .remote
             .viewer
@@ -333,6 +342,7 @@ impl Core {
         let version = binding.presentation_version;
         self.remote.viewer.last_client += 1;
         let mut client = PresentationClient::new(session, self.remote.viewer.last_client, argv, version);
+        client.set_shows_pages(self.shows_replica_pages());
         let Some(transport) = self.remote.viewer.transport.clone() else {
             tracing::debug!(%session, "no presentation transport installed");
             return;
@@ -407,6 +417,19 @@ impl Core {
                 self.close_replica_overlay(&change.job, session);
             }
             ClientEffect::OverlayResize(change) => self.resize_replica_overlay(&change, session),
+            ClientEffect::PageRequest(page) => {
+                if let Err(reason) = self.show_replica_page(&page, session) {
+                    self.answer_origin(
+                        session,
+                        Body::PageRejected(PresentationPageChange {
+                            page: page.page,
+                            reason: Some(reason),
+                        }),
+                    );
+                }
+            }
+            ClientEffect::PageClose(change) => self.close_replica_page(&change.page, session),
+            ClientEffect::PageCommand(command) => self.apply_replica_page_command(&command, session),
             ClientEffect::Warn(reason) => {
                 tracing::warn!(%session, %reason, "presentation stream");
             }
@@ -414,7 +437,7 @@ impl Core {
     }
 
     /// Sends what this machine answered to `session`'s origin; dropped with no stream.
-    fn answer_origin(&self, session: Uuid, body: Body) {
+    pub(crate) fn answer_origin(&self, session: Uuid, body: Body) {
         if let Some(client) = self.remote.viewer.clients.get(&session) {
             client.answer(body);
         }
@@ -430,6 +453,8 @@ impl Core {
         if !left {
             return;
         }
+        // the origin ends a handed-over page when the stream goes, and nothing could reach it from here
+        self.close_replica_pages(session);
         let replicas = self.remote.viewer.replicas.get(&session).cloned().unwrap_or_default();
         for replica in replicas {
             if replica.ended {

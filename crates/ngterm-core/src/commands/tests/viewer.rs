@@ -48,15 +48,15 @@ impl RemoteCommandRunner for Runner {
 }
 
 #[derive(Default)]
-struct LinkState {
-    argv: Vec<String>,
-    key: Option<LinkKey>,
-    sent: Vec<Value>,
-    stopped: bool,
+pub(super) struct LinkState {
+    pub(super) argv: Vec<String>,
+    pub(super) key: Option<LinkKey>,
+    pub(super) sent: Vec<Value>,
+    pub(super) stopped: bool,
 }
 
 #[derive(Clone, Default)]
-struct Link(Rc<RefCell<LinkState>>);
+pub(super) struct Link(pub(super) Rc<RefCell<LinkState>>);
 
 impl PresentationLink for Link {
     fn send(&self, line: &[u8]) {
@@ -69,7 +69,7 @@ impl PresentationLink for Link {
 }
 
 #[derive(Default)]
-struct Transport(RefCell<Vec<Link>>);
+pub(super) struct Transport(pub(super) RefCell<Vec<Link>>);
 
 impl PresentationTransport for Transport {
     fn open(&self, argv: &[String], key: LinkKey) -> Box<dyn PresentationLink> {
@@ -82,13 +82,13 @@ impl PresentationTransport for Transport {
 }
 
 /// A viewer with one attached row of the origin's split session.
-struct Viewer {
-    fixture: Fixture,
+pub(super) struct Viewer {
+    pub(super) fixture: Fixture,
     runner: Arc<Runner>,
     transport: Rc<Transport>,
-    session: Uuid,
+    pub(super) session: Uuid,
     /// The origin's pane identities, left and right.
-    origin: (Uuid, Uuid),
+    pub(super) origin: (Uuid, Uuid),
     /// The generation the origin's frames carry.
     revision: i64,
 }
@@ -118,7 +118,13 @@ fn attach(core: &mut Core, host: Option<&str>, session: Option<&str>) -> Respons
 }
 
 fn viewer_with(split: bool) -> Viewer {
+    viewer_built(split, |_| {})
+}
+
+/// [`viewer_with`], with `setup` run on the fixture before the attach (a host of web views, a page helper).
+pub(super) fn viewer_built(split: bool, setup: impl FnOnce(&mut Fixture)) -> Viewer {
     let mut fixture = Fixture::new(0);
+    setup(&mut fixture);
     let origin = (Uuid::new_v4(), Uuid::new_v4());
     let runner = Arc::new(Runner {
         tree: Mutex::new(RemoteCommandResult {
@@ -158,11 +164,11 @@ fn viewer_with(split: bool) -> Viewer {
 }
 
 impl Viewer {
-    fn link(&self) -> Link {
+    pub(super) fn link(&self) -> Link {
         self.transport.0.borrow().last().cloned().unwrap()
     }
 
-    fn sent(&self, kind: &str) -> Vec<Value> {
+    pub(super) fn sent(&self, kind: &str) -> Vec<Value> {
         self.link()
             .0
             .borrow()
@@ -174,12 +180,12 @@ impl Viewer {
     }
 
     /// Delivers one origin frame of `body`, in order.
-    fn frame(&mut self, body: Value) {
+    pub(super) fn frame(&mut self, body: Value) {
         self.frame_committed(body);
     }
 
     /// [`Viewer::frame`], reporting the windows whose `tree.changed` its commit armed.
-    fn frame_committed(&mut self, mut body: Value) -> usize {
+    pub(super) fn frame_committed(&mut self, mut body: Value) -> usize {
         self.revision += 1;
         body["gen"] = json!(5);
         body["rev"] = json!(self.revision);
@@ -190,7 +196,7 @@ impl Viewer {
     }
 
     /// The origin's hello and snapshot.
-    fn connect(&mut self, snapshot: &Value) {
+    pub(super) fn connect(&mut self, snapshot: &Value) {
         let key = self.link().0.borrow().key.unwrap();
         let hello = json!({"kind": "hello", "gen": 5, "rev": 0,
             "hello": {"version": 1, "kinds": ["status", "hud", "notify", "context", "layout"], "mode": "presenter"}});
@@ -198,7 +204,7 @@ impl Viewer {
         self.frame(json!({"kind": "snapshot", "snapshot": snapshot}));
     }
 
-    fn node(&mut self) -> Value {
+    pub(super) fn node(&mut self) -> Value {
         let response = self.fixture.send(Command::Tree, None, Args::default());
         let tree = response.result.expect("a tree")["tree"].clone();
         tree["workspaces"]
@@ -210,7 +216,7 @@ impl Viewer {
             .expect("the attached row")
     }
 
-    fn session(&self) -> &crate::model::Session {
+    pub(super) fn session(&self) -> &crate::model::Session {
         self.fixture.store().session(self.session).unwrap()
     }
 }

@@ -20,12 +20,15 @@ use gpui_kit::{App, AppContext as _, ClipboardItem, Entity, Window};
 use ngterm_core::Core;
 use ngterm_core::html::bridge;
 use ngterm_core::html::profile::{self, BrowserProfile};
-use ngterm_core::html::{ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, StoreClear, errors};
+use ngterm_core::html::{
+    ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, REPLICA_SCHEME, StoreClear, errors,
+};
 use ngterm_core::pane_env::uuid_string;
+use ngterm_core::remote::replica_page::PageResource;
 use ngterm_proto::Response;
 use ngterm_wpe::{
-    BufferFormat, DmaBufTarget, Event, FrameMode, HostConfig, ReplyToken, SchemeError, SchemeResponse, SessionId,
-    SessionSpec, ViewId,
+    BufferFormat, DmaBufTarget, Event, FrameMode, HostConfig, ReplyToken, SchemeError, SchemeRequest, SchemeResponse,
+    SchemeToken, SessionId, SessionSpec, ViewId,
 };
 use uuid::Uuid;
 
@@ -35,7 +38,7 @@ use super::panel::{PanelColors, TerminalColors};
 use super::policy::{self, GRANT_SCHEME};
 use super::view::PageView;
 use crate::external_texture::{FrameSource, negotiate};
-use crate::state::Poster;
+use crate::state::{AppState, Poster, post};
 
 /// Why a page waits: no window has drawn yet, so the engine cannot know the GPU to render on.
 const NOT_READY: &str = "the web engine starts once a window has drawn";
@@ -84,6 +87,8 @@ struct Registry {
     poster: Option<Poster>,
     /// Where the engine's start goes from its thread: the pump [`init`] spawned.
     pump: Option<async_channel::Sender<Started>>,
+    /// How the pages shown here for another machine reach it: the core's page channels, or a test's stand-in.
+    replica: Option<Rc<dyn ReplicaLink>>,
 }
 
 impl Default for Registry {
@@ -104,6 +109,7 @@ impl Default for Registry {
             colors: TerminalColors::default(),
             poster: None,
             pump: None,
+            replica: None,
         }
     }
 }
@@ -173,6 +179,7 @@ fn engine_failure(registry: &Registry) -> Option<String> {
 pub fn install(core: &mut Core, state_dir: PathBuf, poster: Poster) {
     with(|registry| {
         registry.state_dir = Some(state_dir);
+        registry.replica = Some(Rc::new(CoreLink(poster.clone())));
         registry.poster = Some(poster);
     });
     core.set_html_host(Box::new(PageHost));
@@ -228,7 +235,7 @@ fn engine() -> Result<Rc<dyn Web>, String> {
     };
     let config = HostConfig {
         frames,
-        schemes: vec![GRANT_SCHEME.to_owned()],
+        schemes: vec![GRANT_SCHEME.to_owned(), REPLICA_SCHEME.to_owned()],
     };
     let failed = |failure: String| {
         tracing::error!(failure);
@@ -626,6 +633,7 @@ pub(super) fn dispatch(event: &Event, cx: &mut App) {
             Some(page) => page.event(event, cx),
             None => answer_with(|web| web.reply_script_message(message.token, Err("page closed".to_owned()))),
         },
+        Event::SchemeRequest(request) if policy::is_replica_uri(&request.uri) => serve_replica(request),
         Event::SchemeRequest(request) => {
             let root = request.view.and_then(page_of_view).and_then(|page| page.grant_root());
             let response = if request.view.is_some() {
@@ -727,11 +735,114 @@ pub fn reject(token: u64, message: &str) {
     finish(token, Err(message.to_owned()));
 }
 
+/// Answers the page request `token` with a reply already shaped for the page: its result, or its rejection (a replica's
+/// relayed request, whose reply came back from the machine that opened it).
+pub fn answer_value(token: u64, answer: Result<serde_json::Value, String>) {
+    finish(token, answer);
+}
+
 fn finish(token: u64, answer: Result<serde_json::Value, String>) {
     let Some(reply) = with(|registry| registry.replies.remove(&token)) else {
         return;
     };
     answer_with(|web| web.reply_script_message(reply, answer.map(|value| value.to_string())));
+}
+
+// MARK: - pages shown for another machine
+
+/// How a page shown here for another machine reaches that machine (upstream's `HtmlReplicaLink`): its files, read
+/// through its `ngterm-page` scheme, and its bridge requests. The app's link goes through the core's page channel
+/// ([`ngterm_core::Core::replica_fetch`], [`ngterm_core::Core::replica_bridge`]); a test installs its own
+/// ([`set_replica_link`]).
+pub trait ReplicaLink {
+    /// Reads `path`, the file's path on the other machine, for replica `page`; answered with [`answer_resource`].
+    fn fetch(&self, page: Uuid, path: String, token: SchemeToken);
+
+    /// Relays the request replica `page`'s script sent, as the JSON it sent; answered with [`answer_value`] by `reply`.
+    fn bridge(&self, page: Uuid, body: String, reply: u64);
+}
+
+/// The app's link: each call is a main-loop task on the core.
+struct CoreLink(Poster);
+
+impl ReplicaLink for CoreLink {
+    fn fetch(&self, page: Uuid, path: String, token: SchemeToken) {
+        post(&self.0, move |state: &mut AppState| {
+            state
+                .core
+                .replica_fetch(page, &path, Box::new(move |result| answer_resource(token, result)));
+            state.settle();
+        });
+    }
+
+    fn bridge(&self, page: Uuid, body: String, reply: u64) {
+        post(&self.0, move |state: &mut AppState| {
+            state
+                .core
+                .replica_bridge(page, &body, Box::new(move |result| answer_value(reply, result)));
+            state.settle();
+        });
+    }
+}
+
+/// Makes `link` the way every page shown for another machine reaches it (the headless tests' stand-in origin).
+pub fn set_replica_link(link: Rc<dyn ReplicaLink>) {
+    with(|registry| registry.replica = Some(link));
+}
+
+fn replica_link() -> Option<Rc<dyn ReplicaLink>> {
+    with(|registry| registry.replica.clone())
+}
+
+/// Answers the read `token` of a replica's file: its body whole, or the failure its load reports.
+pub fn answer_resource(token: SchemeToken, result: Result<PageResource, String>) {
+    let response = match result {
+        Ok(resource) => SchemeResponse::Bytes {
+            data: resource.body,
+            mime: resource.mime_type,
+        },
+        Err(message) => SchemeResponse::Error {
+            kind: SchemeError::Failed,
+            message,
+        },
+    };
+    answer_with(|web| web.finish_scheme_request(token, response));
+}
+
+/// A read of the replica scheme (upstream's `HtmlPageSchemeHandler`): served only for the replica page whose id the
+/// address names as its host, from the file of that path on the machine that opened it; a read naming another page,
+/// or from a page that is no replica, fails without reaching that machine.
+fn serve_replica(request: &SchemeRequest) {
+    let page = request.view.and_then(page_of_view);
+    let path = page.as_ref().and_then(|page| {
+        let overlay = page.overlay();
+        matches!(overlay.source, HtmlSource::Replica { .. })
+            .then(|| policy::replica_read(&request.uri, page.id()))
+            .flatten()
+    });
+    match (page, path, replica_link()) {
+        (Some(page), Some(path), Some(link)) => link.fetch(page.id(), path, request.token),
+        _ => answer_with(|web| {
+            web.finish_scheme_request(
+                request.token,
+                SchemeResponse::Error {
+                    kind: SchemeError::PermissionDenied,
+                    message: policy::NOT_THIS_PAGE.to_owned(),
+                },
+            );
+        }),
+    }
+}
+
+/// Relays replica `page`'s request through its link, answered by the parked `reply`; false when there is none.
+pub(super) fn relay(page: Uuid, body: String, reply: u64) -> bool {
+    match replica_link() {
+        Some(link) => {
+            link.bridge(page, body, reply);
+            true
+        }
+        None => false,
+    }
 }
 
 // MARK: - the keyboard
