@@ -8,7 +8,10 @@
 //! before it (`ActivationToken`), a banner the server closed (`NotificationClosed`) is forgotten, a failed repeat keeps
 //! the banner still on screen, signals from anyone but the server count for nothing, a clear withdraws the
 //! session's banners still on screen (`CloseNotification`), and a server that took over the name (the old one
-//! restarted) never gets the old one's ids: no `replaces_id` and no `CloseNotification` of them.
+//! restarted) never gets the old one's ids: no `replaces_id` and no `CloseNotification` of them. A `notify` banner
+//! takes the session's control slot (upstream #772): the main pane's OSC 9 beside it gets a banner of its own, a second
+//! `notify` replaces the first, a clear withdraws the control banner with the panes', and a click on it reveals the
+//! main pane.
 
 use std::collections::HashMap;
 use std::io::{BufRead as _, BufReader};
@@ -17,7 +20,10 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ngterm_core::{NotificationEffect, PaneRole, notification_identity};
+use ngterm_core::{
+    BannerSlot, NotificationEffect, NotificationPost, PaneRole, control_notification_identity, notification_identity,
+    parse_notification_identity,
+};
 use ngterm_gpui::notifications::{BannerSink as _, Click, Desktop, deliver, run};
 use uuid::Uuid;
 use zbus::object_server::SignalEmitter;
@@ -337,13 +343,16 @@ fn on_the_private_bus() -> TestResult {
         "only the split's banner is still up, kept through its refused repeat"
     );
     assert_eq!(notifies(&seen).len(), 5, "a clear posts nothing");
-    a_restarted_server_gets_none_of_the_old_ids(&scenario)
+    let (successor, restarted) = a_restarted_server_gets_none_of_the_old_ids(&scenario)?;
+    a_notify_has_its_own_slot(&scenario, &successor, &restarted)
 }
 
 /// The server's name passes to another server that numbers its banners from 1 again (the old one restarted without
 /// closing its banners): the new one gets none of the old one's ids, neither as a repeat's `replaces_id` nor in a
-/// withdrawal, and its signals are the ones that count.
-fn a_restarted_server_gets_none_of_the_old_ids(scenario: &Scenario) -> TestResult {
+/// withdrawal, and its signals are the ones that count. The server now serving, and what it was asked.
+fn a_restarted_server_gets_none_of_the_old_ids(
+    scenario: &Scenario,
+) -> TestResult<(zbus::blocking::Connection, Arc<Mutex<Vec<Call>>>)> {
     let Scenario {
         calls,
         sink,
@@ -408,6 +417,82 @@ fn a_restarted_server_gets_none_of_the_old_ids(scenario: &Scenario) -> TestResul
             token: None
         },
         "the new server's click reveals its banner's pane; the old server's counts for nothing"
+    );
+    Ok((successor, restarted))
+}
+
+/// The core's banner for `session` of `window` in `slot`.
+fn post(window: Uuid, session: Uuid, slot: BannerSlot, body: &str) -> NotificationEffect {
+    NotificationEffect::Post(NotificationPost {
+        window,
+        session,
+        slot,
+        title: "t".to_owned(),
+        body: body.to_owned(),
+    })
+}
+
+/// Upstream #772, on another session served by `server`, which has handed out ids 1 to 3 (`calls`): a `notify` and the
+/// main pane's OSC 9 give two banners, no `replaces_id` between them; a second `notify` replaces the first; a clear
+/// (the session took focus) closes the control banner too; a click on a control banner reveals the main pane.
+fn a_notify_has_its_own_slot(
+    scenario: &Scenario,
+    server: &zbus::blocking::Connection,
+    calls: &Mutex<Vec<Call>>,
+) -> TestResult {
+    let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+    let control = control_notification_identity(window, session);
+    let sink = &scenario.sink;
+    deliver(
+        sink,
+        &[
+            post(window, session, BannerSlot::Control, "note"),
+            post(window, session, BannerSlot::Pane(PaneRole::Main), "osc"),
+            post(window, session, BannerSlot::Control, "again"),
+        ],
+    );
+    let seen = wait_for(calls, "the note, the terminal's banner and the repeat", |calls| {
+        notifies(calls).len() == 6
+    });
+    assert_eq!(
+        notifies(&seen)[3..],
+        [
+            (0, 4, "note".to_owned()),
+            (0, 5, "osc".to_owned()),
+            (4, 4, "again".to_owned())
+        ],
+        "the terminal's banner replaces no note; a second note replaces the first"
+    );
+
+    deliver(sink, &[NotificationEffect::Clear { window, session }]);
+    let seen = wait_for(calls, "the session's withdrawal", |calls| {
+        calls.contains(&Call::Close(4))
+    });
+    let closes: Vec<_> = seen
+        .iter()
+        .filter(|call| matches!(call, Call::Close(id) if *id >= 4))
+        .collect();
+    assert_eq!(
+        closes,
+        [&Call::Close(5), &Call::Close(4)],
+        "a clear withdraws the main pane's banner and the control one"
+    );
+
+    deliver(sink, &[post(window, session, BannerSlot::Control, "later")]);
+    let seen = wait_for(calls, "the next note", |calls| notifies(calls).len() == 7);
+    assert_eq!(
+        notifies(&seen)[6],
+        (0, 6, "later".to_owned()),
+        "a withdrawn note is replaced by none"
+    );
+    let interface = server.object_server().interface::<_, Server>(PATH)?;
+    emit(Server::action_invoked(interface.signal_emitter(), 6, "default"))?;
+    let click = scenario.click()?;
+    assert_eq!(click.identity, control, "the click names the control slot");
+    assert_eq!(
+        parse_notification_identity(&click.identity),
+        Some((window, session, PaneRole::Main)),
+        "a click on a note reveals the main pane"
     );
     Ok(())
 }

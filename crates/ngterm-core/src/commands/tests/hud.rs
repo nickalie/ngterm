@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{Fixture, UNKNOWN, answered_id, args, failure, wire};
-use crate::commands::notify::{NotificationEffect, NotificationPost, PaneRole};
+use crate::commands::notify::{BannerSlot, NotificationEffect, NotificationPost, PaneRole};
 use crate::hud::{HudPaneFrame, HudPaneFrames};
 use crate::persist::AppSettings;
 
@@ -911,9 +911,39 @@ fn notify_raises_the_badge_emits_the_event_and_queues_a_banner() {
     let posts = posts(&mut fixture.core);
     assert_eq!(posts.len(), 2);
     assert_eq!(posts[1].title, name);
+    assert_eq!(posts[0].slot, BannerSlot::Control);
     assert_eq!(
         posts[0].identity(),
-        format!("{}:{}:main", wire(fixture.window), wire(id))
+        format!("{}:{}:notify", wire(fixture.window), wire(id)),
+        "a notify takes the session's control slot, apart from every pane's"
+    );
+}
+
+/// Upstream #772: a `notify` and the main pane's OSC 9 take two slots, so neither replaces the other, while a second
+/// `notify` reuses the first one's.
+#[test]
+fn a_notify_and_the_main_panes_terminal_banner_take_separate_slots() {
+    let mut fixture = Fixture::new(1);
+    let (id, other) = (fixture.sessions[0], fixture.sessions[1]);
+    with_terminal(&mut fixture, id, "L");
+    fixture.store_mut().unwrap().select_session(Some(other));
+    assert!(notify(&mut fixture, &wire(id), |a| a.body = Some("note".into())).ok);
+    assert!(fixture.core.terminal_notification(id, "L", "", "osc"));
+    assert!(notify(&mut fixture, &wire(id), |a| a.body = Some("again".into())).ok);
+    let identities: Vec<(String, String)> = posts(&mut fixture.core)
+        .into_iter()
+        .map(|post| (post.identity(), post.body))
+        .collect();
+    let window = fixture.window;
+    let control = crate::commands::notify::control_identity(window, id);
+    let main = crate::commands::notify::identity(window, id, PaneRole::Main);
+    assert_eq!(
+        identities,
+        [
+            (control.clone(), "note".to_owned()),
+            (main, "osc".to_owned()),
+            (control, "again".to_owned()),
+        ]
     );
 }
 
@@ -975,9 +1005,9 @@ fn a_terminal_notification_names_its_pane_and_a_click_reveals_it() {
     fixture.store_mut().unwrap().select_session(Some(second));
     assert!(fixture.core.terminal_notification(first, "R", "", "done"));
     let post = posts(&mut fixture.core).remove(0);
-    assert_eq!(post.pane, PaneRole::Split);
+    assert_eq!(post.slot, BannerSlot::Pane(PaneRole::Split));
     fixture.store_mut().unwrap().set_split_focus(first, false);
-    assert!(fixture.core.reveal_notification(post.window, first, post.pane));
+    assert!(fixture.core.reveal_notification(post.window, first, PaneRole::Split));
     let store = fixture.store();
     assert_eq!(store.selected_session_id(), Some(first));
     assert_eq!(store.session(first).unwrap().unseen_count, 0);
@@ -986,7 +1016,11 @@ fn a_terminal_notification_names_its_pane_and_a_click_reveals_it() {
         "the firing pane takes the keyboard"
     );
     assert!(fixture.core.pane_focus_requested(first));
-    assert!(!fixture.core.reveal_notification(post.window, Uuid::new_v4(), post.pane));
+    assert!(
+        !fixture
+            .core
+            .reveal_notification(post.window, Uuid::new_v4(), PaneRole::Split)
+    );
 }
 
 #[test]
@@ -1098,11 +1132,16 @@ fn a_pane_focus_withdraws_every_panes_banner_even_with_the_badge_clear() {
     );
     let effects = fixture.core.take_notifications();
     assert_eq!(effects, [cleared(window, id)]);
-    let identities: Vec<String> = PaneRole::ALL
+    let mut identities: Vec<String> = PaneRole::ALL
         .into_iter()
         .map(|pane| crate::commands::notify::identity(window, id, pane))
         .collect();
-    assert_eq!(effects[0].withdrawn_identities(), identities);
+    identities.push(crate::commands::notify::control_identity(window, id));
+    assert_eq!(
+        effects[0].withdrawn_identities(),
+        identities,
+        "every pane's banner and the control slot's"
+    );
 
     // zoomed, the split's focus stays but the session was still seen
     let zoomed = crate::zoom::SurfaceId {

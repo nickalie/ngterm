@@ -431,6 +431,28 @@ fn a_handed_over_sound_plays_here_and_nothing_goes_back() {
     }
 }
 
+// MARK: - notifications
+
+/// A `notify` the origin sends is this machine's own control note (upstream's `send(toSession:)`): its banner takes the
+/// row's control slot, never a pane's.
+#[test]
+fn a_handed_over_notify_takes_the_rows_control_slot() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    let _ = viewer.fixture.core.take_notifications();
+    viewer.frame(json!({"kind": "notify", "notify": {"title": "build", "body": "done", "source": "control"}}));
+    let effects = viewer.fixture.core.take_notifications();
+    let [crate::NotificationEffect::Post(post)] = effects.as_slice() else {
+        panic!("{effects:?}");
+    };
+    assert_eq!(post.slot, crate::BannerSlot::Control);
+    assert_eq!(post.body, "done");
+    assert_eq!(
+        post.identity(),
+        crate::control_notification_identity(viewer.fixture.window, viewer.session)
+    );
+}
+
 // MARK: - replica asks
 
 fn ask_request(id: &str, pane: Option<Uuid>) -> Value {

@@ -68,7 +68,8 @@ pub use commands::hud::{CellEstimator, HudHideTimer, WINDOW_PADDING as HUD_WINDO
 pub use commands::keymap::{FAILURE_HUD_SECONDS, MenuReader};
 pub use commands::live::{LeadCover, LiveInstall, LiveQuit, PaneReplacement, ResetPrompt, ResetRefusal};
 pub use commands::notify::{
-    BANNERS_OFF_NOTE, NotificationEffect, NotificationPost, PaneRole, identity as notification_identity,
+    BANNERS_OFF_NOTE, BannerSlot, NotificationEffect, NotificationPost, PaneRole,
+    control_identity as control_notification_identity, identity as notification_identity,
     parse_identity as parse_notification_identity, should_deliver,
 };
 pub use commands::overlay::LineChannel;

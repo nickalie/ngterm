@@ -476,8 +476,9 @@ impl Core {
         let Some(window) = self.library().window_holding_session(session) else {
             return;
         };
-        let pane = crate::commands::notify::PaneRole::Main;
-        self.deliver_notification(window, session, pane, &notify.title, &notify.body);
+        // the origin's `notify`, which takes the control slot here too (upstream's `send(toSession:)`)
+        let slot = crate::commands::notify::BannerSlot::Control;
+        self.deliver_notification(window, session, slot, &notify.title, &notify.body);
     }
 
     /// Plays a status sound `session`'s origin handed over instead of playing it (upstream's `playRemoteSound`): the

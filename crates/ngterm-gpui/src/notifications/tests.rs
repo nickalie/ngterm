@@ -3,7 +3,9 @@
 
 use std::cell::RefCell;
 
-use ngterm_core::{NotificationPost, PaneRole, notification_identity as identity};
+use ngterm_core::{
+    BannerSlot, NotificationPost, PaneRole, control_notification_identity as control, notification_identity as identity,
+};
 use uuid::Uuid;
 
 use super::*;
@@ -41,10 +43,14 @@ impl BannerSink for Recorder {
 }
 
 fn post(window: Uuid, session: Uuid, pane: PaneRole, body: &str) -> NotificationEffect {
+    posted(window, session, BannerSlot::Pane(pane), body)
+}
+
+fn posted(window: Uuid, session: Uuid, slot: BannerSlot, body: &str) -> NotificationEffect {
     NotificationEffect::Post(NotificationPost {
         window,
         session,
-        pane,
+        slot,
         title: "t".to_owned(),
         body: body.to_owned(),
     })
@@ -60,6 +66,7 @@ fn posts_and_withdrawals_reach_the_server_in_order_and_only_for_their_session() 
         post(other_window, session, PaneRole::Main, "elsewhere"),
         NotificationEffect::Clear { window, session },
         post(window, session, PaneRole::Main, "three"),
+        posted(window, session, BannerSlot::Control, "note"),
     ];
     let recorder = Recorder::default();
     deliver(&recorder, &effects);
@@ -70,7 +77,9 @@ fn posts_and_withdrawals_reach_the_server_in_order_and_only_for_their_session() 
         format!("withdraw {}", identity(window, session, PaneRole::Main)),
         format!("withdraw {}", identity(window, session, PaneRole::Split)),
         format!("withdraw {}", identity(window, session, PaneRole::Overlay)),
+        format!("withdraw {}", control(window, session)),
         format!("send {} three", identity(window, session, PaneRole::Main)),
+        format!("send {} note", control(window, session)),
     ];
     assert_eq!(*recorder.0.borrow(), expected);
 }
@@ -97,5 +106,9 @@ fn the_desktop_sink_queues_banners_in_order_for_the_task() {
         })
     );
     assert_eq!(queue.try_recv().ok(), Some(Banner::Withdraw { identity: main }));
-    assert_eq!(queue.len(), 2, "the split's and the overlay's identities follow");
+    assert_eq!(
+        queue.len(),
+        3,
+        "the split's, the overlay's and the control slot's identities follow"
+    );
 }

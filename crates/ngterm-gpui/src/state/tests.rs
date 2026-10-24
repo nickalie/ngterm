@@ -736,6 +736,17 @@ fn a_clicked_banner_raises_its_window_with_the_servers_token() {
     );
     state.reveal_notification("not an identity", Some("token".to_owned()));
     assert!(state.take_frontend_work().activations.is_empty(), "nothing to reveal");
+    // a `notify` banner's control slot reveals the main pane, raising the window the same way
+    let control = ngterm_core::control_notification_identity(window, session);
+    state.reveal_notification(&control, Some("control".to_owned()));
+    assert_eq!(
+        state.take_frontend_work().activations,
+        [Activation {
+            token: Some("control".to_owned()),
+            startup_id: None,
+        }],
+        "the control slot's click reveals its session"
+    );
 }
 
 #[test]

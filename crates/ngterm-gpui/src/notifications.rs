@@ -3,13 +3,15 @@
 //! (`org.freedesktop.Notifications` on the session bus) through `zbus`.
 //!
 //! The core records each notification (the badge and the `notify` event) and queues its banner; this posts the queued
-//! banners, each under its identity `<windowID>:<sessionID>:<pane>`: a repeat from one pane replaces the last one
-//! (`replaces_id`), and a click on a banner (its `default` action, `ActionInvoked`) reveals the pane that fired and
-//! raises its window with the activation token the server sent just before (`ActivationToken`), as `GNotification`'s
-//! `activate-action` carries it. Withdrawals are the core's explicit clears, queued with the posts and applied in that
-//! order (`CloseNotification`): when a pane of the session takes focus and after a successful swap, as upstream's
-//! `clearDelivered` call sites. A clear withdraws every pane's identity of that window and session; a session no open
-//! window holds gets none, so a closed window's banners stay clickable and reopen it. A banner the server closes (it
+//! banners, each under its identity: `<windowID>:<sessionID>:<pane>` for a terminal's, `<windowID>:<sessionID>:notify`
+//! for a `notify` (the session's control slot, upstream #772). A repeat in one slot replaces the last one
+//! (`replaces_id`), so a pane's banner never replaces a note and a newer note does; a click on a banner (its `default`
+//! action, `ActionInvoked`) reveals the pane that fired (the main pane for a note) and raises its window with the
+//! activation token the server sent just before (`ActivationToken`), as `GNotification`'s `activate-action` carries
+//! it. Withdrawals are the core's explicit clears, queued with the posts and applied in that order
+//! (`CloseNotification`): when a pane of the session takes focus and after a successful swap, as upstream's
+//! `clearDelivered` call sites. A clear withdraws every pane's identity of that window and session and the control
+//! slot's; a session no open window holds gets none, so a closed window's banners stay clickable and reopen it. A banner the server closes (it
 //! expired, the user dismissed it) is forgotten. The badge clears on its own path and leaves the banners.
 //!
 //! The server sees no sound: a batch that posts banners sounds the configured notification sound as the display's

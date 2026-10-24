@@ -2010,16 +2010,16 @@ sinks come with the frontend on those OSes.
 **Conformance:** none in the suite (its private bus has no notification server); the GPUI integration test over its
 fake freedesktop server instead
 
-- [ ] `control_identity(window, session)` = "<windowID>:<sessionID>:notify"; `session_identities` = the three pane
+- [x] `control_identity(window, session)` = "<windowID>:<sessionID>:notify"; `session_identities` = the three pane
       identities plus the control one; `parse_identity` reads `notify` as the main pane (a click reveals it), every
       other malformed form stays None
-- [ ] `notify` posts under the control slot; a clear withdraws `session_identities`
-- [ ] write tests: the four Swift cases and the two malformed strings; `notify` queues a post whose identity ends in
+- [x] `notify` posts under the control slot; a clear withdraws `session_identities`
+- [x] write tests: the four Swift cases and the two malformed strings; `notify` queues a post whose identity ends in
       ":notify"; the GPUI integration test: a `notify` then an OSC 9 from the main pane give two banners (no
       `replaces_id` between them), a second `notify` replaces the first, focusing the session closes the control
       banner too, a click reveals the main pane
-- [ ] manual check (user): green on `cross-platform.yml` (ngterm-core)
-- [ ] gate passes
+- [x] manual check (user): green on `cross-platform.yml` (ngterm-core) (skipped - not automatable: needs a pull request or a `ci/**` push by the user)
+- [x] gate passes (full suite deferred to the end of the plan per the user)
 
 ### Task 32: The selection clipboard on macOS and Windows (#792)
 

@@ -3,7 +3,8 @@
 //! and `send(toSession:)`, `Notifications.swift`, `notifications.md`).
 //!
 //! The core records the event and bumps the badge; the banner itself is the frontend's ([`Core::take_notifications`]),
-//! gated by the "Show notification banners" setting. Withdrawing delivered banners is edge-triggered, as upstream's
+//! gated by the "Show notification banners" setting. A terminal's banner takes its pane's slot, a `notify` the
+//! session's control slot ([`control_identity`]), so neither replaces the other. Withdrawing delivered banners is edge-triggered, as upstream's
 //! `clearDelivered`: the core queues a [`NotificationEffect::Clear`] in the same queue as the posts at each site that
 //! clears them (a pane taking focus, zoomed or not, and a successful swap), and only for a session an open window
 //! holds. The badge clears on its own path (a selection, `session.seen`), which leaves the banners alone.
@@ -55,18 +56,41 @@ pub fn identity(window: Uuid, session: Uuid, pane: PaneRole) -> String {
     format!("{}:{}:{}", uuid_string(window), uuid_string(session), pane.wire_name())
 }
 
-/// The parts of an [`identity`]; `None` for a malformed one (upstream's `parseIdentity`).
+/// The suffix of the control `notify` slot's identity (upstream's `controlSuffix`).
+const CONTROL_SUFFIX: &str = "notify";
+
+/// The identity of a control `notify` banner, `<windowID>:<sessionID>:notify` (upstream's `controlIdentity`): one slot
+/// per session, apart from every pane's, so a terminal banner never replaces a note posted on purpose; repeated notes
+/// still replace each other.
+#[must_use]
+pub fn control_identity(window: Uuid, session: Uuid) -> String {
+    format!("{}:{}:{CONTROL_SUFFIX}", uuid_string(window), uuid_string(session))
+}
+
+/// Every identity a session's banners can carry: each pane's, then the control slot (upstream's `sessionIdentities`).
+#[must_use]
+pub fn session_identities(window: Uuid, session: Uuid) -> Vec<String> {
+    PaneRole::ALL
+        .into_iter()
+        .map(|pane| identity(window, session, pane))
+        .chain(std::iter::once(control_identity(window, session)))
+        .collect()
+}
+
+/// The click target of a banner identity, an [`identity`] or a [`control_identity`], whose `notify` suffix targets the
+/// main pane; `None` for a malformed one (upstream's `parseIdentity`).
 #[must_use]
 pub fn parse_identity(identity: &str) -> Option<(Uuid, Uuid, PaneRole)> {
     let parts: Vec<&str> = identity.split(':').collect();
     let [window, session, pane] = parts.as_slice() else {
         return None;
     };
-    Some((
-        Uuid::parse_str(window).ok()?,
-        Uuid::parse_str(session).ok()?,
-        PaneRole::from_wire(pane)?,
-    ))
+    let pane = if *pane == CONTROL_SUFFIX {
+        PaneRole::Main
+    } else {
+        PaneRole::from_wire(pane)?
+    };
+    Some((Uuid::parse_str(window).ok()?, Uuid::parse_str(session).ok()?, pane))
 }
 
 /// Whether a terminal notification is delivered: suppressed only while the firing pane holds the keyboard in the
@@ -76,22 +100,33 @@ pub fn should_deliver(firing_is_focused: bool, app_active: bool) -> bool {
     !(firing_is_focused && app_active)
 }
 
+/// The slot of a session's banners a post takes: the firing pane's (a terminal's OSC 9/777), or the control slot (a
+/// `notify`, or one a remote origin sent), which a pane's banner never replaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BannerSlot {
+    Pane(PaneRole),
+    Control,
+}
+
 /// A banner for the frontend to post.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationPost {
     pub window: Uuid,
     pub session: Uuid,
-    pub pane: PaneRole,
+    pub slot: BannerSlot,
     /// The effective title: the caller's, else the session's name.
     pub title: String,
     pub body: String,
 }
 
 impl NotificationPost {
-    /// The banner's [`identity`].
+    /// The banner's identity: its pane's [`identity`], or the session's [`control_identity`].
     #[must_use]
     pub fn identity(&self) -> String {
-        identity(self.window, self.session, self.pane)
+        match self.slot {
+            BannerSlot::Pane(pane) => identity(self.window, self.session, pane),
+            BannerSlot::Control => control_identity(self.window, self.session),
+        }
     }
 }
 
@@ -100,8 +135,8 @@ impl NotificationPost {
 pub enum NotificationEffect {
     /// Post a banner.
     Post(NotificationPost),
-    /// Withdraw every pane's delivered banner of session `session` in open window `window` (upstream's
-    /// `clearDelivered`).
+    /// Withdraw every delivered banner of session `session` in open window `window`, each pane's and the control slot's
+    /// (upstream's `clearDelivered`).
     Clear { window: Uuid, session: Uuid },
     /// Post an app-level banner tied to no pane (a keymap or hooks problem, a failed custom command or hook), under
     /// `identity`, which coalesces repeats.
@@ -113,21 +148,18 @@ pub enum NotificationEffect {
 }
 
 impl NotificationEffect {
-    /// The identities the effect withdraws: every pane's for a clear, none for a post.
+    /// The identities the effect withdraws: the session's [`session_identities`] for a clear, none for a post.
     #[must_use]
     pub fn withdrawn_identities(&self) -> Vec<String> {
         match self {
             Self::Post(_) | Self::App { .. } => Vec::new(),
-            Self::Clear { window, session } => PaneRole::ALL
-                .into_iter()
-                .map(|pane| identity(*window, *session, pane))
-                .collect(),
+            Self::Clear { window, session } => session_identities(*window, *session),
         }
     }
 }
 
-/// `notify`: a body is required, checked before the target; the badge always counts it and the banner obeys the
-/// setting, whose being off the result notes.
+/// `notify`: a body is required, checked before the target; the badge always counts it and the banner, posted in the
+/// session's control slot, obeys the setting, whose being off the result notes.
 pub(crate) fn dispatch(core: &mut Core, request: &Request) -> Outcome {
     let args = args_of(request);
     let body = args
@@ -137,7 +169,8 @@ pub(crate) fn dispatch(core: &mut Core, request: &Request) -> Outcome {
         .ok_or_else(|| ControlError::rejected("notify requires a body"))?;
     let resolved = Resolver::new(core.library()).session(request.target.as_deref(), args.window.as_deref())?;
     let title = args.title.as_deref().unwrap_or("");
-    let Some(title) = core.deliver_notification(resolved.window, resolved.session, PaneRole::Main, title, body) else {
+    let Some(title) = core.deliver_notification(resolved.window, resolved.session, BannerSlot::Control, title, body)
+    else {
         return Err(ControlError::rejected("session's window is not open"));
     };
     // only a control-origin notification travels to viewers: a terminal's reaches them through its live session itself
@@ -159,13 +192,13 @@ impl Core {
         self.settings().notifications_enabled.unwrap_or(true)
     }
 
-    /// Records a notification on session `session` of open window `window` and, with banners on, queues its banner:
-    /// the `notify` event, the badge, the post. Its effective title; `None` when the window or session is gone.
+    /// Records a notification on session `session` of open window `window` and, with banners on, queues its banner in
+    /// `slot`: the `notify` event, the badge, the post. Its effective title; `None` when the window or session is gone.
     pub(crate) fn deliver_notification(
         &mut self,
         window: Uuid,
         session: Uuid,
-        pane: PaneRole,
+        slot: BannerSlot,
         title: &str,
         body: &str,
     ) -> Option<String> {
@@ -177,7 +210,7 @@ impl Core {
             self.notifications.push(NotificationEffect::Post(NotificationPost {
                 window,
                 session,
-                pane,
+                slot,
                 title: title.clone(),
                 body: body.to_owned(),
             }));
@@ -203,7 +236,8 @@ impl Core {
             Some(StatusPane::Right) => PaneRole::Split,
             _ => PaneRole::Main,
         };
-        self.deliver_notification(window, session, pane, title, body).is_some()
+        self.deliver_notification(window, session, BannerSlot::Pane(pane), title, body)
+            .is_some()
     }
 
     /// A banner was clicked (upstream's `AppActions.reveal`): the session is revealed in the open window holding it,
@@ -249,9 +283,9 @@ impl Core {
         true
     }
 
-    /// Queues the withdrawal of session `session`'s delivered banners, every pane's (upstream's `clearDelivered`): a
-    /// no-op when no open window holds the session, so a closed window's banners stay clickable. The badge is left
-    /// as it is. Whether a withdrawal was queued; settle afterwards when it was.
+    /// Queues the withdrawal of session `session`'s delivered banners, every pane's and the control slot's (upstream's
+    /// `clearDelivered`): a no-op when no open window holds the session, so a closed window's banners stay clickable.
+    /// The badge is left as it is. Whether a withdrawal was queued; settle afterwards when it was.
     pub(crate) fn clear_delivered(&mut self, session: Uuid) -> bool {
         let Some(window) = self.library().window_id_for_session(session) else {
             tracing::debug!(%session, "notify: no open window holds the session; no banner to clear");
@@ -306,6 +340,94 @@ mod tests {
         assert_eq!(parse_identity(&extra), None);
         let role = format!("{}:{}:scratch", uuid_string(window), uuid_string(session));
         assert_eq!(parse_identity(&role), None);
+    }
+
+    fn fixed_ids() -> (Uuid, Uuid) {
+        (
+            Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap(),
+            Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap(),
+        )
+    }
+
+    /// Upstream's `controlIdentityFormatIsWindowColonSessionColonNotify`.
+    #[test]
+    fn control_identity_format_is_window_colon_session_colon_notify() {
+        let (window, session) = fixed_ids();
+        assert_eq!(
+            control_identity(window, session),
+            "00000000-0000-0000-0000-000000000000:11111111-1111-1111-1111-111111111111:notify"
+        );
+    }
+
+    /// Upstream's `controlIdentityIsStableAndNeverCollidesWithPaneIdentities`.
+    #[test]
+    fn control_identity_is_stable_and_never_collides_with_pane_identities() {
+        let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+        let control = control_identity(window, session);
+        assert_eq!(control, control_identity(window, session));
+        for pane in PaneRole::ALL {
+            assert_ne!(control, identity(window, session, pane), "{pane:?}");
+        }
+    }
+
+    /// Upstream's `controlIdentityParsesToTheMainPane`.
+    #[test]
+    fn control_identity_parses_to_the_main_pane() {
+        let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+        assert_eq!(
+            parse_identity(&control_identity(window, session)),
+            Some((window, session, PaneRole::Main))
+        );
+    }
+
+    /// Upstream's `sessionIdentitiesCoverEveryPaneAndTheControlSlot`.
+    #[test]
+    fn session_identities_cover_every_pane_and_the_control_slot() {
+        let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut expected: Vec<String> = PaneRole::ALL
+            .into_iter()
+            .map(|pane| identity(window, session, pane))
+            .collect();
+        expected.push(control_identity(window, session));
+        let identities = session_identities(window, session);
+        assert_eq!(identities.len(), 4);
+        assert_eq!(identities, expected);
+        let clear = NotificationEffect::Clear { window, session };
+        assert_eq!(clear.withdrawn_identities(), expected, "a clear withdraws all four");
+    }
+
+    /// Upstream's `parseRejectsMalformed`, the control slot's two cases included.
+    #[test]
+    fn parse_rejects_malformed_control_identities() {
+        let (window, session) = (uuid_string(Uuid::new_v4()), uuid_string(Uuid::new_v4()));
+        for bad in [
+            format!("{window}:not-a-uuid:main"),
+            format!("{window}:{session}:bogus"),
+            format!("{window}:{session}:notify:1"),
+            format!("{window}:not-a-uuid:notify"),
+            format!("not-a-uuid:{session}:main"),
+            format!("{session}:main"),
+            "no-colon".to_owned(),
+        ] {
+            assert_eq!(parse_identity(&bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_post_takes_its_slots_identity() {
+        let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
+        let post = |slot| NotificationPost {
+            window,
+            session,
+            slot,
+            title: "t".to_owned(),
+            body: "b".to_owned(),
+        };
+        assert_eq!(post(BannerSlot::Control).identity(), control_identity(window, session));
+        assert_eq!(
+            post(BannerSlot::Pane(PaneRole::Main)).identity(),
+            identity(window, session, PaneRole::Main)
+        );
     }
 
     #[test]
