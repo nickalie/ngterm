@@ -1,5 +1,6 @@
-//! The first-run welcome and the quit confirmation, host-free (upstream's `FirstRunWelcome.swift`, `QuitPrompt.swift`
-//! and `QuitReason.swift`): the decisions and the copy; the dialogs live in the frontend.
+//! The first-run welcome, the quit confirmation and the window-close sheet's text, host-free (upstream's
+//! `FirstRunWelcome.swift`, `QuitPrompt.swift` and `QuitReason.swift`): the decisions and the copy; the dialogs live in
+//! the frontend.
 
 use std::path::Path;
 
@@ -103,6 +104,20 @@ impl QuitPrompt {
             format!("This closes {window_clause} and {session_clause}, ending all running shells.")
         }
     }
+
+    /// The informative line of the "Close “name”?" sheet over a window running `sessions` sessions (upstream's
+    /// `QuitPrompt.windowCloseMessage`). `live` claims no ending, since a window close only detaches its sessions'
+    /// clients; `mode` is the launch's active restore mode, as for [`QuitPrompt::message`].
+    #[must_use]
+    pub fn window_close_message(sessions: usize, mode: RestoreMode) -> String {
+        let reopen = "The window can be reopened from File \u{25b8} Open Window.";
+        let plural = if sessions == 1 { "" } else { "s" };
+        if mode == RestoreMode::Live {
+            format!("This closes {sessions} session{plural}. {reopen}")
+        } else {
+            format!("This ends {sessions} running session{plural}. {reopen}")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +211,36 @@ mod tests {
         assert_eq!(
             QuitPrompt::message(3, 1, RestoreMode::Live),
             "This closes 3 windows and 1 session."
+        );
+    }
+
+    /// Upstream's `windowCloseNonLiveEndsSessions(none|rerun)`.
+    #[test]
+    fn the_window_close_message_ends_the_sessions_outside_live() {
+        for mode in [RestoreMode::None, RestoreMode::Rerun] {
+            assert_eq!(
+                QuitPrompt::window_close_message(1, mode),
+                "This ends 1 running session. The window can be reopened from File \u{25b8} Open Window.",
+                "{mode:?}"
+            );
+            assert_eq!(
+                QuitPrompt::window_close_message(4, mode),
+                "This ends 4 running sessions. The window can be reopened from File \u{25b8} Open Window.",
+                "{mode:?}"
+            );
+        }
+    }
+
+    /// Upstream's `windowCloseLiveDropsEndingClaim`.
+    #[test]
+    fn the_window_close_message_claims_no_ending_in_live() {
+        assert_eq!(
+            QuitPrompt::window_close_message(1, RestoreMode::Live),
+            "This closes 1 session. The window can be reopened from File \u{25b8} Open Window."
+        );
+        assert_eq!(
+            QuitPrompt::window_close_message(9, RestoreMode::Live),
+            "This closes 9 sessions. The window can be reopened from File \u{25b8} Open Window."
         );
     }
 }

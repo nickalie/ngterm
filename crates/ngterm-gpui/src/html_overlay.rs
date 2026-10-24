@@ -16,6 +16,14 @@
 //! clipboard carries only the text the app hands it before a paste, and nothing is dropped onto a page. Where WPE's
 //! sandbox cannot start, which would end the app at the first page, the host refuses every page instead (`sandbox`).
 //!
+//! A page holding the keyboard consumes every key it forwards to its engine, Escape included, so a key the page leaves
+//! unhandled reaches nothing behind it, and full screen changes only through the app's own action (upstream's #753).
+//! The other frontends' web-view ports carry the same rule: on macOS the page's `WKWebView` answers `cancelOperation:`
+//! itself (upstream's `HtmlOverlayWebView`), as `WebKit` hands an unhandled Esc back up the responder chain and
+//! `NSWindow` takes a full-screen window out of full screen on it; on Windows Win32 has no default Esc that leaves full
+//! screen, and the `WebView2` host must not re-dispatch an unhandled Esc (`AcceleratorKeyPressed`) to a full-screen
+//! handler.
+//!
 //! Without the `html` cargo feature no host is installed, so the core refuses every page and nothing here mounts.
 
 #[cfg(all(feature = "html", target_os = "linux"))]

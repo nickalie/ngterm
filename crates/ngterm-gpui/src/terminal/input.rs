@@ -11,7 +11,19 @@
 //!
 //! [`chord`] is the GTK build's `chord_of` (`agterm-gtk/src/keymap_dispatch.rs`): named keys by their key, other keys by
 //! what the layout types on them with no modifier, or, on a layout that cannot type ASCII, by the Latin key at that
-//! position (upstream's `chordKey`).
+//! position (upstream's `chordKey`). A chord holding Command takes what the key types with only Command applied where
+//! the platform's record carries it ([`NativeKey::command`], upstream's #796): macOS's menus match key equivalents
+//! through a layout's Command table, which can differ from its plain one (Dvorak - QWERTY ⌘ types QWERTY there,
+//! Lithuanian's number row digits), so without it a `cmd+` chord would fire on another key than the menu's.
+//!
+//! The macOS keyboard form, built with GPUI's native key record on macOS (none exists yet, so `current_source` gives
+//! no record off Linux), fills [`NativeKey::command`] for a press holding Command with `UCKeyTranslate` under `cmdKey`
+//! alone (upstream's `characters(byApplyingModifiers: modifierFlags ∩ .command)`): Shift, Option and Control stay
+//! out, as Shift would break `shift+<base>`, Option types `∂` for D and Control types control characters. Its manual
+//! check, as upstream's keymap rules list it: `cmd+d` and `cmd+1` on Dvorak - QWERTY ⌘ and on Lithuanian fire on the
+//! keys the menu matches (the QWERTY D key; the number row's 1), and `cmd+ą` no longer matches. Linux has no
+//! counterpart (XKB keeps no per-modifier table: Super selects no level), nor has Windows (`ToUnicodeEx` translates
+//! with Ctrl and Alt only, and the Win key selects no table); their records leave the field empty.
 
 use gpui_kit::{Keystroke, Modifiers as GpuiModifiers};
 use ngterm_core::ghostty_config::binds::{KeyAction, Mods, PhysicalKey};
@@ -41,6 +53,9 @@ pub struct NativeKey {
     pub repeat: bool,
     /// The lock keys on: [`Mods::CAPS_LOCK`] and [`Mods::NUM_LOCK`].
     pub locks: Mods,
+    /// What the key types with only Command applied, from the layout's Command table (macOS, module docs); `None`
+    /// where layouts keep no such table (Linux, Windows) or Command is not held.
+    pub command: Option<char>,
 }
 
 /// Where a key event came from.
@@ -74,6 +89,8 @@ pub fn current_source(keystroke: &Keystroke) -> Source {
                 locks.set(Mods::NUM_LOCK, native.num_lock);
                 locks
             },
+            // XKB keeps no Command table (module docs)
+            command: None,
         }),
         Some(gpui_linux::NativeInput::Text) => Source::Text,
         _ => Source::Keystroke,
@@ -97,6 +114,8 @@ pub struct KeyStroke {
     pub composing: bool,
     pub text: String,
     pub unshifted: Option<char>,
+    /// What the key types with only Command applied, which a chord holding Command resolves from ([`NativeKey::command`]).
+    pub command: Option<char>,
     /// The XKB keycode; 0 when unknown.
     pub keycode: u32,
     /// Whether the layout types ASCII letters (assumed without a native record).
@@ -220,6 +239,7 @@ fn from_native(keystroke: &Keystroke, native: &NativeKey) -> KeyStroke {
         composing: native.composing,
         text: native.text.clone(),
         unshifted: native.unshifted,
+        command: native.command,
         keycode: native.keycode,
         ascii_layout: native.ascii_layout,
         identity: if native.keycode == 0 {
@@ -239,6 +259,7 @@ fn from_text(keystroke: &Keystroke) -> KeyStroke {
         composing: false,
         text: keystroke.key_char.clone().unwrap_or_else(|| keystroke.key.clone()),
         unshifted: None,
+        command: None,
         keycode: 0,
         ascii_layout: true,
         identity: identity(&keystroke.key),
@@ -285,6 +306,7 @@ fn from_keystroke(keystroke: &Keystroke) -> KeyStroke {
         composing: false,
         text,
         unshifted: base,
+        command: None,
         keycode: 0,
         ascii_layout: true,
         identity: identity(&keystroke.key),
@@ -409,8 +431,19 @@ pub fn chord(stroke: &KeyStroke) -> Option<Chord> {
     }
     let key = named_key(stroke.key)
         .map(str::to_owned)
-        .or_else(|| chord_key(stroke.keycode, stroke.unshifted, stroke.ascii_layout))?;
+        .or_else(|| chord_key(stroke.keycode, chord_char(stroke), stroke.ascii_layout))?;
     Some(Chord::new(keymap_modifiers(stroke.mods), key))
+}
+
+/// The character a chord resolves its base key from (upstream's `CustomCommandRunner.chord(from:)`): what the key
+/// types with no modifier, or, for a chord holding Command, what it types with only Command applied where the record
+/// carries that (module docs).
+fn chord_char(stroke: &KeyStroke) -> Option<char> {
+    if stroke.mods.contains(Mods::SUPER) {
+        stroke.command.or(stroke.unshifted)
+    } else {
+        stroke.unshifted
+    }
 }
 
 /// The base key for a press (upstream's `chordKey`), decided per layout: a layout that can type ASCII binds by what

@@ -110,7 +110,7 @@ impl Look {
     }
 
     /// The selected rows' pill: the selection background, dimmed while the window is not the active one, else
-    /// upstream's soft white wash.
+    /// upstream's soft wash of the theme foreground.
     #[must_use]
     pub fn pill(&self, key_window: bool) -> Hsla {
         crate::chrome::selected_row(&self.colors, key_window).0

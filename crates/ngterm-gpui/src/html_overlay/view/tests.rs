@@ -803,3 +803,58 @@ fn a_page_given_the_keyboard_while_the_engine_starts_holds_the_engine_s_once_rea
     let calls = harness.web.take();
     assert!(calls.contains(&Call::Focused(false)), "{calls:?}");
 }
+
+gpui_kit::actions!(html_overlay_tests, [WindowEscape]);
+
+/// Upstream's #753 (`testEscapeOnAPageWithNoKeyHandlerNeverReachesTheWindow`,
+/// `testEscapeStillReachesAPageListeningForItAndNeverReachesTheWindow`): an Esc on a page goes to its engine, press and
+/// release, and nothing behind the page sees it: on Linux the page consumes every key it forwards, so a window-level
+/// binding never fires, and full screen changes only through the app's own action.
+#[gpui_kit::test]
+fn escape_goes_to_the_page_and_no_further(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    cx.update(|_, cx| crate::keymap_dispatch::init(cx));
+    let fired = Rc::new(Cell::new(0_u32));
+    let counted = Rc::clone(&fired);
+    cx.update(|_, cx| {
+        cx.bind_keys([gpui_kit::KeyBinding::new("escape", WindowEscape, None)]);
+        cx.on_action(move |_: &WindowEscape, _| counted.set(counted.get() + 1));
+    });
+    let escape = || gpui_kit::Keystroke::parse("escape").unwrap();
+    let press_and_release = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.dispatch_keystroke(escape(), cx));
+        cx.simulate_event(gpui_kit::KeyUpEvent { keystroke: escape() });
+        cx.run_until_parked();
+    };
+    let fullscreen = cx.update(|window, _| window.is_fullscreen());
+    // the binding works while the page does not hold the keyboard
+    press_and_release(cx);
+    assert_eq!(
+        fired.get(),
+        1,
+        "the window's binding sees an Esc the page does not take"
+    );
+    harness.focus_page(cx);
+    harness.web.take();
+    press_and_release(cx);
+    let keys: Vec<(bool, u32)> = harness
+        .web
+        .take()
+        .iter()
+        .filter_map(|call| match call {
+            Call::Input(Input::Key(key)) => Some((key.pressed, key.keyval)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        keys,
+        [(true, 0xff1b), (false, 0xff1b)],
+        "the engine gets the Esc and its release"
+    );
+    assert_eq!(fired.get(), 1, "nothing behind the page sees it");
+    assert_eq!(
+        cx.update(|window, _| window.is_fullscreen()),
+        fullscreen,
+        "full screen unchanged"
+    );
+}

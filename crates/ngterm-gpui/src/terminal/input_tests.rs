@@ -153,6 +153,53 @@ fn chords_name_keys_as_the_keymap_does() {
     assert_eq!(input::latin_key(51), Some("\\"));
 }
 
+/// Upstream's #796, fed as the macOS record will feed it (module docs): a chord holding Command resolves its base key
+/// from what the key types with only Command applied, any other chord from what it types plain.
+#[test]
+fn a_cmd_chord_resolves_through_the_command_table() {
+    use ngterm_core::keymap::Modifiers as Keymap;
+    let chord = |text: &str, keycode: u32, plain: char, command: char| {
+        let held = keystroke(text).modifiers;
+        let native = NativeKey {
+            keycode,
+            modifiers: held,
+            unshifted: Some(plain),
+            ascii_layout: true,
+            command: held.platform.then_some(command),
+            ..NativeKey::default()
+        };
+        input::chord(&KeyStroke::new(&keystroke(text), &Source::Native(native), false)).unwrap()
+    };
+    // Dvorak - QWERTY ⌘: the QWERTY D key (XKB 40) types `e`, and `d` under Command
+    let cmd_d = chord("super-e", 40, 'e', 'd');
+    assert_eq!((cmd_d.mods, cmd_d.key.as_str()), (Keymap::COMMAND, "d"));
+    let ctrl_e = chord("ctrl-e", 40, 'e', 'd');
+    assert_eq!(
+        (ctrl_e.mods, ctrl_e.key.as_str()),
+        (Keymap::CONTROL, "e"),
+        "no Command, no Command table"
+    );
+    // Lithuanian: the number row's first key (XKB 10) types `ą`, and `1` under Command, so `cmd+ą` no longer matches
+    let cmd_1 = chord("super-ą", 10, 'ą', '1');
+    assert_eq!((cmd_1.mods, cmd_1.key.as_str()), (Keymap::COMMAND, "1"));
+    // Shift held beside Command stays out of the lookup: the base is the Command table's unshifted character
+    let shift_cmd = chord("shift-super-e", 40, 'e', 'd');
+    assert_eq!(
+        (shift_cmd.mods, shift_cmd.key.as_str()),
+        (Keymap::COMMAND | Keymap::SHIFT, "d")
+    );
+    // a record without a Command character (Linux, Windows) keeps the plain one
+    let native = NativeKey {
+        keycode: 40,
+        modifiers: keystroke("super-e").modifiers,
+        unshifted: Some('e'),
+        ascii_layout: true,
+        ..NativeKey::default()
+    };
+    let linux = input::chord(&KeyStroke::new(&keystroke("super-e"), &Source::Native(native), false)).unwrap();
+    assert_eq!(linux.key, "e");
+}
+
 #[test]
 fn the_wheel_multiplier_and_the_pointer_shapes_follow_ghostty() {
     use gpui_kit::CursorStyle;

@@ -6,9 +6,9 @@
 //! (darker) or white (lighter) over that background, at the magnitude [`sidebar_shift_amount`] gives the Settings
 //! slider; the title strip never does. A selected sidebar row draws the theme's `selection-background`, its text the
 //! `selection-foreground`, else the black or white that contrasts with the selection background
-//! ([`contrasting_text`]). libghostty's config getter cannot read the optional `selection-*` keys, so
-//! [`resolve_selection_colors`] reads them from the config sources and the active theme's file, as upstream's
-//! `GhosttyApp.resolveSelectionColors` does.
+//! ([`contrasting_text`]), else the theme's foreground (upstream's #746). The selection colors are the Rust ghostty
+//! config's (`crate::ghostty_config`), which finds the theme as libghostty does, so a custom theme's colors reach the
+//! row where upstream's by-hand `GhosttyApp.resolveSelectionColors` re-reads the config sources.
 
 use std::fmt;
 
@@ -117,54 +117,6 @@ pub struct SelectionColors {
     pub foreground: Option<Rgb>,
 }
 
-/// The `key = value` pairs of a ghostty-style config text in order, blank and `#` comment lines skipped (upstream's
-/// `GhosttyApp.keyValues`).
-#[must_use]
-pub fn config_key_values(text: &str) -> Vec<(&str, &str)> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .filter_map(|line| line.split_once('='))
-        .map(|(key, value)| (key.trim(), value.trim()))
-        .collect()
-}
-
-/// The selection colors the config `sources` (their texts, in load order, last wins) set, the active theme's file
-/// filling any one they leave unset (upstream's `GhosttyApp.resolveSelectionColors`). `theme_text` reads a bundled
-/// theme's file by name; a `light:…,dark:…` theme picks its side by `is_dark`. Like upstream, the sources'
-/// `config-file` includes are not followed.
-pub fn resolve_selection_colors<'a>(
-    sources: impl IntoIterator<Item = &'a str>,
-    theme_text: impl FnOnce(&str) -> Option<String>,
-    is_dark: bool,
-) -> SelectionColors {
-    let mut theme = None;
-    let mut colors = SelectionColors::default();
-    for (key, value) in sources.into_iter().flat_map(config_key_values) {
-        match key {
-            "theme" => theme = Some(value.to_owned()),
-            "selection-background" => colors.background = Rgb::from_hex(value),
-            "selection-foreground" => colors.foreground = Rgb::from_hex(value),
-            _ => {}
-        }
-    }
-    let unset = colors.background.is_none() || colors.foreground.is_none();
-    let theme = theme
-        .filter(|_| unset)
-        .map(|value| crate::theme::resolved_for_appearance(&value, is_dark))
-        .filter(|name| !name.is_empty());
-    if let Some(text) = theme.and_then(|name| theme_text(&name)) {
-        for (key, value) in config_key_values(&text) {
-            match key {
-                "selection-background" if colors.background.is_none() => colors.background = Rgb::from_hex(value),
-                "selection-foreground" if colors.foreground.is_none() => colors.foreground = Rgb::from_hex(value),
-                _ => {}
-            }
-        }
-    }
-    colors
-}
-
 /// Everything the chrome is painted with, resolved.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChromeColors {
@@ -174,7 +126,7 @@ pub struct ChromeColors {
     pub foreground: Rgb,
     /// The sidebar: the background under the tint wash, equal to `background` at the neutral strength.
     pub sidebar: Rgb,
-    /// The selected row's pill, `None` for upstream's soft white wash.
+    /// The selected row's pill, `None` for upstream's soft wash of the foreground.
     pub selection_background: Option<Rgb>,
     /// The selected row's text.
     pub selection_foreground: Rgb,
@@ -183,8 +135,8 @@ pub struct ChromeColors {
 impl ChromeColors {
     /// Opacity of the selection pill while the window is not the key one (upstream's non-emphasized row).
     pub const INACTIVE_SELECTION_ALPHA: f64 = 0.55;
-    /// The soft white wash a selected row draws when the theme sets no selection background, in the key window and
-    /// elsewhere (upstream's `SidebarRowView.keyAlpha` and `inactiveAlpha`).
+    /// The soft wash of the foreground a selected row draws when the theme sets no selection background, in the key
+    /// window and elsewhere (upstream's `SidebarRowView.keyAlpha` and `inactiveAlpha`).
     pub const WASH_ALPHA: f64 = 0.13;
     pub const INACTIVE_WASH_ALPHA: f64 = 0.07;
     /// The opacity of the chrome text the title-bar hairline and the sidebar divider draw with (upstream's
@@ -196,8 +148,8 @@ impl ChromeColors {
     ///
     /// Without a background the window takes upstream's fallback. Without a foreground, where upstream falls back to
     /// the system label color, the text takes the black or white that contrasts with the background. The selected
-    /// row's text is the selection foreground, else the contrast of the selection background, else white (upstream's
-    /// `refreshSelectionColors` and `SidebarCellView.setColors`).
+    /// row's text is the selection foreground, else the contrast of the selection background, else the foreground
+    /// (upstream's `refreshSelectionColors` and `SidebarCellView.setColors`).
     #[must_use]
     pub fn new(
         background: Option<Rgb>,
@@ -206,16 +158,17 @@ impl ChromeColors {
         sidebar_shift: i64,
     ) -> Self {
         let background = background.unwrap_or(FALLBACK_BACKGROUND);
+        let foreground = foreground.unwrap_or_else(|| contrasting_text(background));
         let shift = sidebar_shift_amount(sidebar_shift);
         Self {
             background,
-            foreground: foreground.unwrap_or_else(|| contrasting_text(background)),
+            foreground,
             sidebar: background.washed(shift < 0.0, shift.abs()),
             selection_background: selection.background,
             selection_foreground: selection
                 .foreground
                 .or_else(|| selection.background.map(contrasting_text))
-                .unwrap_or(Rgb::WHITE),
+                .unwrap_or(foreground),
         }
     }
 }
@@ -270,75 +223,25 @@ mod tests {
     }
 
     #[test]
-    fn key_values_skip_comments_and_blank_lines() {
-        let text = "# comment\n\n theme = Dracula \nselection-background=#112233\nnot a pair\nkey = a = b\n";
-        assert_eq!(
-            config_key_values(text),
-            [
-                ("theme", "Dracula"),
-                ("selection-background", "#112233"),
-                ("key", "a = b")
-            ]
-        );
-    }
-
-    #[test]
-    fn explicit_selection_lines_win_over_the_theme_file() {
-        let themes = |name: &str| {
-            (name == "Nord").then(|| "selection-background = #445566\nselection-foreground = #ddeeff\n".to_owned())
-        };
-        let colors = resolve_selection_colors(["theme = Nord", "selection-background = #010203"], themes, false);
-        assert_eq!(colors.background, Some(Rgb::new(1, 2, 3)));
-        assert_eq!(
-            colors.foreground,
-            Some(Rgb::new(0xdd, 0xee, 0xff)),
-            "the theme fills the unset one"
-        );
-        // the later source wins
-        let later = resolve_selection_colors(
-            ["selection-foreground = #000000", "selection-foreground = #fff"],
-            |_| None,
-            false,
-        );
-        assert_eq!(later.foreground, Some(Rgb::WHITE));
-        assert_eq!(later.background, None);
-    }
-
-    #[test]
-    fn a_dual_theme_reads_the_side_on_screen() {
-        let themes = |name: &str| {
-            Some(format!(
-                "selection-background = {}\n",
-                if name == "Dark" { "#000001" } else { "#fffffe" }
-            ))
-        };
-        let source = ["theme = light:Light,dark:Dark"];
-        assert_eq!(
-            resolve_selection_colors(source, themes, true).background,
-            Some(Rgb::new(0, 0, 1))
-        );
-        assert_eq!(
-            resolve_selection_colors(source, themes, false).background,
-            Some(Rgb::new(255, 255, 254))
-        );
-        // both set explicitly: the theme file is never read
-        let both = [
-            "theme = Dark",
-            "selection-background = #111111",
-            "selection-foreground = #222222",
-        ];
-        let colors = resolve_selection_colors(both, |_| -> Option<String> { unreachable!() }, true);
-        assert_eq!(colors.foreground, Some(Rgb::new(0x22, 0x22, 0x22)));
-    }
-
-    #[test]
     fn the_chrome_falls_back_like_upstream() {
         let none = ChromeColors::new(None, None, SelectionColors::default(), 5);
         assert_eq!(none.background, FALLBACK_BACKGROUND);
         assert_eq!(none.foreground, Rgb::WHITE);
         assert_eq!(none.sidebar, FALLBACK_BACKGROUND, "neutral: no wash");
         assert_eq!(none.selection_background, None);
-        assert_eq!(none.selection_foreground, Rgb::WHITE, "white over the soft wash");
+        assert_eq!(
+            none.selection_foreground,
+            Rgb::WHITE,
+            "the foreground over the soft wash"
+        );
+        // upstream's #746: a light theme with no selection colors keeps its dark text on the selected row
+        let light = ChromeColors::new(
+            Some(Rgb::new(0xfa, 0xfa, 0xfa)),
+            Some(Rgb::new(0x22, 0x22, 0x22)),
+            SelectionColors::default(),
+            5,
+        );
+        assert_eq!(light.selection_foreground, Rgb::new(0x22, 0x22, 0x22));
         let bg = Rgb::new(21, 121, 241);
         let only_background = SelectionColors {
             background: Some(Rgb::new(0xee, 0xee, 0xee)),

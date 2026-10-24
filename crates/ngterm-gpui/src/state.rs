@@ -219,6 +219,8 @@ pub struct WindowClose {
     pub window: Uuid,
     pub name: String,
     pub sessions: usize,
+    /// The launch's active restore mode, which words the sheet ([`ngterm_core::first_run::QuitPrompt::window_close_message`]).
+    pub mode: ngterm_core::persist::RestoreMode,
 }
 
 /// Whether a terminal's desktop notification fired while its pane held its window's keyboard (upstream's first
@@ -1236,7 +1238,13 @@ impl AppState {
                     .iter()
                     .find(|info| info.id == window)
                     .map_or_else(|| "window".to_owned(), |info| info.name.clone());
-                self.frontend.window_closes.push(WindowClose { window, name, sessions });
+                let mode = self.core.restore_launch().active;
+                self.frontend.window_closes.push(WindowClose {
+                    window,
+                    name,
+                    sessions,
+                    mode,
+                });
             }
             return;
         }

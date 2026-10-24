@@ -1394,6 +1394,64 @@ fn a_ctrl_click_on_the_hud_opens_its_link_and_a_plain_click_reaches_the_pane(cx:
     assert!(h.state.take_frontend_work().open_urls.is_empty());
 }
 
+/// Upstream's #747 (launch with many restored sessions): every hidden page's terminal is laid out at the deck's own
+/// bounds, never probed at other sizes, and a selection or a size change re-creates no terminal view.
+#[gpui_kit::test]
+fn many_pages_lay_out_at_the_decks_bounds_and_a_selection_or_resize_keeps_their_views(cx: &mut TestAppContext) {
+    let (mut library, window, mut ids) = three_sessions();
+    let store = library.store_mut(window).unwrap();
+    let workspace = store.workspaces()[0].id();
+    for index in 0..9 {
+        ids.push(
+            store
+                .add_session(workspace, NewSession::at_cwd(format!("/tmp/{index}")))
+                .unwrap(),
+        );
+    }
+    let mut h = harness(cx, core_of(library), window);
+    h.until("every pane to start", |h| {
+        ids.iter().all(|id| h.realized(*id, StatusPane::Left))
+    });
+    let tokens: Vec<String> = ids.iter().map(|id| h.token(*id, StatusPane::Left)).collect();
+    let views = |h: &mut Harness<'_>| -> Vec<gpui_kit::EntityId> {
+        ids.iter()
+            .zip(&tokens)
+            .map(|(id, token)| {
+                h.deck
+                    .read_with(h.cx, |deck, _| deck.terminal(*id, token).unwrap().view.entity_id())
+            })
+            .collect()
+    };
+    let grids =
+        |h: &mut Harness<'_>| -> Vec<u16> { ids.iter().zip(&tokens).map(|(id, token)| h.cols(*id, token)).collect() };
+    let shown_cols = h.cols(ids[0], &tokens[0]);
+    assert_ne!(shown_cols, 0, "the shown page is laid out");
+    h.until("every hidden page laid out at the deck's bounds", |h| {
+        grids(h).iter().all(|cols| *cols == shown_cols)
+    });
+    let before = views(&mut h);
+    let launched = h.launches.lock().unwrap().len();
+    assert_eq!(launched, ids.len());
+
+    // a selection change only flips visibility
+    for id in [ids[7], ids[3], ids[11]] {
+        h.store().select_session(Some(id));
+        h.state.settle();
+        h.turn();
+    }
+    assert_eq!(views(&mut h), before, "no view re-created by a selection");
+    assert!(grids(&mut h).iter().all(|cols| *cols == shown_cols));
+
+    // a wider deck: every page follows it, hidden ones included, in the same views
+    h.cx.simulate_resize(size(px(1203.), px(600.)));
+    h.until("every page laid out at the new bounds", |h| {
+        let grids = grids(h);
+        grids.iter().all(|cols| *cols == grids[0]) && grids[0] > shown_cols
+    });
+    assert_eq!(views(&mut h), before, "no view re-created by a resize");
+    assert_eq!(h.launches.lock().unwrap().len(), launched, "no terminal launched again");
+}
+
 mod ask_form;
 mod dashboard;
 mod overlay;

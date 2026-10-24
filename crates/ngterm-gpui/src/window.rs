@@ -778,7 +778,7 @@ impl WindowView {
         let id = close.window;
         crate::modal::open_alert(
             window,
-            close_alert(&close.name, close.sessions),
+            close_alert(&close.name, close.sessions, close.mode),
             move |answer, _, _| {
                 asked.set(false);
                 if answer.button == CLOSE {
@@ -1110,15 +1110,13 @@ pub(crate) fn check_keyboard_left(cx: &mut App) {
 /// The Close button's index in [`close_alert`].
 pub const CLOSE: usize = 1;
 
-/// The user's close of a window running `sessions` sessions (upstream's `WindowCloseDelegateProxy.windowShouldClose`).
+/// The user's close of a window running `sessions` sessions (upstream's `WindowCloseDelegateProxy.windowShouldClose`),
+/// worded for the launch's active restore `mode`.
 #[must_use]
-pub fn close_alert(name: &str, sessions: usize) -> crate::modal::AlertSpec {
-    let plural = if sessions == 1 { "" } else { "s" };
+pub fn close_alert(name: &str, sessions: usize, mode: ngterm_core::persist::RestoreMode) -> crate::modal::AlertSpec {
     crate::modal::AlertSpec::confirm(
         format!("Close \u{201c}{name}\u{201d}?"),
-        format!(
-            "This ends {sessions} running session{plural}. The window can be reopened from File \u{25b8} Open Window."
-        ),
+        ngterm_core::first_run::QuitPrompt::window_close_message(sessions, mode),
         "Close",
     )
 }

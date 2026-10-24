@@ -2080,14 +2080,16 @@ under `node` with a recording reporter in place of the wrapper)
 
 ### Task 34: UI-only changes
 
-- [ ] window-close sheet in Live mode (#743, commit `f986cfe`; tests `QuitPromptTests.swift`
+- [x] window-close sheet in Live mode (#743, commit `f986cfe`; tests `QuitPromptTests.swift`
       windowCloseNonLiveEndsSessions(none|rerun), windowCloseLiveDropsEndingClaim): `QuitPrompt::window_close_message(sessions,
       mode)` in `crates/ngterm-core/src/first_run.rs` beside `message`; live: "This closes 1 session. The window can be
       reopened from File ▸ Open Window." / "This closes 9 sessions. …"; none and rerun: "This ends 1 running session.
       …" / "This ends 4 running sessions. …"; the mode is the launch decision's active mode, as the quit alert's;
       `crates/ngterm-gpui/src/window.rs` `close_alert` uses it; core unit tests for the five Swift cases, window
-      tests for both modes (no OS-specific code)
-- [ ] an unhandled Esc on an HTML page never reaches the window (#754, commit `3871300`; tests
+      tests for both modes (no OS-specific code) (`WindowClose` carries the launch's active mode, read when the close
+      is requested; window tests `the_window_close_confirmation_counts_the_sessions_it_ends`,
+      `the_window_close_sheet_is_worded_for_the_launchs_mode`)
+- [x] an unhandled Esc on an HTML page never reaches the window (#754, commit `3871300`; tests
       `HtmlOverlayRegistryTests.swift` testEscapeOnAPageWithNoKeyHandlerNeverReachesTheWindow,
       testEscapeStillReachesAPageListeningForItAndNeverReachesTheWindow): on Linux the page view consumes every key it
       forwards and full screen changes only through the app's action, so add the GPUI view test
@@ -2095,8 +2097,10 @@ under `node` with a recording reporter in place of the wrapper)
       one key 0xff1b and its release; a window-level action behind it does not fire; full screen unchanged). macOS:
       record in the macOS page-host work that its WKWebView answers `cancelOperation:` itself; Windows: no default
       Esc-exits-full-screen in Win32, and the future WebView2 host must not re-dispatch an unhandled Esc
-      (AcceleratorKeyPressed) to a full-screen handler
-- [ ] the selected sidebar row with a custom theme that sets no selection colors (#746, commit `f6cf8bf`; tests
+      (AcceleratorKeyPressed) to a full-screen handler (the test drives the app's key interceptor and a window-level
+      `escape` binding, which fires while the page lacks the keyboard and not once it has it; the macOS and Windows
+      rules are recorded in `crates/ngterm-gpui/src/html_overlay.rs`'s module docs)
+- [x] the selected sidebar row with a custom theme that sets no selection colors (#746, commit `f6cf8bf`; tests
       `GhosttyConfigTextTests.swift`, `ThemeNameTests.swift`): the lookup is already the Rust ghostty config's (it
       finds a theme by path, `~/`, user then bundled dirs, XDG); add the fallback: selected text = selection fg, else
       the contrast of selection bg, else the theme foreground (`crates/ngterm-core/src/chrome.rs`), and with no
@@ -2106,18 +2110,26 @@ under `node` with a recording reporter in place of the wrapper)
       `selected_rows_take_the_selection_colors`, and loader tests for any ThemeName/GhosttyConfigText case not yet
       covered (`~/` on a light:/dark: side, quoted sides, `~` and `~user` left alone, a relative path refused, an
       empty XDG_CONFIG_HOME = unset; a later invalid value keeps the earlier one; an empty value resets; an explicit
-      reset beats the theme) (no OS-specific code)
-- [ ] `cmd` chords through the Command table on macOS (#796, commit `ebc5403`): when GPUI's macOS native key record
+      reset beats the theme) (no OS-specific code) (both dead functions removed, no caller found; the loader already
+      behaved as upstream's in every listed case, now pinned by `each_side_of_a_home_relative_theme_loads_its_file`,
+      `a_tilde_alone_or_with_a_user_is_not_the_home`, `selection_colors_take_the_last_valid_line_over_the_theme` and
+      the empty-XDG case in `theme_dirs_are_the_users_then_the_bundled_ones`)
+- [x] `cmd` chords through the Command table on macOS (#796, commit `ebc5403`): when GPUI's macOS native key record
       is built, the produced character for a chord holding Cmd is translated with only Command applied
       (`UCKeyTranslate` with `cmdKey`, upstream's `characters(byApplyingModifiers: modifierFlags ∩ .command)`), so
       `cmd+d` on Dvorak - QWERTY ⌘ is the QWERTY D key and `cmd+ą` no longer matches; record it with the frontend's
       macOS keyboard form; a host-free unit test that `chord_key` takes the Command-translated character for a cmd
       chord (fed as data); keymap.md's manual checklist (`cmd+d` and `cmd+1` on Dvorak - QWERTY ⌘ and Lithuanian) for
       the macOS form. Linux: no counterpart (XKB has no per-modifier table); Windows: no counterpart (`ToUnicodeEx`
-      without Ctrl/Alt; the Win key selects no table)
-- [ ] optional (#747): a GPUI deck window test that with many pages every hidden page's terminal is laid out at the
+      without Ctrl/Alt; the Win key selects no table) (`NativeKey::command` / `KeyStroke::command`, empty on Linux and
+      Windows, and `chord` resolving a Command chord from it; test `a_cmd_chord_resolves_through_the_command_table`;
+      this repository has no keymap.md, so the macOS form's rule and its manual checklist are recorded in
+      `crates/ngterm-gpui/src/terminal/input.rs`'s module docs; not built on macOS by CI until ngterm-gpui joins
+      `cross-platform.yml`)
+- [x] optional (#747): a GPUI deck window test that with many pages every hidden page's terminal is laid out at the
       deck's bounds and a selection or size change re-creates no view
-- [ ] gate passes
+      (`many_pages_lay_out_at_the_decks_bounds_and_a_selection_or_resize_keeps_their_views`, 12 pages)
+- [x] gate passes (full suite deferred to the end of the plan per the user)
 
 ### Task 35: Claim v0.38.1 parity and update the docs
 

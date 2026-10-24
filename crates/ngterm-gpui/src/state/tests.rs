@@ -538,6 +538,7 @@ fn closing_a_window_saves_it_closes_its_store_and_tears_its_terminals_down() {
             window: second,
             name: "second".to_owned(),
             sessions: 1,
+            mode: ngterm_core::persist::RestoreMode::None,
         }]
     );
     state.close_confirmed(second);

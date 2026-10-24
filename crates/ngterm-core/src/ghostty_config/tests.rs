@@ -1400,6 +1400,127 @@ fn theme_dirs_are_the_users_then_the_bundled_ones() {
         .with("HOME", "/home/u")
         .with("XDG_CONFIG_HOME", "/xdg");
     assert_eq!(theme_dirs(&xdg, None), [PathBuf::from("/xdg/ghostty/themes")]);
+    // upstream's `userThemesDirectoryDefaultsToHomeConfig`: an empty XDG_CONFIG_HOME counts as unset
+    let empty = paths::MapEnv::new().with("HOME", "/home/u").with("XDG_CONFIG_HOME", "");
+    assert_eq!(
+        theme_dirs(&empty, None),
+        [PathBuf::from("/home/u/.config/ghostty/themes")]
+    );
+}
+
+/// The config of `text` loaded with `home` as the home, on the `dark` or light side, themes looked up in `dirs`.
+fn finalize_with(home: Option<&Path>, text: &str, dark: bool, dirs: &[PathBuf]) -> FinalConfig {
+    let mut loader = Loader::new(home.map(Path::to_path_buf));
+    loader.load_text("test.conf", text);
+    loader.finish().finalize(dark, dirs)
+}
+
+/// Upstream's #746 (`eachAppearanceSideOfAHomeRelativeThemeResolvesToItsFile`, `quotedAppearanceSidesAreUnquoted`):
+/// each side of a dual theme expands its own leading `~/`, quoted or not.
+#[test]
+fn each_side_of_a_home_relative_theme_loads_its_file() -> TestResult {
+    let home = tempfile::tempdir()?;
+    let day = write(&home.path().join("themes").join("day"), "background = #eeeeee\n")?;
+    let night = write(&home.path().join("themes").join("my night"), "background = #010101\n")?;
+    for value in [
+        "light:~/themes/day,dark:\"~/themes/my night\"",
+        "dark:\"~/themes/my night\",light:\"~/themes/day\"",
+    ] {
+        let text = format!("theme = {value}\n");
+        let light = finalize_with(Some(home.path()), &text, false, &[]);
+        assert_eq!(light.diagnostics, [], "{value}");
+        assert_eq!(light.theme_path.as_deref(), Some(day.as_path()), "{value}");
+        assert_eq!(light.config.colors.background, Rgb::new(0xee, 0xee, 0xee), "{value}");
+        let dark = finalize_with(Some(home.path()), &text, true, &[]);
+        assert_eq!(dark.diagnostics, [], "{value}");
+        assert_eq!(dark.theme_path.as_deref(), Some(night.as_path()), "{value}");
+        assert_eq!(dark.config.colors.background, Rgb::new(1, 1, 1), "{value}");
+    }
+    Ok(())
+}
+
+/// Only a leading `~/` is the home (upstream's `onlyALeadingTildeSlashIsExpanded`,
+/// `relativePathOrEmptyHasNoCandidates`): `~` alone is a bare name looked up in the theme directories, and `~user/…`
+/// or any other relative path is refused.
+#[test]
+fn a_tilde_alone_or_with_a_user_is_not_the_home() -> TestResult {
+    let home = tempfile::tempdir()?;
+    let themes = tempfile::tempdir()?;
+    let bare = write(&themes.path().join("~"), "background = #020202\n")?;
+    let dirs = [themes.path().to_path_buf()];
+    let tilde = finalize_with(Some(home.path()), "theme = ~\n", false, &dirs);
+    assert_eq!(tilde.diagnostics, []);
+    assert_eq!(tilde.theme_path.as_deref(), Some(bare.as_path()));
+    assert_eq!(tilde.config.colors.background, Rgb::new(2, 2, 2));
+    for relative in ["~me/themes/x", "./my-light", "themes/~/x"] {
+        let refused = finalize_with(Some(home.path()), &format!("theme = {relative}\n"), false, &dirs);
+        let messages: Vec<String> = refused.diagnostics.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            messages,
+            [format!(
+                "theme \"{relative}\" cannot include path separators unless it is an absolute path"
+            )],
+            "{relative}"
+        );
+        assert_eq!(refused.theme_path, None, "{relative}");
+    }
+    Ok(())
+}
+
+/// Upstream's `GhosttyConfigTextTests` over the selection keys the sidebar's selected row takes: the last valid line
+/// wins, an invalid one after it keeps it, an empty one resets, and a line over the theme beats the theme's, a reset
+/// included.
+#[test]
+fn selection_colors_take_the_last_valid_line_over_the_theme() -> TestResult {
+    let hex = |value: u8| Some(TerminalColor::Color(Rgb::new(value, value, value)));
+    let background = |text: &str| load(text).config.selection.background;
+    assert_eq!(
+        background("selection-background = #111111\nselection-background = #222222\n"),
+        hex(0x22)
+    );
+    assert_eq!(
+        background("selection-background = #111111\nselection-background = bogus\n"),
+        hex(0x11),
+        "a later invalid value keeps the earlier one"
+    );
+    assert_eq!(
+        background("selection-background = #111111\nselection-background =\n"),
+        None,
+        "an empty value resets"
+    );
+    assert_eq!(
+        background("selection-background =\nselection-background = bogus\n"),
+        None,
+        "an invalid value keeps the reset"
+    );
+    let themes = tempfile::tempdir()?;
+    write(
+        &themes.path().join("Light"),
+        "selection-background = #444444\nselection-background = bogus\nselection-foreground = #777777\n",
+    )?;
+    let dirs = [themes.path().to_path_buf()];
+    let selection = |text: &str| {
+        finalize_with(None, &format!("theme = Light\n{text}"), false, &dirs)
+            .config
+            .selection
+    };
+    let theme = selection("");
+    assert_eq!(
+        (theme.background, theme.foreground),
+        (hex(0x44), hex(0x77)),
+        "the theme's last valid values"
+    );
+    let explicit = selection("selection-background = #010101\n");
+    assert_eq!((explicit.background, explicit.foreground), (hex(1), hex(0x77)));
+    let reset = selection("selection-background =\n");
+    assert_eq!(
+        (reset.background, reset.foreground),
+        (None, hex(0x77)),
+        "an explicit reset beats the theme"
+    );
+    let reset = selection("selection-background =\nselection-background = bogus\n");
+    assert_eq!(reset.background, None, "an invalid value after the reset keeps it");
+    Ok(())
 }
 
 #[test]

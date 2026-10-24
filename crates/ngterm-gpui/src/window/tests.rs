@@ -494,17 +494,73 @@ fn closing_a_window_with_sessions_asks_over_it_first(cx: &mut TestAppContext) {
     assert!(!s.state.core.library().is_open(s.window), "closed");
 }
 
+/// Upstream's #743: the sheet's text follows the launch's active restore mode, as the quit alert's does; a Live
+/// launch's close claims no ending.
+#[gpui_kit::test]
+fn the_window_close_sheet_is_worded_for_the_launchs_mode(cx: &mut TestAppContext) {
+    use ngterm_core::persist::RestoreMode;
+    use ngterm_core::restore::mode::RestoreLaunchDecision;
+    let mut s = shell(cx);
+    for (mode, body) in [
+        (
+            RestoreMode::None,
+            "This ends 2 running sessions. The window can be reopened from File \u{25b8} Open Window.",
+        ),
+        (
+            RestoreMode::Live,
+            "This closes 2 sessions. The window can be reopened from File \u{25b8} Open Window.",
+        ),
+    ] {
+        s.state.core.set_restore_launch(RestoreLaunchDecision::new(mode, None));
+        let window = s.window;
+        s.state.close_requested(window);
+        let closes = s.state.take_frontend_work().window_closes;
+        assert_eq!(closes.len(), 1, "{closes:?}");
+        assert_eq!(
+            (closes[0].sessions, closes[0].mode),
+            (2, mode),
+            "the shell's two sessions"
+        );
+        let poster = s.state.poster().clone();
+        let view = s.view.clone();
+        view.update_in(s.cx, |view, root, cx| view.ask_close(&closes[0], poster, root, cx));
+        s.cx.run_until_parked();
+        let shown = s.cx.update(|window, cx| {
+            crate::modal::front_alert(window.window_handle(), cx).map(|alert| alert.read(cx).spec().body.clone())
+        });
+        assert_eq!(shown.as_deref(), Some(body), "{mode:?}");
+        s.cx.simulate_keystrokes("escape");
+        s.settle();
+        assert!(s.state.core.library().is_open(s.window), "kept");
+    }
+}
+
 #[test]
 fn the_window_close_confirmation_counts_the_sessions_it_ends() {
-    let one = close_alert("work", 1);
-    assert_eq!(one.heading, "Close \u{201c}work\u{201d}?");
+    use ngterm_core::persist::RestoreMode;
+    for mode in [RestoreMode::None, RestoreMode::Rerun] {
+        let one = close_alert("work", 1, mode);
+        assert_eq!(one.heading, "Close \u{201c}work\u{201d}?");
+        assert_eq!(
+            one.body,
+            "This ends 1 running session. The window can be reopened from File \u{25b8} Open Window."
+        );
+        assert_eq!(one.default_button(), Some(CLOSE), "Return closes");
+        assert_eq!(one.cancel_button(), Some(0));
+        assert!(
+            close_alert("work", 3, mode)
+                .body
+                .starts_with("This ends 3 running sessions.")
+        );
+    }
+    // upstream's #743: a window close in Live only detaches its sessions, so the sheet claims no ending
+    let live = close_alert("work", 2, RestoreMode::Live);
+    assert_eq!(live.heading, "Close \u{201c}work\u{201d}?");
     assert_eq!(
-        one.body,
-        "This ends 1 running session. The window can be reopened from File \u{25b8} Open Window."
+        live.body,
+        "This closes 2 sessions. The window can be reopened from File \u{25b8} Open Window."
     );
-    assert_eq!(one.default_button(), Some(CLOSE), "Return closes");
-    assert_eq!(one.cancel_button(), Some(0));
-    assert!(close_alert("work", 3).body.starts_with("This ends 3 running sessions."));
+    assert_eq!(live.default_button(), Some(CLOSE));
 }
 
 #[test]

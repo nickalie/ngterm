@@ -195,14 +195,14 @@ pub fn separator(colors: &ChromeColors) -> Hsla {
 }
 
 /// A selected sidebar row's pill and text: the selection background, dimmed while the window is not the key one,
-/// else upstream's soft white wash.
+/// else upstream's soft wash of the theme foreground (#746: white washed a light theme's row out).
 #[must_use]
 pub fn selected_row(colors: &ChromeColors, key_window: bool) -> (Hsla, Hsla) {
     let pill = match (colors.selection_background, key_window) {
         (Some(selection), true) => color(selection, 1.0),
         (Some(selection), false) => color(selection, ChromeColors::INACTIVE_SELECTION_ALPHA),
-        (None, true) => color(Rgb::WHITE, ChromeColors::WASH_ALPHA),
-        (None, false) => color(Rgb::WHITE, ChromeColors::INACTIVE_WASH_ALPHA),
+        (None, true) => color(colors.foreground, ChromeColors::WASH_ALPHA),
+        (None, false) => color(colors.foreground, ChromeColors::INACTIVE_WASH_ALPHA),
     };
     (pill, color(colors.selection_foreground, 1.0))
 }

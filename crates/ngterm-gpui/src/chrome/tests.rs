@@ -57,14 +57,27 @@ fn selected_rows_take_the_selection_colors() {
     assert_eq!(pill, color(Rgb::new(0x44, 0x47, 0x5a), 1.0));
     assert_eq!(text, color(Rgb::WHITE, 1.0));
     assert_eq!(selected_row(&colors, false).0, color(Rgb::new(0x44, 0x47, 0x5a), 0.55));
-    // no selection background: upstream's soft white wash, white text
+    // no selection background: upstream's soft wash of the theme foreground, the foreground as the text
+    let foreground = Rgb::new(0xe0, 0xe0, 0xe0);
     let colors = colors_of(&config((None, None)));
-    assert_eq!(selected_row(&colors, true).0, color(Rgb::WHITE, 0.13));
-    assert_eq!(selected_row(&colors, false).0, color(Rgb::WHITE, 0.07));
+    assert_eq!(
+        selected_row(&colors, true),
+        (color(foreground, 0.13), color(foreground, 1.0))
+    );
+    assert_eq!(selected_row(&colors, false).0, color(foreground, 0.07));
     // a selection that follows the cell is no fixed color
     let colors = colors_of(&config((Some(Pick::CellForeground), Some(Pick::CellBackground))));
     assert_eq!(colors.selection_background, None);
-    assert_eq!(colors.selection_foreground, Rgb::WHITE);
+    assert_eq!(colors.selection_foreground, foreground);
+    // upstream's #746: a light theme that sets no selection colors keeps its dark text over a dark wash, never
+    // white on white
+    let mut light = config((None, None));
+    light.theme.background = ngterm_term::Rgb::new(0xfd, 0xf6, 0xe3);
+    light.theme.foreground = ngterm_term::Rgb::new(0x2a, 0x2a, 0x2a);
+    let ink = Rgb::new(0x2a, 0x2a, 0x2a);
+    let colors = colors_of(&light);
+    assert_eq!(selected_row(&colors, true), (color(ink, 0.13), color(ink, 1.0)));
+    assert_eq!(selected_row(&colors, false), (color(ink, 0.07), color(ink, 1.0)));
 }
 
 fn colors_of(config: &TerminalConfig) -> ChromeColors {
