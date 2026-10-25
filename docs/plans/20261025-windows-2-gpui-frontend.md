@@ -49,6 +49,10 @@
 - **CRITICAL: all tests must pass before starting the next task**, on both Windows runners (`rust-windows.yml` on a
   `ci/**` push), not only through `cargo check --target`.
 - **CRITICAL: update this plan file when scope changes during implementation.**
+- **Local Windows work in the VM** (user, 2026-10-25): a task that needs Windows by hand (a red test or id to
+  debug, a probe, an interactive check) starts the Win11-admin VMware VM, works there and stops it at the end of
+  the task (memory: windows-macos-debug-in-vmware). The VM is off by default and never left running between tasks;
+  CI on the Windows runners stays the gate.
 - Linux behavior stays as it is; every Linux test and ratchet id stays green.
 - A vendored crate is its crates.io source plus its patches; an edit goes into the patch (CLAUDE.md > Gates).
 - Every test instance, here and in the harness, runs under an app id of its own, so no toast, AppUserModelID key,

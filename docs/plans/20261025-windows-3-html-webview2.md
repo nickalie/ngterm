@@ -35,6 +35,10 @@
 - **CRITICAL: all tests must pass before starting the next task**, on both Windows runners with the real WebView2
   runtime.
 - **CRITICAL: update this plan file when scope changes during implementation**, the spike's outcome first of all.
+- **Local Windows work in the VM** (user, 2026-10-25): a task that needs Windows by hand (a red test or id to
+  debug, a probe, an interactive check) starts the Win11-admin VMware VM, works there and stops it at the end of
+  the task (memory: windows-macos-debug-in-vmware). The VM is off by default and never left running between tasks;
+  CI on the Windows runners stays the gate.
 - Linux's HTML overlays stay as they are; their tests and ratchet ids stay green through the refactor (Task 8).
 
 ## Testing Strategy

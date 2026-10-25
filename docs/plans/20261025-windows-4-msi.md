@@ -38,6 +38,10 @@
 - **CRITICAL: every task MUST include new/updated tests**, success and error cases.
 - **CRITICAL: all tests must pass before starting the next task**, on both Windows runners.
 - **CRITICAL: update this plan file when scope changes during implementation.**
+- **Local Windows work in the VM** (user, 2026-10-25): a task that needs Windows by hand (a red test or id to
+  debug, a probe, an interactive check) starts the Win11-admin VMware VM, works there and stops it at the end of
+  the task (memory: windows-macos-debug-in-vmware). The VM is off by default and never left running between tasks;
+  CI on the Windows runners stays the gate.
 - Scripts stay bash (Git Bash on Windows).
 - An install test never touches the runner's or the VM user's default state dir or app id: every launch, relaunch
   included, runs on a private state dir and app id.
