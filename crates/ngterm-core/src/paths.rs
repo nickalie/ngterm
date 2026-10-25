@@ -330,12 +330,22 @@ fn ghostty_config_home(env: &dyn Env) -> Option<PathBuf> {
     explicit.or_else(|| home_dir(env).map(|home| home.join(".config")))
 }
 
-/// The user's own ghostty config, which the Settings toggle `inheritGlobalGhosttyConfig` loads below the
-/// ngterm-scoped one: `<XDG config home>/ghostty/config` ([`ghostty_config_home`]; upstream reads
-/// `~/.config/ghostty/config`). `None` without a home.
+/// The user's own ghostty directory, `<XDG config home>/ghostty` ([`ghostty_config_home`]): where the global config
+/// files and the user's themes live. `None` without a home.
 #[must_use]
-pub fn global_ghostty_config_path(env: &dyn Env) -> Option<PathBuf> {
-    ghostty_config_home(env).map(|base| base.join("ghostty").join("config"))
+pub fn global_ghostty_dir(env: &dyn Env) -> Option<PathBuf> {
+    ghostty_config_home(env).map(|base| base.join("ghostty"))
+}
+
+/// The user's own ghostty config files, which the Settings toggle `inheritGlobalGhosttyConfig` loads below the
+/// ngterm-scoped one, in Ghostty's load order at the pin (`Config.loadDefaultFiles`, `file_load.zig`): the legacy
+/// `<ghostty dir>/config` (upstream reads `~/.config/ghostty/config`), then `<ghostty dir>/config.ghostty`, Ghostty's
+/// name since 1.3; a missing one is skipped, and when both exist the second wins. Empty without a home.
+#[must_use]
+pub fn global_ghostty_config_paths(env: &dyn Env) -> Vec<PathBuf> {
+    global_ghostty_dir(env)
+        .map(|dir| vec![dir.join("config"), dir.join("config.ghostty")])
+        .unwrap_or_default()
 }
 
 /// The ghostty config the Settings window writes: `<state dir>/ghostty-settings.conf`
@@ -394,25 +404,38 @@ mod tests {
     #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn the_global_ghostty_config_follows_the_xdg_config_home() {
         assert_eq!(
-            global_ghostty_config_path(&home("/home/u")).as_deref(),
-            Some(Path::new("/home/u/.config/ghostty/config"))
+            global_ghostty_config_paths(&home("/home/u")),
+            [
+                Path::new("/home/u/.config/ghostty/config"),
+                Path::new("/home/u/.config/ghostty/config.ghostty")
+            ]
         );
         let env = home("/home/u").with("XDG_CONFIG_HOME", "/cfg");
-        assert_eq!(
-            global_ghostty_config_path(&env).as_deref(),
-            Some(Path::new("/cfg/ghostty/config"))
-        );
+        assert_eq!(global_ghostty_dir(&env).as_deref(), Some(Path::new("/cfg/ghostty")));
         let relative = home("/home/u").with("XDG_CONFIG_HOME", "rel");
         assert_eq!(
-            global_ghostty_config_path(&relative).as_deref(),
-            Some(Path::new("/home/u/.config/ghostty/config"))
+            global_ghostty_dir(&relative).as_deref(),
+            Some(Path::new("/home/u/.config/ghostty"))
         );
         let local = home("/home/u").with("LOCALAPPDATA", "/local");
         assert_eq!(
-            global_ghostty_config_path(&local).as_deref(),
-            Some(Path::new("/home/u/.config/ghostty/config")),
+            global_ghostty_dir(&local).as_deref(),
+            Some(Path::new("/home/u/.config/ghostty")),
             "LOCALAPPDATA is Windows' alone"
         );
+    }
+
+    /// Ghostty's `loadDefaultFiles` order on every OS: the legacy `config`, then `config.ghostty`, in one directory.
+    #[test]
+    fn the_global_ghostty_config_files_are_the_legacy_one_then_config_ghostty() {
+        let env = MapEnv::new().with("HOME", std::env::temp_dir().as_os_str());
+        let dir = global_ghostty_dir(&env).expect("a home");
+        assert_eq!(dir.file_name(), Some(OsStr::new("ghostty")));
+        assert_eq!(
+            global_ghostty_config_paths(&env),
+            [dir.join("config"), dir.join("config.ghostty")]
+        );
+        assert_eq!(global_ghostty_config_paths(&MapEnv::new()), Vec::<PathBuf>::new());
     }
 
     #[test]
@@ -620,34 +643,37 @@ mod tests {
     #[test]
     fn windows_global_ghostty_config_is_where_ghostty_looks() {
         assert_eq!(
-            global_ghostty_config_path(&windows_user()).as_deref(),
-            Some(Path::new(r"C:\Users\u\.config\ghostty\config"))
+            global_ghostty_config_paths(&windows_user()),
+            [
+                Path::new(r"C:\Users\u\.config\ghostty\config"),
+                Path::new(r"C:\Users\u\.config\ghostty\config.ghostty")
+            ]
         );
         let local = windows_user().with("LOCALAPPDATA", r"C:\Users\u\AppData\Local");
         assert_eq!(
-            global_ghostty_config_path(&local).as_deref(),
-            Some(Path::new(r"C:\Users\u\AppData\Local\ghostty\config"))
+            global_ghostty_dir(&local).as_deref(),
+            Some(Path::new(r"C:\Users\u\AppData\Local\ghostty"))
         );
         assert_eq!(
-            global_ghostty_config_path(&local.clone().with("XDG_CONFIG_HOME", r"C:\cfg")).as_deref(),
-            Some(Path::new(r"C:\cfg\ghostty\config"))
+            global_ghostty_dir(&local.clone().with("XDG_CONFIG_HOME", r"C:\cfg")).as_deref(),
+            Some(Path::new(r"C:\cfg\ghostty"))
         );
         assert_eq!(
-            global_ghostty_config_path(&local.clone().with("XDG_CONFIG_HOME", "")).as_deref(),
-            Some(Path::new(r"C:\Users\u\.config\ghostty\config")),
+            global_ghostty_dir(&local.clone().with("XDG_CONFIG_HOME", "")).as_deref(),
+            Some(Path::new(r"C:\Users\u\.config\ghostty")),
             "a set but empty XDG_CONFIG_HOME skips LOCALAPPDATA for the home"
         );
         assert_eq!(
-            global_ghostty_config_path(&local.clone().with("XDG_CONFIG_HOME", "relative")).as_deref(),
-            Some(Path::new(r"relative\ghostty\config")),
+            global_ghostty_dir(&local.clone().with("XDG_CONFIG_HOME", "relative")).as_deref(),
+            Some(Path::new(r"relative\ghostty")),
             "a relative XDG_CONFIG_HOME is taken as given"
         );
         assert_eq!(
-            global_ghostty_config_path(&windows_user().with("LOCALAPPDATA", "")).as_deref(),
-            Some(Path::new(r"C:\Users\u\.config\ghostty\config")),
+            global_ghostty_dir(&windows_user().with("LOCALAPPDATA", "")).as_deref(),
+            Some(Path::new(r"C:\Users\u\.config\ghostty")),
             "an empty LOCALAPPDATA counts as unset"
         );
-        assert_eq!(global_ghostty_config_path(&MapEnv::new()), None);
+        assert_eq!(global_ghostty_dir(&MapEnv::new()), None);
     }
 
     #[cfg(windows)]
