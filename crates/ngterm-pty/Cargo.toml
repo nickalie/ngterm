@@ -19,10 +19,11 @@ tracing.workspace = true
 libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-# The child tree's kill-on-close job and the cancel of a blocked pipe read.
+# The child tree's kill-on-close job, the cancel of a blocked pipe read and the Ctrl+C its children inherit.
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_System_Console",
     "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_System_Threading",

@@ -8,6 +8,12 @@
 //! `NGTERM_STATE_DIR` counts as unset, as the spec treats an empty variable; upstream would take an empty value as
 //! given. The directory name is this build's own (`ngterm`), not upstream's `agterm`.
 //!
+//! The Windows bases are the user's known folders (`SHGetKnownFolderPath`), never the XDG variables: the state
+//! directory is `FOLDERID_LocalAppData\ngterm` (per machine, as Foundation's application support directory is), the
+//! config directory `FOLDERID_RoamingAppData\ngterm` (it roams with the profile, as a user's settings do) and the
+//! home `FOLDERID_Profile` when `HOME` is unset or empty. `NGTERM_STATE_DIR` and `NGTERM_CONTROL_SOCKET` still come
+//! first, and without a known folder the base is `%TEMP%\ngterm`, as `/tmp/ngterm` is on Unix.
+//!
 //! Every function reads the environment through [`Env`], so tests pass a [`MapEnv`] instead of mutating the
 //! process environment.
 
@@ -15,25 +21,43 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+mod windows;
+
 /// Overrides the whole state directory (test isolation, `run-gpui-dev.sh`).
 pub const STATE_DIR_ENV: &str = "NGTERM_STATE_DIR";
 /// Overrides the app's control socket path. Only the app reads it: `ngtermctl` resolves through the state dir.
 pub const CONTROL_SOCKET_ENV: &str = "NGTERM_CONTROL_SOCKET";
 /// The control socket's file name inside the state directory.
 pub const SOCKET_FILE_NAME: &str = "ngterm.sock";
-/// The state directory's name under the XDG data home, the config directory's under `~/.config` and the HUD bodies'
-/// under the runtime dir.
+/// The state directory's name under the XDG data home (the local application data on Windows), the config
+/// directory's under `~/.config` (the roaming application data on Windows) and the HUD bodies' under the runtime dir.
 pub const APP_DIR_NAME: &str = "ngterm";
-/// The base used when no home directory can be found, as upstream's `agtermctl` (`/tmp/agterm`) under this build's
-/// state directory name.
+/// The Unix base used when no home directory can be found, as upstream's `agtermctl` (`/tmp/agterm`) under this
+/// build's state directory name; Windows' is under its temporary directory ([`fallback_dir`]).
 pub const FALLBACK_STATE_DIR: &str = "/tmp/ngterm";
+
+/// A Windows known folder ([`Env::known_folder`]), a base Windows keeps a user's files under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KnownFolder {
+    /// `FOLDERID_Profile`: the user's profile directory, the home.
+    Profile,
+    /// `FOLDERID_LocalAppData`: the user's application data on this machine, the state directory's base.
+    LocalAppData,
+    /// `FOLDERID_RoamingAppData`: the user's application data that roams with the profile, the config directory's
+    /// base.
+    RoamingAppData,
+}
 
 /// The process environment as the resolvers see it.
 pub trait Env {
     /// The variable `key`, unset or not.
     fn var(&self, key: &str) -> Option<OsString>;
-    /// The home directory from the password database, the fallback when `HOME` is unset or empty.
+    /// The home directory from the password database, the fallback when `HOME` is unset or empty (on Windows,
+    /// after the profile's known folder: `USERPROFILE`, else the profile directory the system reports).
     fn passwd_home(&self) -> Option<PathBuf>;
+    /// The current user's known folder `folder` on Windows; `None` on other OSes, or when it does not resolve.
+    fn known_folder(&self, folder: KnownFolder) -> Option<PathBuf>;
     /// The names of every variable set, in no particular order.
     fn names(&self) -> Vec<OsString>;
 }
@@ -51,6 +75,16 @@ impl Env for ProcessEnv {
         std::env::home_dir()
     }
 
+    #[cfg(windows)]
+    fn known_folder(&self, folder: KnownFolder) -> Option<PathBuf> {
+        windows::known_folder(folder)
+    }
+
+    #[cfg(not(windows))]
+    fn known_folder(&self, _folder: KnownFolder) -> Option<PathBuf> {
+        None
+    }
+
     fn names(&self) -> Vec<OsString> {
         std::env::vars_os().map(|(name, _)| name).collect()
     }
@@ -61,10 +95,11 @@ impl Env for ProcessEnv {
 pub struct MapEnv {
     vars: HashMap<String, OsString>,
     passwd_home: Option<PathBuf>,
+    known_folders: HashMap<KnownFolder, PathBuf>,
 }
 
 impl MapEnv {
-    /// An empty environment with no password-database home.
+    /// An empty environment with no password-database home and no known folder.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -83,6 +118,13 @@ impl MapEnv {
         self.passwd_home = Some(home.into());
         self
     }
+
+    /// Sets the known folder `folder`, which the resolvers read on Windows only.
+    #[must_use]
+    pub fn with_known_folder(mut self, folder: KnownFolder, path: impl Into<PathBuf>) -> Self {
+        self.known_folders.insert(folder, path.into());
+        self
+    }
 }
 
 impl Env for MapEnv {
@@ -92,6 +134,10 @@ impl Env for MapEnv {
 
     fn passwd_home(&self) -> Option<PathBuf> {
         self.passwd_home.clone()
+    }
+
+    fn known_folder(&self, folder: KnownFolder) -> Option<PathBuf> {
+        self.known_folders.get(&folder).cloned()
     }
 
     fn names(&self) -> Vec<OsString> {
@@ -104,14 +150,24 @@ fn non_empty(env: &dyn Env, key: &str) -> Option<OsString> {
     env.var(key).filter(|value| !value.is_empty())
 }
 
-/// The user's home: `HOME` when set and non-empty, else the password database.
+/// The known folder `folder` on Windows; `None` elsewhere, whatever `env` holds.
+fn windows_known_folder(env: &dyn Env, folder: KnownFolder) -> Option<PathBuf> {
+    if cfg!(windows) { env.known_folder(folder) } else { None }
+}
+
+/// The user's home: `HOME` when set and non-empty, else (on Windows) the profile's known folder, else the password
+/// database ([`Env::passwd_home`]). `HOME` stays first on Windows, where it is seldom set, as the explicit override
+/// an isolated instance (the conformance harness) sets.
 #[must_use]
 pub fn home_dir(env: &dyn Env) -> Option<PathBuf> {
-    non_empty(env, "HOME").map(PathBuf::from).or_else(|| env.passwd_home())
+    non_empty(env, "HOME")
+        .map(PathBuf::from)
+        .or_else(|| windows_known_folder(env, KnownFolder::Profile))
+        .or_else(|| env.passwd_home())
 }
 
 /// The XDG data home as Foundation reads it: `XDG_DATA_HOME` when it is an absolute path longer than `/`, else
-/// `<home>/.local/share`.
+/// `<home>/.local/share`. The Unix state base; Windows reads its known folders instead.
 #[must_use]
 pub fn xdg_data_home(env: &dyn Env) -> Option<PathBuf> {
     let explicit = env
@@ -121,10 +177,29 @@ pub fn xdg_data_home(env: &dyn Env) -> Option<PathBuf> {
     explicit.or_else(|| home_dir(env).map(|home| home.join(".local/share")))
 }
 
-/// The state directory with no override: `<XDG data home>/ngterm`, or [`FALLBACK_STATE_DIR`] without a home.
+/// The base when no home (on Windows, no known folder) resolves: [`FALLBACK_STATE_DIR`] on Unix; on Windows
+/// `<TEMP>\ngterm`, `TEMP` when set and non-empty, else the system's temporary directory.
+#[must_use]
+pub fn fallback_dir(env: &dyn Env) -> PathBuf {
+    if cfg!(windows) {
+        non_empty(env, "TEMP")
+            .map_or_else(std::env::temp_dir, PathBuf::from)
+            .join(APP_DIR_NAME)
+    } else {
+        PathBuf::from(FALLBACK_STATE_DIR)
+    }
+}
+
+/// The state directory with no override: `<XDG data home>/ngterm` on Unix, `<local application data>\ngterm` on
+/// Windows, or [`fallback_dir`] without either.
 #[must_use]
 pub fn default_state_dir(env: &dyn Env) -> PathBuf {
-    xdg_data_home(env).map_or_else(|| PathBuf::from(FALLBACK_STATE_DIR), |base| base.join(APP_DIR_NAME))
+    let base = if cfg!(windows) {
+        windows_known_folder(env, KnownFolder::LocalAppData)
+    } else {
+        xdg_data_home(env)
+    };
+    base.map_or_else(|| fallback_dir(env), |base| base.join(APP_DIR_NAME))
 }
 
 /// The state directory: a non-empty `NGTERM_STATE_DIR`, else [`default_state_dir`].
@@ -147,7 +222,8 @@ pub fn app_socket_path(env: &dyn Env) -> PathBuf {
 
 /// The directory of the user-editable config files (`keymap.conf`, `hooks.conf`, the ngterm-scoped `ghostty.conf`),
 /// as upstream's `ConfigPaths.configDirectory`: a non-empty `setting` (`AppSettings.configDirectory`), else
-/// `<NGTERM_STATE_DIR>/config` when the state dir is overridden, else `<home>/.config/ngterm`.
+/// `<NGTERM_STATE_DIR>/config` when the state dir is overridden, else `<home>/.config/ngterm` on Unix and
+/// `<roaming application data>\ngterm` on Windows, else `<fallback dir>/config` ([`fallback_dir`]).
 #[must_use]
 pub fn config_dir(env: &dyn Env, setting: Option<&Path>) -> PathBuf {
     if let Some(setting) = setting.filter(|path| !path.as_os_str().is_empty()) {
@@ -156,17 +232,20 @@ pub fn config_dir(env: &dyn Env, setting: Option<&Path>) -> PathBuf {
     if let Some(state) = non_empty(env, STATE_DIR_ENV) {
         return PathBuf::from(state).join("config");
     }
-    home_dir(env).map_or_else(
-        || Path::new(FALLBACK_STATE_DIR).join("config"),
-        |home| home.join(".config").join(APP_DIR_NAME),
-    )
+    let base = if cfg!(windows) {
+        windows_known_folder(env, KnownFolder::RoamingAppData)
+    } else {
+        home_dir(env).map(|home| home.join(".config"))
+    };
+    base.map_or_else(|| fallback_dir(env).join("config"), |base| base.join(APP_DIR_NAME))
 }
 
 /// What [`config_dir`] reads of the environment, captured once so the core can resolve the config directory again
 /// whenever the `configDirectory` setting changes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConfigLocator {
-    state_dir_override: Option<OsString>,
+    /// [`config_dir`] without a setting: where the config lives unless the setting moves it.
+    default_dir: PathBuf,
     home: Option<PathBuf>,
 }
 
@@ -175,7 +254,7 @@ impl ConfigLocator {
     #[must_use]
     pub fn capture(env: &dyn Env) -> Self {
         Self {
-            state_dir_override: non_empty(env, STATE_DIR_ENV),
+            default_dir: config_dir(env, None),
             home: home_dir(env),
         }
     }
@@ -183,14 +262,10 @@ impl ConfigLocator {
     /// [`config_dir`] under the captured environment.
     #[must_use]
     pub fn config_dir(&self, setting: Option<&Path>) -> PathBuf {
-        let mut env = MapEnv::new();
-        if let Some(state) = &self.state_dir_override {
-            env = env.with(STATE_DIR_ENV, state.clone());
+        match setting.filter(|path| !path.as_os_str().is_empty()) {
+            Some(setting) => setting.to_path_buf(),
+            None => self.default_dir.clone(),
         }
-        if let Some(home) = &self.home {
-            env = env.with("HOME", home.clone());
-        }
-        config_dir(&env, setting)
     }
 
     /// The captured home directory.
@@ -202,8 +277,10 @@ impl ConfigLocator {
 
 /// Where the HUD body files go: a private per-user directory standing in for upstream's `NSTemporaryDirectory()`
 /// (a per-user 0700 directory on macOS), never the shared `/tmp`. `<NGTERM_STATE_DIR>/hud` when the state dir is
-/// overridden (instances stay apart, as [`config_dir`]), else `<XDG_RUNTIME_DIR>/ngterm/hud` when that is an absolute
-/// path (the user's 0700 runtime directory, emptied at logout), else `<state dir>/hud`. The caller makes it 0700.
+/// overridden (instances stay apart, as [`config_dir`]), else on Unix `<XDG_RUNTIME_DIR>/ngterm/hud` when that is an
+/// absolute path (the user's 0700 runtime directory, emptied at logout), else `<state dir>/hud`. Windows has no
+/// runtime directory: its bodies go to `<state dir>\hud`, the state dir being the user's own local application data.
+/// The writer makes the directory private: 0700 on Unix, an owner-only DACL on Windows (`owner_only`).
 #[must_use]
 pub fn hud_body_dir(env: &dyn Env) -> PathBuf {
     if let Some(state) = non_empty(env, STATE_DIR_ENV) {
@@ -211,6 +288,7 @@ pub fn hud_body_dir(env: &dyn Env) -> PathBuf {
     }
     let runtime = env
         .var("XDG_RUNTIME_DIR")
+        .filter(|_| !cfg!(windows))
         .map(PathBuf::from)
         .filter(|path| path.is_absolute() && path.as_os_str().len() > 1);
     runtime.map_or_else(
@@ -227,14 +305,19 @@ pub fn ghostty_config_path(config_dir: &Path) -> PathBuf {
 
 /// The user's own ghostty config, which the Settings toggle `inheritGlobalGhosttyConfig` loads below the
 /// ngterm-scoped one: `<XDG config home>/ghostty/config`, the XDG config home being an absolute `XDG_CONFIG_HOME`,
-/// else `<home>/.config` (upstream reads `~/.config/ghostty/config`). `None` without a home.
+/// else `<home>/.config` (upstream reads `~/.config/ghostty/config`). On Windows a non-empty `LOCALAPPDATA` comes
+/// between the two, where Ghostty at the pin looks (`src/os/xdg.zig`, `config`). `None` without a home.
 #[must_use]
 pub fn global_ghostty_config_path(env: &dyn Env) -> Option<PathBuf> {
     let explicit = env
         .var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute() && path.as_os_str().len() > 1);
+    let local = non_empty(env, "LOCALAPPDATA")
+        .filter(|_| cfg!(windows))
+        .map(PathBuf::from);
     explicit
+        .or(local)
         .or_else(|| home_dir(env).map(|home| home.join(".config")))
         .map(|base| base.join("ghostty").join("config"))
 }
@@ -275,10 +358,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "the XDG base directories as Unix paths; the Windows locations belong to the GPUI-on-Windows plan"
-    )]
+    #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn hud_bodies_go_to_the_overridden_state_dir_else_the_runtime_dir_else_the_state_dir() {
         let runtime = home("/home/u").with("XDG_RUNTIME_DIR", "/run/user/1000");
         assert_eq!(hud_body_dir(&runtime), Path::new("/run/user/1000/ngterm/hud"));
@@ -295,10 +375,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "the XDG base directories as Unix paths; the Windows locations belong to the GPUI-on-Windows plan"
-    )]
+    #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn the_global_ghostty_config_follows_the_xdg_config_home() {
         assert_eq!(
             global_ghostty_config_path(&home("/home/u")).as_deref(),
@@ -314,24 +391,29 @@ mod tests {
             global_ghostty_config_path(&relative).as_deref(),
             Some(Path::new("/home/u/.config/ghostty/config"))
         );
+        let local = home("/home/u").with("LOCALAPPDATA", "/local");
+        assert_eq!(
+            global_ghostty_config_path(&local).as_deref(),
+            Some(Path::new("/home/u/.config/ghostty/config")),
+            "LOCALAPPDATA is Windows' alone"
+        );
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn xdg_data_home_unset_falls_back_to_home() {
         assert_eq!(state_dir(&home("/home/u")), Path::new("/home/u/.local/share/ngterm"));
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "the XDG base directories as Unix paths; the Windows locations belong to the GPUI-on-Windows plan"
-    )]
+    #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn xdg_data_home_set_is_used() {
         let env = home("/home/u").with("XDG_DATA_HOME", "/data");
         assert_eq!(state_dir(&env), Path::new("/data/ngterm"));
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn invalid_xdg_data_home_is_ignored() {
         for value in ["", "relative/data", "/"] {
             let env = home("/home/u").with("XDG_DATA_HOME", value);
@@ -340,17 +422,32 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn missing_home_uses_the_password_database_then_tmp() {
         let env = MapEnv::new().with("HOME", "").with_passwd_home("/var/home/u");
         assert_eq!(state_dir(&env), Path::new("/var/home/u/.local/share/ngterm"));
         assert_eq!(state_dir(&MapEnv::new()), Path::new(FALLBACK_STATE_DIR));
+        assert_eq!(
+            fallback_dir(&MapEnv::new().with("TEMP", "/t")),
+            Path::new(FALLBACK_STATE_DIR)
+        );
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "the XDG base directories as Unix paths; the Windows locations belong to the GPUI-on-Windows plan"
-    )]
+    #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
+    fn the_known_folders_are_windows_alone() {
+        let env = MapEnv::new()
+            .with_known_folder(KnownFolder::Profile, "/profile")
+            .with_known_folder(KnownFolder::LocalAppData, "/local")
+            .with_known_folder(KnownFolder::RoamingAppData, "/roaming");
+        assert_eq!(home_dir(&env), None);
+        assert_eq!(state_dir(&env), Path::new(FALLBACK_STATE_DIR));
+        assert_eq!(config_dir(&env, None), Path::new("/tmp/ngterm/config"));
+        assert_eq!(ProcessEnv.known_folder(KnownFolder::Profile), None);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn state_dir_override_wins_and_empty_is_unset() {
         let env = home("/home/u").with("XDG_DATA_HOME", "/data");
         assert_eq!(
@@ -361,6 +458,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn socket_path_falls_back_to_the_state_dir() {
         let env = home("/home/u");
         assert_eq!(
@@ -388,6 +486,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn config_dir_follows_upstream_precedence() {
         let env = home("/home/u").with("XDG_DATA_HOME", "/data");
         assert_eq!(config_dir(&env, None), Path::new("/home/u/.config/ngterm"));
@@ -405,7 +504,32 @@ mod tests {
         assert_eq!(config_dir(&MapEnv::new(), None), Path::new("/tmp/ngterm/config"));
     }
 
+    /// The locator resolves as [`config_dir`] over the environment it captured, on every OS.
     #[test]
+    fn the_config_locator_resolves_as_the_environment_it_captured() {
+        let state = std::env::temp_dir().join("ngterm-locator-state");
+        let elsewhere = std::env::temp_dir().join("ngterm-locator-elsewhere");
+        let env = MapEnv::new()
+            .with("HOME", "home")
+            .with(STATE_DIR_ENV, state.as_os_str())
+            .with_known_folder(KnownFolder::RoamingAppData, "roaming");
+        let locator = ConfigLocator::capture(&env);
+        assert_eq!(locator.home(), Some(Path::new("home")));
+        for setting in [None, Some(Path::new("")), Some(elsewhere.as_path())] {
+            assert_eq!(locator.config_dir(setting), config_dir(&env, setting), "{setting:?}");
+        }
+        assert_eq!(locator.config_dir(None), state.join("config"));
+        let plain = MapEnv::new()
+            .with("HOME", "home")
+            .with_known_folder(KnownFolder::RoamingAppData, "roaming");
+        assert_eq!(
+            ConfigLocator::capture(&plain).config_dir(None),
+            config_dir(&plain, None)
+        );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn ghostty_config_files_sit_in_the_config_and_state_dirs() {
         assert_eq!(
             ghostty_config_path(Path::new("/tmp/s/config")),
@@ -425,5 +549,163 @@ mod tests {
     #[test]
     fn process_env_reads_the_real_environment() {
         assert_eq!(ProcessEnv.var("PATH"), std::env::var_os("PATH"));
+    }
+
+    /// A Windows user's known folders.
+    #[cfg(windows)]
+    fn windows_user() -> MapEnv {
+        MapEnv::new()
+            .with_known_folder(KnownFolder::Profile, r"C:\Users\u")
+            .with_known_folder(KnownFolder::LocalAppData, r"C:\Users\u\AppData\Local")
+            .with_known_folder(KnownFolder::RoamingAppData, r"C:\Users\u\AppData\Roaming")
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_bases_are_the_known_folders_and_ignore_the_xdg_variables() {
+        let plain = windows_user();
+        let xdg = windows_user()
+            .with("XDG_DATA_HOME", r"C:\xdg\data")
+            .with("XDG_RUNTIME_DIR", r"C:\xdg\run");
+        for env in [&plain, &xdg] {
+            assert_eq!(home_dir(env).as_deref(), Some(Path::new(r"C:\Users\u")));
+            assert_eq!(state_dir(env), Path::new(r"C:\Users\u\AppData\Local\ngterm"));
+            assert_eq!(
+                app_socket_path(env),
+                Path::new(r"C:\Users\u\AppData\Local\ngterm\ngterm.sock")
+            );
+            assert_eq!(config_dir(env, None), Path::new(r"C:\Users\u\AppData\Roaming\ngterm"));
+            assert_eq!(hud_body_dir(env), Path::new(r"C:\Users\u\AppData\Local\ngterm\hud"));
+            assert_eq!(
+                ghostty_settings_config_path(env),
+                Path::new(r"C:\Users\u\AppData\Local\ngterm\ghostty-settings.conf")
+            );
+        }
+        assert_eq!(
+            config_dir(&plain, Some(Path::new(r"D:\cfg"))),
+            Path::new(r"D:\cfg"),
+            "the setting still wins"
+        );
+    }
+
+    /// Ghostty's own lookup (`src/os/xdg.zig` at the pin): `XDG_CONFIG_HOME`, else `LOCALAPPDATA`, else the home's
+    /// `.config`.
+    #[cfg(windows)]
+    #[test]
+    fn windows_global_ghostty_config_is_where_ghostty_looks() {
+        assert_eq!(
+            global_ghostty_config_path(&windows_user()).as_deref(),
+            Some(Path::new(r"C:\Users\u\.config\ghostty\config"))
+        );
+        let local = windows_user().with("LOCALAPPDATA", r"C:\Users\u\AppData\Local");
+        assert_eq!(
+            global_ghostty_config_path(&local).as_deref(),
+            Some(Path::new(r"C:\Users\u\AppData\Local\ghostty\config"))
+        );
+        assert_eq!(
+            global_ghostty_config_path(&local.clone().with("XDG_CONFIG_HOME", r"C:\cfg")).as_deref(),
+            Some(Path::new(r"C:\cfg\ghostty\config"))
+        );
+        for value in ["", "relative"] {
+            assert_eq!(
+                global_ghostty_config_path(&local.clone().with("XDG_CONFIG_HOME", value)).as_deref(),
+                Some(Path::new(r"C:\Users\u\AppData\Local\ghostty\config")),
+                "{value:?}"
+            );
+        }
+        assert_eq!(
+            global_ghostty_config_path(&windows_user().with("LOCALAPPDATA", "")).as_deref(),
+            Some(Path::new(r"C:\Users\u\.config\ghostty\config")),
+            "an empty LOCALAPPDATA counts as unset"
+        );
+        assert_eq!(global_ghostty_config_path(&MapEnv::new()), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_overrides_win_and_empty_ones_count_as_unset() {
+        let isolated = windows_user().with(STATE_DIR_ENV, r"C:\inst");
+        assert_eq!(state_dir(&isolated), Path::new(r"C:\inst"));
+        assert_eq!(app_socket_path(&isolated), Path::new(r"C:\inst\ngterm.sock"));
+        assert_eq!(config_dir(&isolated, None), Path::new(r"C:\inst\config"));
+        assert_eq!(hud_body_dir(&isolated), Path::new(r"C:\inst\hud"));
+        let explicit = isolated.with(CONTROL_SOCKET_ENV, r"C:\x\ctl.sock");
+        assert_eq!(app_socket_path(&explicit), Path::new(r"C:\x\ctl.sock"));
+        let empty = windows_user()
+            .with(STATE_DIR_ENV, "")
+            .with(CONTROL_SOCKET_ENV, "")
+            .with("HOME", "");
+        assert_eq!(state_dir(&empty), Path::new(r"C:\Users\u\AppData\Local\ngterm"));
+        assert_eq!(
+            app_socket_path(&empty),
+            Path::new(r"C:\Users\u\AppData\Local\ngterm\ngterm.sock")
+        );
+        assert_eq!(
+            config_dir(&empty, None),
+            Path::new(r"C:\Users\u\AppData\Roaming\ngterm")
+        );
+        assert_eq!(home_dir(&empty).as_deref(), Some(Path::new(r"C:\Users\u")));
+        let home = windows_user().with("HOME", r"D:\h").with_passwd_home(r"E:\p");
+        assert_eq!(
+            home_dir(&home).as_deref(),
+            Some(Path::new(r"D:\h")),
+            "HOME overrides the profile"
+        );
+        assert_eq!(
+            config_dir(&home, None),
+            Path::new(r"C:\Users\u\AppData\Roaming\ngterm"),
+            "the config stays in the application data"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_without_known_folders_falls_back_to_the_temporary_directory() {
+        let temp = MapEnv::new().with("TEMP", r"C:\t").with_passwd_home(r"C:\Users\p");
+        assert_eq!(fallback_dir(&temp), Path::new(r"C:\t\ngterm"));
+        assert_eq!(state_dir(&temp), Path::new(r"C:\t\ngterm"));
+        assert_eq!(app_socket_path(&temp), Path::new(r"C:\t\ngterm\ngterm.sock"));
+        assert_eq!(config_dir(&temp, None), Path::new(r"C:\t\ngterm\config"));
+        assert_eq!(hud_body_dir(&temp), Path::new(r"C:\t\ngterm\hud"));
+        assert_eq!(
+            home_dir(&temp).as_deref(),
+            Some(Path::new(r"C:\Users\p")),
+            "no profile folder: the password database's stand-in"
+        );
+        let system = std::env::temp_dir().join(APP_DIR_NAME);
+        assert_eq!(fallback_dir(&MapEnv::new()), system);
+        assert_eq!(
+            state_dir(&MapEnv::new().with("TEMP", "")),
+            system,
+            "an empty TEMP counts as unset"
+        );
+        assert_eq!(home_dir(&MapEnv::new()), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_process_env_reads_the_users_known_folders() {
+        let folder = |folder| {
+            let path = ProcessEnv.known_folder(folder).unwrap_or_else(|| panic!("{folder:?}"));
+            assert!(path.is_absolute() && path.is_dir(), "{folder:?}: {}", path.display());
+            path
+        };
+        let profile = folder(KnownFolder::Profile);
+        let local = folder(KnownFolder::LocalAppData);
+        let roaming = folder(KnownFolder::RoamingAppData);
+        assert!(local.starts_with(&profile) && roaming.starts_with(&profile));
+        for (key, path) in [
+            ("USERPROFILE", &profile),
+            ("LOCALAPPDATA", &local),
+            ("APPDATA", &roaming),
+        ] {
+            if let Some(value) = std::env::var_os(key).filter(|value| !value.is_empty()) {
+                assert_eq!(&PathBuf::from(value), path, "{key}");
+            }
+        }
+        assert_eq!(default_state_dir(&ProcessEnv), local.join(APP_DIR_NAME));
+        if std::env::var_os(STATE_DIR_ENV).is_none() {
+            assert_eq!(config_dir(&ProcessEnv, None), roaming.join(APP_DIR_NAME));
+        }
     }
 }

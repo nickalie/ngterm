@@ -159,13 +159,21 @@
 - Modify: `crates/ngterm-core/src/paths.rs`
 - Modify: `crates/ngterm-core/Cargo.toml`
 
-- [ ] the Windows bases through `Env` (a `known_folder` read beside `passwd_home`, so tests stay on `MapEnv`): state
+- [x] the Windows bases through `Env` (a `known_folder` read beside `passwd_home`, so tests stay on `MapEnv`): state
       `FOLDERID_LocalAppData\ngterm`, config `FOLDERID_RoamingAppData\ngterm`, `home_dir` `FOLDERID_Profile`
-- [ ] `hud_body_dir` on Windows (a private dir under the state dir's runtime part, owner-only through `owner_only`);
+      (a non-empty `HOME` still first, as the override the harness isolates an instance's home with)
+- [x] `hud_body_dir` on Windows (a private dir under the state dir's runtime part, owner-only through `owner_only`);
       `global_ghostty_config_path` where Ghostty at the pin keeps it on Windows; the fallback when no known folder
       resolves (`%TEMP%\ngterm`)
-- [ ] write tests for each resolution on Windows (override, known folder, fallback, an empty override as unset)
-- [ ] run tests on Linux and the Windows runner (`cross-platform.yml`) - must pass before next task
+- [x] write tests for each resolution on Windows (override, known folder, fallback, an empty override as unset)
+- [x] run tests on Linux and the Windows runner (`cross-platform.yml`) - must pass before next task
+- ⚠️ `commands::tests::remote_roles`' three file-page tests were red on main's Windows leg already (since the
+  v0.38.1 sync): a file page's path must start with `/` (`html::grant_error`). They are ignored on Windows; Windows'
+  file-page paths go with the HTML overlays' Windows forms (plan 3)
+- [x] ➕ `ngterm-session`'s `an_interrupted_powershell_replay_leaves_the_integrated_prompt` was red on the Windows
+  runner too: a spawner in a process group of its own (the runner's steps, the session server's detached start)
+  ignores Ctrl+C and its pane children inherited that. `ngterm-pty`'s Windows spawn now lets its children take Ctrl+C
+  (`SetConsoleCtrlHandler(NULL, FALSE)`), with a test of its own
 
 ### Task 2: The control server's transport seam
 

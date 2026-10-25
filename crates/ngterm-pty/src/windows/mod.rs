@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use portable_pty::win::conpty::{ConPtyHandoff, ConPtyMasterPty, ConPtySystem};
 use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySystem};
-use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+use windows_sys::Win32::Foundation::{FALSE, WAIT_OBJECT_0};
+use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
@@ -302,7 +303,18 @@ fn kill_on_close_job() -> io::Result<OwnedHandle> {
     Ok(job)
 }
 
+/// Lets the children this process starts take Ctrl+C. A process started in a process group of its own
+/// (`CREATE_NEW_PROCESS_GROUP`: the session server's detached start, a CI runner's steps) ignores Ctrl+C, and a child
+/// inherits that, so a pane's program would never see the Ctrl+C its console makes of a typed `^C`. The setting is
+/// this process's own, and Ctrl+C reaches it only through a console it shares: none for the app and the detached
+/// server, none of the pseudoconsoles.
+fn let_children_take_ctrl_c() {
+    // SAFETY: with no handler the call only sets whether this process ignores Ctrl+C.
+    unsafe { SetConsoleCtrlHandler(None, FALSE) };
+}
+
 pub(crate) fn spawn(builder: CommandBuilder, size: Size) -> io::Result<Spawned> {
+    let_children_take_ctrl_c();
     let job = kill_on_close_job()?;
     let pair = ConPtySystem::default()
         .openpty(size.pty())
