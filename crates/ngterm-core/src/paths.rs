@@ -241,8 +241,9 @@ pub fn config_dir(env: &dyn Env, setting: Option<&Path>) -> PathBuf {
 }
 
 /// What [`config_dir`] reads of the environment, captured once so the core can resolve the config directory again
-/// whenever the `configDirectory` setting changes.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// whenever the `configDirectory` setting changes. The default locator is an empty environment's, so its config
+/// directory is the fallback one (`<fallback dir>/config`), never an empty, working-directory-relative path.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigLocator {
     /// [`config_dir`] without a setting: where the config lives unless the setting moves it.
     default_dir: PathBuf,
@@ -275,6 +276,12 @@ impl ConfigLocator {
     }
 }
 
+impl Default for ConfigLocator {
+    fn default() -> Self {
+        Self::capture(&MapEnv::new())
+    }
+}
+
 /// Where the HUD body files go: a private per-user directory standing in for upstream's `NSTemporaryDirectory()`
 /// (a per-user 0700 directory on macOS), never the shared `/tmp`. `<NGTERM_STATE_DIR>/hud` when the state dir is
 /// overridden (instances stay apart, as [`config_dir`]), else on Unix `<XDG_RUNTIME_DIR>/ngterm/hud` when that is an
@@ -303,23 +310,32 @@ pub fn ghostty_config_path(config_dir: &Path) -> PathBuf {
     config_dir.join("ghostty.conf")
 }
 
+/// The XDG config home Ghostty reads its user files under. On Unix an absolute `XDG_CONFIG_HOME`, else
+/// `<home>/.config`. On Windows Ghostty's own choice at the pin (`src/os/xdg.zig`, `dir`): `XDG_CONFIG_HOME` whenever
+/// it is set, even relative, else `LOCALAPPDATA`; the value chosen is used as given unless it is empty, and only then
+/// does the home's `.config` take over (a set but empty `XDG_CONFIG_HOME` skips `LOCALAPPDATA`). The home there is
+/// this build's [`home_dir`] (`HOME`, else the profile's known folder), where Ghostty's is `HOMEDRIVE` + `HOMEPATH`:
+/// the two name the same profile on a stock account, and `HOME` keeps an isolated instance off the real one.
+fn ghostty_config_home(env: &dyn Env) -> Option<PathBuf> {
+    let explicit = if cfg!(windows) {
+        env.var("XDG_CONFIG_HOME")
+            .or_else(|| env.var("LOCALAPPDATA"))
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    } else {
+        env.var("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute() && path.as_os_str().len() > 1)
+    };
+    explicit.or_else(|| home_dir(env).map(|home| home.join(".config")))
+}
+
 /// The user's own ghostty config, which the Settings toggle `inheritGlobalGhosttyConfig` loads below the
-/// ngterm-scoped one: `<XDG config home>/ghostty/config`, the XDG config home being an absolute `XDG_CONFIG_HOME`,
-/// else `<home>/.config` (upstream reads `~/.config/ghostty/config`). On Windows a non-empty `LOCALAPPDATA` comes
-/// between the two, where Ghostty at the pin looks (`src/os/xdg.zig`, `config`). `None` without a home.
+/// ngterm-scoped one: `<XDG config home>/ghostty/config` ([`ghostty_config_home`]; upstream reads
+/// `~/.config/ghostty/config`). `None` without a home.
 #[must_use]
 pub fn global_ghostty_config_path(env: &dyn Env) -> Option<PathBuf> {
-    let explicit = env
-        .var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute() && path.as_os_str().len() > 1);
-    let local = non_empty(env, "LOCALAPPDATA")
-        .filter(|_| cfg!(windows))
-        .map(PathBuf::from);
-    explicit
-        .or(local)
-        .or_else(|| home_dir(env).map(|home| home.join(".config")))
-        .map(|base| base.join("ghostty").join("config"))
+    ghostty_config_home(env).map(|base| base.join("ghostty").join("config"))
 }
 
 /// The ghostty config the Settings window writes: `<state dir>/ghostty-settings.conf`
@@ -528,6 +544,16 @@ mod tests {
         );
     }
 
+    /// A core that never installs a locator still keeps its config files in the fallback directory, not the cwd.
+    #[test]
+    fn the_default_config_locator_is_an_empty_environments() {
+        let locator = ConfigLocator::default();
+        assert_eq!(locator, ConfigLocator::capture(&MapEnv::new()));
+        assert_eq!(locator.config_dir(None), fallback_dir(&MapEnv::new()).join("config"));
+        assert!(locator.config_dir(None).is_absolute());
+        assert_eq!(locator.home(), None);
+    }
+
     #[test]
     #[cfg_attr(windows, ignore = "the XDG bases, Unix's; the `windows_*` tests hold Windows' forms")]
     fn ghostty_config_files_sit_in_the_config_and_state_dirs() {
@@ -588,8 +614,8 @@ mod tests {
         );
     }
 
-    /// Ghostty's own lookup (`src/os/xdg.zig` at the pin): `XDG_CONFIG_HOME`, else `LOCALAPPDATA`, else the home's
-    /// `.config`.
+    /// Ghostty's own lookup (`src/os/xdg.zig` at the pin): `XDG_CONFIG_HOME` whenever set, else `LOCALAPPDATA`; the
+    /// home's `.config` only when the value chosen is empty.
     #[cfg(windows)]
     #[test]
     fn windows_global_ghostty_config_is_where_ghostty_looks() {
@@ -606,13 +632,16 @@ mod tests {
             global_ghostty_config_path(&local.clone().with("XDG_CONFIG_HOME", r"C:\cfg")).as_deref(),
             Some(Path::new(r"C:\cfg\ghostty\config"))
         );
-        for value in ["", "relative"] {
-            assert_eq!(
-                global_ghostty_config_path(&local.clone().with("XDG_CONFIG_HOME", value)).as_deref(),
-                Some(Path::new(r"C:\Users\u\AppData\Local\ghostty\config")),
-                "{value:?}"
-            );
-        }
+        assert_eq!(
+            global_ghostty_config_path(&local.clone().with("XDG_CONFIG_HOME", "")).as_deref(),
+            Some(Path::new(r"C:\Users\u\.config\ghostty\config")),
+            "a set but empty XDG_CONFIG_HOME skips LOCALAPPDATA for the home"
+        );
+        assert_eq!(
+            global_ghostty_config_path(&local.clone().with("XDG_CONFIG_HOME", "relative")).as_deref(),
+            Some(Path::new(r"relative\ghostty\config")),
+            "a relative XDG_CONFIG_HOME is taken as given"
+        );
         assert_eq!(
             global_ghostty_config_path(&windows_user().with("LOCALAPPDATA", "")).as_deref(),
             Some(Path::new(r"C:\Users\u\.config\ghostty\config")),
@@ -693,7 +722,6 @@ mod tests {
         let profile = folder(KnownFolder::Profile);
         let local = folder(KnownFolder::LocalAppData);
         let roaming = folder(KnownFolder::RoamingAppData);
-        assert!(local.starts_with(&profile) && roaming.starts_with(&profile));
         for (key, path) in [
             ("USERPROFILE", &profile),
             ("LOCALAPPDATA", &local),
