@@ -419,7 +419,20 @@ panes keep a PTY of their own, and an instance with live sessions off starts no 
 
 ## Test
 
-The gates every change passes (CI runs the same checks):
+The gates' checks. CI runs them on the whole workspace, with the full suite, on every PR and push to main. Locally, a
+change runs them only on the part it changes:
+
+- `cargo fmt`, `cargo metadata --locked` and `scripts/lint-report.sh` (a source scan, seconds) stay on the whole tree.
+- clippy (both lines) takes `-p` for each crate the change touches and each workspace crate
+  that depends on one (`cargo tree -i CRATE --workspace -e normal,build,dev --prefix none` lists them). The
+  `--no-default-features` line runs only when `ngterm-gpui` is among them.
+- `cargo test` takes `-p` for the touched crates only.
+- the tracing-features check runs for a change to dependencies or `Cargo.lock`; a vendor script's `--check` runs for a
+  change to its `vendor/` tree or `build/patches/`; a bindings check runs for the pin changes named below.
+- the selftests run for a change under `conformance/`.
+- `run-linux.sh` runs partially (`-- -k EXPR`, see [conformance/README.md](conformance/README.md); node ids after `--`
+  add to the three layers instead of narrowing them), on the ids that cover the behavior the change touches, and not at all for a change with no app behavior (docs, CI, the
+  suite's selftests). It still builds the whole release workspace, since the staged app needs it.
 
 ```sh
 cargo fmt --all --check
@@ -494,3 +507,6 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   upstream's `plugins/agterm/skills/agterm` plus `build/patches/skill-ngterm`), and ngterm's PowerShell integration
   (`shell-integration/pwsh`), which live sessions load.
 - `docs/plans/`: implementation plans.
+- `.upstream/agterm`, `.upstream/herdr`: read-only reference clones, git-ignored through `.git/info/exclude`. When
+  missing: `git clone --depth 1 --branch v0.38.1 https://github.com/umputun/agterm .upstream/agterm` (the parity tag;
+  the sync skill moves it), and `HERDR_REPO` checked out at `HERDR_REV` from `build/pins.env`.

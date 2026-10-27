@@ -27,9 +27,11 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
   on-disk formats, model and UI.
 - Baseline after the mechanical commit:
   - `cargo fmt --check`: <ok | ...>; clippy: <ok | ...>; `scripts/lint-report.sh`: <ok | ...>
-  - `cargo test --workspace` (under xvfb): <ok | the failing tests, each with the task that turns it green>
+  - `cargo test` on the crates the bump touches (under xvfb): <ok | the failing tests, each with the task that turns
+    it green>
   - coverage gate: <ok | the uncovered keys, each with its task>
-  - `run-linux.sh` (full): ratchet <holds | breaks: ids and cause>; newly green: <ids added | none>
+  - `run-linux.sh -k <expr>` (partial, or "not run: no app behavior touched"): ratchet <holds | breaks: ids and
+    cause>; newly green: <ids added | none>
 - Already in the Rust build (no task): <feature — evidence: file / ratchet id>, or "nothing".
 - Not run on this host: <the ratchet's `not run on this host` ids and why (no zsh login shell)>, or "none".
 - Upstream's pins (none is a pin here): ZMX_REV and zmx-patches <unchanged | a -> b and the changed patches, a task
@@ -48,16 +50,15 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 - New conformance tests follow conformance/README.md > Reference discipline: a test is accepted only when green on
   the reference. reference-macos runs only in CI on macOS (`reference-macos.yml`), so a task that adds a suite test
   marks "green on reference-macos" as a manual check for the user.
-- Gate of every task: every command of README > Test's code block up to the selftests, in its order and as written
-  there (the window tests under `xvfb-run` and `dbus-run-session`), each pytest command with
+- Gate of every task (CLAUDE.md > Porting a command group, step 6): README > Test's checks on the task's changed part,
+  scoped as README > Test says (the window tests under `xvfb-run` and `dbus-run-session`), each pytest command with
   `PYTHONPATH=conformance` in front; then
   `PYTHONPATH=conformance .venv/bin/python -m pytest conformance --coverage-gate` (until the task that closes the
-  last uncovered key, only the keys listed for later tasks may stay uncovered). A task that adds or changes suite
-  tests runs just those in a targeted `conformance/tools/run-linux.sh -- -k <tests>`.
-- The full `conformance/tools/run-linux.sh` runs once, in the last task (CLAUDE.md > Porting a command group, step 6),
-  not in each task's gate: it takes 30–60 min under the CPU cap and would dominate the run. That task fixes any
-  ratchet id it finds red and adds the newly green ids with
-  `.venv/bin/python conformance/tools/check_ratchet.py --report conformance/reports/rust-linux/nodeids.jsonl --add`.
+  last uncovered key, only the keys listed for later tasks may stay uncovered); then a partial
+  `conformance/tools/run-linux.sh -- -k <expr>` over the ids covering the task's behavior, its newly green ids added
+  with `.venv/bin/python conformance/tools/check_ratchet.py --report conformance/reports/rust-linux/nodeids.jsonl --add`.
+- No task runs the whole workspace or the full suite, not even the last: CI runs both on the pull request, and a
+  ratchet id red there is fixed on the branch before it merges.
 - Platforms (CLAUDE.md > Platforms): macOS, Linux and Windows are equal targets and upstream is macOS only. A
   behavior upstream builds on a macOS API is ported with its macOS form and its Linux and Windows forms in the same
   task (on Linux per desktop, with a fallback); "no counterpart on <OS>" only for a behavior with no meaning there,
@@ -70,8 +71,9 @@ Everything in `<...>` is filled in; drop sections that would stay empty except S
 
 ## Testing Strategy
 
-- unit: `cargo test --workspace` on the `ngterm-host` fakes; the app's tests under `xvfb-run`.
-- conformance: `run-linux.sh` (protocol, cli, behaviors); `tests/ui` skips on Linux.
+- unit: `cargo test` on each task's crates, on the `ngterm-host` fakes; the app's tests under `xvfb-run`.
+- conformance: partial `run-linux.sh -k` runs per task locally, the full suite in CI on the pull request; `tests/ui`
+  skips on Linux.
 - macOS and Windows: `cross-platform.yml` builds and tests the crates its package list names there; the user runs
   it through a pull request or a `ci/**` push of the branch.
 
@@ -126,8 +128,8 @@ code">
 - [ ] README.md, CLAUDE.md, conformance/README.md, conformance/docs/rust-build.md describe what changed (new
       capabilities, commands, on-disk files); `tag-mentions.sh <old>` lists no `review` or stale `claim` line
 - [ ] gate passes
-- [ ] the plan's one full `conformance/tools/run-linux.sh`, in the background: every ratchet id it finds red fixed
-      in this plan; newly green ids added with `check_ratchet.py --add`
+- [ ] manual check (user): the pull request's CI (`rust-linux.yml`'s full suite) holds the ratchet; an id it finds
+      red is fixed on the branch before merge
 ````
 
 ## Writing the tasks

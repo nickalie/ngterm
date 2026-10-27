@@ -151,10 +151,9 @@ narrowed the run. The plugin options behind it are `--ratchet-only LIST`, `--als
 about, and `--add` adds only ids that ran and passed. A narrower selection (`-k`, `-m` or node ids after `--`) makes
 the mode `partial`: the listed ids that did not run are not judged, so a partial run can neither break nor shrink
 the list through what it left out. The report names the mode and the suite time.
-A full run stays the default and is required at milestones (the GPUI switch, the plan's Task 34, was one), and whenever a
-change touches the harness or shared crates broadly (ngterm-core, -proto, -host, -server, -ctl, -session, -app or
--term). Between them a task's routine run is ratchet-only; it finds newly passing ids only among its `--also`
-selections, so a task that turns on a broad area (the terminal, say) grows the list with a full run.
+A full run stays the script's default, but locally a change runs only a partial run (`-- -k EXPR`) over the ids that
+cover the behavior it touches (README > Test); full and ratchet-only runs are CI's, which holds the whole list on every
+PR and push to main. A partial run finds newly passing ids only among what it selected.
 `--nodeid-report` cannot be combined with `--coverage-gate`.
 
 ## Catalog and coverage gate

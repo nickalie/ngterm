@@ -1,163 +1,106 @@
 # ngterm
 
-ngterm: upstream agterm in Rust, for macOS, Linux and Windows as equal targets. The one frontend is GPUI's, which
-renders libghostty-vt itself; today it is built and tested on Linux only, so its macOS and Windows forms are open work
-under the platform rules below, not a later phase. Build, run and test commands are in [README.md](README.md); the
-suite and the ratchet in [conformance/README.md](conformance/README.md) and
+ngterm: upstream agterm in Rust, for macOS, Linux and Windows as equal targets, with one frontend on GPUI that renders
+libghostty-vt itself (built and tested on Linux so far; its macOS and Windows forms are open work, not a later phase).
+Build, run and test: [README.md](README.md). The suite and the ratchet: [conformance/README.md](conformance/README.md),
 [conformance/docs/rust-build.md](conformance/docs/rust-build.md).
+Plans in `docs/plans/` record what was decided at the time: never read one as the current state, never update one to
+match a later change.
 
 ## Platforms
 
-- macOS, Linux and Windows are equal targets. A feature is done when it works on all three, not when it works on the
-  dev box; nothing ships as "Linux now, the others later".
-- A platform-specific mechanism (PTY, IPC, process tables, daemon spawn, paths, notifications) comes with its
-  counterparts for the other two in the same change or the same plan. POSIX-only code sits behind `cfg` with its
-  Windows form beside it, never as the only path.
-- Prefer cross-platform crates over per-OS code (`portable-pty` with ConPTY, `interprocess`, `windows-sys` for what
-  remains). A crate marked `any` in the map below must build on all three.
-- Code for an OS the dev box is not runs on CI for that OS (macOS and Windows runners), not only through `cargo check`.
-- Within Linux, any desktop counts: wlroots, KDE, GNOME, weston, X11. Every compositor-specific path has a fallback.
+- A feature is done when it works on macOS, Linux and Windows, not on the dev box; nothing ships as "Linux now, the
+  others later". Code for another OS is proven on that OS's CI runner, not only by `cargo check`.
+- A platform-specific mechanism (PTY, IPC, process tables, daemon spawn, paths, notifications) comes with its other
+  two forms in the same change or plan; POSIX-only code sits behind `cfg` beside its Windows form.
+- Prefer cross-platform crates (`portable-pty` with ConPTY, `interprocess`) over per-OS code, `windows-sys` for the rest.
+- On Linux any desktop counts (wlroots, KDE, GNOME, weston, X11): every compositor-specific path has a fallback.
 
-## Crate map
+## Crates
 
-| crate | contents | platform |
+| crate | role | platform |
 |---|---|---|
-| `ngterm-proto` | wire types: two-level `Command` (group → command, strum wire names), request/response, read-back results, events, `tree` projection | any |
-| `ngterm-host` | the seams a frontend implements: `MainLoop`, `Surface`, `SessionHost`, `ProcessLauncher`, `ProcessTable`; in-memory fakes behind feature `fakes` | any |
-| `ngterm-core` | model, target resolver, command dispatcher (`commands/`, one module per group), events, keymap and Ghostty's keybind actions, the Ghostty config parser and its diagnostics, hooks, persistence, settings, pane environment, live-session/restore logic, the state-dir lock, the installed identity, the keyboard-layout lock's decision, the remote page-serve channel | any |
-| `ngterm-server` | AF_UNIX control server: socket ownership (`flock`), one thread per connection, main-loop hop, stream handoff | Linux, macOS |
-| `ngterm-ctl` → `ngtermctl` | clap CLI ported from upstream's `agtermctlKit`, socket resolution, output formatting | Linux |
-| `ngterm-ghostty-vt-sys` | checked-in bindgen output over libghostty-vt's official C API (`scripts/gen-ghostty-vt-bindings.sh`), links the vendored static library; not under the workspace lints | any |
-| `ngterm-ghostty-vt` | safe wrapper over the sys crate: terminal, render state, effects, key and mouse encoders, selection and its gesture, formatter with its extras, search, Kitty graphics, stream continuation, snapshot codec, clipboard-read scan | any |
-| `ngterm-pty` | the PTY layer of plain and live panes: a child on a PTY (openpty, ConPTY; its process group or kill-on-close job), herdr's PTY actor (poll and wake pipe on Unix, reader and writer threads on Windows) with the handoff's quiesce, duplicate, rollback and release, over the vendored portable-pty | any |
-| `ngterm-term` | the toolkit-neutral pane core: a libghostty-vt terminal fed by an IO thread per pane from a PTY, or for a live pane from its session's attach stream in process, input, selection, search, read-back, launch and terminal identity, frames and events in its own types | any |
-| `ngterm-session` | the live-session server on herdr's architecture, the app's session host: wire, endpoint, lifecycle and detached spawn per OS; the pane runtime (a session's program on a PTY, its terminal state, the fan-out to attached clients); the update handoff; the client library and the `SessionHost` over it; the binary's server and its attach-contract CLI; the foreground job and its sweeper and the process table, on every OS; the live-launch inputs (session host executable, build id, login shell, resources, namespace); the `/proc` stat and cmdline parsers | any |
-| `ngterm-app` | frontend-neutral app services: the hooks' `ProcessLauncher`, the `ProcessTable` (`ngterm-session`'s, re-exported), logging, the restore launch decision, quick-terminal placement, the agent integrations' installers, the remote presentation process and the page channel helper | Linux |
-| `ngterm-wpe-sys`, `ngterm-wpe-platform-sys`, `ngterm-wpe-javascriptcore-sys` | checked-in gir output over WPE WebKit, one crate per GObject namespace (`scripts/gen-wpe-bindings.sh`) | Linux |
-| `ngterm-wpe` | WPE WebKit host for the HTML overlays: offscreen pages on an engine thread of their own (or in a worker process), frames out as dmabufs or SHM | Linux |
-| `ngterm-gpui` → `ngterm` | GPUI/gpui-kit frontend: windows, sidebar, deck, the terminal element (grid, sprites, Kitty graphics), overlays, quick terminal (layer-shell, a window where there is none), HTML overlays over `ngterm-wpe` (feature `html`), single instance, agent integrations, the keyboard-layout lock per OS and desktop, status sounds | Linux |
+| `ngterm-proto` | wire types | any |
+| `ngterm-host` | the seams a frontend implements, with fakes (feature `fakes`) | any |
+| `ngterm-core` | model, dispatcher (one module per command group), config, hooks, persistence, settings | any |
+| `ngterm-server` | the control socket server | Linux, macOS |
+| `ngterm-ctl` → `ngtermctl` | the CLI | Linux |
+| `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt` | libghostty-vt bindings and their safe wrapper | any |
+| `ngterm-pty` | PTY layer (openpty, ConPTY) | any |
+| `ngterm-term` | the toolkit-neutral pane core | any |
+| `ngterm-session` | the live-session server, its client and `SessionHost` | any |
+| `ngterm-app` | frontend-neutral app services | Linux |
+| `ngterm-wpe-sys` and kin, `ngterm-wpe` | WPE WebKit bindings and the HTML overlays' host | Linux |
+| `ngterm-gpui` → `ngterm` | the GPUI frontend | Linux |
 
-The platform column is where a crate builds and works today. `any` is a crate CI builds and tests on Linux, macOS and
-Windows: the cross-platform workflow's package list is the record (README > CI), and a crate joins it in the change
-that makes it build on all three. A crate that names its OSes has its other forms open under the platform rules; the
-control server and its CLI are meant to be `any`: the server waits for its Windows form, the CLI for its macOS and
-Windows forms. The libghostty-vt crates hold no OS-specific Rust, and the native library behind them is built for
-cargo's target by the sys crate's build script, with the Zig `build/pins.env` pins for the host's OS and arch, over
-the source prefix `scripts/build-ghostty-vt.sh` prepares (README > Native dependencies), so they are `any`. An `any`
-crate may depend on another `any` crate, the libghostty-vt ones included; a crate built on fewer OSes enters it only
-behind the `cfg` of those OSes.
+A crate's root docs and module list show what it holds. `any` means CI builds and tests the crate on all three OSes (README > CI
+has the list); a crate joins it in the change that makes it so. An `any` crate depends on another crate only if that
+one is `any` too, or behind the `cfg` of the OSes it builds on.
 
-GPUI owns the main thread and the whole state; control connections, the single-instance bus and the signal thread hop
-onto it through `MainLoop`. Work that needs no live terminal or widget belongs in `ngterm-core`, unit-tested against
-the `ngterm-host` fakes; terminal work that needs no window belongs in `ngterm-term`, tested on real PTYs. Both stay
-toolkit-neutral, so another frontend can drive them.
+GPUI owns the main thread and the state; other threads hop onto it through `MainLoop`. Work that needs no terminal or
+widget goes in `ngterm-core`, tested on the `ngterm-host` fakes; terminal work that needs no window goes in
+`ngterm-term`, tested on real PTYs. Both stay toolkit-neutral.
 
-## Reference rule
+## References
 
-- Upstream is the reference for the wire protocol, command semantics, error strings, `agtermctl` behavior and output,
-  on-disk formats, model, core behavior and the UI. Port from its sources and Swift unit tests (the source of exact
-  strings) in `.upstream/agterm`, a read-only clone git-ignored through `.git/info/exclude`; when it is missing:
-  `git clone --depth 1 --branch v0.38.1 https://github.com/umputun/agterm .upstream/agterm`.
-- The terminal's reference is Ghostty at the libghostty-vt pin (`build/pins.env`), not upstream's libghostty pin:
-  libghostty-vt's C API is the oracle for what the terminal does, and Ghostty's own source at that revision for what
-  the library leaves to its embedder (rendering, sprites, fonts, the shell integration, config keys, the PTY
-  pipeline). Ported code cites that revision. Other terminals are read-only references, adapted with attribution in
-  the module docs, never dependencies: qwertty-term (a Rust port of Ghostty's subsystems, the first place to look),
-  gpui-ghostty (a GPUI terminal element) and rustty (Kitty placement chains). Zed's terminal is GPL: ideas only, copy
-  nothing.
-- The session server's reference is herdr at the commit `build/pins.env` pins (`HERDR_*`): `ngterm-session` and
-  `ngterm-pty` take its background session server, PTY actor and `portable-pty` fixes as code (Apache-2.0), and its
-  libghostty-vt fixes are carried as recorded patches (Gates). Each derived file names the herdr file it comes from,
-  its license and that it was modified; `NOTICE` carries herdr's license. Read it in `.upstream/herdr`, a read-only
-  clone at that commit, git-ignored like upstream's (when it is missing, clone `HERDR_REPO` and check out
-  `HERDR_REV`). herdr is the source of the server's design and code, not of what the app shows: the `live.*` group,
-  its error strings and the attach contract follow upstream, and none of herdr's names, paths or sockets reach the
-  build.
-- Linux glue upstream has no counterpart for (paths, single-instance forwarding) follows the platform's own specs
-  (the XDG Base Directory spec, GApplication's D-Bus protocol), never another app's build. The build claims the
-  capabilities listed in rust-build.md > Rust target profile.
-- Upstream is the reference for behavior, not for identity. The build is ngterm and shares nothing with it at
-  runtime: its application id, state and config dirs, sockets, binaries, crates, environment variables, CLI, skill
-  and install paths are its own (README holds them), and nothing falls back to, runs or reads an agterm or
-  `agtermctl` path or name. Those names appear only where code and docs cite upstream, and in the harness adapter
-  that drives the reference build. A link the app or its skill shows its own users (website, docs, bug tracker,
-  discussions) is identity too and points at ngterm's own (the Help menu and the bundled skill hold them), even where
-  the upstream text it was ported from links upstream's; a citation is a comment or doc naming upstream's source. A
-  rename or a new path covers every place at once; keeping one on the old name "for compatibility" is not a choice to
-  make alone.
-
-## Plans
-
-- `docs/plans/completed/` holds historical artifacts: what was decided and done at the time, not the product's
-  current state. The code, README and CLAUDE.md are the current state; a completed plan is never read as a
-  description of the product nor updated to match a later change.
+- **Upstream** (`.upstream/agterm`, README > Layout) is the reference for the protocol, command semantics, error
+  strings, `agtermctl` output, on-disk formats, the model and the UI. Port from its sources and its Swift tests, which
+  hold the exact strings.
+- **Ghostty at the libghostty-vt pin** (`build/pins.env`) is the terminal's reference, not upstream's libghostty: the C
+  API for what the terminal does, Ghostty's source at that revision for what it leaves to the embedder. Ported code
+  cites that revision. Other terminals (qwertty-term first, gpui-ghostty, rustty) are read-only references, credited in
+  module docs, never dependencies. Zed's terminal is GPL: ideas only.
+- **herdr at its pin** (`.upstream/herdr`) is the source of the session server and PTY actor's design and code
+  (Apache-2.0). Each derived file names its herdr source, license and that it was modified; `NOTICE` carries the
+  license. What the app shows (`live.*`, its errors, the attach contract) follows upstream; no herdr name, path or
+  socket reaches the build.
+- Linux glue with no upstream counterpart follows the platform's specs (XDG Base Directory, GApplication's D-Bus
+  protocol), never another app's build.
+- **Identity is ngterm's own.** Application id, dirs, sockets, binaries, env vars, CLI, skill, install paths and the
+  links shown to users are ngterm's (README holds them). Nothing falls back to, runs or reads an agterm name or path;
+  those names appear only in citations and the harness adapter for the reference build. A rename covers every place
+  at once; keeping an old name "for compatibility" is the user's call.
 
 ## Porting a command group
 
-1. Read upstream's implementation (`agtermCore/Sources/agtermCore/ControlDispatcher*.swift`, the `AppStore+*` files it
-   calls, the app side in `agterm/Control/ControlServer+*.swift`), its unit tests (error strings, edge cases, field
-   order), `site/commands.html` and the matching `.claude/rules/*.md`.
-2. Implement in `ngterm-core` against the `ngterm-host` traits, with unit tests on the fakes; assert the full upstream
-   error string on the dispatcher's output.
-3. Wire the frontend side in `ngterm-gpui` (terminal behavior in `ngterm-term`), following upstream's UI
-   (`agterm/Views`, `agterm/Ghostty`, the rules files) in GPUI/gpui-kit idioms.
-4. Add the `ngtermctl` subcommands, ported from upstream's `agtermctlKit`.
-5. Claim a capability (`version` result, rust-build.md > Rust target profile) only once its commands implement it.
-6. Gate: every check README > Test lists (format, locked metadata, clippy with `-D warnings` on the workspace and on
-   the frontend without its default features, the lint report, the tracing-features check, the vendored-source
-   checks, the workspace tests headless, the suite's selftests). The full suite (`conformance/tools/run-linux.sh`)
-   runs once at the end of a plan, in the background, and only reports its newly green ids: add them to the ratchet
+1. Read upstream's dispatcher, the `AppStore+*` and `ControlServer+*` code behind it, its unit tests, `site/commands.html`
+   and its matching `.claude/rules/*.md`.
+2. Implement in `ngterm-core` with tests on the fakes, asserting upstream's full error strings.
+3. Wire the frontend in `ngterm-gpui` (terminal behavior in `ngterm-term`), following upstream's UI in GPUI idioms.
+4. Port the `ngtermctl` subcommands from upstream's `agtermctlKit`.
+5. Claim a capability (rust-build.md > Rust target profile) only once its commands implement it.
+6. Gate: README > Test's checks on the changed part only (clippy on the touched crates and their dependents, tests on
+   the touched crates, a partial suite run over the ids covering the touched behavior), never the whole codebase, not
+   even at the end of a plan. The whole workspace and the full suite are CI's. Newly green ids go into the ratchet
    with `check_ratchet.py --add`.
 
-A new upstream release moves the catalog's tag (`conformance/tools/gen_catalog.py`) and `.upstream/agterm` together. The
-build runs no zmx: what an upstream release changes in its zmx (the pin, its patches) is ported into `ngterm-session` as
-behavior, under `live.*` and the attach contract. A herdr bump is a change of its own, never part of an upstream
-sync: its session-server changes are ported into `ngterm-session`, its libghostty-vt patches through the Ghostty patch
-record. The Ghostty pin follows ghostty main, not upstream's libghostty: its bump is a change of its own, with what it
-regenerates (`build/pins.env` names it).
+Upstream syncs and pin bumps (upstream's zmx, herdr, Ghostty) follow the `agterm-upstream-sync` skill and
+`build/pins.env`; a herdr, Ghostty or toolchain bump is a change of its own.
 
 ## Gates
 
-- A ratchet id (`conformance/rust-passing.txt`) never goes red: one the end-of-plan run finds red is fixed in that plan.
-  A change of its own outside a plan (a herdr, Ghostty or toolchain bump) runs the full suite once at its end, as a
-  plan does, and fixes what it turns red in the same change.
-- No reruns: protocol, cli and behaviors tests wait on read-back, so a flaky one is a bug in the build or the test.
-- A function over a complexity limit (`clippy.toml`) is split, not excused. The only exception is an outer
-  `#[expect(clippy::..., reason = "...")]` on that one item; `#[allow]` and inner `#![allow]`/`#![expect]` are refused.
-- Thresholds in `clippy.toml` are lowered, never raised. A `rust-toolchain.toml` bump is a change of its own.
-- A Ghostty patch (`build/patches/ghostty-vt/`) exposes data the library already stores, as C API. A patch that
-  changes the library's logic is taken only for a fix or a parity behavior Rust cannot reach from outside, and only
-  recorded in that directory's README, with its reason, upstream status, a remove-when condition and its
-  verification. A gap Rust can fill is filled in Rust. A pin bump rebases every patch and drops each one whose
-  remove-when condition the new pin meets.
-- Generated bindings change only through their generator scripts. The patched third-party crates under `vendor/` are
-  their sources plus `build/patches/`: an edit there goes back into its patch (`scripts/vendor-gpui.sh`,
-  `scripts/vendor-calloop.sh`, `scripts/vendor-portable-pty.sh`), and each script's check holds.
+- A ratchet id (`conformance/rust-passing.txt`) never goes red: one a scoped run or CI finds red is fixed in the change
+  that broke it.
+- No reruns: a flaky protocol, cli or behaviors test is a bug in the build or the test.
+- A function over a `clippy.toml` limit is split. The only exception is an outer `#[expect(clippy::..., reason = "...")]`
+  on that one item; `#[allow]` and inner `#![allow]`/`#![expect]` are refused. Thresholds are only ever lowered.
+- A Ghostty patch exposes data the library already stores; one that changes its logic is taken only for a fix or parity
+  Rust can't reach, recorded as `build/patches/ghostty-vt/README.md` says. A gap Rust can fill is filled in Rust.
+- Generated bindings change only through their generator scripts; an edit under `vendor/` goes back into its patch
+  through its vendor script, whose `--check` holds.
 
 ## Never touch the user's running ngterm
 
-Agents here usually run inside a pane of the user's live terminal: an installed ngterm, whose `NGTERM_*` variables point
-at it, or an agterm, whose `AGTERM_*` variables (and `ZMX_*`, where it runs its sessions on zmx) do. Every dev
-instance, probe or `ngtermctl` call stays off it:
+Agents usually run inside a pane of the user's live ngterm or agterm. Every dev instance, probe and `ngtermctl` call
+stays off it:
 
-- Launch a checkout's build only through `scripts/run-gpui-dev.sh` (or the suite): the build shares the installed
-  ngterm's application id and state (README holds them), so a plain launch is forwarded to the running instance
-  through the D-Bus name it serves (`zbus`), or shares its state.
-- Strip `NGTERM_*`, `AGTERM_*` and `ZMX_*` from the environment before launching anything (`run-gpui-dev.sh` and the
-  harness do).
-- Give every `ngtermctl` call an explicit `--socket` (a per-subcommand option, after the subcommand name). Without it
-  the CLI resolves the live instance's socket.
-- Use a private state dir, so the instance's live-session namespace, and with it the one session server serving it,
-  is private too: its socket directory on Unix, its namespace directory and the named pipe named after it on Windows.
-  Live sessions outlive the app by design: reap only through that namespace's own server, or the processes the
-  namespace names (its server's command line, its sessions' attach-contract environment), never by name
-  (`pkill ngterm-session`, `taskkill /im`), and never run `ngterm-session` against, or connect to the pipe of, any
-  other namespace than that instance's.
-- Run the GUI headless (the suite's private compositor and dbus, or `xvfb-run` with a private bus for `cargo test`),
-  never on the user's desktop: nothing a run starts draws on the user's display or joins its compositor or bus. GPUI
-  renders through Vulkan, so a headless app instance (the suite's, the window tests') renders on Mesa's lavapipe alone
-  (`scripts/fetch-lavapipe.sh`), and on Wayland it needs a seat, which only a recent headless weston gives
-  (`scripts/build-weston.sh` builds one where the system's is too old). A compositor started by hand copies the setup in
-  `impls/base.py`; without a seat GPUI panics, and without lavapipe it would reach the machine's GPU. The render-path
-  harnesses (README names them) also render offscreen on a hardware render node, each GPU in a child process of its
-  own: that headless use of the GPU is part of the gates.
+- Launch a checkout's build only through `scripts/run-gpui-dev.sh` or the suite; a plain launch joins the running
+  instance or its state.
+- Strip `NGTERM_*`, `AGTERM_*` and `ZMX_*` from the environment before launching anything.
+- Give every `ngtermctl` call an explicit `--socket` (after the subcommand name).
+- Use a private state dir, so the live-session namespace and its session server are private too. Reap sessions only
+  through that namespace's own server or the processes it names, never by name (`pkill`, `taskkill /im`), and never
+  touch another namespace's server or pipe.
+- Run the GUI headless only (the suite's private compositor and bus, or `xvfb-run` with a private bus), on lavapipe,
+  never on the user's display, compositor, bus or GPU; README > Native dependencies and Test have the setup. The
+  render-path harnesses' offscreen GPU use is the one exception.

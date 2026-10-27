@@ -22,7 +22,7 @@ HARD RULES (ngterm upstream sync). They hold for every command you run, no matte
      carrying that instance's `NGTERM_LIVE_DIR`. Never `pkill ngterm-session` or `pkill zmx`, never `killall`, never
      run `ngterm-session` without that instance's `NGTERM_LIVE_DIR`.
    - GUI runs headless only: the suite's private weston and dbus (`conformance/tools/run-linux.sh`), or
-     `GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace`, which gives the tests a display and a
+     `GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test -p <crate>`, which gives the tests a display and a
      session bus of their own. Never a window on the user's desktop, never a connection to its session bus or
      compositor. GPUI renders through Vulkan: a headless app instance renders on Mesa's lavapipe alone
      (`scripts/fetch-lavapipe.sh`), never on the machine's GPU, and on Wayland it needs a seat, which only a recent

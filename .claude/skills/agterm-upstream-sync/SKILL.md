@@ -116,7 +116,8 @@ behavior that differs) is confirmed with one `grep`/read of your own before it b
 that missed a file reports a gap that is not there.
 
 The analysis subagents run no cargo: the `target/` they would share is the gates'. While they read, warm it in the
-background (`cargo test --workspace --no-run`, then clippy), so Step 5 starts from a built tree.
+background (`cargo test -p <each crate the bump touches> --no-run`, then their clippy), so Step 5 starts from a
+built tree.
 
 Facts in the plan come from what these reads and commands showed in this run, never from memory of an earlier
 release: upstream changes its own conventions too.
@@ -177,18 +178,21 @@ because every plan task's subagent starts from this branch and must be able to r
 
 ## Step 5. Baseline gates
 
-Run CLAUDE.md's gate on the branch, all in the background, with `NGTERM_*`/`AGTERM_*`/`ZMX_*` stripped, each command's
-output in `WORK/<name>.log`. The commands are README > Test's code block, read from README in this run (it changes;
-do not copy them from memory or an earlier plan), in its order, plus the catalog coverage gate that
-`conformance-gate.yml` runs:
+Run CLAUDE.md's gate on the changed part of the bump, all in the background, with `NGTERM_*`/`AGTERM_*`/`ZMX_*`
+stripped, each command's output in `WORK/<name>.log`. The commands and how to scope them are README > Test, read from
+README in this run (it changes; do not copy them from memory or an earlier plan), in its order, plus the catalog
+coverage gate that `conformance-gate.yml` runs:
 
-- every command of that block up to the selftests, as written there (the window tests under `xvfb-run` *and*
-  `dbus-run-session`, never without the private bus), with `PYTHONPATH=conformance` in front of each pytest
-  command;
+- README > Test's checks scoped to the crates and files the bump touches (the catalog reaches `ngterm-proto` and
+  `ngterm-ctl`; a vendored resource or pin reaches the crates that embed or build it), the window tests under
+  `xvfb-run` *and* `dbus-run-session`, never without the private bus, with `PYTHONPATH=conformance` in front of each
+  pytest command;
 - `PYTHONPATH=conformance .venv/bin/python -m pytest conformance --coverage-gate`;
-- last, the full `conformance/tools/run-linux.sh` (~10 min: protocol, cli, behaviors, then the ratchet).
+- last, a partial `conformance/tools/run-linux.sh -- -k <expr>` over the ids covering what the bump touches (a pin's
+  area, a vendored resource's behavior), or none when it touches no app behavior. The full suite is CI's: it runs on
+  the pull request the user opens (Step 7).
 
-Without WPE WebKit, `--workspace` and the HTML-overlay feature cannot build: use the package lists README names
+Without WPE WebKit, the WPE crates and the HTML-overlay feature cannot build: leave them out with the package lists README names
 instead (`scripts/lib/native.sh`), as the Ubuntu CI jobs do, and say so in the plan's Context. The cargo commands
 share `target/`, so chain them in one background script (`; ` between them, recording each exit status), then
 start `run-linux.sh` after it; the suite builds the release workspace and needs the vendored prefixes
@@ -200,13 +204,15 @@ Read the outcome as the plan's starting point:
   while the catalog lists wire names or CLI subcommands the code lacks; the coverage gate fails on the new items no
   test covers. Each becomes part of a plan task (the wire names in the first task). Record the exact test names
   and keys. When they are green (the code already has the names), the plan has no skeleton task.
-- **Ratchet break** (`check_ratchet.py` lists a listed id red): the bump caused it, since `main` held the ratchet.
+- **Ratchet break** (`check_ratchet.py` lists a listed id red, here or in the PR's CI): the bump caused it, since
+  `main` held the ratchet.
   Find which part (a pin, a resource) by its log, take that part out of the bump (revert it in a new commit),
   rerun, and make it a plan task. The branch never carries a red ratchet id.
 - **Not run on this host**: check_ratchet prints `not run on this host:` for listed Live ids when the host cannot
   claim `live-sessions`/`live-any-shell` (no zsh login shell). They hold the ratchet without running; name them in the
   plan's Context, since a task touching Live cannot see them green locally (CI's zsh job runs them).
-- **Newly green ids**: check_ratchet prints `newly passing, not in the list (N):` with the ids (no such line: none).
+- **Newly green ids** (only among what the partial run selected): check_ratchet prints `newly passing, not in the
+  list (N):` with the ids (no such line: none).
   Add them with
   `.venv/bin/python conformance/tools/check_ratchet.py --report conformance/reports/rust-linux/nodeids.jsonl --add`
   and commit `test: ratchet after the TARGET sync`.
@@ -223,9 +229,9 @@ the analysis, the bump and the baseline:
   gives: new wire names and CLI skeletons first when the catalog gained any, then the groups, then vendored-copy
   conflicts and pin work, then the UI-only task, then "Claim TARGET parity and update the docs" last;
 - every task names its upstream implementation files, Swift tests (with the functions), contract sections, the Rust
-  files, the existing and new conformance ids, and ends with the gate; the full `run-linux.sh` and the
-  `check_ratchet.py --add` belong to the last task only (the baseline above is this skill's own one run), never to
-  each task's gate;
+  files, the existing and new conformance ids, and ends with the gate: README > Test's checks on that task's changed
+  part and a partial `run-linux.sh -k` over its own ids, whose newly green ids it adds with `check_ratchet.py --add`.
+  No task runs the whole workspace or the full suite; those are CI's, on the pull request;
 - a behavior upstream builds on a macOS API names its mechanism on macOS, Linux and Windows, and says which part
   CI builds on those OSes and which it does not yet (`references/areas.md` > Platforms);
 - `already-ported` clusters go to Context with their evidence, so nobody ports them twice;
@@ -250,14 +256,16 @@ mentions, upstream's pin moves reported; each thing left out of the bump and why
 **No port needed** — the no-port list, one line each.
 **Next** — `/plan-exec-revmux docs/plans/<file>` from branch `upstream-sync-TARGET`; then (the user) push the branch
 and start `reference-macos.yml` on it by hand for the new suite tests (`gh workflow run reference-macos.yml --ref
-upstream-sync-TARGET`), and open a pull request so `cross-platform.yml` runs (a plain branch push starts
-neither). Nothing was pushed.
+upstream-sync-TARGET`), and open a pull request so `cross-platform.yml` and the full suite in `rust-linux.yml` run
+(a plain branch push starts neither); a ratchet id red there is fixed on the branch before it merges. Nothing was
+pushed.
 ```
 
 ## Key rules
 
 - The skill ports nothing; behavior changes go to the plan.
-- The branch always builds and holds the ratchet; anything that would break either is a plan task, not a commit.
+- The branch always builds and holds the ratchet (locally on the changed part, in the PR's CI on the whole list);
+  anything that would break either is a plan task, not a commit.
 - `PARITY_LEVEL` moves only in the plan's last task.
 - Every subagent prompt and the plan carry the hard-rules block verbatim.
 - Commits stay local; nothing is pushed, tagged or released.
