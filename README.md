@@ -1,5 +1,7 @@
 # ngterm
 
+<p align="center"><img src="resources/icons/ngterm-logo.png" alt="ngterm" width="240"></p>
+
 ngterm: [agterm](https://github.com/umputun/agterm) in Rust, a GPUI terminal over Ghostty's libghostty-vt, driven by
 `ngtermctl` over a control socket. macOS, Linux and Windows are equal targets. Today the app is built and tested on
 Linux; the terminal core, the pane core and the live-session server under it (libghostty-vt, `ngterm-pty`,
@@ -505,7 +507,8 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 - `packaging/linux/apparmor/`: ngterm's AppArmor profile (WebKit's sandbox on Ubuntu).
 - `resources/`: the agent-status hooks and agent skill the app installs (the skill at `resources/skills/ngterm`,
   upstream's `plugins/agterm/skills/agterm` plus `build/patches/skill-ngterm`), and ngterm's PowerShell integration
-  (`shell-integration/pwsh`), which live sessions load.
+  (`shell-integration/pwsh`), which live sessions load; the app icon in every form (`icons/`, its README says where
+  each goes).
 - `docs/plans/`: implementation plans.
 - `.upstream/agterm`, `.upstream/herdr`: read-only reference clones, git-ignored through `.git/info/exclude`. When
   missing: `git clone --depth 1 --branch v0.38.1 https://github.com/umputun/agterm .upstream/agterm` (the parity tag;

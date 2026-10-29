@@ -283,7 +283,10 @@ impl Bus {
         let hints = HashMap::from([(DESKTOP_ENTRY_HINT, Value::from(app_id))]);
         // the server's own expiry
         let expire_timeout = -1_i32;
-        let arguments = (APP_NAME, replaces, "", title, body, actions, hints, expire_timeout);
+        // the icon by the theme name `resources/icons` installs, the default app id whatever this instance runs under:
+        // servers that skip the desktop entry (dunst, mako) read it here
+        let icon = crate::instance::DEFAULT_APP_ID;
+        let arguments = (APP_NAME, replaces, icon, title, body, actions, hints, expire_timeout);
         let call = connection.call_method(Some(SERVER), PATH, Some(INTERFACE), "Notify", &arguments);
         let reply = Self::reply(signals, early, call).await?;
         let server = reply

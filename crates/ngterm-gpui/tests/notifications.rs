@@ -111,6 +111,7 @@ fn banners_reach_a_private_bus_replace_click_and_withdraw() {
 enum Call {
     Notify {
         app: String,
+        icon: String,
         replaces: u32,
         id: u32,
         body: String,
@@ -146,6 +147,7 @@ fn serve(address: &str, calls: &Arc<Mutex<Vec<Call>>>) -> TestResult<zbus::block
 /// The `Notify` call as the server reads it.
 struct Notify {
     app: String,
+    icon: String,
     replaces: u32,
     body: String,
     actions: Vec<String>,
@@ -171,6 +173,7 @@ impl Server {
             &self.calls,
             Call::Notify {
                 app: request.app,
+                icon: request.icon,
                 replaces: request.replaces,
                 id,
                 body: request.body,
@@ -206,9 +209,10 @@ impl Server {
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
     ) -> zbus::fdo::Result<u32> {
-        drop((app_icon, summary, expire_timeout));
+        drop((summary, expire_timeout));
         self.notify(Notify {
             app: app_name,
+            icon: app_icon,
             replaces: replaces_id,
             body,
             actions,
@@ -497,7 +501,7 @@ fn a_notify_has_its_own_slot(
     Ok(())
 }
 
-/// A banner the server can click, under the app's desktop entry; a repeat from one pane replaces its banner, another
+/// A banner the server can click, under the app's desktop entry and icon; a repeat from one pane replaces its banner, another
 /// pane gets its own.
 fn repeats_replace_their_banner(scenario: &Scenario) {
     let Scenario {
@@ -513,13 +517,14 @@ fn repeats_replace_their_banner(scenario: &Scenario) {
         seen[0],
         Call::Notify {
             app: "ngterm".to_owned(),
+            icon: ngterm_gpui::instance::DEFAULT_APP_ID.to_owned(),
             replaces: 0,
             id: 1,
             body: "one".to_owned(),
             actions: vec!["default".to_owned(), String::new()],
             desktop_entry: Some(APP_ID.to_owned()),
         },
-        "a banner the server can click, under the app's desktop entry"
+        "a banner the server can click, under the app's desktop entry and icon"
     );
     sink.send(main, "t", "two");
     sink.send(split, "t", "three");

@@ -1240,6 +1240,7 @@ pub fn open(
         // the title bar is the app's own (`titlebar.rs`): the window manager's decorations only where the compositor
         // insists (GPUI falls back to them on X11 without a compositing manager, and a Wayland compositor may refuse)
         window_decorations: Some(gpui_kit::WindowDecorations::Client),
+        icon: crate::app_icon::window_icon(),
         ..gpui_kit::WindowOptions::default()
     };
     let env = Rc::clone(env);

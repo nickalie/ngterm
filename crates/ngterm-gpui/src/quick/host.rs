@@ -112,6 +112,7 @@ pub fn window_options(
         window_background: WindowBackgroundAppearance::Transparent,
         app_id: Some(app_id.to_owned()),
         window_decorations: Some(WindowDecorations::Client),
+        icon: crate::app_icon::window_icon(),
         ..WindowOptions::default()
     };
     match host {
