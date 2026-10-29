@@ -4,8 +4,8 @@
 //! pixels text to background. The text fades and the background does not darken. One Appearance setting gives both
 //! washes their strength, nothing at 0.
 //!
-//! The unfocused pane of a shown split takes the wash. So does an overlay covering that pane, in the overlay's own
-//! background. A floating program's backdrop washes the whole session behind it: the session default over the page,
+//! The unfocused pane of a shown split takes the wash. So does a program overlay covering that pane, in the overlay's
+//! own background; a page covering it takes none (a user override of upstream, which washes a page too). A floating program's backdrop washes the whole session behind it: the session default over the page,
 //! then each laid-out pane's color over that pane, painted opaque and faded once as a group. While a backdrop washes
 //! the page the pane wash stays off, since the two would stack to a stronger mute on one pane than on the other.
 //!
@@ -32,7 +32,7 @@ pub struct Muted {
 
 /// The pane wash of `session`'s page laid out by `plan` (`None` under the dashboard or off screen), at `opacity` over
 /// the `theme` background: over the pane [`PanePlan::muted`] names, in the background its overlay or its terminal
-/// renders.
+/// renders; nothing while a page covers that pane.
 #[must_use]
 pub fn muted(session: &Session, plan: Option<&PanePlan>, opacity: f64, theme: Rgb) -> Option<Muted> {
     if opacity <= 0.0 {
@@ -46,6 +46,9 @@ pub fn muted(session: &Session, plan: Option<&PanePlan>, opacity: f64, theme: Rg
         Slot::Scratch => return None,
     };
     let overlay = plan.overlays.pane(slot).is_some();
+    if overlay && session.pane_overlay_is_html(pane) {
+        return None;
+    }
     let hex = session.pane_wash_color_hex(pane);
     Some(Muted {
         slot,

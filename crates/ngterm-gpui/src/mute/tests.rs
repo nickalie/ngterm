@@ -1,5 +1,6 @@
 //! The inactive-pane and backdrop washes (ported from the GTK build's `mute.rs` tests) and the backdrop's flattening.
 
+use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
 use ngterm_core::model::{BackgroundWatermark, OverlayPane, SplitAxis, WatermarkKind};
 
 use super::*;
@@ -104,6 +105,25 @@ fn an_overlay_wash_blends_toward_the_overlays_own_background() {
         washes.wash(Slot::Primary, false),
         None,
         "over the overlay, not the terminal"
+    );
+}
+
+#[test]
+fn a_page_over_the_unfocused_pane_takes_no_wash() {
+    let mut paged = session(Some(split(true, true)), false);
+    pane_overlay(&mut paged, OverlayPane::Left, 1);
+    if let Some(overlay) = paged.pane_overlays.slot_mut(OverlayPane::Left).overlay.as_mut() {
+        overlay.html = Some(HtmlOverlay::new(
+            HtmlSource::Url(url::Url::parse("https://example.com/").unwrap()),
+            HtmlPageFlags::default(),
+        ));
+    }
+    assert_eq!(muted_of(&paged, 0.4), None, "the page stays unwashed");
+    paged.split.focused = false;
+    assert_eq!(
+        muted_of(&paged, 0.4).map(|muted| (muted.slot, muted.overlay)),
+        Some((Slot::Split, false)),
+        "the page has the focus: the terminal beside it still fades"
     );
 }
 
