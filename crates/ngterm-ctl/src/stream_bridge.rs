@@ -429,11 +429,12 @@ mod tests {
             bridge,
             _ends,
         } = rig();
+        // before anything can shut the bridge's side down: macOS refuses a socket option once the peer shut down
+        app.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         client::send_all(&app, b"{\"ok\":true}\n").unwrap();
         bridge.open(&present()).unwrap();
         let pumping = thread::spawn(move || bridge.pump());
         drop(viewer_in);
-        app.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let mut rest = Vec::new();
         (&app).read_to_end(&mut rest).unwrap();
         assert!(

@@ -30,11 +30,13 @@ pub(super) fn accept(listener: &Listener) -> io::Result<Connection> {
 }
 
 /// A client's connection: on macOS its writes to a server that hung up fail with `EPIPE` rather than raising
-/// `SIGPIPE`, which `ngtermctl` keeps at its default action.
+/// `SIGPIPE`, which `ngtermctl` keeps at its default action. The option's failure is ignored, as upstream's
+/// `SocketClient` ignores it: macOS refuses it (`EINVAL`) on a socket whose peer already shut down, which leaves a
+/// connection whose reads end at once, not a failed connect, and `ngtermctl`'s writes carry `MSG_NOSIGNAL` anyway.
 pub(super) fn connect(socket: &Path) -> io::Result<Connection> {
     let stream = UnixStream::connect(socket)?;
     #[cfg(target_vendor = "apple")]
-    no_sigpipe(&stream)?;
+    let _ = no_sigpipe(&stream);
     Ok(stream)
 }
 
