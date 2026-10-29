@@ -103,8 +103,10 @@ guest has 4 CPUs and 6.5 GB of memory.
 - [ ] the clipboard helper lookup through `PATHEXT` on Windows; `close_range` and `/proc/locks` uses with their macOS and
   Windows forms
 - [ ] the CLI's tests against the server pass on all three OSes
-- [ ] `ngterm-ctl` joins PACKAGES; README's statement that it is Linux only goes
+- [x] `ngterm-ctl` joins PACKAGES; README's statement that it is Linux only goes
 - [ ] Windows VM: clippy and tests green; `ngtermctl --help` and a round trip against a test server run there
+- ⚠️ the Windows gate's first run (2026-10-29 ~21:55) died with the VM: a host-wide SIGBUS storm (rust-lld, ar, brave,
+  vmware-vmx) took the guest down; the Windows half of the items above is unverified until the VM is back
 
 ### Task 3: App services on Windows (`ngterm-app`)
 
