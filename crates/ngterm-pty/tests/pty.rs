@@ -1,6 +1,7 @@
 //! The PTY layer on real PTYs, on every OS: a child spawned with its argv, environment and working directory, its
-//! output read and its input written through the actor, a resize reaching it, its tree killed, its exit code, and
-//! the handoff's quiesce, rollback and release with a second actor taking the PTY over.
+//! output read and its input written through the actor, a resize reaching it, its tree killed, a typed Ctrl+C
+//! reaching it on Windows, its exit code, and the handoff's quiesce, rollback and release with a second actor taking
+//! the PTY over.
 //!
 //! The commands are per OS: `/bin/sh` on Unix, `cmd.exe` and Windows PowerShell on Windows. Every child gets the
 //! test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables.
@@ -385,6 +386,35 @@ fn killing_the_tree_ends_the_child_and_its_descendants() -> TestResult {
     assert_eq!(session.exit.recv_timeout(PATIENCE)?, ExitReason::Eof);
     // signalling a tree that is gone is no error
     session.child.killer().kill_tree()?;
+    Ok(())
+}
+
+/// A `^C` typed into the PTY interrupts the child's program even when the spawner ignores Ctrl+C, as a process
+/// started in a process group of its own does (the session server's detached start, a CI runner's steps) and its
+/// children would inherit: the spawn lets them take it.
+#[cfg(windows)]
+#[test]
+fn a_typed_ctrl_c_interrupts_the_child_even_when_the_spawner_ignores_it() -> TestResult {
+    use windows_sys::Win32::Foundation::TRUE;
+    use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+
+    // SAFETY: with no handler the call only sets whether this test process ignores Ctrl+C.
+    unsafe { SetConsoleCtrlHandler(None, TRUE) };
+    let mut session = start(
+        &command("ping.exe").args(["-n", "600", "127.0.0.1"]),
+        Size::cells(24, 80),
+    )?;
+    session.expect("127.0.0.1");
+    session.handle.write_input(b"\x03")?;
+    let deadline = Instant::now() + PATIENCE;
+    while session.child.try_wait()?.is_none() {
+        if Instant::now() >= deadline {
+            session.child.killer().kill_tree()?;
+            return Err(format!("the ping ignored the Ctrl+C: {:?}", session.text()).into());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    session.finish()?;
     Ok(())
 }
 

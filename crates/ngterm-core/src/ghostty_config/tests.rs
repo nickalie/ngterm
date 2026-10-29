@@ -1118,10 +1118,40 @@ fn the_settings_pick_the_config_directory_and_the_global_config() -> TestResult 
         config_files(&env),
         [
             PathBuf::from("/home/u/.config/ghostty/config"),
+            PathBuf::from("/home/u/.config/ghostty/config.ghostty"),
             PathBuf::from("/elsewhere/ghostty.conf"),
             settings_conf
         ]
     );
+    Ok(())
+}
+
+/// Ghostty's `loadDefaultFiles` at the pin: the legacy `config`, then `config.ghostty` over it; either alone loads.
+#[test]
+fn the_inherited_global_config_loads_config_then_config_ghostty() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let state = root.path().join("state");
+    let ghostty = root.path().join("home/.config/ghostty");
+    std::fs::create_dir_all(&state)?;
+    std::fs::create_dir_all(&ghostty)?;
+    std::fs::write(state.join("settings.json"), r#"{"inheritGlobalGhosttyConfig": true}"#)?;
+    let env = paths::MapEnv::new()
+        .with("HOME", root.path().join("home").as_os_str())
+        .with("XDG_CONFIG_HOME", root.path().join("home/.config").as_os_str())
+        .with(paths::STATE_DIR_ENV, state.as_os_str());
+    let font_size = || -> f32 { load_app_config(&env, true, None).finalize(false, &[]).config.font.size };
+    std::fs::write(ghostty.join("config.ghostty"), "font-size = 21\n")?;
+    assert!((font_size() - 21.0).abs() < f32::EPSILON, "config.ghostty alone");
+    std::fs::write(ghostty.join("config"), "font-size = 19\nwindow-padding-x = 3\n")?;
+    let both = load_app_config(&env, true, None).finalize(false, &[]);
+    assert_eq!(both.diagnostics, []);
+    assert!(
+        (both.config.font.size - 21.0).abs() < f32::EPSILON,
+        "config.ghostty wins over the legacy config"
+    );
+    assert_eq!(both.config.window_padding.x, Padding { start: 3, end: 3 });
+    std::fs::remove_file(ghostty.join("config.ghostty"))?;
+    assert!((font_size() - 19.0).abs() < f32::EPSILON, "the legacy config alone");
     Ok(())
 }
 

@@ -94,14 +94,18 @@ pub fn defaults_text(terminfo_resolved: bool) -> String {
 }
 
 /// The user's config files the settings select, in load order (upstream's `resolveConfigInputs`, read from
-/// `settings.json` on every build): the global ghostty config when `inheritGlobalGhosttyConfig` is on, the
+/// `settings.json` on every build): the global ghostty config files when `inheritGlobalGhosttyConfig` is on (the
+/// legacy `config`, then `config.ghostty`, in Ghostty's order: [`paths::global_ghostty_config_paths`]), the
 /// ngterm-scoped `ghostty.conf` of the settings' config directory, then the Settings window's `ghostty-settings.conf`.
 #[must_use]
 pub fn config_files(env: &dyn Env) -> Vec<PathBuf> {
     let settings = SettingsStore::new(paths::state_dir(env)).load();
     let config_dir = paths::config_dir(env, settings.config_directory.as_deref().map(Path::new));
-    let global =
-        paths::global_ghostty_config_path(env).filter(|_| settings.inherit_global_ghostty_config == Some(true));
+    let global = if settings.inherit_global_ghostty_config == Some(true) {
+        paths::global_ghostty_config_paths(env)
+    } else {
+        Vec::new()
+    };
     global
         .into_iter()
         .chain([
@@ -115,10 +119,7 @@ pub fn config_files(env: &dyn Env) -> Vec<PathBuf> {
 /// `themes` directory of the resolved resources.
 #[must_use]
 pub fn theme_dirs(env: &dyn Env, bundled: Option<&Path>) -> Vec<PathBuf> {
-    let user = paths::global_ghostty_config_path(env)
-        .as_deref()
-        .and_then(Path::parent)
-        .map(|ghostty| ghostty.join("themes"));
+    let user = paths::global_ghostty_dir(env).map(|ghostty| ghostty.join("themes"));
     user.into_iter().chain(bundled.map(Path::to_path_buf)).collect()
 }
 
