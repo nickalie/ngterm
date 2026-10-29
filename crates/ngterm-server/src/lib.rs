@@ -1,12 +1,15 @@
-//! ngterm's control server: an `AF_UNIX` stream socket answering one JSON request line per connection.
+//! ngterm's control server: a local stream endpoint (an `AF_UNIX` socket on Unix, a named pipe on Windows: see
+//! [`endpoint`]) answering one JSON request line per connection.
 //!
 //! Ported from upstream's `agterm/Control/ControlServer.swift` (contract in `.claude/rules/control-api.md` >
 //! Transport and addressing):
-//! - ownership: an exclusive `flock` on `<socket>.lock`, taken in [`ControlServer::new`] (before any shell is
-//!   spawned, so `NGTERM_SOCKET` is right from the start) and kept until [`ControlServer::stop`]; a refused instance
-//!   never unlinks or binds the path and advertises `<socket>.unavailable` instead. A second instance on the same
-//!   state directory never gets here: it exits at launch on the state directory's lock (`ngterm_core::state_lock`), so
-//!   this lock separates only instances on different state directories that share one socket;
+//! - ownership: an exclusive lock on `<socket>.lock` (`flock`, `LockFileEx` on Windows), taken in
+//!   [`ControlServer::new`] (before any shell is spawned, so `NGTERM_SOCKET` is right from the start) and kept until
+//!   [`ControlServer::stop`]; a refused instance never unlinks or binds the endpoint and advertises
+//!   `<socket>.unavailable` instead. On Windows the pipe's first instance guards the endpoint as well, against a
+//!   process that holds the pipe's name without the lock. A second instance on the same state directory never gets
+//!   here: it exits at launch on the state directory's lock (`ngterm_core::state_lock`), so this lock separates only
+//!   instances on different state directories that share one socket;
 //! - each connection reads one line and writes one response within [`ConnectionDeadlines`]; a line that cannot be
 //!   read is answered `request too large or read failed`, one that does not decode `invalid request: <context>`;
 //! - the request hops to the main loop through [`ngterm_host::MainLoop`];
@@ -18,13 +21,13 @@
 //! queue and gives a thread only to the commands that wait on the network; a handler's panic becomes `ok:false`.
 
 mod connection;
+pub mod endpoint;
 pub mod stream;
 
-use std::fs::{self, File, OpenOptions, Permissions};
+use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,10 +40,13 @@ use ngterm_proto::Request;
 
 pub use crate::connection::ConnectionDeadlines;
 use crate::connection::Hop;
+use crate::endpoint::Listener;
+pub use crate::endpoint::{Connection, connect};
 pub use crate::stream::{LineStream, LineStreamLimits, LineStreamOwner, Reply, ReplySender, StreamOwner};
 
 /// A socket path must be shorter than this many bytes: upstream's `start` guard (`socketPath.utf8.count < 104`, the
-/// macOS `sun_path` size), kept on Linux although its `sun_path` holds 108.
+/// macOS `sun_path` size), kept on Linux although its `sun_path` holds 108. Unix only: a Windows path names a pipe
+/// through its hash, whatever its length.
 pub const MAX_SOCKET_PATH_BYTES: usize = 104;
 
 /// Why the server is not serving.
@@ -80,7 +86,8 @@ pub struct ControlServer {
     running: Option<Running>,
 }
 
-/// Takes the exclusive, non-blocking `flock` on `<socket>.lock`, creating the socket's directory and the lock file.
+/// Takes the exclusive, non-blocking lock on `<socket>.lock` (`flock`, `LockFileEx` on Windows), creating the socket's
+/// directory and the lock file (mode 0600 on Unix).
 fn acquire_lock(socket: &Path) -> Result<File, ServerError> {
     let path = ownership_lock_path(socket);
     let lock_error = |source| ServerError::Lock {
@@ -90,14 +97,11 @@ fn acquire_lock(socket: &Path) -> Result<File, ServerError> {
     if let Some(parent) = socket.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent).map_err(lock_error)?;
     }
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(&path)
-        .map_err(lock_error)?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let file = options.open(&path).map_err(lock_error)?;
     match file.try_lock() {
         Ok(()) => Ok(file),
         Err(fs::TryLockError::WouldBlock) => Err(ServerError::Refused(socket.to_path_buf())),
@@ -105,32 +109,35 @@ fn acquire_lock(socket: &Path) -> Result<File, ServerError> {
     }
 }
 
-/// Replaces whatever is at `socket` (a stale socket of a dead instance; only the lock holder gets here) with a fresh
-/// listener only the owner can connect to.
-fn bind(socket: &Path) -> Result<UnixListener, ServerError> {
-    let bind_error = |source| ServerError::Bind {
+fn bind(socket: &Path) -> Result<Listener, ServerError> {
+    endpoint::bind(socket).map_err(|source| ServerError::Bind {
         path: socket.to_path_buf(),
         source,
-    };
-    if let Err(error) = fs::remove_file(socket)
-        && error.kind() != io::ErrorKind::NotFound
-    {
-        tracing::debug!(%error, socket = %socket.display(), "stale control socket not removed");
-    }
-    let listener = UnixListener::bind(socket).map_err(bind_error)?;
-    // another local user must not drive this terminal over the control channel
-    fs::set_permissions(socket, Permissions::from_mode(0o600)).map_err(bind_error)?;
-    Ok(listener)
+    })
 }
 
-fn accept_loop<S: 'static>(listener: &UnixListener, stop: &AtomicBool, hop: &Arc<Hop<S>>) {
+/// The Unix form of upstream's path length guard ([`MAX_SOCKET_PATH_BYTES`]).
+#[cfg(unix)]
+fn check_path_length(socket: &Path) -> Result<(), ServerError> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let len = socket.as_os_str().as_bytes().len();
+    if len >= MAX_SOCKET_PATH_BYTES {
+        return Err(ServerError::PathTooLong {
+            path: socket.to_path_buf(),
+            len,
+        });
+    }
+    Ok(())
+}
+
+fn accept_loop<S: 'static>(listener: &Listener, stop: &AtomicBool, hop: &Arc<Hop<S>>) {
     loop {
         let accepted = listener.accept();
         if stop.load(Ordering::Acquire) {
             return;
         }
         match accepted {
-            Ok((stream, _)) => spawn_connection(stream, hop),
+            Ok(stream) => spawn_connection(stream, hop),
             Err(error) => {
                 // transient (EINTR, ECONNABORTED, EMFILE): keep serving, without spinning
                 tracing::warn!(%error, "control accept failed");
@@ -140,7 +147,7 @@ fn accept_loop<S: 'static>(listener: &UnixListener, stop: &AtomicBool, hop: &Arc
     }
 }
 
-fn spawn_connection<S: 'static>(stream: UnixStream, hop: &Arc<Hop<S>>) {
+fn spawn_connection<S: 'static>(stream: Connection, hop: &Arc<Hop<S>>) {
     let hop = Arc::clone(hop);
     let spawned = thread::Builder::new()
         .name("ngterm-control-conn".to_owned())
@@ -219,8 +226,9 @@ impl ControlServer {
     ///
     /// # Errors
     ///
-    /// The path is [`MAX_SOCKET_PATH_BYTES`] or longer, another instance owns it, or the lock, bind or accept thread
-    /// failed. Every failure after the lock keeps it, so no other instance can bind a path this one may advertise.
+    /// The path is [`MAX_SOCKET_PATH_BYTES`] or longer (Unix), another instance owns it, or the lock, bind or accept
+    /// thread failed. Every failure after the lock keeps it, so no other instance can bind a path this one may
+    /// advertise.
     pub fn start<S, H>(&mut self, main_loop: Arc<dyn MainLoop<S>>, handler: H) -> Result<(), ServerError>
     where
         S: 'static,
@@ -229,13 +237,9 @@ impl ControlServer {
         if self.running.is_some() {
             return Ok(());
         }
-        let len = self.socket.as_os_str().as_bytes().len();
-        if len >= MAX_SOCKET_PATH_BYTES {
-            return Err(ServerError::PathTooLong {
-                path: self.socket.clone(),
-                len,
-            });
-        }
+        // none on Windows, where the path names its pipe through a hash
+        #[cfg(unix)]
+        check_path_length(&self.socket)?;
         self.ensure_ownership()?;
         let listener = bind(&self.socket)?;
         let hop = Arc::new(Hop {
@@ -275,24 +279,24 @@ impl ControlServer {
     }
 
     /// Stops accepting, removes the socket and releases the lock. The lock file stays: unlinking it would let the
-    /// next instance lock a fresh inode and exclude nobody. Connections already accepted finish on their own threads.
+    /// next instance lock a fresh inode and exclude nobody. Connections already accepted finish on their own threads;
+    /// on Windows they keep the pipe's name until they do, so a server started again in this process before then
+    /// fails to bind.
     pub fn stop(&mut self) {
         if let Some(running) = self.running.take() {
             running.stop.store(true, Ordering::Release);
-            // the accept thread is blocked in accept(); a connection wakes it to see the flag
-            match UnixStream::connect(&self.socket) {
-                Ok(_) => {
+            // the accept thread is blocked in accept(); a connection, held until the thread is done, wakes it to see the
+            // flag
+            match endpoint::wake(&self.socket) {
+                Ok(waker) => {
                     if running.thread.join().is_err() {
                         tracing::error!("control accept thread panicked");
                     }
+                    drop(waker);
                 }
                 Err(error) => tracing::warn!(%error, "control accept thread not woken; leaving it detached"),
             }
-            if let Err(error) = fs::remove_file(&self.socket)
-                && error.kind() != io::ErrorKind::NotFound
-            {
-                tracing::warn!(%error, "control socket not removed");
-            }
+            endpoint::remove(&self.socket);
         }
         if matches!(self.ownership, Ownership::Held { .. }) {
             self.ownership = Ownership::Unowned;

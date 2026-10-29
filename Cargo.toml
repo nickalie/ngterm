@@ -46,7 +46,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 # The Core Foundation types macOS's Text Input Source Services take and return (ngterm-gpui's keyboard-layout lock,
 # `input_source/macos.rs`), the objc2 project's crate GPUI's macOS backend already links.
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std"] }
-# The UTF-16 strings interprocess takes a named pipe's security descriptor in (ngterm-session, Windows).
+# The UTF-16 strings interprocess takes a named pipe's security descriptor in (ngterm-session, ngterm-server, Windows).
 widestring = "1.2"
 # ngterm-session's server start from inside a Windows job that refuses breakaway: WMI's `Win32_Process.Create`, as
 # herdr starts its server (docs/spikes/20261018-session-server.md). No chrono or time: no WMI dates are read.
@@ -69,7 +69,7 @@ serde = { version = "1", features = ["derive"] }
 # ngterm-session's wire (docs/spikes/20261018-session-server.md: in place of herdr's bincode, whose last release
 # is a tombstone). `use-std` without the default `heapless-cas`: messages own their buffers.
 postcard = { version = "1.1", default-features = false, features = ["use-std"] }
-# ngterm-session's endpoint, as herdr's: a Unix domain socket, a named pipe on Windows.
+# ngterm-session's endpoint, as herdr's: a Unix domain socket, a named pipe on Windows; ngterm-server's named pipe.
 interprocess = "2.4"
 # `preserve_order`: a result built as a `Value` keeps its fields in upstream's order on the wire (the catalog's
 # `fields` order) instead of sorting them.

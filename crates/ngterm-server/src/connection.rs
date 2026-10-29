@@ -4,7 +4,6 @@
 
 use std::any::Any;
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -13,6 +12,7 @@ use ngterm_core::{ControlError, decode_request};
 use ngterm_host::{MainLoop, MainTask};
 use ngterm_proto::{MAX_REQUEST_LINE_BYTES, Request, Response};
 
+use crate::endpoint::Connection;
 use crate::stream::Reply;
 
 /// How long a connection may take to deliver its request line and to take its response, as upstream's
@@ -44,7 +44,8 @@ impl Default for ConnectionDeadlines {
     }
 }
 
-/// The most one `write` call sends, a fraction of the default `AF_UNIX` send buffer (see [`write_all_by`]).
+/// The most one `write` call sends, a fraction of the default `AF_UNIX` send buffer (see [`write_all_by`]), and the
+/// pipe's on Windows.
 const WRITE_CHUNK_BYTES: usize = 64 * 1024;
 
 /// What is left until `deadline`, capped at `timeout`; `None` once nothing is.
@@ -110,7 +111,7 @@ fn panic_message(payload: &(dyn Any + Send)) -> &str {
 
 /// Serves one accepted connection to completion (or until a stream owner takes it). A line that cannot be read is
 /// answered too, before the connection closes.
-pub(crate) fn serve<S: 'static>(stream: UnixStream, hop: &Hop<S>) {
+pub(crate) fn serve<S: 'static>(stream: Connection, hop: &Hop<S>) {
     let mut reader = BufReader::new(stream);
     let reply = match read_line(&mut reader, &hop.deadlines) {
         Ok(line) => match decode_request(&line) {
@@ -133,7 +134,7 @@ pub(crate) fn serve<S: 'static>(stream: UnixStream, hop: &Hop<S>) {
 ///
 /// EOF before any byte, a read error or timeout, the overall read deadline, or a line over
 /// [`MAX_REQUEST_LINE_BYTES`].
-fn read_line(reader: &mut BufReader<UnixStream>, deadlines: &ConnectionDeadlines) -> io::Result<Vec<u8>> {
+fn read_line(reader: &mut BufReader<Connection>, deadlines: &ConnectionDeadlines) -> io::Result<Vec<u8>> {
     let deadline = Instant::now() + deadlines.read_deadline;
     let mut line = Vec::new();
     loop {
@@ -168,7 +169,7 @@ fn read_line(reader: &mut BufReader<UnixStream>, deadlines: &ConnectionDeadlines
 }
 
 /// Writes the response; on a written `ok`, a claiming owner takes the connection, otherwise it is told it never will.
-fn deliver(mut stream: UnixStream, reply: Reply, pending: Vec<u8>, deadlines: &ConnectionDeadlines) {
+fn deliver(mut stream: Connection, reply: Reply, pending: Vec<u8>, deadlines: &ConnectionDeadlines) {
     let Reply {
         response,
         stream: owner,
@@ -186,7 +187,7 @@ fn deliver(mut stream: UnixStream, reply: Reply, pending: Vec<u8>, deadlines: &C
 }
 
 /// An adopted stream starts with no timeouts; its owner sets its own.
-fn clear_timeouts(stream: &UnixStream) -> bool {
+fn clear_timeouts(stream: &Connection) -> bool {
     match stream
         .set_read_timeout(None)
         .and_then(|()| stream.set_write_timeout(None))
@@ -199,7 +200,7 @@ fn clear_timeouts(stream: &UnixStream) -> bool {
     }
 }
 
-fn write_response(stream: &mut UnixStream, response: &Response, deadlines: &ConnectionDeadlines) -> bool {
+fn write_response(stream: &mut Connection, response: &Response, deadlines: &ConnectionDeadlines) -> bool {
     let mut bytes = match serde_json::to_vec(response) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -220,9 +221,10 @@ fn write_response(stream: &mut UnixStream, response: &Response, deadlines: &Conn
 /// Writes all of `bytes` within the write deadline.
 ///
 /// Linux applies `SO_SNDTIMEO` to each wait for socket buffer space, not to the whole `write`, so one `write` of a
-/// large response to a client draining it slowly would run past any deadline. Writing at most [`WRITE_CHUNK_BYTES`]
+/// large response to a client draining it slowly would run past any deadline (a Windows pipe write waits until the
+/// client has taken all of it, so there one large write would too). Writing at most [`WRITE_CHUNK_BYTES`]
 /// per call lets the deadline be checked between chunks, as upstream checks it between `write` calls.
-fn write_all_by(stream: &mut UnixStream, mut bytes: &[u8], deadlines: &ConnectionDeadlines) -> io::Result<()> {
+fn write_all_by(stream: &mut Connection, mut bytes: &[u8], deadlines: &ConnectionDeadlines) -> io::Result<()> {
     let deadline = Instant::now() + deadlines.write_deadline;
     while !bytes.is_empty() {
         let wait = next_wait(deadline, deadlines.write_timeout).ok_or_else(deadline_passed)?;

@@ -75,14 +75,19 @@ guest has 4 CPUs and 6.5 GB of memory.
 
 ### Task 1: Control server on Windows and macOS (`ngterm-server`)
 
-- [ ] the listener and connections behind an endpoint seam: AF_UNIX on Unix, the named pipe on Windows (Decisions >
+- [x] the listener and connections behind an endpoint seam: AF_UNIX on Unix, the named pipe on Windows (Decisions >
   Control endpoint), streams (`stream.rs`, the live attach and job channels) over both
-- [ ] the binder's lock and stale-socket handling in their Windows form (one server per endpoint; a second start is
+- [x] the binder's lock and stale-socket handling in their Windows form (one server per endpoint; a second start is
   refused with the same error the Unix form gives)
-- [ ] `ngterm-core`'s socket-path helpers name the Windows pipe where they need to (one place, shared with the client)
-- [ ] the server's tests pass on Windows and macOS (Unix-specific assertions gated, their Windows twins added)
-- [ ] `ngterm-server` joins `cross-platform.yml`'s PACKAGES; its header comment updated
-- [ ] Windows VM: clippy and tests of `ngterm-server` and `ngterm-core` green; Linux gate green
+- [x] `ngterm-core`'s socket-path helpers name the Windows pipe where they need to (one place, shared with the client)
+- [x] the server's tests pass on Windows and macOS (Unix-specific assertions gated, their Windows twins added)
+  (macOS checked with `cargo check --target x86_64-apple-darwin --all-targets` only; its tests run on CI's runner)
+- [x] `ngterm-server` joins `cross-platform.yml`'s PACKAGES; its header comment updated
+- [x] Windows VM: clippy and tests of `ngterm-server` and `ngterm-core` green; Linux gate green
+- ➕ the pipe naming scheme and the pipe's descriptor and server-user check moved to `ngterm-core` (`paths::pipe_name`,
+  `paths::control_pipe_name`, `pipe_security`), shared by ngterm-session's namespace pipe and the control pipe
+- ➕ CLAUDE.md's crate table still lists `ngterm-server` as "Linux, macOS"; it is `any` now (left to the docs pass,
+  Task 9)
 
 ### Task 2: `ngtermctl` on Windows and macOS (`ngterm-ctl`)
 

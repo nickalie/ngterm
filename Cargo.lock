@@ -4686,6 +4686,7 @@ dependencies = [
 name = "ngterm-server"
 version = "0.1.0"
 dependencies = [
+ "interprocess",
  "libc",
  "ngterm-core",
  "ngterm-host",
@@ -4694,6 +4695,8 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
+ "widestring",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

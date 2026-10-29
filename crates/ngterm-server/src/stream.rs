@@ -9,8 +9,6 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, ErrorKind, Read};
 use std::net::Shutdown;
-use std::os::fd::AsRawFd;
-use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -18,12 +16,14 @@ use std::time::Duration;
 use ngterm_core::ControlError;
 use ngterm_proto::Response;
 
+use crate::endpoint::Connection;
+
 /// Takes over a connection after its `ok` response was written.
 pub trait StreamOwner: Send {
     /// Owns `stream` from here on, on the connection's own thread; it may block for the stream's whole life and closes
     /// the stream by dropping it. The stream comes without read or write timeouts: the owner sets its own. `pending`
     /// holds bytes the client sent after the request line that the server already read.
-    fn adopt(self: Box<Self>, stream: UnixStream, pending: Vec<u8>);
+    fn adopt(self: Box<Self>, stream: Connection, pending: Vec<u8>);
 
     /// The connection never reached the owner: the response was a failure or could not be written. The default does
     /// nothing; an owner holding a claim (an overlay job, a presentation) releases it here.
@@ -139,7 +139,7 @@ impl LineStreamOwner {
 }
 
 impl StreamOwner for LineStreamOwner {
-    fn adopt(self: Box<Self>, socket: UnixStream, pending: Vec<u8>) {
+    fn adopt(self: Box<Self>, socket: Connection, pending: Vec<u8>) {
         let Self {
             stream,
             mut on_line,
@@ -186,11 +186,12 @@ const READ_CHUNK_BYTES: usize = 16 * 1024;
 /// [`LineStream::run`] reads on the calling thread and spawns a writer thread that drains the queue, so the app never
 /// waits on the peer. Reads never time out (an idle stream is healthy; liveness is the app's business), writes are
 /// bounded by [`LineStreamLimits::write_timeout`], and a write to a peer that hung up fails with `EPIPE` rather than
-/// raising `SIGPIPE` (`MSG_NOSIGNAL`, upstream's `SO_NOSIGPIPE`).
+/// raising `SIGPIPE` (`MSG_NOSIGNAL`, and upstream's `SO_NOSIGPIPE` on macOS as well; a Windows pipe has no signal).
 ///
 /// The reader is the only closer. [`LineStream::shutdown`] wakes it with `shutdown(2)` on a duplicate of the socket
-/// that it keeps until the reader is done, so where upstream must guard its one descriptor number against reuse, each
-/// handle here is its own descriptor and none is closed while another thread may still call into it.
+/// that it keeps until the reader is done (on Windows the pipe's disconnect, which cancels the reader's and the
+/// writer's pending calls: [`Connection::shutdown`]), so where upstream must guard its one descriptor number against
+/// reuse, each handle here is its own descriptor and none is closed while another thread may still call into it.
 #[derive(Debug, Clone)]
 pub struct LineStream {
     shared: Arc<Shared>,
@@ -212,7 +213,7 @@ struct State {
     started: bool,
     /// A duplicate of the socket for `shutdown(2)`, held from the start of [`LineStream::run`] until its reader is
     /// done.
-    control: Option<UnixStream>,
+    control: Option<Connection>,
 }
 
 /// What [`LineStream::run`] found when it attached its socket.
@@ -279,7 +280,7 @@ impl LineStream {
     /// `on_line` gets each received line, newline excluded, on this thread; `on_close` runs once the socket is closed,
     /// and then this returns. A line over [`LineStreamLimits::max_line_bytes`] closes the stream. A second `run` on the
     /// same stream drops its socket at once and calls neither.
-    pub fn run<L, C>(&self, socket: UnixStream, pending: &[u8], mut on_line: L, on_close: C)
+    pub fn run<L, C>(&self, socket: Connection, pending: &[u8], mut on_line: L, on_close: C)
     where
         L: FnMut(&[u8]),
         C: FnOnce(),
@@ -298,7 +299,7 @@ impl LineStream {
     }
 
     /// Reads until the stream ends, then stops the writer and lets go of the control duplicate.
-    fn serve(&self, socket: &UnixStream, pending: &[u8], on_line: &mut impl FnMut(&[u8])) {
+    fn serve(&self, socket: &Connection, pending: &[u8], on_line: &mut impl FnMut(&[u8])) {
         let writer = self.shared.spawn_writer(socket);
         if writer.is_some() {
             self.shared.read_loop(socket, pending, on_line);
@@ -341,7 +342,7 @@ impl Shared {
 
     /// Sets stream timing on the socket (reads never time out, writes are bounded) and keeps a duplicate for
     /// [`Shared::shutdown`].
-    fn attach(&self, socket: &UnixStream) -> Attach {
+    fn attach(&self, socket: &Connection) -> Attach {
         let mut state = self.lock();
         if state.started {
             return Attach::AlreadyRun;
@@ -352,8 +353,10 @@ impl Shared {
         }
         let prepared = socket
             .set_read_timeout(None)
-            .and_then(|()| socket.set_write_timeout(Some(self.limits.write_timeout)))
-            .and_then(|()| socket.try_clone());
+            .and_then(|()| socket.set_write_timeout(Some(self.limits.write_timeout)));
+        #[cfg(target_vendor = "apple")]
+        let prepared = prepared.and_then(|()| no_sigpipe(socket));
+        let prepared = prepared.and_then(|()| socket.try_clone());
         match prepared {
             Ok(control) => {
                 state.control = Some(control);
@@ -366,7 +369,7 @@ impl Shared {
         }
     }
 
-    fn spawn_writer(self: &Arc<Self>, socket: &UnixStream) -> Option<JoinHandle<()>> {
+    fn spawn_writer(self: &Arc<Self>, socket: &Connection) -> Option<JoinHandle<()>> {
         let spawned = socket.try_clone().and_then(|socket| {
             let shared = Arc::clone(self);
             thread::Builder::new()
@@ -378,7 +381,7 @@ impl Shared {
             .ok()
     }
 
-    fn read_loop(&self, mut socket: &UnixStream, pending: &[u8], on_line: &mut impl FnMut(&[u8])) {
+    fn read_loop(&self, mut socket: &Connection, pending: &[u8], on_line: &mut impl FnMut(&[u8])) {
         let mut lines = LineBuffer::new(self.limits.max_line_bytes);
         let mut chunk = vec![0_u8; READ_CHUNK_BYTES];
         let mut input = pending;
@@ -406,7 +409,7 @@ impl Shared {
         }
     }
 
-    fn write_loop(&self, socket: &UnixStream) {
+    fn write_loop(&self, socket: &Connection) {
         while let Some(line) = self.next_line() {
             if let Err(error) = send_all(socket, &line) {
                 tracing::info!(%error, "control stream write failed or timed out; closing");
@@ -432,9 +435,35 @@ impl Shared {
     }
 }
 
+/// Keeps a write to a peer that hung up from raising `SIGPIPE` on macOS whatever the flags it is sent with
+/// (`SO_NOSIGPIPE`, upstream's guard); Linux has no such option and relies on `MSG_NOSIGNAL` ([`send_all`]).
+#[cfg(target_vendor = "apple")]
+fn no_sigpipe(socket: &Connection) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+    let on: libc::c_int = 1;
+    let len = libc::socklen_t::try_from(size_of::<libc::c_int>()).map_err(io::Error::other)?;
+    // SAFETY: the descriptor is the socket's, borrowed for the call; `on` is a live `c_int` of the length passed.
+    let set = unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_NOSIGPIPE,
+            (&raw const on).cast::<libc::c_void>(),
+            len,
+        )
+    };
+    if set == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// Writes all of `data` with `MSG_NOSIGNAL`: std's `UnixStream` writes with `write(2)`, which raises `SIGPIPE` on a
 /// peer that hung up unless the process ignores it, where this fails with `EPIPE` whatever the signal disposition.
-fn send_all(socket: &UnixStream, mut data: &[u8]) -> io::Result<()> {
+#[cfg(unix)]
+fn send_all(socket: &Connection, mut data: &[u8]) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
     let fd = socket.as_raw_fd();
     while !data.is_empty() {
         let (buf, len) = (data.as_ptr().cast::<libc::c_void>(), data.len());
@@ -454,6 +483,21 @@ fn send_all(socket: &UnixStream, mut data: &[u8]) -> io::Result<()> {
     }
     Ok(())
 }
+
+/// Writes all of `data` through the pipe, at most [`PIPE_WRITE_BYTES`] per call: a pipe write waits until its peer
+/// has taken all of it, so the write timeout bounds each chunk, as `SO_SNDTIMEO` bounds each wait for socket buffer
+/// space, not a whole long line.
+#[cfg(windows)]
+fn send_all(mut socket: &Connection, data: &[u8]) -> io::Result<()> {
+    for chunk in data.chunks(PIPE_WRITE_BYTES) {
+        io::Write::write_all(&mut socket, chunk)?;
+    }
+    Ok(())
+}
+
+/// The most one pipe write carries ([`send_all`]): what the control pipe buffers each way.
+#[cfg(windows)]
+const PIPE_WRITE_BYTES: usize = 64 * 1024;
 
 /// A received line ran past the limit.
 struct Oversize;

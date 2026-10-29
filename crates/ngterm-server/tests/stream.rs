@@ -1,18 +1,19 @@
-//! [`LineStream`] over socket pairs, and through the control server over real sockets in a temp dir.
+//! [`LineStream`] over connected pairs, and through the control server over its real endpoint (an `AF_UNIX` socket, a
+//! named pipe on Windows) named by a path in a temp dir. A pair is a connection the server accepted and handed over,
+//! with its client, so the streams run on what the app's do on every OS.
 
 use std::error::Error;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use ngterm_host::MainLoop;
 use ngterm_host::fakes::FakeMainLoop;
 use ngterm_proto::{Command, Request, Response};
-use ngterm_server::{ControlServer, LineStream, LineStreamLimits, LineStreamOwner, Reply, StreamOwner};
+use ngterm_server::{Connection, ControlServer, LineStream, LineStreamLimits, LineStreamOwner, Reply, StreamOwner};
 use tempfile::TempDir;
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -37,7 +38,7 @@ enum Event {
 }
 
 /// Runs `stream` over `socket`, answering every line with `echo:<line>` and reporting to `events`.
-fn echo(stream: &LineStream, socket: UnixStream, pending: &[u8], events: &Sender<Event>) {
+fn echo(stream: &LineStream, socket: Connection, pending: &[u8], events: &Sender<Event>) {
     events.send(Event::Adopted(pending.to_vec())).ok();
     let replies = stream.clone();
     let on_line = |line: &[u8]| {
@@ -59,7 +60,7 @@ struct EchoOwner {
 }
 
 impl StreamOwner for EchoOwner {
-    fn adopt(self: Box<Self>, socket: UnixStream, pending: Vec<u8>) {
+    fn adopt(self: Box<Self>, socket: Connection, pending: Vec<u8>) {
         echo(&self.stream, socket, &pending, &self.events);
     }
 }
@@ -93,9 +94,19 @@ struct Fixture {
     _dir: TempDir,
 }
 
+/// A short temp dir: socket paths must stay under 104 bytes whatever `TMPDIR` is (Unix; Windows has no such limit).
+fn short_dir() -> io::Result<TempDir> {
+    let builder = tempfile::Builder::new().prefix("ngt").clone();
+    if cfg!(unix) {
+        builder.tempdir_in("/tmp")
+    } else {
+        builder.tempdir()
+    }
+}
+
 /// A server answering [`OPEN`] with an echoing [`LineStream`] and everything else with a plain `ok`.
 fn start(limits: LineStreamLimits) -> TestResult<Fixture> {
-    let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp")?;
+    let dir = short_dir()?;
     let socket = dir.path().join("ngterm.sock");
     let main_loop = Arc::new(FakeMainLoop::spawn(())?);
     let (opened_tx, opened) = mpsc::channel();
@@ -130,7 +141,7 @@ fn start(limits: LineStreamLimits) -> TestResult<Fixture> {
 
 /// A plain request on a fresh connection.
 fn assert_ordinary_request_answered(fixture: &Fixture) -> TestResult {
-    let mut stream = UnixStream::connect(&fixture.socket)?;
+    let mut stream = ngterm_server::connect(&fixture.socket)?;
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.write_all(VERSION)?;
     stream.write_all(b"\n")?;
@@ -142,12 +153,12 @@ fn assert_ordinary_request_answered(fixture: &Fixture) -> TestResult {
 
 /// The client side of a stream connection.
 struct Client {
-    writer: UnixStream,
-    reader: BufReader<UnixStream>,
+    writer: Connection,
+    reader: BufReader<Connection>,
 }
 
 impl Client {
-    fn new(socket: UnixStream) -> io::Result<Self> {
+    fn new(socket: Connection) -> io::Result<Self> {
         socket.set_read_timeout(Some(TIMEOUT))?;
         Ok(Self {
             reader: BufReader::new(socket.try_clone()?),
@@ -157,7 +168,7 @@ impl Client {
 
     /// Sends [`OPEN`] with `first` right behind it in the same write, and takes the `ok`.
     fn open(fixture: &Fixture, first: &[u8]) -> TestResult<(Self, Opened)> {
-        let mut client = Self::new(UnixStream::connect(&fixture.socket)?)?;
+        let mut client = Self::new(ngterm_server::connect(&fixture.socket)?)?;
         let mut request = OPEN.to_vec();
         request.push(b'\n');
         request.extend_from_slice(first);
@@ -179,9 +190,55 @@ impl Client {
     }
 }
 
-/// Runs an echoing `stream` over one end of a socket pair on a thread of its own; the other end is the peer.
+/// Hands the connection it is given to the test.
+struct Handoff(Sender<(Connection, Vec<u8>)>);
+
+impl StreamOwner for Handoff {
+    fn adopt(self: Box<Self>, socket: Connection, pending: Vec<u8>) {
+        self.0.send((socket, pending)).ok();
+    }
+}
+
+/// A connected pair: the client's end and the end the server accepted, handed over after the `ok` of its request.
+/// The server is gone by then; the connection outlives it.
+fn pair() -> TestResult<(Connection, Connection)> {
+    let dir = short_dir()?;
+    let socket = dir.path().join("pair.sock");
+    let main_loop = Arc::new(FakeMainLoop::spawn(())?);
+    let (handed_tx, handed) = mpsc::channel();
+    let handed_tx = Mutex::new(handed_tx);
+    let mut server = ControlServer::new(&socket);
+    server.start(
+        Arc::clone(&main_loop) as Arc<dyn MainLoop<()>>,
+        move |(), _: Request| {
+            let Ok(tx) = handed_tx.lock().map(|tx| tx.clone()) else {
+                return Response::failure("poisoned").into();
+            };
+            Reply::streaming(Response::success(), Box::new(Handoff(tx)))
+        },
+    )?;
+    let mut client = ngterm_server::connect(&socket)?;
+    client.set_read_timeout(Some(TIMEOUT))?;
+    client.write_all(VERSION)?;
+    client.write_all(b"\n")?;
+    // byte by byte, so nothing past the response is taken from the peer
+    let mut line = Vec::new();
+    let mut byte = [0_u8; 1];
+    while line.last() != Some(&b'\n') {
+        client.read_exact(&mut byte)?;
+        line.extend_from_slice(&byte);
+    }
+    assert_eq!(serde_json::from_slice::<Response>(&line)?, Response::success());
+    let (ours, pending) = handed.recv_timeout(TIMEOUT)?;
+    assert_eq!(pending, b"");
+    client.set_read_timeout(None)?;
+    server.stop();
+    Ok((client, ours))
+}
+
+/// Runs an echoing `stream` over one end of a pair on a thread of its own; the other end is the peer.
 fn run_on_pair(stream: &LineStream) -> TestResult<(Client, Opened, JoinHandle<()>)> {
-    let (peer, ours) = UnixStream::pair()?;
+    let (peer, ours) = pair()?;
     let (events_tx, events) = mpsc::channel();
     let runner = {
         let stream = stream.clone();
@@ -342,7 +399,7 @@ fn a_peer_that_never_reads_is_dropped_at_the_write_timeout() -> TestResult {
     });
     let (peer, opened, runner) = run_on_pair(&stream)?;
     let started = Instant::now();
-    // far more than an AF_UNIX socket buffers, so the writer blocks on a peer that takes nothing
+    // far more than an AF_UNIX socket or the control pipe buffers, so the writer blocks on a peer that takes nothing
     let big = vec![b'x'; 4 << 20];
     assert!(stream.send(big.clone()));
     assert!(stream.send(big));
@@ -419,7 +476,7 @@ fn a_line_stream_owner_hands_lines_and_the_close_to_its_callbacks() -> TestResul
         stream.send(b"hello".to_vec()),
         "queued before the connection is adopted"
     );
-    let (mut client, server) = UnixStream::pair()?;
+    let (mut client, server) = pair()?;
     let runner = thread::spawn(move || Box::new(owner).adopt(server, b"first\n".to_vec()));
     let mut reader = BufReader::new(client.try_clone()?);
     let mut line = String::new();

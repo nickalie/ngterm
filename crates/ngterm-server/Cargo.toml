@@ -1,6 +1,6 @@
 [package]
 name = "ngterm-server"
-description = "ngterm's AF_UNIX control server: socket ownership, one thread per connection, main-loop hop"
+description = "ngterm's control server: socket ownership, AF_UNIX or a named pipe, a thread per connection, main-loop hop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,14 +11,29 @@ license.workspace = true
 ngterm-proto.workspace = true
 ngterm-host.workspace = true
 ngterm-core.workspace = true
-libc.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# a stream's writes without `SIGPIPE` (`MSG_NOSIGNAL`, macOS's `SO_NOSIGPIPE`)
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# the control socket's named pipe: its listener and its streams
+interprocess.workspace = true
+# the pipe's SDDL, in the UTF-16 string type interprocess takes
+widestring.workspace = true
+# a pipe's disconnect and the cancel of its pending calls (a shutdown, a timeout)
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Pipes"] }
+
 [dev-dependencies]
 ngterm-host = { workspace = true, features = ["fakes"] }
 tempfile.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+# the tests' own pipe clients and a squatter on the pipe's name
+interprocess.workspace = true
 
 [lints]
 workspace = true
