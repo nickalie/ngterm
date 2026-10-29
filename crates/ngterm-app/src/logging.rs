@@ -208,9 +208,11 @@ mod platform {
     const LOCK_OFFSET_HIGH: u32 = 1 << 30;
 
     /// Opened without following a reparse point, and refused when it is one; shared for reading, writing and
-    /// deleting (std's default), so other launches append beside it and a rotation can rename it.
+    /// deleting (std's default), so other launches append beside it and a rotation can rename it. Read access too:
+    /// `LockFileEx` takes only a handle with read or write access, and appending alone is neither.
     pub(super) fn open_append(path: &Path) -> io::Result<File> {
         let file = OpenOptions::new()
+            .read(true)
             .append(true)
             .create(true)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)

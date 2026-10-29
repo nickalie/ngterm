@@ -307,6 +307,15 @@ mod platform {
         }
     }
 
+    /// Writes each queued line to `stdin` until the queue closes (the stop) or the child stops reading.
+    fn write_queued(mut stdin: ChildStdin, queued: &mpsc::Receiver<Vec<u8>>) {
+        for line in queued {
+            if stdin.write_all(&line).is_err() {
+                return;
+            }
+        }
+    }
+
     /// The child's stdin, written from a thread of its own through a queue of [`MAX_PENDING_FRAMES`] lines: a full
     /// queue means the child stopped reading, which fails the link rather than stalling the main loop.
     pub(super) struct Input(RefCell<Option<SyncSender<Vec<u8>>>>);
@@ -323,14 +332,7 @@ mod platform {
             let (lines, queued) = mpsc::sync_channel::<Vec<u8>>(MAX_PENDING_FRAMES);
             let spawned = std::thread::Builder::new()
                 .name("ngterm.presentation-write".to_owned())
-                .spawn(move || {
-                    let mut stdin = stdin;
-                    for line in queued {
-                        if stdin.write_all(&line).is_err() {
-                            return;
-                        }
-                    }
-                });
+                .spawn(move || write_queued(stdin, &queued));
             match spawned {
                 Ok(_) => Self(RefCell::new(Some(lines))),
                 Err(error) => {

@@ -118,10 +118,7 @@ fn the_plan_detects_each_agent_and_writes_nothing() {
         "fish only once ~/.config/fish exists"
     );
     assert_eq!(plan.script_dir, home.path(".config/ngterm/agent-status"));
-    assert_eq!(
-        plan.bake.as_deref(),
-        home.env.bundled_cli.as_deref().and_then(Path::to_str)
-    );
+    assert_eq!(plan.bake, home.env.bundled_cli.as_deref().map(hooks::shell_path));
 }
 
 #[test]

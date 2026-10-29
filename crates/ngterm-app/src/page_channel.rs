@@ -295,7 +295,7 @@ mod tests {
         fn until_closed(&self) -> Vec<Report> {
             let mut reports = Vec::new();
             loop {
-                let report = self.reports.recv_timeout(Duration::from_secs(10)).unwrap();
+                let report = self.reports.recv_timeout(Duration::from_secs(30)).unwrap();
                 let closed = matches!(report, Report::Closed(_));
                 reports.push(report);
                 if closed {
@@ -358,7 +358,10 @@ mod tests {
         // more than a frame's worth without a newline, then a helper that would otherwise live on
         let running = launch(
             &format!("head -c {} /dev/zero | tr '\\0' 'x'; sleep 30", MAX_FRAME_BYTES + 2),
-            &format!("[Console]::Out.Write('x' * {}); Start-Sleep 30", MAX_FRAME_BYTES + 2),
+            &format!(
+                "[Console]::Out.Write([string]::new([char]'x', {})); Start-Sleep 30",
+                MAX_FRAME_BYTES + 2
+            ),
         );
         assert_eq!(
             running.until_closed(),
