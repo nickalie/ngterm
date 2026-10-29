@@ -16,6 +16,7 @@ mod support;
 #[expect(dead_code, reason = "the helpers serve the client and host tests alike")]
 mod peer;
 
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -438,13 +439,24 @@ fn only_an_orderly_close_ends_the_stream_after_the_exit() -> TestResult {
 
 #[test]
 fn a_detach_behind_a_write_a_stopped_server_never_reads_closes_the_connection() -> TestResult {
-    let (peer, received) = attach_peer(vec![owner(), begin(1, 0), end(1), Step::Hold(PATIENCE)])?;
+    let (started_writing, write_started) = mpsc::channel();
+    let steps = vec![
+        owner(),
+        begin(1, 0),
+        end(1),
+        Step::Read(1, started_writing),
+        Step::Hold(PATIENCE),
+    ];
+    let (peer, received) = attach_peer(steps)?;
     let Attachment { mut reader, writer, .. } = Client::new(peer.directory()).attach(request("stuck", None))?;
     next_message(&received)?;
     while event(&mut reader)? != AttachEvent::SnapshotEnd {}
     // far more than a socket's or a pipe's buffer: the write waits for a reader that never comes
     let typing = writer.clone();
     let input = thread::spawn(move || typing.input(&vec![b'x'; 64 * 1024 * 1024]));
+    // the detach must come behind the write: once its first byte reached the peer, the write holds the writers' lock
+    // (a fixed pause raced the writing thread, which builds two 64 MiB buffers before it takes the lock)
+    write_started.recv_timeout(PATIENCE)?;
     thread::sleep(Duration::from_millis(300));
     assert!(!input.is_finished(), "the write was taken: {:?}", input.join());
 
