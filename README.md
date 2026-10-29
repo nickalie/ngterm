@@ -238,9 +238,9 @@ Ghostty's sprite font through qwertty-term (both MIT); `crates/ngterm-gpui/tests
 images with Ghostty's license.
 
 Some GPUI dependencies are patched in the tree rather than built: `vendor/calloop` and
-`vendor/gpui-pre{,-wgpu,-linux}` (GPUI's dmabuf external surfaces for the HTML overlays, the font metrics accessors and
-the coverage masks the terminal's sprites paint with, the native key behind each key event, the HTML clipboard offer,
-xdg-output geometry and X11 window state) are verified crates.io sources plus `build/patches/<crate>`, recreated by
+`vendor/gpui-pre{,-wgpu,-linux,-windows}` (GPUI's dmabuf external surfaces for the HTML overlays, the font metrics
+accessors and the coverage masks the terminal's sprites paint with, the native key behind each key event on Linux and
+Windows, the HTML clipboard offer, xdg-output geometry and X11 window state) are verified crates.io sources plus `build/patches/<crate>`, recreated by
 `scripts/vendor-calloop.sh` and `scripts/vendor-gpui.sh` (`--check` compares, as CI does; `vendor-gpui.sh --diff`
 turns edits under `vendor/` back into the patch files). `vendor/portable-pty` (the PTY and child under `ngterm-pty`:
 ConPTY from kernel32 only, herdr's fixes for malformed Windows environments and directories on `PATH`, the child

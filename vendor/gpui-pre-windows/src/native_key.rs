@@ -1,0 +1,196 @@
+//! The native key behind a key event (an ngterm patch, the Windows form of gpui-pre-linux's): what Windows said about
+//! the key GPUI turned into the [`gpui::Keystroke`] it dispatches, which keeps neither the key's position nor the
+//! layout's unshifted character, and drops Shift from symbols. A terminal needs both for physical-key bindings and the
+//! Kitty keyboard protocol.
+//!
+//! The window procedure installs it for exactly the dispatch of one event ([`NativeScope`]): a press, its autorepeats
+//! and its release carry [`NativeInput::Key`]; anything else (a test's simulated key, a replayed pending keystroke)
+//! carries nothing. A listener reads it with [`current_native_input`] while handling the event, and should check that
+//! the record's keystroke is the event's. Every translation asks `ToUnicode` not to change the keyboard's state
+//! (flag 4), as GPUI's own does, so a pending dead key stays pending.
+
+use std::cell::RefCell;
+
+use gpui::{Keystroke, Modifiers, PlatformInput};
+use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, GetKeyboardState, MAPVK_VSC_TO_VK, MapVirtualKeyW, ToUnicode, VK_CAPITAL, VK_CONTROL, VK_LCONTROL,
+    VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_NUMLOCK, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+};
+
+use crate::current_modifiers;
+
+/// What the platform knew about a key event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeKey {
+    /// The key's scan code (set 1), `0xE000 |` the code for an extended key (`0xE048` is the Up arrow), as the Windows
+    /// column of Ghostty's and Chromium's keycode tables holds it.
+    pub scan_code: u32,
+    /// The virtual key the layout gave it.
+    pub virtual_key: u16,
+    /// The modifiers held, Shift included.
+    pub modifiers: Modifiers,
+    /// The modifiers the layout used up producing the key's character: Shift where it changes what the key types,
+    /// Control and Alt for an AltGr character.
+    pub consumed: Modifiers,
+    /// The character the key types with no modifier and no lock.
+    pub unshifted: Option<char>,
+    /// Whether that layout types ASCII letters, judged over the Latin key positions.
+    pub ascii_layout: bool,
+    /// What the key types under the layout before Ctrl transformations (an AltGr character included); empty for a dead
+    /// key.
+    pub text: String,
+    /// The key is a dead key waiting for the next one.
+    pub composing: bool,
+    /// An autorepeat of a held key.
+    pub repeat: bool,
+    /// Caps Lock is on.
+    pub caps_lock: bool,
+    /// Num Lock is on.
+    pub num_lock: bool,
+    /// The keystroke GPUI dispatched for it.
+    pub keystroke: Keystroke,
+}
+
+/// What is behind the key event being dispatched.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NativeInput {
+    /// A key of the keyboard.
+    Key(NativeKey),
+}
+
+thread_local! {
+    static CURRENT: RefCell<Option<NativeInput>> = const { RefCell::new(None) };
+}
+
+/// The native input behind the key event being dispatched on this thread; `None` outside a platform key dispatch.
+pub fn current_native_input() -> Option<NativeInput> {
+    CURRENT.with_borrow(Clone::clone)
+}
+
+/// Installs a native input for one dispatch and restores the previous one when dropped.
+pub(crate) struct NativeScope(Option<NativeInput>);
+
+impl NativeScope {
+    pub(crate) fn enter(input: Option<NativeInput>) -> Self {
+        Self(CURRENT.replace(input))
+    }
+}
+
+impl Drop for NativeScope {
+    fn drop(&mut self) {
+        CURRENT.set(self.0.take());
+    }
+}
+
+/// The scan codes of the Latin letter positions (the US rows Q to P, A to L, Z to M).
+const LATIN_POSITIONS: [std::ops::RangeInclusive<u32>; 3] = [0x10..=0x19, 0x1e..=0x26, 0x2c..=0x32];
+
+/// The record of the key event `input` GPUI built from the key message `wparam`/`lparam`; `None` for an event that
+/// is not a key's.
+pub(crate) fn native_input(input: &PlatformInput, wparam: WPARAM, lparam: LPARAM) -> Option<NativeInput> {
+    let (keystroke, repeat) = match input {
+        PlatformInput::KeyDown(event) => (&event.keystroke, event.is_held),
+        PlatformInput::KeyUp(event) => (&event.keystroke, false),
+        _ => return None,
+    };
+    Some(NativeInput::Key(native_key(wparam.0 as u16, lparam.0 as u32, keystroke, repeat)))
+}
+
+fn native_key(virtual_key: u16, lparam: u32, keystroke: &Keystroke, repeat: bool) -> NativeKey {
+    let scan = (lparam >> 16) & 0xff;
+    let scan_code = if lparam & (1 << 24) != 0 { 0xe000 | scan } else { scan };
+    let mut state = [0u8; 256];
+    // SAFETY: a 256-byte buffer, as GetKeyboardState takes.
+    if unsafe { GetKeyboardState(&mut state) }.is_err() {
+        state = [0; 256];
+    }
+    let modifiers = current_modifiers();
+    let empty = [0u8; 256];
+    let typed = translate(virtual_key, scan, &state);
+    let without_ctrl = translate(virtual_key, scan, &cleared(&state, &[VK_CONTROL.0, VK_LCONTROL.0, VK_RCONTROL.0, VK_MENU.0, VK_LMENU.0, VK_RMENU.0, VK_LWIN.0, VK_RWIN.0]));
+    let base = translate(virtual_key, scan, &empty);
+    let mut shift_only = empty;
+    for key in [VK_SHIFT.0, VK_LSHIFT.0, VK_RSHIFT.0] {
+        shift_only[usize::from(key)] = state[usize::from(key)];
+    }
+    let shifted = translate(virtual_key, scan, &shift_only);
+    let composing = typed.dead;
+    let alt_gr = modifiers.control && modifiers.alt && typed.printable().is_some() && typed.text != without_ctrl.text;
+    let text = if composing {
+        String::new()
+    } else {
+        typed.printable().or_else(|| without_ctrl.printable()).unwrap_or_default()
+    };
+    NativeKey {
+        scan_code,
+        virtual_key,
+        modifiers,
+        consumed: Modifiers {
+            shift: modifiers.shift && shifted.printable().is_some() && shifted.text != base.text,
+            control: alt_gr,
+            alt: alt_gr,
+            platform: false,
+            function: false,
+        },
+        unshifted: base.printable().and_then(|text| {
+            let mut chars = text.chars();
+            chars.next().filter(|_| chars.next().is_none())
+        }),
+        ascii_layout: ascii_layout(),
+        text,
+        composing,
+        repeat,
+        // SAFETY: plain reads of the lock keys' toggle state.
+        caps_lock: unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0,
+        // SAFETY: as above.
+        num_lock: unsafe { GetKeyState(i32::from(VK_NUMLOCK.0)) } & 1 != 0,
+        keystroke: keystroke.clone(),
+    }
+}
+
+fn cleared(state: &[u8; 256], keys: &[u16]) -> [u8; 256] {
+    let mut state = *state;
+    for key in keys {
+        state[usize::from(*key)] = 0;
+    }
+    state
+}
+
+/// What a key types under one keyboard state.
+struct Translation {
+    text: String,
+    /// A dead key: `text` is what it types alone.
+    dead: bool,
+}
+
+impl Translation {
+    /// The text when it is printable (no control character).
+    fn printable(&self) -> Option<String> {
+        (!self.dead && !self.text.is_empty() && !self.text.chars().any(char::is_control)).then(|| self.text.clone())
+    }
+}
+
+fn translate(virtual_key: u16, scan: u32, state: &[u8; 256]) -> Translation {
+    let mut buffer = [0u16; 8];
+    // SAFETY: valid buffers for the call; flag 4 leaves the keyboard's state (a pending dead key) as it is.
+    let written = unsafe { ToUnicode(u32::from(virtual_key), scan, Some(state), &mut buffer, 0x4) };
+    let length = (written.unsigned_abs() as usize).min(buffer.len());
+    Translation {
+        text: String::from_utf16_lossy(&buffer[..length]),
+        dead: written < 0,
+    }
+}
+
+/// Whether the current layout types an ASCII letter at one of the Latin positions.
+fn ascii_layout() -> bool {
+    let empty = [0u8; 256];
+    LATIN_POSITIONS.into_iter().flatten().any(|scan| {
+        // SAFETY: a plain mapping call.
+        let virtual_key = unsafe { MapVirtualKeyW(scan, MAPVK_VSC_TO_VK) } as u16;
+        virtual_key != 0
+            && translate(virtual_key, scan, &empty)
+                .printable()
+                .is_some_and(|text| text.chars().all(|ch| ch.is_ascii_alphabetic()))
+    })
+}
