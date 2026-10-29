@@ -250,15 +250,15 @@ the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`).
 ### macOS and Windows
 
 What builds there today is the crates the `cross-platform.yml` workflow runs ([CI](#ci)): libghostty-vt and its
-wrapper, `ngterm-pty`, `ngterm-term`, `ngterm-session`, `ngterm-proto`, `ngterm-host` and `ngterm-core`. The app,
-`ngterm-ctl` and `ngterm-app` build on Linux only, and `ngterm-server` compiles for macOS but is not run there
+wrapper, `ngterm-pty`, `ngterm-term`, `ngterm-session`, `ngterm-proto`, `ngterm-host`, `ngterm-core` and
+`ngterm-app`. The app and `ngterm-ctl` build on Linux only, and `ngterm-server` compiles for macOS but is not run there
 ([CI](#ci) says what each waits for). The order is Linux's: the pinned Zig (fetched by the script when none is
 found), the script, then cargo:
 
 ```sh
 scripts/build-ghostty-vt.sh    # stock bash 3.2 on macOS, Git Bash on Windows
 cargo test -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys \
-  -p ngterm-ghostty-vt -p ngterm-pty -p ngterm-term
+  -p ngterm-ghostty-vt -p ngterm-pty -p ngterm-term -p ngterm-app
 ```
 
 A Mac, a Windows machine or a VM of either needs, besides Rust from rustup (`rust-toolchain.toml`):
@@ -483,11 +483,10 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   bash, fish and zsh), each with `--must-pass live-any-shell`, the zsh and fish ones with `--must-pass live-sessions`
   too; the bash one runs the app's process tests with the overlays on first.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
-  `ngterm-core`, `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt`, `ngterm-pty` and `ngterm-term` so far; `ngterm-server`
-  compiles for macOS too but is not run there yet and stays off Windows over `std::os::unix`, and `ngterm-ctl` builds
-  on Linux only over `close_range` and `/proc/locks`; both wait for their remaining forms, and `ngterm-app` for the
-  Windows forms of its Unix-only hook runner, log file, remote presentation process and agent integrations'
-  installers, which write with `std::os::unix` file modes and symlinks), on Ubuntu, macOS and
+  `ngterm-core`, `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt`, `ngterm-pty`, `ngterm-term` and `ngterm-app` so far;
+  `ngterm-server` compiles for macOS too but is not run there yet and stays off Windows over `std::os::unix`, and
+  `ngterm-ctl` builds on Linux only over `close_range` and `/proc/locks`; both wait for their remaining forms), on
+  Ubuntu, macOS and
   Windows runners: the libghostty-vt prefix with each runner's pinned Zig (cached with Zig's global cache), format,
   clippy and `cargo test` (`crates`, a matrix), then the sys crate cross-built for the Zig targets no runner runs
   natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). It also runs on pushes to `ci/**`

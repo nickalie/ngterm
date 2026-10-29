@@ -1,6 +1,12 @@
 //! `OpenCode`'s status plugins (upstream's `AgentHooksInstall.OpenCode` and `OpenCodeEnvironmentProbe.swift`): the
 //! versioned paths and ownership policy, and the login-shell probe that finds the installed major version and the
 //! configuration directory `OpenCode` 2 reads.
+//!
+//! On Windows there is no login shell to ask: an app there starts with the user's whole environment (Explorer's, from
+//! the registry), which is what upstream's macOS probe digs out of the shell. The probe runs `opencode --version`
+//! through `cmd.exe` (which finds npm's `opencode.cmd` shim through `PATHEXT`, as `std` does not) and reads
+//! `OPENCODE_CONFIG_DIR`, `XDG_CONFIG_HOME` and the profile folder from that environment; `OpenCode` itself looks there
+//! (`xdg-basedir`: `XDG_CONFIG_HOME`, else `~\.config`).
 
 use std::collections::HashMap;
 use std::hash::BuildHasher;
@@ -147,7 +153,7 @@ pub fn configuration_directory(
     let Some(working_directory) = working_directory else {
         return Some(path);
     };
-    let absolute = if path.starts_with('/') {
+    let absolute = if Path::new(&path).is_absolute() {
         path
     } else {
         format!("{working_directory}/{path}")
@@ -192,6 +198,12 @@ pub fn detect<H: BuildHasher>(environment: &HashMap<String, String, H>, fallback
         .filter(|(key, _)| key.as_str() != "NGTERM_SESSION_ID")
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
+    probe(&environment, fallback_home)
+}
+
+/// The probe through the login shell.
+#[cfg(not(windows))]
+fn probe(environment: &HashMap<String, String>, fallback_home: &str) -> Option<Probe> {
     let shell = environment
         .get("SHELL")
         .filter(|shell| !shell.is_empty())
@@ -205,12 +217,41 @@ pub fn detect<H: BuildHasher>(environment: &HashMap<String, String, H>, fallback
          exec /usr/bin/env opencode --version"
     );
     let hop = format!("exec /bin/sh -c {}", super::hooks_config::shell_quote(&command));
-    let (stdout, succeeded) = run_with_timeout(&shell, &["-ilc", &hop], &environment)?;
+    let (stdout, succeeded) = run_with_timeout(&shell, &["-ilc", &hop], environment)?;
     parse_probe(&stdout, &marker, succeeded, fallback_home)
+}
+
+/// The probe on Windows: `opencode --version` through `cmd.exe`, the directories from `environment` itself (its names
+/// matched without case, as Windows does), relative ones against this process's working directory.
+#[cfg(windows)]
+fn probe(environment: &HashMap<String, String>, fallback_home: &str) -> Option<Probe> {
+    let var = |name: &str| {
+        environment
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    };
+    let (stdout, succeeded) = run_with_timeout("cmd.exe", &["/D", "/C", "opencode", "--version"], environment)?;
+    let home = var("USERPROFILE")
+        .filter(|home| !home.is_empty())
+        .unwrap_or(fallback_home);
+    let working_directory = std::env::current_dir()
+        .ok()
+        .map(|dir| dir.to_string_lossy().into_owned());
+    Some(Probe {
+        version: succeeded.then(|| Version::from_version_output(&stdout)).flatten(),
+        v2_configuration_directory: configuration_directory(
+            home,
+            var("OPENCODE_CONFIG_DIR"),
+            var("XDG_CONFIG_HOME"),
+            working_directory.as_deref(),
+        ),
+    })
 }
 
 /// The probe's fields past the marker: home, working directory, whether `OPENCODE_CONFIG_DIR` is set, its value,
 /// `XDG_CONFIG_HOME`, then the version output.
+#[cfg(not(windows))]
 fn parse_probe(stdout: &str, marker: &str, succeeded: bool, fallback_home: &str) -> Option<Probe> {
     let (_, after) = stdout.split_once(&format!("\n{marker}\n"))?;
     let fields: Vec<&str> = after.splitn(6, '\0').collect();
@@ -232,7 +273,13 @@ fn parse_probe(stdout: &str, marker: &str, succeeded: bool, fallback_home: &str)
 /// Runs `program args` with `environment`, stdin closed, stderr dropped, killing it past [`PROBE_TIMEOUT`]: its
 /// stdout and whether it exited 0 in time; `None` when it could not start.
 fn run_with_timeout(program: &str, args: &[&str], environment: &HashMap<String, String>) -> Option<(String, bool)> {
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(
+        &mut command,
+        windows_sys::Win32::System::Threading::CREATE_NO_WINDOW,
+    );
+    let mut child = command
         .args(args)
         .env_clear()
         .envs(environment)
@@ -281,6 +328,7 @@ fn join_with_deadline(handle: std::thread::JoinHandle<Vec<u8>>, deadline: Instan
 mod tests {
     use std::fs;
 
+    #[cfg(unix)]
     use ngterm_host::fakes::write_executable;
 
     use super::*;
@@ -312,6 +360,7 @@ mod tests {
         assert!(!Version::V2.may_overwrite(true, Some(Version::V1.marker())));
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_configuration_directory_honors_the_override_before_xdg() {
         let resolve = configuration_directory;
@@ -373,7 +422,72 @@ mod tests {
         }
     }
 
+    /// The Windows twin: a drive path is absolute, a relative one joins the working directory.
+    #[cfg(windows)]
+    #[test]
+    fn the_configuration_directory_honors_the_override_before_xdg() {
+        let resolve = configuration_directory;
+        assert_eq!(
+            resolve(r"C:\Users\u", Some(r"D:\chosen"), Some(r"C:\xdg"), Some(r"C:\work")).as_deref(),
+            Some(r"D:\chosen")
+        );
+        assert_eq!(
+            resolve(r"C:\Users\u", None, Some(r"C:\xdg"), Some(r"C:\work")).as_deref(),
+            Some(r"C:\xdg\opencode")
+        );
+        assert_eq!(
+            resolve(r"C:\Users\u", None, None, None).as_deref(),
+            Some(r"C:\Users\u/.config/opencode")
+        );
+        assert_eq!(
+            resolve(r"C:\Users\u", Some("relative"), None, Some(r"C:\work")).as_deref(),
+            Some(r"C:\work\relative")
+        );
+        assert_eq!(resolve(r"C:\Users\u", Some(""), None, None), None);
+    }
+
+    /// The Windows twin of the probe: a fake `opencode.cmd` first on `PATH`, the directories from the environment.
+    #[cfg(windows)]
+    fn windows_environment(dir: &Path, version_script: &str) -> HashMap<String, String> {
+        let bin = dir.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("opencode.cmd"), version_script).unwrap();
+        let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned());
+        HashMap::from([
+            ("Path".to_owned(), format!(r"{};{system}\System32", bin.display())),
+            ("PATHEXT".to_owned(), ".COM;.EXE;.BAT;.CMD".to_owned()),
+            ("SystemRoot".to_owned(), system),
+            ("USERPROFILE".to_owned(), dir.join("home").display().to_string()),
+            ("NGTERM_SESSION_ID".to_owned(), "must-not-leak".to_owned()),
+        ])
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_probe_reads_the_version_and_the_v2_directory_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = windows_environment(
+            dir.path(),
+            "@echo off\r\nif defined NGTERM_SESSION_ID exit /b 9\r\necho opencode v2.0.12\r\n",
+        );
+        env.insert("XDG_CONFIG_HOME".to_owned(), r"C:\xdg".to_owned());
+        let probe = detect(&env, r"C:\fallback").unwrap();
+        assert_eq!(probe.version, Some(Version::V2));
+        assert_eq!(probe.v2_configuration_directory.as_deref(), Some(r"C:\xdg\opencode"));
+
+        env.insert("OPENCODE_CONFIG_DIR".to_owned(), r"D:\chosen".to_owned());
+        let probe = detect(&env, r"C:\fallback").unwrap();
+        assert_eq!(probe.v2_configuration_directory.as_deref(), Some(r"D:\chosen"));
+
+        let env = windows_environment(dir.path(), "@echo 2.0.1\r\n@exit /b 1\r\n");
+        let probe = detect(&env, r"C:\fallback").unwrap();
+        assert_eq!(probe.version, None, "a failing run is no version");
+        let expected = dir.path().join("home").join(".config").join("opencode");
+        assert_eq!(probe.v2_configuration_directory, Some(expected.display().to_string()));
+    }
+
     /// A fake login shell running the hop the probe hands it, and a fake `opencode` on its `PATH`.
+    #[cfg(unix)]
     fn fake_environment(dir: &Path, version_script: &str) -> HashMap<String, String> {
         let bin = dir.join("bin");
         fs::create_dir_all(&bin).unwrap();
@@ -387,6 +501,7 @@ mod tests {
         ])
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_probe_reads_the_version_and_the_v2_directory_from_the_shell() {
         let dir = tempfile::tempdir().unwrap();
@@ -404,6 +519,7 @@ mod tests {
         assert_eq!(probe.v2_configuration_directory.as_deref(), Some("/chosen"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_unknown_or_failing_version_still_reports_the_directory() {
         let dir = tempfile::tempdir().unwrap();
@@ -424,6 +540,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_shell_that_cannot_run_probes_nothing() {
         let env = HashMap::from([("SHELL".to_owned(), "/no/such/ngterm-test-shell".to_owned())]);

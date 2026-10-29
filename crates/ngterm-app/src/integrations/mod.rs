@@ -94,7 +94,7 @@ impl Environment {
             agent_status: resource("agent-status"),
             skill: resource("skills/ngterm"),
             bundled_cli: exe_dir
-                .map(|dir| dir.join(cli::TOOL_NAME))
+                .map(|dir| dir.join(cli::tool_file_name()))
                 .filter(|tool| tool.is_file()),
             vars: std::env::vars().collect(),
         })
@@ -118,9 +118,12 @@ fn resource_dir(exe_dir: Option<&Path>, relative: &str) -> Option<PathBuf> {
     staged.into_iter().chain([checkout]).find(|dir| dir.is_dir())
 }
 
+// the adapters are the package's POSIX scripts, run for real: their Windows run is the package's own, not this crate's
 #[cfg(test)]
+#[cfg(unix)]
 mod adapter_tests;
 #[cfg(test)]
+#[cfg(unix)]
 mod restore_tests;
 #[cfg(test)]
 mod tests;

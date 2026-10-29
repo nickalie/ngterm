@@ -550,6 +550,25 @@ fn the_codex_block_maps_every_event_to_the_adapter() {
     assert!(!block.ends_with('\n'));
 }
 
+/// Codex runs a hook through `cmd.exe` on Windows: there each hook also runs the adapter under Git Bash.
+#[test]
+fn the_codex_block_runs_the_adapter_under_git_bash_on_windows_only() {
+    let parsed: toml::Table = format!("{}\n", codex_hooks_block(SCRIPT_DIR)).parse().unwrap();
+    let windows = parsed["hooks"]["Stop"][0]["hooks"][0]
+        .get("command_windows")
+        .and_then(toml::Value::as_str);
+    if cfg!(windows) {
+        assert_eq!(
+            windows,
+            Some(
+                r#""%ProgramFiles%\Git\bin\bash.exe" "/home/me/.config/ngterm/agent-status/ngterm-codex-status.sh" stop"#
+            )
+        );
+    } else {
+        assert_eq!(windows, None);
+    }
+}
+
 #[test]
 fn the_codex_block_quotes_spaces_and_escapes_apostrophes() {
     let block = codex_hooks_block("/home/my name/agent-status");
@@ -594,9 +613,13 @@ fn codex_merge_refreshes_a_managed_block_and_keeps_the_trust_state() {
         assert!(contents.contains(&format!("'{hook}' {action}")), "{action}");
     }
     assert!(!contents.contains(&format!("'{legacy}' blocked")));
-    assert!(contents.contains(
-        "command = \"'/home/me/.config/ngterm/agent-status/ngterm-codex-status.sh' stop\"\n\n[hooks.state]\n"
-    ));
+    // the Stop hook's last line (its `command`, or on Windows its `command_windows`) runs into the kept trust state
+    let (definitions, _) = contents.split_once("\n\n[hooks.state]\n").unwrap();
+    assert!(
+        definitions.ends_with("/home/me/.config/ngterm/agent-status/ngterm-codex-status.sh' stop\"")
+            || definitions.ends_with("/home/me/.config/ngterm/agent-status/ngterm-codex-status.sh\\\" stop\""),
+        "{definitions}"
+    );
     assert!(contents.contains("trusted_hash = \"sha256:stale-but-preserved\"\n# <<<"));
     assert_eq!(contents.matches(RC_MARKER_BEGIN).count(), 1);
     assert_eq!(merge_codex_config(&contents, SCRIPT_DIR), CodexMerge::Unchanged);

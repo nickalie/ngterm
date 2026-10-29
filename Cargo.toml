@@ -34,7 +34,8 @@ libc = "0.2"
 # A page-serve channel's MIME types by file extension (ngterm-core's `remote/page_serve.rs`), the standard crate.
 mime_guess = "2.0.5"
 # Windows APIs, features per crate: ngterm-session's endpoint (the named pipe's security descriptor and its
-# server-process check), its job and process tables.
+# server-process check), its job and process tables; ngterm-app's hook runner, log file lock, presentation bridge
+# stop and the user PATH the command line tool's install writes.
 windows-sys = "0.61"
 # macOS system sounds by name for the status sounds (ngterm-gpui's `status_sound.rs`) and the selection clipboard's
 # private pasteboard (`terminal/selection_clipboard/macos.rs`), features per crate: the AppKit and Foundation bindings

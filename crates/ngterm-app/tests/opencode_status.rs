@@ -9,6 +9,10 @@
 //! The plugin is a bare ES module `.js` with no `package.json` above it, which only Node with module-syntax detection
 //! (22.7+, or 20.19+ on the 20.x line) imports. A missing or older `node` prints `SKIPPED:` and passes, unless
 //! `NGTERM_REQUIRE_NODE_TESTS` is set, as CI sets it: then it fails.
+//!
+//! Unix only: the plugin spawns the POSIX status wrapper by its path, which Windows cannot execute; its Windows form
+//! is the agent-status package's own (`resources/agent-status`), not this crate's.
+#![cfg(unix)]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
