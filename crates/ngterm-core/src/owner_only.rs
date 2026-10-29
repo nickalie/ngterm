@@ -1,7 +1,7 @@
 //! Owner-only files and directories on Windows, the counterpart of Unix's 0700 and 0600 for what carries an agent's
 //! posts (the HUD body): the current user as the owner and a protected DACL, nothing inherited from the parent, that
-//! grants full access to that user and SYSTEM alone, the pair the session endpoint's pipe grants
-//! (ngterm-session's `endpoint/windows.rs`). Windows has no mode bits, and a directory outside the user's profile
+//! grants full access to that user and SYSTEM alone, the pair ngterm's local pipes grant
+//! ([`crate::pipe_security`]). Windows has no mode bits, and a directory outside the user's profile
 //! (a state directory override, `C:\tmp`) inherits whatever its parent grants, `BUILTIN\Users` among them.
 
 use std::ffi::c_void;
@@ -23,7 +23,7 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{
     ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetSecurityDescriptorOwner, GetTokenInformation,
     OBJECT_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-    PSID, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    PSID, TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -122,14 +122,8 @@ impl Drop for Descriptor {
 fn current_user_sid() -> io::Result<String> {
     // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no closing and is always valid.
     let process = unsafe { GetCurrentProcess() };
-    let mut raw: HANDLE = null_mut();
-    // SAFETY: `process` is valid for the call and `raw` outlives it.
-    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut raw) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: OpenProcessToken returned a fresh handle that nothing else owns.
-    let token = unsafe { OwnedHandle::from_raw_handle(raw) };
-    let user = token_user(&token)?;
+    let token = open_token(process)?;
+    let user = token_information(&token, TokenUser)?;
     // SAFETY: GetTokenInformation(TokenUser) filled the aligned buffer with a TOKEN_USER at its start.
     let sid = unsafe { &*user.as_ptr().cast::<TOKEN_USER>() }.User.Sid;
     let mut text: *mut u16 = null_mut();
@@ -141,12 +135,23 @@ fn current_user_sid() -> io::Result<String> {
     Ok(unsafe { take_local_string(text) })
 }
 
-/// The token's `TokenUser` information, in `usize` storage so the structure at its start is aligned and the SID it
-/// points to lives with it.
-fn token_user(token: &OwnedHandle) -> io::Result<Vec<usize>> {
+/// The access token of `process`, opened for queries.
+pub(crate) fn open_token(process: HANDLE) -> io::Result<OwnedHandle> {
+    let mut raw: HANDLE = null_mut();
+    // SAFETY: `process` is a valid process handle for the duration of the call and `raw` outlives it.
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut raw) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: OpenProcessToken returned a fresh handle that nothing else owns.
+    Ok(unsafe { OwnedHandle::from_raw_handle(raw) })
+}
+
+/// The token's information of `class`, in `usize` storage so the structure at its start is aligned and the SIDs it
+/// points to live with it.
+pub(crate) fn token_information(token: &OwnedHandle, class: TOKEN_INFORMATION_CLASS) -> io::Result<Vec<usize>> {
     let mut needed = 0_u32;
     // SAFETY: a null buffer of length zero only asks for the size, written to `needed`, which outlives the call.
-    unsafe { GetTokenInformation(token.as_raw_handle(), TokenUser, null_mut(), 0, &raw mut needed) };
+    unsafe { GetTokenInformation(token.as_raw_handle(), class, null_mut(), 0, &raw mut needed) };
     if needed == 0 {
         return Err(io::Error::last_os_error());
     }
@@ -158,7 +163,7 @@ fn token_user(token: &OwnedHandle) -> io::Result<Vec<usize>> {
     let filled = unsafe {
         GetTokenInformation(
             token.as_raw_handle(),
-            TokenUser,
+            class,
             buffer.as_mut_ptr().cast::<c_void>(),
             needed,
             &raw mut needed,

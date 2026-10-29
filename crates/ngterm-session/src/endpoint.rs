@@ -14,7 +14,9 @@
 //! Unix server holds the namespace's `flock` from before the stale-socket check for as long as it listens (ngterm's
 //! addition, so two racing servers cannot both bind) and keeps the lock file's times current while it listens
 //! ([`Listener::keep_current`], ngterm's addition after upstream agterm's #733, so a temp-dir cleaner does not age the
-//! file out from under the namespace's guard); and a client checks that the server runs as its own user.
+//! file out from under the namespace's guard); and a client checks that the server runs as its own user. The pipe's
+//! descriptor, that check and the pipe naming scheme live in ngterm-core (`pipe_security`, `paths::pipe_name`),
+//! shared with the control socket's pipe (ngterm-server).
 //!
 //! # Namespace
 //!
@@ -315,22 +317,13 @@ pub fn is_connection_closed_error(error: &io::Error) -> bool {
     )
 }
 
-/// The Windows pipe name of the namespace `directory`, without the `\\.\pipe\` prefix: [`PIPE_PREFIX`] and the FNV-1a
-/// 64 hash of the directory's path, case-folded, with `/` as `\` and no trailing separator, so every spelling Windows
-/// takes for one directory names one pipe. Defined on every OS, so a namespace's pipe can be named anywhere.
+/// The Windows pipe name of the namespace `directory`, without the `\\.\pipe\` prefix: [`PIPE_PREFIX`] and the
+/// FNV-1a 64 hash of the directory's path, case-folded, with `/` as `\` and no trailing separator, so every spelling
+/// Windows takes for one directory names one pipe ([`ngterm_core::paths::pipe_name`], the scheme the control socket's
+/// pipe shares). Defined on every OS, so a namespace's pipe can be named anywhere.
 #[must_use]
 pub fn pipe_name(directory: &Path) -> String {
-    let path = directory.to_string_lossy().replace('/', "\\").to_lowercase();
-    let path = path.trim_end_matches('\\');
-    format!("{PIPE_PREFIX}{}", fnv1a64(path.as_bytes()))
-}
-
-/// The FNV-1a 64 hash of `bytes` as 16 lower-case hex digits (`ngterm-core::live::fnv1a64`).
-fn fnv1a64(bytes: &[u8]) -> String {
-    let hash = bytes.iter().fold(14_695_981_039_346_656_037_u64, |hash, &byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(1_099_511_628_211)
-    });
-    format!("{hash:016x}")
+    ngterm_core::paths::pipe_name(PIPE_PREFIX, directory)
 }
 
 #[cfg(unix)]
@@ -348,13 +341,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fnv1a64_matches_the_reference_vectors() {
-        assert_eq!(fnv1a64(b""), "cbf29ce484222325");
-        assert_eq!(fnv1a64(b"a"), "af63dc4c8601ec8c");
-        assert_eq!(fnv1a64(b"foobar"), "85944171f73967e8");
-    }
-
-    #[test]
     fn a_pipe_name_ignores_case_separators_and_a_trailing_separator() {
         let name = pipe_name(Path::new(r"C:\Users\Nick\AppData\Local\ngterm\live\0123456789abcdef"));
         assert_eq!(
@@ -367,7 +353,7 @@ mod tests {
             name,
             format!(
                 "{PIPE_PREFIX}{}",
-                fnv1a64(br"c:\users\nick\appdata\local\ngterm\live\0123456789abcdef")
+                ngterm_core::live::fnv1a64(br"c:\users\nick\appdata\local\ngterm\live\0123456789abcdef")
             )
         );
     }

@@ -14,6 +14,9 @@
 //! home `FOLDERID_Profile` when `HOME` is unset or empty. `NGTERM_STATE_DIR` and `NGTERM_CONTROL_SOCKET` still come
 //! first, and without a known folder the base is `%TEMP%\ngterm`, as `/tmp/ngterm` is on Unix.
 //!
+//! On Windows the control socket's path names a named pipe instead of a file ([`control_pipe_name`]): the path stays
+//! the identity the app, `ngtermctl` and `NGTERM_SOCKET` share, and the pipe's name is derived from it.
+//!
 //! Every function reads the environment through [`Env`], so tests pass a [`MapEnv`] instead of mutating the
 //! process environment.
 
@@ -361,8 +364,33 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(raw)
 }
 
-/// `<socket>.lock`: the file whose `flock` owns the socket path. It is never removed: unlinking it would let the next
-/// instance lock a fresh inode and exclude nobody.
+/// The prefix of the control socket's pipe name on Windows ([`control_pipe_name`]).
+pub const CONTROL_PIPE_PREFIX: &str = "ngterm-control-";
+
+/// The Windows pipe name, without the `\\.\pipe\` prefix, that `path` stands for: `prefix` and the FNV-1a 64 hash
+/// ([`crate::live::fnv1a64`]) of the path case-folded, with `/` as `\` and no trailing separator, so every spelling
+/// Windows takes for one path names one pipe. The scheme ngterm-session's namespace pipe and the control socket's
+/// pipe share. Defined on every OS, so a pipe can be named anywhere; `path` is taken as given (make it absolute
+/// first, as [`control_pipe_name`] does).
+#[must_use]
+pub fn pipe_name(prefix: &str, path: &Path) -> String {
+    let path = path.to_string_lossy().replace('/', "\\").to_lowercase();
+    let path = path.trim_end_matches('\\');
+    format!("{prefix}{}", crate::live::fnv1a64(path.as_bytes()))
+}
+
+/// The pipe the control socket at `socket` is on Windows, without the `\\.\pipe\` prefix: [`pipe_name`] of
+/// [`CONTROL_PIPE_PREFIX`] and the path made absolute against the current directory ([`std::path::absolute`]), so a
+/// relative `NGTERM_CONTROL_SOCKET` or `--socket` names the same pipe as its absolute form. A path that cannot be made
+/// absolute (empty) is taken as given. The one derivation the server and its clients share.
+#[must_use]
+pub fn control_pipe_name(socket: &Path) -> String {
+    let absolute = std::path::absolute(socket).unwrap_or_else(|_| socket.to_path_buf());
+    pipe_name(CONTROL_PIPE_PREFIX, &absolute)
+}
+
+/// `<socket>.lock`: the file whose exclusive lock (`flock`, `LockFileEx` on Windows) owns the socket path. It is never
+/// removed: unlinking it would let the next instance lock a fresh inode and exclude nobody.
 #[must_use]
 pub fn ownership_lock_path(socket: &Path) -> PathBuf {
     with_suffix(socket, ".lock")
@@ -760,6 +788,59 @@ mod tests {
         assert_eq!(default_state_dir(&ProcessEnv), local.join(APP_DIR_NAME));
         if std::env::var_os(STATE_DIR_ENV).is_none() {
             assert_eq!(config_dir(&ProcessEnv, None), roaming.join(APP_DIR_NAME));
+        }
+    }
+
+    #[test]
+    fn a_pipe_name_ignores_case_separators_and_a_trailing_separator() {
+        let name = pipe_name("p-", Path::new(r"C:\Users\Nick\AppData\Local\ngterm\ngterm.sock"));
+        assert_eq!(
+            name,
+            pipe_name("p-", Path::new("c:/users/nick/appdata/local/ngterm/NGTERM.SOCK/"))
+        );
+        assert_eq!(
+            name,
+            format!(
+                "p-{}",
+                crate::live::fnv1a64(br"c:\users\nick\appdata\local\ngterm\ngterm.sock")
+            )
+        );
+        assert_ne!(
+            name,
+            pipe_name("p-", Path::new(r"C:\Users\Nick\AppData\Local\ngterm\other.sock"))
+        );
+    }
+
+    #[test]
+    fn the_control_pipe_is_named_after_the_absolute_socket_path() {
+        let current = std::env::current_dir().unwrap();
+        let name = control_pipe_name(Path::new("ngterm.sock"));
+        assert!(name.starts_with(CONTROL_PIPE_PREFIX), "{name}");
+        assert_eq!(name.len(), CONTROL_PIPE_PREFIX.len() + 16);
+        assert_eq!(name, pipe_name(CONTROL_PIPE_PREFIX, &current.join("ngterm.sock")));
+        assert_eq!(name, control_pipe_name(&current.join("ngterm.sock")));
+        // the refused instance's advertised path names a pipe of its own, which nothing serves
+        assert_ne!(
+            control_pipe_name(&unavailable_socket_path(&current.join("ngterm.sock"))),
+            name
+        );
+        assert_eq!(
+            control_pipe_name(Path::new("")),
+            pipe_name(CONTROL_PIPE_PREFIX, Path::new(""))
+        );
+    }
+
+    /// Every spelling Windows takes for one socket path names its one pipe.
+    #[cfg(windows)]
+    #[test]
+    fn windows_every_spelling_of_a_socket_path_names_one_pipe() {
+        let plain = control_pipe_name(Path::new(r"C:\a\ngterm\ngterm.sock"));
+        for spelling in [
+            r"C:\a\b\..\ngterm\ngterm.sock",
+            r"C:\a\.\ngterm\ngterm.sock",
+            "c:/A/ngterm/NGTERM.sock",
+        ] {
+            assert_eq!(control_pipe_name(Path::new(spelling)), plain, "{spelling}");
         }
     }
 }

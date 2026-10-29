@@ -44,6 +44,8 @@ pub mod palette_catalog;
 pub mod pane_env;
 pub mod paths;
 pub mod persist;
+#[cfg(windows)]
+pub mod pipe_security;
 pub mod projection;
 pub mod quick_metrics;
 pub mod remote;

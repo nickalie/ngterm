@@ -34,7 +34,8 @@ uuid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # the HUD body's owner-only owner and DACL (owner_only.rs), Windows' counterpart of its 0700/0600 modes; the user's
-# known folders, the state, config and home bases (paths/windows.rs)
+# known folders, the state, config and home bases (paths/windows.rs); the local pipes' descriptor and server-user
+# check (pipe_security.rs)
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
