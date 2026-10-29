@@ -14,7 +14,7 @@
 //!   behind. A pipe name some other process holds fails the bind with [`io::ErrorKind::AddrInUse`].
 //!   [`Connection`] is a pipe stream with std's socket surface: read and write timeouts (named pipes have none, so a
 //!   timer cancels the call past its timeout), duplicates, and `shutdown(Both)`, which disconnects a server's end.
-//!   There is no half-close.
+//!   There is no half-close; a shutdown holds for every duplicate, as a socket's does.
 
 use std::io;
 use std::path::Path;
@@ -32,6 +32,8 @@ mod windows;
 use windows as sys;
 
 pub use sys::Connection;
+#[cfg(target_vendor = "apple")]
+pub(crate) use sys::no_sigpipe;
 
 /// A bound endpoint, accepting connections.
 pub(crate) struct Listener(sys::Listener);
@@ -65,6 +67,16 @@ pub fn connect(socket: &Path) -> io::Result<Connection> {
 /// dead-on-arrival connections and waits for the next client), so a dropped one would wake nothing.
 pub(crate) fn wake(socket: &Path) -> io::Result<Connection> {
     sys::connect_unchecked(socket)
+}
+
+/// Two connected ends of one connection, as [`UnixStream::pair`](std::os::unix::net::UnixStream::pair): a socket
+/// pair on Unix, a pipe of its own, under a fresh name, on Windows. For tests that play both ends.
+///
+/// # Errors
+///
+/// The pair could not be made.
+pub fn pair() -> io::Result<(Connection, Connection)> {
+    sys::pair()
 }
 
 /// Removes what the stopped server leaves at `socket`: the socket file on Unix, nothing on Windows.
