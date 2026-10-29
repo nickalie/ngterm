@@ -11,9 +11,10 @@
 //! The command and the final "shell" are stand-ins: the command logs that it ran, records its process group and the
 //! terminal's foreground group, then sends SIGINT to its group; the final shell records the variables the replay
 //! re-armed and the flags it was exec'd with, then ends, which ends the session. Each shell runs without the user's
-//! startup files (a throwaway home, an empty `ZDOTDIR`, `fish --no-config`) and without the live ngterm's `NGTERM_*`,
-//! `AGTERM_*` and `ZMX_*` variables, with a namespace directory of its own (only named in its environment: no server
-//! runs). Windows has none of these shells: its live pane runs PowerShell, whose interrupted replay `pwsh.rs` covers.
+//! startup files (a throwaway home, a `ZDOTDIR` holding only an empty `.zshenv`, `fish --no-config`) and without the
+//! live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables, with a namespace directory of its own (only named in its
+//! environment: no server runs). Windows has none of these shells: its live pane runs PowerShell, whose interrupted
+//! replay `pwsh.rs` covers.
 #![cfg(unix)]
 
 #[expect(dead_code, reason = "the helpers serve the pane, the lead and these tests alike")]
@@ -152,6 +153,8 @@ fn session(shell: &Shell, script: String, dir: &Path) -> TestResult<SessionSpec>
     let zdotdir = dir.join("zdotdir");
     fs::create_dir_all(&home)?;
     fs::create_dir_all(&zdotdir)?;
+    // an interactive zsh finding no startup file at all runs `zsh-newuser-install`, which waits for a key
+    fs::write(zdotdir.join(".zshenv"), "")?;
     let mut environment: BTreeMap<String, String> = support::environment().into_iter().collect();
     for key in [
         "ENV",
