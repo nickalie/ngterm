@@ -212,7 +212,31 @@ pub fn executable_path(client: Option<&Path>) -> Result<PathBuf, CopyFailure> {
     }
 }
 
-/// Whether `path` is a regular file this process may execute (Foundation's `isExecutableFile`).
+/// Whether `path` is a regular file this process may execute (Foundation's `isExecutableFile`): on Windows, which
+/// has no execute bit, a file whose extension `PATHEXT` lists, as the shell's own lookup takes it.
+#[cfg(windows)]
+fn is_executable_file(path: &Path) -> bool {
+    /// `PATHEXT` when it is unset: what `cmd.exe` falls back to.
+    const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+    let pathext = std::env::var_os("PATHEXT")
+        .and_then(|value| value.into_string().ok())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_PATHEXT.to_owned());
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                pathext
+                    .split(';')
+                    .filter_map(|listed| listed.strip_prefix('.'))
+                    .any(|listed| listed.eq_ignore_ascii_case(extension))
+            })
+}
+
+/// Whether `path` is a regular file this process may execute (Foundation's `isExecutableFile`): on Windows, which
+/// has no execute bit, a file whose extension `PATHEXT` lists, as the shell's own lookup takes it.
+#[cfg(unix)]
 fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let Ok(metadata) = path.metadata() else {
@@ -459,6 +483,7 @@ mod tests {
             (client, executable)
         }
 
+        #[cfg(unix)]
         fn fake_print(&self, exit_code: i32, stderr: Option<&str>, reads_stdin: bool) -> PathBuf {
             let read = if reads_stdin {
                 format!("cat > '{}'", self.path("stdin").display())
@@ -481,6 +506,7 @@ mod tests {
             executable
         }
 
+        #[cfg(unix)]
         fn lines(&self, name: &str) -> Vec<String> {
             fs::read_to_string(self.path(name))
                 .unwrap()
@@ -497,6 +523,20 @@ mod tests {
         assert_eq!(executable_path(Some(&client)).unwrap(), executable);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn a_file_whose_extension_pathext_does_not_list_is_not_executable() {
+        let fixture = Fixture::new();
+        let (client, _) = fixture.bundle(false);
+        let renamed = client.with_file_name("ngterm-session.txt");
+        fs::write(&renamed, b"").unwrap();
+        assert!(!is_executable_file(&renamed));
+        let listed = client.with_file_name("ngterm-session.CMD");
+        fs::write(&listed, b"").unwrap();
+        assert!(is_executable_file(&listed), "an upper-case extension PATHEXT lists");
+        assert!(!is_executable_file(&client.with_file_name("missing.exe")));
+    }
+
     #[test]
     fn a_stage_without_the_session_server_reports_where_it_looked() {
         let fixture = Fixture::new();
@@ -511,6 +551,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn copy_prints_the_sequence_into_the_panes_daemon_on_stdin() {
         let fixture = Fixture::new();
@@ -520,6 +561,7 @@ mod tests {
         assert_eq!(fs::read(fixture.path("stdin")).unwrap(), b"\x1b]52;c;aGVsbG8=\x07");
     }
 
+    #[cfg(unix)]
     #[test]
     fn copy_clears_the_session_variables_and_keeps_the_socket_directory() {
         let fixture = Fixture::new();
@@ -537,6 +579,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_failed_print_carries_its_status_and_stderr() {
         let fixture = Fixture::new();
@@ -550,6 +593,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_print_that_exits_without_reading_stdin_still_reports_its_status() {
         // with SIGPIPE at its default, as the real binary runs: the write past the pipe buffer must get EPIPE
@@ -570,6 +614,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_pane_that_is_not_live_never_starts_the_print() {
         let fixture = Fixture::new();

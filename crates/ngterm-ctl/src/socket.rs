@@ -9,11 +9,15 @@
 //! shares the app's state-dir code but, as upstream's, never reads the app's socket variables: neither
 //! `NGTERM_CONTROL_SOCKET` nor a pane's `NGTERM_SOCKET` routes a command anywhere.
 
+#[cfg(target_os = "linux")]
 use std::fs;
+#[cfg(target_os = "linux")]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use ngterm_core::paths::{Env, ownership_lock_path, socket_in, state_dir};
+#[cfg(target_os = "linux")]
+use ngterm_core::paths::ownership_lock_path;
+use ngterm_core::paths::{Env, socket_in, state_dir};
 
 /// The socket a command connects to: `option` (`--socket`) when given, else `<state dir>/ngterm.sock`.
 #[must_use]
@@ -21,6 +25,7 @@ pub fn resolve(option: Option<&Path>, env: &dyn Env) -> PathBuf {
     option.map_or_else(|| socket_in(&state_dir(env)), Path::to_path_buf)
 }
 
+#[cfg(target_os = "linux")]
 /// A device number split as `/proc/locks` and `/proc/self/mountinfo` print it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Device {
@@ -28,6 +33,7 @@ struct Device {
     minor: u64,
 }
 
+#[cfg(target_os = "linux")]
 impl Device {
     /// Splits `st_dev` as glibc's `gnu_dev_major`/`gnu_dev_minor`.
     fn from_dev(dev: u64) -> Self {
@@ -53,6 +59,7 @@ impl Device {
 /// One read of `/proc/locks` can miss a held lock: the table is a `seq_file`, each `read` returns at most a page and
 /// the next resumes the walk by position, so a lock released ahead of the cursor between two reads shifts the rest
 /// back and one entry goes unlisted. Only [`LOCKS_READS`] reads that all miss it count as not held.
+#[cfg(target_os = "linux")]
 #[must_use]
 pub fn ownership_lock_held(socket: &Path) -> Option<bool> {
     let lock = ownership_lock_path(socket);
@@ -73,12 +80,14 @@ pub fn ownership_lock_held(socket: &Path) -> Option<bool> {
     Some(false)
 }
 
+#[cfg(target_os = "linux")]
 /// How many whole reads of `/proc/locks` [`ownership_lock_held`] makes before it calls a lock not held. A miss needs
 /// the lock just past a page edge while locks ahead of it go between two `read`s. Measured with a held lock among
 /// hundreds of others taken and released on 12 cores at once: 1 read in 55 missed it, 3 in a row 8 times in 477k
 /// reads, 5 in a row never.
 const LOCKS_READS: usize = 5;
 
+#[cfg(target_os = "linux")]
 /// The device of the mount that holds `path` in `mountinfo` (the text of `/proc/self/mountinfo`): the longest mount
 /// point that is a prefix of `path`, the later line on a tie (a mount over another). A line reads
 /// `id parent MAJ:MIN root mountpoint ...`, decimal device numbers, octal escapes in the mount point.
@@ -103,6 +112,7 @@ fn mount_device(mountinfo: &str, path: &Path) -> Option<Device> {
     best.map(|(_, device)| device)
 }
 
+#[cfg(target_os = "linux")]
 /// Undoes mountinfo's `\ooo` escapes (space, tab, newline, backslash).
 fn unescape_octal(field: &str) -> String {
     let mut out = String::with_capacity(field.len());
@@ -124,6 +134,7 @@ fn unescape_octal(field: &str) -> String {
     out
 }
 
+#[cfg(target_os = "linux")]
 /// Whether `table` (the text of `/proc/locks`) holds a granted `flock` on the file `key` (`MAJ:MIN:INODE`). An entry
 /// reads `N: FLOCK ADVISORY WRITE pid MAJ:MIN:INODE start end`; a blocked waiter's carries `->` after the ordinal, so
 /// it never matches.
@@ -132,6 +143,16 @@ fn flock_listed(table: &str, key: &str) -> bool {
         let fields: Vec<&str> = line.split_whitespace().collect();
         fields.len() > 5 && fields[1] == "FLOCK" && fields[5] == key
     })
+}
+
+/// Whether a process holds the server's ownership lock on `<socket>.lock`: never answered outside Linux, so a failed
+/// connect there takes the hint that names no owner. macOS lists no locks anywhere (no `/proc`), and asking by
+/// taking the lock, `flock` or `LockFileEx` alike, would compete with a starting instance's own non-blocking take
+/// and could make it fail; the hint is not worth that.
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub fn ownership_lock_held(_socket: &Path) -> Option<bool> {
+    None
 }
 
 #[cfg(test)]
@@ -150,6 +171,16 @@ mod tests {
             .with(CONTROL_SOCKET_ENV, "/app/ngterm.sock")
     }
 
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn no_owner_is_named_outside_linux() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("ngterm.sock");
+        let lock = File::create(ngterm_core::paths::ownership_lock_path(&socket)).unwrap();
+        lock.try_lock().unwrap();
+        assert_eq!(ownership_lock_held(&socket), None);
+    }
+
     #[test]
     fn socket_option_wins() {
         let env = env().with(STATE_DIR_ENV, "/state");
@@ -162,6 +193,7 @@ mod tests {
         assert_eq!(resolve(None, &env), Path::new("/state/ngterm.sock"));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn then_the_xdg_data_home_then_home_then_tmp() {
         assert_eq!(resolve(None, &env()), Path::new("/data/ngterm/ngterm.sock"));
@@ -173,12 +205,14 @@ mod tests {
         assert_eq!(resolve(None, &MapEnv::new()), Path::new("/tmp/ngterm/ngterm.sock"));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn an_empty_state_dir_is_unset_as_the_app_reads_it() {
         let env = env().with(STATE_DIR_ENV, "");
         assert_eq!(resolve(None, &env), Path::new("/data/ngterm/ngterm.sock"));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_device_splits_as_glibc() {
         // makedev(8, 2) and makedev(259, 0x12345)
@@ -187,6 +221,7 @@ mod tests {
         assert_eq!(Device::from_dev(dev).lock_key(7), "103:12345:7");
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn only_a_granted_flock_on_the_file_counts() {
         let table = "1: POSIX  ADVISORY  WRITE 10 08:02:42 0 EOF\n\
@@ -198,6 +233,7 @@ mod tests {
         assert!(flock_listed(&granted, "08:02:42"));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_innermost_mount_names_the_device() {
         let mountinfo = "22 1 0:31 / / rw - btrfs /dev/x rw\n\
@@ -212,11 +248,13 @@ mod tests {
         assert_eq!(mount_device("", Path::new("/x")), None);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn octal_escapes_are_undone() {
         assert_eq!(unescape_octal(r"/a\040b\134c\0"), "/a b\\c\\0");
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_held_ownership_lock_is_seen() {
         let dir = tempfile::tempdir().unwrap();

@@ -629,7 +629,7 @@ impl RequestCommand for PageServe {
     /// prints `error: <reason>` and exits 1, having written nothing to stdout.
     fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
         let socket = crate::client::connect(&self.options.socket_path(env))?;
-        let bridge = crate::stream_bridge::StreamBridge::new(socket, libc::STDIN_FILENO, libc::STDOUT_FILENO);
+        let bridge = crate::stream_bridge::StreamBridge::over_stdio(socket).map_err(Failure::Local)?;
         if let Err(error) = bridge.open(&self.make_request()) {
             eprintln!("error: {error}");
             return Err(Failure::Exit(ExitCode::FAILURE));

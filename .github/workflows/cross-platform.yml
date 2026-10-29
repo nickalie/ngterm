@@ -3,9 +3,8 @@
 # checks as steps of the `crates` job. No Miri job: it ran the Rust VT port's memory core (page buffers, its
 # allocators), which left this branch with the port (branch `rust-vt-port`). The rest of the workspace (GPUI, WPE)
 # is checked on Linux only, in rust-linux.yml. ngterm-server (the control socket: AF_UNIX on Linux and macOS, a named
-# pipe on Windows) is in PACKAGES. ngterm-ctl (the CLI, tested against the server) is meant to be cross-platform and
-# is not in PACKAGES yet: it builds on Linux only (an AF_UNIX client, `close_range`, `/proc/locks`) and joins once it
-# has its macOS and Windows forms. ngterm-app stays out too: its process table is ngterm-session's (tested here on all
+# pipe on Windows) and ngterm-ctl (the CLI over it, tested against the server; its overlay job in a Job object and
+# its stream bridge on the console on Windows) are in PACKAGES. ngterm-app stays out: its process table is ngterm-session's (tested here on all
 # three), but its hook runner (a `poll` pump over non-blocking pipes), its log file (`O_NOFOLLOW`), its remote
 # presentation process (`fcntl`, `kill`) and the agent integrations' installers (`std::os::unix` file modes and
 # symlinks) are Unix-only.
@@ -39,7 +38,7 @@ env:
   # `-p` per crate; word-split by bash, which every step runs in (Git Bash on Windows)
   PACKAGES: >-
     -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys -p ngterm-ghostty-vt
-    -p ngterm-pty -p ngterm-term -p ngterm-server
+    -p ngterm-pty -p ngterm-term -p ngterm-server -p ngterm-ctl
 
 defaults:
   run:

@@ -651,7 +651,7 @@ mod tests {
         let mut fake = FakeApp::new(Some("active"), None);
         let refused = ClientError {
             message: "refused".to_owned(),
-            connect_errno: Some(libc::ECONNREFUSED),
+            connect_error: Some(std::io::ErrorKind::ConnectionRefused),
         };
         fake.event_pages = VecDeque::from([
             Ok(page(10, vec![])),
@@ -668,7 +668,7 @@ mod tests {
         let mut fake = FakeApp::new(Some("active"), None);
         let missing = ClientError {
             message: "no socket".to_owned(),
-            connect_errno: Some(libc::ENOENT),
+            connect_error: Some(std::io::ErrorKind::NotFound),
         };
         fake.event_pages = VecDeque::from([Ok(page(10, vec![])), Err(missing)]);
         let outcome = command(&["--target", WORKER, "--until", "completed"]).wait(&mut fake);
@@ -681,7 +681,7 @@ mod tests {
         let mut fake = FakeApp::new(Some("active"), None);
         let refused = ClientError {
             message: "refused".to_owned(),
-            connect_errno: Some(libc::ECONNREFUSED),
+            connect_error: Some(std::io::ErrorKind::ConnectionRefused),
         };
         fake.event_pages = VecDeque::from([Err(refused)]);
         let outcome = command(&["--target", WORKER, "--until", "completed"]).wait(&mut fake);

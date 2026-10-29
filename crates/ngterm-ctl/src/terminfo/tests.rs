@@ -1,7 +1,9 @@
 //! Ported from upstream's `TerminfoInstallTests` and `TerminfoCommandsTests`: fake `ssh` and `infocmp` scripts in a temp
 //! root, the real `infocmp`/`tic` only against a temp database, and the remote side as a temp `HOME`.
 
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::process::Command as Process;
 
 use clap::Parser;
@@ -9,6 +11,7 @@ use clap::Parser;
 use super::*;
 use crate::{Command as Cli, Ngtermctl};
 
+#[cfg(unix)]
 fn env(pairs: &[(&str, &Path)]) -> HashMap<OsString, OsString> {
     pairs
         .iter()
@@ -17,10 +20,12 @@ fn env(pairs: &[(&str, &Path)]) -> HashMap<OsString, OsString> {
 }
 
 /// A temp root holding fake `ssh`/`infocmp` scripts, a fake stage, and what the fakes recorded.
+#[cfg(unix)]
 struct Fixture {
     root: tempfile::TempDir,
 }
 
+#[cfg(unix)]
 impl Fixture {
     fn new() -> Self {
         Self {
@@ -245,6 +250,7 @@ fn every_failure_has_its_own_message() {
 // -- where the entry comes from
 
 #[test]
+#[cfg(unix)]
 fn the_stage_beside_the_client_wins_over_the_environment() {
     let fixture = Fixture::new();
     let (client, terminfo) = fixture.stage("78");
@@ -256,6 +262,7 @@ fn the_stage_beside_the_client_wins_over_the_environment() {
 }
 
 #[test]
+#[cfg(unix)]
 fn the_environment_is_the_fallback_when_the_client_has_no_stage() {
     let fixture = Fixture::new();
     let from_env = fixture.database("env", "x");
@@ -266,6 +273,7 @@ fn the_environment_is_the_fallback_when_the_client_has_no_stage() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_directory_without_the_entry_is_skipped() {
     let fixture = Fixture::new();
     let empty = fixture.path("empty");
@@ -314,6 +322,7 @@ fn install_maps_every_connection_option_after_the_execution_settings() {
 }
 
 #[test]
+#[cfg(unix)]
 fn install_overrides_the_execution_settings_a_config_file_sets() {
     let ssh = Path::new("/usr/bin/ssh");
     if !ssh.exists() {
@@ -349,6 +358,7 @@ fn install_overrides_the_execution_settings_a_config_file_sets() {
 }
 
 #[test]
+#[cfg(unix)]
 fn the_remote_command_is_one_quoted_sh_invocation_on_one_line() {
     let argv = install_command(&connection("buildbox"), "ssh").unwrap();
     let remote = argv.last().unwrap();
@@ -357,6 +367,7 @@ fn the_remote_command_is_one_quoted_sh_invocation_on_one_line() {
 }
 
 /// The installed login shells among those upstream runs the remote command under.
+#[cfg(unix)]
 fn login_shells() -> Vec<&'static str> {
     ["/bin/sh", "/bin/bash", "/bin/zsh", "/bin/dash", "/bin/tcsh", "/bin/csh"]
         .into_iter()
@@ -365,6 +376,7 @@ fn login_shells() -> Vec<&'static str> {
 }
 
 #[test]
+#[cfg(unix)]
 fn the_remote_command_compiles_the_source_under_every_login_shell() {
     let remote = install_command(&connection("buildbox"), "ssh").unwrap().pop().unwrap();
     for shell in login_shells() {
@@ -397,6 +409,7 @@ fn the_remote_command_compiles_the_source_under_every_login_shell() {
 }
 
 #[test]
+#[cfg(unix)]
 fn the_remote_command_says_so_and_exits_3_when_the_host_has_no_tic() {
     let remote = install_command(&connection("buildbox"), "ssh").unwrap().pop().unwrap();
     for shell in login_shells() {
@@ -429,6 +442,7 @@ fn an_option_looking_or_unprintable_destination_is_refused() {
 // -- the pipeline, with fake executables
 
 #[test]
+#[cfg(unix)]
 fn the_dump_reaches_ssh_stdin_byte_for_byte_and_ends_in_eof() {
     let fixture = Fixture::new();
     let database = fixture.database("env", "78");
@@ -449,6 +463,7 @@ fn the_dump_reaches_ssh_stdin_byte_for_byte_and_ends_in_eof() {
 }
 
 #[test]
+#[cfg(unix)]
 fn the_dump_names_the_database_by_argument_as_well_as_by_terminfo() {
     // an ncurses built with `--disable-root-environ` ignores TERMINFO for root, so `-A` carries the database too
     let fixture = Fixture::new();
@@ -477,6 +492,7 @@ fn the_dump_names_the_database_by_argument_as_well_as_by_terminfo() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_failed_dump_never_starts_ssh() {
     let fixture = Fixture::new();
     let database = fixture.database("env", "78");
@@ -500,6 +516,7 @@ fn a_failed_dump_never_starts_ssh() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_missing_entry_never_starts_anything() {
     let fixture = Fixture::new();
     let infocmp = fixture.fake_infocmp("unused");
@@ -510,6 +527,7 @@ fn a_missing_entry_never_starts_anything() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_non_zero_remote_status_is_reported_as_itself() {
     let fixture = Fixture::new();
     let database = fixture.database("env", "78");
@@ -526,6 +544,7 @@ fn a_non_zero_remote_status_is_reported_as_itself() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_missing_ssh_is_a_spawn_failure() {
     let fixture = Fixture::new();
     let database = fixture.database("env", "78");
@@ -548,6 +567,7 @@ fn a_missing_ssh_is_a_spawn_failure() {
 }
 
 #[test]
+#[cfg(unix)]
 fn ssh_stays_in_the_callers_process_group() {
     let fixture = Fixture::new();
     let database = fixture.database("env", "78");
@@ -567,6 +587,7 @@ fn ssh_stays_in_the_callers_process_group() {
 }
 
 #[test]
+#[cfg(unix)]
 fn ssh_inherits_no_descriptor_beyond_its_standard_three() {
     let fixture = Fixture::new();
     let database = fixture.database("env", "78");
@@ -598,6 +619,7 @@ fn ssh_inherits_no_descriptor_beyond_its_standard_three() {
 }
 
 /// Runs `body` with `signal` blocked on this thread only, the previous mask restored after.
+#[cfg(unix)]
 fn with_blocked<T>(signal: i32, body: impl FnOnce() -> T) -> T {
     // SAFETY: a zeroed set is initialized by `sigemptyset` before use.
     let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
@@ -617,6 +639,7 @@ fn with_blocked<T>(signal: i32, body: impl FnOnce() -> T) -> T {
 }
 
 #[test]
+#[cfg(unix)]
 fn ssh_starts_with_signals_unblocked_whatever_the_caller_blocks() {
     let fixture = Fixture::new();
     let database = fixture.database("env", "78");
@@ -630,6 +653,7 @@ fn ssh_starts_with_signals_unblocked_whatever_the_caller_blocks() {
 }
 
 #[test]
+#[cfg(unix)]
 fn an_ssh_that_exits_before_reading_stdin_still_reports_its_status() {
     // with SIGPIPE at its default, as the real binary runs (a real infocmp dump stays under a pipe buffer, so only a
     // fake one reaches this end to end)
@@ -656,6 +680,7 @@ fn an_ssh_that_exits_before_reading_stdin_still_reports_its_status() {
 // -- the real infocmp against a real compiled entry
 
 #[test]
+#[cfg(unix)]
 fn the_real_infocmp_dumps_an_entry_tic_compiled() {
     if !Path::new("/usr/bin/tic").exists() || !Path::new(INFOCMP).exists() {
         return;

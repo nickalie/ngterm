@@ -4586,6 +4586,7 @@ dependencies = [
  "strum 0.27.2",
  "tempfile",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

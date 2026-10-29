@@ -1,19 +1,28 @@
 //! A blocking, one-request-per-connection client for the control socket, ported from `SocketClient.swift`: connect,
 //! write the request line, read the single response line, decode it.
+//!
+//! The connection is ngterm-server's [`Connection`]: the `AF_UNIX` socket at the path on Linux and macOS, the named
+//! pipe the path names on Windows. A failed connect reads the same on every OS: the errno's own text on Unix, and
+//! on Windows the POSIX text of the same failure (a missing pipe is `No such file or directory`, as a missing socket
+//! is), so scripts and upstream's strings match whichever OS answers.
 
 use std::fmt;
 use std::io::{self, ErrorKind, Read};
-use std::os::fd::AsRawFd;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 
 use ngterm_proto::{ControlResult, ControlTree, MAX_REQUEST_LINE_BYTES, Request, Response};
+pub use ngterm_server::Connection;
 
 use crate::socket;
 
-/// `sizeof(sockaddr_un.sun_path)` on Linux: a path must be shorter, its NUL included.
-const SUN_PATH_CAPACITY: usize = 108;
+/// `sizeof(sockaddr_un.sun_path)`: a path must be shorter, its NUL included. Windows has no such limit: the pipe's
+/// name is derived from the path ([`ngterm_core::paths::control_pipe_name`]) and always fits.
+#[cfg(target_os = "linux")]
+const SUN_PATH_CAPACITY: Option<usize> = Some(108);
+#[cfg(all(unix, not(target_os = "linux")))]
+const SUN_PATH_CAPACITY: Option<usize> = Some(104);
+#[cfg(windows)]
+const SUN_PATH_CAPACITY: Option<usize> = None;
 /// Cap on a response line. A `session.text --all` response carries the whole scrollback and can reach several MiB;
 /// the cap only guards against a runaway read.
 const MAX_LINE_BYTES: usize = 64 << 20;
@@ -25,8 +34,9 @@ const READ_CHUNK: usize = 64 * 1024;
 pub struct ClientError {
     /// What follows `Error: ` on stderr.
     pub message: String,
-    /// The errno of a failed connect, `None` for every other failure.
-    pub connect_errno: Option<i32>,
+    /// The kind of a failed connect's error (`ENOENT` and a missing pipe are both [`ErrorKind::NotFound`]), `None`
+    /// for every other failure.
+    pub connect_error: Option<ErrorKind>,
 }
 
 impl ClientError {
@@ -35,7 +45,7 @@ impl ClientError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            connect_errno: None,
+            connect_error: None,
         }
     }
 }
@@ -72,6 +82,21 @@ pub fn os_message(error: &io::Error) -> String {
     }
 }
 
+/// What a failed connect says after `failed: `: the OS's text on Unix; on Windows the POSIX text of the failures a
+/// socket shares with a pipe, so the message is the same whichever OS answers, and the OS's own text otherwise.
+fn connect_reason(error: &io::Error) -> String {
+    #[cfg(windows)]
+    if error.raw_os_error().is_some() {
+        match error.kind() {
+            ErrorKind::NotFound => return "No such file or directory".to_owned(),
+            ErrorKind::ConnectionRefused => return "Connection refused".to_owned(),
+            ErrorKind::PermissionDenied => return "Permission denied".to_owned(),
+            _ => {}
+        }
+    }
+    os_message(error)
+}
+
 /// The sentence after a failed connect. A refusal and a missing socket are the two the ownership lock narrows, and
 /// only to an owner being there: the server keeps the lock after a failed bind, so a held lock never says how the
 /// socket came to be unreachable.
@@ -88,22 +113,22 @@ fn connect_hint(error: &io::Error, path: &Path) -> &'static str {
 
 /// Connects to `path`. The length check comes first, as upstream's, so an over-long path reports itself rather than
 /// a generic connect failure.
-pub fn connect(path: &Path) -> Result<UnixStream, ClientError> {
-    let len = path.as_os_str().as_bytes().len();
-    if len >= SUN_PATH_CAPACITY {
+pub fn connect(path: &Path) -> Result<Connection, ClientError> {
+    let len = path.as_os_str().as_encoded_bytes().len();
+    if SUN_PATH_CAPACITY.is_some_and(|capacity| len >= capacity) {
         return Err(ClientError::new(format!(
             "socket path too long ({len} bytes): {}",
             path.display()
         )));
     }
-    UnixStream::connect(path).map_err(|error| ClientError {
+    ngterm_server::connect(path).map_err(|error| ClientError {
         message: format!(
             "connect({}) failed: {} — {}",
             path.display(),
-            os_message(&error),
+            connect_reason(&error),
             connect_hint(&error, path)
         ),
-        connect_errno: error.raw_os_error(),
+        connect_error: Some(error.kind()),
     })
 }
 
@@ -133,7 +158,7 @@ fn read_line(stream: &mut impl Read) -> Option<Vec<u8>> {
 /// One line of a streaming connection without its newline, a byte at a time, so nothing behind it (a frame right
 /// behind a reply) is consumed before its reader asks. `None` at the end of the connection, on a read error, or past
 /// `cap` bytes.
-pub fn read_socket_line(socket: &UnixStream, cap: usize) -> Option<Vec<u8>> {
+pub fn read_socket_line(socket: &Connection, cap: usize) -> Option<Vec<u8>> {
     let mut line = Vec::new();
     let mut byte = [0_u8; 1];
     loop {
@@ -149,9 +174,21 @@ pub fn read_socket_line(socket: &UnixStream, cap: usize) -> Option<Vec<u8>> {
     }
 }
 
-/// Writes all of `data` to `stream` with `MSG_NOSIGNAL`, looping over short writes: a peer that hung up yields
-/// `EPIPE` rather than SIGPIPE, whatever the process's SIGPIPE disposition (upstream's `SO_NOSIGPIPE`).
-pub fn send_all(stream: &UnixStream, mut data: &[u8]) -> io::Result<()> {
+/// Writes all of `data` to `stream`, looping over short writes: a peer that hung up yields `EPIPE` rather than
+/// SIGPIPE, whatever the process's SIGPIPE disposition (upstream's `SO_NOSIGPIPE`): `MSG_NOSIGNAL` on Unix, with
+/// the socket option ngterm-server's connect sets on macOS as well; a Windows pipe has no signal, and a write to a
+/// gone peer fails with [`ErrorKind::BrokenPipe`].
+#[cfg(windows)]
+pub fn send_all(mut stream: &Connection, data: &[u8]) -> io::Result<()> {
+    io::Write::write_all(&mut stream, data)
+}
+
+/// Writes all of `data` to `stream`, looping over short writes: a peer that hung up yields `EPIPE` rather than
+/// SIGPIPE, whatever the process's SIGPIPE disposition (upstream's `SO_NOSIGPIPE`): `MSG_NOSIGNAL` on Unix, with
+/// the socket option ngterm-server's connect sets on macOS as well.
+#[cfg(unix)]
+pub fn send_all(stream: &Connection, mut data: &[u8]) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
     let fd = stream.as_raw_fd();
     while !data.is_empty() {
         let (buf, len) = (data.as_ptr().cast::<libc::c_void>(), data.len());
@@ -255,7 +292,9 @@ mod tests {
     #[test]
     fn os_message_drops_the_errno_suffix() {
         let error = io::Error::from_raw_os_error(2);
+        #[cfg(unix)]
         assert_eq!(os_message(&error), "No such file or directory");
+        assert!(!os_message(&error).contains("os error"), "{}", os_message(&error));
         assert_eq!(os_message(&io::Error::other("plain")), "plain");
     }
 
@@ -279,6 +318,7 @@ mod tests {
 
     /// SIGPIPE in this thread's pending set. A blocked signal is queued even while its action is "ignore", so a
     /// write that raised it shows up here.
+    #[cfg(unix)]
     fn sigpipe_pending() -> bool {
         // SAFETY: an all-zero `sigset_t` is a valid (empty) set on Linux, which `sigpending` then overwrites.
         let mut pending: libc::sigset_t = unsafe { std::mem::zeroed() };
@@ -288,9 +328,10 @@ mod tests {
         (unsafe { libc::sigismember(&raw const pending, libc::SIGPIPE) }) == 1
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_hung_up_peer_is_an_error_without_sigpipe() {
-        let (ours, theirs) = UnixStream::pair().unwrap();
+        let (ours, theirs) = ngterm_server::endpoint::pair().unwrap();
         drop(theirs);
         // SAFETY: an all-zero `sigset_t` is a valid (empty) set on Linux.
         let mut block: libc::sigset_t = unsafe { std::mem::zeroed() };
@@ -308,21 +349,67 @@ mod tests {
         assert!(!raised, "the write raised SIGPIPE");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn a_hung_up_peer_is_a_broken_pipe() {
+        let (ours, theirs) = ngterm_server::endpoint::pair().unwrap();
+        drop(theirs);
+        let result = send_all(&ours, b"{\"cmd\":\"version\"}\n");
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::BrokenPipe);
+    }
+
+    #[cfg(unix)]
     #[test]
     fn an_over_long_path_is_refused_before_connecting() {
-        let path = format!("/tmp/{}", "x".repeat(SUN_PATH_CAPACITY - 5));
+        let capacity = SUN_PATH_CAPACITY.unwrap();
+        let path = format!("/tmp/{}", "x".repeat(capacity - 5));
         let error = connect(Path::new(&path)).unwrap_err();
         assert_eq!(
             error,
-            ClientError::new(format!("socket path too long ({SUN_PATH_CAPACITY} bytes): {path}"))
+            ClientError::new(format!("socket path too long ({capacity} bytes): {path}"))
         );
     }
 
+    #[cfg(windows)]
     #[test]
-    fn a_failed_connect_carries_its_errno() {
+    fn a_long_path_names_a_pipe_and_fails_as_a_missing_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("{}.sock", "x".repeat(200)));
+        let error = connect(&path).unwrap_err();
+        assert_eq!(error.connect_error, Some(ErrorKind::NotFound));
+        assert!(
+            error.message.starts_with(&format!(
+                "connect({}) failed: No such file or directory — ",
+                path.display()
+            )),
+            "{error}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_missing_pipe_reads_as_a_missing_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.sock");
+        let error = connect(&missing).unwrap_err();
+        assert_eq!(error.connect_error, Some(ErrorKind::NotFound));
+        assert_eq!(
+            error.message,
+            format!(
+                "connect({}) failed: No such file or directory — ngterm may be stopped or unable to accept \
+                 connections",
+                missing.display()
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_connect_carries_its_error_kind() {
+        use std::os::unix::ffi::OsStrExt as _;
         let dir = tempfile::Builder::new().prefix("agc").tempdir_in("/tmp").unwrap();
         let missing = connect(&dir.path().join("missing.sock")).unwrap_err();
-        assert_eq!(missing.connect_errno, Some(libc::ENOENT));
+        assert_eq!(missing.connect_error, Some(ErrorKind::NotFound));
         // a socket file no socket is bound to refuses; `mknod`, as a listener bound and dropped stays open in a
         // sibling test's child until its `exec`, which would accept the connect
         let stale = dir.path().join("stale.sock");
@@ -330,7 +417,7 @@ mod tests {
         // SAFETY: `c_stale` is a NUL-terminated string that outlives the call.
         assert_eq!(unsafe { libc::mknod(c_stale.as_ptr(), libc::S_IFSOCK | 0o600, 0) }, 0);
         let refused = connect(&stale).unwrap_err();
-        assert_eq!(refused.connect_errno, Some(libc::ECONNREFUSED), "{refused}");
+        assert_eq!(refused.connect_error, Some(ErrorKind::ConnectionRefused), "{refused}");
         assert!(
             refused
                 .message

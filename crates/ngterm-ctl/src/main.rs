@@ -306,7 +306,8 @@ trait RequestCommand {
 /// Puts SIGPIPE back to its default action; std sets it to ignored before `main`. A reader that closes stdout early
 /// (`ngtermctl tree | head -1`) then ends the process quietly by the signal, as upstream's CLI, where `println!`
 /// would panic on `EPIPE` and exit 101. The socket write still gets `EPIPE` as an error: it sends with
-/// `MSG_NOSIGNAL`.
+/// `MSG_NOSIGNAL`. Windows has no SIGPIPE: a write to a closed stdout is an error there.
+#[cfg(unix)]
 fn restore_default_sigpipe() {
     // SAFETY: `signal` with a valid signal number and `SIG_DFL` installs no handler code, and this runs first thing
     // in `main`, before any other thread exists.
@@ -352,6 +353,7 @@ fn parse_report(args: &[OsString], error: &clap::Error, width: usize) -> usage::
 }
 
 fn main() -> ExitCode {
+    #[cfg(unix)]
     restore_default_sigpipe();
     let args: Vec<OsString> = std::env::args_os().collect();
     let args = usage::name_default_subcommands(&Ngtermctl::command(), &args);
