@@ -83,9 +83,9 @@ guest has 4 CPUs and 6.5 GB of memory.
 - [x] the server's tests pass on Windows and macOS (Unix-specific assertions gated, their Windows twins added)
   (macOS checked with `cargo check --target x86_64-apple-darwin --all-targets` only; its tests run on CI's runner)
 - [x] `ngterm-server` joins `cross-platform.yml`'s PACKAGES; its header comment updated
-- [ ] Windows VM: clippy and tests of `ngterm-server` and `ngterm-core` green; Linux gate green
-- ⚠️ the Windows run of ngterm-server's and ngterm-core's clippy and tests has not completed: the VM went down
-  (VMware powered it off when the host's /home filled up) while clippy was checking `ngterm-server`
+- [x] Windows VM: clippy and tests of `ngterm-server` and `ngterm-core` green; Linux gate green
+- ⚠️ ngterm-session's `tests/pwsh.rs` did not run on the Windows VM: the guest has only Windows PowerShell 5.1 and
+  the test requires PowerShell 7 there (CI's Windows runners carry it); every other ngterm-session test is green there
 - ➕ ngterm-session's detach-behind-a-write client test raced its writing thread on a loaded guest (a fixed 300 ms
   pause); it now detaches once the scripted peer has read the write's first byte
 - ➕ the pipe naming scheme and the pipe's descriptor and server-user check moved to `ngterm-core` (`paths::pipe_name`,
