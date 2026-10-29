@@ -3,6 +3,9 @@
 //! under cargo's test temp dir with a fake `ngterm-session` beside it, `ssh` is a fake first on `PATH` whose remote
 //! side is a temp `HOME`, and no `NGTERM_*`, `AGTERM_*` or `ZMX_*` variable of the caller reaches a run, so neither a
 //! real pane nor the desktop clipboard nor the account's own terminfo is ever written.
+//!
+//! The tests that run a fake are Unix only, their fakes being `sh` scripts (and `tic` compiling the entry); on Windows
+//! the print's run is covered by the clipboard module's tests over a `.cmd` fake.
 
 use std::error::Error;
 use std::fs;
@@ -66,7 +69,12 @@ struct Sandbox {
 
 impl Sandbox {
     fn new() -> TestResult<Self> {
-        let state = tempfile::Builder::new().prefix("agl").tempdir_in("/tmp")?;
+        // Windows has no `/tmp` and no socket path limit: the pipe's name is derived from the path
+        #[cfg(unix)]
+        let short = PathBuf::from("/tmp");
+        #[cfg(windows)]
+        let short = std::env::temp_dir();
+        let state = tempfile::Builder::new().prefix("agl").tempdir_in(short)?;
         let root = tempfile::Builder::new()
             .prefix("cli-local")
             .tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
@@ -163,11 +171,9 @@ impl Sandbox {
                 command.env_remove(&name);
             }
         }
-        let path = format!(
-            "{}:{}",
-            self.path("fake-ssh").display(),
-            std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_owned())
-        );
+        let inherited = std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into());
+        let path =
+            std::env::join_paths(std::iter::once(self.path("fake-ssh")).chain(std::env::split_paths(&inherited)))?;
         command
             .args(args)
             .env("NGTERM_STATE_DIR", self.state.path())
@@ -264,6 +270,7 @@ fn clipboard_set_checks_the_text_before_the_pane() -> TestResult {
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn clipboard_set_prints_the_write_into_the_panes_daemon() -> TestResult {
     let sandbox = Sandbox::new()?;
@@ -292,6 +299,7 @@ fn clipboard_set_prints_the_write_into_the_panes_daemon() -> TestResult {
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn clipboard_set_reports_the_print_failing_or_missing() -> TestResult {
     let sandbox = Sandbox::new()?;
@@ -315,6 +323,7 @@ fn clipboard_set_reports_the_print_failing_or_missing() -> TestResult {
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn clipboard_set_reports_a_print_that_exits_without_reading_a_large_text() -> TestResult {
     // the built CLI runs SIGPIPE at its default: a write past the pipe buffer into a print that has gone must get EPIPE
@@ -337,6 +346,7 @@ fn clipboard_set_reports_a_print_that_exits_without_reading_a_large_text() -> Te
 
 // -- terminfo install
 
+#[cfg(unix)]
 #[test]
 fn terminfo_install_compiles_the_entry_into_the_remote_home_without_connecting() -> TestResult {
     let sandbox = Sandbox::new()?;
@@ -388,6 +398,7 @@ fn terminfo_install_compiles_the_entry_into_the_remote_home_without_connecting()
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn terminfo_install_reports_how_ssh_ended() -> TestResult {
     let sandbox = Sandbox::new()?;

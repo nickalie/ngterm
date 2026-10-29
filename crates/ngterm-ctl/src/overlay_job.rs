@@ -333,7 +333,9 @@ mod tests {
         /// A connected pair: the helper's end, and the origin serving the other. With `hang_up`, the origin goes away
         /// right after the context.
         fn serve(reply: &str, context: Option<OverlayLaunchContext>, hang_up: bool) -> (Connection, Self) {
-            let (helper, origin) = ngterm_server::endpoint::pair().unwrap();
+            // the helper takes the client's end, as it connects in the app: a server end's shutdown disconnects a
+            // Windows pipe, dropping what the client had not read yet
+            let (origin, helper) = ngterm_server::endpoint::pair().unwrap();
             let writer = (!hang_up).then(|| origin.try_clone().unwrap());
             let reply = format!("{reply}\n");
             let served = thread::spawn(move || {
@@ -489,15 +491,33 @@ mod tests {
         assert!(origin.frames().is_empty());
     }
 
-    /// A program that runs until it is stopped, and the status its stop reads as.
+    /// A program that runs until it is stopped, the status its stop reads as, and a file under `dir` it creates once
+    /// the stop can reach it. Unix needs none: `sh` itself dies of the signal. On Windows a Ctrl+Break sent before the
+    /// probe runs reaches `cmd.exe` alone, which outlives it, and only the kill past the grace ends the job.
     #[cfg(unix)]
-    fn long_running() -> (OverlayLaunchContext, i32) {
-        (context("sleep 30"), 128 + libc::SIGTERM)
+    fn long_running(_dir: &Path) -> (OverlayLaunchContext, i32, Option<std::path::PathBuf>) {
+        (context("sleep 30"), 128 + libc::SIGTERM, None)
     }
 
     #[cfg(windows)]
-    fn long_running() -> (OverlayLaunchContext, i32) {
-        (probe(Probe::Sleep, &[]), sys::INTERRUPTED_STATUS)
+    fn long_running(dir: &Path) -> (OverlayLaunchContext, i32, Option<std::path::PathBuf>) {
+        let ready = dir.join("ready");
+        (
+            probe(Probe::Sleep, &[(PROBE_READY, &ready)]),
+            sys::INTERRUPTED_STATUS,
+            Some(ready),
+        )
+    }
+
+    /// Waits up to ten seconds for `path` to appear.
+    fn wait_for_file(path: &Path) {
+        for _ in 0..500 {
+            if path.exists() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("{} never appeared", path.display())
     }
 
     /// A program that ignores the grace stop.
@@ -519,13 +539,17 @@ mod tests {
 
     #[test]
     fn a_cancel_from_the_app_ends_the_program_canceled() {
-        let (context, stopped) = long_running();
+        let dir = tempfile::tempdir().unwrap();
+        let (context, stopped, ready) = long_running(dir.path());
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context), false);
         let runner = runner(helper, Duration::from_millis(300));
         let claimed = runner.claim("job").unwrap();
         let status = thread::scope(|scope| {
             scope.spawn(|| {
-                thread::sleep(Duration::from_millis(300));
+                match &ready {
+                    Some(ready) => wait_for_file(ready),
+                    None => thread::sleep(Duration::from_millis(300)),
+                }
                 origin.send(&OverlayJobFrame::Cancel);
             });
             runner.run(&claimed, &plain_base())

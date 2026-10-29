@@ -25,17 +25,21 @@ pub fn absolute_path(path: &str) -> String {
     absolute_path_from(&base, path)
 }
 
-/// [`absolute_path`] against `base`.
+/// [`absolute_path`] against `base`. A Windows path keeps its drive or share (`C:\`, `\\server\share\`), which `..`
+/// never climbs past, as it never climbs past `/`.
 fn absolute_path_from(base: &Path, path: &str) -> String {
-    let mut resolved = PathBuf::from("/");
+    let mut resolved = PathBuf::new();
     for component in base.join(path).components() {
         match component {
-            Component::Normal(name) => resolved.push(name),
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => resolved.push(component),
             Component::ParentDir => {
                 resolved.pop();
             }
-            Component::RootDir | Component::CurDir | Component::Prefix(_) => {}
+            Component::CurDir => {}
         }
+    }
+    if resolved.as_os_str().is_empty() {
+        resolved.push(Component::RootDir);
     }
     resolved.to_string_lossy().into_owned()
 }
@@ -345,6 +349,7 @@ mod tests {
         })
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_path_resolves_as_the_callers_shell_sees_it() {
         let base = Path::new("/home/u/work");
@@ -354,6 +359,20 @@ mod tests {
         assert_eq!(absolute_path_from(base, "../x"), "/home/u/x");
         assert_eq!(absolute_path_from(base, "/../.."), "/");
         assert_eq!(absolute_path_from(base, "."), "/home/u/work");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_path_resolves_as_the_callers_shell_sees_it() {
+        let base = Path::new(r"C:\Users\u\work");
+        assert_eq!(absolute_path_from(base, r"\tmp\a\..\a\.\r.html"), r"C:\tmp\a\r.html");
+        assert_eq!(absolute_path_from(base, "/tmp/a/"), r"C:\tmp\a");
+        assert_eq!(absolute_path_from(base, r"D:\x\..\y"), r"D:\y");
+        assert_eq!(absolute_path_from(base, r"out\r.html"), r"C:\Users\u\work\out\r.html");
+        assert_eq!(absolute_path_from(base, "../x"), r"C:\Users\u\x");
+        assert_eq!(absolute_path_from(base, r"\..\.."), r"C:\");
+        assert_eq!(absolute_path_from(base, r"\\host\share\a\..\..\b"), r"\\host\share\b");
+        assert_eq!(absolute_path_from(base, "."), r"C:\Users\u\work");
     }
 
     #[test]

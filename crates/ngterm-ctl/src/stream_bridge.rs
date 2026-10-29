@@ -366,7 +366,9 @@ mod tests {
     }
 
     fn rig() -> Rig {
-        let (bridge_side, app) = ngterm_server::endpoint::pair().unwrap();
+        // the bridge takes the client's end, as it connects in the CLI: a server end's shutdown disconnects a Windows
+        // pipe, dropping what the client had not read yet
+        let (app, bridge_side) = ngterm_server::endpoint::pair().unwrap();
         let (input_reader, viewer_in) = io::pipe().unwrap();
         let (viewer_out, output_writer) = io::pipe().unwrap();
         let bridge = StreamBridge::new(

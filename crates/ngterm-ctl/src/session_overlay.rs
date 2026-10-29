@@ -836,6 +836,24 @@ mod tests {
         outcome(argv).unwrap()
     }
 
+    /// A `/`-spelled absolute path as `absolute_path` sends it on this OS: as it is on Unix, on the current
+    /// directory's drive with `\` separators on Windows.
+    fn native(path: &str) -> String {
+        if cfg!(windows) {
+            let cwd = std::env::current_dir().unwrap();
+            let drive = cwd
+                .components()
+                .next()
+                .unwrap()
+                .as_os_str()
+                .to_string_lossy()
+                .into_owned();
+            format!("{drive}{}", path.replace('/', "\\"))
+        } else {
+            path.to_owned()
+        }
+    }
+
     fn args(argv: &[&str]) -> Value {
         request(argv)["args"].clone()
     }
@@ -966,15 +984,15 @@ mod tests {
         ];
         assert_eq!(
             args(&page),
-            json!({"html": "/tmp/a/r.html", "cwd": "/tmp/a", "pane": "right", "color": "#102030"})
+            json!({"html": native("/tmp/a/r.html"), "cwd": native("/tmp/a"), "pane": "right", "color": "#102030"})
         );
         assert_eq!(
             args(&["open", "--html", "/tmp/r.html", "--chromeless", "--js"]),
-            json!({"html": "/tmp/r.html", "chromeless": true, "javascript": true})
+            json!({"html": native("/tmp/r.html"), "chromeless": true, "javascript": true})
         );
         assert_eq!(
             args(&["open", "--html", "/tmp/r.html", "--navigation", "--js"]),
-            json!({"html": "/tmp/r.html", "navigation": true, "javascript": true})
+            json!({"html": native("/tmp/r.html"), "navigation": true, "javascript": true})
         );
         let here = std::env::current_dir().unwrap();
         assert_eq!(
@@ -1020,7 +1038,7 @@ mod tests {
         // a page may block, a URL may not
         assert_eq!(
             args(&["open", "--html", "/tmp/r.html", "--block"]),
-            json!({"html": "/tmp/r.html"})
+            json!({"html": native("/tmp/r.html")})
         );
     }
 
@@ -1219,7 +1237,7 @@ mod tests {
                 "--height",
                 "240"
             ]),
-            json!({"sizePercent": 60, "width": 700, "height": 240, "html": "/tmp/r.html"})
+            json!({"sizePercent": 60, "width": 700, "height": 240, "html": native("/tmp/r.html")})
         );
         assert_eq!(
             request(&["resize", "--height", "300", "--target", "s"]),

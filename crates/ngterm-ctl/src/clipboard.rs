@@ -318,11 +318,21 @@ mod tests {
 
     const DAEMON: &str = "ngterm-357e181888f34450b5c225bd00239b9b";
 
+    /// A live pane's variables; on Windows over the test's own environment, without which `cmd.exe` and PowerShell
+    /// do not start (the print runs on exactly what it is given).
     fn live() -> HashMap<OsString, OsString> {
-        env(&[
+        let mut environment: HashMap<OsString, OsString> = if cfg!(windows) {
+            std::env::vars_os()
+                .filter(|(name, _)| !name.to_string_lossy().starts_with("NGTERM_"))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        environment.extend(env(&[
             ("NGTERM_LIVE_SESSION", DAEMON),
             ("NGTERM_LIVE_DIR", "/tmp/ngterm-live-1"),
-        ])
+        ]));
+        environment
     }
 
     fn env(pairs: &[(&str, &str)]) -> HashMap<OsString, OsString> {
@@ -506,7 +516,48 @@ mod tests {
             executable
         }
 
-        #[cfg(unix)]
+        /// A `.cmd` fake that runs a PowerShell script recording its arguments, its `NGTERM_LIVE_*` environment and
+        /// (with `reads_stdin`) its stdin byte for byte, then writes `stderr` and exits `exit_code`.
+        #[cfg(windows)]
+        fn fake_print(&self, exit_code: i32, stderr: Option<&str>, reads_stdin: bool) -> PathBuf {
+            let quoted = |path: PathBuf| format!("'{}'", path.display());
+            let read = if reads_stdin {
+                format!(
+                    "$out = [IO.File]::Create({}); [Console]::OpenStandardInput().CopyTo($out); $out.Close()",
+                    quoted(self.path("stdin"))
+                )
+            } else {
+                String::new()
+            };
+            let complain = stderr
+                .map(|text| format!("[Console]::Error.WriteLine('{text}')"))
+                .unwrap_or_default();
+            let script = self.path("print.ps1");
+            fs::write(
+                &script,
+                format!(
+                    "$args | Set-Content -Path {args}\r\n\
+                     [Environment]::GetEnvironmentVariables().Keys | Where-Object {{ $_ -like 'NGTERM_LIVE_*' }} | \
+                     Sort-Object | ForEach-Object {{ \"$_=$([Environment]::GetEnvironmentVariable($_))\" }} | \
+                     Set-Content -Path {env}\r\n{read}\r\n{complain}\r\nexit {exit_code}\r\n",
+                    args = quoted(self.path("args")),
+                    env = quoted(self.path("env")),
+                ),
+            )
+            .unwrap();
+            let executable = self.path("ngterm-session.cmd");
+            fs::write(
+                &executable,
+                format!(
+                    "@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{}\" %*\r\n\
+                     @exit /b %ERRORLEVEL%\r\n",
+                    script.display()
+                ),
+            )
+            .unwrap();
+            executable
+        }
+
         fn lines(&self, name: &str) -> Vec<String> {
             fs::read_to_string(self.path(name))
                 .unwrap()
@@ -551,7 +602,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn copy_prints_the_sequence_into_the_panes_daemon_on_stdin() {
         let fixture = Fixture::new();
@@ -561,7 +611,6 @@ mod tests {
         assert_eq!(fs::read(fixture.path("stdin")).unwrap(), b"\x1b]52;c;aGVsbG8=\x07");
     }
 
-    #[cfg(unix)]
     #[test]
     fn copy_clears_the_session_variables_and_keeps_the_socket_directory() {
         let fixture = Fixture::new();
@@ -579,7 +628,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_failed_print_carries_its_status_and_stderr() {
         let fixture = Fixture::new();
@@ -614,7 +662,21 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(windows)]
+    #[test]
+    fn a_print_that_exits_without_reading_stdin_still_reports_its_status() {
+        let fixture = Fixture::new();
+        let print = fixture.fake_print(4, None, false);
+        let text = vec![0; 1024 * 1024];
+        assert_eq!(
+            copy(&text, None, &live(), Some(&print)),
+            Err(CopyFailure::PrintFailed {
+                status: 4,
+                stderr: String::new()
+            })
+        );
+    }
+
     #[test]
     fn a_pane_that_is_not_live_never_starts_the_print() {
         let fixture = Fixture::new();

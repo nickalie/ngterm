@@ -336,6 +336,10 @@ fn the_app_socket_variables_are_not_read() -> TestResult {
     Ok(())
 }
 
+/// Unix only: on Windows the default is under the account's local application data known folder, which no variable
+/// redirects, so a test could only reach it by serving where a real instance would; ngterm-core's paths tests cover
+/// that resolution.
+#[cfg(unix)]
 #[test]
 fn without_a_state_dir_the_xdg_data_home_is_the_default() -> TestResult {
     let dir = short_dir()?;
@@ -1749,6 +1753,8 @@ fn event_ring(socket: &Path, first: serde_json::Value) -> TestResult<Server<usiz
 fn events_print_each_page_in_local_time_until_the_server_refuses() -> TestResult {
     let dir = short_dir()?;
     let refused = "Error: event cursor expired\n".to_owned();
+    // `TZ` is the C library's: Windows reads the system's zone, which no variable of the process changes
+    #[cfg(unix)]
     for (zone, printed) in [
         ("UTC", "00:00:10 status api active blink\n01:01:01 tree.changed win\n"),
         // POSIX spells three hours east of UTC with a minus
