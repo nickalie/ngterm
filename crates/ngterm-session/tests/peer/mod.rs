@@ -1,7 +1,7 @@
 //! What the client library's tests run against, on every OS: a scripted peer (a fake server on a real endpoint of a
 //! private namespace, its answers given by the test) and a real server run in the test process (`server::run`).
 
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -182,6 +182,9 @@ pub enum Step {
     Raw(Vec<u8>),
     /// Nothing read or written for this long, as a server that stopped.
     Hold(Duration),
+    /// This many bytes read as they come, frames or not, then the test told: a write that reached the peer is in
+    /// progress, so a client's writers' lock is held until it is done.
+    Read(usize, Sender<()>),
     /// Wait for the client's next message (it is forwarded to the test as every one is).
     Receive,
 }
@@ -220,6 +223,10 @@ fn play(stream: &Stream, steps: Vec<Step>, sender: &Sender<AttachClientMessage>)
             Step::Hold(time) => {
                 thread::sleep(time);
                 false
+            }
+            Step::Read(count, read) => {
+                let mut bytes = vec![0; count];
+                (&*stream).read_exact(&mut bytes).is_err() || read.send(()).is_err()
             }
             Step::Receive => !matches!(receive(), Ok(true)),
         };
