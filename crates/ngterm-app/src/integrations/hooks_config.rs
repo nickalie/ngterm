@@ -295,18 +295,31 @@ pub fn backup_path(path: &str) -> String {
     format!("{path}.bak")
 }
 
+/// Git for Windows' bash where its installer puts it, as `cmd.exe` expands it: what the Codex hooks' `command_windows`
+/// runs the adapter in on Windows, where Codex runs a hook's command through `cmd.exe` (`codex-rs/hooks`,
+/// `command_runner.rs`), the shell Claude Code runs its hooks in there too.
+pub const WINDOWS_BASH: &str = r"%ProgramFiles%\Git\bin\bash.exe";
+
 /// The `[[hooks.*]]` block the Codex merge writes, one table pair per lifecycle event, the adapter's path
-/// shell-quoted inside a TOML basic string (upstream's `codexHooksBlock`).
+/// shell-quoted inside a TOML basic string (upstream's `codexHooksBlock`). On Windows each hook also gets its
+/// `command_windows`: the adapter run by [`WINDOWS_BASH`], both double-quoted for `cmd.exe`.
 #[must_use]
 pub fn codex_hooks_block(script_dir: &str) -> String {
-    let wrapper = shell_quote(&format!("{script_dir}/{CODEX_WRAPPER_NAME}"));
+    let script = format!("{script_dir}/{CODEX_WRAPPER_NAME}");
+    let wrapper = shell_quote(&script);
     CODEX_HOOKS
         .iter()
         .map(|(event, action)| {
-            format!(
+            let table = format!(
                 "[[hooks.{event}]]\n[[hooks.{event}.hooks]]\ntype = \"command\"\ncommand = {}",
                 toml_basic_string(&format!("{wrapper} {action}"))
-            )
+            );
+            if cfg!(windows) {
+                let command = format!("\"{WINDOWS_BASH}\" \"{script}\" {action}");
+                format!("{table}\ncommand_windows = {}", toml_basic_string(&command))
+            } else {
+                table
+            }
         })
         .collect::<Vec<_>>()
         .join("\n\n")

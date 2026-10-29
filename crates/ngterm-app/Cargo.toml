@@ -12,18 +12,40 @@ ngterm-core.workspace = true
 ngterm-host.workspace = true
 # the live probe's launch inputs and the process table
 ngterm-session.workspace = true
-libc.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# the hook runner's stdin pump (`poll`, `O_NONBLOCK`), the log file's `O_NOFOLLOW`, the presentation bridge's
+# non-blocking stdin and its `SIGTERM`
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    # the log file's identity (`GetFileInformationByHandle`), its lock past the end (`LockFileEx`), its reparse-point
+    # check and the stderr capture's delete-on-close (`FILE_FLAG_*`)
+    "Win32_Storage_FileSystem",
+    # the cancel of a hook's pending stdin write (`CancelIoEx`), the lock's `OVERLAPPED`
+    "Win32_System_IO",
+    # the user `PATH` the command line tool's install adds its folder to (`HKCU\Environment`)
+    "Win32_System_Registry",
+    # the children's creation flags (`CREATE_NO_WINDOW`, `CREATE_NEW_PROCESS_GROUP`), the bridge's `TerminateProcess`
+    "Win32_System_Threading",
+    # the `WM_SETTINGCHANGE` broadcast that tells Explorer the user `PATH` changed
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 ngterm-host = { workspace = true, features = ["fakes"] }
 # a launched pane's foreground read through the process table (tests/pane_foreground.rs)
 ngterm-term.workspace = true
 tempfile.workspace = true
+# the Windows test scripts' PowerShell `-EncodedCommand` (`src/test_shell.rs`), which no command-line quoting reaches
+base64.workspace = true
 
 [lints]
 workspace = true

@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
@@ -117,16 +118,14 @@ fn the_plan_detects_each_agent_and_writes_nothing() {
         "fish only once ~/.config/fish exists"
     );
     assert_eq!(plan.script_dir, home.path(".config/ngterm/agent-status"));
-    assert_eq!(
-        plan.bake.as_deref(),
-        home.env.bundled_cli.as_deref().and_then(Path::to_str)
-    );
+    assert_eq!(plan.bake, home.env.bundled_cli.as_deref().map(hooks::shell_path));
 }
 
 #[test]
 fn a_fresh_install_wires_every_present_agent() {
     let home = Home::new();
     home.write(".claude/settings.json", "{\"model\": \"opus\"}\n");
+    #[cfg(unix)]
     fs::set_permissions(home.path(".claude/settings.json"), fs::Permissions::from_mode(0o600)).unwrap();
     home.mkdir(".codex");
     home.mkdir(".config/fish");
@@ -151,6 +150,7 @@ fn assert_restore_adapter_installed(home: &Home) {
     let restore = home
         .path(".config/ngterm/agent-status")
         .join(config::RESTORE_WRAPPER_NAME);
+    #[cfg(unix)]
     assert_eq!(
         files::posix_mode(&restore).unwrap() & 0o111,
         0o111,
@@ -160,13 +160,13 @@ fn assert_restore_adapter_installed(home: &Home) {
     assert!(
         fs::read_to_string(&restore)
             .unwrap()
-            .contains(&format!("  NGTERMCTL='{}'", tool.display())),
+            .contains(&format!("  NGTERMCTL='{}'", hooks::shell_path(&tool))),
         "the restore adapter has ngtermctl baked in"
     );
     let settings = home.read(".claude/settings.json");
     for arguments in ["claude start", "claude end"] {
         assert!(
-            settings.contains(&format!("{}' {arguments}", restore.display())),
+            settings.contains(&format!("{}' {arguments}", hooks::shell_path(&restore))),
             "{arguments}"
         );
     }
@@ -178,6 +178,7 @@ fn assert_restore_adapter_installed(home: &Home) {
 
 fn assert_fresh_install_files(home: &Home) {
     let wrapper = home.path(".config/ngterm/agent-status").join(WRAPPER_NAME);
+    #[cfg(unix)]
     assert_eq!(
         files::posix_mode(&wrapper).unwrap() & 0o111,
         0o111,
@@ -187,7 +188,7 @@ fn assert_fresh_install_files(home: &Home) {
     assert!(
         fs::read_to_string(&wrapper)
             .unwrap()
-            .contains(&format!("  NGTERMCTL='{}'", tool.display()))
+            .contains(&format!("  NGTERMCTL='{}'", hooks::shell_path(&tool)))
     );
     assert!(
         home.read(".claude/settings.json")
@@ -195,7 +196,9 @@ fn assert_fresh_install_files(home: &Home) {
     );
     assert_restore_adapter_installed(home);
     assert_eq!(home.read(".claude/settings.json.bak"), "{\"model\": \"opus\"}\n");
+    #[cfg(unix)]
     assert_eq!(files::posix_mode(&home.path(".claude/settings.json")), Some(0o600));
+    #[cfg(unix)]
     assert_eq!(files::posix_mode(&home.path(".claude/settings.json.bak")), Some(0o600));
     assert!(home.read(".codex/config.toml").contains("[[hooks.PermissionRequest]]"));
     assert!(
@@ -267,7 +270,7 @@ fn without_restore_hooks(json: &str) -> String {
 /// installs, or this build's own): every agent's config calling `dir` under the old names, the plugins under their old
 /// names and markers, and its package there.
 fn install_before_the_rename(home: &Home, dir: &Path) {
-    let dir = dir.display().to_string();
+    let dir = hooks::shell_path(dir);
     let (claude, _) = config::merge_claude_settings(Some("{\"model\": \"opus\"}\n"), &dir, &[]).unwrap();
     home.write(
         ".claude/settings.json",
@@ -511,6 +514,7 @@ fn the_old_pi_extension_goes_only_when_it_is_ours() {
 
 /// A symlinked old v2 plugin folder goes by itself, the link only: nothing inside its target is removed, in the
 /// `OpenCode` configuration and in the script directory alike.
+#[cfg(unix)]
 #[test]
 fn a_symlinked_old_v2_plugin_folder_is_unlinked_not_emptied() {
     let home = Home::new();
@@ -627,6 +631,7 @@ fn a_failed_write_names_the_path_it_stopped_on() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_symlinked_config_keeps_its_link_and_the_backup_stays_beside_it() {
     let home = Home::new();
@@ -826,6 +831,7 @@ fn the_skill_installs_for_each_agent_and_refuses_a_users_skill() {
         home.read(".codex/skills/ngterm/SKILL.md"),
         "---\nname: ngterm\n---\nmine\n"
     );
+    #[cfg(unix)]
     assert!(
         files::posix_mode(&home.path(".claude/skills/ngterm/scripts/show-image.sh")).unwrap() & 0o111 != 0,
         "the helper script stays executable"
@@ -862,6 +868,7 @@ fn a_second_skill_install_replaces_its_own_copy() {
     assert_eq!(home.snapshot(), first);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_symlink_at_the_skill_destination_is_the_users() {
     let home = Home::new();
@@ -908,6 +915,7 @@ fn the_bundled_resources_carry_their_ownership_markers() {
     ] {
         assert!(read(plugin).contains(&call), "{plugin}: {call}");
     }
+    #[cfg(unix)]
     for script in [
         "ngterm-agent-status.sh",
         "ngterm-claude-status.sh",

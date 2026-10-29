@@ -1,10 +1,14 @@
 //! The filesystem side of the installers (upstream's `AgentHooksInstaller` helpers and `AgentHooksInstall.writeFile`):
 //! reads that tell an absent file from an unreadable one, mode-preserving atomic writes that go through a symlink to
 //! its target, and the package copy.
+//!
+//! On Windows a file has no POSIX mode and no executable bit: [`posix_mode`] is `None` there, so a write keeps no
+//! mode and a fresh file takes its folder's inherited ACL (a home's is the user's alone), and the hooks run their
+//! scripts through an interpreter rather than by their bit (`hooks_config`). A symlink a user made (with Developer
+//! Mode or an elevated token) is still written through to its target.
 
 use std::fs;
 use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// A file that exists but cannot be read as UTF-8 text: the installers leave it untouched rather than treat it as
@@ -34,10 +38,20 @@ pub fn entry_exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
-/// The permission bits of the file at `path`, `None` when absent or unreadable (upstream's `posixMode`).
+/// The permission bits of the file at `path`, `None` when absent or unreadable (upstream's `posixMode`); always `None`
+/// on Windows, which has none.
+#[cfg(unix)]
 #[must_use]
 pub fn posix_mode(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
     fs::metadata(path).ok().map(|meta| meta.permissions().mode() & 0o7777)
+}
+
+/// Windows has no POSIX mode.
+#[cfg(not(unix))]
+#[must_use]
+pub fn posix_mode(_path: &Path) -> Option<u32> {
+    None
 }
 
 /// The resolved target when `path` is itself a symlink (the chain followed), else `None` (upstream's `symlinkTarget`).
@@ -93,15 +107,22 @@ fn temp_path(path: &Path) -> io::Result<PathBuf> {
 /// default otherwise.
 fn open_temp(temp: &Path, mode: Option<u32>) -> io::Result<fs::File> {
     let _ = fs::remove_file(temp);
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(if mode.is_some() { 0o600 } else { 0o666 })
-        .open(temp)?;
-    if let Some(mode) = mode {
-        file.set_permissions(fs::Permissions::from_mode(mode))?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let file = options.mode(if mode.is_some() { 0o600 } else { 0o666 }).open(temp)?;
+        if let Some(mode) = mode {
+            file.set_permissions(fs::Permissions::from_mode(mode))?;
+        }
+        Ok(file)
     }
-    Ok(file)
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+        options.open(temp)
+    }
 }
 
 /// Writes `text` through an existing symlink to its target, so a dotfiles-managed link survives, keeping the target's
@@ -186,7 +207,8 @@ pub fn relative_files(root: &Path) -> io::Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::symlink;
+    #[cfg(unix)]
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     use super::*;
 
@@ -203,11 +225,15 @@ mod tests {
             Err(Unreadable),
             "non-UTF-8 is unreadable, not absent"
         );
-        let dangling = dir.path().join("dangling");
-        symlink(dir.path().join("nowhere"), &dangling).unwrap();
-        assert_eq!(read_existing(&dangling), Ok(None));
+        #[cfg(unix)]
+        {
+            let dangling = dir.path().join("dangling");
+            symlink(dir.path().join("nowhere"), &dangling).unwrap();
+            assert_eq!(read_existing(&dangling), Ok(None));
+        }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_rewrite_keeps_the_mode_and_writes_through_a_symlink() {
         let dir = tempfile::tempdir().unwrap();
@@ -229,6 +255,7 @@ mod tests {
 
     /// The temp holds the contents before the rename: it must already be restrictive when opened, and a stale temp
     /// with a wide mode must not lend it its permissions.
+    #[cfg(unix)]
     #[test]
     fn the_temp_is_restrictive_before_anything_is_written() {
         let dir = tempfile::tempdir().unwrap();
@@ -254,9 +281,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fresh");
         write_file("x", &path, None).unwrap();
-        let mode = posix_mode(&path).unwrap();
-        assert_eq!(mode & 0o600, 0o600, "{mode:o}");
+        #[cfg(unix)]
+        {
+            let mode = posix_mode(&path).unwrap();
+            assert_eq!(mode & 0o600, 0o600, "{mode:o}");
+        }
+        #[cfg(not(unix))]
+        assert_eq!(posix_mode(&path), None, "no POSIX mode on Windows");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "x");
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1, "no temp file left");
+    }
+
+    /// A rewrite replaces the file in place, the temp renamed over it, a stale temp included.
+    #[test]
+    fn a_rewrite_replaces_the_file_and_leaves_no_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, "old").unwrap();
+        fs::write(temp_path(&path).unwrap(), "stale").unwrap();
+        write_preserving_symlink("new", &path).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1, "no temp file left");
+        assert_eq!(write_target(&path), path, "no link to follow");
     }
 
     #[test]
@@ -265,6 +311,7 @@ mod tests {
         let source = dir.path().join("src");
         fs::create_dir_all(source.join("shell")).unwrap();
         fs::write(source.join("run.sh"), "new").unwrap();
+        #[cfg(unix)]
         fs::set_permissions(source.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
         fs::write(source.join("shell/integration.sh"), "rc").unwrap();
         let destination = dir.path().join("dst");
@@ -275,6 +322,7 @@ mod tests {
         copy_tree(&source, &destination).unwrap();
 
         assert_eq!(fs::read_to_string(destination.join("run.sh")).unwrap(), "new");
+        #[cfg(unix)]
         assert_eq!(posix_mode(&destination.join("run.sh")), Some(0o755));
         assert_eq!(fs::read_to_string(destination.join("extra.sh")).unwrap(), "kept");
         assert_eq!(

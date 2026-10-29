@@ -4532,6 +4532,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 name = "ngterm-app"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "libc",
  "ngterm-core",
  "ngterm-host",
@@ -4543,6 +4544,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

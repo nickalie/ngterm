@@ -10,6 +10,13 @@
 //!
 //! [`plan`] reads the home and decides every step (what each agent has, what is current, what is the user's) without
 //! writing; [`apply`] carries the plan out and reports upstream's outcomes.
+//!
+//! On Windows every agent keeps its config under the user's profile at the same relative paths (`%USERPROFILE%`'s
+//! `.claude`, `.codex`, `.pi\agent`, `.config\opencode`), and the package goes to the same `.config\ngterm\agent-status`
+//! that the Pi extension and the `OpenCode` plugins name. Claude Code runs a hook's command in Git Bash there (its own
+//! requirement on Windows), so the commands stay the POSIX ones, their paths written with forward slashes
+//! ([`shell_path`]); Codex runs a hook through `cmd.exe`, so its block adds each hook's `command_windows`, the adapter
+//! under Git Bash ([`config::WINDOWS_BASH`]). Nothing is linked, and no mode is set or kept ([`files`]).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +25,18 @@ use super::files::{self, Unreadable};
 use super::hooks_config::{self as config, CodexMerge};
 use super::opencode::{Probe, Version};
 use super::{Environment, InstallError};
+
+/// `path` as the hooks' shell commands and the wrappers name it: as is on Unix; on Windows with forward slashes, which
+/// Git Bash takes as a Windows path and which survive its quoting and `cmd.exe`'s alike.
+#[must_use]
+pub fn shell_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.into_owned()
+    }
+}
 
 /// The package's destination under `home`.
 #[must_use]
@@ -481,7 +500,7 @@ pub fn plan(env: &Environment, opencode: &OpenCodeStart, probe: Option<&Probe>) 
         .filter(|package| package.is_dir())
         .ok_or_else(|| InstallError("The agent-status scripts are not bundled in this build.".to_owned()))?;
     let script_dir = script_dir(&env.home);
-    let dir = script_dir.to_string_lossy().into_owned();
+    let dir = shell_path(&script_dir);
     let opencode = match opencode {
         OpenCodeStart::Decided(result) => OpenCodePlan::Decided(result.clone()),
         OpenCodeStart::Install(version) => plan_opencode(&env.home, &package, Some(*version), probe)?,
@@ -491,7 +510,7 @@ pub fn plan(env: &Environment, opencode: &OpenCodeStart, probe: Option<&Probe>) 
     let pi = plan_pi(&env.home, &package)?;
     let stale = legacy_leftovers(&env.home, &script_dir, &pi, &opencode);
     Ok(HooksPlan {
-        bake: env.bundled_cli.as_ref().map(|tool| tool.to_string_lossy().into_owned()),
+        bake: env.bundled_cli.as_deref().map(shell_path),
         claude: plan_claude(&env.home, &dir),
         shell_rcs,
         rcs_skipped,
@@ -601,7 +620,7 @@ fn plan_claude(home: &Path, script_dir: &str) -> ClaudePlan {
         return ClaudePlan::Skipped;
     };
     let legacy = legacy_script_dir(home);
-    match config::merge_claude_settings(existing.as_deref(), script_dir, &[&legacy.to_string_lossy()]) {
+    match config::merge_claude_settings(existing.as_deref(), script_dir, &[&shell_path(&legacy)]) {
         Err(config::MalformedSettings) => ClaudePlan::Skipped,
         Ok((_, false)) => ClaudePlan::Current,
         Ok((contents, true)) => ClaudePlan::Merge(FileWrite {

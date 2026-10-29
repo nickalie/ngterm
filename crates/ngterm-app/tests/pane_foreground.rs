@@ -1,6 +1,10 @@
 //! A launched pane's foreground process group (`ngterm_term::Pane::foreground_pid`, what libghostty's
 //! `foreground_pid` was for the GTK build) read through this crate's process table, as core's restore capture and the
 //! `tree` read it: a command pane's program past its `/bin/sh -c` wrapper, a job typed into a login shell.
+//!
+//! Unix only: a foreground process group is a Unix terminal's; Windows' process table, which has none, is tested in
+//! `ngterm-session`.
+#![cfg(unix)]
 
 use std::time::{Duration, Instant};
 

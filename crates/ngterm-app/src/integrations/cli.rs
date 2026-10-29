@@ -6,15 +6,26 @@
 //!
 //! The CLI is `ngtermctl`, not upstream's `agtermctl`: the two CLIs resolve different default sockets, so this build
 //! neither takes nor touches a `~/.local/bin/agtermctl` an agterm install put there.
+//!
+//! On Windows nothing is linked: a symlink needs a privilege a user rarely holds (Developer Mode or an elevated token)
+//! and a copy or hard link would keep an old `ngtermctl.exe` past an upgrade. The bundled tool's own folder goes onto
+//! the user's `PATH` instead (`HKCU\Environment`'s `Path`, its `REG_EXPAND_SZ` kept, Explorer told with
+//! `WM_SETTINGCHANGE`), the per-user form of what an installer does for every user ([`CliPlan::AddToPath`],
+//! [`windows`]); a folder already on the `PATH` (the MSI's, or one the user added) is left as it is.
 
 use std::fs;
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use super::Environment;
 
 /// The bundled tool's executable name, the link the install puts on the `PATH` and the command the user runs.
 pub const TOOL_NAME: &str = "ngtermctl";
+
+/// The bundled tool's file name on this OS: [`TOOL_NAME`], with `.exe` on Windows.
+#[must_use]
+pub fn tool_file_name() -> String {
+    format!("{TOOL_NAME}{}", std::env::consts::EXE_SUFFIX)
+}
 
 /// The directory the tool is linked into.
 #[must_use]
@@ -42,6 +53,12 @@ pub enum CliPlan {
         link: PathBuf,
         status: LinkStatus,
     },
+    /// Windows: the bundled tool's folder onto the user's `PATH`; `on_path` when the process `PATH` already has it.
+    #[cfg(windows)]
+    AddToPath {
+        directory: PathBuf,
+        on_path: bool,
+    },
     Failed(String),
 }
 
@@ -66,9 +83,29 @@ pub fn link_status(link: &Path, source: &Path) -> LinkStatus {
 /// Plans the install over `env`'s home.
 #[must_use]
 pub fn plan(env: &Environment) -> CliPlan {
-    let Some(source) = env.bundled_cli.clone() else {
+    let Some(source) = env.bundled_cli.as_deref() else {
         return CliPlan::Failed(format!("{TOOL_NAME} is not bundled in this build."));
     };
+    plan_install(env, source)
+}
+
+/// Windows puts the tool's folder on the `PATH`.
+#[cfg(windows)]
+fn plan_install(env: &Environment, source: &Path) -> CliPlan {
+    windows::plan(env, source)
+}
+
+#[cfg(not(windows))]
+fn plan_install(env: &Environment, source: &Path) -> CliPlan {
+    plan_link(env, source.to_path_buf())
+}
+
+/// The link's plan: the Unix install.
+#[cfg_attr(
+    windows,
+    expect(dead_code, reason = "Windows adds the tool's folder to the PATH instead")
+)]
+fn plan_link(env: &Environment, source: PathBuf) -> CliPlan {
     let link = install_directory(&env.home).join(TOOL_NAME);
     let status = link_status(&link, &source);
     if status == LinkStatus::Foreign {
@@ -83,7 +120,16 @@ pub fn plan(env: &Environment) -> CliPlan {
 /// What the install did (upstream's `InstallResult`; Linux has no admin prompt to cancel).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliResult {
-    Installed { link: PathBuf, on_path: bool },
+    Installed {
+        link: PathBuf,
+        on_path: bool,
+    },
+    /// Windows: the tool's folder is on the user's `PATH`; `added` when this install put it there.
+    #[cfg(windows)]
+    OnPath {
+        directory: PathBuf,
+        added: bool,
+    },
     Failed(String),
 }
 
@@ -94,6 +140,10 @@ pub fn apply(plan: &CliPlan, path: Option<&str>) -> CliResult {
     let (source, link, status) = match plan {
         CliPlan::Failed(message) => return CliResult::Failed(message.clone()),
         CliPlan::Link { source, link, status } => (source, link, status),
+        #[cfg(windows)]
+        CliPlan::AddToPath { directory, on_path } => {
+            return windows::add_to_path(directory, *on_path, &windows::UserPath::environment());
+        }
     };
     let linked = (|| {
         if *status == LinkStatus::Current {
@@ -123,9 +173,24 @@ fn on_path(directory: &Path, path: Option<&str>) -> bool {
         .any(|entry| !entry.is_empty() && Path::new(entry) == directory)
 }
 
+#[cfg(unix)]
+fn symlink(source: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, link)
+}
+
+/// Never reached: Windows plans [`CliPlan::AddToPath`].
+#[cfg(windows)]
+fn symlink(_source: &Path, _link: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
 impl CliResult {
     #[must_use]
     pub fn is_warning(&self) -> bool {
+        #[cfg(windows)]
+        if matches!(self, Self::OnPath { .. }) {
+            return false;
+        }
         !matches!(self, Self::Installed { on_path: true, .. })
     }
 
@@ -133,6 +198,8 @@ impl CliResult {
     pub fn title(&self) -> &'static str {
         match self {
             Self::Installed { .. } => "Command Line Tool Installed",
+            #[cfg(windows)]
+            Self::OnPath { .. } => "Command Line Tool Installed",
             Self::Failed(_) => "Install Failed",
         }
     }
@@ -142,6 +209,14 @@ impl CliResult {
     pub fn text(&self) -> String {
         match self {
             Self::Failed(message) => message.clone(),
+            #[cfg(windows)]
+            Self::OnPath { directory, added } => {
+                let how = if *added { "was added to" } else { "is already on" };
+                format!(
+                    "{TOOL_NAME}'s folder {} {how} your PATH. Open a new terminal and run “{TOOL_NAME} --help”.",
+                    directory.display()
+                )
+            }
             Self::Installed { link, on_path } => {
                 let text = format!(
                     "{TOOL_NAME} was linked into {}. Open a new terminal and run “{TOOL_NAME} --help”.",
@@ -159,8 +234,14 @@ impl CliResult {
     }
 }
 
+#[cfg(windows)]
+pub mod windows;
+
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
+    use std::os::unix::fs::symlink;
+
     use super::*;
 
     fn env(home: &Path, bundled: Option<PathBuf>) -> Environment {

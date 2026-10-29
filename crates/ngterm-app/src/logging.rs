@@ -13,10 +13,18 @@
 //! startup: the process that logs to the file holds an exclusive `flock` on it for its lifetime, and a launch that
 //! finds it held never rotates, nor does one whose file another launch rotated away after it was opened. A file
 //! that cannot be opened leaves logging on stderr alone, with a warning there.
+//!
+//! The OS forms ([`platform`]): on Unix the file is opened `O_NOFOLLOW` and `0600`, the lock is `flock` over the
+//! whole file and the file's identity at its path is its device and inode. On Windows a file lock is mandatory, so a
+//! whole-file lock would refuse the second launch's appends: the instance lock is one byte far past any length the log
+//! reaches (`LockFileEx`), which no write touches; the file is opened shared for reading, writing and renaming (the
+//! rotation renames it while other launches hold it) with `FILE_FLAG_OPEN_REPARSE_POINT`, and refused when what opened
+//! is a reparse point (a symlink, or a mount point), so no link is followed; the state directory under
+//! `%LOCALAPPDATA%` is the user's alone by its inherited ACL, which stands in for the mode; the identity is the volume
+//! serial number and file index (`GetFileInformationByHandle`).
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -100,7 +108,7 @@ fn settle_log_file(state_dir: &Path, mut file: File, rotate_bytes: u64) -> io::R
         }
     }
     // still moving after every attempt: append to the last open, holding its lock when free, as a fresh file is held
-    let _ = file.try_lock();
+    let _ = platform::try_lock(&file);
     Ok(Arc::new(file))
 }
 
@@ -117,16 +125,10 @@ enum Claim {
 
 /// Tries the lock on `file`, opened from `path` (held while `file` stays open), and decides what to do with it.
 fn claim(path: &Path, file: &File, rotate_bytes: u64) -> io::Result<Claim> {
-    use std::os::unix::fs::MetadataExt;
-
-    let locked = file.try_lock().is_ok();
+    let locked = platform::try_lock(file);
     let meta = file.metadata()?;
     // checked after the lock: only a holder rotates, so with the lock had the path stays this file until the rename
-    let at_path = match fs::symlink_metadata(path) {
-        Ok(current) => current.dev() == meta.dev() && current.ino() == meta.ino(),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error),
-    };
+    let at_path = platform::is_at(file, path)?;
     Ok(if !at_path {
         Claim::Moved
     } else if locked && meta.is_file() && meta.len() > rotate_bytes {
@@ -143,19 +145,132 @@ fn rotate(state_dir: &Path, path: &Path, old: File) -> io::Result<Arc<File>> {
     let fresh = open_append(path)?;
     // a launch racing in before this lock finds the fresh file empty, so it does not rotate it either; one that takes
     // the lock first leaves this launch appending without it, as a launch that finds the lock held
-    let _ = fresh.try_lock();
+    let _ = platform::try_lock(&fresh);
     drop(old);
     Ok(Arc::new(fresh))
 }
 
 /// Opens `path` for appending, creating it owner-only; a symlink is refused.
 fn open_append(path: &Path) -> io::Result<File> {
-    OpenOptions::new()
-        .append(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
+    platform::open_append(path)
+}
+
+#[cfg(unix)]
+mod platform {
+    use std::fs::{self, File, OpenOptions};
+    use std::io;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use std::path::Path;
+
+    /// `O_NOFOLLOW`: a symlink at `path` fails the open.
+    pub(super) fn open_append(path: &Path) -> io::Result<File> {
+        OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+    }
+
+    /// The instance lock: an exclusive `flock`, held while `file` stays open.
+    pub(super) fn try_lock(file: &File) -> bool {
+        file.try_lock().is_ok()
+    }
+
+    /// Whether `file` is still the file at `path`.
+    pub(super) fn is_at(file: &File, path: &Path) -> io::Result<bool> {
+        let meta = file.metadata()?;
+        match fs::symlink_metadata(path) {
+            Ok(current) => Ok(current.dev() == meta.dev() && current.ino() == meta.ino()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+#[cfg(windows)]
+mod platform {
+    use std::fs::{File, OpenOptions};
+    use std::io;
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::windows::io::AsRawHandle;
+    use std::path::Path;
+
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, GetFileInformationByHandle, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+        LockFileEx,
+    };
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+
+    /// The high half of the instance lock's byte offset (2^62, the low half zero): past any length a log reaches (it
+    /// rotates at a few MiB), so no append ever writes into the locked range, which Windows would refuse.
+    const LOCK_OFFSET_HIGH: u32 = 1 << 30;
+
+    /// Opened without following a reparse point, and refused when it is one; shared for reading, writing and
+    /// deleting (std's default), so other launches append beside it and a rotation can rename it. Read access too:
+    /// `LockFileEx` takes only a handle with read or write access, and appending alone is neither.
+    pub(super) fn open_append(path: &Path) -> io::Result<File> {
+        let file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)?;
+        if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is a link (a reparse point), not a log file", path.display()),
+            ));
+        }
+        Ok(file)
+    }
+
+    /// The instance lock: an exclusive `LockFileEx` of one byte at 2^62 ([`LOCK_OFFSET_HIGH`]), held while `file` stays open.
+    pub(super) fn try_lock(file: &File) -> bool {
+        // SAFETY: an all-zero OVERLAPPED is valid; only its offset is set below.
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        overlapped.Anonymous.Anonymous.OffsetHigh = LOCK_OFFSET_HIGH;
+        // SAFETY: `file`'s handle is open for the call, `overlapped` outlives it, and a synchronous handle completes
+        // the request before returning.
+        let locked = unsafe {
+            LockFileEx(
+                file.as_raw_handle(),
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                0,
+                1,
+                0,
+                &raw mut overlapped,
+            )
+        };
+        locked != 0
+    }
+
+    /// Whether `file` is still the file at `path`: the same volume and file index. The path is opened for its
+    /// attributes only, never following a reparse point.
+    pub(super) fn is_at(file: &File, path: &Path) -> io::Result<bool> {
+        let current = match OpenOptions::new()
+            .access_mode(0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+        {
+            Ok(current) => current,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        Ok(identity(file)? == identity(&current)?)
+    }
+
+    /// The volume serial number and the file index.
+    fn identity(file: &File) -> io::Result<(u32, u32, u32)> {
+        // SAFETY: an all-zero BY_HANDLE_FILE_INFORMATION is valid; the call fills it.
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: `file`'s handle is open for the call and `info` is a live out-parameter.
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok((info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow))
+    }
 }
 
 #[cfg(test)]
@@ -347,11 +462,11 @@ mod tests {
 
         // the rotating launch, mid-rotation: it holds the lock on the file it moves and on its fresh one
         let moving = open_append(&path).unwrap();
-        moving.try_lock().unwrap();
+        assert!(platform::try_lock(&moving));
         let stalled = open_append(&path).unwrap();
         fs::rename(&path, &rotated).unwrap();
         let fresh = open_append(&path).unwrap();
-        fresh.try_lock().unwrap();
+        assert!(platform::try_lock(&fresh));
         let second = settle_log_file(tmp.path(), stalled, 8).unwrap();
         io::Write::write_all(&mut &*second, b"second launch\n").unwrap();
         io::Write::write_all(&mut &fresh, b"rotating launch\n").unwrap();
@@ -361,6 +476,7 @@ mod tests {
         drop((moving, fresh));
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_log_file_is_owner_only_and_never_a_symlink() {
         use std::os::unix::fs::PermissionsExt;
@@ -378,6 +494,36 @@ mod tests {
         std::os::unix::fs::symlink(&target, other.path().join(LOG_FILE_NAME)).unwrap();
         assert!(open_log_file(other.path(), ROTATE_BYTES).is_err());
         assert!(!target.exists());
+    }
+
+    /// The Windows twin: a symlink at the log's path is refused and its target never created. Creating the link
+    /// needs the symlink privilege (an elevated token or Developer Mode); without it the test says so and passes.
+    #[cfg(windows)]
+    #[test]
+    fn the_log_file_is_never_a_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        let other = tempfile::tempdir().unwrap();
+        if let Err(error) = std::os::windows::fs::symlink_file(&target, other.path().join(LOG_FILE_NAME)) {
+            eprintln!("SKIPPED: no symlink privilege here ({error})");
+            return;
+        }
+        assert!(open_log_file(other.path(), ROTATE_BYTES).is_err());
+        assert!(!target.exists());
+    }
+
+    /// The instance lock leaves the file writable to other handles: Windows locks are mandatory, so the lock's byte
+    /// lies past the end, and a second handle's lock on it fails while the first holds it.
+    #[test]
+    fn the_instance_lock_leaves_the_log_writable_and_is_exclusive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(LOG_FILE_NAME);
+        let holder = open_append(&path).unwrap();
+        assert!(platform::try_lock(&holder));
+        let other = open_append(&path).unwrap();
+        assert!(!platform::try_lock(&other), "the lock is exclusive");
+        io::Write::write_all(&mut &other, b"appended beside the holder\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "appended beside the holder\n");
     }
 
     #[test]

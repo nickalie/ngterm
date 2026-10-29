@@ -18,3 +18,5 @@ pub mod process_table;
 pub mod quick_placement;
 pub mod remote;
 pub mod restore_launch;
+#[cfg(test)]
+mod test_shell;

@@ -7,7 +7,9 @@
 //! itself ([`ngterm_core::remote::page_channel`]).
 //!
 //! Plain `std::process` with piped stdio on every OS, `ssh` found on `PATH` (upstream runs it through `/usr/bin/env` on
-//! one end of a socket pair): nothing here is Unix-only.
+//! one end of a socket pair): nothing here is Unix-only. On Windows the helper starts without a console window
+//! (`CREATE_NO_WINDOW`), which a GUI app's console child would otherwise open, and its stop is `TerminateProcess`
+//! through the `Child`'s own handle.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
@@ -49,7 +51,13 @@ impl<S> PageHelperProcess<S> {
 impl<S: PageHelperOwner> PageHelperLauncher for PageHelperProcess<S> {
     fn launch(&self, argv: &[String], key: HelperKey, permits: Arc<Permits>) -> Result<Box<dyn ChannelLink>, String> {
         let (program, arguments) = argv.split_first().ok_or_else(|| "an empty command".to_owned())?;
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::creation_flags(
+            &mut command,
+            windows_sys::Win32::System::Threading::CREATE_NO_WINDOW,
+        );
+        let mut child = command
             .args(arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -204,7 +212,6 @@ fn post<S: 'static>(poster: &Poster<S>, task: impl FnOnce(&mut S) + Send + 'stat
 }
 
 #[cfg(test)]
-#[cfg(unix)]
 mod tests {
     use std::sync::mpsc;
 
@@ -265,7 +272,8 @@ mod tests {
         main_loop: Arc<FakeMainLoop<Owner>>,
     }
 
-    fn launch(script: &str) -> Running {
+    /// A helper running `unix` under `/bin/sh` (`windows` under PowerShell on Windows).
+    fn launch(unix: &str, windows: &str) -> Running {
         let (sender, reports) = mpsc::channel();
         let permits = ReplicaChannel::permits();
         let owner = Owner {
@@ -274,7 +282,7 @@ mod tests {
         };
         let main_loop = Arc::new(FakeMainLoop::spawn(owner).unwrap());
         let poster: Poster<Owner> = Arc::downgrade(&main_loop) as Poster<Owner>;
-        let argv = ["sh".to_owned(), "-c".to_owned(), script.to_owned()];
+        let argv = crate::test_shell::script_argv(unix, windows);
         let link = PageHelperProcess::new(poster).launch(&argv, KEY, permits).unwrap();
         Running {
             reports,
@@ -287,7 +295,7 @@ mod tests {
         fn until_closed(&self) -> Vec<Report> {
             let mut reports = Vec::new();
             loop {
-                let report = self.reports.recv_timeout(Duration::from_secs(10)).unwrap();
+                let report = self.reports.recv_timeout(Duration::from_secs(30)).unwrap();
                 let closed = matches!(report, Report::Closed(_));
                 reports.push(report);
                 if closed {
@@ -306,7 +314,10 @@ mod tests {
 
     #[test]
     fn the_helper_hands_each_line_to_the_loop_then_its_exit() {
-        let running = launch("printf 'one\\ntwo\\n'; exit 3");
+        let running = launch(
+            "printf 'one\\ntwo\\n'; exit 3",
+            "[Console]::Out.Write(\"one`ntwo`n\"); exit 3",
+        );
         assert_eq!(
             running.until_closed(),
             [
@@ -319,7 +330,10 @@ mod tests {
 
     #[test]
     fn a_line_sent_reaches_the_helpers_stdin() {
-        let running = launch("read line; printf '%s\\n' \"got $line\"");
+        let running = launch(
+            "read line; printf '%s\\n' \"got $line\"",
+            "$line = [Console]::In.ReadLine(); [Console]::Out.Write(\"got $line`n\")",
+        );
         assert!(running.link.send(b"{\"id\":1}\n".to_vec()));
         assert_eq!(
             running.until_closed(),
@@ -332,7 +346,7 @@ mod tests {
 
     #[test]
     fn a_stop_ends_the_helper_and_refuses_later_lines() {
-        let running = launch("sleep 30");
+        let running = launch("sleep 30", "Start-Sleep 30");
         running.link.stop();
         assert!(!running.link.send(b"late\n".to_vec()));
         let reports = running.until_closed();
@@ -342,8 +356,13 @@ mod tests {
     #[test]
     fn an_oversize_line_stops_the_helper_and_closes_the_channel() {
         // more than a frame's worth without a newline, then a helper that would otherwise live on
-        let script = format!("head -c {} /dev/zero | tr '\\0' 'x'; sleep 30", MAX_FRAME_BYTES + 2);
-        let running = launch(&script);
+        let running = launch(
+            &format!("head -c {} /dev/zero | tr '\\0' 'x'; sleep 30", MAX_FRAME_BYTES + 2),
+            &format!(
+                "[Console]::Out.Write([string]::new([char]'x', {})); Start-Sleep 30",
+                MAX_FRAME_BYTES + 2
+            ),
+        );
         assert_eq!(
             running.until_closed(),
             [Report::Closed("helper sent an oversize line".to_owned())]
@@ -365,7 +384,7 @@ mod tests {
         // the owner keeps every permit: one line goes through, the second waits
         let main_loop = Arc::new(FakeMainLoop::spawn(Keeper(sender)).unwrap());
         let poster: Poster<Keeper> = Arc::downgrade(&main_loop) as Poster<Keeper>;
-        let argv = ["sh".to_owned(), "-c".to_owned(), "printf 'a\\nb\\n'".to_owned()];
+        let argv = crate::test_shell::script_argv("printf 'a\\nb\\n'", "[Console]::Out.Write(\"a`nb`n\")");
         let link = PageHelperProcess::new(poster)
             .launch(&argv, KEY, Arc::clone(&permits))
             .unwrap();
