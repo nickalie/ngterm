@@ -113,6 +113,9 @@ gpui-pre-wgpu = "=0.3.9"
 # ngterm-gpui reads the native key behind a key event (`current_native_input`, a patch of ours) from GPUI's Linux
 # platform, the crate gpui-kit already links.
 gpui-pre-linux = { version = "=0.3.9", default-features = false }
+# ngterm-gpui reads the native key behind a key event (`current_native_input`, a patch of ours) from GPUI's Windows
+# platform, the crate gpui-kit already links there.
+gpui-pre-windows = { version = "=0.3.9", default-features = false }
 # ngterm-gpui's procedural sprites (box drawing, blocks, powerline, braille) fill and stroke their paths with it, as
 # Ghostty's sprite font does with z2d. No PNG codec (`png-format`): the sprites only rasterize.
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
@@ -210,6 +213,11 @@ gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 # and modifiers, which GPUI's `Keystroke` drops), for the terminal's physical-key bindings and the Kitty keyboard
 # protocol: vendor/gpui-pre-linux is the verified crates.io source plus build/patches/gpui-pre-linux.
 gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
+# Windows Task 4 (docs/plans/20261029-windows-support.md): the native key behind each key event GPUI dispatches on
+# Windows (its scan code, the layout's unshifted character, the modifiers with Shift and those the layout used up),
+# the Windows form of gpui-pre-linux's: vendor/gpui-pre-windows is the verified crates.io source plus
+# build/patches/gpui-pre-windows.
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 # ngterm-pty's PTY and child: vendor/portable-pty is the verified crates.io source plus build/patches/portable-pty
 # (scripts/vendor-portable-pty.sh): ConPTY from kernel32 only, herdr's Windows environment and PATH fixes, a child
 # spawned into its job, and a ConPTY session's handles exported and imported for the session server's update handoff.

@@ -14,7 +14,9 @@
 //!   so the new instance runs on the same state directory and socket and consumes the marker. Upstream opens its bundle
 //!   with `open -n`; Linux has no counterpart, and a launch before the exit would only forward to this instance. A
 //!   binary replaced on disk while the app ran (an upgrade, a rebuild) reopens as the replacement ([`reopen_target`]);
-//!   a relauncher that cannot start leaves the reset unarmed, as upstream's `armLiveReset`.
+//!   a relauncher that cannot start leaves the reset unarmed, as upstream's `armLiveReset`. On Windows the waiter is
+//!   the app's own executable, started detached with [`RELAUNCH_FLAG`] ([`relaunch_if_asked`], first thing in
+//!   `main`): it waits on this process's handle, then starts the executable again; no shell is involved.
 //!
 //! [`Core::live_reset_menu_visible`]: ngterm_core::Core::live_reset_menu_visible
 //! [`Core::arm_live_reset_on_quit`]: ngterm_core::Core::arm_live_reset_on_quit
@@ -28,6 +30,10 @@ use ngterm_core::{ResetPrompt, ResetRefusal};
 
 use crate::modal::{AlertSpec, open_alert};
 use crate::state::{AppState, Poster, post};
+
+/// The argument that makes `ngterm` the relauncher on Windows: `--relaunch-after <pid> <polls>` waits for process
+/// `pid` to exit (at most `polls` of 0.2 s) and starts this executable again ([`relaunch_if_asked`]).
+pub const RELAUNCH_FLAG: &str = "--relaunch-after";
 
 /// The script the relauncher runs: wait for `$1` to exit (at most `$3` polls of 0.2 s), then start `$2` with the
 /// environment the app ran with. Arguments travel positionally, never inside the script text.
@@ -180,6 +186,7 @@ fn without_deleted_suffix(_: &Path) -> Option<PathBuf> {
 }
 
 /// The waiter's command for `executable` after process `pid` exits, detached from the app's process group.
+#[cfg(unix)]
 #[must_use]
 pub fn relaunch_command(executable: &Path, pid: u32) -> Command {
     let mut command = Command::new("/bin/sh");
@@ -193,9 +200,71 @@ pub fn relaunch_command(executable: &Path, pid: u32) -> Command {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
     command
+}
+
+/// The waiter's command for `executable` after process `pid` exits: `executable` itself as the relauncher
+/// ([`RELAUNCH_FLAG`]), in a process group of its own and without a console window.
+#[cfg(windows)]
+#[must_use]
+pub fn relaunch_command(executable: &Path, pid: u32) -> Command {
+    use std::os::windows::process::CommandExt as _;
+    use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
+    let mut command = Command::new(executable);
+    command
+        .arg(RELAUNCH_FLAG)
+        .arg(pid.to_string())
+        .arg(RELAUNCH_MAX_WAITS.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    command
+}
+
+/// The relauncher's run on Windows, when the arguments (without the program's name) are [`RELAUNCH_FLAG`]'s: waits
+/// for the app, then starts this executable again with the environment it inherited. Whether it launched; `None` for
+/// any other arguments.
+#[cfg(windows)]
+#[must_use]
+pub fn relaunch_if_asked(args: &[std::ffi::OsString]) -> Option<bool> {
+    let [flag, pid, polls] = args else {
+        return None;
+    };
+    if flag != RELAUNCH_FLAG {
+        return None;
+    }
+    let pid = pid.to_str()?.parse().ok()?;
+    let polls = polls.to_str()?.parse().ok()?;
+    Some(wait_then_launch(pid, polls, || {
+        Command::new(std::env::current_exe()?)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(drop)
+    }))
+}
+
+/// Waits for process `pid` to exit, at most `polls` of 0.2 s, then runs `launch`; whether it waited and launched. A
+/// process that cannot be opened has exited already.
+#[cfg(windows)]
+pub fn wait_then_launch(pid: u32, polls: u32, launch: impl FnOnce() -> io::Result<()>) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+    // SAFETY: a plain call; a null handle is checked below.
+    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if !process.is_null() {
+        // SAFETY: the handle OpenProcess returned, open until the CloseHandle below.
+        let waited = unsafe { WaitForSingleObject(process, polls.saturating_mul(200)) };
+        // SAFETY: as above, closed once.
+        unsafe { CloseHandle(process) };
+        if waited != WAIT_OBJECT_0 {
+            return false;
+        }
+    }
+    launch().is_ok()
 }
 
 #[cfg(test)]

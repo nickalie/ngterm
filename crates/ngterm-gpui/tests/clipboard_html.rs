@@ -5,6 +5,10 @@
 //!
 //! Wayland is not covered here: a Wayland client may own a selection only with the serial of an input event, which a
 //! headless compositor never delivers.
+//!
+//! Linux only: the `gpui-pre-linux` clipboard offer on a private Xvfb.
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]

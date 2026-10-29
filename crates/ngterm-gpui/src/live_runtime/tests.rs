@@ -189,6 +189,8 @@ fn cancel_and_escape_keep_the_app_and_reset_confirms(cx: &mut TestAppContext) {
     assert!(posted.0.lock().unwrap().is_empty(), "a refusal's OK runs nothing");
 }
 
+/// `/bin/sh` scripts and `sleep` stand in for the app and the process waited for.
+#[cfg(unix)]
 #[test]
 fn the_relauncher_waits_for_the_pid_then_starts_the_app() {
     let dir = tempfile::tempdir().unwrap();
@@ -208,6 +210,8 @@ fn the_relauncher_waits_for_the_pid_then_starts_the_app() {
     assert!(relauncher.wait().unwrap().success());
 }
 
+/// `/bin/sh` scripts and `sleep` stand in for the app and the process waited for.
+#[cfg(unix)]
 #[test]
 fn the_relauncher_gives_up_on_a_process_that_never_exits() {
     let dir = tempfile::tempdir().unwrap();
@@ -236,6 +240,7 @@ fn the_relauncher_gives_up_on_a_process_that_never_exits() {
 }
 
 /// Waits up to five seconds for `path` to appear.
+#[cfg(unix)]
 fn appears(path: &Path) -> bool {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !path.exists() && Instant::now() < deadline {
@@ -244,6 +249,8 @@ fn appears(path: &Path) -> bool {
     path.exists()
 }
 
+/// `/bin/sh` scripts and `sleep` stand in for the app and the process waited for.
+#[cfg(unix)]
 #[test]
 fn a_binary_replaced_on_disk_reopens_as_its_replacement() {
     let dir = tempfile::tempdir().unwrap();
@@ -265,6 +272,8 @@ fn a_binary_replaced_on_disk_reopens_as_its_replacement() {
     assert!(appears(&marker), "the replacement never started");
 }
 
+/// `/bin/sh` scripts and `sleep` stand in for the app and the process waited for.
+#[cfg(unix)]
 #[test]
 fn a_binary_gone_from_disk_starts_no_relauncher() {
     let dir = tempfile::tempdir().unwrap();
@@ -276,4 +285,52 @@ fn a_binary_gone_from_disk_starts_no_relauncher() {
         waited.id()
     ));
     waited.wait().unwrap();
+}
+
+/// The Windows relauncher waits on the app's process handle, then launches; it gives up on one that never exits.
+#[cfg(windows)]
+#[test]
+fn the_windows_relauncher_waits_for_the_pid_then_launches() {
+    let pause = |seconds: &str| {
+        std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("Start-Sleep -Seconds {seconds}"),
+            ])
+            .spawn()
+            .unwrap()
+    };
+    let mut waited = pause("1");
+    let started = Instant::now();
+    let launched = std::cell::Cell::new(None);
+    assert!(wait_then_launch(waited.id(), 50, || {
+        launched.set(Some(Instant::now()));
+        Ok(())
+    }));
+    waited.wait().unwrap();
+    let at = launched.get().expect("launched");
+    assert!(
+        at.duration_since(started) >= Duration::from_millis(500),
+        "launched before the app exited"
+    );
+    let mut never = pause("30");
+    assert!(
+        !wait_then_launch(never.id(), 1, || panic!("launched while the app runs")),
+        "gave up"
+    );
+    never.kill().unwrap();
+    never.wait().unwrap();
+    assert!(
+        wait_then_launch(never.id(), 1, || Ok(())),
+        "a process gone already launches at once"
+    );
+    let command = relaunch_command(Path::new(r"C:\ngterm\ngterm.exe"), 7);
+    let args: Vec<_> = command.get_args().map(std::ffi::OsStr::to_owned).collect();
+    assert_eq!(
+        args,
+        [RELAUNCH_FLAG, "7", &RELAUNCH_MAX_WAITS.to_string()].map(std::ffi::OsString::from)
+    );
+    assert_eq!(relaunch_if_asked(&["--other".into()]), None);
 }

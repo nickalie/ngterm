@@ -13,6 +13,7 @@ pub mod ask_dialog;
 pub mod chrome;
 pub mod dashboard;
 pub mod deck;
+#[cfg(target_os = "linux")]
 pub mod external_texture;
 pub mod folder_chooser;
 pub mod global_hotkey;
@@ -50,6 +51,8 @@ pub mod split;
 pub mod state;
 pub mod status_glyph;
 pub mod status_sound;
+#[cfg(windows)]
+pub mod system_window;
 pub mod terminal;
 pub mod titlebar;
 #[cfg(test)]

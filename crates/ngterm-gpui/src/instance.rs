@@ -1,30 +1,35 @@
-//! One running ngterm per application id, by `GApplication`'s own D-Bus protocol (plan > Solution Overview > Single
-//! instance). This build's id ([`DEFAULT_APP_ID`]) is its own, not upstream's, so it never forwards to an agterm
-//! instance; instances of different ids keep apart through separate state directories (`ngterm_core::paths`).
+//! One running ngterm per application id (plan > Solution Overview > Single instance). This build's id
+//! ([`DEFAULT_APP_ID`]) is its own, not upstream's, so it never forwards to an agterm instance; instances of different
+//! ids keep apart through separate state directories (`ngterm_core::paths`).
 //!
-//! The primary owns the app id's well-known name on the session bus and serves, at `GApplication`'s object path,
-//! `org.gtk.Application` (`Activate` with platform data: the only call a default-flags GTK launch makes; `Open` the
-//! same) and `org.gtk.Actions` (`DescribeAll`, which a non-primary `GApplication` calls while it registers and fails
-//! without, and `Activate`). A launch that finds the name owned sends `Activate` with its own platform data and exits
-//! before GPUI starts and before it reads or writes the model state (`windows.json`, the window files, the settings),
-//! so two launches of one id never both write them; like the GTK build's, it only appends its lines to the shared
-//! `ngterm.log` (logging starts first, and rotates the file only under the running instance's lock). As
-//! `GApplication` does, a launch with no session bus runs as a primary of its own.
+//! A launch that finds a primary running forwards to it and exits before GPUI starts and before it reads or writes the
+//! model state (`windows.json`, the window files, the settings), so two launches of one id never both write them; it
+//! only appends its lines to the shared `ngterm.log` (logging starts first, and rotates the file only under the running
+//! instance's lock). The mechanism is the platform's:
 //!
-//! The activation token travels in the platform data: GPUI consumes `XDG_ACTIVATION_TOKEN` for its first toplevel
-//! only and removes it from the environment when its platform is created, and a plain `GApplication` forwards no token
-//! (`GtkApplication` does), so [`Activation::from_env`] reads the token and the startup id first thing in `main`. A
-//! primary ends its own X11 startup sequence once its window exists (`activation::launched`), and `main` removes
-//! `DESKTOP_STARTUP_ID` from the environment, as GDK does, so no child inherits it.
+//! - Linux ([`gapplication`]): `GApplication`'s own D-Bus protocol on the session bus; a launch with no session bus
+//!   runs as a primary of its own, as `GApplication` does.
+//! - Windows ([`windows`]): a named pipe per app id and state directory, owner-only (plan > Decisions > Single
+//!   instance); the forwarding launch lets the primary take the foreground (`AllowSetForegroundWindow`).
+//!
+//! The activation token and the startup id are Linux's: GPUI consumes `XDG_ACTIVATION_TOKEN` for its first toplevel
+//! only and removes it from the environment when its platform is created, so [`Activation::from_env`] reads the token
+//! and the startup id first thing in `main`. A primary ends its own X11 startup sequence once its window exists
+//! (`activation::launched`), and `main` removes `DESKTOP_STARTUP_ID` from the environment, as GDK does, so no child
+//! inherits it. On Windows neither is set, and an activation carries nothing.
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::error::Error;
 
 use ngterm_core::paths::Env;
-use zbus::blocking::Connection;
-use zbus::fdo::{RequestNameFlags, RequestNameReply};
-use zbus::message::{Flags, Message};
-use zbus::zvariant::{OwnedValue, Signature, Value};
+
+#[cfg(target_os = "linux")]
+pub mod gapplication;
+#[cfg(target_os = "linux")]
+pub use gapplication::{Primary, Remote, register};
+#[cfg(windows)]
+pub mod windows;
+#[cfg(windows)]
+pub use windows::{Primary, Remote, register};
 
 /// The application id this build registers.
 pub const DEFAULT_APP_ID: &str = "com.nickalie.ngterm";
@@ -35,11 +40,6 @@ pub const APP_ID_ENV: &str = "NGTERM_APP_ID";
 pub const ACTIVATION_TOKEN_ENV: &str = "XDG_ACTIVATION_TOKEN";
 /// The startup-notification id a launcher hands an X11 launch (its `_TIME<n>` suffix is the launching event's time).
 pub const STARTUP_ID_ENV: &str = "DESKTOP_STARTUP_ID";
-
-/// The platform data keys `GtkApplication` sends and reads.
-const TOKEN_KEY: &str = "activation-token";
-const STARTUP_ID_KEY: &str = "desktop-startup-id";
-const CWD_KEY: &str = "cwd";
 
 /// `NGTERM_APP_ID` when `GApplication` would accept it, else [`DEFAULT_APP_ID`].
 #[must_use]
@@ -63,12 +63,6 @@ pub fn id_is_valid(id: &str) -> bool {
     id.len() <= 255 && id.split('.').count() >= 2 && id.split('.').all(element_is_valid)
 }
 
-/// `GApplication`'s object path for `app_id` (`application_path_from_appid`): `/` + the id, `.` → `/`, `-` → `_`.
-#[must_use]
-pub fn object_path(app_id: &str) -> String {
-    format!("/{}", app_id.replace('.', "/").replace('-', "_"))
-}
-
 /// What a launch hands the primary to raise its window with: the Wayland activation token and the X11 startup id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Activation {
@@ -90,207 +84,47 @@ impl Activation {
             startup_id: read(STARTUP_ID_ENV),
         }
     }
-
-    /// What a primary was handed in `Activate`'s platform data; values of another type count as absent.
-    #[must_use]
-    pub fn from_platform_data(data: &HashMap<String, OwnedValue>) -> Self {
-        let string = |key: &str| {
-            data.get(key)
-                .and_then(|value| <&str>::try_from(&**value).ok())
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-        };
-        Self {
-            token: string(TOKEN_KEY),
-            startup_id: string(STARTUP_ID_KEY),
-        }
-    }
-
-    /// The platform data a forwarding launch sends: `GApplication`'s `cwd` (a NUL-terminated bytestring) and
-    /// `GtkApplication`'s two keys. Unlike `GtkApplication`, which sends one value under both keys, each key carries what
-    /// this launch was given.
-    #[must_use]
-    pub fn platform_data(&self, cwd: Option<&Path>) -> HashMap<&'static str, Value<'static>> {
-        let mut data = HashMap::new();
-        if let Some(cwd) = cwd {
-            let mut bytes = std::os::unix::ffi::OsStrExt::as_bytes(cwd.as_os_str()).to_vec();
-            bytes.push(0);
-            data.insert(CWD_KEY, Value::from(bytes));
-        }
-        if let Some(token) = &self.token {
-            data.insert(TOKEN_KEY, Value::from(token.clone()));
-        }
-        if let Some(startup_id) = &self.startup_id {
-            data.insert(STARTUP_ID_KEY, Value::from(startup_id.clone()));
-        }
-        data
-    }
 }
 
-/// What another launch asked of the primary over the bus.
+/// What another launch asked of the primary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BusRequest {
-    /// `org.gtk.Application.Activate` (or `Open`): raise the frontmost window.
+    /// `org.gtk.Application.Activate` (or `Open`), or a forward over the instance pipe: raise the frontmost window.
     Activate(Activation),
 }
 
-/// Where the bus handlers hand requests: drained into the main loop once the app runs.
+/// Where the instance's handlers hand requests: drained into the main loop once the app runs.
 pub type BusRequests = async_channel::Sender<BusRequest>;
-
-/// `GApplication`'s `org.gtk.Application` on the primary.
-struct ApplicationIface {
-    requests: BusRequests,
-}
-
-#[zbus::interface(name = "org.gtk.Application")]
-impl ApplicationIface {
-    #[expect(clippy::needless_pass_by_value, reason = "zbus hands a method its arguments owned")]
-    fn activate(&self, platform_data: HashMap<String, OwnedValue>) {
-        let activation = Activation::from_platform_data(&platform_data);
-        let mut keys: Vec<&str> = platform_data.keys().map(String::as_str).collect();
-        keys.sort_unstable();
-        tracing::info!(
-            ?keys,
-            token = activation.token.as_deref(),
-            startup_id = activation.startup_id.as_deref(),
-            "instance: activation requested over the bus"
-        );
-        if self.requests.try_send(BusRequest::Activate(activation)).is_err() {
-            tracing::debug!("instance: activation dropped, the app is gone");
-        }
-    }
-
-    /// Files are not ngterm's: an `Open` raises the window as an `Activate` does.
-    #[expect(clippy::needless_pass_by_value, reason = "zbus hands a method its arguments owned")]
-    fn open(&self, uris: Vec<String>, hint: String, platform_data: HashMap<String, OwnedValue>) {
-        tracing::info!(uris = uris.len(), hint, "instance: open requested over the bus");
-        self.activate(platform_data);
-    }
-}
-
-/// `GApplication`'s `org.gtk.Actions` on the primary: no exported actions yet.
-struct ActionsIface;
-
-#[zbus::interface(name = "org.gtk.Actions")]
-impl ActionsIface {
-    #[expect(clippy::unused_self, reason = "a zbus method takes the interface")]
-    fn list(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    #[expect(clippy::unused_self, reason = "a zbus method takes the interface")]
-    fn describe_all(&self) -> HashMap<String, (bool, Signature, Vec<OwnedValue>)> {
-        HashMap::new()
-    }
-
-    #[expect(
-        clippy::unused_self,
-        clippy::needless_pass_by_value,
-        reason = "a zbus method takes the interface and its arguments owned"
-    )]
-    fn activate(&self, action_name: String, parameter: Vec<OwnedValue>, platform_data: HashMap<String, OwnedValue>) {
-        tracing::info!(
-            action_name,
-            parameters = parameter.len(),
-            platform_data = platform_data.len(),
-            "instance: unknown action activated over the bus"
-        );
-    }
-}
 
 /// How this launch ended up registered.
 pub enum Registration {
-    /// This process owns the app id: it runs the app. The connection must live as long as the process.
-    Primary(Connection),
-    /// Another process owns the app id: this launch forwards to it and exits.
+    /// This process is the primary for the app id: it runs the app. The value must live as long as the process.
+    Primary(Primary),
+    /// Another process is the primary: this launch forwards to it and exits.
     Remote(Remote),
-    /// No session bus: the app runs without single-instance (`GApplication`'s behavior).
-    Unique(zbus::Error),
+    /// No way to tell (no session bus): the app runs without single-instance (`GApplication`'s behavior).
+    Unique(Box<dyn Error + Send + Sync>),
 }
 
-/// The bus registration failed past the connection: the launch cannot tell whether another instance runs.
+/// The registration failed past reaching the platform's service: the launch cannot tell whether another instance
+/// runs.
 #[derive(Debug, thiserror::Error)]
-#[error("failed to register {app_id} on the session bus: {source}")]
+#[error("failed to register {app_id} {place}: {source}")]
 pub struct RegisterError {
     app_id: String,
+    /// Where: "on the session bus", "on its instance pipe".
+    place: &'static str,
     #[source]
-    source: Box<zbus::Error>,
+    source: Box<dyn Error + Send + Sync>,
 }
 
-/// Registers `app_id` on the session bus the way `GApplication` does: the interfaces are exported first, so a
-/// racing launch never meets the name without them, then the name is requested without queueing.
-///
-/// # Errors
-///
-/// The bus refused the name request or the export; a missing bus is [`Registration::Unique`] instead.
-pub fn register(app_id: &str, requests: BusRequests) -> Result<Registration, RegisterError> {
-    let failed = |source| RegisterError {
-        app_id: app_id.to_owned(),
-        source: Box::new(source),
-    };
-    let connection = match connect(app_id, requests) {
-        Ok(connection) => connection,
-        Err(Connect::NoBus(error)) => return Ok(Registration::Unique(error)),
-        Err(Connect::Export(error)) => return Err(failed(error)),
-    };
-    let remote = |connection| {
-        Registration::Remote(Remote {
-            connection,
+impl RegisterError {
+    fn new(app_id: &str, place: &'static str, source: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
+        Self {
             app_id: app_id.to_owned(),
-        })
-    };
-    match connection.request_name_with_flags(app_id, RequestNameFlags::DoNotQueue.into()) {
-        Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => Ok(Registration::Primary(connection)),
-        // zbus reports the bus's `Exists` reply as this error
-        Ok(RequestNameReply::Exists | RequestNameReply::InQueue) | Err(zbus::Error::NameTaken) => {
-            Ok(remote(connection))
+            place,
+            source: source.into(),
         }
-        Err(error) => Err(failed(error)),
-    }
-}
-
-enum Connect {
-    NoBus(zbus::Error),
-    Export(zbus::Error),
-}
-
-/// A session bus connection serving both interfaces at `app_id`'s object path, no name requested yet. A connection
-/// that cannot be made at all means no bus; a failure after it is a registration failure.
-fn connect(app_id: &str, requests: BusRequests) -> Result<Connection, Connect> {
-    let connection = zbus::blocking::connection::Builder::session()
-        .and_then(zbus::blocking::connection::Builder::build)
-        .map_err(Connect::NoBus)?;
-    let path = object_path(app_id);
-    let server = connection.object_server();
-    server
-        .at(path.as_str(), ApplicationIface { requests })
-        .and_then(|_| server.at(path.as_str(), ActionsIface))
-        .map_err(Connect::Export)?;
-    drop(server);
-    Ok(connection)
-}
-
-/// The primary another process runs, as a forwarding launch reaches it.
-pub struct Remote {
-    connection: Connection,
-    app_id: String,
-}
-
-impl Remote {
-    /// Sends `org.gtk.Application.Activate` with this launch's platform data, expecting no reply (`GApplication`'s
-    /// remote activation is fire-and-forget: the primary's answer never holds the launch up).
-    ///
-    /// # Errors
-    ///
-    /// The message could not be built or written to the bus.
-    pub fn activate(&self, activation: &Activation, cwd: Option<&Path>) -> zbus::Result<()> {
-        let path = object_path(&self.app_id);
-        let message = Message::method_call(path.as_str(), "Activate")?
-            .destination(self.app_id.as_str())?
-            .interface("org.gtk.Application")?
-            .with_flags(Flags::NoReplyExpected)?
-            .build(&(activation.platform_data(cwd),))?;
-        self.connection.send(&message)
     }
 }
 
@@ -333,12 +167,6 @@ mod tests {
     }
 
     #[test]
-    fn the_object_path_is_gapplications() {
-        assert_eq!(object_path("com.nickalie.ngterm"), "/com/nickalie/ngterm");
-        assert_eq!(object_path("org.example.my-app"), "/org/example/my_app");
-    }
-
-    #[test]
     fn a_launch_reads_its_token_and_startup_id_and_skips_empty_ones() {
         let env = MapEnv::new()
             .with(ACTIVATION_TOKEN_ENV, "tok")
@@ -352,29 +180,5 @@ mod tests {
         );
         let empty = MapEnv::new().with(ACTIVATION_TOKEN_ENV, "").with(STARTUP_ID_ENV, "");
         assert_eq!(Activation::from_env(&empty), Activation::default());
-    }
-
-    #[test]
-    fn platform_data_round_trips_and_carries_the_cwd_as_a_bytestring() {
-        let activation = Activation {
-            token: Some("tok".to_owned()),
-            startup_id: Some("sid".to_owned()),
-        };
-        let data = activation.platform_data(Some(Path::new("/srv")));
-        assert_eq!(data[CWD_KEY], Value::from(b"/srv\0".to_vec()));
-        let received: HashMap<String, OwnedValue> = data
-            .into_iter()
-            .map(|(key, value)| (key.to_owned(), value.try_into().unwrap()))
-            .collect();
-        assert_eq!(Activation::from_platform_data(&received), activation);
-        assert!(Activation::default().platform_data(None).is_empty());
-    }
-
-    #[test]
-    fn values_of_another_type_count_as_absent() {
-        let mut data: HashMap<String, OwnedValue> = HashMap::new();
-        data.insert(TOKEN_KEY.to_owned(), Value::from(7_u32).try_into().unwrap());
-        data.insert(STARTUP_ID_KEY.to_owned(), Value::from("").try_into().unwrap());
-        assert_eq!(Activation::from_platform_data(&data), Activation::default());
     }
 }

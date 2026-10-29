@@ -26,14 +26,12 @@ ngterm-server.workspace = true
 # the live sessions' server: its `SessionHost`, the live-launch inputs and the update handoff
 ngterm-session.workspace = true
 ngterm-term.workspace = true
-ashpd.workspace = true
 async-channel.workspace = true
 cosmic-text.workspace = true
 fancy-regex.workspace = true
 futures-util.workspace = true
 gpui-kit.workspace = true
 image.workspace = true
-libc.workspace = true
 notify.workspace = true
 # text watermarks are written as PNG files the terminals' `background-image` reads
 png.workspace = true
@@ -41,7 +39,6 @@ raw-window-handle.workspace = true
 # the windows' saved frames (`window_frames.rs`)
 serde.workspace = true
 serde_json.workspace = true
-signal-hook.workspace = true
 # write_*_file: the screen file goes into a temporary directory of its own, as Ghostty's does
 tempfile.workspace = true
 thiserror.workspace = true
@@ -49,6 +46,14 @@ tiny-skia.workspace = true
 tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+# `_exit` after the orderly shutdown (`main.rs`), the SIGTERM quit (`signals.rs`)
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+signal-hook.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd.workspace = true
 wayland-backend.workspace = true
 wayland-client.workspace = true
 wayland-protocols.workspace = true
@@ -56,8 +61,6 @@ wayland-protocols.workspace = true
 # screen spans; XKB: the keyboard-layout lock's groups on X11 (`input_source/linux/x11.rs`)
 x11rb = { workspace = true, features = ["randr", "xkb"] }
 zbus.workspace = true
-
-[target.'cfg(target_os = "linux")'.dependencies]
 ngterm-wpe = { workspace = true, optional = true }
 # the default web browser a page hands off to, whatever the address's type (upstream's `SystemBrowser`): the gio the
 # WPE host already links
@@ -77,12 +80,26 @@ objc2-app-kit = { workspace = true, features = ["NSSound", "NSGraphics", "NSPast
 objc2-foundation = { workspace = true, features = ["NSString"] }
 objc2-core-foundation = { workspace = true, features = ["CFArray", "CFBase", "CFDictionary", "CFNumber", "CFString"] }
 
+# the single instance's pipe (`instance/windows.rs`), owner-only like the control socket's, its SDDL in the UTF-16
+# string type interprocess takes
 [target.'cfg(windows)'.dependencies]
+# the native key behind a key event (`terminal/input.rs`, our `gpui-pre-windows` patch)
+gpui-pre-windows.workspace = true
+interprocess.workspace = true
+widestring.workspace = true
+# beside the sounds and the layout calls: the instance pipe's flush and the foreground hand-over
+# (`instance/windows.rs`), the quit on the console's events and the session's end (`signals/windows.rs`), the process's
+# own end (`main.rs`), the window's minimized and maximized state (`window.rs`), the motion setting
+# (`status_glyph.rs`), the relauncher's detached start (`live_runtime.rs`)
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Media_Audio",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
     "Win32_System_Registry",
+    "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
@@ -91,6 +108,8 @@ windows-sys = { workspace = true, features = [
 ngterm-host = { workspace = true, features = ["fakes"] }
 gpui-kit = { workspace = true, features = ["test-support"] }
 gpui-pre-wgpu.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
 # the global hotkey's and the keyboard layout's tests press their keys on a private Xvfb through XTEST
 # (tests/global_hotkey.rs, tests/keyboard_layout.rs); the window test lays monitors out on one through RandR
 # (tests/x11_window.rs)

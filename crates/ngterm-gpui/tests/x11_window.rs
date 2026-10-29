@@ -7,6 +7,10 @@
 //! blur behind it (patch 0003).
 //!
 //! A test whose tool is missing prints `SKIPPED:` and passes, unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set.
+//!
+//! Linux only: the window on a private Xvfb (`RandR`, EWMH states).
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]

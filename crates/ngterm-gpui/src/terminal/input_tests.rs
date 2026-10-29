@@ -67,6 +67,25 @@ fn a_native_key_is_its_physical_key_with_the_layouts_character() {
 }
 
 #[test]
+fn a_windows_scan_code_is_the_same_physical_key_as_its_xkb_keycode() {
+    // Windows reports set-1 scan codes, `0xE0`-prefixed for the extended keys
+    for (scan_code, name) in [
+        (0x2e, "key_c"),
+        (0x1c, "enter"),
+        (0xe01c, "numpad_enter"),
+        (0xe048, "arrow_up"),
+        (0x48, "numpad_8"),
+        (0x02, "digit_1"),
+        (0x01, "escape"),
+        (0x56, "intl_backslash"),
+    ] {
+        let keycode = input::xkb_keycode_of_scan_code(scan_code).unwrap_or(0);
+        assert_eq!(input::physical_key(keycode).name(), name, "{scan_code:#x}");
+    }
+    assert_eq!(input::xkb_keycode_of_scan_code(0xffff), None);
+}
+
+#[test]
 fn a_key_press_is_classified_for_the_status_glyph_as_the_gtk_build_does() {
     use ngterm_core::model::StatusKeystroke::{Interrupt, Other, Submit};
     let classify = |text: &str| input::status_keystroke(&KeyStroke::new(&keystroke(text), &Source::Keystroke, false));

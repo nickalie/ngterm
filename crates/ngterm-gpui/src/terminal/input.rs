@@ -5,7 +5,10 @@
 //! On Linux GPUI's own `Keystroke` keeps neither the key's position nor the layout's level-0 character, and drops Shift
 //! from symbols, so the platform's record of the native key (`gpui_linux::current_native_input`, a patch of ours)
 //! is read during the dispatch and preferred: the XKB keycode gives the physical key through Ghostty's keycode table
-//! (`keycodes.rs`), XKB gives the rest. Without one (GPUI's test platform, a replayed pending keystroke, another
+//! (`keycodes.rs`), XKB gives the rest. Windows's GPUI keeps no more (its key is the virtual key's character, its
+//! symbols lose Shift as well), so its record (`gpui_windows::current_native_input`, our `gpui-pre-windows` patch) is
+//! read the same way: its scan code becomes the XKB keycode of the same key (`keycodes.rs`), `ToUnicode` gives the
+//! rest. Without one (GPUI's test platform, a replayed pending keystroke, another
 //! platform) the key is read from GPUI's key name as a US keyboard would type it, Shift restored for its symbols;
 //! text an input method committed as a key has no position at all.
 //!
@@ -97,11 +100,49 @@ pub fn current_source(keystroke: &Keystroke) -> Source {
     }
 }
 
-/// The native input behind the key event being dispatched (none off Linux).
-#[cfg(not(target_os = "linux"))]
+/// The native input behind the key event being dispatched, when it describes `keystroke`.
+#[cfg(windows)]
+#[must_use]
+pub fn current_source(keystroke: &Keystroke) -> Source {
+    match gpui_windows::current_native_input() {
+        Some(gpui_windows::NativeInput::Key(native)) if native.keystroke == *keystroke => Source::Native(NativeKey {
+            keycode: xkb_keycode_of_scan_code(native.scan_code).unwrap_or(0),
+            modifiers: native.modifiers,
+            consumed: native.consumed,
+            unshifted: native.unshifted,
+            ascii_layout: native.ascii_layout,
+            text: native.text,
+            composing: native.composing,
+            repeat: native.repeat,
+            locks: {
+                let mut locks = Mods::empty();
+                locks.set(Mods::CAPS_LOCK, native.caps_lock);
+                locks.set(Mods::NUM_LOCK, native.num_lock);
+                locks
+            },
+            // `ToUnicodeEx` has no Command table (module docs)
+            command: None,
+        }),
+        _ => Source::Keystroke,
+    }
+}
+
+/// The native input behind the key event being dispatched (none where GPUI keeps no record yet: macOS).
+#[cfg(not(any(target_os = "linux", windows)))]
 #[must_use]
 pub fn current_source(_keystroke: &Keystroke) -> Source {
     Source::Keystroke
+}
+
+/// The XKB keycode of the key at Windows scan code `scan_code` (`0xE000 |` the code for an extended key), through
+/// Ghostty's keycode table; `None` for a code it does not list.
+#[cfg(any(windows, test))]
+#[must_use]
+pub fn xkb_keycode_of_scan_code(scan_code: u32) -> Option<u32> {
+    super::keycodes::WINDOWS_SCAN_CODES
+        .binary_search_by_key(&scan_code, |(code, _)| *code)
+        .ok()
+        .map(|index| super::keycodes::WINDOWS_SCAN_CODES[index].1)
 }
 
 /// One key event, owned (module docs).

@@ -11,6 +11,9 @@
 //!   it fares across a layout switch is the desktop's; the desktop may let the user confirm or change it ([`portal`]). A compositor without the portal (the wlroots ones, niri) gives a
 //!   client no global hotkey at all: logged, and its own key bindings run `ngtermctl quick toggle` instead.
 //!
+//! - Windows: not yet; the chord is logged as ignored until Task 5 of `docs/plans/20261029-windows-support.md`
+//!   registers it system-wide by physical key position.
+//!
 //! The chord is registered again whenever the keymap's changes (a reload); none is while the keymap names none
 //! (upstream ships no default).
 
@@ -132,6 +135,9 @@ impl GlobalHotkey {
         }
         if chord.is_some() && !self.unsupported_logged {
             self.unsupported_logged = true;
+            #[cfg(windows)]
+            tracing::warn!("the Windows global hotkey arrives in Task 5: global-hotkey is ignored");
+            #[cfg(not(windows))]
             tracing::warn!(
                 display = cx.compositor_name(),
                 "this display has no global hotkey: global-hotkey is ignored"

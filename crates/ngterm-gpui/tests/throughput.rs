@@ -6,6 +6,10 @@
 //! meanwhile (the UI stays responsive). One JSON line of numbers is printed (seen with `--nocapture`).
 //!
 //! A test whose tool is missing prints `SKIPPED:` and passes, unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set.
+//!
+//! Linux only: the app on a private Xvfb with lavapipe.
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]

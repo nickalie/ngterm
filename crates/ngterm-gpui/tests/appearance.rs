@@ -2,6 +2,10 @@
 //! `org.freedesktop.portal.Desktop` on a private session bus (a current portal, one before `ReadOne`, none at all), and
 //! the GPUI build launched on the dark side and flipping to the light one when the portal says so. Nothing here
 //! reaches the user's session bus or portal: every bus is the sandbox's own.
+//!
+//! Linux only: the settings portal on a private D-Bus session bus, the app on a headless weston.
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(

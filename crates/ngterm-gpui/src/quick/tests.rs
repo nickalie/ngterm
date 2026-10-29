@@ -58,6 +58,8 @@ fn display(id: DisplayId, width: f32, height: f32) -> Target {
 
 // MARK: - decisions
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_host_is_a_layer_surface_on_wayland_and_a_window_elsewhere() {
     assert_eq!(first_host("Wayland"), QuickHost::LayerShell);
@@ -70,6 +72,8 @@ fn the_host_is_a_layer_surface_on_wayland_and_a_window_elsewhere() {
     assert_eq!(first_host(""), QuickHost::Window);
 }
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn only_a_compositor_without_layer_shell_moves_the_panel_to_a_window() {
     let refused: gpui_kit::Result<()> = Err(gpui_kit::layer_shell::LayerShellNotSupportedError.into());
@@ -147,6 +151,7 @@ fn a_layer_surface_landing_off_its_estimate_is_refitted_once() {
 }
 
 /// The layer surface's options, split out.
+#[cfg(target_os = "linux")]
 fn layer(options: &gpui_kit::WindowOptions) -> &gpui_kit::layer_shell::LayerShellOptions {
     let WindowKind::LayerShell(layer) = &options.kind else {
         panic!("not a layer surface: {:?}", options.kind);
@@ -161,6 +166,8 @@ fn windowed_size(options: &gpui_kit::WindowOptions) -> gpui_kit::Size<gpui_kit::
     }
 }
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_layer_surface_takes_the_gtk_builds_attributes_centered_on_its_display() {
     use gpui_kit::layer_shell::{Anchor, KeyboardInteractivity, Layer};
@@ -185,6 +192,8 @@ fn the_layer_surface_takes_the_gtk_builds_attributes_centered_on_its_display() {
     assert_eq!(named.display_id, Some(one()), "a refit names the output it landed on");
 }
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_zoomed_layer_surface_fills_its_output() {
     use gpui_kit::layer_shell::Anchor;
@@ -200,11 +209,15 @@ fn the_zoomed_layer_surface_fills_its_output() {
     }
 }
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_centered_layer_surface_needs_a_display() {
     assert!(window_options(QuickHost::LayerShell, fit(false), None, false, "io.test").is_none());
 }
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_placement_follows_a_fractional_outputs_logical_size() {
     // eDP-1 at scale 1.75 (2880x1800): its logical size, as xdg-output reports it, and what the integer scale gave
@@ -242,7 +255,12 @@ fn the_window_host_is_undecorated_centered_and_maximized_for_the_zoom() {
         },
     };
     let options = window_options(QuickHost::Window, fit(false), Some(&monitor), false, "io.test").unwrap();
-    assert_eq!(options.kind, WindowKind::Normal);
+    let kind = if cfg!(windows) {
+        WindowKind::PopUp
+    } else {
+        WindowKind::Normal
+    };
+    assert_eq!(options.kind, kind);
     assert_eq!(options.window_decorations, Some(gpui_kit::WindowDecorations::Client));
     assert_eq!(
         options.window_background,

@@ -12,7 +12,8 @@
 //!   `p` write reaches the embedder, and macOS has no primary of its own); on Windows it shares the selection buffer,
 //!   as it shares PRIMARY with Selection on Linux.
 //!
-//! The macOS and Windows forms are not built on macOS/Windows by CI until ngterm-gpui joins `cross-platform.yml`.
+//! The Windows form is built and tested on the Windows runner (`cross-platform.yml`); the macOS form is not built on
+//! macOS by CI yet.
 
 #[cfg(target_os = "macos")]
 mod macos;

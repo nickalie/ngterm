@@ -9,6 +9,10 @@
 //! are killed through their own namespace's server at the end. The app runs the cargo-built `ngterm-session` beside
 //! it, as the staged layout has it; without one the test fails. Without Xvfb, lavapipe and Ghostty's shell integration
 //! it skips (fails under `NGTERM_REQUIRE_DISPLAY_TESTS`).
+//!
+//! Linux only: SIGTERM and HTML pages on WPE `WebKit`, the app on a private Xvfb.
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]

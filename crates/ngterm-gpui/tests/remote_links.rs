@@ -3,6 +3,10 @@
 //! (`support::Sandbox`). First the sources as the library starts them (what each reports, which network source is
 //! picked, none without a service), then the GPUI build launched on those buses retrying its links when the network
 //! comes back and when the machine wakes, and posting the remotes problems banner when `remotes.conf` turns bad on disk.
+//!
+//! Linux only: `NetworkManager`, logind and the portal faked on private D-Bus buses.
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(

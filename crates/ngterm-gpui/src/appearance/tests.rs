@@ -25,29 +25,6 @@ fn both() -> AppSettings {
 }
 
 #[test]
-fn the_portals_values_and_their_wrapping() {
-    assert_eq!(ColorScheme::from_value(0), ColorScheme::NoPreference);
-    assert_eq!(ColorScheme::from_value(1), ColorScheme::PreferDark);
-    assert_eq!(ColorScheme::from_value(2), ColorScheme::PreferLight);
-    assert_eq!(
-        ColorScheme::from_value(7),
-        ColorScheme::NoPreference,
-        "an undefined value"
-    );
-    assert!(ColorScheme::PreferDark.is_dark());
-    assert!(!ColorScheme::PreferLight.is_dark());
-    assert!(
-        !ColorScheme::NoPreference.is_dark(),
-        "no preference is light, as libadwaita reads it"
-    );
-    assert_eq!(ColorScheme::from_variant(&Value::U32(1)), Some(ColorScheme::PreferDark));
-    // the deprecated `Read` wraps the value in one more variant
-    let wrapped = Value::Value(Box::new(Value::Value(Box::new(Value::U32(2)))));
-    assert_eq!(ColorScheme::from_variant(&wrapped), Some(ColorScheme::PreferLight));
-    assert_eq!(ColorScheme::from_variant(&Value::from("dark")), None);
-}
-
-#[test]
 fn a_flip_reloads_only_while_following_both_slots_and_on_a_new_side() {
     let light = Appearance::new(false);
     assert!(light.flip_reloads(&both(), true));

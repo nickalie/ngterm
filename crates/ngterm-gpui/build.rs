@@ -3,10 +3,19 @@
 //! `WebKit` they link (`wpe_rpath`).
 //!
 //! The prefix path comes from `scripts/fetch-fonts.sh --print-prefix`, the one place that knows how it is keyed; this
-//! script never fetches. A missing or incomplete prefix fails the build with a pointer to the script.
+//! script never fetches. A missing or incomplete prefix fails the build with a pointer to the script. The script runs
+//! as libghostty-vt's prepare script does (`ngterm-ghostty-vt-sys`'s `script.rs`, shared): with Git Bash on Windows,
+//! its MSYS path converted to the native form.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
+
+#[path = "../ngterm-ghostty-vt-sys/script.rs"]
+#[expect(
+    dead_code,
+    reason = "the libghostty-vt prefix lookup there is that crate's; this one runs its own script"
+)]
+mod script;
 
 /// The faces `terminal::font` embeds (scripts/lib/native.sh `FONT_FILES`).
 const FONT_FILES: [&str; 5] = [
@@ -57,19 +66,8 @@ fn fonts() -> Result<PathBuf, String> {
     println!("cargo::rerun-if-env-changed=NGTERM_VENDOR");
     println!("cargo::rerun-if-env-changed=HOME");
 
-    let output = Command::new("bash")
-        .arg(&script)
-        .arg("--print-prefix")
-        .output()
-        .map_err(|err| format!("cannot run {}: {err}", script.display()))?;
-    if !output.status.success() {
-        return Err(format!(
-            "{} --print-prefix failed: {}",
-            script.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let fonts = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()).join("share/fonts");
+    let prefix = script::native(&script::run(&script, &["--print-prefix"], &[])?)?;
+    let fonts = prefix.join("share/fonts");
     if FONT_FILES.iter().all(|file| fonts.join(file).is_file()) {
         Ok(fonts)
     } else {

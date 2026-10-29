@@ -165,14 +165,21 @@ pub fn reported_minimized(read: Option<bool>, pending: Option<bool>) -> (Option<
 }
 
 /// `window`'s minimized state as the window manager reports it: X11's `_NET_WM_STATE_HIDDEN` (GPUI patch
-/// `gpui-pre-linux` 0003); `None` on Wayland, whose xdg-shell has no such state for a client, and elsewhere.
+/// `gpui-pre-linux` 0003), Windows's `IsIconic`; `None` on Wayland, whose xdg-shell has no such state for a client, and
+/// elsewhere.
 #[must_use]
 pub fn read_minimized(window: &Window) -> Option<bool> {
     #[cfg(target_os = "linux")]
     {
         gpui_linux::x11_window_minimized(x11_id(window)?)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::IsIconic;
+        // SAFETY: GPUI's live window handle, a plain query.
+        Some(unsafe { IsIconic(hwnd(window)?) } != 0)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = window;
         None
@@ -312,6 +319,11 @@ impl WindowView {
             (Layer::Search, AnyView::from(search.clone())),
             (Layer::Switcher, AnyView::from(switcher.clone())),
         ];
+        // the desktop's light or dark side, where the platform reports it per window (`appearance.rs`)
+        let subscriptions = [activation, bounds, opening, popped, alerts]
+            .into_iter()
+            .chain(crate::appearance::observe_window(&poster, window, cx))
+            .collect();
         Self {
             id,
             deck,
@@ -336,7 +348,7 @@ impl WindowView {
             first_focus,
             raised,
             poster,
-            _subscriptions: vec![activation, bounds, opening, popped, alerts],
+            _subscriptions: subscriptions,
         }
     }
 
@@ -1177,14 +1189,45 @@ fn x11_id(window: &Window) -> Option<u32> {
     }
 }
 
+/// `window`'s Win32 handle, `None` for a window of another platform.
+#[cfg(windows)]
+fn hwnd(window: &Window) -> Option<windows_sys::Win32::Foundation::HWND> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as windows_sys::Win32::Foundation::HWND),
+        _ => None,
+    }
+}
+
 /// Whether the window manager keeps X11 window `window` maximized, minimized or not (GPUI patch `gpui-pre-linux`
-/// 0003); `None` elsewhere.
+/// 0003), or Windows keeps it so (`IsZoomed`; while it is minimized, whether it restores to maximized); `None`
+/// elsewhere.
 fn read_maximized(window: &Window) -> Option<bool> {
     #[cfg(target_os = "linux")]
     {
         gpui_linux::x11_window_maximized(x11_id(window)?)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetWindowPlacement, IsIconic, IsZoomed, WINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED,
+        };
+        let hwnd = hwnd(window)?;
+        // SAFETY: GPUI's live window handle, a plain query.
+        if unsafe { IsIconic(hwnd) } == 0 {
+            // SAFETY: as above.
+            return Some(unsafe { IsZoomed(hwnd) } != 0);
+        }
+        let mut placement = WINDOWPLACEMENT {
+            length: u32::try_from(std::mem::size_of::<WINDOWPLACEMENT>()).ok()?,
+            // SAFETY: WINDOWPLACEMENT is plain data, valid zeroed; the call fills it.
+            ..unsafe { std::mem::zeroed() }
+        };
+        // SAFETY: the live handle and a WINDOWPLACEMENT with its length set, alive through the call.
+        (unsafe { GetWindowPlacement(hwnd, &raw mut placement) } != 0)
+            .then_some(placement.flags & WPF_RESTORETOMAXIMIZED != 0)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = window;
         None

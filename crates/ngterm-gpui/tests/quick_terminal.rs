@@ -8,6 +8,10 @@
 //!
 //! A test whose tool is missing prints `SKIPPED:` and passes, unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set. The
 //! nested-niri check is `#[ignore]`d (CI has no niri): run it with `--ignored`.
+//!
+//! Linux only: the panel on a headless weston and a private Xvfb.
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]

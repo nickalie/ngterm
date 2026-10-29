@@ -18,7 +18,8 @@
 //!   lookup and the file it names are read inside `PlaySoundW`, so it runs on a serial queue of its own too, off the
 //!   main thread.
 //!
-//! The macOS and Windows forms are not built on macOS/Windows by CI until ngterm-gpui joins `cross-platform.yml`.
+//! The Windows form is built and tested on the Windows runner (`cross-platform.yml`); the macOS form is not built on
+//! macOS by CI yet.
 //!
 //! The alert sound for a refusal with nothing on screen to explain it ([`alert`], upstream's `NSSound.beep()`): the
 //! display's alert bell on Linux, `NSBeep` on macOS and `MessageBeep(MB_OK)` on Windows.
