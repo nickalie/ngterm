@@ -371,10 +371,6 @@ fn token_of(argv: &[String]) -> String {
 
 /// Upstream's `testAFilePageHandedToTheViewerSubmitsThroughItsChannel`.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a file page's path is a `/` one (`html::grant_error`) and this page a real file in the temporary directory; Windows' file pages come with the HTML overlays' Windows plan"
-)]
 fn a_file_page_handed_to_the_viewer_loads_and_submits_through_its_channel() {
     let mut roles = Roles::new(true);
     assert_eq!(roles.viewer.node()["presentation"]["mode"], json!("presenter"));
@@ -447,10 +443,6 @@ fn a_file_page_handed_to_the_viewer_loads_and_submits_through_its_channel() {
 
 /// Upstream's `testTheOriginReadsTheViewersPageStateAndPresenterLossDismissesIt`.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a file page's path is a `/` one (`html::grant_error`) and this page a real file in the temporary directory; Windows' file pages come with the HTML overlays' Windows plan"
-)]
 fn the_origin_reads_the_viewers_page_state_and_presenter_loss_dismisses_it() {
     let mut roles = Roles::new(true);
     let opened = roles.open_page();
@@ -498,10 +490,6 @@ fn the_origin_reads_the_viewers_page_state_and_presenter_loss_dismisses_it() {
 /// Upstream's `testAnOlderPresenterKeepsTheRefusal`: a viewer that shows no pages lists no page kind, so the origin
 /// keeps its refusal rather than handing the page over.
 #[test]
-#[cfg_attr(
-    windows,
-    ignore = "a file page's path is a `/` one (`html::grant_error`) and this page a real file in the temporary directory; Windows' file pages come with the HTML overlays' Windows plan"
-)]
 fn a_viewer_showing_no_pages_keeps_the_origins_refusal() {
     let mut roles = Roles::new(false);
 

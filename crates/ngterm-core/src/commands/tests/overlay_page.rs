@@ -59,7 +59,7 @@ fn overlay(fixture: &mut Fixture, cmd: SessionCmd, id: Uuid, edit: impl FnOnce(&
 /// Opens a file page in the session-wide slot, or `pane`'s; its page id when it opened.
 fn open_page(fixture: &mut Fixture, id: Uuid, edit: impl FnOnce(&mut Args)) -> Response {
     overlay(fixture, SessionCmd::OverlayOpen, id, |a| {
-        a.html = Some("/tmp/site/page.html".to_owned());
+        a.html = Some(crate::html::os_path("/tmp/site/page.html"));
         edit(a);
     })
 }
@@ -122,7 +122,7 @@ fn a_page_occupies_the_slot_reads_back_and_is_dismissed_by_its_close() {
     assert_eq!(
         node["htmlOverlays"],
         json!([{
-            "file": "/tmp/site/page.html",
+            "file": crate::html::os_path("/tmp/site/page.html"),
             "state": "loading",
             "javascript": false,
             "chromeless": false,

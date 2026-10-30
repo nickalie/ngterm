@@ -14,7 +14,6 @@ use ngterm_core::model::is_valid_color_hex;
 use uuid::Uuid;
 
 use super::policy::{self, StripItem};
-use super::registry;
 use crate::state::{AppState, Poster, post};
 
 /// The theme foreground when the terminal's is unknown (upstream's `HtmlOverlayRegistry` falls back to white).
@@ -319,7 +318,7 @@ pub fn act(id: Uuid, item: StripItem, poster: &Poster, cx: &mut App) {
         StripItem::Forward => HtmlNavigation::Forward,
         StripItem::Browser => HtmlNavigation::Browser,
         StripItem::Files => HtmlNavigation::Finder,
-        StripItem::CopyLink => return registry::copy_link(id, cx),
+        StripItem::CopyLink => return super::copy_link(id, cx),
         StripItem::Reload => {
             return post(poster, move |state: &mut AppState| {
                 if state.core.reload_html_overlay(id, HtmlReloadTarget::Current) {
@@ -342,7 +341,7 @@ pub fn act(id: Uuid, item: StripItem, poster: &Poster, cx: &mut App) {
             });
         }
     };
-    if let Err(error) = registry::navigate(id, navigation) {
+    if let Err(error) = super::navigate(id, navigation) {
         tracing::debug!(%error, "page navigation refused");
     }
 }

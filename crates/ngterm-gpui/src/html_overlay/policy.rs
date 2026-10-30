@@ -13,16 +13,16 @@
 use std::path::{Path, PathBuf};
 
 use ngterm_core::html::navigation::file_path;
-use ngterm_core::html::{
-    HtmlNavigationAction, HtmlNavigationTarget, HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlSource,
-    REPLICA_SCHEME, replica_path, replica_url_of,
-};
+#[cfg(target_os = "linux")]
+use ngterm_core::html::{HtmlNavigationAction, HtmlNavigationTarget, REPLICA_SCHEME};
+use ngterm_core::html::{HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlSource, replica_path, replica_url_of};
 use url::Url;
 
 /// The scheme a granted file page loads through: every read passes the handler, which answers only inside the grant,
 /// while `file:` stays a local scheme `WebKit` refuses to a non-local origin.
 pub const GRANT_SCHEME: &str = "ngterm-file";
 
+#[cfg(target_os = "linux")]
 /// What `WebKitGTK` tells about a decision: a frame navigation (no target frame named), a new window, or the response
 /// of the main frame or a subframe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +33,7 @@ pub enum DecisionTarget {
     SubframeResponse,
 }
 
+#[cfg(target_os = "linux")]
 /// The shared policy's view of a `WebKitGTK` decision: a clicked link is judged as the main frame's, where a hand-off
 /// belongs; any other navigation as a subframe's, which admits what an iframe may load, the main frame being pinned
 /// when its response arrives. Only a navigation or a new window counts as clicked.
@@ -58,6 +59,7 @@ pub fn navigation_action(url: Url, target: DecisionTarget, link_clicked: bool) -
     }
 }
 
+#[cfg(target_os = "linux")]
 /// Whether a navigation or new-window request goes ahead in the page's own view. A real `file:` address would bypass
 /// the grant and is never asked about; any other request asks the policy (`allows`, which raises a hand-off prompt the
 /// policy offers), a new window's too, since that prompt is all a new window can lead to: the window itself never
@@ -68,6 +70,7 @@ pub fn navigation_proceeds(uri: &str, new_window: bool, allows: impl FnOnce() ->
     allowed && !new_window
 }
 
+#[cfg(target_os = "linux")]
 /// A web view address as the app spells it: a granted file as the `file:` URI it stands for.
 #[must_use]
 pub fn app_uri(uri: &str) -> String {
@@ -77,6 +80,7 @@ pub fn app_uri(uri: &str) -> String {
     }
 }
 
+#[cfg(target_os = "linux")]
 /// The address a granted file page loads `path` from; `None` for a path that is not absolute.
 #[must_use]
 pub fn granted_uri(path: &str) -> Option<String> {
@@ -88,6 +92,7 @@ pub fn granted_uri(path: &str) -> Option<String> {
 /// Why the replica scheme's handler refuses a read: it names another page, or the page is no replica.
 pub const NOT_THIS_PAGE: &str = "not a file of this page";
 
+#[cfg(target_os = "linux")]
 /// Whether `uri` reads the replica scheme, which a page shown for another machine loads from.
 #[must_use]
 pub fn is_replica_uri(uri: &str) -> bool {
@@ -103,6 +108,7 @@ pub fn replica_read(uri: &str, page: uuid::Uuid) -> Option<String> {
     replica_url_of(&url, page).then(|| replica_path(&url)).flatten()
 }
 
+#[cfg(target_os = "linux")]
 /// The address a replica page loads its file from (upstream's `HtmlPageSchemeHandler.url(pageID:path:)`).
 #[must_use]
 pub fn replica_uri(page: uuid::Uuid, path: &str) -> Option<String> {
@@ -207,6 +213,7 @@ impl LoadTracker {
 
     /// The main frame's response arrived: the pending load's navigation steps are behind it, so a refusal recorded
     /// before was not its own and a later one is not either.
+    #[cfg(target_os = "linux")]
     pub fn responded(&mut self) {
         self.provisional = Provisional::None;
     }
@@ -247,6 +254,7 @@ impl LoadTracker {
     /// macOS refuses a page's own direct navigation before it starts and the shown document stays, so a load the app
     /// started, or one with nothing shown, fails here; a page's own load over a shown document settles. A refused
     /// navigation step (a redirect) fails through [`Self::refused`] instead.
+    #[cfg(target_os = "linux")]
     pub fn blocked(&mut self, url: &str) -> LoadOutcome {
         if !self.pending {
             return LoadOutcome::None;
@@ -275,9 +283,14 @@ impl LoadTracker {
     }
 }
 
-/// A file path's URL; `None` for a path that is not absolute.
+/// A file path's URL; `None` for a path that is not absolute. A `/` path names a file on another machine where this
+/// one spells paths otherwise (a replica's, from a Mac or Linux, on Windows): its URL is built from the path as is.
 fn file_url(path: &str) -> Option<Url> {
-    Url::from_file_path(path).ok()
+    Url::from_file_path(path).ok().or_else(|| {
+        let mut url = Url::parse("file:///").ok()?;
+        path.starts_with('/').then(|| url.set_path(&path.replace('%', "%25")))?;
+        Some(url)
+    })
 }
 
 /// The source's own address: a file page's file (a replica's on the machine that opened it), a URL page's URL.
@@ -360,6 +373,14 @@ pub fn shown_after_change(shown: Option<&Url>, web: Option<&Url>) -> Option<Url>
     }
 }
 
+/// Whether a page report of `info` goes out: unless the model's value as last applied (`model`) and the page's last
+/// post (`reported`) both hold it. The model alone lags: a report posted but not yet applied leaves it at the value
+/// before, so a reload's title reported cleared and then back would read as unchanged and the title stay cleared.
+#[must_use]
+pub fn needs_report(model: Option<&HtmlPageInfo>, reported: Option<&HtmlPageInfo>, info: &HtmlPageInfo) -> bool {
+    model != Some(info) || reported != Some(info)
+}
+
 /// One item of the identity strip, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StripItem {
@@ -439,6 +460,7 @@ pub fn theme_change(current: &HtmlOverlayTheme, next: &HtmlOverlayTheme, themed:
     }
 }
 
+#[cfg(target_os = "linux")]
 /// A failed load as the tracker reads it (upstream's `reportFailure`, the GTK build's `failure_event`): a cancel
 /// superseded by the next load, a policy interruption, or a failure.
 #[must_use]
@@ -450,6 +472,7 @@ pub fn failure_event(error: &ngterm_wpe::LoadError) -> LoadEvent {
     }
 }
 
+#[cfg(target_os = "linux")]
 /// The answer to a read of `uri` through [`GRANT_SCHEME`] by a page whose grant is `root` (a real path): the file when
 /// it sits inside the grant, else the refusal (the GTK build's scheme handler).
 #[must_use]
@@ -470,11 +493,14 @@ pub fn serve_granted(root: Option<&Path>, uri: &str) -> ngterm_wpe::SchemeRespon
 
 #[cfg(test)]
 mod tests {
-    use ngterm_core::html::{HtmlNavigationDecision, HtmlPageFlags, decide};
+    use ngterm_core::html::HtmlPageFlags;
+    #[cfg(target_os = "linux")]
+    use ngterm_core::html::{HtmlNavigationDecision, decide};
 
     use super::*;
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_load_error_reads_as_the_trackers_event() {
         let error = |kind| ngterm_wpe::LoadError {
             kind,
@@ -495,6 +521,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn the_grant_scheme_serves_files_inside_the_grant_and_refuses_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
@@ -549,6 +576,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_new_window_asks_the_policy_for_its_prompt_and_never_proceeds() {
         let count = std::cell::Cell::new(0);
         let asked = &count;
@@ -574,6 +602,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_clicked_navigation_is_the_main_frames_and_anything_else_a_subframes() {
         let clicked = navigation_action(url("https://a.test/"), DecisionTarget::Frame, true);
         assert_eq!(
@@ -600,6 +629,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_url_page_is_pinned_at_its_main_response_and_offers_clicked_links_away() {
         let page = url_page(HtmlPageFlags::default());
         let decide_at = |text: &str, target, clicked| decide(&navigation_action(url(text), target, clicked), &page);
@@ -627,6 +657,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_granted_file_reads_back_as_its_file_uri() {
         let granted = granted_uri("/site/a b.html").unwrap();
         assert_eq!(granted, "ngterm-file:///site/a%20b.html");
@@ -641,25 +672,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         std::fs::create_dir(root.join("sub")).unwrap();
-        std::fs::write(root.join("sub/page.html"), "x").unwrap();
+        let page = root.join("sub").join("page.html");
+        std::fs::write(&page, "x").unwrap();
+        assert_eq!(granted_file(Some(&root), Some(&page)), Ok(page.clone()));
+        // a verbatim Windows path (what canonicalizing gives there) takes `..` as a name
+        #[cfg(not(windows))]
         assert_eq!(
             granted_file(Some(&root), Some(&root.join("sub/../sub/page.html"))),
-            Ok(root.join("sub/page.html"))
+            Ok(page.clone())
         );
         assert_eq!(granted_file(Some(&root), Some(&root.join("sub"))), Err(NOT_A_FILE));
         assert_eq!(granted_file(Some(&root), Some(&root)), Err(OUTSIDE_GRANT));
         assert_eq!(
-            granted_file(Some(&root), Some(&root.join("../x.html"))),
+            granted_file(Some(&root), Some(&root.join("..").join("x.html"))),
             Err(OUTSIDE_GRANT)
         );
         assert_eq!(
             granted_file(Some(&root), Some(&root.join("missing.html"))),
             Err(OUTSIDE_GRANT)
         );
-        assert_eq!(
-            granted_file(None, Some(&root.join("sub/page.html"))),
-            Err(OUTSIDE_GRANT)
-        );
+        assert_eq!(granted_file(None, Some(&page)), Err(OUTSIDE_GRANT));
     }
 
     #[test]
@@ -706,6 +738,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_navigation_refused_before_the_load_commits_names_the_interruption() {
         let interrupted = LoadEvent::Interrupted("Frame load was interrupted".to_owned());
         let blocked = LoadOutcome::Failed("navigation blocked: http://127.0.0.1:2/".to_owned());
@@ -774,6 +807,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_blocked_response_fails_an_app_load_or_one_with_nothing_shown() {
         let mut explicit = LoadTracker::default();
         explicit.handle(&LoadEvent::Committed);
@@ -932,6 +966,7 @@ mod tests {
     /// A replica loads from its page's own `ngterm-page` address, and reports the origin's path as what it shows, never
     /// that address (upstream's `pageURL` on a replica's scheme URL); a read naming another page's id is not its own.
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_replica_shows_the_origin_path_and_reads_only_its_own_addresses() {
         let page = uuid::Uuid::new_v4();
         let mut replica = HtmlOverlay::new(
@@ -961,6 +996,26 @@ mod tests {
         );
         assert_eq!(replica_read(asset.as_str(), uuid::Uuid::new_v4()), None);
         assert_eq!(replica_read("ngterm-file:///origin/my%20docs/a.png", page), None);
+    }
+
+    #[test]
+    fn a_report_the_model_has_not_applied_yet_does_not_hide_the_next_one() {
+        let info = |title: Option<&str>| HtmlPageInfo {
+            page: "/tmp/page.html".to_owned(),
+            title: title.map(str::to_owned),
+            can_go_back: false,
+            can_go_forward: false,
+        };
+        let titled = info(Some("Page"));
+        let cleared = info(None);
+        // settled: the model and the last post hold it
+        assert!(!needs_report(Some(&titled), Some(&titled), &titled));
+        // a reload cleared the title (posted, not applied yet), then the title came back
+        assert!(needs_report(Some(&titled), Some(&cleared), &titled));
+        // the model moved on its own (a reload's reset) while the last post still holds it
+        assert!(needs_report(Some(&cleared), Some(&titled), &titled));
+        // the first report
+        assert!(needs_report(None, None, &titled));
     }
 
     #[test]

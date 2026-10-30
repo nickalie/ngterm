@@ -297,8 +297,10 @@ fn standardized(path: &Path) -> PathBuf {
     out
 }
 
-/// The MIME type of `path` by its extension, as upstream's `UTType` lookup.
-fn mime_type(path: &Path) -> String {
+/// The MIME type of `path` by its extension, as upstream's `UTType` lookup (also the type a `WebView2` page's granted
+/// file is served with).
+#[must_use]
+pub fn mime_type(path: &Path) -> String {
     mime_guess::from_path(path)
         .first_raw()
         .unwrap_or("application/octet-stream")

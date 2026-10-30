@@ -1026,6 +1026,15 @@ impl Render for WindowView {
             })
             .collect();
         let alert = crate::modal::alert_layer(window.window_handle(), cx);
+        // a dialog, the palette, a popover, the switcher or an alert over the content: pages that sit above everything
+        // the window draws (Windows' native ones) step aside meanwhile
+        let covered = alert.is_some()
+            || self.switcher.read(cx).is_active()
+            || self
+                .layers
+                .iter()
+                .any(|(layer, _)| !matches!(layer, Layer::Search | Layer::Switcher));
+        crate::html_overlay::set_covered(window, covered, cx);
         div()
             .id("window")
             .capture_key_up(|event: &KeyUpEvent, window, cx| {

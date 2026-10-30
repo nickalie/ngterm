@@ -99,8 +99,8 @@ impl Origin {
     pub(super) fn open(&mut self, source: &str, edit: impl FnOnce(&mut Args)) -> Response {
         self.overlay(SessionCmd::OverlayOpen, |a| {
             if source.starts_with('/') {
-                a.html = Some(source.to_owned());
-                a.cwd = Some("/tmp/docs".to_owned());
+                a.html = Some(crate::html::os_path(source));
+                a.cwd = Some(crate::html::os_path("/tmp/docs"));
                 a.javascript = Some(true);
             } else {
                 a.url = Some(source.to_owned());
