@@ -65,8 +65,8 @@ jobs:
     # Measured 2026-10-19 with cold caches: the prefix 25 s (Ubuntu), 1 min (macOS), 2 min (Windows); the first
     # cargo step (clippy), which builds libghostty-vt first, 3 min (Ubuntu), 4.5 min (macOS), 2 min (Windows); each
     # cross build 1.5-2.5 min; the whole job 9-12 min. A warm Zig global cache saved little on Ubuntu (clippy 2.6 min).
-    # The Windows job also builds ngterm-gpui (GPUI and its DirectX platform), measured 2026-10-29 in the Win11 VM at
-    # several times the rest; the limit leaves it room.
+    # The Windows job also builds ngterm-gpui (GPUI and its DirectX platform), measured 2026-10-30 on the runner with a
+    # cold cache: its clippy 3.5 min, its tests 7 min, the whole job 27.5 min; the limit leaves it room.
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7

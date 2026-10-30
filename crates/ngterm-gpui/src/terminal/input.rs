@@ -106,7 +106,9 @@ pub fn current_source(keystroke: &Keystroke) -> Source {
 pub fn current_source(keystroke: &Keystroke) -> Source {
     match gpui_windows::current_native_input() {
         Some(gpui_windows::NativeInput::Key(native)) if native.keystroke == *keystroke => Source::Native(NativeKey {
-            keycode: xkb_keycode_of_scan_code(native.scan_code).unwrap_or(0),
+            keycode: xkb_keycode_of_scan_code(native.scan_code)
+                .or_else(|| xkb_keycode_of_scan_code(virtual_key_scan_code(native.virtual_key)))
+                .unwrap_or(0),
             modifiers: native.modifiers,
             consumed: native.consumed,
             unshifted: native.unshifted,
@@ -132,6 +134,19 @@ pub fn current_source(keystroke: &Keystroke) -> Source {
 #[must_use]
 pub fn current_source(_keystroke: &Keystroke) -> Source {
     Source::Keystroke
+}
+
+/// The scan code the current layout puts virtual key `virtual_key` on, `0xE0`-prefixed for an extended key as
+/// [`xkb_keycode_of_scan_code`] takes it (`MapVirtualKeyW`, `MAPVK_VK_TO_VSC_EX`); 0 for a key it has none for. Input
+/// that was synthesized with no scan code (`SendInput` or `keybd_event` with a zero one, as on-screen keyboards and
+/// automation tools send) is placed through it, so its Enter, arrows and other keys that type no text still reach the
+/// terminal's encoder as keys.
+#[cfg(windows)]
+#[must_use]
+pub fn virtual_key_scan_code(virtual_key: u16) -> u32 {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MAPVK_VK_TO_VSC_EX, MapVirtualKeyW};
+    // SAFETY: a query of the thread's keyboard layout with plain integers.
+    unsafe { MapVirtualKeyW(u32::from(virtual_key), MAPVK_VK_TO_VSC_EX) }
 }
 
 /// The XKB keycode of the key at Windows scan code `scan_code` (`0xE000 |` the code for an extended key), through

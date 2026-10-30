@@ -85,6 +85,16 @@ fn a_windows_scan_code_is_the_same_physical_key_as_its_xkb_keycode() {
     assert_eq!(input::xkb_keycode_of_scan_code(0xffff), None);
 }
 
+#[cfg(windows)]
+#[test]
+fn a_key_synthesized_without_a_scan_code_takes_its_virtual_keys() {
+    // what `MapVirtualKeyW` gives on every layout for the keys that type no text: Enter, the Up arrow (extended)
+    assert_eq!(input::virtual_key_scan_code(0x0d), 0x1c);
+    assert_eq!(input::virtual_key_scan_code(0x26), 0xe048);
+    let keycode = input::xkb_keycode_of_scan_code(input::virtual_key_scan_code(0x0d)).unwrap_or(0);
+    assert_eq!(input::physical_key(keycode).name(), "enter");
+}
+
 #[test]
 fn a_key_press_is_classified_for_the_status_glyph_as_the_gtk_build_does() {
     use ngterm_core::model::StatusKeystroke::{Interrupt, Other, Submit};

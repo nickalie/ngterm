@@ -8,16 +8,21 @@ Run it on the desktop the window should open on (in a VM: `vmrun runProgramInGue
 scheduled task), never on a machine whose own ngterm runs there: the instance is private (its own state directory,
 app id, home and control pipe; NGTERM_*, AGTERM_* and ZMX_* stripped), but its window takes the desktop.
 
-The check: the app launches and serves its control socket (the named pipe its socket path names, spoken to directly,
-and with -Ctl through `ngtermctl --socket` too: its tree, a typed line and the text read back); the pane runs
-PowerShell (a typed command's output read back with `session.text`); `session.split` opens the split and its
-PowerShell answers too; a screenshot of the desktop is saved;
-the app quits on Ctrl+C (the console's Ctrl event, its orderly quit) with status 0; a second launch restores the
-session with its split. The app is stopped by its own process id at the end, whatever happened. Every step is logged
-to <StateDir>\smoke.log; the exit status is 0 when every step passed.
+The check: the app launches and serves its control socket (the named pipe its socket path names, spoken to directly, and
+with -Ctl through `ngtermctl --socket` too: its tree, a typed line and the text read back); the pane runs PowerShell (a
+typed command's output read back with `session.text`); `session.split` opens the split and its PowerShell answers too; a
+screenshot of the desktop is saved; the app quits on Ctrl+C (the console's Ctrl event, its orderly quit) with status 0;
+a second launch restores the session with its split; keys typed on the desktop (`SendKeys`) run in its focused pane; the
+quick terminal shows, runs PowerShell and zooms (screenshots `quick.png`, `quick-zoomed.png`); a launch beside it
+forwards to it over the instance pipe and exits 0; a flip of the system's app mode (`AppsUseLightTheme`, announced as
+Settings does with `WM_SETTINGCHANGE` `ImmersiveColorSet`, then put back) reloads the config of a theme with both slots;
+the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the app's hidden window) quits it. The app is stopped
+by its own process id at the end, whatever happened. Every step is logged to <StateDir>\smoke.log; the exit status is 0
+when every step passed.
 
 .PARAMETER Exe
-The ngterm.exe to run (a debug build keeps its console, which the Ctrl+C quit needs).
+The ngterm.exe to run (a debug build keeps its console, which the Ctrl+C quit needs), in a staged tree
+(`bin\ngterm.exe` beside `share\ghostty\themes`, scripts/stage.sh's layout), so the theme slots find Ghostty's themes.
 
 .PARAMETER Ctl
 An ngtermctl.exe; without it the script speaks the control protocol itself.
@@ -70,9 +75,10 @@ function Get-ControlPipeName([string] $path) {
 $pipeName = Get-ControlPipeName $socket
 
 # One control request (`{"cmd": ..., "args": ...}`), its reply line; $null when the pipe is not there.
-function Invoke-Control([string] $cmd, [hashtable] $arguments = $null, [int] $connectMs = 2000) {
+function Invoke-Control([string] $cmd, [hashtable] $arguments = $null, [int] $connectMs = 2000, [string] $target = '') {
     $request = @{ cmd = $cmd }
     if ($arguments) { $request.args = $arguments }
+    if ($target) { $request.target = $target }
     $line = $request | ConvertTo-Json -Compress -Depth 5
     $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $pipeName, [System.IO.Pipes.PipeDirection]::InOut)
     try {
@@ -139,6 +145,111 @@ exit 0
     return $sent.ExitCode
 }
 
+# The app's hidden top-level window (`system_window.rs`), the session's end sent to it, and a setting change broadcast.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SmokeWindows {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+    [DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW")]
+    static extern IntPtr SendNumbers(IntPtr window, uint msg, UIntPtr w, IntPtr l, uint flags, uint ms, out UIntPtr result);
+    [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode)]
+    static extern IntPtr SendText(IntPtr window, uint msg, UIntPtr w, string l, uint flags, uint ms, out UIntPtr result);
+    [DllImport("user32.dll")]
+    static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")]
+    static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")]
+    static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+    const uint AbortIfHung = 0x2;
+    // brings the first visible top-level window of `pid` to the front; false when it has none or Windows refused.
+    // An Alt press and release first: Windows lets the process that sent the last input set the foreground window.
+    public static bool Raise(uint pid) {
+        IntPtr window = IntPtr.Zero;
+        while ((window = FindWindowEx(IntPtr.Zero, window, null, null)) != IntPtr.Zero) {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner == pid && IsWindowVisible(window)) {
+                keybd_event(0x12, 0, 0, UIntPtr.Zero);
+                keybd_event(0x12, 0, 2, UIntPtr.Zero);
+                return SetForegroundWindow(window);
+            }
+        }
+        return false;
+    }
+    public static IntPtr SystemWindow(uint pid) {
+        IntPtr window = IntPtr.Zero;
+        while ((window = FindWindowEx(IntPtr.Zero, window, "ngterm-system-window", null)) != IntPtr.Zero) {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner == pid) { return window; }
+        }
+        return IntPtr.Zero;
+    }
+    // the window's answer, or -1 when the call failed or timed out
+    public static long Send(IntPtr window, uint msg, ulong w, long l, uint ms) {
+        UIntPtr result;
+        IntPtr sent = SendNumbers(window, msg, new UIntPtr(w), new IntPtr(l), AbortIfHung, ms, out result);
+        return sent == IntPtr.Zero ? -1 : (long)result.ToUInt64();
+    }
+    public static void BroadcastSettingChange(string area) {
+        UIntPtr result;
+        SendText(new IntPtr(0xffff), 0x001A, UIntPtr.Zero, area, AbortIfHung, 5000, out result);
+    }
+}
+'@
+
+# Polls the app's log until it holds `line`.
+function Wait-Log([string] $line) {
+    $file = Join-Path $state 'ngterm.log'
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    while ((Get-Date) -lt $deadline) {
+        if ((Test-Path $file) -and (Select-String -Path $file -SimpleMatch $line -Quiet)) { return $true }
+        Start-Sleep -Milliseconds 300
+    }
+    return $false
+}
+
+# Saves a screenshot of the desktop as `name` under the root.
+function Save-Screen([string] $name) {
+    $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+    $shot = Join-Path $root $name
+    $bitmap.Save($shot, [System.Drawing.Imaging.ImageFormat]::Png)
+    $graphics.Dispose(); $bitmap.Dispose()
+    Log "screenshot $shot"
+}
+
+# Polls `session.text` of both panes until one holds `marker`.
+function Wait-EitherPane([string] $marker) {
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    while ((Get-Date) -lt $deadline) {
+        foreach ($pane in 'left', 'right') {
+            $reply = Invoke-Control 'session.text' @{ pane = $pane }
+            if ($reply -and $reply.Contains($marker)) { return $true }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
+# Polls `quick.text` until it holds `marker`.
+function Wait-Quick([string] $marker) {
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    while ((Get-Date) -lt $deadline) {
+        $reply = Invoke-Control 'quick.text'
+        if ($reply -and $reply.Contains($marker)) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    Log "last quick.text: $reply"
+    return $false
+}
+
 function Start-App {
     # a console window of its own: the app's log lines and Ctrl events
     Start-Process -FilePath $Exe -WorkingDirectory $homeDir -PassThru
@@ -151,6 +262,8 @@ function Stop-App($process) {
         $process.WaitForExit(10000) | Out-Null
     }
 }
+
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
 Get-ChildItem env: | Where-Object { $_.Name -match '^(NGTERM|AGTERM|ZMX)_' } | ForEach-Object {
     Remove-Item -LiteralPath "env:$($_.Name)"
@@ -187,15 +300,7 @@ try {
     $tree = Invoke-Control 'tree'
     Check ($tree -match '"split":true') "the tree shows the split: $tree"
     Start-Sleep -Seconds 1
-    Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-    $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-    $bitmap = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-    $shot = Join-Path $root 'window.png'
-    $bitmap.Save($shot, [System.Drawing.Imaging.ImageFormat]::Png)
-    $graphics.Dispose(); $bitmap.Dispose()
-    Log "screenshot $shot"
+    Save-Screen 'window.png'
     $sent = Send-CtrlC $app.Id
     Check ($sent -eq 0) "Ctrl+C sent to the app's console (helper status $sent)"
     $quit = $app.WaitForExit(15000)
@@ -211,6 +316,67 @@ try {
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
     Check ($tree -match '"hasSplit":true') "the session comes back with its split: $tree"
+
+    # the keyboard: keys typed on the desktop, the window brought to the front, reach the focused pane
+    Check ([SmokeWindows]::Raise([uint32]$app.Id)) 'the app window comes to the front'
+    Start-Sleep -Seconds 1
+    # Escape first: a sheet the launch shows (the first-run welcome) takes the keyboard until dismissed
+    [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+    Start-Sleep -Milliseconds 500
+    [System.Windows.Forms.SendKeys]::SendWait("Write-Output {(}'Smoke'{+}'-Keys'{)}{ENTER}")
+    $typed = Wait-EitherPane 'Smoke-Keys'
+    Save-Screen 'keys.png'
+    Check $typed 'keys typed on the desktop run in the focused pane'
+
+    # the quick terminal: its window host shows PowerShell, zoomed too
+    $shown = Invoke-Control 'quick' @{ mode = 'show' }
+    Check ($shown -match '"ok":true') "quick show: $shown"
+    Check ((Invoke-Control 'tree') -match '"quickVisible":true') 'the tree shows the quick terminal'
+    Invoke-Control 'quick.type' @{ text = "Write-Output ('smoke' + '-quick')`r" } | Out-Null
+    Check (Wait-Quick 'smoke-quick') 'PowerShell in the quick terminal runs a typed command'
+    Save-Screen 'quick.png'
+    $zoom = Invoke-Control 'surface.zoom' @{ mode = 'show' } 2000 'quick'
+    Check ($zoom -match '"ok":true') "surface.zoom quick show: $zoom"
+    Start-Sleep -Seconds 2
+    Save-Screen 'quick-zoomed.png'
+    $unzoom = Invoke-Control 'surface.zoom' @{ mode = 'hide' } 2000 'quick'
+    Check ($unzoom -match '"ok":true') "surface.zoom quick hide: $unzoom"
+    Invoke-Control 'quick' @{ mode = 'hide' } | Out-Null
+    Check ((Invoke-Control 'tree') -match '"quickVisible":false') 'quick hide hides it'
+
+    # single instance: a launch beside the running one hands it an activation and leaves
+    $second = Start-App
+    $left = $second.WaitForExit(30000)
+    Check ($left -and $second.ExitCode -eq 0) "a second launch exits with status $(if ($left) { $second.ExitCode } else { 'none: still running' })"
+    Stop-App $second
+    Check (Wait-Log 'activation requested over the instance pipe') 'the running app took the activation'
+
+    # appearance: both theme slots set, so a flip of the system's app mode reloads the config
+    # bundled themes: a staged build's share\ghostty\themes (scripts/stage.sh's layout)
+    $set = Invoke-Control 'theme.set' @{ light = 'Dracula'; dark = 'Nord' }
+    Check ($set -match '"ok":true') "theme.set of both slots: $set"
+    $personalize = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+    $light = (Get-ItemProperty -Path $personalize -Name AppsUseLightTheme -ErrorAction SilentlyContinue).AppsUseLightTheme
+    if ($null -eq $light) { $light = 1 }
+    try {
+        Set-ItemProperty -Path $personalize -Name AppsUseLightTheme -Value ([int](-not $light)) -Type DWord
+        [SmokeWindows]::BroadcastSettingChange('ImmersiveColorSet')
+        Check (Wait-Log 'appearance: the desktop flipped') 'a flip of the system app mode reloads the config'
+    } finally {
+        Set-ItemProperty -Path $personalize -Name AppsUseLightTheme -Value ([int]$light) -Type DWord
+        [SmokeWindows]::BroadcastSettingChange('ImmersiveColorSet')
+    }
+
+    # the session's end: asked, then told; the app quits
+    $window = [SmokeWindows]::SystemWindow([uint32]$app.Id)
+    Check ($window -ne [IntPtr]::Zero) "the app's hidden window is there ($window)"
+    $logoff = [long]0x80000000
+    $query = [SmokeWindows]::Send($window, 0x0011, 0, $logoff, 5000)
+    Check ($query -eq 1) "WM_QUERYENDSESSION lets the session end (answer $query)"
+    [SmokeWindows]::Send($window, 0x0016, 1, $logoff, 15000) | Out-Null
+    $ended = $app.WaitForExit(15000)
+    Check ($ended -and $app.ExitCode -eq 0) "the app quit at the session's end with status $(if ($ended) { $app.ExitCode } else { 'none: still running' })"
+    Check (Wait-Log 'the session is ending: quitting') 'the session end ran the quit'
 } catch {
     Log "ERROR $_"
     $failures++
