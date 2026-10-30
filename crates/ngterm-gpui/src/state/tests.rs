@@ -70,9 +70,20 @@ fn record(state: &mut AppState) -> Recorded {
     (main_loop, as_dyn)
 }
 
+/// A state directory with a short path, so the control socket it holds fits a Unix socket address: under `/tmp`, and
+/// in the temporary directory on Windows (whose socket is a named pipe).
+fn short_tempdir() -> tempfile::TempDir {
+    let base = if cfg!(unix) {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        std::env::temp_dir()
+    };
+    tempfile::Builder::new().prefix("agt").tempdir_in(base).unwrap()
+}
+
 #[test]
 fn a_commit_arms_its_saves_grace_timers_and_tree_changed_with_their_delays() {
-    let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp").unwrap();
+    let dir = short_tempdir();
     let mut persistence = LibraryPersistence::new(dir.path());
     let library = persistence.bootstrap("/home/u");
     let window = library.active_window_id().unwrap();
@@ -221,7 +232,7 @@ fn settle_sequences_events_and_lands_tree_changed_when_its_timer_fires() {
 
 #[test]
 fn settle_writes_a_debounced_save_when_its_timer_fires() {
-    let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp").unwrap();
+    let dir = short_tempdir();
     let mut persistence = LibraryPersistence::new(dir.path());
     let library = persistence.bootstrap("/home/u");
     let window = library.active_window_id().unwrap();
@@ -272,7 +283,7 @@ fn settle_writes_a_debounced_save_when_its_timer_fires() {
 
 #[test]
 fn nothing_saves_after_the_quit_save() {
-    let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp").unwrap();
+    let dir = short_tempdir();
     let mut persistence = LibraryPersistence::new(dir.path());
     let library = persistence.bootstrap("/home/u");
     let window = library.active_window_id().unwrap();
@@ -515,7 +526,7 @@ fn a_dragged_divider_stores_its_ratio_clamped() {
 
 #[test]
 fn closing_a_window_saves_it_closes_its_store_and_tears_its_terminals_down() {
-    let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp").unwrap();
+    let dir = short_tempdir();
     let mut persistence = LibraryPersistence::new(dir.path());
     let mut library = persistence.bootstrap("/home/u");
     let first = library.active_window_id().unwrap();
@@ -954,7 +965,7 @@ fn no_window_is_raised_once_the_quit_save_ran() {
 
 #[test]
 fn attaching_settles_and_arms_on_the_loop() {
-    let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp").unwrap();
+    let dir = short_tempdir();
     let mut persistence = LibraryPersistence::new(dir.path());
     let library = persistence.bootstrap("/home/u");
     let window = library.active_window_id().unwrap();

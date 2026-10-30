@@ -24,7 +24,7 @@ use ngterm_proto::{AppIdentity, Args, Command, ControlLiveEndpoint, Request};
 use ngterm_term::{Launch, Pane, PaneCommand, PaneConfig};
 
 use super::*;
-use crate::pane::tests::three_sessions;
+use crate::pane::tests::{idle_command, three_sessions};
 use crate::terminal::Spawn;
 
 const DEADLINE: Duration = Duration::from_secs(20);
@@ -143,23 +143,11 @@ impl MainLoop<AppState> for Posted {
     }
 }
 
-/// `/bin/sh -c 'exec cat'` with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed.
-fn quiet_shell() -> PaneCommand {
-    let mut command = PaneCommand::new("/bin/sh").arg("-c").arg("exec cat");
-    for (key, _) in std::env::vars_os() {
-        let name = key.to_string_lossy();
-        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
-            command = command.env_remove(key);
-        }
-    }
-    command
-}
-
-/// A launcher that starts [`quiet_shell`] whatever it is asked to launch, keeping each launch.
+/// A launcher that starts [`idle_command`] whatever it is asked to launch, keeping each launch.
 fn test_launcher(launches: Arc<Mutex<Vec<Launch>>>) -> pane::Launcher {
     Rc::new(move |launch: &Launch| -> Spawn {
         launches.lock().unwrap().push(launch.clone());
-        let command = quiet_shell();
+        let command = idle_command();
         Box::new(move |config: PaneConfig| Pane::spawn(&command, &config))
     })
 }

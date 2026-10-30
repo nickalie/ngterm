@@ -736,6 +736,7 @@ const SCRIPT: &str = concat!(
 );
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_placed_image_is_drawn_from_the_atlas_and_leaves_it_when_deleted(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let terminal = terminal(cx, SCRIPT, dir.path());
@@ -760,6 +761,7 @@ fn a_placed_image_is_drawn_from_the_atlas_and_leaves_it_when_deleted(cx: &mut Te
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_torn_down_terminal_drops_its_images_from_the_atlas(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let terminal = terminal(cx, SCRIPT, dir.path());
@@ -783,6 +785,7 @@ const PLACEHOLDERS: &str = concat!(
 );
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn placeholder_cells_draw_their_virtual_placements(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let terminal = terminal(cx, PLACEHOLDERS, dir.path());
@@ -851,6 +854,7 @@ const RELATIVE: &str = concat!(
 );
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn relative_placements_chained_to_a_virtual_placement_land_at_its_cells(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let terminal = terminal(cx, RELATIVE, dir.path());
@@ -901,6 +905,7 @@ const LAYERS: &str = concat!(
 );
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn each_kitty_layer_is_painted_at_its_stage(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let terminal = terminal(cx, LAYERS, dir.path());

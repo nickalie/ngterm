@@ -296,7 +296,12 @@ fn a_relative_path_is_made_absolute() {
         absolute(Path::new("cfg/./x/../remotes.conf")),
         cwd.join("cfg/remotes.conf")
     );
-    assert_eq!(absolute(Path::new("/cfg/remotes.conf")), Path::new("/cfg/remotes.conf"));
+    let rooted = if cfg!(windows) {
+        r"C:\cfg\remotes.conf"
+    } else {
+        "/cfg/remotes.conf"
+    };
+    assert_eq!(absolute(Path::new(rooted)), Path::new(rooted));
 }
 
 /// Symlinks: on Windows making one takes a privilege a user rarely holds (Developer Mode or elevation).

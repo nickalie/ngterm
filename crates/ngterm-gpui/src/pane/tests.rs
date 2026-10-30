@@ -7,6 +7,24 @@ use ngterm_term::{ExitStatus, PaneEvent};
 
 use super::*;
 
+/// A pane program that runs until it is closed, quietly, echoing what is typed: `/bin/sh -c 'exec cat'`, and on
+/// Windows `cmd.exe` with no `AutoRun` and no command echo; the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables
+/// removed.
+pub(crate) fn idle_command() -> ngterm_term::PaneCommand {
+    let mut command = if cfg!(windows) {
+        ngterm_term::PaneCommand::new("cmd.exe").args(["/D", "/Q", "/K"])
+    } else {
+        ngterm_term::PaneCommand::new("/bin/sh").arg("-c").arg("exec cat")
+    };
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+            command = command.env_remove(key);
+        }
+    }
+    command
+}
+
 fn context() -> PaneContext {
     PaneContext {
         socket: "/tmp/a.sock".to_owned(),
