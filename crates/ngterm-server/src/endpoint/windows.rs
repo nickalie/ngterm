@@ -9,8 +9,9 @@ use std::io::{self, Read, Write};
 use std::net::Shutdown;
 use std::os::windows::io::{AsHandle as _, AsRawHandle as _};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use interprocess::TryClone as _;
 use interprocess::os::windows::named_pipe::{DuplexPipeStream, PipeListenerOptions, pipe_mode::Bytes};
@@ -31,20 +32,27 @@ type Pipe = DuplexPipeStream<Bytes>;
 const BUFFER_BYTES: u32 = 64 * 1024;
 
 /// One control connection, either end: a byte-mode pipe stream with the part of std's socket surface the server
-/// uses. Reads and writes take the timeouts set on it (shared with its duplicates, as a socket's options are), a
-/// write that times out disconnects the pipe (its peer is stalled, and what it was sent is cut), and
-/// [`Connection::shutdown`] ends a server's end from any thread.
+/// and `ngtermctl` use. Reads and writes take the timeouts set on it (shared with its duplicates, as a socket's
+/// options are), a write that times out disconnects the pipe (its peer is stalled, and what it was sent is cut), and
+/// [`Connection::shutdown`] ends either end from any thread, for good, as `shutdown(2)` does a socket's.
 #[derive(Debug)]
 pub struct Connection {
     pipe: Pipe,
     timeouts: Arc<Timeouts>,
 }
 
+/// What a connection's duplicates share: its timeouts, whether it was shut down, and how many calls are in flight
+/// on it, which a shutdown keeps cancelling until none is left.
 #[derive(Debug, Default)]
 struct Timeouts {
     read: Mutex<Option<Duration>>,
     write: Mutex<Option<Duration>>,
+    shut: AtomicBool,
+    calls: AtomicUsize,
 }
+
+/// How long [`Connection::shutdown`] keeps cancelling the calls in flight before it gives up on them.
+const SHUTDOWN_DRAIN: Duration = Duration::from_secs(2);
 
 impl Timeouts {
     fn get(slot: &Mutex<Option<Duration>>) -> Option<Duration> {
@@ -124,7 +132,9 @@ impl Connection {
 
     /// Ends the connection from any thread, as `shutdown(2)` with [`Shutdown::Both`] does: a server's end is
     /// disconnected (the client reads its end at once; what it had not read is dropped), and every read or write
-    /// pending on the pipe, from any duplicate, is cancelled. A client's end only has its pending calls cancelled.
+    /// pending on the pipe, from any duplicate, is cancelled. A client's end has its pending calls cancelled; its
+    /// peer reads the end once the last handle to it closes. Either way every later read on it, from any duplicate,
+    /// returns 0 and every later write fails with [`io::ErrorKind::BrokenPipe`].
     ///
     /// # Errors
     ///
@@ -136,8 +146,33 @@ impl Connection {
                 "a named pipe has no half-close",
             ));
         }
+        // sticky, as a socket's: every later read ends at once and every later write fails, on each duplicate
+        self.timeouts.shut.store(true, Ordering::SeqCst);
         self.disconnect();
+        // a call that read the flag just before it was set may enter the kernel after the cancel above, which would
+        // then miss it; cancelling until no call is in flight catches those
+        let deadline = Instant::now() + SHUTDOWN_DRAIN;
+        while self.timeouts.calls.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+            self.cancel_pending();
+        }
         Ok(())
+    }
+
+    /// Runs `call` counted as in flight, or `closed` once the connection is shut down; a call a shutdown cancelled
+    /// answers as `closed` does.
+    fn call<T>(&self, call: impl FnOnce() -> io::Result<T>, closed: fn() -> io::Result<T>) -> io::Result<T> {
+        self.timeouts.calls.fetch_add(1, Ordering::SeqCst);
+        let result = if self.timeouts.shut.load(Ordering::SeqCst) {
+            closed()
+        } else {
+            call()
+        };
+        self.timeouts.calls.fetch_sub(1, Ordering::SeqCst);
+        match result {
+            Err(_) if self.timeouts.shut.load(Ordering::SeqCst) => closed(),
+            result => result,
+        }
     }
 
     fn handle(&self) -> HANDLE {
@@ -151,22 +186,33 @@ impl Connection {
             // SAFETY: the handle is the open pipe end `self.pipe` owns, borrowed for the call.
             unsafe { DisconnectNamedPipe(handle) };
         }
-        // SAFETY: as above; a null overlapped pointer cancels every operation pending on the pipe.
-        unsafe { CancelIoEx(handle, std::ptr::null()) };
+        self.cancel_pending();
+    }
+
+    fn cancel_pending(&self) {
+        // SAFETY: the handle is the open pipe end `self.pipe` owns, borrowed for the call; a null overlapped pointer
+        // cancels every operation pending on the pipe, through any of its duplicates.
+        unsafe { CancelIoEx(self.handle(), std::ptr::null()) };
     }
 }
 
 impl Read for &Connection {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let timeout = Timeouts::get(&self.timeouts.read);
-        watchdog::timed(self.handle(), timeout, || (&self.pipe).read(buf))
+        self.call(
+            || watchdog::timed(self.handle(), timeout, || (&self.pipe).read(buf)),
+            || Ok(0),
+        )
     }
 }
 
 impl Write for &Connection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let timeout = Timeouts::get(&self.timeouts.write);
-        let written = watchdog::timed(self.handle(), timeout, || (&self.pipe).write(buf));
+        let written = self.call(
+            || watchdog::timed(self.handle(), timeout, || (&self.pipe).write(buf)),
+            || Err(io::ErrorKind::BrokenPipe.into()),
+        );
         if written
             .as_ref()
             .is_err_and(|error| error.kind() == io::ErrorKind::TimedOut)
@@ -237,6 +283,26 @@ pub(super) fn connect_unchecked(socket: &Path) -> io::Result<Connection> {
 
 /// Nothing: a pipe ends with its last handle.
 pub(super) fn remove(_socket: &Path) {}
+
+/// Two connected ends of a pipe of their own, under a name no one else uses.
+pub(super) fn pair() -> io::Result<(Connection, Connection)> {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let name = format!(
+        "ngterm-pair-{}-{}-{nanos}.sock",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    let socket = std::env::temp_dir().join(name);
+    let listener = bind(&socket)?;
+    // the instance `bind` created takes the client before the accept: a pipe instance is connectable once created
+    let client = connect_unchecked(&socket)?;
+    let server = accept(&listener)?;
+    Ok((server, client))
+}
 
 /// The pipe's descriptor: SYSTEM's and the owner's alone, at the server's integrity level.
 fn owner_only_security_descriptor() -> io::Result<SecurityDescriptor> {

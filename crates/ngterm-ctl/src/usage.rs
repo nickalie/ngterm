@@ -134,6 +134,7 @@ pub fn screen_width(env: &dyn Env) -> usize {
         .unwrap_or(DEFAULT_SCREEN_WIDTH)
 }
 
+#[cfg(unix)]
 fn stdout_columns() -> Option<usize> {
     let mut size = libc::winsize {
         ws_row: 0,
@@ -144,6 +145,23 @@ fn stdout_columns() -> Option<usize> {
     // SAFETY: `TIOCGWINSZ` writes one `winsize` through the pointer, which points at a live local.
     let result = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &raw mut size) };
     (result == 0 && size.ws_col > 0).then_some(usize::from(size.ws_col))
+}
+
+/// The width of the console window stdout writes to, `None` when stdout is not a console.
+#[cfg(windows)]
+fn stdout_columns() -> Option<usize> {
+    use windows_sys::Win32::System::Console::{
+        CONSOLE_SCREEN_BUFFER_INFO, GetConsoleScreenBufferInfo, GetStdHandle, STD_OUTPUT_HANDLE,
+    };
+    let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+    // SAFETY: `GetStdHandle` only reads the process's standard handle.
+    let stdout = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    // SAFETY: any handle is accepted (one that is not a console fails the call); the info is a live local it fills.
+    let read = unsafe { GetConsoleScreenBufferInfo(stdout, &raw mut info) };
+    let columns = i32::from(info.srWindow.Right) - i32::from(info.srWindow.Left) + 1;
+    usize::try_from(columns)
+        .ok()
+        .filter(|&columns| read != 0 && columns > 0)
 }
 
 /// Renders a clap parse failure of `root` over `args` (without the program name) as swift-argument-parser reports

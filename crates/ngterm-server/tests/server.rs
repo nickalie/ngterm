@@ -737,3 +737,35 @@ fn stop_returns_every_time() -> TestResult {
     cycles.join().map_err(|_| "the cycles panicked")??;
     Ok(())
 }
+
+/// `shutdown(Both)` holds for good on every duplicate of either end, as a socket's does: a read in flight on a
+/// duplicate ends with 0, later reads return 0 and later writes fail with `BrokenPipe`.
+#[test]
+fn a_shutdown_ends_every_duplicate_for_good() -> TestResult {
+    for end in 0..2 {
+        let (server, client) = ngterm_server::endpoint::pair()?;
+        let (shut, _peer) = if end == 0 { (server, client) } else { (client, server) };
+        shut.set_read_timeout(Some(CLIENT_TIMEOUT))?;
+        let duplicate = shut.try_clone()?;
+        let in_flight = thread::spawn(move || {
+            let mut buf = [0_u8; 16];
+            let read = (&duplicate).read(&mut buf).map_err(|error| error.to_string());
+            (read, duplicate)
+        });
+        thread::sleep(Duration::from_millis(100));
+        shut.shutdown(Shutdown::Both)?;
+        let (read, duplicate) = in_flight.join().map_err(|_| "the reader panicked")?;
+        assert_eq!(read, Ok(0), "end {end}: the read in flight");
+        for (name, conn) in [("the end", &shut), ("its duplicate", &duplicate)] {
+            let mut buf = [0_u8; 16];
+            assert_eq!((&*conn).read(&mut buf)?, 0, "end {end}: a later read on {name}");
+            let write = (&*conn).write(b"x").map_err(|error| error.kind());
+            assert_eq!(
+                write,
+                Err(io::ErrorKind::BrokenPipe),
+                "end {end}: a later write on {name}"
+            );
+        }
+    }
+    Ok(())
+}

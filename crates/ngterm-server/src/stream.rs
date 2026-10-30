@@ -355,7 +355,7 @@ impl Shared {
             .set_read_timeout(None)
             .and_then(|()| socket.set_write_timeout(Some(self.limits.write_timeout)));
         #[cfg(target_vendor = "apple")]
-        let prepared = prepared.and_then(|()| no_sigpipe(socket));
+        let prepared = prepared.and_then(|()| crate::endpoint::no_sigpipe(socket));
         let prepared = prepared.and_then(|()| socket.try_clone());
         match prepared {
             Ok(control) => {
@@ -432,30 +432,6 @@ impl Shared {
         let line = state.queue.pop_front();
         self.wake.notify_all();
         line
-    }
-}
-
-/// Keeps a write to a peer that hung up from raising `SIGPIPE` on macOS whatever the flags it is sent with
-/// (`SO_NOSIGPIPE`, upstream's guard); Linux has no such option and relies on `MSG_NOSIGNAL` ([`send_all`]).
-#[cfg(target_vendor = "apple")]
-fn no_sigpipe(socket: &Connection) -> io::Result<()> {
-    use std::os::fd::AsRawFd as _;
-    let on: libc::c_int = 1;
-    let len = libc::socklen_t::try_from(size_of::<libc::c_int>()).map_err(io::Error::other)?;
-    // SAFETY: the descriptor is the socket's, borrowed for the call; `on` is a live `c_int` of the length passed.
-    let set = unsafe {
-        libc::setsockopt(
-            socket.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_NOSIGPIPE,
-            (&raw const on).cast::<libc::c_void>(),
-            len,
-        )
-    };
-    if set == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
     }
 }
 

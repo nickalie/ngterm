@@ -532,6 +532,46 @@ mod tests {
         }
     }
 
+    /// Once [`shell`] waits at its prompt with `pane`'s cursor right after it (on Unix it has none: an empty row): its
+    /// output is all on the screen, so what is printed now lands after it. Seeing the output is not enough on Windows:
+    /// the pseudoconsole ends a line with a carriage return, then a title, then the line feed, and may send them apart,
+    /// so a print in between would land over the line just shown.
+    fn wait_prompt(pane: &Pane) {
+        const ROW_TEXT: vt::FormatOptions = vt::FormatOptions {
+            format: vt::Format::Plain,
+            unwrap: false,
+            trim: true,
+            extras: vt::FormatExtras::empty(),
+        };
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let (column, row) = pane.with_terminal(|terminal| {
+                let (column, row) = terminal.cursor();
+                let line = |x| vt::Point::new(vt::PointTag::Active, x, u32::from(row));
+                let region = vt::Region::Range {
+                    start: line(0),
+                    end: line(terminal.cols().saturating_sub(1)),
+                    rectangle: false,
+                };
+                let text = terminal.format(region, ROW_TEXT).ok().flatten().unwrap_or_default();
+                (column, String::from_utf8_lossy(&text).trim_end().to_owned())
+            });
+            let prompt = if cfg!(windows) {
+                row.ends_with('>')
+            } else {
+                row.is_empty()
+            };
+            if prompt && usize::from(column) == row.chars().count() {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no prompt: the cursor at {column} on {row:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// The PTY and program of `pane`, as a handoff passes them (here into this same process).
     fn taken_over(pane: &Pane) -> (Master, Child) {
         #[cfg(unix)]
@@ -564,11 +604,12 @@ mod tests {
         }
     }
 
-    /// Text `print` wrote on `pane`'s screen, the shell's output after it: on Windows the pseudoconsole's buffer
+    /// Text `print` wrote on `pane`'s screen at the shell's prompt, the shell's output after it: on Windows the pseudoconsole's buffer
     /// never holds it, so a resize of the pseudoconsole, which repaints the screen from that buffer, would show.
     const PRINTED: &str = "printed-mark";
 
     fn print_on_screen(pane: &Pane) {
+        wait_prompt(pane);
         pane.print(PRINTED.as_bytes()).unwrap();
         type_line(pane, &tagged("printed"));
         wait_screen(pane, "got:printed");

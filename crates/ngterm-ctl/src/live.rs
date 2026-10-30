@@ -501,7 +501,7 @@ impl RequestCommand for Present {
     /// Opens the stream and bridges it to stdin/stdout until either side ends (upstream's `Present.run`).
     fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
         let socket = crate::client::connect(&self.options.socket_path(env))?;
-        let bridge = crate::stream_bridge::StreamBridge::new(socket, libc::STDIN_FILENO, libc::STDOUT_FILENO);
+        let bridge = crate::stream_bridge::StreamBridge::over_stdio(socket).map_err(Failure::Local)?;
         bridge.open(&self.make_request()).map_err(Failure::Local)?;
         bridge.pump();
         Ok(())

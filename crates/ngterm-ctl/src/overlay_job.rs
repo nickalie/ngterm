@@ -5,14 +5,15 @@
 //!
 //! The frames after the claim's ordinary reply are [`OverlayJobFrame`] lines: the app sends `context`, then maybe
 //! `cancel`; the helper reports `started`, then one of `exited`, `canceled` or `launch-failed`.
+//!
+//! What runs the program is per OS ([`sys`]). On Linux and macOS the program leads a process group of its own, the
+//! terminal's foreground, which a cancel signals as a whole (SIGTERM, SIGKILL past the grace). On Windows its whole
+//! process tree sits in a Job object, killed when the helper's handle to it closes; the grace stop is a console
+//! Ctrl+Break to the program's own process group and the kill ends the job.
 
 use std::ffi::OsString;
-use std::io::{self, ErrorKind};
 use std::net::Shutdown;
-use std::os::fd::RawFd;
-use std::os::unix::net::UnixStream;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::process::{Child, ExitCode};
+use std::process::ExitCode;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -23,8 +24,15 @@ use ngterm_core::paths::Env;
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Command, MAX_REQUEST_LINE_BYTES, Request, Response};
 
-use crate::client::{self, os_message};
+use crate::client::{self, Connection, os_message};
 use crate::{BasicOptions, Failure, RequestCommand};
+
+#[cfg(unix)]
+#[path = "overlay_job/unix.rs"]
+mod sys;
+#[cfg(windows)]
+#[path = "overlay_job/windows.rs"]
+mod sys;
 
 /// How long a cancelled program gets to exit before it is killed.
 pub const DEFAULT_GRACE: Duration = Duration::from_secs(3);
@@ -34,30 +42,11 @@ const MAX_FRAME_BYTES: usize = 256 * 1024;
 const LAUNCH_FAILED_STATUS: i32 = 127;
 /// How often the supervisor looks at the program, the terminal and the cancel deadline.
 const SUPERVISE_TICK: Duration = Duration::from_millis(20);
-/// The shell that runs the program. `eval` keeps the command's own exit status as the shell's; the command rides
-/// `NGTERM_OVL_CMD` in the context's environment, so nothing interpolates it.
-const SHELL: &str = "/bin/sh";
-const SHELL_SCRIPT: &str = r#"eval "$NGTERM_OVL_CMD""#;
-/// The signals the helper changes, put back to their defaults in the program.
-const RESET_SIGNALS: [libc::c_int; 7] = [
-    libc::SIGINT,
-    libc::SIGQUIT,
-    libc::SIGTSTP,
-    libc::SIGTTOU,
-    libc::SIGTERM,
-    libc::SIGHUP,
-    libc::SIGPIPE,
-];
-/// The signals that cancel the program as a `cancel` frame does: losing the terminal, or being told to stop.
-const STOP_SIGNALS: [libc::c_int; 2] = [libc::SIGHUP, libc::SIGTERM];
-/// The terminal's keys are the program's, and taking the terminal back from its group happens from the background.
-const IGNORED_SIGNALS: [libc::c_int; 4] = [libc::SIGINT, libc::SIGQUIT, libc::SIGTSTP, libc::SIGTTOU];
-
 /// The program's process group and the deadline a cancel set, shared with the threads that cancel.
 #[derive(Debug, Default)]
 struct Stop {
-    /// The program's pid, which leads its group; 0 before it started.
-    group: libc::pid_t,
+    /// The program's process group; `None` before it started.
+    group: Option<sys::Group>,
     /// When a cancelled program is killed; `None` until cancelled.
     kill_at: Option<Instant>,
 }
@@ -73,8 +62,8 @@ impl Shared {
         self.stop.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// SIGTERM to the program's group now, SIGKILL once the grace has passed; before the program started, it is
-    /// stopped as soon as it does.
+    /// The grace stop to the program's group now (SIGTERM, a Ctrl+Break on Windows), the kill once the grace has
+    /// passed; before the program started, it is stopped as soon as it does.
     fn cancel(&self) {
         let group = {
             let mut stop = self.lock();
@@ -83,8 +72,8 @@ impl Shared {
             }
             stop.group
         };
-        if group > 0 {
-            signal_group(group, libc::SIGTERM);
+        if let Some(group) = group {
+            sys::stop(group);
         }
     }
 
@@ -106,17 +95,18 @@ impl Canceler {
 /// Supervises one claimed job over its connection to the app (upstream's `OverlayJobRunner`).
 #[derive(Debug)]
 pub struct JobRunner {
-    socket: Arc<UnixStream>,
-    /// The pty the program runs under, the helper's own stdin in production.
-    terminal: RawFd,
+    socket: Arc<Connection>,
+    /// The pty the program runs under, the helper's own stdin in production; `None` runs it without one.
+    terminal: Option<sys::Terminal>,
     shared: Arc<Shared>,
 }
 
 impl JobRunner {
-    /// A runner over `socket`, the app's connection. It is close-on-exec (std opens every descriptor so), so the
-    /// program never holds it: only the helper ending closes it, which is how the app learns an unreported job is over.
+    /// A runner over `socket`, the app's connection. It is close-on-exec (std opens every descriptor so, and every
+    /// Windows handle not inheritable), so the program never holds it: only the helper ending closes it, which is how
+    /// the app learns an unreported job is over.
     #[must_use]
-    pub fn new(socket: UnixStream, terminal: RawFd, grace: Duration) -> Self {
+    fn new(socket: Connection, terminal: Option<sys::Terminal>, grace: Duration) -> Self {
         Self {
             socket: Arc::new(socket),
             terminal,
@@ -154,21 +144,17 @@ impl JobRunner {
     }
 
     /// Runs `context` to the end and returns the helper's own exit status: the program's, 128 plus the signal that
-    /// ended it, or 127 when it could not be launched. The program starts from `base`, the helper's own environment,
-    /// with the context's over it, so it keeps HOME, PATH and TERM. A report the app never receives changes nothing.
+    /// ended it (on Windows: 130 for a program a console Ctrl event ended, 137 for one the kill ended), or 127 when
+    /// it could not be launched. The program starts from `base`, the helper's own environment, with the context's
+    /// over it, so it keeps HOME, PATH and TERM. A report the app never receives changes nothing.
     pub fn run(&self, context: &OverlayLaunchContext, base: &[(OsString, OsString)]) -> i32 {
-        let tty = is_terminal(self.terminal).then_some(self.terminal);
-        let spawned = spawn(context, base, tty).and_then(|child| {
-            let pid = libc::pid_t::try_from(child.id()).map_err(|_| io::Error::from(ErrorKind::InvalidData))?;
-            Ok((child, pid))
-        });
-        let (mut child, pid) = match spawned {
-            Ok(spawned) => spawned,
+        let tty = self.terminal.filter(|tty| sys::is_terminal(*tty));
+        let mut program = match sys::spawn(context, base, tty) {
+            Ok(program) => program,
             Err(error) => {
                 // the child takes the terminal before its exec, which can still fail
                 if let Some(tty) = tty {
-                    // SAFETY: `getpgrp` only reads the calling process's group.
-                    give_terminal(tty, unsafe { libc::getpgrp() });
+                    sys::take_terminal_back(tty);
                 }
                 self.report(&OverlayJobFrame::LaunchFailed {
                     reason: format!("could not start the program: {}", os_message(&error)),
@@ -177,21 +163,20 @@ impl JobRunner {
                 return LAUNCH_FAILED_STATUS;
             }
         };
+        let group = program.group();
         let canceled_early = {
             let mut stop = self.shared.lock();
-            stop.group = pid;
+            stop.group = Some(group);
             stop.kill_at.is_some()
         };
         self.report(&OverlayJobFrame::Started);
         if canceled_early {
-            signal_group(pid, libc::SIGTERM);
+            sys::stop(group);
         }
         let listener = self.listen();
-        let status = self.supervise(&mut child, pid, tty);
+        let status = self.supervise(&mut program, tty);
         if let Some(tty) = tty {
-            // SAFETY: `getpgrp` only reads the calling process's group.
-            let helper = unsafe { libc::getpgrp() };
-            give_terminal(tty, helper);
+            sys::take_terminal_back(tty);
         }
         if self.shared.deadline().is_some() {
             self.report(&OverlayJobFrame::Canceled);
@@ -214,30 +199,30 @@ impl JobRunner {
     /// Waits for the program, watching the terminal for a hangup, which cancels as a cancel frame does. After a cancel
     /// it also waits for the rest of the program's group, killing what outlives the grace, so no descendant is left
     /// running behind a `canceled` report.
-    fn supervise(&self, child: &mut Child, pid: libc::pid_t, tty: Option<RawFd>) -> i32 {
+    fn supervise(&self, program: &mut sys::Program, tty: Option<sys::Terminal>) -> i32 {
         let mut status = None;
         let mut killed = false;
         loop {
             if status.is_none() {
-                status = reap(child);
+                status = program.reap();
             }
             // after the reap: a program whose read got the hangup's end-of-file has already exited, and that exit must
             // not pass for an ordinary one while its group lives on
             if let Some(tty) = tty
                 && self.shared.deadline().is_none()
-                && hung_up(tty)
+                && sys::hung_up(tty)
             {
                 self.shared.cancel();
             }
             let deadline = self.shared.deadline();
-            if status.is_some() && (deadline.is_none() || !group_alive(pid)) {
+            if status.is_some() && (deadline.is_none() || !program.alive()) {
                 return status.unwrap_or_default();
             }
             if let Some(deadline) = deadline
                 && !killed
                 && Instant::now() >= deadline
             {
-                signal_group(pid, libc::SIGKILL);
+                program.kill();
                 killed = true;
             }
             thread::sleep(SUPERVISE_TICK);
@@ -278,141 +263,6 @@ fn claim_request(job: &str) -> Request {
     }
 }
 
-fn is_terminal(fd: RawFd) -> bool {
-    // SAFETY: `isatty` only inspects the descriptor; an invalid one is an error, not undefined behavior.
-    (unsafe { libc::isatty(fd) }) == 1
-}
-
-/// Sends `signal` to the whole process group `group` leads.
-fn signal_group(group: libc::pid_t, signal: libc::c_int) {
-    // SAFETY: `kill` takes any pid and signal; a group that is gone is an error, ignored here.
-    unsafe { libc::kill(-group, signal) };
-}
-
-/// Whether any process of the group `group` leads still exists.
-fn group_alive(group: libc::pid_t) -> bool {
-    // SAFETY: signal 0 only checks that the group exists.
-    (unsafe { libc::kill(-group, 0) }) == 0
-}
-
-/// Makes `group` the terminal's foreground with SIGTTOU held, which a background caller would otherwise get. Only
-/// async-signal-safe calls, so the child may make it between fork and exec. Returns `tcsetpgrp`'s result.
-fn give_terminal(tty: RawFd, group: libc::pid_t) -> libc::c_int {
-    // SAFETY: an all-zero `sigset_t` is a valid (empty) set on Linux, which `sigemptyset` then initializes.
-    let mut held: libc::sigset_t = unsafe { std::mem::zeroed() };
-    // SAFETY: `held` is a valid, writable set.
-    unsafe { libc::sigemptyset(&raw mut held) };
-    // SAFETY: as above, and SIGTTOU is a valid signal.
-    unsafe { libc::sigaddset(&raw mut held, libc::SIGTTOU) };
-    // SAFETY: `previous` is written by `pthread_sigmask` before it is read.
-    let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
-    // SAFETY: changes only this thread's mask; both sets are valid.
-    unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &raw const held, &raw mut previous) };
-    // SAFETY: `tcsetpgrp` takes any descriptor and group; a refusal is its result.
-    let result = unsafe { libc::tcsetpgrp(tty, group) };
-    // SAFETY: restores the mask read above.
-    unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &raw const previous, std::ptr::null_mut()) };
-    result
-}
-
-/// In the child between fork and exec: take the terminal before the program runs a single instruction, or its first
-/// read would stop it, then put back the signal dispositions the helper changed and unblock every signal: the child
-/// inherits the forking thread's mask, which holds the stop signals for the helper's waiter.
-fn prepare_child(tty: Option<RawFd>) -> io::Result<()> {
-    // SAFETY: `getpid` only reads the calling process's id.
-    let program = unsafe { libc::getpid() };
-    if let Some(tty) = tty
-        && give_terminal(tty, program) != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    for signal in RESET_SIGNALS {
-        // SAFETY: installs the default action, no handler code, for a valid signal.
-        unsafe { libc::signal(signal, libc::SIG_DFL) };
-    }
-    // SAFETY: an all-zero `sigset_t` is a valid (empty) set on Linux, which `sigemptyset` then initializes.
-    let mut unblocked: libc::sigset_t = unsafe { std::mem::zeroed() };
-    // SAFETY: `unblocked` is a valid, writable set.
-    unsafe { libc::sigemptyset(&raw mut unblocked) };
-    // SAFETY: replaces only this thread's mask with a valid set.
-    let result = unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &raw const unblocked, std::ptr::null_mut()) };
-    if result != 0 {
-        return Err(io::Error::from_raw_os_error(result));
-    }
-    Ok(())
-}
-
-/// Starts the program as the leader of a process group of its own, which a cancel ends as a whole and which becomes
-/// the terminal's foreground, so it gets the keys and SIGWINCH directly.
-fn spawn(context: &OverlayLaunchContext, base: &[(OsString, OsString)], tty: Option<RawFd>) -> io::Result<Child> {
-    let mut command = std::process::Command::new(SHELL);
-    command
-        .arg("-c")
-        .arg(SHELL_SCRIPT)
-        .env_clear()
-        .envs(base.iter().map(|(name, value)| (name, value)))
-        .envs(&context.environment)
-        .current_dir(&context.cwd)
-        .process_group(0);
-    // SAFETY: the hook runs in the forked child after std put it in its own group (std leaves it the forking thread's
-    // signal mask, which the hook clears), and calls only async-signal-safe functions, allocating nothing.
-    unsafe { command.pre_exec(move || prepare_child(tty)) };
-    command.spawn()
-}
-
-/// The program's status once it ended: its exit code, or 128 plus the signal that ended it. `None` while it runs.
-fn reap(child: &mut Child) -> Option<i32> {
-    let status = child.try_wait().ok()??;
-    status.code().or_else(|| status.signal().map(|signal| 128 + signal))
-}
-
-/// Whether the terminal hung up, asked without reading, so the program's input is never taken.
-fn hung_up(tty: RawFd) -> bool {
-    let mut probe = libc::pollfd {
-        fd: tty,
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    // SAFETY: `probe` is one valid `pollfd`, and a zero timeout never blocks.
-    if (unsafe { libc::poll(&raw mut probe, 1, 0) }) <= 0 {
-        return false;
-    }
-    probe.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
-}
-
-/// Ignores the terminal's keys and SIGTTOU, and turns SIGHUP and SIGTERM into a cancel: like a shell running a
-/// foreground command. The stop signals are blocked in the calling thread before any other starts, so every later
-/// thread inherits the block and only the waiting thread takes them.
-fn route_signals(canceler: Canceler) {
-    for signal in IGNORED_SIGNALS {
-        // SAFETY: ignoring a valid signal installs no handler code.
-        unsafe { libc::signal(signal, libc::SIG_IGN) };
-    }
-    // SAFETY: an all-zero `sigset_t` is a valid (empty) set on Linux, which `sigemptyset` then initializes.
-    let mut stops: libc::sigset_t = unsafe { std::mem::zeroed() };
-    // SAFETY: `stops` is a valid, writable set.
-    unsafe { libc::sigemptyset(&raw mut stops) };
-    for signal in STOP_SIGNALS {
-        // SAFETY: as above, for a valid signal.
-        unsafe { libc::sigaddset(&raw mut stops, signal) };
-    }
-    // SAFETY: changes only this thread's mask, inherited by the threads it starts next.
-    unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &raw const stops, std::ptr::null_mut()) };
-    let waiter = thread::Builder::new()
-        .name("ngtermctl.run-job.signals".to_owned())
-        .spawn(move || {
-            loop {
-                let mut received: libc::c_int = 0;
-                // SAFETY: `stops` is a valid set of signals this thread blocks, and `received` is writable.
-                if unsafe { libc::sigwait(&raw const stops, &raw mut received) } == 0 {
-                    canceler.cancel();
-                }
-            }
-        });
-    // without the waiter the stop signals stay blocked: the program still ends with the terminal's hangup
-    drop(waiter);
-}
-
 /// `ngtermctl session overlay run-job <job>`.
 #[derive(Debug, clap::Args)]
 #[command(
@@ -443,7 +293,7 @@ impl RequestCommand for RunJob {
 
     fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
         let socket = client::connect(&self.options.socket_path(env))?;
-        let runner = JobRunner::new(socket, libc::STDIN_FILENO, DEFAULT_GRACE);
+        let runner = JobRunner::new(socket, Some(sys::stdin_terminal()), DEFAULT_GRACE);
         let context = match runner.claim(&self.job) {
             Ok(context) => context,
             Err(message) => {
@@ -451,7 +301,7 @@ impl RequestCommand for RunJob {
                 return Err(Failure::Exit(ExitCode::FAILURE));
             }
         };
-        route_signals(runner.canceler());
+        sys::route_signals(runner.canceler());
         let base: Vec<(OsString, OsString)> = std::env::vars_os().collect();
         match u8::try_from(runner.run(&context, &base)) {
             Ok(0) => Ok(()),
@@ -463,7 +313,6 @@ impl RequestCommand for RunJob {
 
 #[cfg(test)]
 mod tests {
-    use std::os::fd::AsRawFd;
     use std::path::Path;
 
     use ngterm_core::pane_env::PaneEnv;
@@ -476,15 +325,17 @@ mod tests {
     /// frame the helper reports until the connection ends.
     struct FakeOrigin {
         /// Where a test sends frames from; `None` once the origin hung up.
-        writer: Option<UnixStream>,
+        writer: Option<Connection>,
         served: JoinHandle<(Vec<u8>, Vec<OverlayJobFrame>)>,
     }
 
     impl FakeOrigin {
         /// A connected pair: the helper's end, and the origin serving the other. With `hang_up`, the origin goes away
         /// right after the context.
-        fn serve(reply: &str, context: Option<OverlayLaunchContext>, hang_up: bool) -> (UnixStream, Self) {
-            let (helper, origin) = UnixStream::pair().unwrap();
+        fn serve(reply: &str, context: Option<OverlayLaunchContext>, hang_up: bool) -> (Connection, Self) {
+            // the helper takes the client's end, as it connects in the app: a server end's shutdown disconnects a
+            // Windows pipe, dropping what the client had not read yet
+            let (origin, helper) = ngterm_server::endpoint::pair().unwrap();
             let writer = (!hang_up).then(|| origin.try_clone().unwrap());
             let reply = format!("{reply}\n");
             let served = thread::spawn(move || {
@@ -523,15 +374,20 @@ mod tests {
         }
     }
 
-    fn runner(helper: UnixStream, grace: Duration) -> JobRunner {
-        JobRunner::new(helper, -1, grace)
+    fn runner(helper: Connection, grace: Duration) -> JobRunner {
+        JobRunner::new(helper, None, grace)
+    }
+
+    fn temp_cwd() -> String {
+        std::env::temp_dir().to_string_lossy().into_owned()
     }
 
     fn context(command: &str) -> OverlayLaunchContext {
         let environment = PaneEnv::from([("NGTERM_ENABLED".to_owned(), "1".to_owned())]);
-        OverlayLaunchContext::new(command, "/tmp", environment)
+        OverlayLaunchContext::new(command, &temp_cwd(), environment)
     }
 
+    #[cfg(unix)]
     fn base(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         pairs
             .iter()
@@ -539,8 +395,15 @@ mod tests {
             .collect()
     }
 
+    #[cfg(unix)]
     fn plain_base() -> Vec<(OsString, OsString)> {
         base(&[("PATH", "/usr/bin:/bin"), ("HOME", "/tmp")])
+    }
+
+    /// The test's own environment: a Windows program needs `SystemRoot` and its kin, which the helper's would carry.
+    #[cfg(windows)]
+    fn plain_base() -> Vec<(OsString, OsString)> {
+        std::env::vars_os().collect()
     }
 
     /// Runs `command` to the end against a fresh origin: the helper's status and the frames the origin got.
@@ -554,7 +417,7 @@ mod tests {
     }
 
     /// The pid written to `path`, waiting for it to appear.
-    fn read_pid(path: &Path) -> libc::pid_t {
+    fn read_pid(path: &Path) -> u32 {
         for _ in 0..250 {
             if let Ok(pid) = std::fs::read_to_string(path).unwrap_or_default().trim().parse() {
                 return pid;
@@ -565,7 +428,9 @@ mod tests {
     }
 
     /// Whether `pid` is gone, waiting up to two seconds.
-    fn gone(pid: libc::pid_t) -> bool {
+    #[cfg(unix)]
+    fn gone(pid: u32) -> bool {
+        let pid = libc::pid_t::try_from(pid).unwrap();
         for _ in 0..100 {
             // SAFETY: signal 0 only checks that the process exists.
             if unsafe { libc::kill(pid, 0) } != 0 {
@@ -574,6 +439,23 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         }
         false
+    }
+
+    /// Whether `pid` is gone, waiting up to two seconds.
+    #[cfg(windows)]
+    fn gone(pid: u32) -> bool {
+        use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
+        use windows_sys::Win32::Foundation::{FALSE, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+        // SAFETY: plain arguments; a process that is gone fails the call.
+        let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, FALSE, pid) };
+        if raw.is_null() {
+            return true;
+        }
+        // SAFETY: `raw` is the process handle just opened, owned by nothing else.
+        let process = unsafe { OwnedHandle::from_raw_handle(raw) };
+        // SAFETY: the handle is open with the access a wait needs.
+        (unsafe { WaitForSingleObject(process.as_raw_handle(), 2_000) }) == WAIT_OBJECT_0
     }
 
     #[test]
@@ -609,26 +491,77 @@ mod tests {
         assert!(origin.frames().is_empty());
     }
 
+    /// A program that runs until it is stopped, the status its stop reads as, and a file under `dir` it creates once
+    /// the stop can reach it. Unix needs none: `sh` itself dies of the signal. On Windows a Ctrl+Break sent before the
+    /// probe runs reaches `cmd.exe` alone, which outlives it, and only the kill past the grace ends the job.
+    #[cfg(unix)]
+    fn long_running(_dir: &Path) -> (OverlayLaunchContext, i32, Option<std::path::PathBuf>) {
+        (context("sleep 30"), 128 + libc::SIGTERM, None)
+    }
+
+    #[cfg(windows)]
+    fn long_running(dir: &Path) -> (OverlayLaunchContext, i32, Option<std::path::PathBuf>) {
+        let ready = dir.join("ready");
+        (
+            probe(Probe::Sleep, &[(PROBE_READY, &ready)]),
+            sys::INTERRUPTED_STATUS,
+            Some(ready),
+        )
+    }
+
+    /// Waits up to ten seconds for `path` to appear.
+    fn wait_for_file(path: &Path) {
+        for _ in 0..500 {
+            if path.exists() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("{} never appeared", path.display())
+    }
+
+    /// A program that ignores the grace stop.
+    #[cfg(unix)]
+    fn stubborn() -> OverlayLaunchContext {
+        context(r#"trap "" TERM; sleep 30"#)
+    }
+
+    #[cfg(windows)]
+    fn stubborn() -> OverlayLaunchContext {
+        probe(Probe::Ignore, &[])
+    }
+
+    /// The status the kill past the grace sets.
+    #[cfg(unix)]
+    const KILLED: i32 = 128 + libc::SIGKILL;
+    #[cfg(windows)]
+    const KILLED: i32 = sys::KILLED_STATUS;
+
     #[test]
     fn a_cancel_from_the_app_ends_the_program_canceled() {
-        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context("sleep 30")), false);
+        let dir = tempfile::tempdir().unwrap();
+        let (context, stopped, ready) = long_running(dir.path());
+        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context), false);
         let runner = runner(helper, Duration::from_millis(300));
         let claimed = runner.claim("job").unwrap();
         let status = thread::scope(|scope| {
             scope.spawn(|| {
-                thread::sleep(Duration::from_millis(300));
+                match &ready {
+                    Some(ready) => wait_for_file(ready),
+                    None => thread::sleep(Duration::from_millis(300)),
+                }
                 origin.send(&OverlayJobFrame::Cancel);
             });
             runner.run(&claimed, &plain_base())
         });
         drop(runner);
-        assert_eq!(status, 128 + libc::SIGTERM);
+        assert_eq!(status, stopped);
         assert_eq!(origin.frames(), [OverlayJobFrame::Started, OverlayJobFrame::Canceled]);
     }
 
     #[test]
     fn a_cancel_kills_a_program_that_ignores_the_first_signal() {
-        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context(r#"trap "" TERM; sleep 30"#)), false);
+        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(stubborn()), false);
         let runner = runner(helper, Duration::from_millis(300));
         let claimed = runner.claim("job").unwrap();
         let canceler = runner.canceler();
@@ -641,14 +574,16 @@ mod tests {
             runner.run(&claimed, &plain_base())
         });
         drop(runner);
-        assert_eq!(status, 128 + libc::SIGKILL);
+        assert_eq!(status, KILLED);
         assert!(started.elapsed() < Duration::from_secs(10));
         assert_eq!(origin.frames(), [OverlayJobFrame::Started, OverlayJobFrame::Canceled]);
     }
 
     /// Blocks SIGTERM in the calling thread, as `route_signals` does in run-job's, until dropped.
+    #[cfg(unix)]
     struct SigtermBlocked(libc::sigset_t);
 
+    #[cfg(unix)]
     impl SigtermBlocked {
         fn new() -> Self {
             // SAFETY: zeroed sets are initialized by `sigemptyset` or written by `pthread_sigmask` before use.
@@ -664,6 +599,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Drop for SigtermBlocked {
         fn drop(&mut self) {
             // SAFETY: restores the mask read in `new`.
@@ -671,6 +607,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_program_gets_the_stop_signals_the_helpers_thread_blocks() {
         let _blocked = SigtermBlocked::new();
@@ -716,15 +653,21 @@ mod tests {
 
     #[test]
     fn a_report_the_app_never_gets_leaves_the_helpers_status_alone() {
-        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context("sleep 0.3; exit 5")), true);
+        #[cfg(unix)]
+        let command = "sleep 0.3; exit 5";
+        #[cfg(windows)]
+        let command = "ping -n 2 127.0.0.1 >nul & exit 5";
+        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context(command)), true);
         let runner = runner(helper, DEFAULT_GRACE);
         let claimed = runner.claim("job").unwrap();
         assert!(origin.frames().is_empty());
         assert_eq!(runner.run(&claimed, &plain_base()), 5);
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_program_does_not_inherit_the_app_connection() {
+        use std::os::fd::AsRawFd as _;
         let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context("exit 9")), false);
         let fd = helper.as_raw_fd();
         let runner = runner(helper, DEFAULT_GRACE);
@@ -744,12 +687,19 @@ mod tests {
 
     #[test]
     fn the_terminal_type_comes_from_the_helpers_own_environment() {
-        let base = base(&[("PATH", "/usr/bin:/bin"), ("HOME", "/tmp"), ("TERM", "xterm-kitty")]);
-        let (status, frames) = run_to_end(r#"test "$TERM" = xterm-kitty"#, &base);
+        let mut base = plain_base();
+        base.retain(|(name, _)| !name.eq_ignore_ascii_case("TERM"));
+        base.push(("TERM".into(), "xterm-kitty".into()));
+        #[cfg(unix)]
+        let command = r#"test "$TERM" = xterm-kitty"#;
+        #[cfg(windows)]
+        let command = r#"if "%TERM%"=="xterm-kitty" (exit 0) else (exit 1)"#;
+        let (status, frames) = run_to_end(command, &base);
         assert_eq!(status, 0);
         assert_eq!(frames, [OverlayJobFrame::Started, OverlayJobFrame::Exited { code: 0 }]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_program_gets_the_helpers_environment_under_the_context() {
         let bin = tempfile::tempdir().unwrap();
@@ -774,6 +724,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_cancel_ends_the_programs_descendants_too() {
         let dir = tempfile::tempdir().unwrap();
@@ -807,5 +758,155 @@ mod tests {
             matches!(frames.as_slice(), [OverlayJobFrame::LaunchFailed { .. }]),
             "{frames:?}"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_program_gets_the_helpers_environment_under_the_context() {
+        let session = "0F2C7A4E-9B1D-4C3A-8E5F-1A2B3C4D5E6F";
+        let environment = PaneEnv::from([("NGTERM_SESSION_ID".to_owned(), session.to_owned())]);
+        let command =
+            format!(r#"if "%NGTERM_SESSION_ID%"=="{session}" (if defined HOME (exit 0) else (exit 2)) else (exit 1)"#);
+        let context = OverlayLaunchContext::new(&command, &temp_cwd(), environment);
+        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context), false);
+        let runner = runner(helper, DEFAULT_GRACE);
+        let mut base = plain_base();
+        base.retain(|(name, _)| {
+            !["HOME", "NGTERM_SESSION_ID"]
+                .iter()
+                .any(|taken| name.eq_ignore_ascii_case(taken))
+        });
+        base.extend([
+            ("HOME".into(), "C:\\Users\\x".into()),
+            ("NGTERM_SESSION_ID".into(), "stale".into()),
+        ]);
+        let status = runner.run(&runner.claim("job").unwrap(), &base);
+        drop(runner);
+        assert_eq!(status, 0);
+        assert_eq!(
+            origin.frames(),
+            [OverlayJobFrame::Started, OverlayJobFrame::Exited { code: 0 }]
+        );
+    }
+
+    /// What the probe (this test binary, run again as the job's program) does until it is stopped.
+    #[cfg(windows)]
+    #[derive(Debug, Clone, Copy)]
+    enum Probe {
+        /// Sleeps, so a Ctrl+Break ends it with `STATUS_CONTROL_C_EXIT`.
+        Sleep,
+        /// Sleeps, ignoring every Ctrl event, so only the kill ends it.
+        Ignore,
+        /// Sleeps, exiting 0 on a Ctrl+Break, as a program that handles the stop.
+        Trap,
+    }
+
+    /// The probe's environment variables: its mode, where it writes its pid, and a file it creates once it is ready.
+    #[cfg(windows)]
+    const PROBE_MODE: &str = "NGTERMCTL_TEST_OVERLAY_PROBE";
+    #[cfg(windows)]
+    const PROBE_PID: &str = "NGTERMCTL_TEST_OVERLAY_PROBE_PID";
+    #[cfg(windows)]
+    const PROBE_READY: &str = "NGTERMCTL_TEST_OVERLAY_PROBE_READY";
+
+    /// A context whose program is the probe in `mode`, with `extra` in its environment.
+    #[cfg(windows)]
+    fn probe(mode: Probe, extra: &[(&str, &Path)]) -> OverlayLaunchContext {
+        let exe = std::env::current_exe().unwrap();
+        let command = format!(
+            r#""{}" overlay_job::tests::the_probe --exact --nocapture --test-threads=1"#,
+            exe.display()
+        );
+        let mut environment = PaneEnv::from([(PROBE_MODE.to_owned(), format!("{mode:?}"))]);
+        for (name, path) in extra {
+            environment.insert((*name).to_owned(), path.to_string_lossy().into_owned());
+        }
+        OverlayLaunchContext::new(&command, &temp_cwd(), environment)
+    }
+
+    #[cfg(windows)]
+    unsafe extern "system" fn ignore_every_event(_event: u32) -> windows_sys::core::BOOL {
+        windows_sys::Win32::Foundation::TRUE
+    }
+
+    #[cfg(windows)]
+    unsafe extern "system" fn exit_on_break(_event: u32) -> windows_sys::core::BOOL {
+        std::process::exit(0)
+    }
+
+    /// Not a test of its own: the job's program in the tests above, when the probe's mode is set; without it, nothing.
+    #[cfg(windows)]
+    #[test]
+    fn the_probe() {
+        use windows_sys::Win32::Foundation::TRUE;
+        use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+        let Ok(mode) = std::env::var(PROBE_MODE) else {
+            return;
+        };
+        let handler: Option<unsafe extern "system" fn(u32) -> windows_sys::core::BOOL> = match mode.as_str() {
+            "Ignore" => Some(ignore_every_event),
+            "Trap" => Some(exit_on_break),
+            _ => None,
+        };
+        if handler.is_some() {
+            // SAFETY: the handler is a valid function for the process's whole life.
+            unsafe { SetConsoleCtrlHandler(handler, TRUE) };
+        }
+        if let Some(path) = std::env::var_os(PROBE_PID) {
+            std::fs::write(path, std::process::id().to_string()).unwrap();
+        }
+        if let Some(path) = std::env::var_os(PROBE_READY) {
+            std::fs::write(path, b"").unwrap();
+        }
+        thread::sleep(Duration::from_secs(30));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_program_that_handles_the_stop_ends_with_its_own_status_within_the_grace() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        let grace = Duration::from_secs(5);
+        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(probe(Probe::Trap, &[(PROBE_READY, &ready)])), false);
+        let runner = runner(helper, grace);
+        let claimed = runner.claim("job").unwrap();
+        let canceler = runner.canceler();
+        let (status, canceled_at) = thread::scope(|scope| {
+            let canceling = scope.spawn(|| {
+                while !ready.exists() {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                canceler.cancel();
+                Instant::now()
+            });
+            let status = runner.run(&claimed, &plain_base());
+            (status, canceling.join().unwrap())
+        });
+        drop(runner);
+        assert_eq!(status, 0, "the handler never ran");
+        assert!(canceled_at.elapsed() < grace);
+        assert_eq!(origin.frames(), [OverlayJobFrame::Started, OverlayJobFrame::Canceled]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_cancel_ends_the_programs_descendants_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("descendant.pid");
+        // the probe is the shell's child: a descendant of the program, which is the shell
+        let context = probe(Probe::Ignore, &[(PROBE_PID, &pid_file)]);
+        let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context), false);
+        let runner = runner(helper, Duration::from_millis(300));
+        let claimed = runner.claim("job").unwrap();
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                let _ = read_pid(&pid_file);
+                origin.send(&OverlayJobFrame::Cancel);
+            });
+            runner.run(&claimed, &plain_base())
+        });
+        drop(runner);
+        assert!(gone(read_pid(&pid_file)), "the descendant outlived the cancel");
+        assert_eq!(origin.frames(), [OverlayJobFrame::Started, OverlayJobFrame::Canceled]);
     }
 }

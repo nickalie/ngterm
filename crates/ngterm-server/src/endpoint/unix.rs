@@ -29,12 +29,23 @@ pub(super) fn accept(listener: &Listener) -> io::Result<Connection> {
     listener.accept().map(|(stream, _)| stream)
 }
 
+/// A client's connection: on macOS its writes to a server that hung up fail with `EPIPE` rather than raising
+/// `SIGPIPE`, which `ngtermctl` keeps at its default action. The option's failure is ignored, as upstream's
+/// `SocketClient` ignores it: macOS refuses it (`EINVAL`) on a socket whose peer already shut down, which leaves a
+/// connection whose reads end at once, not a failed connect, and `ngtermctl`'s writes carry `MSG_NOSIGNAL` anyway.
 pub(super) fn connect(socket: &Path) -> io::Result<Connection> {
-    UnixStream::connect(socket)
+    let stream = UnixStream::connect(socket)?;
+    #[cfg(target_vendor = "apple")]
+    let _ = no_sigpipe(&stream);
+    Ok(stream)
 }
 
 pub(super) fn connect_unchecked(socket: &Path) -> io::Result<Connection> {
     UnixStream::connect(socket)
+}
+
+pub(super) fn pair() -> io::Result<(Connection, Connection)> {
+    UnixStream::pair()
 }
 
 pub(super) fn remove(socket: &Path) {
@@ -42,5 +53,29 @@ pub(super) fn remove(socket: &Path) {
         && error.kind() != io::ErrorKind::NotFound
     {
         tracing::warn!(%error, "control socket not removed");
+    }
+}
+
+/// Keeps a write to a peer that hung up from raising `SIGPIPE` on macOS whatever the flags it is sent with
+/// (`SO_NOSIGPIPE`, upstream's guard); Linux has no such option and relies on `MSG_NOSIGNAL` (the stream's `send_all`).
+#[cfg(target_vendor = "apple")]
+pub(crate) fn no_sigpipe(socket: &Connection) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+    let on: libc::c_int = 1;
+    let len = libc::socklen_t::try_from(size_of::<libc::c_int>()).map_err(io::Error::other)?;
+    // SAFETY: the descriptor is the socket's, borrowed for the call; `on` is a live `c_int` of the length passed.
+    let set = unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_NOSIGPIPE,
+            (&raw const on).cast::<libc::c_void>(),
+            len,
+        )
+    };
+    if set == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
