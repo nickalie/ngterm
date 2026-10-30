@@ -114,6 +114,9 @@ echo "→ building the ngterm $VERSION installer ($(wix_arch))" >&2
 "$WIX_TOOL" build -nologo -arch "$(wix_arch)" -pdbtype none \
   -d "Version=$VERSION" -d "AppId=$(app_id)" \
   -d "Root=$(cygpath -w "$ROOT")" -d "Icon=$(cygpath -w "$NATIVE_ROOT/resources/icons/ngterm.ico")" \
-  -sice ICE38 -sice ICE64 \
   -o "$(cygpath -w "$OUTPUT")" "$(cygpath -w "$NATIVE_ROOT/packaging/windows/ngterm.wxs")"
+# Windows Installer's internal consistency evaluators, but the three the package's header says do not apply per user
+echo "→ validating the installer" >&2
+"$WIX_TOOL" msi validate -nologo -sice ICE38 -sice ICE64 -sice ICE91 "$(cygpath -w "$OUTPUT")" \
+  || die "the installer fails validation: $OUTPUT"
 echo "→ $OUTPUT" >&2

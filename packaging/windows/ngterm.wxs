@@ -27,9 +27,10 @@
   Upgrades are major upgrades under the one UpgradeCode below (never change it): the earlier version is removed before
   the new one is installed; user state (the state, config and agent directories) is never the installer's.
 
-  ICE38 and ICE64 are suppressed by the build script: they ask a component under the user's profile to key on an HKCU
-  value and list its folders for removal, for roaming profiles of per-machine packages; this package is per-user, its
-  components key on their files and Windows Installer removes the folders it created when they empty.
+  ICE38, ICE64 and ICE91 are suppressed by the build script: they ask a component under the user's profile to key on
+  an HKCU value, list its folders for removal, and vary with ALLUSERS, for the roaming profiles and per-user copies of
+  per-machine packages; this package is only ever per user, its components key on their files and Windows Installer
+  removes the folders it created when they empty.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package Name="ngterm" Manufacturer="ngterm" Version="$(var.Version)" UpgradeCode="2AFFBC1D-0676-4307-9304-8F9FC6D23363"
@@ -84,7 +85,10 @@
 
   <Fragment>
     <!-- the shortcut starts the app in the user's profile, as a desktop launcher starts it in the home on Linux -->
-    <SetProperty Id="NGTERMHOME" Value="[%USERPROFILE]" Before="CreateShortcuts" Sequence="execute" />
+    <StandardDirectory Id="TARGETDIR">
+      <Directory Id="NGTERMHOME" Name="Profile" />
+    </StandardDirectory>
+    <SetDirectory Id="NGTERMHOME" Value="[%USERPROFILE]" />
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="StartMenuShortcut">
         <Shortcut Id="StartMenuShortcut" Name="ngterm" Description="A terminal driven by ngtermctl"

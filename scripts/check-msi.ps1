@@ -10,14 +10,15 @@ installed there already. No app is started: ngterm.exe runs only for its build i
 
 After the install: the binaries, Ghostty's resources (shell integration, the themes, the compiled xterm-ghostty),
 ngterm's PowerShell integration, the agent-status package, the agent skill, the build identity and the licenses are in
-the staged layout; no session build id (packaging/windows/ngterm.wxs says why); `ngterm.exe --build-identity` names
-the package's version; the user's PATH in the registry holds bin\, and a new PowerShell given that PATH finds the
-installed ngtermctl and runs it; the Start-menu shortcut targets ngterm.exe, starts in the user's profile and carries
-the app id as its System.AppUserModel.ID. With -UpgradeMsi, that MSI (a higher version) replaces the first: the first
-product is gone, the second installed, the files in place, and a file in the app's state directory is kept. Then the
-uninstall, after the app id's toast registration is written as the app writes it at each launch: no install folder,
-shortcut, PATH entry, product registration, HKCU\Software\ngterm or app id registration is left, and the state
-directory's file stays (user state is never the installer's).
+the staged layout; no session build id (packaging/windows/ngterm.wxs says why); `ngterm.exe --build-identity` names the
+package's version; the user's PATH in the registry holds bin\ and keeps its value kind (REG_EXPAND_SZ), and a new
+PowerShell given that PATH finds the installed ngtermctl and runs it; the Start-menu shortcut targets ngterm.exe, starts
+in the user's profile and carries the app id as its System.AppUserModel.ID. With -UpgradeMsi, that MSI (a higher
+version) replaces the first: the first product is gone, the second installed, the files in place, and a file in the
+app's state directory is kept. Then the uninstall, after the app id's toast registration is written as the app writes it
+at each launch: no install folder, shortcut, product registration, PATH entry (the user's PATH is back as it was, kind
+included), HKCU\Software\ngterm or app id registration is left, and the state directory's file stays (user state is
+never the installer's).
 
 Each msiexec run logs verbosely under -Log. The exit status is 0 when every check passed.
 
@@ -79,6 +80,13 @@ function Get-ProductState([string] $code) {
 
 function Get-UserPath { [string] [Environment]::GetEnvironmentVariable('Path', 'User') }
 
+# The user's Path as the registry holds it (unexpanded) and its kind (REG_EXPAND_SZ keeps %VAR% entries working).
+function Get-RawUserPath {
+    $key = Get-Item 'HKCU:\Environment'
+    if ($null -eq $key.GetValue('Path')) { return @('', 'absent') }
+    @([string] $key.GetValue('Path', '', 'DoNotExpandEnvironmentNames'), [string] $key.GetValueKind('Path'))
+}
+
 function Test-OnUserPath {
     @((Get-UserPath) -split ';' | Where-Object { $_.TrimEnd('\') -ieq $bin }).Count -gt 0
 }
@@ -103,6 +111,8 @@ function Test-Installed([string] $msi) {
     Check "ngterm.exe --build-identity names $version (got '$($identity[0])')" ($identity[0] -eq $version)
 
     Check "the user's PATH holds $bin" (Test-OnUserPath)
+    $kind = (Get-RawUserPath)[1]
+    Check "the user's PATH keeps its kind ($($originalPath[1]), now $kind)" ($originalPath[1] -eq 'absent' -or $kind -eq $originalPath[1])
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $found = & powershell.exe -NoProfile -Command "`$env:Path = '$machinePath;$(Get-UserPath)'; (Get-Command ngtermctl).Source; ngtermctl --help | Out-Null; `$LASTEXITCODE"
     Check "a new shell finds the installed ngtermctl (got '$($found[0])')" ($found[0] -ieq (Join-Path $bin 'ngtermctl.exe'))
@@ -126,12 +136,14 @@ if ((Get-ProductState $code) -eq 5 -or (Test-Path $root)) {
     exit 1
 }
 
+$originalPath = Get-RawUserPath
 Invoke-Msiexec @('/i', "`"$Msi`"") 'install'
 $installed = Test-Installed $Msi
 
 # user state the installer never owns: a file in the app's state directory (the Windows state dir is
 # %LOCALAPPDATA%\ngterm, crates/ngterm-core/src/paths.rs)
 $stateDir = Join-Path $env:LOCALAPPDATA 'ngterm'
+$stateDirExisted = Test-Path $stateDir
 $stateFile = Join-Path $stateDir "check-msi-$PID.txt"
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 Set-Content -Path $stateFile -Value 'user state'
@@ -152,10 +164,15 @@ Check "product $installed is gone" ((Get-ProductState $installed) -eq -1)
 Check "no install folder is left ($root)" (-not (Test-Path $root))
 Check 'no Start-menu shortcut is left' (-not (Test-Path $shortcut))
 Check "the user's PATH no longer holds bin\" (-not (Test-OnUserPath))
+$restored = Get-RawUserPath
+Check "the user's PATH is as it was ($($restored[1]): '$($restored[0])')" (
+    ($restored[0] -eq $originalPath[0] -and $restored[1] -eq $originalPath[1]) -or
+    ($originalPath[1] -eq 'absent' -and $restored[0] -eq ''))
 Check 'no HKCU\Software\ngterm is left' (-not (Test-Path 'HKCU:\Software\ngterm'))
 Check "no app id registration is left ($aumidKey)" (-not (Test-Path $aumidKey))
 Check 'the state directory is kept' (Test-Path -PathType Leaf $stateFile)
 Remove-Item -Force $stateFile
+if (-not $stateDirExisted) { Remove-Item -Force $stateDir }
 
 if ($failures -gt 0) {
     Write-Output "$failures check(s) failed"
