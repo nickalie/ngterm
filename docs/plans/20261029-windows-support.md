@@ -95,18 +95,25 @@ guest has 4 CPUs and 6.5 GB of memory.
 
 ### Task 2: `ngtermctl` on Windows and macOS (`ngterm-ctl`)
 
-- [ ] the client over the endpoint seam (Task 1), with its connect errors mapped to the same messages on every OS
-- [ ] `overlay_job.rs`'s Windows form: the job's process tree in a Job object, the grace stop and kill, the console
+- [x] the client over the endpoint seam (Task 1), with its connect errors mapped to the same messages on every OS
+- [x] `overlay_job.rs`'s Windows form: the job's process tree in a Job object, the grace stop and kill, the console
   Ctrl events in place of signals, the exit status mapping; its macOS form is the Unix one
-- [ ] the live attach bridge (`stream_bridge`, `live.rs`) on the Windows console: raw input with VT input, VT output,
+- [x] the live attach bridge (`stream_bridge`, `live.rs`) on the Windows console: raw input with VT input, VT output,
   resize, restore on exit
-- [ ] the clipboard helper lookup through `PATHEXT` on Windows; `close_range` and `/proc/locks` uses with their macOS and
+- [x] the clipboard helper lookup through `PATHEXT` on Windows; `close_range` and `/proc/locks` uses with their macOS and
   Windows forms
-- [ ] the CLI's tests against the server pass on all three OSes
+- [x] the CLI's tests against the server pass on all three OSes (Linux and the Windows VM run; macOS is
+  clippy-checked locally and tested by CI's macOS runner)
 - [x] `ngterm-ctl` joins PACKAGES; README's statement that it is Linux only goes
-- [ ] Windows VM: clippy and tests green; `ngtermctl --help` and a round trip against a test server run there
-- ⚠️ the Windows gate's first run (2026-10-29 ~21:55) died with the VM: a host-wide SIGBUS storm (rust-lld, ar, brave,
-  vmware-vmx) took the guest down; the Windows half of the items above is unverified until the VM is back
+- [x] Windows VM: clippy and tests green; `ngtermctl --help` and a round trip against a test server run there
+- ➕ the Windows gate's first run (2026-10-29 ~21:55) died with the VM (the host's /home filled up); rerun green
+  after the VM came back
+- ➕ on Windows a Ctrl+Break sent before `cmd.exe` has started the program reaches `cmd.exe` alone, which outlives
+  it: such an early cancel ends at the kill past the grace (137); one sent later reads 130 (`STATUS_CONTROL_C_EXIT`
+  passes through `cmd /c`, checked in the VM)
+- ➕ `cli_local`'s tests that run a fake (`ngterm-session`, `ssh`, `tic`) stay Unix only, their fakes being `sh`
+  scripts; the print's run has Windows twins over a `.cmd` fake in `clipboard`'s tests, `terminfo install` has none
+  on Windows (it needs `infocmp` and `ssh` there)
 
 ### Task 3: App services on Windows (`ngterm-app`)
 
