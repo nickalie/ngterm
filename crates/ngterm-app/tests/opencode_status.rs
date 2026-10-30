@@ -28,18 +28,6 @@ fn path() -> String {
     "/usr/bin:/bin".to_owned()
 }
 
-/// The system directory and Windows PowerShell's, under the system root, which both need too.
-#[cfg(windows)]
-fn path() -> String {
-    let root = system_root();
-    format!(r"{root}\System32;{root}\System32\WindowsPowerShell\v1.0")
-}
-
-#[cfg(windows)]
-fn system_root() -> String {
-    std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned())
-}
-
 fn plugin() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/agent-status/opencode/ngterm-status.js")
 }
@@ -94,17 +82,32 @@ fn node() -> Option<&'static Path> {
     }
 }
 
-/// Runs `script` under `node` in exactly `env` (nothing of this process's environment, the user's `NGTERM_*` least
-/// of all); fails with node's output when it exits non-zero.
+/// Runs `script` under `node` in `env`, without the user's `NGTERM_*` (on Unix with nothing else of this process's
+/// environment either); fails with node's output when it exits non-zero.
+///
+/// On Windows the plugin's reporters are PowerShell processes, which need the system's variables: the environment
+/// stays this process's, less the live instance's variables, and the runs go one at a time, so that PowerShell cold
+/// starts do not pile up past the plugin's 10 s wait (every report timed out on CI's runner while the runs went at
+/// once in a stripped environment).
 fn run_node(node: &Path, script: &Path, env: &[(&str, &Path)]) -> TestResult {
     let mut command = Command::new(node);
-    command.arg(script).env_clear().env("PATH", path());
+    command.arg(script);
+    #[cfg(unix)]
+    command.env_clear().env("PATH", path());
     #[cfg(windows)]
-    for key in ["SystemRoot", "windir", "TEMP", "TMP"] {
-        if let Some(value) = std::env::var_os(key) {
-            command.env(key, value);
+    let _one_at_a_time = {
+        static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        for (key, _) in std::env::vars_os() {
+            let key = key.to_string_lossy().into_owned();
+            if ["NGTERM_", "AGTERM_", "ZMX_"]
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
+            {
+                command.env_remove(key);
+            }
         }
-    }
+        ONE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
     for (key, value) in env {
         command.env(key, value);
         // the home `os.homedir()` reads on Windows
