@@ -51,6 +51,8 @@ if sys.platform != "win32":
     import pwd
 
 WINDOWS = sys.platform == "win32"
+if WINDOWS:
+    winproc.quiet_error_mode()
 
 # Upstream refuses to bind at `path.utf8.count >= 104` (Darwin's sun_path, mirrored on Linux).
 SOCKET_PATH_CAP = 104

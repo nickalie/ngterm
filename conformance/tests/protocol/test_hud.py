@@ -210,6 +210,7 @@ def test_hud_hides_itself_after_its_interval(ctl):
 @pytest.mark.covers(
     "session.hud.open", "session.hud.close", "session.overlay.open", "session.overlay.close", "field:tree.session.hud"
 )
+@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
 def test_hud_and_program_share_one_slot(ctl):
     sid = _new(ctl)
     assert_ok(ctl.request("session.overlay.open", sid, command=HOLD))

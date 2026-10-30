@@ -103,6 +103,16 @@ ENDSESSION_CLOSEAPP = 0x1
 SMTO_ABORTIFHUNG = 0x2
 # How long a window gets to answer `WM_QUERYENDSESSION`.
 QUERY_TIMEOUT_MS = 5000
+SEM_FAILCRITICALERRORS = 0x0001
+SEM_NOGPFAULTERRORBOX = 0x0002
+SEM_NOOPENFILEERRORBOX = 0x8000
+
+
+def quiet_error_mode() -> None:
+    """No modal error box for this process or the ones it starts, which inherit the mode: a crash, or an app that
+    failed to start (a DLL's initialisation, `0xc0000142`), ends with its status instead of waiting on the desktop
+    for someone to click OK, which would hold the harness until its timeouts."""
+    _kernel32.SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX)
 
 
 @dataclass(frozen=True)
