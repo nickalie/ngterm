@@ -156,8 +156,12 @@ jobs:
           conformance/selftests/test_client.py conformance/selftests/test_windows_launch.py
       # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
       # every stopped instance's logs (the harness's and the app's own), named after its test, uploaded with the report
+      # --must-pass live-any-shell: the login shell is Windows PowerShell, which the build runs its live sessions in; a
+      # skipped, failed or deselected Live test fails the job, as does finding none.
       - name: suite (protocol, cli, behaviors)
-        run: CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows/instances")" conformance/tools/run-windows.sh
+        run: >-
+          CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows/instances")"
+          conformance/tools/run-windows.sh -- --must-pass live-any-shell
       - name: report into the summary
         if: always()
         run: |
