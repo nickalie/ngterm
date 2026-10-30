@@ -9,7 +9,7 @@ whose own ngterm runs there: the instance is private (its own state directory, a
 NGTERM_*, AGTERM_* and ZMX_* stripped), but its window takes the desktop.
 
 The check: a `--js` file page, granted its folder, shows (its load state `loaded` in the tree, a screenshot); its bridge
-round-trips (the page asks for the tree, renames its session with the answer's window count, and titles itself with
+round-trips (the page asks for the tree, renames its session with the answer's workspace count, and titles itself with
 it: the session's new name and the page's title read back from the tree); a persistent URL page on a loopback server
 signs in (a cookie the server sets), the app quits on Ctrl+C (its orderly quit) and a second launch's persistent page is
 still signed in (the cookie sent back, the page's title and the server's log), while an in-memory page there is not.
@@ -125,10 +125,11 @@ function Save-Screen([string] $name) {
     Log "screenshot $shot"
 }
 
+# Stops `process` and what it started (a launcher's node), by process id, never by name.
 function Stop-ById($process, [string] $what) {
-    if ($process -and -not $process.HasExited) {
-        Log "stopping $what pid $($process.Id) by its process id"
-        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    if ($process) {
+        Log "stopping $what pid $($process.Id) and its children by process id"
+        & taskkill.exe /PID $process.Id /T /F 2>&1 | Out-Null
         $process.WaitForExit(10000) | Out-Null
     }
 }
@@ -184,8 +185,8 @@ Set-Content -Encoding utf8 -Path (Join-Path $site 'page.html') -Value @'
 <body><h1>WebView2 page</h1><p id="out">asking the app...</p>
 <script>
 ngterm.request('tree').then((tree) => {
-  const count = (tree && tree.windows) ? tree.windows.length : 0;
-  document.getElementById('out').textContent = 'bridge reply: ' + count + ' window(s)';
+  const count = (tree && tree.workspaces) ? tree.workspaces.length : 0;
+  document.getElementById('out').textContent = 'bridge reply: ' + count + ' workspace(s)';
   return ngterm.request('session.rename', {args: {name: 'bridged-' + count}}).then(() => {
     document.title = 'bridged ' + count;
   });
@@ -284,6 +285,12 @@ try {
 } finally {
     Stop-ById $app 'app'
     Stop-ById $server 'server'
+    # a launcher (Volta's node) may have handed the server to a child of its own and left: that one by its id too
+    $script = Join-Path $root 'server.js'
+    Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($script) } | ForEach-Object {
+        Log "stopping the server's pid $($_.ProcessId) by its process id"
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Log "failures: $failures"

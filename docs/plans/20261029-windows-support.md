@@ -193,13 +193,24 @@ guest has 4 CPUs and 6.5 GB of memory.
 
 ### Task 6: HTML overlays on Windows (WebView2, depends on Task 4)
 
-- [ ] a Windows page host behind `ngterm_core::html::HtmlHost` on `wry` (Decisions > HTML overlays): pages over the
+- [x] a Windows page host behind `ngterm_core::html::HtmlHost` on `wry` (Decisions > HTML overlays): pages over the
   pane and the session, their bounds, visibility, focus and input, the theme, navigation policy and the system
   browser hand-off, the page bridge, saved logins (a persistent profile under the state dir), devtools
-- [ ] the `html` feature builds on Windows; what `ngterm-wpe` holds that has no WebView2 meaning is named
-- [ ] tests of the host's frontend-neutral parts on Windows; Windows VM: `ngtermctl session overlay page` shows, its
-  bridge round-trips, a login survives a restart
-- [ ] the WebView2 runtime's presence is checked at start, with a message when it is missing
+  (`ngterm-gpui/src/html_overlay/webview2*`: a `WebView2` child window per page through wry, webview2-com for the
+  navigation policy, load events, focus, keys, context menu, script dialogs and the store's clear; devtools off, as
+  upstream's pages are not inspectable; the app's keymap chords taken from a focused page; core's file pages take
+  Windows paths; `gpui-pre-windows` 0002 puts GPUI's composition target beneath child windows)
+  - ➕ a page sits above everything GPUI draws over its content area: it is hidden while a dialog, the palette, a
+    popover, the switcher or an alert is up (`set_covered`), but GPUI's in-pane drawing over a page (the HUD, a
+    pane ask's dim) stays under it
+  - ➕ a file page without `--cwd` loads its text through `NavigateToString`, which `WebView2` caps at 2 MB (a larger
+    one fails with `WebView2`'s reason)
+- [x] the `html` feature builds on Windows; what `ngterm-wpe` holds that has no WebView2 meaning is named
+  (`html_overlay/webview2.rs` module docs)
+- [x] tests of the host's frontend-neutral parts on Windows; Windows VM: `ngtermctl session overlay page` shows, its
+  bridge round-trips, a login survives a restart (`scripts/smoke-windows-pages.ps1`; CI's Windows job runs
+  ngterm-gpui's clippy and tests with `html`)
+- [x] the WebView2 runtime's presence is checked at start, with a message when it is missing
 
 ### Task 7: The Windows installer (depends on Tasks 4–6)
 
