@@ -88,7 +88,7 @@ class Connection(Protocol):
 def connect(socket_path: str | os.PathLike[str], timeout: float | None) -> Connection:
     """A connection to the server of `socket_path`; `timeout` bounds the connect and is the connection's timeout."""
     if WINDOWS:
-        return PipeConnection.connect(control_pipe_path(socket_path), timeout)
+        return PipeConnection.open(control_pipe_path(socket_path), timeout)
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         sock.settimeout(timeout)
@@ -109,7 +109,7 @@ class PipeConnection:
         self._lock = threading.Lock()
 
     @classmethod
-    def connect(cls, name: str, timeout: float | None) -> PipeConnection:
+    def open(cls, name: str, timeout: float | None) -> PipeConnection:
         """Opens the client end of `name`; a busy pipe (every instance taken, the server between two accepts) is waited
         for until `timeout` runs out. A missing one raises `FileNotFoundError` at once."""
         import _winapi
