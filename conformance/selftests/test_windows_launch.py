@@ -135,11 +135,10 @@ def test_a_relaunch_runs_again_and_the_stop_reaps_both_trees(
     relaunched = adapter.relaunch(first)
     assert first.process.returncode == 0
     assert [process.pid for process, _ in relaunched.launched] == [first.pid, relaunched.pid]
+    second_child = int((relaunched.state_dir / "fake-child").read_text())
+    children = [winproc.Process(pid, 0, "", winproc.creation_time(pid)) for pid in (first_child, second_child)]
     adapter.stop(relaunched)
-    for pid in (first_child, int((relaunched.state_dir / "fake-child").read_text())):
-        assert winproc.creation_time(pid) is None or not winproc.alive(
-            winproc.Process(pid, 0, "", winproc.creation_time(pid))
-        )
+    assert not any(winproc.alive(child) for child in children)
 
 
 def test_a_launch_beside_outliving_its_timeout_is_ended_by_pid(
