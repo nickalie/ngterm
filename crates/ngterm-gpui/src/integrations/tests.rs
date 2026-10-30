@@ -76,12 +76,6 @@ fn slashed(text: &str) -> String {
     text.replace('\\', "/")
 }
 
-/// `text` as it reads inside a JSON string (a Windows path's `\` doubled).
-fn json_text(text: &str) -> String {
-    let quoted = serde_json::to_string(text).unwrap();
-    quoted[1..quoted.len() - 1].to_owned()
-}
-
 /// A temp home with the checkout's bundled resources, a fake bundled `ngtermctl`, a fake login shell and a `PATH` of
 /// the home's own `bin` alone. The installers read its environment through a [`Source`]; a test may change it between
 /// runs.
@@ -420,8 +414,9 @@ fn hooks_with_opencode_v1(cx: &mut VisualTestContext, home: &Home) {
     press(cx, "OK");
     assert!(script_dir.join(WRAPPER_NAME).is_file());
     let settings = home.read(".claude/settings.json");
+    // the hook commands name the scripts with `/` on Windows too
     assert!(
-        settings.contains(&json_text(&script_dir.display().to_string())),
+        slashed(&settings).contains(&slashed(&script_dir.display().to_string())),
         "{settings}"
     );
     assert!(home.read(".zshrc").contains(RC_MARKER_BEGIN));

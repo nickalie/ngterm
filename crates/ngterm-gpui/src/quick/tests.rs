@@ -561,7 +561,13 @@ fn the_panel_goes_with_its_shell_and_the_next_show_starts_afresh(cx: &mut TestAp
     });
     let key = h.panel.shared().unwrap().key();
     // the shell ends: the panel goes with its terminal
-    h.panel.shared().unwrap().pane().unwrap().write(&[4]).unwrap();
+    h.panel
+        .shared()
+        .unwrap()
+        .pane()
+        .unwrap()
+        .write(crate::pane::tests::IDLE_EOF)
+        .unwrap();
     h.until("the panel to go with its shell", |h| h.panel.window().is_none());
     assert!(h.panel.shared().is_none());
     assert!(!h.state.core.quick_visible() && !h.state.core.quick_has_surface());

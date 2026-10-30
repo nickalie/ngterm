@@ -691,7 +691,12 @@ fn live_core(library: WindowLibrary, resources: &Path) -> Core {
             socket_directory: "/tmp/ngterm-live-test".to_owned(),
         },
         wrap: Inputs {
-            executable: "/bin/sh".into(),
+            // an executable file, as the wrap requires
+            executable: if cfg!(windows) {
+                std::env::current_exe().unwrap()
+            } else {
+                "/bin/sh".into()
+            },
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: Some(resources.to_path_buf()),
             state_dir: resources.join("state"),
@@ -968,6 +973,10 @@ fn a_session_background_reaches_its_terminals_and_a_pane_override_wins(cx: &mut 
 /// so a program's OSC 11 background lifts its terminal's `background-opacity` to the window's, and its OSC 111 reset
 /// drops the lift; a change of the window opacity follows while the color shows.
 #[gpui_kit::test]
+#[cfg_attr(
+    windows,
+    ignore = "has `cat` repeat an OSC sequence; ConPTY renders a program's output anew"
+)]
 fn a_programs_osc_background_shows_at_the_window_opacity_until_it_resets(cx: &mut TestAppContext) {
     let (library, window, ids) = three_sessions();
     let mut h = harness(cx, core_of(library), window);
@@ -1347,7 +1356,7 @@ fn a_ctrl_click_on_the_hud_opens_its_link_and_a_plain_click_reaches_the_pane(cx:
         let panel = deck.page(session).unwrap().hud().panel().unwrap();
         (panel.terminal().clone(), panel.view().clone())
     });
-    // the test launcher runs `cat`: the tty echoes what is written, on the panel's first row
+    // the test launcher runs the idle program: the terminal echoes what is written, on the panel's first row
     let pane = terminal.read_with(h.cx, |terminal, _| terminal.shared().pane().unwrap());
     pane.write(b"https://example.com/hud").unwrap();
     h.until("the link to show on the panel", |h| {
