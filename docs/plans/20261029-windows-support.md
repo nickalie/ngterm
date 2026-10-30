@@ -249,10 +249,62 @@ guest has 4 CPUs and 6.5 GB of memory.
 
 ### Task 7: The Windows installer (depends on Tasks 4–6)
 
-- [ ] a WiX MSI (Decisions > Installer) built by a script under `scripts/` and kept in `packaging/windows/`
-- [ ] the installed app finds its resources, shell integration and `ngtermctl`; the AUMID shortcut makes toasts work
-- [ ] a CI job builds the MSI on the Windows runner and keeps it as an artifact
-- [ ] Windows VM: install, run, upgrade, uninstall
+- [x] a WiX MSI (Decisions > Installer) built by a script under `scripts/` and kept in `packaging/windows/`
+  (`packaging/windows/ngterm.wxs`, `scripts/build-msi.sh`, which builds and stages the release binaries itself or takes
+  a tree `scripts/stage.sh` staged; the installed folder keeps the staged layout)
+  - ➕ WiX 5.0.2 (`WIX_VERSION` in `build/pins.env`, the `wix` .NET tool installed into the vendor root), not the current
+    7.0.1: 5.0.2 is the last release under the plain MS-RL; 6.x and 7.x ship under the Open Source Maintenance Fee EULA
+    (a fee for revenue-generating users, an explicit acceptance in 7.x), which is the user's call. The source's schema
+    is the same in 5–7, so a bump is the pin line (plus, for 7, the EULA's acceptance)
+  - ➕ per user, not per machine: everything the app registers is the user's (the AUMID key under HKCU, the CLI
+    installer's user `PATH` entry, the state and config dirs), so the package owns and removes exactly what it adds,
+    the AUMID key included, and installs and upgrades without elevation into `%LOCALAPPDATA%\Programs\ngterm`. ICE38,
+    ICE64 and ICE91 (per-machine roaming rules) are suppressed in the validation `build-msi.sh` runs, with the reason in
+    the .wxs header
+  - ➕ it installs `bin\` (`ngterm.exe`, `ngtermctl.exe`, `ngterm-session.exe`, and the Visual C++ runtime DLLs they
+    import, deployed app-locally from the build machine's Visual Studio redist: the binaries link the dynamic CRT, which
+    a fresh Windows lacks; the UCRT is part of Windows), `bin\` on the user's `PATH`, `share\` (Ghostty's themes, shell
+    integration, terminfo; ngterm's PowerShell integration, the agent-status package, the skill, `app-BUILD`), the
+    licenses under `share\doc` (the terminal fonts are compiled into `ngterm.exe`, so only their licenses are files),
+    and a Start-menu shortcut with `System.AppUserModel.ID` = the app id, started in the user's profile. Uninstall
+    removes `HKCU\Software\Classes\AppUserModelId\<app id>` too. MajorUpgrade under one stable UpgradeCode; the version
+    is the staged binary's Cargo version (`--version` overrides)
+  - ➕ `share\ngterm\session-BUILD` is not installed: its stat line names the staged binary's mtime to the nanosecond,
+    which an installed file never keeps, so the installed session server runs as an unstaged one (no outdated reset
+    reason, no handoff to a new build after an upgrade), as `cargo run` does. Open work if handoffs are wanted for MSI
+    installs: a build id tied to the binary by something an installer keeps (its content, or a stamp written at install)
+- [x] the installed app finds its resources, shell integration and `ngtermctl`; the AUMID shortcut makes toasts work
+  (`scripts/check-msi.ps1` on CI and in the VM; the desktop checks below)
+- [x] a CI job builds the MSI on the Windows runner and keeps it as an artifact (`.github/workflows/windows-installer.yml`,
+  artifact `ngterm-msi`: the release build, the MSI, then `check-msi.ps1` installs it for the runner's user, checks
+  the files, the build identity, `ngtermctl` from the registry's `PATH`, the shortcut's target, start folder and AUMID,
+  upgrades to an MSI of the next patch version, and uninstalls, checking no folder, shortcut, `PATH` entry, product,
+  `HKCU\Software\ngterm` or AUMID key is left and the user's `PATH` keeps its entries and `REG_EXPAND_SZ` kind;
+  a separate workflow so it runs beside `cross-platform`'s jobs; 12.5 minutes with a warm cache, 20 with a cold one)
+- [x] Windows VM: install, run, upgrade, uninstall (2026-10-30/31, Win11-admin, CI's MSI of `019a2ae` and two MSIs of
+  0.1.1 and 0.1.2 repackaged from its own files with `build-msi.sh --version`, on the guest's desktop through
+  `vmrun -interactive`, the real per-user locations and state dir): the install (basic UI) puts ngterm in the Start
+  menu's search with its icon; a shell Explorer starts afterwards finds and runs `ngtermctl` from the new user `PATH`;
+  the app launched from the Start menu's entry for the app id (`shell:AppsFolder\com.nickalie.ngterm`, which only the
+  shortcut's AUMID makes) serves its socket, its pane runs PowerShell 7 in the profile with the installed `ngtermctl`
+  on its `PATH` and `GHOSTTY_RESOURCES_DIR` at the installed `share\ghostty` (so `xterm-ghostty` resolved); a `notify`
+  for a session not shown shows a toast titled with ngterm's name and icon and lands in the notification center under
+  the app id; the upgrade to 0.1.1 run without UI while the app ran closed it through Restart Manager (no reboot) and
+  the relaunched app restored the session renamed before it; the upgrade to 0.1.2 with the app quit kept it too, and
+  the upgraded shortcut carries the AUMID; the uninstall leaves no install folder, shortcut, `PATH` entry,
+  `HKCU\Software\ngterm` or AUMID key, and the Start menu no longer finds the app
+  - ➕ left after the uninstall, as for any uninstalled desktop app: the user's state and config dirs
+    (`%LOCALAPPDATA%\ngterm`, `%APPDATA%\ngterm`, never the installer's) and Windows' own per-app records
+    (`Notifications\Settings\<app id>`, `PushNotifications\Backup\<app id>`, `Start\TileProperties`, WebView2's
+    profile MACs of the pages' profiles). Removing `Notifications\Settings` would also drop the user's toast choice at
+    every major upgrade (the old product's uninstall runs then), so the package leaves it
+  - ➕ a Start-menu launch right after a major upgrade can miss for a minute: the shell's index of the shortcut the
+    upgrade recreated lags behind it (`shell:AppsFolder\<app id>` opened Documents once; the shortcut itself works)
+  - ➕ seen beside the checks, not installer matters: `WM_CLOSE` to the main window (`CloseMainWindow`) did not end the
+    app within 15 s (it was stopped by its pid); `GHOSTTY_RESOURCES_DIR` reads `...\ngterm\share/ghostty`, a `/` from
+    `ngterm-term`'s `STAGED_RESOURCES` join (Windows takes it)
+  - ⚠️ the guest, loaded by other tasks' suite runs, again showed `ngterm.exe - Application Error (0xc0000142)` for one
+    launch of a debug build (Task 5's ⚠️); every launch of the release MSI's build started
 
 ### Task 8: The conformance suite on Windows (depends on Tasks 2 and 4)
 
