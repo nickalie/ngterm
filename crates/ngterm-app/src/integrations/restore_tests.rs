@@ -80,7 +80,11 @@ impl Bench {
         {
             use std::io::Write;
             let mut stdin = child.stdin.take().unwrap();
-            stdin.write_all(payload.as_bytes()).unwrap();
+            // the adapter may leave before reading (outside ngterm it exits first), as a hook may: the agent's write
+            // then meets a broken pipe, which is no failure; what the adapter did shows in the calls it made
+            if let Err(err) = stdin.write_all(payload.as_bytes()) {
+                assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe, "writing the payload: {err}");
+            }
         }
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success(), "the hook exits 0: {output:?}");
