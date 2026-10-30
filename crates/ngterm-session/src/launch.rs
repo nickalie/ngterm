@@ -9,8 +9,9 @@
 //! another executable from [`EXECUTABLE_OVERRIDE`] (upstream's `AGTERM_ZMX_PATH`).
 //!
 //! The login shell is the password database's on Unix ([`login_shell`]); Windows has none, so there it is PowerShell:
-//! the first launchable `pwsh.exe` on `PATH`, else `powershell.exe` there or in the system directory (`windows_shell`,
-//! after herdr), none when there is neither: the live launch then refuses with the unsupported-shell reason.
+//! the first launchable `pwsh.exe` on `PATH` (an image, or the App Execution Alias of an MSIX install), else
+//! `powershell.exe` there or in the system directory (`windows_shell`, after herdr), none when there is neither: the
+//! live launch then refuses with the unsupported-shell reason.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

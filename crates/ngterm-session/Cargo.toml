@@ -51,7 +51,9 @@ windows-sys = { workspace = true, features = [
     "Win32_System_Diagnostics_Debug",
     # the job table's process snapshot
     "Win32_System_Diagnostics_ToolHelp",
+    # the login shell's App Execution Alias: its reparse point (`DeviceIoControl`, `FSCTL_GET_REPARSE_POINT`)
     "Win32_System_IO",
+    "Win32_System_Ioctl",
     "Win32_System_JobObjects",
     # the ConPTY gate: the module `CreatePseudoConsole` lives in (`GetModuleHandleExW`, `GetModuleFileNameW`)
     "Win32_System_LibraryLoader",
