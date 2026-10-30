@@ -24,8 +24,10 @@ use tempfile::TempDir;
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 const NGTERMCTL: &str = env!("CARGO_BIN_EXE_ngtermctl");
+#[cfg(unix)]
 const ENTRY: &str = "xterm-ghostty";
 const NOT_LIVE: &str = "this pane has no live session; run it in a main or split pane started under Live sessions";
+#[cfg(unix)]
 const DAEMON: &str = "ngterm-357e181888f34450b5c225bd00239b9b";
 
 /// A server on `<state>/ngterm.sock`, the socket the CLI would resolve from `NGTERM_STATE_DIR`, counting the requests
@@ -113,6 +115,7 @@ impl Sandbox {
     }
 
     /// The stage's `share/terminfo`, compiled by the real `tic` from a small entry of the right name.
+    #[cfg(unix)]
     fn stage_terminfo(&self) -> TestResult {
         let database = self.path("stage/share/terminfo");
         fs::create_dir_all(&database)?;
@@ -190,6 +193,19 @@ impl Sandbox {
         }
         Ok(child.wait_with_output()?)
     }
+}
+
+/// `path` resolved as `ngtermctl` prints its own location: canonical, and on Windows without the verbatim `\\?\`
+/// prefix `canonicalize` adds.
+fn real_path(path: impl AsRef<Path>) -> io::Result<PathBuf> {
+    let path = fs::canonicalize(path)?;
+    #[cfg(windows)]
+    if let Some(rest) = path.to_str().and_then(|text| text.strip_prefix(r"\\?\"))
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        return Ok(PathBuf::from(rest));
+    }
+    Ok(path)
 }
 
 fn outcome(output: &Output) -> (Option<i32>, String, String) {
@@ -307,7 +323,7 @@ fn clipboard_set_reports_the_print_failing_or_missing() -> TestResult {
         ("NGTERM_LIVE_SESSION", DAEMON),
         ("NGTERM_LIVE_DIR", "/tmp/ngterm-live-1"),
     ];
-    let print = fs::canonicalize(sandbox.path("stage/bin"))?.join("ngterm-session");
+    let print = real_path(sandbox.path("stage/bin"))?.join("ngterm-session");
     assert_eq!(
         outcome(&sandbox.run(None, &["clipboard", "set", "hi"], &live, b"")?),
         failed(&format!(
@@ -434,6 +450,8 @@ fn terminfo_install_reports_how_ssh_ended() -> TestResult {
 #[test]
 fn terminfo_install_refuses_a_destination_ssh_would_misread() -> TestResult {
     let sandbox = Sandbox::new()?;
+    // the entry is compiled by `tic`, which Windows does not have; the refusal comes before any entry is read
+    #[cfg(unix)]
     sandbox.stage_terminfo()?;
     sandbox.fake_ssh()?;
     for destination in ["-oProxyCommand=x", "two words", ""] {
@@ -453,7 +471,7 @@ fn terminfo_install_refuses_a_destination_ssh_would_misread() -> TestResult {
 fn terminfo_install_without_an_entry_says_where_it_looked() -> TestResult {
     let sandbox = Sandbox::new()?;
     sandbox.fake_ssh()?;
-    let database = fs::canonicalize(sandbox.path("stage"))?.join("share/terminfo");
+    let database = real_path(sandbox.path("stage"))?.join("share/terminfo");
     let empty = sandbox.path("empty");
     fs::create_dir_all(&empty)?;
     let empty_text = empty.display().to_string();

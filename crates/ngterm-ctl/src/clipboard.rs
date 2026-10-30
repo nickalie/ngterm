@@ -530,7 +530,7 @@ mod tests {
                 String::new()
             };
             let complain = stderr
-                .map(|text| format!("[Console]::Error.WriteLine('{text}')"))
+                .map(|text| format!("[Console]::Error.Write('{text}' + \"`n\")"))
                 .unwrap_or_default();
             let script = self.path("print.ps1");
             fs::write(

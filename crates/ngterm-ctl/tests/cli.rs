@@ -121,6 +121,19 @@ where
     Ok(command.output()?)
 }
 
+/// `path` resolved as `ngtermctl` prints its own location: canonical, and on Windows without the verbatim `\\?\`
+/// prefix `canonicalize` adds.
+fn real_path(path: impl AsRef<Path>) -> io::Result<PathBuf> {
+    let path = fs::canonicalize(path)?;
+    #[cfg(windows)]
+    if let Some(rest) = path.to_str().and_then(|text| text.strip_prefix(r"\\?\"))
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        return Ok(PathBuf::from(rest));
+    }
+    Ok(path)
+}
+
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
@@ -168,7 +181,7 @@ fn version_prints_the_app_then_the_client() -> TestResult {
         &[],
         [OsStr::new("version"), OsStr::new("--socket"), socket.as_os_str()],
     )?;
-    let client = fs::canonicalize(NGTERMCTL)?;
+    let client = real_path(NGTERMCTL)?;
     let expected = format!("0.1.0 (abc1234)\nclient: {}\n", client.display());
     assert_eq!(outcome(&output), (Some(0), expected, String::new()));
     Ok(())
@@ -194,7 +207,7 @@ fn version_prints_the_installed_build_between_the_app_and_the_client_when_it_dif
             [OsStr::new("version"), OsStr::new("--socket"), socket.as_os_str()],
         )
     };
-    let client = fs::canonicalize(NGTERMCTL)?;
+    let client = real_path(NGTERMCTL)?;
     let expected = format!(
         "0.1.0 (abc1234)\ninstalled: 0.2.0 (def5678)\nclient: {}\n",
         client.display()

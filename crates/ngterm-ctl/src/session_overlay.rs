@@ -997,7 +997,7 @@ mod tests {
         let here = std::env::current_dir().unwrap();
         assert_eq!(
             args(&["open", "--html", "out/r.html", "--cwd", "out"]),
-            json!({"html": here.join("out/r.html"), "cwd": here.join("out")})
+            json!({"html": here.join("out").join("r.html"), "cwd": here.join("out")})
         );
         assert_eq!(
             args(&["open", "--url", "http://localhost:5173/a/../b", "--navigation", "--js"]),
