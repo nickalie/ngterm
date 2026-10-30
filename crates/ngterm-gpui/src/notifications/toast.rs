@@ -38,7 +38,7 @@ pub fn slot(identity: &str) -> Slot {
     }
 }
 
-/// Whether `key` fits a toast's tag or group (counted in UTF-16 units, as WinRT's strings are).
+/// Whether `key` fits a toast's tag or group (counted in UTF-16 units, as `HSTRING`s are).
 fn fits(key: &str) -> bool {
     key.encode_utf16().count() <= MAX_KEY
 }

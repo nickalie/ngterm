@@ -1,4 +1,4 @@
-//! The banners on Windows: toasts through WinRT's `ToastNotificationManager` (the `windows` crate), under the app id
+//! The banners on Windows: toasts through the Windows Runtime's `ToastNotificationManager` (the `windows` crate), under the app id
 //! the instance runs as, which is the toasts' `AppUserModelID`.
 //!
 //! - **The app id**: an app that is not packaged shows toasts only under an `AppUserModelID` Windows knows. ngterm
@@ -23,7 +23,7 @@
 //!   sounds' player ([`crate::status_sound`]), as on Linux.
 //!
 //! The toasts are posted on a thread of their own in the multithreaded apartment, in the order the core queued them;
-//! the `Activated` and `Dismissed` events arrive on WinRT's threads.
+//! the `Activated` and `Dismissed` events arrive on the Windows Runtime's threads.
 
 use std::collections::HashMap;
 use std::io;
