@@ -23,11 +23,12 @@
 //!   `START_TIMEOUT`, after which the worker is killed. The worker runs in a process group of its own, so a terminal's
 //!   Ctrl-C reaches the app alone; it ends when the app quits it or goes away (the end of its socket), never through
 //!   `bwrap --die-with-parent`, which would kill it with the thread that started it.
-//! - The end: [`crate::Host::shutdown`] quits the engine (pages closed, its last answer flushed before the worker
-//!   exits) and waits `STOP_TIMEOUT` for it, then closes the socket, which frees a writer stuck on a worker that stopped
-//!   reading, and reaps the worker, killing its group when it does not end at once. A worker that ends unasked answers
-//!   every evaluation still waiting with an error and closes the event channel: the consumer's pages cannot come back
-//!   in this process.
+//! - The end: [`crate::Host::shutdown`] quits the engine (pages closed and their web processes ended, its last answer
+//!   flushed before the worker exits) and waits `STOP_TIMEOUT` for it, then closes the socket, which frees a writer
+//!   stuck on a worker that stopped reading, and reaps the worker, killing its group when it does not end at once. A
+//!   worker whose app went away (the end of its socket) stops its engine the same way before it ends. A worker that
+//!   ends unasked answers every evaluation still waiting with an error and closes the event channel: the consumer's
+//!   pages cannot come back in this process.
 
 mod client;
 mod message;

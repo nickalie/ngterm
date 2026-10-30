@@ -166,11 +166,13 @@ fn apply(command: Command) {
     }
 }
 
-/// Closes every page and drops the engine; what `WebKit` still calls back afterwards finds no engine and does nothing.
+/// Closes every page, ends its web process ([`Page::end_web_process`]) and drops the engine; what `WebKit` still
+/// calls back afterwards finds no engine and does nothing.
 fn stop() {
-    let pages = with(|engine| engine.pages.keys().copied().collect::<Vec<_>>()).unwrap_or_default();
-    for id in pages {
-        close_view(id);
+    let pages = with(|engine| engine.pages.values().cloned().collect::<Vec<_>>()).unwrap_or_default();
+    for page in pages {
+        close_view(page.id);
+        page.end_web_process();
     }
     let engine = ENGINE.with(RefCell::take);
     drop(engine);

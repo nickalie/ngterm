@@ -441,9 +441,9 @@ impl Host {
         self.view(view, ViewCommand::ImeCommit(text));
     }
 
-    /// Closes every page and stops the engine, waiting (a bounded time) until it has; a worker is then reaped. The
-    /// engine cannot start again in this process; commands after it are dropped. Once is enough: a second call (or the
-    /// drop after it) returns at once.
+    /// Closes every page, ends its web process and stops the engine, waiting (a bounded time) until it has; a worker
+    /// is then reaped. The engine cannot start again in this process; commands after it are dropped. Once is enough:
+    /// a second call (or the drop after it) returns at once.
     pub fn shutdown(&self) {
         match &self.engine {
             Engine::Local(local) => local.stop(),

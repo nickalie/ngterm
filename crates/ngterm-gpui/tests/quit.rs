@@ -1,9 +1,10 @@
 //! SIGTERM's deadline under load (`conformance/docs/rust-build.md`: quit without a prompt within 10 seconds): the
 //! GPUI build in Live mode on a private Xvfb (lavapipe) with three live sessions, one of them flooding its pane, and an
-//! HTML page over two of them, one of whose engines spins in a script, quits on SIGTERM with status 0 within the
-//! deadline, its quit save written (every session in the saved state), the Live sessions and their one server
-//! surviving it and nothing else of the app's left running (the `WebKit` worker and web processes; the panes attach
-//! in process). The time the quit took is printed (seen with `--nocapture`).
+//! HTML page over two of them, one of whose engines spins in a script (its page opened with scripts on), quits on
+//! SIGTERM with status 0 within the deadline, its quit save written (every session in the saved state), the Live
+//! sessions and their one server surviving it and nothing else of the app's left running (the `WebKit` worker and web
+//! processes, the spinning page's too, which only the app's quit can end; the panes attach in process). The time the
+//! quit took is printed (seen with `--nocapture`).
 //!
 //! Everything runs in a [`support::Sandbox`] (private bus, state, live-session namespace and Xvfb); its live sessions
 //! are killed through their own namespace's server at the end. The app runs the cargo-built `ngterm-session` beside
@@ -41,15 +42,16 @@ fn live_session(sandbox: &Sandbox) -> TestResult<String> {
     Ok(sid)
 }
 
-/// Opens a page titled `title` with `body` over session `sid` and waits for its load.
-fn load_page(sandbox: &Sandbox, sid: &str, title: &str, body: &str) -> TestResult {
+/// Opens a page titled `title` with `body` over session `sid`, its scripts run with `javascript` (off unless asked, as
+/// upstream's), and waits for its load.
+fn load_page(sandbox: &Sandbox, sid: &str, title: &str, body: &str, javascript: bool) -> TestResult {
     let file = sandbox.path(&format!("home/{title}.html"));
     std::fs::write(&file, format!("<!doctype html><title>{title}</title>{body}"))?;
     call(
         sandbox,
         "session.overlay.open",
         Some(sid),
-        json!({ "html": file.to_string_lossy() }),
+        json!({ "html": file.to_string_lossy(), "javascript": javascript }),
     )?;
     eventually(&format!("the page {title} loaded"), || {
         call(sandbox, "tree", None, json!({})).ok().filter(|tree| {
@@ -168,9 +170,9 @@ fn start_live(lavapipe: &Path, executable: &Path, resources: &Path) -> TestResul
 fn load_up(sandbox: &Sandbox) -> TestResult<[String; 3]> {
     let busy = live_session(sandbox)?;
     let spin = "<p>busy</p><script>setTimeout(() => { for (;;) {} }, 300)</script>";
-    load_page(sandbox, &busy, "busy", spin)?;
+    load_page(sandbox, &busy, "busy", spin, true)?;
     let quiet = live_session(sandbox)?;
-    load_page(sandbox, &quiet, "quiet", "<p>quiet</p>")?;
+    load_page(sandbox, &quiet, "quiet", "<p>quiet</p>", false)?;
     let flooding = live_session(sandbox)?;
     let flood = "yes 'ngterm quit test: output while the app quits'\n";
     call(sandbox, "session.type", Some(&flooding), json!({ "text": flood }))?;
@@ -195,8 +197,9 @@ fn app_processes(sandbox: &Sandbox, app: u32) -> TestResult<(Vec<u32>, Vec<u32>,
     Ok((helpers, live, shells))
 }
 
-/// Waits for every one of `pids` to end; the error names the ones left.
-fn wait_gone(pids: &[u32]) -> TestResult {
+/// Waits for every one of `pids` to end; the error names the ones left, with the app's log (`log`), where the
+/// helpers it started write too.
+fn wait_gone(pids: &[u32], log: impl FnOnce() -> String) -> TestResult {
     eventually("the app's processes gone", || {
         pids.iter().all(|pid| !running(*pid)).then_some(())
     })
@@ -210,7 +213,7 @@ fn wait_gone(pids: &[u32]) -> TestResult {
             })
             .collect();
         let stuck: Vec<u32> = pids.iter().copied().filter(|pid| running(*pid)).collect();
-        format!("{err}: still running {left:?}\n{}", stuck_report(&stuck)).into()
+        format!("{err}: still running {left:?}\n{}\n{}", stuck_report(&stuck), log()).into()
     })
 }
 
@@ -327,7 +330,7 @@ fn sigterm_saves_and_quits_within_its_deadline_with_live_sessions_busy_and_pages
         )
         .into());
     }
-    wait_gone(&helpers)?;
+    wait_gone(&helpers, || sandbox.log("primary.log"))?;
     drop(sessions);
     Ok(())
 }

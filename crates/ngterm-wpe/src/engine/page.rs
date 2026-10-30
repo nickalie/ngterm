@@ -165,8 +165,12 @@ impl Page {
         self.web_view.terminate_web_process();
     }
 
-    /// The web process ended: a fall-back reloads the page silently, anything else is reported.
+    /// The web process ended: a fall-back reloads the page silently, anything else is reported; nothing for a closed
+    /// page (its web process ended with it, [`Page::end_web_process`]).
     fn terminated(&self, reason: Termination) {
+        if self.closed.get() {
+            return;
+        }
         if reason == Termination::TerminatedByApi && self.falling_back.replace(false) {
             self.web_view.reload();
             return;
@@ -226,6 +230,21 @@ impl Page {
         }
         self.web_view.stop_loading();
         self.view.detach();
+    }
+
+    /// Ends the web process of the closed page at once (the engine's stop), so it never outlives the engine's
+    /// process. Left to itself it would end only once its main thread saw the UI process go, and that path does not
+    /// end cleanly: `WebKit`'s `GLib` ports stop the web process's main loop there for a normal exit, a main thread
+    /// that never gets back to it (a page spinning in a script) has the process abort with a core dump 10 s on
+    /// (`crashAfter10Seconds` in `Source/WebKit/WebProcess/WebProcess.cpp` at `wpewebkit-2.54.1`), long after the app
+    /// is gone, and now and then even an idle page's process aborts on a release assertion of its own on the way
+    /// (`WTF::releaseAssertIsCurrent`, `Source/WTF/wtf/RunLoop.h`). Ended through `WebKit`
+    /// (`webkit_web_view_terminate_web_process`, a `SIGKILL` from its process launcher), it goes at once and dumps
+    /// nothing; what it held that lasts (cookies, storage) lives in the network process, which ends on its own. macOS's
+    /// `WebKit` ends its web processes as abruptly when the UI process goes (`callExit`, an `_exit` off the main
+    /// thread).
+    pub(crate) fn end_web_process(&self) {
+        self.web_view.terminate_web_process();
     }
 
     // MARK: - input

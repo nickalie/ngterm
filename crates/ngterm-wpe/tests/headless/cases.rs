@@ -8,7 +8,7 @@ use ngterm_wpe::{
     SessionSpec, Settings, StartError, UserScript, fourcc,
 };
 
-use crate::support::{Harness, Outcome, SCHEME, Server, data_url, ensure};
+use crate::support::{Harness, Outcome, SCHEME, Server, ensure, page};
 
 /// What the cases share besides the engine.
 pub struct Context {
@@ -69,10 +69,6 @@ pub const CASES: &[(&str, Case)] = &[
 
 const RED: (u8, u8, u8) = (0xc0, 0x30, 0x30);
 const BLUE: (u8, u8, u8) = (0x30, 0x30, 0xc0);
-
-fn page(body: &str) -> Load {
-    Load::Uri(data_url(&format!("<html><body style='margin:0'>{body}</body></html>")))
-}
 
 // MARK: - frames
 
