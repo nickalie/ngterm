@@ -5,7 +5,7 @@ use std::error::Error;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -16,7 +16,7 @@ use ngterm_core::{Core, CoreConfig, CoreState};
 use ngterm_host::MainLoop;
 use ngterm_host::fakes::FakeMainLoop;
 use ngterm_proto::{AppIdentity, Request, Response};
-use ngterm_server::{ControlServer, Reply};
+use ngterm_server::{Connection, ControlServer, Reply};
 use tempfile::TempDir;
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -24,9 +24,14 @@ type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 const NGTERMCTL: &str = env!("CARGO_BIN_EXE_ngtermctl");
 const NOT_RUNNING: &str = "ngterm may be stopped or unable to accept connections";
 
-/// A short temp dir: socket paths must stay under 104 bytes whatever `TMPDIR` is.
+/// A short temp dir: socket paths must stay under 104 bytes whatever `TMPDIR` is. Windows has no such limit (the
+/// pipe's name is derived from the path), and no `/tmp`.
 fn short_dir() -> io::Result<TempDir> {
-    tempfile::Builder::new().prefix("agc").tempdir_in("/tmp")
+    #[cfg(unix)]
+    let root = PathBuf::from("/tmp");
+    #[cfg(windows)]
+    let root = std::env::temp_dir();
+    tempfile::Builder::new().prefix("agc").tempdir_in(root)
 }
 
 /// A server on `<dir>/ngterm.sock` answering through `handler` on a fake main loop. Fields drop top to bottom: the
@@ -116,6 +121,19 @@ where
     Ok(command.output()?)
 }
 
+/// `path` resolved as `ngtermctl` prints its own location: canonical, and on Windows without the verbatim `\\?\`
+/// prefix `canonicalize` adds.
+fn real_path(path: impl AsRef<Path>) -> io::Result<PathBuf> {
+    let path = fs::canonicalize(path)?;
+    #[cfg(windows)]
+    if let Some(rest) = path.to_str().and_then(|text| text.strip_prefix(r"\\?\"))
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        return Ok(PathBuf::from(rest));
+    }
+    Ok(path)
+}
+
 fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
@@ -127,7 +145,9 @@ fn outcome(output: &Output) -> (Option<i32>, String, String) {
 
 /// A socket file no socket is bound to, as a dead instance leaves behind: a connect to it is refused. Made with
 /// `mknod`, not by binding a listener and dropping it: a sibling test's spawn copies the listener's fd into a child
-/// that holds it until its `exec`, and a connect in that window is accepted into the backlog and then reset.
+/// that holds it until its `exec`, and a connect in that window is accepted into the backlog and then reset. Unix
+/// only: a Windows pipe ends with its server, so no endpoint is ever left stale.
+#[cfg(unix)]
 fn stale_socket(path: &Path) -> TestResult {
     let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())?;
     // SAFETY: `path` is a NUL-terminated string that outlives the call.
@@ -144,7 +164,7 @@ fn connect_failure(socket: &Path, reason: &str, hint: &str) -> String {
 /// The server's own `version` response line, newline included, read straight off the socket: what `--json` must
 /// print byte for byte.
 fn version_line(socket: &Path) -> TestResult<String> {
-    let mut stream = UnixStream::connect(socket)?;
+    let mut stream = ngterm_server::connect(socket)?;
     stream.write_all(b"{\"cmd\":\"version\"}\n")?;
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
@@ -161,7 +181,7 @@ fn version_prints_the_app_then_the_client() -> TestResult {
         &[],
         [OsStr::new("version"), OsStr::new("--socket"), socket.as_os_str()],
     )?;
-    let client = fs::canonicalize(NGTERMCTL)?;
+    let client = real_path(NGTERMCTL)?;
     let expected = format!("0.1.0 (abc1234)\nclient: {}\n", client.display());
     assert_eq!(outcome(&output), (Some(0), expected, String::new()));
     Ok(())
@@ -187,7 +207,7 @@ fn version_prints_the_installed_build_between_the_app_and_the_client_when_it_dif
             [OsStr::new("version"), OsStr::new("--socket"), socket.as_os_str()],
         )
     };
-    let client = fs::canonicalize(NGTERMCTL)?;
+    let client = real_path(NGTERMCTL)?;
     let expected = format!(
         "0.1.0 (abc1234)\ninstalled: 0.2.0 (def5678)\nclient: {}\n",
         client.display()
@@ -329,6 +349,10 @@ fn the_app_socket_variables_are_not_read() -> TestResult {
     Ok(())
 }
 
+/// Unix only: on Windows the default is under the account's local application data known folder, which no variable
+/// redirects, so a test could only reach it by serving where a real instance would; ngterm-core's paths tests cover
+/// that resolution.
+#[cfg(unix)]
 #[test]
 fn without_a_state_dir_the_xdg_data_home_is_the_default() -> TestResult {
     let dir = short_dir()?;
@@ -339,6 +363,7 @@ fn without_a_state_dir_the_xdg_data_home_is_the_default() -> TestResult {
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn a_refused_connection_exits_1_with_the_error() -> TestResult {
     let dir = short_dir()?;
@@ -354,6 +379,8 @@ fn a_refused_connection_exits_1_with_the_error() -> TestResult {
     Ok(())
 }
 
+/// Linux only: only there does the CLI see the ownership lock (`/proc/locks`).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_present_owner_that_does_not_accept_is_named() -> TestResult {
     let dir = short_dir()?;
@@ -372,6 +399,8 @@ fn a_present_owner_that_does_not_accept_is_named() -> TestResult {
     Ok(())
 }
 
+/// Unix only: a Windows pipe's name is derived from the path, so no path is too long for it.
+#[cfg(unix)]
 #[test]
 fn an_over_long_socket_path_is_refused_locally() -> TestResult {
     let dir = short_dir()?;
@@ -604,6 +633,7 @@ fn help_wraps_to_the_columns_variable() -> TestResult {
 
 /// Runs `ngtermctl args` with stdout on a pipe whose reader is already gone, as `ngtermctl tree | head -1` once
 /// `head` exits.
+#[cfg(unix)]
 fn run_into_closed_pipe(root: &Path, args: &[&OsStr]) -> TestResult<Output> {
     let (reader, writer) = io::pipe()?;
     drop(reader);
@@ -612,6 +642,7 @@ fn run_into_closed_pipe(root: &Path, args: &[&OsStr]) -> TestResult<Output> {
     Ok(command.output()?)
 }
 
+#[cfg(unix)]
 #[test]
 fn a_closed_stdout_ends_the_run_by_sigpipe_not_a_panic() -> TestResult {
     let dir = short_dir()?;
@@ -939,8 +970,8 @@ fn live_tree_and_present_send_their_args_and_print_the_sessions() -> TestResult 
         assert_eq!(
             outcome(&output),
             (Some(0), printed, String::new()),
-            "{args:?}, killed by signal {:?}",
-            output.status.signal()
+            "{args:?}, {}",
+            output.status
         );
     }
     Ok(())
@@ -1735,6 +1766,8 @@ fn event_ring(socket: &Path, first: serde_json::Value) -> TestResult<Server<usiz
 fn events_print_each_page_in_local_time_until_the_server_refuses() -> TestResult {
     let dir = short_dir()?;
     let refused = "Error: event cursor expired\n".to_owned();
+    // `TZ` is the C library's: Windows reads the system's zone, which no variable of the process changes
+    #[cfg(unix)]
     for (zone, printed) in [
         ("UTC", "00:00:10 status api active blink\n01:01:01 tree.changed win\n"),
         // POSIX spells three hours east of UTC with a minus
@@ -3517,7 +3550,7 @@ fn a_refused_page_claim_exits_1_with_the_reason_on_stderr() -> TestResult {
 struct EchoPage(std::sync::mpsc::Sender<Vec<u8>>);
 
 impl ngterm_server::StreamOwner for EchoPage {
-    fn adopt(self: Box<Self>, socket: UnixStream, pending: Vec<u8>) {
+    fn adopt(self: Box<Self>, socket: Connection, pending: Vec<u8>) {
         let mut reader = BufReader::new(io::Read::chain(&pending[..], &socket));
         let mut line = Vec::new();
         if reader.read_until(b'\n', &mut line).is_err() {
@@ -4635,7 +4668,7 @@ fn sidebar_refusals_are_usage_errors_before_connecting() -> TestResult {
 
 /// Sends one raw request line and returns the reply line.
 fn request_line(socket: &Path, line: &str) -> TestResult<String> {
-    let mut stream = UnixStream::connect(socket)?;
+    let mut stream = ngterm_server::connect(socket)?;
     stream.write_all(format!("{line}\n").as_bytes())?;
     let mut reply = String::new();
     BufReader::new(stream).read_line(&mut reply)?;
@@ -4683,6 +4716,7 @@ fn session_wait_reads_the_current_status_through_the_composite() -> TestResult {
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn session_wait_times_out_while_the_app_never_answers() -> TestResult {
     let dir = short_dir()?;
@@ -4724,7 +4758,7 @@ fn session_wait_times_out_while_the_app_never_answers() -> TestResult {
         "{elapsed:?}"
     );
     // a second connect ends the holder, whose streams drop with it
-    drop(UnixStream::connect(&socket));
+    drop(std::os::unix::net::UnixStream::connect(&socket));
     drop(holder.join());
     Ok(())
 }

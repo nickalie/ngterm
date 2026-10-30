@@ -6,14 +6,15 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{self, Write};
-use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use ngterm_core::command_restore::shell_quoted_line;
 
 use crate::Failure;
-use crate::local::{SigpipeIgnored, close_inherited_descriptors, exit_status, reset_signals};
+use crate::local::{SigpipeIgnored, exit_status};
+#[cfg(unix)]
+use crate::local::{close_inherited_descriptors, reset_signals};
 use crate::version::client_path;
 
 /// The entry this installs.
@@ -347,7 +348,9 @@ fn dump(directory: &Path, infocmp: &Path) -> Result<Vec<u8>, InstallFailure> {
 /// Runs ssh with the source on its stdin. The child stays in the caller's process group (ssh reads its password and
 /// host-key prompts from the controlling tty, and a background group doing that is stopped by SIGTTIN), inherits only
 /// its standard three descriptors (upstream's `POSIX_SPAWN_CLOEXEC_DEFAULT`), and starts with every signal unblocked and
-/// at its default action, whatever the caller blocks or ignores.
+/// at its default action, whatever the caller blocks or ignores. On Windows, which has neither signals nor process
+/// groups of this kind, ssh gets the standard three handles and whatever handles its caller made inheritable, as
+/// any Windows child does; the CLI opens none of its own inheritable.
 fn install(
     argv: &[String],
     source: &[u8],
@@ -366,9 +369,10 @@ fn install(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     // SAFETY: the hook only makes async-signal-safe calls (`sigemptyset` on its own stack, `sigprocmask`, `signal`,
-    // `close_range`) and touches no memory of the parent.
+    // `close_range`, `fcntl`) and touches no memory of the parent.
+    #[cfg(unix)]
     unsafe {
-        command.pre_exec(|| {
+        std::os::unix::process::CommandExt::pre_exec(&mut command, || {
             reset_signals();
             close_inherited_descriptors();
             Ok(())
@@ -388,7 +392,11 @@ fn install(
         operation: "waitpid".to_owned(),
         reason: crate::client::os_message(&error),
     })?;
-    Ok(match status.signal() {
+    #[cfg(unix)]
+    let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+    #[cfg(windows)]
+    let signal = None;
+    Ok(match signal {
         Some(signal) => Outcome::Signaled(signal),
         None => Outcome::Exited(status.code().unwrap_or(-1)),
     })

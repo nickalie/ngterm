@@ -248,7 +248,7 @@ impl StreamState {
     /// answers first. It is kept for parity with upstream. Without a cursor there is
     /// nothing to keep, so a first read fails fast.
     pub(crate) fn retry_delay(&mut self, error: &ClientError) -> Option<Duration> {
-        let refused = error.connect_errno == Some(libc::ECONNREFUSED);
+        let refused = error.connect_error == Some(std::io::ErrorKind::ConnectionRefused);
         if self.cursor.is_none() || !refused || self.retried_for >= RETRY_BUDGET {
             return None;
         }
@@ -304,6 +304,7 @@ impl Zone {
 }
 
 /// The local zone's offset east of UTC at `seconds` since the epoch, 0 when the C library cannot say.
+#[cfg(unix)]
 fn local_offset(seconds: i64) -> i64 {
     let time: libc::time_t = seconds;
     // SAFETY: `tm` is plain integers and a `tm_zone` pointer, for which all-zero is a valid (null) value.
@@ -311,6 +312,50 @@ fn local_offset(seconds: i64) -> i64 {
     // SAFETY: both pointers are to live locals; the reentrant form writes only `tm`.
     let converted = unsafe { libc::localtime_r(&raw const time, &raw mut tm) };
     if converted.is_null() { 0 } else { tm.tm_gmtoff }
+}
+
+/// The local zone's offset east of UTC at `seconds` since the epoch, 0 when Windows cannot say: the instant as
+/// local time (`SystemTimeToTzSpecificLocalTime` under the current zone and its daylight rule for that year) less
+/// the instant itself, the CRT's `tm` having no `tm_gmtoff`.
+#[cfg(windows)]
+fn local_offset(seconds: i64) -> i64 {
+    use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
+    use windows_sys::Win32::System::Time::{
+        FileTimeToSystemTime, SystemTimeToFileTime, SystemTimeToTzSpecificLocalTime,
+    };
+
+    /// `FILETIME` counts 100 ns ticks since 1601-01-01, this many before the Unix epoch.
+    const EPOCH_TICKS: i64 = 116_444_736_000_000_000;
+    const TICKS_PER_SECOND: i64 = 10_000_000;
+
+    fn file_time(ticks: i64) -> Option<FILETIME> {
+        let ticks = u64::try_from(ticks).ok()?;
+        Some(FILETIME {
+            dwLowDateTime: u32::try_from(ticks & 0xffff_ffff).ok()?,
+            dwHighDateTime: u32::try_from(ticks >> 32).ok()?,
+        })
+    }
+
+    let Some(utc_file) = seconds
+        .checked_mul(TICKS_PER_SECOND)
+        .and_then(|ticks| ticks.checked_add(EPOCH_TICKS))
+        .and_then(file_time)
+    else {
+        return 0;
+    };
+    let (mut utc, mut local) = (SYSTEMTIME::default(), SYSTEMTIME::default());
+    let mut local_file = FILETIME::default();
+    // SAFETY: each pointer is to a live local of the type the call takes; a null zone means the current one.
+    let converted = unsafe { FileTimeToSystemTime(&raw const utc_file, &raw mut utc) } != 0
+        // SAFETY: as above.
+        && unsafe { SystemTimeToTzSpecificLocalTime(std::ptr::null(), &raw const utc, &raw mut local) } != 0
+        // SAFETY: as above.
+        && unsafe { SystemTimeToFileTime(&raw const local, &raw mut local_file) } != 0;
+    if !converted {
+        return 0;
+    }
+    let ticks = |time: FILETIME| (i64::from(time.dwHighDateTime) << 32) | i64::from(time.dwLowDateTime);
+    (ticks(local_file) - ticks(utc_file)) / TICKS_PER_SECOND
 }
 
 /// Whole seconds since the epoch, rounded down.
@@ -430,7 +475,7 @@ mod tests {
     fn refused() -> ClientError {
         ClientError {
             message: "connect failed: Connection refused".to_owned(),
-            connect_errno: Some(libc::ECONNREFUSED),
+            connect_error: Some(std::io::ErrorKind::ConnectionRefused),
         }
     }
 
@@ -469,7 +514,7 @@ mod tests {
 
         fn write_line(&mut self, line: &str) -> io::Result<()> {
             if self.broken_stdout {
-                return Err(io::Error::from_raw_os_error(libc::EIO));
+                return Err(io::Error::other("Input/output error"));
             }
             self.lines.push(line.to_owned());
             Ok(())
@@ -704,7 +749,7 @@ mod tests {
     fn only_a_refused_connect_with_a_cursor_is_retried() {
         let missing = ClientError {
             message: "connect failed".to_owned(),
-            connect_errno: Some(libc::ENOENT),
+            connect_error: Some(std::io::ErrorKind::NotFound),
         };
         let fatal = [
             (parsed(&[]).unwrap(), refused()),

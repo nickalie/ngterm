@@ -3,11 +3,10 @@
 # checks as steps of the `crates` job. No Miri job: it ran the Rust VT port's memory core (page buffers, its
 # allocators), which left this branch with the port (branch `rust-vt-port`). The rest of the workspace (GPUI, WPE)
 # is checked on Linux only, in rust-linux.yml. ngterm-server (the control socket: AF_UNIX on Linux and macOS, a named
-# pipe on Windows) is in PACKAGES. ngterm-ctl (the CLI, tested against the server) is meant to be cross-platform and
-# is not in PACKAGES yet: it builds on Linux only (an AF_UNIX client, `close_range`, `/proc/locks`) and joins once it
-# has its macOS and Windows forms. ngterm-app's hook runner, log file, remote presentation process and agent
-# integrations' installers have their Windows forms beside the Unix ones (macOS takes the Unix forms); its tests that
-# run the agent-status package's POSIX scripts and plugins are Unix-only.
+# pipe on Windows) and ngterm-ctl (the CLI over it, tested against the server; its overlay job in a Job object and
+# its stream bridge on the console on Windows) are in PACKAGES. ngterm-app's hook runner, log file, remote
+# presentation process and agent integrations' installers have their Windows forms beside the Unix ones (macOS takes
+# the Unix forms); its tests that run the agent-status package's POSIX scripts and plugins are Unix-only.
 #
 # libghostty-vt (ngterm-ghostty-vt-sys, its wrapper ngterm-ghostty-vt) builds here from the prefix
 # scripts/build-ghostty-vt.sh prepares with the pinned Zig of each runner's OS and arch (Git Bash on Windows, stock
@@ -38,7 +37,7 @@ env:
   # `-p` per crate; word-split by bash, which every step runs in (Git Bash on Windows)
   PACKAGES: >-
     -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys -p ngterm-ghostty-vt
-    -p ngterm-pty -p ngterm-term -p ngterm-server -p ngterm-app
+    -p ngterm-pty -p ngterm-term -p ngterm-server -p ngterm-ctl -p ngterm-app
 
 defaults:
   run:

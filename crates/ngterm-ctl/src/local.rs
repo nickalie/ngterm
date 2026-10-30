@@ -1,17 +1,33 @@
 //! What the local-only subcommands (`clipboard set`, `terminfo install`) share: they run child processes instead of
 //! talking to the socket.
 
-use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 
 /// SIGPIPE ignored while it lives, the previous action restored on drop. `main` puts SIGPIPE back to its default so a
 /// closed stdout ends the CLI quietly; a write into a child's stdin must instead get `EPIPE` when the child exits
 /// without reading, so its own status is reported (upstream's `F_SETNOSIGPIPE` on the pipe, which Linux lacks). The
 /// disposition is process-wide: the local subcommands run on the main thread, before any output is printed.
+///
+/// Windows has no SIGPIPE: a write to a pipe whose reader is gone fails with an error there, so the guard holds
+/// nothing.
+#[cfg(unix)]
 pub struct SigpipeIgnored {
     previous: libc::sighandler_t,
 }
 
+/// SIGPIPE's guard on Windows, which has no SIGPIPE: nothing to change.
+#[cfg(windows)]
+pub struct SigpipeIgnored;
+
+#[cfg(windows)]
+impl SigpipeIgnored {
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(unix)]
 impl SigpipeIgnored {
     #[must_use]
     pub fn new() -> Self {
@@ -21,6 +37,7 @@ impl SigpipeIgnored {
     }
 }
 
+#[cfg(unix)]
 impl Drop for SigpipeIgnored {
     fn drop(&mut self) {
         if self.previous != libc::SIG_ERR {
@@ -31,9 +48,14 @@ impl Drop for SigpipeIgnored {
 }
 
 /// A child's exit status as Foundation's `terminationStatus` reads it: the exit code, else the signal that ended it.
+/// A Windows process always has an exit code (an `NTSTATUS` for a crash, which reads negative).
 #[must_use]
 pub fn exit_status(status: ExitStatus) -> i32 {
-    status.code().or_else(|| status.signal()).unwrap_or(-1)
+    #[cfg(unix)]
+    let signal = || std::os::unix::process::ExitStatusExt::signal(&status);
+    #[cfg(windows)]
+    let signal = || None;
+    status.code().or_else(signal).unwrap_or(-1)
 }
 
 /// Every signal unblocked and back to its default action, for a child about to exec (upstream's
@@ -41,6 +63,7 @@ pub fn exit_status(status: ExitStatus) -> i32 {
 /// actions survive `exec` (a handler does not), so a caller blocking or ignoring SIGTERM would otherwise leave the
 /// child deaf to it. Only `sigemptyset`, `sigprocmask` and `signal` run, all async-signal-safe, so this may run
 /// between `fork` and `exec`.
+#[cfg(unix)]
 pub fn reset_signals() {
     // SAFETY: a zeroed set is initialized by `sigemptyset` before use.
     let mut none: libc::sigset_t = unsafe { std::mem::zeroed() };
@@ -60,9 +83,26 @@ pub fn reset_signals() {
 /// but one the caller leaked would otherwise reach the child. Marked rather than closed, so std's own exec-error pipe
 /// still reports a failed exec. `close_range` is a plain system call, safe between `fork` and `exec`; a kernel older
 /// than 5.11 refuses the flag and the descriptors stay as they are.
+#[cfg(target_os = "linux")]
 pub fn close_inherited_descriptors() {
     // SAFETY: `close_range` takes plain integers and only changes descriptor flags.
     unsafe { libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, libc::CLOSE_RANGE_CLOEXEC) };
+}
+
+/// Marks every descriptor above the standard three close-on-exec, for a child about to exec, as the Linux form
+/// does; macOS has no `close_range`, so each descriptor below the process's limit (capped, as a raised limit can be
+/// in the millions) gets `FD_CLOEXEC` by `fcntl`, which is async-signal-safe. A number that is not open answers
+/// `EBADF` and is skipped.
+#[cfg(all(unix, not(target_os = "linux")))]
+pub fn close_inherited_descriptors() {
+    /// The highest descriptor number marked: far above what the CLI's caller leaks in practice.
+    const MAX_DESCRIPTORS: libc::c_int = 1 << 16;
+    // SAFETY: `getdtablesize` only reads the process's descriptor limit.
+    let limit = unsafe { libc::getdtablesize() }.clamp(3, MAX_DESCRIPTORS);
+    for fd in 3..limit {
+        // SAFETY: `fcntl` takes any descriptor number; one that is not open is an error, not undefined behavior.
+        unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
 }
 
 /// Running a test as the real binary runs, with SIGPIPE at its default action. std ignores SIGPIPE before the test
@@ -70,6 +110,7 @@ pub fn close_inherited_descriptors() {
 /// harness passes whether or not the guard does anything. Setting the default in the harness itself would let a
 /// concurrent test's `EPIPE` kill the whole test binary, so the test runs again, alone, in a fresh copy of the binary.
 #[cfg(test)]
+#[cfg(unix)]
 pub mod default_sigpipe {
     use std::os::unix::process::ExitStatusExt;
     use std::process::Command;
@@ -109,6 +150,21 @@ pub mod default_sigpipe {
 }
 
 #[cfg(test)]
+#[cfg(windows)]
+mod windows_tests {
+    use std::process::Command;
+
+    use super::*;
+
+    #[test]
+    fn an_exit_code_reads_as_itself() {
+        let exited = Command::new("cmd.exe").args(["/d", "/c", "exit 7"]).status().unwrap();
+        assert_eq!(exit_status(exited), 7);
+    }
+}
+
+#[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use std::process::Command;
 

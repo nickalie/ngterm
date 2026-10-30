@@ -14,18 +14,40 @@ path = "src/main.rs"
 [dependencies]
 ngterm-proto.workspace = true
 ngterm-core.workspace = true
+# the control socket's client end: `AF_UNIX`, or the named pipe on Windows
+ngterm-server.workspace = true
 base64.workspace = true
 clap.workspace = true
-libc.workspace = true
 serde_json.workspace = true
 strum.workspace = true
 uuid.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# signals, process groups, the tty, `poll`, `close_range`, `localtime_r`
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# the overlay job's Job object and console Ctrl events, the console's modes and size, the local time zone, and the
+# cancel of a stdin read
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+] }
+
 [dev-dependencies]
 ngterm-host ={ workspace = true, features = ["fakes"] }
-ngterm-server.workspace = true
 serde_norway.workspace = true
 tempfile.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+# the tests' stale socket (`mknod`), signal masks and process probes
+libc.workspace = true
 
 [lints]
 workspace = true
