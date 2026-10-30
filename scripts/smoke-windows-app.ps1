@@ -256,12 +256,11 @@ function Wait-Quick([string] $marker) {
     return $false
 }
 
-# The desktop integrations' helpers: a chord pressed on the desktop (`keybd_event`, as any keyboard), the toast found
-# on screen by UI Automation and clicked, and a window message whose answer is not waited for.
-Add-Type -ReferencedAssemblies UIAutomationClient, UIAutomationTypes, WindowsBase -TypeDefinition @'
+# The desktop integrations' helpers: keys pressed on the desktop (`keybd_event`, as any keyboard), a click, a keyboard
+# layout loaded for the session, and a window message whose answer is not waited for.
+Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
-using System.Windows.Automation;
 public static class SmokeDesktop {
     [DllImport("user32.dll")]
     static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
@@ -279,35 +278,21 @@ public static class SmokeDesktop {
     static extern int GetKeyboardLayoutList(int count, IntPtr[] list);
     [DllImport("user32.dll")]
     static extern bool PostMessageW(IntPtr window, uint msg, UIntPtr w, IntPtr l);
-    // presses the virtual keys in order and releases them in reverse, each with its scan code
-    public static void Chord(byte[] keys) {
+    // presses the virtual keys in order, each with its scan code
+    public static void Press(byte[] keys) {
         foreach (byte key in keys) { keybd_event(key, (byte)MapVirtualKeyW(key, 0), 0, UIntPtr.Zero); }
-        System.Threading.Thread.Sleep(50);
+    }
+    // releases them in reverse
+    public static void Release(byte[] keys) {
         for (int i = keys.Length - 1; i >= 0; i--) {
             keybd_event(keys[i], (byte)MapVirtualKeyW(keys[i], 0), 2, UIntPtr.Zero);
         }
     }
-    // the on-screen element whose name holds `text` in a toast's window, clicked at its center; false when none shows
-    public static bool ClickToast(string text, int timeoutMs) {
-        DateTime deadline = DateTime.Now.AddMilliseconds(timeoutMs);
-        Condition windows = new PropertyCondition(AutomationElement.ClassNameProperty, "Windows.UI.Core.CoreWindow");
-        while (DateTime.Now < deadline) {
-            foreach (AutomationElement window in AutomationElement.RootElement.FindAll(TreeScope.Children, windows)) {
-                foreach (AutomationElement element in window.FindAll(TreeScope.Descendants, Condition.TrueCondition)) {
-                    string name = element.Current.Name;
-                    if (name == null || name.IndexOf(text, StringComparison.Ordinal) < 0) { continue; }
-                    System.Windows.Rect box = element.Current.BoundingRectangle;
-                    if (box.IsEmpty || box.Width < 1) { continue; }
-                    int x = (int)(box.X + box.Width / 2), y = (int)(box.Y + box.Height / 2);
-                    SetCursorPos(x, y);
-                    mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
-                    mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
-                    return true;
-                }
-            }
-            System.Threading.Thread.Sleep(300);
-        }
-        return false;
+    // a left click at the screen point
+    public static void Click(int x, int y) {
+        SetCursorPos(x, y);
+        mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
     }
     // loads a keyboard layout for the session; IntPtr.Zero when it was loaded already (so it is not unloaded after)
     public static IntPtr LoadLayout(string klid) {
@@ -323,6 +308,37 @@ public static class SmokeDesktop {
     }
 }
 '@
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+
+# A chord pressed on the desktop: the keys down in order, up in reverse.
+function Send-Chord([byte[]] $keys) {
+    [SmokeDesktop]::Press($keys)
+    Start-Sleep -Milliseconds 50
+    [SmokeDesktop]::Release($keys)
+}
+
+# The on-screen element of a toast's window whose name holds `text`, clicked at its center; false when none shows.
+function Click-Toast([string] $text) {
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    $automation = [System.Windows.Automation.AutomationElement]
+    $windows = New-Object System.Windows.Automation.PropertyCondition($automation::ClassNameProperty, 'Windows.UI.Core.CoreWindow')
+    do {
+        foreach ($window in $automation::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $windows)) {
+            $all = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+            foreach ($element in $all) {
+                $name = $element.Current.Name
+                if (-not $name -or -not $name.Contains($text)) { continue }
+                $box = $element.Current.BoundingRectangle
+                if ($box.IsEmpty -or $box.Width -lt 1) { continue }
+                Log "toast element '$name' at $box"
+                [SmokeDesktop]::Click([int]($box.X + $box.Width / 2), [int]($box.Y + $box.Height / 2))
+                return $true
+            }
+        }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
 
 # The app's toasts in the notification center (Windows PowerShell's WinRT projection, from a helper of its own): one
 # `group|tag|xml` line each.
@@ -521,12 +537,12 @@ try {
         Check ([SmokeWindows]::Raise([uint32]$notepad.Id)) 'Notepad has the keyboard'
         Start-Sleep -Milliseconds 500
         # Ctrl, Shift and the key left of 1 (VK_OEM_3 on the US layout)
-        [SmokeDesktop]::Chord([byte[]](0x11, 0x10, 0xC0))
+        Send-Chord ([byte[]](0x11, 0x10, 0xC0))
         Check (Wait-Quick-Visible $true) 'the global hotkey pressed in Notepad shows the quick terminal'
         Check (Wait-Log 'global hotkey: pressed') 'the press reached the main loop'
         Start-Sleep -Seconds 1
         Save-Screen 'hotkey.png'
-        [SmokeDesktop]::Chord([byte[]](0x11, 0x10, 0xC0))
+        Send-Chord ([byte[]](0x11, 0x10, 0xC0))
         Check (Wait-Quick-Visible $false) 'the global hotkey pressed again hides it'
     } finally {
         Stop-Process -Id $notepad.Id -Force -ErrorAction SilentlyContinue
@@ -545,7 +561,7 @@ try {
     Check (Wait-Toasts { param($t) $slot = @($t | Where-Object { $_ -match "\|${second}:notify\|" }); $slot.Count -eq 1 -and $slot[0] -match 'smoke-toast-two' }) 'a second notify replaces the toast in its slot'
     Start-Sleep -Seconds 1
     Save-Screen 'toast.png'
-    Check ([SmokeDesktop]::ClickToast('smoke-toast-two', 15000)) 'the toast is on screen and clicked'
+    Check (Click-Toast 'smoke-toast-two') 'the toast is on screen and clicked'
     Check (Wait-Log 'notify: toast clicked') 'the click reached the app'
     Check (Wait-Active $second) 'the click reveals the notified session'
     Start-Sleep -Seconds 1
