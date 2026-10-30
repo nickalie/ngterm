@@ -4615,6 +4615,7 @@ dependencies = [
  "async-channel",
  "cosmic-text",
  "fancy-regex",
+ "futures-lite",
  "futures-util",
  "gio",
  "gpui-kit",
