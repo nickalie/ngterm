@@ -46,7 +46,18 @@ WAIT_TIMEOUT = 0x102
 INFINITE = 0xFFFFFFFF
 # The pipe's end is gone: a read sees the end of the stream, a write a broken pipe.
 PIPE_GONE = frozenset({ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED})
+# winbase.h, which `_winapi` does not all export
+PIPE_ACCESS_DUPLEX = 0x3
+FILE_FLAG_FIRST_PIPE_INSTANCE = 0x0008_0000
+FILE_FLAG_OVERLAPPED = 0x4000_0000
+PIPE_TYPE_BYTE = 0x0
+PIPE_READMODE_BYTE = 0x0
+PIPE_WAIT = 0x0
 PIPE_REJECT_REMOTE_CLIENTS = 0x8
+PIPE_UNLIMITED_INSTANCES = 255
+GENERIC_READ = 0x8000_0000
+GENERIC_WRITE = 0x4000_0000
+OPEN_EXISTING = 3
 
 
 def fnv1a64(data: bytes) -> str:
@@ -118,13 +129,7 @@ class PipeConnection:
         while True:
             try:
                 handle = _winapi.CreateFile(
-                    name,
-                    _winapi.GENERIC_READ | _winapi.GENERIC_WRITE,
-                    0,
-                    _winapi.NULL,
-                    _winapi.OPEN_EXISTING,
-                    _winapi.FILE_FLAG_OVERLAPPED,
-                    _winapi.NULL,
+                    name, GENERIC_READ | GENERIC_WRITE, 0, _winapi.NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, _winapi.NULL
                 )
             except OSError as error:
                 if error.winerror != ERROR_PIPE_BUSY:
@@ -264,14 +269,14 @@ class Listener:
     def _instance(self, first: bool = False) -> int:
         import _winapi
 
-        flags = _winapi.PIPE_ACCESS_DUPLEX | _winapi.FILE_FLAG_OVERLAPPED
+        flags = PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED
         if first:
-            flags |= _winapi.FILE_FLAG_FIRST_PIPE_INSTANCE
+            flags |= FILE_FLAG_FIRST_PIPE_INSTANCE
         return _winapi.CreateNamedPipe(
             self.name,
             flags,
-            _winapi.PIPE_TYPE_BYTE | _winapi.PIPE_READMODE_BYTE | _winapi.PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-            _winapi.PIPE_UNLIMITED_INSTANCES,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_UNLIMITED_INSTANCES,
             PIPE_BUFFER_BYTES,
             PIPE_BUFFER_BYTES,
             0,
