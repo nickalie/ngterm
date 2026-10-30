@@ -368,7 +368,8 @@ fn open_refusals_check_a_chromeless_url_page() {
 /// A file page's flags and its `--cwd` grant.
 #[test]
 fn open_refusals_check_a_file_page_and_its_grant() {
-    let file = "/agterm-conformance/site/page.html";
+    let file = crate::html::os_path("/agterm-conformance/site/page.html");
+    let file = file.as_str();
     let url = "http://127.0.0.1:9/page.html";
     assert_open_refusals(&[
         (
@@ -400,19 +401,24 @@ fn open_refusals_check_a_file_page_and_its_grant() {
             "session.overlay.open: html file must be an absolute path",
         ),
         (
-            json!({"html": file, "cwd": "/"}),
+            json!({"html": file, "cwd": crate::html::os_path("/")}),
             "session.overlay.open: cwd must not be / or the home directory",
         ),
         (
             json!({"html": file, "cwd": "/home/u"}),
-            "session.overlay.open: cwd must not be / or the home directory",
+            // the fixture's home, `/home/u`, which Windows reads as relative to the current drive
+            if cfg!(windows) {
+                "session.overlay.open: cwd must be an absolute path"
+            } else {
+                "session.overlay.open: cwd must not be / or the home directory"
+            },
         ),
         (
             json!({"html": file, "cwd": file}),
             "session.overlay.open: cwd must be a directory containing the html file",
         ),
         (
-            json!({"html": file, "cwd": "/other"}),
+            json!({"html": file, "cwd": crate::html::os_path("/other")}),
             "session.overlay.open: html file is outside cwd",
         ),
     ]);
@@ -610,7 +616,7 @@ fn page_commands_need_a_page_and_a_build_without_web_views_refuses_pages() {
             failure(error)
         );
     }
-    let page = args(|a| a.html = Some("/tmp/page.html".into()));
+    let page = args(|a| a.html = Some(crate::html::os_path("/tmp/page.html")));
     assert!(overlay(&mut fixture, SessionCmd::OverlayClose, id, |_| {}).ok);
     assert_eq!(
         fixture.session(SessionCmd::OverlayOpen, Some(&wire(id)), page),

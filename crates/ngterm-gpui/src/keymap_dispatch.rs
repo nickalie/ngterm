@@ -162,6 +162,37 @@ pub fn menu_action(stroke: &KeyStroke) -> Option<BuiltinAction> {
     ROUTER.with_borrow(|router| router.menu.get(&chord).copied())
 }
 
+/// Whether the keymap or the window's own keys would take `stroke` now, changing nothing: a key pressed in an HTML
+/// page's native web view (Windows, `html_overlay::webview2::keys`) goes to the window only then, every other key
+/// staying the page's. The window's own keys there are Ctrl+Tab's switcher.
+#[cfg(all(feature = "html", windows))]
+#[must_use]
+pub fn takes(stroke: &KeyStroke) -> bool {
+    let Some(chord) = input::chord(stroke) else {
+        return false;
+    };
+    if chord.key == "tab" && chord.mods.contains(ngterm_core::keymap::Modifiers::CONTROL) {
+        return true;
+    }
+    ROUTER.with_borrow(|router| {
+        router.menu.contains_key(&chord)
+            || router
+                .engine
+                .as_ref()
+                .is_some_and(|engine| !matches!(engine.clone().advance(&chord), EngineOutcome::Unmatched))
+    })
+}
+
+/// Lets go of `keystroke`, a press dispatched for an HTML page's native web view (`takes`), whose release the window
+/// never sees.
+#[cfg(all(feature = "html", windows))]
+pub fn release_dispatched(keystroke: &gpui_kit::Keystroke) {
+    let stroke = KeyStroke::new(keystroke, &input::Source::Keystroke, true);
+    ROUTER.with_borrow_mut(|router| {
+        router.release(stroke.identity, Instant::now());
+    });
+}
+
 /// What fired since the last call (tests).
 #[cfg(test)]
 pub(crate) fn take_fired() -> Vec<Fired> {

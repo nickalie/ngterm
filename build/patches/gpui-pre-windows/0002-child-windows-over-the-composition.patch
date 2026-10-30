@@ -1,0 +1,19 @@
+Child windows over the window's DirectComposition visual (Task 6 of docs/plans/20261029-windows-support.md): GPUI
+composes its swap chain into a DirectComposition target made topmost over the window, which draws over every child
+window, so a native child (the HTML overlays' `WebView2` pages, ngterm-gpui's `html_overlay/webview2`) would never
+show. The target is made beneath the child windows instead; GPUI has none of its own, so nothing else it draws moves.
+scripts/vendor-gpui.sh applies this to the verified crates.io archive.
+
+diff -ruN a/src/directx_renderer.rs b/src/directx_renderer.rs
+--- a/src/directx_renderer.rs
++++ b/src/directx_renderer.rs
+@@ -1014,7 +1014,8 @@
+ impl DirectComposition {
+     pub fn new(dxgi_device: &IDXGIDevice, hwnd: HWND) -> Result<Self> {
+         let comp_device = get_comp_device(dxgi_device)?;
+-        let comp_target = unsafe { comp_device.CreateTargetForHwnd(hwnd, true) }?;
++        // beneath the child windows (ngterm: a native child, a `WebView2` page, shows over GPUI)
++        let comp_target = unsafe { comp_device.CreateTargetForHwnd(hwnd, false) }?;
+         let comp_visual = unsafe { comp_device.CreateVisual() }?;
+ 
+         Ok(Self {

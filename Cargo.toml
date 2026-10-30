@@ -37,6 +37,14 @@ mime_guess = "2.0.5"
 # server-process check), its job and process tables; ngterm-app's hook runner, log file lock, presentation bridge
 # stop and the user PATH the command line tool's install writes.
 windows-sys = "0.61"
+# ngterm-gpui's HTML overlays on Windows (`html_overlay/webview2`): WebView2 through tauri's wry, the standard Rust web
+# view crate, each page a child web view of the GPUI window. No default features: they are its WebKitGTK form.
+wry = { version = "0.57", default-features = false }
+# The WebView2 interfaces wry has no API for (the pages' navigation policy and load events, focus, context menu, script
+# dialogs, the saved store's clear): the bindings wry itself links, and the `windows` crates at the version they take.
+webview2-com = "0.39"
+windows = "0.62"
+windows-core = "0.62"
 # macOS system sounds by name for the status sounds (ngterm-gpui's `status_sound.rs`) and the selection clipboard's
 # private pasteboard (`terminal/selection_clipboard/macos.rs`), features per crate: the AppKit and Foundation bindings
 # of the objc2 project, and the runtime crate for the retained sound the player keeps, the versions GPUI's macOS
@@ -215,7 +223,8 @@ gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
 # Windows Task 4 (docs/plans/20261029-windows-support.md): the native key behind each key event GPUI dispatches on
 # Windows (its scan code, the layout's unshifted character, the modifiers with Shift and those the layout used up),
-# the Windows form of gpui-pre-linux's: vendor/gpui-pre-windows is the verified crates.io source plus
+# the Windows form of gpui-pre-linux's; Task 6: its DirectComposition target beneath the window's child windows, so the
+# HTML overlays' WebView2 pages show: vendor/gpui-pre-windows is the verified crates.io source plus
 # build/patches/gpui-pre-windows.
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 # ngterm-pty's PTY and child: vendor/portable-pty is the verified crates.io source plus build/patches/portable-pty

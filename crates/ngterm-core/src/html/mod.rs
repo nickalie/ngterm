@@ -27,19 +27,22 @@ pub const CWD_IS_FILE: &str = "cwd must be a directory containing the html file"
 pub const OUTSIDE_CWD: &str = "html file is outside cwd";
 
 /// Why a file page and its `--cwd` grant cannot be shown (upstream's `HtmlOverlay.grantError`): the file must be
-/// absolute; a grant must be absolute, neither `/` nor `home`, and a directory holding the file. Paths compare by
-/// their standardized components, `.` and `..` resolved lexically, never through the file system.
+/// absolute; a grant must be absolute, neither the file system's root nor `home`, and a directory holding the file.
+/// Paths compare by their standardized components, `.` and `..` resolved lexically, never through the file system.
+/// On Windows an absolute path names its drive or share (`C:\`, `\\server\share\`), whose root a grant may not be
+/// either, and names compare in any case, as the file system does.
 #[must_use]
 pub fn grant_error(file: &str, grant_root: Option<&str>, home: &str) -> Option<&'static str> {
-    if !file.starts_with('/') {
+    if !is_absolute(file) {
         return Some(FILE_NOT_ABSOLUTE);
     }
     let grant_root = grant_root?;
-    if !grant_root.starts_with('/') {
+    if !is_absolute(grant_root) {
         return Some(CWD_NOT_ABSOLUTE);
     }
     let root = components(grant_root);
-    if root == components("/") || root == components(home) {
+    // a root alone: `/`, or on Windows a drive's or a share's
+    if root.len() == 1 || root == components(home) {
         return Some(CWD_ROOT_OR_HOME);
     }
     let file = components(file);
@@ -55,11 +58,24 @@ pub fn contains(root: &str, path: &str) -> bool {
     components(path).starts_with(&components(root))
 }
 
+/// Whether `path` is absolute on this OS: `/`-rooted on Unix; on Windows rooted on a drive or a share (a `\`-rooted
+/// path is relative to the current drive).
+#[must_use]
+pub fn is_absolute(path: &str) -> bool {
+    if cfg!(windows) {
+        std::path::Path::new(path).is_absolute()
+    } else {
+        path.starts_with('/')
+    }
+}
+
 /// The components of an absolute path as Foundation's `standardizedFileURL.pathComponents` gives them: the root, then
 /// each name, with `.` dropped, `..` taking the previous name off, and empty names (repeated or trailing slashes)
-/// ignored.
-fn components(path: &str) -> Vec<&str> {
-    let mut parts = vec!["/"];
+/// ignored. On Windows the root is the drive or share with its root, both separators split, and every component is
+/// lowercased, since the file system compares names in any case.
+#[cfg(not(windows))]
+fn components(path: &str) -> Vec<String> {
+    let mut parts = vec!["/".to_owned()];
     for part in path.split('/') {
         match part {
             "" | "." => {}
@@ -68,10 +84,31 @@ fn components(path: &str) -> Vec<&str> {
                     parts.pop();
                 }
             }
-            name => parts.push(name),
+            name => parts.push(name.to_owned()),
         }
     }
     parts
+}
+
+#[cfg(windows)]
+fn components(path: &str) -> Vec<String> {
+    use std::path::Component;
+    let mut parts: Vec<String> = Vec::new();
+    let mut root = String::new();
+    for component in std::path::Path::new(path).components() {
+        match component {
+            Component::Prefix(prefix) => root.push_str(&prefix.as_os_str().to_string_lossy()),
+            Component::RootDir => root.push('\\'),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop();
+            }
+            Component::Normal(name) => parts.push(name.to_string_lossy().to_lowercase()),
+        }
+    }
+    let mut all = vec![root.to_lowercase()];
+    all.extend(parts);
+    all
 }
 
 /// The URL of an absolute http or https address with a host, `None` for anything else (upstream's
@@ -413,14 +450,32 @@ impl HtmlOverlay {
     }
 }
 
+/// A `/`-spelled absolute test path as this OS spells it: as is on Unix, on drive `C:` with backslashes on Windows; a
+/// relative one keeps its form.
+#[cfg(test)]
+pub(crate) fn os_path(unix: &str) -> String {
+    if cfg!(windows) {
+        let backslashed = unix.replace('/', "\\");
+        if unix.starts_with('/') {
+            format!("C:{backslashed}")
+        } else {
+            backslashed
+        }
+    } else {
+        unix.to_owned()
+    }
+}
+
 /// The last component of a path as Foundation's `lastPathComponent` gives it: trailing slashes ignored, `/` for the
 /// root.
 fn last_path_component(path: &str) -> String {
-    let trimmed = path.trim_end_matches('/');
+    // Windows paths separate by either slash
+    let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
+    let trimmed = path.trim_end_matches(separators);
     if trimmed.is_empty() {
         return if path.is_empty() { String::new() } else { "/".to_owned() };
     }
-    trimmed.rsplit('/').next().unwrap_or(trimmed).to_owned()
+    trimmed.rsplit(separators).next().unwrap_or(trimmed).to_owned()
 }
 
 /// The frontend's web views, as the dispatcher reaches them (upstream's `HtmlOverlayRegistry` calls in
@@ -524,7 +579,9 @@ pub mod errors {
 mod tests {
     use super::*;
 
-    const HOME: &str = "/Users/me";
+    fn home() -> String {
+        os_path("/Users/me")
+    }
 
     /// Upstream's `HtmlOverlayTests.grantContainment`.
     #[test]
@@ -540,7 +597,12 @@ mod tests {
             ("relative/report.html", None, false),
             ("/a/report.html", Some("relative"), false),
         ] {
-            assert_eq!(grant_error(file, grant, HOME).is_none(), valid, "{file} {grant:?}");
+            let (file, grant) = (os_path(file), grant.map(os_path));
+            assert_eq!(
+                grant_error(&file, grant.as_deref(), &home()).is_none(),
+                valid,
+                "{file} {grant:?}"
+            );
         }
     }
 
@@ -555,7 +617,7 @@ mod tests {
             ("/Users/me/docs", true),
             ("/Users", true),
         ] {
-            let error = grant_error("/Users/me/docs/report.html", Some(grant), HOME);
+            let error = grant_error(&os_path("/Users/me/docs/report.html"), Some(&os_path(grant)), &home());
             assert_eq!(error.is_none(), valid, "{grant}");
             if !valid {
                 assert_eq!(error, Some(CWD_ROOT_OR_HOME));
@@ -565,16 +627,50 @@ mod tests {
 
     #[test]
     fn each_refusal_names_its_reason() {
-        assert_eq!(grant_error("x.html", None, HOME), Some(FILE_NOT_ABSOLUTE));
-        assert_eq!(grant_error("/a/x.html", Some("a"), HOME), Some(CWD_NOT_ABSOLUTE));
-        assert_eq!(grant_error("/a/x.html", Some("/a/x.html"), HOME), Some(CWD_IS_FILE));
-        assert_eq!(grant_error("/b/x.html", Some("/a"), HOME), Some(OUTSIDE_CWD));
+        let error =
+            |file: &str, grant: Option<&str>| grant_error(&os_path(file), grant.map(os_path).as_deref(), &home());
+        assert_eq!(error("x.html", None), Some(FILE_NOT_ABSOLUTE));
+        assert_eq!(error("/a/x.html", Some("a")), Some(CWD_NOT_ABSOLUTE));
+        assert_eq!(error("/a/x.html", Some("/a/x.html")), Some(CWD_IS_FILE));
+        assert_eq!(error("/b/x.html", Some("/a")), Some(OUTSIDE_CWD));
+        assert_eq!(error("/a/../b/x.html", Some("/b")), None, ".. resolves lexically");
+        assert!(contains(&os_path("/a"), &os_path("/a/b/c")) && !contains(&os_path("/a/b"), &os_path("/a/c")));
+    }
+
+    /// Windows paths: a drive or share is the root, `\\`-rooted paths are relative to the current drive, either slash
+    /// separates and names compare in any case.
+    #[test]
+    #[cfg(windows)]
+    fn windows_paths_are_rooted_on_a_drive_or_share() {
+        let home = r"C:\Users\me";
+        assert_eq!(grant_error(r"\a\x.html", None, home), Some(FILE_NOT_ABSOLUTE));
+        assert_eq!(grant_error("/a/x.html", None, home), Some(FILE_NOT_ABSOLUTE));
+        assert_eq!(grant_error(r"C:\a\x.html", Some(r"\a"), home), Some(CWD_NOT_ABSOLUTE));
+        assert_eq!(grant_error(r"D:\a\x.html", Some(r"D:\"), home), Some(CWD_ROOT_OR_HOME));
         assert_eq!(
-            grant_error("/a/../b/x.html", Some("/b"), HOME),
-            None,
-            ".. resolves lexically"
+            grant_error(r"C:\Users\Me\x.html", Some(r"c:/users/ME/"), home),
+            Some(CWD_ROOT_OR_HOME)
         );
-        assert!(contains("/a", "/a/b/c") && !contains("/a/b", "/a/c"));
+        assert_eq!(
+            grant_error(r"\\host\share\a\x.html", Some(r"\\host\share\"), home),
+            Some(CWD_ROOT_OR_HOME)
+        );
+        assert_eq!(
+            grant_error(r"\\host\share\a\x.html", Some(r"\\host\share\a"), home),
+            None
+        );
+        assert_eq!(grant_error(r"C:\Site\Page.HTML", Some("c:/site"), home), None);
+        assert_eq!(
+            grant_error(r"D:\site\page.html", Some(r"C:\site"), home),
+            Some(OUTSIDE_CWD)
+        );
+        assert_eq!(
+            grant_error(r"C:\site\..\..\page.html", Some(r"C:\site"), home),
+            Some(OUTSIDE_CWD)
+        );
+        assert!(contains(r"C:\Site", "c:/site/sub/x.png"));
+        assert_eq!(last_path_component(r"C:\site\page.html"), "page.html");
+        assert_eq!(last_path_component(r"C:\site\sub\"), "sub");
     }
 
     /// Upstream's `HtmlOverlayTests.webURLAcceptsOnlyAbsoluteHttpWithAHost`.

@@ -22,7 +22,9 @@
 #   gpui-pre-windows the native key behind each key event GPUI dispatches on Windows (its scan code, the layout's
 #                  unshifted character, the modifiers with Shift and those the layout used up, the text before Ctrl
 #                  transformations), which GPUI's `Keystroke` drops, for the terminal's physical-key bindings and the
-#                  Kitty keyboard protocol (Task 4 of docs/plans/20261029-windows-support.md, 0001)
+#                  Kitty keyboard protocol (Task 4 of docs/plans/20261029-windows-support.md, 0001); the
+#                  DirectComposition target beneath the window's child windows, so the HTML overlays' WebView2 pages
+#                  show over GPUI (Task 6, 0002)
 #
 # Each source is the crates.io archive of GPUI_VERSION, verified against SHA256 below: the release's crates.io
 # checksum (the `cksum` of its version's line in the crates.io index, https://index.crates.io/gp/ui/<crate>, also what

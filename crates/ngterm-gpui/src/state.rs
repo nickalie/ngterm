@@ -833,13 +833,13 @@ impl AppState {
     }
 
     /// Input reached a page: auto-follow waits for the user, as for typing in a terminal.
-    #[cfg(all(feature = "html", target_os = "linux"))]
+    #[cfg(all(feature = "html", any(target_os = "linux", windows)))]
     pub(crate) fn page_input(&mut self) {
         self.arm_auto_follow();
     }
 
     /// Asks the frontend to reveal `path` in the file manager (a page's Show in Files).
-    #[cfg(all(feature = "html", target_os = "linux"))]
+    #[cfg(all(feature = "html", any(target_os = "linux", windows)))]
     pub(crate) fn reveal(&mut self, path: std::path::PathBuf) {
         self.frontend.reveals.push(path);
     }

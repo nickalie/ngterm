@@ -215,7 +215,7 @@ fn opening_into_a_hidden_session_slot_is_refused_by_name() {
         .unwrap();
     assert_eq!(open(&mut fixture, id, |_| {}), failure("overlay hidden"));
     let page = overlay(&mut fixture, SessionCmd::OverlayOpen, id, |a| {
-        a.html = Some("/tmp/p.html".to_owned());
+        a.html = Some(crate::html::os_path("/tmp/p.html"));
     });
     assert_eq!(page, failure("overlay hidden"));
     assert_eq!(
@@ -281,7 +281,7 @@ fn tree_reads_back_the_hidden_slots_and_a_hidden_page() {
     fixture.core.set_html_host(Box::new(NoopHost));
     let id = fixture.sessions[0];
     let page = overlay(&mut fixture, SessionCmd::OverlayOpen, id, |a| {
-        a.html = Some("/tmp/p.html".to_owned());
+        a.html = Some(crate::html::os_path("/tmp/p.html"));
     });
     let page_id = page.result.unwrap()["pageID"].clone();
     assert!(overlay(&mut fixture, SessionCmd::OverlayHide, id, |_| {}).ok);

@@ -114,7 +114,7 @@ fn a_page_opens_with_its_points() {
         &mut fixture,
         SessionCmd::OverlayOpen,
         id,
-        json!({"html": "/tmp/a/page.html", "sizePercent": 60, "height": 240}),
+        json!({"html": crate::html::os_path("/tmp/a/page.html"), "sizePercent": 60, "height": 240}),
     );
     assert!(opened.ok, "{opened:?}");
     assert_eq!(slot_points(&fixture, id), points(None, Some(240)));
@@ -123,7 +123,7 @@ fn a_page_opens_with_its_points() {
             &mut fixture,
             SessionCmd::OverlayOpen,
             id,
-            json!({"html": "/tmp/a/page.html", "height": 240})
+            json!({"html": crate::html::os_path("/tmp/a/page.html"), "height": 240})
         ),
         failure(NEEDS_PERCENT)
     );
@@ -246,7 +246,7 @@ fn the_tree_reads_the_content_size_back_once_laid_out() {
         &mut fixture,
         SessionCmd::OverlayOpen,
         id,
-        json!({"html": "/tmp/a/page.html", "sizePercent": 60, "height": 240}),
+        json!({"html": crate::html::os_path("/tmp/a/page.html"), "sizePercent": 60, "height": 240}),
     );
     assert!(opened.ok, "{opened:?}");
     let read = node(&mut fixture, id);

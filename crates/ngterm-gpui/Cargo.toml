@@ -13,9 +13,10 @@ path = "src/main.rs"
 
 [features]
 default = ["html"]
-# HTML overlays on WPE WebKit (ngterm-wpe, Linux), which needs a WPE WebKit at build and run time (README > WPE
-# WebKit). Without it the core refuses every page; the Ubuntu CI jobs build that way.
-html = ["dep:ngterm-wpe", "dep:gio"]
+# HTML overlays: on WPE WebKit on Linux (ngterm-wpe), which needs a WPE WebKit at build and run time (README > WPE
+# WebKit); on WebView2 on Windows (wry, webview2-com), whose runtime the app checks for at start. Without it the core
+# refuses every page; the Ubuntu CI jobs build that way.
+html = ["dep:ngterm-wpe", "dep:gio", "dep:wry", "dep:webview2-com", "dep:windows", "dep:windows-core"]
 
 [dependencies]
 ngterm-app.workspace = true
@@ -104,6 +105,13 @@ windows-sys = { workspace = true, features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# the HTML overlays' web views (`html_overlay/webview2`): WebView2 child windows through wry, and its own interfaces
+# where wry has none
+wry = { workspace = true, optional = true }
+webview2-com = { workspace = true, optional = true }
+windows = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_UI_Shell"] }
+windows-core = { workspace = true, optional = true }
 
 [dev-dependencies]
 ngterm-host = { workspace = true, features = ["fakes"] }

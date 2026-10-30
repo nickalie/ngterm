@@ -34,9 +34,9 @@ mod input;
 mod menus;
 #[cfg(all(feature = "html", target_os = "linux"))]
 mod page;
-#[cfg(all(feature = "html", target_os = "linux"))]
+#[cfg(all(feature = "html", any(target_os = "linux", windows)))]
 mod panel;
-#[cfg(all(feature = "html", target_os = "linux"))]
+#[cfg(all(feature = "html", any(target_os = "linux", windows)))]
 mod policy;
 #[cfg(all(feature = "html", target_os = "linux"))]
 mod registry;
@@ -46,8 +46,10 @@ mod sandbox;
 pub(crate) mod testing;
 #[cfg(all(feature = "html", target_os = "linux"))]
 mod view;
+#[cfg(all(feature = "html", windows))]
+mod webview2;
 
-#[cfg(all(feature = "html", target_os = "linux"))]
+#[cfg(all(feature = "html", any(target_os = "linux", windows)))]
 pub use panel::TerminalColors;
 #[cfg(all(feature = "html", target_os = "linux"))]
 pub use registry::{
@@ -55,10 +57,19 @@ pub use registry::{
     set_replica_link, settle, shutdown,
 };
 #[cfg(all(feature = "html", target_os = "linux"))]
+use registry::{copy_link, navigate};
+#[cfg(all(feature = "html", target_os = "linux"))]
 pub use view::{FrameStats, PageView};
+#[cfg(all(feature = "html", windows))]
+pub use webview2::{
+    PageView, answer, apply, hide, init, install, key_down, mount, refresh_themes, reject, set_covered, settle,
+    shutdown,
+};
+#[cfg(all(feature = "html", windows))]
+use webview2::{copy_link, navigate};
 
 /// The terminal's colors of `config`, which the pages are drawn in.
-#[cfg(all(feature = "html", target_os = "linux"))]
+#[cfg(all(feature = "html", any(target_os = "linux", windows)))]
 #[must_use]
 pub fn colors_of(config: &crate::terminal::TerminalConfig) -> TerminalColors {
     TerminalColors::of(&config.theme)
@@ -72,7 +83,13 @@ pub fn hide(element: &gpui_kit::Entity<PageView>, cx: &mut gpui_kit::App) {
     page.apply(&overlay, false, cx);
 }
 
-#[cfg(not(all(feature = "html", target_os = "linux")))]
+/// Whether a layer the app draws over `window`'s content (a dialog, the palette, a popover, an alert) is up: native
+/// pages are hidden under it on Windows, where they sit above everything the window draws. Nothing to do where the
+/// app draws the pages itself.
+#[cfg(not(all(feature = "html", windows)))]
+pub fn set_covered(_: &gpui_kit::Window, _: bool, _: &mut gpui_kit::App) {}
+
+#[cfg(not(all(feature = "html", any(target_os = "linux", windows))))]
 mod unavailable {
     //! The build without WPE `WebKit`: no host is installed, so no page ever reaches these.
 
@@ -145,7 +162,7 @@ mod unavailable {
     }
 }
 
-#[cfg(not(all(feature = "html", target_os = "linux")))]
+#[cfg(not(all(feature = "html", any(target_os = "linux", windows))))]
 pub use unavailable::{
     PageView, TerminalColors, answer, apply, colors_of, hide, init, install, key_down, mount, refresh_themes, reject,
     settle, shutdown,
