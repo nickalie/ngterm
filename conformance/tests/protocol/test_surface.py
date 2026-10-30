@@ -105,6 +105,7 @@ def test_cursor_reads_each_pane_by_surface_id_or_pane_id(ctl, fresh):
 
 
 @pytest.mark.covers("surface.cursor", "session.overlay.open")
+@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
 def test_cursor_reads_a_program_overlay_but_not_a_hud(ctl, fresh):
     command = "printf '\\033[2J\\033[H%s' abcdef; exec cat"
     assert_ok(ctl.request("session.overlay.open", fresh, command=command))

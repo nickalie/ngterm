@@ -137,6 +137,7 @@ def test_program_overlay_covers_the_session(ctl):
 
 
 @pytest.mark.covers("session.overlay.result", "field:result.exitCode", "field:result.id")
+@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
 def test_overlay_result_reports_the_exit_status(ctl):
     sid = _new(ctl)
     assert_error(ctl.request("session.overlay.result", sid), "no overlay result")
@@ -151,6 +152,7 @@ def test_overlay_result_reports_the_exit_status(ctl):
 
 
 @pytest.mark.covers("session.overlay.text")
+@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
 def test_overlay_text_reads_the_covering_program(ctl):
     sid = _new(ctl)
     assert_error(ctl.request("session.overlay.text", sid), "no overlay")
@@ -218,6 +220,7 @@ def test_overlay_opens_in_the_background_unless_it_follows(ctl):
 
 
 @pytest.mark.covers("session.overlay.open")
+@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
 def test_overlay_runs_in_its_cwd(ctl):
     sid = _new(ctl)
     root = ctl.instance.root
@@ -391,6 +394,7 @@ def test_point_size_refusals(ctl, cmd, slot, args, error):
     "field:tree.session.paneOverlays",
     "field:tree.session.surfaces",
 )
+@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
 def test_pane_overlays_cover_one_pane_each(ctl):
     sid = _split(ctl)
     _open(ctl, sid, "echo PANE-RIGHT; exec cat", pane="right")
@@ -1084,6 +1088,7 @@ def _left(ctl, cmd, sid, text, **args):
     "field:tree.session.overlay",
     "field:tree.session.paneOverlays",
 )
+@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
 def test_hide_show_and_toggle_keep_the_overlays_running(ctl):
     sid = _split(ctl)
     marker = f"HIDDEN-{uuid.uuid4().hex[:8].upper()}"

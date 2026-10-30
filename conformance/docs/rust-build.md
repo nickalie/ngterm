@@ -98,6 +98,8 @@ share is asserted directly, with no capability.
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
 | `hidden-split-holds-focus` |  | `session.focus` on a hidden split reads back as `splitFocused`; upstream's shown left pane takes the focus back while its window is key |
+| `posix-command-line` | yes | a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs through `/bin/sh -c`, so a test's POSIX line runs as written; Windows runs it through `cmd.exe` |
+| `untitled-panes` | yes | a pane has no title until a program sets one; Windows' console host titles each pane with its program's path |
 
 ## Rust target profile
 
@@ -108,6 +110,7 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `posix-shell`: panes run `/bin/sh` from the harness's ghostty config, as the reference;
 - `hidden-split-holds-focus`: upstream's documented model contract (`control-api.md`, "works shown or hidden; read
   `splitFocused`", and `AppStorePaneTests`); macOS's reversion is an AppKit first-responder effect;
+- `posix-command-line`, `untitled-panes`: on Linux and macOS, as upstream; not on Windows (below);
 - `live-sessions`: by host, where the login shell is zsh or fish (upstream's two) and `ngterm-session` is staged;
 - `live-any-shell`: by host, live sessions for bash and PowerShell login shells too, the one Rust-only extension
   (below): claimed together with `live-sessions` for a zsh or fish login shell, alone for the others.
@@ -117,6 +120,11 @@ It does not claim:
 - `window-geometry`, `window-minimize`: Wayland gives a client no window position and no minimized read-back; their
   tests branch, and the Rust build passes the other branch;
 - `sidebar-min-width`: the GPUI frontend does not claim it; its test takes the other branch.
+- on Windows, `posix-command-line`: a command line runs as `cmd.exe`'s command text there (`%ComSpec% /D /S /C`, as
+  Ghostty runs a command on Windows, `ngterm-term`'s `launch.rs`), so the tests whose overlay programs, scratch
+  commands, hooks or custom commands are POSIX lines skip as unsupported; and `untitled-panes`: the console host
+  (ConPTY) titles a pane with its program's path before any program sets one, so the title test reads that title on
+  the other branch.
 
 The table above stays the reference's profile; this list is the Rust build's.
 

@@ -177,6 +177,7 @@ def test_a_file_binding_the_toggle_overlay_chord_keeps_it(ctl, keymap):
 
 
 @pytest.mark.covers("keymap.run", "field:result.id", "behavior:protocol.target-resolution")
+@pytest.mark.requires("posix-command-line", reason="the custom commands and hooks are POSIX command lines")
 def test_run_starts_the_command_for_the_addressed_session(ctl, keymap):
     first, second = ctl.instance.root / "run-first", ctl.instance.root / "run-active"
     keymap.write_text(_marker_command("mark-first", first) + _marker_command("mark-active", second))
@@ -195,6 +196,7 @@ def test_run_starts_the_command_for_the_addressed_session(ctl, keymap):
 
 
 @pytest.mark.covers("keymap.run")
+@pytest.mark.requires("posix-command-line", reason="the custom commands and hooks are POSIX command lines")
 def test_run_in_a_removed_session_directory_starts_in_home(ctl, keymap):
     # upstream #740: a session whose directory was removed runs its custom commands in HOME, and
     # `$AGT_SESSION_PWD` keeps the reported path
@@ -218,6 +220,7 @@ def test_run_in_a_removed_session_directory_starts_in_home(ctl, keymap):
 
 
 @pytest.mark.covers("keymap.run", "keymap.reload")
+@pytest.mark.requires("posix-command-line", reason="the custom commands and hooks are POSIX command lines")
 def test_reload_reaches_every_window(ctl, keymap):
     marker = ctl.instance.root / "run-second-window"
     wid = assert_ok(ctl.request("window.new", name="second"))["id"]
@@ -295,6 +298,7 @@ def test_reload_reports_each_bad_line_and_keeps_the_good_ones(ctl, hooks):
 
 
 @pytest.mark.covers("hooks.reload", "event:session.created", "event:session.closed")
+@pytest.mark.requires("posix-command-line", reason="the custom commands and hooks are POSIX command lines")
 def test_hook_gets_its_event_on_stdin_and_in_its_environment(ctl, hooks):
     out = ctl.instance.root / "hook-events"
     out.mkdir()
@@ -337,6 +341,7 @@ def _release(fifo):
 
 
 @pytest.mark.covers("hooks.list", "hooks.reload", "field:result.hooks")
+@pytest.mark.requires("posix-command-line", reason="the custom commands and hooks are POSIX command lines")
 def test_a_running_hook_queues_its_events_and_survives_its_removal(ctl, hooks):
     fifo = ctl.instance.root / "hook-gate"
     os.mkfifo(fifo)

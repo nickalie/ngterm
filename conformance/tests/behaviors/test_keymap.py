@@ -31,6 +31,7 @@ def _ran(ctl, name, marker):
 
 
 @pytest.mark.covers("behavior:keymap.loaded-at-launch")
+@pytest.mark.requires("posix-command-line", reason="the custom commands are POSIX command lines")
 def test_keymap_file_is_read_at_launch(launch):
     ctl = launch()
     marker = ctl.instance.root / "launch-marker"
@@ -41,6 +42,7 @@ def test_keymap_file_is_read_at_launch(launch):
 
 
 @pytest.mark.covers("behavior:keymap.edit-needs-reload")
+@pytest.mark.requires("posix-command-line", reason="the custom commands are POSIX command lines")
 def test_an_edit_takes_effect_only_on_reload(launch):
     ctl = launch()
     first, second = ctl.instance.root / "first-marker", ctl.instance.root / "second-marker"

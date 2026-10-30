@@ -186,6 +186,10 @@ CAPABILITIES: Mapping[str, str] = {
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",
     "hidden-split-holds-focus": "`session.focus` on a hidden split reads back as `splitFocused`; upstream's shown "
     "left pane takes the focus back while its window is key",
+    "posix-command-line": "a command line (an overlay's program, a scratch pane's command, a hook, a custom command) "
+    "runs through `/bin/sh -c`, so a test's POSIX line runs as written; Windows runs it through `cmd.exe`",
+    "untitled-panes": "a pane has no title until a program sets one; Windows' console host titles each pane with its "
+    "program's path",
 }
 
 

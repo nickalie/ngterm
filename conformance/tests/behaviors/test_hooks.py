@@ -26,6 +26,7 @@ def _written(marker):
 
 
 @pytest.mark.covers("behavior:hooks.loaded-at-launch")
+@pytest.mark.requires("posix-command-line", reason="the hooks are POSIX command lines")
 def test_hooks_file_is_read_at_launch(launch):
     ctl = launch()
     marker = ctl.instance.root / "created-marker"
@@ -37,6 +38,7 @@ def test_hooks_file_is_read_at_launch(launch):
 
 
 @pytest.mark.covers("behavior:hooks.edit-needs-reload")
+@pytest.mark.requires("posix-command-line", reason="the hooks are POSIX command lines")
 def test_an_edit_takes_effect_only_on_reload(launch):
     ctl = launch()
     marker = ctl.instance.root / "created-marker"
@@ -53,6 +55,7 @@ def test_an_edit_takes_effect_only_on_reload(launch):
 
 
 @pytest.mark.covers("behavior:hooks.once-per-event-in-order", "event:status")
+@pytest.mark.requires("posix-command-line", reason="the hooks are POSIX command lines")
 def test_a_hook_runs_once_per_event_in_event_order(launch):
     ctl = launch()
     log = ctl.instance.root / "status-log"
@@ -78,6 +81,7 @@ def test_a_hook_runs_once_per_event_in_event_order(launch):
 
 
 @pytest.mark.covers("behavior:hooks.loaded-at-launch", "event:app.launched")
+@pytest.mark.requires("posix-command-line", reason="the hooks are POSIX command lines")
 def test_app_launched_runs_its_hook_once_per_launch(launch):
     ctl = launch()
     log = ctl.instance.root / "launched-log"

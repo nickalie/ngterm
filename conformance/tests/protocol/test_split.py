@@ -333,6 +333,7 @@ def _background_and_selected(ctl):
 
 
 @pytest.mark.covers("session.scratch", "field:tree.session.scratch")
+@pytest.mark.requires("posix-command-line", reason="the scratch command and the overlay's program are POSIX command lines")
 def test_scratch_on_a_background_session_starts_without_switching_unless_followed(ctl):
     background, selected = _background_and_selected(ctl)
     marker = ctl.instance.root / "background-scratch-ran"
@@ -359,6 +360,7 @@ def test_scratch_follow_selects_only_when_showing(ctl):
 
 
 @pytest.mark.covers("session.scratch")
+@pytest.mark.requires("posix-command-line", reason="the scratch command and the overlay's program are POSIX command lines")
 def test_scratch_command_replaces_a_shown_scratch(ctl):
     sid = _mounted(ctl)
     assert_ok(ctl.request("session.scratch", sid, mode="on"))
@@ -391,6 +393,7 @@ def test_zoom_one_surface_and_back(ctl):
 
 
 @pytest.mark.covers("surface.zoom", "session.overlay.open")
+@pytest.mark.requires("posix-command-line", reason="the scratch command and the overlay's program are POSIX command lines")
 def test_zoom_the_pane_under_a_running_overlay(ctl):
     sid = _mounted(ctl)
     assert assert_ok(ctl.request("session.overlay.open", sid, command="printf 'under-zoom\\n'; exec cat"))["id"] == sid
