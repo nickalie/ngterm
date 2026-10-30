@@ -159,10 +159,15 @@ fn read_line(stream: &mut impl Read) -> Option<Vec<u8>> {
 /// behind a reply) is consumed before its reader asks. `None` at the end of the connection, on a read error, or past
 /// `cap` bytes.
 pub fn read_socket_line(socket: &Connection, cap: usize) -> Option<Vec<u8>> {
+    read_line_with(cap, |byte| (&*socket).read(byte))
+}
+
+/// [`read_socket_line`] over `read`, which fills the one-byte buffer it is given; `Ok(0)` ends the line's source.
+pub fn read_line_with(cap: usize, mut read: impl FnMut(&mut [u8]) -> io::Result<usize>) -> Option<Vec<u8>> {
     let mut line = Vec::new();
     let mut byte = [0_u8; 1];
     loop {
-        match (&*socket).read(&mut byte) {
+        match read(&mut byte) {
             Ok(1) if byte[0] == b'\n' => return Some(line),
             Ok(1) => line.push(byte[0]),
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
@@ -410,12 +415,11 @@ mod tests {
         let dir = tempfile::Builder::new().prefix("agc").tempdir_in("/tmp").unwrap();
         let missing = connect(&dir.path().join("missing.sock")).unwrap_err();
         assert_eq!(missing.connect_error, Some(ErrorKind::NotFound));
-        // a socket file no socket is bound to refuses; `mknod`, as a listener bound and dropped stays open in a
-        // sibling test's child until its `exec`, which would accept the connect
+        // a socket file no socket is bound to refuses. Its socket never listens: a listener bound and dropped stays
+        // open in a sibling test's child until its `exec`, which would accept the connect, and `mknod` of a socket
+        // file is root's alone on macOS
         let stale = dir.path().join("stale.sock");
-        let c_stale = std::ffi::CString::new(stale.as_os_str().as_bytes()).unwrap();
-        // SAFETY: `c_stale` is a NUL-terminated string that outlives the call.
-        assert_eq!(unsafe { libc::mknod(c_stale.as_ptr(), libc::S_IFSOCK | 0o600, 0) }, 0);
+        bind_without_listening(stale.as_os_str().as_bytes());
         let refused = connect(&stale).unwrap_err();
         assert_eq!(refused.connect_error, Some(ErrorKind::ConnectionRefused), "{refused}");
         assert!(
@@ -423,5 +427,27 @@ mod tests {
                 .message
                 .starts_with(&format!("connect({}) failed: ", stale.display()))
         );
+    }
+
+    /// Binds a stream socket at `path` and closes it without ever listening, leaving the socket file behind.
+    #[cfg(unix)]
+    fn bind_without_listening(path: &[u8]) {
+        // SAFETY: an all-zero `sockaddr_un` is a valid address, the family and path written below.
+        let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        address.sun_family = libc::sa_family_t::try_from(libc::AF_UNIX).unwrap();
+        assert!(path.len() < address.sun_path.len());
+        for (slot, byte) in address.sun_path.iter_mut().zip(path) {
+            *slot = libc::c_char::from_ne_bytes([*byte]);
+        }
+        // SAFETY: `socket` takes plain integers.
+        let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+        assert!(fd >= 0);
+        let length = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_un>()).unwrap();
+        // SAFETY: `address` is a valid, NUL-terminated `sockaddr_un` of `length` bytes that outlives the call.
+        let bound = unsafe { libc::bind(fd, (&raw const address).cast(), length) };
+        let error = std::io::Error::last_os_error();
+        // SAFETY: closes the descriptor `socket` opened above, once.
+        unsafe { libc::close(fd) };
+        assert_eq!(bound, 0, "{error}");
     }
 }

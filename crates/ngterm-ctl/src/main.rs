@@ -21,6 +21,7 @@ mod overlay_job;
 mod overlay_page;
 mod pick;
 mod quick;
+mod read_wake;
 mod recent;
 mod restore;
 mod session;

@@ -46,7 +46,7 @@ serde_norway.workspace = true
 tempfile.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]
-# the tests' stale socket (`mknod`), signal masks and process probes
+# the tests' stale socket, signal masks and process probes
 libc.workspace = true
 
 [lints]
