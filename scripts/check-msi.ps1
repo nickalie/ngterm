@@ -11,14 +11,14 @@ installed there already. No app is started: ngterm.exe runs only for its build i
 After the install: the binaries, Ghostty's resources (shell integration, the themes, the compiled xterm-ghostty),
 ngterm's PowerShell integration, the agent-status package, the agent skill, the build identity and the licenses are in
 the staged layout; no session build id (packaging/windows/ngterm.wxs says why); `ngterm.exe --build-identity` names the
-package's version; the user's PATH in the registry holds bin\ and keeps its value kind (REG_EXPAND_SZ), and a new
-PowerShell given that PATH finds the installed ngtermctl and runs it; the Start-menu shortcut targets ngterm.exe, starts
-in the user's profile and carries the app id as its System.AppUserModel.ID. With -UpgradeMsi, that MSI (a higher
-version) replaces the first: the first product is gone, the second installed, the files in place, and a file in the
-app's state directory is kept. Then the uninstall, after the app id's toast registration is written as the app writes it
-at each launch: no install folder, shortcut, product registration, PATH entry (the user's PATH is back as it was, kind
-included), HKCU\Software\ngterm or app id registration is left, and the state directory's file stays (user state is
-never the installer's).
+version the installed share\ngterm\app-BUILD records, which is the first package's version; the user's PATH in the
+registry holds bin\ and keeps its value kind (REG_EXPAND_SZ), and a new PowerShell given that PATH finds the installed
+ngtermctl and runs it; the Start-menu shortcut targets ngterm.exe, starts in the user's profile and carries the app id
+as its System.AppUserModel.ID. With -UpgradeMsi, that MSI (a higher version) replaces the first: the first product is
+gone, the second installed, the files in place, and a file in the app's state directory is kept. Then the uninstall,
+after the app id's toast registration is written as the app writes it at each launch: no install folder, shortcut,
+product registration, PATH entry (the user's PATH has its entries and kind back), HKCU\Software\ngterm or app id
+registration is left, and the state directory's file stays (user state is never the installer's).
 
 Each msiexec run logs verbosely under -Log. The exit status is 0 when every check passed.
 
@@ -91,7 +91,7 @@ function Test-OnUserPath {
     @((Get-UserPath) -split ';' | Where-Object { $_.TrimEnd('\') -ieq $bin }).Count -gt 0
 }
 
-function Test-Installed([string] $msi) {
+function Test-Installed([string] $msi, [bool] $versioned) {
     $version = Get-MsiProperty $msi 'ProductVersion'
     $code = Get-MsiProperty $msi 'ProductCode'
     Check "product $code ($version) is installed" ((Get-ProductState $code) -eq 5)
@@ -107,8 +107,16 @@ function Test-Installed([string] $msi) {
     Check "Ghostty's themes are installed ($themes)" ($themes -gt 700)
     Check 'no session build id is installed' (-not (Test-Path (Join-Path $root 'share\ngterm\session-BUILD')))
 
-    $identity = @(& (Join-Path $bin 'ngterm.exe') --build-identity)
-    Check "ngterm.exe --build-identity names $version (got '$($identity[0])')" ($identity[0] -eq $version)
+    # the release ngterm.exe is a GUI program, which PowerShell neither waits for nor reads from a pipe
+    $printed = Join-Path $Log "build-identity-$version.txt"
+    Start-Process (Join-Path $bin 'ngterm.exe') -ArgumentList '--build-identity' -RedirectStandardOutput $printed -NoNewWindow -Wait
+    $identity = @(Get-Content $printed)
+    $recorded = @(Get-Content (Join-Path $root 'share\ngterm\app-BUILD'))
+    Check "ngterm.exe --build-identity names the installed app-BUILD's $($recorded[0]) (got '$($identity[0])')" (
+        $identity.Count -gt 0 -and $identity[0] -ne '' -and $identity[0] -eq $recorded[0])
+    if ($versioned) {
+        Check "the package's version is the app's ($version)" ($recorded[0] -eq $version)
+    }
 
     Check "the user's PATH holds $bin" (Test-OnUserPath)
     $kind = (Get-RawUserPath)[1]
@@ -138,7 +146,7 @@ if ((Get-ProductState $code) -eq 5 -or (Test-Path $root)) {
 
 $originalPath = Get-RawUserPath
 Invoke-Msiexec @('/i', "`"$Msi`"") 'install'
-$installed = Test-Installed $Msi
+$installed = Test-Installed $Msi $true
 
 # user state the installer never owns: a file in the app's state directory (the Windows state dir is
 # %LOCALAPPDATA%\ngterm, crates/ngterm-core/src/paths.rs)
@@ -151,7 +159,8 @@ Set-Content -Path $stateFile -Value 'user state'
 if ($UpgradeMsi) {
     Invoke-Msiexec @('/i', "`"$UpgradeMsi`"") 'upgrade'
     Check "the upgrade removed product $installed" ((Get-ProductState $installed) -eq -1)
-    $installed = Test-Installed $UpgradeMsi
+    # built from the same binaries with a higher package version (scripts/build-msi.sh --version)
+    $installed = Test-Installed $UpgradeMsi $false
     Check 'the upgrade kept the state directory' (Test-Path -PathType Leaf $stateFile)
 }
 
@@ -165,9 +174,10 @@ Check "no install folder is left ($root)" (-not (Test-Path $root))
 Check 'no Start-menu shortcut is left' (-not (Test-Path $shortcut))
 Check "the user's PATH no longer holds bin\" (-not (Test-OnUserPath))
 $restored = Get-RawUserPath
-Check "the user's PATH is as it was ($($restored[1]): '$($restored[0])')" (
-    ($restored[0] -eq $originalPath[0] -and $restored[1] -eq $originalPath[1]) -or
-    ($originalPath[1] -eq 'absent' -and $restored[0] -eq ''))
+$entries = { param($value) @($value -split ';' | Where-Object { $_ -ne '' }) -join ';' }
+Check "the user's PATH has its entries and kind back (was $($originalPath[1]) '$($originalPath[0])', now $($restored[1]) '$($restored[0])')" (
+    (& $entries $restored[0]) -eq (& $entries $originalPath[0]) -and
+    ($restored[1] -eq $originalPath[1] -or ($originalPath[1] -eq 'absent' -and $restored[0] -eq '')))
 Check 'no HKCU\Software\ngterm is left' (-not (Test-Path 'HKCU:\Software\ngterm'))
 Check "no app id registration is left ($aumidKey)" (-not (Test-Path $aumidKey))
 Check 'the state directory is kept' (Test-Path -PathType Leaf $stateFile)
