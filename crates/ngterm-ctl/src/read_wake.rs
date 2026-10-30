@@ -109,13 +109,16 @@ impl ReadWake {
         source.read(buffer)
     }
 
-    /// Reads `source`: on Windows, closing it is what ends the read.
+    /// Reads `source`, or `Ok(0)` once woken: on Windows, closing the source is what ends a read already waiting.
     ///
     /// # Errors
     ///
     /// The read failed.
     #[cfg(windows)]
     pub fn read(&self, mut source: impl Source, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.is_woken() {
+            return Ok(0);
+        }
         source.read(buffer)
     }
 }
