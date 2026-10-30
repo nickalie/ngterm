@@ -489,8 +489,9 @@ fn scrollback_then_screen(api: &mut Api, name: &str) -> TestResult<Screen> {
     api.type_text(name, &format!("{lines}\r"))?.map_err(|err| err.message)?;
     // the screen's rows: as many of the last printed as fit above `ready`
     let first = 62 - SIZE.rows;
-    let shown = (first..=60).map(|row| format!("row-{row}-end\n")).collect::<String>() + "ready";
-    let active = api.ready_screen(name, &shown)?;
+    let mut shown = (first..=60).map(|row| format!("row-{row}-end")).collect::<Vec<_>>();
+    shown.push("ready".to_owned());
+    let active = api.ready_screen(name, &shown.join("\n"))?;
     let all = api.screen(name, true)?.map_err(|err| err.message)?;
     assert!(all.text.contains("row-1-end\n"), "{:?}", all.text);
     assert!(
