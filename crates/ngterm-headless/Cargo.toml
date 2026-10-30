@@ -1,0 +1,40 @@
+[package]
+name = "ngterm-headless"
+description = "ngterm-headless: the core, its control socket and live sessions with no window, an origin for File ▸ Attach Remote on a machine without a display"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ngterm-headless"
+path = "src/main.rs"
+
+[dependencies]
+ngterm-proto.workspace = true
+ngterm-host.workspace = true
+ngterm-core.workspace = true
+# the control socket, its streaming replies (a viewer's presentation stream, an overlay job, a page channel)
+ngterm-server.workspace = true
+# the process launcher, the process table, the restore decision, logging
+ngterm-app.workspace = true
+# the live-session host, its runtime inputs and the server update at launch
+ngterm-session.workspace = true
+# the panes' terminals, each a live session's client in process
+ngterm-term.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# SIGTERM, SIGINT and SIGHUP quit with the quit save
+signal-hook.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# the console's Ctrl events quit with the quit save
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Console"] }
+
+[lints]
+workspace = true
