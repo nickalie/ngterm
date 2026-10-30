@@ -114,6 +114,10 @@ guest has 4 CPUs and 6.5 GB of memory.
 - ➕ `cli_local`'s tests that run a fake (`ngterm-session`, `ssh`, `tic`) stay Unix only, their fakes being `sh`
   scripts; the print's run has Windows twins over a `.cmd` fake in `clipboard`'s tests, `terminfo install` has none
   on Windows (it needs `infocmp` and `ssh` there)
+- ➕ macOS CI's first ngterm-ctl run failed 4 unit tests on Linux assumptions (`mknod` of a socket, `/bin/true`,
+  `/proc/*/status`, `/proc/*/fd`); with those fixed, 2 CLI tests failed the same way (`mknod`, tic's hex directory
+  layout) and a stream-bridge test hung: macOS can leave a `recv` blocked in one thread asleep after another thread's
+  `shutdown` of the same socket, so the bridge and run-job's listener now wait on a wake pipe too (`read_wake`)
 
 ### Task 3: App services on Windows (`ngterm-app`)
 

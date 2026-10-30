@@ -143,16 +143,36 @@ fn outcome(output: &Output) -> (Option<i32>, String, String) {
     (output.status.code(), text(&output.stdout), text(&output.stderr))
 }
 
-/// A socket file no socket is bound to, as a dead instance leaves behind: a connect to it is refused. Made with
-/// `mknod`, not by binding a listener and dropping it: a sibling test's spawn copies the listener's fd into a child
-/// that holds it until its `exec`, and a connect in that window is accepted into the backlog and then reset. Unix
-/// only: a Windows pipe ends with its server, so no endpoint is ever left stale.
+/// A socket file no socket is bound to, as a dead instance leaves behind: a connect to it is refused. Its socket is
+/// bound and closed without ever listening, not a listener bound and dropped: a sibling test's spawn copies the
+/// listener's fd into a child that holds it until its `exec`, and a connect in that window is accepted into the
+/// backlog and then reset, where a socket that never listened refuses either way. Not `mknod`, which makes a socket
+/// file for root alone on macOS. Unix only: a Windows pipe ends with its server, so no endpoint is ever left stale.
 #[cfg(unix)]
 fn stale_socket(path: &Path) -> TestResult {
-    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())?;
-    // SAFETY: `path` is a NUL-terminated string that outlives the call.
-    if unsafe { libc::mknod(path.as_ptr(), libc::S_IFSOCK | 0o600, 0) } != 0 {
+    let path = path.as_os_str().as_encoded_bytes();
+    // SAFETY: an all-zero `sockaddr_un` is a valid address, the family and path written below.
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    address.sun_family = libc::sa_family_t::try_from(libc::AF_UNIX)?;
+    if path.len() >= address.sun_path.len() {
+        return Err(format!("socket path too long: {}", path.len()).into());
+    }
+    for (slot, byte) in address.sun_path.iter_mut().zip(path) {
+        *slot = libc::c_char::from_ne_bytes([*byte]);
+    }
+    // SAFETY: `socket` takes plain integers.
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
         return Err(io::Error::last_os_error().into());
+    }
+    let length = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_un>())?;
+    // SAFETY: `address` is a valid, NUL-terminated `sockaddr_un` of `length` bytes that outlives the call.
+    let bound = unsafe { libc::bind(fd, (&raw const address).cast(), length) };
+    let error = io::Error::last_os_error();
+    // SAFETY: closes the descriptor `socket` opened above, once.
+    unsafe { libc::close(fd) };
+    if bound != 0 {
+        return Err(error.into());
     }
     Ok(())
 }

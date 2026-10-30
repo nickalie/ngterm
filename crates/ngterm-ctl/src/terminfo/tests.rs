@@ -596,26 +596,28 @@ fn ssh_inherits_no_descriptor_beyond_its_standard_three() {
     let mut stray = [-1; 2];
     // SAFETY: `stray` is a valid two-element array for `pipe` to fill.
     assert_eq!(unsafe { libc::pipe(stray.as_mut_ptr()) }, 0);
-    let record = fixture.path("ssh.fd");
-    // the probe matches the pipe itself (`pipe:[inode]`), not just its number, which the shell's own descriptors may
-    // take with nothing leaked: dash (Ubuntu's /bin/sh) keeps its script open on the lowest free one from 10, and
-    // both shells park stdout on 10 or above while a redirect is in force
-    let pipe = fs::read_link(format!("/proc/self/fd/{}", stray[1])).unwrap();
-    let probe = format!(
-        "if [ \"$(readlink /proc/$$/fd/{fd})\" = '{pipe}' ]; then echo inherited; else echo absent; fi > '{record}'",
-        pipe = pipe.display(),
-        record = record.display(),
-        fd = stray[1]
-    );
+    // the probe writes to the pipe's number from a child shell: ssh's own descriptors (dash's script, from 10 up, and
+    // a stdout either shell parks while a redirect is in force) may take that number with nothing leaked, but they
+    // are close-on-exec, so only a leaked pipe carries the write to the read end. `/proc` would name the descriptor,
+    // but on Linux alone.
+    let probe = format!("/bin/sh -c 'echo inherited >&{fd}' 2> /dev/null", fd = stray[1]);
     let ssh = fixture.fake_ssh(0, true, &probe);
     let environment = env(&[("TERMINFO", &database), ("PATH", Path::new("/bin:/usr/bin"))]);
     let outcome = run(&connection("buildbox"), None, &environment, &ssh, &infocmp);
+    // a sibling test's child may hold the write end too, so the read never waits for its end
+    // SAFETY: `fcntl` on the read end `pipe` opened above.
+    assert_eq!(unsafe { libc::fcntl(stray[0], libc::F_SETFL, libc::O_NONBLOCK) }, 0);
+    let mut leaked = [0_u8; 64];
+    // SAFETY: `leaked` is a valid, writable buffer of its length.
+    let read = unsafe { libc::read(stray[0], leaked.as_mut_ptr().cast(), leaked.len()) };
+    let error = io::Error::last_os_error();
     for fd in stray {
         // SAFETY: closing the two descriptors `pipe` opened above, once each.
         unsafe { libc::close(fd) };
     }
     assert_eq!(outcome, Ok(Outcome::Exited(0)));
-    assert_eq!(fixture.read("ssh.fd").trim(), "absent");
+    assert_eq!(read, -1, "ssh inherited the pipe");
+    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
 }
 
 /// Runs `body` with `signal` blocked on this thread only, the previous mask restored after.

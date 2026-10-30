@@ -13,13 +13,17 @@
 //! not a screen, so a console's resize means nothing to it.
 
 use std::fs::File;
-use std::io::{self, ErrorKind, Read, Write};
+#[cfg(windows)]
+use std::io::Read;
+use std::io::{self, ErrorKind, Write};
 use std::net::Shutdown;
 use std::thread;
 
 use ngterm_proto::{MAX_REQUEST_LINE_BYTES, Request, Response};
 
 use crate::client::{self, Connection};
+#[cfg(unix)]
+use crate::read_wake::{ReadWake, Source};
 
 /// How much one read takes.
 const CHUNK_BYTES: usize = 16 * 1024;
@@ -79,24 +83,26 @@ impl StreamBridge {
     /// the viewer went away; the socket ending returns. Both directions have stopped by the time this returns.
     #[cfg(unix)]
     pub fn pump(&self) {
-        use std::os::fd::AsRawFd as _;
         let (Ok(input), Ok(output)) = (self.input.try_clone(), self.output.try_clone()) else {
             return;
         };
-        let Ok((cancel, wake)) = io::pipe() else {
+        // either side ending wakes the other: the shutdown alone does not reliably end the socket side's read on macOS
+        let Ok(wake) = ReadWake::new() else {
             return;
         };
         let socket = &self.socket;
-        // the reader stays here, open until both directions stopped: the input side may finish first, and a wake
-        // written into a pipe with no reader left raises SIGPIPE, which main restored to its default
-        let cancel_fd = cancel.as_raw_fd();
         thread::scope(|scope| {
             let upstream = thread::Builder::new()
                 .name("ngtermctl.stream.upstream".to_owned())
-                .spawn_scoped(scope, move || copy_until_cancelled(input, socket, cancel_fd));
-            copy(socket, output);
-            let mut wake = wake;
-            let _ = wake.write_all(&[1]);
+                .spawn_scoped(scope, || {
+                    if copy_until_woken(&wake, &input, |bytes| client::send_all(socket, bytes).is_ok()) {
+                        let _ = socket.shutdown(Shutdown::Both);
+                        wake.wake();
+                    }
+                });
+            let mut output = &output;
+            copy_until_woken(&wake, socket, |bytes| output.write_all(bytes).is_ok());
+            wake.wake();
             if let Ok(upstream) = upstream {
                 let _ = upstream.join();
             }
@@ -116,31 +122,26 @@ fn stdio_file(stream: &impl std::os::windows::io::AsHandle) -> io::Result<File> 
     stream.as_handle().try_clone_to_owned().map(File::from)
 }
 
-/// Copies `source` to the socket until `source` ends, which shuts the socket down, or `cancel` becomes readable, which
-/// just stops.
+/// Hands what `source` reads to `sink` until `source` ends or fails or `sink` refuses, which returns `true`, or `wake`
+/// is woken, which returns `false`.
 #[cfg(unix)]
-fn copy_until_cancelled(mut source: File, socket: &Connection, cancel: std::os::fd::RawFd) {
-    use std::os::fd::AsRawFd as _;
+fn copy_until_woken(wake: &ReadWake, source: impl Source + Copy, mut sink: impl FnMut(&[u8]) -> bool) -> bool {
     let mut chunk = vec![0_u8; CHUNK_BYTES];
     loop {
-        match wait_readable(source.as_raw_fd(), cancel) {
-            Readiness::Interrupted => continue,
-            Readiness::Cancelled | Readiness::Failed => return,
-            Readiness::Source => {}
-        }
-        let count = match source.read(&mut chunk) {
+        let count = match wake.read(source, &mut chunk) {
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Ok(0) => return !wake.is_woken(),
             Ok(count) => count,
-            Err(_) => 0,
+            Err(_) => return true,
         };
-        if count == 0 || client::send_all(socket, &chunk[..count]).is_err() {
-            let _ = socket.shutdown(Shutdown::Both);
-            return;
+        if !sink(&chunk[..count]) {
+            return true;
         }
     }
 }
 
 /// Copies the socket to `destination` until either ends.
+#[cfg(windows)]
 fn copy(mut socket: &Connection, mut destination: File) {
     let mut chunk = vec![0_u8; CHUNK_BYTES];
     loop {
@@ -152,45 +153,6 @@ fn copy(mut socket: &Connection, mut destination: File) {
         if count == 0 || destination.write_all(&chunk[..count]).is_err() {
             return;
         }
-    }
-}
-
-#[cfg(unix)]
-enum Readiness {
-    Source,
-    Cancelled,
-    Interrupted,
-    Failed,
-}
-
-/// Blocks until `source` or `cancel` can be read; the cancel wins a tie.
-#[cfg(unix)]
-fn wait_readable(source: std::os::fd::RawFd, cancel: std::os::fd::RawFd) -> Readiness {
-    let mut pollers = [
-        libc::pollfd {
-            fd: source,
-            events: libc::POLLIN,
-            revents: 0,
-        },
-        libc::pollfd {
-            fd: cancel,
-            events: libc::POLLIN,
-            revents: 0,
-        },
-    ];
-    // SAFETY: `pollers` is a live array of two initialized `pollfd`s, and the count passed is its length.
-    let ready = unsafe { libc::poll(pollers.as_mut_ptr(), 2, -1) };
-    if ready < 0 {
-        return if io::Error::last_os_error().kind() == ErrorKind::Interrupted {
-            Readiness::Interrupted
-        } else {
-            Readiness::Failed
-        };
-    }
-    if pollers[1].revents != 0 {
-        Readiness::Cancelled
-    } else {
-        Readiness::Source
     }
 }
 
@@ -329,7 +291,7 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
-    use std::io::BufRead;
+    use std::io::{BufRead, Read};
     use std::time::Duration;
 
     use ngterm_proto::Command;
