@@ -102,6 +102,14 @@ guest has 4 CPUs and 6.5 GB of memory.
   Windows) waits up to `TERMINATION_LIMIT` for the exit, a plain hangup on Unix `KILL_LIMIT`; the client's kill call
   waits `KILL_WAIT` beyond its timeout to match. Unix had the same flaw for a late exit whose PTY stays open
   (`tests/pane.rs` covers it)
+- ➕ (side task 20) ngterm-session's `the_screen_comes_from_the_servers_terminal_…` test failed under load on
+  Windows ("the scrollback, then the screen", about 1 round in 90): `cmd /q /k` writes a blank line and its prompt
+  after the 60-row command, in a read of its own, and one landing between the test's two reads scrolled the screen
+  (the revision moved with it, so the server's rule holds). The typed line now ends in a program that says `ready`
+  and waits, and both reads come once exactly that screen shows
+- ⚠️ (side task 20) the same test's closing forced kill once reported "did not end after its hangup" in a stress
+  round on an overloaded guest (4 busy processes on its 4 CPUs; the round took 25 s against about 4 s): the 5 s
+  `TERMINATION_LIMIT` left as it is, pending the user's call
 
 ### Task 2: `ngtermctl` on Windows and macOS (`ngterm-ctl`)
 

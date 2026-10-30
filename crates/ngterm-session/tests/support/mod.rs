@@ -80,8 +80,8 @@ pub fn config(name: &str, namespace: &Path, spec: SessionSpec) -> PaneConfig {
     PaneConfig::new(name, namespace, spec, SIZE)
 }
 
-/// A shell that runs each line it reads: `cmd /q /k` (no prompt noise), or `sh` evaluating its input lines (no
-/// prompt at all).
+/// A shell that runs each line it reads: `cmd /q /k` (its command lines not echoed, though a blank line and its prompt
+/// still follow each command), or `sh` evaluating its input lines (nothing after a command).
 pub fn shell() -> SessionSpec {
     if cfg!(windows) {
         spec(&["cmd.exe", "/d", "/q", "/k"])
