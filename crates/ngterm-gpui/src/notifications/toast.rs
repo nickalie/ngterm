@@ -105,23 +105,28 @@ mod tests {
 
     use super::*;
 
+    /// An identity's ids, as upstream's `uuidString` spells them.
+    fn upper(id: Uuid) -> String {
+        id.to_string().to_uppercase()
+    }
+
     #[test]
     fn a_terminal_banner_takes_its_window_as_the_group_and_the_rest_as_the_tag() {
         let (window, session) = (Uuid::new_v4(), Uuid::new_v4());
         for (identity, rest) in [
             (
                 notification_identity(window, session, PaneRole::Overlay),
-                format!("{session}:overlay"),
+                format!("{}:overlay", upper(session)),
             ),
             (
                 control_notification_identity(window, session),
-                format!("{session}:notify"),
+                format!("{}:notify", upper(session)),
             ),
         ] {
             assert_eq!(
                 slot(&identity),
                 Slot {
-                    group: window.to_string(),
+                    group: upper(window),
                     tag: rest
                 }
             );
