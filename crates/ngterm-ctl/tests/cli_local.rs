@@ -379,8 +379,17 @@ fn terminfo_install_compiles_the_entry_into_the_remote_home_without_connecting()
         (Some(0), "installed xterm-ghostty on box\n"),
         "{stderr}"
     );
-    let installed = sandbox.path("home/.terminfo/x").join(ENTRY);
-    assert!(installed.metadata()?.len() > 0);
+    // the "remote" `tic` is this machine's, which files the entry under the same directory the stage's went to: its
+    // first letter on Linux, its hex code on macOS
+    let letter_dir = sandbox.path("stage/share/terminfo/x").join(ENTRY).exists();
+    let installed = sandbox
+        .path(if letter_dir {
+            "home/.terminfo/x"
+        } else {
+            "home/.terminfo/78"
+        })
+        .join(ENTRY);
+    assert!(installed.metadata()?.len() > 0, "{}", installed.display());
 
     let recorded = fs::read_to_string(sandbox.path("ssh.args"))?;
     let argv: Vec<&str> = recorded.lines().collect();
