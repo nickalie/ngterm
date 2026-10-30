@@ -105,7 +105,7 @@ impl Sandbox {
         Self::script(
             &self.path("stage/bin/ngterm-session"),
             &format!(
-                "printf '%s\\n' \"$@\" > '{args}'\nenv | grep '^NGTERM_LIVE_' | sort > '{env}'\ncat > '{stdin}'\n\
+                "printf '%s\\n' \"$@\" > '{args}'\nenv | grep '^NGTERM_LIVE_' | LC_ALL=C sort > '{env}'\ncat > '{stdin}'\n\
                  exit {code}",
                 args = self.path("print.args").display(),
                 env = self.path("print.env").display(),
