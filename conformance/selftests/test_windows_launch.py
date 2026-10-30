@@ -68,6 +68,8 @@ def test_the_instance_lives_under_its_root_and_serves_the_pipe_its_path_names(la
     assert not any(name.startswith(("AGTERM_", "ZMX_")) for name in env)
     config = (launched.state_dir / "config" / "ghostty.conf").read_text()
     assert config.startswith(f"command = {os.environ[base.POSIX_SHELL_VARIABLE]}\n")
+    # Git's sh is an interactive bash that is no login shell: its prompt comes from ~/.bashrc
+    assert (launched.home / ".bashrc").read_text() == "PS1='$ '\n"
     assert not launched.socket.exists()
     assert launched.request("version").ok
     with transport.connect(launched.socket, 5) as conn:

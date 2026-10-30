@@ -87,8 +87,11 @@ SERVER_NAMESPACE_FILES = frozenset({"server.lock", "server.sock"})
 # (conformance/docs/spike-macos.md).
 GHOSTTY_SHELL_CONFIG = "command = /bin/sh\n"
 # A macOS pane runs a login /bin/sh, which reads this after /etc/profile: that prompt carries the host name, long
-# enough on a CI runner that a split pane wraps the typed line and the redraw mangles it.
+# enough on a CI runner that a split pane wraps the typed line and the redraw mangles it. Git for Windows' sh is an
+# interactive bash that is no login shell: it reads `~/.bashrc` after Git's own `/etc/bash.bashrc`, whose two-line prompt
+# (user, host, MSYSTEM, the directory, the title) this replaces.
 SHELL_PROFILE = "PS1='$ '\n"
+SHELL_RC = ".bashrc" if WINDOWS else None
 # A selection (`session.selectall`) would otherwise land in the desktop's own primary selection, and an OSC 52 write
 # (`agtermctl clipboard set` in a Live pane) in the desktop clipboard the user's session shares.
 GHOSTTY_ISOLATION_CONFIG = "copy-on-select = false\nclipboard-write = deny\n"
@@ -799,6 +802,7 @@ class Adapter:
         finally:
             _release_app_id(instance.app_id)
             headless_problem = stop_headless(instance.compositor, instance.session_bus, instance.root)
+            keep_logs(instance)
         if leftovers is not None:
             raise leftovers
         if problem is not None:
@@ -808,7 +812,7 @@ class Adapter:
         if headless_problem is not None:
             raise StopError(headless_problem)
         if cleanup:
-            shutil.rmtree(instance.root, ignore_errors=True)
+            _remove_root(instance.root)
             remove_live_dir(instance.live_dir)
 
     def stop_helpers(self, instance: Instance) -> str | None:
@@ -1074,6 +1078,40 @@ def _leftovers_error(
     return LeftoverProcesses(f"processes left under {vocabulary.directory_variable} {live_dir}: {described}{reaping}")
 
 
+# Where a run keeps each stopped instance's logs (the harness's app.log and the app's own state-dir log), named after
+# the test that ran it; unset, they go with the root. CI's Windows job sets it, since its roots go with the runner.
+KEEP_LOGS_VARIABLE = "CONFORMANCE_KEEP_LOGS"
+# The app's own log in its state dir (crates/ngterm-app/src/logging.rs).
+APP_STATE_LOGS = ("ngterm.log", "ngterm.log.1")
+
+
+def keep_logs(instance: Instance) -> None:
+    """Copies the instance's logs into `CONFORMANCE_KEEP_LOGS` when it is set, before the root goes."""
+    target = os.environ.get(KEEP_LOGS_VARIABLE)
+    if not target:
+        return
+    test = os.environ.get("PYTEST_CURRENT_TEST", "outside-a-test").rsplit(" ", 1)[0]
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "_", test)[-150:] + "." + instance.root.name
+    directory = Path(target) / name
+    sources = [instance.log, *(instance.state_dir / log for log in APP_STATE_LOGS)]
+    for source in sources:
+        if source.is_file():
+            directory.mkdir(parents=True, exist_ok=True)
+            with contextlib.suppress(OSError):
+                shutil.copy2(source, directory / source.name)
+
+
+def _remove_root(root: Path) -> None:
+    """The instance root, gone; on Windows, where a file another process still has open cannot be removed, retried
+    while a process the app left goes (its tree was reaped just before)."""
+    deadline = time.monotonic() + (REAP_TREE_GRACE if WINDOWS else 0)
+    while True:
+        shutil.rmtree(root, ignore_errors=True)
+        if not root.exists() or time.monotonic() >= deadline:
+            return
+        threading.Event().wait(POLL_INTERVAL * 4)
+
+
 def _absolute(path: Path | None) -> Path | None:
     return Path(os.path.abspath(path)) if path is not None else None
 
@@ -1118,6 +1156,8 @@ def _prepare_tree(
         (state / "windows").mkdir()
     (state / "config" / "ghostty.conf").write_text(ghostty_config)
     (home / ".profile").write_text(SHELL_PROFILE)
+    if SHELL_RC is not None:
+        (home / SHELL_RC).write_text(SHELL_PROFILE)
     if settings is not None:
         (state / "settings.json").write_text(json.dumps(settings))
 

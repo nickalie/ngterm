@@ -155,8 +155,9 @@ jobs:
           .venv/Scripts/python.exe -m pytest conformance/selftests/test_transport.py
           conformance/selftests/test_client.py conformance/selftests/test_windows_launch.py
       # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
+      # every stopped instance's logs (the harness's and the app's own), named after its test, uploaded with the report
       - name: suite (protocol, cli, behaviors)
-        run: conformance/tools/run-windows.sh
+        run: CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows/instances")" conformance/tools/run-windows.sh
       - name: report into the summary
         if: always()
         run: |
