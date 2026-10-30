@@ -127,6 +127,21 @@ def test_the_stop_reaps_the_apps_process_tree_by_pid(
     assert not winproc.alive(child)
 
 
+def test_the_stop_reaps_a_program_whose_launcher_left(
+    adapter: FakeRust, roots: list[Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_CHILD", "orphan")
+    monkeypatch.setattr(base, "REAP_TREE_GRACE", 0.3)
+    instance = adapter.launch()
+    pid = int((instance.state_dir / "fake-grandchild").read_text())
+    orphan = winproc.Process(pid, 0, "python.exe", winproc.creation_time(pid))
+    # its parent is gone: the process table no longer leads from the app to it
+    app = winproc.Process(instance.pid, 0, "", instance.launched[0][1])
+    assert orphan.pid not in {process.pid for process in winproc.descendants([app])}
+    adapter.stop(instance)
+    assert not winproc.alive(orphan)
+
+
 def test_a_relaunch_runs_again_and_the_stop_reaps_both_trees(
     adapter: FakeRust, roots: list[Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:

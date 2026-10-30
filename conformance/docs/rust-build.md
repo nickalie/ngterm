@@ -65,7 +65,7 @@ On Windows (`tools/run-windows.sh`) the launch differs where the OS does:
 - no compositor, bus or lavapipe: the build renders through DirectX on the machine's adapter;
 - the quit is the session's end (the Restart Manager's `WM_QUERYENDSESSION`, then `WM_ENDSESSION` with
   `ENDSESSION_CLOSEAPP`) posted to the build's hidden `ngterm-system-window`, which must quit within the same 10
-  seconds; the app's process tree is then ended by pid.
+  seconds; the app's process tree is then ended by pid, and the Job object holding the app's processes is closed.
 
 SIGTERM must quit without a prompt within 10 seconds.
 Live sessions keep their sockets in a namespace directory named by the FNV-1a 64 hash (`%016x`, lowercase hex) over

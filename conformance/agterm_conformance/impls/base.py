@@ -93,8 +93,8 @@ SERVER_NAMESPACE_FILES = frozenset({"server.lock", "server.sock"})
 GHOSTTY_SHELL_CONFIG = "command = /bin/sh\n"
 # A macOS pane runs a login /bin/sh, which reads this after /etc/profile: that prompt carries the host name, long
 # enough on a CI runner that a split pane wraps the typed line and the redraw mangles it. Git for Windows' sh is an
-# interactive bash that is no login shell: it reads `~/.bashrc` after Git's own `/etc/bash.bashrc`, whose two-line prompt
-# (user, host, MSYSTEM, the directory, the title) this replaces.
+# interactive bash that is no login shell: it reads `~/.bashrc` after Git's own `/etc/bash.bashrc`, whose two-line
+# prompt (user, host, MSYSTEM, the directory, the title) this replaces.
 SHELL_PROFILE = "PS1='$ '\n"
 SHELL_RC = ".bashrc" if WINDOWS else None
 # A selection (`session.selectall`) would otherwise land in the desktop's own primary selection, and an OSC 52 write
@@ -431,6 +431,8 @@ class Instance:
     # Windows: every app process launched on this root (relaunches too), with its creation time, kept open so no pid
     # is reused: the roots of the process tree the stop reaps.
     launched: list[tuple[subprocess.Popen[bytes], int | None]] = field(default_factory=list)
+    # Windows: the Job object every app process launched on this root is in, with what it starts (`winproc.Job`).
+    job: Any = None
 
     @property
     def pid(self) -> int:
@@ -653,6 +655,7 @@ class Adapter:
             shutil.rmtree(root, ignore_errors=True)
             raise
         launched = [(process, winproc.creation_time(process.pid) if WINDOWS else None)]
+        job = _job_for(process) if WINDOWS else None
         instance = Instance(
             process=process,
             root=root,
@@ -669,6 +672,7 @@ class Adapter:
             session_bus=session_bus,
             quit_window_class=self.quit_window_class,
             launched=launched,
+            job=job,
         )
         return instance if first_run else self._serving(instance, timeout)
 
@@ -704,6 +708,8 @@ class Adapter:
             except BaseException:
                 _release_app_id(instance.app_id)
                 raise
+            if instance.job is not None:
+                _assign(instance.job, process)
         except BaseException as error:
             _note_headless_stop(error, instance.compositor, instance.session_bus, instance.root)
             if (leftovers := _leftovers_error(instance.live_dir, vocabulary=instance.vocabulary)) is not None:
@@ -725,6 +731,7 @@ class Adapter:
             session_bus=instance.session_bus,
             quit_window_class=instance.quit_window_class,
             launched=[*instance.launched, (process, winproc.creation_time(process.pid) if WINDOWS else None)],
+            job=instance.job,
         )
         return self._serving(relaunched, timeout)
 
@@ -758,17 +765,23 @@ class Adapter:
             **_own_group(),
         )
         created = winproc.creation_time(process.pid) if WINDOWS else None
+        job = _job_for(process) if WINDOWS else None
         try:
             stdout, stderr = process.communicate(timeout=timeout)
             code: int | None = process.returncode
         except subprocess.TimeoutExpired:
             if WINDOWS:
+                if job is not None:
+                    job.close()
                 _end_tree([(process, created)], grace=0)
             else:
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate()
             code = None
+        finally:
+            if job is not None:
+                job.close()
         return Beside(
             returncode=code,
             stdout=stdout.decode(errors="replace"),
@@ -1407,10 +1420,31 @@ def _end_windows_app(instance: Instance) -> str | None:
 def reap_process_tree(instance: Instance) -> None:
     """Windows: what is left of every app process launched on the instance's root and its descendants (its panes'
     programs and ConPTY hosts, a session server and its sessions) gets REAP_TREE_GRACE to end by itself, then is ended
-    by pid, each re-checked by its creation time first, never by image name. A no-op elsewhere, where a pane's program
-    ends with its pty and the leftover check names what a live session left."""
+    by pid, each re-checked by its creation time first, never by image name; the instance's Job object then ends
+    whatever is still in it, a program whose parent chain no longer leads to the app included. A no-op elsewhere,
+    where a pane's program ends with its pty and the leftover check names what a live session left."""
     if WINDOWS:
-        _end_tree(instance.launched, REAP_TREE_GRACE)
+        try:
+            _end_tree(instance.launched, REAP_TREE_GRACE)
+        finally:
+            if instance.job is not None:
+                instance.job.close()
+
+
+def _job_for(process: subprocess.Popen[bytes]) -> winproc.Job | None:
+    """A Job object holding `process`, just started, and what it starts; None when the system refused one."""
+    try:
+        job = winproc.Job()
+    except OSError:
+        return None
+    _assign(job, process)
+    return job
+
+
+def _assign(job: winproc.Job, process: subprocess.Popen[bytes]) -> None:
+    # A process that already exited cannot join: the launch's own wait reports it.
+    with contextlib.suppress(OSError):
+        job.assign(process.pid)
 
 
 def _end_tree(launched: Iterable[tuple[subprocess.Popen[bytes], int | None]], grace: float) -> None:

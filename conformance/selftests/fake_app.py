@@ -16,7 +16,8 @@ change from a timer after the reply, as an app does work after acknowledging a c
 On Windows it serves the named pipe the socket path names (agterm_conformance.transport) and opens a hidden top-level
 window of the class FAKE_QUIT_WINDOW_CLASS (default: the Rust build's `ngterm-system-window`) whose `WM_ENDSESSION`
 quits it with 0, as the app's does; in ignore-term mode it records `ENDSESSION` in `fake-signals` and keeps running.
-FAKE_CHILD=1 starts a child that sleeps, its pid written to `fake-child`, for the stop's process-tree reap.
+FAKE_CHILD=1 starts a child that sleeps, its pid written to `fake-child`, for the stop's process-tree reap;
+FAKE_CHILD=orphan starts it through a launcher that leaves at once, its pid written to `fake-grandchild`.
 """
 
 import json
@@ -112,6 +113,18 @@ if os.environ.get("FAKE_CHILD") == "1":
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
     with open(os.path.join(state, "fake-child"), "w") as sink:
         sink.write(str(child.pid))
+if os.environ.get("FAKE_CHILD") == "orphan":
+    import subprocess
+
+    # a launcher that starts the sleeper and leaves at once, as Git for Windows' sh.exe leaves its bash.exe: the
+    # sleeper's parent pid then names a process that is gone
+    grandchild = os.path.join(state, "fake-grandchild")
+    launcher = (
+        "import subprocess, sys; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)']); "
+        f"open({grandchild!r}, 'w').write(str(child.pid))"
+    )
+    subprocess.Popen([sys.executable, "-c", launcher]).wait()
 
 if mode == "ignore-term" and not WINDOWS:
 

@@ -221,14 +221,17 @@ that could reach it:
   with the account.
   Run reference-macos only on an ephemeral runner, never on a Mac with a live agterm.
 - A Windows instance (the Rust build's) keeps its local and roaming application data (`LOCALAPPDATA`, `APPDATA`) in
-  its root with its home, so its live-session namespace (`<LOCALAPPDATA>\ngterm\live\<hash>`) and everything a
-  pane writes per user stay there too; its control socket's path names a named pipe, which nothing else serves. It
-  gets a unique app id, starts in a process group of its own, quits on the session's end posted to its hidden window
-  (the Restart Manager's `WM_QUERYENDSESSION`/`WM_ENDSESSION`), and its process tree (every app process launched on
-  the root and their descendants, each re-checked by its creation time) is ended by pid at the stop, never by image
-  name. Windows offers no headless desktop and no no-op URI handler: the instance's window opens on the desktop the
-  run is on, and `session.reveal` or a clicked link reaches the system's handlers. Run it only on a CI runner or a
-  throwaway VM, never beside a live ngterm.
+  its root with its home, so its live-session namespace (`<LOCALAPPDATA>\ngterm\live\<hash>`) and everything a pane
+  writes per user stay there too; its control socket's path names a named pipe, which nothing else serves. It gets a
+  unique app id, starts in a process group of its own, quits on the session's end posted to its hidden window (the
+  Restart Manager's `WM_QUERYENDSESSION`/`WM_ENDSESSION`), and its process tree (every app process launched on the
+  root and their descendants, each re-checked by its creation time) is ended by pid at the stop, never by image name;
+  a Job object the harness puts each of its app processes in ends what is left of them at the stop, a program whose
+  parent chain no longer leads to the app included (Git for Windows' `sh.exe` launcher, ended alone, leaves its
+  `bash.exe` running), while breakaway lets the live-session server leave the job as it is built to. Windows offers no
+  headless desktop and no no-op URI handler: the instance's window opens on the desktop the run is on, and
+  `session.reveal` or a clicked link reaches the system's handlers. Run it only on a CI runner or a throwaway VM,
+  never beside a live ngterm.
 
 ## CI
 
