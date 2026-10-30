@@ -30,6 +30,7 @@ ngterm-term.workspace = true
 async-channel.workspace = true
 cosmic-text.workspace = true
 fancy-regex.workspace = true
+futures-lite.workspace = true
 futures-util.workspace = true
 gpui-kit.workspace = true
 image.workspace = true

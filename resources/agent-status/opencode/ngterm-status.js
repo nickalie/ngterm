@@ -29,7 +29,30 @@ const ABORT_ERROR_NAMES = new Set(["MessageAbortedError", "AbortError"]);
 const OVERFLOW_ERROR_NAME = "ContextOverflowError";
 
 function defaultWrapperPath() {
-  return join(homedir(), ".config", "ngterm", "agent-status", "ngterm-agent-status.sh");
+  const wrapper = join(homedir(), ".config", "ngterm", "agent-status", "ngterm-agent-status.sh");
+  // Windows has no POSIX shell to run it: the package's PowerShell form sits beside it
+  return process.platform === "win32" ? wrapper.replace(/\.sh$/, ".ps1") : wrapper;
+}
+
+/** The program and argv that run `wrapper`: a `.ps1` through Windows PowerShell on Windows, else the wrapper itself. */
+function reporterCommand(wrapper, args) {
+  if (process.platform === "win32" && /\.ps1$/i.test(wrapper)) {
+    return [
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapper, ...args],
+    ];
+  }
+  return [wrapper, args];
+}
+
+/** Ends a reporter that outlived its wait: its process group on Unix, the process itself on Windows (no groups). */
+function killReporter(child, signal) {
+  try {
+    if (process.platform === "win32") child.kill();
+    else if (child.pid != null) process.kill(-child.pid, signal);
+  } catch {
+    /* already gone */
+  }
 }
 
 function errorName(error) {
@@ -62,19 +85,18 @@ function spawnReport(wrapper, args) {
       clearTimeout(timer);
       resolve();
     };
-    const child = spawn(wrapper, args, {
+    const [program, argv] = reporterCommand(wrapper, args);
+    // a process group of its own to kill on Unix; on Windows `detached` would open a console window
+    const child = spawn(program, argv, {
       stdio: "ignore",
       env: process.env,
-      detached: true,
+      detached: process.platform !== "win32",
+      windowsHide: true,
     });
     child.on("error", finish);
     child.on("close", finish);
     const timer = setTimeout(() => {
-      try {
-        if (child.pid != null) process.kill(-child.pid, "SIGTERM");
-      } catch {
-        /* already gone */
-      }
+      killReporter(child, "SIGTERM");
       finish();
     }, 10_000);
   });

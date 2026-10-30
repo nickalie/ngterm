@@ -164,12 +164,22 @@ fn assert_restore_adapter_installed(home: &Home) {
         "the restore adapter has ngtermctl baked in"
     );
     let settings = home.read(".claude/settings.json");
+    let form = config::HookForm::HOST;
+    let dir = hooks::shell_path(&home.path(".config/ngterm/agent-status"));
+    let command = serde_json::to_string(&form.command(&form.restore_adapter(&dir))).unwrap();
     for arguments in ["claude start", "claude end"] {
-        assert!(
-            settings.contains(&format!("{}' {arguments}", hooks::shell_path(&restore))),
-            "{arguments}"
-        );
+        let entry = format!("{}{arguments}\"", command.trim_end_matches('"'));
+        assert!(settings.contains(&entry), "{arguments}: {entry} in {settings}");
     }
+    let restore_ps1 = home
+        .path(".config/ngterm/agent-status")
+        .join(config::WINDOWS_RESTORE_WRAPPER_NAME);
+    assert!(
+        fs::read_to_string(restore_ps1)
+            .unwrap()
+            .contains(&format!("  $NgtermctlBaked = '{}'", hooks::shell_path(&tool))),
+        "the restore adapter's Windows form has ngtermctl baked in"
+    );
     assert!(
         !home.read(".codex/config.toml").contains(config::RESTORE_WRAPPER_NAME),
         "Codex gets no restore hooks"
@@ -190,10 +200,22 @@ fn assert_fresh_install_files(home: &Home) {
             .unwrap()
             .contains(&format!("  NGTERMCTL='{}'", hooks::shell_path(&tool)))
     );
+    let wrapper_ps1 = home
+        .path(".config/ngterm/agent-status")
+        .join(config::WINDOWS_WRAPPER_NAME);
     assert!(
-        home.read(".claude/settings.json")
-            .contains("ngterm-claude-status.sh' completed --auto-reset")
+        fs::read_to_string(wrapper_ps1)
+            .unwrap()
+            .contains(&format!("  $NgtermctlBaked = '{}'", hooks::shell_path(&tool)))
     );
+    let form = config::HookForm::HOST;
+    let dir = hooks::shell_path(&home.path(".config/ngterm/agent-status"));
+    let command = serde_json::to_string(&format!(
+        "{}completed --auto-reset",
+        form.command(&form.claude_adapter(&dir))
+    ))
+    .unwrap();
+    assert!(home.read(".claude/settings.json").contains(&command), "{command}");
     assert_restore_adapter_installed(home);
     assert_eq!(home.read(".claude/settings.json.bak"), "{\"model\": \"opus\"}\n");
     #[cfg(unix)]
@@ -271,7 +293,9 @@ fn without_restore_hooks(json: &str) -> String {
 /// names and markers, and its package there.
 fn install_before_the_rename(home: &Home, dir: &Path) {
     let dir = hooks::shell_path(dir);
-    let (claude, _) = config::merge_claude_settings(Some("{\"model\": \"opus\"}\n"), &dir, &[]).unwrap();
+    // the installs from before the rename were upstream's, in the POSIX form
+    let (claude, _) =
+        config::merge_claude_settings_in(config::HookForm::Posix, Some("{\"model\": \"opus\"}\n"), &dir, &[]).unwrap();
     home.write(
         ".claude/settings.json",
         &before_the_rename(&without_restore_hooks(&claude)),
@@ -375,7 +399,11 @@ fn assert_moved_onto_the_current_names(home: &Home, ours: bool) {
     let kept: &[&str] = if ours { &[] } else { &OLD_PLUGINS };
     assert_nothing_calls_the_old_names(home, kept);
     let settings = home.read(".claude/settings.json");
-    assert_eq!(settings.matches("ngterm-claude-status.sh").count(), 6, "{settings}");
+    let adapter = match config::HookForm::HOST {
+        config::HookForm::Posix => config::CLAUDE_WRAPPER_NAME,
+        config::HookForm::Windows => config::WINDOWS_CLAUDE_WRAPPER_NAME,
+    };
+    assert_eq!(settings.matches(adapter).count(), 6, "{settings}");
     for rc in [".zshrc", ".bashrc", ".config/fish/config.fish", ".codex/config.toml"] {
         assert_eq!(home.read(rc).matches(RC_MARKER_BEGIN).count(), 1, "{rc}");
     }

@@ -1,11 +1,10 @@
 //! The Claude adapter script run for real: what it forwards to the shared wrapper for a hook's argv and payload. A
-//! stub wrapper records the forwarded argv; nothing reaches an app.
+//! stub wrapper records the forwarded argv; nothing reaches an app. The POSIX script runs on Unix, its PowerShell form
+//! (`ngterm-claude-status.ps1`) on Windows, under Windows PowerShell and, where it is installed, PowerShell 7.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
 
 const IN_FLIGHT: &str =
     r#"[{"id":"b1","type":"shell","status":"running","description":"cargo test","command":"cargo test"}]"#;
@@ -17,14 +16,18 @@ fn payload(event: &str, message: &str, tasks: &str) -> String {
     )
 }
 
-fn adapter() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/agent-status/ngterm-claude-status.sh")
+fn resources() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/agent-status")
 }
 
 /// The argv the adapter hands the wrapper for `args` with `payload` on stdin. The adapter starts only once its
 /// launching shell is reaped, so it is an orphan whose ancestor walk never meets the agent that may be running these
 /// tests (a second agent above the hook would make it a silent worker).
+#[cfg(unix)]
 fn forwarded(args: &[&str], payload: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
     let dir = tempfile::tempdir().unwrap();
     let stub = dir.path().join("wrapper.sh");
     fs::write(
@@ -39,7 +42,7 @@ fn forwarded(args: &[&str], payload: &str) -> String {
     let launch = r#"(while kill -0 $$ 2>/dev/null; do :; done; exec bash "$0" "$@" <"$PAYLOAD" >/dev/null 2>&1) &"#;
     let status = Command::new("sh")
         .args(["-c", launch])
-        .arg(adapter())
+        .arg(resources().join("ngterm-claude-status.sh"))
         .args(args)
         .env("PAYLOAD", &input)
         .env("OUT", &out)
@@ -60,6 +63,67 @@ fn forwarded(args: &[&str], payload: &str) -> String {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// The PowerShell hosts a Windows test runs a script under: Windows PowerShell, and PowerShell 7 when it is on `PATH`.
+#[cfg(windows)]
+pub(super) fn powershells() -> Vec<&'static str> {
+    let pwsh = Command::new("pwsh")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "exit 0"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if pwsh {
+        vec!["powershell", "pwsh"]
+    } else {
+        vec!["powershell"]
+    }
+}
+
+/// `shell` running the PowerShell script `script` with `args`, as a hook command starts it.
+#[cfg(windows)]
+pub(super) fn powershell_file(shell: &str, script: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(shell);
+    command
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(script)
+        .args(args);
+    command
+}
+
+/// The argv the adapter hands the wrapper for `args` with `payload` on stdin, the same under each PowerShell. The
+/// adapter runs as the test's child: its ancestor walk meets the test, cargo and their shell, no agent on a CI runner
+/// (a developer's agent above them counts once, which still reports).
+#[cfg(windows)]
+fn forwarded(args: &[&str], payload: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let stub = dir.path().join("wrapper.ps1");
+    fs::write(
+        &stub,
+        "Set-Content -LiteralPath $env:OUT -Value ($args -join ' ') -NoNewline\r\n",
+    )
+    .unwrap();
+    let out = dir.path().join("argv");
+    let input = dir.path().join("payload.json");
+    fs::write(&input, payload).unwrap();
+    let mut seen = Vec::new();
+    for shell in powershells() {
+        let _ = fs::remove_file(&out);
+        let status = powershell_file(shell, &resources().join("ngterm-claude-status.ps1"), args)
+            .stdin(fs::File::open(&input).unwrap())
+            .env("OUT", &out)
+            .env("NGTERM_STATUS_WRAPPER", &stub)
+            .env("NGTERM_SESSION_ID", "S")
+            .env_remove("NGTERM_AGENT_RE")
+            .status()
+            .unwrap();
+        assert!(status.success(), "{shell}: {status}");
+        let recorded = fs::read_to_string(&out)
+            .unwrap_or_else(|err| panic!("{shell}: the adapter never called the wrapper for {args:?}: {err}"));
+        seen.push(recorded);
+    }
+    seen.dedup();
+    assert_eq!(seen.len(), 1, "the PowerShell hosts differ: {seen:?}");
+    seen.remove(0)
 }
 
 #[test]
@@ -103,4 +167,75 @@ fn other_states_and_events_forward_verbatim() {
         "completed --auto-reset"
     );
     assert_eq!(forwarded(&["completed", "--auto-reset"], ""), "completed --auto-reset");
+}
+
+/// The ancestor walk on Windows, through the process table: copies of `cmd.exe` named as agents stand between a
+/// launcher and the adapter, each running the next with `/c`. One agent, or a run of one name, is the pane's agent and
+/// reports; a second, different agent above the first makes the hook a worker's, which stays silent. The launcher
+/// starts the first agent with `start /b` and exits, so the walk ends there, never reaching an agent that may be
+/// running these tests; the outermost agent touches `done` once the chain has finished. The paths go unquoted, since
+/// `cmd /c` strips the quotes of a command line that starts with one: the test's directories hold no space.
+#[cfg(windows)]
+#[test]
+fn a_hook_under_a_second_agent_is_a_workers_and_stays_silent() {
+    use std::os::windows::process::CommandExt as _;
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned());
+    for agent in ["claude", "codex"] {
+        let copy = dir.path().join(format!("{agent}.exe"));
+        fs::copy(Path::new(&system).join(r"System32\cmd.exe"), copy).unwrap();
+    }
+    let stub = dir.path().join("wrapper.ps1");
+    fs::write(
+        &stub,
+        "Set-Content -LiteralPath $env:OUT -Value ($args -join ' ') -NoNewline\r\n",
+    )
+    .unwrap();
+    let (out, done) = (dir.path().join("argv"), dir.path().join("done"));
+    let adapter = resources().join("ngterm-claude-status.ps1");
+    for path in [dir.path(), adapter.as_path()] {
+        assert!(
+            !path.display().to_string().contains(' '),
+            "a space in {}",
+            path.display()
+        );
+    }
+    let hook = format!(
+        "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {} blocked",
+        adapter.display()
+    );
+    let exe = |name: &str| dir.path().join(format!("{name}.exe")).display().to_string();
+    let under = |agents: &[&str]| {
+        let _ = fs::remove_file(&out);
+        let _ = fs::remove_file(&done);
+        let line = agents
+            .iter()
+            .rev()
+            .fold(hook.clone(), |inner, name| format!("{} /d /c {inner}", exe(name)));
+        // `^&` and `^>` reach the first agent, which runs the chain and then touches `done`
+        let status = Command::new("cmd")
+            .raw_arg(format!("/d /c start \"\" /b {line} ^& type nul ^> {}", done.display()))
+            .env("OUT", &out)
+            .env("NGTERM_STATUS_WRAPPER", &stub)
+            .env("NGTERM_SESSION_ID", "S")
+            .env_remove("NGTERM_AGENT_RE")
+            .status()
+            .unwrap();
+        assert!(status.success(), "{agents:?}: {status}");
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !done.exists() {
+            assert!(Instant::now() < deadline, "{agents:?}: the chain never finished");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        fs::read_to_string(&out).ok()
+    };
+    assert_eq!(under(&["claude"]).as_deref(), Some("blocked"), "the pane's agent");
+    assert_eq!(
+        under(&["claude", "claude"]).as_deref(),
+        Some("blocked"),
+        "a run of one name"
+    );
+    assert_eq!(under(&["claude", "codex"]), None, "a worker under another agent");
 }

@@ -13,10 +13,12 @@
 //!
 //! On Windows every agent keeps its config under the user's profile at the same relative paths (`%USERPROFILE%`'s
 //! `.claude`, `.codex`, `.pi\agent`, `.config\opencode`), and the package goes to the same `.config\ngterm\agent-status`
-//! that the Pi extension and the `OpenCode` plugins name. Claude Code runs a hook's command in Git Bash there (its own
-//! requirement on Windows), so the commands stay the POSIX ones, their paths written with forward slashes
-//! ([`shell_path`]); Codex runs a hook through `cmd.exe`, so its block adds each hook's `command_windows`, the adapter
-//! under Git Bash ([`config::WINDOWS_BASH`]). Nothing is linked, and no mode is set or kept ([`files`]).
+//! that the Pi extension and the `OpenCode` plugins name, paths written with forward slashes ([`shell_path`]). Claude
+//! Code runs a hook's command in Git Bash there, or in PowerShell without it, so its hooks call the package's
+//! PowerShell forms through `powershell.exe`, a command line both shells read alike ([`config::HookForm`]); the Pi
+//! extension and the `OpenCode` plugins start the PowerShell wrapper the same way. Codex runs a hook through
+//! `cmd.exe`, so its block adds each hook's `command_windows`, the POSIX adapter under Git Bash
+//! ([`config::WINDOWS_BASH`]). Nothing is linked, and no mode is set or kept ([`files`]).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -752,21 +754,24 @@ pub fn apply(plan: &HooksPlan) -> Result<HooksOutcome, InstallError> {
 }
 
 /// Copies the package over the script directory and bakes `ngtermctl` into the generic and Codex wrappers and the
-/// restore adapter (the Claude status adapter execs the generic wrapper, so it needs none).
+/// restore adapter, in both their forms (the Claude status adapters call the generic wrapper, so they need none).
 fn install_package(plan: &HooksPlan) -> Result<(), InstallError> {
     files::copy_tree(&plan.package, &plan.script_dir).map_err(failed("install the scripts into", &plan.script_dir))?;
     let Some(tool) = &plan.bake else {
         return Ok(());
     };
-    for name in [
-        config::WRAPPER_NAME,
-        config::CODEX_WRAPPER_NAME,
-        config::RESTORE_WRAPPER_NAME,
+    let posix: fn(&str, &str) -> String = config::bake_ngtermctl_path;
+    let powershell: fn(&str, &str) -> String = config::bake_ngtermctl_path_powershell;
+    for (name, bake) in [
+        (config::WRAPPER_NAME, posix),
+        (config::CODEX_WRAPPER_NAME, posix),
+        (config::RESTORE_WRAPPER_NAME, posix),
+        (config::WINDOWS_WRAPPER_NAME, powershell),
+        (config::WINDOWS_RESTORE_WRAPPER_NAME, powershell),
     ] {
         let wrapper = plan.script_dir.join(name);
         let original = fs::read_to_string(&wrapper).map_err(failed("read", &wrapper))?;
-        files::write_preserving_symlink(&config::bake_ngtermctl_path(&original, tool), &wrapper)
-            .map_err(failed("write", &wrapper))?;
+        files::write_preserving_symlink(&bake(&original, tool), &wrapper).map_err(failed("write", &wrapper))?;
     }
     Ok(())
 }

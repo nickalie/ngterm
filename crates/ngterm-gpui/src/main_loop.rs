@@ -102,6 +102,11 @@ impl<S: 'static> MainLoop<S> for GpuiMainLoop<S> {
 
 /// Runs the tasks posted to `tasks` on the foreground, each with `state`, then `after` with the app context and the
 /// state released (where what the task left to the frontend lands). Ends when the loop is closed.
+///
+/// Each task gets a pass of GPUI's loop of its own: the consumer yields after every one, so the platform's events
+/// that arrived before a task are handled before it. Without the yield a burst of tasks ran in one pass, and an X11
+/// `ConfigureNotify` a task's own request read into the connection's queue (a `window.resize`) waited behind the
+/// whole burst, so a quit queued in it saved the window's size from before the resize.
 pub fn drive<S: 'static>(
     tasks: async_channel::Receiver<MainTask<S>>,
     state: Entity<S>,
@@ -114,6 +119,7 @@ pub fn drive<S: 'static>(
                 state.update(cx, |state, _| task(state));
                 after(&state, cx);
             });
+            futures_lite::future::yield_now().await;
         }
     })
 }

@@ -193,3 +193,177 @@ fn invalid_candidates_are_skipped_for_a_later_directory() {
     fs::create_dir_all(directory.join(PWSH)).unwrap();
     assert_eq!(shell_under(&[&directory, &invalid, &valid]), found(pwsh));
 }
+
+/// The package an MSIX PowerShell 7 installs, as its alias names it.
+const PACKAGE: &str = "Microsoft.PowerShell_8wekyb3d8bbwe";
+const APP_ID: &str = "Microsoft.PowerShell_8wekyb3d8bbwe!App";
+const PACKAGED_PWSH: &str = r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.5.4.0_x64__8wekyb3d8bbwe\pwsh.exe";
+
+/// An App Execution Alias's reparse buffer with `version` and `strings`, each NUL-terminated, laid out as Windows
+/// writes one (`fsutil reparsepoint query` on a Windows 11 alias): the header, the version, the UTF-16 strings.
+fn alias_buffer_of(version: u32, strings: &[&str]) -> Vec<u8> {
+    let mut data = version.to_le_bytes().to_vec();
+    for string in strings {
+        data.extend(string.encode_utf16().chain([0]).flat_map(u16::to_le_bytes));
+    }
+    let mut buffer = IO_REPARSE_TAG_APPEXECLINK.to_le_bytes().to_vec();
+    buffer.extend(u16::try_from(data.len()).unwrap().to_le_bytes());
+    buffer.extend([0, 0]);
+    buffer.extend(data);
+    buffer
+}
+
+/// The reparse buffer of an alias of PowerShell 7's package whose image is `target`.
+fn alias_buffer(target: &str) -> Vec<u8> {
+    alias_buffer_of(APP_EXEC_LINK_VERSION, &[PACKAGE, APP_ID, target, "0"])
+}
+
+#[test]
+fn an_app_execution_alias_names_its_packaged_image() {
+    assert_eq!(
+        app_exec_link_target(&alias_buffer(PACKAGED_PWSH)).as_deref(),
+        Some(PACKAGED_PWSH)
+    );
+    // an older alias without the application type still names its image
+    let three = alias_buffer_of(APP_EXEC_LINK_VERSION, &[PACKAGE, APP_ID, PACKAGED_PWSH]);
+    assert_eq!(app_exec_link_target(&three).as_deref(), Some(PACKAGED_PWSH));
+    // data past what the header declares is not read
+    let mut trailing = alias_buffer(PACKAGED_PWSH);
+    trailing.extend([0xff; 6]);
+    assert_eq!(app_exec_link_target(&trailing).as_deref(), Some(PACKAGED_PWSH));
+}
+
+#[test]
+fn other_reparse_buffers_name_no_image() {
+    let other_tag = {
+        let mut buffer = alias_buffer(PACKAGED_PWSH);
+        // IO_REPARSE_TAG_SYMLINK
+        buffer[..4].copy_from_slice(&0xa000_000c_u32.to_le_bytes());
+        buffer
+    };
+    let truncated = {
+        let mut buffer = alias_buffer(PACKAGED_PWSH);
+        buffer.pop();
+        buffer
+    };
+    let odd = {
+        let mut buffer = alias_buffer(PACKAGED_PWSH);
+        buffer.push(0);
+        let len = u16::from_le_bytes([buffer[4], buffer[5]]) + 1;
+        buffer[4..6].copy_from_slice(&len.to_le_bytes());
+        buffer
+    };
+    let unterminated = {
+        let mut buffer = alias_buffer_of(APP_EXEC_LINK_VERSION, &[PACKAGE, APP_ID]);
+        let path: Vec<u8> = PACKAGED_PWSH.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let len = u16::from_le_bytes([buffer[4], buffer[5]]) + u16::try_from(path.len()).unwrap();
+        buffer[4..6].copy_from_slice(&len.to_le_bytes());
+        buffer.extend(path);
+        buffer
+    };
+    let cases: [(&str, Vec<u8>); 9] = [
+        ("empty", Vec::new()),
+        (
+            "header only",
+            alias_buffer_of(APP_EXEC_LINK_VERSION, &[])[..REPARSE_HEADER_LEN].to_vec(),
+        ),
+        ("another tag", other_tag),
+        (
+            "another version",
+            alias_buffer_of(2, &[PACKAGE, APP_ID, PACKAGED_PWSH, "0"]),
+        ),
+        ("shorter than its header says", truncated),
+        ("half a UTF-16 unit", odd),
+        ("no image", alias_buffer_of(APP_EXEC_LINK_VERSION, &[PACKAGE, APP_ID])),
+        ("an empty image", alias_buffer("")),
+        ("an unterminated image", unterminated),
+    ];
+    for (label, buffer) in cases {
+        assert_eq!(app_exec_link_target(&buffer), None, "case {label:?}");
+    }
+}
+
+/// Makes `alias` an App Execution Alias of PowerShell 7's package whose image is `target`, as an MSIX install does.
+#[cfg(windows)]
+fn make_alias(alias: &Path, target: &str) {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+
+    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT};
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    use windows_sys::Win32::System::Ioctl::FSCTL_SET_REPARSE_POINT;
+
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(alias)
+        .unwrap();
+    let buffer = alias_buffer(target);
+    let mut returned = 0u32;
+    // SAFETY: the handle is open for writing, the input buffer is valid for the length passed beside it, there is no
+    // output, and the call is synchronous.
+    let ok = unsafe {
+        DeviceIoControl(
+            file.as_raw_handle(),
+            FSCTL_SET_REPARSE_POINT,
+            buffer.as_ptr().cast(),
+            u32::try_from(buffer.len()).unwrap(),
+            std::ptr::null_mut(),
+            0,
+            &raw mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    assert_ne!(ok, 0, "setting the alias: {}", std::io::Error::last_os_error());
+}
+
+#[cfg(windows)]
+#[test]
+fn an_alias_of_a_launchable_image_is_the_shell_itself() {
+    let base = tempfile::tempdir().unwrap();
+    let (apps, package) = (base.path().join("WindowsApps"), base.path().join("package"));
+    fs::create_dir_all(&apps).unwrap();
+    fs::create_dir_all(&package).unwrap();
+    let image = package.join(PWSH);
+    fs::write(&image, x64_image()).unwrap();
+    let alias = apps.join(PWSH);
+    make_alias(&alias, image.to_str().unwrap());
+    // the alias is no image: opening it without its reparse point fails, as on a real one
+    assert!(fs::File::open(&alias).is_err(), "the alias opens like a file");
+    assert_eq!(alias_target(&alias), Some(image));
+    assert_eq!(shell_under(&[&apps]), found(alias), "the alias, not its image");
+}
+
+#[cfg(windows)]
+#[test]
+fn an_alias_of_no_launchable_image_is_skipped() {
+    let base = tempfile::tempdir().unwrap();
+    let (apps, package, later) = (
+        base.path().join("WindowsApps"),
+        base.path().join("package"),
+        base.path().join("later"),
+    );
+    for dir in [&apps, &package, &later] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    let arm64 = package.join("arm64.exe");
+    fs::write(&arm64, image(MACHINE_ARM64, IMAGE_FILE_EXECUTABLE_IMAGE, 1)).unwrap();
+    let not_an_image = package.join("text.exe");
+    fs::write(&not_an_image, b"not a PE image").unwrap();
+    let missing = package.join("missing.exe");
+    let pwsh = later.join(PWSH);
+    fs::write(&pwsh, x64_image()).unwrap();
+    for (label, target) in [
+        ("a foreign image", arm64.to_str().unwrap()),
+        ("not an image", not_an_image.to_str().unwrap()),
+        ("a missing image", missing.to_str().unwrap()),
+        ("a relative image", r"package\pwsh.exe"),
+    ] {
+        let alias = apps.join(PWSH);
+        make_alias(&alias, target);
+        assert!(!is_launchable(&alias, MACHINE_AMD64), "case {label:?}");
+        assert_eq!(shell_under(&[&apps, &later]), found(pwsh.clone()), "case {label:?}");
+        fs::remove_file(&alias).unwrap();
+    }
+}

@@ -28,6 +28,8 @@ use crate::pane::tests::{idle_command, three_sessions};
 use crate::terminal::Spawn;
 
 const DEADLINE: Duration = Duration::from_secs(20);
+/// How long [`Harness::quiet`] waits with nothing posted.
+const QUIET: Duration = Duration::from_secs(1);
 
 // MARK: - the plan
 
@@ -261,6 +263,25 @@ impl Harness<'_> {
             self.deck.read_with(self.cx, |deck, _| deck.launch(&grant));
         }
         self.cx.run_until_parked();
+    }
+
+    /// Turns until the panes' threads have posted nothing for [`QUIET`], or fails: what a pseudoconsole sends on its own
+    /// once a pane starts (Windows' title and screen setup, whatever the program prints) is in before a test counts
+    /// what one action posts.
+    fn quiet(&mut self) {
+        let deadline = Instant::now() + DEADLINE;
+        let mut calm = Instant::now();
+        loop {
+            if !self.posted.0.lock().unwrap().is_empty() {
+                calm = Instant::now();
+            }
+            self.turn();
+            if calm.elapsed() >= QUIET {
+                return;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for the panes to go quiet");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     /// Turns until `done` holds (the panes' threads run meanwhile), or fails.

@@ -10,12 +10,10 @@
 //! (22.7+, or 20.19+ on the 20.x line) imports. A missing or older `node` prints `SKIPPED:` and passes, unless
 //! `NGTERM_REQUIRE_NODE_TESTS` is set, as CI sets it: then it fails.
 //!
-//! Unix only: the plugin spawns the POSIX status wrapper by its path, which Windows cannot execute; its Windows form
-//! is the agent-status package's own (`resources/agent-status`), not this crate's.
-#![cfg(unix)]
+//! On Windows the plugin runs a `.ps1` reporter through Windows PowerShell, as it runs the package's PowerShell wrapper
+//! there, so the recorders are PowerShell scripts on Windows and `sh` scripts elsewhere.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -25,7 +23,10 @@ use serde_json::{Value, json};
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 /// The PATH the plugin runs under: the reporter scripts' shell and nothing of the developer's.
-const PATH: &str = "/usr/bin:/bin";
+#[cfg(unix)]
+fn path() -> String {
+    "/usr/bin:/bin".to_owned()
+}
 
 fn plugin() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/agent-status/opencode/ngterm-status.js")
@@ -81,13 +82,38 @@ fn node() -> Option<&'static Path> {
     }
 }
 
-/// Runs `script` under `node` in exactly `env` (nothing of this process's environment, the user's `NGTERM_*` least
-/// of all); fails with node's output when it exits non-zero.
+/// Runs `script` under `node` in `env`, without the user's `NGTERM_*` (on Unix with nothing else of this process's
+/// environment either); fails with node's output when it exits non-zero.
+///
+/// On Windows the plugin's reporters are PowerShell processes, which need the system's variables: the environment
+/// stays this process's, less the live instance's variables, and the runs go one at a time, so that PowerShell cold
+/// starts do not pile up past the plugin's 10 s wait (every report timed out on CI's runner while the runs went at
+/// once in a stripped environment).
 fn run_node(node: &Path, script: &Path, env: &[(&str, &Path)]) -> TestResult {
     let mut command = Command::new(node);
-    command.arg(script).env_clear().env("PATH", PATH);
+    command.arg(script);
+    #[cfg(unix)]
+    command.env_clear().env("PATH", path());
+    #[cfg(windows)]
+    let _one_at_a_time = {
+        static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        for (key, _) in std::env::vars_os() {
+            let key = key.to_string_lossy().into_owned();
+            if ["NGTERM_", "AGTERM_", "ZMX_"]
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
+            {
+                command.env_remove(key);
+            }
+        }
+        ONE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
     for (key, value) in env {
         command.env(key, value);
+        // the home `os.homedir()` reads on Windows
+        if *key == "HOME" {
+            command.env("USERPROFILE", value);
+        }
     }
     let out = command.output()?;
     assert!(
@@ -101,10 +127,30 @@ fn run_node(node: &Path, script: &Path, env: &[(&str, &Path)]) -> TestResult {
     Ok(())
 }
 
+/// A reporter script named `stem` in `dir`: as is on Unix, `.ps1` on Windows, where the plugin runs it through Windows
+/// PowerShell.
+fn script_path(dir: &Path, stem: &str) -> PathBuf {
+    if cfg!(windows) {
+        dir.join(format!("{stem}.ps1"))
+    } else {
+        dir.join(stem)
+    }
+}
+
 fn write_executable(path: &Path, text: &str) -> TestResult {
     fs::write(path, text)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    }
     Ok(())
+}
+
+/// `path` single-quoted for PowerShell.
+#[cfg(windows)]
+fn quoted(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
 
 fn lines(path: &Path) -> Vec<String> {
@@ -116,8 +162,17 @@ fn lines(path: &Path) -> Vec<String> {
 }
 
 /// A reporter that appends its argv, one line per call, to `statuses`.
+#[cfg(unix)]
 fn recorder(statuses: &Path) -> String {
     format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n", statuses.display())
+}
+
+#[cfg(windows)]
+fn recorder(statuses: &Path) -> String {
+    format!(
+        "Add-Content -LiteralPath {} -Value ($args -join ' ')\r\n",
+        quoted(statuses)
+    )
 }
 
 /// The harness stays out of the resources (they ship to users). It is `.mjs`, so Node loads the plugin's `.js` as ESM
@@ -153,12 +208,17 @@ fn run_events(node: &Path, events: &[Value], setup: Setup) -> TestResult<Vec<Str
     let statuses = dir.path().join("statuses");
     let home = dir.path().join("home");
     fs::create_dir(&home)?;
-    let status_wrapper = dir.path().join("status-wrapper");
+    let status_wrapper = script_path(dir.path(), "status-wrapper");
     write_executable(&status_wrapper, &recorder(&statuses))?;
     if !setup.status_wrapper {
         let default_dir = home.join(".config/ngterm/agent-status");
         fs::create_dir_all(&default_dir)?;
-        write_executable(&default_dir.join("ngterm-agent-status.sh"), &recorder(&statuses))?;
+        let name = if cfg!(windows) {
+            "ngterm-agent-status.ps1"
+        } else {
+            "ngterm-agent-status.sh"
+        };
+        write_executable(&default_dir.join(name), &recorder(&statuses))?;
     }
     let events_file = dir.path().join("events.json");
     fs::write(&events_file, serde_json::to_string(events)?)?;
@@ -543,7 +603,7 @@ const pending = Promise.all(events.map((event) => hooks.event({ event })));
 const startedPath = process.env.NGTERM_OPENCODE_STARTED;
 const releasePath = process.env.NGTERM_OPENCODE_RELEASE;
 const statusesPath = process.env.NGTERM_OPENCODE_STATUSES;
-for (let i = 0; i < 500 && !existsSync(startedPath); i++) await sleep(10);
+for (let i = 0; i < 3000 && !existsSync(startedPath); i++) await sleep(10);
 // While blocked is held, the follow-up active report must not have started (the queue serializes).
 const started = existsSync(startedPath) ? readFileSync(startedPath, "utf8") : "";
 if (started.includes("active")) {
@@ -560,6 +620,31 @@ writeFileSync(releasePath, "1");
 await pending;
 "#;
 
+/// A reporter that notes each start in `started`, holds `blocked` until `release` exists, then records its argv in
+/// `statuses`.
+#[cfg(unix)]
+fn gated_reporter(started: &Path, release: &Path, statuses: &Path) -> String {
+    format!(
+        "#!/bin/sh\nprintf '%s\\n' \"start $*\" >> '{started}'\nif [ \"$1\" = \"blocked\" ]; then\n  while [ ! -f \
+         '{release}' ]; do sleep 0.01; done\nfi\nprintf '%s\\n' \"$*\" >> '{statuses}'\n",
+        started = started.display(),
+        release = release.display(),
+        statuses = statuses.display(),
+    )
+}
+
+#[cfg(windows)]
+fn gated_reporter(started: &Path, release: &Path, statuses: &Path) -> String {
+    format!(
+        "Add-Content -LiteralPath {started} -Value ('start ' + ($args -join ' '))\r\nif ($args[0] -eq 'blocked') {{\r\n  \
+         while (-not (Test-Path -LiteralPath {release})) {{ Start-Sleep -Milliseconds 10 }}\r\n}}\r\nAdd-Content \
+         -LiteralPath {statuses} -Value ($args -join ' ')\r\n",
+        started = quoted(started),
+        release = quoted(release),
+        statuses = quoted(statuses),
+    )
+}
+
 #[test]
 fn reports_run_strictly_in_order() -> TestResult {
     let Some(node) = node() else {
@@ -570,17 +655,8 @@ fn reports_run_strictly_in_order() -> TestResult {
     let statuses = dir.path().join("statuses");
     let started = dir.path().join("started");
     let release = dir.path().join("release");
-    let wrapper = dir.path().join("status-wrapper");
-    write_executable(
-        &wrapper,
-        &format!(
-            "#!/bin/sh\nprintf '%s\\n' \"start $*\" >> '{started}'\nif [ \"$1\" = \"blocked\" ]; then\n  while [ ! -f \
-             '{release}' ]; do sleep 0.01; done\nfi\nprintf '%s\\n' \"$*\" >> '{statuses}'\n",
-            started = started.display(),
-            release = release.display(),
-            statuses = statuses.display(),
-        ),
-    )?;
+    let wrapper = script_path(dir.path(), "status-wrapper");
+    write_executable(&wrapper, &gated_reporter(&started, &release, &statuses))?;
     // permission.asked / replied always report (no active-set gate), so the queue order is isolated
     let events_file = dir.path().join("events.json");
     let events = [bare("permission.asked"), bare("permission.replied")];

@@ -27,6 +27,9 @@ ngterm-wpe-platform-sys = { path = "crates/ngterm-wpe-platform-sys" }
 ngterm-wpe-sys = { path = "crates/ngterm-wpe-sys" }
 ngterm-wpe = { path = "crates/ngterm-wpe" }
 async-channel = "2"
+# ngterm-gpui's main-loop consumer yields to GPUI's loop between tasks (`future::yield_now`); the futures-lite smol and
+# async-io already link.
+futures-lite = "2.6"
 base64 = "0.23"
 bitflags = "2"
 clap = { version = "4.6", features = ["derive"] }

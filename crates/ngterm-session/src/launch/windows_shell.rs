@@ -13,6 +13,15 @@
 //! PE32 or PE32+ optional header inside the file: `CreateProcessW` does not fall back to later `PATH` entries, so a
 //! malformed, DLL or foreign-architecture `pwsh.exe` is skipped here. Defined on every OS for its tests, which model
 //! an x64 host where the host is not Windows.
+//!
+//! A candidate may also be an App Execution Alias, the zero-byte file in `%LOCALAPPDATA%\Microsoft\WindowsApps` that
+//! is the only `pwsh.exe` on `PATH` when PowerShell 7 comes from its MSIX package (winget's, the Microsoft Store's):
+//! a reparse point tagged `IO_REPARSE_TAG_APPEXECLINK` whose data names the package's image. Such an alias is
+//! launchable when that image is, and the pane runs the alias itself: `CreateProcessW` resolves it and starts the
+//! image with the package's identity, which starting the image under `Program Files\WindowsApps` directly would lose.
+//! The alias's layout is not in the SDK headers: a version (3), then NUL-terminated UTF-16 strings, the package
+//! family name, the application user model id, the image's full path and the application type, as
+//! `fsutil reparsepoint query` shows it on Windows 11's own aliases.
 
 #[cfg(test)]
 mod tests;
@@ -49,6 +58,15 @@ const IMAGE_FILE_EXECUTABLE_IMAGE: u16 = 0x0002;
 const IMAGE_FILE_DLL: u16 = 0x2000;
 const PE32_MAGIC: u16 = 0x010b;
 const PE32_PLUS_MAGIC: u16 = 0x020b;
+
+/// The reparse tag of an App Execution Alias (`IO_REPARSE_TAG_APPEXECLINK`, `winnt.h`).
+const IO_REPARSE_TAG_APPEXECLINK: u32 = 0x8000_001b;
+/// A reparse buffer's header (`REPARSE_DATA_BUFFER`): the tag, the data's length and a reserved field.
+const REPARSE_HEADER_LEN: usize = 8;
+/// The one layout of an alias's data this lookup reads.
+const APP_EXEC_LINK_VERSION: u32 = 3;
+/// Which of an alias's strings is its image's path: after the package family name and the application user model id.
+const APP_EXEC_LINK_TARGET: usize = 2;
 
 /// This process's shell: the first launchable `pwsh.exe` on its `PATH`, else `powershell.exe` there or in the
 /// system directory; `None` without any.
@@ -101,9 +119,90 @@ fn system_directory() -> Option<PathBuf> {
     Some(PathBuf::from(std::ffi::OsString::from_wide(&buffer[..len])))
 }
 
-/// Whether `path` is a PE image a host of `native_machine` can launch.
+/// Whether `path` is a PE image a host of `native_machine` can launch, or an App Execution Alias whose image is one.
 pub(super) fn is_launchable(path: &Path, native_machine: u16) -> bool {
-    Image::read(path).is_some_and(|image| image.is_launchable(native_machine))
+    let image_is_launchable = |path: &Path| Image::read(path).is_some_and(|image| image.is_launchable(native_machine));
+    image_is_launchable(path) || alias_target(path).is_some_and(|target| image_is_launchable(&target))
+}
+
+/// The image `path` names when it is an App Execution Alias with an absolute target; `None` for any other file.
+fn alias_target(path: &Path) -> Option<PathBuf> {
+    let target = PathBuf::from(app_exec_link_target(&reparse_point(path)?)?);
+    target.is_absolute().then_some(target)
+}
+
+/// The image path of the App Execution Alias whose reparse buffer (`FSCTL_GET_REPARSE_POINT`'s output, its header
+/// first) is `buffer`; `None` for another tag, another version, a buffer shorter than its header says, data that is
+/// not whole UTF-16 units, or an empty or unterminated path.
+pub(super) fn app_exec_link_target(buffer: &[u8]) -> Option<String> {
+    let (header, rest) = buffer.split_at_checked(REPARSE_HEADER_LEN)?;
+    let tag = u32::from_le_bytes(header[..4].try_into().ok()?);
+    let data_len = usize::from(u16::from_le_bytes([header[4], header[5]]));
+    let data = rest.get(..data_len)?;
+    let (version, strings) = data.split_at_checked(4)?;
+    let (units, odd) = strings.as_chunks::<2>();
+    if tag != IO_REPARSE_TAG_APPEXECLINK
+        || u32::from_le_bytes(version.try_into().ok()?) != APP_EXEC_LINK_VERSION
+        || !odd.is_empty()
+    {
+        return None;
+    }
+    let units: Vec<u16> = units.iter().map(|unit| u16::from_le_bytes(*unit)).collect();
+    // the strings up to the target's own NUL; a target that runs to the end of the data is unterminated
+    let terminated = units.iter().filter(|unit| **unit == 0).count() > APP_EXEC_LINK_TARGET;
+    let target = units.split(|unit| *unit == 0).nth(APP_EXEC_LINK_TARGET)?;
+    if !terminated || target.is_empty() {
+        return None;
+    }
+    String::from_utf16(target).ok()
+}
+
+/// The reparse buffer of `path` itself, not of what it points at; `None` when it is no reparse point.
+#[cfg(windows)]
+fn reparse_point(path: &Path) -> Option<Vec<u8>> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, MAXIMUM_REPARSE_DATA_BUFFER_SIZE,
+    };
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    use windows_sys::Win32::System::Ioctl::FSCTL_GET_REPARSE_POINT;
+
+    // no access asked: reading the reparse point needs none, and an alias opened without
+    // `FILE_FLAG_OPEN_REPARSE_POINT` fails (`ERROR_CANT_ACCESS_FILE`), no filter handling its tag
+    let file = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .ok()?;
+    let mut buffer = vec![0u8; usize::try_from(MAXIMUM_REPARSE_DATA_BUFFER_SIZE).ok()?];
+    let mut returned = 0u32;
+    // SAFETY: the handle is open for the call, no input is passed, and the output buffer is valid for the length
+    // passed beside it; the call is synchronous (no OVERLAPPED) and writes `returned`.
+    let ok = unsafe {
+        DeviceIoControl(
+            file.as_raw_handle(),
+            FSCTL_GET_REPARSE_POINT,
+            std::ptr::null(),
+            0,
+            buffer.as_mut_ptr().cast(),
+            MAXIMUM_REPARSE_DATA_BUFFER_SIZE,
+            &raw mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    buffer.truncate(usize::try_from(returned).ok()?);
+    Some(buffer)
+}
+
+/// No reparse points off Windows: the tests' hosts there have images only.
+#[cfg(not(windows))]
+fn reparse_point(_path: &Path) -> Option<Vec<u8>> {
+    None
 }
 
 /// Whether a host of `native_machine` (`IMAGE_FILE_MACHINE_*`) runs an image built for `machine`: a host runs its own

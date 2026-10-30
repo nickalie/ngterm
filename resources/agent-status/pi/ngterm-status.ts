@@ -10,11 +10,19 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
   const wrapper = join(homedir(), ".config", "ngterm", "agent-status", "ngterm-agent-status.sh");
+  // Windows has no POSIX shell to run it: Windows PowerShell runs the package's PowerShell form beside it
+  const [program, prefix] =
+    process.platform === "win32"
+      ? [
+          "powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapper.replace(/\.sh$/, ".ps1")],
+        ]
+      : [wrapper, []];
 
   async function report(args: string[]): Promise<void> {
     if (!process.env.NGTERM_SESSION_ID) return;
     try {
-      await pi.exec(wrapper, args, { timeout: 1_000 });
+      await pi.exec(program, [...prefix, ...args], { timeout: 1_000 });
     } catch {
       // Status reporting is advisory and must never interrupt Pi's agent loop.
     }

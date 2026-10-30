@@ -43,8 +43,9 @@ fn status_commands(json: &str, event: &str) -> Vec<String> {
     found
 }
 
+/// The POSIX form's merge, on every OS: its strings are the ones upstream's tests hold.
 fn merge(existing: Option<&str>) -> (String, bool) {
-    merge_claude_settings(existing, SCRIPT_DIR, &[LEGACY_DIR]).unwrap()
+    merge_claude_settings_in(HookForm::Posix, existing, SCRIPT_DIR, &[LEGACY_DIR]).unwrap()
 }
 
 #[test]
@@ -901,4 +902,71 @@ fn the_restore_hooks_are_added_once_beside_the_users_own() {
             "{malformed}"
         );
     }
+}
+
+const WINDOWS_DIR: &str = "C:/Users/me/.config/ngterm/agent-status";
+
+fn merge_windows(existing: Option<&str>) -> (String, bool) {
+    merge_claude_settings_in(HookForm::Windows, existing, WINDOWS_DIR, &[]).unwrap()
+}
+
+/// A Windows hook command: Windows PowerShell running the package script `name` with `arguments`.
+fn powershell(name: &str, arguments: &str) -> String {
+    format!("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{WINDOWS_DIR}/{name}\" {arguments}")
+}
+
+#[test]
+fn the_windows_form_calls_the_powershell_adapters() {
+    let (json, changed) = merge_windows(None);
+    assert!(changed);
+    for (event, _, state) in CLAUDE_HOOKS {
+        let mut status = commands(&json, event);
+        status.retain(|command| !command.contains(WINDOWS_RESTORE_WRAPPER_NAME));
+        assert_eq!(status, [powershell(WINDOWS_CLAUDE_WRAPPER_NAME, state)], "{event}");
+    }
+    assert_eq!(
+        commands(&json, "SessionStart"),
+        [powershell(WINDOWS_RESTORE_WRAPPER_NAME, "claude start")]
+    );
+    assert_eq!(
+        commands(&json, "SessionEnd").last(),
+        Some(&powershell(WINDOWS_RESTORE_WRAPPER_NAME, "claude end"))
+    );
+    assert!(!json.contains(".sh"), "{json}");
+    assert_eq!(merge_windows(Some(&json)), (json.clone(), false));
+}
+
+/// An install of the POSIX form on Windows (an earlier build's) moves onto the PowerShell scripts, its stock commands
+/// byte for byte, without a second set; a user's own command naming a POSIX script stays as it is.
+#[test]
+fn the_windows_form_moves_a_posix_install_onto_the_powershell_scripts() {
+    let (posix, _) = merge_claude_settings_in(HookForm::Posix, None, WINDOWS_DIR, &[]).unwrap();
+    let (json, changed) = merge_windows(Some(&posix));
+    assert!(changed);
+    assert_eq!(json, merge_windows(None).0);
+
+    let users = format!("'{WINDOWS_DIR}/{CLAUDE_WRAPPER_NAME}' blocked --verbose");
+    let existing = format!(r#"{{"hooks": {{"Stop": [{{"hooks": [{{"type": "command", "command": "{users}"}}]}}]}}}}"#);
+    let (json, _) = merge_windows(Some(&existing));
+    assert_eq!(
+        commands(&json, "Stop"),
+        [users, powershell(WINDOWS_CLAUDE_WRAPPER_NAME, "completed --auto-reset")]
+    );
+}
+
+#[test]
+fn baking_a_powershell_script_sets_the_baked_path_once() {
+    let script = "# a header\n$ngtermctl = 'ngtermctl'\n";
+    let baked = bake_ngtermctl_path_powershell(script, "C:/Program Files/ngterm/bin/it's/ngtermctl.exe");
+    let lines: Vec<&str> = baked.split('\n').collect();
+    assert_eq!(lines[0], NGTERMCTL_MARKER);
+    assert_eq!(lines[1], "if (-not $env:NGTERMCTL) {");
+    assert_eq!(
+        lines[2],
+        "  $NgtermctlBaked = 'C:/Program Files/ngterm/bin/it''s/ngtermctl.exe'"
+    );
+    assert!(baked.ends_with(script));
+    let moved = bake_ngtermctl_path_powershell(&baked, "D:/ngterm/ngtermctl.exe");
+    assert_eq!(moved.matches(NGTERMCTL_MARKER).count(), 1);
+    assert_eq!(moved, bake_ngtermctl_path_powershell(script, "D:/ngterm/ngtermctl.exe"));
 }

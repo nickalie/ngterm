@@ -92,6 +92,9 @@ guest has 4 CPUs and 6.5 GB of memory.
   `paths::control_pipe_name`, `pipe_security`), shared by ngterm-session's namespace pipe and the control pipe
 - ➕ CLAUDE.md's crate table still lists `ngterm-server` as "Linux, macOS"; it is `any` now (left to the docs pass,
   Task 9)
+- ➕ (side task 13) live panes missed a winget/Store PowerShell 7: its only `pwsh.exe` on `PATH` is the zero-byte
+  App Execution Alias, which the PE-image check skipped; an `IO_REPARSE_TAG_APPEXECLINK` alias whose package image is
+  launchable now counts, and the pane runs the alias itself (`launch/windows_shell.rs`)
 
 ### Task 2: `ngtermctl` on Windows and macOS (`ngterm-ctl`)
 
@@ -129,24 +132,55 @@ guest has 4 CPUs and 6.5 GB of memory.
   per agent, as each agent documents for Windows)
 - [ ] `ngterm-app` joins PACKAGES; its tests pass on all three
 - [ ] Windows VM: clippy and tests green; Linux gate green
+- ➕ (side task 12) the agent-status package's Windows forms: `ngterm-agent-status.ps1`, `ngterm-claude-status.ps1`
+  (the process walk through `Win32_Process` where the POSIX one runs `ps`) and `ngterm-agent-restore.ps1`, for
+  Windows PowerShell 5.1 and PowerShell 7; on Windows the Claude Code hooks call them through `powershell.exe`, and
+  the Pi extension and both `OpenCode` plugins start the PowerShell wrapper (`0004-windows-forms.patch`); the adapter,
+  restore and `OpenCode` plugin tests run on Windows too
+- ➕ left open: Codex's Windows hooks (`command_windows`) still run the POSIX Codex adapter under Git Bash: it has no
+  PowerShell form yet (its blocker watcher and question check are the largest script of the package)
 
 ### Task 4: The GPUI frontend on Windows (`ngterm-gpui`, depends on Tasks 1 and 3)
 
-- [ ] Linux-only dependencies move under target sections; the crate builds on Windows without the `html` feature
-- [ ] single instance and activation (Decisions > Single instance)
-- [ ] quit: console Ctrl events and the session's end (`WM_QUERYENDSESSION`/`WM_ENDSESSION`) run the orderly shutdown
+- [x] Linux-only dependencies move under target sections; the crate builds on Windows without the `html` feature
+- [x] single instance and activation (Decisions > Single instance)
+- [x] quit: console Ctrl events and the session's end (`WM_QUERYENDSESSION`/`WM_ENDSESSION`) run the orderly shutdown
   that SIGTERM runs on Linux
-- [ ] appearance: the system's light or dark setting, followed live
-- [ ] keyboard: the native key behind each key event, if Ghostty's key encoding needs it on Windows. A
+- [x] appearance: the system's light or dark setting, followed live
+- [x] keyboard: the native key behind each key event, if Ghostty's key encoding needs it on Windows. A
   `gpui-pre-windows` patch through the vendor script, like `gpui-pre-linux`'s; recorded in `build/patches`
-- [ ] motion (status glyph), folder chooser, monitors and window frames, the quick terminal's window host, the live
+- [x] motion (status glyph), folder chooser, monitors and window frames, the quick terminal's window host, the live
   reset relauncher, the selection clipboard: each checked and given its Windows form where the Linux one does not
   carry over
-- [ ] `ngterm-gpui` (without `html`) builds, lints and tests on Windows; the tests that need Linux (Xvfb, weston,
+- [x] `ngterm-gpui` (without `html`) builds, lints and tests on Windows; the tests that need Linux (Xvfb, weston,
   lavapipe, D-Bus) are gated
-- [ ] a `cross-platform.yml` job (or step) builds and tests the app on the Windows runner
-- [ ] Windows VM: the app launches with a private state dir, opens a window, runs PowerShell in a pane, splits,
+- [x] a `cross-platform.yml` job (or step) builds and tests the app on the Windows runner
+- [x] Windows VM: the app launches with a private state dir, opens a window, runs PowerShell in a pane, splits,
   restores; `ngtermctl --socket` drives it (a smoke script kept under `scripts/`)
+- ➕ `scripts/smoke-windows-app.ps1` passed in the VM (2026-10-30, debug build) on every step: the control pipe and
+  `ngtermctl --socket` (tree, type, text), PowerShell 7 in a pane and in its split, Ctrl+C on the console quits with
+  status 0 and the relaunch restores the split, keys typed on the desktop (`SendKeys`: text, Enter, the Up arrow through
+  PowerShell's history) run in the pane, the quick terminal shows, runs PowerShell, zooms and hides, a second launch
+  forwards over the instance pipe and exits 0, a flip of `AppsUseLightTheme` reloads a two-slot theme,
+  `WM_QUERYENDSESSION`/`WM_ENDSESSION` to the hidden window quits with status 0. It needs a staged tree
+  (`bin\ngterm.exe` beside `share\ghostty` with its themes, shell integration and terminfo, scripts/stage.sh's layout),
+  staged by hand until Task 8's Windows staging script
+- ➕ the smoke's desktop typing found Windows keys synthesized with no scan code (`SendInput`/`keybd_event`, as on-screen
+  keyboards and automation tools send) dropped when they type no text (Enter): such a key is now placed by its virtual
+  key's scan code (`MapVirtualKeyW`), with the `0xE0` prefix of the extended keys, which Windows Server's
+  `MapVirtualKeyW` leaves off (the Up arrow came back as the keypad's 8)
+- ➕ a Windows test run found the pane reporting a config's own color change as a program's at its next output batch (any
+  platform: a prompt redraw after a background change raced the deck's OSC 11 handling); fixed in `ngterm-term`'s
+  `Pane::set_colors`, with a test
+- ➕ on Windows the unit tests whose panes run POSIX `sh` scripts (the terminal, input, Kitty and overlay-program tests),
+  measure DejaVu through fontconfig, or have `cat` repeat an OSC sequence are ignored there with their reason (82
+  tests); the deck's and quick terminal's tests run on Windows over an idle `findstr` pane
+- ➕ checked on the desktop: the quick terminal's window host (shown, zoomed, hidden), the appearance flip, the session's
+  end, Ctrl+C. Checked by build and tests only, not on the desktop: the primary's window rising on an activation, a
+  console window's close (`CTRL_CLOSE_EVENT`), the motion setting (`SPI_GETCLIENTAREAANIMATION` on `WM_SETTINGCHANGE`),
+  the folder chooser, monitors and window frames, the live reset relauncher (`--relaunch-after`)
+- ➕ the HTML clipboard is plain text on Windows (GPUI's Windows clipboard writes no `CF_HTML`)
+- ➕ the folder chooser on Windows has no title and no starting folder (GPUI's path prompt takes the accept label only)
 
 ### Task 5: Desktop integrations on Windows (depends on Task 4)
 
