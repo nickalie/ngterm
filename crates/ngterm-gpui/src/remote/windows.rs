@@ -134,10 +134,10 @@ unsafe extern "system" fn hint_changed(_context: *const c_void, hint: NL_NETWORK
     let now = (hint.ConnectivityLevel, hint.ConnectivityCost);
     let changed = network.last.lock().unwrap_or_else(PoisonError::into_inner).replace(now) != Some(now);
     if changed {
-        tracing::debug!(
+        tracing::info!(
             level = hint.ConnectivityLevel,
             cost = hint.ConnectivityCost,
-            "remote links: connectivity hint"
+            "remote links: the network's connectivity hint"
         );
         (network.report)(LinkEvent::Network {
             available: available(hint.ConnectivityLevel),

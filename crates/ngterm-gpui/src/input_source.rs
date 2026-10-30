@@ -189,9 +189,12 @@ impl Performer {
         let Ok(backend) = self.backend() else {
             return;
         };
-        if let Err(error) = backend.select(id) {
-            tracing::warn!(%error, layout = id, "keyboard layout lock: the layout was not selected");
-            self.lock.selection_failed();
+        match backend.select(id) {
+            Ok(()) => tracing::info!(layout = id, "keyboard layout lock: layout selected"),
+            Err(error) => {
+                tracing::warn!(%error, layout = id, "keyboard layout lock: the layout was not selected");
+                self.lock.selection_failed();
+            }
         }
     }
 
