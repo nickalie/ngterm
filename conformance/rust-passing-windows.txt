@@ -54,11 +54,13 @@ tests/cli/test_cli_output.py::test_session_move_and_go
 tests/cli/test_cli_output.py::test_session_panes
 tests/cli/test_cli_output.py::test_session_restore_prints_the_note_or_ok
 tests/cli/test_cli_output.py::test_session_status_carries_its_overrides
+tests/cli/test_cli_output.py::test_session_type_text_search_and_copy
 tests/cli/test_cli_output.py::test_sidebar
 tests/cli/test_cli_output.py::test_surface_and_dashboard
 tests/cli/test_cli_output.py::test_theme
 tests/cli/test_cli_output.py::test_version
 tests/cli/test_cli_output.py::test_version_prints_the_installed_build_when_it_differs
+tests/cli/test_cli_output.py::test_window_commands
 tests/cli/test_cli_output.py::test_workspace_flag
 tests/cli/test_cli_output.py::test_workspace_focus_and_filter
 tests/cli/test_cli_output.py::test_workspace_go_and_move
@@ -192,6 +194,7 @@ tests/protocol/test_dashboard_quick.py::test_dashboard_shows_each_pane_of_the_gi
 tests/protocol/test_dashboard_quick.py::test_quick_commands_need_a_shown_terminal
 tests/protocol/test_dashboard_quick.py::test_quick_input_validation
 tests/protocol/test_dashboard_quick.py::test_quick_show_hide_toggle
+tests/protocol/test_dashboard_quick.py::test_quick_type_then_read_the_marker_back
 tests/protocol/test_dashboard_quick.py::test_quick_zoom_ends_with_the_panel
 tests/protocol/test_events.py::test_cursor_expires_past_the_ring_capacity
 tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[ahead]
@@ -254,6 +257,9 @@ tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args1-keymap.run req
 tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args2-no custom command named nope]
 tests/protocol/test_keymap_hooks.py::test_run_refusals[None-args3-no custom command named  plain]
 tests/protocol/test_keymap_hooks.py::test_run_refusals[zzz-args4-no such session: zzz]
+tests/protocol/test_live_any_shell.py::test_a_live_pane_in_the_login_shell_reports_its_cwd_and_survives_the_relaunch
+tests/protocol/test_live_any_shell.py::test_a_live_pane_keeps_the_configs_xdg_data_dirs
+tests/protocol/test_live_any_shell.py::test_an_interrupted_live_command_leaves_the_login_shell_prompt
 tests/protocol/test_notify.py::test_notify_raises_the_badge_and_emits_the_event
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args0-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args1-notify requires a body]
@@ -278,6 +284,7 @@ tests/protocol/test_overlay.py::test_open_refusals[chromeless-url]
 tests/protocol/test_overlay.py::test_open_refusals[cmd-html]
 tests/protocol/test_overlay.py::test_open_refusals[cmd-url]
 tests/protocol/test_overlay.py::test_open_refusals[color]
+tests/protocol/test_overlay.py::test_open_refusals[cwd-is-file]
 tests/protocol/test_overlay.py::test_open_refusals[cwd-url]
 tests/protocol/test_overlay.py::test_open_refusals[empty-command]
 tests/protocol/test_overlay.py::test_open_refusals[ftp-url]
@@ -285,12 +292,15 @@ tests/protocol/test_overlay.py::test_open_refusals[html-url]
 tests/protocol/test_overlay.py::test_open_refusals[js-program]
 tests/protocol/test_overlay.py::test_open_refusals[navigation-program]
 tests/protocol/test_overlay.py::test_open_refusals[no-command]
+tests/protocol/test_overlay.py::test_open_refusals[outside-cwd]
 tests/protocol/test_overlay.py::test_open_refusals[pane-size]
 tests/protocol/test_overlay.py::test_open_refusals[pane]
 tests/protocol/test_overlay.py::test_open_refusals[persistent-html]
 tests/protocol/test_overlay.py::test_open_refusals[persistent-program]
+tests/protocol/test_overlay.py::test_open_refusals[relative-cwd]
 tests/protocol/test_overlay.py::test_open_refusals[relative-html]
 tests/protocol/test_overlay.py::test_open_refusals[relative-url]
+tests/protocol/test_overlay.py::test_open_refusals[root-cwd]
 tests/protocol/test_overlay.py::test_open_refusals[wait-html]
 tests/protocol/test_overlay.py::test_open_refusals[wait-url]
 tests/protocol/test_overlay.py::test_overlay_opens_in_the_background_unless_it_follows
@@ -415,15 +425,23 @@ tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[right-sessio
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[right-session has no split pane-session.type]
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[scratch-session has no scratch terminal-session.text]
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[scratch-session has no scratch terminal-session.type]
+tests/protocol/test_session_text.py::test_search_counts_the_matches
+tests/protocol/test_session_text.py::test_text_all_includes_the_scrollback
+tests/protocol/test_session_text.py::test_text_defaults_to_the_pane_on_screen
+tests/protocol/test_session_text.py::test_text_lines_returns_the_last_content_lines
 tests/protocol/test_session_text.py::test_text_rejects[all-and-lines]
 tests/protocol/test_session_text.py::test_text_rejects[negative-lines]
 tests/protocol/test_session_text.py::test_text_rejects[pane-id]
 tests/protocol/test_session_text.py::test_text_rejects[pane]
 tests/protocol/test_session_text.py::test_text_rejects[zero-lines]
+tests/protocol/test_session_text.py::test_title_reads_the_terminal_title_a_program_set
+tests/protocol/test_session_text.py::test_type_and_text_address_a_pane
+tests/protocol/test_session_text.py::test_type_and_text_address_a_pane_by_token
 tests/protocol/test_session_text.py::test_type_rejects[no-text]
 tests/protocol/test_session_text.py::test_type_rejects[pane-id]
 tests/protocol/test_session_text.py::test_type_rejects[pane]
 tests/protocol/test_session_text.py::test_type_text_carrying_a_nul
+tests/protocol/test_session_text.py::test_type_then_read_the_marker_back
 tests/protocol/test_session_text.py::test_unknown_session_target[session.search-args2]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.text-args1]
 tests/protocol/test_session_text.py::test_unknown_session_target[session.type-args0]
@@ -549,6 +567,7 @@ tests/protocol/test_window.py::test_rename_trims_the_name
 tests/protocol/test_window.py::test_resize_echoes_the_applied_size
 tests/protocol/test_window.py::test_select_and_go_move_the_active_window
 tests/protocol/test_window.py::test_window_option_addresses_that_windows_store
+tests/protocol/test_window.py::test_zoom_toggles
 tests/protocol/test_workspace.py::test_a_lone_workspace_has_nowhere_to_go_and_cannot_be_deleted
 tests/protocol/test_workspace.py::test_background_create_keeps_the_current_workspace[collapsed]
 tests/protocol/test_workspace.py::test_background_create_keeps_the_current_workspace[session-no-select]
