@@ -39,7 +39,9 @@ pub enum Power {
 }
 
 /// What runs on each power event.
-static POWER: Mutex<Vec<Box<dyn Fn(Power) + Send + Sync>>> = Mutex::new(Vec::new());
+static POWER: Mutex<Vec<PowerHandler>> = Mutex::new(Vec::new());
+
+type PowerHandler = Box<dyn Fn(Power) + Send + Sync>;
 /// The window's thread started, or why it did not.
 static STARTED: OnceLock<Result<(), String>> = OnceLock::new();
 
@@ -109,9 +111,9 @@ unsafe fn power_event(wparam: WPARAM, lparam: LPARAM) -> Option<Power> {
             let data = setting
                 .cast::<u8>()
                 .wrapping_add(std::mem::offset_of!(POWERBROADCAST_SETTING, Data))
-                .cast::<u32>();
+                .cast::<[u8; 4]>();
             // SAFETY: the setting's data, `DataLength` bytes of it: the display state's DWORD.
-            Some(Power::Display(unsafe { data.read_unaligned() }))
+            Some(Power::Display(u32::from_ne_bytes(unsafe { data.read_unaligned() })))
         }
         _ => None,
     }
