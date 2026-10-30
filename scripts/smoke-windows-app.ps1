@@ -18,9 +18,9 @@ run in its focused pane; the quick terminal shows, runs PowerShell and zooms (sc
 mode (`AppsUseLightTheme`, announced as Settings does with `WM_SETTINGCHANGE` `ImmersiveColorSet`, then put back)
 reloads the config of a theme with both slots; the desktop integrations: keymap.conf's `global-hotkey`, pressed while
 Character Map has the keyboard, shows the quick terminal and pressed again hides it (`hotkey.png`); a `notify` to a session
-not shown posts a toast under the app's id (read back from the notification center's history), a second one replaces
-it, a click on it (where Windows shows it) reveals that session (`toast.png`, `toast-clicked.png`), and a
-toast is withdrawn once its session is selected; a status sound plays (upstream's names have no Windows sound alias:
+not shown posts a toast under the app's id, a click on it where Windows shows it reveals that session (`toast-N.png`,
+`toast-clicked.png`), a toast sits in its session's slot of the notification center (read back from its history), a
+second one replaces it, and it is withdrawn once its session is selected; a status sound plays (upstream's names have no Windows sound alias:
 the alert); a resume from sleep (`WM_POWERBROADCAST` sent to the hidden window) retries the remote links; with the
 keyboard-layout lock on Russian (`LoadKeyboardLayout`, unloaded at the end) the pane types Cyrillic for the US keys;
 the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the app's hidden window) quits it. The app is stopped by its own process id at the end, whatever happened. Every step is
@@ -347,6 +347,27 @@ foreach (`$toast in [Windows.UI.Notifications.ToastNotificationManager]::History
     @(& powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1 | ForEach-Object { "$_" })
 }
 
+# Clears the app id's toasts from the notification center (Windows PowerShell's WinRT projection).
+function Clear-Toasts {
+    $helper = @"
+`$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+[Windows.UI.Notifications.ToastNotificationManager]::History.Clear('$appId')
+"@
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($helper))
+    & powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1 | Out-Null
+}
+
+# Polls the app's log for `line`, up to `seconds`.
+function Wait-Log-For([string] $line, [int] $seconds) {
+    $file = Join-Path $state 'ngterm.log'
+    $deadline = (Get-Date).AddSeconds($seconds)
+    do {
+        if ((Test-Path $file) -and (Select-String -Path $file -SimpleMatch $line -Quiet)) { return $true }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
 # Polls the notification center until `test` holds for its toasts.
 function Wait-Toasts([scriptblock] $test) {
     $deadline = (Get-Date).AddSeconds($Timeout)
@@ -546,32 +567,39 @@ try {
         Stop-Process -Id $other.Id -Force -ErrorAction SilentlyContinue
     }
 
-    # notifications: toasts under the app's id, a repeat replacing, a click revealing its session, a withdrawal
+    # notifications: toasts under the app's id, a click revealing its session, a repeat replacing, a withdrawal; the
+    # toasts earlier runs left under this app id are cleared first
+    Clear-Toasts
     $first = (Invoke-Control 'session.select' | ConvertFrom-Json).result.id
     $second = (Invoke-Control 'session.new' | ConvertFrom-Json).result.id
     Log "sessions: shown $first, notified $second"
     Invoke-Control 'session.select' $null 2000 $first | Out-Null
     Check (Wait-Active $first) 'the first session is shown again'
-    $note = Invoke-Control 'notify' @{ title = 'Smoke toast'; body = 'smoke-toast-one' } 2000 $second
-    Check ($note -match '"ok":true') "notify: $note"
-    Check (Wait-Toasts { param($t) ($t | Where-Object { $_ -match "\|${second}:notify\|" -and $_ -match 'smoke-toast-one' }).Count -eq 1 }) 'the notification center holds the toast in the session''s slot'
-    Save-Screen 'toast-first.png'
-    Invoke-Control 'notify' @{ title = 'Smoke toast'; body = 'smoke-toast-two' } 2000 $second | Out-Null
-    Check (Wait-Toasts { param($t) $slot = @($t | Where-Object { $_ -match "\|${second}:notify\|" }); $slot.Count -eq 1 -and $slot[0] -match 'smoke-toast-two' }) 'a second notify replaces the toast in its slot'
-    Save-Screen 'toast.png'
-    Check (Click-Toast) 'the toast on screen is clicked'
-    Check (Wait-Log 'notify: toast clicked') 'the click reached the app'
+    $slot = "\|${second}:notify\|"
+    # a toast's popup shows for a few seconds: each try posts one, clicks it at once and waits for the app to hear it
+    $clicked = $false
+    for ($try = 1; $try -le 3 -and -not $clicked; $try++) {
+        $note = Invoke-Control 'notify' @{ title = 'Smoke toast'; body = "smoke-toast-click-$try" } 2000 $second
+        Check ($note -match '"ok":true') "notify: $note"
+        Start-Sleep -Milliseconds 1500
+        Save-Screen "toast-$try.png"
+        Click-Toast | Out-Null
+        $clicked = Wait-Log-For 'notify: toast clicked' 15
+    }
+    Check $clicked 'a click on the toast on screen reaches the app'
     Check (Wait-Active $second) 'the click reveals the notified session'
     Start-Sleep -Seconds 1
     Save-Screen 'toast-clicked.png'
-    Check (Wait-Toasts { param($t) -not ($t | Where-Object { $_ -match "\|${second}:notify\|" }) }) 'the clicked toast is gone from the notification center'
+    Check (Wait-Toasts { param($t) -not ($t | Where-Object { $_ -match $slot }) }) 'the clicked toast is gone from the notification center'
     Invoke-Control 'session.select' $null 2000 $first | Out-Null
     Check (Wait-Active $first) 'the first session is shown again'
     Invoke-Control 'notify' @{ title = 'Smoke toast'; body = 'smoke-toast-three' } 2000 $second | Out-Null
-    Check (Wait-Toasts { param($t) ($t | Where-Object { $_ -match 'smoke-toast-three' }).Count -eq 1 }) 'a third toast is posted'
+    Check (Wait-Toasts { param($t) @($t | Where-Object { $_ -match $slot -and $_ -match 'smoke-toast-three' }).Count -eq 1 }) 'the notification center holds the toast in the session''s slot'
+    Invoke-Control 'notify' @{ title = 'Smoke toast'; body = 'smoke-toast-four' } 2000 $second | Out-Null
+    Check (Wait-Toasts { param($t) $held = @($t | Where-Object { $_ -match $slot }); $held.Count -eq 1 -and $held[0] -match 'smoke-toast-four' }) 'a second notify replaces the toast in its slot'
     Check ([SmokeWindows]::Raise([uint32]$app.Id)) 'the app window comes to the front'
     Invoke-Control 'session.select' $null 2000 $second | Out-Null
-    Check (Wait-Toasts { param($t) -not ($t | Where-Object { $_ -match 'smoke-toast-three' }) }) 'selecting the session withdraws its toast'
+    Check (Wait-Toasts { param($t) -not ($t | Where-Object { $_ -match $slot }) }) 'selecting the session withdraws its toast'
 
     # status sounds: upstream's names are macOS sounds; Windows has no alias of theirs and plays the alert
     $status = Invoke-Control 'session.status' @{ status = 'blocked'; sound = 'Glass' } 2000 $second
