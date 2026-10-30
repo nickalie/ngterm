@@ -13,8 +13,8 @@
 # Windows Installer compares the first three fields, which a major upgrade needs to rise. The toasts' app id the
 # Start-menu shortcut carries is the app's DEFAULT_APP_ID (crates/ngterm-gpui/src/instance.rs).
 #
-# The `wix` tool is installed once into the vendor root (dotnet tool install, which needs a .NET SDK); WIX overrides it
-# with a `wix` of the pinned version.
+# The `wix` tool is installed once into the vendor root (dotnet tool install, which needs a .NET SDK); NGTERM_WIX names
+# a `wix` of the pinned version to use instead (not WIX, which WiX 3 sets to its own folder).
 #
 # Usage: scripts/build-msi.sh OUTPUT.msi [--staged DIR] [--version X.Y.Z]
 set -euo pipefail
@@ -41,9 +41,9 @@ while (($#)); do
 done
 [[ "$OUTPUT" == *.msi ]] || die "the output is a .msi: $OUTPUT"
 
-# The pinned `wix`: WIX when given (checked against the pin), else the vendor root's, installed on first use.
+# The pinned `wix`: NGTERM_WIX when given (checked against the pin), else the vendor root's, installed on first use.
 wix_tool() {
-  local tool="${WIX:-}" dir version
+  local tool="${NGTERM_WIX:-}" dir version
   if [[ -z "$tool" ]]; then
     dir="$VENDOR_ROOT/wix-$WIX_VERSION"
     tool="$dir/wix.exe"
