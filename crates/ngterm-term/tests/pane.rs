@@ -83,6 +83,26 @@ fn a_color_change_is_reported_once() {
     assert_eq!(colors[0].background, Some(Rgb::new(0x12, 0x34, 0x56)));
 }
 
+#[test]
+fn a_config_color_change_is_no_programs() {
+    // the program prints only once the test has changed the colors: the batch that output makes reports nothing
+    let fixture = spawn("stty -echo; read line; printf 'after'; exec sleep 5").unwrap();
+    let theme = ngterm_term::ThemeColors {
+        background: Rgb::new(0x20, 0x14, 0x14),
+        ..ngterm_term::ThemeColors::default()
+    };
+    fixture.pane.set_colors(&theme).unwrap();
+    fixture.pane.write(b"\n").unwrap();
+    wait_text(&fixture.pane, "after");
+    let colors: Vec<_> = fixture
+        .pane
+        .take_events()
+        .into_iter()
+        .filter(|event| matches!(event, PaneEvent::Colors(_)))
+        .collect();
+    assert!(colors.is_empty(), "{colors:?}");
+}
+
 /// Run a program that sends `request` in raw mode and saves the next `reply_len` bytes it reads; answer its read
 /// with `answer` and return what it read.
 fn clipboard_round_trip(request: &str, answer: ClipboardAnswer, reply_len: usize) -> TestResult<(ReadScope, Vec<u8>)> {

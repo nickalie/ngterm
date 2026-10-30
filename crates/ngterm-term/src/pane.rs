@@ -539,9 +539,12 @@ impl Pane {
     ///
     /// [`PaneError::Terminal`] when the library refuses a color.
     pub fn set_colors(&self, colors: &ThemeColors) -> Result<(), PaneError> {
-        colors
-            .apply(&mut lock(&self.shared.vt).terminal)
-            .map_err(PaneError::terminal)?;
+        {
+            let mut vt = lock(&self.shared.vt);
+            colors.apply(&mut vt.terminal).map_err(PaneError::terminal)?;
+            // the config's change is no program's: the next batch reports only what the program changes from here
+            vt.colors = vt.terminal.colors();
+        }
         self.update_metadata();
         self.shared.wake();
         Ok(())
