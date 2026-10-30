@@ -20,6 +20,9 @@
 //!   a kill after [`KILL_GRACE`] or once the child, the PTY and the session's other processes ended (herdr's
 //!   terminate step dropped), the child left unreaped meanwhile, so its group and its session, which its id names,
 //!   are still reached once it exited and cannot be reused;
+//! - a kill reports whether the program ended, in place of herdr's grace after the kill: its exit seen within
+//!   [`KILL_LIMIT`] of the first signal, then its end recorded, which waits for the PTY from the exit, so a slow
+//!   exit (a loaded Windows takes half a second to end a job's tree) takes nothing of that wait;
 //! - the registry is keyed by session name and drops a pane once its program ended.
 //!
 //! # The terminal
@@ -117,8 +120,13 @@ pub const FALLBACK_TERM: &str = "xterm-256color";
 /// How long the end of a program waits for the PTY's end, so its last output is processed first (a background
 /// process holding the PTY keeps it open).
 pub const EXIT_GRACE: Duration = Duration::from_secs(1);
-/// How long a kill waits for the program to end after the hangup, and again after the kill (herdr's grace).
+/// How long a forced kill waits after the hangup before it kills (herdr's grace).
 pub const KILL_GRACE: Duration = Duration::from_millis(250);
+/// How long a kill waits for the program's exit to be seen, from its first signal: a program that handles the hangup
+/// has it to end, and so has a forced kill's slow exit (a loaded system can take half a second to end a tree and wake
+/// the waiter); only a program that ignores the hangup, or one the system cannot end, takes it all. The end is waited
+/// for apart, from the exit ([`Pane::kill`]), so a slow exit takes nothing of the PTY's [`EXIT_GRACE`].
+pub const KILL_LIMIT: Duration = Duration::from_millis(1500);
 /// How long an attach or a resync waits for a cut its snapshot can be taken at.
 pub const SNAPSHOT_WAIT: Duration = Duration::from_secs(2);
 /// How often a kill's grace looks at what of the program's session lives on (herdr's poll).
@@ -127,6 +135,11 @@ const SESSION_POLL: Duration = Duration::from_millis(20);
 /// How long the waiter holds off reaping the program for a kill under way, which holds it for the hangup, at most
 /// [`KILL_GRACE`] and the kill; past it the program is reaped, and the kill then signals nothing.
 const REAP_HOLD_LIMIT: Duration = Duration::from_secs(5);
+/// How long a kill that saw the program exit waits for its end to be recorded: the most the waiter waits after the
+/// exit, for the PTY's end and for a kill's hold on the reaping. Reached only by a waiter that never records the end.
+const END_LIMIT: Duration = EXIT_GRACE.saturating_add(REAP_HOLD_LIMIT);
+// a kill whose program exits at its limit, with a PTY that never ends, answers within the client's call
+const _: () = assert!(KILL_LIMIT.saturating_add(EXIT_GRACE).as_millis() < crate::client::DEFAULT_TIMEOUT.as_millis());
 /// How long the replies' helper thread sleeps with nothing to do (it is woken for whatever it does).
 const HELPER_IDLE: Duration = Duration::from_secs(60);
 
@@ -997,8 +1010,8 @@ impl Pane {
     /// member of its group that ignores it lives on; with `force`, [`Pane::end_tree`]'s hangup and then kill of the
     /// whole group and of every other process of its session, which ends those too. On Windows either ends the
     /// program's job, its whole tree, at once.
-    /// Whether the program's end was recorded within [`KILL_GRACE`] after the last signal plus [`EXIT_GRACE`] for
-    /// its last output.
+    /// Whether the program ended: its exit seen within [`KILL_LIMIT`] of the first signal, and its end recorded after
+    /// it, once the PTY ended or [`EXIT_GRACE`] after the exit, however late the exit came.
     ///
     /// # Errors
     ///
@@ -1007,15 +1020,15 @@ impl Pane {
         if self.exit_status().is_some() {
             return Ok(true);
         }
-        if !still_the_program(self) {
-            return Ok(self.ended_within(KILL_GRACE));
+        let deadline = Instant::now() + KILL_LIMIT;
+        if still_the_program(self) {
+            if force {
+                self.end_tree()?;
+            } else {
+                self.killer.hang_up()?;
+            }
         }
-        if force {
-            self.end_tree()?;
-        } else {
-            self.killer.hang_up()?;
-        }
-        Ok(self.ended_within(KILL_GRACE))
+        Ok(self.ends_by(deadline))
     }
 
     /// herdr's `shutdown_pane_processes`: a hangup to the program's process group and the rest of its session, up
@@ -1046,9 +1059,11 @@ impl Pane {
         hung_up.and(killed)
     }
 
-    /// Whether the program ends within `grace` (its end then recorded within [`EXIT_GRACE`] more).
-    fn ended_within(&self, grace: Duration) -> bool {
-        self.wait_exit(grace + EXIT_GRACE).is_some()
+    /// Whether the program's exit is seen by `deadline`, and its end then recorded: the waiter records it once the
+    /// PTY ended, at most [`EXIT_GRACE`] after the exit, so that wait counts from the exit, not from the kill.
+    fn ends_by(&self, deadline: Instant) -> bool {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        self.core.wait_for(wait, |state| state.exited || state.exit.is_some()) && self.wait_exit(END_LIMIT).is_some()
     }
 
     /// Run `on_end` once the program's end is recorded (now, if it already is), after the hooks given before it.

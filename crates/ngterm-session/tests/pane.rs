@@ -392,6 +392,22 @@ fn a_forced_kill_ends_a_program_that_ignores_the_hangup() -> TestResult {
     Ok(())
 }
 
+/// A program that ends a while after the hangup, its PTY held open past its exit by a job in a group of its own, which
+/// the hangup does not reach (on macOS the tty is revoked at the exit, which ends the PTY at once): the kill reports
+/// the end, since the PTY's wait counts from the exit, not from the hangup.
+#[cfg(unix)]
+#[test]
+fn a_kill_reports_a_late_exit_whose_pty_stays_open() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let spec = script("set -m; sleep 3 & trap 'sleep 0.6; exit 0' HUP; echo ready; while :; do sleep 0.1; done");
+    let (pane, creator) = Pane::spawn(config("late", dir.path(), spec))?;
+    let mut client = Client::new(creator);
+    client.expect("ready");
+    assert!(pane.kill(false)?, "the kill did not wait for the end after a late exit");
+    client.finish();
+    Ok(())
+}
+
 /// A shell the hangup ends, with a background child that ignores it: holding the PTY, or with it let go of
 /// (`nohup`'s way). The child says `started:<pid>:` itself, once it ignores the hangup, so a hangup sent on that
 /// word never finds it still taking the default action.
