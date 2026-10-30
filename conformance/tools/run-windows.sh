@@ -134,8 +134,12 @@ if [[ -n "$left" && $status -eq 0 ]]; then
     status=1
 fi
 
-build_commit="$(git -C "$repo" rev-parse --short HEAD)"
-if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)"; fi
+# A VM's copy of the sources may carry no .git: the report then says so rather than the run ending here.
+if build_commit="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)"; then
+    if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)"; fi
+else
+    build_commit="no git checkout"
+fi
 
 {
     echo "## rust-windows conformance"
