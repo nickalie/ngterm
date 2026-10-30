@@ -242,8 +242,8 @@ guest has 4 CPUs and 6.5 GB of memory.
   live-any-shell tests type PowerShell's lines on Windows (`Write-Output`, `ping -n` for a long program, the prompt
   waited for after a Ctrl+C, which the console drops typing before); the stage it ran is kept as an artifact
   (`rust-windows-stage`) for a VM run against the same build
-- ➕ the Windows ratchet holds 639 ids: the 620, the 16 more green in three windows-job runs, and the three
-  live-any-shell tests (held by `--must-pass` too); HUD ids stay out (below)
+- ➕ the Windows ratchet holds 638 ids: the 620 less one found flaky (below), the 16 more green in three windows-job
+  runs, and the three live-any-shell tests (held by `--must-pass` too); HUD ids stay out (below)
 - ➕ red on Windows and not in the list, each a build gap found by the suite and left to its task:
   - ⚠️ the HUD (`session.hud.*`, 4–6 ids red per run, the rest green only by timing): its painter is
     `ngterm-gpui/resources/hud/hud.sh`, which `ngterm-core`'s `HudRuntime::helper_command` runs as `/bin/sh <path>`,
@@ -258,6 +258,10 @@ guest has 4 CPUs and 6.5 GB of memory.
     `test_cli_only.py` ids): a Windows form (Task 2) would read the staged `share/terminfo` instead
   - a file page's title (`htmlOverlays[].title`) never comes on the CI runner, so `test_overlay.py`'s nine page tests
     wait out their read-back (Task 6)
+  - a file page without a grant reloads its text through `NavigateToString` again, which adds a history entry, so
+    `canGoBack` turns true once `WebView2`'s `HistoryChanged` lands: `navigate back` after a reload is refused or not
+    by that race (`test_cli_output.py::test_overlay_page_blocks_until_submitted`, green in three runs, red in the
+    fourth, taken out of the list); upstream's reload of such a page adds none (Task 6)
 
 ### Task 9: Docs
 

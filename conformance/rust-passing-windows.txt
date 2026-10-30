@@ -38,7 +38,6 @@ tests/cli/test_cli_output.py::test_events_refuses_a_bad_cursor_or_kind_before_re
 tests/cli/test_cli_output.py::test_font
 tests/cli/test_cli_output.py::test_hooks
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
-tests/cli/test_cli_output.py::test_overlay_page_blocks_until_submitted
 tests/cli/test_cli_output.py::test_overlay_page_dismissed_exits_2
 tests/cli/test_cli_output.py::test_page_serve_refused_claim_exits_1
 tests/cli/test_cli_output.py::test_pick_blocks_until_cancelled
