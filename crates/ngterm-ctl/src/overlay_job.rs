@@ -607,6 +607,30 @@ mod tests {
         }
     }
 
+    /// The file the mask probe (this test binary, run again as the job's program) writes its SIGTERM state to.
+    #[cfg(unix)]
+    const MASK_PROBE: &str = "NGTERMCTL_TEST_MASK_PROBE";
+
+    /// Not a test of its own: the job's program in the stop-signals test below, when [`MASK_PROBE`] names a file;
+    /// without it, nothing. It writes whether SIGTERM is blocked in the mask the program started with, which the
+    /// harness's test thread inherits from the main thread; `/proc` would show it on Linux alone, and macOS keeps
+    /// masks per thread, so its `ps` shows none.
+    #[cfg(unix)]
+    #[test]
+    fn the_mask_probe() {
+        let Some(path) = std::env::var_os(MASK_PROBE) else {
+            return;
+        };
+        // SAFETY: a zeroed set is written by `pthread_sigmask` before it is read.
+        let mut current: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: a null new set only reads this thread's mask into `current`, a valid, writable set.
+        let result = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), &raw mut current) };
+        assert_eq!(result, 0);
+        // SAFETY: `current` was filled by `pthread_sigmask`, and SIGTERM is a valid signal.
+        let blocked = unsafe { libc::sigismember(&raw const current, libc::SIGTERM) } == 1;
+        std::fs::write(path, if blocked { "blocked" } else { "unblocked" }).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_program_gets_the_stop_signals_the_helpers_thread_blocks() {
@@ -614,17 +638,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let mask_file = dir.path().join("mask");
-        // the shell reads its own mask by becoming the reader: a forked `grep` reading `/proc/$$/status` races dash,
-        // which blocks every signal around its (v)fork until the child execs (seen on ubuntu-26.04 as a full mask)
-        let probe = format!("exec grep '^SigBlk:' /proc/self/status > {}", mask_file.display());
+        // the shell becomes the reader, so the mask read is the one a program it execs starts with; a forked reader
+        // races dash, which blocks every signal around its (v)fork until the child execs (seen on ubuntu-26.04 as a
+        // full mask)
+        let probe = format!(
+            "export {MASK_PROBE}='{}'; exec '{}' overlay_job::tests::the_mask_probe --exact --nocapture \
+             --test-threads=1 > /dev/null",
+            mask_file.display(),
+            std::env::current_exe().unwrap().display()
+        );
         let (status, _) = run_to_end(&probe, &plain_base());
         assert_eq!(status, 0);
-        let line = std::fs::read_to_string(&mask_file).unwrap();
-        let mask = u64::from_str_radix(line.trim_start_matches("SigBlk:").trim(), 16).unwrap();
         assert_eq!(
-            mask & (1 << (libc::SIGTERM - 1)),
-            0,
-            "the shell started with SIGTERM blocked: {line}"
+            std::fs::read_to_string(&mask_file).unwrap(),
+            "unblocked",
+            "the program started with SIGTERM blocked"
         );
 
         let ready = dir.path().join("ready");
@@ -703,7 +731,12 @@ mod tests {
     #[test]
     fn the_program_gets_the_helpers_environment_under_the_context() {
         let bin = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink("/bin/true", bin.path().join("ngterm-fixture-tool")).unwrap();
+        // `true` is `/bin/true` on Linux, `/usr/bin/true` alone on macOS
+        let true_tool = ["/bin/true", "/usr/bin/true"]
+            .into_iter()
+            .find(|tool| Path::new(tool).exists())
+            .unwrap();
+        std::os::unix::fs::symlink(true_tool, bin.path().join("ngterm-fixture-tool")).unwrap();
         let session = "0F2C7A4E-9B1D-4C3A-8E5F-1A2B3C4D5E6F";
         let environment = PaneEnv::from([("NGTERM_SESSION_ID".to_owned(), session.to_owned())]);
         let command = format!(r#"ngterm-fixture-tool && test -n "$HOME" && test "$NGTERM_SESSION_ID" = "{session}""#);
