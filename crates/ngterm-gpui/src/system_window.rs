@@ -200,14 +200,9 @@ fn run() -> io::Result<()> {
     if window.is_null() {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: this thread's window, a static GUID; the registration lasts as long as the window.
-    let display = unsafe {
-        RegisterPowerSettingNotification(
-            window,
-            &raw const GUID_CONSOLE_DISPLAY_STATE,
-            DEVICE_NOTIFY_WINDOW_HANDLE,
-        )
-    };
+    let setting = GUID_CONSOLE_DISPLAY_STATE;
+    // SAFETY: this thread's window and a GUID alive for the call; the registration lasts as long as the window.
+    let display = unsafe { RegisterPowerSettingNotification(window, &raw const setting, DEVICE_NOTIFY_WINDOW_HANDLE) };
     if display == 0 {
         tracing::debug!(error = %io::Error::last_os_error(), "the app's hidden window gets no display state");
     }
