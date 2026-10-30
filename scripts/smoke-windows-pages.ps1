@@ -51,7 +51,7 @@ $failures = 0
 function Log([string] $line) {
     $stamped = "{0:HH:mm:ss.fff} {1}" -f (Get-Date), $line
     Add-Content -Path $log -Value $stamped
-    Write-Output $stamped
+    Write-Host $stamped
 }
 
 function Check([bool] $ok, [string] $what) {
@@ -134,6 +134,47 @@ function Stop-ById($process, [string] $what) {
 }
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PagesWindows {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+    [DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll")]
+    static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")]
+    static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")]
+    static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+    // brings the first visible top-level window of `pid` to the front (an Alt press first: Windows lets the process
+    // that sent the last input set the foreground window)
+    public static bool Raise(uint pid) {
+        IntPtr window = IntPtr.Zero;
+        while ((window = FindWindowEx(IntPtr.Zero, window, null, null)) != IntPtr.Zero) {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner == pid && IsWindowVisible(window)) {
+                keybd_event(0x12, 0, 0, UIntPtr.Zero);
+                keybd_event(0x12, 0, 2, UIntPtr.Zero);
+                return SetForegroundWindow(window);
+            }
+        }
+        return false;
+    }
+}
+'@
+
+# The first run's welcome sheet covers the window (and hides its pages): Escape dismisses it.
+function Dismiss-Welcome($process) {
+    Start-Sleep -Seconds 2
+    if ([PagesWindows]::Raise([uint32]$process.Id)) {
+        Start-Sleep -Milliseconds 500
+        [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+        Start-Sleep -Milliseconds 500
+    }
+}
 
 # the file page: its script asks for the tree over the bridge, renames its session with the answer and titles itself
 Set-Content -Encoding utf8 -Path (Join-Path $site 'page.html') -Value @'
@@ -185,6 +226,8 @@ $env:NGTERM_APP_ID = 'com.nickalie.ngterm.pages'
 $env:HOME = $homeDir
 Log "exe $Exe; ctl $Ctl; state $state"
 
+# ngtermctl's refusals on stderr are answers, not errors of the script
+$ErrorActionPreference = 'Continue'
 $app = $null
 $server = $null
 try {
@@ -194,6 +237,7 @@ try {
     $app = Start-Process -FilePath $Exe -WorkingDirectory $homeDir -PassThru
     Log "launched pid $($app.Id)"
     Check (Wait-Socket) 'the control socket answers'
+    Dismiss-Welcome $app
 
     # a page shows, and its bridge round-trips
     Ctl @('session', 'overlay', 'open', '--socket', $socket, '--html', (Join-Path $site 'page.html'), '--cwd', $site, '--js', '--navigation') | Out-Null
@@ -220,6 +264,7 @@ try {
     $app = Start-Process -FilePath $Exe -WorkingDirectory $homeDir -PassThru
     Log "relaunched pid $($app.Id)"
     Check (Wait-Socket) 'the relaunched app answers'
+    Dismiss-Welcome $app
     # the session may come back with its page: a fresh one replaces it either way
     Ctl @('session', 'overlay', 'close', '--socket', $socket) | Out-Null
     Ctl @('session', 'overlay', 'open', '--socket', $socket, '--url', "http://127.0.0.1:$Port/", '--persistent') | Out-Null
@@ -233,6 +278,9 @@ try {
     $served = Get-Content -Path $serverLog -Raw
     Log "server log:`n$served"
     Check (($served -split "`n" | Where-Object { $_ -match '^/ cookie=.*session=signed-in' }).Count -ge 2) 'the saved cookie came back before and after the restart'
+} catch {
+    Log "FAIL the check stopped: $_"
+    $failures++
 } finally {
     Stop-ById $app 'app'
     Stop-ById $server 'server'

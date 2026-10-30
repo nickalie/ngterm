@@ -119,6 +119,8 @@ pub enum Report {
     DownloadRefused(String),
     /// A key pressed in the page that the app takes (`keys`), kept from the page.
     Key(gpui_kit::Keystroke),
+    /// A replaced theme script is in place: later loads wear it.
+    ThemeInstalled,
 }
 
 /// Decides a navigation at once.
@@ -187,6 +189,7 @@ pub struct Native {
     view: WebView,
     /// The theme script's id once `WebView2` added it.
     theme: Rc<RefCell<Option<String>>>,
+    post: Post,
 }
 
 impl Native {
@@ -197,6 +200,7 @@ impl Native {
         let native = Self {
             view,
             theme: Rc::default(),
+            post: Rc::clone(&spec.post),
         };
         let webview = native.webview();
         wire_navigation(&webview, &spec.decide, &spec.post).map_err(|err| err.to_string())?;
@@ -204,11 +208,33 @@ impl Native {
         wire_refusals(&webview).map_err(|err| err.to_string())?;
         wire_focus(&native.view.controller(), &spec.post).map_err(|err| err.to_string())?;
         wire_keys(&native.view.controller(), &spec.take_key, &spec.post).map_err(|err| err.to_string())?;
-        native.set_theme(&spec.theme);
+        // each script is in place before the first load starts: `WebView2` adds them asynchronously
+        let theme = native.add_script_now(&spec.theme)?;
+        native.theme.replace(Some(theme));
         for script in &spec.scripts {
-            native.add_script(script, None);
+            native.add_script_now(script)?;
         }
         Ok(native)
+    }
+
+    /// Adds `script` for later documents and waits until `WebView2` did (pumping the window's messages); its id.
+    fn add_script_now(&self, script: &str) -> Result<String, String> {
+        let webview = self.webview();
+        let source = HSTRING::from(script);
+        let id = Rc::new(RefCell::new(String::new()));
+        let added = Rc::clone(&id);
+        AddScriptToExecuteOnDocumentCreatedCompletedHandler::wait_for_async_operation(
+            Box::new(move |handler| {
+                // SAFETY: a COM call on the web view's own thread.
+                unsafe { webview.AddScriptToExecuteOnDocumentCreated(&source, &handler) }.map_err(Into::into)
+            }),
+            Box::new(move |result, script_id| {
+                added.replace(script_id);
+                result
+            }),
+        )
+        .map_err(|err| format!("a page's script was not added: {err}"))?;
+        Ok(id.take())
     }
 
     /// The environment the web view runs in, which later pages share.
@@ -220,11 +246,15 @@ impl Native {
         self.view.webview()
     }
 
-    fn add_script(&self, script: &str, id: Option<Rc<RefCell<Option<String>>>>) {
+    /// Adds `script` for later documents; once `WebView2` did, its id goes to `id` and the page is told
+    /// ([`Report::ThemeInstalled`]).
+    fn add_script(&self, script: &str, id: Rc<RefCell<Option<String>>>) {
+        let post = Rc::clone(&self.post);
         let handler = AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(move |result, added| {
-            if let (Ok(()), Some(id)) = (result, id) {
+            if result.is_ok() {
                 id.replace(Some(added));
             }
+            post(Report::ThemeInstalled);
             Ok(())
         }));
         let webview = self.webview();
@@ -235,14 +265,15 @@ impl Native {
         }
     }
 
-    /// Replaces the theme script, which later documents run (the WPE host's `set_scripts`).
+    /// Replaces the theme script, which later documents run (the WPE host's `set_scripts`); the page hears once it is
+    /// in place ([`Report::ThemeInstalled`]).
     pub fn set_theme(&self, script: &str) {
         if let Some(old) = self.theme.take() {
             let webview = self.webview();
             // SAFETY: a COM call on the web view's own thread.
             let _ = unsafe { webview.RemoveScriptToExecuteOnDocumentCreated(&HSTRING::from(old)) };
         }
-        self.add_script(script, Some(Rc::clone(&self.theme)));
+        self.add_script(script, Rc::clone(&self.theme));
     }
 
     /// Loads `address`, as the web view spells it.

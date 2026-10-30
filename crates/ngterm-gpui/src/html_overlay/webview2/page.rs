@@ -135,6 +135,8 @@ pub struct Page {
     applied: Cell<Placement>,
     /// The web view holds the keyboard, as it last reported.
     native_focused: Cell<bool>,
+    /// A file page reloads once its replaced theme script is in place.
+    reload_after_theme: Cell<bool>,
     me: Weak<Page>,
 }
 
@@ -183,6 +185,7 @@ impl Page {
             laid_out: Cell::new(Placement::default()),
             applied: Cell::new(Placement::default()),
             native_focused: Cell::new(false),
+            reload_after_theme: Cell::new(false),
             me: me.clone(),
         })
     }
@@ -434,15 +437,17 @@ impl Page {
         if change == ThemeChange::Unchanged {
             return;
         }
-        let script = next.script(themed);
+        let script = bridge::theme_script(&next.script(themed));
         self.theme.replace(next);
+        let reload = change == ThemeChange::ReinstallAndReload;
         if let Some(native) = self.native() {
+            // the reload waits for the new script to be in place
+            self.reload_after_theme.set(reload);
             native.set_theme(&script);
             if let Some(canvas) = self.canvas() {
                 native.set_background(canvas);
             }
-        }
-        if change == ThemeChange::ReinstallAndReload {
+        } else if reload {
             self.reload_shown();
         }
     }
@@ -535,6 +540,11 @@ impl Page {
             Report::Focus(focused) => self.native_focus(focused, cx),
             Report::DownloadRefused(uri) => tracing::info!(uri, "a page's download was refused"),
             Report::Key(keystroke) => self.app_key(&keystroke, cx),
+            Report::ThemeInstalled => {
+                if self.reload_after_theme.take() {
+                    self.reload_shown();
+                }
+            }
         }
     }
 
@@ -690,7 +700,7 @@ impl Page {
         match bridge::parse(raw, &self.nonce) {
             Some(bridge::Message::Input { click }) => self.user_input(click),
             Some(bridge::Message::Bridge { id, body }) => self.bridge_message(id, body),
-            None => {}
+            None => tracing::debug!(page = %self.id, "a web message that is none of ngterm's script's"),
         }
     }
 
@@ -719,7 +729,7 @@ impl Page {
     /// Settles the page's bridge request `id` with `answer`.
     pub fn reply(&self, id: u64, answer: Result<serde_json::Value, String>) {
         if let Some(native) = self.native() {
-            native.post_json(&bridge::reply(id, answer));
+            native.post_json(&bridge::reply(id, &self.nonce, answer));
         }
     }
 

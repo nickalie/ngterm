@@ -7,8 +7,10 @@
 //!   `postMessage` and `addEventListener` taken before the page's scripts run. A message without the nonce, from the
 //!   page itself or from a frame, is dropped (upstream refuses frames' requests; a frame never runs this script).
 //! - the bridge's handler (upstream's `messageHandlers.ngterm`), whose `postMessage` returns a promise the host's
-//!   reply settles: the reply comes back as a web message (`PostWebMessageAsJson`), which only the browser can raise
-//!   as a trusted event. Core's adapter and `--js` relay run over it unchanged but for the name they reach it by.
+//!   reply settles: the reply comes back as a web message (`PostWebMessageAsJson`) carrying the nonce too, so a reply
+//!   the page forged (a `message` event it dispatched itself, which `WebView2`'s own does not tell apart by
+//!   `isTrusted`) settles nothing. Core's adapter and `--js` relay run over it unchanged but for the name they reach it
+//!   by.
 //! - the user's input, real presses and keys only (`isTrusted`, which page code cannot fake), reported for
 //!   auto-follow and to lift a declined hand-off's silence (upstream's `onUserInput`).
 //!
@@ -50,7 +52,7 @@ pub fn page_script(nonce: &str, themed: bool, javascript: bool) -> String {
   let next = 0;
   listen('message', (event) => {{
     const data = event.data;
-    if (!event.isTrusted || !data || data.ngterm !== 'reply' || !waiting.has(data.id)) return;
+    if (!data || data.ngterm !== 'reply' || data.n !== nonce || !waiting.has(data.id)) return;
     const {{resolve, reject}} = waiting.get(data.id);
     waiting.delete(data.id);
     if (typeof data.error === 'string') reject(new Error(data.error)); else resolve(data.result);
@@ -138,14 +140,27 @@ pub fn parse(raw: &str, nonce: &str) -> Option<Message> {
     }
 }
 
-/// The web message that settles bridge request `id` with `answer`: its result, or its rejection's text.
+/// The web message that settles bridge request `id` of the page signing with `nonce` with `answer`: its result, or
+/// its rejection's text.
 #[must_use]
-pub fn reply(id: u64, answer: Result<Value, String>) -> String {
+pub fn reply(id: u64, nonce: &str, answer: Result<Value, String>) -> String {
     let message = match answer {
-        Ok(result) => serde_json::json!({"ngterm": "reply", "id": id, "result": result}),
-        Err(error) => serde_json::json!({"ngterm": "reply", "id": id, "error": error}),
+        Ok(result) => serde_json::json!({"ngterm": "reply", "n": nonce, "id": id, "result": result}),
+        Err(error) => serde_json::json!({"ngterm": "reply", "n": nonce, "id": id, "error": error}),
     };
     message.to_string()
+}
+
+/// Core's theme script as a `WebView2` document runs it: at document creation the document has no root element yet
+/// (`WebKit` runs its start scripts once it has one), so the style goes in once the root is there, before anything
+/// the document holds.
+#[must_use]
+pub fn theme_script(script: &str) -> String {
+    format!(
+        "(() => {{\n  const apply = () => {{ {script} }};\n  if (document.documentElement) {{ apply(); return; }}\n  \
+         new MutationObserver((records, observer) => {{\n    if (!document.documentElement) return;\n    \
+         observer.disconnect();\n    apply();\n  }}).observe(document, {{childList: true}});\n}})();"
+    )
 }
 
 /// A fresh nonce for a page: 128 random bits, as hex.
@@ -181,16 +196,23 @@ mod tests {
 
     #[test]
     fn a_reply_settles_its_request() {
-        let ok: Value = serde_json::from_str(&reply(7, Ok(serde_json::json!({"text": "done"})))).unwrap();
+        let ok: Value = serde_json::from_str(&reply(7, "n1", Ok(serde_json::json!({"text": "done"})))).unwrap();
         assert_eq!(
             ok,
-            serde_json::json!({"ngterm": "reply", "id": 7, "result": {"text": "done"}})
+            serde_json::json!({"ngterm": "reply", "n": "n1", "id": 7, "result": {"text": "done"}})
         );
-        let refused: Value = serde_json::from_str(&reply(8, Err("page closed".to_owned()))).unwrap();
+        let refused: Value = serde_json::from_str(&reply(8, "n1", Err("page closed".to_owned()))).unwrap();
         assert_eq!(
             refused,
-            serde_json::json!({"ngterm": "reply", "id": 8, "error": "page closed"})
+            serde_json::json!({"ngterm": "reply", "n": "n1", "id": 8, "error": "page closed"})
         );
+    }
+
+    #[test]
+    fn the_theme_waits_for_the_documents_root() {
+        let theme = theme_script("document.documentElement.prepend(style);");
+        assert!(theme.contains("if (document.documentElement) { apply(); return; }"));
+        assert!(theme.contains("MutationObserver") && theme.contains("document.documentElement.prepend(style);"));
     }
 
     #[test]

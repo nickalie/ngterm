@@ -359,7 +359,7 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
         zoom: with(|registry| registry.zoom.unwrap_or(1.0)),
         bounds: placement.bounds,
         visible: false,
-        theme: page.theme().script(overlay.themed()),
+        theme: super::bridge::theme_script(&page.theme().script(overlay.themed())),
         scripts: page.scripts(),
         grant: granted.then(|| page.grant().clone()),
         replica,
