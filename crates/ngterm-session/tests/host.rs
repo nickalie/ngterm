@@ -20,7 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ngterm_host::{HostError, KillOutcome, LiveScreen, LiveSessionRecord, ProcessRecord, SessionHost};
-use ngterm_session::client::{AttachEvent, Client};
+use ngterm_session::client::{AttachEvent, Client, KILL_WAIT};
 use ngterm_session::host::ServerHost;
 use ngterm_session::job::{ProcessEntry, Signal, Sweeper};
 use ngterm_session::protocol::{
@@ -313,10 +313,12 @@ fn a_silent_server_fails_each_call_within_the_timeout() -> TestResult {
     assert!(host.type_input(NAME, b"x").is_err());
     assert!(matches!(host.kill(NAME, true), KillOutcome::Failed(_)));
     assert!(!host.kill_batch(&[NAME.to_owned()]));
+    // a kill waits KILL_WAIT more, which a server answers within once the programs ended
+    let bound = Duration::from_secs(10) + KILL_WAIT * 2;
+    let elapsed = started.elapsed();
     assert!(
-        started.elapsed() < Duration::from_secs(10),
-        "{:?} for five calls",
-        started.elapsed()
+        elapsed >= KILL_WAIT * 2 && elapsed < bound,
+        "{elapsed:?} for five calls"
     );
     assert_eq!(calls(&log).len(), 5, "each call reached the server once, never retried");
     Ok(())

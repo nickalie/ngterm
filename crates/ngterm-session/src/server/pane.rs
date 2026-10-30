@@ -21,8 +21,9 @@
 //!   terminate step dropped), the child left unreaped meanwhile, so its group and its session, which its id names,
 //!   are still reached once it exited and cannot be reused;
 //! - a kill reports whether the program ended, in place of herdr's grace after the kill: its exit seen within
-//!   [`KILL_LIMIT`] of the first signal, then its end recorded, which waits for the PTY from the exit, so a slow
-//!   exit (a loaded Windows takes half a second to end a job's tree) takes nothing of that wait;
+//!   [`TERMINATION_LIMIT`] of the first signal (a plain hangup on Unix, which the program may ignore, within
+//!   [`KILL_LIMIT`]), then its end recorded, which waits for the PTY from the exit, so a slow exit (a loaded Windows
+//!   takes half a second and more to end a job's tree) takes nothing of that wait;
 //! - the registry is keyed by session name and drops a pane once its program ended.
 //!
 //! # The terminal
@@ -122,11 +123,15 @@ pub const FALLBACK_TERM: &str = "xterm-256color";
 pub const EXIT_GRACE: Duration = Duration::from_secs(1);
 /// How long a forced kill waits after the hangup before it kills (herdr's grace).
 pub const KILL_GRACE: Duration = Duration::from_millis(250);
-/// How long a kill waits for the program's exit to be seen, from its first signal: a program that handles the hangup
-/// has it to end, and so has a forced kill's slow exit (a loaded system can take half a second to end a tree and wake
-/// the waiter); only a program that ignores the hangup, or one the system cannot end, takes it all. The end is waited
-/// for apart, from the exit ([`Pane::kill`]), so a slow exit takes nothing of the PTY's [`EXIT_GRACE`].
+/// How long a plain kill on Unix, a hangup the program may handle or ignore, waits for the program's exit to be seen:
+/// a program that handles it has that long to end. The end is waited for apart, from the exit ([`Pane::kill`]), so a
+/// slow exit takes nothing of the PTY's [`EXIT_GRACE`].
 pub const KILL_LIMIT: Duration = Duration::from_millis(1500);
+/// How long a kill that ends the program for certain (a forced one, or any on Windows, which terminates the program's
+/// job) waits for the program's exit to be seen, from its first signal. The system is ending the tree, which a loaded
+/// one takes seconds to do and report (half a second seen on a loaded Windows guest, more under heavier load); only a
+/// process the system cannot end (stuck in a driver) takes it all. [`crate::client::KILL_WAIT`] covers it.
+pub const TERMINATION_LIMIT: Duration = Duration::from_secs(5);
 /// How long an attach or a resync waits for a cut its snapshot can be taken at.
 pub const SNAPSHOT_WAIT: Duration = Duration::from_secs(2);
 /// How often a kill's grace looks at what of the program's session lives on (herdr's poll).
@@ -138,8 +143,8 @@ const REAP_HOLD_LIMIT: Duration = Duration::from_secs(5);
 /// How long a kill that saw the program exit waits for its end to be recorded: the most the waiter waits after the
 /// exit, for the PTY's end and for a kill's hold on the reaping. Reached only by a waiter that never records the end.
 const END_LIMIT: Duration = EXIT_GRACE.saturating_add(REAP_HOLD_LIMIT);
-// a kill whose program exits at its limit, with a PTY that never ends, answers within the client's call
-const _: () = assert!(KILL_LIMIT.saturating_add(EXIT_GRACE).as_millis() < crate::client::DEFAULT_TIMEOUT.as_millis());
+// the client's wait for a kill, which covers a certain kill's limit, covers a plain one's too
+const _: () = assert!(KILL_LIMIT.as_millis() <= TERMINATION_LIMIT.as_millis());
 /// How long the replies' helper thread sleeps with nothing to do (it is woken for whatever it does).
 const HELPER_IDLE: Duration = Duration::from_secs(60);
 
@@ -1010,8 +1015,9 @@ impl Pane {
     /// member of its group that ignores it lives on; with `force`, [`Pane::end_tree`]'s hangup and then kill of the
     /// whole group and of every other process of its session, which ends those too. On Windows either ends the
     /// program's job, its whole tree, at once.
-    /// Whether the program ended: its exit seen within [`KILL_LIMIT`] of the first signal, and its end recorded after
-    /// it, once the PTY ended or [`EXIT_GRACE`] after the exit, however late the exit came.
+    /// Whether the program ended: its exit seen within [`TERMINATION_LIMIT`] of the first signal ([`KILL_LIMIT`] for
+    /// a plain kill on Unix, which the program may ignore), and its end recorded after it, once the PTY ended or
+    /// [`EXIT_GRACE`] after the exit, however late the exit came.
     ///
     /// # Errors
     ///
@@ -1020,7 +1026,8 @@ impl Pane {
         if self.exit_status().is_some() {
             return Ok(true);
         }
-        let deadline = Instant::now() + KILL_LIMIT;
+        let certain = force || cfg!(windows);
+        let deadline = Instant::now() + if certain { TERMINATION_LIMIT } else { KILL_LIMIT };
         if still_the_program(self) {
             if force {
                 self.end_tree()?;

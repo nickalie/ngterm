@@ -9,7 +9,8 @@
 //! - **Failures are never answers.** A listing that could not be read is an error, never an empty namespace; a screen
 //!   that could not be read is an error, never a blank screen; a kill that could not be sent is
 //!   [`KillOutcome::Failed`] with the reason. Every call is bounded by the client's timeout
-//!   ([`crate::client::DEFAULT_TIMEOUT`], zmx's per invocation) and never retried: a second typing after an unclear
+//!   ([`crate::client::DEFAULT_TIMEOUT`], zmx's per invocation; a kill [`crate::client::KILL_WAIT`] more, for its
+//!   programs' end) and never retried: a second typing after an unclear
 //!   failure would type twice.
 //! - **The error texts** are zmx's in live-session wording: `live session list failed: <reason>`,
 //!   `live session screen failed: <reason>`, `live session type failed: <reason>` (`ZmxClient`'s `zmx list failed`,

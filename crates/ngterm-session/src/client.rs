@@ -15,8 +15,8 @@
 //! ([`spawn::connect_or_start`]); without them it reports [`ClientError::NoServer`].
 //!
 //! Every api call runs within the client's timeout ([`DEFAULT_TIMEOUT`]), connecting included, the whole call
-//! together however its reply arrives; an attach's first answer within [`ATTACH_TIMEOUT`]. A call that outran its
-//! timeout drops its connection.
+//! together however its reply arrives, a kill within [`KILL_WAIT`] more, as the server answers it once the programs
+//! ended; an attach's first answer within [`ATTACH_TIMEOUT`]. A call that outran its timeout drops its connection.
 //!
 //! # The attach stream
 //!
@@ -57,11 +57,15 @@ use crate::protocol::{
     JobProcess, KillResult, LeadRole, PROTOCOL_VERSION, ReplyMetadata, Role, Screen, SessionRecord, Welcome,
     read_frame, write_message,
 };
-use crate::server::BUILD_ID;
 use crate::server::spawn::{self, Connected, HandoffAttempt, StartError, StartOptions};
+use crate::server::{self, BUILD_ID};
 
 /// How long an api call may take, connecting included (zmx's `DEFAULT_TIMEOUT`, which bounded one invocation).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// What a kill call may take beyond the client's timeout: the server answers once the programs ended, whose exit it
+/// waits for up to [`server::pane::TERMINATION_LIMIT`], then for the PTY up to [`server::pane::EXIT_GRACE`].
+pub const KILL_WAIT: Duration = server::pane::TERMINATION_LIMIT.saturating_add(server::pane::EXIT_GRACE);
 
 /// How long an attach waits for the server's first answer once connected: a session is created and its first
 /// snapshot cut by then (the server waits for a cut for at most 2 s, `server::pane::SNAPSHOT_WAIT`).
@@ -76,6 +80,15 @@ pub const DETACH_WAIT: Duration = Duration::from_secs(1);
 
 /// How often [`AttachWriter::detach`] looks whether the write in progress is done.
 const DETACH_POLL: Duration = Duration::from_millis(5);
+
+/// How long `request` may take with the client's `timeout`: a kill [`KILL_WAIT`] more.
+fn within(request: &ApiRequest, timeout: Duration) -> Duration {
+    if matches!(request, ApiRequest::Kill { .. }) {
+        timeout.saturating_add(KILL_WAIT)
+    } else {
+        timeout
+    }
+}
 
 /// Why a client call failed.
 #[derive(Debug, thiserror::Error)]
@@ -192,7 +205,7 @@ impl Client {
     ///
     /// Connecting or the call failed; [`ClientError::Api`] for the server's refusal of the request.
     pub fn call(&self, request: ApiRequest) -> Result<Option<ApiResponse>, ClientError> {
-        let deadline = Instant::now() + self.timeout;
+        let deadline = Instant::now() + within(&request, self.timeout);
         let Some(mut api) = self.api()? else {
             return Ok(None);
         };
@@ -322,7 +335,8 @@ impl Api {
     ///
     /// As [`Api::call_within`].
     pub fn call(&mut self, request: ApiRequest) -> Result<ApiResponse, ClientError> {
-        self.call_within(request, self.timeout)
+        let timeout = within(&request, self.timeout);
+        self.call_within(request, timeout)
     }
 
     /// The server's answer to `request` within `timeout`.

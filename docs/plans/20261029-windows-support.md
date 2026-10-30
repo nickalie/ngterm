@@ -97,9 +97,11 @@ guest has 4 CPUs and 6.5 GB of memory.
   launchable now counts, and the pane runs the alias itself (`launch/windows_shell.rs`)
 - ➕ (side task 19) a forced kill on a loaded Windows sometimes reported "did not end after its hangup": the job's
   tree took about half a second to end and wake the waiter, and the PTY's `EXIT_GRACE`, counted by the waiter from
-  the exit, then outran the kill's single budget counted from the signal. A kill now waits for the exit to be seen
-  within `KILL_LIMIT` of its first signal, then for the end the waiter records (`Pane::kill`); Unix had the same flaw
-  for a late exit whose PTY stays open (`tests/pane.rs` covers it)
+  the exit, then outran the kill's single budget counted from the signal. A kill now waits for the exit to be seen,
+  then for the end the waiter records (`Pane::kill`): a kill that ends the program for certain (forced, or any on
+  Windows) waits up to `TERMINATION_LIMIT` for the exit, a plain hangup on Unix `KILL_LIMIT`; the client's kill call
+  waits `KILL_WAIT` beyond its timeout to match. Unix had the same flaw for a late exit whose PTY stays open
+  (`tests/pane.rs` covers it)
 
 ### Task 2: `ngtermctl` on Windows and macOS (`ngterm-ctl`)
 
