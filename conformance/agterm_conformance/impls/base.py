@@ -2,6 +2,11 @@
 
 Safety is an allowlist: every path the instance is told about lives under a fresh `mkdtemp` root, and the
 guards refuse a launch env that points anywhere else before anything is spawned.
+
+On Windows (the Rust build only) the control socket's path names a named pipe (`agterm_conformance.transport`), the
+instance's local and roaming application data move under the root with its home, its panes run a POSIX `sh`
+(`posix_shell`), the quit is the session's end sent to the app's hidden window (`winproc.ask_to_end`) and the app's
+process tree is reaped by pid at the stop (`reap_process_tree`).
 """
 
 from __future__ import annotations
@@ -10,7 +15,6 @@ import contextlib
 import functools
 import json
 import os
-import pwd
 import re
 import shutil
 import signal
@@ -26,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
+from agterm_conformance import winproc
 from agterm_conformance.client import (
     Client,
     ClientError,
@@ -42,13 +47,31 @@ from agterm_conformance.vocabulary import (
     Vocabulary,
 )
 
+if sys.platform != "win32":
+    import pwd
+
+WINDOWS = sys.platform == "win32"
+
 # Upstream refuses to bind at `path.utf8.count >= 104` (Darwin's sun_path, mirrored on Linux).
 SOCKET_PATH_CAP = 104
 # `/tmp`, not `$TMPDIR`: a macOS runner's `/var/folders/...` temp dir eats most of the socket cap.
 # `CONFORMANCE_TMP` (not `AGTERM_`- or `NGTERM_`-prefixed, which the plugin scrubs) gives run-linux.sh its own
 # parent.
-TEMP_PARENT = os.environ.get("CONFORMANCE_TMP") or "/tmp"
-MINIMAL_PATH = "/usr/bin:/bin"
+# Windows has no `/tmp`: its temporary directory there.
+TEMP_PARENT = os.environ.get("CONFORMANCE_TMP") or (tempfile.gettempdir() if WINDOWS else "/tmp")
+_SYSTEM_ROOT = os.environ.get("SystemRoot") or r"C:\Windows"
+# Windows: the system directories alone, so the app's login shell is the inbox Windows PowerShell
+# (crates/ngterm-session/src/launch/windows_shell.rs), never a PowerShell 7 the machine's PATH carries.
+MINIMAL_PATH = (
+    f"{_SYSTEM_ROOT}\\System32;{_SYSTEM_ROOT};{_SYSTEM_ROOT}\\System32\\Wbem" if WINDOWS else "/usr/bin:/bin"
+)
+# Windows has no /bin/sh: the panes run Git for Windows' `sh.exe` (`posix_shell`), named by this variable, else found
+# beside the `git` on PATH or in Git's default install directory.
+POSIX_SHELL_VARIABLE = "CONFORMANCE_POSIX_SHELL"
+GIT_SHELL_DEFAULT = r"C:\Program Files\Git\bin\sh.exe"
+# The Windows instance's application data, under its home as a profile keeps them; the Rust build's live-session
+# namespace is derived from the local one (`ngterm_core::live::windows_socket_directory`).
+WINDOWS_APP_DATA = {"LOCALAPPDATA": "AppData/Local", "APPDATA": "AppData/Roaming"}
 # The startup variables a Live pane's shell integration hands on to the login shell (zsh's ZDOTDIR, bash's ENV and
 # HISTFILE), which would point the pane at the user's real startup and history files.
 SHELL_STARTUP_VARIABLES = ("ZDOTDIR", "GHOSTTY_ZSH_ZDOTDIR", "ENV", "BASH_ENV", "GHOSTTY_BASH_ENV", "HISTFILE")
@@ -131,6 +154,11 @@ DBUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Confi
 HEADLESS_HELPERS = ("weston", "dbus-daemon")
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
+# How long the processes of a Windows app's tree get to end by themselves once it quit (its panes' ConPTYs closed)
+# before they are ended by pid.
+REAP_TREE_GRACE = 3.0
+# How long a Windows stop looks for the app's quit window (`Adapter.quit_window_class`) before it kills the app.
+QUIT_WINDOW_WAIT = 2.0
 # How long an app outliving STOP_TIMEOUT gets to write its core after SIGABRT before it is killed.
 ABORT_GRACE = 10.0
 PROC_ROOT = Path("/proc")
@@ -202,12 +230,33 @@ def version_tuple(version: str) -> tuple[int, ...]:
 def login_shell_blocker() -> str | None:
     """Why Live sessions cannot run for this account, or None: upstream wraps a pane in zmx only when
     the password-database login shell is zsh or fish (`ZmxSupport.configuration`), and the pane then execs it."""
+    if WINDOWS:
+        return "Windows has no password-database login shell"
     shell = pwd.getpwuid(os.getuid()).pw_shell
     if os.path.basename(shell) not in ("zsh", "fish"):
         return f"the password-database login shell is {shell or 'unset'}, not zsh or fish"
     if not os.access(shell, os.X_OK):
         return f"the login shell {shell} is not executable"
     return None
+
+
+def posix_shell(environ: Mapping[str, str] | None = None) -> str:
+    """The POSIX `sh` a pane runs: `/bin/sh`; on Windows Git for Windows' `bin\\sh.exe` (`CONFORMANCE_POSIX_SHELL`, else
+    the one of the `git` on PATH, else Git's default install directory), absolute, refused when missing."""
+    if not WINDOWS:
+        return "/bin/sh"
+    source = os.environ if environ is None else environ
+    candidates = [source.get(POSIX_SHELL_VARIABLE, "")]
+    if git := shutil.which("git", path=source.get("PATH")):
+        # <git>\cmd\git.exe or <git>\bin\git.exe
+        candidates.append(os.path.join(os.path.dirname(os.path.dirname(git)), "bin", "sh.exe"))
+    candidates.append(GIT_SHELL_DEFAULT)
+    for candidate in candidates:
+        if candidate and os.path.isabs(candidate) and os.path.isfile(candidate):
+            return candidate
+    raise LaunchError(
+        f"no POSIX sh for the panes: install Git for Windows, or set {POSIX_SHELL_VARIABLE} to its bin\\sh.exe"
+    )
 
 
 def scrubbed_environ(environ: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -317,6 +366,7 @@ def check_launch_env(
             raise LaunchRefused(f"{name} would leak into the instance: only harness-set {prefix}* are allowed")
     rooted = [f"{prefix}STATE_DIR", f"{prefix}CONTROL_SOCKET", "HOME", *XDG_HOMES]
     rooted += ["XDG_RUNTIME_DIR"] if needs_runtime_dir else []
+    rooted += list(WINDOWS_APP_DATA) if WINDOWS else []
     if headless:
         if "DISPLAY" in env:
             raise LaunchRefused("DISPLAY is set: a headless instance would reach the user's X server")
@@ -364,6 +414,11 @@ class Instance:
     # The instance's own headless weston and session bus; a relaunch keeps both.
     compositor: subprocess.Popen[bytes] | None = None
     session_bus: subprocess.Popen[bytes] | None = None
+    # Windows: the class of the top-level window the quit is asked of (`Adapter.quit_window_class`).
+    quit_window_class: str | None = None
+    # Windows: every app process launched on this root (relaunches too), with its creation time, kept open so no pid
+    # is reused: the roots of the process tree the stop reaps.
+    launched: list[tuple[subprocess.Popen[bytes], int | None]] = field(default_factory=list)
 
     @property
     def pid(self) -> int:
@@ -417,6 +472,9 @@ class Adapter:
     compositor_args: ClassVar[tuple[str, ...]] = ()
     # The names the implementation answers the shared tests' live-session group by (agterm_conformance.vocabulary).
     vocabulary: ClassVar[Vocabulary] = UPSTREAM
+    # Windows: the class of the app's top-level window that takes the session's end, the polite quit (the Rust
+    # build's hidden window, crates/ngterm-gpui/src/system_window.rs); None: the stop kills the app.
+    quit_window_class: ClassVar[str | None] = None
 
     def __init__(self, bin: Path | None, ctl: Path | None = None) -> None:
         # Absolute now: the child starts in the isolated HOME, where a relative path would not resolve.
@@ -494,8 +552,10 @@ class Adapter:
         """Hook for what a first-run launch needs beyond a state dir with no prior state."""
 
     def ghostty_config(self) -> str:
-        """The agterm-scoped `<state>/config/ghostty.conf` the instance starts with."""
-        return GHOSTTY_SHELL_CONFIG + GHOSTTY_ISOLATION_CONFIG
+        """The agterm-scoped `<state>/config/ghostty.conf` the instance starts with: on Windows its `command` is the
+        POSIX `sh` there (`posix_shell`)."""
+        shell = f"command = {posix_shell()}\n" if WINDOWS else GHOSTTY_SHELL_CONFIG
+        return shell + GHOSTTY_ISOLATION_CONFIG
 
     # -- launch
 
@@ -513,9 +573,13 @@ class Adapter:
             XDG_STATE_HOME=os.fspath(home / ".local/state"),
             XDG_CACHE_HOME=os.fspath(home / ".cache"),
             PATH=MINIMAL_PATH,
-            SHELL="/bin/sh",
-            BROWSER="true",
         )
+        if WINDOWS:
+            # The live-session namespace, PowerShell's caches and every per-user file a pane writes stay in the root.
+            for name, relative in WINDOWS_APP_DATA.items():
+                env[name] = os.fspath(home / relative)
+        else:
+            env.update(SHELL="/bin/sh", BROWSER="true")
         env[self.variable("STATE_DIR")] = os.fspath(state)
         env[self.variable("CONTROL_SOCKET")] = os.fspath(state / f"{self.app_dir_name}.sock")
         if self.needs_app_id:
@@ -576,6 +640,7 @@ class Adapter:
             _note_headless_stop(error, compositor, session_bus, root)
             shutil.rmtree(root, ignore_errors=True)
             raise
+        launched = [(process, winproc.creation_time(process.pid) if WINDOWS else None)]
         instance = Instance(
             process=process,
             root=root,
@@ -585,11 +650,13 @@ class Adapter:
             env=env,
             log=log,
             app_id=app_id,
-            live_dir=self.vocabulary.socket_directory(state_dir, self.app_dir_name),
+            live_dir=self.vocabulary.socket_directory(state_dir, self.app_dir_name, env),
             vocabulary=self.vocabulary,
             env_prefix=self.env_prefix,
             compositor=compositor,
             session_bus=session_bus,
+            quit_window_class=self.quit_window_class,
+            launched=launched,
         )
         return instance if first_run else self._serving(instance, timeout)
 
@@ -644,6 +711,8 @@ class Adapter:
             env_prefix=instance.env_prefix,
             compositor=instance.compositor,
             session_bus=instance.session_bus,
+            quit_window_class=instance.quit_window_class,
+            launched=[*instance.launched, (process, winproc.creation_time(process.pid) if WINDOWS else None)],
         )
         return self._serving(relaunched, timeout)
 
@@ -652,7 +721,8 @@ class Adapter:
         its own (so neither the single-instance forwarding nor the socket lock stops it first), and wait for it to exit.
 
         For a launch expected to stop at once (a state directory another instance owns): one still running after
-        `timeout` loses its process group to SIGKILL and reports a `returncode` of None.
+        `timeout` loses its process group to SIGKILL (on Windows its process tree, by pid) and reports a `returncode`
+        of None.
         """
         env = dict(instance.env)
         env[self.variable("CONTROL_SOCKET")] = os.fspath(instance.root / "beside.sock")
@@ -673,14 +743,18 @@ class Adapter:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            start_new_session=True,
+            **_own_group(),
         )
+        created = winproc.creation_time(process.pid) if WINDOWS else None
         try:
             stdout, stderr = process.communicate(timeout=timeout)
             code: int | None = process.returncode
         except subprocess.TimeoutExpired:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
+            if WINDOWS:
+                _end_tree([(process, created)], grace=0)
+            else:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate()
             code = None
         return Beside(
@@ -702,7 +776,7 @@ class Adapter:
 
     def stop(self, instance: Instance, cleanup: bool = True) -> None:
         """Reap daemons, SIGTERM the launched pid, end what `stop_helpers` owns, then require no live-session process
-        left (`find_leftovers`).
+        left (`find_leftovers`); on Windows the app's process tree is then reaped by pid (`reap_process_tree`).
 
         The compositor and session bus go last, once the app is gone, and must leave no process of their own.
         """
@@ -721,6 +795,7 @@ class Adapter:
                 problem = _terminate_app(instance)
             helper_problem = self.stop_helpers(instance)
             leftovers = _leftovers_error(instance.live_dir, steps, instance.vocabulary)
+            reap_process_tree(instance)
         finally:
             _release_app_id(instance.app_id)
             headless_problem = stop_headless(instance.compositor, instance.session_bus, instance.root)
@@ -1016,8 +1091,16 @@ def _spawn(command: list[str], env: dict[str, str], log: Path, mode: str) -> sub
             stdin=subprocess.DEVNULL,
             stdout=sink,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            **_own_group(),
         )
+
+
+def _own_group() -> dict[str, Any]:
+    """A session of its own on POSIX; on Windows a process group of its own, so no console Ctrl event of the harness's
+    reaches it."""
+    if WINDOWS:
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
 
 
 def _prepare_tree(
@@ -1198,10 +1281,13 @@ def _terminate_app(instance: Instance) -> str | None:
 
     An app that stalls gets its threads snapshotted into its log and SIGABRT, so the system writes a core naming the
     stalled step, then SIGKILL once ABORT_GRACE runs out. Weston and the session bus keep the plain `_terminate`.
+    Windows has neither: `_end_windows_app`.
     """
     process = instance.process
     if process.poll() is not None:
         return None
+    if WINDOWS:
+        return _end_windows_app(instance)
     process.send_signal(signal.SIGTERM)
     try:
         process.wait(timeout=STOP_TIMEOUT)
@@ -1233,6 +1319,61 @@ def _terminate_app(instance: Instance) -> str | None:
         f"pid {process.pid} did not exit within {STOP_TIMEOUT}s of SIGTERM{outlived_kill}; {written}; "
         f"core requested ({_core_hint(process.pid)}){unwritten}"
     )
+
+
+def _end_windows_app(instance: Instance) -> str | None:
+    """The Windows quit: the session's end asked of the app's quit window (`winproc.ask_to_end`), SIGTERM's
+    counterpart for a GUI process, which takes no console Ctrl event; an app without that window, or still running
+    STOP_TIMEOUT after it, is ended by its pid and reported (no thread snapshot or core: Windows writes neither)."""
+    process = instance.process
+    asked = False
+    if instance.quit_window_class is not None:
+        deadline = time.monotonic() + QUIT_WINDOW_WAIT
+        # The window opens with the app's quit handlers; a launch still starting may not have it yet.
+        while not (asked := winproc.ask_to_end(process.pid, instance.quit_window_class)):
+            if process.poll() is not None:
+                return None
+            if time.monotonic() >= deadline:
+                break
+            threading.Event().wait(POLL_INTERVAL)
+    if asked:
+        try:
+            process.wait(timeout=STOP_TIMEOUT)
+            return None
+        except subprocess.TimeoutExpired:
+            pass
+    process.kill()
+    try:
+        process.wait(timeout=STOP_TIMEOUT)
+        outlived = ""
+    except subprocess.TimeoutExpired:
+        outlived = f", and it outlived TerminateProcess by {STOP_TIMEOUT}s"
+    if asked:
+        why = f"did not exit within {STOP_TIMEOUT}s of the session's end"
+    else:
+        why = f"showed no {instance.quit_window_class or 'quit'} window to ask the quit of"
+    return f"pid {process.pid} {why}; ended by its pid{outlived} (Windows writes no thread snapshot or core)"
+
+
+def reap_process_tree(instance: Instance) -> None:
+    """Windows: what is left of every app process launched on the instance's root and its descendants (its panes'
+    programs and ConPTY hosts, a session server and its sessions) gets REAP_TREE_GRACE to end by itself, then is ended
+    by pid, each re-checked by its creation time first, never by image name. A no-op elsewhere, where a pane's program
+    ends with its pty and the leftover check names what a live session left."""
+    if WINDOWS:
+        _end_tree(instance.launched, REAP_TREE_GRACE)
+
+
+def _end_tree(launched: Iterable[tuple[subprocess.Popen[bytes], int | None]], grace: float) -> None:
+    roots = [winproc.Process(process.pid, 0, "", created) for process, created in launched]
+    deadline = time.monotonic() + grace
+    while True:
+        left = [process for process in [*roots, *winproc.descendants(roots)] if winproc.alive(process)]
+        if not left or time.monotonic() >= deadline:
+            break
+        threading.Event().wait(POLL_INTERVAL * 4)
+    for process in left:
+        winproc.terminate(process)
 
 
 def thread_snapshot(pid: int) -> str:
@@ -1277,6 +1418,8 @@ def find_leftovers(live_dir: str, vocabulary: Vocabulary = UPSTREAM) -> list[tup
     (`NGTERM_LIVE_DIR`: its sessions' programs and their attach clients); else zmx / agterm-session-host processes
     carrying it (`ZMX_DIR`)."""
     marker = f"{vocabulary.directory_variable}={live_dir}"
+    if WINDOWS:
+        return _windows_leftovers(live_dir, vocabulary)
     if vocabulary.server is not None:
         return [
             (pid, name, command)
@@ -1290,11 +1433,40 @@ def find_leftovers(live_dir: str, vocabulary: Vocabulary = UPSTREAM) -> list[tup
     ]
 
 
+def _windows_leftovers(live_dir: str, vocabulary: Vocabulary) -> list[tuple[int, str, str]]:
+    """Windows: the namespace's session server, found by its argv, and every process descending from it (its sessions'
+    programs and their ConPTY hosts)."""
+    if vocabulary.server is None:
+        return []
+    table = winproc.processes()
+    servers: list[tuple[winproc.Process, list[str]]] = []
+    for process in table:
+        if program_name(process.name) != vocabulary.server:
+            continue
+        words = winproc.command_line(process.pid)
+        if words is not None and serves_namespace(words, live_dir, vocabulary.server):
+            servers.append((process, words))
+    found = [(process.pid, process.name, " ".join(words)) for process, words in servers]
+    sessions = winproc.descendants((process for process, _ in servers), table)
+    found += [(process.pid, process.name, process.name) for process in sessions]
+    return found
+
+
+def program_name(path: str) -> str:
+    """The program a path names: its file name, on Windows case-folded and without `.exe`."""
+    name = os.path.basename(path)
+    return name.lower().removesuffix(".exe") if WINDOWS else name
+
+
 def serves_namespace(words: Iterable[str], live_dir: str, server: str) -> bool:
     """`<server> server <live_dir>`, the argv a session server of that namespace runs with (its environment carries
-    no `NGTERM_*`: the spawn drops them)."""
+    no `NGTERM_*`: the spawn drops them). On Windows paths compare as the file system does, ignoring case."""
     words = list(words)
-    return len(words) >= 3 and os.path.basename(words[0]) == server and words[1:3] == ["server", live_dir]
+    if len(words) < 3 or program_name(words[0]) != server or words[1] != "server":
+        return False
+    if WINDOWS:
+        return os.path.normcase(words[2]) == os.path.normcase(live_dir)
+    return words[2] == live_dir
 
 
 def hosts_zmx_dir(words: Iterable[str], zmx_dir: str) -> bool:
@@ -1343,10 +1515,22 @@ def _darwin_pidpath(pid: int) -> str | None:
 
 def _processes() -> Iterable[tuple[int, str, str, list[str]]]:
     """(pid, program name, command, argv and environ words) for every readable process."""
-    if os.path.isdir("/proc/self"):
+    if WINDOWS:
+        yield from _windows_processes()
+    elif os.path.isdir("/proc/self"):
         yield from _proc_processes()
     else:
         yield from _ps_processes()
+
+
+def _windows_processes() -> Iterable[tuple[int, str, str, list[str]]]:
+    """Windows keeps no process's environment where another can read it cheaply: the words are the argv alone, and a
+    session server's sessions are found as its descendants instead (`find_leftovers`)."""
+    for process in winproc.processes():
+        words = winproc.command_line(process.pid)
+        if words is None:
+            continue  # gone, or another user's process
+        yield process.pid, process.name, " ".join(words), words
 
 
 def _proc_processes() -> Iterable[tuple[int, str, str, list[str]]]:

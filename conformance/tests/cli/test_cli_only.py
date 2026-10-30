@@ -13,11 +13,10 @@ import base64
 import dataclasses
 import json
 import os
-import pwd
 import shlex
 import shutil
-import socket
 import stat
+import sys
 import threading
 import time
 import uuid
@@ -25,6 +24,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from agterm_conformance import transport
 from agterm_conformance.match import assert_ok, find_session
 from agterm_conformance.wait import wait_until
 
@@ -121,7 +121,12 @@ def test_clipboard_set_reaches_every_terminal_attached_to_the_pane(cli, launch):
 
 def _account_terminfo():
     """The real account's own terminfo directories, which the install must leave alone."""
-    home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    if sys.platform == "win32":
+        home = Path(os.environ["USERPROFILE"])
+    else:
+        import pwd
+
+        home = Path(pwd.getpwuid(os.getuid()).pw_dir)
     return [home / ".terminfo", home / ".local/share/terminfo"]
 
 
@@ -233,15 +238,14 @@ class _Relay:
         self.cli = cli.on(dataclasses.replace(cli.instance, socket=path))
         self.requests = []
         self._lock = threading.Lock()
-        self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._server.bind(os.fspath(path))
-        self._server.listen(16)
+        # an AF_UNIX socket, or on Windows the named pipe its path names
+        self._server = transport.Listener(path)
         threading.Thread(target=self._accept, daemon=True).start()
 
     def _accept(self):
         while True:
             try:
-                connection, _ = self._server.accept()
+                connection = self._server.accept()
             except OSError:
                 return  # closed
             threading.Thread(target=self._relay, args=(connection,), daemon=True).start()

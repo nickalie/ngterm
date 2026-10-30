@@ -1,0 +1,4 @@
+# The Windows conformance ratchet: pytest node ids the Rust build passes on Windows, one per line, verbatim and sorted.
+# tools/run-windows.sh (the cross-platform workflow's `windows` job) fails a run in which a listed id fails, errors or
+# skips (a host-dependent skip excepted). Add newly passing ids with
+# `tools/check_ratchet.py --report <nodeid report> --list conformance/rust-passing-windows.txt --add`.

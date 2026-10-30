@@ -11,10 +11,12 @@ from agterm_conformance.vocabulary import upstream_socket_directory
 CONFORMANCE = Path(__file__).parents[1]
 PACKAGE = CONFORMANCE / "agterm_conformance"
 # Every socket connect the harness makes, by file and enclosing function. The client's re-check the root on
-# each connect; `wait_for_unix_socket` probes the compositor and bus sockets its callers checked.
+# each connect, through the transport's `connect` (an AF_UNIX socket, or the named pipe the path names on Windows),
+# which nothing else calls; `wait_for_unix_socket` probes the compositor and bus sockets its callers checked.
 CONNECT_SITES = {
     ("client.py", "open_stream"),
     ("client.py", "_exchange"),
+    ("transport.py", "connect"),
     ("impls/base.py", "wait_for_unix_socket"),
 }
 CONNECT_CALLS = {"connect", "connect_ex", "create_connection", "urlopen"}

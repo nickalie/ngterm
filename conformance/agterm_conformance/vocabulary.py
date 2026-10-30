@@ -20,6 +20,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from agterm_conformance import transport
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -34,10 +36,7 @@ UPSTREAM_GROUP = "zmx"
 
 
 def fnv1a64(text: str) -> str:
-    value = 14_695_981_039_346_656_037
-    for byte in text.encode():
-        value = ((value ^ byte) * 1_099_511_628_211) & 0xFFFF_FFFF_FFFF_FFFF
-    return f"{value:016x}"
+    return transport.fnv1a64(text.encode())
 
 
 def _foundation_resolved(path: str) -> str:
@@ -47,16 +46,29 @@ def _foundation_resolved(path: str) -> str:
     return path
 
 
-def upstream_socket_directory(state_dir: str | os.PathLike[str], name: str = "agterm") -> str:
+def upstream_socket_directory(
+    state_dir: str | os.PathLike[str], name: str = "agterm", environ: Mapping[str, str] | None = None
+) -> str:
     """`ZmxSupport.socketDirectory`: FNV-1a 64 of the canonical state dir, under `/tmp`, prefixed with the
-    implementation's directory name (`Adapter.app_dir_name`: upstream's `agterm`, the Rust build's `ngterm`)."""
+    implementation's directory name (`Adapter.app_dir_name`: upstream's `agterm`, the Rust build's `ngterm`).
+    `environ`, the instance's, is not read: upstream has no Windows build."""
+    del environ
     return f"/tmp/{name}-zmx-{fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))}"
 
 
-def live_socket_directory(state_dir: str | os.PathLike[str], name: str = "ngterm") -> str:
-    """`ngterm_core::live::socket_directory` on Unix: upstream's hash under `/tmp/<name>-live-`, the Rust build's
-    namespace of its session server."""
-    return f"/tmp/{name}-live-{fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))}"
+def live_socket_directory(
+    state_dir: str | os.PathLike[str], name: str = "ngterm", environ: Mapping[str, str] | None = None
+) -> str:
+    """`ngterm_core::live::socket_directory`: the Rust build's namespace of its session server, upstream's hash under
+    `/tmp/<name>-live-` on Unix; on Windows `<LOCALAPPDATA>\\<name>\\live\\<hash>` of the instance's environment
+    `environ` (`windows_socket_directory`), the hash over the state dir as `realpath` spells it there."""
+    digest = fnv1a64(_foundation_resolved(os.path.realpath(state_dir)))
+    if sys.platform == "win32":
+        local = (environ if environ is not None else os.environ).get("LOCALAPPDATA", "").rstrip("\\/")
+        if not local:
+            raise ValueError("no LOCALAPPDATA to derive the Windows live-session namespace from")
+        return f"{local}\\{name}\\live\\{digest}"
+    return f"/tmp/{name}-live-{digest}"
 
 
 def _zmx_leading_client(instance: Any, endpoint: Mapping[str, Any], daemon: str) -> PtyProcess:
@@ -95,8 +107,9 @@ class Vocabulary:
     daemon_prefix: str
     # Upstream error and output texts (`str.format` templates) to this implementation's; one not listed is unchanged.
     texts: Mapping[str, str] = field(default_factory=dict)
-    # `socket_directory(state_dir, app_dir_name)`: the instance's namespace, named by the adapter's `app_dir_name`.
-    socket_directory: Callable[[str | os.PathLike[str], str], str] = upstream_socket_directory
+    # `socket_directory(state_dir, app_dir_name, environ)`: the instance's namespace, named by the adapter's
+    # `app_dir_name`; `environ` is the instance's launch environment, where a namespace depends on it (Windows).
+    socket_directory: Callable[..., str] = upstream_socket_directory
     # `leading_client(instance, endpoint, daemon)`: a second client of a daemon that claims its lead.
     leading_client: Callable[[Any, Mapping[str, Any], str], PtyProcess] = _zmx_leading_client
     # The executable of the one server per namespace that hosts every live session (`<server> server <directory>`),

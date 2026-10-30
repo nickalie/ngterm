@@ -52,6 +52,21 @@ The Rust build (GPUI) gets, on top of that:
 - a headless weston started with `--fake-seat`, since GPUI needs a `wl_seat`: weston 15.0 or later (the system's, or
   the one `scripts/build-weston.sh` vendors where the system's is older).
 
+On Windows (`tools/run-windows.sh`) the launch differs where the OS does:
+
+- the control socket's path is the identity, and the build serves the named pipe it names
+  (`ngterm_core::paths::control_pipe_name`; `agterm_conformance/transport.py` derives the same name);
+- `LOCALAPPDATA` and `APPDATA` lie under the root with `HOME`, a unique `NGTERM_APP_ID` names the single instance, and
+  the live-session namespace is `<LOCALAPPDATA>\ngterm\live\<hash>` over the state dir's realpath
+  (`live_socket_directory`), its server `ngterm-session.exe server <that dir>`;
+- no `SHELL`; `PATH` is the system directories alone (`System32`, the Windows directory, `Wbem`), so the login shell
+  is the inbox Windows PowerShell; the ghostty config's `command` is Git for Windows' `sh.exe` (absolute) in place of
+  `/bin/sh`;
+- no compositor, bus or lavapipe: the build renders through DirectX on the machine's adapter;
+- the quit is the session's end (the Restart Manager's `WM_QUERYENDSESSION`, then `WM_ENDSESSION` with
+  `ENDSESSION_CLOSEAPP`) posted to the build's hidden `ngterm-system-window`, which must quit within the same 10
+  seconds; the app's process tree is then ended by pid.
+
 SIGTERM must quit without a prompt within 10 seconds.
 Live sessions keep their sockets in a namespace directory named by the FNV-1a 64 hash (`%016x`, lowercase hex) over
 the UTF-8 bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists:
