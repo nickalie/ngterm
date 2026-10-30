@@ -65,8 +65,10 @@ pub(super) fn serve(socket: OwnedFd) -> i32 {
             match item {
                 Outgoing::Packet(packet) => {
                     if wire::send(writer_socket.as_fd(), &packet).is_err() {
-                        // the app is gone
-                        crate::exit_process(0);
+                        // the app is gone: the reader sees the end of the socket and stops the engine before the
+                        // worker ends
+                        let _ = rustix::net::shutdown(&*writer_socket, rustix::net::Shutdown::Both);
+                        return;
                     }
                 }
                 Outgoing::Flush(done) => {
@@ -90,8 +92,16 @@ pub(super) fn serve(socket: OwnedFd) -> i32 {
 }
 
 /// Hands the app's commands to `engine` until a quit (after which the engine's stop is told and flushed) or the end of
-/// the socket.
+/// the socket; the engine stops either way, so its web processes end with the worker (`engine::stop`) rather than
+/// outlive it.
 fn serve_commands(socket: &OwnedFd, engine: &Local, outgoing: &async_channel::Sender<Outgoing>) -> i32 {
+    let code = serve_until_end(socket, engine, outgoing);
+    engine.stop();
+    code
+}
+
+/// [`serve_commands`]'s loop: the worker's exit code once the app quit the engine or went away.
+fn serve_until_end(socket: &OwnedFd, engine: &Local, outgoing: &async_channel::Sender<Outgoing>) -> i32 {
     loop {
         let packet = match wire::recv(socket.as_fd(), Limits::FROM_APP) {
             Ok(Some(packet)) => packet,

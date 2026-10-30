@@ -7,11 +7,7 @@ use ngterm_wpe::{
 };
 
 use crate::cases::Context;
-use crate::support::{Harness, Outcome, SCHEME, data_url, ensure};
-
-fn page(body: &str) -> ngterm_wpe::Load {
-    ngterm_wpe::Load::Uri(data_url(&format!("<html><body style='margin:0'>{body}</body></html>")))
-}
+use crate::support::{Harness, Outcome, SCHEME, ensure, page};
 
 /// A page's copy reaches the consumer; the consumer's text reaches the page's paste, by editing command and by key.
 pub fn clipboard(h: &Harness, _: &Context) -> Outcome {

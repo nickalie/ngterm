@@ -15,6 +15,9 @@
 //!
 //! Every child gets private XDG directories and an environment without `NGTERM_*`, `AGTERM_*` and `ZMX_*`.
 //!
+//! Each run of the cases ends with the engine's shutdown, itself a case: the web processes of the pages still open
+//! then, one of them spinning in a script, end with it.
+//!
 //! Arguments: a substring selects cases by name; `--list` lists them.
 
 mod cases;
@@ -36,6 +39,8 @@ use crate::support::{Harness, SCHEME};
 const MODE: &str = "WPE_TEST_MODE";
 const BACKEND: &str = "WPE_TEST_BACKEND";
 const RENDER_NODE: &str = "WPE_TEST_RENDER_NODE";
+/// The case that ends each mode's run: the engine's shutdown ([`quit`]).
+const QUIT_CASE: &str = "the_quit_ends_the_web_processes_of_open_pages_a_spinning_one_s_too";
 /// How long one mode's child may run.
 const CHILD_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -47,6 +52,7 @@ fn main() -> ExitCode {
         for (name, _) in CASES {
             println!("{name}: test");
         }
+        println!("{QUIT_CASE}: test");
         return ExitCode::SUCCESS;
     }
     let filter = args.iter().find(|arg| !arg.starts_with('-')).cloned();
@@ -261,12 +267,114 @@ fn cases_in(frames: FrameMode, backend: Backend, filter: Option<&str>) -> Result
             }
         }
     }
-    harness.shutdown();
+    let name = QUIT_CASE;
+    if filter.is_none_or(|filter| name.contains(filter)) {
+        let started = Instant::now();
+        match quit(harness) {
+            Ok(()) => println!("test {name} ... ok ({:.1?})", started.elapsed()),
+            Err(message) => {
+                failed += 1;
+                println!("test {name} ... FAILED: {message}");
+            }
+        }
+    } else {
+        harness.shutdown();
+    }
     if failed == 0 {
         Ok(())
     } else {
         Err(format!("{failed} failed"))
     }
+}
+
+/// How long the web processes may take to end after the shutdown: well inside the 10 s after which `WebKit`'s web
+/// process kills itself with a core dump when its main thread never sees the UI process go (a page spinning in a
+/// script).
+const WEB_PROCESSES_GONE: Duration = Duration::from_secs(5);
+
+/// The shutdown with a quiet page and one whose script spins open: every web process alive then is gone within
+/// [`WEB_PROCESSES_GONE`], and so is any it started on the way, the engine having ended them rather than left them
+/// to notice it went: the pages' own, and those `WebKit` keeps with no page (the earlier cases leave prewarmed and
+/// cached ones about), in a worker and in process alike.
+fn quit(harness: Harness) -> Result<(), String> {
+    let before = web_processes();
+    let session = harness.ephemeral();
+    let quiet = harness.view(session, ngterm_wpe::Settings::overlay(false));
+    harness.load(quiet, support::page("<title>quiet</title>"))?;
+    let busy = harness.view(session, ngterm_wpe::Settings::overlay(true));
+    harness.load(
+        busy,
+        support::page("<title>busy</title><script>setTimeout(() => { for (;;) {} }, 100)</script>"),
+    )?;
+    std::thread::sleep(Duration::from_millis(400));
+    let web = web_processes();
+    let pages = web.iter().filter(|pid| !before.contains(pid)).count();
+    if pages < 2 {
+        harness.shutdown();
+        return Err(format!("two pages run in fewer new web processes than two: {web:?}"));
+    }
+    harness.shutdown();
+    let deadline = Instant::now() + WEB_PROCESSES_GONE;
+    loop {
+        let mut left: Vec<u32> = web.iter().copied().filter(|pid| running(*pid)).collect();
+        // started since (under this process: the in-process engine's)
+        left.extend(web_processes().into_iter().filter(|pid| !web.contains(pid)));
+        if left.is_empty() {
+            return Ok(());
+        }
+        if Instant::now() > deadline {
+            return Err(format!(
+                "web processes {left:?} still run {WEB_PROCESSES_GONE:?} after the shutdown (alive at it: {web:?})"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The `WPEWebProcess`es under this process (a worker's among them).
+fn web_processes() -> Vec<u32> {
+    let me = std::process::id();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let pids: Vec<u32> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+        .collect();
+    pids.into_iter()
+        .filter(|pid| {
+            std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|name| name.trim() == "WPEWebProcess")
+        })
+        .filter(|pid| {
+            let mut next = parent_of(*pid);
+            while let Some(parent) = next.filter(|parent| *parent > 1) {
+                if parent == me {
+                    return true;
+                }
+                next = parent_of(parent);
+            }
+            false
+        })
+        .collect()
+}
+
+/// The parent of `pid`, from the fields after its command (which may hold spaces and parentheses itself).
+fn parent_of(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.get(stat.rfind(')')? + 2..)?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
+/// Whether `pid` still runs (a zombie has ended).
+fn running(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rfind(')')
+            .and_then(|end| stat.get(end + 2..end + 3))
+            .is_some_and(|state| state != "Z")
+    })
 }
 
 fn start_on(

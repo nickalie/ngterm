@@ -348,6 +348,11 @@ impl Harness {
     }
 }
 
+/// `body` in a page with no margin, as a `data:` URL.
+pub fn page(body: &str) -> Load {
+    Load::Uri(data_url(&format!("<html><body style='margin:0'>{body}</body></html>")))
+}
+
 /// An HTML page as a `data:` URL.
 pub fn data_url(html: &str) -> String {
     let mut url = String::from("data:text/html,");
