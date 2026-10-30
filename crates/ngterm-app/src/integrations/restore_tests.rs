@@ -1,9 +1,10 @@
 //! The restore adapter run for real: which `ngtermctl session restore` calls it makes for a hook's event, payload and
-//! environment. A stub `ngtermctl` records each call's argv; the environment is built from scratch, so no `NGTERM_*`
-//! variable of a live instance reaches the script and nothing talks to an app.
+//! environment. A stub `ngtermctl` records each call's argv; no `NGTERM_*` variable of a live instance reaches the
+//! script and nothing talks to an app. The POSIX script runs on Unix under `bash`; its PowerShell form
+//! (`ngterm-agent-restore.ps1`) on Windows, under Windows PowerShell and, where it is installed, PowerShell 7, each
+//! run asserted to make the same calls.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -12,8 +13,18 @@ const SESSION: &str = "06882D55-AC80-4B1B-8BBE-682FDDDEC95A";
 const PANE: &str = "05E0AB65-271B-4389-9946-C3A7E2060CAC";
 const SOCKET: &str = "/nonexistent/ngterm-restore-test.sock";
 
-fn adapter() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/agent-status/ngterm-agent-restore.sh")
+fn resources() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/agent-status")
+}
+
+/// The pin a start writes: shell code for the pane's login shell, POSIX `||` on Unix, a form Windows PowerShell 5.1
+/// (no `||`) takes on Windows.
+fn resume_line() -> String {
+    if cfg!(windows) {
+        format!("claude --resume {ID}; if (-not $?) {{ claude }}")
+    } else {
+        format!("claude --resume {ID} || claude")
+    }
 }
 
 /// A Claude Code hook payload as it writes one: compact JSON, the common fields first.
@@ -29,15 +40,27 @@ struct Bench {
 }
 
 impl Bench {
+    #[cfg(unix)]
+    const STUB: (&str, &str) = (
+        "ngtermctl",
+        "#!/usr/bin/env bash\n(IFS=$'\\t'; printf '%s\\n' \"$*\") >> \"$(dirname \"$0\")/calls\"\n",
+    );
+    #[cfg(windows)]
+    const STUB: (&str, &str) = (
+        "ngtermctl.ps1",
+        "Add-Content -LiteralPath (Join-Path $PSScriptRoot 'calls') -Value ($args -join \"`t\")\r\n",
+    );
+
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let stub = dir.path().join("ngtermctl");
-        fs::write(
-            &stub,
-            "#!/usr/bin/env bash\n(IFS=$'\\t'; printf '%s\\n' \"$*\") >> \"$(dirname \"$0\")/calls\"\n",
-        )
-        .unwrap();
-        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        let (name, text) = Self::STUB;
+        let stub = dir.path().join(name);
+        fs::write(&stub, text).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         Self { dir }
     }
 
@@ -54,13 +77,37 @@ impl Bench {
             .collect()
     }
 
-    /// A pane's environment from scratch: the pane variables, the stub, a private TMPDIR, plus `vars`.
-    fn command(&self, program: &str, vars: &[(&str, &str)]) -> Command {
-        let mut command = Command::new(program);
+    /// The adapter with `args` under `shell` (Unix: `bash`), in a pane's environment from scratch: the pane variables,
+    /// the stub, a private TMPDIR, plus `vars`, less `removed`.
+    fn command(&self, shell: &str, vars: &[(&str, &str)], removed: &[&str], args: &[&str]) -> Command {
+        #[cfg(unix)]
+        let mut command = {
+            let mut command = Command::new(shell);
+            command
+                .arg(resources().join("ngterm-agent-restore.sh"))
+                .args(args)
+                .env_clear()
+                .env("PATH", std::env::var("PATH").unwrap_or_default());
+            command
+        };
+        #[cfg(windows)]
+        let mut command = {
+            let script = resources().join("ngterm-agent-restore.ps1");
+            let mut command = super::adapter_tests::powershell_file(shell, &script, args);
+            // the system's variables PowerShell needs stay; the live instance's and the agent's go
+            for (key, _) in std::env::vars_os() {
+                let key = key.to_string_lossy().into_owned();
+                if ["NGTERM_", "AGTERM_", "ZMX_", "CLAUDE"]
+                    .iter()
+                    .any(|prefix| key.starts_with(prefix))
+                {
+                    command.env_remove(key);
+                }
+            }
+            command
+        };
         command
-            .env_clear()
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("NGTERMCTL", self.path("ngtermctl"))
+            .env("NGTERMCTL", self.path(Self::STUB.0))
             .env("TMPDIR", self.dir.path())
             .env("NGTERM_SESSION_ID", SESSION)
             .env("NGTERM_PANE_ID", PANE)
@@ -68,10 +115,47 @@ impl Bench {
         for (key, value) in vars {
             command.env(key, value);
         }
+        for key in removed {
+            command.env_remove(key);
+        }
         command
     }
 
-    fn run(mut command: Command, payload: &str) -> Output {
+    /// The shells the adapter runs under.
+    #[cfg(unix)]
+    fn shells() -> Vec<&'static str> {
+        vec!["bash"]
+    }
+
+    #[cfg(windows)]
+    fn shells() -> Vec<&'static str> {
+        super::adapter_tests::powershells()
+    }
+
+    /// Runs the adapter with `args` and `payload` on stdin under each shell, which must make the same calls; they are
+    /// recorded once.
+    fn run(&self, vars: &[(&str, &str)], removed: &[&str], args: &[&str], payload: &str) {
+        let before = self.calls();
+        let mut made: Option<Vec<Vec<String>>> = None;
+        for shell in Self::shells() {
+            Self::run_one(self.command(shell, vars, removed, args), payload);
+            let calls = self.calls()[before.len()..].to_vec();
+            match &made {
+                Some(made) => assert_eq!(&calls, made, "{shell} differs, for {args:?} with {payload}"),
+                None => made = Some(calls),
+            }
+            let lines: Vec<String> = before.iter().map(|call| call.join("\t") + "\n").collect();
+            fs::write(self.path("calls"), lines.concat()).unwrap();
+        }
+        let lines: Vec<String> = before
+            .iter()
+            .chain(made.iter().flatten())
+            .map(|call| call.join("\t") + "\n")
+            .collect();
+        fs::write(self.path("calls"), lines.concat()).unwrap();
+    }
+
+    fn run_one(mut command: Command, payload: &str) -> Output {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -97,9 +181,7 @@ impl Bench {
 
     /// The adapter as Claude Code runs it: a child of the agent, `vars` on top of the pane's environment.
     fn claude(&self, event: &str, payload: &str, vars: &[(&str, &str)]) -> Vec<Vec<String>> {
-        let mut command = self.command("bash", vars);
-        command.arg(adapter()).args(["claude", event]);
-        Self::run(command, payload);
+        self.run(vars, &[], &["claude", event], payload);
         self.calls()
     }
 }
@@ -133,21 +215,19 @@ fn a_claude_start_pins_the_live_conversation() {
         let payload = claude_payload("SessionStart", &format!(r#","source":"{source}","model":"m""#));
         bench.claude("start", &payload, &[CLI]);
     }
-    let line = format!("claude --resume {ID} || claude");
-    assert_eq!(bench.calls(), vec![pin(&line); 4]);
+    assert_eq!(bench.calls(), vec![pin(&resume_line()); 4]);
 }
 
 #[test]
 fn a_claude_start_without_a_pane_id_or_socket_targets_the_session_alone() {
     let bench = Bench::new();
-    let mut command = bench.command("bash", &[CLI]);
-    command
-        .env_remove("NGTERM_PANE_ID")
-        .env_remove("NGTERM_SOCKET")
-        .arg(adapter())
-        .args(["claude", "start"]);
-    Bench::run(command, &claude_payload("SessionStart", ""));
-    let line = format!("claude --resume {ID} || claude");
+    bench.run(
+        &[CLI],
+        &["NGTERM_PANE_ID", "NGTERM_SOCKET"],
+        &["claude", "start"],
+        &claude_payload("SessionStart", ""),
+    );
+    let line = resume_line();
     assert_eq!(
         bench.calls(),
         [["session", "restore", line.as_str(), "--target", SESSION]
@@ -231,15 +311,8 @@ fn outside_ngterm_the_adapter_does_nothing() {
         ("claude", "start", claude_payload("SessionStart", "")),
         ("claude", "end", claude_payload("SessionEnd", r#","reason":"logout""#)),
     ] {
-        let mut command = bench.command("bash", &[CLI]);
-        command
-            .env_remove("NGTERM_SESSION_ID")
-            .arg(adapter())
-            .args([agent, event]);
-        Bench::run(command, &payload);
+        bench.run(&[CLI], &["NGTERM_SESSION_ID"], &[agent, event], &payload);
     }
-    let mut command = bench.command("bash", &[CLI]);
-    command.arg(adapter());
-    Bench::run(command, "");
+    bench.run(&[CLI], &[], &[], "");
     assert_eq!(bench.calls(), Vec::<Vec<String>>::new());
 }

@@ -19,6 +19,68 @@ pub const CLAUDE_WRAPPER_NAME: &str = "ngterm-claude-status.sh";
 /// and on a deliberate exit it clears the pin, so a rerun launch brings every pane back to its latest conversation.
 pub const RESTORE_WRAPPER_NAME: &str = "ngterm-agent-restore.sh";
 
+/// The Windows forms of the generic wrapper, the Claude adapter and the restore adapter: PowerShell scripts beside the
+/// POSIX ones, for Windows PowerShell 5.1 (inbox on every Windows) and PowerShell 7. A stock Windows has no POSIX
+/// shell, and Claude Code runs a hook's command in Git Bash there, or in PowerShell without it ([`HookForm`]).
+pub const WINDOWS_WRAPPER_NAME: &str = "ngterm-agent-status.ps1";
+pub const WINDOWS_CLAUDE_WRAPPER_NAME: &str = "ngterm-claude-status.ps1";
+pub const WINDOWS_RESTORE_WRAPPER_NAME: &str = "ngterm-agent-restore.ps1";
+
+/// How a Windows hook command starts a PowerShell script: Windows PowerShell by name, which Git Bash, PowerShell and
+/// `cmd.exe` all find on the system `PATH`, without the user's profile, never prompting, past the execution policy
+/// that blocks scripts on a stock Windows. The script's path follows, double-quoted (no Windows path holds a `"`).
+pub const WINDOWS_POWERSHELL_FILE: &str = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File";
+
+/// Which form of the adapters the Claude Code hooks call: the POSIX scripts (`'<script>' <args>`, run by `sh`), or on
+/// Windows the PowerShell ones ([`WINDOWS_POWERSHELL_FILE`] `"<script>" <args>`), a command line Git Bash and
+/// PowerShell, the shells Claude Code runs hooks in there, both read alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookForm {
+    Posix,
+    Windows,
+}
+
+impl HookForm {
+    /// This host's form.
+    pub const HOST: Self = if cfg!(windows) { Self::Windows } else { Self::Posix };
+
+    /// The Claude adapter in `script_dir`.
+    #[must_use]
+    pub fn claude_adapter(self, script_dir: &str) -> String {
+        match self {
+            Self::Posix => claude_wrapper_path(script_dir),
+            Self::Windows => format!("{script_dir}/{WINDOWS_CLAUDE_WRAPPER_NAME}"),
+        }
+    }
+
+    /// The generic wrapper in `script_dir`.
+    #[must_use]
+    pub fn wrapper(self, script_dir: &str) -> String {
+        match self {
+            Self::Posix => wrapper_path(script_dir),
+            Self::Windows => format!("{script_dir}/{WINDOWS_WRAPPER_NAME}"),
+        }
+    }
+
+    /// The restore adapter in `script_dir`.
+    #[must_use]
+    pub fn restore_adapter(self, script_dir: &str) -> String {
+        match self {
+            Self::Posix => restore_wrapper_path(script_dir),
+            Self::Windows => format!("{script_dir}/{WINDOWS_RESTORE_WRAPPER_NAME}"),
+        }
+    }
+
+    /// The start of a hook command running `script`, up to its arguments (a trailing space included).
+    #[must_use]
+    pub fn command(self, script: &str) -> String {
+        match self {
+            Self::Posix => format!("{} ", shell_quote(script)),
+            Self::Windows => format!("{WINDOWS_POWERSHELL_FILE} \"{script}\" "),
+        }
+    }
+}
+
 /// The bundled Pi extension's path inside the package, its destination name and its ownership sentinel.
 pub const PI_EXTENSION_RELATIVE_PATH: &str = "pi/ngterm-status.ts";
 pub const PI_EXTENSION_NAME: &str = "ngterm-status.ts";
@@ -140,23 +202,38 @@ pub fn merge_claude_settings(
     script_dir: &str,
     legacy_dirs: &[&str],
 ) -> Result<(String, bool), MalformedSettings> {
+    merge_claude_settings_in(HookForm::HOST, existing, script_dir, legacy_dirs)
+}
+
+/// [`merge_claude_settings`] with the hooks in `form`. The Windows form also moves the entries an install of the POSIX
+/// form wrote on Windows (the stock command of each event, byte for byte) onto the PowerShell scripts.
+///
+/// # Errors
+///
+/// As [`merge_claude_settings`].
+pub fn merge_claude_settings_in(
+    form: HookForm,
+    existing: Option<&str>,
+    script_dir: &str,
+    legacy_dirs: &[&str],
+) -> Result<(String, bool), MalformedSettings> {
     let mut root = parsed_object(existing)?;
     let mut hooks = claude_hooks_object(&root)?;
-    let mut changed = migrate_claude_entries_from_legacy_dirs(&mut hooks, script_dir, legacy_dirs);
-    changed |= migrate_claude_entries_to_adapter(&mut hooks, script_dir);
-    let command = wrapper_command(script_dir);
+    let mut changed = migrate_claude_entries_from_legacy_dirs(&mut hooks, form, script_dir, legacy_dirs);
+    changed |= migrate_claude_entries_to_adapter(&mut hooks, form, script_dir);
+    let command = form.command(&form.claude_adapter(script_dir));
     for (event, matcher, state) in CLAUDE_HOOKS {
         let entries = hooks.entry(event).or_insert_with(|| Value::Array(Vec::new()));
         let Value::Array(entries) = entries else {
             continue; // the shape was checked above
         };
-        if entries.iter().any(|entry| entry_uses_wrapper(entry, script_dir)) {
+        if entries.iter().any(|entry| entry_uses_wrapper(entry, form, script_dir)) {
             continue;
         }
         entries.push(hook_entry(&command, state, matcher));
         changed = true;
     }
-    changed |= merge_claude_restore_hooks(&mut hooks, script_dir);
+    changed |= merge_claude_restore_hooks(&mut hooks, form, script_dir);
     if !changed {
         return Ok((existing.unwrap_or_default().to_owned(), false));
     }
@@ -166,15 +243,21 @@ pub fn merge_claude_settings(
 
 /// Adds the restore adapter's entry to each of its events that has none calling it, returning whether any was added.
 /// The adapter is probed on its own: a status hook in the same event (`SessionEnd`) does not count.
-fn merge_claude_restore_hooks(hooks: &mut Map<String, Value>, script_dir: &str) -> bool {
-    let adapter = restore_wrapper_path(script_dir);
-    let command = format!("{} ", shell_quote(&adapter));
+fn merge_claude_restore_hooks(hooks: &mut Map<String, Value>, form: HookForm, script_dir: &str) -> bool {
+    let adapter = form.restore_adapter(script_dir);
+    let command = form.command(&adapter);
+    let posix = HookForm::Posix.command(&HookForm::Posix.restore_adapter(script_dir));
     let mut changed = false;
     for (event, arguments) in CLAUDE_RESTORE_HOOKS {
         let entries = hooks.entry(event).or_insert_with(|| Value::Array(Vec::new()));
         let Value::Array(entries) = entries else {
             continue; // the shape was checked when the hooks were read
         };
+        if form == HookForm::Windows {
+            for entry in entries.iter_mut() {
+                changed |= migrate_entry(entry, &posix, &[arguments], &format!("{command}{arguments}"));
+            }
+        }
         if entries
             .iter()
             .any(|entry| entry_calls(entry, std::slice::from_ref(&adapter)))
@@ -282,6 +365,26 @@ pub fn bake_ngtermctl_path(text: &str, tool_path: &str) -> String {
         "  [ -x \"$NGTERMCTL\" ] || NGTERMCTL=\"$(command -v ngtermctl || true)\"".to_owned(),
         "fi".to_owned(),
     ];
+    insert_baked_block(text, block)
+}
+
+/// [`bake_ngtermctl_path`] for a PowerShell script ([`WINDOWS_WRAPPER_NAME`], [`WINDOWS_RESTORE_WRAPPER_NAME`]): the
+/// block sets `$NgtermctlBaked`, which the script calls unless `NGTERMCTL` is set, and drops a baked path that is gone,
+/// so the script falls back to `ngtermctl` on `PATH`.
+#[must_use]
+pub fn bake_ngtermctl_path_powershell(text: &str, tool_path: &str) -> String {
+    let block = [
+        NGTERMCTL_MARKER.to_owned(),
+        "if (-not $env:NGTERMCTL) {".to_owned(),
+        format!("  $NgtermctlBaked = '{}'", tool_path.replace('\'', "''")),
+        "  if (-not (Test-Path -LiteralPath $NgtermctlBaked -PathType Leaf)) { $NgtermctlBaked = $null }".to_owned(),
+        "}".to_owned(),
+    ];
+    insert_baked_block(text, block)
+}
+
+/// `text` with `block` (the marker first) in place of a block an earlier bake left, after a shebang line if any.
+fn insert_baked_block(text: &str, block: [String; 5]) -> String {
     let stripped = strip_baked_block(text, block.len() - 1);
     let mut lines: Vec<String> = stripped.split('\n').map(str::to_owned).collect();
     let at = usize::from(lines.first().is_some_and(|line| line.starts_with("#!")));
@@ -347,11 +450,6 @@ fn claude_wrapper_path(script_dir: &str) -> String {
     format!("{script_dir}/{CLAUDE_WRAPPER_NAME}")
 }
 
-/// The start of a Claude hook's command: the quoted Claude adapter, then the state.
-fn wrapper_command(script_dir: &str) -> String {
-    format!("{} ", shell_quote(&claude_wrapper_path(script_dir)))
-}
-
 /// A blank or absent text is a fresh object; anything else must parse as a JSON object.
 fn parsed_object(text: Option<&str>) -> Result<Map<String, Value>, MalformedSettings> {
     let Some(text) = text.filter(|text| !text.trim().is_empty()) else {
@@ -393,15 +491,14 @@ fn is_array_of_objects(value: &Value) -> bool {
 /// Repoints an earlier install's entries from the generic wrapper at the Claude adapter, returning whether anything
 /// moved. Byte-exact against the command this installer generated for that event (the pre-`--blink` prompt form
 /// included), so a customized entry or a user's own hook naming the wrapper is left alone; only the command string
-/// changes, a matcher and sibling keys survive.
-fn migrate_claude_entries_to_adapter(hooks: &mut Map<String, Value>, script_dir: &str) -> bool {
-    let generated = format!("{} ", shell_quote(&wrapper_path(script_dir)));
-    let replacement = wrapper_command(script_dir);
+/// changes, a matcher and sibling keys survive. In the Windows form the POSIX adapter's stock commands, which an
+/// install of that form wrote in every event, move onto the PowerShell adapter too.
+fn migrate_claude_entries_to_adapter(hooks: &mut Map<String, Value>, form: HookForm, script_dir: &str) -> bool {
+    let generated = HookForm::Posix.command(&wrapper_path(script_dir));
+    let posix_adapter = HookForm::Posix.command(&claude_wrapper_path(script_dir));
+    let replacement = form.command(&form.claude_adapter(script_dir));
     let mut changed = false;
     for (event, _, state) in CLAUDE_HOOKS {
-        if !written_by_earlier_installs(event) {
-            continue;
-        }
         let Some(Value::Array(entries)) = hooks.get_mut(event) else {
             continue;
         };
@@ -410,8 +507,14 @@ fn migrate_claude_entries_to_adapter(hooks: &mut Map<String, Value>, script_dir:
         } else {
             &[state]
         };
+        let target = format!("{replacement}{state}");
         for entry in entries.iter_mut() {
-            changed |= migrate_entry(entry, &generated, states, &format!("{replacement}{state}"));
+            if written_by_earlier_installs(event) {
+                changed |= migrate_entry(entry, &generated, states, &target);
+            }
+            if form == HookForm::Windows {
+                changed |= migrate_entry(entry, &posix_adapter, &[state], &target);
+            }
         }
     }
     changed
@@ -447,6 +550,7 @@ fn migrate_entry(entry: &mut Value, generated: &str, states: &[&str], replacemen
 /// commands repointed in place, keeping a matcher, sibling keys and the user's own commands beside them.
 fn migrate_claude_entries_from_legacy_dirs(
     hooks: &mut Map<String, Value>,
+    form: HookForm,
     script_dir: &str,
     legacy_dirs: &[&str],
 ) -> bool {
@@ -463,7 +567,7 @@ fn migrate_claude_entries_from_legacy_dirs(
         // covers other notifications, and the merge below would not add the stock one back beside it
         let current_matchers: Vec<Option<Value>> = entries
             .iter()
-            .filter(|entry| entry_uses_wrapper(entry, script_dir))
+            .filter(|entry| entry_uses_wrapper(entry, form, script_dir))
             .map(|entry| entry.get("matcher").cloned())
             .collect();
         let before = entries.len();
@@ -594,10 +698,10 @@ fn hook_entry(command: &str, state: &str, matcher: Option<&str>) -> Value {
     Value::Object(entry)
 }
 
-/// Whether an entry already invokes us: either the adapter or the generic wrapper counts, so a customized wrapper
-/// entry the migration declined is not doubled by a stock one.
-fn entry_uses_wrapper(entry: &Value, script_dir: &str) -> bool {
-    entry_calls(entry, &[claude_wrapper_path(script_dir), wrapper_path(script_dir)])
+/// Whether an entry already invokes us in `form`: either the adapter or the generic wrapper counts, so a customized
+/// wrapper entry the migration declined is not doubled by a stock one.
+fn entry_uses_wrapper(entry: &Value, form: HookForm, script_dir: &str) -> bool {
+    entry_calls(entry, &[form.claude_adapter(script_dir), form.wrapper(script_dir)])
 }
 
 /// Whether one of `entry`'s commands names one of `probes`.

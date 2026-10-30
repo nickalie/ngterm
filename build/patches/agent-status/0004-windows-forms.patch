@@ -1,0 +1,418 @@
+The package's Windows forms, which upstream (macOS only) has no need of: ngterm-agent-status.ps1,
+ngterm-claude-status.ps1 and ngterm-agent-restore.ps1 do what their POSIX namesakes do under Windows PowerShell 5.1
+and PowerShell 7 (the Claude adapter reads the process table through Win32_Process where the POSIX one runs `ps`; the
+restore pin is `claude --resume <id>; if (-not $?) { claude }`, as 5.1 has no `||`), and on Windows the Pi extension
+and both OpenCode plugins start the PowerShell wrapper through powershell.exe instead of spawning the POSIX one.
+Applied after 0003-restore-adapter.patch.
+
+diff --git a/ngterm-agent-restore.ps1 b/ngterm-agent-restore.ps1
+new file mode 100644
+index 0000000..7ec08ad
+--- /dev/null
++++ b/ngterm-agent-restore.ps1
+@@ -0,0 +1,84 @@
++# ngterm-agent-restore — keep a pane's restore pin on the Claude Code conversation it is in (Windows).
++#
++#   powershell -NoProfile -ExecutionPolicy Bypass -File ngterm-agent-restore.ps1 claude start   # Claude Code SessionStart
++#   powershell -NoProfile -ExecutionPolicy Bypass -File ngterm-agent-restore.ps1 claude end     # Claude Code SessionEnd
++#
++# The Windows form of ngterm-agent-restore.sh, for Windows PowerShell 5.1 and PowerShell 7; that script's header
++# holds what it pins, what it skips and why. One difference: the pin is typed into the pane's login shell, which on
++# Windows is PowerShell, and Windows PowerShell 5.1 has no `||`, so the pin is
++#
++#   claude --resume <session_id>; if (-not $?) { claude }
++#
++# which both PowerShells take: `$?` is false after a native command that exits non-zero.
++#
++# As a hook it must never disturb the agent: no output, always exit 0, and outside ngterm (NGTERM_SESSION_ID unset)
++# it does nothing. The payload is matched with a regular expression, as the POSIX form does with bash's.
++#
++# ngtermctl resolution: $env:NGTERMCTL, else the path the installer bakes in ($NgtermctlBaked), else `ngtermctl` on
++# PATH.
++
++trap { exit 0 }
++
++if (-not $env:NGTERM_SESSION_ID) { exit 0 }
++
++$agent = if ($args.Count -gt 0) { $args[0] } else { '' }
++$hookEvent = if ($args.Count -gt 1) { $args[1] } else { '' }
++
++$payload = ''
++if ([Console]::IsInputRedirected) {
++  try {
++    $read = [Console]::In.ReadToEndAsync()
++    if ($read.Wait(5000)) { $payload = $read.Result }
++  } catch { }
++}
++
++# A top-level string field of the payload. The key must not follow a backslash: a key quoted inside a string value is
++# escaped (\"session_id\"), so the match cannot come from a message or a path. Claude Code writes the ids first.
++function Get-StringField([string] $name) {
++  $pattern = '(^|[^\\])"' + [regex]::Escape($name) + '"\s*:\s*"([^"\\]*)"'
++  if ($payload -cmatch $pattern) { return $Matches[2] }
++  return $null
++}
++
++function Get-SessionId {
++  $id = Get-StringField 'session_id'
++  if ($id -and $id -cmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
++    return $id
++  }
++  return $null
++}
++
++function Invoke-Restore([string[]] $restoreArgs) {
++  $ngtermctl = 'ngtermctl'
++  if ($env:NGTERMCTL) {
++    $ngtermctl = $env:NGTERMCTL
++  } elseif ((Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue)) {
++    $ngtermctl = $NgtermctlBaked
++  }
++  $cli = @('session', 'restore') + $restoreArgs + @('--target', $env:NGTERM_SESSION_ID)
++  if ($env:NGTERM_PANE_ID) { $cli += @('--pane-id', $env:NGTERM_PANE_ID) }
++  if ($env:NGTERM_SOCKET) { $cli += @('--socket', $env:NGTERM_SOCKET) }
++  try { $null | & $ngtermctl @cli *> $null } catch { }
++}
++
++function Invoke-ClaudeHook {
++  if ($env:CLAUDE_CODE_ENTRYPOINT -cne 'cli') { return }
++  if (Get-StringField 'agent_id') { return }
++  switch -CaseSensitive ($hookEvent) {
++    'start' {
++      $id = Get-SessionId
++      if ($id) { Invoke-Restore @("claude --resume $id; if (-not `$?) { claude }") }
++    }
++    'end' {
++      $reason = Get-StringField 'reason'
++      if ($reason -ceq 'prompt_input_exit' -or $reason -ceq 'logout') { Invoke-Restore @('--clear') }
++    }
++  }
++}
++
++try {
++  switch -CaseSensitive ($agent) {
++    'claude' { Invoke-ClaudeHook *> $null }
++  }
++} catch { }
++exit 0
+diff --git a/ngterm-agent-status.ps1 b/ngterm-agent-status.ps1
+new file mode 100644
+index 0000000..78ee118
+--- /dev/null
++++ b/ngterm-agent-status.ps1
+@@ -0,0 +1,49 @@
++# ngterm-agent-status — set the current ngterm session's agent-status indicator (Windows).
++#
++#   powershell -NoProfile -ExecutionPolicy Bypass -File ngterm-agent-status.ps1 active            # agent is busy
++#   powershell -NoProfile -ExecutionPolicy Bypass -File ngterm-agent-status.ps1 completed         # agent finished a turn
++#   powershell -NoProfile -ExecutionPolicy Bypass -File ngterm-agent-status.ps1 blocked --blink   # agent is waiting on you
++#   powershell -NoProfile -ExecutionPolicy Bypass -File ngterm-agent-status.ps1 idle              # clear the indicator
++#
++# The Windows form of ngterm-agent-status.sh, for Windows PowerShell 5.1 (inbox on every Windows) and PowerShell 7;
++# cmd and Git Bash start it through powershell.exe as above, and another script calls it in-process (`& <path> ...`).
++#
++# States: idle | active | completed | blocked. An optional --blink / --auto-reset
++# (and any further args) is forwarded verbatim to `ngtermctl session status`.
++#
++# Outside ngterm this is a silent no-op, so it is safe to call from any hook.
++#
++# As a hook it must never interfere with the agent: its output and the CLI's are suppressed (Claude Code injects a
++# UserPromptSubmit/SessionStart hook's stdout into the prompt context) and it always exits 0 (a non-zero exit can
++# block the turn).
++#
++# ngtermctl resolution order (the binary that talks to the control socket):
++#   1. $env:NGTERMCTL — an explicit override the caller set.
++#   2. the absolute bundled-binary path the installer bakes in ($NgtermctlBaked, set by the block it writes at the
++#      top), so the hook fires even when the CLI was never put on PATH.
++#   3. `ngtermctl` on PATH — the fallback when no override was set and the baked path no longer exists.
++
++if (-not $env:NGTERM_SESSION_ID -or $args.Count -lt 1) { exit 0 } # not inside ngterm (or no state): nothing to do
++
++$state = $args[0]
++$rest = @($args | Select-Object -Skip 1)
++
++$ngtermctl = 'ngtermctl'
++if ($env:NGTERMCTL) {
++  $ngtermctl = $env:NGTERMCTL
++} elseif ((Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue)) {
++  $ngtermctl = $NgtermctlBaked
++}
++
++# --socket is a SUBCOMMAND option, so it comes AFTER `session status`; passed only when NGTERM_SOCKET is set.
++# The pane discriminators go along when the app injected them: NGTERM_PANE (the role, which can go stale) and
++# NGTERM_PANE_ID (the surface's stable token, which the app resolves to its current slot, #199); ngtermctl
++# validates both, so they pass through verbatim.
++$cli = @('session', 'status', $state, '--target', $env:NGTERM_SESSION_ID)
++if ($env:NGTERM_SOCKET) { $cli += @('--socket', $env:NGTERM_SOCKET) }
++if ($env:NGTERM_PANE) { $cli += @('--pane', $env:NGTERM_PANE) }
++if ($env:NGTERM_PANE_ID) { $cli += @('--pane-id', $env:NGTERM_PANE_ID) }
++$cli += $rest
++
++try { & $ngtermctl @cli *> $null } catch { }
++exit 0
+diff --git a/ngterm-claude-status.ps1 b/ngterm-claude-status.ps1
+new file mode 100644
+index 0000000..f4fbea1
+--- /dev/null
++++ b/ngterm-claude-status.ps1
+@@ -0,0 +1,109 @@
++# Claude Code status adapter installed by ngterm's Help ▸ Install Agent Status Hooks command (Windows).
++#
++# The Windows form of ngterm-claude-status.sh, for Windows PowerShell 5.1 and PowerShell 7: Claude Code runs a hook's
++# command in Git Bash, or in PowerShell without Git Bash, and the installer's command starts this script through
++# powershell.exe, which both run. Its header holds the reasoning; in short:
++#
++# A worker agent spawned from inside a session inherits the spawner's NGTERM_* environment, so its own hooks would
++# repaint the SPAWNER's row. The hook is a descendant of the agent that fired it, so exactly one agent between here and
++# the pane means "I am the pane's agent"; a second one means another agent spawned mine, so stay silent. A consecutive
++# run of one name counts once. The walk reads the process table (Win32_Process: each process's parent, image name and
++# command line) where the POSIX form asks `ps`; an image name is matched without its `.exe` and in any case, as
++# Windows names it. A parent id that names a process started after its child is a reused id: the chain is severed.
++#
++# It fails OPEN (reports) whenever the chain is unreadable or severed: a missed guard is the behavior without this
++# adapter, while a false silence is a bug with no symptom. The argv is forwarded to the shared wrapper verbatim, with
++# one exception: a Stop whose payload lists work still in flight in `background_tasks` posts `active --blink` instead
++# of `completed`, so the row keeps pulsing until a Stop with nothing in flight, or the SessionEnd hook the installer
++# adds. Only a `completed` call reads stdin, where Claude Code writes the payload as JSON; a key quoted inside a string
++# value is escaped (`\"background_tasks\"`), so the match cannot hit the last assistant message.
++
++if (-not $env:NGTERM_SESSION_ID) { exit 0 }
++
++$statusWrapper = $env:NGTERM_STATUS_WRAPPER
++if (-not $statusWrapper) { $statusWrapper = Join-Path $PSScriptRoot 'ngterm-agent-status.ps1' }
++
++# exact names, not a pattern: the union of the hook-driven agents and the shell integration's NGTERM_AGENT_RE
++# default, as in the POSIX form; keep the lists in sync. An overridden NGTERM_AGENT_RE extends the set, matched
++# against the same image name; an expression .NET cannot compile lands on "not an agent", keeping the walk fail-open.
++$agentNames = @('claude', 'codex', 'kimi', 'opencode', 'pi', 'gemini', 'cursor-agent', 'aider', 'crush', 'goose')
++
++function Test-Agent([string] $name) {
++  if ($agentNames -contains $name) { return $true }
++  if ($env:NGTERM_AGENT_RE) {
++    try { if ($name -cmatch $env:NGTERM_AGENT_RE) { return $true } } catch { }
++  }
++  return $false
++}
++
++# The file name of a path or command-line token without a trailing `.exe`.
++function Get-BaseName([string] $path) {
++  $leaf = ($path -split '[\\/]')[-1]
++  return ($leaf -replace '\.exe$', '')
++}
++
++# The argument after the program in a Windows command line (quoted or bare), or nothing.
++function Get-HostedScript([string] $commandLine) {
++  if ($commandLine -match '^\s*(?:"[^"]*"|\S+)\s+(?:"([^"]*)"|(\S+))') {
++    if ($Matches[1]) { return $Matches[1] }
++    return $Matches[2]
++  }
++  return ''
++}
++
++# Whether a second agent sits above this hook, between it and the pane: then it is a worker's.
++function Test-Worker {
++  try {
++    $table = @{}
++    $processes = Get-CimInstance -ClassName Win32_Process -Property ProcessId, ParentProcessId, Name, CommandLine, CreationDate -ErrorAction Stop
++    foreach ($process in $processes) { $table[[int] $process.ProcessId] = $process }
++  } catch {
++    return $false
++  }
++  $child = $table[[int] $PID]
++  if (-not $child) { return $false }
++  $agents = 0
++  $previous = ''
++  for ($step = 0; $step -lt 8; $step++) {
++    $parentId = [int] $child.ParentProcessId
++    if ($parentId -le 4) { break } # the idle and system processes: the top
++    $process = $table[$parentId]
++    if (-not $process) { break }
++    if ($process.CreationDate -and $child.CreationDate -and $process.CreationDate -gt $child.CreationDate) { break }
++    $base = Get-BaseName $process.Name
++    # node/bun-hosted CLIs present as `node ...\cli.js`, so test the script too
++    if (@('node', 'bun', 'deno', 'python3', 'python') -contains $base) {
++      $hosted = Get-BaseName (Get-HostedScript $process.CommandLine)
++      if (Test-Agent $hosted) { $base = $hosted }
++    }
++    if (Test-Agent $base) {
++      if ($base -ne $previous) { $agents++ }
++      $previous = $base
++    } else {
++      $previous = ''
++    }
++    if ($agents -gt 1) { return $true } # a second agent above mine: I am a worker, not the pane's agent
++    if (@('login', 'ngterm') -contains $base) { break } # reached the pane boundary
++    $child = $process
++  }
++  return $false
++}
++
++if (Test-Worker) { exit 0 }
++
++if ($args.Count -gt 0 -and $args[0] -ceq 'completed' -and [Console]::IsInputRedirected) {
++  $payload = ''
++  try {
++    $read = [Console]::In.ReadToEndAsync()
++    if ($read.Wait(2000)) { $payload = $read.Result }
++  } catch { }
++  $stopPattern = '"hook_event_name"\s*:\s*"Stop"'
++  $inFlightPattern = '"background_tasks"\s*:\s*\[\s*\{'
++  if ($payload -cmatch $stopPattern -and $payload -cmatch $inFlightPattern) {
++    try { & $statusWrapper active --blink *> $null } catch { }
++    exit 0
++  }
++}
++
++try { & $statusWrapper @args *> $null } catch { }
++exit 0
+diff --git a/opencode/ngterm-status.js b/opencode/ngterm-status.js
+index c956bf6..16e4dec 100644
+--- a/opencode/ngterm-status.js
++++ b/opencode/ngterm-status.js
+@@ -29,7 +29,30 @@ const ABORT_ERROR_NAMES = new Set(["MessageAbortedError", "AbortError"]);
+ const OVERFLOW_ERROR_NAME = "ContextOverflowError";
+ 
+ function defaultWrapperPath() {
+-  return join(homedir(), ".config", "ngterm", "agent-status", "ngterm-agent-status.sh");
++  const wrapper = join(homedir(), ".config", "ngterm", "agent-status", "ngterm-agent-status.sh");
++  // Windows has no POSIX shell to run it: the package's PowerShell form sits beside it
++  return process.platform === "win32" ? wrapper.replace(/\.sh$/, ".ps1") : wrapper;
++}
++
++/** The program and argv that run `wrapper`: a `.ps1` through Windows PowerShell on Windows, else the wrapper itself. */
++function reporterCommand(wrapper, args) {
++  if (process.platform === "win32" && /\.ps1$/i.test(wrapper)) {
++    return [
++      "powershell.exe",
++      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapper, ...args],
++    ];
++  }
++  return [wrapper, args];
++}
++
++/** Ends a reporter that outlived its wait: its process group on Unix, the process itself on Windows (no groups). */
++function killReporter(child, signal) {
++  try {
++    if (process.platform === "win32") child.kill();
++    else if (child.pid != null) process.kill(-child.pid, signal);
++  } catch {
++    /* already gone */
++  }
+ }
+ 
+ function errorName(error) {
+@@ -62,19 +85,18 @@ function spawnReport(wrapper, args) {
+       clearTimeout(timer);
+       resolve();
+     };
+-    const child = spawn(wrapper, args, {
++    const [program, argv] = reporterCommand(wrapper, args);
++    // a process group of its own to kill on Unix; on Windows `detached` would open a console window
++    const child = spawn(program, argv, {
+       stdio: "ignore",
+       env: process.env,
+-      detached: true,
++      detached: process.platform !== "win32",
++      windowsHide: true,
+     });
+     child.on("error", finish);
+     child.on("close", finish);
+     const timer = setTimeout(() => {
+-      try {
+-        if (child.pid != null) process.kill(-child.pid, "SIGTERM");
+-      } catch {
+-        /* already gone */
+-      }
++      killReporter(child, "SIGTERM");
+       finish();
+     }, 10_000);
+   });
+diff --git a/opencode/ngterm-v2/tui.js b/opencode/ngterm-v2/tui.js
+index 7171a63..bb5890d 100644
+--- a/opencode/ngterm-v2/tui.js
++++ b/opencode/ngterm-v2/tui.js
+@@ -15,7 +15,30 @@ const COMPLETED = ["completed", "--auto-reset"];
+ const IDLE = ["idle"];
+ 
+ function defaultWrapperPath() {
+-  return join(homedir(), ".config", "ngterm", "agent-status", "ngterm-agent-status.sh");
++  const wrapper = join(homedir(), ".config", "ngterm", "agent-status", "ngterm-agent-status.sh");
++  // Windows has no POSIX shell to run it: the package's PowerShell form sits beside it
++  return process.platform === "win32" ? wrapper.replace(/\.sh$/, ".ps1") : wrapper;
++}
++
++/** The program and argv that run `wrapper`: a `.ps1` through Windows PowerShell on Windows, else the wrapper itself. */
++function reporterCommand(wrapper, args) {
++  if (process.platform === "win32" && /\.ps1$/i.test(wrapper)) {
++    return [
++      "powershell.exe",
++      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapper, ...args],
++    ];
++  }
++  return [wrapper, args];
++}
++
++/** Ends a reporter that outlived its wait: its process group on Unix, the process itself on Windows (no groups). */
++function killReporter(child, signal) {
++  try {
++    if (process.platform === "win32") child.kill();
++    else if (child.pid != null) process.kill(-child.pid, signal);
++  } catch {
++    /* already gone */
++  }
+ }
+ 
+ /** Serialize reports so a slow spawn cannot reorder status; failures must never reject into OpenCode. */
+@@ -38,21 +61,18 @@ function spawnReport(wrapper, args, env) {
+       clearTimeout(timer);
+       resolve();
+     };
+-    const child = spawn(wrapper, args, {
++    const [program, argv] = reporterCommand(wrapper, args);
++    // a process group of its own to kill on Unix; on Windows `detached` would open a console window
++    const child = spawn(program, argv, {
+       stdio: "ignore",
+       env,
+-      detached: true,
++      detached: process.platform !== "win32",
++      windowsHide: true,
+     });
+     child.on("error", finish);
+     child.on("close", finish);
+     // Wait for the killed reporter to close before sending a newer status to the same pane.
+-    const timer = setTimeout(() => {
+-      try {
+-        if (child.pid != null) process.kill(-child.pid, "SIGKILL");
+-      } catch {
+-        /* already gone */
+-      }
+-    }, 10_000);
++    const timer = setTimeout(() => killReporter(child, "SIGKILL"), 10_000);
+   });
+ }
+ 
+diff --git a/pi/ngterm-status.ts b/pi/ngterm-status.ts
+index 0a5bdf3..905f701 100644
+--- a/pi/ngterm-status.ts
++++ b/pi/ngterm-status.ts
+@@ -10,11 +10,19 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+ 
+ export default function (pi: ExtensionAPI) {
+   const wrapper = join(homedir(), ".config", "ngterm", "agent-status", "ngterm-agent-status.sh");
++  // Windows has no POSIX shell to run it: Windows PowerShell runs the package's PowerShell form beside it
++  const [program, prefix] =
++    process.platform === "win32"
++      ? [
++          "powershell.exe",
++          ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapper.replace(/\.sh$/, ".ps1")],
++        ]
++      : [wrapper, []];
+ 
+   async function report(args: string[]): Promise<void> {
+     if (!process.env.NGTERM_SESSION_ID) return;
+     try {
+-      await pi.exec(wrapper, args, { timeout: 1_000 });
++      await pi.exec(program, [...prefix, ...args], { timeout: 1_000 });
+     } catch {
+       // Status reporting is advisory and must never interrupt Pi's agent loop.
+     }

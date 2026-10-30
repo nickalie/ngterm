@@ -38,6 +38,12 @@
 //!   `NGTERMCTL`, `NGTERM_AGENT_BIN`, `NGTERM_AGENT_RE`, …); a reinstall moves an install under the old names onto
 //!   these ([`hooks::Leftovers`]);
 //! - the Pi extension and both `OpenCode` plugins call the wrapper in `~/.config/ngterm/agent-status`;
+//! - the package adds Windows forms, which upstream (macOS only) has no need of: `ngterm-agent-status.ps1`,
+//!   `ngterm-claude-status.ps1` and `ngterm-agent-restore.ps1` do what their POSIX namesakes do under Windows
+//!   PowerShell 5.1 and PowerShell 7 (the Claude adapter reads the process table through `Win32_Process` where the
+//!   POSIX one runs `ps`; the restore pin is `claude --resume <id>; if (-not $?) { claude }`, as 5.1 has no `||`), and
+//!   on Windows the Pi extension and both `OpenCode` plugins start the PowerShell wrapper through `powershell.exe`
+//!   instead of spawning the POSIX one (`build/patches/agent-status/0004-windows-forms.patch`);
 //! - the skill speaks of the `live` group and the attach contract's `NGTERM_LIVE_*` variables where upstream's names
 //!   `zmx`, and it is named `ngterm` (frontmatter `name`, a description that also triggers on ngterm and `ngtermctl`),
 //!   its text, examples and `show-image.sh` running `ngtermctl` wherever upstream runs `agtermctl`, the far side of a
@@ -118,12 +124,10 @@ fn resource_dir(exe_dir: Option<&Path>, relative: &str) -> Option<PathBuf> {
     staged.into_iter().chain([checkout]).find(|dir| dir.is_dir())
 }
 
-// the adapters are the package's POSIX scripts, run for real: their Windows run is the package's own, not this crate's
+// the adapters run for real: the POSIX scripts on Unix, their PowerShell forms on Windows
 #[cfg(test)]
-#[cfg(unix)]
 mod adapter_tests;
 #[cfg(test)]
-#[cfg(unix)]
 mod restore_tests;
 #[cfg(test)]
 mod tests;

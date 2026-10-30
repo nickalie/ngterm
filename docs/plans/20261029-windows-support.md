@@ -92,6 +92,9 @@ guest has 4 CPUs and 6.5 GB of memory.
   `paths::control_pipe_name`, `pipe_security`), shared by ngterm-session's namespace pipe and the control pipe
 - ➕ CLAUDE.md's crate table still lists `ngterm-server` as "Linux, macOS"; it is `any` now (left to the docs pass,
   Task 9)
+- ➕ (side task 13) live panes missed a winget/Store PowerShell 7: its only `pwsh.exe` on `PATH` is the zero-byte
+  App Execution Alias, which the PE-image check skipped; an `IO_REPARSE_TAG_APPEXECLINK` alias whose package image is
+  launchable now counts, and the pane runs the alias itself (`launch/windows_shell.rs`)
 
 ### Task 2: `ngtermctl` on Windows and macOS (`ngterm-ctl`)
 
@@ -129,6 +132,13 @@ guest has 4 CPUs and 6.5 GB of memory.
   per agent, as each agent documents for Windows)
 - [ ] `ngterm-app` joins PACKAGES; its tests pass on all three
 - [ ] Windows VM: clippy and tests green; Linux gate green
+- ➕ (side task 12) the agent-status package's Windows forms: `ngterm-agent-status.ps1`, `ngterm-claude-status.ps1`
+  (the process walk through `Win32_Process` where the POSIX one runs `ps`) and `ngterm-agent-restore.ps1`, for
+  Windows PowerShell 5.1 and PowerShell 7; on Windows the Claude Code hooks call them through `powershell.exe`, and
+  the Pi extension and both `OpenCode` plugins start the PowerShell wrapper (`0004-windows-forms.patch`); the adapter,
+  restore and `OpenCode` plugin tests run on Windows too
+- ➕ left open: Codex's Windows hooks (`command_windows`) still run the POSIX Codex adapter under Git Bash: it has no
+  PowerShell form yet (its blocker watcher and question check are the largest script of the package)
 
 ### Task 4: The GPUI frontend on Windows (`ngterm-gpui`, depends on Tasks 1 and 3)
 
