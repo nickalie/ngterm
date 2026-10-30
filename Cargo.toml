@@ -46,6 +46,9 @@ wry = { version = "0.57", default-features = false }
 # The WebView2 interfaces wry has no API for (the pages' navigation policy and load events, focus, context menu, script
 # dialogs, the saved store's clear): the bindings wry itself links, and the `windows` crates at the version they take.
 webview2-com = "0.39"
+# Windows's WinRT and Win32 APIs, features per crate: ngterm-gpui's toasts (`ToastNotificationManager`,
+# `notifications/windows.rs`) and the WebView2 interfaces above, Microsoft's own bindings at the version GPUI's Windows
+# backend and wry already link.
 windows = "0.62"
 windows-core = "0.62"
 # macOS system sounds by name for the status sounds (ngterm-gpui's `status_sound.rs`) and the selection clipboard's

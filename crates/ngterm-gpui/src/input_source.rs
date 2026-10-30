@@ -189,9 +189,12 @@ impl Performer {
         let Ok(backend) = self.backend() else {
             return;
         };
-        if let Err(error) = backend.select(id) {
-            tracing::warn!(%error, layout = id, "keyboard layout lock: the layout was not selected");
-            self.lock.selection_failed();
+        match backend.select(id) {
+            Ok(()) => tracing::info!(layout = id, "keyboard layout lock: layout selected"),
+            Err(error) => {
+                tracing::warn!(%error, layout = id, "keyboard layout lock: the layout was not selected");
+                self.lock.selection_failed();
+            }
         }
     }
 
@@ -256,7 +259,7 @@ fn probe(compositor: &'static str) -> Probe {
     #[cfg(windows)]
     return {
         let _ = compositor;
-        Ok(Box::new(windows::KeyboardLayouts))
+        Ok(Box::new(self::windows::KeyboardLayouts))
     };
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {

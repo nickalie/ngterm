@@ -30,7 +30,7 @@ use crate::state::{AppState, Poster, post};
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::quit_on_termination;
+pub use self::windows::quit_on_termination;
 
 /// Quits through the main loop behind `poster` when the system asks the app to end (see the module docs).
 ///

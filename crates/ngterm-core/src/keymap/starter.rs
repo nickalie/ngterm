@@ -1,7 +1,7 @@
 //! The commented starter `keymap.conf` and the editor command the Edit Keymap overlay runs (upstream's
 //! `ConfigPaths.starterKeymapConf` and `ConfigPaths.editorCommand`), with the macOS-only wording made neutral and
-//! `global-hotkey` documented as the Linux build registers it (an X11 key grab, else the desktop's global shortcuts
-//! portal), and what to do where neither exists.
+//! `global-hotkey` documented as the Linux and Windows builds register it (an X11 key grab, else the desktop's global
+//! shortcuts portal; a system hotkey on Windows), and what to do where none exists.
 
 use std::fmt::Write as _;
 
@@ -58,18 +58,18 @@ const STARTER_HEAD: &str = r#"# ngterm keymap — a kitty-flavored config for re
 #       the keyboard — the only binding here that fires when ngterm does not. Exactly one
 #       chord: no `|` alternatives, no leader sequence. A modifier is required except for
 #       function keys (f1 through f20). A second global-hotkey line replaces the first.
-#       ngterm registers it: on X11 as a key grab by physical key position, so it works on a
-#       non-Latin layout; on Wayland through the desktop's global shortcuts portal (KDE
-#       Plasma, GNOME 48 and later, Hyprland), which gets the chord by key name, so whether
-#       it survives a layout switch is up to the desktop, and which may ask you to confirm or
-#       change it. A Wayland compositor without that portal gives an app no system-wide key
-#       at all: there, bind a custom shortcut in the desktop's own settings that runs
-#       `ngtermctl quick toggle` instead. The desktop owns the chord, so it takes no
-#       part in the collision rules above, and it WINS, ngterm included, so a chord shared
-#       with a menu action fires this and the menu binding never sees it. There is no
-#       default: registering a chord takes it from every other application. Spending it on
-#       the chord the in-app binding already uses is how to get ONE shortcut that works
-#       everywhere.
+#       ngterm registers it by physical key position, so it works on a non-Latin layout: on
+#       X11 as a key grab, on Windows as a system hotkey; on Wayland through the desktop's
+#       global shortcuts portal (KDE Plasma, GNOME 48 and later, Hyprland), which gets the
+#       chord by key name, so whether it survives a layout switch is up to the desktop, and
+#       which may ask you to confirm or change it. A Wayland compositor without that portal
+#       gives an app no system-wide key at all: there, bind a custom shortcut in the
+#       desktop's own settings that runs `ngtermctl quick toggle` instead. The desktop owns
+#       the chord, so it takes no part in the collision rules above, and it WINS, ngterm
+#       included, so a chord shared with a menu action fires this and the menu binding never
+#       sees it. There is no default: registering a chord takes it from every other
+#       application. Spending it on the chord the in-app binding already uses is how to get
+#       ONE shortcut that works everywhere.
 #       Examples:
 #
 #           global-hotkey ctrl+opt+space

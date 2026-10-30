@@ -8,7 +8,7 @@ use std::sync::{Arc, LazyLock};
 use image::RgbaImage;
 
 /// The icon's 256 px rendering, the largest a window manager's switcher or taskbar asks for.
-const PNG: &[u8] = include_bytes!("../../../resources/icons/hicolor/256x256/apps/com.nickalie.ngterm.png");
+pub(crate) const PNG: &[u8] = include_bytes!("../../../resources/icons/hicolor/256x256/apps/com.nickalie.ngterm.png");
 
 /// The decoded icon, once per process.
 static ICON: LazyLock<Option<Arc<RgbaImage>>> = LazyLock::new(|| match image::load_from_memory(PNG) {

@@ -67,11 +67,13 @@ fn the_starter_keymap_is_commented_and_documents_the_verbs() {
         );
     }
     assert!(starter.ends_with("# map cmd+shift+l toggle_split\n"));
-    // the global hotkey as the Linux build registers it (an X11 grab by key position, the Wayland portal by key name),
+    // the global hotkey as the Linux and Windows builds register it (an X11 grab and a Windows hotkey by key position,
+    // the Wayland portal by key name),
     // and the fallback without the portal; upstream's examples, all commented out
     let paragraph = starter.replace("\n#       ", " ");
     for said in [
-        "ngterm registers it: on X11 as a key grab by physical key position",
+        "ngterm registers it by physical key position, so it works on a non-Latin layout: on X11 as a key grab, on \
+         Windows as a system hotkey;",
         "on Wayland through the desktop's global shortcuts portal (KDE Plasma, GNOME 48 and later, Hyprland), which \
          gets the chord by key name",
         "A Wayland compositor without that portal gives an app no system-wide key at all: there, bind a custom \

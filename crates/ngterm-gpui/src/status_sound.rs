@@ -15,8 +15,9 @@
 //!   so a slow lookup never holds up a cached sound and a busy playback never holds up a lookup ([`player`]).
 //! - Windows plays the name as a system sound alias (`PlaySoundW` with `SND_ALIAS`), and the alert sound
 //!   (`MessageBeep(MB_OK)`) for `default`, `beep` and a name with no alias; the throttle keys on the name. The alias
-//!   lookup and the file it names are read inside `PlaySoundW`, so it runs on a serial queue of its own too, off the
-//!   main thread.
+//!   lookup and the file it names are read inside `PlaySoundW`, played to the end so its answer says whether the alias
+//!   exists, on a serial queue of its own, off the main thread. Upstream's names are macOS's sounds, which Windows has
+//!   no alias of, so each of them sounds the alert there.
 //!
 //! The Windows form is built and tested on the Windows runner (`cross-platform.yml`); the macOS form is not built on
 //! macOS by CI yet.
@@ -247,7 +248,7 @@ mod system {
 mod system {
     use std::sync::LazyLock;
 
-    use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
+    use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_NODEFAULT};
     use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
     use windows_sys::Win32::UI::WindowsAndMessaging::MB_OK;
 
@@ -261,18 +262,13 @@ mod system {
         QUEUE.run(move || play_now(&name));
     }
 
-    /// `PlaySoundW` stops whatever it played before, so a replay restarts the clip.
+    /// Plays the clip to its end on the queue's thread: only a synchronous `PlaySoundW` says whether the alias was
+    /// found (an asynchronous one returns before it looks), so a name with none plays the alert instead of nothing.
     fn play_now(name: &str) {
         if !super::is_alert(name) {
             let alias: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-            // SAFETY: a NUL-terminated wide string alive for the call, no module; `SND_ASYNC` copies what it plays.
-            let played = unsafe {
-                PlaySoundW(
-                    alias.as_ptr(),
-                    std::ptr::null_mut(),
-                    SND_ALIAS | SND_ASYNC | SND_NODEFAULT,
-                )
-            };
+            // SAFETY: a NUL-terminated wide string alive for the call, no module.
+            let played = unsafe { PlaySoundW(alias.as_ptr(), std::ptr::null_mut(), SND_ALIAS | SND_NODEFAULT) };
             if played != 0 {
                 return;
             }

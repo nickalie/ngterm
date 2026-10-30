@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-The Windows app smoke check (docs/plans/20261029-windows-support.md, Task 4): one ngterm.exe on this desktop, on a
-private state directory, driven through its control socket.
+The Windows app smoke check (docs/plans/20261029-windows-support.md, Tasks 4 and 5): one ngterm.exe on this desktop, on
+a private state directory, driven through its control socket.
 
 .DESCRIPTION
 Run it on the desktop the window should open on (in a VM: `vmrun runProgramInGuest -interactive`, or an interactive
@@ -16,8 +16,14 @@ a second launch restores the session with its split; keys typed on the desktop (
 run in its focused pane; the quick terminal shows, runs PowerShell and zooms (screenshots `quick.png`,
 `quick-zoomed.png`); a launch beside it forwards to it over the instance pipe and exits 0; a flip of the system's app
 mode (`AppsUseLightTheme`, announced as Settings does with `WM_SETTINGCHANGE` `ImmersiveColorSet`, then put back)
-reloads the config of a theme with both slots; the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the
-app's hidden window) quits it. The app is stopped by its own process id at the end, whatever happened. Every step is
+reloads the config of a theme with both slots; the desktop integrations: keymap.conf's `global-hotkey`, pressed while
+Character Map has the keyboard, shows the quick terminal and pressed again hides it (`hotkey.png`); a `notify` to a session
+not shown posts a toast under the app's id, a click on it where Windows shows it reveals that session (`toast-N.png`,
+`toast-clicked.png`), a toast sits in its session's slot of the notification center (read back from its history), a
+second one replaces it, and it is withdrawn once its session is selected; a status sound plays (upstream's names have no Windows sound alias:
+the alert); a resume from sleep (`WM_POWERBROADCAST` sent to the hidden window) retries the remote links; with the
+keyboard-layout lock on Russian (`LoadKeyboardLayout`, unloaded at the end) the pane types Cyrillic for the US keys;
+the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the app's hidden window) quits it. The app is stopped by its own process id at the end, whatever happened. Every step is
 logged to <StateDir>\smoke.log; the exit status is 0 when every step passed.
 
 .PARAMETER Exe
@@ -109,7 +115,7 @@ function Wait-Text([string] $marker, [string] $pane = $null) {
         if ($reply -and $reply.Contains($marker)) { return $true }
         Start-Sleep -Milliseconds 500
     }
-    Log "last session.text: $reply"
+    Log "last session.text: $reply" | Out-Null
     return $false
 }
 
@@ -246,7 +252,169 @@ function Wait-Quick([string] $marker) {
         if ($reply -and $reply.Contains($marker)) { return $true }
         Start-Sleep -Milliseconds 500
     }
-    Log "last quick.text: $reply"
+    Log "last quick.text: $reply" | Out-Null
+    return $false
+}
+
+# The desktop integrations' helpers: keys pressed on the desktop (`keybd_event`, as any keyboard), a click, a keyboard
+# layout loaded for the session, and a window message whose answer is not waited for.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SmokeDesktop {
+    [DllImport("user32.dll")]
+    static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+    [DllImport("user32.dll")]
+    static extern uint MapVirtualKeyW(uint code, uint type);
+    [DllImport("user32.dll")]
+    static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")]
+    static extern void mouse_event(uint flags, int x, int y, uint data, UIntPtr extra);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr LoadKeyboardLayoutW(string klid, uint flags);
+    [DllImport("user32.dll")]
+    static extern bool UnloadKeyboardLayout(IntPtr layout);
+    [DllImport("user32.dll")]
+    static extern int GetKeyboardLayoutList(int count, IntPtr[] list);
+    [DllImport("user32.dll")]
+    static extern bool PostMessageW(IntPtr window, uint msg, UIntPtr w, IntPtr l);
+    [DllImport("user32.dll")]
+    public static extern bool SetProcessDPIAware();
+    // presses the virtual keys in order, each with its scan code
+    public static void Press(byte[] keys) {
+        foreach (byte key in keys) { keybd_event(key, (byte)MapVirtualKeyW(key, 0), 0, UIntPtr.Zero); }
+    }
+    // releases them in reverse
+    public static void Release(byte[] keys) {
+        for (int i = keys.Length - 1; i >= 0; i--) {
+            keybd_event(keys[i], (byte)MapVirtualKeyW(keys[i], 0), 2, UIntPtr.Zero);
+        }
+    }
+    // a left click at the screen point
+    public static void Click(int x, int y) {
+        SetCursorPos(x, y);
+        mouse_event(0x2, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(0x4, 0, 0, 0, UIntPtr.Zero);
+    }
+    // loads a keyboard layout for the session; IntPtr.Zero when it was loaded already (so it is not unloaded after)
+    public static IntPtr LoadLayout(string klid) {
+        int count = GetKeyboardLayoutList(0, null);
+        IntPtr[] before = new IntPtr[count];
+        GetKeyboardLayoutList(count, before);
+        IntPtr layout = LoadKeyboardLayoutW(klid, 0x80);
+        return Array.IndexOf(before, layout) >= 0 ? IntPtr.Zero : layout;
+    }
+    public static void UnloadLayout(IntPtr layout) { if (layout != IntPtr.Zero) { UnloadKeyboardLayout(layout); } }
+    public static bool Post(IntPtr window, uint msg, ulong w, long l) {
+        return PostMessageW(window, msg, new UIntPtr(w), new IntPtr(l));
+    }
+}
+'@
+# screenshots and clicks in the screen's own pixels
+[SmokeDesktop]::SetProcessDPIAware() | Out-Null
+
+# A chord pressed on the desktop: the keys down in order, up in reverse.
+function Send-Chord([byte[]] $keys) {
+    [SmokeDesktop]::Press($keys)
+    Start-Sleep -Milliseconds 50
+    [SmokeDesktop]::Release($keys)
+}
+
+# A click on the newest toast where Windows shows it: the bottom right of the primary screen's work area, on its text
+# (left of its buttons). UI Automation does not reach the toast's window from a plain process.
+function Click-Toast {
+    $area = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $graphics = [System.Drawing.Graphics]::FromHwnd([IntPtr]::Zero)
+    $scale = $graphics.DpiX / 96
+    $graphics.Dispose()
+    $x = [int]($area.Right - 280 * $scale)
+    $y = [int]($area.Bottom - 50 * $scale)
+    Log "clicking the toast at $x,$y (work area $area, scale $scale)" | Out-Null
+    [SmokeDesktop]::Click($x, $y)
+    return $true
+}
+
+# The app's toasts in the notification center (Windows PowerShell's WinRT projection, from a helper of its own): one
+# `group|tag|xml` line each.
+function Get-Toasts {
+    $helper = @"
+`$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+foreach (`$toast in [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory('$appId')) {
+    '{0}|{1}|{2}' -f `$toast.Group, `$toast.Tag, `$toast.Content.GetXml()
+}
+"@
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($helper))
+    @(& powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1 | ForEach-Object { "$_" })
+}
+
+# Clears the app id's toasts from the notification center (Windows PowerShell's WinRT projection).
+function Clear-Toasts {
+    $helper = @"
+`$null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+[Windows.UI.Notifications.ToastNotificationManager]::History.Clear('$appId')
+"@
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($helper))
+    & powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1 | Out-Null
+}
+
+# Polls the app's log for `line`, up to `seconds`.
+function Wait-Log-For([string] $line, [int] $seconds) {
+    $file = Join-Path $state 'ngterm.log'
+    $deadline = (Get-Date).AddSeconds($seconds)
+    do {
+        if ((Test-Path $file) -and (Select-String -Path $file -SimpleMatch $line -Quiet)) { return $true }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
+# Polls the notification center until `test` holds for its toasts.
+function Wait-Toasts([scriptblock] $test) {
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    do {
+        $toasts = Get-Toasts
+        if (& $test $toasts) { return $true }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    Log "toasts: $($toasts -join ' / ')" | Out-Null
+    return $false
+}
+
+# The session of id `sid` in the tree, or $null.
+function Find-Session($node, [string] $sid) {
+    if ($null -eq $node) { return $null }
+    if ($node -is [System.Array]) {
+        foreach ($item in $node) { $found = Find-Session $item $sid; if ($found) { return $found } }
+        return $null
+    }
+    if ($node -isnot [System.Management.Automation.PSCustomObject]) { return $null }
+    if ($node.PSObject.Properties['id'] -and $node.id -eq $sid -and $node.PSObject.Properties['active']) { return $node }
+    foreach ($property in $node.PSObject.Properties) {
+        $found = Find-Session $property.Value $sid
+        if ($found) { return $found }
+    }
+    return $null
+}
+
+# Polls the tree until session `sid` is the active one.
+function Wait-Active([string] $sid) {
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    do {
+        $session = Find-Session ((Invoke-Control 'tree') | ConvertFrom-Json) $sid
+        if ($session -and $session.active) { return $true }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
+# Polls the tree until the quick terminal's visibility is `visible`.
+function Wait-Quick-Visible([bool] $visible) {
+    $want = '"quickVisible":' + $visible.ToString().ToLowerInvariant()
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    do {
+        if ((Invoke-Control 'tree') -match $want) { return $true }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
     return $false
 }
 
@@ -268,8 +436,12 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Get-ChildItem env: | Where-Object { $_.Name -match '^(NGTERM|AGTERM|ZMX)_' } | ForEach-Object {
     Remove-Item -LiteralPath "env:$($_.Name)"
 }
+$appId = 'com.nickalie.ngterm.smoke'
 $env:NGTERM_STATE_DIR = $state
-$env:NGTERM_APP_ID = 'com.nickalie.ngterm.smoke'
+$env:NGTERM_APP_ID = $appId
+# the global hotkey: the key left of 1 by position, with Ctrl and Shift
+$config = New-Item -ItemType Directory -Force -Path (Join-Path $state 'config')
+Set-Content -Path (Join-Path $config 'keymap.conf') -Value 'global-hotkey ctrl+shift+`' -Encoding utf8
 $env:HOME = $homeDir
 Log "exe $Exe; state $state; pipe \\.\pipe\$pipeName"
 
@@ -371,6 +543,76 @@ try {
         [SmokeWindows]::BroadcastSettingChange('ImmersiveColorSet')
     }
 
+    # the global hotkey: registered at the launch, it toggles the quick terminal while another application has the
+    # keyboard (Character Map, a plain Win32 window, stopped by its process id after)
+    Check (Wait-Log 'global hotkey: registered') 'the keymap''s global-hotkey is registered'
+    $other = Start-Process -FilePath 'charmap.exe' -PassThru
+    try {
+        $raised = $false
+        for ($try = 0; $try -lt 60 -and -not $raised; $try++) {
+            Start-Sleep -Milliseconds 500
+            $raised = [SmokeWindows]::Raise([uint32]$other.Id)
+        }
+        Check $raised 'Character Map has the keyboard'
+        Start-Sleep -Milliseconds 500
+        # Ctrl, Shift and the key left of 1 (VK_OEM_3 on the US layout)
+        Send-Chord ([byte[]](0x11, 0x10, 0xC0))
+        Check (Wait-Quick-Visible $true) 'the global hotkey pressed in Character Map shows the quick terminal'
+        Check (Wait-Log 'global hotkey: pressed') 'the press reached the main loop'
+        Start-Sleep -Seconds 1
+        Save-Screen 'hotkey.png'
+        Send-Chord ([byte[]](0x11, 0x10, 0xC0))
+        Check (Wait-Quick-Visible $false) 'the global hotkey pressed again hides it'
+    } finally {
+        Stop-Process -Id $other.Id -Force -ErrorAction SilentlyContinue
+    }
+
+    # notifications: toasts under the app's id, a click revealing its session, a repeat replacing, a withdrawal; the
+    # toasts earlier runs left under this app id are cleared first
+    Clear-Toasts
+    $first = (Invoke-Control 'session.select' | ConvertFrom-Json).result.id
+    $second = (Invoke-Control 'session.new' | ConvertFrom-Json).result.id
+    Log "sessions: shown $first, notified $second"
+    Invoke-Control 'session.select' $null 2000 $first | Out-Null
+    Check (Wait-Active $first) 'the first session is shown again'
+    $slot = "\|${second}:notify\|"
+    # a toast's popup shows for a few seconds: each try posts one, clicks it at once and waits for the app to hear it
+    $clicked = $false
+    for ($try = 1; $try -le 3 -and -not $clicked; $try++) {
+        $note = Invoke-Control 'notify' @{ title = 'Smoke toast'; body = "smoke-toast-click-$try" } 2000 $second
+        Check ($note -match '"ok":true') "notify: $note"
+        Start-Sleep -Milliseconds 1500
+        Save-Screen "toast-$try.png"
+        Click-Toast | Out-Null
+        $clicked = Wait-Log-For 'notify: toast clicked' 15
+    }
+    Check $clicked 'a click on the toast on screen reaches the app'
+    Check (Wait-Active $second) 'the click reveals the notified session'
+    Start-Sleep -Seconds 1
+    Save-Screen 'toast-clicked.png'
+    Check (Wait-Toasts { param($t) -not ($t | Where-Object { $_ -match $slot }) }) 'the clicked toast is gone from the notification center'
+    Invoke-Control 'session.select' $null 2000 $first | Out-Null
+    Check (Wait-Active $first) 'the first session is shown again'
+    Invoke-Control 'notify' @{ title = 'Smoke toast'; body = 'smoke-toast-three' } 2000 $second | Out-Null
+    Check (Wait-Toasts { param($t) @($t | Where-Object { $_ -match $slot -and $_ -match 'smoke-toast-three' }).Count -eq 1 }) 'the notification center holds the toast in the session''s slot'
+    Invoke-Control 'notify' @{ title = 'Smoke toast'; body = 'smoke-toast-four' } 2000 $second | Out-Null
+    Check (Wait-Toasts { param($t) $held = @($t | Where-Object { $_ -match $slot }); $held.Count -eq 1 -and $held[0] -match 'smoke-toast-four' }) 'a second notify replaces the toast in its slot'
+    Check ([SmokeWindows]::Raise([uint32]$app.Id)) 'the app window comes to the front'
+    Invoke-Control 'session.select' $null 2000 $second | Out-Null
+    Check (Wait-Toasts { param($t) -not ($t | Where-Object { $_ -match $slot }) }) 'selecting the session withdraws its toast'
+
+    # status sounds: upstream's names are macOS sounds; Windows has no alias of theirs and plays the alert
+    $status = Invoke-Control 'session.status' @{ status = 'blocked'; sound = 'Glass' } 2000 $second
+    Check ($status -match '"ok":true') "session.status with a sound: $status"
+    Check (Wait-Log 'no such sound alias here, playing the alert') 'the status sound reached the player'
+
+    # the remote links: the network's connectivity hint at start, and a resume from sleep retrying them
+    Check (Wait-Log "remote links: the network's connectivity hint") 'the connectivity hint reported the network'
+    $hidden = [SmokeWindows]::SystemWindow([uint32]$app.Id)
+    # WM_POWERBROADCAST, PBT_APMRESUMEAUTOMATIC
+    Check ([SmokeDesktop]::Post($hidden, 0x0218, 0x12, 0)) 'a resume sent to the hidden window'
+    Check (Wait-Log 'network back or machine awake: retrying the remote links now') 'the resume retries the remote links'
+
     # the session's end: asked, then told; the app quits
     $window = [SmokeWindows]::SystemWindow([uint32]$app.Id)
     Check ($window -ne [IntPtr]::Zero) "the app's hidden window is there ($window)"
@@ -381,6 +623,30 @@ try {
     $ended = $app.WaitForExit(15000)
     Check ($ended -and $app.ExitCode -eq 0) "the app quit at the session's end with status $(if ($ended) { $app.ExitCode } else { 'none: still running' })"
     Check (Wait-Log 'the session is ending: quitting') 'the session end ran the quit'
+
+    # the keyboard-layout lock: Russian for the terminals, so the US keys type Cyrillic in the pane
+    $russian = [SmokeDesktop]::LoadLayout('00000419')
+    try {
+        $settingsFile = Join-Path $state 'settings.json'
+        $settings = Get-Content -Raw -Path $settingsFile | ConvertFrom-Json
+        $settings | Add-Member -NotePropertyName terminalInputSource -NotePropertyValue '00000419' -Force
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsFile -Encoding utf8
+        $app = Start-App
+        Log "relaunched pid $($app.Id) with the layout lock on 00000419"
+        Check ($null -ne (Wait-Socket)) 'the relaunched app answers'
+        Start-Sleep -Seconds 2
+        Check ([SmokeWindows]::Raise([uint32]$app.Id)) 'the app window comes to the front'
+        Start-Sleep -Seconds 1
+        [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+        Check (Wait-Log 'keyboard layout lock: layout selected') 'the lock selects Russian for the terminal'
+        Start-Sleep -Milliseconds 500
+        [System.Windows.Forms.SendKeys]::SendWait('qwe')
+        Check (Wait-EitherPane ([string][char]0x439 + [char]0x446 + [char]0x443)) 'the US keys Q, W, E type the Russian letters in the pane'
+        Save-Screen 'layout-lock.png'
+    } finally {
+        Stop-App $app
+        [SmokeDesktop]::UnloadLayout($russian)
+    }
 } catch {
     Log "ERROR $_"
     $failures++

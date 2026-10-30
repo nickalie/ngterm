@@ -7,6 +7,31 @@ use std::path::Path;
 use crate::paths::Env;
 use crate::persist::RestoreMode;
 
+/// The welcome's sentence on the install that already puts `ngtermctl` on the `PATH` ([`FirstRunWelcome::MESSAGE`]):
+/// upstream's on macOS.
+#[cfg(target_os = "macos")]
+macro_rules! cli_install_note {
+    () => {
+        "A Homebrew install already has it, so that one is only for a direct download."
+    };
+}
+
+/// Linux: a distribution's package installs `ngtermctl` beside the app.
+#[cfg(not(any(target_os = "macos", windows)))]
+macro_rules! cli_install_note {
+    () => {
+        "A package install already has it, so that one is only for a direct download."
+    };
+}
+
+/// Windows: the installer puts `ngtermctl` on the `PATH`.
+#[cfg(windows)]
+macro_rules! cli_install_note {
+    () => {
+        "The ngterm installer already puts it there, so that one is only for a copy run without installing."
+    };
+}
+
 /// The one-time pointer at the optional extras, shown on a first launch only (upstream's `FirstRunWelcome`).
 pub struct FirstRunWelcome;
 
@@ -17,7 +42,10 @@ impl FirstRunWelcome {
 
     pub const TITLE: &str = "Welcome to ngterm";
 
-    pub const MESSAGE: &str =
+    /// The welcome's text. Its last line says which install already puts `ngtermctl` on the `PATH`, so the Help menu's
+    /// installer is only for another one: upstream's Homebrew install on macOS, a distribution package on Linux and the
+    /// Windows installer (its MSI) on Windows; upstream has no Linux or Windows wording to take.
+    pub const MESSAGE: &str = concat!(
         "ngterm ships optional extras. These two install from here, and all of them from the Help \
 menu at any time:
 
@@ -25,8 +53,9 @@ The agent skill teaches Claude Code and Codex to drive ngterm over its control s
 
 The agent status hooks make an agent session report active, blocked or completed in the sidebar.
 
-The command line tool puts ngtermctl on your PATH. A Homebrew install already has it, so that one is only for a direct \
-download.";
+The command line tool puts ngtermctl on your PATH. ",
+        cli_install_note!()
+    );
 
     pub const SKILL_OPTION: &str = "Install the agent skill";
 
@@ -184,6 +213,24 @@ mod tests {
         assert!(FirstRunWelcome::MESSAGE.contains("command line tool"));
         assert!(FirstRunWelcome::SKILL_OPTION.contains("agent skill"));
         assert!(FirstRunWelcome::HOOKS_OPTION.contains("agent status hooks"));
+    }
+
+    /// Upstream's Homebrew sentence on macOS only: Linux names a package install, Windows the installer.
+    #[test]
+    fn the_message_names_this_platforms_install_of_the_command_line_tool() {
+        let note = if cfg!(target_os = "macos") {
+            "A Homebrew install already has it, so that one is only for a direct download."
+        } else if cfg!(windows) {
+            "The ngterm installer already puts it there, so that one is only for a copy run without installing."
+        } else {
+            "A package install already has it, so that one is only for a direct download."
+        };
+        assert!(
+            FirstRunWelcome::MESSAGE.ends_with(&format!("puts ngtermctl on your PATH. {note}")),
+            "{}",
+            FirstRunWelcome::MESSAGE
+        );
+        assert_eq!(FirstRunWelcome::MESSAGE.contains("Homebrew"), cfg!(target_os = "macos"));
     }
 
     #[test]
