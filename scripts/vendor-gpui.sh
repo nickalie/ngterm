@@ -24,7 +24,8 @@
 #                  transformations), which GPUI's `Keystroke` drops, for the terminal's physical-key bindings and the
 #                  Kitty keyboard protocol (Task 4 of docs/plans/20261029-windows-support.md, 0001); the
 #                  DirectComposition target beneath the window's child windows, so the HTML overlays' WebView2 pages
-#                  show over GPUI (Task 6, 0002)
+#                  show over GPUI (Task 6, 0002); `zoom` restoring a maximized window, as GPUI's other platforms toggle
+#                  it (Task 8, 0003)
 #
 # Each source is the crates.io archive of GPUI_VERSION, verified against SHA256 below: the release's crates.io
 # checksum (the `cksum` of its version's line in the crates.io index, https://index.crates.io/gp/ui/<crate>, also what

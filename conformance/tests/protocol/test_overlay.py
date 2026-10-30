@@ -5,6 +5,7 @@ outside the instance. Every page is a static file written into the instance's ow
 process on 127.0.0.1: no page loads anything from the network."""
 
 import itertools
+import os
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler
@@ -874,7 +875,9 @@ def test_page_result_needs_a_known_page(ctl, page, error):
 
 # -- refusals
 
-FILE = "/agterm-conformance/site/page.html"
+# Absolute paths that name nothing, as the OS spells them: `/...` on Unix, on the current drive on Windows.
+FILE = os.path.abspath(os.sep + os.path.join("agterm-conformance", "site", "page.html"))
+FILESYSTEM_ROOT = os.path.abspath(os.sep)
 URL = "http://127.0.0.1:9/page.html"
 LOOPBACK_HOST = "session.overlay.open: --chromeless with --url requires a loopback host: 127.0.0.1, ::1 or localhost"
 
@@ -960,7 +963,9 @@ LOOPBACK_HOST = "session.overlay.open: --chromeless with --url requires a loopba
             {"html": FILE, "cwd": "site"}, "session.overlay.open: cwd must be an absolute path", id="relative-cwd"
         ),
         pytest.param(
-            {"html": FILE, "cwd": "/"}, "session.overlay.open: cwd must not be / or the home directory", id="root-cwd"
+            {"html": FILE, "cwd": FILESYSTEM_ROOT},
+            "session.overlay.open: cwd must not be / or the home directory",
+            id="root-cwd",
         ),
         pytest.param(
             {"html": FILE, "cwd": FILE},
@@ -968,7 +973,7 @@ LOOPBACK_HOST = "session.overlay.open: --chromeless with --url requires a loopba
             id="cwd-is-file",
         ),
         pytest.param(
-            {"html": FILE, "cwd": "/agterm-conformance/other"},
+            {"html": FILE, "cwd": os.path.abspath(os.sep + os.path.join("agterm-conformance", "other"))},
             "session.overlay.open: html file is outside cwd",
             id="outside-cwd",
         ),
