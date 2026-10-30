@@ -65,7 +65,7 @@ fn forwarded(args: &[&str], payload: &str) -> String {
     }
 }
 
-/// The PowerShells a Windows test runs a script under: Windows PowerShell, and PowerShell 7 when it is on `PATH`.
+/// The PowerShell hosts a Windows test runs a script under: Windows PowerShell, and PowerShell 7 when it is on `PATH`.
 #[cfg(windows)]
 pub(super) fn powershells() -> Vec<&'static str> {
     let pwsh = Command::new("pwsh")
@@ -117,12 +117,12 @@ fn forwarded(args: &[&str], payload: &str) -> String {
             .status()
             .unwrap();
         assert!(status.success(), "{shell}: {status}");
-        let argv = fs::read_to_string(&out)
+        let recorded = fs::read_to_string(&out)
             .unwrap_or_else(|err| panic!("{shell}: the adapter never called the wrapper for {args:?}: {err}"));
-        seen.push(argv);
+        seen.push(recorded);
     }
     seen.dedup();
-    assert_eq!(seen.len(), 1, "the PowerShells differ: {seen:?}");
+    assert_eq!(seen.len(), 1, "the PowerShell hosts differ: {seen:?}");
     seen.remove(0)
 }
 
@@ -206,14 +206,14 @@ fn a_hook_under_a_second_agent_is_a_workers_and_stays_silent() {
         "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {} blocked",
         adapter.display()
     );
-    let agent = |name: &str| dir.path().join(format!("{name}.exe")).display().to_string();
+    let exe = |name: &str| dir.path().join(format!("{name}.exe")).display().to_string();
     let under = |agents: &[&str]| {
         let _ = fs::remove_file(&out);
         let _ = fs::remove_file(&done);
         let line = agents
             .iter()
             .rev()
-            .fold(hook.clone(), |inner, name| format!("{} /d /c {inner}", agent(name)));
+            .fold(hook.clone(), |inner, name| format!("{} /d /c {inner}", exe(name)));
         // `^&` and `^>` reach the first agent, which runs the chain and then touches `done`
         let status = Command::new("cmd")
             .raw_arg(format!("/d /c start \"\" /b {line} ^& type nul ^> {}", done.display()))
