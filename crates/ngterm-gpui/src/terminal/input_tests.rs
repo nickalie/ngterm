@@ -85,14 +85,27 @@ fn a_windows_scan_code_is_the_same_physical_key_as_its_xkb_keycode() {
     assert_eq!(input::xkb_keycode_of_scan_code(0xffff), None);
 }
 
+#[test]
+fn an_extended_key_s_scan_code_takes_its_prefix() {
+    // the Up arrow, which a layout may give as the keypad's 8
+    assert_eq!(input::extended_scan_code(0x48, 0x26, 0), 0xe048);
+    assert_eq!(input::extended_scan_code(0xe048, 0x26, 0), 0xe048);
+    // Enter, and the keypad's Enter by the event's extended flag
+    assert_eq!(input::extended_scan_code(0x1c, 0x0d, 0), 0x1c);
+    assert_eq!(input::extended_scan_code(0x1c, 0x0d, 0xe000), 0xe01c);
+    assert_eq!(input::extended_scan_code(0, 0x26, 0xe000), 0);
+}
+
 #[cfg(windows)]
 #[test]
 fn a_key_synthesized_without_a_scan_code_takes_its_virtual_keys() {
-    // what `MapVirtualKeyW` gives on every layout for the keys that type no text: Enter, the Up arrow (extended)
-    assert_eq!(input::virtual_key_scan_code(0x0d), 0x1c);
-    assert_eq!(input::virtual_key_scan_code(0x26), 0xe048);
-    let keycode = input::xkb_keycode_of_scan_code(input::virtual_key_scan_code(0x0d)).unwrap_or(0);
-    assert_eq!(input::physical_key(keycode).name(), "enter");
+    // the keys that type no text, on every layout: Enter, the Up arrow (extended)
+    assert_eq!(input::virtual_key_scan_code(0x0d, 0), 0x1c);
+    assert_eq!(input::virtual_key_scan_code(0x26, 0), 0xe048);
+    for (virtual_key, name) in [(0x0d, "enter"), (0x26, "arrow_up")] {
+        let keycode = input::xkb_keycode_of_scan_code(input::virtual_key_scan_code(virtual_key, 0)).unwrap_or(0);
+        assert_eq!(input::physical_key(keycode).name(), name);
+    }
 }
 
 #[test]

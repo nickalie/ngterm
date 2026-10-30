@@ -12,13 +12,13 @@ The check: the app launches and serves its control socket (the named pipe its so
 with -Ctl through `ngtermctl --socket` too: its tree, a typed line and the text read back); the pane runs PowerShell (a
 typed command's output read back with `session.text`); `session.split` opens the split and its PowerShell answers too; a
 screenshot of the desktop is saved; the app quits on Ctrl+C (the console's Ctrl event, its orderly quit) with status 0;
-a second launch restores the session with its split; keys typed on the desktop (`SendKeys`) run in its focused pane; the
-quick terminal shows, runs PowerShell and zooms (screenshots `quick.png`, `quick-zoomed.png`); a launch beside it
-forwards to it over the instance pipe and exits 0; a flip of the system's app mode (`AppsUseLightTheme`, announced as
-Settings does with `WM_SETTINGCHANGE` `ImmersiveColorSet`, then put back) reloads the config of a theme with both slots;
-the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the app's hidden window) quits it. The app is stopped
-by its own process id at the end, whatever happened. Every step is logged to <StateDir>\smoke.log; the exit status is 0
-when every step passed.
+a second launch restores the session with its split; keys typed on the desktop (`SendKeys`: text, Enter, the Up arrow)
+run in its focused pane; the quick terminal shows, runs PowerShell and zooms (screenshots `quick.png`,
+`quick-zoomed.png`); a launch beside it forwards to it over the instance pipe and exits 0; a flip of the system's app
+mode (`AppsUseLightTheme`, announced as Settings does with `WM_SETTINGCHANGE` `ImmersiveColorSet`, then put back)
+reloads the config of a theme with both slots; the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the
+app's hidden window) quits it. The app is stopped by its own process id at the end, whatever happened. Every step is
+logged to <StateDir>\smoke.log; the exit status is 0 when every step passed.
 
 .PARAMETER Exe
 The ngterm.exe to run (a debug build keeps its console, which the Ctrl+C quit needs), in a staged tree
@@ -225,13 +225,13 @@ function Save-Screen([string] $name) {
     Log "screenshot $shot"
 }
 
-# Polls `session.text` of both panes until one holds `marker`.
-function Wait-EitherPane([string] $marker) {
+# Polls `session.text` of both panes until one holds `marker` `count` times.
+function Wait-EitherPane([string] $marker, [int] $count = 1) {
     $deadline = (Get-Date).AddSeconds($Timeout)
     while ((Get-Date) -lt $deadline) {
         foreach ($pane in 'left', 'right') {
             $reply = Invoke-Control 'session.text' @{ pane = $pane }
-            if ($reply -and $reply.Contains($marker)) { return $true }
+            if ($reply -and ($reply -split [regex]::Escape($marker)).Count - 1 -ge $count) { return $true }
         }
         Start-Sleep -Milliseconds 500
     }
@@ -325,8 +325,12 @@ try {
     Start-Sleep -Milliseconds 500
     [System.Windows.Forms.SendKeys]::SendWait("Write-Output {(}'Smoke'{+}'-Keys'{)}{ENTER}")
     $typed = Wait-EitherPane 'Smoke-Keys'
+    # the Up arrow brings the line back from PowerShell's history, and Enter runs it again
+    [System.Windows.Forms.SendKeys]::SendWait('{UP}{ENTER}')
+    $again = Wait-EitherPane 'Smoke-Keys' 2
     Save-Screen 'keys.png'
     Check $typed 'keys typed on the desktop run in the focused pane'
+    Check $again 'the Up arrow and Enter typed on the desktop run the line again'
 
     # the quick terminal: its window host shows PowerShell, zoomed too
     $shown = Invoke-Control 'quick' @{ mode = 'show' }
