@@ -184,12 +184,32 @@ guest has 4 CPUs and 6.5 GB of memory.
 
 ### Task 5: Desktop integrations on Windows (depends on Task 4)
 
-- [ ] notifications: toasts under the AUMID with the slot identities and replace rules of `notifications.rs`, click to
+- [x] notifications: toasts under the AUMID with the slot identities and replace rules of `notifications.rs`, click to
   reveal and raise, withdrawals
-- [ ] global hotkey: the chord registered system-wide by physical key position, the press posted to the main loop
-- [ ] remote links: the network's reachability and resume from sleep as `LinkEvent`s
-- [ ] status sounds and the keyboard-layout lock re-checked end to end on Windows
-- [ ] tests on the seams; Windows VM checks of each (a toast shown and clicked, the hotkey toggling the quick terminal)
+- [x] global hotkey: the chord registered system-wide by physical key position, the press posted to the main loop
+- [x] remote links: the network's reachability and resume from sleep as `LinkEvent`s
+- [x] status sounds and the keyboard-layout lock re-checked end to end on Windows
+- [x] tests on the seams; Windows VM checks of each (a toast shown and clicked, the hotkey toggling the quick terminal)
+- ➕ the AUMID's registration (decided here): every launch sets the process's explicit AppUserModelID to the app id and
+  writes `HKCU\Software\Classes\AppUserModelId\<app id>` (`DisplayName` ngterm, `IconUri` the bundled icon written to
+  `<state dir>\notification-icon.png`), before any window opens. That alone shows toasts for a build run from its
+  folder (dev builds, the smoke); Task 7's Start-menu shortcut carries the same id as `System.AppUserModel.ID`, and its
+  uninstall should remove that registry key. A test instance's own app id leaves its own key behind (a few bytes)
+- ➕ a toast's group is its window id and its tag the rest of the identity (a tag holds 64 characters, an identity is
+  longer); app banners go to the `ngterm` group, a long identity shortened with its hash. Toasts are silent: the
+  configured sound plays beside them through the status sounds' player, as on Linux
+- ➕ a toast left in the notification center after the app quit opens nothing (no COM activator is registered), as a
+  freedesktop banner of an app that is gone; relaunching the app from such a click is open work if wanted
+- ➕ the global hotkey follows the foreground window's layout (`MapVirtualKeyExW` of the chord's US scan code), read
+  again on each foreground change (`EVENT_SYSTEM_FOREGROUND`) and each second; the starter keymap's text names the
+  Windows form
+- ➕ remote links: the network is the IP helper's connectivity hint (`NotifyNetworkConnectivityHintChange`, resolved at
+  run time: a Windows before 10 2004 reads as always reachable); the resume is `PBT_APMRESUMEAUTOMATIC` and the
+  console display turning on after off (modern standby's wake) on the app's hidden window
+- ➕ status sounds: an asynchronous `PlaySoundW` returned before looking the alias up, so a name Windows has no alias of
+  (all of upstream's macOS names) played nothing; it now plays to the end on its queue and falls back to the alert
+- ➕ the first-run welcome's command line tool sentence is per platform: upstream's Homebrew one on macOS, a package
+  install on Linux, the installer on Windows (upstream has no wording for either)
 
 ### Task 6: HTML overlays on Windows (WebView2, depends on Task 4)
 

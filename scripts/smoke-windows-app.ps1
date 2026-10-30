@@ -115,7 +115,7 @@ function Wait-Text([string] $marker, [string] $pane = $null) {
         if ($reply -and $reply.Contains($marker)) { return $true }
         Start-Sleep -Milliseconds 500
     }
-    Log "last session.text: $reply"
+    Log "last session.text: $reply" | Out-Null
     return $false
 }
 
@@ -252,7 +252,7 @@ function Wait-Quick([string] $marker) {
         if ($reply -and $reply.Contains($marker)) { return $true }
         Start-Sleep -Milliseconds 500
     }
-    Log "last quick.text: $reply"
+    Log "last quick.text: $reply" | Out-Null
     return $false
 }
 
