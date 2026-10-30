@@ -37,6 +37,7 @@ pub const RELAUNCH_FLAG: &str = "--relaunch-after";
 
 /// The script the relauncher runs: wait for `$1` to exit (at most `$3` polls of 0.2 s), then start `$2` with the
 /// environment the app ran with. Arguments travel positionally, never inside the script text.
+#[cfg(unix)]
 const RELAUNCH_SCRIPT: &str = r#"i=0
 while kill -0 "$1" 2>/dev/null; do
   i=$((i + 1))
