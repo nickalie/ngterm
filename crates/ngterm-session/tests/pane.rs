@@ -506,11 +506,14 @@ fn dropping_a_pane_ends_a_job_in_a_group_of_its_own() -> TestResult {
 }
 
 /// The recorder of [`a_forced_kill_hangs_up_a_job_in_a_group_of_its_own`], in Perl: no shell leaves its session, and
-/// `setsid(1)` is util-linux's, which macOS lacks. It starts two jobs of the session, each a `sleep 300` without the
-/// PTY in a process group of its own, the first taking the hangup's default action and the second ignoring it, both
-/// from their fork on. It then leaves the session, so neither the hangup nor the kill reaches it, says
-/// `started:<first>:<second>:`, lets go of the PTY, and once it reaped the first job writes the signal that ended it
-/// (`signal:0` for none) to the file its argument names.
+/// `setsid(1)` is util-linux's, which macOS lacks. It starts two jobs of the session, each a Perl `sleep 300` without
+/// the PTY in a process group of its own, the first taking the hangup's default action and the second ignoring it,
+/// both from their fork on. It puts each job in its group itself, a checked `setpgid`, while the job waits on a pipe:
+/// a job that also set its own group raced that call, and macOS once refused the job's own `setpgid(0, 0)` with
+/// `EPERM` (seen in a stress run of this test, the job dying before it was named, so its group read `ESRCH` for good).
+/// The jobs exec nothing, so a job named is never in the middle of an exec. It then leaves the session, so neither
+/// the hangup nor the kill reaches it, says `started:<first>:<second>:`, lets go of the PTY, and once it reaped the
+/// first job writes the signal that ended it (`signal:0` for none) to the file its argument names.
 #[cfg(unix)]
 const RECORDER: &str = r#"
 use strict;
@@ -520,16 +523,22 @@ use POSIX qw(setpgid setsid);
 sub job {
     my ($hangup) = @_;
     local $SIG{HUP} = $hangup;
+    pipe(my $hold, my $release) or die "pipe: $!\n";
     my $pid = fork() // die "fork: $!\n";
     if ($pid == 0) {
-        setpgid(0, 0) or die "setpgid: $!\n";
+        close $release;
+        # the end of the pipe: the parent has put this job in its group
+        defined sysread($hold, my $byte, 1) or die "read: $!\n";
+        close $hold;
         open STDIN, '<', '/dev/null' or die;
         open STDOUT, '>', '/dev/null' or die;
         open STDERR, '>&', \*STDOUT or die;
-        exec 'sleep', '300' or die "exec: $!\n";
+        sleep 300;
+        exit 0;
     }
-    # settles the group before the jobs are named, whichever of the two calls comes first
-    setpgid($pid, $pid);
+    close $hold;
+    setpgid($pid, $pid) or die "setpgid: $!\n";
+    close $release;
     return $pid;
 }
 
