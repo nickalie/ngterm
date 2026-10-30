@@ -40,6 +40,9 @@ mime_guess = "2.0.5"
 # server-process check), its job and process tables; ngterm-app's hook runner, log file lock, presentation bridge
 # stop and the user PATH the command line tool's install writes.
 windows-sys = "0.61"
+# Windows's WinRT APIs, features per crate: ngterm-gpui's toasts (`ToastNotificationManager`, `notifications/windows.rs`),
+# Microsoft's own bindings, the version GPUI's Windows backend already links.
+windows = "0.62"
 # macOS system sounds by name for the status sounds (ngterm-gpui's `status_sound.rs`) and the selection clipboard's
 # private pasteboard (`terminal/selection_clipboard/macos.rs`), features per crate: the AppKit and Foundation bindings
 # of the objc2 project, and the runtime crate for the retained sound the player keeps, the versions GPUI's macOS

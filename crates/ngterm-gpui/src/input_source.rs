@@ -256,7 +256,7 @@ fn probe(compositor: &'static str) -> Probe {
     #[cfg(windows)]
     return {
         let _ = compositor;
-        Ok(Box::new(windows::KeyboardLayouts))
+        Ok(Box::new(self::windows::KeyboardLayouts))
     };
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {

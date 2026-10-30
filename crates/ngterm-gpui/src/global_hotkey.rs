@@ -11,8 +11,9 @@
 //!   it fares across a layout switch is the desktop's; the desktop may let the user confirm or change it ([`portal`]). A compositor without the portal (the wlroots ones, niri) gives a
 //!   client no global hotkey at all: logged, and its own key bindings run `ngtermctl quick toggle` instead.
 //!
-//! - Windows: not yet; the chord is logged as ignored until Task 5 of `docs/plans/20261029-windows-support.md`
-//!   registers it system-wide by physical key position.
+//! - Windows: `RegisterHotKey` on a thread of the app's own, the chord's key by its position: the virtual key the
+//!   foreground window's layout puts on the US key the chord names ([`win32_keys::position`]), registered again when
+//!   the layout there changes; an autorepeat is no new press ([`windows`]).
 //!
 //! The chord is registered again whenever the keymap's changes (a reload); none is while the keymap names none
 //! (upstream ships no default).
@@ -20,12 +21,16 @@
 use gpui_kit::App;
 use ngterm_core::keymap::{Chord, Modifiers};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 use crate::state::post;
 use crate::state::{AppState, Poster};
 
 #[cfg(target_os = "linux")]
 pub mod portal;
+#[cfg(any(windows, test))]
+pub mod win32_keys;
+#[cfg(windows)]
+pub mod windows;
 #[cfg(target_os = "linux")]
 pub mod x11;
 
@@ -117,6 +122,8 @@ pub struct GlobalHotkey {
     x11: Option<x11::Grabber>,
     #[cfg(target_os = "linux")]
     portal: Option<portal::Binding>,
+    #[cfg(windows)]
+    windows: Option<self::windows::Registrar>,
     /// The display has no global hotkey of its own (headless, another platform): said once.
     unsupported_logged: bool,
 }
@@ -129,6 +136,18 @@ impl GlobalHotkey {
         }
         self.synced = true;
         self.registered = chord.cloned();
+        #[cfg(windows)]
+        {
+            let _ = cx;
+            self.register(chord, poster);
+        }
+        #[cfg(not(windows))]
+        self.sync_display(chord, poster, cx);
+    }
+
+    /// Registers `chord` by the display server GPUI runs on, or says once that it has no global hotkey.
+    #[cfg(not(windows))]
+    fn sync_display(&mut self, chord: Option<&Chord>, poster: &Poster, cx: &mut App) {
         #[cfg(not(target_os = "linux"))]
         let _ = poster;
         #[cfg(target_os = "linux")]
@@ -139,16 +158,32 @@ impl GlobalHotkey {
         }
         if chord.is_some() && !self.unsupported_logged {
             self.unsupported_logged = true;
-            #[cfg(windows)]
-            tracing::warn!(
-                display = cx.compositor_name(),
-                "the Windows global hotkey arrives in Task 5: global-hotkey is ignored"
-            );
-            #[cfg(not(windows))]
             tracing::warn!(
                 display = cx.compositor_name(),
                 "this display has no global hotkey: global-hotkey is ignored"
             );
+        }
+    }
+
+    /// Hands `chord` to the hotkey's thread, started with the first chord.
+    #[cfg(windows)]
+    fn register(&mut self, chord: Option<&Chord>, poster: &Poster) {
+        if self.windows.is_none() {
+            if chord.is_none() {
+                return;
+            }
+            match self::windows::Registrar::start(fired(poster)) {
+                Ok(registrar) => self.windows = Some(registrar),
+                Err(error) => {
+                    if !std::mem::replace(&mut self.unsupported_logged, true) {
+                        tracing::warn!(%error, "the global hotkey's thread did not start: global-hotkey is ignored");
+                    }
+                    return;
+                }
+            }
+        }
+        if let Some(registrar) = &self.windows {
+            registrar.set(chord);
         }
     }
 
@@ -194,7 +229,7 @@ impl GlobalHotkey {
 }
 
 /// What a press of the global hotkey runs: the quick terminal's toggle on the main loop.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 fn fired(poster: &Poster) -> impl Fn() + Send + Sync + 'static {
     let poster = poster.clone();
     move || post(&poster, AppState::global_hotkey_fired)

@@ -1,6 +1,6 @@
 //! Desktop notifications (upstream's `Notifications/NotificationManager.swift`, `notifications.md`; port of the GTK
-//! build's `notifications.rs`, which posted through `GNotification`) over the freedesktop notification server
-//! (`org.freedesktop.Notifications` on the session bus) through `zbus`.
+//! build's `notifications.rs`, which posted through `GNotification`): on Linux over the freedesktop notification server
+//! (`org.freedesktop.Notifications` on the session bus) through `zbus`, on Windows as toasts.
 //!
 //! The core records each notification (the badge and the `notify` event) and queues its banner; this posts the queued
 //! banners, each under its identity: `<windowID>:<sessionID>:<pane>` for a terminal's, `<windowID>:<sessionID>:notify`
@@ -14,9 +14,13 @@
 //! slot's; a session no open window holds gets none, so a closed window's banners stay clickable and reopen it. A banner the server closes (it
 //! expired, the user dismissed it) is forgotten. The badge clears on its own path and leaves the banners.
 //!
-//! The server sees no sound: a batch that posts banners sounds the configured notification sound as the display's
-//! alert (Linux has none of upstream's named sounds), through the status sounds' throttled bell
-//! ([`crate::status_sound`]); the badge and the event never depend on it.
+//! The server sees no sound: a batch that posts banners sounds the configured notification sound through the status
+//! sounds' throttled player ([`crate::status_sound`]): the display's alert on Linux (it has none of upstream's named
+//! sounds), the system sound of that name on Windows, whose toasts are silent; the badge and the event never depend
+//! on it.
+//!
+//! On Windows the banners are toasts under the app id, with the same identities, replacements, clicks and withdrawals
+//! ([`windows`]'s docs say how).
 //!
 //! The banners go out in order on one task ([`run`]) over one session-bus connection of its own, which is also where
 //! the server's signals arrive (a server may send `ActivationToken` to the connection that posted the banner alone);
@@ -33,10 +37,12 @@ use ngterm_core::{NotificationEffect, parse_notification_identity};
 mod freedesktop;
 #[cfg(target_os = "linux")]
 pub use freedesktop::run;
+#[cfg(any(windows, test))]
+mod toast;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::run;
+pub use self::windows::{register_app_id, run};
 
 /// The application name banners carry (the server's grouping; GTK's `g_get_application_name`).
 pub const APP_NAME: &str = "ngterm";

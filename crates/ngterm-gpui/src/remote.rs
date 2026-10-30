@@ -14,9 +14,9 @@
 //! - **Linux** ([`dbus`]): `NetworkManager` on the system bus, else the desktop portal's network monitor on the session
 //!   bus, else the kernel's default routes over rtnetlink ([`routes`], gio's netlink monitor), else none, and the
 //!   network reads as always reachable (logged): the links then retry on their backoff alone. The resume is logind's `PrepareForSleep(false)`; without logind there is none (logged).
-//! - **Elsewhere**: no source yet; the network reads as always reachable and no resume is reported (logged). Windows's
-//!   sources (the network list manager's connectivity, the power broadcast's resume) arrive with Task 5 of
-//!   `docs/plans/20261029-windows-support.md`.
+//! - **Windows** ([`windows`]): the IP helper's connectivity hint, its first report the state at start; the resume
+//!   from sleep, and the console display's wake (modern standby's), from the app's hidden window.
+//! - **Elsewhere**: no source yet; the network reads as always reachable and no resume is reported (logged).
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -28,6 +28,8 @@ use crate::state::{AppState, Poster, post};
 pub mod dbus;
 #[cfg(target_os = "linux")]
 pub mod routes;
+#[cfg(windows)]
+pub mod windows;
 
 /// What a platform's source reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,11 +86,8 @@ fn start_sources(report: &Report) {
 }
 
 #[cfg(windows)]
-fn start_sources(_report: &Report) {
-    tracing::info!(
-        "remote links: Windows's network and resume sources arrive in Task 5; the network reads as always reachable \
-         and the links retry on their backoff alone"
-    );
+fn start_sources(report: &Report) {
+    self::windows::start(report);
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]

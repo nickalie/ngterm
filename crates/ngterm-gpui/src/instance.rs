@@ -29,7 +29,7 @@ pub use gapplication::{Primary, Remote, register};
 #[cfg(windows)]
 pub mod windows;
 #[cfg(windows)]
-pub use windows::{Primary, Remote, register};
+pub use self::windows::{Primary, Remote, register};
 
 /// The application id this build registers.
 pub const DEFAULT_APP_ID: &str = "com.nickalie.ngterm";

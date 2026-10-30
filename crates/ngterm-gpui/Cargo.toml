@@ -91,20 +91,31 @@ widestring.workspace = true
 # beside the sounds and the layout calls: the instance pipe's flush and the foreground hand-over
 # (`instance/windows.rs`), the quit on the console's events and the session's end (`signals/windows.rs`), the process's
 # own end (`main.rs`), the window's minimized and maximized state (`window.rs`), the motion setting
-# (`status_glyph.rs`), the relauncher's detached start (`live_runtime.rs`)
+# (`status_glyph.rs`), the relauncher's detached start (`live_runtime.rs`), the toasts' app id and its registration
+# (`notifications/windows.rs`), the global hotkey (`global_hotkey/windows.rs`), the network's connectivity hint and the
+# resume (`remote/windows.rs`, `system_window.rs`)
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
     "Win32_Storage_FileSystem",
+    "Win32_System_Com",
     "Win32_System_Console",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_LibraryLoader",
+    "Win32_System_Power",
     "Win32_System_Registry",
+    "Win32_System_SystemServices",
     "Win32_System_Threading",
+    "Win32_UI_Accessibility",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# the toasts: WinRT's `ToastNotificationManager` and the XML their content is (`notifications/windows.rs`)
+windows = { workspace = true, features = ["Data_Xml_Dom", "Foundation", "UI_Notifications"] }
 
 [dev-dependencies]
 ngterm-host = { workspace = true, features = ["fakes"] }

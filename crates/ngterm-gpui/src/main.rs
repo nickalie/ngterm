@@ -78,6 +78,9 @@ fn main() -> ExitCode {
         Ok(lock) => lock,
         Err(status) => return status,
     };
+    // the toasts' app id, before any window opens (`notifications/windows.rs`)
+    #[cfg(windows)]
+    ngterm_gpui::notifications::register_app_id(&app_id, &paths::state_dir(&ProcessEnv));
     let status = app::run(Launch {
         app_id,
         requests: received,

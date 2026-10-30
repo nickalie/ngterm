@@ -230,10 +230,7 @@ mod tests {
             "{}",
             FirstRunWelcome::MESSAGE
         );
-        assert_eq!(
-            FirstRunWelcome::MESSAGE.contains("Homebrew"),
-            cfg!(target_os = "macos")
-        );
+        assert_eq!(FirstRunWelcome::MESSAGE.contains("Homebrew"), cfg!(target_os = "macos"));
     }
 
     #[test]
