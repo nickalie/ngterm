@@ -109,8 +109,8 @@ def test_an_interrupted_live_command_leaves_the_login_shell_prompt(launch):
     assert_ok(ctl.request("session.type", sid, text="\x03"))
     ctl.wait_tree(lambda tree: not _runs(find_session(tree, sid).get("foreground"), LONG_PROGRAM))
     if WINDOWS:
-        # the console drops what is typed before PowerShell's prompt is back from the Ctrl+C
-        ctl.wait_text(sid, r"(?m)Control-C\s*\nPS [^\n]*> *$")
+        # the console drops what is typed before PowerShell's prompt is back from the Ctrl+C: the screen ends in it
+        ctl.wait_text(sid, r"(?m)^PS [^\n]*>\s*\Z")
     marker = _marker()
     assert_ok(ctl.request("session.type", sid, text=_print_line(marker)))
     ctl.wait_text(sid, rf"(?m)^{marker}$")

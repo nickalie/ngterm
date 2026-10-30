@@ -174,3 +174,12 @@ jobs:
           name: rust-windows-conformance
           path: conformance/reports/rust-windows/
           if-no-files-found: warn
+      # the staged tree the suite ran, for a run on a Windows VM against the same build (run-windows.sh --stage)
+      - name: upload the stage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-windows-stage
+          path: target/conformance-stage/
+          retention-days: 5
+          if-no-files-found: warn
