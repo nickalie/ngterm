@@ -443,17 +443,16 @@ mod platform {
 mod tests {
     use std::fs;
     use std::sync::mpsc;
-    use std::time::Duration;
 
     use super::*;
-    use crate::test_shell::script_argv;
+    use crate::test_shell::{CHILD_DEADLINE, script_argv};
 
     fn run(spec: &LaunchSpec) -> ProcessExit {
         let (tx, rx) = mpsc::channel();
         SystemLauncher
             .launch(spec, Box::new(move |exit| tx.send(exit).unwrap()))
             .unwrap();
-        rx.recv_timeout(Duration::from_secs(20)).unwrap()
+        rx.recv_timeout(CHILD_DEADLINE).unwrap()
     }
 
     /// `unix` under `/bin/sh -c` on Unix, `windows` under PowerShell on Windows.
@@ -523,55 +522,63 @@ mod tests {
     #[test]
     fn a_descendant_holding_stdin_unread_does_not_hold_back_the_exit() {
         // upstream's testAGrandchildHoldingStdinDoesNotDelayExitOrCleanup: more than a pipe buffer of input, and a
-        // background descendant that keeps the pipe open without reading it
+        // background descendant that keeps the pipe open without reading it, living past the deadline
         let (tx, rx) = mpsc::channel();
         let launched = SystemLauncher
             .launch(
                 &LaunchSpec {
                     stdin: Some(vec![b'x'; 300_000]),
-                    ..script("exec 3<&0; (sleep 30 <&3 3<&-) & exec 3<&-; exit 0", "")
+                    ..script("exec 3<&0; (sleep 300 <&3 3<&-) & exec 3<&-; exit 0", "")
                 },
                 Box::new(move |exit| tx.send(exit).unwrap()),
             )
             .unwrap();
-        let exit = rx.recv_timeout(Duration::from_secs(5));
-        // the descendant is in the child's process group
-        let _ = Command::new("kill")
+        let exit = rx.recv_timeout(CHILD_DEADLINE);
+        // the descendant is in the child's process group: the kill finding it shows it still ran when the exit came
+        let killed = Command::new("kill")
             .args(["-KILL", "--", &format!("-{}", launched.pid)])
-            .status();
+            .status()
+            .is_ok_and(|status| status.success());
         let exit = exit.expect("the exit is reported while the descendant still holds stdin");
+        assert!(killed, "the exit came only once the descendant had ended");
         assert_eq!((exit.status, exit.stdin_failure), (0, None));
     }
 
-    /// The Windows twin: a descendant inherits the stdin pipe and keeps it open unread; the cancel of the pending
-    /// write lets the exit through. The descendant's pid comes back in the stderr tail, for the cleanup.
+    /// The Windows twin: a descendant inherits the stdin pipe and keeps it open unread, living past the deadline; the
+    /// cancel of the pending write lets the exit through. The descendant's pid comes back in a file, for the cleanup,
+    /// whose kill finding it shows it still ran when the exit came.
     #[cfg(windows)]
     #[test]
     fn a_descendant_holding_stdin_unread_does_not_hold_back_the_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
         let (tx, rx) = mpsc::channel();
         SystemLauncher
             .launch(
                 &LaunchSpec {
                     stdin: Some(vec![b'x'; 300_000]),
-                    capture_stderr: true,
+                    env: vec![("PID_FILE".to_owned(), pid_file.to_string_lossy().into_owned())],
                     ..script(
                         "",
-                        "$start = New-Object Diagnostics.ProcessStartInfo 'ping.exe', '-n 30 127.0.0.1'\n\
+                        "$start = New-Object Diagnostics.ProcessStartInfo 'ping.exe', '-n 300 127.0.0.1'\n\
                          $start.UseShellExecute = $false\n\
                          $descendant = [Diagnostics.Process]::Start($start)\n\
-                         [Console]::Error.Write($descendant.Id)\n\
+                         [IO.File]::WriteAllText($env:PID_FILE, $descendant.Id)\n\
                          exit 0",
                     )
                 },
                 Box::new(move |exit| tx.send(exit).unwrap()),
             )
             .unwrap();
-        let exit = rx.recv_timeout(Duration::from_secs(20));
-        if let Ok(exit) = &exit {
-            let pid = String::from_utf8_lossy(&exit.stderr_tail).trim().to_owned();
-            let _ = Command::new("taskkill").args(["/F", "/PID", &pid]).output();
-        }
+        let exit = rx.recv_timeout(CHILD_DEADLINE);
+        let killed = fs::read_to_string(&pid_file).is_ok_and(|pid| {
+            Command::new("taskkill")
+                .args(["/F", "/PID", pid.trim()])
+                .output()
+                .is_ok_and(|output| output.status.success())
+        });
         let exit = exit.expect("the exit is reported while the descendant still holds stdin");
+        assert!(killed, "the exit came only once the descendant had ended");
         assert_eq!((exit.status, exit.stdin_failure), (0, None));
     }
 

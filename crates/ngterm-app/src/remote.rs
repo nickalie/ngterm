@@ -458,7 +458,7 @@ mod tests {
         let link = transport.open(&argv, KEY);
         let mut reports = Vec::new();
         loop {
-            let report = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
+            let report = receiver.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap();
             let closed = matches!(report, Report::Closed(_));
             reports.push(report);
             if closed {
@@ -506,10 +506,10 @@ mod tests {
         );
         let link = ProcessTransport::new(poster).open(&argv, KEY);
         link.send(b"hello\n");
-        let echoed = receiver.recv_timeout(Duration::from_secs(20)).unwrap();
+        let echoed = receiver.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap();
         assert_eq!(echoed, Report::Line("got hello".to_owned()));
         link.stop();
-        let closed = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
+        let closed = receiver.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap();
         let expected = if cfg!(windows) { "exit 1" } else { "signal 15" };
         assert_eq!(closed, Report::Closed(expected.to_owned()));
         drop(link);
@@ -523,7 +523,7 @@ mod tests {
         let poster: Poster<Viewer> = Arc::downgrade(&main_loop) as Poster<Viewer>;
         let argv = ["ngterm-test-no-such-ssh".to_owned()];
         let link = ProcessTransport::new(poster).open(&argv, KEY);
-        let report = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
+        let report = receiver.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap();
         // `/usr/bin/env` starts on Unix and exits 127 for the missing program; Windows refuses the spawn itself
         let ok = match &report {
             Report::Closed(reason) if cfg!(windows) => reason.starts_with("could not run ngterm-test-no-such-ssh"),

@@ -295,7 +295,7 @@ mod tests {
         fn until_closed(&self) -> Vec<Report> {
             let mut reports = Vec::new();
             loop {
-                let report = self.reports.recv_timeout(Duration::from_secs(30)).unwrap();
+                let report = self.reports.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap();
                 let closed = matches!(report, Report::Closed(_));
                 reports.push(report);
                 if closed {
@@ -389,7 +389,7 @@ mod tests {
             .launch(&argv, KEY, Arc::clone(&permits))
             .unwrap();
         assert_eq!(
-            reports.recv_timeout(Duration::from_secs(10)).unwrap(),
+            reports.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap(),
             Report::Line("a".to_owned())
         );
         assert!(
@@ -398,7 +398,7 @@ mod tests {
         );
         permits.give();
         assert_eq!(
-            reports.recv_timeout(Duration::from_secs(10)).unwrap(),
+            reports.recv_timeout(crate::test_shell::CHILD_DEADLINE).unwrap(),
             Report::Line("b".to_owned())
         );
         link.stop();

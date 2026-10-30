@@ -239,6 +239,9 @@ fn pair() -> TestResult<(Connection, Connection)> {
 /// Runs an echoing `stream` over one end of a pair on a thread of its own; the other end is the peer.
 fn run_on_pair(stream: &LineStream) -> TestResult<(Client, Opened, JoinHandle<()>)> {
     let (peer, ours) = pair()?;
+    // The client's timeout goes on before the runner starts: a stream shut down beforehand closes `ours` at once, and
+    // macOS refuses a socket option on a socket whose peer has shut down (`EINVAL`), where Linux takes it.
+    let client = Client::new(peer)?;
     let (events_tx, events) = mpsc::channel();
     let runner = {
         let stream = stream.clone();
@@ -249,7 +252,7 @@ fn run_on_pair(stream: &LineStream) -> TestResult<(Client, Opened, JoinHandle<()
         events,
     };
     assert_eq!(opened.next()?, Event::Adopted(Vec::new()));
-    Ok((Client::new(peer)?, opened, runner))
+    Ok((client, opened, runner))
 }
 
 #[test]
