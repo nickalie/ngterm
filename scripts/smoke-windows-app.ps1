@@ -693,7 +693,8 @@ try {
     Save-Screen 'close-asked.png'
     Check ([SmokeWindows]::Focus($main)) 'the asking window comes to the front'
     Start-Sleep -Milliseconds 500
-    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    # Return as a key press: SendKeys' Return did not reach the alert
+    Send-Chord ([byte[]](0x0D))
     $closed = $app.WaitForExit(15000)
     Check ($closed -and $app.ExitCode -eq 0) "closing the last window quits the app with status $(if ($closed) { $app.ExitCode } else { 'none: still running' })"
     Check ((Count-Log 'quit: the state is saved') -gt $saves) 'the quit saved the state'

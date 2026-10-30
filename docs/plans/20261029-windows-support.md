@@ -310,6 +310,20 @@ guest has 4 CPUs and 6.5 GB of memory.
   - ➕ seen beside the checks, not installer matters: `WM_CLOSE` to the main window (`CloseMainWindow`) did not end the
     app within 15 s (it was stopped by its pid); `GHOSTTY_RESOURCES_DIR` reads `...\ngterm\share/ghostty`, a `/` from
     `ngterm-term`'s `STAGED_RESOURCES` join (Windows takes it)
+    - ➕ (side task 21) the close was the app asking, not a hang: a window running sessions asks "Close “window 1”?"
+      first (upstream's `windowShouldClose`, as on Linux), and on a fresh state dir the Welcome comes up before it.
+      Answered Close, the last window's close quits in under a second with status 0 after the quit's save (VM, debug
+      build on the guest's desktop). `scripts/smoke-windows-app.ps1` now checks it: `WM_CLOSE` to the main window, the
+      app still running (it asked, `close-asked.png`), Return as a key press (`SendKeys`' Return did not reach the
+      alert), exit 0 within 15 s and a new "quit: the state is saved" line; the whole smoke passed on the VM (61
+      checks, 0 failures)
+    - ➕ (side task 21) the separators: `ngterm_core::paths::join_relative` joins a `/`-separated relative path one
+      component at a time, for the staged resources (`ngterm-term`, `ngterm-session`), both build id files,
+      `ngtermctl`'s `share/terminfo`, the bundled `share/ngterm`, the XDG data home, bash's `ENV` and the agent hooks'
+      config paths (their command strings keep forward slashes on purpose); a Windows unit test holds the staged
+      resources at `...\share\ghostty`. Build scripts' `../..` joins stay as they are (never exported or shown)
+    - ➕ (side task 21) seen: the quit after the last window's close logs GPUI's "window not found" and "Invalid window
+      handle" errors from the teardown of the window already gone; harmless (exit 0), left as is
   - ⚠️ the guest, loaded by other tasks' suite runs, again showed `ngterm.exe - Application Error (0xc0000142)` for one
     launch of a debug build (Task 5's ⚠️); every launch of the release MSI's build started
 
