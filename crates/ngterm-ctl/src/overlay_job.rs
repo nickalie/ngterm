@@ -25,6 +25,7 @@ use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Command, MAX_REQUEST_LINE_BYTES, Request, Response};
 
 use crate::client::{self, Connection, os_message};
+use crate::read_wake::ReadWake;
 use crate::{BasicOptions, Failure, RequestCommand};
 
 #[cfg(unix)]
@@ -184,8 +185,9 @@ impl JobRunner {
             self.report(&OverlayJobFrame::Exited { code: status });
         }
         self.hang_up();
-        if let Some(listener) = listener {
-            // the listener only reads, and the hang-up just ended its read
+        if let Some((listener, wake)) = listener {
+            // the listener only reads, and the wake ends its read: the hang-up alone may not on macOS
+            wake.wake();
             let _ = listener.join();
         }
         status
@@ -229,21 +231,26 @@ impl JobRunner {
         }
     }
 
-    /// Reads the app's frames until the connection ends, cancelling on a `cancel`. The app going away does not stop
-    /// the program: it runs on under the viewer's pty, only unreported. `None` when no thread could be started.
-    fn listen(&self) -> Option<JoinHandle<()>> {
+    /// Reads the app's frames until the connection ends or the returned wake is woken, cancelling on a `cancel`. The
+    /// app going away does not stop the program: it runs on under the viewer's pty, only unreported. `None` when no
+    /// thread or wake could be made.
+    fn listen(&self) -> Option<(JoinHandle<()>, Arc<ReadWake>)> {
         let socket = Arc::clone(&self.socket);
         let shared = Arc::clone(&self.shared);
+        let wake = Arc::new(ReadWake::new().ok()?);
+        let woken = Arc::clone(&wake);
         thread::Builder::new()
             .name("ngtermctl.run-job.listen".to_owned())
             .spawn(move || {
-                while let Some(line) = client::read_socket_line(&socket, MAX_FRAME_BYTES) {
+                let read = |byte: &mut [u8]| woken.read(&*socket, byte);
+                while let Some(line) = client::read_line_with(MAX_FRAME_BYTES, read) {
                     if matches!(OverlayJobFrame::parse(&line), Ok(OverlayJobFrame::Cancel)) {
                         shared.cancel();
                     }
                 }
             })
             .ok()
+            .map(|listener| (listener, wake))
     }
 
     /// Best effort: a report the app never receives changes nothing here.

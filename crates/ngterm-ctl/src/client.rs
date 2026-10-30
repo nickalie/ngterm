@@ -159,10 +159,15 @@ fn read_line(stream: &mut impl Read) -> Option<Vec<u8>> {
 /// behind a reply) is consumed before its reader asks. `None` at the end of the connection, on a read error, or past
 /// `cap` bytes.
 pub fn read_socket_line(socket: &Connection, cap: usize) -> Option<Vec<u8>> {
+    read_line_with(cap, |byte| (&*socket).read(byte))
+}
+
+/// [`read_socket_line`] over `read`, which fills the one-byte buffer it is given; `Ok(0)` ends the line's source.
+pub fn read_line_with(cap: usize, mut read: impl FnMut(&mut [u8]) -> io::Result<usize>) -> Option<Vec<u8>> {
     let mut line = Vec::new();
     let mut byte = [0_u8; 1];
     loop {
-        match (&*socket).read(&mut byte) {
+        match read(&mut byte) {
             Ok(1) if byte[0] == b'\n' => return Some(line),
             Ok(1) => line.push(byte[0]),
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
