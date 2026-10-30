@@ -173,7 +173,9 @@ fn other_states_and_events_forward_verbatim() {
 /// launcher and the adapter, each running the next with `/c`. One agent, or a run of one name, is the pane's agent and
 /// reports; a second, different agent above the first makes the hook a worker's, which stays silent. The launcher
 /// starts the first agent with `start /b` and exits, so the walk ends there, never reaching an agent that may be
-/// running these tests; the outermost agent touches `done` once the chain has finished. The paths go unquoted, since
+/// running these tests; the outermost agent touches a `done` file once the chain has finished. Each chain records to
+/// files of its own: a file a finished chain's agent still holds open cannot be deleted for the next one (its sharing
+/// refuses it), so a shared `done` could stand from the last chain before this one ran. The paths go unquoted, since
 /// `cmd /c` strips the quotes of a command line that starts with one: the test's directories hold no space.
 #[cfg(windows)]
 #[test]
@@ -193,7 +195,6 @@ fn a_hook_under_a_second_agent_is_a_workers_and_stays_silent() {
         "Set-Content -LiteralPath $env:OUT -Value ($args -join ' ') -NoNewline\r\n",
     )
     .unwrap();
-    let (out, done) = (dir.path().join("argv"), dir.path().join("done"));
     let adapter = resources().join("ngterm-claude-status.ps1");
     for path in [dir.path(), adapter.as_path()] {
         assert!(
@@ -208,8 +209,11 @@ fn a_hook_under_a_second_agent_is_a_workers_and_stays_silent() {
     );
     let exe = |name: &str| dir.path().join(format!("{name}.exe")).display().to_string();
     let under = |agents: &[&str]| {
-        let _ = fs::remove_file(&out);
-        let _ = fs::remove_file(&done);
+        let chain = agents.join("-");
+        let (out, done) = (
+            dir.path().join(format!("{chain}.argv")),
+            dir.path().join(format!("{chain}.done")),
+        );
         let line = agents
             .iter()
             .rev()

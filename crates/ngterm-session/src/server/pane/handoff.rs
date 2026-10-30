@@ -639,13 +639,16 @@ mod tests {
         let imported = Pane::import(&cut.state, &cut.vt, &cut.replies, taken_over(&pane), Limits::default()).unwrap();
         // not this server's until activated: a drop before would end nothing
         assert!(imported.handed_over.load(Ordering::Acquire));
+        // the output goes on from the cut's offset; read before the activation, since the shell's own output may
+        // come in right after it (on Windows the pseudoconsole paints the prompt or the title late, seen on CI)
+        assert_eq!(imported.offset(), cut.state.offset);
         pane.hand_over();
         imported.activate();
 
         let screen = wait_screen(&imported, "line50");
         assert!(screen.contains("line1\n"), "the scrollback did not cross: {screen}");
         assert!(screen.contains(PRINTED), "the printed text did not cross: {screen}");
-        assert_eq!(imported.offset(), cut.state.offset);
+        assert!(imported.offset() >= cut.state.offset);
         type_line(&imported, &tagged("after"));
         let screen = wait_screen(&imported, "got:after");
         assert!(screen.contains(PRINTED), "the printed text did not last: {screen}");

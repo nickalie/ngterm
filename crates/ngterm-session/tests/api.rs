@@ -26,7 +26,7 @@ use ngterm_session::protocol::{
 };
 use ngterm_session::server::lifecycle::{Graces, StopReason};
 use ngterm_session::server::{self, ServerConfig};
-use support::{PATIENCE, SIZE, TestResult, shell, shown, spec, tagged};
+use support::{PATIENCE, SIZE, TestResult, script, shell, shown, spec, tagged};
 
 /// A server of a private namespace, run on a thread of the test.
 struct Server {
@@ -169,6 +169,19 @@ impl Api {
                 screen.text
             );
             thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// The active screen of `name` once it shows only `ready` with the cursor right after it.
+    fn ready_screen(&mut self, name: &str) -> TestResult<Screen> {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let screen = self.screen(name, false)?.map_err(|err| err.message)?;
+            if screen.text == "ready" && (screen.cursor_row, screen.cursor_column) == (0, 5) {
+                return Ok(screen);
+            }
+            assert!(Instant::now() < deadline, "not ready: {screen:?}");
+            thread::sleep(Duration::from_millis(20));
         }
     }
 
@@ -524,15 +537,25 @@ fn typing_is_queued_without_taking_the_lead() -> TestResult {
     Ok(())
 }
 
+/// A print reaches every client and moves the revision, and an empty one moves nothing. The session's program says
+/// `ready` and waits on its input, so nothing but the prints changes the screen once `ready` and the cursor after it
+/// are shown: a shell would not do, since `ConPTY` paints its first screen, its title and the prompt in reads of their
+/// own, after the program started and the terminal answered its cursor report, and one coming between two reads of
+/// the screen moved the revision (seen in a stress run on Windows).
 #[test]
 fn a_print_reaches_every_attached_client_in_the_output() -> TestResult {
     let server = Server::start()?;
-    let mut one = server.attach("printed", Some(shell()), None)?;
+    let waiting = if cfg!(windows) {
+        script("set /p line=ready")
+    } else {
+        script("printf ready; read line")
+    };
+    let mut one = server.attach("printed", Some(waiting), None)?;
     one.attached()?;
     let mut two = server.attach("printed", None, None)?;
     two.attached()?;
     let mut api = server.api()?;
-    let before = api.screen("printed", false)?.map_err(|err| err.message)?;
+    let before = api.ready_screen("printed")?;
     // `ngtermctl clipboard set`'s write: OSC 52 of "copied"
     let write = b"\x1b]52;c;Y29waWVk\x1b\\";
     assert_eq!(api.print("printed", write)?, Ok(ApiResponse::Done));
