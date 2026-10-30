@@ -10,6 +10,9 @@
 //!   no match for either, so Ghostty ignores it, and so does this.
 //! - The path is percent-decoded and ends at a query or fragment, except for `kitty-shell-cwd://`, whose path is
 //!   everything after the host, raw (Ghostty's `raw_path`).
+//! - On Windows a path naming a drive as a URI spells it, `/C:/Users/me` (RFC 8089's form, which ngterm's
+//!   PowerShell integration writes), is reported as Windows spells it, `C:\Users\me` ([`windows_form`]): the path the
+//!   app's other working directories (a launch's, a restored one) carry there. Ghostty leaves that to the embedder.
 //!
 //! [`PaneEvent::Pwd`]: crate::PaneEvent::Pwd
 
@@ -36,11 +39,30 @@ pub fn reported_path(raw: &str, hostname: &str) -> Option<String> {
         tracing::debug!(host, "OSC 7 host must be local");
         return None;
     }
-    if scheme == KITTY {
-        return Some(path.to_owned());
+    let path = if scheme == KITTY {
+        path.to_owned()
+    } else {
+        let end = path.find(['?', '#']).unwrap_or(path.len());
+        decode(&path[..end])
+    };
+    Some(if cfg!(windows) { windows_form(&path) } else { path })
+}
+
+/// `path` as Windows spells it when it names a drive as a URI does (`/C:/Users/me`, `/C:`): without the leading
+/// slash, with `\` separators (`C:\Users\me`, `C:\`); any other path as it is.
+#[must_use]
+pub fn windows_form(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0] == b'/'
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+        && bytes.get(3).is_none_or(|byte| *byte == b'/');
+    if !drive {
+        return path.to_owned();
     }
-    let end = path.find(['?', '#']).unwrap_or(path.len());
-    Some(decode(&path[..end]))
+    let native = path[1..].replace('/', "\\");
+    if native.len() == 2 { native + "\\" } else { native }
 }
 
 /// This machine's hostname, as `gethostname(2)` gives it (on Windows `GetComputerNameW`'s, the name Ghostty's
@@ -156,6 +178,19 @@ mod tests {
             reported_path("kitty-shell-cwd://box/a%20b?c#d", HOST).as_deref(),
             Some("/a%20b?c#d")
         );
+    }
+
+    #[test]
+    fn a_drive_spelled_as_a_uri_does_is_spelled_as_windows_does() {
+        assert_eq!(windows_form("/C:/Users/me/my dir"), r"C:\Users\me\my dir");
+        assert_eq!(windows_form("/c:"), r"c:\");
+        assert_eq!(windows_form("/C:/"), r"C:\");
+        for other in ["/home/u", "/C", "/CD:/x", "C:/x", "/1:/x", ""] {
+            assert_eq!(windows_form(other), other, "{other}");
+        }
+        let reported = reported_path("kitty-shell-cwd://box/C:/Users/me", HOST);
+        let expected = if cfg!(windows) { r"C:\Users\me" } else { "/C:/Users/me" };
+        assert_eq!(reported.as_deref(), Some(expected));
     }
 
     #[test]

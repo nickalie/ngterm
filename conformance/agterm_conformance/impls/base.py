@@ -57,8 +57,11 @@ SOCKET_PATH_CAP = 104
 # `/tmp`, not `$TMPDIR`: a macOS runner's `/var/folders/...` temp dir eats most of the socket cap.
 # `CONFORMANCE_TMP` (not `AGTERM_`- or `NGTERM_`-prefixed, which the plugin scrubs) gives run-linux.sh its own
 # parent.
-# Windows has no `/tmp`: its temporary directory there.
+# Windows has no `/tmp`: its temporary directory there, its long name (a runner's `%TEMP%` is `C:\Users\RUNNER~1\...`),
+# the one a shell's or the app's working directory reports.
 TEMP_PARENT = os.environ.get("CONFORMANCE_TMP") or (tempfile.gettempdir() if WINDOWS else "/tmp")
+if WINDOWS:
+    TEMP_PARENT = os.path.realpath(TEMP_PARENT)
 _SYSTEM_ROOT = os.environ.get("SystemRoot") or r"C:\Windows"
 # Windows: the system directories alone, so the app's login shell is the inbox Windows PowerShell
 # (crates/ngterm-session/src/launch/windows_shell.rs), never a PowerShell 7 the machine's PATH carries.
