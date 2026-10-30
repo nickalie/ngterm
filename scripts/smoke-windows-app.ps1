@@ -9,8 +9,9 @@ scheduled task), never on a machine whose own ngterm runs there: the instance is
 app id, home and control pipe; NGTERM_*, AGTERM_* and ZMX_* stripped), but its window takes the desktop.
 
 The check: the app launches and serves its control socket (the named pipe its socket path names, spoken to directly,
-or through `ngtermctl --socket` with -Ctl); the pane runs PowerShell (a typed command's output read back with
-`session.text`); `session.split` opens the split and its PowerShell answers too; a screenshot of the desktop is saved;
+and with -Ctl through `ngtermctl --socket` too: its tree, a typed line and the text read back); the pane runs
+PowerShell (a typed command's output read back with `session.text`); `session.split` opens the split and its
+PowerShell answers too; a screenshot of the desktop is saved;
 the app quits on Ctrl+C (the console's Ctrl event, its orderly quit) with status 0; a second launch restores the
 session with its split. The app is stopped by its own process id at the end, whatever happened. Every step is logged
 to <StateDir>\smoke.log; the exit status is 0 when every step passed.
@@ -168,6 +169,11 @@ try {
     if ($Ctl) {
         $ctlTree = & $Ctl tree --socket $socket 2>&1 | Out-String
         Check ($LASTEXITCODE -eq 0) "ngtermctl tree --socket: $ctlTree"
+        $typed = & $Ctl session type --socket $socket "Write-Output ('smoke' + '-ctl')`r" 2>&1 | Out-String
+        Check ($LASTEXITCODE -eq 0) "ngtermctl session type --socket: $typed"
+        Check (Wait-Text 'smoke-ctl') 'the line ngtermctl typed runs in the pane'
+        $text = & $Ctl session text --socket $socket 2>&1 | Out-String
+        Check ($text.Contains('smoke-ctl')) 'ngtermctl session text --socket reads it back'
     }
     $tree = Invoke-Control 'tree'
     Log "tree: $tree"
