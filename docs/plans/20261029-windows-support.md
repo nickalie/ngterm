@@ -208,6 +208,21 @@ guest has 4 CPUs and 6.5 GB of memory.
   console display turning on after off (modern standby's wake) on the app's hidden window
 - ➕ status sounds: an asynchronous `PlaySoundW` returned before looking the alias up, so a name Windows has no alias of
   (all of upstream's macOS names) played nothing; it now plays to the end on its queue and falls back to the alert
+- ➕ `scripts/smoke-windows-app.ps1` extended and run in the VM (2026-10-30, debug build, run 11 on a guest loaded by
+  other tasks' builds): every Task 4 step again, then the global hotkey (`ctrl+shift+\``) pressed with Character Map in
+  front shows the quick terminal and pressed again hides it; a `notify` to a session not shown posts a toast under the
+  app id (shown with ngterm's name and icon), a click on it reveals that session and raises the window, the clicked
+  toast leaves the notification center, a toast sits in its session's slot and a second one replaces it, selecting
+  the session withdraws it; `session.status --sound Glass` reaches the player (the alert); the connectivity hint is
+  reported at start and a `PBT_APMRESUMEAUTOMATIC` sent to the hidden window retries the remote links; the layout lock
+  on Russian selects it and the US keys Q, W, E type `йцу` in the pane. One step stayed red under the load: Character
+  Map's window did not come up in 10 s to take the keyboard (it did in run 10; the wait is now 30 s), the hotkey still
+  toggling. Not checked on the desktop: a real sleep and resume, a network change, a display-off wake (unit tests on
+  the folds only), a toast clicked after the app quit (opens nothing, above)
+- ⚠️ the guest showed `ngterm.exe - Application Error (0xc0000142)` (a DLL's initialization failed at process start)
+  for a launch while it was loaded by other tasks' builds and installs, and in an earlier run a relaunch sat in process
+  creation for 18 minutes with no CPU time; every launch the smoke made in an idle guest started. Not traced to this
+  task's code (it fails before `main`); worth watching in Task 8's suite runs
 - ➕ the first-run welcome's command line tool sentence is per platform: upstream's Homebrew one on macOS, a package
   install on Linux, the installer on Windows (upstream has no wording for either)
 

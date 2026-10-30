@@ -549,7 +549,7 @@ try {
     $other = Start-Process -FilePath 'charmap.exe' -PassThru
     try {
         $raised = $false
-        for ($try = 0; $try -lt 20 -and -not $raised; $try++) {
+        for ($try = 0; $try -lt 60 -and -not $raised; $try++) {
             Start-Sleep -Milliseconds 500
             $raised = [SmokeWindows]::Raise([uint32]$other.Id)
         }
