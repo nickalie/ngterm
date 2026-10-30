@@ -20,11 +20,16 @@ pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="the Windows lau
 FAKE_APP = Path(__file__).with_name("fake_app.py")
 
 
+# The interpreter itself: a venv's python.exe is a launcher that runs it as a child, which would leave the launched
+# pid without the fake's window.
+PYTHON = getattr(sys, "_base_executable", None) or sys.executable
+
+
 class FakeRust(RustAdapter):
     """The Rust adapter running fake_app.py through this Python: Windows runs no script by its shebang."""
 
     def executable(self) -> list[str]:
-        return [sys.executable, os.fspath(FAKE_APP)]
+        return [PYTHON, os.fspath(FAKE_APP)]
 
 
 @pytest.fixture
