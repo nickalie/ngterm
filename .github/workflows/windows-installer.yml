@@ -1,0 +1,79 @@
+# The Windows installer (packaging/windows/ngterm.wxs, scripts/build-msi.sh): the release binaries built on the Windows
+# runner and staged by scripts/stage.sh, the MSI built from them with the pinned WiX Toolset (build/pins.env), then
+# checked by scripts/check-msi.ps1: installed for the runner's user, what it installed run (the build identity beside
+# ngterm.exe, ngtermctl from a PATH read back from the registry, the Start-menu shortcut's app id), upgraded to an MSI of
+# the next patch version and uninstalled, which must leave none of its files, its shortcut, its PATH entry or its
+# registry keys. The MSI is kept as an artifact.
+#
+# Pushes to a `ci/**` branch run it too, as cross-platform.yml.
+name: windows-installer
+
+on:
+  pull_request:
+  push:
+    branches: [main, "ci/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  msi:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: installer
+      # the libghostty-vt prefix, the pinned Zig, the terminal fonts and the pinned WiX, as cross-platform.yml keeps them
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-installer-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
+      - name: release build
+        run: cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session
+      - name: stage
+        run: scripts/stage.sh "$RUNNER_TEMP/stage" --profile release
+      # the MSI, and one of the next patch version from the same tree, which the check upgrades to
+      - name: MSI
+        run: |
+          version="$(head -n1 "$(cygpath -u "$RUNNER_TEMP")/stage/share/ngterm/app-BUILD" | tr -d '\r')"
+          scripts/build-msi.sh "dist/ngterm-$version-x64.msi" --staged "$RUNNER_TEMP/stage"
+          IFS=. read -r major minor patch <<<"$version"
+          scripts/build-msi.sh "$(cygpath -u "$RUNNER_TEMP")/upgrade/ngterm-upgrade.msi" --staged "$RUNNER_TEMP/stage" \
+            --version "$major.$minor.$((patch + 1))"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ngterm-msi
+          path: dist/*.msi
+          if-no-files-found: error
+      - name: install, upgrade and uninstall
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dist\*.msi).FullName
+          scripts\check-msi.ps1 -Msi $msi -UpgradeMsi "$env:RUNNER_TEMP\upgrade\ngterm-upgrade.msi" -Log "$env:RUNNER_TEMP\msi"
+      - name: upload the installer logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ngterm-msi-logs
+          path: ${{ runner.temp }}/msi/
+          if-no-files-found: ignore

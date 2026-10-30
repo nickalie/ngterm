@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ngterm's Windows installer, built by scripts/build-msi.sh with the WiX Toolset (the `wix` .NET tool at WIX_VERSION of
+  build/pins.env) from a tree scripts/stage.sh staged: the installed folder has the staged layout, so the app finds its
+  resources the way a staged build does (bin\..\share\ghostty, bin\..\share\ngterm, ngtermctl.exe beside ngterm.exe).
+
+  Per user, not per machine: everything the app registers is the user's (the toasts' AppUserModelID under
+  HKCU\Software\Classes, the command line tool's folder on the user's PATH, the state and config directories), so a
+  per-user package owns and removes exactly what it adds, the AUMID key included; it installs and upgrades without
+  elevation, into %LOCALAPPDATA%\Programs\ngterm, the per-user programs folder. Each user installs it for themselves.
+
+  What it installs:
+  - bin\ngterm.exe, ngtermctl.exe, ngterm-session.exe, and beside them the Visual C++ runtime DLLs they import (the app
+    is built against the dynamic runtime, which a fresh Windows lacks: app-local deployment); bin\ goes onto the user's
+    PATH (removed on uninstall), so a new shell finds ngtermctl
+  - share\: Ghostty's themes, shell integration and terminfo, ngterm's PowerShell integration, the agent-status package
+    and the agent skill, the app's build identity (share\ngterm\app-BUILD); the licenses and notices under share\doc
+    (the terminal fonts are compiled into ngterm.exe, so only their licenses are files here)
+  - a Start-menu shortcut whose System.AppUserModel.ID is the app id the app runs under, so the shortcut, the taskbar
+    and the toasts are one app (crates/ngterm-gpui/src/notifications/windows.rs); uninstall removes the app id's
+    registration the app writes at each launch
+
+  Not installed: share\ngterm\session-BUILD, the session server's build id, which names the staged binary's size and
+  modification time to the nanosecond (crates/ngterm-session/src/build_id.rs): an installed file gets the install's
+  time, so the id would never match; without it the installed server runs as an unstaged one (no outdated reason, no
+  handoff), as `cargo run` does.
+
+  Upgrades are major upgrades under the one UpgradeCode below (never change it): the earlier version is removed before
+  the new one is installed; user state (the state, config and agent directories) is never the installer's.
+
+  ICE38, ICE64 and ICE91 are suppressed by the build script: they ask a component under the user's profile to key on
+  an HKCU value, list its folders for removal, and vary with ALLUSERS, for the roaming profiles and per-user copies of
+  per-machine packages; this package is only ever per user, its components key on their files and Windows Installer
+  removes the folders it created when they empty.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="ngterm" Manufacturer="ngterm" Version="$(var.Version)" UpgradeCode="2AFFBC1D-0676-4307-9304-8F9FC6D23363"
+           Scope="perUser" Language="1033">
+    <SummaryInformation Description="ngterm $(var.Version) installer" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of ngterm is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="ngterm.ico" SourceFile="$(var.Icon)" />
+    <Property Id="ARPPRODUCTICON" Value="ngterm.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://ngterm.com" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="ngterm">
+          <Directory Id="BINFOLDER" Name="bin" />
+          <Directory Id="SHAREFOLDER" Name="share" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="ngterm" Title="ngterm" AllowAbsent="no">
+      <ComponentGroupRef Id="Binaries" />
+      <ComponentGroupRef Id="Resources" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="UserPath" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="Binaries" Directory="BINFOLDER">
+      <Component>
+        <File Id="ngterm.exe" Source="$(var.Root)\bin\ngterm.exe" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Id="ngtermctl.exe" Source="$(var.Root)\bin\ngtermctl.exe" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Id="ngterm_session.exe" Source="$(var.Root)\bin\ngterm-session.exe" KeyPath="yes" />
+      </Component>
+      <!-- the Visual C++ runtime the executables import, deployed beside them (scripts/build-msi.sh) -->
+      <Files Directory="BINFOLDER" Include="$(var.Root)\bin\*.dll" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="Resources">
+      <Files Directory="SHAREFOLDER" Include="$(var.Root)\share\**">
+        <Exclude Files="$(var.Root)\share\ngterm\session-BUILD" />
+      </Files>
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <!-- the shortcut starts the app in the user's profile, as a desktop launcher starts it in the home on Linux -->
+    <StandardDirectory Id="TARGETDIR">
+      <Directory Id="NGTERMHOME" Name="Profile" />
+    </StandardDirectory>
+    <SetDirectory Id="NGTERMHOME" Value="[%USERPROFILE]" />
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="StartMenuShortcut" Name="ngterm" Description="A terminal driven by ngtermctl"
+                  Target="[#ngterm.exe]" WorkingDirectory="NGTERMHOME" Icon="ngterm.ico">
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="$(var.AppId)" />
+        </Shortcut>
+        <!-- the app id's registration (DisplayName, IconUri), which the app writes at each launch -->
+        <RemoveRegistryKey Root="HKCU" Key="Software\Classes\AppUserModelId\$(var.AppId)" Action="removeOnUninstall" />
+        <RegistryValue Root="HKCU" Key="Software\ngterm\Installer" Name="StartMenuShortcut" Type="integer" Value="1"
+                       KeyPath="yes" />
+        <RemoveRegistryKey Root="HKCU" Key="Software\ngterm" Action="removeOnUninstall" />
+      </Component>
+    </StandardDirectory>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="UserPath" Directory="INSTALLFOLDER">
+      <Environment Id="UserPath" Name="PATH" Value="[BINFOLDER]" Part="last" Action="set" System="no" Permanent="no" />
+      <RegistryValue Root="HKCU" Key="Software\ngterm\Installer" Name="UserPath" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+  </Fragment>
+</Wix>
