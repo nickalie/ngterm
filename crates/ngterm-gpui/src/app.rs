@@ -153,9 +153,10 @@ pub fn run(launch: Launch) -> i32 {
         .with_assets(crate::titlebar::Icons);
     let main_loop = Arc::new(GpuiMainLoop::<AppState>::new(app.background_executor()));
     let posting: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;
-    // SIGTERM is this process's from here: it is the primary
-    if let Err(error) = crate::signals::quit_on_sigterm(Arc::downgrade(&posting)) {
-        tracing::error!(%error, "SIGTERM is not handled: it ends the app without the quit save");
+    // SIGTERM (the console's Ctrl events and the session's end on Windows) is this process's from here: it is the
+    // primary
+    if let Err(error) = crate::signals::quit_on_termination(Arc::downgrade(&posting)) {
+        tracing::error!(%error, "the system's quit is not handled: it ends the app without the quit save");
     }
     app.run(move |cx| start(cx, launch, main_loop, posting));
     tracing::info!("quit: the application run returned");
@@ -190,8 +191,8 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
     let resources = session_host::resources();
     let mut core = launch_core(identity, resources.as_deref(), &poster, context.socket.clone(), cx);
     // the desktop's side before the config loads, so the first terminal starts on it (`appearance.rs`)
-    let portal = crate::appearance::Portal::session();
-    let dark = portal.as_ref().is_some_and(crate::appearance::Portal::is_dark);
+    let desktop = crate::appearance::DesktopSide::read(cx);
+    let dark = desktop.is_dark();
     let windows = windows(context, resources, dark, &poster, &launch);
     core.set_menu_reader(windows.menu_reader());
     // the HTML overlays: the core's page host, their engine's event pump, and the terminals' colors they are drawn in
@@ -246,11 +247,7 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
     // retried when the network comes back or the machine wakes
     post(&poster, AppState::watch_remotes);
     crate::remote::observe_links(poster.clone());
-    if let Some(portal) = portal
-        && let Err(error) = crate::appearance::follow_into(portal, poster.clone())
-    {
-        tracing::error!(%error, "appearance: the desktop's light/dark changes are not followed");
-    }
+    desktop.follow(&poster);
     // the last window closing quits, as in the GTK build
     let closing = poster;
     cx.on_window_closed(move |cx, _| {
@@ -578,25 +575,31 @@ mod tests {
     #[test]
     fn the_app_binds_the_control_socket_variable_else_the_state_dir() {
         let home = MapEnv::new().with("HOME", "/home/u");
-        assert_eq!(
-            control_socket(&home),
+        // the default state dir is the platform's (`paths`' own tests hold each form)
+        let default = if cfg!(windows) {
+            paths::state_dir(&home).join("ngterm.sock")
+        } else {
             PathBuf::from("/home/u/.local/share/ngterm/ngterm.sock")
-        );
+        };
+        assert_eq!(control_socket(&home), default);
         let state = home.clone().with("NGTERM_STATE_DIR", "/tmp/st");
         assert_eq!(control_socket(&state), PathBuf::from("/tmp/st/ngterm.sock"));
         let socket = state.with("NGTERM_CONTROL_SOCKET", "/tmp/c.sock");
         assert_eq!(control_socket(&socket), PathBuf::from("/tmp/c.sock"));
         // ngtermctl's variable is not the app's
         let pane = home.with("NGTERM_SOCKET", "/tmp/other.sock");
-        assert_eq!(
-            control_socket(&pane),
-            PathBuf::from("/home/u/.local/share/ngterm/ngterm.sock")
-        );
+        assert_eq!(control_socket(&pane), default);
     }
 
     #[test]
     fn the_terminal_advertises_the_owned_socket_or_the_unavailable_one() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::Builder::new().prefix("agt").tempdir_in("/tmp")?;
+        // a short path, so the socket fits a Unix socket address; Windows' is a named pipe
+        let base = if cfg!(unix) {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let dir = tempfile::Builder::new().prefix("agt").tempdir_in(base)?;
         let socket = dir.path().join("ngterm.sock");
         let serving = ControlServer::new(&socket);
         let refused = ControlServer::new(&socket);

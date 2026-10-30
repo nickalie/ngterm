@@ -18,7 +18,8 @@
 //!   lookup and the file it names are read inside `PlaySoundW`, so it runs on a serial queue of its own too, off the
 //!   main thread.
 //!
-//! The macOS and Windows forms are not built on macOS/Windows by CI until ngterm-gpui joins `cross-platform.yml`.
+//! The Windows form is built and tested on the Windows runner (`cross-platform.yml`); the macOS form is not built on
+//! macOS by CI yet.
 //!
 //! The alert sound for a refusal with nothing on screen to explain it ([`alert`], upstream's `NSSound.beep()`): the
 //! display's alert bell on Linux, `NSBeep` on macOS and `MessageBeep(MB_OK)` on Windows.
@@ -29,13 +30,16 @@
 //! and neither upstream nor the GTK build sounds it.
 
 use std::cell::RefCell;
+#[cfg(target_os = "linux")]
 use std::error::Error;
 use std::time::Instant;
 
 use gpui_kit::{App, Window};
 use ngterm_core::sound_throttle::SoundThrottle;
+#[cfg(target_os = "linux")]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
+#[cfg(target_os = "linux")]
 type Failure = Box<dyn Error + Send + Sync>;
 
 /// The one throttle key on Linux: every status sound is the same bell.
@@ -317,7 +321,15 @@ fn alert_sound(_: &Window, _: &App) {
     unsafe { MessageBeep(MB_OK) };
 }
 
+/// Rings the display's alert bell for `window`, by the display server GPUI runs on; headless, nothing. Elsewhere the
+/// system's alert sound ([`alert`]'s).
+#[cfg(not(target_os = "linux"))]
+pub fn ring(window: &Window, cx: &App) {
+    alert_sound(window, cx);
+}
+
 /// Rings the display's alert bell for `window`, by the display server GPUI runs on; headless, nothing.
+#[cfg(target_os = "linux")]
 pub fn ring(window: &Window, cx: &App) {
     let rung = match cx.compositor_name() {
         "Wayland" => wayland::ring(window),
@@ -332,6 +344,7 @@ pub fn ring(window: &Window, cx: &App) {
     }
 }
 
+#[cfg(target_os = "linux")]
 mod wayland {
     use wayland_backend::client::{Backend, ObjectId};
     use wayland_client::globals::{GlobalListContents, registry_queue_init};
@@ -401,6 +414,7 @@ mod wayland {
     }
 }
 
+#[cfg(target_os = "linux")]
 mod x11 {
     use x11rb::connection::Connection as _;
     use x11rb::protocol::xproto::ConnectionExt as _;

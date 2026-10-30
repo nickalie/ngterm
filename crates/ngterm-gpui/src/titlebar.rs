@@ -302,6 +302,31 @@ pub fn height(mode: ToolbarMode) -> Pixels {
     }
 }
 
+/// The buttons' order when the platform names none: the window managers' default on Linux (GPUI's), Windows's own
+/// elsewhere (minimize, maximize and close on the right).
+fn default_button_layout() -> WindowButtonLayout {
+    #[cfg(target_os = "linux")]
+    {
+        WindowButtonLayout::linux_default()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        button_layout(
+            &[],
+            &[WindowButton::Minimize, WindowButton::Maximize, WindowButton::Close],
+        )
+    }
+}
+
+/// A layout of `left` and `right`, each in order (past GPUI's slots per side, the rest is left out).
+#[cfg(any(not(target_os = "linux"), test))]
+fn button_layout(left: &[WindowButton], right: &[WindowButton]) -> WindowButtonLayout {
+    WindowButtonLayout {
+        left: std::array::from_fn(|index| left.get(index).copied()),
+        right: std::array::from_fn(|index| right.get(index).copied()),
+    }
+}
+
 /// The window controls the bar draws on its `left` or right side: none under the window manager's decorations, else
 /// the desktop's `layout` for that side, without the ones the window manager does not support.
 #[must_use]
@@ -1059,7 +1084,7 @@ impl Render for Titlebar {
         } else {
             GLYPH_COMPACT
         };
-        let layout = cx.button_layout().unwrap_or_else(WindowButtonLayout::linux_default);
+        let layout = cx.button_layout().unwrap_or_else(default_button_layout);
         let supported = window.window_controls();
         let colors = bar.colors;
         let hidden = mode == ToolbarMode::Hidden;

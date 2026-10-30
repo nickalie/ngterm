@@ -5,6 +5,10 @@
 //! trigger, and the portal's `Activated` toggles the panel.
 //!
 //! A test whose tool is missing prints `SKIPPED:` and passes, unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set.
+//!
+//! Linux only: X11 key grabs on a private Xvfb and the global shortcuts portal on a private D-Bus bus.
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]

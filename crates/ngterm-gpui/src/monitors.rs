@@ -2,7 +2,8 @@
 //! places a window at its frame's origin at all. GPUI's displays serve, except on X11: there GPUI has one display per
 //! X screen, the root window that spans every monitor, with dead areas where the monitors differ in size, so a frame
 //! saved on a monitor gone since could come back inside the root yet on no monitor. There the monitors are `RandR`'s
-//! (`RRGetMonitors`), read now on a connection of the app's own, in GPUI's logical pixels at GPUI's own scale.
+//! (`RRGetMonitors`), read now on a connection of the app's own, in GPUI's logical pixels at GPUI's own scale. On
+//! Windows GPUI has one display per monitor, in the logical pixels it places windows in, so its displays serve there.
 
 use gpui_kit::App;
 use ngterm_core::window_geometry::Rect;
@@ -23,6 +24,7 @@ pub fn placement(cx: &App) -> Placement {
 /// displays.
 #[must_use]
 pub fn display_rects(cx: &App) -> Vec<Rect> {
+    #[cfg(target_os = "linux")]
     if cx.compositor_name() == "X11"
         && let Some(monitors) = x11_monitors()
     {
@@ -80,6 +82,7 @@ pub fn logical(monitors: &[Monitor], scale: f64) -> Vec<Rect> {
 /// X11 scale factor (GPUI patch `gpui-pre-linux` 0003), the one it places windows with: settled at its start, it holds
 /// through a later resize of the screen (a monitor docked or undocked), which GPUI's displays, read off its
 /// connection's setup, never see.
+#[cfg(target_os = "linux")]
 fn x11_monitors() -> Option<Vec<Rect>> {
     let scale = x11_scale_factor()?;
     match read_x11_monitors() {
@@ -93,18 +96,13 @@ fn x11_monitors() -> Option<Vec<Rect>> {
 }
 
 /// GPUI's X11 scale factor; `None` without its X11 client.
+#[cfg(target_os = "linux")]
 fn x11_scale_factor() -> Option<f64> {
-    #[cfg(target_os = "linux")]
-    {
-        gpui_linux::x11_scale_factor().map(f64::from)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        None
-    }
+    gpui_linux::x11_scale_factor().map(f64::from)
 }
 
 /// `RandR`'s active monitors of the default X screen, read now.
+#[cfg(target_os = "linux")]
 fn read_x11_monitors() -> Result<Vec<Monitor>, Box<dyn std::error::Error>> {
     use x11rb::connection::Connection as _;
     use x11rb::protocol::randr::ConnectionExt as _;

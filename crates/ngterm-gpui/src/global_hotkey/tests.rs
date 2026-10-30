@@ -49,6 +49,7 @@ fn a_chord_reads_as_a_portal_trigger() {
 }
 
 /// The X grab: the chord's modifiers as X's, under every Caps Lock and Num Lock state.
+#[cfg(target_os = "linux")]
 #[test]
 fn an_x_grab_covers_every_lock_state() {
     use x11rb::protocol::xproto::ModMask;

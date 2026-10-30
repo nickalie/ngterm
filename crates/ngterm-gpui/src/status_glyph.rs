@@ -182,8 +182,9 @@ fn blink_at(delta: f32) -> f32 {
     opacity
 }
 
-/// Whether the desktop lets things animate: GTK's `gtk-enable-animations`, read from the settings portal's
-/// `org.gnome.desktop.interface` `enable-animations` and kept current by its `SettingChanged` ([`watch_motion`]). On
+/// Whether the desktop lets things animate, kept current ([`watch_motion`]): on Linux GTK's `gtk-enable-animations`,
+/// read from the settings portal's `org.gnome.desktop.interface` `enable-animations` and its `SettingChanged`; on
+/// Windows "Show animations in Windows" (`SPI_GETCLIENTAREAANIMATION`), read again on every `WM_SETTINGCHANGE`. On
 /// while unknown (no portal, a desktop that does not carry the key), as GTK's default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Motion {
@@ -205,7 +206,9 @@ pub fn animations_enabled(cx: &App) -> bool {
 }
 
 /// The portal namespace and key of the desktop's animation switch.
+#[cfg(target_os = "linux")]
 const MOTION_NAMESPACE: &str = "org.gnome.desktop.interface";
+#[cfg(target_os = "linux")]
 const MOTION_KEY: &str = "enable-animations";
 
 /// Starts following the desktop's animation switch, once per app; every window redraws when it flips.
@@ -214,6 +217,14 @@ pub fn watch_motion(cx: &mut App) {
         return;
     }
     cx.set_global(Motion::default());
+    #[cfg(target_os = "linux")]
+    watch_portal_motion(cx);
+    #[cfg(windows)]
+    watch_system_motion(cx);
+}
+
+#[cfg(target_os = "linux")]
+fn watch_portal_motion(cx: &mut App) {
     cx.spawn(async move |cx| {
         let Ok(settings) = ashpd::desktop::settings::Settings::new().await else {
             tracing::debug!("no settings portal: status glyphs blink");
@@ -235,6 +246,34 @@ pub fn watch_motion(cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// Windows's switch now, and again after each changed system setting (the app's hidden window sees them).
+#[cfg(windows)]
+fn watch_system_motion(cx: &mut App) {
+    let (notify, settings) = async_channel::unbounded::<()>();
+    if let Err(error) = crate::system_window::on_setting_change(move |_| {
+        let _ = notify.try_send(());
+    }) {
+        tracing::warn!(%error, "the animation switch is read once, not followed");
+    }
+    cx.spawn(async move |cx| {
+        set_motion(cx, client_area_animation());
+        while settings.recv().await.is_ok() {
+            set_motion(cx, client_area_animation());
+        }
+    })
+    .detach();
+}
+
+/// "Show animations in Windows": on when it cannot be read.
+#[cfg(windows)]
+fn client_area_animation() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW};
+    let mut on: windows_sys::core::BOOL = 1;
+    // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL into the pointed-to value, which lives through the call.
+    let read = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut on).cast(), 0) };
+    read == 0 || on != 0
 }
 
 fn set_motion(cx: &mut gpui_kit::AsyncApp, animations: bool) {

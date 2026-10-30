@@ -1,23 +1,28 @@
 //! The installers driven as the Help items and the welcome run them, in GPUI's test window over a temp home (never the
 //! real one): each install's alert, what it wrote, and the planners' read-back of the home after each step (what a
 //! next run would find: current, absent again after the user removed it, the user's own). The `OpenCode` probe runs a
-//! fake login shell and a fake `opencode` from the temp home's `PATH`, so the machine's shell and `OpenCode` stay out.
+//! fake login shell and a fake `opencode` from the temp home's `PATH` (on Windows, `cmd.exe` and a fake `opencode.cmd`),
+//! so the machine's shell and `OpenCode` stay out.
 //! One test runs a child of this binary whose `HOME` and `XDG_CONFIG_HOME` are temp directories, so the process
 //! environment the app reads is checked too.
 
 use std::collections::HashMap;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use gpui_kit::{TestAppContext, VisualTestContext};
+#[cfg(unix)]
+use ngterm_app::integrations::cli;
+#[cfg(unix)]
 use ngterm_app::integrations::cli::LinkStatus;
 use ngterm_app::integrations::hooks::{ClaudePlan, OpenCodePlan};
 use ngterm_app::integrations::hooks_config::{RC_MARKER_BEGIN, WRAPPER_NAME};
 use ngterm_app::integrations::skill::{MARKER, TargetPlan};
-use ngterm_app::integrations::{cli, files, skill};
+use ngterm_app::integrations::{files, skill};
 use ngterm_host::fakes::write_executable;
 
 use super::*;
@@ -26,6 +31,50 @@ use crate::modal::{answer_front_alert, front_alert};
 
 /// The login shell the `OpenCode` probe starts (`$SHELL -ilc <hop>`): runs the hop, reads no startup file.
 const FAKE_SHELL: &str = "#!/bin/sh\n[ \"$1\" = -ilc ] || exit 64\nexec /bin/sh -c \"$2\"\n";
+
+/// Writes an `opencode` into `bin` that prints `output` for `--version`: a POSIX script, a batch file on Windows.
+fn fake_opencode(bin: &Path, output: &str) {
+    if cfg!(windows) {
+        let script = format!("@echo off\r\nif not \"%~1\"==\"--version\" exit /b 2\r\necho {output}\r\n");
+        fs::write(bin.join("opencode.cmd"), script).unwrap();
+    } else {
+        let script = format!("#!/bin/sh\n[ \"$1\" = --version ] || exit 2\necho '{output}'\n");
+        write_executable(&bin.join("opencode"), &script).unwrap();
+    }
+}
+
+/// A `PATH` of `bin` alone; on Windows the system directory too, for `cmd.exe`, which the probe runs there.
+fn search_path(bin: &Path) -> String {
+    if cfg!(windows) {
+        format!(r"{};{}\System32", bin.display(), system_root())
+    } else {
+        bin.display().to_string()
+    }
+}
+
+fn system_root() -> String {
+    std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned())
+}
+
+/// What a Windows program run from a cleared environment needs (`cmd.exe` finding a `.cmd` by its extension); none
+/// elsewhere.
+fn windows_vars() -> Vec<(String, String)> {
+    if cfg!(windows) {
+        vec![
+            ("SystemRoot".to_owned(), system_root()),
+            ("PATHEXT".to_owned(), ".COM;.EXE;.BAT;.CMD".to_owned()),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
+/// `text` with every `\` as `/`. On Windows an installer's message names a path joined from a base and a relative
+/// tail spelled with `/` (`<home>\.config/opencode\plugins`), which a test's own join spells another way; comparing
+/// with one separator checks the same components.
+fn slashed(text: &str) -> String {
+    text.replace('\\', "/")
+}
 
 /// A temp home with the checkout's bundled resources, a fake bundled `ngtermctl`, a fake login shell and a `PATH` of
 /// the home's own `bin` alone. The installers read its environment through a [`Source`]; a test may change it between
@@ -47,11 +96,12 @@ impl Home {
         write_executable(&tool, "#!/bin/sh\n").unwrap();
         let shell = bin.join("login-shell");
         write_executable(&shell, FAKE_SHELL).unwrap();
-        let vars = HashMap::from([
+        let mut vars = HashMap::from([
             ("HOME".to_owned(), home.display().to_string()),
             ("SHELL".to_owned(), shell.display().to_string()),
-            ("PATH".to_owned(), bin.display().to_string()),
+            ("PATH".to_owned(), search_path(&bin)),
         ]);
+        vars.extend(windows_vars());
         let env = Environment {
             home,
             agent_status: Some(resources().join("agent-status")),
@@ -93,8 +143,7 @@ impl Home {
 
     /// An `opencode` on the home's `PATH` printing `output` for `--version`.
     fn opencode(&self, output: &str) {
-        let script = format!("#!/bin/sh\n[ \"$1\" = --version ] || exit 2\necho '{output}'\n");
-        write_executable(&self.dir.path().join("bin/opencode"), &script).unwrap();
+        fake_opencode(&self.dir.path().join("bin"), output);
     }
 
     /// Makes this home what the window's installs read.
@@ -108,7 +157,8 @@ impl Home {
         skill::plan(&self.env()).unwrap().targets
     }
 
-    /// The command line tool planner's read-back of the link.
+    /// The command line tool planner's read-back of the link (Unix: Windows links nothing).
+    #[cfg(unix)]
     fn cli_status(&self) -> LinkStatus {
         match cli::plan(&self.env()) {
             cli::CliPlan::Link { status, .. } => status,
@@ -217,7 +267,7 @@ fn first_skill_install(cx: &mut VisualTestContext, home: &Home) {
         claude.display(),
         codex.display()
     );
-    assert!(alert.body.starts_with(&installed), "{}", alert.body);
+    assert!(slashed(&alert.body).starts_with(&slashed(&installed)), "{}", alert.body);
     assert!(alert.body.ends_with(
         "A skills directory was created for the first time — restart any running agent session so it picks up the \
          new skill."
@@ -237,7 +287,7 @@ fn skill_removed_and_reinstalled(cx: &mut VisualTestContext, home: &Home) {
     assert!(!files::entry_exists(&claude));
     start(cx, run_skill);
     let alert = shown(cx);
-    assert!(alert.body.contains(&format!("  • Claude Code: {}", claude.display())));
+    assert!(slashed(&alert.body).contains(&slashed(&format!("  • Claude Code: {}", claude.display()))));
     assert!(
         !alert.body.contains("for the first time"),
         "both skills directories are there"
@@ -261,6 +311,9 @@ fn users_skill_left_alone(cx: &mut VisualTestContext, home: &Home) {
     assert_eq!(fs::read_to_string(&skill).unwrap(), users);
 }
 
+/// The Unix form: a symlink into `~/.local/bin`. On Windows the install puts the tool's folder on the user's own
+/// `HKCU\Environment` `Path`, which no test may write (ngterm-app tests that plan without applying it).
+#[cfg(unix)]
 #[gpui_kit::test]
 fn the_command_line_tool_links_reads_back_current_and_refuses_a_real_file(cx: &mut TestAppContext) {
     let home = Home::new();
@@ -351,17 +404,21 @@ fn hooks_with_opencode_v1(cx: &mut VisualTestContext, home: &Home) {
     let alert = shown(cx);
     assert_eq!(alert.heading, "Agent Status Hooks Installed");
     let scripts = format!("Scripts installed to {}.\n", script_dir.display());
-    assert!(alert.body.starts_with(&scripts), "{}", alert.body);
+    assert!(slashed(&alert.body).starts_with(&slashed(&scripts)), "{}", alert.body);
     let plugin = format!(
         "OpenCode v1 status plugin installed to {}. Restart OpenCode.",
         v1.display()
     );
-    assert!(alert.body.contains(&plugin), "{}", alert.body);
+    assert!(slashed(&alert.body).contains(&slashed(&plugin)), "{}", alert.body);
     assert_eq!(labels(&alert), ["OK"], "no Codex merge to do by hand");
     press(cx, "OK");
     assert!(script_dir.join(WRAPPER_NAME).is_file());
     let settings = home.read(".claude/settings.json");
-    assert!(settings.contains(&script_dir.display().to_string()));
+    // the hook commands name the scripts with `/` on Windows too
+    assert!(
+        slashed(&settings).contains(&slashed(&script_dir.display().to_string())),
+        "{settings}"
+    );
     assert!(home.read(".zshrc").contains(RC_MARKER_BEGIN));
     assert!(fs::read_to_string(&v1).unwrap().contains(Version::V1.marker()));
     // read back: every step current
@@ -379,7 +436,7 @@ fn opencode_v2_takes_over(cx: &mut VisualTestContext, home: &Home) {
     press(cx, "OpenCode v2");
     let alert = shown(cx);
     let plugin = format!("OpenCode v2 status plugin installed to {}.", v2.display());
-    assert!(alert.body.contains(&plugin), "{}", alert.body);
+    assert!(slashed(&alert.body).contains(&slashed(&plugin)), "{}", alert.body);
     press(cx, "OK");
     assert!(fs::read_to_string(&v2).unwrap().contains(Version::V2.marker()));
     assert!(!files::entry_exists(&v1), "the managed v1 plugin is removed");
@@ -434,7 +491,7 @@ fn opencode_skipped_and_current(cx: &mut VisualTestContext, home: &Home) {
     start(cx, run_hooks);
     press(cx, "OpenCode v2");
     let current = format!("OpenCode v2 status plugin is already current at {}.", v2.display());
-    assert!(shown(cx).body.contains(&current));
+    assert!(slashed(&shown(cx).body).contains(&slashed(&current)));
     press(cx, "OK");
     assert!(front(cx).is_none());
 }
@@ -456,11 +513,10 @@ fn a_detected_opencode_installs_into_its_xdg_config_without_asking(cx: &mut Test
         "no chooser: the probe told"
     );
     let plugin = xdg.join("opencode/plugins/ngterm-v2/tui.js");
-    assert!(
-        alert
-            .body
-            .contains(&format!("OpenCode v2 status plugin installed to {}.", plugin.display()))
-    );
+    assert!(slashed(&alert.body).contains(&slashed(&format!(
+        "OpenCode v2 status plugin installed to {}.",
+        plugin.display()
+    ))));
     press(cx, "OK");
     assert!(plugin.is_file());
     assert!(
@@ -617,7 +673,7 @@ fn the_installers_read_home_and_xdg_config_home_from_the_process() {
         fs::create_dir_all(directory).unwrap();
     }
     write_executable(&bin.join("login-shell"), FAKE_SHELL).unwrap();
-    write_executable(&bin.join("opencode"), "#!/bin/sh\necho 2.0.0\n").unwrap();
+    fake_opencode(&bin, "2.0.0");
     let status = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -630,7 +686,8 @@ fn the_installers_read_home_and_xdg_config_home_from_the_process() {
         .env("HOME", &home)
         .env("XDG_CONFIG_HOME", &xdg)
         .env("SHELL", bin.join("login-shell"))
-        .env("PATH", &bin)
+        .env("PATH", search_path(&bin))
+        .envs(windows_vars())
         .env(CHILD_HOME, &home)
         .status()
         .unwrap();
@@ -663,19 +720,20 @@ fn child_installs_into_the_process_home(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let skill = shown(cx);
     assert!(
-        skill
-            .body
-            .contains(&format!("  • Codex: {}", home.join(".codex/skills/ngterm").display())),
+        slashed(&skill.body).contains(&slashed(&format!(
+            "  • Codex: {}",
+            home.join(".codex/skills/ngterm").display()
+        ))),
         "{}",
         skill.body
     );
     press(cx, "OK");
     let hooks = shown(cx);
     assert!(
-        hooks.body.contains(&format!(
+        slashed(&hooks.body).contains(&slashed(&format!(
             "OpenCode v2 status plugin installed to {}.",
             xdg.join("opencode/plugins/ngterm-v2/tui.js").display()
-        )),
+        ))),
         "{}",
         hooks.body
     );

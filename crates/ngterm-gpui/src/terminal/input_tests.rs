@@ -67,6 +67,48 @@ fn a_native_key_is_its_physical_key_with_the_layouts_character() {
 }
 
 #[test]
+fn a_windows_scan_code_is_the_same_physical_key_as_its_xkb_keycode() {
+    // Windows reports set-1 scan codes, `0xE0`-prefixed for the extended keys
+    for (scan_code, name) in [
+        (0x2e, "key_c"),
+        (0x1c, "enter"),
+        (0xe01c, "numpad_enter"),
+        (0xe048, "arrow_up"),
+        (0x48, "numpad_8"),
+        (0x02, "digit_1"),
+        (0x01, "escape"),
+        (0x56, "intl_backslash"),
+    ] {
+        let keycode = input::xkb_keycode_of_scan_code(scan_code).unwrap_or(0);
+        assert_eq!(input::physical_key(keycode).name(), name, "{scan_code:#x}");
+    }
+    assert_eq!(input::xkb_keycode_of_scan_code(0xffff), None);
+}
+
+#[test]
+fn an_extended_key_s_scan_code_takes_its_prefix() {
+    // the Up arrow, which a layout may give as the keypad's 8
+    assert_eq!(input::extended_scan_code(0x48, 0x26, 0), 0xe048);
+    assert_eq!(input::extended_scan_code(0xe048, 0x26, 0), 0xe048);
+    // Enter, and the keypad's Enter by the event's extended flag
+    assert_eq!(input::extended_scan_code(0x1c, 0x0d, 0), 0x1c);
+    assert_eq!(input::extended_scan_code(0x1c, 0x0d, 0xe000), 0xe01c);
+    assert_eq!(input::extended_scan_code(0, 0x26, 0xe000), 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_key_synthesized_without_a_scan_code_takes_its_virtual_keys() {
+    // the keys that type no text, on every layout: Enter, the Up arrow (extended)
+    assert_eq!(input::virtual_key_scan_code(0x0d, 0), 0x1c);
+    assert_eq!(input::virtual_key_scan_code(0x26, 0), 0xe048);
+    for (virtual_key, name) in [(0x0d, "enter"), (0x26, "arrow_up")] {
+        let keycode = input::xkb_keycode_of_scan_code(input::virtual_key_scan_code(virtual_key, 0)).unwrap_or(0);
+        assert_eq!(input::physical_key(keycode).name(), name);
+    }
+}
+
+#[test]
 fn a_key_press_is_classified_for_the_status_glyph_as_the_gtk_build_does() {
     use ngterm_core::model::StatusKeystroke::{Interrupt, Other, Submit};
     let classify = |text: &str| input::status_keystroke(&KeyStroke::new(&keystroke(text), &Source::Keystroke, false));
@@ -241,6 +283,7 @@ fn wait_frame(pane: &Pane, needle: &str) -> std::sync::Arc<ngterm_term::Frame> {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn urls_are_found_across_soft_wraps_and_osc8_links_by_their_cells() {
     let dir = tempfile::tempdir().unwrap();
     let size = ngterm_term::GridSize {
@@ -428,6 +471,7 @@ fn fixture<'a>(cx: &'a mut TestAppContext, script: &str, config: TerminalConfig)
 const ECHO: &str = "stty -echo -icanon; printf 'ready\\r\\n'; exec cat -v";
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_keymap_takes_its_chords_before_the_binds_and_the_binds_before_the_encoder(cx: &mut TestAppContext) {
     let mut f = fixture(cx, ECHO, config(""));
     let keymap_text = "command \"x\" ctrl+shift+b true\ncommand \"e\" ctrl+e true\n";
@@ -470,6 +514,7 @@ fn the_keymap_takes_its_chords_before_the_binds_and_the_binds_before_the_encoder
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_composition_shows_at_the_cursor_and_its_commit_is_typed(cx: &mut TestAppContext) {
     let mut f = fixture(cx, "stty -echo -icanon; printf 'ready\\r\\n'; exec cat", config(""));
     f.focus();
@@ -522,6 +567,7 @@ fn a_composition_shows_at_the_cursor_and_its_commit_is_typed(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn drags_and_double_and_triple_clicks_select_and_copy_to_primary(cx: &mut TestAppContext) {
     let mut f = fixture(cx, "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30", config(""));
     // a drag from the first cell past the middle of the fifth
@@ -541,7 +587,9 @@ fn drags_and_double_and_triple_clicks_select_and_copy_to_primary(cx: &mut TestAp
         Modifiers::default(),
     );
     assert_eq!(f.selection().as_deref(), Some("hello"));
-    let primary = f.cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text()));
+    let primary = f.cx.update(|_, cx| {
+        super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx).and_then(|item| item.text())
+    });
     assert_eq!(primary.as_deref(), Some("hello"));
     // a single click clears it; a double click takes the word, a triple the line
     std::thread::sleep(Duration::from_millis(600));
@@ -563,6 +611,7 @@ fn drags_and_double_and_triple_clicks_select_and_copy_to_primary(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_double_click_selects_a_whole_url_only_while_urls_are_links(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nsee https://example.com/p\\r\\n'; exec sleep 30";
     let mut f = fixture(cx, script, config("link-url = false\n"));
@@ -580,6 +629,7 @@ fn a_double_click_selects_a_whole_url_only_while_urls_are_links(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_program_with_the_mouse_gets_clicks_and_shift_keeps_the_mouse_for_selecting(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nhello\\r\\n'; exec cat -v";
     let mut f = fixture(cx, script, config(""));
@@ -604,6 +654,7 @@ fn a_program_with_the_mouse_gets_clicks_and_shift_keeps_the_mouse_for_selecting(
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_wheel_scrolls_the_viewport_back(cx: &mut TestAppContext) {
     let script = "i=0; while [ $i -lt 60 ]; do echo line-$i; i=$((i+1)); done; printf ready; exec sleep 30";
     let mut f = fixture(cx, script, config(""));
@@ -618,6 +669,7 @@ fn the_wheel_scrolls_the_viewport_back(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_ctrl_click_on_a_link_opens_it_through_the_link_route(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nsee \\033]8;;https://osc8.test/x\\033\\\\here\\033]8;;\\033\\\\ or https://example.com/p'; exec sleep 30";
     let mut f = fixture(cx, script, config(""));
@@ -671,6 +723,7 @@ fn a_ctrl_click_on_a_link_opens_it_through_the_link_route(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn read_only_mode_keeps_the_users_input_from_the_program(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nhello\\r\\n'; exec cat -v";
     let mut f = fixture(cx, script, config(""));
@@ -681,7 +734,13 @@ fn read_only_mode_keeps_the_users_input_from_the_program(cx: &mut TestAppContext
     f.type_keys("x");
     let view = f.view.clone();
     f.cx.update(|window, cx| view.update(cx, |view, cx| view.replace_text_in_range(None, "y", window, cx)));
-    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("p".into())));
+    f.cx.update(|_, cx| {
+        super::selection_clipboard::write(
+            ngterm_term::ClipboardLocation::Selection,
+            ClipboardItem::new_string("p".into()),
+            cx,
+        );
+    });
     f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Middle, Modifiers::default());
     f.cx.simulate_mouse_up(Fixture::at(1, 1), MouseButton::Middle, Modifiers::default());
     f.click(1, 1, Modifiers::default());
@@ -697,6 +756,7 @@ fn read_only_mode_keeps_the_users_input_from_the_program(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn focus_reports_follow_the_view_and_its_window(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1004hready\\r\\n'; exec cat -v";
     let mut f = fixture(cx, script, config(""));
@@ -715,6 +775,7 @@ fn osc52_write(base64: &str) -> String {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn clipboard_writes_ask_and_a_session_choice_is_remembered(cx: &mut TestAppContext) {
     // each write waits for a line, so each gets its own prompt
     let script = format!(
@@ -755,6 +816,7 @@ fn osc52_read(name: &str) -> String {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn clipboard_reads_ask_by_default_and_are_answered_either_way(cx: &mut TestAppContext) {
     // the second request's answer, if any, is shown by `cat -v` after `done`: the pane reads nothing past a request
     // until it is answered
@@ -790,6 +852,7 @@ fn clipboard_reads_ask_by_default_and_are_answered_either_way(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn releasing_a_lone_modifier_puts_out_the_link_it_lit(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nsee https://example.com/p'; exec sleep 30";
     let mut f = fixture(cx, script, config(""));
@@ -819,6 +882,7 @@ fn releasing_a_lone_modifier_puts_out_the_link_it_lit(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn links_open_with_ctrl_shift_while_the_program_has_the_mouse(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nsee https://example.com/p\\r\\n'; exec cat -v";
     let mut f = fixture(cx, script, config(""));
@@ -843,6 +907,7 @@ fn links_open_with_ctrl_shift_while_the_program_has_the_mouse(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn right_click_follows_right_click_action(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf 'ready\\r\\nhello world\\r\\n'; exec cat";
     // paste (ngterm's default setting writes it): the selection goes, the clipboard is pasted
@@ -858,6 +923,7 @@ fn right_click_follows_right_click_action(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn right_click_copy_and_ignore(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
     let mut f = fixture(cx, script, config("right-click-action = copy\n"));
@@ -872,10 +938,17 @@ fn right_click_copy_and_ignore(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn right_click_ignore_and_context_menu(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
     let f = fixture(cx, script, config("right-click-action = ignore\n"));
-    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("untouched".into())));
+    f.cx.update(|_, cx| {
+        super::selection_clipboard::write(
+            ngterm_term::ClipboardLocation::Selection,
+            ClipboardItem::new_string("untouched".into()),
+            cx,
+        );
+    });
     f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
     f.cx.simulate_mouse_up(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
     assert_eq!(f.selection(), None);
@@ -887,15 +960,24 @@ fn right_click_ignore_and_context_menu(cx: &mut TestAppContext) {
     f.cx.simulate_mouse_up(Fixture::at(8, 1), MouseButton::Right, Modifiers::default());
     f.cx.run_until_parked();
     assert_eq!(f.selection().as_deref(), Some("world"));
-    let primary = f.cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text()));
+    let primary = f.cx.update(|_, cx| {
+        super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx).and_then(|item| item.text())
+    });
     assert_eq!(primary.as_deref(), Some("world"));
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn middle_click_follows_its_action_not_copy_on_select(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf 'ready\\r\\n'; exec cat";
     let mut f = fixture(cx, script, config("middle-click-action = ignore\n"));
-    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("primary-text".into())));
+    f.cx.update(|_, cx| {
+        super::selection_clipboard::write(
+            ngterm_term::ClipboardLocation::Selection,
+            ClipboardItem::new_string("primary-text".into()),
+            cx,
+        );
+    });
     f.cx.write_to_clipboard(ClipboardItem::new_string("clipboard-text".into()));
     let middle = |f: &mut Fixture<'_>| {
         f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Middle, Modifiers::default());
@@ -924,26 +1006,40 @@ fn middle_click_follows_its_action_not_copy_on_select(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn copy_on_select_false_leaves_the_primary_selection_alone(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
     let mut f = fixture(cx, script, config("copy-on-select = false\n"));
-    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("untouched".into())));
+    f.cx.update(|_, cx| {
+        super::selection_clipboard::write(
+            ngterm_term::ClipboardLocation::Selection,
+            ClipboardItem::new_string("untouched".into()),
+            cx,
+        );
+    });
     f.click(1, 1, Modifiers::default());
     f.click(1, 1, Modifiers::default());
     f.cx.run_until_parked();
     assert_eq!(f.selection().as_deref(), Some("hello"));
-    let primary = f.cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text()));
+    let primary = f.cx.update(|_, cx| {
+        super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx).and_then(|item| item.text())
+    });
     assert_eq!(primary.as_deref(), Some("untouched"));
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_mouse_selection_leaves_the_system_clipboard_alone_unless_copy_on_select_says_clipboard(cx: &mut TestAppContext) {
     // the defaults copy a selection to the selection clipboard only (upstream #792)
     let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
     let mut f = fixture(cx, script, config(""));
     f.cx.write_to_clipboard(ClipboardItem::new_string("seeded".into()));
     let clipboard = |f: &mut Fixture<'_>| f.cx.read_from_clipboard().and_then(|item| item.text());
-    let primary = |f: &mut Fixture<'_>| f.cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text()));
+    let primary = |f: &mut Fixture<'_>| {
+        f.cx.update(|_, cx| {
+            super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx).and_then(|item| item.text())
+        })
+    };
     f.click(1, 1, Modifiers::default());
     f.click(1, 1, Modifiers::default());
     f.cx.run_until_parked();
@@ -976,6 +1072,7 @@ fn a_mouse_selection_leaves_the_system_clipboard_alone_unless_copy_on_select_say
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn toggling_mouse_reporting_lasts_past_the_next_event(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nhello\\r\\n'; exec cat -v";
     let mut f = fixture(cx, script, config(""));
@@ -992,6 +1089,7 @@ fn toggling_mouse_reporting_lasts_past_the_next_event(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_keymaps_chords_release_never_reaches_a_kitty_program(cx: &mut TestAppContext) {
     // Kitty flags 3: disambiguate and report event types (releases too)
     let script = "stty -echo -icanon; printf '\\033[>3uready\\r\\n'; exec cat -v";
@@ -1010,6 +1108,7 @@ fn the_keymaps_chords_release_never_reaches_a_kitty_program(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn an_all_binding_changes_every_terminals_key_tables(cx: &mut TestAppContext) {
     let binds = "keybind = vim/j=text:J\nkeybind = all:ctrl+t=activate_key_table:vim\n";
     let mut f = fixture(cx, "printf 'ready'; exec sleep 30", config(binds));
@@ -1093,6 +1192,7 @@ impl Render for Pair {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn an_all_end_key_sequence_flushes_each_terminals_keys_before_its_chained_action(cx: &mut TestAppContext) {
     let binds = "keybind = a>b=ignore\nkeybind = all:ctrl+t=end_key_sequence\nkeybind = chain=text:X\n";
     cx.executor().allow_parking();
@@ -1147,6 +1247,7 @@ impl Render for Covered {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn focus_follows_mouse_asks_nothing_through_an_overlay(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let dir = tempfile::tempdir().unwrap();
@@ -1209,6 +1310,7 @@ fn covered<'a>(
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_program_tracking_every_motion_hears_none_through_an_overlay(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let script = "stty -echo -icanon; printf '\\033[?1003hready\\r\\n'; exec cat -v";
@@ -1224,6 +1326,7 @@ fn a_program_tracking_every_motion_hears_none_through_an_overlay(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_link_under_an_overlay_is_not_hovered(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let script = "printf 'ready\\r\\nsee https://example.com/a-long-path-past-it'; exec sleep 30";
@@ -1242,6 +1345,7 @@ fn a_link_under_an_overlay_is_not_hovered(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn adjacent_hyperlinks_stay_apart_and_a_short_repeat_interval_counts_no_double_click(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\n\\033]8;;https://a.test\\033\\\\aaa\\033]8;;https://b.test\\033\\\\bbb\\033]8;;\\033\\\\ x y'; \
                   exec sleep 30";
@@ -1288,6 +1392,7 @@ fn a_native_key_carries_the_lock_keys() {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_pointer_asks_for_focus_under_focus_follows_mouse(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\none;two'; exec sleep 30";
     let mut f = fixture(

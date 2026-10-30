@@ -14,7 +14,9 @@
 //! The window host (GNOME/Mutter and weston, which have no layer-shell; X11, where GPUI opens a layer-shell window as a
 //! plain one; every other platform): undecorated (client decorations, no title bar of ours), on a transparent
 //! background, sized on its display and centered there where the platform lets a client place a window (X11; Wayland
-//! gives a client no position). Its zoom is a maximize.
+//! gives a client no position). Its zoom is a maximize. On Windows it is GPUI's pop-up kind, a topmost tool window
+//! (`WS_EX_TOPMOST | WS_EX_TOOLWINDOW`): over other windows as upstream's panel floats, and out of the taskbar and
+//! Alt+Tab, as a panel is.
 
 use gpui_kit::{
     Bounds, DisplayId, Pixels, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
@@ -163,6 +165,10 @@ fn layer_options(base: WindowOptions, fit: Fit, display: Option<&Target>, named:
 }
 
 #[cfg(not(target_os = "linux"))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Linux form's signature: a layer surface may have no display"
+)]
 fn layer_options(base: WindowOptions, fit: Fit, display: Option<&Target>, _named: bool) -> Option<WindowOptions> {
     Some(window_host_options(base, fit, display))
 }
@@ -181,7 +187,11 @@ fn window_host_options(base: WindowOptions, fit: Fit, display: Option<&Target>) 
         |display| Bounds::centered_at(display.bounds.center(), extent),
     );
     WindowOptions {
-        kind: WindowKind::Normal,
+        kind: if cfg!(windows) {
+            WindowKind::PopUp
+        } else {
+            WindowKind::Normal
+        },
         window_bounds: Some(if fit.zoomed {
             WindowBounds::Maximized(bounds)
         } else {

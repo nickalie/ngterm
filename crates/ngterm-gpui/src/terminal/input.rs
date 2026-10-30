@@ -5,7 +5,10 @@
 //! On Linux GPUI's own `Keystroke` keeps neither the key's position nor the layout's level-0 character, and drops Shift
 //! from symbols, so the platform's record of the native key (`gpui_linux::current_native_input`, a patch of ours)
 //! is read during the dispatch and preferred: the XKB keycode gives the physical key through Ghostty's keycode table
-//! (`keycodes.rs`), XKB gives the rest. Without one (GPUI's test platform, a replayed pending keystroke, another
+//! (`keycodes.rs`), XKB gives the rest. Windows's GPUI keeps no more (its key is the virtual key's character, its
+//! symbols lose Shift as well), so its record (`gpui_windows::current_native_input`, our `gpui-pre-windows` patch) is
+//! read the same way: its scan code becomes the XKB keycode of the same key (`keycodes.rs`), `ToUnicode` gives the
+//! rest. Without one (GPUI's test platform, a replayed pending keystroke, another
 //! platform) the key is read from GPUI's key name as a US keyboard would type it, Shift restored for its symbols;
 //! text an input method committed as a key has no position at all.
 //!
@@ -97,11 +100,88 @@ pub fn current_source(keystroke: &Keystroke) -> Source {
     }
 }
 
-/// The native input behind the key event being dispatched (none off Linux).
-#[cfg(not(target_os = "linux"))]
+/// The native input behind the key event being dispatched, when it describes `keystroke`.
+#[cfg(windows)]
+#[must_use]
+pub fn current_source(keystroke: &Keystroke) -> Source {
+    match gpui_windows::current_native_input() {
+        Some(gpui_windows::NativeInput::Key(native)) if native.keystroke == *keystroke => Source::Native(NativeKey {
+            keycode: xkb_keycode_of_scan_code(native.scan_code)
+                .or_else(|| xkb_keycode_of_scan_code(virtual_key_scan_code(native.virtual_key, native.scan_code)))
+                .unwrap_or(0),
+            modifiers: native.modifiers,
+            consumed: native.consumed,
+            unshifted: native.unshifted,
+            ascii_layout: native.ascii_layout,
+            text: native.text,
+            composing: native.composing,
+            repeat: native.repeat,
+            locks: {
+                let mut locks = Mods::empty();
+                locks.set(Mods::CAPS_LOCK, native.caps_lock);
+                locks.set(Mods::NUM_LOCK, native.num_lock);
+                locks
+            },
+            // `ToUnicodeEx` has no Command table (module docs)
+            command: None,
+        }),
+        _ => Source::Keystroke,
+    }
+}
+
+/// The native input behind the key event being dispatched (none where GPUI keeps no record yet: macOS).
+#[cfg(not(any(target_os = "linux", windows)))]
 #[must_use]
 pub fn current_source(_keystroke: &Keystroke) -> Source {
     Source::Keystroke
+}
+
+/// The scan code the current layout puts virtual key `virtual_key` on (`MapVirtualKeyW`, `MAPVK_VK_TO_VSC_EX`),
+/// `0xE0`-prefixed for an extended key as [`xkb_keycode_of_scan_code`] takes it ([`extended_scan_code`]); 0 for a key
+/// it has none for. `native_scan_code` is the event's own (its `0xE000` the extended flag alone). Input that was
+/// synthesized with no scan code (`SendInput` or `keybd_event` with a zero one, as on-screen keyboards and automation
+/// tools send) is placed through it, so its Enter, arrows and other keys that type no text still reach the terminal's
+/// encoder as keys.
+#[cfg(windows)]
+#[must_use]
+pub fn virtual_key_scan_code(virtual_key: u16, native_scan_code: u32) -> u32 {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MAPVK_VK_TO_VSC_EX, MapVirtualKeyW};
+    // SAFETY: a query of the thread's keyboard layout with plain integers.
+    let code = unsafe { MapVirtualKeyW(u32::from(virtual_key), MAPVK_VK_TO_VSC_EX) };
+    extended_scan_code(code, virtual_key, native_scan_code)
+}
+
+/// The virtual keys of the keys Windows flags extended (the arrows and the navigation block, Print Screen, the right
+/// Control and Alt, the Windows and Menu keys, the keypad's divide, Num Lock): `MapVirtualKeyW` gives their scan code
+/// without its `0xE0` prefix on some systems (the Up arrow as `0x48`, the keypad's 8).
+#[cfg(any(windows, test))]
+const EXTENDED_VIRTUAL_KEYS: [u16; 18] = [
+    0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2c, 0x2d, 0x2e, 0x5b, 0x5c, 0x5d, 0x6f, 0x90, 0xa3, 0xa5,
+];
+
+/// `code`, the scan code a layout gave `virtual_key`, with the `0xE0` prefix an extended key's needs: one it has, else
+/// one when the event carried the extended flag (`native_scan_code`'s `0xE000`: the keypad's Enter beside Enter's
+/// virtual key) or `virtual_key` is one of [`EXTENDED_VIRTUAL_KEYS`]. 0 stays 0.
+#[cfg(any(windows, test))]
+#[must_use]
+pub fn extended_scan_code(code: u32, virtual_key: u16, native_scan_code: u32) -> u32 {
+    let flagged = native_scan_code & 0xff00 == 0xe000;
+    if code == 0 || code & 0xff00 != 0 || !(flagged || EXTENDED_VIRTUAL_KEYS.contains(&virtual_key)) {
+        code
+    } else {
+        0xe000 | code
+    }
+}
+
+/// The XKB keycode of the key at Windows scan code `scan_code` (`0xE000 |` the code for an extended key), through
+/// Ghostty's keycode table; `None` for a code it does not list.
+#[cfg(any(windows, test))]
+#[must_use]
+pub fn xkb_keycode_of_scan_code(scan_code: u32) -> Option<u32> {
+    super::keycodes::WINDOWS_SCAN_CODES
+        .binary_search_by_key(&scan_code, |(code, _)| *code)
+        .ok()
+        .map(|index| super::keycodes::WINDOWS_SCAN_CODES[index].1)
 }
 
 /// One key event, owned (module docs).

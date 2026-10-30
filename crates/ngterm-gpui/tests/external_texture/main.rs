@@ -18,27 +18,42 @@
 //!
 //! Arguments: a substring selects cases by name; `--list` lists them.
 
+#[cfg(target_os = "linux")]
 mod buffers;
+#[cfg(target_os = "linux")]
 mod cases;
+#[cfg(target_os = "linux")]
 mod gl;
+#[cfg(target_os = "linux")]
 #[path = "../support/gpus.rs"]
 mod gpus;
+#[cfg(target_os = "linux")]
 #[path = "../support/lavapipe.rs"]
 mod lavapipe;
 
+#[cfg(target_os = "linux")]
 use gpus::{Gpu, mesa_egl_vendor, mesa_gpu, pci_device};
+#[cfg(target_os = "linux")]
 use lavapipe::lavapipe_icd;
 
+#[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
 use std::process::{Command, ExitCode, Stdio};
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
 const GPU_ENV: &str = "NGTERM_EXTERNAL_TEXTURE_GPU";
+#[cfg(target_os = "linux")]
 const NODE_ENV: &str = "NGTERM_EXTERNAL_TEXTURE_NODE";
+#[cfg(target_os = "linux")]
 const REQUIRE_ENV: &str = "NGTERM_REQUIRE_DISPLAY_TESTS";
 /// How long one GPU's child may run.
+#[cfg(target_os = "linux")]
 const CHILD_TIMEOUT: Duration = Duration::from_secs(300);
 
+#[cfg(target_os = "linux")]
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--list") {
@@ -54,6 +69,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn parent(args: &[String]) -> ExitCode {
     let Ok(exe) = std::env::current_exe() else {
         eprintln!("the test binary cannot find itself");
@@ -93,6 +109,7 @@ fn parent(args: &[String]) -> ExitCode {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn run_child(exe: &Path, gpu: &Gpu, args: &[String]) -> Result<(), String> {
     let mut command = Command::new(exe);
     command.args(args).env_clear().stdin(Stdio::null());
@@ -136,4 +153,11 @@ fn run_child(exe: &Path, gpu: &Gpu, args: &[String]) -> Result<(), String> {
             Err(err) => return Err(format!("waiting for the child: {err}")),
         }
     }
+}
+
+/// Dmabufs, Vulkan's foreign queue family and the external surfaces are Linux's (GPUI patch 1 is Linux only): nothing
+/// to run elsewhere.
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    println!("SKIPPED: external textures are Linux only");
 }

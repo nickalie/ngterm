@@ -139,6 +139,8 @@ fn a_click_rings_its_cell_then_enters_it(cx: &mut TestAppContext) {
     });
     let targets = vec![uuid_string(ids[0]), uuid_string(ids[1])];
     open_dashboard(&mut h, |args| args.targets = Some(targets));
+    // only the click's tasks are counted below
+    h.quiet();
     let at = h.cx.debug_bounds("dashboard-cell-1").expect("the second cell").center();
     h.cx.simulate_click(at, gpui_kit::Modifiers::default());
     // the test loop runs a delayed task at once: the ring, then the enter

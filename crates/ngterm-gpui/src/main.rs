@@ -11,6 +11,11 @@
 //! and a refused one say so in it, and it only ever appends to a log another process holds (it rotates only a file
 //! whose own lock it gets, `ngterm_app::logging`). The claim comes after the bus registration, so a second launch of
 //! the same app id is still forwarded with exit 0 rather than refused.
+//!
+//! On Windows a release build is a GUI program (no console window of its own when Explorer or the Start menu starts
+//! it); a debug build keeps its console, where its log lines and the console's Ctrl events reach it (`signals.rs`).
+
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 use std::ffi::OsString;
 use std::io::Write as _;
@@ -36,6 +41,14 @@ fn main() -> ExitCode {
         print!("{}", app::build_identity_text());
         return ExitCode::SUCCESS;
     }
+    // the Live sessions reset's relauncher on Windows (`live_runtime.rs`): it waits for the app and reopens it, and
+    // touches nothing else of the app
+    #[cfg(windows)]
+    if let Some(launched) =
+        ngterm_gpui::live_runtime::relaunch_if_asked(&std::env::args_os().skip(1).collect::<Vec<_>>())
+    {
+        return if launched { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
     let activation = Activation::from_env(&ProcessEnv);
     // GDK unsets it once read, so no child (a hook, a custom command, a shell) claims this launch's sequence
     // SAFETY: first thing in main, while the process has one thread.
@@ -44,7 +57,8 @@ fn main() -> ExitCode {
     let app_id = instance::app_id(&ProcessEnv);
     let (requests, received) = async_channel::unbounded();
     // kept for the whole run: dropping it gives the name up
-    let _bus = match instance::register(&app_id, requests) {
+    // the state directory names the instance on Windows; only its path is computed here, nothing in it is read
+    let _bus = match instance::register(&app_id, &paths::state_dir(&ProcessEnv), requests) {
         Ok(Registration::Primary(connection)) => {
             tracing::info!(app_id, "instance: primary");
             Some(connection)
@@ -114,10 +128,27 @@ fn forward(remote: &instance::Remote, activation: &Activation) -> ExitCode {
 /// instance (GPUI creates its wgpu instance with the GL backend beside Vulkan) terminates EGL in a TLS destructor
 /// after the Wayland connection is gone and crashes every exit with SIGSEGV (`docs/spikes/20261014-wpe-dmabuf.md`,
 /// quirk 12; `docs/upstream-issues/gpui-wgpu-gles-exit-segfault.md`). Everything that must outlive the process is
-/// written by then: the quit save, the socket removed, the log written unbuffered.
+/// written by then: the quit save, the socket removed, the log written unbuffered. Windows ends it the same way
+/// (`TerminateProcess` of itself: no DLL detach, no TLS callbacks), so the threads still waiting in a quit handler
+/// (`signals.rs`) end with it.
 fn exit_now(status: i32) -> ! {
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
+    #[cfg(unix)]
     // SAFETY: `_exit` only ends the process; nothing of this process runs after it, so no invariant can break.
-    unsafe { libc::_exit(status) }
+    unsafe {
+        libc::_exit(status)
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+        // the exit code Windows records is the status's bits
+        let code = u32::from_ne_bytes(status.to_ne_bytes());
+        // SAFETY: a pseudo-handle that needs no closing and is always valid.
+        let process = unsafe { GetCurrentProcess() };
+        // SAFETY: the current process's pseudo-handle; nothing of this process runs after the call returns.
+        unsafe { TerminateProcess(process, code) };
+        // TerminateProcess of the current process does not return; should it, the ordinary exit ends it
+        std::process::exit(status)
+    }
 }

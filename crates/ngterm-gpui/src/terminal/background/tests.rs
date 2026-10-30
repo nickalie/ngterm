@@ -299,9 +299,15 @@ fn the_watermark_overlay_lines_reach_the_terminal_config() {
     let env = paths::MapEnv::new()
         .with("HOME", "/nonexistent")
         .with(paths::STATE_DIR_ENV, state.path());
+    // an absolute path on each platform
+    let image = if cfg!(windows) {
+        r"C:\pictures\prod.png"
+    } else {
+        "/pictures/prod.png"
+    };
     let mark = BackgroundWatermark {
         kind: WatermarkKind::Image,
-        image_path: Some("/pictures/prod.png".to_owned()),
+        image_path: Some(image.to_owned()),
         text: None,
         color_hex: None,
         opacity: Some(0.25),
@@ -321,7 +327,7 @@ fn the_watermark_overlay_lines_reach_the_terminal_config() {
     assert_eq!(
         spec,
         Spec {
-            path: "/pictures/prod.png".into(),
+            path: image.into(),
             alpha: 0.25,
             composite: None,
             fit: Fit::Cover,

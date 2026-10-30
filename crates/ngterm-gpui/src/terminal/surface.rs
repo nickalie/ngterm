@@ -402,7 +402,6 @@ fn selection_adjust(adjust: binds::SelectionAdjust) -> SelectionAdjust {
 /// for whoever the path goes to (Ghostty's `TempDir` retained).
 fn screen_file(region: FormatRegion, format: TextFormat, text: &str) -> std::io::Result<PathBuf> {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
     let dir = tempfile::Builder::new().prefix("ngterm-").tempdir()?.keep();
     let name = match region {
         FormatRegion::Screen => "screen",
@@ -411,12 +410,12 @@ fn screen_file(region: FormatRegion, format: TextFormat, text: &str) -> std::io:
     };
     let extension = if format == TextFormat::Html { "html" } else { "txt" };
     let path = dir.join(format!("{name}.{extension}"));
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)?
-        .write_all(text.as_bytes())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    // on Windows the file takes the user's own temporary directory's access, which only the user has
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(&path)?.write_all(text.as_bytes())?;
     Ok(path)
 }
 

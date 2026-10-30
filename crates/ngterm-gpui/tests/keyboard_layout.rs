@@ -10,6 +10,10 @@
 //! the "input method" GPUI reads.
 //!
 //! A test whose tool is missing prints `SKIPPED:` and passes, unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set.
+//!
+//! Linux only: XKB layouts on a private Xvfb, pressed through XTEST.
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]

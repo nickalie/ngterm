@@ -19,6 +19,10 @@
 #                  blur behind a blurred X11 window (Task 33, 0003); a new keymap reported as a keyboard layout
 #                  change on X11 and Wayland even when the effective layout keeps its name, so a changed layout list
 #                  reaches `on_keyboard_layout_change` (Task 29 of the upstream v0.38.1 sync, 0004)
+#   gpui-pre-windows the native key behind each key event GPUI dispatches on Windows (its scan code, the layout's
+#                  unshifted character, the modifiers with Shift and those the layout used up, the text before Ctrl
+#                  transformations), which GPUI's `Keystroke` drops, for the terminal's physical-key bindings and the
+#                  Kitty keyboard protocol (Task 4 of docs/plans/20261029-windows-support.md, 0001)
 #
 # Each source is the crates.io archive of GPUI_VERSION, verified against SHA256 below: the release's crates.io
 # checksum (the `cksum` of its version's line in the crates.io index, https://index.crates.io/gp/ui/<crate>, also what
@@ -28,7 +32,8 @@
 # Bump GPUI_VERSION and the sums together with gpui-kit's `gpui-pre` pin, run this, and check that the patches still
 # apply.
 #
-# Usage: scripts/vendor-gpui.sh           (re)create vendor/gpui-pre, vendor/gpui-pre-wgpu and vendor/gpui-pre-linux
+# Usage: scripts/vendor-gpui.sh           (re)create vendor/gpui-pre, vendor/gpui-pre-wgpu, vendor/gpui-pre-linux and
+#                                         vendor/gpui-pre-windows
 #        scripts/vendor-gpui.sh --check   rebuild into a scratch dir and fail if a vendored crate differs
 #        scripts/vendor-gpui.sh --diff    regenerate the last patch of each crate, build/patches/<crate>/NNNN-*.patch,
 #                                         as the vendored tree against the crate with the earlier patches applied
@@ -43,8 +48,9 @@ declare -A SHA256=(
   [gpui-pre]="34f61c1cfd36fc9c436af09308c963822ae27a45a84feb21a77ba5c9e051f1c0"
   [gpui-pre-wgpu]="5b1cdb26c1503bf9662ee8fbc5ab0b44b2deeee4b5c12dc67491ba6fb5fc544b"
   [gpui-pre-linux]="e28213c3fde6f13e91ba0b74b90cbaadec9373e36a031eda98561d31059870f3"
+  [gpui-pre-windows]="513d4f0fc7d596d3bdef2a73a524ffb83dabc95bf484f2855a698e7f431290a9"
 )
-CRATES=(gpui-pre gpui-pre-wgpu gpui-pre-linux)
+CRATES=(gpui-pre gpui-pre-wgpu gpui-pre-linux gpui-pre-windows)
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -58,7 +64,7 @@ case "${1:-}" in
   "") ;;
   --check) mode=check ;;
   --diff) mode=diff ;;
-  -h | --help) sed -n '2,37s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  -h | --help) sed -n '2,42s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
   *) die "unknown argument: $1 (see --help)" ;;
 esac
 

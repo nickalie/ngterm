@@ -8,6 +8,12 @@
 # presentation process and agent integrations' installers have their Windows forms beside the Unix ones (macOS takes
 # the Unix forms); its tests that run the agent-status package's POSIX scripts and plugins are Unix-only.
 #
+# ngterm-gpui (the app) builds, lints and tests on the Windows runner too, without its `html` feature (the HTML
+# overlays are WPE WebKit, Linux only; WebView2 on Windows is later work), in steps of its own: it embeds the terminal
+# fonts scripts/fetch-fonts.sh vendors, and its tests that run the app on Xvfb, weston, lavapipe or a D-Bus bus are
+# Linux-only. It is not built on macOS here: its single instance, quit, keyboard and other macOS forms are not written
+# yet.
+#
 # libghostty-vt (ngterm-ghostty-vt-sys, its wrapper ngterm-ghostty-vt) builds here from the prefix
 # scripts/build-ghostty-vt.sh prepares with the pinned Zig of each runner's OS and arch (Git Bash on Windows, stock
 # bash 3.2 on macOS); the sys crate's build script runs `zig build` over it, offline. The vendor cache keeps the
@@ -59,7 +65,9 @@ jobs:
     # Measured 2026-10-19 with cold caches: the prefix 25 s (Ubuntu), 1 min (macOS), 2 min (Windows); the first
     # cargo step (clippy), which builds libghostty-vt first, 3 min (Ubuntu), 4.5 min (macOS), 2 min (Windows); each
     # cross build 1.5-2.5 min; the whole job 9-12 min. A warm Zig global cache saved little on Ubuntu (clippy 2.6 min).
-    timeout-minutes: 40
+    # The Windows job also builds ngterm-gpui (GPUI and its DirectX platform), measured 2026-10-30 on the runner with a
+    # cold cache: its clippy 3.5 min, its tests 7 min, the whole job 27.5 min; the limit leaves it room.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
       - name: rust toolchain (rust-toolchain.toml)
@@ -88,6 +96,15 @@ jobs:
           cp -r vendor/portable-pty "$copy"
           printf '\n[workspace]\n' >> "$copy/Cargo.toml"
           cargo test --manifest-path "$copy/Cargo.toml" --lib windows_
+      - name: terminal fonts (ngterm-gpui embeds them)
+        if: runner.os == 'Windows'
+        run: scripts/fetch-fonts.sh
+      - name: ngterm-gpui clippy (Windows, without html)
+        if: runner.os == 'Windows'
+        run: cargo clippy --locked -p ngterm-gpui --no-default-features --all-targets -- -D warnings
+      - name: ngterm-gpui test (Windows, without html)
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p ngterm-gpui --no-default-features
       - name: cross build of libghostty-vt for ${{ matrix.cross }}
         if: matrix.cross != ''
         run: |

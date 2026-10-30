@@ -14,6 +14,10 @@
 //! Everything runs in a [`support::Sandbox`] (private bus, state, live-session namespace and Xvfb); the live sessions
 //! are killed through their own namespace's server at the end, and a reopened instance is stopped. Without Xvfb,
 //! lavapipe and Ghostty's shell integration it skips (fails under `NGTERM_REQUIRE_DISPLAY_TESTS`).
+//!
+//! Linux only: the app on a private Xvfb with lavapipe, stopped by SIGTERM.
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]

@@ -6,6 +6,10 @@
 //! A test that needs a tool this machine lacks (weston, Xvfb, lavapipe) prints `SKIPPED:` with the reason (seen with
 //! `--nocapture`) and passes, unless `NGTERM_REQUIRE_DISPLAY_TESTS` is set, as CI sets it: then it fails. The
 //! nested-niri check is `#[ignore]`d (CI has no niri): run it with `--ignored`.
+//!
+//! Linux only: the D-Bus single instance and the X11/Wayland activation on a private bus, Xvfb and weston.
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]

@@ -51,6 +51,8 @@ fn watching(path: &Path, test: impl FnOnce(&Reads)) {
     drop(watcher);
 }
 
+/// Symlinks: on Windows making one takes a privilege a user rarely holds (Developer Mode or elevation).
+#[cfg(unix)]
 #[test]
 fn a_symlink_whose_target_appears_later_is_followed() {
     let dir = tempfile::tempdir().unwrap();
@@ -64,6 +66,8 @@ fn a_symlink_whose_target_appears_later_is_followed() {
     });
 }
 
+/// Symlinks: on Windows making one takes a privilege a user rarely holds (Developer Mode or elevation).
+#[cfg(unix)]
 #[test]
 fn a_symlink_whose_target_is_deleted_then_recreated_is_followed() {
     let dir = tempfile::tempdir().unwrap();
@@ -128,6 +132,8 @@ fn a_config_directory_created_later_is_followed() {
     });
 }
 
+/// Symlinks: on Windows making one takes a privilege a user rarely holds (Developer Mode or elevation).
+#[cfg(unix)]
 #[test]
 fn a_chain_of_symlinks_is_followed_to_the_real_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -247,6 +253,8 @@ fn a_change_elsewhere_in_the_directory_is_not_one_of_the_files() {
     assert!(!concerns(&interest, Path::new("/cfg/remotes.conf.tmp")));
 }
 
+/// Symlinks: on Windows making one takes a privilege a user rarely holds (Developer Mode or elevation).
+#[cfg(unix)]
 #[test]
 fn the_watched_paths_include_a_symlink_targets_directory() {
     let dir = tempfile::tempdir().unwrap();
@@ -288,9 +296,16 @@ fn a_relative_path_is_made_absolute() {
         absolute(Path::new("cfg/./x/../remotes.conf")),
         cwd.join("cfg/remotes.conf")
     );
-    assert_eq!(absolute(Path::new("/cfg/remotes.conf")), Path::new("/cfg/remotes.conf"));
+    let rooted = if cfg!(windows) {
+        r"C:\cfg\remotes.conf"
+    } else {
+        "/cfg/remotes.conf"
+    };
+    assert_eq!(absolute(Path::new(rooted)), Path::new(rooted));
 }
 
+/// Symlinks: on Windows making one takes a privilege a user rarely holds (Developer Mode or elevation).
+#[cfg(unix)]
 #[test]
 fn the_symlink_hops_end_at_a_loop() {
     let dir = tempfile::tempdir().unwrap();

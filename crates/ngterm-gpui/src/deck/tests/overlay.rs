@@ -12,12 +12,17 @@ use super::*;
 use crate::overlay::ProgramPlacement;
 use ngterm_core::model::PanelSizing;
 
-/// Runs each launch's command through `/bin/sh -c` in its directory with its variables, `exec cat` without one.
+/// Runs each launch's command through `/bin/sh -c` in its directory with its variables, the idle program
+/// ([`idle_program`](crate::pane::tests::idle_program)) without one.
 fn running_launcher(launches: Arc<Mutex<Vec<Launch>>>) -> pane::Launcher {
     Rc::new(move |launch: &Launch| -> Spawn {
         launches.lock().unwrap().push(launch.clone());
-        let line = launch.command.clone().unwrap_or_else(|| "exec cat".to_owned());
-        let mut command = PaneCommand::new("/bin/sh").arg("-c").arg(line);
+        let mut command = launch
+            .command
+            .clone()
+            .map_or_else(crate::pane::tests::idle_program, |line| {
+                PaneCommand::new("/bin/sh").arg("-c").arg(line)
+            });
         for (key, _) in std::env::vars_os() {
             let name = key.to_string_lossy();
             let ours = launch.env.iter().any(|(set, _)| set.as_str() == name);
@@ -109,6 +114,7 @@ fn exit_code(response: &Response) -> Option<i64> {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "runs a POSIX sh command line as its overlay program")]
 fn a_program_overlay_covers_the_page_takes_the_keyboard_and_reports_its_exit_status(cx: &mut TestAppContext) {
     let (mut h, session, token) = overlay_harness(cx);
     h.dispatch(Command::Session(SessionCmd::OverlayOpen), session, |args| {
@@ -258,6 +264,7 @@ pub(super) fn quoted(path: &Path) -> String {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "runs a POSIX sh command line as its overlay program")]
 fn show_image_draws_its_image_in_a_pty_overlay_and_closes_on_enter(cx: &mut TestAppContext) {
     let (mut h, session, token) = overlay_harness(cx);
     let dir = tempfile::tempdir().unwrap();

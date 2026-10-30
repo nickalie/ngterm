@@ -302,8 +302,9 @@ mod tests {
         let host = launch_host(&app, None, &env);
         assert_eq!(host.shell, "/bin/sh");
         let prepared = host.prepare(&Launch::default(), &env);
+        // run through `sh -c` on Unix, as the program itself on Windows
         assert!(
-            prepared.command.args.iter().any(|arg| arg == "/bin/sh"),
+            prepared.command.program == "/bin/sh" || prepared.command.args.iter().any(|arg| arg == "/bin/sh"),
             "{:?}",
             prepared.command
         );

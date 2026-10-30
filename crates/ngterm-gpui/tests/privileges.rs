@@ -11,6 +11,10 @@
 //! beside it, as the staged layout has it; without one the test fails. Without Xvfb, lavapipe and Ghostty's shell
 //! integration, or with a login shell Live sessions do not run in, it skips (fails under
 //! `NGTERM_REQUIRE_DISPLAY_TESTS`).
+//!
+//! Linux only: WPE `WebKit`'s worker, bwrap and `/proc`.
+
+#![cfg(target_os = "linux")]
 
 #[macro_use]
 #[expect(dead_code, reason = "the sandbox serves the process tests too")]

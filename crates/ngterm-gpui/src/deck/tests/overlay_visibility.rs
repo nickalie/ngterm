@@ -82,6 +82,7 @@ fn pane_overlay_realized(h: &Harness<'_>, session: Uuid, pane: OverlayPane) -> b
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "runs a POSIX sh command line as its overlay program")]
 fn a_hidden_program_hands_the_keys_to_the_pane_and_show_brings_the_same_program_back(cx: &mut TestAppContext) {
     let (mut h, session, token) = overlay_harness(cx);
     let dir = tempfile::tempdir().unwrap();
@@ -132,6 +133,7 @@ fn a_hidden_program_hands_the_keys_to_the_pane_and_show_brings_the_same_program_
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "runs a POSIX sh command line as its overlay program")]
 fn a_hidden_pane_overlay_leaves_its_pane_clickable_and_typable(cx: &mut TestAppContext) {
     let (mut h, session, _) = overlay_harness(cx);
     let (primary, right) = split(&mut h, session);
@@ -183,6 +185,7 @@ fn a_hidden_pane_overlay_leaves_its_pane_clickable_and_typable(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "runs a POSIX sh command line as its overlay program")]
 fn the_keyboard_moves_only_when_the_visible_cover_changes(cx: &mut TestAppContext) {
     let (mut h, session, _) = overlay_harness(cx);
     let (_, right) = split(&mut h, session);
@@ -230,6 +233,7 @@ fn the_keyboard_moves_only_when_the_visible_cover_changes(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "runs a POSIX sh command line as its overlay program")]
 fn a_hidden_floating_program_drops_its_backdrop_and_keeps_its_size(cx: &mut TestAppContext) {
     let (mut h, session, token) = overlay_harness(cx);
     h.dispatch(Command::Session(SessionCmd::OverlayOpen), session, |args| {

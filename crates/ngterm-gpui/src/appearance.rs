@@ -1,14 +1,19 @@
 //! Following the desktop's light or dark appearance (upstream's `SystemAppearanceObserver.swift` and
-//! `SettingsModel.appearanceChanged`; ported from the GTK build's `theme.rs`, which read libadwaita's style manager):
-//! the XDG settings portal's `org.freedesktop.appearance` `color-scheme` over `zbus`, which is what libadwaita follows
-//! on every desktop that runs a portal backend (GNOME, KDE, the wlroots portals, darkman).
+//! `SettingsModel.appearanceChanged`; ported from the GTK build's `theme.rs`, which read libadwaita's style manager),
+//! by the platform's source ([`DesktopSide`]):
 //!
-//! - **Launch**: [`Portal::session`] reads the scheme before the config loads ([`Portal::is_dark`]), so the first
-//!   terminal starts on the desktop's side of a dual `theme = light:…,dark:…`. No session bus, no portal, or a portal
-//!   without the key reads as light, libadwaita's default for "no preference".
-//! - **Following**: [`Portal::follow`] subscribes to the portal's `SettingChanged` for the key on a thread of its own
-//!   and reads the key once more after subscribing, so no change between the launch read and the subscription is lost.
-//!   Each value is debounced on the main loop (upstream's 0.05 s) and lands in [`AppState::appearance_changed`].
+//! - Linux ([`portal`]): the XDG settings portal's `org.freedesktop.appearance` `color-scheme` over `zbus`, which is
+//!   what libadwaita follows on every desktop that runs a portal backend (GNOME, KDE, the wlroots portals, darkman).
+//! - Windows: GPUI's own reading of the system's app mode (`WindowAppearance`, from `UISettings`) and its windows'
+//!   appearance observation, which GPUI updates on `WM_SETTINGCHANGE` (`ImmersiveColorSet`).
+//!
+//! - **Launch**: [`DesktopSide::read`] reads the side before the config loads, so the first terminal starts on the
+//!   desktop's side of a dual `theme = light:…,dark:…`. On Linux no session bus, no portal, or a portal without the
+//!   key reads as light, libadwaita's default for "no preference".
+//! - **Following**: on Linux [`Portal::follow`] subscribes to the portal's `SettingChanged` for the key on a thread of
+//!   its own and reads the key once more after subscribing, so no change between the launch read and the subscription
+//!   is lost; on Windows every window reports its appearance when GPUI sees it change ([`observe_window`]). Each value
+//!   is debounced on the main loop (upstream's 0.05 s) and lands in [`AppState::appearance_changed`].
 //! - **The flip**: as upstream, a new side re-feeds the config only while following the system appearance with both
 //!   theme slots set ([`Appearance::flip_reloads`]); every reload, whichever path asked for it, loads the side
 //!   [`Appearance::side`] gives and records it ([`AppState::config_applied`]). The terminals keep their font sizes
@@ -21,180 +26,97 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use gpui_kit::{App, Subscription, Window};
 use ngterm_core::persist::AppSettings;
-use zbus::blocking::{Connection, Proxy};
-use zbus::proxy::CacheProperties;
-use zbus::zvariant::{OwnedValue, Value};
 
 use crate::state::{AppState, Poster};
 
-/// The portal's bus name, object path and settings interface.
-pub const PORTAL: &str = "org.freedesktop.portal.Desktop";
-pub const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
-pub const SETTINGS_INTERFACE: &str = "org.freedesktop.portal.Settings";
-/// The setting: its namespace and key.
-pub const NAMESPACE: &str = "org.freedesktop.appearance";
-pub const KEY: &str = "color-scheme";
+#[cfg(target_os = "linux")]
+pub mod portal;
+#[cfg(target_os = "linux")]
+pub use portal::{ColorScheme, KEY, NAMESPACE, PORTAL, PORTAL_PATH, Portal, SETTINGS_INTERFACE};
 
 /// How long a burst of appearance changes settles before one report (upstream's `appearanceDebounceInterval`).
 pub const DEBOUNCE: Duration = Duration::from_millis(50);
-/// How long a portal call may take: the launch waits for the first read, which may start the portal.
-const CALL_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// The portal's `color-scheme` value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ColorScheme {
-    /// 0, and any value the specification does not define.
-    #[default]
-    NoPreference,
-    /// 1.
-    PreferDark,
-    /// 2.
-    PreferLight,
+/// The desktop's side as the platform reports it, read at launch and followed from then on.
+pub struct DesktopSide {
+    #[cfg(target_os = "linux")]
+    portal: Option<Portal>,
+    dark: bool,
 }
 
-impl ColorScheme {
-    /// The scheme of the portal's value `value`.
+impl DesktopSide {
+    /// The desktop's side now, before the config loads.
     #[must_use]
-    pub fn from_value(value: u32) -> Self {
-        match value {
-            1 => Self::PreferDark,
-            2 => Self::PreferLight,
-            _ => Self::NoPreference,
+    pub fn read(cx: &App) -> Self {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = cx;
+            let portal = Portal::session();
+            let dark = portal.as_ref().is_some_and(Portal::is_dark);
+            Self { portal, dark }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let dark = is_dark(cx.window_appearance());
+            tracing::info!(dark, "appearance: the system's app mode");
+            Self { dark }
         }
     }
 
-    /// The scheme a setting's `value` carries: a `u32`, possibly wrapped in variants (the deprecated `Read` wraps it
-    /// twice); `None` for any other type.
-    #[must_use]
-    pub fn from_variant(value: &Value<'_>) -> Option<Self> {
-        match value {
-            Value::U32(raw) => Some(Self::from_value(*raw)),
-            Value::Value(inner) => Self::from_variant(inner),
-            _ => None,
-        }
-    }
-
-    /// Whether the desktop prefers dark: no preference is light, as libadwaita reads it.
-    #[must_use]
-    pub fn is_dark(self) -> bool {
-        self == Self::PreferDark
-    }
-}
-
-/// A connection to the desktop's settings portal.
-pub struct Portal {
-    connection: Connection,
-}
-
-impl Portal {
-    /// The portal on the session bus; `None` (logged) without one.
-    #[must_use]
-    pub fn session() -> Option<Self> {
-        let connected = zbus::blocking::connection::Builder::session()
-            .map(|builder| builder.method_timeout(CALL_TIMEOUT))
-            .and_then(zbus::blocking::connection::Builder::build);
-        match connected {
-            Ok(connection) => Some(Self::over(connection)),
-            Err(error) => {
-                tracing::info!(%error, "appearance: no session bus; the desktop reads as light");
-                None
-            }
-        }
-    }
-
-    /// The portal reached over `connection`.
-    #[must_use]
-    pub fn over(connection: Connection) -> Self {
-        Self { connection }
-    }
-
-    fn proxy(&self) -> zbus::Result<Proxy<'static>> {
-        zbus::blocking::proxy::Builder::new(&self.connection)
-            .destination(PORTAL)?
-            .path(PORTAL_PATH)?
-            .interface(SETTINGS_INTERFACE)?
-            .cache_properties(CacheProperties::No)
-            .build()
-    }
-
-    /// The desktop's color scheme now: `ReadOne`, else the deprecated `Read` of portals before version 2.
-    ///
-    /// # Errors
-    ///
-    /// The portal is not there, does not have the setting, or answered with another type.
-    pub fn color_scheme(&self) -> zbus::Result<ColorScheme> {
-        let proxy = self.proxy()?;
-        let value: OwnedValue = match proxy.call("ReadOne", &(NAMESPACE, KEY)) {
-            Ok(value) => value,
-            Err(zbus::Error::MethodError(name, _, _))
-                if name.as_str() == "org.freedesktop.DBus.Error.UnknownMethod" =>
-            {
-                proxy.call("Read", &(NAMESPACE, KEY))?
-            }
-            Err(error) => return Err(error),
-        };
-        ColorScheme::from_variant(&value).ok_or_else(|| zbus::Error::Failure(format!("{NAMESPACE} {KEY}: {value:?}")))
-    }
-
-    /// Whether the desktop prefers dark now; light when the portal cannot say (logged).
+    /// Whether the desktop is on the dark side.
     #[must_use]
     pub fn is_dark(&self) -> bool {
-        match self.color_scheme() {
-            Ok(scheme) => {
-                tracing::info!(?scheme, "appearance: the desktop's color scheme");
-                scheme.is_dark()
-            }
-            Err(error) => {
-                tracing::info!(%error, "appearance: the settings portal has no color scheme; the desktop reads as light");
-                false
-            }
-        }
+        self.dark
     }
 
-    /// Reports every color scheme the portal announces from now on to `report`, on a thread of its own, starting with
-    /// one read made after subscribing. The thread ends with the connection.
-    ///
-    /// # Errors
-    ///
-    /// The thread could not start.
-    pub fn follow(self, report: impl Fn(ColorScheme) + Send + 'static) -> std::io::Result<std::thread::JoinHandle<()>> {
-        std::thread::Builder::new()
-            .name("ngterm-appearance".to_owned())
-            .spawn(move || self.listen(&report))
-    }
-
-    fn listen(&self, report: &dyn Fn(ColorScheme)) {
-        let changes = self
-            .proxy()
-            .and_then(|proxy| proxy.receive_signal_with_args("SettingChanged", &[(0, NAMESPACE), (1, KEY)]));
-        let changes = match changes {
-            Ok(changes) => changes,
-            Err(error) => {
-                tracing::warn!(%error, "appearance: cannot follow the settings portal");
-                return;
-            }
-        };
-        if let Ok(scheme) = self.color_scheme() {
-            report(scheme);
+    /// Follows the desktop into the app state behind `poster` (Linux: the portal's thread; elsewhere the windows
+    /// report, [`observe_window`]).
+    pub fn follow(self, poster: &Poster) {
+        #[cfg(target_os = "linux")]
+        if let Some(portal) = self.portal
+            && let Err(error) = follow_into(portal, poster.clone())
+        {
+            tracing::error!(%error, "appearance: the desktop's light/dark changes are not followed");
         }
-        for message in changes {
-            let body = message.body();
-            match body.deserialize::<(String, String, OwnedValue)>() {
-                Ok((_, _, value)) => {
-                    if let Some(scheme) = ColorScheme::from_variant(&value) {
-                        report(scheme);
-                    } else {
-                        tracing::debug!(?value, "appearance: a color scheme of another type");
-                    }
-                }
-                Err(error) => tracing::debug!(%error, "appearance: an unreadable setting change"),
-            }
-        }
-        tracing::debug!("appearance: the settings portal's signals ended");
+        #[cfg(not(target_os = "linux"))]
+        let _ = (self, poster);
     }
 }
 
+/// Whether GPUI's `appearance` is a dark one.
+#[must_use]
+pub fn is_dark(appearance: gpui_kit::WindowAppearance) -> bool {
+    matches!(
+        appearance,
+        gpui_kit::WindowAppearance::Dark | gpui_kit::WindowAppearance::VibrantDark
+    )
+}
+
+/// Reports `window`'s appearance into the app state behind `poster` whenever GPUI sees it change, debounced as the
+/// portal's reports are: the Windows source (see the module docs); `None` on Linux, which follows the portal.
+pub fn observe_window<V: 'static>(
+    poster: &Poster,
+    window: &mut Window,
+    cx: &mut gpui_kit::Context<V>,
+) -> Option<Subscription> {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (poster, window, cx);
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        static LATEST: std::sync::OnceLock<Arc<AtomicU64>> = std::sync::OnceLock::new();
+        let latest = Arc::clone(LATEST.get_or_init(Arc::default));
+        let poster = poster.clone();
+        Some(cx.observe_window_appearance(window, move |_, window, _| {
+            debounce(&poster, &latest, is_dark(window.appearance()));
+        }))
+    }
+}
+
+#[cfg(target_os = "linux")]
 /// Follows the portal into the app state: each scheme is debounced on the main loop by [`DEBOUNCE`] (a later one
 /// supersedes it) and then lands in [`AppState::appearance_changed`].
 ///

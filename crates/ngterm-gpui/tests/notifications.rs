@@ -12,6 +12,10 @@
 //! takes the session's control slot (upstream #772): the main pane's OSC 9 beside it gets a banner of its own, a second
 //! `notify` replaces the first, a clear withdraws the control banner with the panes', and a click on it reveals the
 //! main pane.
+//!
+//! Linux only: the freedesktop notification server on a private D-Bus bus.
+
+#![cfg(target_os = "linux")]
 
 use std::collections::HashMap;
 use std::io::{BufRead as _, BufReader};

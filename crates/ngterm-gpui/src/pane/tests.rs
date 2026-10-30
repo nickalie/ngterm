@@ -7,6 +7,32 @@ use ngterm_term::{ExitStatus, PaneEvent};
 
 use super::*;
 
+/// A pane program that prints nothing of its own and runs until its input ends, the terminal echoing what is typed:
+/// `cat` (`/bin/sh -c 'exec cat'`), and on Windows `findstr`, which reads its input line by line in the console's
+/// line mode and repeats every line.
+pub(crate) fn idle_program() -> ngterm_term::PaneCommand {
+    if cfg!(windows) {
+        ngterm_term::PaneCommand::new("findstr.exe").args(["/R", "^"])
+    } else {
+        ngterm_term::PaneCommand::new("/bin/sh").arg("-c").arg("exec cat")
+    }
+}
+
+/// What ends [`idle_program`]'s input when typed: Ctrl+D, and on Windows Ctrl+Z and Enter.
+pub(crate) const IDLE_EOF: &[u8] = if cfg!(windows) { b"\x1a\r" } else { b"\x04" };
+
+/// [`idle_program`] with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed.
+pub(crate) fn idle_command() -> ngterm_term::PaneCommand {
+    let mut command = idle_program();
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+            command = command.env_remove(key);
+        }
+    }
+    command
+}
+
 fn context() -> PaneContext {
     PaneContext {
         socket: "/tmp/a.sock".to_owned(),

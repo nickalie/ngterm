@@ -46,6 +46,7 @@ fn frame(host: QuickHost, zoomed: bool, sized_for: Option<DisplayId>, landed: Op
     }
 }
 
+#[cfg(target_os = "linux")]
 fn display(id: DisplayId, width: f32, height: f32) -> Target {
     Target {
         id,
@@ -58,6 +59,8 @@ fn display(id: DisplayId, width: f32, height: f32) -> Target {
 
 // MARK: - decisions
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_host_is_a_layer_surface_on_wayland_and_a_window_elsewhere() {
     assert_eq!(first_host("Wayland"), QuickHost::LayerShell);
@@ -70,6 +73,8 @@ fn the_host_is_a_layer_surface_on_wayland_and_a_window_elsewhere() {
     assert_eq!(first_host(""), QuickHost::Window);
 }
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn only_a_compositor_without_layer_shell_moves_the_panel_to_a_window() {
     let refused: gpui_kit::Result<()> = Err(gpui_kit::layer_shell::LayerShellNotSupportedError.into());
@@ -147,6 +152,7 @@ fn a_layer_surface_landing_off_its_estimate_is_refitted_once() {
 }
 
 /// The layer surface's options, split out.
+#[cfg(target_os = "linux")]
 fn layer(options: &gpui_kit::WindowOptions) -> &gpui_kit::layer_shell::LayerShellOptions {
     let WindowKind::LayerShell(layer) = &options.kind else {
         panic!("not a layer surface: {:?}", options.kind);
@@ -161,6 +167,8 @@ fn windowed_size(options: &gpui_kit::WindowOptions) -> gpui_kit::Size<gpui_kit::
     }
 }
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_layer_surface_takes_the_gtk_builds_attributes_centered_on_its_display() {
     use gpui_kit::layer_shell::{Anchor, KeyboardInteractivity, Layer};
@@ -185,6 +193,8 @@ fn the_layer_surface_takes_the_gtk_builds_attributes_centered_on_its_display() {
     assert_eq!(named.display_id, Some(one()), "a refit names the output it landed on");
 }
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_zoomed_layer_surface_fills_its_output() {
     use gpui_kit::layer_shell::Anchor;
@@ -200,11 +210,15 @@ fn the_zoomed_layer_surface_fills_its_output() {
     }
 }
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_centered_layer_surface_needs_a_display() {
     assert!(window_options(QuickHost::LayerShell, fit(false), None, false, "io.test").is_none());
 }
 
+/// Linux only: the layer surface is Wayland's (layer-shell), GPUI's `layer_shell` options with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_placement_follows_a_fractional_outputs_logical_size() {
     // eDP-1 at scale 1.75 (2880x1800): its logical size, as xdg-output reports it, and what the integer scale gave
@@ -242,7 +256,12 @@ fn the_window_host_is_undecorated_centered_and_maximized_for_the_zoom() {
         },
     };
     let options = window_options(QuickHost::Window, fit(false), Some(&monitor), false, "io.test").unwrap();
-    assert_eq!(options.kind, WindowKind::Normal);
+    let kind = if cfg!(windows) {
+        WindowKind::PopUp
+    } else {
+        WindowKind::Normal
+    };
+    assert_eq!(options.kind, kind);
     assert_eq!(options.window_decorations, Some(gpui_kit::WindowDecorations::Client));
     assert_eq!(
         options.window_background,
@@ -312,17 +331,23 @@ impl MainLoop<AppState> for Posted {
     }
 }
 
-/// `/bin/sh -c <script>` with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed, whatever the launch asked.
-fn quiet_launcher(launches: Arc<Mutex<Vec<Launch>>>, script: &'static str) -> crate::pane::Launcher {
+/// `/bin/sh -c <script>` with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed.
+fn script_command(script: &str) -> PaneCommand {
+    let mut command = PaneCommand::new("/bin/sh").arg("-c").arg(script);
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+            command = command.env_remove(key);
+        }
+    }
+    command
+}
+
+/// Starts `command` whatever the launch asked.
+fn quiet_launcher(launches: Arc<Mutex<Vec<Launch>>>, command: PaneCommand) -> crate::pane::Launcher {
     Rc::new(move |launch: &Launch| -> Spawn {
         launches.lock().unwrap().push(launch.clone());
-        let mut command = PaneCommand::new("/bin/sh").arg("-c").arg(script);
-        for (key, _) in std::env::vars_os() {
-            let name = key.to_string_lossy();
-            if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
-                command = command.env_remove(key);
-            }
-        }
+        let command = command.clone();
         Box::new(move |config: PaneConfig| Pane::spawn(&command, &config))
     })
 }
@@ -338,12 +363,17 @@ struct Harness<'a> {
     cx: &'a mut TestAppContext,
 }
 
+/// The harness with the quick terminal running [`idle_command`](crate::pane::tests::idle_command).
 fn harness(cx: &mut TestAppContext) -> Harness<'_> {
-    harness_running(cx, "exec cat")
+    harness_with(cx, crate::pane::tests::idle_command())
 }
 
 /// The harness with the quick terminal running `/bin/sh -c <script>`.
-fn harness_running<'a>(cx: &'a mut TestAppContext, script: &'static str) -> Harness<'a> {
+fn harness_running<'a>(cx: &'a mut TestAppContext, script: &str) -> Harness<'a> {
+    harness_with(cx, script_command(script))
+}
+
+fn harness_with(cx: &mut TestAppContext, command: PaneCommand) -> Harness<'_> {
     // the pane's thread wakes its pump from outside the test scheduler
     cx.executor().allow_parking();
     let (library, _, _) = crate::pane::tests::three_sessions();
@@ -368,7 +398,7 @@ fn harness_running<'a>(cx: &'a mut TestAppContext, script: &'static str) -> Harn
             socket: "/tmp/ngterm-test.sock".to_owned(),
             program_version: "1.2.3".to_owned(),
         },
-        quiet_launcher(Arc::clone(&launches), script),
+        quiet_launcher(Arc::clone(&launches), command),
         TerminalConfig::default(),
         Arc::downgrade(&main_loop),
         Watermarks {
@@ -531,7 +561,13 @@ fn the_panel_goes_with_its_shell_and_the_next_show_starts_afresh(cx: &mut TestAp
     });
     let key = h.panel.shared().unwrap().key();
     // the shell ends: the panel goes with its terminal
-    h.panel.shared().unwrap().pane().unwrap().write(&[4]).unwrap();
+    h.panel
+        .shared()
+        .unwrap()
+        .pane()
+        .unwrap()
+        .write(crate::pane::tests::IDLE_EOF)
+        .unwrap();
     h.until("the panel to go with its shell", |h| h.panel.window().is_none());
     assert!(h.panel.shared().is_none());
     assert!(!h.state.core.quick_visible() && !h.state.core.quick_has_surface());
@@ -617,6 +653,7 @@ fn a_hide_the_panel_starts_itself_forgets_the_keys_the_keymap_consumed(cx: &mut 
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_hide_reports_the_focus_leaving_and_the_next_show_its_return(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf '\\033[?1004hready\\r\\n'; exec cat -v";
     let mut h = harness_running(cx, script);

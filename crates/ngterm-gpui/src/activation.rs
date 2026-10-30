@@ -9,18 +9,40 @@
 //!   stealing may refuse, so this sends it with the startup id's `_TIME`, sets `_NET_WM_USER_TIME` and ends the
 //!   startup sequence (`remove: ID=…`), on a connection of its own to the same display (GPUI patch 3 later).
 //! - Without a token or a startup id, GPUI's own `activate_window`; headless, nothing.
+//! - Windows: GPUI's own `activate_window` (restore, `SetForegroundWindow`), which Windows lets through because the
+//!   forwarding launch allowed this process to take the foreground (`AllowSetForegroundWindow`, `instance/windows.rs`);
+//!   a launch carries no token there and its own first window needs no startup sequence ended.
 
+#[cfg(target_os = "linux")]
 use std::error::Error;
+#[cfg(target_os = "linux")]
 use std::ffi::c_void;
 
 use gpui_kit::{App, Window};
+#[cfg(target_os = "linux")]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
 use crate::instance::Activation;
 
+#[cfg(target_os = "linux")]
 type Failure = Box<dyn Error + Send + Sync>;
 
+/// Raises `window` for `activation`: GPUI's own request on Windows (see the module docs).
+#[cfg(windows)]
+pub fn activate(window: &mut Window, cx: &App, activation: &Activation) {
+    let _ = (cx, activation);
+    window.activate_window();
+    tracing::info!("activation: window raised");
+}
+
+/// This process's own launch opened `window`, its first: nothing to end on Windows (see the module docs).
+#[cfg(windows)]
+pub fn launched(window: &mut Window, cx: &App, activation: &Activation) {
+    let _ = (window, cx, activation);
+}
+
 /// Raises `window` for `activation`, by the display server GPUI runs on.
+#[cfg(target_os = "linux")]
 pub fn activate(window: &mut Window, cx: &App, activation: &Activation) {
     let (token, startup_id) = (activation.token.as_deref(), activation.startup_id.as_deref());
     // GtkApplication sends one value under both keys; each server prefers its own
@@ -46,6 +68,7 @@ pub fn activate(window: &mut Window, cx: &App, activation: &Activation) {
 /// This process's own launch opened `window`, its first: on X11 the launch's startup sequence ends here (GPUI handles
 /// neither `DESKTOP_STARTUP_ID` nor startup notification); on Wayland GPUI has already activated its first toplevel
 /// with the launch's token.
+#[cfg(target_os = "linux")]
 pub fn launched(window: &mut Window, cx: &App, activation: &Activation) {
     let Some(startup_id) = activation.startup_id.as_deref() else {
         return;
@@ -60,6 +83,7 @@ pub fn launched(window: &mut Window, cx: &App, activation: &Activation) {
 }
 
 /// Raises `window` with what the launch `handed` over through `with`, or GPUI's own request without it.
+#[cfg(target_os = "linux")]
 fn raise(
     window: &mut Window,
     handed: Option<&str>,
@@ -109,6 +133,7 @@ pub fn message_chunks(message: &str) -> Vec<[u8; 20]> {
         .collect()
 }
 
+#[cfg(target_os = "linux")]
 mod wayland {
     use wayland_backend::client::{Backend, ObjectId};
     use wayland_client::globals::{GlobalListContents, registry_queue_init};
@@ -173,6 +198,7 @@ mod wayland {
     }
 }
 
+#[cfg(target_os = "linux")]
 mod x11 {
     use x11rb::connection::Connection as _;
     use x11rb::protocol::xproto::{

@@ -60,7 +60,7 @@ fn the_window_controls_follow_the_layout_and_what_the_window_manager_supports() 
         tiling: Tiling::default(),
     };
     let all = WindowControls::default();
-    let standard = WindowButtonLayout::linux_default();
+    let standard = default_button_layout();
     assert_eq!(
         controls(client, all, standard, false),
         [WindowButton::Minimize, WindowButton::Maximize, WindowButton::Close]
@@ -76,7 +76,7 @@ fn the_window_controls_follow_the_layout_and_what_the_window_manager_supports() 
         ..WindowControls::default()
     };
     assert_eq!(controls(client, tiling_wm, standard, false), [WindowButton::Close]);
-    let left = WindowButtonLayout::parse("close,minimize:").unwrap();
+    let left = button_layout(&[WindowButton::Close, WindowButton::Minimize], &[]);
     assert_eq!(
         controls(client, all, left, true),
         [WindowButton::Close, WindowButton::Minimize]

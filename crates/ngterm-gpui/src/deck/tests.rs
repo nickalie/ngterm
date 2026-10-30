@@ -24,10 +24,12 @@ use ngterm_proto::{AppIdentity, Args, Command, ControlLiveEndpoint, Request};
 use ngterm_term::{Launch, Pane, PaneCommand, PaneConfig};
 
 use super::*;
-use crate::pane::tests::three_sessions;
+use crate::pane::tests::{idle_command, three_sessions};
 use crate::terminal::Spawn;
 
 const DEADLINE: Duration = Duration::from_secs(20);
+/// How long [`Harness::quiet`] waits with nothing posted.
+const QUIET: Duration = Duration::from_secs(1);
 
 // MARK: - the plan
 
@@ -143,23 +145,11 @@ impl MainLoop<AppState> for Posted {
     }
 }
 
-/// `/bin/sh -c 'exec cat'` with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed.
-fn quiet_shell() -> PaneCommand {
-    let mut command = PaneCommand::new("/bin/sh").arg("-c").arg("exec cat");
-    for (key, _) in std::env::vars_os() {
-        let name = key.to_string_lossy();
-        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
-            command = command.env_remove(key);
-        }
-    }
-    command
-}
-
-/// A launcher that starts [`quiet_shell`] whatever it is asked to launch, keeping each launch.
+/// A launcher that starts [`idle_command`] whatever it is asked to launch, keeping each launch.
 fn test_launcher(launches: Arc<Mutex<Vec<Launch>>>) -> pane::Launcher {
     Rc::new(move |launch: &Launch| -> Spawn {
         launches.lock().unwrap().push(launch.clone());
-        let command = quiet_shell();
+        let command = idle_command();
         Box::new(move |config: PaneConfig| Pane::spawn(&command, &config))
     })
 }
@@ -273,6 +263,25 @@ impl Harness<'_> {
             self.deck.read_with(self.cx, |deck, _| deck.launch(&grant));
         }
         self.cx.run_until_parked();
+    }
+
+    /// Turns until the panes' threads have posted nothing for [`QUIET`], or fails: what a pseudoconsole sends on its own
+    /// once a pane starts (Windows' title and screen setup, whatever the program prints) is in before a test counts
+    /// what one action posts.
+    fn quiet(&mut self) {
+        let deadline = Instant::now() + DEADLINE;
+        let mut calm = Instant::now();
+        loop {
+            if !self.posted.0.lock().unwrap().is_empty() {
+                calm = Instant::now();
+            }
+            self.turn();
+            if calm.elapsed() >= QUIET {
+                return;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for the panes to go quiet");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     /// Turns until `done` holds (the panes' threads run meanwhile), or fails.
@@ -703,7 +712,12 @@ fn live_core(library: WindowLibrary, resources: &Path) -> Core {
             socket_directory: "/tmp/ngterm-live-test".to_owned(),
         },
         wrap: Inputs {
-            executable: "/bin/sh".into(),
+            // an executable file, as the wrap requires
+            executable: if cfg!(windows) {
+                std::env::current_exe().unwrap()
+            } else {
+                "/bin/sh".into()
+            },
             login_shell: Some("/bin/zsh".to_owned()),
             resources_dir: Some(resources.to_path_buf()),
             state_dir: resources.join("state"),
@@ -980,6 +994,10 @@ fn a_session_background_reaches_its_terminals_and_a_pane_override_wins(cx: &mut 
 /// so a program's OSC 11 background lifts its terminal's `background-opacity` to the window's, and its OSC 111 reset
 /// drops the lift; a change of the window opacity follows while the color shows.
 #[gpui_kit::test]
+#[cfg_attr(
+    windows,
+    ignore = "has `cat` repeat an OSC sequence; ConPTY renders a program's output anew"
+)]
 fn a_programs_osc_background_shows_at_the_window_opacity_until_it_resets(cx: &mut TestAppContext) {
     let (library, window, ids) = three_sessions();
     let mut h = harness(cx, core_of(library), window);
@@ -1359,7 +1377,7 @@ fn a_ctrl_click_on_the_hud_opens_its_link_and_a_plain_click_reaches_the_pane(cx:
         let panel = deck.page(session).unwrap().hud().panel().unwrap();
         (panel.terminal().clone(), panel.view().clone())
     });
-    // the test launcher runs `cat`: the tty echoes what is written, on the panel's first row
+    // the test launcher runs the idle program: the terminal echoes what is written, on the panel's first row
     let pane = terminal.read_with(h.cx, |terminal, _| terminal.shared().pane().unwrap());
     pane.write(b"https://example.com/hud").unwrap();
     h.until("the link to show on the panel", |h| {

@@ -8,6 +8,7 @@
 //! (1000 units per em, every ASCII advance 600, ascent 1025, descent -275), the real-font test uses GPUI's Linux text
 //! system.
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::rc::Rc;
@@ -207,6 +208,10 @@ fn real_fonts() -> TestAppContext {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
+)]
 fn a_known_font_measures_as_ghostty_measures_it() {
     let text_system = Arc::new(gpui_wgpu::CosmicTextSystem::new_without_system_fonts(
         "DejaVu Sans Mono",
@@ -339,6 +344,7 @@ fn the_cursor_color_prefers_the_program_then_the_config_then_the_foreground() {
 // row plans
 
 #[test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn runs_split_by_style_and_keep_wide_characters_on_their_columns() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane(
@@ -377,6 +383,7 @@ fn runs_split_by_style_and_keep_wide_characters_on_their_columns() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn kitty_placeholder_cells_shape_no_text_but_keep_their_background() {
     let dir = tempfile::tempdir().unwrap();
     // a, then two placeholder cells (U+10EEEE U+0305 U+0305, image id 1 in the foreground) on a red background, b
@@ -406,6 +413,7 @@ fn kitty_placeholder_cells_shape_no_text_but_keep_their_background() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn backgrounds_merge_and_decorations_span_their_cells() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane(
@@ -446,6 +454,7 @@ fn backgrounds_merge_and_decorations_span_their_cells() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_path_link_ends_at_the_path_not_at_the_rows_blank_tail() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane("printf 'see ./notes.md'; exec sleep 5", dir.path());
@@ -461,6 +470,7 @@ fn a_path_link_ends_at_the_path_not_at_the_rows_blank_tail() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn marks_color_the_selection_and_search_and_a_hovered_link_is_underlined() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane("printf 'hello world\\033[4m!\\033[0m'; exec sleep 5", dir.path());
@@ -524,6 +534,7 @@ fn search_highlights_spanning_rows_mark_every_row() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_row_cache_rebuilds_only_rows_that_changed() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane(
@@ -697,6 +708,7 @@ fn wait_painted(view: &Entity<TerminalView>, cx: &mut VisualTestContext, needle:
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_owner_starts_the_pane_at_its_grid_and_resizes_it(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let script = "printf 'ready'; read _; stty size; read _; stty size; exec cat";
@@ -726,6 +738,7 @@ fn the_owner_starts_the_pane_at_its_grid_and_resizes_it(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn glyphs_sit_at_their_clusters_columns(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let terminal = terminal(cx, "printf 'a日b\\342\\200\\224c'; exec sleep 5", dir.path());
@@ -748,6 +761,7 @@ fn glyphs_sit_at_their_clusters_columns(cx: &mut TestAppContext) {
 const CLUSTERS: &str = "a\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}e\u{301}\u{2764}\u{FE0F}x";
 
 #[test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn an_emoji_sequence_and_a_combining_mark_are_one_cluster_each_on_their_columns() {
     let dir = tempfile::tempdir().unwrap();
     let pane = pane(&format!("printf '{CLUSTERS}'; exec sleep 5"), dir.path());
@@ -774,6 +788,7 @@ fn an_emoji_sequence_and_a_combining_mark_are_one_cluster_each_on_their_columns(
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_grapheme_width_method_reaches_a_new_terminal(cx: &mut TestAppContext) {
     let legacy = |text: &str| {
         let mut loader = ngterm_core::ghostty_config::Loader::new(None);
@@ -805,6 +820,7 @@ fn the_grapheme_width_method_reaches_a_new_terminal(cx: &mut TestAppContext) {
 /// `image-storage-limit` reaches the pane when it starts and again on a reload (Ghostty applies it live): with the
 /// limit at 0 a Kitty transmission stores nothing.
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_image_storage_limit_reaches_the_pane_at_its_start_and_on_a_reload(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let dir = tempfile::tempdir().unwrap();
@@ -853,6 +869,7 @@ fn the_image_storage_limit_reaches_the_pane_at_its_start_and_on_a_reload(cx: &mu
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn sprite_characters_leave_the_font_and_split_the_runs(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     // a ─ ┼ b, a space, a powerline arrow and a braille cell, a space, then a stylized powerline glyph (U+E0C0) the
@@ -900,6 +917,7 @@ impl Render for Pair {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn two_views_draw_one_frame_and_only_the_owner_lays_out(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let terminal = terminal(cx, "printf 'shared'; exec sleep 5", dir.path());
@@ -940,6 +958,7 @@ fn a_view_only_terminal_never_starts_its_pane(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_focused_cursor_blinks_and_an_unfocused_one_does_not(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let terminal = terminal(cx, "printf 'blink'; exec sleep 5", dir.path());
@@ -972,6 +991,7 @@ fn the_focused_cursor_blinks_and_an_unfocused_one_does_not(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_cursor_a_program_starts_blinking_while_idle_blinks(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     // a steady cursor, then the program asks for a blinking one and goes quiet
@@ -998,6 +1018,7 @@ fn a_cursor_a_program_starts_blinking_while_idle_blinks(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_cursor_takes_the_background_of_an_erased_cell(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     // the cursor's cell is blank but erased with a blue background
@@ -1016,6 +1037,7 @@ fn the_cursor_takes_the_background_of_an_erased_cell(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_cell_change_without_a_font_action_is_reported(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, _view, events, cx) = realized(cx, "printf 'ready'; exec sleep 5", dir.path());
@@ -1051,6 +1073,10 @@ fn unstarted_at(cx: &mut TestAppContext, family: &str, font_size: Option<f32>) -
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
+)]
 fn a_config_whose_fonts_change_the_cell_reports_it() {
     let mut cx = real_fonts();
     let (terminal, events) = unstarted(&mut cx, "DejaVu Sans Mono");
@@ -1084,6 +1110,10 @@ fn assert_points(actual: f32, expected: f32) {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
+)]
 fn a_config_reload_resizes_a_terminal_whose_size_the_user_kept() {
     let mut cx = real_fonts();
     let (terminal, events) = unstarted(&mut cx, "DejaVu Sans Mono");
@@ -1103,6 +1133,10 @@ fn a_config_reload_resizes_a_terminal_whose_size_the_user_kept() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
+)]
 fn a_config_reload_keeps_the_size_the_user_zoomed_to() {
     let mut cx = real_fonts();
     let (terminal, events) = unstarted(&mut cx, "DejaVu Sans Mono");
@@ -1119,6 +1153,10 @@ fn a_config_reload_keeps_the_size_the_user_zoomed_to() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
+)]
 fn a_watermark_change_keeps_a_restored_or_replacement_size() {
     // a restored session's persisted size, and the size a takeover or restart replacement carries over
     for start in [18.0, 20.0] {
@@ -1138,6 +1176,10 @@ fn a_watermark_change_keeps_a_restored_or_replacement_size() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
+)]
 fn a_config_reload_resizes_a_restored_size_the_user_did_not_step() {
     // the GTK build's explicit reload: libghostty's re-feed resets a start size the user did not step
     let mut cx = real_fonts();
@@ -1150,6 +1192,10 @@ fn a_config_reload_resizes_a_restored_size_the_user_did_not_step() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
+)]
 fn an_appearance_flip_keeps_a_restored_or_replacement_size() {
     // upstream's `reloadConfigPreservingSessionZoom`, the GTK build's `keep_zoom`: the flip's reload keeps the live
     // size without marking it stepped, so a later explicit reload still takes the configured one
@@ -1167,6 +1213,10 @@ fn an_appearance_flip_keeps_a_restored_or_replacement_size() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
+)]
 fn an_appearance_flip_and_a_reload_keep_the_size_the_user_zoomed_to() {
     let mut cx = real_fonts();
     let (terminal, _events) = unstarted(&mut cx, "DejaVu Sans Mono");
@@ -1239,6 +1289,7 @@ fn surface(terminal: &Entity<Terminal>, cx: &mut VisualTestContext) -> Box<dyn S
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_realized_surface_types_and_reads_back(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, view, events, cx) = realized(cx, "printf 'ready\\r\\n'; exec cat", dir.path());
@@ -1260,6 +1311,7 @@ fn a_realized_surface_types_and_reads_back(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn font_actions_change_the_size_and_the_cell_at_once(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, _view, events, cx) = realized(cx, "printf 'ready'; exec cat", dir.path());
@@ -1302,12 +1354,13 @@ fn clipboard_text(cx: &mut VisualTestContext) -> String {
 }
 
 fn primary_text(cx: &mut VisualTestContext) -> String {
-    cx.update(|_, cx| cx.read_from_primary())
+    cx.update(|_, cx| super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx))
         .and_then(|item| item.text())
         .unwrap_or_default()
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn search_actions_report_performed_as_libghostty_did(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, view, events, cx) = realized(cx, "printf 'ready'; exec cat", dir.path());
@@ -1377,6 +1430,7 @@ fn copied(terminal: &Entity<Terminal>, cx: &mut VisualTestContext, action: &str)
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn copy_actions_follow_their_formats(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, _view, _events, cx) = realized(cx, "printf 'ready \\033[31mred\\033[0m'; exec cat", dir.path());
@@ -1414,13 +1468,20 @@ fn select_all_copies(
     };
     terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("standard".into()));
-    cx.update(|_, cx| cx.write_to_primary(gpui_kit::ClipboardItem::new_string("primary".into())));
+    cx.update(|_, cx| {
+        super::selection_clipboard::write(
+            ngterm_term::ClipboardLocation::Selection,
+            gpui_kit::ClipboardItem::new_string("primary".into()),
+            cx,
+        );
+    });
     assert!(perform(terminal, cx, "select_all"));
     cx.run_until_parked();
     (clipboard_text(cx), primary_text(cx))
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn select_all_copies_per_copy_on_select(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, _view, _events, cx) = realized(cx, "printf 'ready  \\r\\nnext'; exec cat", dir.path());
@@ -1445,6 +1506,7 @@ fn select_all_copies_per_copy_on_select(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn search_selection_takes_the_selection_untrimmed(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, _view, events, cx) = realized(cx, "printf 'ready  x'; exec cat", dir.path());
@@ -1458,6 +1520,7 @@ fn search_selection_takes_the_selection_untrimmed(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn the_url_and_title_copies_follow_the_gtk_build(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, _view, _events, cx) = realized(cx, "printf 'ready'; exec cat", dir.path());
@@ -1475,8 +1538,12 @@ fn take_screen_file(cx: &mut VisualTestContext) -> (String, String) {
     cx.run_until_parked();
     let path = std::path::PathBuf::from(clipboard_text(cx));
     let text = std::fs::read_to_string(&path).expect("the screen file exists");
-    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "readable by the user only");
+    // on Windows the file takes the user's own temporary directory's access
+    #[cfg(unix)]
+    {
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "readable by the user only");
+    }
     let name = path.file_name().unwrap().to_string_lossy().into_owned();
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     (name, text)
@@ -1491,6 +1558,7 @@ fn opened(events: &Events) -> Option<std::path::PathBuf> {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn screen_files_are_written_and_copied(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, _view, events, cx) = realized(cx, "printf 'ready \\033[31mred\\033[0m'; exec cat", dir.path());
@@ -1512,6 +1580,7 @@ fn screen_files_are_written_and_copied(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn screen_files_are_opened_and_pasted(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, view, events, cx) = realized(cx, "printf 'ready'; exec cat", dir.path());
@@ -1537,6 +1606,7 @@ fn screen_files_are_opened_and_pasted(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn scroll_selection_and_mouse_actions(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, view, _events, cx) = realized(cx, "seq 1 40; printf 'ready'; exec cat", dir.path());
@@ -1567,6 +1637,7 @@ fn scroll_selection_and_mouse_actions(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn read_only_keeps_the_users_input_from_the_program(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, view, events, cx) = realized(cx, "stty -echo; printf 'ready'; exec cat", dir.path());
@@ -1592,6 +1663,7 @@ fn read_only_keeps_the_users_input_from_the_program(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn clear_screen_and_reset(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, view, _events, cx) = realized(cx, "seq 1 40; printf 'ready'; exec cat", dir.path());
@@ -1606,6 +1678,7 @@ fn clear_screen_and_reset(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn clear_screen_is_not_performed_on_the_alternate_screen(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, _view, _events, cx) = realized(cx, "printf '\\033[?1049hready'; exec cat", dir.path());
@@ -1613,6 +1686,7 @@ fn clear_screen_is_not_performed_on_the_alternate_screen(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn paste_and_copy_go_through_the_clipboard(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     let (terminal, view, events, cx) = realized(cx, "printf 'ready\\r\\n'; exec cat", dir.path());
@@ -1636,6 +1710,7 @@ fn paste_and_copy_go_through_the_clipboard(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
 fn a_config_reload_reaches_the_pane_and_the_views(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
     // OSC 10 overrides the foreground; the theme's background still comes through

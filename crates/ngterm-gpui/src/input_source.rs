@@ -28,7 +28,8 @@
 //! - Windows ([`windows`]): the installed layouts (`GetKeyboardLayoutList`), the stored id the KLID,
 //!   `ActivateKeyboardLayout` for the process on the UI thread.
 //!
-//! The macOS and Windows forms are not built on macOS/Windows by CI until ngterm-gpui joins `cross-platform.yml`.
+//! The Windows form is built and tested on the Windows runner (`cross-platform.yml`); the macOS form is not built on
+//! macOS by CI yet.
 
 #[cfg(target_os = "linux")]
 pub mod linux;
@@ -237,6 +238,13 @@ pub fn install(probe: Box<dyn FnOnce() -> Probe>, poster: Option<Poster>, cx: &m
 }
 
 /// This platform's backend on the display server GPUI runs on (`compositor`, GPUI's name for it).
+#[cfg_attr(
+    any(target_os = "macos", windows),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "Linux's probe can fail; the macOS and Windows ones cannot"
+    )
+)]
 fn probe(compositor: &'static str) -> Probe {
     #[cfg(target_os = "linux")]
     return linux::probe(compositor);

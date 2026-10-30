@@ -95,6 +95,11 @@ mod platform {
 
     use super::FolderRequest;
 
+    /// GPUI's prompt takes the accept button's label only: no title, no starting folder.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the Linux form's signature, whose portal request takes it"
+    )]
     pub fn choose(_: AnyWindowHandle, request: FolderRequest, cx: &mut App) -> Task<Option<PathBuf>> {
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -104,12 +109,11 @@ mod platform {
         });
         cx.spawn(async move |_| match picked.await {
             Ok(Ok(Some(paths))) => paths.into_iter().next(),
-            Ok(Ok(None)) => None,
+            Ok(Ok(None)) | Err(_) => None,
             Ok(Err(err)) => {
                 tracing::warn!(%err, "the folder chooser did not open");
                 None
             }
-            Err(_) => None,
         })
     }
 }
