@@ -158,6 +158,17 @@ fn windows_known_folder(env: &dyn Env, folder: KnownFolder) -> Option<PathBuf> {
     if cfg!(windows) { env.known_folder(folder) } else { None }
 }
 
+/// `base` with `relative`, a `/`-separated relative path (`share/ghostty`), joined one component at a time, so the
+/// result carries the platform's one separator: `relative` joined whole keeps its `/` on Windows beside the base's `\`
+/// (`C:\...\ngterm\share/ghostty`), which the paths the app exports and shows would carry on.
+#[must_use]
+pub fn join_relative(base: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .fold(base.to_path_buf(), |path, component| path.join(component))
+}
+
 /// The user's home: `HOME` when set and non-empty, else (on Windows) the profile's known folder, else the password
 /// database ([`Env::passwd_home`]). `HOME` stays first on Windows, where it is seldom set, as the explicit override
 /// an isolated instance (the conformance harness) sets.
@@ -177,7 +188,7 @@ pub fn xdg_data_home(env: &dyn Env) -> Option<PathBuf> {
         .var("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute() && path.as_os_str().len() > 1);
-    explicit.or_else(|| home_dir(env).map(|home| home.join(".local/share")))
+    explicit.or_else(|| home_dir(env).map(|home| join_relative(&home, ".local/share")))
 }
 
 /// The base when no home (on Windows, no known folder) resolves: [`FALLBACK_STATE_DIR`] on Unix; on Windows
@@ -409,6 +420,19 @@ mod tests {
 
     fn home(path: &str) -> MapEnv {
         MapEnv::new().with("HOME", path)
+    }
+
+    #[test]
+    fn a_relative_path_joins_with_the_platform_separator_only() {
+        let sep = std::path::MAIN_SEPARATOR;
+        let base = PathBuf::from(format!("root{sep}stage"));
+        let joined = join_relative(&base, "share/ghostty/");
+        assert_eq!(
+            joined.to_str(),
+            Some(format!("root{sep}stage{sep}share{sep}ghostty").as_str())
+        );
+        assert_eq!(join_relative(&base, "app-BUILD"), base.join("app-BUILD"));
+        assert_eq!(join_relative(&base, ""), base);
     }
 
     #[test]

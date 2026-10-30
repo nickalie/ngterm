@@ -117,7 +117,7 @@ impl Environment {
 fn resource_dir(exe_dir: Option<&Path>, relative: &str) -> Option<PathBuf> {
     let staged = exe_dir
         .and_then(Path::parent)
-        .map(|root| root.join("share/ngterm").join(relative));
+        .map(|root| paths::join_relative(root, "share/ngterm").join(relative));
     let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../resources")
         .join(relative);

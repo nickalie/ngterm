@@ -245,7 +245,7 @@ pub fn candidate_directories(client: Option<&Path>, environment: &HashMap<OsStri
     if let Some(client) = client {
         let bin = client.parent().unwrap_or_else(|| Path::new("/"));
         let prefix = bin.parent().unwrap_or_else(|| Path::new("/"));
-        candidates.push(prefix.join("share/terminfo"));
+        candidates.push(ngterm_core::paths::join_relative(prefix, "share/terminfo"));
     }
     if let Some(terminfo) = environment
         .get(&OsString::from("TERMINFO"))
