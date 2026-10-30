@@ -98,7 +98,8 @@ bundle_vc_runtime() {
   crt="$(vc_runtime_dir "$(wix_arch)")"
   for dll in "$crt"/*.dll; do
     name="$(basename "$dll")"
-    if grep -a -i -q -F "$name" "$bin"/*.exe; then
+    # one the staged tree carries already is kept (a tree repackaged from an installed one)
+    if [[ ! -f "$bin/$name" ]] && grep -a -i -q -F "$name" "$bin"/*.exe; then
       cp "$dll" "$bin/$name"
       echo "→ bundling $name from $crt" >&2
     fi
