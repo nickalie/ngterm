@@ -39,6 +39,8 @@ const HOTKEY_PARAM: usize = 1;
 const SYNC: u32 = WM_APP + 1;
 /// The foreground window changed: its layout may put another virtual key on the chord's position.
 const REFRESH: u32 = WM_APP + 2;
+/// `ERROR_HOTKEY_ALREADY_REGISTERED`: another application holds the chord.
+const HOTKEY_TAKEN: i32 = 1409;
 /// How often the foreground window's layout is read again while a chord's key follows it.
 const LAYOUT_CHECK_MS: u32 = 1000;
 
@@ -132,7 +134,12 @@ impl Held {
         };
         // SAFETY: a thread hotkey (no window) of this thread, its id this thread's own.
         if unsafe { RegisterHotKey(std::ptr::null_mut(), HOTKEY_ID, flags, u32::from(vk)) } == 0 {
-            tracing::warn!(error = %io::Error::last_os_error(), vk, "the global hotkey is taken by another application");
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(HOTKEY_TAKEN) {
+                tracing::warn!(vk, "the global hotkey is taken by another application");
+            } else {
+                tracing::warn!(%error, vk, "the global hotkey was not registered");
+            }
             return;
         }
         self.registered = true;
