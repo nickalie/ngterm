@@ -8,17 +8,18 @@ For a throwaway machine or account (a CI runner, a test VM): it installs into th
 (%LOCALAPPDATA%\Programs\ngterm, the Start menu, the user's PATH) and removes them again, and it fails when an ngterm is
 installed there already. No app is started: ngterm.exe runs only for its build identity.
 
-After the install: the binaries, Ghostty's resources (shell integration, the themes, the compiled xterm-ghostty),
-ngterm's PowerShell integration, the agent-status package, the agent skill, the build identity and the licenses are in
-the staged layout; no session build id (packaging/windows/ngterm.wxs says why); `ngterm.exe --build-identity` names the
-version the installed share\ngterm\app-BUILD records, which is the first package's version; the user's PATH in the
-registry holds bin\ and keeps its value kind (REG_EXPAND_SZ), and a new PowerShell given that PATH finds the installed
-ngtermctl and runs it; the Start-menu shortcut targets ngterm.exe, starts in the user's profile and carries the app id
-as its System.AppUserModel.ID. With -UpgradeMsi, that MSI (a higher version) replaces the first: the first product is
-gone, the second installed, the files in place, and a file in the app's state directory is kept. Then the uninstall,
-after the app id's toast registration is written as the app writes it at each launch: no install folder, shortcut,
-product registration, PATH entry (the user's PATH has its entries and kind back), HKCU\Software\ngterm or app id
-registration is left, and the state directory's file stays (user state is never the installer's).
+After the install: the binaries with the Visual C++ runtime beside them, Ghostty's resources (shell integration, the
+themes, the compiled xterm-ghostty), ngterm's PowerShell integration, the agent-status package, the agent skill, the
+build identity and the licenses are in the staged layout; no session build id (packaging/windows/ngterm.wxs says why);
+`ngterm.exe --build-identity` names the version the installed share\ngterm\app-BUILD records, which is the first
+package's version; the user's PATH in the registry holds bin\ and keeps its value kind (REG_EXPAND_SZ), and a new
+PowerShell given that PATH finds the installed ngtermctl and runs it; the Start-menu shortcut targets ngterm.exe, starts
+in the user's profile and carries the app id as its System.AppUserModel.ID. With -UpgradeMsi, that MSI (a higher
+version) replaces the first: the first product is gone, the second installed, the files in place, and a file in the
+app's state directory is kept. Then the uninstall, after the app id's toast registration is written as the app writes it
+at each launch: no install folder, shortcut, product registration, PATH entry (the user's PATH has its entries and kind
+back), HKCU\Software\ngterm or app id registration is left, and the state directory's file stays (user state is never
+the installer's).
 
 Each msiexec run logs verbosely under -Log. The exit status is 0 when every check passed.
 
@@ -95,7 +96,7 @@ function Test-Installed([string] $msi, [bool] $versioned) {
     $version = Get-MsiProperty $msi 'ProductVersion'
     $code = Get-MsiProperty $msi 'ProductCode'
     Check "product $code ($version) is installed" ((Get-ProductState $code) -eq 5)
-    foreach ($file in 'bin\ngterm.exe', 'bin\ngtermctl.exe', 'bin\ngterm-session.exe',
+    foreach ($file in 'bin\ngterm.exe', 'bin\ngtermctl.exe', 'bin\ngterm-session.exe', 'bin\vcruntime140.dll',
         'share\ghostty\shell-integration\bash\ghostty.bash', 'share\ngterm\shell-integration\pwsh\ngterm.ps1',
         'share\ngterm\agent-status\ngterm-agent-status.ps1', 'share\ngterm\skills\ngterm\SKILL.md',
         'share\ngterm\app-BUILD', 'share\doc\ngterm\NOTICE.txt', 'share\doc\fonts\JetBrainsMono-OFL.txt') {

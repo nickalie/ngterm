@@ -10,8 +10,9 @@
   elevation, into %LOCALAPPDATA%\Programs\ngterm, the per-user programs folder. Each user installs it for themselves.
 
   What it installs:
-  - bin\ngterm.exe, ngtermctl.exe, ngterm-session.exe; bin\ goes onto the user's PATH (removed on uninstall), so a new
-    shell finds ngtermctl
+  - bin\ngterm.exe, ngtermctl.exe, ngterm-session.exe, and beside them the Visual C++ runtime DLLs they import (the app
+    is built against the dynamic runtime, which a fresh Windows lacks: app-local deployment); bin\ goes onto the user's
+    PATH (removed on uninstall), so a new shell finds ngtermctl
   - share\: Ghostty's themes, shell integration and terminfo, ngterm's PowerShell integration, the agent-status package
     and the agent skill, the app's build identity (share\ngterm\app-BUILD); the licenses and notices under share\doc
     (the terminal fonts are compiled into ngterm.exe, so only their licenses are files here)
@@ -72,6 +73,8 @@
       <Component>
         <File Id="ngterm_session.exe" Source="$(var.Root)\bin\ngterm-session.exe" KeyPath="yes" />
       </Component>
+      <!-- the Visual C++ runtime the executables import, deployed beside them (scripts/build-msi.sh) -->
+      <Files Directory="BINFOLDER" Include="$(var.Root)\bin\*.dll" />
     </ComponentGroup>
   </Fragment>
 

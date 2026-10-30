@@ -71,6 +71,43 @@ wix_arch() {
   esac
 }
 
+# The folder of the Visual C++ runtime DLLs this host's MSVC links against, for the package's arch (the latest Visual
+# Studio with the C++ tools, vswhere's; its default redistributable version).
+vc_runtime_dir() {
+  local vswhere install version dir
+  vswhere="$(cygpath -u 'C:\Program Files (x86)')/Microsoft Visual Studio/Installer/vswhere.exe"
+  [[ -x "$vswhere" ]] || die "no vswhere ($vswhere): the Visual C++ runtime comes from a Visual Studio with the C++ tools"
+  install="$("$vswhere" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 \
+    -property installationPath | tr -d '\r')"
+  [[ -n "$install" ]] || die "vswhere found no Visual Studio with the C++ tools"
+  install="$(cygpath -u "$install")"
+  version="$(tr -d '\r\n ' <"$install/VC/Auxiliary/Build/Microsoft.VCRedistVersion.default.txt")" \
+    || die "no default redistributable version under $install"
+  for dir in "$install/VC/Redist/MSVC/$version/$1"/Microsoft.VC*.CRT; do
+    [[ -d "$dir" ]] && { echo "$dir"; return; }
+  done
+  die "no Visual C++ runtime for $1 under $install/VC/Redist/MSVC/$version"
+}
+
+# Copies into BIN the Visual C++ runtime DLLs its executables import (vcruntime140.dll, vcruntime140_1.dll, ...):
+# the app is built against the dynamic runtime, which a fresh Windows does not carry, so the package deploys it beside
+# the executables (Microsoft's app-local deployment; the redistributable files of the Visual Studio license). The
+# Universal CRT (api-ms-win-crt-*) is part of Windows 10 and later.
+bundle_vc_runtime() {
+  local bin="$1" crt dll name
+  crt="$(vc_runtime_dir "$(wix_arch)")"
+  for dll in "$crt"/*.dll; do
+    name="$(basename "$dll")"
+    if grep -a -i -q -F "$name" "$bin"/*.exe; then
+      cp "$dll" "$bin/$name"
+      echo "→ bundling $name from $crt" >&2
+    fi
+  done
+  grep -a -i -q -F vcruntime140.dll "$bin"/*.exe && [[ ! -f "$bin/vcruntime140.dll" ]] \
+    && die "the executables import vcruntime140.dll, which $crt lacks"
+  return 0
+}
+
 # DEFAULT_APP_ID of crates/ngterm-gpui/src/instance.rs.
 app_id() {
   local id
@@ -98,7 +135,8 @@ if [[ -z "$VERSION" ]]; then
 fi
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "an MSI's version is MAJOR.MINOR.PATCH, not '$VERSION' (give --version)"
 
-# the package's root: the staged tree with the licenses and notices beside it
+# the package's root: the staged tree with the licenses and notices beside it, and the Visual C++ runtime beside the
+# executables
 ROOT="$WORK/root"
 cp -R "$STAGED" "$ROOT"
 FONTS="$(fonts_prefix)"
@@ -107,6 +145,7 @@ mkdir -p "$ROOT/share/doc/ngterm" "$ROOT/share/doc/fonts"
 cp "$NATIVE_ROOT/NOTICE" "$ROOT/share/doc/ngterm/NOTICE.txt"
 cp "$NATIVE_ROOT/resources/LICENSE.upstream" "$ROOT/share/doc/ngterm/LICENSE.upstream.txt"
 cp "$FONTS/share/doc/fonts/"* "$ROOT/share/doc/fonts/"
+bundle_vc_runtime "$ROOT/bin"
 
 WIX_TOOL="$(wix_tool)"
 mkdir -p "$(dirname "$OUTPUT")"
