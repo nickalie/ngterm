@@ -560,7 +560,9 @@ fn drags_and_double_and_triple_clicks_select_and_copy_to_primary(cx: &mut TestAp
         Modifiers::default(),
     );
     assert_eq!(f.selection().as_deref(), Some("hello"));
-    let primary = f.cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text()));
+    let primary = f.cx.update(|_, cx| {
+        super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx).and_then(|item| item.text())
+    });
     assert_eq!(primary.as_deref(), Some("hello"));
     // a single click clears it; a double click takes the word, a triple the line
     std::thread::sleep(Duration::from_millis(600));
@@ -700,7 +702,13 @@ fn read_only_mode_keeps_the_users_input_from_the_program(cx: &mut TestAppContext
     f.type_keys("x");
     let view = f.view.clone();
     f.cx.update(|window, cx| view.update(cx, |view, cx| view.replace_text_in_range(None, "y", window, cx)));
-    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("p".into())));
+    f.cx.update(|_, cx| {
+        super::selection_clipboard::write(
+            ngterm_term::ClipboardLocation::Selection,
+            ClipboardItem::new_string("p".into()),
+            cx,
+        );
+    });
     f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Middle, Modifiers::default());
     f.cx.simulate_mouse_up(Fixture::at(1, 1), MouseButton::Middle, Modifiers::default());
     f.click(1, 1, Modifiers::default());
@@ -894,7 +902,13 @@ fn right_click_copy_and_ignore(cx: &mut TestAppContext) {
 fn right_click_ignore_and_context_menu(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
     let f = fixture(cx, script, config("right-click-action = ignore\n"));
-    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("untouched".into())));
+    f.cx.update(|_, cx| {
+        super::selection_clipboard::write(
+            ngterm_term::ClipboardLocation::Selection,
+            ClipboardItem::new_string("untouched".into()),
+            cx,
+        );
+    });
     f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
     f.cx.simulate_mouse_up(Fixture::at(1, 1), MouseButton::Right, Modifiers::default());
     assert_eq!(f.selection(), None);
@@ -906,7 +920,9 @@ fn right_click_ignore_and_context_menu(cx: &mut TestAppContext) {
     f.cx.simulate_mouse_up(Fixture::at(8, 1), MouseButton::Right, Modifiers::default());
     f.cx.run_until_parked();
     assert_eq!(f.selection().as_deref(), Some("world"));
-    let primary = f.cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text()));
+    let primary = f.cx.update(|_, cx| {
+        super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx).and_then(|item| item.text())
+    });
     assert_eq!(primary.as_deref(), Some("world"));
 }
 
@@ -914,7 +930,13 @@ fn right_click_ignore_and_context_menu(cx: &mut TestAppContext) {
 fn middle_click_follows_its_action_not_copy_on_select(cx: &mut TestAppContext) {
     let script = "stty -echo -icanon; printf 'ready\\r\\n'; exec cat";
     let mut f = fixture(cx, script, config("middle-click-action = ignore\n"));
-    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("primary-text".into())));
+    f.cx.update(|_, cx| {
+        super::selection_clipboard::write(
+            ngterm_term::ClipboardLocation::Selection,
+            ClipboardItem::new_string("primary-text".into()),
+            cx,
+        );
+    });
     f.cx.write_to_clipboard(ClipboardItem::new_string("clipboard-text".into()));
     let middle = |f: &mut Fixture<'_>| {
         f.cx.simulate_mouse_down(Fixture::at(1, 1), MouseButton::Middle, Modifiers::default());
@@ -946,12 +968,20 @@ fn middle_click_follows_its_action_not_copy_on_select(cx: &mut TestAppContext) {
 fn copy_on_select_false_leaves_the_primary_selection_alone(cx: &mut TestAppContext) {
     let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
     let mut f = fixture(cx, script, config("copy-on-select = false\n"));
-    f.cx.update(|_, cx| cx.write_to_primary(ClipboardItem::new_string("untouched".into())));
+    f.cx.update(|_, cx| {
+        super::selection_clipboard::write(
+            ngterm_term::ClipboardLocation::Selection,
+            ClipboardItem::new_string("untouched".into()),
+            cx,
+        );
+    });
     f.click(1, 1, Modifiers::default());
     f.click(1, 1, Modifiers::default());
     f.cx.run_until_parked();
     assert_eq!(f.selection().as_deref(), Some("hello"));
-    let primary = f.cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text()));
+    let primary = f.cx.update(|_, cx| {
+        super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx).and_then(|item| item.text())
+    });
     assert_eq!(primary.as_deref(), Some("untouched"));
 }
 
@@ -962,7 +992,11 @@ fn a_mouse_selection_leaves_the_system_clipboard_alone_unless_copy_on_select_say
     let mut f = fixture(cx, script, config(""));
     f.cx.write_to_clipboard(ClipboardItem::new_string("seeded".into()));
     let clipboard = |f: &mut Fixture<'_>| f.cx.read_from_clipboard().and_then(|item| item.text());
-    let primary = |f: &mut Fixture<'_>| f.cx.update(|_, cx| cx.read_from_primary().and_then(|item| item.text()));
+    let primary = |f: &mut Fixture<'_>| {
+        f.cx.update(|_, cx| {
+            super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx).and_then(|item| item.text())
+        })
+    };
     f.click(1, 1, Modifiers::default());
     f.click(1, 1, Modifiers::default());
     f.cx.run_until_parked();

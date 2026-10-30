@@ -251,15 +251,15 @@ fn watch_portal_motion(cx: &mut App) {
 /// Windows's switch now, and again after each changed system setting (the app's hidden window sees them).
 #[cfg(windows)]
 fn watch_system_motion(cx: &mut App) {
-    let (changed, changes) = async_channel::unbounded::<()>();
+    let (notify, settings) = async_channel::unbounded::<()>();
     if let Err(error) = crate::system_window::on_setting_change(move |_| {
-        let _ = changed.try_send(());
+        let _ = notify.try_send(());
     }) {
         tracing::warn!(%error, "the animation switch is read once, not followed");
     }
     cx.spawn(async move |cx| {
         set_motion(cx, client_area_animation());
-        while changes.recv().await.is_ok() {
+        while settings.recv().await.is_ok() {
             set_motion(cx, client_area_animation());
         }
     })

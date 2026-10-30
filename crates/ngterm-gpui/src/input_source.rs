@@ -238,6 +238,13 @@ pub fn install(probe: Box<dyn FnOnce() -> Probe>, poster: Option<Poster>, cx: &m
 }
 
 /// This platform's backend on the display server GPUI runs on (`compositor`, GPUI's name for it).
+#[cfg_attr(
+    any(target_os = "macos", windows),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "Linux's probe can fail; the macOS and Windows ones cannot"
+    )
+)]
 fn probe(compositor: &'static str) -> Probe {
     #[cfg(target_os = "linux")]
     return linux::probe(compositor);

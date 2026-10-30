@@ -1,5 +1,5 @@
 //! The banners on Windows: a seam that drains the queue and posts nothing yet. Windows toasts under ngterm's
-//! AppUserModelID, their clicks and withdrawals arrive with Task 5 of `docs/plans/20261029-windows-support.md`
+//! `AppUserModelID`, their clicks and withdrawals arrive with Task 5 of `docs/plans/20261029-windows-support.md`
 //! (Decisions > Notifications); until then the badge and the `notify` event work as everywhere, and each banner is
 //! logged.
 
@@ -12,9 +12,11 @@ pub async fn run(banners: async_channel::Receiver<Banner>, app_id: String, click
     tracing::info!(app_id, "notify: Windows toasts arrive in Task 5; banners are not shown");
     while let Ok(banner) = banners.recv().await {
         match banner {
-            Banner::Send { identity, .. } => tracing::debug!(%identity, "notify: banner not shown (no toast host yet)"),
+            Banner::Send { identity, .. } => {
+                tracing::debug!(%identity, "notify: banner not shown (no toast host yet)");
+            }
             Banner::Withdraw { identity } => {
-                tracing::debug!(%identity, "notify: nothing to withdraw (no toast host yet)")
+                tracing::debug!(%identity, "notify: nothing to withdraw (no toast host yet)");
             }
         }
     }

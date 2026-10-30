@@ -93,6 +93,7 @@ widestring.workspace = true
 # (`status_glyph.rs`), the relauncher's detached start (`live_runtime.rs`)
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",

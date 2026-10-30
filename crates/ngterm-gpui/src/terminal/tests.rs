@@ -8,6 +8,7 @@
 //! (1000 units per em, every ASCII advance 600, ascent 1025, descent -275), the real-font test uses GPUI's Linux text
 //! system.
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::rc::Rc;
@@ -1302,7 +1303,7 @@ fn clipboard_text(cx: &mut VisualTestContext) -> String {
 }
 
 fn primary_text(cx: &mut VisualTestContext) -> String {
-    cx.update(|_, cx| cx.read_from_primary())
+    cx.update(|_, cx| super::selection_clipboard::read(ngterm_term::ClipboardLocation::Selection, cx))
         .and_then(|item| item.text())
         .unwrap_or_default()
 }
@@ -1414,7 +1415,13 @@ fn select_all_copies(
     };
     terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("standard".into()));
-    cx.update(|_, cx| cx.write_to_primary(gpui_kit::ClipboardItem::new_string("primary".into())));
+    cx.update(|_, cx| {
+        super::selection_clipboard::write(
+            ngterm_term::ClipboardLocation::Selection,
+            gpui_kit::ClipboardItem::new_string("primary".into()),
+            cx,
+        );
+    });
     assert!(perform(terminal, cx, "select_all"));
     cx.run_until_parked();
     (clipboard_text(cx), primary_text(cx))
@@ -1475,8 +1482,12 @@ fn take_screen_file(cx: &mut VisualTestContext) -> (String, String) {
     cx.run_until_parked();
     let path = std::path::PathBuf::from(clipboard_text(cx));
     let text = std::fs::read_to_string(&path).expect("the screen file exists");
-    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "readable by the user only");
+    // on Windows the file takes the user's own temporary directory's access
+    #[cfg(unix)]
+    {
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "readable by the user only");
+    }
     let name = path.file_name().unwrap().to_string_lossy().into_owned();
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     (name, text)

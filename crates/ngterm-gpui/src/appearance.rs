@@ -97,7 +97,7 @@ pub fn is_dark(appearance: gpui_kit::WindowAppearance) -> bool {
 /// portal's reports are: the Windows source (see the module docs); `None` on Linux, which follows the portal.
 pub fn observe_window<V: 'static>(
     poster: &Poster,
-    window: &Window,
+    window: &mut Window,
     cx: &mut gpui_kit::Context<V>,
 ) -> Option<Subscription> {
     #[cfg(target_os = "linux")]

@@ -144,8 +144,10 @@ fn exit_now(status: i32) -> ! {
         use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
         // the exit code Windows records is the status's bits
         let code = u32::from_ne_bytes(status.to_ne_bytes());
+        // SAFETY: a pseudo-handle that needs no closing and is always valid.
+        let process = unsafe { GetCurrentProcess() };
         // SAFETY: the current process's pseudo-handle; nothing of this process runs after the call returns.
-        unsafe { TerminateProcess(GetCurrentProcess(), code) };
+        unsafe { TerminateProcess(process, code) };
         // TerminateProcess of the current process does not return; should it, the ordinary exit ends it
         std::process::exit(status)
     }

@@ -46,6 +46,7 @@ fn frame(host: QuickHost, zoomed: bool, sized_for: Option<DisplayId>, landed: Op
     }
 }
 
+#[cfg(target_os = "linux")]
 fn display(id: DisplayId, width: f32, height: f32) -> Target {
     Target {
         id,

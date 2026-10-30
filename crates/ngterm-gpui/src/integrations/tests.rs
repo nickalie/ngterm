@@ -7,17 +7,21 @@
 
 use std::collections::HashMap;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use gpui_kit::{TestAppContext, VisualTestContext};
+#[cfg(unix)]
+use ngterm_app::integrations::cli;
+#[cfg(unix)]
 use ngterm_app::integrations::cli::LinkStatus;
 use ngterm_app::integrations::hooks::{ClaudePlan, OpenCodePlan};
 use ngterm_app::integrations::hooks_config::{RC_MARKER_BEGIN, WRAPPER_NAME};
 use ngterm_app::integrations::skill::{MARKER, TargetPlan};
-use ngterm_app::integrations::{cli, files, skill};
+use ngterm_app::integrations::{files, skill};
 use ngterm_host::fakes::write_executable;
 
 use super::*;
@@ -108,7 +112,8 @@ impl Home {
         skill::plan(&self.env()).unwrap().targets
     }
 
-    /// The command line tool planner's read-back of the link.
+    /// The command line tool planner's read-back of the link (Unix: Windows links nothing).
+    #[cfg(unix)]
     fn cli_status(&self) -> LinkStatus {
         match cli::plan(&self.env()) {
             cli::CliPlan::Link { status, .. } => status,
@@ -261,6 +266,9 @@ fn users_skill_left_alone(cx: &mut VisualTestContext, home: &Home) {
     assert_eq!(fs::read_to_string(&skill).unwrap(), users);
 }
 
+/// The Unix form: a symlink into `~/.local/bin`. On Windows the install puts the tool's folder on the user's own
+/// `HKCU\Environment` `Path`, which no test may write (ngterm-app tests that plan without applying it).
+#[cfg(unix)]
 #[gpui_kit::test]
 fn the_command_line_tool_links_reads_back_current_and_refuses_a_real_file(cx: &mut TestAppContext) {
     let home = Home::new();

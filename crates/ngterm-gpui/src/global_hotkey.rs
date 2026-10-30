@@ -20,7 +20,9 @@
 use gpui_kit::App;
 use ngterm_core::keymap::{Chord, Modifiers};
 
-use crate::state::{AppState, Poster, post};
+#[cfg(target_os = "linux")]
+use crate::state::post;
+use crate::state::{AppState, Poster};
 
 #[cfg(target_os = "linux")]
 pub mod portal;
@@ -127,6 +129,8 @@ impl GlobalHotkey {
         }
         self.synced = true;
         self.registered = chord.cloned();
+        #[cfg(not(target_os = "linux"))]
+        let _ = poster;
         #[cfg(target_os = "linux")]
         match cx.compositor_name() {
             "X11" => return self.grab(chord, poster),
@@ -136,7 +140,10 @@ impl GlobalHotkey {
         if chord.is_some() && !self.unsupported_logged {
             self.unsupported_logged = true;
             #[cfg(windows)]
-            tracing::warn!("the Windows global hotkey arrives in Task 5: global-hotkey is ignored");
+            tracing::warn!(
+                display = cx.compositor_name(),
+                "the Windows global hotkey arrives in Task 5: global-hotkey is ignored"
+            );
             #[cfg(not(windows))]
             tracing::warn!(
                 display = cx.compositor_name(),
@@ -187,6 +194,7 @@ impl GlobalHotkey {
 }
 
 /// What a press of the global hotkey runs: the quick terminal's toggle on the main loop.
+#[cfg(target_os = "linux")]
 fn fired(poster: &Poster) -> impl Fn() + Send + Sync + 'static {
     let poster = poster.clone();
     move || post(&poster, AppState::global_hotkey_fired)

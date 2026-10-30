@@ -129,7 +129,7 @@ fn serve(listener: &PipeListener<Bytes, Bytes>, requests: &BusRequests) {
         let requests = requests.clone();
         let spawned = thread::Builder::new()
             .name("ngterm-instance-forward".to_owned())
-            .spawn(move || receive(pipe, &requests));
+            .spawn(move || receive(&pipe, &requests));
         if let Err(error) = spawned {
             tracing::warn!(%error, "instance: a forward was dropped");
         }
@@ -137,9 +137,9 @@ fn serve(listener: &PipeListener<Bytes, Bytes>, requests: &BusRequests) {
 }
 
 /// Reads one forward and hands it to the main loop.
-fn receive(pipe: Pipe, requests: &BusRequests) {
+fn receive(pipe: &Pipe, requests: &BusRequests) {
     let mut line = String::new();
-    if let Err(error) = BufReader::new((&pipe).take(LINE_LIMIT)).read_line(&mut line) {
+    if let Err(error) = BufReader::new(pipe.take(LINE_LIMIT)).read_line(&mut line) {
         tracing::debug!(%error, "instance: an unreadable forward");
         return;
     }

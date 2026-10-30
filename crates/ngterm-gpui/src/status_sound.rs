@@ -30,13 +30,16 @@
 //! and neither upstream nor the GTK build sounds it.
 
 use std::cell::RefCell;
+#[cfg(target_os = "linux")]
 use std::error::Error;
 use std::time::Instant;
 
 use gpui_kit::{App, Window};
 use ngterm_core::sound_throttle::SoundThrottle;
+#[cfg(target_os = "linux")]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
+#[cfg(target_os = "linux")]
 type Failure = Box<dyn Error + Send + Sync>;
 
 /// The one throttle key on Linux: every status sound is the same bell.
@@ -318,7 +321,15 @@ fn alert_sound(_: &Window, _: &App) {
     unsafe { MessageBeep(MB_OK) };
 }
 
+/// Rings the display's alert bell for `window`, by the display server GPUI runs on; headless, nothing. Elsewhere the
+/// system's alert sound ([`alert`]'s).
+#[cfg(not(target_os = "linux"))]
+pub fn ring(window: &Window, cx: &App) {
+    alert_sound(window, cx);
+}
+
 /// Rings the display's alert bell for `window`, by the display server GPUI runs on; headless, nothing.
+#[cfg(target_os = "linux")]
 pub fn ring(window: &Window, cx: &App) {
     let rung = match cx.compositor_name() {
         "Wayland" => wayland::ring(window),
@@ -333,6 +344,7 @@ pub fn ring(window: &Window, cx: &App) {
     }
 }
 
+#[cfg(target_os = "linux")]
 mod wayland {
     use wayland_backend::client::{Backend, ObjectId};
     use wayland_client::globals::{GlobalListContents, registry_queue_init};
@@ -402,6 +414,7 @@ mod wayland {
     }
 }
 
+#[cfg(target_os = "linux")]
 mod x11 {
     use x11rb::connection::Connection as _;
     use x11rb::protocol::xproto::ConnectionExt as _;

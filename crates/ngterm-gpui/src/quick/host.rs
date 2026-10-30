@@ -165,6 +165,10 @@ fn layer_options(base: WindowOptions, fit: Fit, display: Option<&Target>, named:
 }
 
 #[cfg(not(target_os = "linux"))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Linux form's signature: a layer surface may have no display"
+)]
 fn layer_options(base: WindowOptions, fit: Fit, display: Option<&Target>, _named: bool) -> Option<WindowOptions> {
     Some(window_host_options(base, fit, display))
 }

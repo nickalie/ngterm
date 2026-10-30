@@ -132,10 +132,9 @@ fn run() -> io::Result<()> {
     // SAFETY: `message` is a valid MSG; a null window takes every message of this thread.
     while unsafe { GetMessageW(&raw mut message, std::ptr::null_mut(), 0, 0) } > 0 {
         // SAFETY: the message GetMessageW filled.
-        unsafe {
-            TranslateMessage(&raw const message);
-            DispatchMessageW(&raw const message);
-        }
+        unsafe { TranslateMessage(&raw const message) };
+        // SAFETY: as above.
+        unsafe { DispatchMessageW(&raw const message) };
     }
     Ok(())
 }
