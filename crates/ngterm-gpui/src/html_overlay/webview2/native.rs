@@ -192,8 +192,8 @@ pub struct Native {
 impl Native {
     /// Makes the web view `spec` describes, wired and with its scripts, loading nothing yet. Pumps the window's
     /// messages until it exists (module docs).
-    pub fn create(spec: Spec) -> Result<Self, String> {
-        let view = build(&spec)?;
+    pub fn create(spec: &Spec) -> Result<Self, String> {
+        let view = build(spec)?;
         let native = Self {
             view,
             theme: Rc::default(),

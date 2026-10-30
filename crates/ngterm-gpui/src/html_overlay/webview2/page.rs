@@ -534,7 +534,7 @@ impl Page {
             Report::Message(raw) => self.message(&raw),
             Report::Focus(focused) => self.native_focus(focused, cx),
             Report::DownloadRefused(uri) => tracing::info!(uri, "a page's download was refused"),
-            Report::Key(keystroke) => self.app_key(keystroke, cx),
+            Report::Key(keystroke) => self.app_key(&keystroke, cx),
         }
     }
 
@@ -674,13 +674,13 @@ impl Page {
 
     /// A key pressed in the page that the app takes: dispatched to the page's window as the keymap reads it, its
     /// release, which the window never sees, let go at once.
-    fn app_key(&self, keystroke: gpui_kit::Keystroke, cx: &mut App) {
+    fn app_key(&self, keystroke: &gpui_kit::Keystroke, cx: &mut App) {
         let Some(window) = self.element_window.get() else {
             return;
         };
         let _ = window.update(cx, |_, window, cx| {
             window.dispatch_keystroke(keystroke.clone(), cx);
-            crate::keymap_dispatch::release_dispatched(&keystroke);
+            crate::keymap_dispatch::release_dispatched(keystroke);
         });
     }
 

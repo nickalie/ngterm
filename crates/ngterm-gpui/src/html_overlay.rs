@@ -24,6 +24,9 @@
 //! screen, and the `WebView2` host must not re-dispatch an unhandled Esc (`AcceleratorKeyPressed`) to a full-screen
 //! handler.
 //!
+//! On Windows the pages are `WebView2` child windows of the GPUI window instead (`webview2`, on wry), sharing the
+//! panel and the policy here; the engine, its frames, input, popups and sandbox are WPE's alone.
+//!
 //! Without the `html` cargo feature no host is installed, so the core refuses every page and nothing here mounts.
 
 #[cfg(all(feature = "html", target_os = "linux"))]

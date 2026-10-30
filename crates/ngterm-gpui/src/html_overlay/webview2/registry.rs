@@ -22,7 +22,7 @@ use ngterm_core::html::profile::{self, BrowserProfile};
 use ngterm_core::html::{ClearProgress, HtmlHost, HtmlNavigation, HtmlOverlay, HtmlSource, StoreClear, errors};
 use ngterm_core::remote::replica_page::PageResource;
 use ngterm_proto::Response;
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use raw_window_handle::RawWindowHandle;
 use uuid::Uuid;
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment;
 use wry::RequestAsyncResponder;
@@ -256,7 +256,7 @@ pub fn engine_ended() {
 
 /// The native handle of GPUI window `window`.
 fn native_window(window: &Window) -> Option<isize> {
-    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+    match raw_window_handle::HasWindowHandle::window_handle(window).ok()?.as_raw() {
         RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
         _ => None,
     }
@@ -285,7 +285,7 @@ fn build(id: Uuid) {
             return;
         }
     };
-    match Native::create(spec) {
+    match Native::create(&spec) {
         Ok(native) => {
             let environment = native.environment();
             with(|registry| {

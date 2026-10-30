@@ -16,6 +16,8 @@
 //! The guard script, in every frame, keeps a page from what the WPE host refuses natively: file choosers and the File
 //! System Access pickers, and files pasted onto a page (dropped ones are refused natively, `native.rs`).
 
+use std::fmt::Write as _;
+
 use ngterm_core::html::bridge::{ADAPTER_SCRIPT, HELPER_SCRIPT, RELAY_SCRIPT};
 use serde_json::Value;
 
@@ -42,7 +44,8 @@ pub fn page_script(nonce: &str, themed: bool, javascript: bool) -> String {
 "#
     );
     if themed {
-        script.push_str(&format!(
+        let _ = write!(
+            script,
             r#"  const waiting = new Map();
   let next = 0;
   listen('message', (event) => {{
@@ -61,7 +64,7 @@ pub fn page_script(nonce: &str, themed: bool, javascript: bool) -> String {
     send('bridge', ',"id":' + id + ',"body":' + text);
   }})}});
 "#
-        ));
+        );
         if javascript {
             script.push_str(&RELAY_SCRIPT.replace(WEBKIT_HANDLER, HANDLER));
             script.push('\n');

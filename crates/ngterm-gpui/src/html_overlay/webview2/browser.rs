@@ -72,21 +72,28 @@ fn split(line: &str) -> Option<Vec<String>> {
     let line = wide(line);
     let mut count = 0;
     // SAFETY: a NUL-terminated string; the array the call allocates is read `count` long and freed with `LocalFree`.
-    unsafe {
-        let argv = CommandLineToArgvW(line.as_ptr(), &raw mut count);
-        if argv.is_null() {
-            return None;
-        }
-        let args = (0..usize::try_from(count).ok()?)
-            .map(|index| {
-                let arg = *argv.add(index);
-                let length = (0..).take_while(|&offset| *arg.add(offset) != 0).count();
-                String::from_utf16_lossy(std::slice::from_raw_parts(arg, length))
-            })
-            .collect();
-        windows_sys::Win32::Foundation::LocalFree(argv.cast());
-        Some(args)
+    let array = unsafe { CommandLineToArgvW(line.as_ptr(), &raw mut count) };
+    if array.is_null() {
+        return None;
     }
+    let args = (0..usize::try_from(count).unwrap_or(0))
+        .map(|index| {
+            // SAFETY: one of the `count` entries of the array.
+            let arg = unsafe { *array.wrapping_add(index) };
+            // a command line is at most 32767 units
+            let length = (0..32_768)
+                .take_while(|&offset| {
+                    // SAFETY: inside the entry's NUL-terminated string.
+                    unsafe { *arg.wrapping_add(offset) != 0 }
+                })
+                .count();
+            // SAFETY: the entry's `length` units before its NUL.
+            String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(arg, length) })
+        })
+        .collect();
+    // SAFETY: the array the call allocated, freed once.
+    unsafe { windows_sys::Win32::Foundation::LocalFree(array.cast()) };
+    Some(args)
 }
 
 /// The shell's open of `uri` by its own type.

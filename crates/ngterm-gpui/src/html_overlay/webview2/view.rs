@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use gpui_kit::{
     App, Context, FocusHandle, Focusable, HitboxBehavior, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, Subscription, Window, canvas, div, px,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Window, canvas, div, px,
 };
 
 use super::super::panel;

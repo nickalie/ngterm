@@ -213,6 +213,7 @@ impl LoadTracker {
 
     /// The main frame's response arrived: the pending load's navigation steps are behind it, so a refusal recorded
     /// before was not its own and a later one is not either.
+    #[cfg(target_os = "linux")]
     pub fn responded(&mut self) {
         self.provisional = Provisional::None;
     }
@@ -253,6 +254,7 @@ impl LoadTracker {
     /// macOS refuses a page's own direct navigation before it starts and the shown document stays, so a load the app
     /// started, or one with nothing shown, fails here; a page's own load over a shown document settles. A refused
     /// navigation step (a redirect) fails through [`Self::refused`] instead.
+    #[cfg(target_os = "linux")]
     pub fn blocked(&mut self, url: &str) -> LoadOutcome {
         if !self.pending {
             return LoadOutcome::None;
@@ -736,6 +738,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_navigation_refused_before_the_load_commits_names_the_interruption() {
         let interrupted = LoadEvent::Interrupted("Frame load was interrupted".to_owned());
         let blocked = LoadOutcome::Failed("navigation blocked: http://127.0.0.1:2/".to_owned());
@@ -804,6 +807,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_blocked_response_fails_an_app_load_or_one_with_nothing_shown() {
         let mut explicit = LoadTracker::default();
         explicit.handle(&LoadEvent::Committed);
