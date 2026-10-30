@@ -95,6 +95,11 @@ guest has 4 CPUs and 6.5 GB of memory.
 - ➕ (side task 13) live panes missed a winget/Store PowerShell 7: its only `pwsh.exe` on `PATH` is the zero-byte
   App Execution Alias, which the PE-image check skipped; an `IO_REPARSE_TAG_APPEXECLINK` alias whose package image is
   launchable now counts, and the pane runs the alias itself (`launch/windows_shell.rs`)
+- ➕ (side task 19) a forced kill on a loaded Windows sometimes reported "did not end after its hangup": the job's
+  tree took about half a second to end and wake the waiter, and the PTY's `EXIT_GRACE`, counted by the waiter from
+  the exit, then outran the kill's single budget counted from the signal. A kill now waits for the exit to be seen
+  within `KILL_LIMIT` of its first signal, then for the end the waiter records (`Pane::kill`); Unix had the same flaw
+  for a late exit whose PTY stays open (`tests/pane.rs` covers it)
 
 ### Task 2: `ngtermctl` on Windows and macOS (`ngterm-ctl`)
 
