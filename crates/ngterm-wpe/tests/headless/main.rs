@@ -293,8 +293,11 @@ fn cases_in(frames: FrameMode, backend: Backend, filter: Option<&str>) -> Result
 const WEB_PROCESSES_GONE: Duration = Duration::from_secs(5);
 
 /// The shutdown with a quiet page and one whose script spins open: every web process alive then is gone within
-/// [`WEB_PROCESSES_GONE`], the engine's thread (or worker) having ended them rather than left them to notice it went.
+/// [`WEB_PROCESSES_GONE`], and so is any it started on the way, the engine having ended them rather than left them
+/// to notice it went: the pages' own, and those `WebKit` keeps with no page (the earlier cases leave prewarmed and
+/// cached ones about), in a worker and in process alike.
 fn quit(harness: Harness) -> Result<(), String> {
+    let before = web_processes();
     let session = harness.ephemeral();
     let quiet = harness.view(session, ngterm_wpe::Settings::overlay(false));
     harness.load(quiet, support::page("<title>quiet</title>"))?;
@@ -305,26 +308,23 @@ fn quit(harness: Harness) -> Result<(), String> {
     )?;
     std::thread::sleep(Duration::from_millis(400));
     let web = web_processes();
-    if web.len() < 2 {
+    let pages = web.iter().filter(|pid| !before.contains(pid)).count();
+    if pages < 2 {
         harness.shutdown();
-        return Err(format!("two pages run in fewer web processes than two: {web:?}"));
+        return Err(format!("two pages run in fewer new web processes than two: {web:?}"));
     }
     harness.shutdown();
     let deadline = Instant::now() + WEB_PROCESSES_GONE;
     loop {
-        // the ones alive at the shutdown, and any it started (one under this process, for the in-process engine)
         let mut left: Vec<u32> = web.iter().copied().filter(|pid| running(*pid)).collect();
-        left.extend(
-            web_processes()
-                .into_iter()
-                .filter(|pid| !web.contains(pid) && running(*pid)),
-        );
+        // started since (under this process: the in-process engine's)
+        left.extend(web_processes().into_iter().filter(|pid| !web.contains(pid)));
         if left.is_empty() {
             return Ok(());
         }
         if Instant::now() > deadline {
             return Err(format!(
-                "web processes {left:?} still run {WEB_PROCESSES_GONE:?} after the shutdown (the pages': {web:?})"
+                "web processes {left:?} still run {WEB_PROCESSES_GONE:?} after the shutdown (alive at it: {web:?})"
             ));
         }
         std::thread::sleep(Duration::from_millis(50));
