@@ -5,7 +5,8 @@ The first two run through `cli.local`, without `--socket` (they refuse it) and i
 directory variable (`AGTERM_STATE_DIR`, the Rust build's `NGTERM_STATE_DIR`) is under the temp root. `clipboard set`
 writes nothing outside a Live pane, and inside one the instance's terminals drop the OSC 52 write
 (`clipboard-write = deny`), so the desktop clipboard is never touched.
-`terminfo install` talks to a stand-in `ssh` on PATH that runs the remote command against the isolated HOME.
+`terminfo install` talks to a stand-in `ssh` on PATH that runs the remote command against the isolated HOME (on
+Windows an `ssh.exe` launcher over Python, running it in Git for Windows' `sh` with its `tic`).
 `session wait` runs against the instance's socket, or through a relay in the instance root that notes each request, so
 a test acts only once the wait has read the tree and is polling."""
 
@@ -25,6 +26,7 @@ from pathlib import Path
 
 import pytest
 from agterm_conformance import transport
+from agterm_conformance.impls.base import posix_shell
 from agterm_conformance.match import assert_ok, find_session
 from agterm_conformance.wait import wait_until
 
@@ -143,6 +145,41 @@ def _snapshot(directories):
     return state
 
 
+# The Windows stand-in's body: what the POSIX script below does, with the remote account's shell Git for Windows'.
+_WINDOWS_FAKE_SSH = """#!python
+import os
+import subprocess
+import sys
+
+with open({record!r}, "w", encoding="utf-8", newline="\\n") as out:
+    out.writelines(arg + "\\n" for arg in sys.argv[1:])
+mode = os.environ.get("FAKE_SSH", "")
+if mode.startswith("exit"):
+    sys.exit(int(mode[len("exit"):]))
+# HOME and PATH alone, as `env -i` gives the POSIX shell (and SYSTEMROOT, which any Windows process needs)
+remote = {{"HOME": {home!r}, "PATH": {path!r}, "SYSTEMROOT": os.environ.get("SYSTEMROOT", r"C:\\Windows")}}
+sys.exit(subprocess.run([{shell!r}, "-c", sys.argv[-1]], env=remote).returncode)
+"""
+
+
+def _windows_fake_ssh(folder, record, home):
+    """`ssh.exe` in `folder`: Windows finds a program by `.exe` alone, so the stand-in is distlib's script launcher (as
+    pip makes console scripts) over a Python script."""
+    from distlib.scripts import ScriptMaker
+
+    shell = posix_shell()
+    git = os.path.dirname(os.path.dirname(shell))
+    path = os.pathsep.join([os.path.join(git, "usr", "bin"), os.path.join(git, "bin")])
+    source = folder / "source"
+    source.mkdir()
+    body = _WINDOWS_FAKE_SSH.format(record=os.fspath(record), home=os.fspath(home), path=path, shell=shell)
+    (source / "ssh.py").write_text(body, encoding="utf-8")
+    maker = ScriptMaker(os.fspath(source), os.fspath(folder))
+    maker.executable = sys.executable
+    maker.make("ssh.py")
+    assert (folder / "ssh.exe").is_file(), sorted(os.listdir(folder))
+
+
 @pytest.fixture
 def fake_ssh(cli):
     """A stand-in `ssh` first on PATH: it records its argv and runs the remote command line the way sshd hands it to
@@ -151,18 +188,22 @@ def fake_ssh(cli):
     folder = root / f"fake-ssh-{uuid.uuid4().hex[:8]}"
     folder.mkdir()
     record = folder / "argv"
-    script = folder / "ssh"
-    script.write_text(
-        "#!/bin/sh\n"
-        f"for arg; do printf '%s\\n' \"$arg\"; done > {shlex.quote(os.fspath(record))}\n"
-        'case "$FAKE_SSH" in exit*) exit "${FAKE_SSH#exit}" ;; signal) kill -TERM $$ ;; esac\n'
-        "for last; do :; done\n"
-        f'exec /usr/bin/env -i HOME={shlex.quote(os.fspath(cli.instance.home))} PATH=/usr/bin:/bin /bin/sh -c "$last"\n'
-    )
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    if sys.platform == "win32":
+        _windows_fake_ssh(folder, record, cli.instance.home)
+    else:
+        script = folder / "ssh"
+        script.write_text(
+            "#!/bin/sh\n"
+            f"for arg; do printf '%s\\n' \"$arg\"; done > {shlex.quote(os.fspath(record))}\n"
+            'case "$FAKE_SSH" in exit*) exit "${FAKE_SSH#exit}" ;; signal) kill -TERM $$ ;; esac\n'
+            "for last; do :; done\n"
+            f"exec /usr/bin/env -i HOME={shlex.quote(os.fspath(cli.instance.home))} PATH=/usr/bin:/bin "
+            '/bin/sh -c "$last"\n'
+        )
+        script.chmod(script.stat().st_mode | stat.S_IXUSR)
 
     def env(**extra):
-        return _env(cli, PATH=f"{folder}:{cli.instance.env['PATH']}", **extra)
+        return _env(cli, PATH=f"{folder}{os.pathsep}{cli.instance.env['PATH']}", **extra)
 
     env.record = record
     yield env
@@ -198,9 +239,11 @@ def test_terminfo_install_reports_how_ssh_ended(cli, fake_ssh):
         "",
         f"ssh exited 255; {ENTRY} was not installed\n",
     )
-    killed = cli.local("terminfo", "install", "box", env=fake_ssh(FAKE_SSH="signal"), input="")
-    message = f"ssh was killed by signal 15; {ENTRY} was not installed\n"
-    assert (killed.returncode, killed.stdout, killed.stderr) == (128 + 15, "", message)
+    # Windows has no signals: ssh ends there with an exit status, which the half above covers
+    if sys.platform != "win32":
+        killed = cli.local("terminfo", "install", "box", env=fake_ssh(FAKE_SSH="signal"), input="")
+        message = f"ssh was killed by signal 15; {ENTRY} was not installed\n"
+        assert (killed.returncode, killed.stdout, killed.stderr) == (128 + 15, "", message)
     assert not (cli.instance.home / ".terminfo").exists()
 
 

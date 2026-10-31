@@ -11,6 +11,8 @@ dependencies = [
     "pytest>=8.0",
     "pytest-rerunfailures>=14.0",
     "pyyaml>=6.0",
+    # the Windows stand-in for `ssh` in tests/cli/test_cli_only.py: an .exe launcher over a Python script
+    "distlib>=0.3.8; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
