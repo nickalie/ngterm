@@ -602,3 +602,62 @@ fn a_programs_own_clipboard_write_is_given_back_too() -> TestResult {
     watcher.finish();
     Ok(())
 }
+
+// TEMP win-34 diagnostics: the raw size of a flood chunk on this OS, its control strings, and the watcher's backlog
+#[test]
+fn zz_diag_flood() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let (pane, _slow, mut watcher) = slow_session("diag", &dir, ResyncBudget::default())?;
+    for chunk in 1..=3 {
+        let before = watcher.output.len();
+        let mut max_queued = 0;
+        let mut receives = 0;
+        type_line(&pane, &flood(chunk))?;
+        let deadline = Instant::now() + PATIENCE;
+        while !watcher.text().contains(&flood_end(chunk)) {
+            max_queued = max_queued.max(watcher.subscription.queued());
+            watcher.receive(Duration::from_millis(100));
+            receives += 1;
+            assert!(Instant::now() < deadline, "DIAG stuck: {:?}", diag_events(&watcher));
+        }
+        if cfg!(windows) {
+            expect_prompt_after(&mut watcher, &flood_end(chunk));
+        }
+        let raw = &watcher.output[before..];
+        let oscs: Vec<_> = raw
+            .windows(2)
+            .enumerate()
+            .filter(|(_, w)| *w == b"\x1b]")
+            .map(|(at, _)| String::from_utf8_lossy(&raw[at..raw.len().min(at + 90)]).into_owned())
+            .collect();
+        let csis = raw.windows(2).filter(|w| *w == b"\x1b[").count();
+        eprintln!(
+            "DIAG chunk {chunk}: raw {} bytes, shown {} bytes, {} OSCs, {csis} CSIs, max queued {max_queued}, {receives} \
+             receives, events {:?}",
+            raw.len(),
+            support::shown(raw).len(),
+            oscs.len(),
+            diag_events(&watcher)
+        );
+        for osc in oscs.iter().take(4) {
+            eprintln!("DIAG   {osc:?}");
+        }
+    }
+    quit(&pane)?;
+    watcher.finish();
+    Ok(())
+}
+
+fn diag_events(client: &Client) -> Vec<String> {
+    client
+        .events
+        .iter()
+        .filter(|event| !matches!(event, ClientEvent::Output { .. }))
+        .map(|event| match event {
+            ClientEvent::Snapshot {
+                epoch, offset, data, ..
+            } => format!("Snapshot {epoch} at {offset}, {}", data.len()),
+            other => format!("{other:?}"),
+        })
+        .collect()
+}
