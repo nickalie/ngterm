@@ -227,6 +227,8 @@ fn launch_core(decision: RestoreLaunchDecision, resources: Option<&Path>, poster
         ngterm_app::restore_launch::shell_basename(env),
     );
     core.set_process_host(process_host(poster, socket));
+    // `session.hud.open` writes its body here; nothing paints it, an attached viewer shows it
+    core.set_hud_body_dir(paths::hud_body_dir(env));
     install_live(&mut core, env);
     core.load_keymap_at_launch();
     core.load_hooks_at_launch();
