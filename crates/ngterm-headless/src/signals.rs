@@ -45,34 +45,64 @@ pub fn quit_on_termination(poster: Poster) -> io::Result<()> {
     Ok(())
 }
 
-/// Quits through the main loop behind `poster` on the console's Ctrl+C, Ctrl+Break and close.
+/// How long the console's closing, a logoff or a shutdown waits for the quit save (the GPUI frontend's
+/// `SHUTDOWN_GRACE`): Windows ends the process once the handler returns, and the save ends it from the main thread
+/// meanwhile.
+#[cfg(windows)]
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Quits through the main loop behind `poster` on the console's Ctrl+C and Ctrl+Break (a second one gets the default
+/// action, as a second Unix signal does) and on its closing, a logoff or a shutdown, which wait for the quit save (the
+/// GPUI frontend's `signals/windows.rs`).
 ///
 /// # Errors
 ///
-/// The handler could not be installed.
+/// The handler could not be installed, or was installed already.
 #[cfg(windows)]
 pub fn quit_on_termination(poster: Poster) -> io::Result<()> {
     use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use windows_sys::Win32::Foundation::{FALSE, TRUE};
-    use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+    use windows_sys::Win32::System::Console::{
+        CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT, SetConsoleCtrlHandler,
+    };
     use windows_sys::core::BOOL;
 
     static POSTER: OnceLock<Poster> = OnceLock::new();
+    /// A Ctrl+C or Ctrl+Break came before: the next one gets the default action.
+    static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
-    unsafe extern "system" fn handler(_event: u32) -> BOOL {
-        let Some(poster) = POSTER.get() else {
-            return FALSE;
-        };
-        tracing::info!("console control event: quitting");
-        post(poster, HeadlessState::request_quit);
-        TRUE
+    fn request_quit(why: &str) {
+        tracing::info!("{why}: quitting");
+        if let Some(poster) = POSTER.get() {
+            post(poster, HeadlessState::request_quit);
+        }
+    }
+
+    unsafe extern "system" fn handler(kind: u32) -> BOOL {
+        match kind {
+            CTRL_C_EVENT | CTRL_BREAK_EVENT => {
+                if INTERRUPTED.swap(true, Ordering::AcqRel) {
+                    // the default action: the process ends
+                    return FALSE;
+                }
+                request_quit(if kind == CTRL_C_EVENT { "Ctrl+C" } else { "Ctrl+Break" });
+                TRUE
+            }
+            CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
+                request_quit("the console is closing");
+                std::thread::sleep(SHUTDOWN_GRACE);
+                TRUE
+            }
+            _ => FALSE,
+        }
     }
 
     if POSTER.set(poster).is_err() {
-        return Ok(());
+        return Err(io::Error::other("the quit handler is installed already"));
     }
-    // SAFETY: `handler` is a valid handler routine for the life of the process.
+    // SAFETY: a handler that only posts to the main loop and sleeps, for the whole process.
     if unsafe { SetConsoleCtrlHandler(Some(handler), TRUE) } == FALSE {
         return Err(io::Error::last_os_error());
     }
