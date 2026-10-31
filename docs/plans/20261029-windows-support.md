@@ -367,6 +367,20 @@ guest has 4 CPUs and 6.5 GB of memory.
     relaunch's rerun stay red (`test_restore.py`'s three, `test_relaunch.py`'s
     `test_rerun_replays_the_captured_foreground_program`). Under Git for Windows' sh a newest-child stand-in would
     still name `bash.exe` (the launcher's) or an MSYS fork stub rather than the program
+  - ➕ (side task 24) done: an in-app pane's foreground on Windows is read from its program's kill-on-close job
+    (`ngterm-pty`'s `JobView`, which never holds the job open): the oldest member started since the pane's program
+    that is no idle shell, else that program; a `cmd.exe /D /S /C` wrapper holds its own foreground, as `/bin/sh -c`
+    leads its group (`ngterm-session`'s `console_foreground`, `job_foreground`). The job, not the parent links: an
+    MSYS program's parent (the fork) is gone by the time it runs, and Git's `bin\sh.exe` launcher's `bash.exe` and
+    MSYS forks are idle shells skipped by the rule; `GetConsoleProcessList` would need a helper attached to each
+    console. Live panes take the same rule over their shell's descendants (it was the newest direct child). The
+    Windows process table models sessions (a process the app started leads one) and groups (a process with its
+    descendants) for core's reads; `foregroundShell` drops a Windows `.exe`; the suite puts Git's `usr\bin` on the
+    app's `PATH` (for a command line's `cmd.exe`) and compares a foreground argv by its program's name
+    (`match.program_argv`). The four ids above are green on the `windows` job and in its list (642). Left as they
+    are: a background program (`sleep 600 &`) reads as the foreground until it ends, and a shell typed into the pane
+    reads as the pane's shell; a rerun types a POSIX-quoted line, right for the suite's Git sh but not for a
+    PowerShell or `cmd.exe` pane, whose replay quoting is open work
   - `ngtermctl terminfo install` dumps the entry with `/usr/bin/infocmp`, which Windows lacks (two
     `test_cli_only.py` ids): a Windows form (Task 2) would read the staged `share/terminfo` instead
   - a file page's title (`htmlOverlays[].title`) never comes, on the CI runner and in the VM, so eight of
