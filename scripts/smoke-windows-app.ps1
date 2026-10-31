@@ -23,7 +23,9 @@ not shown posts a toast under the app's id, a click on it where Windows shows it
 second one replaces it, and it is withdrawn once its session is selected; a status sound plays (upstream's names have no Windows sound alias:
 the alert); a resume from sleep (`WM_POWERBROADCAST` sent to the hidden window) retries the remote links; with the
 keyboard-layout lock on Russian (`LoadKeyboardLayout`, unloaded at the end) the pane types Cyrillic for the US keys;
-the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the app's hidden window) quits it. The app is stopped by its own process id at the end, whatever happened. Every step is
+the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the app's hidden window) quits it; `WM_CLOSE` to the
+last window asks first (it runs a session), and its Close quits the app with status 0 after the quit's save
+(`close-asked.png`). The app is stopped by its own process id at the end, whatever happened. Every step is
 logged to <StateDir>\smoke.log; the exit status is 0 when every step passed.
 
 .PARAMETER Exe
@@ -185,6 +187,22 @@ public static class SmokeWindows {
             }
         }
         return false;
+    }
+    // the first visible GPUI window of `pid` (class `Zed::Window`): the main window while the quick terminal is hidden
+    public static IntPtr MainWindow(uint pid) {
+        IntPtr window = IntPtr.Zero;
+        while ((window = FindWindowEx(IntPtr.Zero, window, "Zed::Window", null)) != IntPtr.Zero) {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner == pid && IsWindowVisible(window)) { return window; }
+        }
+        return IntPtr.Zero;
+    }
+    // brings `window` to the front, as Raise does
+    public static bool Focus(IntPtr window) {
+        keybd_event(0x12, 0, 0, UIntPtr.Zero);
+        keybd_event(0x12, 0, 2, UIntPtr.Zero);
+        return SetForegroundWindow(window);
     }
     public static IntPtr SystemWindow(uint pid) {
         IntPtr window = IntPtr.Zero;
@@ -366,6 +384,13 @@ function Wait-Log-For([string] $line, [int] $seconds) {
         Start-Sleep -Milliseconds 300
     } while ((Get-Date) -lt $deadline)
     return $false
+}
+
+# How many lines of the app's log hold `line`.
+function Count-Log([string] $line) {
+    $file = Join-Path $state 'ngterm.log'
+    if (-not (Test-Path $file)) { return 0 }
+    @(Select-String -Path $file -SimpleMatch $line).Count
 }
 
 # Polls the notification center until `test` holds for its toasts.
@@ -647,6 +672,32 @@ try {
         Stop-App $app
         [SmokeDesktop]::UnloadLayout($russian)
     }
+
+    # the last window's close (WM_CLOSE, as its title bar's close button and the taskbar's Close window send it): a
+    # window running sessions asks first (upstream's `windowShouldClose`); its Close (Return, the default) closes it, and
+    # the last window closing quits the app, which saves and exits with status 0
+    $saves = Count-Log 'quit: the state is saved'
+    $app = Start-App
+    Log "relaunched pid $($app.Id) for the last window's close"
+    Check ($null -ne (Wait-Socket)) 'the relaunched app answers'
+    $main = [IntPtr]::Zero
+    for ($try = 0; $try -lt 60 -and $main -eq [IntPtr]::Zero; $try++) {
+        Start-Sleep -Milliseconds 500
+        $main = [SmokeWindows]::MainWindow([uint32]$app.Id)
+    }
+    Check ($main -ne [IntPtr]::Zero) "the app's main window is there ($main)"
+    Start-Sleep -Seconds 1
+    Check ([SmokeDesktop]::Post($main, 0x0010, 0, 0)) 'WM_CLOSE posted to the main window'
+    Start-Sleep -Seconds 2
+    Check (-not $app.HasExited) 'the window running a session asks before it closes'
+    Save-Screen 'close-asked.png'
+    Check ([SmokeWindows]::Focus($main)) 'the asking window comes to the front'
+    Start-Sleep -Milliseconds 500
+    # Return as a key press: SendKeys' Return did not reach the alert
+    Send-Chord ([byte[]](0x0D))
+    $closed = $app.WaitForExit(15000)
+    Check ($closed -and $app.ExitCode -eq 0) "closing the last window quits the app with status $(if ($closed) { $app.ExitCode } else { 'none: still running' })"
+    Check ((Count-Log 'quit: the state is saved') -gt $saves) 'the quit saved the state'
 } catch {
     Log "ERROR $_"
     $failures++

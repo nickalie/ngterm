@@ -480,7 +480,7 @@ fn terminfo_install_refuses_a_destination_ssh_would_misread() -> TestResult {
 fn terminfo_install_without_an_entry_says_where_it_looked() -> TestResult {
     let sandbox = Sandbox::new()?;
     sandbox.fake_ssh()?;
-    let database = real_path(sandbox.path("stage"))?.join("share/terminfo");
+    let database = real_path(sandbox.path("stage"))?.join("share").join("terminfo");
     let empty = sandbox.path("empty");
     fs::create_dir_all(&empty)?;
     let empty_text = empty.display().to_string();

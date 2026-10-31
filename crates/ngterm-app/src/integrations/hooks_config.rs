@@ -2,6 +2,9 @@
 //! string, JSON and TOML rewrites returning the new contents and whether anything changed. The installer
 //! (`hooks.rs`) owns the reads, writes and backups.
 
+use std::path::{Path, PathBuf};
+
+use ngterm_core::paths::join_relative;
 use serde_json::{Map, Value};
 
 /// The wrapper script the hooks invoke, installed into the script directory.
@@ -165,16 +168,19 @@ const CODEX_HOOKS: [(&str, &str); 6] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MalformedSettings;
 
+/// Pi's extensions directory under the home.
+const PI_EXTENSIONS: &str = ".pi/agent/extensions";
+
 /// The Pi extension's destination under `home`.
 #[must_use]
-pub fn pi_extension_path(home: &str) -> String {
-    format!("{home}/.pi/agent/extensions/{PI_EXTENSION_NAME}")
+pub fn pi_extension_path(home: &Path) -> PathBuf {
+    join_relative(home, PI_EXTENSIONS).join(PI_EXTENSION_NAME)
 }
 
 /// Where an install from before the rename put the Pi extension under `home` ([`LEGACY_PI_EXTENSION_NAME`]).
 #[must_use]
-pub fn legacy_pi_extension_path(home: &str) -> String {
-    format!("{home}/.pi/agent/extensions/{LEGACY_PI_EXTENSION_NAME}")
+pub fn legacy_pi_extension_path(home: &Path) -> PathBuf {
+    join_relative(home, PI_EXTENSIONS).join(LEGACY_PI_EXTENSION_NAME)
 }
 
 /// Whether the Pi extension destination may be replaced: absent is safe, an existing file must carry the ownership

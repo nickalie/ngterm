@@ -558,7 +558,10 @@ pub fn resolve_resources(candidates: &[PathBuf], exists: impl Fn(&Path) -> bool)
         .iter()
         .filter(|dir| dir.is_absolute())
         .find(|dir| {
-            exists(&dir.join("shell-integration")) && TERMINFO_ENTRIES.iter().any(|entry| exists(&dir.join(entry)))
+            exists(&dir.join("shell-integration"))
+                && TERMINFO_ENTRIES
+                    .iter()
+                    .any(|entry| exists(&paths::join_relative(dir, entry)))
         })
         .cloned()
 }
@@ -570,7 +573,7 @@ pub fn resource_candidates(exe: Option<&Path>) -> Vec<PathBuf> {
     let staged = exe
         .and_then(Path::parent)
         .and_then(Path::parent)
-        .map(|root| root.join(STAGED_RESOURCES));
+        .map(|root| paths::join_relative(root, STAGED_RESOURCES));
     #[cfg(unix)]
     let system = Some(PathBuf::from(SYSTEM_RESOURCES));
     #[cfg(windows)]
@@ -1396,6 +1399,19 @@ mod tests {
         assert!(
             !set(&shell).contains_key("ENV"),
             "no POSIX shell integration on Windows"
+        );
+    }
+
+    /// The staged resources an installed `ngterm.exe` exports as `GHOSTTY_RESOURCES_DIR` carry Windows' one separator
+    /// (Task 7 saw `...\ngterm\share/ghostty`).
+    #[cfg(windows)]
+    #[test]
+    fn windows_staged_resources_join_with_backslashes_only() {
+        let exe = Path::new(r"C:\Users\me\AppData\Local\Programs\ngterm\bin\ngterm.exe");
+        let staged = resource_candidates(Some(exe));
+        assert_eq!(
+            staged.iter().map(|dir| dir.to_str().unwrap()).collect::<Vec<_>>(),
+            [r"C:\Users\me\AppData\Local\Programs\ngterm\share\ghostty"]
         );
     }
 

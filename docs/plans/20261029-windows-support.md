@@ -154,6 +154,18 @@ guest has 4 CPUs and 6.5 GB of memory.
   restore and `OpenCode` plugin tests run on Windows too
 - ➕ left open: Codex's Windows hooks (`command_windows`) still run the POSIX Codex adapter under Git Bash: it has no
   PowerShell form yet (its blocker watcher and question check are the largest script of the package)
+- ➕ (side task 22) hooks, keymap and custom commands got a broken `PATH` on Windows: `widened_path` (`ngterm-core`)
+  split and joined it with `:`, cutting every `C:\...` entry at the drive's colon and never splitting at `;`. It now
+  splits and joins with `std::env::split_paths`/`join_paths` (a quoted Windows entry kept whole), compares entries
+  without case or a trailing separator on Windows, falls back to Windows' default system `Path` (`SystemRoot`
+  expanded) when the app has none, and appends `~/.local/bin` on Unix only: on Windows the CLI install puts the
+  bundled tool's folder on the user's `PATH`, which the widened one already leads with. Its test runs on Windows
+  (drive letters, a `;` input, a quoted entry, duplicates in another case). The CLI installer's Unix `on_path` check
+  splits by the platform's rules too. Checked and left: `ngterm-term`'s `GHOSTTY_BIN_DIR` append (the platform's
+  separator already, exact match as Ghostty's `Exec.zig`), the Windows CLI install's `HKCU` `Path` (`;`, no case),
+  the live fish `XDG_DATA_DIRS` (`:` by the XDG spec), the remote tree's `PATH` (a POSIX remote shell), the session's
+  Windows shell lookup (`split_paths`), `ngtermctl`'s `PATHEXT` (`;`), and the `ngterm-gpui` build's WPE libdirs
+  (Linux only)
 
 ### Task 4: The GPUI frontend on Windows (`ngterm-gpui`, depends on Tasks 1 and 3)
 
@@ -318,6 +330,20 @@ guest has 4 CPUs and 6.5 GB of memory.
   - ➕ seen beside the checks, not installer matters: `WM_CLOSE` to the main window (`CloseMainWindow`) did not end the
     app within 15 s (it was stopped by its pid); `GHOSTTY_RESOURCES_DIR` reads `...\ngterm\share/ghostty`, a `/` from
     `ngterm-term`'s `STAGED_RESOURCES` join (Windows takes it)
+    - ➕ (side task 21) the close was the app asking, not a hang: a window running sessions asks "Close “window 1”?"
+      first (upstream's `windowShouldClose`, as on Linux), and on a fresh state dir the Welcome comes up before it.
+      Answered Close, the last window's close quits in under a second with status 0 after the quit's save (VM, debug
+      build on the guest's desktop). `scripts/smoke-windows-app.ps1` now checks it: `WM_CLOSE` to the main window, the
+      app still running (it asked, `close-asked.png`), Return as a key press (`SendKeys`' Return did not reach the
+      alert), exit 0 within 15 s and a new "quit: the state is saved" line; the whole smoke passed on the VM (61
+      checks, 0 failures)
+    - ➕ (side task 21) the separators: `ngterm_core::paths::join_relative` joins a `/`-separated relative path one
+      component at a time, for the staged resources (`ngterm-term`, `ngterm-session`), both build id files,
+      `ngtermctl`'s `share/terminfo`, the bundled `share/ngterm`, the XDG data home, bash's `ENV` and the agent hooks'
+      config paths (their command strings keep forward slashes on purpose); a Windows unit test holds the staged
+      resources at `...\share\ghostty`. Build scripts' `../..` joins stay as they are (never exported or shown)
+    - ➕ (side task 21) seen: the quit after the last window's close logs GPUI's "window not found" and "Invalid window
+      handle" errors from the teardown of the window already gone; harmless (exit 0), left as is
   - ⚠️ the guest, loaded by other tasks' suite runs, again showed `ngterm.exe - Application Error (0xc0000142)` for one
     launch of a debug build (Task 5's ⚠️); every launch of the release MSI's build started
 
