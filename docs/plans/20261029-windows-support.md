@@ -450,7 +450,8 @@ guest has 4 CPUs and 6.5 GB of memory.
     per dialect with nasty arguments through each shell on the host (`sh`, fish, `pwsh` on every OS; `powershell.exe`
     and `cmd.exe` on Windows), in real panes (`ngterm-term`'s `tests/replay.rs`: PowerShell 7, 5.1 and `cmd.exe` on
     Windows), and in the suite: the `windows-shells` capability (claimed on Windows) and `launch(pane_shell=...)` run
-    `test_relaunch.py`'s replay and pin tests in PowerShell 5.1, PowerShell 7 and `cmd.exe` panes
+    `test_relaunch.py`'s replay and pin tests in PowerShell 5.1, PowerShell 7 and `cmd.exe` panes; their six ids
+    passed on the `windows` suite job and joined the Windows ratchet
   - `ngtermctl terminfo install` dumps the entry with `/usr/bin/infocmp`, which Windows lacks (two
     `test_cli_only.py` ids): a Windows form (Task 2) would read the staged `share/terminfo` instead
   - a file page's title (`htmlOverlays[].title`) never comes, on the CI runner and in the VM, so eight of
