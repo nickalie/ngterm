@@ -508,9 +508,10 @@ impl SettingsStore {
         settings
     }
 
+    /// A leading UTF-8 BOM is dropped, as in the hand-edited config files (`hooks::read_config_text`).
     fn read(path: &Path) -> Option<AppSettings> {
         let data = std::fs::read(path).ok()?;
-        serde_json::from_slice(&data).ok()
+        serde_json::from_slice(data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&data)).ok()
     }
 
     /// Writes the settings, migrated, atomically; creates the directory if needed.
@@ -563,6 +564,14 @@ mod tests {
         assert_eq!(store.load().theme, None);
         seed(&store, "{ not valid json ]");
         assert_eq!(store.load(), AppSettings::default());
+    }
+
+    #[test]
+    fn a_leading_bom_is_dropped() {
+        // Windows PowerShell's `Set-Content -Encoding utf8` writes one
+        let (_dir, store) = store();
+        seed(&store, "\u{feff}{\"terminalInputSource\": \"00000419\"}");
+        assert_eq!(store.load().terminal_input_source.as_deref(), Some("00000419"));
     }
 
     #[test]
