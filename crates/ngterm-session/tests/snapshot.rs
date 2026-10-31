@@ -11,6 +11,7 @@
 #[expect(dead_code, reason = "the helpers serve the pane, lead and snapshot tests alike")]
 mod support;
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -250,7 +251,10 @@ fn flood_lines(dir: &Path) -> TestResult<PathBuf> {
     if !path.exists() {
         let newline = if cfg!(windows) { "\r\n" } else { "\n" };
         let x = "x".repeat(50);
-        let lines: String = (1..=FLOOD_LINES).map(|i| format!("line-{i}-{x}{newline}")).collect();
+        let mut lines = String::new();
+        for i in 1..=FLOOD_LINES {
+            write!(lines, "line-{i}-{x}{newline}")?;
+        }
         std::fs::write(&path, lines)?;
     }
     Ok(path)
