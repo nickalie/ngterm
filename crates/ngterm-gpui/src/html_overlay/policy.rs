@@ -175,11 +175,11 @@ pub fn granted_file(root: Option<&GrantRoot>, requested: Option<&Path>) -> Resul
 fn strictly_inside(path: &Path, root: &Path) -> bool {
     use std::path::Component;
 
-    let after_volume = |path: &Path| {
+    fn after_volume(path: &Path) -> Vec<Component<'_>> {
         path.components()
             .skip_while(|component| matches!(component, Component::Prefix(_)))
-            .collect::<Vec<_>>()
-    };
+            .collect()
+    }
     let (path_rest, root_rest) = (after_volume(path), after_volume(root));
     volume(path) == volume(root) && path_rest.len() > root_rest.len() && path_rest.starts_with(&root_rest)
 }
