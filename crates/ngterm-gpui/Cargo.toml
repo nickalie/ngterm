@@ -150,7 +150,7 @@ path = "tests/external_texture/main.rs"
 harness = false
 
 # HTML pages end to end on the real WPE WebKit, which runs once per process: a child per Vulkan driver, each a plain
-# process whose engine runs in a worker where WPE WebKit is vendored (tests/html_overlay/main.rs).
+# process whose engine runs in a worker, as the app's does (tests/html_overlay/main.rs).
 [[test]]
 name = "html_overlay"
 path = "tests/html_overlay/main.rs"

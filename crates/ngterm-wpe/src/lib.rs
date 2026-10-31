@@ -19,8 +19,10 @@
 //!   schemes, and what a page may not do (new windows, dialogs, file choosers, permissions, full screen) refused.
 //! - [`worker`]: the engine in a process of its own, which the vendored WPE `WebKit` (its helpers at a compiled-in
 //!   path, reachable only inside an overlay of `/usr/lib`, [`launcher`]) always gets, so the consumer itself never runs
-//!   in that overlay's user namespace; [`Host::start_worker`] asks for one anywhere. Every program that may start an
-//!   engine calls [`worker::serve_if_asked`] first thing in its `main`.
+//!   in that overlay's user namespace; [`Host::start_worker`] asks for one anywhere. The worker's environment, which
+//!   its web processes inherit, carries a request size for their `PulseAudio` streams that keeps Web Audio playing on
+//!   a Bluetooth sink (module `worker`). Every program that may start an engine calls [`worker::serve_if_asked`] first
+//!   thing in its `main`.
 //!
 //! - What `WebKitGTK` draws itself and an offscreen page cannot (module `engine::interaction`): the clipboard
 //!   (`WPEPlatform`'s is the engine's own: a page's copy is reported, the desktop's text is handed in before a paste),

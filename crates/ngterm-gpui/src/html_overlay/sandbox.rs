@@ -1,12 +1,11 @@
 //! Whether WPE `WebKit`'s web process can start here, asked before the first page is accepted (carried over from the
-//! GTK build's `html_overlay/sandbox.rs`: WPE starts the same sandbox `WebKitGTK` does, and the engine thread's
-//! failure would end the app just the same).
+//! GTK build's `html_overlay/sandbox.rs`: WPE starts the same sandbox `WebKitGTK` does).
 //!
 //! `WebKit` runs its web process (and the D-Bus proxy beside it) inside bubblewrap, and when bubblewrap cannot set up
-//! its namespaces it ends the app's own process (a `g_error`, which aborts): every terminal of the instance would go
-//! with the page. That is the case on Ubuntu 24.04 and later, whose `AppArmor` denies an unconfined program the
-//! capabilities of a user namespace (`kernel.apparmor_restrict_unprivileged_userns=1`), unless a profile grants it
-//! `userns`; `bwrap` then fails with `setting up uid map: Permission denied`. So the check `WebKit` itself runs inside
+//! its namespaces it ends the process the engine runs in (a `g_error`, which aborts): the engine's worker
+//! (`ngterm_wpe::worker`), and with it every page, with a reason no page reports. That is the case on Ubuntu 24.04
+//! and later, whose `AppArmor` denies an unconfined program the capabilities of a user namespace
+//! (`kernel.apparmor_restrict_unprivileged_userns=1`), unless a profile grants it `userns`; `bwrap` then fails with `setting up uid map: Permission denied`. So the check `WebKit` itself runs inside
 //! a container (`WTF::isInsideUnsupportedContainer`, the same `bwrap` invocation) runs here once, and a failure
 //! refuses pages with its reason instead, pointing at `scripts/install-apparmor-profile.sh` where `AppArmor` is the
 //! cause (the README's section on `WebKit`'s sandbox on Ubuntu). The sandbox is never turned off: where `WebKit` does not

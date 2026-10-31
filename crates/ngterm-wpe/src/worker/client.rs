@@ -25,6 +25,7 @@
 //! nor the reader with the pages locked, and neither drops a backlog: the writer does, once the queue closed.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::ffi::{OsStr, OsString};
 use std::os::fd::{AsFd as _, AsRawFd as _, BorrowedFd, OwnedFd};
 use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
@@ -403,13 +404,40 @@ fn own_image() -> Result<OwnedFd, StartError> {
 /// `WebKit`.
 fn worker_command(image: i32) -> Command {
     let image = PathBuf::from(format!("/proc/self/fd/{image}"));
-    match launcher::provider() {
+    let mut command = match launcher::provider() {
         Provider::System => Command::new(image),
         Provider::Vendored { libdir } => {
             let cwd = std::env::current_dir().ok();
             let mut command = Command::new("bwrap");
             command.args(launcher::overlay_args(&libdir, cwd.as_deref(), false, &[], &image));
             command
+        }
+    };
+    command.env(PULSE_PROP, web_audio_props(std::env::var_os(PULSE_PROP).as_deref()));
+    command
+}
+
+/// The variable libpulse adds to a client's properties (`key=value` pairs separated by spaces), which `WebKit`'s web
+/// process inherits from the worker as the rest of its environment (`ProcessLauncherGLib.cpp` at WPE `WebKit` 2.54).
+const PULSE_PROP: &str = "PULSE_PROP";
+/// The least request size `pipewire-pulse` gives the web process's streams (`pulse.min.req`, which it reads from a
+/// client's properties as from its own rules). `WebKit`'s Web Audio feeds `pulsesink` from a live, clock-paced source
+/// with a 100 ms buffer (`AudioDestinationGStreamer.cpp`), whose 10 ms requests stall on a Bluetooth A2DP sink after
+/// the first ~0.5 s: the stream stays running and plays silence. Measured on an LDAC sink at
+/// 96 kHz under `PipeWire` 1.6.10: a floor of 2048/48000 still stalls, 3072/48000 plays through; this one keeps a
+/// margin. A real `PulseAudio` server ignores the property.
+const MIN_REQUEST: &str = "pulse.min.req=4096/48000";
+
+/// The worker's `PULSE_PROP`: the user's own (`current`) with [`MIN_REQUEST`] added, unless it names a floor itself.
+fn web_audio_props(current: Option<&OsStr>) -> OsString {
+    match current.filter(|current| !current.is_empty()) {
+        None => OsString::from(MIN_REQUEST),
+        Some(current) if current.to_string_lossy().contains("pulse.min.req") => current.to_owned(),
+        Some(current) => {
+            let mut props = current.to_owned();
+            props.push(" ");
+            props.push(MIN_REQUEST);
+            props
         }
     }
 }
@@ -857,6 +885,21 @@ fn keep_buffer(page: &mut PageFrames, frame: &Frame) -> Option<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_worker_asks_for_the_least_request_and_keeps_the_users_properties() {
+        assert_eq!(web_audio_props(None), MIN_REQUEST);
+        assert_eq!(web_audio_props(Some(OsStr::new(""))), MIN_REQUEST);
+        assert_eq!(
+            web_audio_props(Some(OsStr::new("media.role=music"))),
+            format!("media.role=music {MIN_REQUEST}").as_str()
+        );
+        // a floor of the user's own wins
+        assert_eq!(
+            web_audio_props(Some(OsStr::new("pulse.min.req=8192/48000"))),
+            "pulse.min.req=8192/48000"
+        );
+    }
 
     /// A stand-in worker: `sleep`, in a group of its own, on our end of a fresh pair; the other end comes back unread.
     fn sleeper() -> (Arc<Worker>, OwnedFd, OwnedFd) {

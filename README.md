@@ -314,8 +314,7 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
   socket; every `main` that may start an engine calls `ngterm_wpe::worker::serve_if_asked` first), and the app, its
   terminals, their live sessions and everything they start keep the user's privileges (`cargo test -p ngterm-gpui --test
   privileges`). `ngterm-wpe`'s engine tests (`cargo test -p ngterm-wpe`) run every case through a worker and again in
-  process inside the overlay (`ngterm_wpe::launcher::command`). Pick the distribution package whenever you can: with
-  it the engine runs in the app's own process.
+  process inside the overlay (`ngterm_wpe::launcher::command`). Pick the distribution package whenever you can.
 - Ubuntu packages no `wpewebkit` at all (none since 22.04's 2.36, 26.04 included), and 24.04 cannot load the Arch
   package (glibc 2.39): Ubuntu builds the workspace without what links WPE (`WORKSPACE_WITHOUT_WPE` in
   `scripts/lib/native.sh`: the WPE crates and the GPUI frontend) and the GPUI frontend without its HTML overlays
@@ -331,7 +330,10 @@ need WPE WebKit 2.54 or newer (`WPE_API_VERSION`) at build time, found through p
 `WPEDisplay`/`WPEView` subclass rendering on the render node the GPUI side names with the formats it imports, frames
 out as dmabufs (SHM as a last-resort fallback), and the WebKit surface the HTML overlay uses: stores, scripts and the
 bridge, policies, schemes, the clipboard, `<select>` popups, the context menu's hit test and input methods; in this
-process or in a worker (`Host::start_worker` asks for one with the system's package too, as the engine tests do). Its
+process or in a worker (`Host::start_worker` asks for one with the system's package too, as the engine tests do). The
+app runs its engine in a worker with either package, whose environment alone its web processes inherit: it names a
+least `PulseAudio` request size (`PULSE_PROP`) that keeps a page's Web Audio playing on a Bluetooth sink, and no
+terminal sees it. Its
 engine tests render headless on this machine's first DRM render node (Mesa; `WPE_TEST_RENDER_NODE` picks another) and
 in shared memory, each frame mode on each backend in a child process of its own. The GPUI side (`ngterm-gpui`'s `html_overlay`) has a
 headless harness of its own (`cargo test -p ngterm-gpui --test html_overlay`): the real engine on the GPU GPUI's

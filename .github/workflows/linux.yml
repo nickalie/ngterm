@@ -316,7 +316,7 @@ jobs:
           usermod --shell "$(command -v ${{ matrix.shell }})" "$(id -un)"
           getent passwd "$(id -un)"
       # instance: forwarding, activation and the SIGTERM quit; privileges: the app, a Live pane and its session keep
-      # the user's privileges while a page runs (with the system's wpewebkit the engine runs in process here); quit:
+      # the user's privileges while a page runs (with the system's wpewebkit its worker runs plainly here); quit:
       # SIGTERM within its deadline with Live sessions busy and pages open
       - name: the process tests with the HTML overlays
         if: matrix.shell == 'bash'

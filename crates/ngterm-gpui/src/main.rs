@@ -1,8 +1,8 @@
 //! `ngterm`, the GPUI frontend: one instance per application id (`instance.rs`), the core and its control
 //! socket on GPUI's main thread (`app.rs`).
 //!
-//! Startup order matters: a process started as the HTML overlays' engine worker (`ngterm_wpe::worker`, the vendored WPE
-//! `WebKit`'s engine in a process of its own) serves the engine and ends before anything of the app starts; then the
+//! Startup order matters: a process started as the HTML overlays' engine worker (`ngterm_wpe::worker`, WPE `WebKit`'s
+//! engine in a process of its own) serves the engine and ends before anything of the app starts; then the
 //! activation token and the startup id are read while the process has one thread and before GPUI's platform exists
 //! (GPUI removes the token from the environment; the startup id is removed here), and a launch that forwards to a
 //! running ngterm exits before GPUI starts and before it reads or writes the model state (it only appends to the shared
@@ -29,7 +29,8 @@ use ngterm_gpui::instance::{self, Activation, Registration};
 
 fn main() -> ExitCode {
     // the pages' engine worker: it serves the engine (inside the vendored WPE WebKit's overlay, where the app never
-    // goes) and ends here, appending to the app's log, and touches nothing else of the app
+    // goes, or plainly with the system's) and ends here, appending to the app's log, and touches nothing else of the
+    // app
     #[cfg(all(feature = "html", target_os = "linux"))]
     // SAFETY: first thing in main, while the process has one thread.
     unsafe {

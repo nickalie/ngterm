@@ -10,6 +10,11 @@
 //! overlay for the vendored package and plainly for the system's, and drives the engine through a [`crate::Host`] whose
 //! calls travel over a socket. The worker runs the ordinary in-process engine and nothing else.
 //!
+//! The worker's environment is the app's plus `PULSE_PROP` naming a least request size for `pipewire-pulse`, which
+//! `WebKit`'s web process inherits: its Web Audio stream otherwise stalls on a Bluetooth A2DP sink (`client.rs` has the
+//! measurements). Only the worker carries it, so an engine in the consumer's own process ([`crate::Host::start`] with
+//! the system's package) plays without it, and nothing else the consumer starts sees it.
+//!
 //! - Every program that may start an engine calls [`serve_if_asked`] first thing in its `main`: in the worker it serves
 //!   the engine and ends the process; anywhere else it returns at once.
 //! - The transport (`wire`): an `AF_UNIX` `SOCK_SEQPACKET` socket pair, close-on-exec on both sides (the worker's end

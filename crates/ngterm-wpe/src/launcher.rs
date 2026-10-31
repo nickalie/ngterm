@@ -5,8 +5,9 @@
 //! for the system's `wpewebkit`. The vendored package of `scripts/fetch-wpe.sh` lives in a prefix of its own, and its
 //! pages run only with that prefix's `lib/` overlaid on `/usr/lib`, read-only, in a mount namespace of the engine's
 //! own (`bwrap --ro-overlay`, no root; Task 2's spike launcher). That namespace is a user namespace with
-//! `PR_SET_NO_NEW_PRIVS`, inherited by everything started inside it, so only the engine may run there: the app starts
-//! its engine in a worker under the overlay ([`crate::Host::start`], crate `worker`) and never enters it itself.
+//! `PR_SET_NO_NEW_PRIVS`, inherited by everything started inside it, so only the engine may run there: the engine
+//! runs in a worker under the overlay ([`crate::Host::start`] and [`crate::Host::start_worker`], crate `worker`), and
+//! the consumer never enters it itself.
 //! [`command`] builds the overlay's launch of a program for an engine-only test process.
 
 use std::ffi::OsString;

@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use ngterm_wpe::{
-    Button, Event, FrameContent, Geometry, Host, HostConfig, InjectionTime, Input, Key, Load, LoadErrorKind, LoadEvent,
-    MessageHandler, Modifiers, NavigationType, Pointer, PointerKind, PolicyKind, SchemeError, SchemeResponse, Scroll,
-    SessionSpec, Settings, StartError, UserScript, fourcc,
+    Backend, Button, Event, FrameContent, Geometry, Host, HostConfig, InjectionTime, Input, Key, Load, LoadErrorKind,
+    LoadEvent, MessageHandler, Modifiers, NavigationType, Pointer, PointerKind, PolicyKind, SchemeError,
+    SchemeResponse, Scroll, SessionSpec, Settings, StartError, UserScript, fourcc,
 };
 
 use crate::support::{Harness, Outcome, SCHEME, Server, ensure, page};
@@ -64,6 +64,10 @@ pub const CASES: &[(&str, Case)] = &[
     (
         "animation_frames_run_at_a_displays_rate",
         crate::interaction::animation_frames,
+    ),
+    (
+        "a_workers_web_process_asks_pulseaudio_for_the_least_request",
+        pulse_request,
     ),
 ];
 
@@ -770,4 +774,33 @@ impl Harness {
         self.host.input(view, pointer(PointerKind::Down(Button::Primary)));
         self.host.input(view, pointer(PointerKind::Up(Button::Primary)));
     }
+}
+
+// MARK: - the web process's environment
+
+/// A worker's web process inherits its `PULSE_PROP`, which names `pipewire-pulse`'s least request size for the
+/// page's audio streams (`worker/client.rs`: Web Audio stalls on a Bluetooth sink without it). In process the web
+/// process inherits the consumer's environment, which the engine leaves as it is.
+fn pulse_request(h: &Harness, _: &Context) -> Outcome {
+    if h.host.backend() != Backend::Worker {
+        return Ok(());
+    }
+    let view = h.view(h.ephemeral(), Settings::overlay(true));
+    h.load(view, page("<title>audio</title>"))?;
+    let processes = crate::web_processes();
+    ensure(!processes.is_empty(), || "no web process runs the page".to_owned())?;
+    for pid in processes {
+        let environ =
+            std::fs::read(format!("/proc/{pid}/environ")).map_err(|err| format!("web process {pid}: {err}"))?;
+        let prop = environ
+            .split(|byte| *byte == 0)
+            .find_map(|entry| entry.strip_prefix(b"PULSE_PROP="))
+            .map(String::from_utf8_lossy);
+        ensure(
+            prop.as_deref().is_some_and(|prop| prop.contains("pulse.min.req=")),
+            || format!("web process {pid} has PULSE_PROP {prop:?}"),
+        )?;
+    }
+    h.host.close_view(view);
+    Ok(())
 }

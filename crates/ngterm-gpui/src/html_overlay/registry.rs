@@ -4,8 +4,10 @@
 //!
 //! The engine (`ngterm_wpe::Host`, one per process) starts with the first page once a window has drawn: it renders on
 //! the GPU that window's renderer opened, with the formats that device imports (`crate::external_texture::negotiate`),
-//! which exist only from then on. The start runs on a thread of its own (a vendored WPE `WebKit`'s engine starts in a
-//! worker process, `ngterm_wpe::worker`), so the main thread never waits on it and a quit meanwhile waits for nothing;
+//! which exist only from then on. The engine runs in a worker process (`ngterm_wpe::worker`) whatever the package, so
+//! the environment its web process gets is the worker's, never the app's (the audio fix `ngterm_wpe::worker` gives it
+//! reaches no terminal); the start runs on a thread of its own, so the main thread never waits on it and a quit
+//! meanwhile waits for nothing;
 //! a page mounted before it ends stays waiting and is realized once it does. Its events come back on one channel the
 //! pump ([`init`]) dispatches on the main thread; should they end while the app runs (the worker died), every page
 //! fails for the rest of the run.
@@ -246,7 +248,7 @@ fn engine() -> Result<Rc<dyn Web>, String> {
         return failed("the web engine has no event pump (html_overlay::init was not called)".to_owned());
     };
     let spawned = std::thread::Builder::new().name("wpe-start".to_owned()).spawn(move || {
-        let _ = pump.send_blocking(ngterm_wpe::Host::start(config));
+        let _ = pump.send_blocking(ngterm_wpe::Host::start_worker(config));
     });
     match spawned {
         Ok(_) => {
