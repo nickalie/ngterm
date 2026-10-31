@@ -264,13 +264,34 @@ fn flood_end(chunk: usize) -> String {
 }
 
 /// Flood the session with `chunks`, each read by `watcher` before the next is asked for, while the client that is to
-/// fall behind reads nothing.
+/// fall behind reads nothing. On Windows the next chunk also waits for `cmd`'s prompt after the last one's end: the
+/// console drops a line typed before `cmd` reads again (the end's echo is not yet the prompt).
 fn flood_past(pane: &Pane, watcher: &mut Client, chunks: std::ops::RangeInclusive<usize>) -> TestResult {
     for chunk in chunks {
         type_line(pane, &flood(chunk))?;
         watcher.expect(&flood_end(chunk));
+        if cfg!(windows) {
+            expect_prompt_after(watcher, &flood_end(chunk));
+        }
     }
     Ok(())
+}
+
+/// Wait for `cmd`'s prompt (its `>`) after the last `needle` in `client`'s output, before anything else is typed.
+fn expect_prompt_after(client: &mut Client, needle: &str) {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let text = client.text();
+        let after = text.rsplit_once(needle).map_or("", |(_, after)| after);
+        if after.contains('>') {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline && client.exit.is_none(),
+            "no prompt after {needle:?}: {after:?}"
+        );
+        client.receive(Duration::from_millis(100));
+    }
 }
 
 /// A session of [`shell`] whose managed creator, given a 16 KiB queue and `budget`, leads it, with a watcher
