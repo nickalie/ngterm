@@ -32,6 +32,7 @@ use ngterm_proto::ControlTree;
 use crate::command_restore::PaneForeground;
 use crate::commands::live::launch::{live_foreground_group, pane_seed};
 use crate::model::{AppStore, Session, StatusPane, SurfaceSlot, WindowLibrary};
+use crate::persist::RestoreMode;
 use crate::restore::capture::{CaptureKind, ForegroundReader, capture_foreground_commands};
 use crate::restore::mode::{RestoreLaunchDecision, captures_on_exit};
 use crate::restore::spawn_plan::{LaunchSeed, LaunchSeedPolicy};
@@ -53,6 +54,9 @@ pub struct PaneSpawn {
 #[derive(Default)]
 pub(crate) struct RestoreRuntime {
     pub(crate) decision: RestoreLaunchDecision,
+    /// The mode every launch of this host runs whatever the settings hold (`ngterm-headless`'s `live`): what the
+    /// next launch is configured for, while the settings keep the user's own choice.
+    forced: Option<RestoreMode>,
     denylist: HashSet<String>,
     table: Option<Box<dyn ProcessTable>>,
     /// The user's `$SHELL` basename.
@@ -73,6 +77,7 @@ impl fmt::Debug for RestoreRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RestoreRuntime")
             .field("decision", &self.decision)
+            .field("forced", &self.forced)
             .field("denylist", &self.denylist)
             .field("shell", &self.shell)
             .finish_non_exhaustive()
@@ -124,6 +129,22 @@ impl Core {
     #[must_use]
     pub fn restore_launch(&self) -> &RestoreLaunchDecision {
         &self.restore.decision
+    }
+
+    /// Makes `mode` the next launch's on this host, whatever the settings hold, for a host that runs every launch in
+    /// it (`ngterm-headless`, always `live`). The settings are not touched, so a settings write saves the user's own
+    /// mode and another host on the same state dir follows it.
+    pub fn force_restore_mode(&mut self, mode: RestoreMode) {
+        self.restore.forced = Some(mode);
+    }
+
+    /// The mode the next launch runs: the forced one ([`Core::force_restore_mode`]), else the settings'. The quit
+    /// capture, `restore.capture`, the `restore.mode` read-back and the live sessions reset read it.
+    #[must_use]
+    pub fn configured_restore_mode(&self) -> RestoreMode {
+        self.restore
+            .forced
+            .unwrap_or_else(|| self.settings().effective_restore_mode())
     }
 
     /// Installs the frontend's process table and the user's `$SHELL` basename, which the `tree`'s foreground fields
@@ -372,7 +393,7 @@ impl Core {
 
     /// The exit capture over windows `ids`.
     pub(crate) fn capture_windows_on_exit(&mut self, ids: &[Uuid]) {
-        let capturing = captures_on_exit(self.settings().effective_restore_mode());
+        let capturing = captures_on_exit(self.configured_restore_mode());
         if !capturing {
             for id in ids {
                 if let Some(store) = self.library.store_mut(*id) {

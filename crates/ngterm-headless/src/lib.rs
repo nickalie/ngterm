@@ -6,10 +6,10 @@
 //! live session, the presentation (status, layout, HUD, notifications) streamed over `ngtermctl live present`, and
 //! asks, program overlays and pages shown on the viewer.
 //!
-//! - Live sessions always: the launch runs in restore mode `live` whatever the settings hold (they keep what was
-//!   saved, so `live.reset` is offered only with `live` saved, as in the app), and refuses to start when the live probe
-//!   rejects this host (no `ngterm-session` beside the binary, an unsupported login shell), since without daemons
-//!   there is nothing to attach.
+//! - Live sessions always: every launch runs in restore mode `live` whatever the settings hold, which keep the user's
+//!   own mode for an app on the same state dir ([`Core::force_restore_mode`]), and refuses to start when the live
+//!   probe rejects this host (no `ngterm-session` beside the binary, an unsupported login shell), since without
+//!   daemons there is nothing to attach.
 //! - Every session's panes run, not only a shown one's (there is none): a session is attachable once every pane of it
 //!   has a running daemon.
 //! - One instance per state directory, as the app: the state lock refuses a second one, and an app instance on the
@@ -94,8 +94,8 @@ pub fn live_decision(env: &dyn Env) -> Result<RestoreLaunchDecision, Refused> {
     }
 }
 
-/// The model as the last run left it. The settings stay as saved: the launch runs live by its decision
-/// ([`live_decision`]), and a settings write (a theme, a font) saves the user's restore mode, not this launch's.
+/// The model as the last run left it. The settings stay as saved: the core runs live by its forced mode and decision
+/// ([`launch_core`]), and a settings write (a theme, a font) saves the user's restore mode, not this host's.
 fn load_state(env: &dyn Env) -> CoreState {
     let state_dir = paths::state_dir(env);
     let home = paths::home_dir(env).map_or_else(|| "/".to_owned(), |home| home.to_string_lossy().into_owned());
@@ -223,6 +223,8 @@ fn launch_core(decision: RestoreLaunchDecision, resources: Option<&Path>, poster
             .and_then(|executable| ngterm_core::identity::InstalledSource::of_executable(&executable)),
     );
     core.set_config_locator(paths::ConfigLocator::capture(env));
+    // every launch here is live: the quit capture, the reset and `restore.mode` read live as the next launch's mode
+    core.force_restore_mode(RestoreMode::Live);
     core.set_restore_launch(decision);
     core.load_restore_denylist_at_launch();
     core.set_process_table(

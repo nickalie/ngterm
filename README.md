@@ -430,8 +430,8 @@ File ▸ Attach Remote attaches the live sessions of another machine running ngt
 server reached over ssh) that is `ngterm-headless` (`crates/ngterm-headless`), staged beside `ngtermctl` and
 `ngterm-session`: the core, the control socket and the session server of the app, with no window and no GPUI, Wayland
 or Vulkan. It runs every session pane of its state dir in a live session (restore mode `live` whatever the settings
-hold, which keep what was saved: `ngtermctl live reset` wants `live` saved, as in the app; it refuses to start where
-the live probe rejects the host), each in a terminal nobody draws, so every session is attachable. `ngtermctl` drives it as it drives the app; the agents' hooks and the skill work in its panes.
+hold, which keep the user's own mode for an app on the same state dir; it refuses to start where the live probe
+rejects the host), each in a terminal nobody draws, so every session is attachable. `ngtermctl` drives it as it drives the app; the agents' hooks and the skill work in its panes.
 
 ```sh
 # on the server: the staged layout (scripts/stage.sh), ngtermctl on PATH (~/.local/bin or /usr/local/bin)

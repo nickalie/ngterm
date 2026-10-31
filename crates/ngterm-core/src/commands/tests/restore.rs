@@ -565,3 +565,39 @@ fn only_the_shown_restored_sessions_spawn_and_a_reopened_window_restores_lazily(
     core.wake_shown_sessions();
     assert_eq!(core.request_pane_spawn(first, &selected), Some(LaunchSeed::default()));
 }
+
+/// A host that runs every launch live (`ngterm-headless`) captures at quit, offers the live sessions reset and reads
+/// back `live` as configured, with settings that say otherwise and stay as saved.
+#[test]
+fn a_forced_mode_is_the_next_launchs_and_leaves_the_settings_alone() {
+    let mut fixture = Fixture::with_settings(1, settings(RestoreMode::None));
+    fixture.core.force_restore_mode(RestoreMode::Live);
+    fixture
+        .core
+        .set_restore_launch(RestoreLaunchDecision::new(RestoreMode::Live, None));
+    assert_eq!(fixture.core.configured_restore_mode(), RestoreMode::Live);
+    let live = json!({"configured": "live", "requestedAtLaunch": "live", "active": "live", "restartRequired": false});
+    assert_eq!(status(&restore(&mut fixture.core, RestoreCmd::Mode, |_| {})), live);
+    assert!(fixture.core.live_reset_menu_visible());
+    // a set is the user's, saved for another host on this state dir; this host's next launch stays live
+    assert_eq!(
+        status(&restore(&mut fixture.core, RestoreCmd::Mode, |a| a.mode = Some("rerun".into()))),
+        live
+    );
+    assert_eq!(fixture.core.settings().effective_restore_mode(), RestoreMode::Rerun);
+    // the quit capture runs, as live falls back to it
+    fixture
+        .core
+        .set_process_table(Box::new(processes()), Some("sh".to_owned()));
+    let session = fixture.sessions[0];
+    install(&mut fixture.core, session, Some(101));
+    fixture.core.capture_on_exit();
+    let captured = fixture
+        .store()
+        .session(session)
+        .expect("a session")
+        .restore
+        .foreground
+        .clone();
+    assert_eq!(captured, Some(vec!["cat".to_owned()]));
+}

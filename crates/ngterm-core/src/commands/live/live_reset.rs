@@ -104,7 +104,7 @@ impl Core {
     /// Whether Reset Live Sessions… is offered: live both configured and running.
     #[must_use]
     pub fn live_reset_menu_visible(&self) -> bool {
-        menu_visible(self.settings().effective_restore_mode(), self.restore.decision.active)
+        menu_visible(self.configured_restore_mode(), self.restore.decision.active)
     }
 
     /// The panes a reset would end; `None` when the listing failed.

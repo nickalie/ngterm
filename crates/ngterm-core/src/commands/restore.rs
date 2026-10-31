@@ -165,7 +165,7 @@ fn mode(core: &mut Core, raw: Option<&str>) -> Result<ControlResult, ControlErro
 /// `restore.capture`: every open pane's foreground program captured now, for the exit that never reaches the quit
 /// capture (a force quit, a crash). Only with `rerun` configured for the next launch.
 fn capture(core: &mut Core) -> Result<ControlResult, ControlError> {
-    let configured = core.settings().effective_restore_mode();
+    let configured = core.configured_restore_mode();
     if configured != RestoreMode::Rerun {
         return Err(ControlError::rejected(format!(
             "restore.capture requires rerun mode; configured restore mode is {}",
@@ -211,7 +211,7 @@ impl Core {
     /// The `restore.mode` read-back.
     #[must_use]
     pub fn restore_status(&self) -> ngterm_proto::ControlRestoreStatus {
-        self.restore_launch().status(self.settings().effective_restore_mode())
+        self.restore_launch().status(self.configured_restore_mode())
     }
 
     /// Writes every open window now (upstream's `saveAllOpenChecked`); whether every write landed.
