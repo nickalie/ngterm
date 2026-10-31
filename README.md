@@ -4,16 +4,17 @@
 
 ngterm: [agterm](https://github.com/umputun/agterm) in Rust, a GPUI terminal over Ghostty's libghostty-vt, driven by
 `ngtermctl` over a control socket. macOS, Linux and Windows are equal targets. Today the app is built and tested on
-Linux; the terminal core, the pane core and the live-session server under it (libghostty-vt, `ngterm-pty`,
-`ngterm-term`, `ngterm-session` and the crates [CI](#ci) lists) build and test on all three
-([macOS and Windows](#macos-and-windows)). Everything else below is the Linux build unless it names another OS.
+Linux and Windows ([Windows](#windows)); everything under it (libghostty-vt, `ngterm-pty`, `ngterm-term`,
+`ngterm-session`, the control server, `ngtermctl`, the app services and the other crates [CI](#ci) lists) builds and
+tests on all three, and the app's macOS form is open work ([macOS and Windows](#macos-and-windows)). Everything else
+below is the Linux build unless it names another OS.
 
 - The Linux build's application id is `com.nickalie.ngterm`, its state dir `$XDG_DATA_HOME/ngterm` (else
   `~/.local/share/ngterm`) with the control socket at `<state dir>/ngterm.sock`, and its config dir `~/.config/ngterm`
   (keymap, hooks, ngterm-scoped ghostty config).
   One instance runs per application id: the first owns the id's name on the session bus and serves `GApplication`'s
   D-Bus protocol there (through `zbus`), and a later launch of this build forwards its activation to it and exits
-  before touching the state.
+  before touching the state. The Windows build's dirs, control pipe and registrations are in [Windows](#windows).
 - The binaries are `ngterm`, `ngtermctl` and `ngterm-session`, the crates `ngterm-*`, and every variable the app sets
   or reads is `NGTERM_*` (a pane's `NGTERM_SESSION_ID`, `NGTERM_SOCKET`, `NGTERM_PANE_ID`, the attach contract's
   `NGTERM_LIVE_*`; upstream's are `AGTERM_*`). A reinstall of the agent-status hooks or the skill over one made
@@ -82,7 +83,7 @@ and how this build does it where the OS matters:
   weston and any other compositor the setting is disabled with the reason shown
   (`crates/ngterm-gpui/src/input_source.rs`).
 - `notify` banners get a notification slot of their own per session, replaced and cleared as upstream's
-  (freedesktop `replaces_id` and `CloseNotification` on Linux).
+  (freedesktop `replaces_id` and `CloseNotification` on Linux, a toast's group and tag on Windows).
 - Live sessions: a fish login shell claims `live-sessions` as zsh does, with the shell integration's root merged into
   the pane's `XDG_DATA_DIRS`; an interrupted restored command or `--command` still leaves the login shell's prompt;
   the session server touches its namespace lock hourly, so a temp-dir cleaner never ages it out.
@@ -251,8 +252,11 @@ the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`).
 
 What builds there today is the crates the `cross-platform.yml` workflow runs ([CI](#ci)): libghostty-vt and its
 wrapper, `ngterm-pty`, `ngterm-term`, `ngterm-session`, `ngterm-proto`, `ngterm-host`, `ngterm-core`,
-`ngterm-server`, `ngterm-ctl` and `ngterm-app`. The app builds on Linux only ([CI](#ci) says what it waits for).
-The order is Linux's: the pinned Zig (fetched by the script when none is found), the script, then cargo:
+`ngterm-server`, `ngterm-ctl` and `ngterm-app`; on Windows the app too (`ngterm-gpui`, with and without its HTML
+overlays; [Windows](#windows) has its build, install and test). The app is not built on macOS: its macOS forms (its
+single instance, quit, keyboard and the rest GPUI's macOS platform leaves to it, the HTML overlays' host, a bundle)
+are not written yet. The order is Linux's: the pinned Zig (fetched by the script when none is found), the script,
+then cargo:
 
 ```sh
 scripts/build-ghostty-vt.sh    # stock bash 3.2 on macOS, Git Bash on Windows
@@ -269,7 +273,8 @@ A Mac, a Windows machine or a VM of either needs, besides Rust from rustup (`rus
   targets link through it, and Zig builds libghostty-vt for `windows-msvc` only against it. Git for Windows: its Git
   Bash runs the script and brings curl, tar, patch, `sha256sum`, `unzip` (Zig's archive), `tic`/`infocmp` and
   `cygpath`. PowerShell 7 (`pwsh`): `ngterm-session`'s PowerShell session tests require it on Windows and run
-  elsewhere wherever one is installed.
+  elsewhere wherever one is installed. The app, its installer and the suite need a little more
+  ([Windows](#windows)).
 
 The script picks the pinned Zig of the host's OS and arch (`LIBGHOSTTY_VT_ZIG_SHA256_<OS>_<ARCH>`). On Windows the sys
 crate's build script runs it with Git for Windows's `bin\bash.exe`, found beside `git.exe` or under the install
@@ -418,10 +423,111 @@ panes keep a PTY of their own, and an instance with live sessions off starts no 
   through the old wrappers a reinstall leaves in place. A one-time migration
   (`ngterm_core::live::LEGACY_NAME_PREFIX`).
 
+## Windows
+
+The same app, CLI and session server, built with MSVC: GPUI renders through DirectX, the HTML overlays are WebView2
+pages through `wry` (`crates/ngterm-gpui/src/html_overlay/webview2.rs`) in place of WPE WebKit, notifications are
+toasts. The application id is `com.nickalie.ngterm` here too, and so are the binaries' and variables' names; what
+differs is where things are kept and how they are reached:
+
+- The state dir is `%LOCALAPPDATA%\ngterm` and the config dir `%APPDATA%\ngterm` (the local and roaming application
+  data known folders, never the XDG variables; `<state dir>\config` when `NGTERM_STATE_DIR` is set, as on Linux), the
+  home `HOME`, else the profile folder (`crates/ngterm-core/src/paths.rs`).
+- The control socket's path stays the identity (`<state dir>\ngterm.sock`, `NGTERM_CONTROL_SOCKET`, `NGTERM_SOCKET`,
+  `ngtermctl --socket`), and the app serves the named pipe that path names, `\\.\pipe\ngterm-control-<hash>` (the
+  FNV-1a 64 hash of the absolute path, case-folded with `\` separators: `ngterm_core::paths::control_pipe_name`),
+  owner-only and closed to remote clients; nothing is created at the path itself. `ngtermctl` derives the same name
+  and refuses a pipe another user's process serves.
+- One instance per application id and state dir: the first serves a named pipe of its own (`ngterm-instance-…`), and
+  a later launch forwards its activation over it, lets the primary raise its window and exits before GPUI starts or
+  the state is read (`crates/ngterm-gpui/src/instance/windows.rs`); the state dir's `ngterm.lock` refuses a second
+  instance on one state dir as on Linux. The quit SIGTERM runs on Linux comes from the console's Ctrl events and the
+  session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION`).
+- Toasts go out under the AppUserModelID, which is the application id: every launch sets it on the process and
+  registers it (`HKCU\Software\Classes\AppUserModelId\<app id>`, the name and icon the toasts show), and the
+  installer's Start-menu shortcut carries it.
+- The live-session namespace is `%LOCALAPPDATA%\ngterm\live\<hash>` ([Live sessions](#live-sessions)).
+- Install Command Line Tool… links nothing: it puts the bundled `ngtermctl.exe`'s folder on the user's `PATH`
+  (`HKCU\Environment`) unless it is there already (the installer's is). Install Agent Skill… installs into the home's
+  `.claude\skills\ngterm` and `.codex\skills\ngterm`.
+
+Besides the toolchain [macOS and Windows](#macos-and-windows) lists (Visual Studio Build Tools, Rust, Git for Windows,
+PowerShell 7):
+
+- the terminal fonts, `scripts/fetch-fonts.sh` from Git Bash, as on Linux;
+- the Microsoft Edge WebView2 Runtime for the HTML overlays (part of Windows 11; Windows 10 may lack it): the app
+  checks for it at start, and without it refuses every page with a reason that says where to get it;
+- for the installer, a .NET SDK, through which `scripts/build-msi.sh` installs the pinned WiX Toolset (`WIX_VERSION`
+  in `build/pins.env`, whose comment says why that version) into the vendor root on first use (`NGTERM_WIX` names a
+  `wix` of that version instead), and the Visual C++ redistributable files of the Visual Studio the build links with,
+  which it puts beside the executables;
+- for the suite, Python 3.11 or later with venv (CI runs 3.14).
+
+Build and stage, from Git Bash (`stage.sh` takes a destination in either form and stages
+`bin\{ngterm,ngtermctl,ngterm-session}.exe` beside `share\`, the layout the suite, the installer and an install run
+from):
+
+```sh
+scripts/build-ghostty-vt.sh && scripts/fetch-fonts.sh
+cargo build --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session    # ngterm-gpui's default `html`: WebView2
+scripts/stage.sh 'C:\ngterm-stage'
+```
+
+A dev build beside an installed ngterm needs what `scripts/run-gpui-dev.sh` gives an instance on Linux (that script
+is not checked on Windows, and has no Windows form of its own): `NGTERM_*`, `AGTERM_*` and `ZMX_*` stripped
+from the environment, a unique `NGTERM_APP_ID` (its own instance pipe, so the launch is not forwarded to the installed
+app) and a private `NGTERM_STATE_DIR` (its config dir, its live-session namespace and its control socket,
+`<state dir>\ngterm.sock`, follow it), then the staged `bin\ngterm.exe`, driven with
+`ngtermctl <command> --socket <state dir>\ngterm.sock`. The smoke checks below and the suite's harness launch their
+instances the same way. Its window opens on the desktop it runs on.
+
+The installer is a per-user MSI from `packaging/windows/ngterm.wxs`, whose header says what it installs and why per
+user:
+
+```sh
+scripts/build-msi.sh dist/ngterm-x64.msi [--staged DIR] [--version X.Y.Z]   # builds and stages first without --staged
+msiexec /i dist\ngterm-x64.msi                                               # from cmd or PowerShell; no elevation
+```
+
+It installs into `%LOCALAPPDATA%\Programs\ngterm` with the staged layout and the licenses under `share\doc`, puts
+`bin\` on the user's `PATH`, and adds a Start-menu shortcut carrying the application id. The version is the staged
+`ngterm`'s Cargo version unless `--version` gives one; an install of a higher version replaces the installed one (a
+major upgrade). The uninstall removes its files, shortcut, `PATH` entry and the application id's registration, and
+leaves the state and config dirs. The session server's build id
+(`share\ngterm\session-BUILD`) is not installed, so an installed session server hands no sessions over to a new build
+after an upgrade (the .wxs header says why). `scripts/check-msi.ps1` installs an MSI for the current user, checks
+what it installed, upgrades and uninstalls it, on a throwaway machine or account only, as CI does.
+
+Tests, from Git Bash. The crates as CI runs them ([CI](#ci)), then the suite, which builds the release app, stages it
+into `target/conformance-stage` and runs the protocol, cli and behaviors layers against it, held by its own ratchet,
+`conformance/rust-passing-windows.txt` (`check_ratchet.py --list` names it; see
+[conformance/README.md](conformance/README.md), Rust runner and ratchet):
+
+```sh
+cargo test -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys \
+  -p ngterm-ghostty-vt -p ngterm-pty -p ngterm-term -p ngterm-server -p ngterm-ctl -p ngterm-app --all-features
+cargo test -p ngterm-gpui --no-default-features && cargo test -p ngterm-gpui   # without and with the HTML overlays
+python -m venv .venv && .venv/Scripts/python.exe -m pip install -e conformance
+.venv/Scripts/python.exe -m pytest conformance/selftests/test_transport.py conformance/selftests/test_client.py \
+  conformance/selftests/test_windows_launch.py      # the harness's Windows self-tests: the pipe transport, the launch
+conformance/tools/run-windows.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS...]
+```
+
+- `ngterm-gpui`'s tests that need Xvfb, weston, lavapipe, a D-Bus bus or WPE WebKit are Linux-only, and those whose
+  panes run POSIX `sh` scripts are ignored on Windows with that reason.
+- Windows has no headless desktop: the suite's instances (each on a private root, `NGTERM_*`, `AGTERM_*` and `ZMX_*`
+  stripped, its processes ended by pid) open their windows on the desktop it runs on, and `session.reveal` or a
+  clicked link reaches the system's handlers. Run it on a CI runner or a throwaway VM only, never beside a live
+  ngterm. Its panes run Git for Windows' `sh.exe`; the conformance README's Safety guards have the rest.
+- `scripts/smoke-windows-app.ps1` (the app, its panes, quick terminal, single instance, quit, hotkey, toasts and
+  layout lock) and `scripts/smoke-windows-pages.ps1` (the HTML overlays) check a debug build on a desktop with a
+  private state dir, through `ngtermctl --socket`; their headers say how to run them in a VM.
+
 ## Test
 
 The gates' checks. CI runs them on the whole workspace, with the full suite, on every PR and push to main. Locally, a
-change runs them only on the part it changes:
+change runs them only on the part it changes (these are Linux's; Windows' are in [Windows](#windows), and its and
+macOS' gate is [CI](#ci)'s run on a `ci/**` branch or a PR):
 
 - `cargo fmt`, `cargo metadata --locked` and `scripts/lint-report.sh` (a source scan, seconds) stay on the whole tree.
 - clippy (both lines) takes `-p` for each crate the change touches and each workspace crate
@@ -486,21 +592,32 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   `ngterm-ctl` and `ngterm-app` so far), on Ubuntu, macOS and Windows runners: the libghostty-vt prefix with each
   runner's pinned Zig (cached with Zig's global cache), format,
   clippy and `cargo test` (`crates`, a matrix), then the sys crate cross-built for the Zig targets no runner runs
-  natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). It also runs on pushes to `ci/**`
-  branches, to check a macOS or Windows form without a PR.
+  natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). The Windows leg also runs the
+  vendored portable-pty's Windows patch tests and builds the app: `ngterm-gpui`'s clippy and tests without and with
+  its HTML overlays (WebView2, which the runner image carries). Beside it, `windows`: the harness's Windows
+  self-tests and the suite against the staged release build (`conformance/tools/run-windows.sh`, with `--must-pass
+  live-any-shell`: the runner's login shell is Windows PowerShell), held by `rust-passing-windows.txt`; the report
+  and the stage are kept as artifacts. It also runs on pushes to `ci/**` branches, to check a macOS or Windows form
+  without a PR.
+- `windows-installer.yml` (the same triggers, and by hand): the release build staged, the MSI built from it with the
+  pinned WiX and one of the next patch version, then `scripts/check-msi.ps1` installs, checks, upgrades and
+  uninstalls it on the runner; the MSI is kept as the `ngterm-msi` artifact.
 - `conformance-gate.yml`: the suite's self-tests and catalog coverage gate.
 - `reference-macos.yml`: the suite against upstream's macOS release.
 
 ## Layout
 
 - `crates/`: the Cargo workspace (crate map in [CLAUDE.md](CLAUDE.md)).
-- `conformance/`: the suite, its catalog of upstream's commands, the ratchet list `rust-passing.txt`.
+- `conformance/`: the suite, its catalog of upstream's commands, the ratchet lists `rust-passing.txt` and
+  `rust-passing-windows.txt`.
 - `build/`: `pins.env`, the ghostty-vt, gir, calloop, GPUI and portable-pty patches, the bundled skill's patches over
   upstream's.
 - `vendor/`: the patched GPUI, calloop and portable-pty crates, recreated by the vendor scripts (an edit there goes back into its
   patch).
-- `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the AppArmor profile installer.
+- `scripts/`: native builds, staging, `run-gpui-dev.sh`, the lint report, the AppArmor profile installer, the Windows
+  installer's build and check, the Windows smoke checks.
 - `packaging/linux/apparmor/`: ngterm's AppArmor profile (WebKit's sandbox on Ubuntu).
+- `packaging/windows/`: the Windows installer's WiX source.
 - `resources/`: the agent-status hooks and agent skill the app installs (the skill at `resources/skills/ngterm`,
   upstream's `plugins/agterm/skills/agterm` plus `build/patches/skill-ngterm`), and ngterm's PowerShell integration
   (`shell-integration/pwsh`), which live sessions load; the app icon in every form (`icons/`, its README says where
