@@ -19,6 +19,7 @@ from agterm_conformance.match import (
     assert_subset,
     assert_version_result,
     find_session,
+    sessions,
     window_ids,
     workspaces,
 )
@@ -95,6 +96,23 @@ def _new(ctl, **args):
     return sid
 
 
+def _titles_settled(ctl, adapter):
+    """Wait until no pane's first title is still on its way, before two reads of the tree are compared.
+
+    Where `untitled-panes` is not claimed (Windows), the console host titles each pane with its program's path a
+    moment after the pane mounts, so every realized session reports a `title` (its left pane's) only some time after
+    `wait_mounted`; a tree read before that title and one read after it differ."""
+    if adapter.has("untitled-panes"):
+        return
+
+    def titled(tree):
+        pending = [node["name"] for node in sessions(tree) if node.get("realized") and node.get("title") is None]
+        assert not pending, f"untitled: {pending}"
+        return True
+
+    ctl.wait_tree(titled)
+
+
 def _node(ctl, sid):
     return find_session(ctl.tree(), sid)
 
@@ -161,7 +179,8 @@ def tree_workspace(ctl, adapter):
 
 
 @pytest.mark.covers("cli:tree")
-def test_tree_lists_workspaces_and_tagged_sessions(cli, ctl, tree_workspace):
+def test_tree_lists_workspaces_and_tagged_sessions(cli, ctl, adapter, tree_workspace):
+    _titles_settled(ctl, adapter)
     top = _json(cli("tree", "--json"))["tree"]
     human = _ok(cli("tree"))
     assert human == cli_format.tree(top) + "\n"
@@ -669,6 +688,7 @@ def test_session_overlay_visibility(cli, ctl, adapter):
     _overlay_up(ctl, sid)
     _ok(cli("session", "overlay", "hide", "--target", sid), "hidden\n")
     assert _node(ctl, sid)["hiddenOverlays"] == ["session"]
+    _titles_settled(ctl, adapter)
     top = _json(cli("tree", "--json"))["tree"]
     human = _ok(cli("tree"))
     assert human == cli_format.tree(top) + "\n"
@@ -688,6 +708,7 @@ def test_session_overlay_visibility(cli, ctl, adapter):
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("paneOverlays") == ["left"])
     _ok(cli("session", "overlay", "hide", "--pane", "left", "--target", sid), "hidden\n")
     assert _node(ctl, sid)["hiddenOverlays"] == ["left"]
+    _titles_settled(ctl, adapter)
     top = _json(cli("tree", "--json"))["tree"]
     human = _ok(cli("tree"))
     assert human == cli_format.tree(top) + "\n"
