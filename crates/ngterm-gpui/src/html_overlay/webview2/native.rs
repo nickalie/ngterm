@@ -44,6 +44,7 @@ use wry::{
     WebViewExtWindows,
 };
 
+use super::super::policy::GrantRoot;
 use super::scheme;
 
 /// A page's content area in its window, in logical pixels.
@@ -131,11 +132,11 @@ pub type Post = Rc<dyn Fn(Report)>;
 /// The keystroke the app takes from a key pressed in the page, by its virtual key.
 pub type TakeKey = Rc<dyn Fn(u32) -> Option<gpui_kit::Keystroke>>;
 
-/// How the grant's protocol answers: the page's grant as a real path, and the last read it refused (an address and
+/// How the grant's protocol answers: the page's grant, and the last read it refused (an address and
 /// why), which a failed main-frame load reports.
 #[derive(Clone, Default)]
 pub struct Grant {
-    pub root: Arc<Mutex<Option<PathBuf>>>,
+    pub root: Arc<Mutex<Option<GrantRoot>>>,
     pub refused: Arc<Mutex<Option<(String, String)>>>,
 }
 
@@ -852,7 +853,7 @@ fn serve_granted(grant: &Grant, uri: &str, reply: RequestAsyncResponder) {
     let (root, refused) = (Arc::clone(&grant.root), Arc::clone(&grant.refused));
     let spawned = std::thread::Builder::new().name("page-file".to_owned()).spawn(move || {
         let root = root.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        let answer = read_granted(root.as_deref(), &app);
+        let answer = read_granted(root.as_ref(), &app);
         if let Err(message) = &answer {
             let mut refused = refused.lock().unwrap_or_else(PoisonError::into_inner);
             refused.replace((app, message.clone()));
@@ -877,7 +878,7 @@ fn serve_granted(grant: &Grant, uri: &str, reply: RequestAsyncResponder) {
 }
 
 /// The file `app` names, inside the grant `root`: its MIME type and bytes, or the refusal's text.
-fn read_granted(root: Option<&std::path::Path>, app: &str) -> Result<(String, Vec<u8>), String> {
+fn read_granted(root: Option<&GrantRoot>, app: &str) -> Result<(String, Vec<u8>), String> {
     let requested = url::Url::parse(app).ok().and_then(|url| url.to_file_path().ok());
     let path = super::super::policy::granted_file(root, requested.as_deref()).map_err(str::to_owned)?;
     let body = std::fs::read(&path).map_err(|err| err.to_string())?;

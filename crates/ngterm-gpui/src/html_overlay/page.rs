@@ -61,7 +61,7 @@ struct PageState {
     /// The address of the document a browsing page shows; `None` until its first commit.
     shown_url: Option<Url>,
     /// A granted page's grant as a real path, which the scheme's reads are served from.
-    grant_root: Option<PathBuf>,
+    grant_root: Option<policy::GrantRoot>,
     storage_failure: Option<String>,
     prompt: Option<Entity<Alert>>,
     /// A declined prompt silences the page until real input reaches its view: script can click links in a loop, but
@@ -189,7 +189,7 @@ impl Page {
         &self.storage
     }
 
-    pub(super) fn grant_root(&self) -> Option<PathBuf> {
+    pub(super) fn grant_root(&self) -> Option<policy::GrantRoot> {
         self.state.borrow().grant_root.clone()
     }
 
@@ -654,7 +654,7 @@ impl Page {
                 path,
                 grant_root: Some(root),
             } => {
-                self.state.borrow_mut().grant_root = std::fs::canonicalize(&root).ok();
+                self.state.borrow_mut().grant_root = policy::GrantRoot::new(std::path::Path::new(&root));
                 match policy::granted_uri(&path) {
                     Some(uri) => Load::Uri(uri),
                     None => return self.fail(format!("not an absolute path: {path}")),

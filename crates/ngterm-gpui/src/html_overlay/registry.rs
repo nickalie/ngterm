@@ -637,7 +637,7 @@ pub(super) fn dispatch(event: &Event, cx: &mut App) {
         Event::SchemeRequest(request) => {
             let root = request.view.and_then(page_of_view).and_then(|page| page.grant_root());
             let response = if request.view.is_some() {
-                policy::serve_granted(root.as_deref(), &request.uri)
+                policy::serve_granted(root.as_ref(), &request.uri)
             } else {
                 SchemeResponse::Error {
                     kind: SchemeError::PermissionDenied,

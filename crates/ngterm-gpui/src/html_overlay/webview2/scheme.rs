@@ -56,7 +56,8 @@ fn is_text_document(rest: &str) -> bool {
 }
 
 /// The address `WebView2` loads granted file `path` from; `None` for a path that is not absolute. A share's file
-/// carries its server after [`UNC_SEGMENT`] (module docs).
+/// carries its server after [`UNC_SEGMENT`] (module docs), spelled as a `file:` URI's host (lowercased, punycoded),
+/// which the grant's check reads alike (`policy::granted_file`).
 #[must_use]
 pub fn granted_address(path: &str) -> Option<String> {
     let file = Url::from_file_path(path).ok()?;
@@ -202,11 +203,50 @@ mod tests {
         assert_eq!(app_uri("https://ngterm-file.localhost/unc/srv/s/a"), "file://srv/s/a");
     }
 
-    /// A granted page and what it reads, on a drive and through a share (this machine's administrative share of the
-    /// same directory, by address: a `file:` URL drops a `localhost` host), pass the grant inside it only.
+    /// A drive letter mapped for a test's span by `map` (`subst`, `net use`) and removed on drop by `remove`.
+    struct Drive {
+        letter: String,
+        remove: Vec<String>,
+    }
+
+    impl Drive {
+        fn map(map: impl FnOnce(&str) -> Vec<String>, remove: impl FnOnce(&str) -> Vec<String>) -> Self {
+            let letter = ('D'..='Z')
+                .rev()
+                .map(|letter| format!("{letter}:"))
+                .find(|drive| !std::path::Path::new(&format!(r"{drive}\")).exists())
+                .unwrap();
+            let run = |args: Vec<String>| {
+                let output = std::process::Command::new(&args[0]).args(&args[1..]).output().unwrap();
+                assert!(output.status.success(), "{args:?}: {output:?}");
+            };
+            run(map(&letter));
+            Self {
+                remove: remove(&letter),
+                letter,
+            }
+        }
+    }
+
+    impl Drop for Drive {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new(&self.remove[0])
+                .args(&self.remove[1..])
+                .output();
+        }
+    }
+
+    fn words(line: &str) -> Vec<String> {
+        line.split(' ').map(str::to_owned).collect()
+    }
+
+    /// A granted page and what it reads pass the grant inside it only, however the page names its grant: a drive's
+    /// directory; this machine's administrative share of it by address (a `file:` URL drops a `localhost` host) and
+    /// by the machine's name in capitals, which a page's address lowercases; a `subst` drive and a network drive
+    /// mapped onto them, which the grant resolves to another volume.
     #[test]
     fn the_grant_serves_a_drives_and_a_shares_files_only_inside_it() {
-        use crate::html_overlay::policy::{OUTSIDE_GRANT, granted_file};
+        use crate::html_overlay::policy::{GrantRoot, OUTSIDE_GRANT, granted_file};
 
         let dir = tempfile::tempdir().unwrap();
         let canonical = dir.path().canonicalize().unwrap();
@@ -216,19 +256,38 @@ mod tests {
         let plain = canonical.to_str().unwrap().strip_prefix(r"\\?\").unwrap().to_owned();
         let (drive, rest) = plain.split_once(r":\").unwrap();
         let share = format!(r"\\127.0.0.1\{drive}$\{rest}");
-        for base in [&plain, &share] {
-            let root = std::fs::canonicalize(format!(r"{base}\site")).unwrap();
+        let computer = std::env::var("COMPUTERNAME").unwrap().to_uppercase();
+        assert_ne!(computer, computer.to_lowercase());
+        let named = format!(r"\\{computer}\{drive}$\{rest}");
+        let named_root = std::fs::canonicalize(format!(r"{named}\site")).unwrap();
+        assert!(
+            named_root.to_string_lossy().contains(&computer),
+            "the grant keeps the server's capitals: {}",
+            named_root.display()
+        );
+        let substed = Drive::map(
+            |letter| words(&format!("subst {letter} {plain}")),
+            |letter| words(&format!("subst {letter} /D")),
+        );
+        let mapped = Drive::map(
+            |letter| words(&format!(r"net use {letter} \\127.0.0.1\{drive}$ /persistent:no")),
+            |letter| words(&format!("net use {letter} /delete /y")),
+        );
+        let substed_base = substed.letter.clone();
+        let mapped_base = format!(r"{}\{rest}", mapped.letter);
+        for base in [&plain, &share, &named, &substed_base, &mapped_base] {
+            let root = GrantRoot::new(std::path::Path::new(&format!(r"{base}\site"))).unwrap();
             let read = |file: &str| {
                 let app = app_uri(&granted_address(&format!(r"{base}\{file}")).unwrap());
                 let requested = Url::parse(&app).unwrap().to_file_path().unwrap();
                 granted_file(Some(&root), Some(&requested))
             };
-            assert_eq!(read(r"site\index.html"), Ok(root.join("index.html")), "{base}");
+            let index = std::fs::canonicalize(format!(r"{base}\site\index.html")).unwrap();
+            assert_eq!(read(r"site\index.html"), Ok(index), "{base}");
             assert_eq!(read("outside.html"), Err(OUTSIDE_GRANT), "{base}");
+            let elsewhere = std::path::Path::new(r"\\ngterm-nowhere.invalid\share\site\index.html");
+            assert_eq!(granted_file(Some(&root), Some(elsewhere)), Err(OUTSIDE_GRANT), "{base}");
         }
-        let root = std::fs::canonicalize(format!(r"{plain}\site")).unwrap();
-        let elsewhere = std::path::Path::new(r"\\ngterm-nowhere.invalid\share\site\index.html");
-        assert_eq!(granted_file(Some(&root), Some(elsewhere)), Err(OUTSIDE_GRANT));
     }
 
     #[test]

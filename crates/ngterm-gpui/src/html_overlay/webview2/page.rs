@@ -931,8 +931,8 @@ impl Page {
                 path,
                 grant_root: Some(root),
             } => {
-                let real = std::fs::canonicalize(&root).ok();
-                *self.grant.root.lock().unwrap_or_else(PoisonError::into_inner) = real;
+                *self.grant.root.lock().unwrap_or_else(PoisonError::into_inner) =
+                    policy::GrantRoot::new(std::path::Path::new(&root));
                 match scheme::granted_address(&path) {
                     Some(address) => address,
                     None => return self.fail(format!("not an absolute path: {path}")),

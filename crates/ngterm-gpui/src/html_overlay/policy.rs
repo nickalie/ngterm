@@ -119,23 +119,48 @@ pub fn replica_uri(page: uuid::Uuid, path: &str) -> Option<String> {
 pub const OUTSIDE_GRANT: &str = "outside the page's granted directory";
 pub const NOT_A_FILE: &str = "not a file";
 
-/// The file a grant's read of `requested` serves: its real path when that sits strictly inside `root` (itself a real
-/// path) and is a regular file. A path on another volume than the grant's (on Windows: another drive, or another
-/// server's or share's file) is refused before the file system is asked, so no page's address makes Windows reach
-/// out to a server the grant does not name.
+/// A page's grant as its reads are checked: the directory as a real path, and the volume the page named it on. On
+/// Windows the two can differ: a mapped network drive resolves to its share, a `subst` drive or a junction to the
+/// volume behind it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantRoot {
+    real: PathBuf,
+    named_volume: Option<String>,
+}
+
+impl GrantRoot {
+    /// The grant of directory `root` as the page's source names it; `None` when it does not resolve.
+    #[must_use]
+    pub fn new(root: &Path) -> Option<Self> {
+        Some(Self {
+            real: std::fs::canonicalize(root).ok()?,
+            named_volume: volume(root),
+        })
+    }
+}
+
+/// The file a grant's read of `requested` serves: its real path when that sits strictly inside the grant and is a
+/// regular file.
+///
+/// A path on a volume the grant names neither as its page gave it nor as it resolves (on Windows: another drive, or
+/// another server's or share's file) is refused before the file system is asked. Resolving such a path would make
+/// Windows open it, and a page could spell any server in a root-relative `/UNC/<server>/...` address: an SMB
+/// connection to it hands over the user's NTLM credentials. The grant's own two volumes are the user's choice, so a
+/// request on either is resolved, and containment is checked on the real paths.
 ///
 /// # Errors
 ///
 /// The refusal's text: no grant, a path outside it, or not a regular file.
-pub fn granted_file(root: Option<&Path>, requested: Option<&Path>) -> Result<PathBuf, &'static str> {
+pub fn granted_file(root: Option<&GrantRoot>, requested: Option<&Path>) -> Result<PathBuf, &'static str> {
     let (Some(root), Some(requested)) = (root, requested) else {
         return Err(OUTSIDE_GRANT);
     };
-    if volume(root) != volume(requested) {
+    let requested_volume = volume(requested);
+    if requested_volume != volume(&root.real) && requested_volume != root.named_volume {
         return Err(OUTSIDE_GRANT);
     }
     let resolved = requested.canonicalize().map_err(|_| OUTSIDE_GRANT)?;
-    if resolved == root || !resolved.starts_with(root) {
+    if !strictly_inside(&resolved, &root.real) {
         return Err(OUTSIDE_GRANT);
     }
     if !resolved.is_file() {
@@ -144,8 +169,24 @@ pub fn granted_file(root: Option<&Path>, requested: Option<&Path>) -> Result<Pat
     Ok(resolved)
 }
 
+/// Whether real path `path` sits strictly inside real path `root`. Their volumes compare as Windows reads them
+/// ([`volume`]): a share's server comes back from the page's address lowercased (a `file:` URI's host), while the
+/// root keeps the spelling it was resolved from, and `Path::starts_with` compares a prefix's server exactly.
+fn strictly_inside(path: &Path, root: &Path) -> bool {
+    use std::path::Component;
+
+    let after_volume = |path: &Path| {
+        path.components()
+            .skip_while(|component| matches!(component, Component::Prefix(_)))
+            .collect::<Vec<_>>()
+    };
+    let (path_rest, root_rest) = (after_volume(path), after_volume(root));
+    volume(path) == volume(root) && path_rest.len() > root_rest.len() && path_rest.starts_with(&root_rest)
+}
+
 /// The volume `path` names, in one spelling whether verbatim (`\\?\`) or not and in any case, as Windows reads it: a
-/// drive's letter, or a share's server and name; `None` for a path without one (every Unix path).
+/// drive's letter, or a share's server and name, the server as a `file:` URI's host spells it (lowercased, a
+/// non-ASCII name punycoded, as a page's address carries it); `None` for a path without one (every Unix path).
 fn volume(path: &Path) -> Option<String> {
     use std::path::{Component, Prefix};
 
@@ -156,7 +197,9 @@ fn volume(path: &Path) -> Option<String> {
         match prefix.kind() {
             Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => format!("{}:", char::from(letter)),
             Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
-                format!(r"\\{}\{}", server.to_string_lossy(), share.to_string_lossy())
+                let server = server.to_string_lossy();
+                let server = url::Host::parse(&server).map_or_else(|_| server.to_string(), |host| host.to_string());
+                format!(r"\\{server}\{}", share.to_string_lossy())
             }
             Prefix::Verbatim(_) | Prefix::DeviceNS(_) => prefix.as_os_str().to_string_lossy().into_owned(),
         }
@@ -501,7 +544,7 @@ pub fn failure_event(error: &ngterm_wpe::LoadError) -> LoadEvent {
 /// The answer to a read of `uri` through [`GRANT_SCHEME`] by a page whose grant is `root` (a real path): the file when
 /// it sits inside the grant, else the refusal (the GTK build's scheme handler).
 #[must_use]
-pub fn serve_granted(root: Option<&Path>, uri: &str) -> ngterm_wpe::SchemeResponse {
+pub fn serve_granted(root: Option<&GrantRoot>, uri: &str) -> ngterm_wpe::SchemeResponse {
     let requested = Url::parse(&app_uri(uri)).ok().and_then(|url| url.to_file_path().ok());
     match granted_file(root, requested.as_deref()) {
         Ok(path) => ngterm_wpe::SchemeResponse::File(path),
@@ -552,19 +595,23 @@ mod tests {
         let root = dir.path().canonicalize().unwrap();
         std::fs::create_dir(root.join("sub")).unwrap();
         std::fs::write(root.join("sub/page.html"), "x").unwrap();
+        let grant = GrantRoot::new(&root);
         let uri = |path: &Path| granted_uri(&path.to_string_lossy()).unwrap();
         assert_eq!(
-            serve_granted(Some(&root), &uri(&root.join("sub/page.html"))),
+            serve_granted(grant.as_ref(), &uri(&root.join("sub/page.html"))),
             ngterm_wpe::SchemeResponse::File(root.join("sub/page.html"))
         );
         assert_eq!(
-            serve_granted(Some(&root), &uri(&root.join("sub"))),
+            serve_granted(grant.as_ref(), &uri(&root.join("sub"))),
             ngterm_wpe::SchemeResponse::Error {
                 kind: ngterm_wpe::SchemeError::IsDirectory,
                 message: NOT_A_FILE.to_owned()
             }
         );
-        let outside = serve_granted(Some(&root.join("sub")), &uri(&root.join("other.html")));
+        let outside = serve_granted(
+            GrantRoot::new(&root.join("sub")).as_ref(),
+            &uri(&root.join("other.html")),
+        );
         assert_eq!(
             outside,
             ngterm_wpe::SchemeResponse::Error {
@@ -577,7 +624,7 @@ mod tests {
             ngterm_wpe::SchemeResponse::Error { .. }
         ));
         assert!(matches!(
-            serve_granted(Some(&root), "not a uri"),
+            serve_granted(grant.as_ref(), "not a uri"),
             ngterm_wpe::SchemeResponse::Error { .. }
         ));
     }
@@ -699,21 +746,22 @@ mod tests {
         std::fs::create_dir(root.join("sub")).unwrap();
         let page = root.join("sub").join("page.html");
         std::fs::write(&page, "x").unwrap();
-        assert_eq!(granted_file(Some(&root), Some(&page)), Ok(page.clone()));
+        let grant = GrantRoot::new(&root);
+        assert_eq!(granted_file(grant.as_ref(), Some(&page)), Ok(page.clone()));
         // a verbatim Windows path (what canonicalizing gives there) takes `..` as a name
         #[cfg(not(windows))]
         assert_eq!(
-            granted_file(Some(&root), Some(&root.join("sub/../sub/page.html"))),
+            granted_file(grant.as_ref(), Some(&root.join("sub/../sub/page.html"))),
             Ok(page.clone())
         );
-        assert_eq!(granted_file(Some(&root), Some(&root.join("sub"))), Err(NOT_A_FILE));
-        assert_eq!(granted_file(Some(&root), Some(&root)), Err(OUTSIDE_GRANT));
+        assert_eq!(granted_file(grant.as_ref(), Some(&root.join("sub"))), Err(NOT_A_FILE));
+        assert_eq!(granted_file(grant.as_ref(), Some(&root)), Err(OUTSIDE_GRANT));
         assert_eq!(
-            granted_file(Some(&root), Some(&root.join("..").join("x.html"))),
+            granted_file(grant.as_ref(), Some(&root.join("..").join("x.html"))),
             Err(OUTSIDE_GRANT)
         );
         assert_eq!(
-            granted_file(Some(&root), Some(&root.join("missing.html"))),
+            granted_file(grant.as_ref(), Some(&root.join("missing.html"))),
             Err(OUTSIDE_GRANT)
         );
         assert_eq!(granted_file(None, Some(&page)), Err(OUTSIDE_GRANT));
@@ -1054,6 +1102,29 @@ mod tests {
         assert_ne!(volume(r"\\server\share\a"), volume(r"\\elsewhere\share\a"));
         assert_ne!(volume(r"C:\a"), volume(r"\\localhost\C$\a"));
         assert_eq!(volume(r"\a\b"), None);
+        // a server as a page's address spells it: lowercased, punycoded
+        assert_eq!(volume(r"\\ÑAS\share\a"), volume(r"\\xn--as-yja\share\a"));
+    }
+
+    /// A share's server spelled differently by the grant and by a page's address (`Path::starts_with` would refuse
+    /// it).
+    #[test]
+    #[cfg(windows)]
+    fn a_shares_file_is_inside_its_grant_whatever_its_servers_spelling() {
+        let root = Path::new(r"\\?\UNC\NAS\Share\site");
+        let page = Path::new(r"\\?\UNC\nas\share\site\index.html");
+        assert!(!page.starts_with(root));
+        assert!(strictly_inside(page, root));
+        assert!(strictly_inside(
+            Path::new(r"\\?\UNC\xn--as-yja\share\site\a"),
+            Path::new(r"\\?\UNC\ñas\share\site")
+        ));
+        assert!(!strictly_inside(root, root));
+        assert!(!strictly_inside(Path::new(r"\\?\UNC\nas\share\other\a"), root));
+        assert!(!strictly_inside(Path::new(r"\\?\UNC\nas\other\site\a"), root));
+        assert!(!strictly_inside(Path::new(r"\\?\C:\site\a"), Path::new(r"\\?\D:\site")));
+        // the rest of the path compares exactly: canonicalizing gives each name its spelling on disk
+        assert!(!strictly_inside(Path::new(r"\\?\C:\Site\a"), Path::new(r"\\?\C:\site")));
     }
 
     #[test]
