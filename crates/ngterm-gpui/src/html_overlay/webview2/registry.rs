@@ -363,6 +363,7 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
         scripts: page.scripts(),
         grant: granted.then(|| page.grant().clone()),
         replica,
+        text: overlay.text_loaded().then(|| Arc::clone(page.text())),
         decide: Rc::new(move |navigation| weak.upgrade().is_some_and(|page| page.allows(navigation))),
         post: Rc::new(move |report| {
             let _ = reports.try_send(Job::Report(id, report));

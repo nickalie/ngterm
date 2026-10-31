@@ -14,8 +14,8 @@
 //!   profile id, every other page an `InPrivate` profile of its own. Saved logins live under
 //!   `<state>/browser/webview2`.
 //! - Files (`scheme`): a granted file page loads through a protocol of its own that serves only files inside its
-//!   grant, a replica through one that reads from the machine that opened it; a file page without a grant loads its
-//!   text at `about:blank`.
+//!   grant, a replica through one that reads from the machine that opened it, a file page without a grant its text
+//!   through one that serves that text alone, read back as the `about:blank` it loads at on Linux.
 //! - The bridge (`bridge`): ngterm's scripts in the page's world from one closure, their messages signed with a nonce
 //!   page code never sees, replies posted back as web messages.
 //! - What a page may not do (`native`): new windows, script dialogs, permissions, downloads, dropped and pasted files,

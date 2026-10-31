@@ -138,6 +138,9 @@ pub struct Grant {
     pub refused: Arc<Mutex<Option<(String, String)>>>,
 }
 
+/// The text a file page without a grant shows, which its text protocol serves (`scheme`); `None` before its load.
+pub type Text = Arc<Mutex<Option<String>>>;
+
 /// How a replica's protocol is answered: its read, the app's address and the responder.
 pub type ReplicaRead = Arc<dyn Fn(String, RequestAsyncResponder) + Send + Sync>;
 
@@ -167,6 +170,7 @@ pub struct Spec {
     pub scripts: Vec<String>,
     pub grant: Option<Grant>,
     pub replica: Option<ReplicaRead>,
+    pub text: Option<Text>,
     pub decide: Decide,
     pub post: Post,
     pub take_key: TakeKey,
@@ -283,12 +287,6 @@ impl Native {
         }
     }
 
-    /// Loads `html` at `about:blank`; `WebView2`'s refusal text when it does not take the document (over its 2 MB
-    /// limit).
-    pub fn load_html(&self, html: &str) -> Result<(), String> {
-        self.view.load_html(html).map_err(|err| err.to_string())
-    }
-
     pub fn reload(&self) {
         let _ = self.view.reload();
     }
@@ -386,6 +384,11 @@ fn build(spec: &Spec) -> Result<WebView, String> {
                 serve_granted(&grant, &request.uri().to_string(), reply);
             });
     }
+    if let Some(text) = spec.text.clone() {
+        builder = builder.with_custom_protocol(scheme::TEXT_PROTOCOL.to_owned(), move |_, request| {
+            serve_text(&text, &request.uri().to_string())
+        });
+    }
     if let Some(replica) = spec.replica.clone() {
         builder =
             builder.with_asynchronous_custom_protocol(scheme::REPLICA_PROTOCOL.to_owned(), move |_, request, reply| {
@@ -482,7 +485,9 @@ fn wire_navigation(webview: &ICoreWebView2, decide: &Decide, post: &Post) -> Com
     let frame_decide = Rc::clone(decide);
     let frames = NavigationStartingEventHandler::create(Box::new(move |_, args| {
         let Some(args) = args else { return Ok(()) };
-        let allowed = frame_decide(&navigation_of(&args, false)?);
+        let navigation = navigation_of(&args, false)?;
+        let allowed = frame_decide(&navigation);
+        tracing::debug!(uri = navigation.uri, allowed, "a page's frame navigation");
         // SAFETY: the event's own arguments, answered on its thread.
         unsafe { args.SetCancel(!allowed) }
     }));
@@ -795,6 +800,25 @@ fn read_granted(root: Option<&std::path::Path>, app: &str) -> Result<(String, Ve
     let path = super::super::policy::granted_file(root, requested.as_deref()).map_err(str::to_owned)?;
     let body = std::fs::read(&path).map_err(|err| err.to_string())?;
     Ok((ngterm_core::remote::page_serve::mime_type(&path), body))
+}
+
+// MARK: - the text protocol
+
+/// Answers a read of the text protocol: the page's text for its document, nothing else.
+fn serve_text(text: &Text, uri: &str) -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
+    let body = scheme::requests_text_document(uri)
+        .then(|| text.lock().unwrap_or_else(PoisonError::into_inner).clone())
+        .flatten();
+    let (status, mime, body) = match body {
+        Some(body) => (200, "text/html; charset=utf-8", body.into_bytes()),
+        None => (404, "text/plain; charset=utf-8", Vec::new()),
+    };
+    wry::http::Response::builder()
+        .status(status)
+        .header("Content-Type", mime)
+        .header("Cache-Control", "no-store")
+        .body(std::borrow::Cow::Owned(body))
+        .unwrap_or_default()
 }
 
 // MARK: - the saved store's clear

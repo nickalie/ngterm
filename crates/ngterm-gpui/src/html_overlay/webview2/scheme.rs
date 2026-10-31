@@ -1,11 +1,17 @@
-//! The pages' own addresses on `WebView2`. A granted file page and a page shown for another machine load through
-//! custom protocols wry registers on that page alone, which `WebView2` serves only under an `https://<scheme>.<host>/`
+//! The pages' own addresses on `WebView2`. A file page and a page shown for another machine load through custom
+//! protocols wry registers on that page alone, which `WebView2` serves only under an `https://<scheme>.<host>/`
 //! address of its own (wry's workaround for `WebView2`'s custom schemes): a granted file as
-//! `https://ngterm-file.localhost/C:/dir/page.html`, a replica's file as `https://ngterm-page.<page id>/path`. Every
-//! address the web view reports is read back in the app's spelling (a granted file's `file:` URI, a replica's
-//! `ngterm-page:` one) before the shared navigation policy or the model sees it, as the WPE host reads its grant
-//! scheme back (`policy::app_uri`). A URL page registers neither protocol, so those names reach nothing of the app's
-//! from it, and the policy refuses them as the file addresses they read as.
+//! `https://ngterm-file.localhost/C:/dir/page.html`, a replica's file as `https://ngterm-page.<page id>/path`, the
+//! text of a file page without a grant as `https://ngterm-text.<page id>/`. Every address the web view reports is read
+//! back in the app's spelling (a granted file's `file:` URI, a replica's `ngterm-page:` one, the text's `about:blank`,
+//! where the WPE host and upstream load it) before the shared navigation policy or the model sees it, as the WPE host
+//! reads its grant scheme back (`policy::app_uri`). A URL page registers none of the protocols, so those names reach
+//! nothing of the app's from it, and the policy refuses them as the file addresses they read as.
+//!
+//! The text loads through a protocol rather than `NavigateToString`: `WebView2` reports no address for a string's
+//! document (it stays `about:blank`, so no `SourceChanged` comes and the page never reports its title), each string
+//! load adds a history entry where `WebKit`'s `about:blank` reload adds none, and a string is capped at 2 MB. A load of
+//! the text's one address over the shown one replaces it, as a same-address load does in a browser.
 
 use ngterm_core::html::REPLICA_SCHEME;
 use url::Url;
@@ -17,6 +23,33 @@ use super::super::policy::GRANT_SCHEME;
 const ENGINE_SCHEME: &str = "https";
 /// The grant protocol's one host.
 const GRANT_HOST: &str = "localhost";
+
+/// The text protocol's address of page `page`: its one document.
+#[must_use]
+pub fn text_address(page: Uuid) -> String {
+    format!("{ENGINE_SCHEME}://{TEXT_PROTOCOL}.{}/", page.hyphenated())
+}
+
+/// Whether `engine` is an address under a text protocol's host other than its document's: nothing is served there
+/// (the WPE host's `about:blank` document resolves no relative address either).
+#[must_use]
+pub fn is_text_resource(engine: &str) -> bool {
+    text_rest(engine).is_some_and(|rest| !is_text_document(rest))
+}
+
+/// What follows `https://ngterm-text.` in `engine`.
+fn text_rest(engine: &str) -> Option<&str> {
+    strip_prefix_ignoring_case(engine, &format!("{ENGINE_SCHEME}://{TEXT_PROTOCOL}."))
+}
+
+/// Whether `rest`, a text address after its scheme and protocol name, names the document: `<page id>/`, maybe with
+/// a fragment.
+fn is_text_document(rest: &str) -> bool {
+    let address = rest.split_once('#').map_or(rest, |(address, _)| address);
+    address
+        .split_once('/')
+        .is_some_and(|(host, path)| !host.is_empty() && path.is_empty())
+}
 
 /// The address `WebView2` loads granted file `path` from; `None` for a path that is not absolute.
 #[must_use]
@@ -38,9 +71,15 @@ pub fn replica_address(page: Uuid, path: &str) -> Option<String> {
 }
 
 /// An address the web view reports, as the app spells it: a granted file's `file:` URI, a replica's `ngterm-page:`
-/// one, anything else as it is.
+/// one, a page's text `about:blank` (its fragment kept), anything else as it is.
 #[must_use]
 pub fn app_uri(engine: &str) -> String {
+    if let Some(rest) = text_rest(engine).filter(|rest| is_text_document(rest)) {
+        return match rest.split_once('#') {
+            Some((_, fragment)) => format!("about:blank#{fragment}"),
+            None => "about:blank".to_owned(),
+        };
+    }
     let grant = format!("{ENGINE_SCHEME}://{GRANT_SCHEME}.{GRANT_HOST}/");
     if let Some(rest) = strip_prefix_ignoring_case(engine, &grant) {
         return format!("file:///{rest}");
@@ -66,6 +105,16 @@ pub fn request_app_uri(request: &str) -> String {
 /// The protocol names wry registers, by what a page loads through them.
 pub const GRANT_PROTOCOL: &str = GRANT_SCHEME;
 pub const REPLICA_PROTOCOL: &str = REPLICA_SCHEME;
+pub const TEXT_PROTOCOL: &str = "ngterm-text";
+
+/// Whether a text protocol request (`ngterm-text://<page id>/...`, as wry hands it to the handler) asks for the
+/// document.
+#[must_use]
+pub fn requests_text_document(request: &str) -> bool {
+    strip_prefix_ignoring_case(request, &format!("{TEXT_PROTOCOL}://"))
+        .map(|rest| rest.split_once('?').map_or(rest, |(address, _)| address))
+        .is_some_and(is_text_document)
+}
 
 fn strip_prefix_ignoring_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
     let head = text.get(..prefix.len())?;
@@ -101,6 +150,25 @@ mod tests {
             ngterm_core::html::replica_path(&app).as_deref(),
             Some("/Users/u/docs/a b.html")
         );
+    }
+
+    #[test]
+    fn a_text_page_loads_under_its_page_host_and_reads_back_as_about_blank() {
+        let page = Uuid::new_v4();
+        let address = text_address(page);
+        assert_eq!(address, format!("https://ngterm-text.{}/", page.hyphenated()));
+        assert_eq!(app_uri(&address), "about:blank");
+        assert_eq!(app_uri(&format!("{address}#part")), "about:blank#part");
+        assert!(!is_text_resource(&address));
+        let other = format!("{address}other.html");
+        assert!(is_text_resource(&other));
+        assert_eq!(app_uri(&other), other, "only the document reads as about:blank");
+        assert!(!is_text_resource("https://example.com/"));
+        let request = format!("ngterm-text://{}", page.hyphenated());
+        assert!(requests_text_document(&format!("{request}/")));
+        assert!(requests_text_document(&format!("{request}/?x=1")));
+        assert!(!requests_text_document(&format!("{request}/style.css")));
+        assert!(!requests_text_document("ngterm-file://localhost/"));
     }
 
     #[test]
