@@ -49,7 +49,8 @@ class CommandLines:
 
     def hold(self) -> str:
         """A program that prints nothing and stays up reading its terminal until the terminal goes: `cat`, or `more`
-        under `cmd` (it reads the console until Ctrl+Z)."""
+        under `cmd` (it reads the console until Ctrl+Z, and erases the line the cursor is on as it starts, so what
+        comes before it ends with a newline)."""
         return "more" if self.cmd else "exec cat"
 
     def pwd(self) -> str:

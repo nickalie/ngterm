@@ -247,7 +247,8 @@ guest has 4 CPUs and 6.5 GB of memory.
   Keymap/Hooks on Windows opens `VISUAL`, else `EDITOR`, else Notepad waited for (`start "" /wait`), read from the
   app's environment (`keymap::windows_editor_command`). The overlay, surface, HUD, split and CLI conformance tests
   build their programs in either dialect (`CommandLines.hold`: `more` under `cmd`, which holds on the console's
-  input as `cat` does; `pwd`) under `cmd-command-line`. Linux partial run green (156 ids, ratchet holds); the windows
+  input as `cat` does but erases the line the cursor is on as it starts, so the cursor test holds with `ping` after
+  its `set /p`, as a VM probe showed; `pwd`) under `cmd-command-line`. Linux partial run green (156 ids, ratchet holds); the windows
   job ran all 36 of them green (`exit 7` reads back 7, the program runs in its cwd, its text reads back) and they
   joined the Windows ratchet (749 ids). On the VM's desktop (the windows job's stage, a private state dir) an
   overlay program covered the PowerShell pane with its output and working directory, and `ngtermctl session overlay

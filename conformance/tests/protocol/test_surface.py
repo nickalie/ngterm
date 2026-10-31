@@ -108,9 +108,11 @@ def test_cursor_reads_each_pane_by_surface_id_or_pane_id(ctl, fresh):
 @pytest.mark.covers("surface.cursor", "session.overlay.open")
 def test_cursor_reads_a_program_overlay_but_not_a_hud(ctl, fresh, adapter):
     lines = CommandLines.of(adapter, "the overlay's program")
-    # the screen cleared, `abcdef` at its top left with the cursor after it (`set /p` prints no newline)
+    # the screen cleared, `abcdef` at its top left with the cursor after it. Under `cmd`, `set /p` prints it with no
+    # newline (and with the space before a spaced `&`, hence the tight ones), and the hold is `ping`, which leaves the
+    # console alone: `more` erases the line the cursor is on as it starts.
     if lines.cmd:
-        command = lines.then("cls", '<nul set /p "=abcdef"', lines.hold())
+        command = 'cls& <nul set /p "=abcdef"& ping -n 3600 127.0.0.1 >nul'
     else:
         command = lines.then("printf '\\033[2J\\033[H%s' abcdef", lines.hold())
     assert_ok(ctl.request("session.overlay.open", fresh, command=command))
