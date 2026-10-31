@@ -203,7 +203,7 @@ mod tests {
     }
 
     /// A granted page and what it reads, on a drive and through a share (this machine's administrative share of the
-    /// same directory), pass the grant inside it only.
+    /// same directory, by address: a `file:` URL drops a `localhost` host), pass the grant inside it only.
     #[test]
     fn the_grant_serves_a_drives_and_a_shares_files_only_inside_it() {
         use crate::html_overlay::policy::{OUTSIDE_GRANT, granted_file};
@@ -215,7 +215,7 @@ mod tests {
         std::fs::write(canonical.join("outside.html"), "x").unwrap();
         let plain = canonical.to_str().unwrap().strip_prefix(r"\\?\").unwrap().to_owned();
         let (drive, rest) = plain.split_once(r":\").unwrap();
-        let share = format!(r"\\localhost\{drive}$\{rest}");
+        let share = format!(r"\\127.0.0.1\{drive}$\{rest}");
         for base in [&plain, &share] {
             let root = std::fs::canonicalize(format!(r"{base}\site")).unwrap();
             let read = |file: &str| {
