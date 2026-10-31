@@ -745,3 +745,30 @@ Round 2 (`02-after-fix`) found six and one pre-existing; each is fixed in a comm
 - ➕ [pre-existing, major] `parse_denylist` reads CRLF and lone-CR line endings, as `keymap.conf`, `hooks.conf` and
   `remotes.conf` already did (the sweep of core's config readers found no other: `ghostty.conf` trims `\r`).
   Test: `the_denylist_reads_windows_and_old_mac_line_endings`
+
+### ➕ one volume spelling for every grant check (side task 42)
+
+- ➕ [pre-existing, major, revmux round 4] the navigation policy's containment (`html::contains`, which
+  `navigation::decide` runs on every navigation, `WebView2`'s `NavigationStarting` included) and `grant_error`
+  lowercased a Windows path's prefix and compared it as written. A grant on `\\ÑAS\share\site` met the page's address
+  as `\\xn--as-yja\share\...` (a `file:` URL's host), and a grant on `\\?\C:\site` met `C:\...`, so the page's own
+  navigation was cancelled before the grant protocol's `granted_file` was asked. Side task 41's `volume` and
+  `strictly_inside` moved from `ngterm-gpui`'s `html_overlay::policy` into `ngterm-core` (`html::volume`, `any`),
+  which `policy` now reuses: a drive or share in one spelling whether verbatim or not, the server as an address
+  spells it (`url::Host::parse`: lowercased, punycoded), share and drive in any case; the rest of the path compares
+  as before (lexically and in any case in `components`, exactly on real paths in `strictly_inside`). `components`
+  takes its root from `volume`, so `contains`, `grant_error` and its home check read every spelling alike
+- ➕ the sweep (`starts_with`, `strip_prefix`, `components`, `Prefix` over grant and root paths in `ngterm-core`,
+  `ngterm-gpui`, `ngterm-wpe`, `ngterm-app`) found one more: `remote::page_serve::resolve`, which serves a replica's
+  resource requests on the machine that opened the page. It compared real paths with `Path::starts_with` (a share's
+  server or name spelled otherwise was refused) and canonicalized any absolute path a presenter asked for, so a
+  replica page could make this machine open an SMB connection to a server it chose. It now refuses a request on a
+  volume the page's grant (or, without one, its file) names neither as given nor as it resolves before the file
+  system is asked, as `granted_file` does, and checks containment with `strictly_inside`. Left as they are, not
+  grant containment: `link_policy`'s automount roots (Unix paths), `live`'s verbatim-prefix strip (a hash's
+  spelling), `remotes_watcher::concerns` (watched paths against the watcher's own events), `integrations::files`'
+  test walk. Tests (Windows, CI's crates job): `a_file_page_stays_inside_its_grant_whatever_its_volumes_spelling`
+  (`decide` on the finding's two cases and their kin), `a_windows_volume_compares_in_any_of_its_spellings`
+  (`grant_error`, `contains`), `a_grant_on_a_share_serves_its_files_in_any_spelling_of_the_share` (`resolve` through
+  this machine's administrative share by its name in capitals, lowercased and verbatim), and the moved `volume` and
+  `strictly_inside` cases; each of the first three fails without the fix
