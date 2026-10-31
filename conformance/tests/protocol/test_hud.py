@@ -3,6 +3,7 @@ window, so only the bounds the app clamps it to are compared, never a measured v
 waits in `cat` until its overlay is closed."""
 
 import pytest
+from agterm_conformance.command_line import CommandLines
 from agterm_conformance.match import (
     assert_absent,
     assert_error,
@@ -13,7 +14,6 @@ from agterm_conformance.match import (
 )
 
 UNKNOWN = "zzz"
-HOLD = "exec cat"
 POSITIONS = (
     "top-left|top-center|top-right|center-left|center|center-right|bottom-left|bottom-center|bottom-right|top|bottom"
 )
@@ -211,10 +211,10 @@ def test_hud_hides_itself_after_its_interval(ctl):
 @pytest.mark.covers(
     "session.hud.open", "session.hud.close", "session.overlay.open", "session.overlay.close", "field:tree.session.hud"
 )
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_hud_and_program_share_one_slot(ctl):
+def test_hud_and_program_share_one_slot(ctl, adapter):
+    hold = CommandLines.of(adapter, "the overlay's program").hold()
     sid = _new(ctl)
-    assert_ok(ctl.request("session.overlay.open", sid, command=HOLD))
+    assert_ok(ctl.request("session.overlay.open", sid, command=hold))
     assert_error(ctl.request("session.hud.open", sid, message="over a program"), "overlay already open")
     assert_error(ctl.request("session.hud.close", sid), "no hud")
     node = _node(ctl, sid)
@@ -224,7 +224,7 @@ def test_hud_and_program_share_one_slot(ctl):
 
     # A program replaces a message; a close of the slot takes a message down too.
     _open(ctl, sid, "replaced")
-    assert_ok(ctl.request("session.overlay.open", sid, command=HOLD))
+    assert_ok(ctl.request("session.overlay.open", sid, command=hold))
     node = _node(ctl, sid)
     assert node["overlay"] is True
     assert_absent(node, "hud")

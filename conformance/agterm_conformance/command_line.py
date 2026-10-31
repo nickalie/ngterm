@@ -1,6 +1,6 @@
-"""The command lines a test's hooks and custom commands run, in the dialect the build runs them in: POSIX `sh`
-(capability `posix-command-line`, upstream's) or Windows `cmd.exe` (`cmd-command-line`, the Rust build on Windows,
-which runs a hook's and a custom command's line as `%ComSpec% /D /S /C "<line>"`). A build claiming neither skips the
+"""The command lines a test's hooks, custom commands, overlay programs and scratch commands run, in the dialect the
+build runs them in: POSIX `sh` (capability `posix-command-line`, upstream's) or Windows `cmd.exe` (`cmd-command-line`,
+the Rust build on Windows, which runs such a line as `%ComSpec% /D /S /C "<line>"`). A build claiming neither skips the
 test as unsupported.
 
 Every line built here writes only the paths it is given, each quoted for its dialect; a file meant to be read whole
@@ -46,6 +46,15 @@ class CommandLines:
     def then(self, *lines: str) -> str:
         """`lines` one after the other, whatever each exits with."""
         return (" & " if self.cmd else "; ").join(lines)
+
+    def hold(self) -> str:
+        """A program that prints nothing and stays up reading its terminal until the terminal goes: `cat`, or `more`
+        under `cmd` (it reads the console until Ctrl+Z)."""
+        return "more" if self.cmd else "exec cat"
+
+    def pwd(self) -> str:
+        """Prints the working directory (`cmd`'s bare `cd`)."""
+        return "cd" if self.cmd else "pwd"
 
     def drain_stdin(self) -> str:
         return "more > nul" if self.cmd else "cat > /dev/null"

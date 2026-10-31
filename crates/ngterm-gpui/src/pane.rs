@@ -154,6 +154,7 @@ impl PaneSpec {
             env_remove: Vec::new(),
             live: None,
             painter: None,
+            status_file: None,
         }
     }
 

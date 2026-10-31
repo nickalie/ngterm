@@ -12,8 +12,9 @@
 //! ([`crate::split::OverlayFocus`]), the keyboard in place of the pane; the deck gives it back to the pane once the
 //! overlay goes. A pane overlay the user clicks into moves the split's focus to its pane.
 //!
-//! Every overlay terminal runs the program through upstream's wrapper (`ngterm_core::overlay_capture`), which leaves
-//! the exit status in a file the core reads when the slot closes (`session.overlay.result`).
+//! Every overlay terminal leaves its program's exit status in a file the core reads when the slot closes
+//! (`session.overlay.result`): upstream's wrapper writes it on Unix, the terminal itself on Windows
+//! (`ngterm_core::overlay_capture`).
 //!
 //! A page (`--html`/`--url`) takes the same places by the same keys, its element from [`crate::html_overlay`] in place
 //! of a terminal: the session-wide page covering or floating as a program does, a pane page over its pane
@@ -35,7 +36,7 @@ use gpui_kit::{
 use ngterm_core::keymap::SurfaceOwner;
 use ngterm_core::link_policy::ClickOrigin;
 use ngterm_core::model::{BackgroundWatermark, OverlayPane, Session, WatermarkKind};
-use ngterm_core::overlay_capture::{self, OverlayLaunchContext};
+use ngterm_core::overlay_capture::{self, OverlayLaunchContext, SurfaceProgram};
 use ngterm_core::pane_env::{self, SessionPane};
 use ngterm_core::watermark;
 use uuid::Uuid;
@@ -549,8 +550,10 @@ impl Program {
     }
 }
 
-/// The launch of an overlay terminal: the wrapper running the program in its directory (the caller's, else the
-/// session's), with the session's environment, the command and the status file (upstream's `makeOverlaySurface`).
+/// The launch of an overlay terminal: the program in its directory (the caller's, else the session's), with the
+/// session's environment, the command and the status file (upstream's `makeOverlaySurface`), run through this OS's
+/// [`SurfaceProgram`]: upstream's wrapper on Unix, the command line itself on Windows with the terminal recording its
+/// status.
 fn launch(session: &Session, program: &Program, hud: &HudContext<'_>) -> ngterm_term::Launch {
     let session_env = pane_env::session(&SessionPane {
         session: session.id(),
@@ -571,8 +574,9 @@ fn launch(session: &Session, program: &Program, hud: &HudContext<'_>) -> ngterm_
         .code_file
         .clone()
         .unwrap_or_else(overlay_capture::mint_code_file);
+    let surface = SurfaceProgram::new(&context.command);
     ngterm_term::Launch {
-        command: Some(overlay_capture::surface_command()),
+        command: Some(surface.command),
         initial_input: None,
         working_directory: Some(PathBuf::from(&context.cwd)),
         wait_after_command: program.wait,
@@ -580,6 +584,7 @@ fn launch(session: &Session, program: &Program, hud: &HudContext<'_>) -> ngterm_
         env_remove: Vec::new(),
         live: None,
         painter: None,
+        status_file: surface.terminal_records_status.then_some(code_file),
     }
 }
 

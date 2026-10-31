@@ -99,7 +99,7 @@ share is asserted directly, with no capability.
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
 | `hidden-split-holds-focus` |  | `session.focus` on a hidden split reads back as `splitFocused`; upstream's shown left pane takes the focus back while its window is key |
 | `posix-command-line` | yes | a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs through `/bin/sh -c`, so a test's POSIX line runs as written; Windows runs it through `cmd.exe` |
-| `cmd-command-line` |  | Rust-only, Windows: a hook's and a custom command's line runs as `cmd.exe`'s command text (`%ComSpec% /D /S /C`), so a test's `cmd` line runs as written where `posix-command-line` is not claimed |
+| `cmd-command-line` |  | Rust-only, Windows: a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs as `cmd.exe`'s command text (`%ComSpec% /D /S /C`), so a test's `cmd` line runs as written where `posix-command-line` is not claimed |
 | `untitled-panes` | yes | a pane has no title until a program sets one; Windows' console host titles each pane with its program's path |
 
 ## Rust target profile
@@ -112,7 +112,8 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `hidden-split-holds-focus`: upstream's documented model contract (`control-api.md`, "works shown or hidden; read
   `splitFocused`", and `AppStorePaneTests`); macOS's reversion is an AppKit first-responder effect;
 - `posix-command-line`, `untitled-panes`: on Linux and macOS, as upstream; not on Windows (below);
-- `cmd-command-line`: on Windows, where a hook's and a custom command's line is `cmd`'s (below);
+- `cmd-command-line`: on Windows, where a command line (an overlay's program, a scratch pane's command, a hook, a
+  custom command) is `cmd`'s (below);
 - `live-sessions`: by host, where the login shell is zsh or fish (upstream's two) and `ngterm-session` is staged;
 - `live-any-shell`: by host, live sessions for bash and PowerShell login shells too, the one Rust-only extension
   (below): claimed together with `live-sessions` for a zsh or fish login shell, alone for the others.
@@ -123,10 +124,10 @@ It does not claim:
   tests branch, and the Rust build passes the other branch;
 - `sidebar-min-width`: the GPUI frontend does not claim it; its test takes the other branch.
 - on Windows, `posix-command-line`: a command line runs as `cmd.exe`'s command text there (`%ComSpec% /D /S /C`, as
-  Ghostty runs a command on Windows; `ngterm-host`'s `command_line` chooses it for every caller), so the tests whose
-  overlay programs or scratch commands are POSIX lines skip as unsupported; the hook and custom-command tests take
-  their `cmd` branch instead (`cmd-command-line`, claimed on Windows only, with `agterm_conformance.command_line`
-  building each line in either dialect); and `untitled-panes`: the console host
+  Ghostty runs a command on Windows; `ngterm-host`'s `command_line` chooses it for every caller), so the tests of
+  hooks, custom commands, overlay programs and scratch commands take their `cmd` branch instead (`cmd-command-line`,
+  claimed on Windows only, with `agterm_conformance.command_line` building each line in either dialect), and the few
+  whose lines have no `cmd` form skip as unsupported; and `untitled-panes`: the console host
   (ConPTY) titles a pane with its program's path before any program sets one, so the title test reads that title on
   the other branch.
 - on Windows a pane's `foreground` and `foregroundShell` come from a stand-in for the console's foreground (the

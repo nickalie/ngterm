@@ -27,6 +27,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use ngterm_core::overlay_capture;
 use ngterm_ghostty_vt::{self as vt, ReadCandidate, Scanner};
 use ngterm_pty::{Actor, ActorConfig, ActorHandle, Child, Killer, Master, ReadPause, Spawned};
 use ngterm_session::cli::{Outcome, Prepared};
@@ -72,6 +73,10 @@ pub struct PaneConfig {
     pub kitty_image_limit: u64,
     /// What the end of the program leaves on screen.
     pub exit: ExitPolicy,
+    /// Where the program's exit status is written when it ends by itself, before its exit is reported: an overlay
+    /// program's status file where no wrapper writes it ([`ngterm_core::overlay_capture`]). A program the pane hangs
+    /// up as it goes writes none, as a wrapper the hangup ends writes none.
+    pub status_file: Option<PathBuf>,
     /// Grapheme clustering (mode 2027) as the terminal's default, which a reset restores: Ghostty's
     /// `grapheme-width-method = unicode`, its default; `false` is `legacy`.
     pub grapheme_clusters: bool,
@@ -91,6 +96,7 @@ impl PaneConfig {
             write_limit: DEFAULT_WRITE_LIMIT,
             kitty_image_limit: DEFAULT_KITTY_IMAGE_LIMIT,
             exit: ExitPolicy::default(),
+            status_file: None,
             grapheme_clusters: true,
             color_scheme: ColorScheme::default(),
             wake: None,
@@ -108,6 +114,7 @@ impl std::fmt::Debug for PaneConfig {
             .field("write_limit", &self.write_limit)
             .field("kitty_image_limit", &self.kitty_image_limit)
             .field("exit", &self.exit)
+            .field("status_file", &self.status_file)
             .field("grapheme_clusters", &self.grapheme_clusters)
             .field("color_scheme", &self.color_scheme)
             .field("wake", &self.wake.is_some())
@@ -224,6 +231,9 @@ pub(crate) struct Shared {
     write_limit: usize,
     /// How the program's end is handled, and when the program started (an early failure is reported as one).
     exit: ExitPolicy,
+    /// [`PaneConfig::status_file`], taken by whichever comes first: the child's own end, which writes it, or the
+    /// pane's drop, which hangs the child up and so drops it.
+    status_file: Mutex<Option<PathBuf>>,
     started: Instant,
     /// Set once the IO worker fed the last of the output (or stopped).
     eof: (Mutex<bool>, Condvar),
@@ -686,6 +696,7 @@ impl Drop for Pane {
     /// live pane detaches instead, leaving its session running.
     fn drop(&mut self) {
         self.shared.mailbox.shutdown();
+        lock(&self.shared.status_file).take();
         match &self.io {
             Io::Pty { actor, killer, .. } => {
                 if let Err(err) = killer.hang_up() {
@@ -771,6 +782,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
         counters: Counters::default(),
         write_limit: config.write_limit,
         exit: config.exit.clone(),
+        status_file: Mutex::new(config.status_file.clone()),
         started: Instant::now(),
         eof: (Mutex::new(false), Condvar::new()),
         #[cfg(test)]
@@ -1000,9 +1012,21 @@ fn wait_child(mut child: Child, shared: &Shared, actor: &ActorHandle) {
             (1, None)
         }
     };
+    record_status(shared, code);
     shared.mailbox.child_exited();
     actor.child_exited();
     report_exit(shared, Some(code), signal);
+}
+
+/// Writes the child's exit `code` to the pane's status file, unless the pane's drop took it first.
+fn record_status(shared: &Shared, code: u32) {
+    let Some(file) = lock(&shared.status_file).take() else {
+        return;
+    };
+    let status = overlay_capture::status_of_exit_code(code);
+    if let Err(error) = overlay_capture::write_exit_code(&file, status) {
+        tracing::warn!(file = %file.display(), %error, "could not write the program's exit status");
+    }
 }
 
 /// The program ended with `code` (`None`: unknown, reported as 0) and `signal`: give the IO worker a moment to feed

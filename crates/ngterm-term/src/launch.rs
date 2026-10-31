@@ -518,6 +518,8 @@ pub struct Launch {
     /// A HUD's body file, painted in process ([`crate::painted`]) in place of any program: the panel runs no shell on
     /// any OS. Wins over `live` and `command`.
     pub painter: Option<PathBuf>,
+    /// Where the program's exit status is written when it ends by itself ([`PaneConfig::status_file`]).
+    pub status_file: Option<PathBuf>,
 }
 
 impl Launch {
@@ -541,6 +543,7 @@ impl Launch {
             env_remove: Vec::new(),
             live: seed.attach.clone(),
             painter: None,
+            status_file: None,
         }
     }
 }
@@ -600,6 +603,7 @@ impl Pane {
         let input = prepared.initial_input.unwrap_or_default();
         let config = PaneConfig {
             exit: prepared.exit,
+            status_file: launch.status_file.clone(),
             // the queue is empty: it takes the input whole, even a 10 MB `input = path:` file
             write_limit: config.write_limit.max(input.len()),
             ..config.clone()
@@ -1189,6 +1193,7 @@ mod tests {
             working_directory: Some(PathBuf::from("/nonexistent/dir")),
             live: None,
             painter: None,
+            status_file: None,
         };
         let prepared = host(None).prepare(&launch, &MapEnv::new());
         // `/bin/sh -c <line>`; on Windows (no `ComSpec` here) `cmd.exe /D /S /C "<line>"`

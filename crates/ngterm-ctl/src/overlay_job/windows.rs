@@ -27,7 +27,7 @@ use std::process::Child;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use ngterm_core::overlay_capture::OverlayLaunchContext;
+use ngterm_core::overlay_capture::{self, OverlayLaunchContext};
 use ngterm_host::ShellCommand;
 use windows_sys::Win32::Foundation::{FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE};
 use windows_sys::Win32::System::Console::{
@@ -55,10 +55,8 @@ pub(super) struct Terminal;
 /// The program's console process group, which its pid names.
 pub(super) type Group = u32;
 
-/// What a console program a Ctrl event ended exits with (`STATUS_CONTROL_C_EXIT`), read as an `i32`.
-const CONTROL_C_EXIT: i32 = i32::from_ne_bytes(0xC000_013A_u32.to_ne_bytes());
-/// The status a Ctrl event's end reads as: 128 plus SIGINT.
-pub(super) const INTERRUPTED_STATUS: i32 = 130;
+/// The status a Ctrl event's end reads as: 128 plus SIGINT (`overlay_capture`'s, which a local overlay reads too).
+pub(super) const INTERRUPTED_STATUS: i32 = overlay_capture::INTERRUPTED_STATUS;
 /// The status the kill sets: 128 plus SIGKILL.
 pub(super) const KILLED_STATUS: i32 = 137;
 /// How long the console's close waits for the cancel to report before the system ends the helper (it allows 5 s).
@@ -218,11 +216,9 @@ impl Program {
     /// The program's status once it ended, `None` while it runs.
     pub(super) fn reap(&mut self) -> Option<i32> {
         let code = self.child.try_wait().ok()??.code()?;
-        Some(if code == CONTROL_C_EXIT {
-            INTERRUPTED_STATUS
-        } else {
-            code
-        })
+        Some(overlay_capture::status_of_exit_code(u32::from_ne_bytes(
+            code.to_ne_bytes(),
+        )))
     }
 
     /// Whether any process of the job is still there.

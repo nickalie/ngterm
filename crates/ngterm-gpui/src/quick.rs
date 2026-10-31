@@ -421,6 +421,7 @@ pub fn launch(cwd: String, context: &PaneContext) -> ngterm_term::Launch {
         env_remove: Vec::new(),
         live: None,
         painter: None,
+        status_file: None,
     }
 }
 
