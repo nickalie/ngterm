@@ -8,6 +8,7 @@
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Command, Request};
 
+use crate::tint::{SessionTint, TintCreateOptions};
 use crate::{
     BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions, session_background, session_hud,
     session_io, session_meta, session_overlay, session_panes, session_restore, session_wait,
@@ -53,12 +54,15 @@ impl Session {
             SessionCommand::Restart(command) => command,
             SessionCommand::Flag(command) => command,
             SessionCommand::Context(command) => command,
+            SessionCommand::Tint(command) => command,
             SessionCommand::Seen(command) => command,
             SessionCommand::Search(command) => command,
             SessionCommand::Background(group) => group.command(),
             SessionCommand::Overlay(group) => group.command(),
             SessionCommand::Hud(group) => group.command(),
             SessionCommand::Wait(command) => command,
+            SessionCommand::Collapse(command) => command,
+            SessionCommand::Expand(command) => command,
         }
     }
 }
@@ -90,12 +94,15 @@ enum SessionCommand {
     Restart(session_restore::Restart),
     Flag(session_meta::Flag),
     Context(session_meta::Context),
+    Tint(SessionTint),
     Seen(session_meta::Seen),
     Search(session_io::Search),
     Background(session_background::Background),
     Overlay(session_overlay::Overlay),
     Hud(session_hud::Hud),
     Wait(session_wait::Wait),
+    Collapse(Collapse),
+    Expand(Expand),
 }
 
 /// A request for `cmd` on `target` with `args` (`--window` folded in).
@@ -125,7 +132,8 @@ pub fn flag(set: bool) -> Option<bool> {
     set.then_some(true)
 }
 
-/// `ngtermctl session new`: echoes the new session's id.
+/// `ngtermctl session new`: echoes the new session's id. `--parent SID` creates a companion of `SID` instead
+/// (`session.companion.new`, the parent as the target), carrying only the options a companion takes.
 #[derive(Debug, clap::Args)]
 #[command(about = "Create a session.")]
 pub struct New {
@@ -189,6 +197,16 @@ pub struct New {
     )]
     no_select: bool,
 
+    #[arg(
+        long,
+        help = "Create a companion of this session (id/prefix/active), placed under it in the sidebar; a companion \
+                target means its parent."
+    )]
+    parent: Option<String>,
+
+    #[command(flatten)]
+    tint: TintCreateOptions,
+
     #[command(flatten)]
     options: ClientOptions,
 }
@@ -223,7 +241,24 @@ impl RequestCommand for New {
     }
 
     fn make_request(&self) -> Request {
-        let args = Args {
+        if let Some(parent) = &self.parent {
+            let mut args = Args {
+                name: self.name.clone(),
+                cwd: self.cwd.clone(),
+                no_select: flag(self.no_select),
+                command: self.command.clone(),
+                wait: flag(self.wait),
+                ..Args::default()
+            };
+            self.tint.apply(&mut args);
+            return session_request(
+                SessionCmd::CompanionNew,
+                Some(parent.clone()),
+                Some(args),
+                &self.options,
+            );
+        }
+        let mut args = Args {
             name: self.name.clone(),
             cwd: self.cwd.clone(),
             workspace: self.workspace.clone(),
@@ -236,16 +271,28 @@ impl RequestCommand for New {
             before: self.before.clone(),
             ..Args::default()
         };
+        self.tint.apply(&mut args);
         // upstream always builds the bag, so even a bare `session new` sends `"args": {}`
         session_request(SessionCmd::New, None, Some(args), &self.options)
     }
 }
 
-/// `ngtermctl session duplicate`: no options of its own, since the target session names both the destination
-/// workspace and the cwd. Echoes the copy's id.
+/// `ngtermctl session duplicate`: the target session names both the destination workspace and the cwd, so a plain
+/// duplicate is fully described by `--target`; `--companion` is Duplicate as Companion (`session.companion.duplicate`).
+/// Echoes the copy's id.
 #[derive(Debug, clap::Args)]
 #[command(about = "Duplicate a session: a fresh shell in its directory, placed right after it.")]
 pub struct Duplicate {
+    #[arg(
+        long,
+        help = "Create a companion copying the session's split layout and starting another copy of each pane's \
+                program."
+    )]
+    companion: bool,
+
+    #[arg(long, help = "With --companion: create it without selecting or focusing it.")]
+    no_select: bool,
+
     #[command(flatten)]
     target: TargetOptions,
 
@@ -263,12 +310,16 @@ impl RequestCommand for Duplicate {
     }
 
     fn make_request(&self) -> Request {
-        session_request(
-            SessionCmd::Duplicate,
-            Some(self.target.target.clone()),
-            None,
-            &self.options,
-        )
+        let cmd = if self.companion {
+            SessionCmd::CompanionDuplicate
+        } else {
+            SessionCmd::Duplicate
+        };
+        let args = self.no_select.then(|| Args {
+            no_select: Some(true),
+            ..Args::default()
+        });
+        session_request(cmd, Some(self.target.target.clone()), args, &self.options)
     }
 }
 
@@ -278,6 +329,13 @@ impl RequestCommand for Duplicate {
 pub struct Close {
     #[command(flatten)]
     target: BatchTargetOptions,
+
+    #[arg(
+        long,
+        help = "Give a single close ⌘W's undo grace, so undo inside it brings the running shell back; closes at once \
+                when Settings turns undo off."
+    )]
+    undoable: bool,
 
     #[command(flatten)]
     options: ClientOptions,
@@ -289,10 +347,12 @@ impl RequestCommand for Close {
     }
 
     fn make_request(&self) -> Request {
-        let args = self.target.batch().map(|targets| Args {
-            targets: Some(targets),
+        let args = Args {
+            targets: self.target.batch(),
+            undoable: flag(self.undoable),
             ..Args::default()
-        });
+        };
+        let args = (args != Args::default()).then_some(args);
         session_request(SessionCmd::Close, Some(self.target.first()), args, &self.options)
     }
 }
@@ -501,6 +561,46 @@ impl RequestCommand for Move {
         session_request(SessionCmd::Move, Some(self.target.first()), Some(args), &self.options)
     }
 }
+
+/// A subcommand folding or unfolding a parent session's companions (upstream's `Session+Companions.swift`).
+macro_rules! fold_command {
+    ($(#[$doc:meta])* $name:ident, $cmd:expr, $about:literal) => {
+        $(#[$doc])*
+        #[derive(Debug, clap::Args)]
+        #[command(about = $about)]
+        pub struct $name {
+            #[command(flatten)]
+            target: TargetOptions,
+
+            #[command(flatten)]
+            options: ClientOptions,
+        }
+
+        impl RequestCommand for $name {
+            fn options(&self) -> &BasicOptions {
+                &self.options.basic
+            }
+
+            fn make_request(&self) -> Request {
+                session_request($cmd, Some(self.target.target.clone()), None, &self.options)
+            }
+        }
+    };
+}
+
+fold_command!(
+    /// `ngtermctl session collapse`.
+    Collapse,
+    SessionCmd::Collapse,
+    "Fold a parent session's companions in the sidebar tree."
+);
+
+fold_command!(
+    /// `ngtermctl session expand`.
+    Expand,
+    SessionCmd::Expand,
+    "Unfold a parent session's companions in the sidebar tree."
+);
 
 #[cfg(test)]
 mod tests {
@@ -728,6 +828,111 @@ mod tests {
         for (argv, message) in cases {
             assert_eq!(refusal(&[&["move"][..], argv].concat()), message, "{argv:?}");
         }
+    }
+
+    /// The request `ngtermctl session <argv>` builds, before validation (whose v0.39 rules come with each feature).
+    fn sent(argv: &[&str]) -> Value {
+        serde_json::to_value(parsed(argv).command().make_request()).unwrap()
+    }
+
+    #[test]
+    fn new_with_a_parent_sends_a_companion_new_on_the_parent() {
+        assert_eq!(
+            request(&["new", "--parent", "p1"]),
+            json!({"cmd": "session.companion.new", "target": "p1", "args": {}})
+        );
+        assert_eq!(
+            request(&[
+                "new",
+                "--parent",
+                "active",
+                "--cwd",
+                "/tmp",
+                "--command",
+                "make",
+                "--wait",
+                "--name",
+                "n",
+                "--no-select",
+                "--tint",
+                "Red",
+                "--tint-on",
+                "icon,name",
+                "--window",
+                "w1",
+            ]),
+            json!({"cmd": "session.companion.new", "target": "active", "args": {
+                "name": "n", "cwd": "/tmp", "tint": "red", "tintOn": ["icon", "name"], "noSelect": true,
+                "command": "make", "wait": true, "window": "w1"}})
+        );
+    }
+
+    #[test]
+    fn duplicate_as_companion_sends_its_own_command() {
+        assert_eq!(
+            request(&["duplicate", "--companion"]),
+            json!({"cmd": "session.companion.duplicate", "target": "active"})
+        );
+        assert_eq!(
+            sent(&["duplicate", "--companion", "--no-select", "--target", "s1"]),
+            json!({"cmd": "session.companion.duplicate", "target": "s1", "args": {"noSelect": true}})
+        );
+    }
+
+    #[test]
+    fn close_undoable_rides_with_one_target_or_a_batch() {
+        assert_eq!(
+            request(&["close", "--undoable"]),
+            json!({"cmd": "session.close", "target": "active", "args": {"undoable": true}})
+        );
+        assert_eq!(
+            request(&["close", "--target", "b", "--target", "a", "--undoable"]),
+            json!({"cmd": "session.close", "target": "b", "args": {"targets": ["b", "a"], "undoable": true}})
+        );
+    }
+
+    #[test]
+    fn collapse_and_expand_address_the_parent() {
+        for (verb, cmd) in [("collapse", "session.collapse"), ("expand", "session.expand")] {
+            assert_eq!(request(&[verb]), json!({"cmd": cmd, "target": "active"}), "{verb}");
+            assert_eq!(
+                request(&[verb, "--target", "p1", "--window", "w1"]),
+                json!({"cmd": cmd, "target": "p1", "args": {"window": "w1"}}),
+                "{verb}"
+            );
+        }
+    }
+
+    #[test]
+    fn flag_sends_its_move_anchors() {
+        assert_eq!(
+            sent(&["flag", "move", "--before", "s2", "--target", "s1"]),
+            json!({"cmd": "session.flag", "target": "s1", "args": {"mode": "move", "before": "s2"}})
+        );
+        assert_eq!(
+            sent(&["flag", "move", "--after", "s3"]),
+            json!({"cmd": "session.flag", "target": "active", "args": {"mode": "move", "after": "s3"}})
+        );
+    }
+
+    #[test]
+    fn overlay_open_companion_and_page_attach_send_the_companion_commands() {
+        let page = sent(&[
+            "overlay",
+            "open",
+            "--url",
+            "https://example.com",
+            "--companion",
+            "--target",
+            "s1",
+        ]);
+        assert_eq!(page["cmd"], "session.companion.page");
+        assert_eq!(page["target"], "s1");
+        assert_eq!(page["args"]["url"], "https://example.com");
+        assert_eq!(
+            request(&["overlay", "page-attach", "--target", "s1"]),
+            json!({"cmd": "session.companion.page.attach", "target": "s1"})
+        );
     }
 
     #[test]

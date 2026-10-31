@@ -39,6 +39,7 @@ mod stream_bridge;
 mod surface;
 mod terminfo;
 mod theme;
+mod tint;
 mod tree;
 mod usage;
 mod version;

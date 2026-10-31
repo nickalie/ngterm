@@ -5,7 +5,7 @@
 //! `AppStore+Focus.swift` mutators, and `flag` over `AppStore+SessionState.swift`'s `applyWorkspaceFlag`.
 
 use ngterm_proto::command::WorkspaceCmd;
-use ngterm_proto::{Args, ControlResult, Request};
+use ngterm_proto::{Args, Command, ControlResult, Request};
 
 use super::{ToggleMode, args_of, in_placement_store, with_id, workspace_store};
 use crate::Core;
@@ -33,6 +33,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: WorkspaceCmd, request: &Request) ->
         WorkspaceCmd::Collapse => WorkspaceAction::Expand(false),
         WorkspaceCmd::Expand => WorkspaceAction::Expand(true),
         WorkspaceCmd::Flag => WorkspaceAction::flag(args)?,
+        WorkspaceCmd::Tint => return Err(ControlError::NotSupported(Command::Workspace(cmd))),
     };
     apply(core, action, request.target.as_deref(), args.window.as_deref()).map(Some)
 }

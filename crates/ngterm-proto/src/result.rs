@@ -107,6 +107,20 @@ pub struct ControlResult {
     /// `recent.open`: what it reopened and where.
     #[serde(default)]
     pub recent_open: Option<ControlRecentOpen>,
+    /// `session.close --undoable`: whether the close was left undoable; absent for a plain close.
+    #[serde(default)]
+    pub undoable: Option<bool>,
+    /// A companion creation's receipt: the new companion's parent id.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// `session.close`: every session id it closed, a parent's companions included.
+    #[serde(default)]
+    pub closed: Option<Vec<String>>,
+    /// `session.companion.page.attach`: the page it handed out, token included. Upstream's `PresentationPage`, whose
+    /// Rust type (`ngterm_core::remote::frames::PresentationPage`) lives above this crate, so it travels as its JSON,
+    /// as `ControlLiveInventory::live_reset` does.
+    #[serde(default)]
+    pub companion_page: Option<serde_json::Value>,
 }
 
 /// The restore-mode policy `restore.mode` reads (upstream's `ControlRestoreStatus`). The modes travel as raw strings,
@@ -689,6 +703,38 @@ mod tests {
         assert_eq!(closed.sidebar_visible, None);
         let back: ControlResult = serde_json::from_str(&text).unwrap();
         assert_eq!(back.windows, Some(vec![node]));
+    }
+
+    /// The close and companion receipts ride after `recentOpen` in upstream's order, each absent when unset.
+    #[test]
+    fn close_and_companion_fields_keep_upstreams_order_and_are_absent_when_unset() {
+        let result = ControlResult {
+            id: Some("C".to_owned()),
+            affected: Some(2),
+            companion_page: Some(json!({"page": "p", "token": "t"})),
+            closed: Some(vec!["C".to_owned(), "K".to_owned()]),
+            parent: Some("P".to_owned()),
+            undoable: Some(true),
+            ..ControlResult::default()
+        };
+        let text = serde_json::to_string(&result).unwrap();
+        assert_eq!(
+            text,
+            r#"{"id":"C","affected":2,"undoable":true,"parent":"P","closed":["C","K"],"companionPage":{"page":"p","token":"t"}}"#
+        );
+        assert_eq!(serde_json::from_str::<ControlResult>(&text).unwrap(), result);
+        let plain = serde_json::to_string(&ControlResult::affected(1)).unwrap();
+        for key in ["undoable", "parent", "closed", "companionPage"] {
+            assert!(!plain.contains(key), "{plain}");
+        }
+        let not_undoable = ControlResult {
+            undoable: Some(false),
+            ..ControlResult::affected(1)
+        };
+        assert_eq!(
+            serde_json::to_string(&not_undoable).unwrap(),
+            r#"{"affected":1,"undoable":false}"#
+        );
     }
 
     /// Upstream's `SessionRestartTests`: the receipt rides last, with upstream's key spellings.

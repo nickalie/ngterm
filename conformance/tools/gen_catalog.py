@@ -4,9 +4,10 @@
 Commands come from the `Command` enum, fields from the Codable properties of `ControlResult` and the tree,
 workspace, session and window nodes, events from `ControlEventKind`, CLI subcommands from the
 `site/commands.html` synopses (a card whose wire line reads `CLI only: a, b` is a client-side composite: its CLI
-items carry no wire command and list the commands they use). Generated sections are replaced; `behaviors` and
-`exemptions` are kept, except that entries of AUTO_BEHAVIORS / AUTO_EXEMPTIONS are re-added when missing (drop one
-from its table to remove it).
+items carry no wire command and list the commands they use; a subcommand whose cards send different commands
+depending on a flag, as `session new --parent`, lists the others under `variants`, keyed by that flag). Generated
+sections are replaced; `behaviors` and `exemptions` are kept, except that entries of AUTO_BEHAVIORS /
+AUTO_EXEMPTIONS are re-added when missing (drop one from its table to remove it).
 UI ids (ui-ids.yaml, next to the catalog) come from the `accessibilityIdentifier(...)` and
 `setAccessibilityIdentifier(...)` calls under `agterm/`; an argument that calls a `Self.` helper returning one string
 literal resolves to that literal.
@@ -48,7 +49,7 @@ FIELD_SOURCES = (
 )
 GENERATED_SECTIONS = ("commands", "fields", "events", "cli")
 # Keys the generator owns inside an item; every other key on an item is kept across regeneration.
-GENERATED_KEYS = ("mode", "wire", "uses")
+GENERATED_KEYS = ("mode", "wire", "variants", "uses")
 UI_GENERATED_KEYS = ("at",)
 UI_WIDTH = 4096  # source paths make ui items long; keep one line each
 
@@ -77,6 +78,7 @@ HEADER = (
     "# commands/fields/events/cli are regenerated (status and extra keys survive); behaviors and exemptions\n"
     "# are hand-maintained, but the generator re-adds its own entries (AUTO_BEHAVIORS / AUTO_EXEMPTIONS) when\n"
     "# missing, so removing one means removing it from that table. Statuses: uncovered, covered, removed-upstream.\n"
+    "# A cli item's `variants` maps a flag to the command the subcommand sends instead of `wire` when given it.\n"
 )
 
 
@@ -474,7 +476,7 @@ def _cards(path: Path, text: str, commands: set[str], problems: list[str]) -> li
 
 
 def cli_subcommands(path: Path, text: str, commands: set[str], problems: list[str]) -> dict[str, dict[str, Any]]:
-    out: dict[str, dict[str, Any]] = {}
+    found: dict[str, list[tuple[dict[str, Any], str, int]]] = {}
     for card in _cards(path, text, commands, problems):
         synopsis, line, wires = card.synopsis, card.line, card.wires
         invocations = [s.strip() for s in re.split(r"(?:^|\s)agtermctl\s+", " " + synopsis) if s.strip()]
@@ -492,10 +494,67 @@ def cli_subcommands(path: Path, text: str, commands: set[str], problems: list[st
                 entry: dict[str, Any] = {"wire": wire} if wire else {}
                 if card.uses is not None:
                     entry["uses"] = list(card.uses)
-                if key in out and out[key] != entry:
-                    problems.append(f"{path}:{line}: `{key}` maps to both {out[key]} and {entry}")
-                out[key] = entry
+                found.setdefault(key, []).append((entry, invocation, line))
+    out: dict[str, dict[str, Any]] = {}
+    for key, cards in found.items():
+        if (entry := _one_entry(path, key, cards, problems)) is not None:
+            out[key] = entry
     return out
+
+
+_FLAG = re.compile(r"--[a-z][a-z0-9-]*")
+_SYNOPSIS_TOKEN = re.compile(r"[\[\]()]|[^\s\[\]()]+")
+
+
+def _required_flags(invocation: str) -> set[str]:
+    """Flags an invocation names outside any `[...]` option or `(...)` group: the ones it always passes."""
+    depth, flags = 0, set()
+    for token in _SYNOPSIS_TOKEN.findall(invocation):
+        if token in ("[", "("):
+            depth += 1
+        elif token in ("]", ")"):
+            depth -= 1
+        elif depth == 0:
+            flags.update(_FLAG.findall(token))
+    return flags
+
+
+def _one_entry(
+    path: Path, key: str, cards: list[tuple[dict[str, Any], str, int]], problems: list[str]
+) -> dict[str, Any] | None:
+    """The catalog item of `key` from every card that names it.
+
+    Cards that agree give one item. Cards that send different wire commands give `wire` (the command named like the
+    key, the one sent without a variant flag) and `variants` mapping each other command to the one flag its
+    synopses always pass and the default's synopses never name, e.g. `session new --parent` → session.companion.new.
+    Anything else is a problem: which command a CLI line sends is never guessed.
+    """
+    entries: list[dict[str, Any]] = []
+    for entry, _, _ in cards:
+        if entry not in entries:
+            entries.append(entry)
+    if len(entries) == 1:
+        return entries[0]
+    line = next(at for entry, _, at in cards if entry != entries[0])
+    default = ".".join(key.split())
+    if any(set(entry) != {"wire"} for entry in entries) or {"wire": default} not in entries:
+        problems.append(f"{path}:{line}: `{key}` maps to both {entries[0]} and {entries[1]}")
+        return None
+    named = {flag for entry, invocation, _ in cards if entry["wire"] == default for flag in _FLAG.findall(invocation)}
+    variants: dict[str, str] = {}
+    for variant in (entry["wire"] for entry in entries if entry["wire"] != default):
+        required = [_required_flags(inv) - named for entry, inv, _ in cards if entry["wire"] == variant]
+        flags = sorted(set.intersection(*required))
+        at = next(at for entry, _, at in cards if entry["wire"] == variant)
+        if len(flags) != 1:
+            choices = f"flags {', '.join(flags)}" if flags else "no flag"
+            problems.append(f"{path}:{at}: `{key}` sends {variant} under {choices} of its own, not one")
+            return None
+        if flags[0] in variants:
+            problems.append(f"{path}:{at}: `{key}` {flags[0]} sends both {variants[flags[0]]} and {variant}")
+            return None
+        variants[flags[0]] = variant
+    return {"wire": default, "variants": variants}
 
 
 def _cli_keys(invocation: str, wires: list[str]) -> Iterator[tuple[str, str | None]]:
@@ -637,7 +696,9 @@ def ui_identifiers(path: Path, text: str, gen: Generated) -> None:
 def generate(source: Path) -> Generated:
     gen = Generated()
     core = source / CORE
-    sources = {p.relative_to(source): strip_comments(p.read_text()) for p in sorted(core.glob("*.swift"))}
+    sources = {
+        p.relative_to(source): strip_comments(p.read_text(encoding="utf-8")) for p in sorted(core.glob("*.swift"))
+    }
     if not sources:
         gen.problems.append(f"no Swift sources under {core}")
         return gen
@@ -662,11 +723,12 @@ def generate(source: Path) -> Generated:
             gen.fields.update({f"{prefix}.{key}": {} for key in keys})
     html_path = source / COMMANDS_HTML
     if html_path.is_file():
-        gen.cli = cli_subcommands(COMMANDS_HTML, html_path.read_text(), set(gen.commands), gen.problems)
+        html_text = html_path.read_text(encoding="utf-8")
+        gen.cli = cli_subcommands(COMMANDS_HTML, html_text, set(gen.commands), gen.problems)
     else:
         gen.problems.append(f"{COMMANDS_HTML} not found")
     for path in sorted((source / APP).rglob("*.swift")):
-        ui_identifiers(path.relative_to(source), strip_comments(path.read_text()), gen)
+        ui_identifiers(path.relative_to(source), strip_comments(path.read_text(encoding="utf-8")), gen)
 
     for section in GENERATED_SECTIONS:
         if not getattr(gen, section):
@@ -806,7 +868,7 @@ def extract(repo: Path, tag: str, into: Path) -> None:
 
 
 def _load(path: Path) -> Any:
-    return yaml.safe_load(path.read_text()) if path.exists() else None
+    return yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
 def run(
@@ -817,8 +879,8 @@ def run(
         raise CatalogError("unparseable upstream input:\n  " + "\n  ".join(gen.problems))
     catalog, changes = merge(_load(catalog_path), gen, tag)
     ui, ui_changes = merge_ui(_load(ui_path), gen, tag)
-    catalog_path.write_text(dump(catalog))
-    ui_path.write_text(dump(ui, UI_HEADER, width=UI_WIDTH))
+    catalog_path.write_text(dump(catalog), encoding="utf-8")
+    ui_path.write_text(dump(ui, UI_HEADER, width=UI_WIDTH), encoding="utf-8")
     return changes, ui_changes, gen, ui
 
 

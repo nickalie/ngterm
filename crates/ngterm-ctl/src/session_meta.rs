@@ -112,15 +112,23 @@ impl RequestCommand for Status {
     }
 }
 
-/// `ngtermctl session flag [on|off|toggle|clear]`.
+/// `ngtermctl session flag [on|off|toggle|clear|move] [--before SID | --after SID]`; the anchors place the target in
+/// the flagged order (`move`). Which modes take an anchor is checked by the server.
 #[derive(Debug, clap::Args)]
-#[command(about = "Flag a session for the flagged working-set view (on|off|toggle|clear).")]
+#[command(about = "Flag a session for the flagged working-set view (on|off|toggle|clear|move).")]
 pub struct Flag {
     #[arg(
         default_value = "toggle",
-        help = "Mode: on, off, toggle (default), or clear (unflag all; ignores --target)."
+        help = "Mode: on, off, toggle (default), clear (unflag all; ignores --target), or move (reorder the flagged \
+                target with --before or --after)."
     )]
     mode: String,
+
+    #[arg(long, help = "With move: the flagged session to place the target right before.")]
+    before: Option<String>,
+
+    #[arg(long, help = "With move: the flagged session to place the target right after.")]
+    after: Option<String>,
 
     #[command(flatten)]
     target: TargetOptions,
@@ -135,16 +143,18 @@ impl RequestCommand for Flag {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if ["on", "off", "toggle", "clear"].contains(&self.mode.as_str()) {
+        if ["on", "off", "toggle", "clear", "move"].contains(&self.mode.as_str()) {
             Ok(())
         } else {
-            Err("mode must be on, off, toggle, or clear".to_owned())
+            Err("mode must be on, off, toggle, clear, or move".to_owned())
         }
     }
 
     fn make_request(&self) -> Request {
         let args = Args {
             mode: Some(self.mode.clone()),
+            before: self.before.clone(),
+            after: self.after.clone(),
             ..Args::default()
         };
         session_request(
@@ -363,7 +373,14 @@ mod tests {
             request(&["flag", "clear", "--window", "w1"]),
             json!({"cmd": "session.flag", "target": "active", "args": {"mode": "clear", "window": "w1"}})
         );
-        assert_eq!(refusal(&["flag", "bogus"]), "mode must be on, off, toggle, or clear");
+        assert_eq!(
+            refusal(&["flag", "bogus"]),
+            "mode must be on, off, toggle, clear, or move"
+        );
+        assert_eq!(
+            request(&["flag", "move", "--before", "s2", "--target", "s1"]),
+            json!({"cmd": "session.flag", "target": "s1", "args": {"mode": "move", "before": "s2"}})
+        );
     }
 
     #[test]

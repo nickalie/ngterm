@@ -85,10 +85,17 @@ pub struct Args {
     pub name: Option<String>,
     pub cwd: Option<String>,
     pub targets: Option<Vec<String>>,
+    /// `session.close`: ask for the undo grace and a `result.undoable` answer.
+    pub undoable: Option<bool>,
     pub workspace: Option<String>,
     pub workspace_name: Option<String>,
     pub create_workspace: Option<bool>,
     pub collapsed: Option<bool>,
+    /// The tint color of `session.tint`/`workspace.tint` mode `set`, and the creation tint of `session.new`,
+    /// `session.companion.new` and `workspace.new`.
+    pub tint: Option<String>,
+    /// The row parts the tint colors (`icon`, `name`).
+    pub tint_on: Option<Vec<String>>,
     pub minimized: Option<bool>,
     pub force: Option<bool>,
     pub host: Option<String>,
@@ -395,6 +402,27 @@ mod tests {
             let error = serde_json::from_str::<Request>(line).unwrap_err();
             assert!(error.to_string().contains("expected a JSON object"), "{line}: {error}");
         }
+    }
+
+    #[test]
+    fn tint_and_undoable_args_round_trip_in_upstreams_order() {
+        let wire = json!({
+            "cmd": "session.close",
+            "target": "a",
+            "args": {"targets": ["a", "b"], "undoable": true, "collapsed": true, "tint": "red",
+                     "tintOn": ["icon", "name"], "mode": "set"}
+        });
+        let request: Request = serde_json::from_value(wire.clone()).unwrap();
+        let args = request.args.clone().unwrap();
+        assert_eq!((args.undoable, args.tint.as_deref()), (Some(true), Some("red")));
+        assert_eq!(args.tint_on, Some(vec!["icon".to_owned(), "name".to_owned()]));
+        assert_eq!(serde_json::to_value(&request).unwrap(), wire);
+        let Value::Object(map) = serde_json::to_value(args).unwrap() else {
+            panic!("args is not an object")
+        };
+        let keys: Vec<&str> = map.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["targets", "undoable", "collapsed", "tint", "tintOn", "mode"]);
+        assert_eq!(serde_json::to_string(&Args::default()).unwrap(), "{}");
     }
 
     #[test]

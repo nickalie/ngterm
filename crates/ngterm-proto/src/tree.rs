@@ -23,6 +23,12 @@ pub struct ControlTree {
     /// The window's auto-follow timeout; absent while the feature is off.
     #[serde(default)]
     pub auto_follow_ms: Option<i64>,
+    /// Whether the window's attention navigation also stops on `active` sessions.
+    #[serde(default)]
+    pub attention_includes_active: Option<bool>,
+    /// Whether the window's GUI attention navigation walks every open window (`session.go` stays window-scoped).
+    #[serde(default)]
+    pub attention_navigation_across_windows: Option<bool>,
     #[serde(default)]
     pub sidebar_visible: Option<bool>,
     /// `tree` or `flagged`.
@@ -31,6 +37,10 @@ pub struct ControlTree {
     /// `flat`, `plain` or `tree`; app-wide.
     #[serde(default)]
     pub sidebar_flagged_layout: Option<String>,
+    /// The window's saved flagged order as session ids (the read side of `session.flag move`); absent when nothing
+    /// is flagged.
+    #[serde(default)]
+    pub flagged_order: Option<Vec<String>>,
     /// `browser` or `overlay`; app-wide.
     #[serde(default)]
     pub link_open_mode: Option<String>,
@@ -82,6 +92,12 @@ pub struct ControlWorkspaceNode {
     /// Collapsed in the sidebar tree; absent when expanded.
     #[serde(default)]
     pub collapsed: Option<bool>,
+    /// The workspace row's own tint color; absent when untinted. Never inherited by its sessions.
+    #[serde(default)]
+    pub tint: Option<String>,
+    /// The row parts the tint colors; present exactly when `tint` is.
+    #[serde(default)]
+    pub tint_on: Option<Vec<String>>,
     pub sessions: Vec<ControlSessionNode>,
 }
 
@@ -171,6 +187,24 @@ pub struct ControlSessionNode {
     /// Epoch seconds.
     #[serde(default)]
     pub status_changed_at: Option<f64>,
+    /// When the session was last selected, as epoch seconds; absent before any selection was recorded.
+    #[serde(default)]
+    pub last_selected_at: Option<f64>,
+    /// The row's tint color (`session.tint`); absent when untinted.
+    #[serde(default)]
+    pub tint: Option<String>,
+    /// The row parts the tint colors, `icon` and/or `name`; present exactly when `tint` is.
+    #[serde(default)]
+    pub tint_on: Option<Vec<String>>,
+    /// A companion's parent id; absent for a top-level session.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// True for a parent whose companions are folded; absent otherwise.
+    #[serde(default)]
+    pub collapsed: Option<bool>,
+    /// `page` for a page companion, which has no terminal; absent for a terminal session.
+    #[serde(default)]
+    pub content: Option<String>,
     /// A `BackgroundWatermark` in its persisted shape.
     #[serde(default)]
     pub background: Option<Value>,
@@ -249,6 +283,12 @@ impl ControlSessionNode {
             status_color: None,
             status_shape: None,
             status_changed_at: None,
+            last_selected_at: None,
+            tint: None,
+            tint_on: None,
+            parent: None,
+            collapsed: None,
+            content: None,
             background: None,
             pane_backgrounds: None,
             unseen: None,
@@ -509,6 +549,7 @@ mod tests {
         node.status_color = Some(String::new());
         node.status_shape = Some(String::new());
         node.status_changed_at = Some(1.0);
+        set_selection_tint_and_companion_fields(&mut node);
         node.background = Some(json!({}));
         node.pane_backgrounds = Some(json!({}));
         node.unseen = Some(1);
@@ -536,8 +577,18 @@ mod tests {
         assert_eq!(back, node);
     }
 
+    /// The v0.39 fields between `statusChangedAt` and `background`.
+    fn set_selection_tint_and_companion_fields(node: &mut ControlSessionNode) {
+        node.last_selected_at = Some(2.0);
+        node.tint = Some("red".to_owned());
+        node.tint_on = Some(vec!["icon".to_owned()]);
+        node.parent = Some("P".to_owned());
+        node.collapsed = Some(true);
+        node.content = Some("page".to_owned());
+    }
+
     /// The catalog's `field:tree.session.*` order (its `backedByZmx` is `backedByLive` here).
-    const SESSION_FIELDS: [&str; 52] = [
+    const SESSION_FIELDS: [&str; 58] = [
         "id",
         "name",
         "cwd",
@@ -576,6 +627,12 @@ mod tests {
         "statusColor",
         "statusShape",
         "statusChangedAt",
+        "lastSelectedAt",
+        "tint",
+        "tintOn",
+        "parent",
+        "collapsed",
+        "content",
         "background",
         "paneBackgrounds",
         "unseen",
@@ -598,9 +655,12 @@ mod tests {
             workspaces: vec![],
             idle_ms: Some(1),
             auto_follow_ms: Some(1),
+            attention_includes_active: Some(false),
+            attention_navigation_across_windows: Some(true),
             sidebar_visible: Some(true),
             sidebar_mode: Some("tree".to_owned()),
             sidebar_flagged_layout: Some("flat".to_owned()),
+            flagged_order: Some(vec!["S".to_owned()]),
             link_open_mode: Some("browser".to_owned()),
             sidebar_width: Some(220.0),
             workspace_filter: Some(false),
@@ -623,9 +683,12 @@ mod tests {
                 "workspaces",
                 "idleMs",
                 "autoFollowMs",
+                "attentionIncludesActive",
+                "attentionNavigationAcrossWindows",
                 "sidebarVisible",
                 "sidebarMode",
                 "sidebarFlaggedLayout",
+                "flaggedOrder",
                 "linkOpenMode",
                 "sidebarWidth",
                 "workspaceFilter",
@@ -645,6 +708,64 @@ mod tests {
         assert_eq!(
             keys(&serde_json::to_value(ControlTree::default()).unwrap()),
             ["workspaces"]
+        );
+        let back: ControlTree = serde_json::from_value(value).unwrap();
+        assert_eq!(back, tree);
+    }
+
+    #[test]
+    fn a_workspace_node_serializes_in_upstream_order_and_omits_an_absent_tint() {
+        let mut node = ControlWorkspaceNode {
+            id: "W".to_owned(),
+            name: "w".to_owned(),
+            active: true,
+            focused: Some(true),
+            collapsed: Some(true),
+            tint: Some("blue".to_owned()),
+            tint_on: Some(vec!["icon".to_owned(), "name".to_owned()]),
+            sessions: vec![],
+        };
+        let value = serde_json::to_value(&node).unwrap();
+        assert_eq!(
+            keys(&value),
+            [
+                "id",
+                "name",
+                "active",
+                "focused",
+                "collapsed",
+                "tint",
+                "tintOn",
+                "sessions"
+            ]
+        );
+        assert_eq!(serde_json::from_value::<ControlWorkspaceNode>(value).unwrap(), node);
+        node.tint = None;
+        node.tint_on = None;
+        node.focused = None;
+        node.collapsed = None;
+        let plain = serde_json::to_value(&node).unwrap();
+        assert_eq!(keys(&plain), ["id", "name", "active", "sessions"]);
+    }
+
+    #[test]
+    fn a_tree_from_an_older_server_decodes_with_the_new_fields_absent() {
+        let tree: ControlTree = serde_json::from_value(json!({"workspaces": [{"id": "W", "name": "w", "active": true,
+            "sessions": [{"id": "x", "name": "n", "cwd": "/", "active": true, "split": false, "overlay": false,
+                          "scratch": false, "flagged": false}]}]}))
+        .unwrap();
+        assert_eq!((tree.attention_includes_active, tree.flagged_order), (None, None));
+        let workspace = &tree.workspaces[0];
+        assert_eq!((&workspace.tint, &workspace.tint_on), (&None, &None));
+        let session = &workspace.sessions[0];
+        assert_eq!(
+            (
+                &session.last_selected_at,
+                &session.parent,
+                &session.collapsed,
+                &session.content
+            ),
+            (&None, &None, &None, &None)
         );
     }
 

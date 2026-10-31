@@ -1303,9 +1303,10 @@ SUBCOMMANDS:
   restart                 Replace the shell of one live pane and run a shell
                           line, or the same program again, in the new one.
   flag                    Flag a session for the flagged working-set view
-                          (on|off|toggle|clear).
+                          (on|off|toggle|clear|move).
   context                 Set or clear what a session is about, shown in the
                           title bar.
+  tint                    Tint a session's sidebar row (a color, or clear).
   seen                    Clear a session's unseen-notification badge without
                           changing the selection or focus (idempotent).
   search                  Search a session's terminal output (open the bar, set
@@ -1318,6 +1319,10 @@ SUBCOMMANDS:
                           session.
   wait                    Block until a session's agent status is one of the
                           given values.
+  collapse                Fold a parent session's companions in the sidebar
+                          tree.
+  expand                  Unfold a parent session's companions in the sidebar
+                          tree.
 
   See 'ngtermctl help session <subcommand>' for detailed help.
 ";
@@ -1353,6 +1358,12 @@ OPTIONS:
   --no-select             Create the session in the background without
                           selecting or focusing it (leaves the current
                           selection untouched).
+  --parent <parent>       Create a companion of this session
+                          (id/prefix/active), placed under it in the sidebar; a
+                          companion target means its parent.
+  --tint <tint>           Create it tinted this color
+                          (red|orange|yellow|green|blue|purple|gray).
+  --tint-on <tint-on>     With --tint: icon, name, or icon,name (default icon).
   --socket <socket>       Override the control socket path.
   --json                  Print the raw JSON response.
   --window <window>       Target window id, unique prefix, or 'active'
@@ -1365,9 +1376,13 @@ const SESSION_DUPLICATE_HELP: &str = "\
 OVERVIEW: Duplicate a session: a fresh shell in its directory, placed right
 after it.
 
-USAGE: ngtermctl session duplicate [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session duplicate [--companion] [--no-select] [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 OPTIONS:
+  --companion             Create a companion copying the session's split layout
+                          and starting another copy of each pane's program.
+  --no-select             With --companion: create it without selecting or
+                          focusing it.
   --target <target>       Target session/workspace id, unique prefix, or
                           'active'. (default: active)
   --socket <socket>       Override the control socket path.
@@ -1381,11 +1396,14 @@ OPTIONS:
 const SESSION_CLOSE_HELP: &str = "\
 OVERVIEW: Close a session.
 
-USAGE: ngtermctl session close [--target <target> ...] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session close [--target <target> ...] [--undoable] [--socket <socket>] [--json] [--window <window>]
 
 OPTIONS:
   --target <target>       Target session id, prefix, or 'active'. Repeat for a
                           batch.
+  --undoable              Give a single close ⌘W's undo grace, so undo inside
+                          it brings the running shell back; closes at once when
+                          Settings turns undo off.
   --socket <socket>       Override the control socket path.
   --json                  Print the raw JSON response.
   --window <window>       Target window id, unique prefix, or 'active'
@@ -1619,6 +1637,8 @@ SUBCOMMANDS:
                           (on|off|toggle).
   collapse                Collapse a workspace in the sidebar tree.
   expand                  Expand a workspace in the sidebar tree.
+  tint                    Tint a workspace's own sidebar row (a color, or
+                          clear); its sessions keep their own.
 
   See 'ngtermctl help workspace <subcommand>' for detailed help.
 ";
@@ -1626,13 +1646,16 @@ SUBCOMMANDS:
 const WORKSPACE_NEW_HELP: &str = "\
 OVERVIEW: Create a workspace.
 
-USAGE: ngtermctl workspace new [<name>] [--collapsed] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl workspace new [<name>] [--collapsed] [--tint <tint>] [--tint-on <tint-on>] [--socket <socket>] [--json] [--window <window>]
 
 ARGUMENTS:
   <name>                  Workspace name (defaults to the auto-generated name).
 
 OPTIONS:
   --collapsed             Create the workspace collapsed in the sidebar.
+  --tint <tint>           Create it tinted this color
+                          (red|orange|yellow|green|blue|purple|gray).
+  --tint-on <tint-on>     With --tint: icon, name, or icon,name (default icon).
   --socket <socket>       Override the control socket path.
   --json                  Print the raw JSON response.
   --window <window>       Target window id, unique prefix, or 'active'
@@ -2045,8 +2068,8 @@ fn io_and_metadata_refusals_are_usage_errors_before_connecting() -> TestResult {
         ),
         (
             &["session", "flag", "bogus"],
-            "mode must be on, off, toggle, or clear",
-            usage("flag", "[<mode>] "),
+            "mode must be on, off, toggle, clear, or move",
+            usage("flag", "[<mode>] [--before <before>] [--after <after>] "),
         ),
         (
             &["session", "context"],
@@ -2140,15 +2163,21 @@ OPTIONS:
 ";
 
 const SESSION_FLAG_HELP: &str = "\
-OVERVIEW: Flag a session for the flagged working-set view (on|off|toggle|clear).
+OVERVIEW: Flag a session for the flagged working-set view
+(on|off|toggle|clear|move).
 
-USAGE: ngtermctl session flag [<mode>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
+USAGE: ngtermctl session flag [<mode>] [--before <before>] [--after <after>] [--target <target>] [--socket <socket>] [--json] [--window <window>]
 
 ARGUMENTS:
-  <mode>                  Mode: on, off, toggle (default), or clear (unflag
-                          all; ignores --target). (default: toggle)
+  <mode>                  Mode: on, off, toggle (default), clear (unflag all;
+                          ignores --target), or move (reorder the flagged
+                          target with --before or --after). (default: toggle)
 
 OPTIONS:
+  --before <before>       With move: the flagged session to place the target
+                          right before.
+  --after <after>         With move: the flagged session to place the target
+                          right after.
   --target <target>       Target session/workspace id, unique prefix, or
                           'active'. (default: active)
   --socket <socket>       Override the control socket path.
@@ -3805,6 +3834,8 @@ SUBCOMMANDS:
                           Mac.
   page-serve              Carry a handed-over page's channel between
                           stdin/stdout and this app.
+  page-attach             Hand out one attachment of a page companion to
+                          another Mac.
 
   See 'ngtermctl help session overlay <subcommand>' for detailed help.
 ";

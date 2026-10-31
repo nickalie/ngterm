@@ -96,29 +96,31 @@ new subcommands and flags, parse only, sending what upstream sends).
 **Conformance:** `ngterm-proto/tests/catalog.rs` and ngterm-ctl's `the_command_tree_is_the_catalogs_cli` must be
 green at the end; the coverage gate lists the new keys, all owned by later tasks.
 
-- [ ] teach `gen_catalog.py` a CLI subcommand that sends one of several wire commands depending on a flag
+- [x] teach `gen_catalog.py` a CLI subcommand that sends one of several wire commands depending on a flag
       (`session duplicate` → `session.duplicate` | `session.companion.duplicate` with `--companion`; `session new` →
       `session.new` | `session.companion.new` with `--parent`; `session overlay open` → `session.overlay.open` |
       `session.companion.page` with `--companion`), in whatever catalog shape keeps the existing `cli:` keys stable
       and lets the coverage gate name both wires; selftests for it in `test_gen_catalog.py`
-- [ ] run `.venv/bin/python conformance/tools/gen_catalog.py --tag v0.39.1 --repo .upstream/agterm`; keep its reflow
+- [x] run `.venv/bin/python conformance/tools/gen_catalog.py --tag v0.39.1 --repo .upstream/agterm`; keep its reflow
       of hand-written exemption lines; then `coverage-map.py --since HEAD~1` lists every added/changed key: record
       that list in this task's commit message
-- [ ] `Command` variants: `session.companion.new`, `session.companion.duplicate`, `session.companion.page`,
+- [x] `Command` variants: `session.companion.new`, `session.companion.duplicate`, `session.companion.page`,
       `session.companion.page.attach`, `session.collapse`, `session.expand`, `session.tint`, `workspace.tint` (and any
       other the regenerated catalog lists that the enum lacks)
-- [ ] `Args`: `tint`, `tintOn`, `before`/`after` on `session.flag`, `undoable`, `parent`-side args the companions take
+- [x] `Args`: `tint`, `tintOn`, `before`/`after` on `session.flag`, `undoable`, `parent`-side args the companions take
       (whatever the catalog lists); `ControlResult`: `undoable`, `parent`, `closed`, `companionPage` in upstream's
       order; tree session node `lastSelectedAt`, `tint`, `tintOn`, `parent`, `collapsed`, `content`; workspace node
       `tint`, `tintOn`; top level `flaggedOrder`, `attentionIncludesActive`, `attentionNavigationAcrossWindows`; event
       payload `parent`; all optional and omitted when `None` (Context > Cross-cluster seams has the order)
-- [ ] CLI skeletons: `session tint`, `workspace tint`, `session collapse`, `session expand`, `session overlay
+- [x] CLI skeletons: `session tint`, `workspace tint`, `session collapse`, `session expand`, `session overlay
       page-attach`, flags `session new --parent/--tint/--tint-on`, `workspace new --tint/--tint-on`, `session flag
       move --before/--after`, `session close --undoable`, `session duplicate --companion --no-select`, `session
       overlay open --companion`, `browser links` new modes (parse and send only; validation strings come in each
-      feature's task)
-- [ ] write tests: proto round-trip and omission of every new field; the key-order lists in `tree.rs` tests
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+      feature's task) (`browser links` unchanged: it already sends any MODE, and only its `LinkOpenMode` check,
+      Task 9's, refuses the new ones)
+- [x] write tests: proto round-trip and omission of every new field; the key-order lists in `tree.rs` tests
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: no new behavior; the coverage
+      gate and its selftest twin fail only on the 35 new keys, all later tasks')
 
 ### Task 2: `tree` `lastSelectedAt` per session (#818, 21dc990)
 

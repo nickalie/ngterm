@@ -7,6 +7,7 @@ use ngterm_core::model::FocusMode;
 use ngterm_proto::command::WorkspaceCmd;
 use ngterm_proto::{Args, Command, Request};
 
+use crate::tint::{TintCreateOptions, WorkspaceTint};
 use crate::{BasicOptions, ClientOptions, RequestCommand, TargetOptions};
 
 /// `ngtermctl workspace <subcommand>`.
@@ -36,6 +37,7 @@ impl Workspace {
             WorkspaceCommand::Flag(command) => command,
             WorkspaceCommand::Collapse(command) => command,
             WorkspaceCommand::Expand(command) => command,
+            WorkspaceCommand::Tint(command) => command,
         }
     }
 }
@@ -54,6 +56,7 @@ enum WorkspaceCommand {
     Flag(Flag),
     Collapse(Collapse),
     Expand(Expand),
+    Tint(WorkspaceTint),
 }
 
 /// A request for `cmd` on `target` with `args` (`--window` folded in).
@@ -70,7 +73,7 @@ fn workspace_request(
     }
 }
 
-/// `ngtermctl workspace new [<name>] [--collapsed]`: echoes the new workspace's id.
+/// `ngtermctl workspace new [<name>] [--collapsed] [--tint COLOR [--tint-on PARTS]]`: echoes the new workspace's id.
 #[derive(Debug, clap::Args)]
 #[command(about = "Create a workspace.")]
 pub struct New {
@@ -79,6 +82,9 @@ pub struct New {
 
     #[arg(long, help = "Create the workspace collapsed in the sidebar.")]
     collapsed: bool,
+
+    #[command(flatten)]
+    tint: TintCreateOptions,
 
     #[command(flatten)]
     options: ClientOptions,
@@ -94,11 +100,12 @@ impl RequestCommand for New {
     }
 
     fn make_request(&self) -> Request {
-        let args = Args {
+        let mut args = Args {
             name: self.name.clone(),
             collapsed: self.collapsed.then_some(true),
             ..Args::default()
         };
+        self.tint.apply(&mut args);
         // upstream always builds the bag, so even a bare `workspace new` sends `"args": {}`
         workspace_request(WorkspaceCmd::New, None, Some(args), &self.options)
     }

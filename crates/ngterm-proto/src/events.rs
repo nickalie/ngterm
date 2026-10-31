@@ -101,6 +101,9 @@ pub struct EventPayload {
     /// while that pane's surface does not exist yet.
     #[serde(default, rename = "paneID")]
     pub pane_id: Option<String>,
+    /// `session.created`: a companion's parent id; absent for a top-level session.
+    #[serde(default)]
+    pub parent: Option<String>,
 }
 
 /// One immutable ring entry (upstream's `ControlEvent`). The identities are upper-case UUIDs, absent when the event
@@ -206,6 +209,37 @@ mod tests {
             r##"{"seq":1,"ts":1.25,"kind":"status","window":"win","workspace":"work","session":"sess","payload":{"name":"api","status":"blocked","pane":"right","blink":true,"color":"#aabbcc","shape":"triangle"}}"##
         );
         assert_eq!(serde_json::from_str::<ControlEvent>(&text).unwrap(), event);
+    }
+
+    /// A companion's `session.created` names its parent last, after the payload's other fields.
+    #[test]
+    fn a_companion_created_event_carries_its_parent_last() {
+        let event = ControlEvent {
+            seq: 14,
+            ts: 14.5,
+            kind: EventKind::SessionCreated,
+            window: Some("win".to_owned()),
+            workspace: Some("work".to_owned()),
+            session: Some("sess".to_owned()),
+            payload: EventPayload {
+                name: Some("api".to_owned()),
+                pane_id: Some("tok".to_owned()),
+                parent: Some("P".to_owned()),
+                ..EventPayload::default()
+            },
+        };
+        let text = serde_json::to_string(&event).unwrap();
+        assert!(
+            text.ends_with(r#""payload":{"name":"api","paneID":"tok","parent":"P"}}"#),
+            "{text}"
+        );
+        assert_eq!(serde_json::from_str::<ControlEvent>(&text).unwrap(), event);
+        let top_level = serde_json::to_string(&EventPayload {
+            name: Some("api".to_owned()),
+            ..EventPayload::default()
+        })
+        .unwrap();
+        assert_eq!(top_level, r#"{"name":"api"}"#);
     }
 
     /// Upstream's `everyEventKindMatchesGoldenWireShape` `app.launched` case: no identities, an empty payload.

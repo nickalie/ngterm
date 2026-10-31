@@ -90,6 +90,8 @@ fn workspace_node(
         active: current == Some(id),
         focused: store.focus().ids().contains(&id).then_some(true),
         collapsed: (!workspace.is_expanded).then_some(true),
+        tint: None,
+        tint_on: None,
         sessions: workspace
             .sessions
             .iter()

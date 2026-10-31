@@ -131,8 +131,17 @@ group_commands!(
         Status = "session.status",
         Flag = "session.flag",
         Context = "session.context",
+        Tint = "session.tint",
         Seen = "session.seen",
         Restore = "session.restore",
+        Collapse = "session.collapse",
+        CompanionNew = "session.companion.new",
+        CompanionPage = "session.companion.page",
+        CompanionDuplicate = "session.companion.duplicate",
+        // a viewer asking for one attachment of a page companion: a single-use token for `session.overlay.page.serve`
+        // plus what the page shows
+        CompanionPageAttach = "session.companion.page.attach",
+        Expand = "session.expand",
         Restart = "session.restart",
         Background = "session.background",
         Split = "session.split",
@@ -221,6 +230,7 @@ group_commands!(
         Collapse = "workspace.collapse",
         Expand = "workspace.expand",
         Flag = "workspace.flag",
+        Tint = "workspace.tint",
     }
 );
 
@@ -443,6 +453,11 @@ mod tests {
             "sidebar.flagged-layout".parse(),
             Ok(Command::Sidebar(SidebarCmd::FlaggedLayout))
         );
+        assert_eq!(
+            "session.companion.page.attach".parse(),
+            Ok(Command::Session(SessionCmd::CompanionPageAttach))
+        );
+        assert_eq!("workspace.tint".parse(), Ok(Command::Workspace(WorkspaceCmd::Tint)));
     }
 
     #[test]
@@ -472,7 +487,7 @@ mod tests {
     #[test]
     fn every_command_round_trips_through_its_wire_name() {
         let all = Command::all();
-        assert_eq!(all.len(), 118);
+        assert_eq!(all.len(), 126);
         for command in all {
             assert_eq!(command.wire_name().parse(), Ok(command));
             assert_eq!(

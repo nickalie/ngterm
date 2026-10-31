@@ -1040,6 +1040,28 @@ mod tests {
         }
     }
 
+    /// The v0.39 commands decode and are refused by name until their command groups are ported.
+    #[test]
+    fn the_v0_39_commands_are_refused_as_not_supported() {
+        for cmd in [
+            Command::Session(SessionCmd::Tint),
+            Command::Session(SessionCmd::Collapse),
+            Command::Session(SessionCmd::Expand),
+            Command::Session(SessionCmd::CompanionNew),
+            Command::Session(SessionCmd::CompanionPage),
+            Command::Session(SessionCmd::CompanionDuplicate),
+            Command::Session(SessionCmd::CompanionPageAttach),
+            Command::Workspace(WorkspaceCmd::Tint),
+        ] {
+            let line = format!(r#"{{"cmd":"{cmd}","target":"active"}}"#);
+            assert_eq!(
+                core().dispatch_line(line.as_bytes()),
+                Response::failure(format!("{cmd} is not supported by this host")),
+                "{cmd}"
+            );
+        }
+    }
+
     /// The cases of `test_undecodable_request_is_refused` (`conformance/tests/protocol/test_addressing.py`), with the
     /// full text the suite leaves open.
     #[test]

@@ -70,6 +70,7 @@ impl Overlay {
             OverlayCommand::Text(command) => command,
             OverlayCommand::RunJob(command) => command,
             OverlayCommand::PageServe(command) => command,
+            OverlayCommand::PageAttach(command) => command,
         }
     }
 }
@@ -92,6 +93,7 @@ enum OverlayCommand {
     Text(Text),
     RunJob(crate::overlay_job::RunJob),
     PageServe(PageServe),
+    PageAttach(PageAttach),
 }
 
 /// The exit status of a program status: its low byte, as the OS keeps of an `exit(code)`.
@@ -163,6 +165,13 @@ pub struct Open {
 
     #[arg(long, help = BLOCK_HELP)]
     block: bool,
+
+    #[arg(
+        long,
+        help = "Open the --html/--url page as a page companion under the target session: a sidebar row of its own, \
+                full size, that closes with its page. Refuses --pane, --size-percent, --width and --height."
+    )]
+    companion: bool,
 
     #[arg(
         long,
@@ -346,8 +355,9 @@ impl RequestCommand for Open {
         Ok(())
     }
 
-    /// The open request; `--block` changes the run, not the request. A page's file and `--cwd` are made absolute
-    /// against the caller's directory, since the app never learns it; a program's `--cwd` goes as typed.
+    /// The open request; `--block` changes the run, not the request, and `--companion` sends the same arguments as
+    /// `session.companion.page`. A page's file and `--cwd` are made absolute against the caller's directory, since the
+    /// app never learns it; a program's `--cwd` goes as typed.
     fn make_request(&self) -> Request {
         let page = self.html.is_some();
         let args = Args {
@@ -373,12 +383,12 @@ impl RequestCommand for Open {
             browse: flag(self.browse),
             ..Args::default()
         };
-        session_request(
-            SessionCmd::OverlayOpen,
-            Some(self.target.target.clone()),
-            Some(args),
-            &self.options,
-        )
+        let cmd = if self.companion {
+            SessionCmd::CompanionPage
+        } else {
+            SessionCmd::OverlayOpen
+        };
+        session_request(cmd, Some(self.target.target.clone()), Some(args), &self.options)
     }
 
     fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
@@ -636,6 +646,39 @@ impl RequestCommand for PageServe {
         }
         bridge.pump();
         Ok(())
+    }
+}
+
+/// `ngtermctl session overlay page-attach`: one attachment of a page companion for another Mac
+/// (`agtermctlKit/OverlayPageAttach.swift`).
+#[derive(Debug, clap::Args)]
+#[command(
+    name = "page-attach",
+    about = "Hand out one attachment of a page companion to another Mac.",
+    long_about = "Run on this Mac by the ngterm on another Mac, over ssh, when it shows one of this app's page \
+                  companions: the reply carries the page and a single-use token its `page-serve` claims. It is not \
+                  meant to be run by hand."
+)]
+pub struct PageAttach {
+    #[command(flatten)]
+    target: TargetOptions,
+
+    #[command(flatten)]
+    options: ClientOptions,
+}
+
+impl RequestCommand for PageAttach {
+    fn options(&self) -> &BasicOptions {
+        &self.options.basic
+    }
+
+    fn make_request(&self) -> Request {
+        session_request(
+            SessionCmd::CompanionPageAttach,
+            Some(self.target.target.clone()),
+            None,
+            &self.options,
+        )
     }
 }
 

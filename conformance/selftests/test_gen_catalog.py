@@ -150,6 +150,122 @@ def test_a_composite_keeps_its_uses_through_a_merge() -> None:
     assert "\n  session wait: {status: covered, uses: [events.read, tree], note: kept}\n" in gc.dump(catalog)
 
 
+def _card_html(*cards: tuple[str, str]) -> str:
+    """commands.html cards, each a (synopsis, wire line) pair."""
+    synopsis = '<div style="font-size: 13.5px; color: #6d82f3">{}</div>'
+    wire = '<div style="font-size: 11.5px; color: #6b727a">{}</div>'
+    return "".join(f"<div>{synopsis.format(s)}{wire.format(w)}</div>" for s, w in cards)
+
+
+def _cli(*cards: tuple[str, str]) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    commands = {"session.new", "session.companion.new", "session.overlay.open", "session.companion.page", "tree"}
+    found: list[str] = []
+    return gc.cli_subcommands(Path("site/commands.html"), _card_html(*cards), commands, found), found
+
+
+def test_a_flag_that_sends_another_command_is_a_variant() -> None:
+    cli, found = _cli(
+        ("agtermctl session new [--cwd DIR] [--after SID | --before SID] [--no-select]", "session.new"),
+        ("agtermctl session new --parent SID [--cwd DIR [--wait]] [--no-select]", "session.companion.new"),
+        ("agtermctl session overlay open &lt;command&gt; [--cwd DIR] [--pane left|right]", "session.overlay.open"),
+        ("agtermctl session overlay open --html FILE [--js]", "session.overlay.open"),
+        ("agtermctl session overlay open --url URL [--persistent]", "session.overlay.open"),
+        ("agtermctl session overlay open --html FILE|--url URL --companion [page flags]", "session.companion.page"),
+    )
+    assert found == []
+    assert cli == {
+        "session new": {"wire": "session.new", "variants": {"--parent": "session.companion.new"}},
+        "session overlay open": {"wire": "session.overlay.open", "variants": {"--companion": "session.companion.page"}},
+    }
+
+
+def test_a_variant_card_before_the_default_keeps_the_key_order() -> None:
+    cli, found = _cli(
+        ("agtermctl tree", "tree"),
+        ("agtermctl session new --parent SID", "session.companion.new"),
+        ("agtermctl session new [--cwd DIR]", "session.new"),
+    )
+    assert found == []
+    assert list(cli) == ["tree", "session new"]
+    assert cli["session new"] == {"wire": "session.new", "variants": {"--parent": "session.companion.new"}}
+
+
+@pytest.mark.parametrize(
+    ("cards", "expected"),
+    [
+        (  # the variant's only required flag is one the default names too
+            [
+                ("agtermctl session new [--parent SID]", "session.new"),
+                ("agtermctl session new --parent SID", "session.companion.new"),
+            ],
+            "`session new` sends session.companion.new under no flag of its own, not one",
+        ),
+        (  # an optional flag cannot tell them apart
+            [
+                ("agtermctl session new", "session.new"),
+                ("agtermctl session new [--parent SID]", "session.companion.new"),
+            ],
+            "`session new` sends session.companion.new under no flag of its own, not one",
+        ),
+        (  # two required flags of its own: which one selects it is unknowable
+            [
+                ("agtermctl session new", "session.new"),
+                ("agtermctl session new --parent SID --x", "session.companion.new"),
+            ],
+            "`session new` sends session.companion.new under flags --parent, --x of its own, not one",
+        ),
+        (  # no card sends the command named like the key
+            [
+                ("agtermctl session new --a", "session.overlay.open"),
+                ("agtermctl session new --b", "session.companion.new"),
+            ],
+            "`session new` maps to both {'wire': 'session.overlay.open'} and {'wire': 'session.companion.new'}",
+        ),
+        (  # two variants under one flag
+            [
+                ("agtermctl session new", "session.new"),
+                ("agtermctl session new --parent SID", "session.companion.new"),
+                ("agtermctl session new --parent SID", "session.overlay.open"),
+            ],
+            "`session new` --parent sends both session.companion.new and session.overlay.open",
+        ),
+        (  # a composite never takes a variant
+            [("agtermctl session new", "session.new"), ("agtermctl session new --parent SID", "CLI only: tree")],
+            "`session new` maps to both {'wire': 'session.new'} and {'uses': ['tree']}",
+        ),
+    ],
+)
+def test_an_ambiguous_variant_is_reported(cards: list[tuple[str, str]], expected: str) -> None:
+    cli, found = _cli(*cards)
+    assert "session new" not in cli
+    assert any(expected in p for p in found), found
+
+
+def test_variants_are_regenerated_through_a_merge() -> None:
+    old = {"cli": {"session new": {"status": "covered", "wire": "session.new", "variants": {"--old": "x"}, "n": 1}}}
+    entry = {"wire": "session.new", "variants": {"--parent": "session.companion.new"}}
+    catalog, _ = gc.merge(old, generated(cli={"session new": entry}), "v0.39.1")
+    assert catalog["cli"]["session new"] == {"status": "covered", **entry, "n": 1}
+    line = "  session new: {status: covered, wire: session.new, variants: {--parent: session.companion.new}, n: 1}\n"
+    assert line in gc.dump(catalog)
+    assert yaml.safe_load(gc.dump(catalog))["cli"]["session new"] == catalog["cli"]["session new"]
+
+
+def test_the_generator_reads_and_writes_utf8_whatever_the_locale(mini: Path, tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog.yaml"
+    env = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C", "PYTHONUTF8": "0", "PYTHONIOENCODING": "latin-1"}
+    run = subprocess.run(
+        [sys.executable, "-X", "utf8=0", str(TOOLS / "gen_catalog.py"), "--source", str(mini), "--tag", "v0.1.0"]
+        + ["--catalog", str(catalog)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr
+    assert "font inc: {status: uncovered, wire: font.inc}" in catalog.read_text(encoding="utf-8")
+
+
 def test_comments_and_strings_do_not_shift_nesting() -> None:
     src = 'let a = "/* {" // } trailing\n/* { */ let b = 1'
     text = gc.strip_comments(src)
@@ -436,9 +552,14 @@ def test_reads_the_tag_with_git_archive_without_touching_the_checkout(
 
 def test_the_committed_catalog_parses_and_names_its_tag() -> None:
     data = yaml.safe_load((TOOLS.parent / "catalog.yaml").read_text())
-    assert data["upstream"] == "v0.38.1"
-    assert len(data["commands"]) == 118
+    assert data["upstream"] == "v0.39.1"
+    assert len(data["commands"]) == 126
     assert data["cli"]["session wait"] == {"status": "uncovered", "uses": ["events.read", "window.list", "tree"]}
+    assert data["cli"]["session new"] == {
+        "status": "uncovered",
+        "wire": "session.new",
+        "variants": {"--parent": "session.companion.new"},
+    }
     assert data["commands"]["session.overlay.page.serve"]["mode"] == "page-serve-stream"
     assert set(gc.GENERATED_SECTIONS) | {"upstream", "behaviors", "exemptions"} == set(data)
 
@@ -684,9 +805,9 @@ def test_ui_ids_path_can_be_given(mini: Path, tmp_path: Path) -> None:
 
 def test_the_committed_ui_ids_parse_and_name_their_tag() -> None:
     data = yaml.safe_load((TOOLS.parent / "ui-ids.yaml").read_text())
-    assert data["upstream"] == "v0.38.1"
-    assert len(data["ids"]) == 105
+    assert data["upstream"] == "v0.39.1"
+    assert len(data["ids"]) == 112
     assert len(data["manual"]) == 15
-    assert data["ids"]["ask-choice-{id}"]["at"] == ["agterm/Views/AskFormViews.swift:406"]
+    assert data["ids"]["ask-choice-{id}"]["at"] == ["agterm/Views/AskFormViews.swift:435"]
     assert all(entry["site"].startswith("agterm/") for entry in data["manual"].values())
     assert not set(data["ids"]) & set(data["manual"])
