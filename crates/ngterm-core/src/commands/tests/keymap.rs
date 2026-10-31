@@ -396,9 +396,7 @@ fn a_session_directory_that_is_not_a_directory_here_runs_the_command_in_home() {
 #[test]
 fn a_launch_failure_opens_the_failure_panel_only_when_opted_in() {
     let mut host = Host::new(0);
-    let helper = host.dir.path().join("hud.sh");
-    std::fs::write(&helper, "#!/bin/sh\n").unwrap();
-    host.fixture.core.set_hud_helper(helper, host.dir.path().join("bodies"));
+    host.fixture.core.set_hud_body_dir(host.dir.path().join("bodies"));
     host.write(
         "keymap.conf",
         "command \"quiet\" true\n\

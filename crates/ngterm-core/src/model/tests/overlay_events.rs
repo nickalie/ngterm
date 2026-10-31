@@ -67,7 +67,6 @@ fn install(store: &mut AppStore, id: Uuid, pane: StatusPane) {
 
 fn hud_opening(dir: &tempfile::TempDir) -> HudOpening {
     HudOpening {
-        command: "hud.sh".to_owned(),
         file: dir.path().join("hud"),
         size: size(),
         pane_identity: None,

@@ -215,7 +215,6 @@ fn a_hud_measures_its_own_height() {
     let id = fixture.sessions[0];
     let dir = tempfile::tempdir().unwrap();
     let opening = crate::model::HudOpening {
-        command: "hud.sh".to_owned(),
         file: dir.path().join("hud"),
         size: crate::hud::HudPanelSize::new(35, 12),
         pane_identity: None,

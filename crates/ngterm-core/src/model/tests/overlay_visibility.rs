@@ -80,7 +80,6 @@ fn tree_changes(store: &mut AppStore) -> usize {
 /// A HUD in the session-wide slot.
 fn open_hud(store: &mut AppStore, id: Uuid, dir: &tempfile::TempDir) {
     let opening = HudOpening {
-        command: "hud.sh".to_owned(),
         file: dir.path().join("hud"),
         size: HudPanelSize::new(40, 10),
         pane_identity: None,

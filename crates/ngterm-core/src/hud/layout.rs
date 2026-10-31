@@ -1,6 +1,6 @@
 //! The panel's sizing math and the body file the painter reads (upstream's `HudLayout`, `PaneMetrics`,
 //! `HudPaneFrame(s)` and `HudPanelSize`): message to a cell box, cell box to the pane percentages the overlay slot
-//! understands, and the exact bytes `hud.sh` reads.
+//! understands, and the exact bytes the painter ([`super::painter`], upstream's `hud.sh`) reads.
 
 use unicode_normalization::UnicodeNormalization;
 
@@ -12,8 +12,9 @@ use crate::model::is_valid_color_hex;
 pub const MAX_COLUMNS: usize = 60;
 pub const MAX_SIZE_PERCENT: i64 = 80;
 pub const MIN_SIZE_PERCENT: i64 = 10;
-/// The only HUD-specific variable in the painter's environment: the path to the body file. Everything an update may
-/// change rides in that file's header instead (see [`rendered_body`]).
+/// The variable upstream's painter script found the body file in (an overlay terminal's environment still carries it
+/// for a HUD's slot, upstream's `localEnvironment`); the in-process painter is handed the path. Everything an update
+/// may change rides in that file's header (see [`rendered_body`]).
 pub const FILE_ENV_KEY: &str = "NGTERM_HUD_FILE";
 /// Frame padding in cells, on both sides of the content.
 pub const HORIZONTAL_PADDING: usize = 2;

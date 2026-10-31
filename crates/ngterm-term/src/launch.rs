@@ -516,6 +516,9 @@ pub struct Launch {
     /// A live pane's attach to its session, run in process in place of `command`, its shell line (which the exit
     /// report then names).
     pub live: Option<LiveAttach>,
+    /// A HUD's body file, painted in process ([`crate::painted`]) in place of any program: the panel runs no shell on
+    /// any OS. Wins over `live` and `command`.
+    pub painter: Option<PathBuf>,
 }
 
 impl Launch {
@@ -538,6 +541,7 @@ impl Launch {
             env: merged,
             env_remove: Vec::new(),
             live: seed.attach.clone(),
+            painter: None,
         }
     }
 }
@@ -586,7 +590,7 @@ impl Pane {
     /// Start `launch` under `host` on a new PTY of `config`'s size, with the exit handling of a launched pane; the
     /// launch's input is queued for the program at once. A live launch attaches to its session in process instead
     /// (module docs); an attach that fails ends the pane with the CLI's status, reported through
-    /// [`crate::PaneEvent::Exited`].
+    /// [`crate::PaneEvent::Exited`]. A painter launch paints its HUD body in process ([`crate::painted`]).
     ///
     /// # Errors
     ///
@@ -601,13 +605,14 @@ impl Pane {
             write_limit: config.write_limit.max(input.len()),
             ..config.clone()
         };
-        let pane = match &launch.live {
-            Some(attach) => {
+        let pane = match (&launch.painter, &launch.live) {
+            (Some(file), _) => Self::paint(file.clone(), &config)?,
+            (None, Some(attach)) => {
                 let (env, current_dir) = crate::session_io::app_environment();
                 let session = crate::session_io::resolve(attach, &prepared.command, env, current_dir);
                 Self::attach_live(session, &config)?
             }
-            None => Self::spawn(&prepared.command, &config)?,
+            (None, None) => Self::spawn(&prepared.command, &config)?,
         };
         if !input.is_empty() {
             pane.write(&input)?;
@@ -1184,6 +1189,7 @@ mod tests {
             env_remove: vec!["NGTERM_LIVE_DIR".to_owned(), "GHOSTTY_SHELL_FEATURES".to_owned()],
             working_directory: Some(PathBuf::from("/nonexistent/dir")),
             live: None,
+            painter: None,
         };
         let prepared = host(None).prepare(&launch, &MapEnv::new());
         // `/bin/sh -c <line>`; on Windows (no `ComSpec` here) `cmd.exe /D /S /C "<line>"`

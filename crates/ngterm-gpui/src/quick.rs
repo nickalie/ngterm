@@ -420,6 +420,7 @@ pub fn launch(cwd: String, context: &PaneContext) -> ngterm_term::Launch {
             .collect(),
         env_remove: Vec::new(),
         live: None,
+        painter: None,
     }
 }
 

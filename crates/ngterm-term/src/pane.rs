@@ -3,7 +3,8 @@
 //! polling thread on Unix, a reader and a writer on Windows), the IO worker (feeds the mailbox's output to the VT,
 //! stopping at clipboard reads for their answers), and the waiter (reports the child's exit). A live pane has no PTY
 //! and no child: its session's attach stream, read and written by threads of [`crate::session_io`], takes the
-//! actor's and the waiter's places, and the same IO worker feeds its output to the VT.
+//! actor's and the waiter's places, and the same IO worker feeds its output to the VT. A HUD's painted pane has neither
+//! either: the painter's thread ([`crate::painted`]) takes their places.
 //!
 //! Locks (Technical Details > Threads): `vt` → `capture` → leaves (`armed`, `published`, `divert`), and `vt` →
 //! `search`, never the reverse. The IO thread holds `vt` for one bounded slice of `vt_write` at a time; input
@@ -19,6 +20,7 @@
 //! While the worker waits on a clipboard answer, the program's output waits in the mailbox until the mailbox's high
 //! mark pauses the actor's reads ([`crate::mailbox`]); the actor keeps writing the program's input.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
@@ -36,6 +38,7 @@ use crate::effects::{
 use crate::exit::{ExitPolicy, Layout};
 use crate::input::InputState;
 use crate::mailbox::{Answer, Mail, Mailbox};
+use crate::painted::Painted;
 use crate::pty::{GridSize, PaneCommand, ReplyOutlet, Tty};
 use crate::render::{Capture, CursorDefaults, Frame, MouseShape, ThemeColors};
 use crate::search::SearchSlot;
@@ -321,6 +324,8 @@ enum Io {
     },
     /// A live pane's attach to its session.
     Live(Arc<Live>),
+    /// A HUD's painter.
+    Painted(Arc<Painted>),
 }
 
 impl std::fmt::Debug for Pane {
@@ -424,11 +429,51 @@ impl Pane {
         })
     }
 
+    /// A pane of `config.size` painting the HUD body `file` in process ([`crate::painted`]): no PTY and no child; the
+    /// painter runs on the pane's thread, so this returns at once.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneError::Pty`] when a thread of the pane cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
+    /// the size or cannot allocate.
+    pub(crate) fn paint(file: PathBuf, config: &PaneConfig) -> Result<Self, PaneError> {
+        let (events_tx, events) = mpsc::channel();
+        let mailbox = Arc::new(Mailbox::new(ReadPause::new()));
+        let shared = Arc::new(shared(config, events_tx, mailbox)?);
+        // nothing reads the terminal's replies
+        shared.replies.close();
+        let painted = Arc::new(Painted::new(file));
+        let worker = Worker {
+            shared: Arc::clone(&shared),
+            reads: Reads::Painted,
+            scanner: Scanner::default(),
+            next_read: 0,
+            child_exited: false,
+        };
+        let worker = spawn_thread("pane-io", move || worker.run())?;
+        let paint_thread = {
+            let (painted, shared) = (Arc::clone(&painted), Arc::clone(&shared));
+            spawn_thread("pane-paint", move || painted.run(&shared))
+        };
+        if let Err(err) = paint_thread {
+            shared.mailbox.shutdown();
+            let _ = worker.join();
+            return Err(err);
+        }
+        Ok(Self {
+            shared,
+            io: Io::Painted(painted),
+            events: Mutex::new(events),
+            pid: None,
+            worker: Some(worker),
+        })
+    }
+
     pub(crate) fn shared(&self) -> &Arc<Shared> {
         &self.shared
     }
 
-    /// The child's process id; `None` for a live pane, whose program runs under the session server.
+    /// The child's process id; `None` for a live pane, whose program runs under the session server, and a painted one.
     #[must_use]
     pub fn pid(&self) -> Option<u32> {
         self.pid
@@ -441,7 +486,7 @@ impl Pane {
     pub fn foreground_pid(&self) -> Option<u32> {
         match &self.io {
             Io::Pty { tty, .. } => tty.foreground_pid(),
-            Io::Live(_) => None,
+            Io::Live(_) | Io::Painted(_) => None,
         }
     }
 
@@ -454,7 +499,7 @@ impl Pane {
     pub fn password_input(&self) -> bool {
         match &self.io {
             Io::Pty { tty, .. } => tty.password_input(),
-            Io::Live(_) => false,
+            Io::Live(_) | Io::Painted(_) => false,
         }
     }
 
@@ -468,6 +513,7 @@ impl Pane {
         match &self.io {
             Io::Pty { actor, .. } => actor.write_input(bytes).map_err(PaneError::from),
             Io::Live(live) => live.input(bytes),
+            Io::Painted(_) => Ok(()),
         }
     }
 
@@ -491,6 +537,7 @@ impl Pane {
                 live.resize(size);
                 self.update_metadata();
             }
+            Io::Painted(painted) => painted.resized(),
         }
         self.shared.wake();
         Ok(())
@@ -604,7 +651,7 @@ impl Pane {
     /// Answer the clipboard read `id` ([`PaneEvent::ClipboardRead`]); an answer for any other id is ignored.
     pub fn answer_clipboard_read(&self, id: u64, answer: ClipboardAnswer) {
         match &self.io {
-            Io::Pty { .. } => self.shared.mailbox.answer(id, answer),
+            Io::Pty { .. } | Io::Painted(_) => self.shared.mailbox.answer(id, answer),
             Io::Live(live) => live.answer(id, answer),
         }
     }
@@ -615,6 +662,7 @@ impl Pane {
         match &self.io {
             Io::Pty { actor, .. } => actor.queued(),
             Io::Live(live) => live.queued(),
+            Io::Painted(_) => 0,
         }
     }
 
@@ -645,6 +693,7 @@ impl Drop for Pane {
                 actor.shutdown();
             }
             Io::Live(live) => live.leave(),
+            Io::Painted(painted) => painted.stop(),
         }
         self.shared.replies.close();
         if let Some(worker) = self.worker.take() {
@@ -995,10 +1044,12 @@ fn dispatch(shared: &Shared, byte: u8, read: ReadCandidate, answer: ClipboardAns
     shared.counters.bytes.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Whose reads the mailbox pauses and resumes: the PTY's actor, or a live pane's reader.
+/// Whose reads the mailbox pauses and resumes: the PTY's actor, or a live pane's reader; a painter's few bytes a tick
+/// need no pause.
 enum Reads {
     Actor(ActorHandle),
     Live(Arc<Live>),
+    Painted,
 }
 
 impl Reads {
@@ -1006,6 +1057,7 @@ impl Reads {
         match self {
             Self::Actor(actor) => actor.wake_reader(),
             Self::Live(live) => live.wake_reader(),
+            Self::Painted => {}
         }
     }
 }

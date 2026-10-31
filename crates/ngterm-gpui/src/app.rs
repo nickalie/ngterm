@@ -303,9 +303,7 @@ fn launch_core(identity: AppIdentity, resources: Option<&Path>, poster: &Poster,
     core.set_translucent_host(true);
     core.write_settings_config();
     install_launch_hosts(&mut core, poster, socket);
-    if let Some(helper) = crate::hud::install_helper(&paths::state_dir(&ProcessEnv)) {
-        core.set_hud_helper(helper, paths::hud_body_dir(&ProcessEnv));
-    }
+    core.set_hud_body_dir(paths::hud_body_dir(&ProcessEnv));
     core.set_cell_estimator(crate::hud::cell_estimator(Arc::clone(cx.text_system())));
     core
 }

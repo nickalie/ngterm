@@ -45,7 +45,6 @@ mkdir -p "$patches"
 MAPPINGS=(
   "agterm/Resources/agent-status|.|resources/agent-status"
   "plugins/agterm/skills/agterm|.|resources/skills/ngterm"
-  "agterm/Resources/hud|.|crates/ngterm-gpui/resources/hud"
   "agterm/Resources|ghostty-defaults.conf|crates/ngterm-core/src/ghostty_config"
   ".|LICENSE|resources/LICENSE.upstream"
 )

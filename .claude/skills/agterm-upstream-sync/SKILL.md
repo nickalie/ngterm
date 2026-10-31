@@ -155,7 +155,7 @@ because every plan task's subagent starts from this branch and must be able to r
    the session server's source, not upstream, and moving `HERDR_REV` is a change of its own that ports into
    `ngterm-session`.
 3. **Vendored copies**: `bash SKILL_DIR/scripts/sync-resources.sh [--upstream DIR] --patches WORK/patches CURRENT TARGET`.
-   It applies upstream's own diff to each copy (`hud.sh`, `ghostty-defaults.conf`, `LICENSE.upstream`) only where it
+   It applies upstream's own diff to each copy (`ghostty-defaults.conf`, `LICENSE.upstream`) only where it
    applies cleanly, so the Linux glue in the copies survives; the agent-status package (`resources/agent-status`) and
    the agent skill (`resources/skills/ngterm`) are rebuilt as the new upstream tree plus their recorded patches
    (`build/patches/agent-status/`: the Linux glue, then this build's `ngterm-*` files and `NGTERM_*` variables;

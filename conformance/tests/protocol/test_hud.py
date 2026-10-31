@@ -197,7 +197,8 @@ def test_update_sets_and_drops_sticky_and_frame(ctl):
 @pytest.mark.covers("session.hud.open", "session.hud.update", "field:tree.session.hud")
 def test_hud_hides_itself_after_its_interval(ctl):
     sid = _new(ctl)
-    assert _open(ctl, sid, "brief", hideAfter=2)["hideAfter"] == 2
+    # no read-back here: the panel may already be down by then (test_hud_reads_back_every_option reads hideAfter)
+    assert assert_ok(ctl.request("session.hud.open", sid, message="brief", hideAfter=2))["id"] == sid
     ctl.wait_tree(lambda tree: "hud" not in find_session(tree, sid), timeout=15)
     assert_error(ctl.request("session.hud.close", sid), "no hud")
 
