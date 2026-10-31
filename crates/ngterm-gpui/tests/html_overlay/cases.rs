@@ -366,8 +366,20 @@ fn moved(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     })
 }
 
-/// A canvas animation at 1080p keeps its frame rate on dmabufs (the path video takes) and never falls back to SHM;
-/// on lavapipe it keeps running in SHM at a small size.
+/// Presents an animation's pace is measured over: a count, not a period, so a loaded host lengthens the measure
+/// instead of thinning it.
+const PRESENTS: u64 = 40;
+/// The engine's display refresh (WPE's default screen): `requestAnimationFrame` never runs faster.
+const REFRESH_HZ: f64 = 60.;
+
+/// A canvas animation at 1080p stays on dmabufs (the path video takes), never falls back to SHM, and keeps pace with
+/// the presenter: every frame is answered, and the engine draws the next one within the present that follows, so
+/// all but a few presents (each a 1080p read-back here, the headless counterpart of a window's present) show a new
+/// frame. On lavapipe it keeps running in SHM at a small size.
+///
+/// The pace is the frames over the presents of the same run, capped by the refresh, never an absolute rate: the
+/// presents themselves (a debug build's read-back on the test's own thread) are what a loaded host slows, by 20 ms to
+/// 300 ms each here, and with them every frame the engine may draw.
 fn animation(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     let dmabuf = dmabuf_mode();
     let (width, height) = if dmabuf { (1920., 1080.) } else { (480., 270.) };
@@ -386,27 +398,36 @@ fn animation(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     })?;
     let before = fixture.stats(&element);
     let started = Instant::now();
-    let period = Duration::from_secs(2);
-    // every frame rendered and read back: the headless renderer submits (and so completes frames) only for a read-back,
-    // the headless counterpart of a window's present; at 1080p the read-back itself costs a good part of each frame
-    while started.elapsed() < period {
+    // every present read back: the headless renderer submits (and so completes frames) only for a read-back
+    for _ in 0..PRESENTS {
         fixture.frame()?;
-        std::thread::sleep(Duration::from_millis(1));
     }
+    let elapsed = started.elapsed().as_secs_f64();
     let after = fixture.stats(&element);
     let frames = (after.dmabuf + after.shm) - (before.dmabuf + before.shm);
-    #[expect(clippy::cast_precision_loss, reason = "a frame count")]
-    let fps = frames as f64 / started.elapsed().as_secs_f64();
-    println!("    {width}x{height}: {fps:.1} frames/s, {after:?}");
+    #[expect(clippy::cast_precision_loss, reason = "frame and present counts")]
+    let (pace, fps) = {
+        let possible = (PRESENTS as f64).min((elapsed * REFRESH_HZ).ceil());
+        (frames as f64 / possible, frames as f64 / elapsed)
+    };
+    println!(
+        "    {width}x{height}: {frames} frames in {PRESENTS} presents ({pace:.2} of possible), {fps:.1} frames/s, {after:?}"
+    );
+    check((after.dmabuf + after.shm).saturating_sub(after.answered) <= 1, || {
+        format!("frames handed over were never answered: {after:?}")
+    })?;
     if dmabuf {
         check(!after.fell_back && after.shm == 0, || {
             format!("SHM was chosen while dmabufs import: {after:?}")
         })?;
-        // ~40 here (Intel UHD, a debug build, a 1080p read-back per frame); SHM manages 2.5 at 1080p (Task 2)
-        check(fps >= 24.0, || format!("{fps:.1} frames/s at 1080p on dmabufs"))
+        // 0.93 to 1.0 here at load averages of 19 to 70 (Intel, a debug build); SHM manages 2.5 frames/s at 1080p
+        check(pace >= 0.75, || {
+            format!("{frames} frames in {PRESENTS} presents over {elapsed:.1} s at 1080p on dmabufs")
+        })
     } else {
-        check(after.dmabuf == 0 && fps >= 2.0, || {
-            format!("{fps:.1} frames/s in SHM, {after:?}")
+        // 0.2 to 0.7 here: lavapipe draws both sides on the CPU, and the engine copies each frame out
+        check(after.dmabuf == 0 && pace >= 0.125, || {
+            format!("{frames} frames in {PRESENTS} presents over {elapsed:.1} s in SHM, {after:?}")
         })
     }
 }
