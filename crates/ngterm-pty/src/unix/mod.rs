@@ -454,12 +454,11 @@ mod tests {
                 rlim_cur: 0,
                 rlim_max: 0,
             };
-            // SAFETY: reads and sets this child process's descriptor limit through a valid `rlimit`.
-            unsafe {
-                assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit), 0);
-                let spent = libc::rlimit { rlim_cur: 0, ..limit };
-                assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &raw const spent), 0);
-            }
+            // SAFETY: reads this child process's descriptor limit into a valid `rlimit`.
+            assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) }, 0);
+            let spent = libc::rlimit { rlim_cur: 0, ..limit };
+            // SAFETY: sets this child process's descriptor limit from a valid `rlimit`.
+            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const spent) }, 0);
             let opened = native_pty_system().openpty(Size::cells(24, 80).pty());
             // SAFETY: as above, the limit read before.
             unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) };
