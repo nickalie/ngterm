@@ -246,10 +246,16 @@ guest has 4 CPUs and 6.5 GB of memory.
   130 as the overlay job reads it (`overlay_capture::status_of_exit_code`, shared with `ngtermctl`). Edit
   Keymap/Hooks on Windows opens `VISUAL`, else `EDITOR`, else Notepad waited for (`start "" /wait`), read from the
   app's environment (`keymap::windows_editor_command`). The overlay, surface, HUD, split and CLI conformance tests
-  build their programs in either dialect (`CommandLines.hold`, `pwd`) under `cmd-command-line`. Linux partial run
-  green (156 ids, ratchet holds).
-- ⚠️ (side task 30) left open at handback: the `windows` suite job's result on `ci/win-30`, the Windows ratchet
-  additions and the VM desktop check of an overlay program and its exit status
+  build their programs in either dialect (`CommandLines.hold`: `more` under `cmd`, which holds on the console's
+  input as `cat` does; `pwd`) under `cmd-command-line`. Linux partial run green (156 ids, ratchet holds); the windows
+  job ran all 36 of them green (`exit 7` reads back 7, the program runs in its cwd, its text reads back) and they
+  joined the Windows ratchet (749 ids). On the VM's desktop (the windows job's stage, a private state dir) an
+  overlay program covered the PowerShell pane with its output and working directory, and `ngtermctl session overlay
+  open --block 'echo … & exit 7'` exited 7, which `session overlay result` read back in the pane
+- ➕ (side task 30) the other `/bin/sh` lines left as they are: the live takeover's fallback creation argv
+  (`commands/live/lead.rs`, a line that fails anyway; its attach line is POSIX-quoted), the remote ssh lines (the
+  remote host is POSIX), and `cfg(unix)` or test-only code; `ngterm-gpui`'s `privileges` test fails on this dev box
+  with its system WPE WebKit at the base commit too (not this change)
 
 ### Task 5: Desktop integrations on Windows (depends on Task 4)
 
