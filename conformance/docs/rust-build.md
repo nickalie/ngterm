@@ -101,6 +101,7 @@ share is asserted directly, with no capability.
 | `posix-command-line` | yes | a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs through `/bin/sh -c`, so a test's POSIX line runs as written; Windows runs it through `cmd.exe` |
 | `cmd-command-line` |  | Rust-only, Windows: a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs as `cmd.exe`'s command text (`%ComSpec% /D /S /C`), so a test's `cmd` line runs as written where `posix-command-line` is not claimed |
 | `untitled-panes` | yes | a pane has no title until a program sets one; Windows' console host titles each pane with its program's path |
+| `windows-shells` |  | Rust-only, Windows: a pane runs PowerShell or `cmd.exe` as its shell (the config's `command`), and a rerun restore types a captured program's replay, and a pinned line, as that shell reads them |
 
 ## Rust target profile
 
@@ -114,6 +115,9 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `posix-command-line`, `untitled-panes`: on Linux and macOS, as upstream; not on Windows (below);
 - `cmd-command-line`: on Windows, where a command line (an overlay's program, a scratch pane's command, a hook, a
   custom command) is `cmd`'s (below);
+- `windows-shells`: on Windows, where a pane's shell may be PowerShell or `cmd.exe` and a rerun restore types its
+  replay quoted for that shell (`ngterm-core`'s `shell_dialect`; the harness picks the shell with
+  `launch(pane_shell=...)`), where upstream types a POSIX line into any shell;
 - `live-sessions`: by host, where the login shell is zsh or fish (upstream's two) and `ngterm-session` is staged;
 - `live-any-shell`: by host, live sessions for bash and PowerShell login shells too, the one Rust-only extension
   (below): claimed together with `live-sessions` for a zsh or fish login shell, alone for the others.

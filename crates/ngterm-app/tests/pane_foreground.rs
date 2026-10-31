@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use ngterm_app::process_table::ProcTable;
-use ngterm_core::command_restore::PaneForeground;
+use ngterm_core::command_restore::{PaneForeground, PaneInput};
 use ngterm_core::ghostty_config::GhosttyConfig;
 use ngterm_core::restore::capture::ForegroundReader;
 use ngterm_host::ProcessTable as _;
@@ -22,11 +22,11 @@ const SIZE: GridSize = GridSize {
     cell_height: 16,
 };
 
-/// A launch isolated from any ngterm the tests run under.
+/// A launch isolated from any ngterm the tests run under, `initial_input` a line typed into the login shell.
 fn launch(command: Option<&str>, initial_input: Option<&str>) -> Launch {
     Launch {
         command: command.map(str::to_owned),
-        initial_input: initial_input.map(str::to_owned),
+        initial_input: initial_input.map(|line| PaneInput::Line(line.to_owned())),
         env_remove: std::env::vars_os()
             .map(|(key, _)| key.to_string_lossy().into_owned())
             .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_"))
@@ -70,7 +70,7 @@ fn a_command_panes_program_is_read_past_its_wrapper() -> Result<(), Box<dyn std:
 
 #[test]
 fn a_job_typed_into_the_login_shell_is_its_foreground_command() -> Result<(), Box<dyn std::error::Error>> {
-    let pane = Pane::launch(&launch(None, Some("sleep 31\n")), &host(), &PaneConfig::new(SIZE))?;
+    let pane = Pane::launch(&launch(None, Some("sleep 31")), &host(), &PaneConfig::new(SIZE))?;
     let table = ProcTable::new();
     let reader = ForegroundReader::new(&table, None);
     let command = || {

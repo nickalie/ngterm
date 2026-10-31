@@ -188,7 +188,7 @@ fn a_seed_runs_over_the_panes_own_environment() {
     let spec = PaneSpec::primary(window, library.store(window).unwrap(), ids[0]).unwrap();
     let seed = LaunchSeed {
         command: Some("ngterm-session attach x".to_owned()),
-        initial_input: Some("ls\n".to_owned()),
+        initial_input: Some(ngterm_core::command_restore::PaneInput::Line("ls".to_owned())),
         wait_after_command: false,
         env: vec![
             ("NGTERM_LIVE_DIR".to_owned(), "/tmp/z".to_owned()),
@@ -199,7 +199,10 @@ fn a_seed_runs_over_the_panes_own_environment() {
     };
     let launch = spec.seeded(&seed, &context());
     assert_eq!(launch.command.as_deref(), Some("ngterm-session attach x"));
-    assert_eq!(launch.initial_input.as_deref(), Some("ls\n"));
+    assert_eq!(
+        launch.initial_input,
+        Some(ngterm_core::command_restore::PaneInput::Line("ls".to_owned()))
+    );
     let value = |key: &str| {
         launch
             .env

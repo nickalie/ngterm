@@ -195,6 +195,8 @@ CAPABILITIES: Mapping[str, str] = {
     "where `posix-command-line` is not claimed",
     "untitled-panes": "a pane has no title until a program sets one; Windows' console host titles each pane with its "
     "program's path",
+    "windows-shells": "Rust-only, Windows: a pane runs PowerShell or `cmd.exe` as its shell (the config's `command`), "
+    "and a rerun restore types a captured program's replay, and a pinned line, as that shell reads them",
 }
 
 
@@ -575,10 +577,13 @@ class Adapter:
     def first_run_env(self, env: dict[str, str]) -> None:
         """Hook for what a first-run launch needs beyond a state dir with no prior state."""
 
-    def ghostty_config(self) -> str:
+    def ghostty_config(self, pane_shell: str | None = None) -> str:
         """The agterm-scoped `<state>/config/ghostty.conf` the instance starts with: on Windows its `command` is the
-        POSIX `sh` there (`posix_shell`)."""
-        shell = f"command = {posix_shell()}\n" if WINDOWS else GHOSTTY_SHELL_CONFIG
+        POSIX `sh` there (`posix_shell`); `pane_shell`, a shell's full path, as the `command` instead."""
+        if pane_shell is not None:
+            shell = f"command = {pane_shell}\n"
+        else:
+            shell = f"command = {posix_shell()}\n" if WINDOWS else GHOSTTY_SHELL_CONFIG
         return shell + GHOSTTY_ISOLATION_CONFIG
 
     # -- launch
@@ -625,8 +630,10 @@ class Adapter:
         settings: Mapping[str, Any] | None = None,
         first_run: bool = False,
         private_install: bool = False,
+        pane_shell: str | None = None,
     ) -> Instance:
         """`settings` seeds `<state>/settings.json`, which every implementation reads at launch (`restoreMode`, ...).
+        `pane_shell` names the shell the panes run by its full path (`ghostty_config`), kept by relaunches.
 
         `first_run` leaves out the prior-state marker and asks for the welcome dialog an isolated launch suppresses.
         The dialog is modal and holds the socket unanswered, so such a launch returns without waiting for it: the
@@ -644,7 +651,8 @@ class Adapter:
             check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir, headless, self.env_prefix)
             app_id = env.get(self.variable("APP_ID"))
             state_dir = env[self.variable("STATE_DIR")]
-            _prepare_tree(root, Path(env["HOME"]), Path(state_dir), self.ghostty_config(), settings, first_run)
+            config = self.ghostty_config(pane_shell)
+            _prepare_tree(root, Path(env["HOME"]), Path(state_dir), config, settings, first_run)
             command = self.instance_executable(root, private_install)
             if self.needs_runtime_dir:
                 os.mkdir(env["XDG_RUNTIME_DIR"], 0o700)  # the XDG spec's mode

@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use crate::command_restore::{RestoreInputs, restore_plan, shell_quoted_line, should_restore};
+use crate::command_restore::{PaneInput, RestoreInputs, restore_plan, should_restore};
 use crate::live::support::{Configuration, LiveAttach, attach_line, live_attach, settled};
 use crate::model::{Session, StatusPane};
 
@@ -18,7 +18,8 @@ use crate::model::{Session, StatusPane};
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LaunchSeed {
     pub command: Option<String>,
-    pub initial_input: Option<String>,
+    /// Typed into the login shell, quoted for it where the frontend knows which shell it runs.
+    pub initial_input: Option<PaneInput>,
     pub wait_after_command: bool,
     /// Variables the terminal runs with on top of the pane's own environment: a wrapped pane's attach contract.
     pub env: Vec<(String, String)>,
@@ -45,12 +46,12 @@ pub struct LaunchSeedPolicy {
 }
 
 impl LaunchSeedPolicy {
-    /// The `initial_input` for a captured argv: its shell-quoted line and a newline, or `None` outside rerun mode or
-    /// when the argv may not be replayed (denylisted, a control character, an undecodable byte).
-    fn restore_initial_input(&self, argv: Option<&[String]>) -> Option<String> {
+    /// The `initial_input` for a captured argv: its replay, or `None` outside rerun mode or when the argv may not be
+    /// replayed (denylisted, a control character, an undecodable byte).
+    fn restore_initial_input(&self, argv: Option<&[String]>) -> Option<PaneInput> {
         let argv = argv.filter(|_| self.restore_enabled)?;
         let denylist: Vec<&str> = self.denylist.iter().map(String::as_str).collect();
-        should_restore(argv, &denylist).then(|| format!("{}\n", shell_quoted_line(argv)))
+        should_restore(argv, &denylist).then(|| PaneInput::Replay(argv.to_vec()))
     }
 }
 
@@ -184,7 +185,10 @@ mod tests {
         let rerun = policy(true, &[]);
         let seed = resolve_seed(&mut restored, StatusPane::Left, &rerun);
         assert_eq!(seed.command, None);
-        assert_eq!(seed.initial_input.as_deref(), Some("'sleep' '600'\n"));
+        assert_eq!(
+            seed.initial_input,
+            Some(PaneInput::Replay(vec!["sleep".to_owned(), "600".to_owned()]))
+        );
         assert_eq!(restored.restore.pending_foreground, None, "consumed once");
         assert_eq!(
             resolve_seed(&mut restored, StatusPane::Left, &rerun).command.as_deref(),
@@ -214,7 +218,10 @@ mod tests {
             LaunchSeed::default()
         );
         let seed = resolve_seed(&mut restored, StatusPane::Left, &policy(true, &[]));
-        assert_eq!(seed.initial_input.as_deref(), Some("cd x && claude --resume y\n"));
+        assert_eq!(
+            seed.initial_input,
+            Some(PaneInput::Line("cd x && claude --resume y".to_owned()))
+        );
         assert_eq!(seed.command, None);
     }
 

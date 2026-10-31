@@ -2,12 +2,37 @@
 `launch` fixture and relaunches it with `launch.relaunch`, which SIGTERMs the launched pid and starts the same binary
 on the same root."""
 
+import os
 import re
+import shutil
+import sys
 import uuid
 
 import pytest
 from agterm_conformance.match import assert_absent, assert_ok, find_session, program_argv, workspaces
 
+WINDOWS = sys.platform == "win32"
+WINDOWS_SHELLS = pytest.mark.requires(
+    "windows-shells", reason="Rust-only, Windows: panes run PowerShell or cmd.exe, which read a replay their own way"
+)
+# How long a pane's PowerShell may take to start on a loaded Windows: its first start in a fresh profile builds caches.
+SHELL_START = 60.0
+# A program that runs until it is ended, and arguments each shell reads specially: Python ignores what follows its
+# `-c` script, which keeps them in the argv the pane's foreground reports.
+PROGRAM_ARGUMENTS = (
+    "-c",
+    "import time; time.sleep(600)",
+    "a b",
+    "it's",
+    'say "hi"',
+    "",
+    "$HOME",
+    "semi;colon",
+    "x&y|z",
+    "100%",
+    "^caret",
+    "(paren)",
+)
 LIVE = pytest.mark.requires(
     "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
 )
@@ -132,6 +157,91 @@ def test_rerun_replays_the_captured_foreground_program(launch):
     ctl = launch.relaunch(ctl)
     ctl.wait_mounted(sid, "left")
     ctl.wait_tree(lambda tree: program_argv(find_session(tree, sid).get("foreground")) == ["sleep", "600"])
+
+
+def _windows_shell(name):
+    """The full path of the Windows shell `name` (`powershell` 5.1 and `cmd` from the system directory, `pwsh` 7 from
+    `PATH`), or None when this machine has none."""
+    system = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    path = {
+        "powershell": os.path.join(system, "WindowsPowerShell", "v1.0", "powershell.exe"),
+        "cmd": os.path.join(system, "cmd.exe"),
+    }.get(name) or shutil.which("pwsh")
+    return path if path and os.path.isfile(path) else None
+
+
+def _crt_quoted(argument, always=False):
+    """`argument` as one word of a command line the C runtime splits."""
+    if not always and argument and not re.search(r'[ \t"]', argument):
+        return argument
+    quoted, backslashes = '"', 0
+    for character in argument:
+        if character == "\\":
+            backslashes += 1
+            continue
+        quoted += "\\" * (backslashes * 2 + 1 if character == '"' else backslashes) + character
+        backslashes = 0
+    return quoted + "\\" * (backslashes * 2) + '"'
+
+
+def _program_line(shell, argv):
+    """The line that starts `argv` at `shell`'s prompt, as a user would type it: in PowerShell under the legacy argument
+    passing every version has, each word already quoted for the C runtime; in `cmd.exe` every word in quotes."""
+    if shell == "cmd":
+        return " ".join(_crt_quoted(word, always=True) for word in argv) + "\n"
+    words = " ".join("'" + _crt_quoted(word).replace("'", "''") + "'" for word in argv[1:])
+    return f"& {{ $PSNativeCommandArgumentPassing = 'Legacy' ; & '{argv[0]}' {words} }}\n"
+
+
+def _launch_in(launch, shell):
+    path = _windows_shell(shell)
+    if path is None:
+        pytest.skip(f"no {shell} on this machine")
+    return launch(settings={"restoreMode": "rerun"}, pane_shell=path)
+
+
+def _wait_prompt(ctl, sid, shell):
+    """Wait for `shell`'s first prompt: what is typed before PowerShell's line editor reads keys can be lost."""
+    prompt = r"(?m)^[A-Z]:\\[^\n]*>\s*\Z" if shell == "cmd" else r"(?m)^PS [^\n]*>\s*\Z"
+    ctl.wait_text(sid, prompt, timeout=SHELL_START)
+
+
+@WINDOWS_SHELLS
+@pytest.mark.covers("behavior:restore.rerun-replays-captured-command")
+@pytest.mark.parametrize("shell", ["powershell", "pwsh", "cmd"])
+def test_rerun_replays_the_captured_program_into_a_windows_shell(launch, shell):
+    ctl = _launch_in(launch, shell)
+    sid = _new(ctl)
+    _wait_prompt(ctl, sid, shell)
+    argv = [sys.executable, *PROGRAM_ARGUMENTS]
+    assert_ok(ctl.request("session.type", sid, text=_program_line(shell, argv)))
+
+    def running(tree):
+        foreground = program_argv(find_session(tree, sid).get("foreground"))
+        assert foreground and foreground[1:] == list(PROGRAM_ARGUMENTS), foreground
+        return foreground
+
+    captured = running(ctl.wait_tree(running, timeout=SHELL_START))
+    assert assert_ok(ctl.request("restore.capture"))["count"] >= 1
+    ctl = launch.relaunch(ctl)
+    ctl.wait_mounted(sid, "left")
+    # the replay is typed as the shell starts, quoted for it: the same argv runs again
+    ctl.wait_tree(lambda tree: program_argv(find_session(tree, sid).get("foreground")) == captured, timeout=SHELL_START)
+
+
+@WINDOWS_SHELLS
+@pytest.mark.covers("behavior:restore.rerun-types-pinned-command")
+@pytest.mark.parametrize("shell", ["powershell", "pwsh", "cmd"])
+def test_rerun_types_the_pinned_line_into_a_windows_shell(launch, shell):
+    ctl = _launch_in(launch, shell)
+    sid = _new(ctl)
+    marker = _marker()
+    # The pin prints the marker joined from two halves, so only its output matches.
+    line = f"echo {marker[:4]}^{marker[4:]}" if shell == "cmd" else f"Write-Output ('{marker[:4]}' + '{marker[4:]}')"
+    assert_ok(ctl.request("session.restore", sid, mode="set", command=line))
+    ctl = launch.relaunch(ctl)
+    ctl.wait_mounted(sid, "left")
+    ctl.wait_text(sid, rf"(?m)^{marker}\s*$", timeout=SHELL_START)
 
 
 @LIVE

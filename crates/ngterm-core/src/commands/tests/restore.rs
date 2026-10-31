@@ -273,7 +273,10 @@ fn a_rerun_relaunch_respawns_commands_and_replays_the_typed_job_once() {
         .map(|id| install(&mut core, id, None))
         .collect();
     let replay = LaunchSeed {
-        initial_input: Some("'sleep' '600'\n".to_owned()),
+        initial_input: Some(crate::command_restore::PaneInput::Replay(vec![
+            "sleep".to_owned(),
+            "600".to_owned(),
+        ])),
         ..LaunchSeed::default()
     };
     assert_eq!(
@@ -444,7 +447,10 @@ fn a_dormant_split_spawns_once_its_session_wakes_even_while_hidden() {
     assert_eq!(grants.len(), 1, "{grants:?}");
     assert_eq!((grants[0].session, grants[0].token.as_str()), (queued, token.as_str()));
     // the pin is typed, never exec'd
-    assert_eq!(grants[0].seed.initial_input.as_deref(), Some("htop\n"));
+    assert_eq!(
+        grants[0].seed.initial_input,
+        Some(crate::command_restore::PaneInput::Line("htop".to_owned()))
+    );
     // granted once
     split_mode(&mut core, queued, "on");
     core.wake_shown_sessions();

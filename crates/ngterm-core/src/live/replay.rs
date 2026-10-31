@@ -30,19 +30,17 @@
 //! ([`LoginShell::script_flags`]), so the script re-arms the integration's variable and loads the integration first,
 //! then runs the command (`& 'program' 'argument'`, or a durable line as a script block). Loading it first keeps the
 //! prompt integrated however the command ends: a Ctrl+C stops the rest of a `-Command` script, not only the command.
-//! Only language syntax and .NET calls, so no alias or function of the user's takes it over. Words are single-quoted
-//! ([`powershell_quoted`]). How a native program receives them is PowerShell's own argument passing
-//! (`$PSNativeCommandArgumentPassing`), which the captured argv runs under in a scope of its own: a profile's `Legacy`
-//! is replaced there by the mode PowerShell 7.3+ defaults to on the OS (`Standard`; `Windows` on Windows), the user's
-//! preference left as it is for later commands. On Linux and macOS, where a program receives an argv, that passing is
-//! exact. On Windows a program receives one command line it splits itself: `Windows` mode quotes for the C runtime's
-//! split (`CommandLineToArgvW`), exact for programs that split that way, but keeps the legacy passing for `cmd.exe`,
-//! batch files (`.bat`, `.cmd`), Windows Script Host scripts (`.js`, `.vbs`, `.wsf`, run by `cscript`/`wscript`) and
-//! `msiexec`, whose own parsers no argv rebuilds exactly (`cmd.exe`'s least of all: its `/c` text is no argv).
-//! Windows PowerShell 5.1 has only the legacy passing, which loses an embedded double quote or an empty argument.
-
+//! Only language syntax and .NET calls, so no alias or function of the user's takes it over. The command is
+//! [`powershell_call`]'s (`crate::shell_dialect`, which a rerun restore types into a PowerShell pane too): words
+//! single-quoted ([`powershell_quoted`]), and an argv that PowerShell's argument passings would not all hand on alike
+//! (an empty argument, whitespace, a double quote) run in a scope of its own under the legacy passing, each argument
+//! quoted for the C runtime's split, which hands it on whole on Windows PowerShell 5.1 and every PowerShell 7, on every
+//! OS, the user's preference left as it is for later commands. Exact for programs that split their command line as the
+//! C runtime does; `cmd.exe`, batch files and `msiexec` parse theirs their own way.
 use super::shell_integration::{DEFAULT_XDG_DATA_DIRS, LoginShell, PWSH_LOAD, Rearm};
 use crate::command_restore::shell_quoted_line;
+use crate::shell_dialect::powershell_call;
+pub use crate::shell_dialect::{fish_quoted, powershell_quoted};
 
 /// The interactive login shell a replay ends in, and what it re-arms before the `exec`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,26 +63,11 @@ pub fn render_argv<S: AsRef<str>>(argv: &[S], shell: &FinalShell<'_>) -> String 
     let statement = if shell.kind.is_fish() {
         words(fish_quoted)
     } else if shell.kind.is_powershell() {
-        format!(
-            "& {{ if ({NATIVE_PASSING_LOOKUP} -eq 'Legacy') {{ $PSNativeCommandArgumentPassing = '{}' }} ; & {} }}",
-            exact_native_passing(),
-            words(powershell_quoted)
-        )
+        powershell_call(argv)
     } else {
         shell_quoted_line(argv)
     };
     render(&statement, shell)
-}
-
-/// `$PSNativeCommandArgumentPassing` read without failing where it is unset (Windows PowerShell 5.1) under a
-/// profile's `Set-StrictMode`.
-const NATIVE_PASSING_LOOKUP: &str =
-    "$ExecutionContext.SessionState.PSVariable.GetValue('PSNativeCommandArgumentPassing')";
-
-/// The native argument passing PowerShell 7.3+ defaults to on this OS, which a captured argv is replayed under in place
-/// of a profile's `Legacy`.
-fn exact_native_passing() -> &'static str {
-    if cfg!(windows) { "Windows" } else { "Standard" }
 }
 
 /// The script for a durable creation command, a shell line kept with its operators and word parsing (`eval`; in
@@ -212,28 +195,6 @@ fn render_powershell(statement: &str, shell: &FinalShell<'_>) -> String {
 
 fn quoted(value: &str) -> String {
     shell_quoted_line(&[value])
-}
-
-/// `value` as one PowerShell word: a single-quoted string, inside which a single quote is written twice. PowerShell
-/// takes the typographic single quotes (U+2018–U+201B) for one as well, so those are doubled too.
-#[must_use]
-pub fn powershell_quoted(value: &str) -> String {
-    let mut quoted = String::with_capacity(value.len() + 2);
-    quoted.push('\'');
-    for character in value.chars() {
-        if matches!(character, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}') {
-            quoted.push(character);
-        }
-        quoted.push(character);
-    }
-    quoted.push('\'');
-    quoted
-}
-
-/// `value` as one fish word: single quotes, inside which only a backslash and a single quote are escaped.
-#[must_use]
-pub fn fish_quoted(value: &str) -> String {
-    format!("'{}'", value.replace('\\', r"\\").replace('\'', r"\'"))
 }
 
 #[cfg(test)]
@@ -752,15 +713,17 @@ mod tests {
         let shell = pwsh_shell(&rearm, r"C:\Program Files\PowerShell\7\pwsh.exe");
         let prefix =
             format!(r"$env:NGTERM_PWSH_INTEGRATION = 'C:\it''s\ngterm.ps1' ; $env:STALE = $null ; {PWSH_LOAD} ; ");
-        // a captured argv runs in a scope of its own, out of a profile's legacy argument passing
-        let passing = if cfg!(windows) { "Windows" } else { "Standard" };
+        // an argv the argument passings would hand on differently runs in a scope of its own, under the legacy
+        // passing, its arguments quoted for the C runtime's split
         assert_eq!(
             render_argv(&[r"C:\tools\top.exe", "a b", "it's"], &shell),
             format!(
-                "{prefix}& {{ if ($ExecutionContext.SessionState.PSVariable.GetValue('PSNativeCommandArgumentPassing') \
-                 -eq 'Legacy') {{ $PSNativeCommandArgumentPassing = '{passing}' }} ; & 'C:\\tools\\top.exe' 'a b' \
-                 'it''s' }}"
+                "{prefix}& {{ $PSNativeCommandArgumentPassing = 'Legacy' ; & 'C:\\tools\\top.exe' '\"a b\"' 'it''s' }}"
             )
+        );
+        assert_eq!(
+            render_argv(&["top", "-d", "1"], &shell),
+            format!("{prefix}& 'top' '-d' '1'")
         );
         assert_eq!(
             render_command_line("Get-ChildItem | Select-Object -First 1; 'done'", &shell),
