@@ -1,11 +1,12 @@
 //! Who may use a local named pipe on Windows, for the pipes ngterm serves on (ngterm-session's namespace pipe, the
-//! control socket's pipe): the descriptor a server creates its pipe with, and the check a client makes on the process
-//! serving the pipe it reached.
+//! control socket's pipe, the app's instance pipe): the descriptor a server creates its pipe with, and the check a
+//! client makes on the process serving the pipe it reached ([`check_server_user`], its refusal and message one for
+//! every client).
 //!
 //! herdr: `src/platform/windows.rs` (`bind_private_local_listener`, `local_server_security_descriptor`) at
 //! `HERDR_REV` (`build/pins.env`), licensed under the Apache License 2.0, modified: the descriptor's SDDL alone (the
 //! caller builds the descriptor in the type its pipe API takes), and the server-user check, ngterm's addition, moved
-//! here from ngterm-session's endpoint so the control socket's client shares it.
+//! here from ngterm-session's endpoint so the control socket's and the instance pipe's clients share it.
 
 use std::io;
 use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
@@ -48,6 +49,23 @@ pub fn runs_as_current_user(pid: u32) -> io::Result<bool> {
     Ok(unsafe { EqualSid(peer_sid, own_sid) } != 0)
 }
 
+/// Refuses the pipe `pipe` (as the error names it) when the process `server_pid` serving it runs as another user: a
+/// client's check on a pipe whose name is derived, so anyone could create it first ([`runs_as_current_user`]).
+///
+/// # Errors
+///
+/// `PermissionDenied`, naming the pipe and the server, when the server runs as another user; the check's own error
+/// when the server cannot be opened or its user cannot be read.
+pub fn check_server_user(pipe: &dyn std::fmt::Display, server_pid: u32) -> io::Result<()> {
+    if runs_as_current_user(server_pid)? {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!("the pipe at {pipe} belongs to a process of another user (pid {server_pid})"),
+    ))
+}
+
 fn current_process_is_elevated() -> io::Result<bool> {
     // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no closing and is always valid.
     let current = unsafe { GetCurrentProcess() };
@@ -86,5 +104,22 @@ mod tests {
             assert!(!same, "the System process reads as the current user");
         }
         assert!(runs_as_current_user(u32::MAX - 2).is_err());
+    }
+
+    #[test]
+    fn a_pipe_served_by_another_user_is_refused_by_name() {
+        let pipe = r"\\.\pipe\ngterm-test";
+        assert!(check_server_user(&pipe, std::process::id()).is_ok());
+        // the System process runs as SYSTEM, which no test runs as; it may not be readable at all
+        if runs_as_current_user(4).is_ok() {
+            let error = check_server_user(&pipe, 4).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(
+                error.to_string(),
+                r"the pipe at \\.\pipe\ngterm-test belongs to a process of another user (pid 4)"
+            );
+        }
+        let gone = check_server_user(&pipe, u32::MAX - 2).unwrap_err();
+        assert_ne!(gone.kind(), io::ErrorKind::PermissionDenied, "{gone}");
     }
 }

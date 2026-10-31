@@ -266,13 +266,7 @@ pub(super) fn accept(listener: &Listener) -> io::Result<Connection> {
 pub(super) fn connect(socket: &Path) -> io::Result<Connection> {
     let path = pipe_path(socket);
     let pipe = Pipe::connect_by_path(path.as_str())?;
-    let server_pid = pipe.server_process_id()?;
-    if !ngterm_core::pipe_security::runs_as_current_user(server_pid)? {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("the pipe at {path} belongs to a process of another user (pid {server_pid})"),
-        ));
-    }
+    ngterm_core::pipe_security::check_server_user(&path, pipe.server_process_id()?)?;
     Ok(Connection::new(pipe))
 }
 

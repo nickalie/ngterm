@@ -661,3 +661,51 @@ guest has 4 CPUs and 6.5 GB of memory.
   closed it; `run-gpui-dev.sh` from Git Bash built, staged and launched the debug app on a private state dir and app
   id, `ngtermctl --socket` drove it, the image showed there too, and `taskkill /F /PID` on the printed pid stopped it
   and ended the script
+
+### ➕ revmux round 1 fixes (side task 38)
+
+The final revmux round over the whole plan found seven; each is fixed in a commit of its own:
+
+- ➕ [major] `is_command_wrapper` knew a Windows `--command` pane's `cmd.exe /D /S /C "<line>"` only as five argv
+  words, and `CommandLineToArgvW` splits a line holding a quoted word with a space into more (`"C:\Program
+  Files\nodejs\node.exe" server.js`, `echo "a b"`, a redirection to a quoted path), so the console's foreground went
+  to the program and the capture replayed it over the creation command. The Windows process table now reads such a
+  command line whole (`command_restore::command_wrapper_argv`: the program as the C runtime reads it, the three
+  switches, the line as `cmd` reads it under `/S`), and `is_command_wrapper` knows the wrapper by its four leading
+  words whatever follows. Tests: core's round trip of `ShellCommand::cmd` lines with quoted paths, spaces and
+  redirections through three `%ComSpec%` spellings and the `/S` rule's edges; the session's `console_foreground` on
+  a split wrapper; the Windows process table's live test spawning those lines (`ping` behind a quoted path writing
+  to a directory with a space, `echo "a b" & ping`), reading back the five words and the wrapper as the foreground
+- ➕ [major] the restore denylist (`should_restore`, `restart_replay::resolve`) and `$SHELL`'s match in
+  `is_known_shell` compared basenames exactly, so `ZELLIJ.EXE` or `ssh.exe` was never denylisted on Windows. They now
+  go through `command_restore::same_program`: on Windows in any case and without a `.exe`, `.com`, `.bat` or `.cmd`
+  on either side (`shell_name`'s normalisation, generalised); Unix stays exact. The sweep found no other basename
+  comparison over a captured argv (`LoginShell::of` reads the configured shell, a Windows live pane runs PowerShell
+  only; `ngtermctl live list` only shows the name). Tests: `same_program`'s Windows and Unix readings, the denylist
+  and `$SHELL` on each OS, `resolve` refusing Windows-spelled programs (Windows only)
+- ➕ [major] a granted file on a network share lost its server in `WebView2`'s grant address. A share's file now
+  loads as `https://ngterm-file.localhost/UNC/<server>/<share>/...` and reads back as `file://<server>/<share>/...`
+  (`app_uri`, `request_app_uri`); a drive path's first segment is always `X:`, so the two never collide.
+  `policy::granted_file` refuses a path on another volume (drive, or server and share, in any spelling) before it
+  asks the file system, so no page's root-relative `/UNC/...` makes Windows reach a server the grant does not name.
+  Tests: the UNC and verbatim-UNC round trips, `volume`'s spellings, and the grant served end to end for a drive's
+  and a share's file (the runner's administrative share of the same directory), inside and outside the grant
+- ➕ [minor] `of_shell` reads a configured shell past `env` (its switches, `-u`/`-C`/`-P` with their values, long
+  options, `NAME=value`, `-S`/`--split-string`'s words, `--`, a nested `env`, an `env.exe` path with spaces), and
+  `POSIX_SHELLS` gains `ksh93`, `loksh`, `lksh`, `rbash`, `posh`, `bosh` and `hush`. Unknown shells keep their
+  documented plain-words policy. Tests: `a_shell_is_known_by_its_programs_name`,
+  `a_configured_shell_is_read_through_its_spaces_and_arguments`
+- ➕ [minor] the `WebView2` file-chooser guard is still page-world JS: `WebView2` has no native refusal (webview2-com
+  0.39.1's API has only `SaveAsUIShowing`, the page's own Save As, and `PermissionRequested`'s `FILE_READ_WRITE`,
+  which comes after a File System Access picker), no setting for it and no script worlds. The guard now binds every
+  DOM function it calls before the page's scripts run, tells a file input by its own `type` getter's brand check,
+  and refuses `click()` and `showPicker()` on one (a detached input's click never reached the window's listener); its
+  docs say it is defence in depth, with the bypass left (a realm it does not run in, such as a fresh same-origin
+  `about:blank` frame). Checked in a headless Chromium: after a page replaced `preventDefault`, `composedPath`,
+  `Array.prototype.some`, `type` and `Symbol.hasInstance`, a file input's click was still prevented, a detached one's
+  `click()` and `showPicker()` refused, a text input untouched (no automated test: no DOM in the unit tests)
+- ➕ [minor] toast tags hash with `ngterm_core::live::fnv1a64`; the private copy is gone. Test: two shortened tags
+  pinned to their text as the old code made them
+- ➕ [minor] `ngterm_core::pipe_security::check_server_user` holds the pipe-server user refusal and its message for
+  the session pipe's, the control socket's and the instance pipe's clients; each still builds its own descriptor.
+  Test: `a_pipe_served_by_another_user_is_refused_by_name` (Windows)

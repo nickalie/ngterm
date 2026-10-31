@@ -1,12 +1,15 @@
 //! The pages' own addresses on `WebView2`. A file page and a page shown for another machine load through custom
-//! protocols wry registers on that page alone, which `WebView2` serves only under an `https://<scheme>.<host>/`
-//! address of its own (wry's workaround for `WebView2`'s custom schemes): a granted file as
-//! `https://ngterm-file.localhost/C:/dir/page.html`, a replica's file as `https://ngterm-page.<page id>/path`, the
-//! text of a file page without a grant as `https://ngterm-text.<page id>/`. Every address the web view reports is read
-//! back in the app's spelling (a granted file's `file:` URI, a replica's `ngterm-page:` one, the text's `about:blank`,
-//! where the WPE host and upstream load it) before the shared navigation policy or the model sees it, as the WPE host
-//! reads its grant scheme back (`policy::app_uri`). A URL page registers none of the protocols, so those names reach
-//! nothing of the app's from it, and the policy refuses them as the file addresses they read as.
+//! protocols wry registers on that page alone, which `WebView2` serves only under an `https://<scheme>.<host>/` address
+//! of its own (wry's workaround for `WebView2`'s custom schemes): a granted file as
+//! `https://ngterm-file.localhost/C:/dir/page.html`, one on a network share (`\\server\share\dir\page.html`, its
+//! `file:` URI's host the server) as `https://ngterm-file.localhost/UNC/server/share/dir/page.html` (the server as the
+//! segment after `UNC`, Windows' own spelling of a share's path, which no drive path's first segment `X:` is), a
+//! replica's file as `https://ngterm-page.<page id>/path`, the text of a file page without a grant as
+//! `https://ngterm-text.<page id>/`. Every address the web view reports is read back in the app's spelling (a granted
+//! file's `file:` URI, a replica's `ngterm-page:` one, the text's `about:blank`, where the WPE host and upstream load
+//! it) before the shared navigation policy or the model sees it, as the WPE host reads its grant scheme back
+//! (`policy::app_uri`). A URL page registers none of the protocols, so those names reach nothing of the app's from it,
+//! and the policy refuses them as the file addresses they read as.
 //!
 //! The text loads through a protocol rather than `NavigateToString`: a string's document never reported its title
 //! (granted and URL pages did, through the same events: the page report waits on an address, and a string's stays
@@ -52,11 +55,35 @@ fn is_text_document(rest: &str) -> bool {
         .is_some_and(|(host, path)| !host.is_empty() && path.is_empty())
 }
 
-/// The address `WebView2` loads granted file `path` from; `None` for a path that is not absolute.
+/// The address `WebView2` loads granted file `path` from; `None` for a path that is not absolute. A share's file
+/// carries its server after [`UNC_SEGMENT`] (module docs).
 #[must_use]
 pub fn granted_address(path: &str) -> Option<String> {
     let file = Url::from_file_path(path).ok()?;
-    Some(format!("{ENGINE_SCHEME}://{GRANT_SCHEME}.{GRANT_HOST}{}", file.path()))
+    let server = file
+        .host_str()
+        .filter(|server| !server.is_empty())
+        .map(|server| format!("/{UNC_SEGMENT}/{server}"))
+        .unwrap_or_default();
+    Some(format!(
+        "{ENGINE_SCHEME}://{GRANT_SCHEME}.{GRANT_HOST}{server}{}",
+        file.path()
+    ))
+}
+
+/// The path segment a share's server follows in a granted address.
+const UNC_SEGMENT: &str = "UNC";
+
+/// The `file:` URI of a granted address's path `rest` (what follows its host's `/`): a share's file by its server, any
+/// other as the drive path it spells. Only a granted share's page loads under `UNC/`: a root-relative address another
+/// page asks for there reads as a share's file too, which the grant then refuses (`policy::granted_file`).
+fn granted_file_uri(rest: &str) -> String {
+    let share = strip_prefix_ignoring_case(rest, &format!("{UNC_SEGMENT}/"))
+        .filter(|share| share.split('/').next().is_some_and(|server| !server.is_empty()));
+    match share {
+        Some(share) => format!("file://{share}"),
+        None => format!("file:///{rest}"),
+    }
 }
 
 /// The address `WebView2` loads file `path` of replica page `page` from (upstream's `HtmlPageSchemeHandler.url`).
@@ -83,7 +110,7 @@ pub fn app_uri(engine: &str) -> String {
     }
     let grant = format!("{ENGINE_SCHEME}://{GRANT_SCHEME}.{GRANT_HOST}/");
     if let Some(rest) = strip_prefix_ignoring_case(engine, &grant) {
-        return format!("file:///{rest}");
+        return granted_file_uri(rest);
     }
     let replica = format!("{ENGINE_SCHEME}://{REPLICA_SCHEME}.");
     if let Some(rest) = strip_prefix_ignoring_case(engine, &replica) {
@@ -98,7 +125,7 @@ pub fn app_uri(engine: &str) -> String {
 pub fn request_app_uri(request: &str) -> String {
     let grant = format!("{GRANT_SCHEME}://{GRANT_HOST}/");
     match strip_prefix_ignoring_case(request, &grant) {
-        Some(rest) => format!("file:///{rest}"),
+        Some(rest) => granted_file_uri(rest),
         None => request.to_owned(),
     }
 }
@@ -147,6 +174,61 @@ mod tests {
         let path = Url::parse(&app).unwrap().to_file_path().unwrap();
         assert_eq!(path, std::path::Path::new(r"C:\Users\u\my site\index.html"));
         assert!(granted_address("relative.html").is_none());
+    }
+
+    #[test]
+    fn a_shares_file_loads_with_its_server_and_reads_back_as_its_file() {
+        let address = granted_address(r"\\server\share\my site\index.html").unwrap();
+        assert_eq!(
+            address,
+            "https://ngterm-file.localhost/UNC/server/share/my%20site/index.html"
+        );
+        let app = app_uri(&address);
+        assert_eq!(app, "file://server/share/my%20site/index.html");
+        let path = Url::parse(&app).unwrap().to_file_path().unwrap();
+        assert_eq!(path, std::path::Path::new(r"\\server\share\my site\index.html"));
+        assert_eq!(
+            request_app_uri("ngterm-file://localhost/UNC/server/share/a/b.css"),
+            "file://server/share/a/b.css"
+        );
+        let verbatim = granted_address(r"\\?\UNC\server\share\a.html").unwrap();
+        assert_eq!(app_uri(&verbatim), "file://server/share/a.html");
+        // a drive's file never reads as a share's, nor does a `UNC` segment naming no server
+        assert_eq!(
+            app_uri("https://ngterm-file.localhost/C:/UNC/x/a.html"),
+            "file:///C:/UNC/x/a.html"
+        );
+        assert_eq!(app_uri("https://ngterm-file.localhost/UNC//x"), "file:///UNC//x");
+        assert_eq!(app_uri("https://ngterm-file.localhost/unc/srv/s/a"), "file://srv/s/a");
+    }
+
+    /// A granted page and what it reads, on a drive and through a share (this machine's administrative share of the
+    /// same directory, by address: a `file:` URL drops a `localhost` host), pass the grant inside it only.
+    #[test]
+    fn the_grant_serves_a_drives_and_a_shares_files_only_inside_it() {
+        use crate::html_overlay::policy::{OUTSIDE_GRANT, granted_file};
+
+        let dir = tempfile::tempdir().unwrap();
+        let canonical = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(canonical.join("site")).unwrap();
+        std::fs::write(canonical.join("site").join("index.html"), "x").unwrap();
+        std::fs::write(canonical.join("outside.html"), "x").unwrap();
+        let plain = canonical.to_str().unwrap().strip_prefix(r"\\?\").unwrap().to_owned();
+        let (drive, rest) = plain.split_once(r":\").unwrap();
+        let share = format!(r"\\127.0.0.1\{drive}$\{rest}");
+        for base in [&plain, &share] {
+            let root = std::fs::canonicalize(format!(r"{base}\site")).unwrap();
+            let read = |file: &str| {
+                let app = app_uri(&granted_address(&format!(r"{base}\{file}")).unwrap());
+                let requested = Url::parse(&app).unwrap().to_file_path().unwrap();
+                granted_file(Some(&root), Some(&requested))
+            };
+            assert_eq!(read(r"site\index.html"), Ok(root.join("index.html")), "{base}");
+            assert_eq!(read("outside.html"), Err(OUTSIDE_GRANT), "{base}");
+        }
+        let root = std::fs::canonicalize(format!(r"{plain}\site")).unwrap();
+        let elsewhere = std::path::Path::new(r"\\ngterm-nowhere.invalid\share\site\index.html");
+        assert_eq!(granted_file(Some(&root), Some(elsewhere)), Err(OUTSIDE_GRANT));
     }
 
     #[test]

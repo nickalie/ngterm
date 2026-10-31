@@ -43,6 +43,10 @@ fn a_shell_is_known_by_its_programs_name() {
         ("-zsh", ShellDialect::Posix),
         ("/usr/local/bin/bash", ShellDialect::Posix),
         ("/bin/tcsh", ShellDialect::Posix),
+        ("/usr/bin/ksh93", ShellDialect::Posix),
+        ("/usr/local/bin/loksh", ShellDialect::Posix),
+        ("rbash", ShellDialect::Posix),
+        ("posh", ShellDialect::Posix),
         ("/usr/bin/fish", ShellDialect::Fish),
         ("pwsh", ShellDialect::PowerShell),
         ("/usr/bin/pwsh", ShellDialect::PowerShell),
@@ -64,11 +68,26 @@ fn a_configured_shell_is_read_through_its_spaces_and_arguments() {
     let mut cases = vec![
         ("pwsh -NoLogo", ShellDialect::PowerShell),
         ("/usr/bin/fish -l", ShellDialect::Fish),
-        ("/usr/bin/env fish", ShellDialect::Unknown),
+        ("/usr/bin/env fish", ShellDialect::Fish),
+        ("/usr/bin/env zsh", ShellDialect::Posix),
+        ("env -S zsh -l", ShellDialect::Posix),
+        ("/usr/bin/env -S 'fish -l'", ShellDialect::Fish),
+        ("env -Sbash --login", ShellDialect::Posix),
+        ("env --split-string=pwsh -NoLogo", ShellDialect::PowerShell),
+        (
+            "env -i HOME=/home/u -u TMUX --chdir /tmp -C /tmp -- fish",
+            ShellDialect::Fish,
+        ),
+        ("env -iuTMUX -P /opt/bin ksh93", ShellDialect::Posix),
+        ("env --unset=TMUX - LANG=C env loksh", ShellDialect::Posix),
+        ("/usr/bin/env nu", ShellDialect::Unknown),
+        ("/usr/bin/env", ShellDialect::Unknown),
+        ("env -u", ShellDialect::Unknown),
         ("nu --login", ShellDialect::Unknown),
     ];
     if cfg!(windows) {
         cases.extend([
+            (r"C:\Program Files\Git\usr\bin\ENV.EXE bash -l", ShellDialect::Posix),
             (r"C:\Program Files\PowerShell\7\pwsh.exe", ShellDialect::PowerShell),
             (r"C:\Program Files\Git\bin\sh.exe --login", ShellDialect::Posix),
             (r"C:\Windows\System32\cmd.exe", ShellDialect::Cmd),

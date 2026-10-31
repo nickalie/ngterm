@@ -66,7 +66,7 @@ pub fn basename(path: &str) -> &str {
 
 /// Whether `basename` is a login shell, also matching the user's `$SHELL` basename passed as `extra`. A leading `-`
 /// (a login shell's dash-marked argv[0]) is stripped first. A Windows program name (`pwsh.exe`, `PowerShell.EXE`) is
-/// known by its name without `.exe`, in any case.
+/// known by its name without `.exe`, in any case, and on Windows `extra` matches as [`same_program`] reads names.
 #[must_use]
 pub fn is_known_shell(basename: &str, extra: Option<&str>) -> bool {
     let name = basename.strip_prefix('-').unwrap_or(basename);
@@ -74,7 +74,9 @@ pub fn is_known_shell(basename: &str, extra: Option<&str>) -> bool {
     let windows_known = windows_name
         .strip_suffix(".exe")
         .is_some_and(|stem| KNOWN_SHELLS.contains(&stem));
-    KNOWN_SHELLS.contains(&name) || windows_known || extra.is_some_and(|extra| !extra.is_empty() && name == extra)
+    KNOWN_SHELLS.contains(&name)
+        || windows_known
+        || extra.is_some_and(|extra| !extra.is_empty() && same_program(name, extra))
 }
 
 /// Whether `argv` is shell-shaped with nothing to restore: `argv[0]` is a known shell (or `$SHELL`'s basename, passed
@@ -101,18 +103,17 @@ pub fn is_idle_shell(argv: &[String], extra: Option<&str>) -> bool {
 
 /// Whether `argv` is the shell a pane's command line runs through, which holds no job control, so whatever it runs
 /// is the pane's creation command: `/bin/sh -c <command>` on Linux (libghostty's spelling; `-l` first inside
-/// Flatpak), and on Windows `cmd.exe /D /S /C <command>` (`ngterm-term`'s `launch.rs`; the `cmd.exe` by any path, as
-/// `%ComSpec%` names it, in any case, as Windows reads names and switches).
+/// Flatpak), and on Windows `cmd.exe /D /S /C <command>` (`ngterm_host::ShellCommand::cmd`; the `cmd.exe` by any
+/// path, as `%ComSpec%` names it, in any case, as Windows reads names and switches). The Windows form is known by
+/// those four words alone, whatever follows: the process table reads it whole ([`command_wrapper_argv`]), but a
+/// command line split by the C runtime's rules (`CommandLineToArgvW`, which does not know `cmd`'s `/S`) breaks a line
+/// holding a quoted word into several arguments (`""C:\Program Files\x.exe" a"`).
 #[must_use]
 pub fn is_command_wrapper(argv: &[String]) -> bool {
-    let is_cmd = |program: &str| {
-        let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
-        name.eq_ignore_ascii_case("cmd.exe") || name.eq_ignore_ascii_case("cmd")
-    };
     match argv {
         [shell, flag, _] => shell == "/bin/sh" && flag == "-c",
         [shell, login, flag, _] => shell == "/bin/sh" && login == "-l" && flag == "-c",
-        [cmd, no_autorun, keep_quotes, run, _] => {
+        [cmd, no_autorun, keep_quotes, run, _, ..] => {
             is_cmd(cmd)
                 && [(no_autorun, "/D"), (keep_quotes, "/S"), (run, "/C")]
                     .iter()
@@ -120,6 +121,55 @@ pub fn is_command_wrapper(argv: &[String]) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `program` names `cmd.exe` (or `cmd`) by any path, in any case.
+fn is_cmd(program: &str) -> bool {
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    name.eq_ignore_ascii_case("cmd.exe") || name.eq_ignore_ascii_case("cmd")
+}
+
+/// The argv of a Windows process's `command_line` when it runs a line through `cmd.exe /D /S /C`
+/// ([`is_command_wrapper`]): the program as the C runtime reads a command line's first word (up to the closing quote
+/// when it opens with one, else up to a space or tab), the three switches, and the line as `cmd` reads it under `/S`
+/// (the tail after `/C` and its blanks; when that opens with a quote, without it and without the tail's last quote,
+/// whatever follows that quote kept). So `cmd.exe /D /S /C ""C:\Program Files\x.exe" a > "my logs\o.txt""` is five
+/// words, the last `"C:\Program Files\x.exe" a > "my logs\o.txt"`, where `CommandLineToArgvW` splits the line at its
+/// quoted spaces. `None` for any other command line (another program, other switches, nothing after `/C`), which the
+/// C runtime's split reads.
+#[must_use]
+pub fn command_wrapper_argv(command_line: &str) -> Option<Vec<String>> {
+    const BLANKS: [char; 2] = [' ', '\t'];
+    let (program, mut rest) = match command_line.strip_prefix('"') {
+        Some(quoted) => quoted.split_once('"').unwrap_or((quoted, "")),
+        None => command_line.split_at(command_line.find(BLANKS).unwrap_or(command_line.len())),
+    };
+    if !is_cmd(program) {
+        return None;
+    }
+    let mut argv = vec![program.to_owned()];
+    for wanted in ngterm_host::command_line::CMD_SWITCHES {
+        let word = rest.trim_start_matches(BLANKS);
+        let (switch, tail) = word.split_at(word.find(BLANKS).unwrap_or(word.len()));
+        if !switch.eq_ignore_ascii_case(wanted) {
+            return None;
+        }
+        argv.push(switch.to_owned());
+        rest = tail;
+    }
+    let tail = rest.trim_start_matches(BLANKS);
+    if tail.is_empty() {
+        return None;
+    }
+    let line = match tail.strip_prefix('"') {
+        Some(inner) => match inner.rfind('"') {
+            Some(last) => format!("{}{}", &inner[..last], &inner[last + 1..]),
+            None => inner.to_owned(),
+        },
+        None => tail.to_owned(),
+    };
+    argv.push(line);
+    Some(argv)
 }
 
 /// Which PowerShell reads its host options: PowerShell 7 (`pwsh`) or Windows PowerShell 5.1 (`powershell`).
@@ -400,13 +450,37 @@ pub fn pane_foreground(argv: &[String], extra: Option<&str>) -> Option<PaneForeg
 /// A shell's name as the tree reports it: its basename, without the `.exe` (any case) a Windows image carries
 /// (`sh.exe` is `sh`, as `/bin/sh` is).
 pub(crate) fn shell_name(basename: &str) -> &str {
-    let stem = basename.len().checked_sub(".exe".len()).filter(|stem| *stem > 0);
-    match stem {
-        Some(stem) if basename.is_char_boundary(stem) && basename[stem..].eq_ignore_ascii_case(".exe") => {
-            &basename[..stem]
-        }
-        _ => basename,
-    }
+    without_extension(basename, ".exe").unwrap_or(basename)
+}
+
+/// `basename` without `extension`, matched in any case; `None` when it does not end with it or is nothing more.
+fn without_extension<'a>(basename: &'a str, extension: &str) -> Option<&'a str> {
+    let stem = basename.len().checked_sub(extension.len()).filter(|stem| *stem > 0)?;
+    (basename.is_char_boundary(stem) && basename[stem..].eq_ignore_ascii_case(extension)).then(|| &basename[..stem])
+}
+
+/// The extensions a Windows console runs a program or a script by without its name spelling them (`PATHEXT`'s).
+const WINDOWS_PROGRAM_EXTENSIONS: [&str; 4] = [".exe", ".com", ".bat", ".cmd"];
+
+/// Whether the program basenames `name` (an argv's) and `entry` (a list's, the user's `$SHELL`'s) name the same
+/// program: the same text, and on Windows, which finds a program by its name in any case with or without its
+/// extension, also in any case and without a Windows program extension on either (`ZELLIJ.EXE` is `zellij`,
+/// `vim.bat` is `vim`), as [`shell_name`] reads a shell's.
+#[must_use]
+pub fn same_program(name: &str, entry: &str) -> bool {
+    same_program_on(name, entry, cfg!(windows))
+}
+
+/// [`same_program`] with Windows' reading when `windows`.
+fn same_program_on(name: &str, entry: &str, windows: bool) -> bool {
+    let stem = |name: &'_ str| -> String {
+        WINDOWS_PROGRAM_EXTENSIONS
+            .iter()
+            .find_map(|extension| without_extension(name, extension))
+            .unwrap_or(name)
+            .to_lowercase()
+    };
+    name == entry || (windows && !entry.is_empty() && stem(name) == stem(entry))
 }
 
 /// `argv` without the `-` a login process's `argv[0]` is marked with, so it names a program that can be rendered and
@@ -457,7 +531,7 @@ pub fn group_descent_candidates(pgid: i32, members: &[ProcessGroupMember]) -> Ve
 }
 
 /// Whether a captured argv may be re-run: false for an empty argv or an empty `argv[0]`, one whose `argv[0]` basename
-/// is on `denylist`, or one carrying a control character or U+FFFD (what an undecodable byte became).
+/// is on `denylist` ([`same_program`]: on Windows in any case, without a `.exe`), or one carrying a control character or U+FFFD (what an undecodable byte became).
 #[must_use]
 pub fn should_restore<S: AsRef<str>>(argv: &[String], denylist: &[S]) -> bool {
     let Some(first) = argv.first().filter(|first| !first.is_empty()) else {
@@ -467,7 +541,7 @@ pub fn should_restore<S: AsRef<str>>(argv: &[String], denylist: &[S]) -> bool {
         return false;
     }
     let name = basename(first);
-    !denylist.iter().any(|entry| entry.as_ref() == name)
+    !denylist.iter().any(|entry| same_program(name, entry.as_ref()))
 }
 
 /// Whether `value` carries a character a line editor reads as an editing command (C0 or DEL), tab included.
@@ -685,6 +759,56 @@ mod tests {
         assert!(!should_restore(&argv(&["tool", "a\nb"]), &none));
         assert!(!should_restore(&argv(&["tool", "a\u{fffd}"]), &none));
         assert!(!should_restore(&argv(&["/opt/bin/tmux", "attach"]), &["tmux"]));
+    }
+
+    #[test]
+    fn a_windows_program_name_matches_in_any_case_without_its_extension() {
+        for (name, entry) in [
+            ("zellij.exe", "zellij"),
+            ("ZELLIJ.EXE", "zellij"),
+            ("Vim.bat", "vim"),
+            ("tmux.cmd", "tmux"),
+            ("more.com", "more"),
+            ("ssh", "ssh.exe"),
+            ("SSH", "ssh"),
+            ("nu.exe", "NU.EXE"),
+        ] {
+            assert!(same_program_on(name, entry, true), "{name} {entry}");
+            assert_eq!(same_program_on(name, entry, false), name == entry, "{name} {entry}");
+        }
+        for (name, entry) in [
+            ("sshd.exe", "ssh"),
+            ("ssh.exe.bak", "ssh"),
+            ("zellij.ps1", "zellij"),
+            (".exe", ""),
+            ("vim", ""),
+            (".exe", ".EXE"),
+        ] {
+            assert_eq!(
+                same_program_on(name, entry, true),
+                name.eq_ignore_ascii_case(entry) && !entry.is_empty(),
+                "{name} {entry}"
+            );
+        }
+        assert!(same_program_on("tmux", "tmux", false));
+    }
+
+    #[test]
+    fn the_denylist_and_shell_read_windows_names_on_windows_only() {
+        let windows = cfg!(windows);
+        let denylist = ["zellij", "ssh"];
+        assert_eq!(
+            should_restore(&argv(&[r"C:\Program Files\zellij\ZELLIJ.EXE"]), &denylist),
+            !windows
+        );
+        assert_eq!(
+            should_restore(&argv(&[r"C:\Windows\System32\OpenSSH\ssh.exe", "host"]), &denylist),
+            !windows
+        );
+        assert!(!should_restore(&argv(&["/usr/bin/ssh", "host"]), &denylist));
+        assert!(should_restore(&argv(&["/usr/bin/sshd"]), &denylist));
+        assert_eq!(is_known_shell("NU.EXE", Some("nu")), windows);
+        assert!(is_known_shell("nu", Some("nu")));
     }
 
     #[test]
@@ -1177,6 +1301,74 @@ mod tests {
             "an interactive cmd"
         );
         assert!(!is_command_wrapper(&argv(&["notcmd.exe", "/D", "/S", "/C", "cat"])));
+        assert!(!is_command_wrapper(&argv(&["cmd.exe", "/D", "/S", "/C"])), "no line");
+        // a line holding a quoted word, as `CommandLineToArgvW` splits `/C ""C:\Program Files\x.exe" a"`
+        assert!(is_command_wrapper(&argv(&[
+            "cmd.exe",
+            "/D",
+            "/S",
+            "/C",
+            r"C:\Program",
+            r"Files\nodejs\node.exe server.js",
+        ])));
+    }
+
+    /// The pane's `cmd.exe /D /S /C "<line>"` (`ngterm_host::ShellCommand::cmd`), read back as the five words it was
+    /// run with, the line as `cmd` reads it under `/S`.
+    #[test]
+    fn a_wrapper_command_line_reads_back_its_line_whole() {
+        let lines = [
+            "npm run dev",
+            r#""C:\Program Files\nodejs\node.exe" server.js"#,
+            r#"echo "a b""#,
+            r#"ping -n 600 127.0.0.1 > "C:\my logs\out.txt""#,
+            r#""C:\Program Files\tool.exe" "a b" > "%TEMP%\out" & echo "done""#,
+            r#"echo ""#,
+            "",
+        ];
+        for comspec in [r"C:\WINDOWS\system32\cmd.exe", r"C:\Program Files\odd\CMD.EXE", "cmd"] {
+            for line in lines {
+                let shell = ngterm_host::ShellCommand::cmd(line, Some(std::ffi::OsStr::new(comspec)));
+                let program = comspec.to_owned();
+                let quoted = if program.contains(' ') {
+                    format!("\"{program}\"")
+                } else {
+                    program
+                };
+                let command_line = format!("{quoted} {} {}", shell.args.join(" "), shell.raw_tail.unwrap());
+                let read = command_wrapper_argv(&command_line);
+                assert_eq!(read, Some(argv(&[comspec, "/D", "/S", "/C", line])), "{command_line}");
+                assert!(is_command_wrapper(&read.unwrap()));
+            }
+        }
+    }
+
+    #[test]
+    fn a_wrapper_line_loses_only_its_outer_quotes_under_s() {
+        let read = |command_line: &str| command_wrapper_argv(command_line).map(|argv| argv[4].clone());
+        assert_eq!(
+            read(r#"cmd /d /s /c   "a" b "c" d"#).as_deref(),
+            Some(r#"a" b "c d"#),
+            "text after the last quote kept"
+        );
+        assert_eq!(
+            read("cmd.exe\t/D /S /C\tdir /b").as_deref(),
+            Some("dir /b"),
+            "unquoted: as written"
+        );
+        assert_eq!(read(r#"cmd.exe /D /S /C "unclosed"#).as_deref(), Some("unclosed"));
+        for other in [
+            "cmd.exe /D /S /C",
+            "cmd.exe /D /S /C   ",
+            "cmd.exe /D /S /K \"x\"",
+            "cmd.exe /C \"x\"",
+            "cmd.exe /D/S/C \"x\"",
+            "notcmd.exe /D /S /C \"x\"",
+            r#""C:\Program Files\x.exe" /D /S /C "x""#,
+            "",
+        ] {
+            assert_eq!(command_wrapper_argv(other), None, "{other}");
+        }
     }
 
     #[test]

@@ -3,8 +3,8 @@
 //! whatever the shell; a Rust-only extension for the shells a Windows pane runs), and the PowerShell call a live
 //! replay runs ([`crate::live::replay`]).
 //!
-//! The dialect is the pane's shell's, read off its program's name ([`ShellDialect::of_shell`]), a Windows `.exe`
-//! dropped in any case:
+//! The dialect is the pane's shell's, read off its program's name ([`ShellDialect::of_shell`], past an `env` that
+//! runs it), a Windows `.exe` dropped in any case:
 //!
 //! - **POSIX** (`sh`, `bash`, `zsh`, `dash`, `ksh` and kin, `tcsh`, `csh`): upstream's line, each word single-quoted
 //!   ([`shell_quoted_line`]), a line feed after it. Git for Windows' `sh` and `bash` are POSIX shells too.
@@ -41,10 +41,77 @@
 
 use crate::command_restore::{basename, shell_name, shell_quoted_line};
 
-/// The POSIX-family shells, by name: upstream's and their kin.
-const POSIX_SHELLS: [&str; 13] = [
-    "sh", "bash", "zsh", "dash", "ash", "ksh", "mksh", "oksh", "pdksh", "yash", "busybox", "tcsh", "csh",
+/// The POSIX-family shells, by name: upstream's and their kin (the Korn shells' `ksh93`, OpenBSD's ports `oksh` and
+/// `loksh`, `mksh`'s legacy `lksh`, restricted `rbash`, Debian's `posh`, the Schily `bosh`, `BusyBox`'s `ash` and
+/// `hush`).
+const POSIX_SHELLS: [&str; 20] = [
+    "sh", "bash", "rbash", "zsh", "dash", "ash", "hush", "ksh", "ksh93", "mksh", "lksh", "oksh", "loksh", "pdksh",
+    "posh", "bosh", "yash", "busybox", "tcsh", "csh",
 ];
+
+/// Whether `word` names `env` (by any path, a Windows `.exe` dropped in any case).
+fn is_env(word: &str) -> bool {
+    shell_name(basename(word)).eq_ignore_ascii_case("env")
+}
+
+/// The program `env` runs, given the words after `env`: past its options (GNU's and BSD's: switches, bundled or not,
+/// `-u`/`-C`/`-P` and their long forms with their values, joined or the next word, `--` ending them), its
+/// `NAME=value` assignments, and the words `-S` (`--split-string`) splits, which `env` reads as more of its own
+/// arguments; another `env` it runs read the same way. Quotes around the program's word are dropped (`-S 'zsh -l'`
+/// splits on whitespace here into `'zsh` and `-l'`). `None` when no program follows.
+fn env_program<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let mut pending: Option<&'a str> = None;
+    loop {
+        let word = pending.take().or_else(|| words.next())?;
+        if word == "--" {
+            let program = words.next()?.trim_matches(['\'', '"']);
+            return if is_env(program) {
+                env_program(words)
+            } else {
+                Some(program)
+            };
+        }
+        if word == "-" || (word.contains('=') && !word.starts_with('-')) {
+            continue;
+        }
+        if let Some(long) = word.strip_prefix("--") {
+            if ["unset", "chdir"].contains(&long) {
+                words.next();
+            }
+            pending = long.strip_prefix("split-string=").filter(|rest| !rest.is_empty());
+            continue;
+        }
+        if let Some(bundle) = word.strip_prefix('-') {
+            let (takes_next, split) = env_short_options(bundle);
+            if takes_next {
+                words.next();
+            }
+            pending = split;
+            continue;
+        }
+        let program = word.trim_matches(['\'', '"']);
+        if !is_env(program) {
+            return Some(program);
+        }
+    }
+}
+
+/// What a bundle of `env`'s short options (`-iu`, `-uNAME`, `-Szsh`, without the `-`) leaves: whether the next word
+/// is an option's value, and the start of `-S`'s words joined to it.
+fn env_short_options(bundle: &str) -> (bool, Option<&str>) {
+    /// The short options taking a value.
+    const VALUED: [char; 3] = ['u', 'C', 'P'];
+    for (at, option) in bundle.char_indices() {
+        let rest = &bundle[at + option.len_utf8()..];
+        if VALUED.contains(&option) {
+            return (rest.is_empty(), None);
+        }
+        if option == 'S' {
+            return (false, Some(rest).filter(|rest| !rest.is_empty()));
+        }
+    }
+    (false, None)
+}
 
 /// What `cmd.exe` reads specially outside quotes, a caret escaping each; `%` and `"` have rules of their own.
 const CMD_METACHARACTERS: [char; 7] = ['^', '&', '|', '<', '>', '(', ')'];
@@ -77,11 +144,19 @@ impl ShellDialect {
     /// The dialect of a pane's shell as its config names it: a program path that may hold spaces
     /// (`C:\Program Files\PowerShell\7\pwsh.exe`) or a program and its arguments (`pwsh -NoLogo`, `/usr/bin/fish -l`).
     /// The first of the whole value's last component, that component's first word and the value's first word that
-    /// names a known shell; [`Self::Unknown`] when none does.
+    /// names a known shell; [`Self::Unknown`] when none does. A value run through `env`, the value's first word or
+    /// its last component's (`/usr/bin/env zsh`, `env -S 'zsh -l'`, `env -i HOME=/h zsh`,
+    /// `C:\Program Files\Git\usr\bin\env.exe bash`), is the program `env` runs ([`env_program`]).
     #[must_use]
     pub fn of_shell(shell: &str) -> Self {
-        let first_word = |value: &str| value.split_whitespace().next().unwrap_or(value).to_owned();
         let last = basename(shell).to_owned();
+        for value in [shell, &last] {
+            let mut words = value.split_whitespace();
+            if words.next().is_some_and(is_env) {
+                return env_program(words).map_or(Self::Unknown, Self::of_program);
+            }
+        }
+        let first_word = |value: &str| value.split_whitespace().next().unwrap_or(value).to_owned();
         [last.clone(), first_word(&last), first_word(shell)]
             .iter()
             .map(|candidate| Self::of_program(candidate))
