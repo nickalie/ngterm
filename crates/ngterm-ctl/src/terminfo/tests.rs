@@ -191,6 +191,15 @@ impl Fixture {
     }
 }
 
+/// This process's environment with `TERMINFO` naming `database`: the `.cmd` fake needs `PATH` and `SystemRoot` to
+/// find PowerShell, as a real `ssh.exe` would to run at all.
+#[cfg(windows)]
+fn windows_env(database: &Path) -> HashMap<OsString, OsString> {
+    let mut environment: HashMap<OsString, OsString> = std::env::vars_os().collect();
+    environment.insert("TERMINFO".into(), database.as_os_str().to_owned());
+    environment
+}
+
 fn connection(destination: &str) -> Connection {
     Connection {
         destination: destination.to_owned(),
@@ -507,7 +516,7 @@ fn the_dump_reaches_ssh_stdin_byte_for_byte_and_ends_in_eof() {
     let fixture = Fixture::new();
     let database = fixture.database("env", "78");
     let ssh = fixture.fake_ssh(0);
-    let outcome = run(&connection("buildbox"), None, &env(&[("TERMINFO", &database)]), &ssh);
+    let outcome = run(&connection("buildbox"), None, &windows_env(&database), &ssh);
     assert_eq!(outcome, Ok(Outcome::Exited(0)));
     let file = database.join("78").join(ENTRY);
     assert_eq!(fixture.read("ssh.stdin"), dumped("xterm-ghostty|env", &file));
@@ -597,7 +606,7 @@ fn a_non_zero_remote_status_is_reported_as_itself() {
     let fixture = Fixture::new();
     let database = fixture.database("env", "78");
     let ssh = fixture.fake_ssh(255);
-    let outcome = run(&connection("buildbox"), None, &env(&[("TERMINFO", &database)]), &ssh);
+    let outcome = run(&connection("buildbox"), None, &windows_env(&database), &ssh);
     assert_eq!(outcome, Ok(Outcome::Exited(255)));
 }
 

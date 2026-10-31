@@ -20,9 +20,11 @@ tests/cli/test_cli_only.py::test_session_wait_refuses_bad_arguments[zero]
 tests/cli/test_cli_only.py::test_session_wait_returns_at_once_when_the_status_already_matches
 tests/cli/test_cli_only.py::test_session_wait_sees_a_later_status_event
 tests/cli/test_cli_only.py::test_session_wait_times_out_with_124
+tests/cli/test_cli_only.py::test_terminfo_install_compiles_the_entry_into_the_remote_home
 tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_would_misread[-oProxyCommand=x]
 tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_would_misread[]
 tests/cli/test_cli_only.py::test_terminfo_install_refuses_a_destination_ssh_would_misread[two words]
+tests/cli/test_cli_only.py::test_terminfo_install_reports_how_ssh_ended
 tests/cli/test_cli_output.py::test_ask_blocks_until_cancelled
 tests/cli/test_cli_output.py::test_ask_form_options
 tests/cli/test_cli_output.py::test_ask_without_blocking
