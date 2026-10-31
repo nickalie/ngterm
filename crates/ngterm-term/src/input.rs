@@ -372,10 +372,39 @@ impl Pane {
             .encode(terminal, &input.engine())
             .map_err(PaneError::terminal)?;
         let sent = self.queue(&bytes)?;
+        self.after_typing(vt, sent && !input.key.is_modifier(), input.key.name() == "escape");
+        Ok(sent)
+    }
+
+    /// Type `text` as one press of an unidentified key carrying it, as upstream's `session.type` does
+    /// (`ghostty_surface_key` with only the text set); whether it sent anything. Ghostty's encoder sends such a key's
+    /// text as it is under every keyboard mode, control characters included (a typed `^C`, which the pane's line
+    /// discipline or console turns into the program's interrupt). The library's API takes no control character in a
+    /// key's text (`event.h`), so text holding one is written here as the encoder would have written it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Pane::key`].
+    pub fn type_text(&self, text: &str) -> Result<bool, PaneError> {
+        if !text.chars().any(|c| c.is_ascii_control()) {
+            return self.key(&KeyInput {
+                unshifted: None,
+                ..KeyInput::press(PhysicalKey::UNIDENTIFIED, Mods::empty(), text)
+            });
+        }
+        let vt = lock(&self.shared().vt);
+        let sent = self.queue(text.as_bytes())?;
+        self.after_typing(vt, sent, false);
+        Ok(sent)
+    }
+
+    /// What a typed key does besides sending (when it `sent` something other than a lone modifier): what [`Typing`]
+    /// says, an Escape clearing the selection whatever it says; then the repaint either asks for.
+    fn after_typing(&self, mut vt: std::sync::MutexGuard<'_, Vt>, sent: bool, escape: bool) {
         let mut moved = false;
-        if sent && !input.key.is_modifier() {
+        if sent {
             let typing = vt.input.typing;
-            if typing.clear_selection || input.key.name() == "escape" {
+            if typing.clear_selection || escape {
                 self.clear_selection_held(&mut vt);
             }
             moved = typing.scroll_to_bottom && vt.scroll_to_bottom();
@@ -385,7 +414,6 @@ impl Pane {
         if repaint {
             self.shared().wake();
         }
-        Ok(sent)
     }
 
     /// What typing does besides sending the key ([`Typing`]).

@@ -234,6 +234,36 @@ fn a_read_without_echo_is_password_input_where_the_pty_can_say() -> TestResult {
     Ok(())
 }
 
+/// A `^C` typed as `session.type` types text ([`Pane::type_text`]) interrupts the pane's program: the line
+/// discipline's SIGINT on Unix; on Windows the console's Ctrl+C event, which ends `ping` with `STATUS_CONTROL_C_EXIT`.
+#[test]
+fn a_typed_ctrl_c_interrupts_the_program() -> TestResult {
+    use ngterm_term::PaneCommand;
+
+    let (command, started) = if cfg!(windows) {
+        (
+            PaneCommand::new("ping.exe").args(["-n", "600", "127.0.0.1"]),
+            "127.0.0.1",
+        )
+    } else {
+        (
+            PaneCommand::new("/bin/sh").args(["-c", "echo ready; exec sleep 600"]),
+            "ready",
+        )
+    };
+    let pane = Pane::spawn(&command, &PaneConfig::new(SIZE))?;
+    wait_text(&pane, started);
+    assert!(pane.type_text("\x03")?, "the typed ^C sent nothing");
+    let status = exit_of(&pane);
+    if cfg!(windows) {
+        const STATUS_CONTROL_C_EXIT: u32 = 0xC000_013A;
+        assert_eq!(status.code, STATUS_CONTROL_C_EXIT, "{status:?}");
+    } else {
+        assert!(status.signal.is_some(), "{status:?}");
+    }
+    Ok(())
+}
+
 /// Windows' stand-in foreground: an interactive `cmd.exe` at its prompt holds it, a program typed into it holds it
 /// while it runs (the oldest one: `ping` here, not anything it starts), and the shell has it back once the program
 /// ends.

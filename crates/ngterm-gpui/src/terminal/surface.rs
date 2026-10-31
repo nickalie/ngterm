@@ -52,13 +52,10 @@ impl TerminalSurface {
     }
 }
 
-/// Sends `text` as one key press typing it (an unidentified key, as libghostty's `text_key` sent it).
+/// Sends `text` as one key press typing it (an unidentified key, as libghostty's `text_key` sent it), control
+/// characters too ([`Pane::type_text`]).
 fn type_run(pane: &Pane, text: &str) {
-    let key = KeyInput {
-        unshifted: None,
-        ..KeyInput::press(PhysicalKey::UNIDENTIFIED, Mods::empty(), text)
-    };
-    if let Err(err) = pane.key(&key) {
+    if let Err(err) = pane.type_text(text) {
         tracing::warn!(target: "ngterm::surface", %err, "typing into the terminal failed");
     }
 }

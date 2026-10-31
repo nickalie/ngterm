@@ -551,6 +551,7 @@ tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[right-sessio
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[right-session has no split pane-session.type]
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[scratch-session has no scratch terminal-session.text]
 tests/protocol/test_session_text.py::test_a_missing_pane_is_refused[scratch-session has no scratch terminal-session.type]
+tests/protocol/test_session_text.py::test_a_typed_ctrl_c_interrupts_the_running_program
 tests/protocol/test_session_text.py::test_search_counts_the_matches
 tests/protocol/test_session_text.py::test_text_all_includes_the_scrollback
 tests/protocol/test_session_text.py::test_text_defaults_to_the_pane_on_screen
