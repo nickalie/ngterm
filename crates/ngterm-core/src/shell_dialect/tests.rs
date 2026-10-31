@@ -80,6 +80,13 @@ fn a_configured_shell_is_read_through_its_spaces_and_arguments() {
         ),
         ("env -iuTMUX -P /opt/bin ksh93", ShellDialect::Posix),
         ("env --unset=TMUX - LANG=C env loksh", ShellDialect::Posix),
+        ("/usr/bin/env -- FOO=bar /bin/zsh", ShellDialect::Posix),
+        ("env -i -- - LANG=C TERM=xterm fish -l", ShellDialect::Fish),
+        ("env -- FOO=bar", ShellDialect::Unknown),
+        ("bash --rcfile /etc/env", ShellDialect::Posix),
+        ("/bin/zsh -c /opt/env", ShellDialect::Posix),
+        ("fish -C /etc/bash", ShellDialect::Fish),
+        ("/opt/my tools/env fish", ShellDialect::Fish),
         ("/usr/bin/env nu", ShellDialect::Unknown),
         ("/usr/bin/env", ShellDialect::Unknown),
         ("env -u", ShellDialect::Unknown),
@@ -92,6 +99,12 @@ fn a_configured_shell_is_read_through_its_spaces_and_arguments() {
             (r"C:\Program Files\Git\bin\sh.exe --login", ShellDialect::Posix),
             (r"C:\Windows\System32\cmd.exe", ShellDialect::Cmd),
             (r"pwsh -File C:\scripts\start.ps1", ShellDialect::PowerShell),
+            (r"pwsh -File C:\scripts\env", ShellDialect::PowerShell),
+            (r"pwsh -File C:\scripts\bash", ShellDialect::PowerShell),
+            (
+                r"C:\Program Files\PowerShell\7\pwsh.exe -File C:\tools\env",
+                ShellDialect::PowerShell,
+            ),
         ]);
     }
     for (shell, dialect) in cases {

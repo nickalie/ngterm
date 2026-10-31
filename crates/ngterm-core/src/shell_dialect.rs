@@ -64,7 +64,15 @@ fn env_program<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<&'a str> 
     loop {
         let word = pending.take().or_else(|| words.next())?;
         if word == "--" {
-            let program = words.next()?.trim_matches(['\'', '"']);
+            // options end here, but not env's own `-` and its assignments, which it still reads before the program
+            let mut program = words.next()?;
+            if program == "-" {
+                program = words.next()?;
+            }
+            while program.contains('=') {
+                program = words.next()?;
+            }
+            let program = program.trim_matches(['\'', '"']);
             return if is_env(program) {
                 env_program(words)
             } else {
@@ -143,25 +151,30 @@ impl ShellDialect {
 
     /// The dialect of a pane's shell as its config names it: a program path that may hold spaces
     /// (`C:\Program Files\PowerShell\7\pwsh.exe`) or a program and its arguments (`pwsh -NoLogo`, `/usr/bin/fish -l`).
-    /// The first of the whole value's last component, that component's first word and the value's first word that
-    /// names a known shell; [`Self::Unknown`] when none does. A value run through `env`, the value's first word or
-    /// its last component's (`/usr/bin/env zsh`, `env -S 'zsh -l'`, `env -i HOME=/h zsh`,
-    /// `C:\Program Files\Git\usr\bin\env.exe bash`), is the program `env` runs ([`env_program`]).
+    /// The program is the value's shortest run of leading words that names a known shell or `env`, so a path with
+    /// spaces is read whole and a shell's argument never stands for it (`bash --rcfile /etc/env`,
+    /// `pwsh -File C:\scripts\bash`); [`Self::Unknown`] when no run does. A program `env` is the program it runs
+    /// ([`env_program`]: `/usr/bin/env zsh`, `env -S 'zsh -l'`, `C:\Program Files\Git\usr\bin\env.exe bash`).
     #[must_use]
     pub fn of_shell(shell: &str) -> Self {
-        let last = basename(shell).to_owned();
-        for value in [shell, &last] {
-            let mut words = value.split_whitespace();
-            if words.next().is_some_and(is_env) {
-                return env_program(words).map_or(Self::Unknown, Self::of_program);
+        let shell = shell.trim_start();
+        let mut end = 0;
+        loop {
+            let rest = &shell[end..];
+            let word = rest.trim_start();
+            if word.is_empty() {
+                return Self::Unknown;
+            }
+            end += rest.len() - word.len() + word.find(char::is_whitespace).unwrap_or(word.len());
+            let program = &shell[..end];
+            if is_env(program) {
+                return env_program(shell[end..].split_whitespace()).map_or(Self::Unknown, Self::of_program);
+            }
+            let dialect = Self::of_program(program);
+            if dialect != Self::Unknown {
+                return dialect;
             }
         }
-        let first_word = |value: &str| value.split_whitespace().next().unwrap_or(value).to_owned();
-        [last.clone(), first_word(&last), first_word(shell)]
-            .iter()
-            .map(|candidate| Self::of_program(candidate))
-            .find(|dialect| *dialect != Self::Unknown)
-            .unwrap_or(Self::Unknown)
     }
 
     /// What submits a typed line: upstream's line feed for POSIX shells and fish, else a carriage return, the Enter
