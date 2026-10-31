@@ -245,6 +245,35 @@ mod tests {
         assert_eq!(file_path(&raw), "/tmp/a/%FF.html");
     }
 
+    /// A navigation's address spells the volume as a `file:` URL does (a plain drive, a share's server lowercased and
+    /// punycoded, what `WebView2`'s grant protocol reads back), whichever spelling the page's grant was given in.
+    #[test]
+    #[cfg(windows)]
+    fn a_file_page_stays_inside_its_grant_whatever_its_volumes_spelling() {
+        for (grant, file, decision) in [
+            (r"\\ÑAS\share\site", r"\\ÑAS\share\site\index.html", Allow),
+            (r"\\?\UNC\NAS\Share\site", r"\\nas\share\site\index.html", Allow),
+            (r"\\?\C:\site", r"\\?\C:\site\index.html", Allow),
+            (r"\\?\C:\site", r"C:\site\sub\a.html", Allow),
+            (r"\\ÑAS\share\site", r"\\nas\share\site\index.html", Cancel),
+            (r"\\ÑAS\share\site", r"\\ÑAS\other\site\index.html", Cancel),
+            (r"\\?\C:\site", r"D:\site\index.html", Cancel),
+            (r"\\?\C:\site", r"\\?\C:\other\index.html", Cancel),
+        ] {
+            let address = Url::from_file_path(file).unwrap();
+            let navigation = HtmlNavigationAction {
+                url: address.clone(),
+                target: MainFrame,
+                user_activated: false,
+            };
+            assert_eq!(
+                decide(&navigation, &file_page(Some(grant))),
+                decision,
+                "{grant} {address}"
+            );
+        }
+    }
+
     /// Upstream's `HtmlOverlayTests.urlPagePolicy`: a URL page's main frame is pinned to its origin.
     #[test]
     fn a_url_page_is_pinned_to_its_origin() {

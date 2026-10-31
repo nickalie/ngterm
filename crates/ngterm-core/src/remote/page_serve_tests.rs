@@ -229,6 +229,39 @@ fn a_relative_path_or_a_url_page_serves_nothing() {
     assert_eq!(resolve(&text(&docs.docs(&["index.html"])), &web), None);
 }
 
+/// A grant on a share (this machine's administrative share of the fixture, by its name in capitals, which
+/// canonicalizing keeps) serves a request that spells the share otherwise (its server and name lowercased, or
+/// verbatim), and refuses one on another volume.
+#[test]
+#[cfg(windows)]
+fn a_grant_on_a_share_serves_its_files_in_any_spelling_of_the_share() {
+    let docs = Docs::new();
+    let canonical_docs = canonical(&docs.docs(&[]));
+    let plain = text(&canonical_docs).strip_prefix(r"\\?\").unwrap().to_owned();
+    let (drive, rest) = plain.split_once(r":\").unwrap();
+    let computer = std::env::var("COMPUTERNAME").unwrap().to_uppercase();
+    let grant = format!(r"\\{computer}\{drive}$\{rest}");
+    let source = HtmlSource::File {
+        path: format!(r"{grant}\index.html"),
+        grant_root: Some(grant.clone()),
+    };
+    let lower = format!(r"\\{}\{}$\{rest}", computer.to_lowercase(), drive.to_lowercase());
+    let verbatim = format!(r"\\?\UNC\{}\{}$\{rest}", computer.to_lowercase(), drive.to_lowercase());
+    // the real paths keep each spelling, so `Path::starts_with` tells them apart
+    assert!(
+        !canonical(Path::new(&format!(r"{lower}\index.html"))).starts_with(canonical(Path::new(&grant))),
+        "{lower} {grant}"
+    );
+    for base in [&grant, &lower, &verbatim] {
+        let index = format!(r"{base}\index.html");
+        assert_eq!(resolve(&index, &source), Some(canonical(Path::new(&index))), "{base}");
+        assert_eq!(resolve(&format!(r"{base}\..\secret.txt"), &source), None, "{base}");
+    }
+    let elsewhere = format!(r"\\ngterm-nowhere.invalid\{drive}$\{rest}\index.html");
+    assert_eq!(resolve(&elsewhere, &source), None);
+    assert_eq!(resolve(&format!(r"{plain}\index.html"), &source), None);
+}
+
 /// Upstream's `testAdmissionRefusesPastItsLimitUntilASlotIsReleased`.
 #[test]
 fn admission_refuses_past_its_limit_until_a_slot_is_released() {

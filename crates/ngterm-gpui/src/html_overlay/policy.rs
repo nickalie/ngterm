@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use ngterm_core::html::navigation::file_path;
 #[cfg(target_os = "linux")]
 use ngterm_core::html::{HtmlNavigationAction, HtmlNavigationTarget, REPLICA_SCHEME};
-use ngterm_core::html::{HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlSource, replica_path, replica_url_of};
+use ngterm_core::html::{
+    HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlSource, replica_path, replica_url_of, strictly_inside, volume,
+};
 use url::Url;
 
 /// The scheme a granted file page loads through: every read passes the handler, which answers only inside the grant,
@@ -146,7 +148,8 @@ impl GrantRoot {
 /// another server's or share's file) is refused before the file system is asked. Resolving such a path would make
 /// Windows open it, and a page could spell any server in a root-relative `/UNC/<server>/...` address: an SMB
 /// connection to it hands over the user's NTLM credentials. The grant's own two volumes are the user's choice, so a
-/// request on either is resolved, and containment is checked on the real paths.
+/// request on either is resolved, and containment is checked on the real paths, their volumes in any spelling
+/// ([`strictly_inside`]).
 ///
 /// # Errors
 ///
@@ -167,44 +170,6 @@ pub fn granted_file(root: Option<&GrantRoot>, requested: Option<&Path>) -> Resul
         return Err(NOT_A_FILE);
     }
     Ok(resolved)
-}
-
-/// Whether real path `path` sits strictly inside real path `root`. Their volumes compare as Windows reads them
-/// ([`volume`]): a share's server comes back from the page's address lowercased (a `file:` URI's host), while the
-/// root keeps the spelling it was resolved from, and `Path::starts_with` compares a prefix's server exactly.
-fn strictly_inside(path: &Path, root: &Path) -> bool {
-    use std::path::Component;
-
-    fn after_volume(path: &Path) -> Vec<Component<'_>> {
-        path.components()
-            .skip_while(|component| matches!(component, Component::Prefix(_)))
-            .collect()
-    }
-    let (path_rest, root_rest) = (after_volume(path), after_volume(root));
-    volume(path) == volume(root) && path_rest.len() > root_rest.len() && path_rest.starts_with(&root_rest)
-}
-
-/// The volume `path` names, in one spelling whether verbatim (`\\?\`) or not and in any case, as Windows reads it: a
-/// drive's letter, or a share's server and name, the server as a `file:` URI's host spells it (lowercased, a
-/// non-ASCII name punycoded, as a page's address carries it); `None` for a path without one (every Unix path).
-fn volume(path: &Path) -> Option<String> {
-    use std::path::{Component, Prefix};
-
-    let Some(Component::Prefix(prefix)) = path.components().next() else {
-        return None;
-    };
-    Some(
-        match prefix.kind() {
-            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => format!("{}:", char::from(letter)),
-            Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
-                let server = server.to_string_lossy();
-                let server = url::Host::parse(&server).map_or_else(|_| server.to_string(), |host| host.to_string());
-                format!(r"\\{server}\{}", share.to_string_lossy())
-            }
-            Prefix::Verbatim(_) | Prefix::DeviceNS(_) => prefix.as_os_str().to_string_lossy().into_owned(),
-        }
-        .to_lowercase(),
-    )
 }
 
 /// One thing a page's main-frame load reports.
@@ -1089,42 +1054,6 @@ mod tests {
         assert!(needs_report(Some(&cleared), Some(&titled), &titled));
         // the first report
         assert!(needs_report(None, None, &titled));
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn a_volume_is_a_drive_or_a_share_in_any_spelling() {
-        let volume = |path: &str| volume(Path::new(path));
-        assert_eq!(volume(r"C:\a\b"), volume(r"\\?\c:\x"));
-        assert_ne!(volume(r"C:\a"), volume(r"D:\a"));
-        assert_eq!(volume(r"\\Server\Share\a"), volume(r"\\?\UNC\server\share\b"));
-        assert_ne!(volume(r"\\server\share\a"), volume(r"\\server\other\a"));
-        assert_ne!(volume(r"\\server\share\a"), volume(r"\\elsewhere\share\a"));
-        assert_ne!(volume(r"C:\a"), volume(r"\\localhost\C$\a"));
-        assert_eq!(volume(r"\a\b"), None);
-        // a server as a page's address spells it: lowercased, punycoded
-        assert_eq!(volume(r"\\ÑAS\share\a"), volume(r"\\xn--as-yja\share\a"));
-    }
-
-    /// A share's server spelled differently by the grant and by a page's address (`Path::starts_with` would refuse
-    /// it).
-    #[test]
-    #[cfg(windows)]
-    fn a_shares_file_is_inside_its_grant_whatever_its_servers_spelling() {
-        let root = Path::new(r"\\?\UNC\NAS\Share\site");
-        let page = Path::new(r"\\?\UNC\nas\share\site\index.html");
-        assert!(!page.starts_with(root));
-        assert!(strictly_inside(page, root));
-        assert!(strictly_inside(
-            Path::new(r"\\?\UNC\xn--as-yja\share\site\a"),
-            Path::new(r"\\?\UNC\ñas\share\site")
-        ));
-        assert!(!strictly_inside(root, root));
-        assert!(!strictly_inside(Path::new(r"\\?\UNC\nas\share\other\a"), root));
-        assert!(!strictly_inside(Path::new(r"\\?\UNC\nas\other\site\a"), root));
-        assert!(!strictly_inside(Path::new(r"\\?\C:\site\a"), Path::new(r"\\?\D:\site")));
-        // the rest of the path compares exactly: canonicalizing gives each name its spelling on disk
-        assert!(!strictly_inside(Path::new(r"\\?\C:\Site\a"), Path::new(r"\\?\C:\site")));
     }
 
     #[test]
