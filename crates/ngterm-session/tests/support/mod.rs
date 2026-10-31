@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ngterm_ghostty_vt::Terminal;
+use ngterm_host::fakes::copy_executable;
 use ngterm_session::build_id::Staged;
 use ngterm_session::protocol::{ExitStatus, GridSize, LeadRole, Managed, SessionSpec};
 use ngterm_session::server::clients::{ClientEvent, RecvError, Subscription};
@@ -36,11 +37,15 @@ pub fn wait_for<T: std::fmt::Debug>(what: &str, mut read: impl FnMut() -> T, don
 
 /// A staged root under `root` holding a copy of the binary with `id` staged beside it, replaced through a new file as
 /// a stager does (a server never runs it on Windows: it runs a private copy); the executable's path.
+///
+/// A child process writes the copy ([`copy_executable`]): a copy written here would leave its write descriptor, for as
+/// long as the copy takes, to every child another test's thread forks meanwhile, until that child's exec, and starting
+/// the copy before such a child execs fails with ETXTBSY ("Text file busy").
 pub fn stage(root: &Path, id: &str) -> TestResult<PathBuf> {
     let executable = root.join("bin").join(Path::new(EXE).file_name().ok_or("no file name")?);
     std::fs::create_dir_all(executable.parent().ok_or("no parent")?)?;
     let temporary = executable.with_extension("new");
-    std::fs::copy(EXE, &temporary)?;
+    copy_executable(Path::new(EXE), &temporary)?;
     std::fs::rename(&temporary, &executable)?;
     Staged::write_beside(&executable, id)?;
     Ok(executable)

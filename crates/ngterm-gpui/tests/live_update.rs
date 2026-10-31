@@ -39,12 +39,13 @@ use support::{GPUI, Sandbox, TestResult, have, lavapipe_icd};
 const QUIT_DEADLINE: Duration = Duration::from_secs(10);
 
 /// A staged root `<sandbox>/<name>` holding a copy of `executable` as `bin/ngterm-session` with the build `id` staged
-/// beside it, renamed into place as `scripts/stage.sh` does; the staged executable.
+/// beside it, renamed into place as `scripts/stage.sh` does; the staged executable. A child writes the copy, so no
+/// child another test forks meanwhile holds it open for writing when it starts (`fakes::copy_executable`).
 fn stage(sandbox: &Sandbox, executable: &Path, name: &str, id: &str) -> TestResult<PathBuf> {
     let staged = sandbox.path(name).join("bin/ngterm-session");
     std::fs::create_dir_all(staged.parent().ok_or("no parent")?)?;
     let temporary = staged.with_extension("new");
-    std::fs::copy(executable, &temporary)?;
+    ngterm_host::fakes::copy_executable(executable, &temporary)?;
     std::fs::rename(&temporary, &staged)?;
     Staged::write_beside(&staged, id)?;
     Ok(staged)

@@ -1,6 +1,6 @@
 //! In-memory fakes of the host traits, for tests that run the core or the control server without a window, a
 //! terminal or a daemon. Each records what was asked of it so a test can assert on it afterwards. Beside them,
-//! [`write_executable`] writes a script a test runs.
+//! [`write_executable`] writes a script a test runs and [`copy_executable`] copies a binary it runs.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -733,8 +733,8 @@ impl crate::ProcessTable for FakeProcessTable {
 /// Writes `text` to `path` as an executable (mode 0755) for a test to run, without this process ever holding a write
 /// descriptor to it. A test on another thread that forks while this process holds one hands its child a copy until the
 /// child's own exec (close-on-exec closes it only then), and running the file meanwhile fails with ETXTBSY ("Text file
-/// busy"). A child `install` writes it instead: the text goes to `<path>.source` first, which nothing runs, and is
-/// removed afterwards.
+/// busy"). A child `install` writes it instead ([`copy_executable`]): the text goes to `<path>.source` first, which
+/// nothing runs, and is removed afterwards.
 ///
 /// # Errors
 ///
@@ -744,17 +744,25 @@ pub fn write_executable(path: &Path, text: &str) -> io::Result<()> {
     let mut source = path.as_os_str().to_owned();
     source.push(".source");
     std::fs::write(&source, text)?;
-    let status = Command::new("install")
-        .args(["-m", "755"])
-        .arg(&source)
-        .arg(path)
-        .status();
+    let installed = copy_executable(Path::new(&source), path);
     std::fs::remove_file(&source)?;
-    let status = status?;
+    installed
+}
+
+/// Copies the binary `from` to `to` as an executable (mode 0755) for a test to run, without this process ever holding
+/// a write descriptor to the copy: a child `install` writes it, for [`write_executable`]'s reason (a test staging a
+/// build's binary and starting it while other tests start theirs).
+///
+/// # Errors
+///
+/// Starting `install`; an `install` that fails is an error naming `to`.
+#[cfg(unix)]
+pub fn copy_executable(from: &Path, to: &Path) -> io::Result<()> {
+    let status = Command::new("install").args(["-m", "755"]).arg(from).arg(to).status()?;
     if status.success() {
         Ok(())
     } else {
-        Err(io::Error::other(format!("install {}: {status}", path.display())))
+        Err(io::Error::other(format!("install {}: {status}", to.display())))
     }
 }
 
@@ -767,6 +775,17 @@ pub fn write_executable(path: &Path, text: &str) -> io::Result<()> {
 #[cfg(windows)]
 pub fn write_executable(path: &Path, text: &str) -> io::Result<()> {
     std::fs::write(path, text)
+}
+
+/// Copies the binary `from` to `to` for a test to run: [`copy_executable`]'s Windows form. No fork hands a write handle
+/// to a child (a file's handle is not inheritable), so the copy is made directly.
+///
+/// # Errors
+///
+/// Copying the file.
+#[cfg(windows)]
+pub fn copy_executable(from: &Path, to: &Path) -> io::Result<()> {
+    std::fs::copy(from, to).map(drop)
 }
 
 #[cfg(test)]

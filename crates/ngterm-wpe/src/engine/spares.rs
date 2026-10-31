@@ -110,10 +110,12 @@ mod tests {
         assert!(!descends_from(99, 10, &table));
     }
 
-    /// `sleep` run under the web process's name.
+    /// `sleep` run under the web process's name. A child writes the copy (`fakes::copy_executable`): a copy written
+    /// here would leave its write descriptor, for as long as it takes to exec, in a child another test forks
+    /// meanwhile, and starting the copy would then fail with ETXTBSY.
     fn stand_in(dir: &std::path::Path, name: &str) -> Child {
         let program = dir.join(name);
-        std::fs::copy("/bin/sleep", &program).unwrap();
+        ngterm_host::fakes::copy_executable(std::path::Path::new("/bin/sleep"), &program).unwrap();
         Command::new(&program).arg("30").spawn().unwrap()
     }
 

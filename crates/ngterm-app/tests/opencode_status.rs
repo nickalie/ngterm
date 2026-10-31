@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use ngterm_host::fakes::write_executable;
 use serde_json::{Value, json};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -135,16 +136,6 @@ fn script_path(dir: &Path, stem: &str) -> PathBuf {
     } else {
         dir.join(stem)
     }
-}
-
-fn write_executable(path: &Path, text: &str) -> TestResult {
-    fs::write(path, text)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
-    }
-    Ok(())
 }
 
 /// `path` single-quoted for PowerShell.

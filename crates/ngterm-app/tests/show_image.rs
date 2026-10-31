@@ -65,14 +65,12 @@ impl Root {
 
     #[cfg(unix)]
     fn write_recorder(&self) -> TestResult {
-        use std::os::unix::fs::PermissionsExt as _;
         let recorder = self.path.join("bin/ngtermctl");
         let calls = self.calls_file().display().to_string().replace('\'', r"'\''");
-        fs::write(
+        ngterm_host::fakes::write_executable(
             &recorder,
-            format!("#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\"; done >> '{calls}'\n"),
+            &format!("#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\"; done >> '{calls}'\n"),
         )?;
-        fs::set_permissions(&recorder, fs::Permissions::from_mode(0o755))?;
         Ok(())
     }
 

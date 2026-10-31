@@ -587,6 +587,41 @@ guest has 4 CPUs and 6.5 GB of memory.
     `canGoBack` turns true once `WebView2`'s `HistoryChanged` lands: `navigate back` after a reload is refused or not
     by that race (`test_cli_output.py::test_overlay_page_blocks_until_submitted`, green in three runs, red in the
     fourth, taken out of the list); upstream's reload of such a page adds none (Task 6)
+- ➕ (side task 37) `ngterm-session`'s `tests/handoff.rs` failed now and then with ETXTBSY ("Text file busy") starting a
+  staged copy (`a_client_of_another_build_hands_the_server_over_…`, `an_update_hands_a_running_server_…`): the
+  multithreaded write-then-exec race. `support::stage` wrote the copy in the test process (std's `File`, already
+  `O_CLOEXEC`; the temp name and rename it used change nothing, the inode is the same), and a child another test
+  thread forked during that write inherited the write descriptor and held it until its own exec, so starting the copy
+  first failed. A diagnostic scan of the test process's children (`/proc/self/task/*/children`) caught them: 47
+  children holding the copy while it was written in 30 runs, and three still holding it (`O_WRONLY|O_CLOEXEC`, the
+  test binary's image not yet exec'd, named after the forking thread: another test's or a session server's) 0.5 to
+  0.7 ms after the test had closed it. Fixed in the test support: `ngterm-host`'s fakes gain `copy_executable`, a
+  child `install` writing the copy, beside `write_executable` (the same fix for scripts, which now goes through it),
+  so the test process never holds a write descriptor to anything it runs; `stage`, `tests/replay.rs`'s scripts and
+  `ngterm-gpui`'s `tests/live_update.rs` stage use them. No `O_PATH`/`fexecve` route helps: the kernel refuses the
+  exec on the inode's open writers, however it is named. macOS has the same race (its exec refuses a vnode open for
+  writing) and the same fix (`install` is BSD's there); Windows has no ETXTBSY, and no equivalent sharing violation
+  here: a file's handle is not inheritable, so no child takes it, and its copy stays `fs::copy`. The app itself has
+  no such write: on Unix the stager (`scripts/stage.sh`), another process, writes the binary before the app runs it,
+  and the Windows server's private image is written in-process but runs only after it is closed, with nothing
+  inheriting its handle. Rate on Linux (the handoff test binary in a loop): 3 ETXTBSY failures in 200 runs before,
+  0 failures in 400 after (where 3 in 200 would leave about a 0.2% chance of none). Left as they are, the same
+  pattern in other crates' tests, none seen failing: scripts written in process and run by `ngterm-app`
+  (`hook_runner`'s quoted command line, `adapter_tests`, `restore_tests`, `tests/opencode_status.rs`,
+  `tests/show_image.rs`) and by `ngterm-gpui`'s app (`tests/keyboard_layout.rs`, `tests/throughput.rs`);
+  `write_executable` is their fix
+- ➕ (side task 40) the write-then-run sweep: every test that wrote a file in its own process and then ran it now
+  stages it through `ngterm-host`'s fakes (`write_executable` for a script, `copy_executable` for a binary). The
+  seven sites side task 37 listed take `write_executable`; the sweep (every exec mode set, `fs::copy`/`hard_link`
+  of something then started, every shebang written) found two more, both copies of a binary: `ngterm-ctl`'s
+  `tests/cli_local.rs` copies `ngtermctl` when a hard link fails, and `ngterm-wpe`'s `engine::spares` tests copy
+  `/bin/sleep` as a stand-in web process (`ngterm-wpe` gains the `fakes` dev-dependency). Checked and left: files
+  given an exec mode but never run (`restore::mode`'s and `launch`'s probes, `integrations::files`' mode tests, the
+  WPE provider's stand-in `WPEWebProcess`), scripts copied and run through `bash`/`powershell` (a read, not an exec:
+  `show_image`'s skill script, the `-sys` crates' build scripts), stubs written without an exec mode (never run),
+  the session server's private image (run only on Windows, and in tests only compared), Windows-only copies
+  (`adapter_tests`' `cmd.exe`), and the app's own installs (`integrations::files::write_file` writes the agent hooks
+  for the agents to run, never this process). No Rust helper sits under `conformance/`.
 
 ### Task 9: Docs
 

@@ -55,12 +55,7 @@ impl Bench {
         let dir = tempfile::tempdir().unwrap();
         let (name, text) = Self::STUB;
         let stub = dir.path().join(name);
-        fs::write(&stub, text).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        ngterm_host::fakes::write_executable(&stub, text).unwrap();
         Self { dir }
     }
 
