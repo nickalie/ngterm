@@ -28,7 +28,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 16] = [
+pub const CASES: [(&str, Case); 22] = [
     ("the_engine_renders_on_the_renderers_gpu_in_its_mode", mode),
     ("a_page_loads_and_its_frames_reach_the_screen", loads),
     ("a_page_moved_to_another_window_draws_there", moved),
@@ -71,6 +71,30 @@ pub const CASES: [(&str, Case); 16] = [
     (
         "a_play_survives_rescues_that_rerun_the_selection_twice",
         replica_play_reruns,
+    ),
+    (
+        "a_pause_during_a_rescue_aborts_the_play_and_keeps_the_audio_paused",
+        replica_pause_during_rescue,
+    ),
+    (
+        "a_pause_during_a_rescue_keeps_autoplay_audio_paused",
+        replica_pause_during_rescue_autoplay,
+    ),
+    (
+        "a_pause_before_a_rescue_keeps_autoplay_audio_paused",
+        replica_pause_before_rescue_autoplay,
+    ),
+    (
+        "a_later_sources_failure_stays_silent_while_an_earlier_one_is_rescued",
+        granted_later_source_silent,
+    ),
+    (
+        "a_later_sources_held_failure_is_told_once_the_earlier_one_is_removed",
+        replica_held_failure_told_on_removal,
+    ),
+    (
+        "a_play_after_a_reload_of_a_file_that_appeared_waits_for_a_fresh_rescue",
+        granted_unreadable_reloaded,
     ),
 ];
 
@@ -1026,5 +1050,287 @@ fn replica_play_reruns(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     })?;
     check(close(seen, GREEN), || {
         "the page's play() was rejected by a rerun of the selection".to_owned()
+    })
+}
+
+/// A `pause()` while a `play()` waits on its rescue, whose read through the channel the origin holds, aborts that
+/// play as a browser's pause steps do: the promise rejects with `AbortError`, and once the file arrives the element
+/// loads it but stays paused. A first click plays (the gesture media needs), a second pauses.
+fn replica_pause_during_rescue(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    pause_and_rescue(
+        fixture,
+        Pause {
+            autoplay: false,
+            with_play: false,
+        },
+    )
+}
+
+/// As [`replica_pause_during_rescue`], of an `autoplay` element: the rescue's load of the blob, which turns `WebKit`'s
+/// autoplay back on, does not play what the page paused.
+fn replica_pause_during_rescue_autoplay(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    pause_and_rescue(
+        fixture,
+        Pause {
+            autoplay: true,
+            with_play: false,
+        },
+    )
+}
+
+/// An `autoplay` element the page plays and pauses in one click, before its file fails and its rescue starts, stays
+/// paused once the rescue's blob loads.
+fn replica_pause_before_rescue_autoplay(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    pause_and_rescue(
+        fixture,
+        Pause {
+            autoplay: true,
+            with_play: true,
+        },
+    )
+}
+
+/// How a pause case's page stops its audio.
+#[derive(Clone, Copy)]
+struct Pause {
+    /// The element has `autoplay`.
+    autoplay: bool,
+    /// The click that plays pauses at once, rather than a second click while the rescue's read is held.
+    with_play: bool,
+}
+
+/// A replica page's audio, played by a click and paused (see [`Pause`]) while its rescue's read is held by the
+/// origin, then given its file. Green when the play was aborted and nothing played, blue otherwise.
+fn pause_and_rescue(fixture: &mut Fixture, pause: Pause) -> Result<(), String> {
+    const GREEN: [u8; 4] = [0x30, 0xc0, 0x30, 0xff];
+    const BLUE: [u8; 4] = [0x30, 0x30, 0xc0, 0xff];
+    let page = format!(
+        "<body style='margin:0;background:#c03030'>\
+         <div id=go style='position:fixed;left:0;top:0;width:100%;height:100%'></div>\
+         <script>
+           const a = new Audio('slow.wav');
+           a.preload = 'auto';
+           a.autoplay = {autoplay};
+           const withPlay = {with_play};
+           let clicks = 0;
+           let outcome = 'pending';
+           let playing = false;
+           a.addEventListener('playing', () => {{ playing = true; }});
+           a.addEventListener('loadedmetadata', () => setTimeout(() => {{
+             const aborted = outcome === 'AbortError' && !playing && a.paused;
+             document.body.style.background = aborted ? '#30c030' : '#3030c0';
+           }}, 500));
+           document.getElementById('go').addEventListener('click', () => {{
+             clicks += 1;
+             if (clicks === 1) {{
+               a.play().then(() => {{ outcome = 'resolved'; }}, (error) => {{ outcome = error.name; }});
+               if (withPlay) a.pause();
+             }} else {{
+               a.pause();
+             }}
+           }});
+         </script></body>",
+        autoplay = pause.autoplay,
+        with_play = pause.with_play,
+    );
+    let mut origin = FakeOrigin::new(&[("/docs/index.html", "text/html", page)]);
+    let fake = Rc::get_mut(&mut origin).ok_or("the origin is shared")?;
+    fake.files.insert("/docs/slow.wav", ("audio/wav", wav_second()));
+    fake.held = Some("/docs/slow.wav");
+    // WebKit's own sniffing read is answered; the rescue's is held
+    fake.answered_first = 1;
+    let overlay = Fixture::replica(&origin, true);
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    fixture.until("the page on screen", &element, |_, width, pixels| {
+        close(pixel(pixels, width, width / 2, 200), RED)
+    })?;
+    fixture.click(point(px(160.), px(120.)))?;
+    let held = Rc::clone(&origin);
+    fixture.wait("the rescue's read", || !held.parked.borrow().is_empty())?;
+    if !pause.with_play {
+        fixture.click(point(px(160.), px(120.)))?;
+    }
+    // let the pause reach the page before the file does
+    let settle = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < settle {
+        fixture.frame()?;
+    }
+    let parked: Vec<_> = origin.parked.borrow_mut().drain(..).collect();
+    for token in parked {
+        html_overlay::answer_resource(
+            token,
+            Ok(PageResource {
+                mime_type: "audio/wav".to_owned(),
+                body: wav_second(),
+            }),
+        );
+    }
+    let mut seen = [0; 4];
+    fixture.until("the play's outcome", &element, |_, width, pixels| {
+        seen = pixel(pixels, width, width / 2, 200);
+        close(seen, GREEN) || close(seen, BLUE)
+    })?;
+    check(close(seen, GREEN), || {
+        "the play the page paused resolved, or the audio played once the file arrived".to_owned()
+    })
+}
+
+/// The failure of a `<source>` a selection only reached because an earlier one failed as unsupported for a moment is
+/// not told once that earlier one is rescued and loads: a browser never reaches it, and a page reading an error on its
+/// last `<source>` as "nothing plays" would tear down a working player. A first `<source>` that fails is still told,
+/// once. Red when the element with the missing last `<source>` loaded silently and the one with the missing first
+/// `<source>` told it once, yellow otherwise.
+fn granted_later_source_silent(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    const YELLOW: [u8; 4] = [0xc0, 0xc0, 0x30, 0xff];
+    let overlay = fixture.granted_page(
+        "index.html",
+        "<body style='margin:0;background:#3030c0'>\
+         <audio id=d preload=auto><source src='tone.wav'><source id=late src='missing.wav'></audio>\
+         <audio id=f preload=auto><source id=first src='missing.wav'><source src='tone.wav'></audio>\
+         <script>
+           let late = 0;
+           let first = 0;
+           let loaded = 0;
+           document.getElementById('late').addEventListener('error', () => { late += 1; });
+           document.getElementById('first').addEventListener('error', () => { first += 1; });
+           const done = () => {
+             loaded += 1;
+             if (loaded < 2) return;
+             setTimeout(() => {
+               document.body.style.background = late === 0 && first === 1 ? '#c03030' : '#c0c030';
+             }, 1000);
+           };
+           for (const id of ['d', 'f']) {
+             document.getElementById(id).addEventListener('loadedmetadata', done, { once: true });
+           }
+         </script></body>",
+        &[("tone.wav", &wav_second())],
+    )?;
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    let mut seen = [0; 4];
+    fixture.until("both elements loaded and settled", &element, |_, width, pixels| {
+        seen = pixel(pixels, width, width / 2, 200);
+        close(seen, RED) || close(seen, YELLOW)
+    })?;
+    check(close(seen, RED), || {
+        "the last <source>'s failure was told while the first played, or the first <source>'s was not told once"
+            .to_owned()
+    })
+}
+
+/// A later `<source>`'s failed read, held back while an earlier one's read is on its way (held by the origin), is told
+/// once the page removes that earlier one and its read lands: it holds nothing back in the element any more. A click
+/// removes it. Green when the failure was told once, after the removal; blue when it was told before; a timeout when
+/// never.
+fn replica_held_failure_told_on_removal(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    const GREEN: [u8; 4] = [0x30, 0xc0, 0x30, 0xff];
+    const BLUE: [u8; 4] = [0x30, 0x30, 0xc0, 0xff];
+    let mut origin = FakeOrigin::new(&[(
+        "/docs/index.html",
+        "text/html",
+        "<body style='margin:0;background:#c03030'>\
+         <div id=go style='position:fixed;left:0;top:0;width:100%;height:100%'></div>\
+         <audio id=d preload=auto><source id=first src='slow.wav'><source id=last src='missing.wav'></audio>\
+         <script>
+           let removed = false;
+           let told = 0;
+           document.getElementById('last').addEventListener('error', () => {
+             told += 1;
+             document.body.style.background = removed && told === 1 ? '#30c030' : '#3030c0';
+           });
+           document.getElementById('go').addEventListener('click', () => {
+             removed = true;
+             document.getElementById('first').remove();
+           });
+         </script></body>"
+            .to_owned(),
+    )]);
+    let fake = Rc::get_mut(&mut origin).ok_or("the origin is shared")?;
+    fake.files.insert("/docs/slow.wav", ("audio/wav", wav_second()));
+    fake.held = Some("/docs/slow.wav");
+    // WebKit's own sniffing read is answered; the rescue's is held
+    fake.answered_first = 1;
+    let overlay = Fixture::replica(&origin, true);
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    let held = Rc::clone(&origin);
+    fixture.wait("the first source's rescue read", || !held.parked.borrow().is_empty())?;
+    // let the last source's read fail, held back behind the first
+    let settle = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < settle {
+        fixture.frame()?;
+    }
+    let (width, pixels) = fixture.frame()?;
+    check(close(pixel(&pixels, width, width / 2, 200), RED), || {
+        "the last source's failure was told while the first one was still being read".to_owned()
+    })?;
+    fixture.click(point(px(160.), px(120.)))?;
+    let settle = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < settle {
+        fixture.frame()?;
+    }
+    let parked: Vec<_> = origin.parked.borrow_mut().drain(..).collect();
+    for token in parked {
+        html_overlay::answer_resource(
+            token,
+            Ok(PageResource {
+                mime_type: "audio/wav".to_owned(),
+                body: wav_second(),
+            }),
+        );
+    }
+    let mut seen = [0; 4];
+    fixture.until("the last source's failure told", &element, |_, width, pixels| {
+        seen = pixel(pixels, width, width / 2, 200);
+        close(seen, GREEN) || close(seen, BLUE)
+    })?;
+    check(close(seen, GREEN), || {
+        "the last source's failure was told more than once".to_owned()
+    })
+}
+
+/// A file the page's scheme could not read, told to the page once, then put in place: the page's `load()` and
+/// `play()` of it read it afresh, and the play resolves (it is not rejected as already unreadable while the audio
+/// plays). The click is the gesture media needs. Green when the play resolved, blue when it rejected.
+fn granted_unreadable_reloaded(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    const GREEN: [u8; 4] = [0x30, 0xc0, 0x30, 0xff];
+    const BLUE: [u8; 4] = [0x30, 0x30, 0xc0, 0xff];
+    const YELLOW: [u8; 4] = [0xc0, 0xc0, 0x30, 0xff];
+    let overlay = fixture.granted_page(
+        "index.html",
+        "<body style='margin:0;background:#c03030'>\
+         <div id=go style='position:fixed;left:0;top:0;width:100%;height:100%'></div>\
+         <script>
+           const a = new Audio('later.wav');
+           a.preload = 'auto';
+           a.addEventListener('error', () => { document.body.style.background = '#c0c030'; }, { once: true });
+           document.getElementById('go').addEventListener('click', () => {
+             a.load();
+             a.play().then(
+               () => { document.body.style.background = '#30c030'; },
+               () => { document.body.style.background = '#3030c0'; });
+           });
+         </script></body>",
+        &[],
+    )?;
+    let HtmlSource::File {
+        grant_root: Some(root), ..
+    } = &overlay.source
+    else {
+        return Err("the granted page has no root".to_owned());
+    };
+    let root = PathBuf::from(root);
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    fixture.until("the missing file's failure told", &element, |_, width, pixels| {
+        close(pixel(pixels, width, width / 2, 200), YELLOW)
+    })?;
+    std::fs::write(root.join("later.wav"), wav_second()).map_err(|err| err.to_string())?;
+    fixture.click(point(px(160.), px(120.)))?;
+    let mut seen = [0; 4];
+    fixture.until("the play's outcome", &element, |_, width, pixels| {
+        seen = pixel(pixels, width, width / 2, 200);
+        close(seen, GREEN) || close(seen, BLUE)
+    })?;
+    check(close(seen, GREEN), || {
+        "the play after the reload was rejected as already unreadable".to_owned()
     })
 }
