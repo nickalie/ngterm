@@ -139,7 +139,7 @@ guest has 4 CPUs and 6.5 GB of memory.
 
 ### Task 3: App services on Windows (`ngterm-app`)
 
-- [ ] the hook runner's Windows form (no `poll`; pipe readers on threads, the same timeout and output caps)
+- [x] the hook runner's Windows form (no `poll`; pipe readers on threads, the same timeout and output caps)
 - [ ] the log file's Windows form (open without following a reparse point, shared for appending, the same rotation
   under the running instance's lock)
 - [ ] the remote presentation process's Windows form (its lifetime, stop and reap)
@@ -154,6 +154,26 @@ guest has 4 CPUs and 6.5 GB of memory.
   restore and `OpenCode` plugin tests run on Windows too
 - ➕ left open: Codex's Windows hooks (`command_windows`) still run the POSIX Codex adapter under Git Bash: it has no
   PowerShell form yet (its blocker watcher and question check are the largest script of the package)
+- ➕ (side task 27) hooks and custom commands ran `/bin/sh -c` on Windows too, so none could start there. One place now
+  chooses the shell of a user's command line, `ngterm-host`'s `command_line`: `/bin/sh -c` on Unix, `%ComSpec% /D /S /C
+  "<line>"` on Windows (`cmd.exe` when `ComSpec` names none; the system's interpreter, as Node's `shell: true` and
+  Ghostty's command use it, and fast enough for a hook per event), the quoted line passed as written (`raw_arg`).
+  Hooks, custom commands (`LaunchSpec::command_line`), a pane's command (`ngterm-term`'s launch) and the overlay job
+  (`ngtermctl`) share it. The starter `hooks.conf` and `keymap.conf` name `cmd.exe` and `%VAR%` on Windows. The hook
+  runner was checked end to end on Windows: the event on stdin, the `AGT_*` environment, the stderr tail's cap and the
+  exit status (`ngterm-app`'s launcher tests through `cmd`: a hook line reading stdin into files, a quoted program path
+  with spaces and a quoted argument, a failing line's status and stderr), and there is no timeout, as upstream has
+  none. The hook and custom-command conformance tests build their lines in either dialect
+  (`agterm_conformance.command_line`) under a new capability, `cmd-command-line`, which the Windows build claims: 11
+  ids joined the Windows ratchet. `test_run_in_a_removed_session_directory_starts_in_home` stays POSIX-only: Windows
+  keeps the directory a pane's shell works in from being removed. Their external programs (`more`) needed side task
+  22's `PATH` fix, merged in first
+- ➕ found and left to their tasks, the other `/bin/sh` lines on Windows: an overlay program's wrapper
+  (`overlay_capture::surface_command`, `/usr/bin/env /bin/sh -c '( eval "$NGTERM_OVL_CMD" ); …'`, handed to `cmd`
+  there, so the GPUI overlay's program does not start on Windows; its tests stay under `posix-command-line`), the
+  Edit Keymap/Hooks editor command (`keymap::editor_command`, `$SHELL -ilc`), the live re-attach's fallback creation
+  argv (`commands/live/lead.rs`, a fixed line that should fail anyway), and `OpenCode`'s version probe (a POSIX login
+  shell on Unix, its own `cmd.exe` form on Windows)
 - ➕ (side task 22) hooks, keymap and custom commands got a broken `PATH` on Windows: `widened_path` (`ngterm-core`)
   split and joined it with `:`, cutting every `C:\...` entry at the drive's colon and never splitting at `;`. It now
   splits and joins with `std::env::split_paths`/`join_paths` (a quoted Windows entry kept whole), compares entries
