@@ -17,6 +17,8 @@ base64.workspace = true
 mime_guess.workspace = true
 # the installed identity of a macOS app bundle (identity.rs)
 plist.workspace = true
+# a share server's IDNA form read back, so only a real Unicode name equals its punycode (html/volume.rs)
+idna.workspace = true
 pulldown-cmark.workspace = true
 serde.workspace = true
 strum.workspace = true

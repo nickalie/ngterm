@@ -2,13 +2,15 @@
 //! `Session+HtmlOverlay.swift`): what a page shows ([`HtmlSource`]), its origin, the page-zoom ladder, the page value
 //! the model carries ([`HtmlOverlay`]), the checks `session.overlay.open` runs before any web view exists (`grantError`,
 //! `webURL`), the theme a page sees, and the seam to the frontend's web views ([`HtmlHost`]). The navigation policy,
-//! the page bridge, the outcomes and the browser profile have modules of their own.
+//! the page bridge, the outcomes, the browser profile and a path's volume as the grant's checks compare it have modules
+//! of their own.
 
 pub mod bridge;
 pub mod navigation;
 pub mod outcomes;
 pub mod profile;
 pub mod theme;
+mod volume;
 
 #[cfg(test)]
 mod page_tests;
@@ -16,6 +18,7 @@ mod page_tests;
 pub use navigation::{HtmlNavigationAction, HtmlNavigationDecision, HtmlNavigationTarget, HtmlOrigin, decide};
 pub use outcomes::HtmlPageOutcomes;
 pub use theme::HtmlOverlayTheme;
+pub use volume::{strictly_inside, volume};
 
 use url::Url;
 
@@ -30,7 +33,8 @@ pub const OUTSIDE_CWD: &str = "html file is outside cwd";
 /// absolute; a grant must be absolute, neither the file system's root nor `home`, and a directory holding the file.
 /// Paths compare by their standardized components, `.` and `..` resolved lexically, never through the file system.
 /// On Windows an absolute path names its drive or share (`C:\`, `\\server\share\`), whose root a grant may not be
-/// either, and names compare in any case, as the file system does.
+/// either, its volume compares in any of its spellings ([`volume`]: verbatim or not, a share's server as an address
+/// carries it), and names compare in any case, as the file system does.
 #[must_use]
 pub fn grant_error(file: &str, grant_root: Option<&str>, home: &str) -> Option<&'static str> {
     if !is_absolute(file) {
@@ -71,8 +75,8 @@ pub fn is_absolute(path: &str) -> bool {
 
 /// The components of an absolute path as Foundation's `standardizedFileURL.pathComponents` gives them: the root, then
 /// each name, with `.` dropped, `..` taking the previous name off, and empty names (repeated or trailing slashes)
-/// ignored. On Windows the root is the drive or share with its root, both separators split, and every component is
-/// lowercased, since the file system compares names in any case.
+/// ignored. On Windows the root is the drive or share in its one spelling ([`volume`]) with its root, both separators
+/// split, and every name is lowercased, since the file system compares names in any case.
 #[cfg(not(windows))]
 fn components(path: &str) -> Vec<String> {
     let mut parts = vec!["/".to_owned()];
@@ -93,20 +97,20 @@ fn components(path: &str) -> Vec<String> {
 #[cfg(windows)]
 fn components(path: &str) -> Vec<String> {
     use std::path::Component;
+    let path = std::path::Path::new(path);
     let mut parts: Vec<String> = Vec::new();
-    let mut root = String::new();
-    for component in std::path::Path::new(path).components() {
+    let mut root = volume(path).unwrap_or_default();
+    for component in path.components() {
         match component {
-            Component::Prefix(prefix) => root.push_str(&prefix.as_os_str().to_string_lossy()),
+            Component::Prefix(_) | Component::CurDir => {}
             Component::RootDir => root.push('\\'),
-            Component::CurDir => {}
             Component::ParentDir => {
                 parts.pop();
             }
             Component::Normal(name) => parts.push(name.to_string_lossy().to_lowercase()),
         }
     }
-    let mut all = vec![root.to_lowercase()];
+    let mut all = vec![root];
     all.extend(parts);
     all
 }
@@ -671,6 +675,50 @@ mod tests {
         assert!(contains(r"C:\Site", "c:/site/sub/x.png"));
         assert_eq!(last_path_component(r"C:\site\page.html"), "page.html");
         assert_eq!(last_path_component(r"C:\site\sub\"), "sub");
+    }
+
+    /// A grant and a file name their volume in any of its spellings: verbatim or plain, a share's server as the user
+    /// typed it or as a page's address carries it (lowercased, punycoded).
+    #[test]
+    #[cfg(windows)]
+    fn a_windows_volume_compares_in_any_of_its_spellings() {
+        let home = r"C:\Users\me";
+        for (file, grant) in [
+            (r"C:\site\index.html", r"\\?\C:\site"),
+            (r"\\?\c:\site\index.html", r"C:\site"),
+            (r"\\server\share\site\index.html", r"\\?\UNC\Server\Share\site"),
+            (r"\\xn--as-yja\share\site\index.html", r"\\ÑAS\share\site"),
+            (r"\\?\UNC\ñas\Share\site\index.html", r"\\xn--as-yja\share\site"),
+            (r"\\127.0.0.1\share\site\index.html", r"\\localhost\share\site"),
+        ] {
+            assert_eq!(grant_error(file, Some(grant), home), None, "{file} {grant}");
+            assert!(contains(grant, file), "{file} {grant}");
+        }
+        for (file, grant) in [
+            (r"D:\site\index.html", r"\\?\C:\site"),
+            (r"\\other\share\site\index.html", r"\\?\UNC\server\share\site"),
+            (r"\\server\other\site\index.html", r"\\server\share\site"),
+            (r"\\localhost\C$\site\index.html", r"C:\site"),
+            // the URL parser would read these as `nas`; Windows reads them as names of their own
+            (r"\\n%61s\share\site\index.html", r"\\nas\share\site"),
+            (r"\\nas\share\site\index.html", r"\\n%61s\share\site"),
+            (r"\\ｎａｓ\share\site\index.html", r"\\nas\share\site"),
+        ] {
+            assert_eq!(
+                grant_error(file, Some(grant), home),
+                Some(OUTSIDE_CWD),
+                "{file} {grant}"
+            );
+            assert!(!contains(grant, file), "{file} {grant}");
+        }
+        assert_eq!(
+            grant_error(r"C:\x.html", Some(r"\\?\C:\"), home),
+            Some(CWD_ROOT_OR_HOME)
+        );
+        assert_eq!(
+            grant_error(r"C:\Users\me\x.html", Some(r"\\?\C:\Users\Me"), home),
+            Some(CWD_ROOT_OR_HOME)
+        );
     }
 
     /// Upstream's `HtmlOverlayTests.webURLAcceptsOnlyAbsoluteHttpWithAHost`.

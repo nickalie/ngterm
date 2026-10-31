@@ -229,6 +229,101 @@ fn a_relative_path_or_a_url_page_serves_nothing() {
     assert_eq!(resolve(&text(&docs.docs(&["index.html"])), &web), None);
 }
 
+/// A drive letter `subst` maps onto `target` for a test's span, removed on drop.
+#[cfg(windows)]
+struct SubstDrive(String);
+
+#[cfg(windows)]
+impl SubstDrive {
+    fn new(target: &str) -> Self {
+        let letter = ('D'..='Z')
+            .rev()
+            .map(|letter| format!("{letter}:"))
+            .find(|drive| !Path::new(&format!(r"{drive}\")).exists())
+            .unwrap();
+        let output = std::process::Command::new("subst")
+            .args([letter.as_str(), target])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "subst {letter} {target}: {output:?}");
+        Self(letter)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for SubstDrive {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("subst")
+            .args([self.0.as_str(), "/D"])
+            .output();
+    }
+}
+
+/// A grant serves a request on the volume its page named it on or on the one it resolves to, in any spelling (this
+/// machine's administrative share by its name in capitals, lowercased, verbatim), and refuses a request on any other
+/// volume before the file system is asked, even one that would resolve inside it (a `subst` drive onto the grant's
+/// drive the page never named), so no request makes Windows open a volume, or a server, the page chose.
+#[test]
+#[cfg(windows)]
+fn a_grant_serves_only_requests_on_the_volumes_it_names() {
+    let docs = Docs::new();
+    let plain_root = text(&canonical(docs.root())).strip_prefix(r"\\?\").unwrap().to_owned();
+    let plain = format!(r"{plain_root}\docs");
+    let (drive, rest) = plain.split_once(r":\").unwrap();
+    let computer = std::env::var("COMPUTERNAME").unwrap().to_uppercase();
+    let share = format!(r"\\{computer}\{drive}$\{rest}");
+    let lower = format!(r"\\{}\{}$\{rest}", computer.to_lowercase(), drive.to_lowercase());
+    let verbatim = format!(r"\\?\UNC\{}\{}$\{rest}", computer.to_lowercase(), drive.to_lowercase());
+    let substed = SubstDrive::new(&plain_root);
+    let other = format!(r"{}\docs", substed.0);
+    let granted = |grant: &str| HtmlSource::File {
+        path: format!(r"{grant}\index.html"),
+        grant_root: Some(grant.to_owned()),
+    };
+    let served = |base: &str, source: &HtmlSource| {
+        let index = format!(r"{base}\index.html");
+        assert_eq!(resolve(&index, source), Some(canonical(Path::new(&index))), "{base}");
+        assert_eq!(resolve(&format!(r"{base}\..\secret.txt"), source), None, "{base}");
+    };
+    // the subst drive resolves inside the grant: only the volume check refuses it
+    let through_other = canonical(Path::new(&format!(r"{other}\index.html")));
+    assert_eq!(through_other, canonical(&docs.docs(&["index.html"])));
+    for base in [&plain, &other] {
+        served(base, &granted(base));
+    }
+    let on_share = granted(&share);
+    for base in [&share, &lower, &verbatim] {
+        served(base, &on_share);
+    }
+    assert_eq!(resolve(&format!(r"{other}\index.html"), &granted(&plain)), None);
+    // a subst drive's grant resolves onto the drive behind it, which a request may name too
+    served(&plain, &granted(&other));
+    let elsewhere = format!(r"\\ngterm-nowhere.invalid\{drive}$\{rest}\index.html");
+    assert_eq!(resolve(&elsewhere, &on_share), None);
+    assert_eq!(resolve(&format!(r"{other}\index.html"), &on_share), None);
+}
+
+/// A request whose server the URL parser would read as the grant's (percent-escaped) is on a server of its own to
+/// Windows, and refused before the file system is asked: neither side exists, so only the volume check refuses it.
+#[test]
+#[cfg(windows)]
+fn a_request_on_a_server_spelled_to_read_as_the_grants_is_refused() {
+    let source = HtmlSource::File {
+        path: r"\\ngterm-nowhere.invalid\share\site\index.html".to_owned(),
+        grant_root: Some(r"\\ngterm-nowhere.invalid\share\site".to_owned()),
+    };
+    assert_eq!(
+        resolve(r"\\ngterm-nowhere.invalid\share\site\a.png", &source),
+        Some(PathBuf::from(r"\\ngterm-nowhere.invalid\share\site\a.png"))
+    );
+    for request in [
+        r"\\ngterm-nowhere%2Einvalid\share\site\a.png",
+        r"\\?\UNC\ngterm-nowhere%2einvalid\share\site\a.png",
+    ] {
+        assert_eq!(resolve(request, &source), None, "{request}");
+    }
+}
+
 /// Upstream's `testAdmissionRefusesPastItsLimitUntilASlotIsReleased`.
 #[test]
 fn admission_refuses_past_its_limit_until_a_slot_is_released() {
