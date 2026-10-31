@@ -1,8 +1,10 @@
 //! The restart a confirmed Live sessions reset quits for (the GPUI frontend's relauncher, `live_runtime.rs`): the
 //! reset marker the quit armed is consumed by the next launch, which kills the selected sessions before any pane
 //! attaches. On Unix the binary replaces this process in place (`exec`): the same pid, so a service manager sees no
-//! exit, and the state lock goes with the old image's descriptors. On Windows a new instance starts on this console
-//! and waits for the lock this process holds until it exits ([`LOCK_WAIT`]).
+//! exit, and the state lock goes with the old image's descriptors. The cost: a child the old image started (the
+//! session server, a hook still running) outlives the threads that reaped it, so one that exits later stays a zombie
+//! until this process exits (`docs/backlog/headless-exec-restart-leaves-old-children-unreaped.md`). On Windows a new
+//! instance starts on this console and waits for the lock this process holds until it exits ([`LOCK_WAIT`]).
 
 use std::ffi::OsString;
 use std::io;
