@@ -697,12 +697,18 @@ zellij
 ";
 
 /// Parses `restore-denylist.conf` into the program basenames not to re-run on restore, each once, in file order: one
-/// entry per line, trimmed of spaces and tabs; blank lines and `#` comments ignored. There is no built-in list: the
-/// file is the whole source. A list rather than upstream's set, to fit [`should_restore`]'s slice.
+/// entry per line (a CRLF or a lone CR ends one too, as in the other config files: a file saved with Windows line
+/// endings would leave a `\r` in each entry), trimmed of spaces and tabs; blank lines and `#` comments ignored. There
+/// is no built-in list: the file is the whole source. A list rather than upstream's set, to fit [`should_restore`]'s
+/// slice.
 #[must_use]
 pub fn parse_denylist(text: &str) -> Vec<String> {
     let mut entries: Vec<String> = Vec::new();
-    for line in text.split('\n').map(|line| line.trim_matches(is_inline_whitespace)) {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    for line in normalized
+        .split('\n')
+        .map(|line| line.trim_matches(is_inline_whitespace))
+    {
         if line.is_empty() || line.starts_with('#') || entries.iter().any(|entry| entry == line) {
             continue;
         }
@@ -1556,6 +1562,17 @@ mod tests {
         let denylist = parse_denylist(DENYLIST_STARTER);
         assert!(!should_restore(&argv(&["/usr/bin/tmux", "attach"]), &denylist));
         assert!(should_restore(&argv(&["vim", "x"]), &denylist));
+    }
+
+    #[test]
+    fn the_denylist_reads_windows_and_old_mac_line_endings() {
+        let crlf = DENYLIST_STARTER.replace('\n', "\r\n");
+        assert_eq!(parse_denylist(&crlf), argv(&["tmux", "screen", "zellij"]));
+        assert_eq!(
+            parse_denylist("tmux\rscreen\r\n zellij \r"),
+            argv(&["tmux", "screen", "zellij"])
+        );
+        assert!(!should_restore(&argv(&["zellij"]), &parse_denylist(&crlf)));
     }
 
     #[test]
