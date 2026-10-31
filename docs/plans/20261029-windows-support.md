@@ -239,6 +239,17 @@ guest has 4 CPUs and 6.5 GB of memory.
   needing `posix-command-line` skip there), and they joined the Windows ratchet (702 ids). On the VM's desktop (the
   windows job's stage, a private state dir) a braille-spinner HUD with a dimmed detail showed over the PowerShell pane,
   an update repainted it as markdown in its text color, and a close took it down, with no child process for the panel
+- ➕ (side task 30) an overlay program runs on Windows: the POSIX wrapper (`overlay_capture::surface_command`) stays
+  Unix's; on Windows there is no wrapper: the overlay terminal runs the command line itself through `cmd /D /S /C`
+  (`ngterm_host::command_line`), and `ngterm-term` writes the program's exit status to the overlay's status file when
+  it ends by itself (`Launch::status_file`; a program the pane hangs up writes none), `STATUS_CONTROL_C_EXIT` read as
+  130 as the overlay job reads it (`overlay_capture::status_of_exit_code`, shared with `ngtermctl`). Edit
+  Keymap/Hooks on Windows opens `VISUAL`, else `EDITOR`, else Notepad waited for (`start "" /wait`), read from the
+  app's environment (`keymap::windows_editor_command`). The overlay, surface, HUD, split and CLI conformance tests
+  build their programs in either dialect (`CommandLines.hold`, `pwd`) under `cmd-command-line`. Linux partial run
+  green (156 ids, ratchet holds).
+- ⚠️ (side task 30) left open at handback: the `windows` suite job's result on `ci/win-30`, the Windows ratchet
+  additions and the VM desktop check of an overlay program and its exit status
 
 ### Task 5: Desktop integrations on Windows (depends on Task 4)
 
