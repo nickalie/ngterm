@@ -448,6 +448,8 @@ The attached row is as one from a desktop instance: each pane an ssh into its li
 size), the status, context, split, HUD and notifications streamed over `ngtermctl live present`, asks, program
 overlays and pages shown on the viewer. What would be drawn on the server (banners, sounds, an overlay with no viewer)
 has no display there: banners go to its log. A session closes when its program ends, as in the app.
+It builds and runs on macOS and Windows too; a viewer reaches a Linux or macOS origin only, since Attach Remote runs
+its commands there through `/bin/sh` (`docs/backlog/attach-remote-cannot-reach-a-windows-origin.md`).
 
 ## Windows
 
