@@ -110,6 +110,18 @@ guest has 4 CPUs and 6.5 GB of memory.
 - ⚠️ (side task 20) the same test's closing forced kill once reported "did not end after its hangup" in a stress
   round on an overloaded guest (4 busy processes on its 4 CPUs; the round took 25 s against about 4 s): the 5 s
   `TERMINATION_LIMIT` left as it is, pending the user's call
+- ➕ (side task 34) ngterm-session's `tests/snapshot.rs` flood tests failed under load on Windows (the watcher waited
+  out its 60 s for a chunk's end; a stress loop on the runner failed 2 tests in its first round): cmd titles its
+  console with every command it runs, each `echo` of the flood's `for` loop too, and ConPTY passes each title on as
+  an OSC, so a chunk was 26.5 KB of output against the tests' 16 KiB client queue, and the watcher, a few reads
+  behind, overflowed mid-chunk. A chunk is now a file printed by one `type` (`cat` on Unix), 9 KB, which fits in the
+  queue the watcher starts it with empty. The same symptom on the run before c1b510c5 may have been this overflow;
+  that commit's wait for cmd's prompt stays, as it keeps the watcher's queue empty at each chunk's start
+- ⚠️ (side task 34) seen on Linux, not fixed (outside the task): ngterm-session's `tests/handoff.rs` spawns of a
+  staged binary copy fail now and then with `ETXTBSY` (1 round in 8 of the binary: "Text file busy" in
+  `a_client_of_another_build_hands_the_server_over_…` and `an_update_hands_a_running_server_…`): `support::stage`
+  writes the copy in the test process, and a child another test thread forks meanwhile holds the copy's write
+  descriptor until its own exec
 
 ### Task 2: `ngtermctl` on Windows and macOS (`ngterm-ctl`)
 
