@@ -7,8 +7,11 @@ Full detail for every `ngtermctl` command. See `SKILL.md` for the model and addr
 
 - **Socket resolution** (when `--socket` is omitted): `NGTERM_SOCKET` is the path the running app
   bound; ngtermctl resolves the same rendezvous: `<NGTERM_STATE_DIR>/ngterm.sock`, else
-  `~/.local/share/ngterm/ngterm.sock`. Passing `--socket "$NGTERM_SOCKET"` is the
-  safe explicit form.
+  `~/.local/share/ngterm/ngterm.sock` (`%LOCALAPPDATA%\ngterm\ngterm.sock` on Windows). Passing
+  `--socket "$NGTERM_SOCKET"` is the safe explicit form. On Windows the path is still what every
+  `--socket` and `NGTERM_SOCKET` names, but nothing is created there: the app serves a named pipe
+  derived from that path (`\\.\pipe\ngterm-control-<hash>`), and ngtermctl connects to the pipe the
+  given path names, so pass the path, never a pipe name.
 - **`--json`**: prints the raw response object. Without it, ordinary mutations print `ok`, batch
   close/move prints the affected session count, and `tree`/`window list` print a human listing. Use
   `--json` when you need to read ids or values back.

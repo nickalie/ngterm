@@ -121,7 +121,7 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 It does not claim:
 
 - `window-geometry`, `window-minimize`: Wayland gives a client no window position and no minimized read-back; their
-  tests branch, and the Rust build passes the other branch;
+  tests branch, and the Rust build passes the other branch, on Windows too, where it claims neither;
 - `sidebar-min-width`: the GPUI frontend does not claim it; its test takes the other branch.
 - on Windows, `posix-command-line`: a command line runs as `cmd.exe`'s command text there (`%ComSpec% /D /S /C`, as
   Ghostty runs a command on Windows; `ngterm-host`'s `command_line` chooses it for every caller), so the tests of
@@ -165,10 +165,12 @@ neither `live-sessions` nor `live-any-shell`.
 The `conformance` job of `.github/workflows/rust-linux.yml` is a matrix over three login shells, each leg with
 `--must-pass live-any-shell`: bash, fish and zsh. The zsh and fish legs, the hosts where the build claims
 `live-sessions`, also run with `--must-pass live-sessions`, as reference-macos.
-No leg runs a PowerShell login shell, so the suite does not hold PowerShell's part of the claim: below it,
-`.github/workflows/cross-platform.yml` runs `ngterm-session`'s PowerShell session tests (`tests/pwsh.rs`: the
-integration's marks and working directory, the foreground read, a replay) on Linux, macOS and Windows, and
-`ngterm-core`'s replay round trip through a real `pwsh` where one is installed.
+PowerShell's part of the claim is held on Windows: the `windows` job of `.github/workflows/cross-platform.yml` runs
+the suite with `--must-pass live-any-shell` too, its login shell Windows PowerShell, and the tests type PowerShell's
+lines there (`Write-Output`, `ping -n` for a long program). No Linux leg runs a PowerShell login shell; below the
+suite, the same workflow runs `ngterm-session`'s PowerShell session tests (`tests/pwsh.rs`: the integration's marks
+and working directory, the foreground read, a replay) on Linux, macOS and Windows, and `ngterm-core`'s replay round
+trip through a real `pwsh` where one is installed.
 
 ## The `live` group
 
@@ -231,9 +233,23 @@ listed text against the Rust sources.
 The bundled agent skill (`resources/skills/ngterm`) is upstream's with
 `build/patches/skill-ngterm/` applied (the `live` names, this build's `ngterm` and `ngtermctl`, then the attach
 contract's `AGTERM_LIVE_*`, then the rest of this build's identity, `NGTERM_*` among it, then the restore adapter, then
-`show-image.sh` passing the pane's socket):
+`show-image.sh` passing the pane's socket, then the Windows build's paths and chord and `terminfo install`'s own
+text):
 `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh` rebuilds it as the new upstream tree plus those
 patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned tag verifies the copy still equals it.
+
+## Other strings of the build's own
+
+Outside the `live` group, where the build does a thing differently from upstream and upstream's text would name what
+it no longer does:
+
+| upstream | Rust build |
+|---|---|
+| `infocmp exited N: …` (`terminfo install`, the local dump failing) | `could not read <file>: <reason>`: the CLI decompiles the staged compiled entry itself on every OS (`ngterm-ctl`'s `terminfo/source.rs`, a port of ncurses' entry reader and `infocmp -x`'s layout), since Windows has no `infocmp` |
+
+Texts with no upstream counterpart, each the build's own: `live.reset is not supported on this platform` (above),
+and on Windows an HTML page's refusal without the WebView2 Runtime, `the Microsoft Edge WebView2 Runtime is not
+installed; get it from <link>` (`ngterm-gpui`'s `html_overlay/webview2/runtime.rs`). No suite test asserts either.
 
 ## Ratchet
 
@@ -253,6 +269,11 @@ plus a task's `--also`/`--also-k` selections), judged like a full run, a listed 
 A change's local check is a partial run over the ids that cover what it touches; the full suite runs in CI on every PR
 and push to main (conformance/README.md > Rust runner and ratchet).
 The script exits with the ratchet's status, or 1 when an instance root was left behind, whatever pytest's own status.
+
+On Windows `conformance/tools/run-windows.sh` does the same from Git Bash, against the build staged with `.exe`
+binaries (GPUI build below), into `conformance/reports/rust-windows/`, and holds its own list,
+`conformance/rust-passing-windows.txt`, with the same checker and rules (`check_ratchet.py --list`). The `windows`
+job of `.github/workflows/cross-platform.yml` runs it on every PR, push to main and push to a `ci/**` branch.
 
 ## GPUI build
 
@@ -294,3 +315,10 @@ Probes. Three scripts beside the runner check what the suite cannot see, on the 
 default; CI runs them after the bash leg): `ghostty_probe.py` (a terminal draws its first frame), `webkit_probe.py`
 (a page loads in WPE WebKit's sandbox) and `chrome_probe.py` (the title bar, the sidebar and the terminal draw the
 theme's background, the sidebar tint washing the sidebar alone).
+
+On Windows. `run-windows.sh` builds the release app with its `html` feature (the HTML overlays on WebView2, which
+needs the WebView2 Runtime), `ngterm-ctl` and `ngterm-session`, and stages them with the same script
+(`bin\ngterm.exe`, `bin\ngtermctl.exe`, `bin\ngterm-session.exe` beside the same `share\`); `--stage DIR` runs a tree
+staged elsewhere, such as the `windows` job's `rust-windows-stage` artifact on a VM. No lavapipe, weston or bus: the
+build renders through DirectX on the machine's adapter, on the desktop the run is on (Launch contract above). The
+probes are Linux's.

@@ -46,7 +46,8 @@ You are inside ngterm (`NGTERM_ENABLED=1`). Use:
   `SettingsView`, `SettingsModel`, `CustomCommandRunner`, `ControlServer`.
 - **Files** — keymap `~/.config/ngterm/keymap.conf`; ngterm-scoped ghostty config
   `~/.config/ngterm/ghostty.conf`; settings `~/.local/share/ngterm/settings.json`;
-  socket path in `$NGTERM_SOCKET`.
+  socket path in `$NGTERM_SOCKET`. On Windows the config dir is `%APPDATA%\ngterm` and the state dir
+  (settings, log `ngterm.log`, socket path) `%LOCALAPPDATA%\ngterm`.
 
 ### "Keymap editor won't open"
 

@@ -71,7 +71,8 @@ already-poisoned tmux server, and for the Codex shared-daemon limitation, which 
 
 ## Running ngtermctl
 
-`ngtermctl` must be on PATH (install it from ngterm's **Help ▸ Install Command Line Tool…**). If it
+`ngtermctl` must be on PATH (install it from ngterm's **Help ▸ Install Command Line Tool…**; on Windows the
+installer, or that menu item, puts its folder on the user's PATH). If it
 is not on PATH, the user can install it, or you invoke it by absolute path.
 
 - When `NGTERM_SOCKET` is set, pass `--socket "$NGTERM_SOCKET"` on every call: `ngtermctl` never reads it
@@ -99,7 +100,7 @@ program, which is how to show the user an artifact you generated. The same sessi
 whole session or one pane as its placement bounds. The session keeps focus and stays typable
 under it.
 One slot, so a session shows either a HUD or a program overlay, never both. A program or page overlay can be
-hidden without closing it (`session overlay hide|show|toggle`, ⇧⌘J for the user, `ctrl+alt+shift+j` on Linux): it keeps running and keeps
+hidden without closing it (`session overlay hide|show|toggle`, ⇧⌘J for the user, `ctrl+alt+shift+j` on Linux and Windows): it keeps running and keeps
 its slot until it closes, so opening another there is refused. Separately, the app has one
 **quick terminal** (a scratch shell in a floating panel at 90% of the focused screen capped at 1100x700,
 or whatever share Settings sets instead; not part of the tree and not owned by a window).
