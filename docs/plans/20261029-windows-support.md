@@ -508,5 +508,5 @@ guest has 4 CPUs and 6.5 GB of memory.
 ### Task 9: Docs
 
 - [ ] README: Windows build, run, install and test; CI list; prerequisites (WebView2, WiX)
-- [ ] CLAUDE.md's crate table: each crate's platform column as it now stands
-- [ ] `conformance/docs/rust-build.md`: the Windows profile, divergences and renamed strings, if any
+- [x] CLAUDE.md's crate table: each crate's platform column as it now stands
+- [x] `conformance/docs/rust-build.md`: the Windows profile, divergences and renamed strings, if any
