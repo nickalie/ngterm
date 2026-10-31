@@ -107,6 +107,14 @@ fn a_command_wrapper_holds_its_consoles_foreground() {
     let wrapper = member(100, 10, Some(&["cmd.exe", "/D", "/S", "/C", "cat"]));
     let cat = member(101, 11, Some(&["cat"]));
     assert_eq!(console_foreground(100, &[wrapper, cat.clone()]), Some(100));
+    // a line holding a quoted word, split by the C runtime's rules
+    let split = member(
+        100,
+        10,
+        Some(&["cmd.exe", "/D", "/S", "/C", r"C:\Program", r"Files\nodejs\node.exe server.js"]),
+    );
+    let node = member(101, 11, Some(&[r"C:\Program Files\nodejs\node.exe", "server.js"]));
+    assert_eq!(console_foreground(100, &[split, node]), Some(100));
     let interactive = member(100, 10, Some(&["cmd.exe"]));
     assert_eq!(console_foreground(100, &[interactive, cat]), Some(101));
 }

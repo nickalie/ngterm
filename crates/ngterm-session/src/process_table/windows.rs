@@ -16,6 +16,7 @@ use std::mem::{MaybeUninit, size_of};
 use std::os::windows::io::{AsRawHandle as _, OwnedHandle};
 use std::ptr::null_mut;
 
+use ngterm_core::command_restore::command_wrapper_argv;
 use ngterm_host::{ProcessStat, ProcessTable};
 use windows_sys::Wdk::System::Threading::{
     NtQueryInformationProcess, ProcessBasicInformation, ProcessCommandLineInformation,
@@ -48,7 +49,7 @@ impl ProcTable {
 impl ProcessTable for ProcTable {
     fn argv(&self, pid: i32) -> Option<Vec<String>> {
         let process = open(u32::try_from(pid).ok()?, PROCESS_QUERY_LIMITED_INFORMATION)?;
-        command_line_to_argv(&read_command_line(&process)?)
+        argv_of(&read_command_line(&process)?)
     }
 
     /// The process with its parent; it stands in for its own group, and leads its session when this process started
@@ -134,7 +135,7 @@ fn job_member(pid: u32) -> Option<ConsoleMember> {
     Some(ConsoleMember {
         pid: i32::try_from(pid).ok()?,
         started: creation_time(&process)?,
-        argv: read_command_line(&process).and_then(|line| command_line_to_argv(&line)),
+        argv: read_command_line(&process).and_then(|line| argv_of(&line)),
     })
 }
 
@@ -217,6 +218,13 @@ impl Drop for LocalAllocation {
         // SAFETY: the pointer is the allocation `CommandLineToArgvW` returned, freed only here.
         unsafe { LocalFree(self.0.cast()) };
     }
+}
+
+/// The argv of `command_line`: a pane's `cmd.exe /D /S /C "<line>"` as the five words it was run with, the line as
+/// `cmd` reads it (`ngterm_core::command_restore::command_wrapper_argv`), which the C runtime's split would break at a
+/// quoted word's spaces; any other split as the C runtime splits it ([`command_line_to_argv`]).
+fn argv_of(command_line: &[u16]) -> Option<Vec<String>> {
+    command_wrapper_argv(&String::from_utf16_lossy(command_line)).or_else(|| command_line_to_argv(command_line))
 }
 
 /// `command_line` split as the C runtime splits it (`CommandLineToArgvW`), each argument decoded lossily; `None`
@@ -496,22 +504,48 @@ mod tests {
     }
 
     /// A child this process started leads its session, its tree is its group, and a command line's `cmd.exe /D /S /C`
-    /// holds its console's foreground over what it runs, while an interactive `cmd.exe` hands it to its program.
+    /// holds its console's foreground over what it runs, read back as the five words it ran with even when its line
+    /// holds quoted words with spaces, while an interactive `cmd.exe` hands it to its program.
     #[test]
     fn a_started_command_leads_its_session_and_holds_its_foreground() {
         use std::os::windows::process::CommandExt as _;
 
+        let logs = std::env::temp_dir().join(format!("ngterm wrapper logs {}", std::process::id()));
+        std::fs::create_dir_all(&logs).unwrap();
+        let quoted_path = format!(
+            r#""C:\Windows\System32\PING.EXE" -n 600 127.0.0.1 > "{}""#,
+            logs.join("out.txt").display()
+        );
+        let cases = [
+            (["/D", "/S", "/C"], "ping -n 600 127.0.0.1 >NUL".to_owned(), true),
+            (["/D", "/S", "/C"], quoted_path, true),
+            (
+                ["/D", "/S", "/C"],
+                r#"echo "a b" >NUL & ping -n 600 127.0.0.1 >NUL"#.to_owned(),
+                true,
+            ),
+            (["/D", "/S", "/K"], "ping -n 600 127.0.0.1 >NUL".to_owned(), false),
+        ];
         let table = ProcTable::new();
-        for (switches, wrapper) in [(["/D", "/S", "/C"], true), (["/D", "/S", "/K"], false)] {
+        for (switches, line, wrapper) in cases {
             let mut child = std::process::Command::new("cmd.exe")
                 .args(switches)
-                .raw_arg("\"ping -n 600 127.0.0.1 >NUL\"")
+                .raw_arg(format!("\"{line}\""))
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .spawn()
                 .unwrap();
             let pid = i32::try_from(child.id()).unwrap();
             let ping = descendant(pid, "ping");
+            if wrapper {
+                let argv = table.argv(pid).unwrap();
+                assert_eq!(
+                    &argv[1..],
+                    [switches[0], switches[1], switches[2], line.as_str()],
+                    "{argv:?}"
+                );
+                assert!(std::path::Path::new(&argv[0]).ends_with("cmd.exe"), "{argv:?}");
+            }
             let own = table.stat(pid).unwrap();
             assert_eq!((own.pgrp, own.session), (pid, pid), "started here");
             assert_eq!(table.stat(ping).map(|stat| stat.session), Some(0), "started by cmd");
@@ -522,7 +556,7 @@ mod tests {
                     .any(|member| member.pid == ping && member.ppid == pid)
             );
             let expected = if wrapper { pid } else { ping };
-            assert_eq!(table.terminal_foreground(pid), Some(expected), "{switches:?}");
+            assert_eq!(table.terminal_foreground(pid), Some(expected), "{switches:?} {line}");
             let pids = [child.id(), u32::try_from(ping).unwrap()];
             assert_eq!(job_foreground(child.id(), &pids), u32::try_from(expected).ok());
             assert_eq!(job_foreground(1, &pids), None, "a root not among them");
@@ -536,5 +570,6 @@ mod tests {
             child.kill().unwrap();
             child.wait().unwrap();
         }
+        let _ = std::fs::remove_dir_all(&logs);
     }
 }

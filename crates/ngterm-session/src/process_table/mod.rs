@@ -9,7 +9,8 @@
 //!   (upstream's `processGroup`), `getsid` for the session, `proc_pidinfo(PROC_PIDVNODEPATHINFO)` for the working
 //!   directory (upstream's `workingDirectory`).
 //! - Windows: `NtQueryInformationProcess(ProcessCommandLineInformation)` split with `CommandLineToArgvW` for an argv
-//!   (herdr's), a tool-help snapshot for the parent, the process environment block's current directory for the
+//!   (herdr's; a pane's `cmd.exe /D /S /C "<line>"` read whole instead, its line as `cmd` reads it,
+//!   `ngterm_core::command_restore::command_wrapper_argv`), a tool-help snapshot for the parent, the process environment block's current directory for the
 //!   working directory (herdr's). Windows has neither process groups nor sessions, so they are modelled for core's
 //!   foreground reads (`ngterm_core::restore::capture`): a process stands in for its own group, as in herdr, which
 //!   holds it and its live descendants (a shell without job control keeps its children in its group); a process this
