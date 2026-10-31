@@ -11,6 +11,16 @@
 # tool shell (no controlling terminal). the overlay sidesteps both.
 #
 # requires running inside ngterm (NGTERM_ENABLED=1) with ngtermctl on PATH.
+#
+# on Windows (Git Bash) this hands over to show-image.ps1 beside it: a Windows pane's program writes through the
+# pseudoconsole (ConPTY), which drops the kitty protocol's APC escapes, so the PowerShell form shows the image in a
+# page overlay instead. from PowerShell, run that one directly.
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*)
+    [ -n "${1:-}" ] && [ -e "$1" ] && set -- "$(cygpath -w "$1")" "${@:2}"
+    exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$(dirname "$0")/show-image.ps1")" "$@"
+    ;;
+esac
 
 # ask the terminal for a geometry report and echo the two numeric fields it carries. $1 is the CSI
 # request (14t -> ESC [ 4 ; height-px ; width-px t, 18t -> ESC [ 8 ; rows ; cols t). the request and

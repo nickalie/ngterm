@@ -1,0 +1,193 @@
+show-image.sh has a Windows form: a Windows pane's program writes through the pseudoconsole (ConPTY), whose console
+drops the kitty graphics protocol's APC escapes (checked in a Windows 11 VM: text around the image reached the overlay,
+the image never did), so no program overlay can draw the image there. `scripts/show-image.ps1` (Windows PowerShell
+5.1 and PowerShell 7) shows it in a page overlay instead: a self-contained HTML page under TEMP holding the image as a
+data URI, scaled to fit and centered above "press Enter to close", opened with `session overlay open --html FILE --js
+--chromeless --size-percent N` on the pane's `NGTERM_SOCKET`, and closed by Enter through the page bridge. Under Git
+Bash, show-image.sh hands over to it, so the skill's one command line works there too; SKILL.md, reference.md and
+examples.md say so and give the PowerShell line. Upstream (macOS only) has no need of it. Applied after
+0007-windows.patch.
+
+diff --git a/SKILL.md b/SKILL.md
+index a2f3f7f..e4157c9 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -775,12 +775,18 @@ app's own **Help ▸ Install Agent Skill…** copy (`~/.claude/skills/ngterm/`,
+ bash <this-skill-directory>/scripts/show-image.sh <image> [size-percent]
+ ```
+ 
++On Windows a pane's program writes through the pseudoconsole, which drops the kitty graphics escapes,
++so the image shows in a page overlay instead (`--html`, the image inlined, Enter closes it): run the
++same line from Git Bash, which hands over to `scripts/show-image.ps1` beside it, or from PowerShell
++`powershell -NoProfile -ExecutionPolicy Bypass -File <this-skill-directory>\scripts\show-image.ps1 <image> [size-percent]`.
++
+ The size percent sizes the overlay PANEL; the image itself is scaled to fit that panel and centered
+ in it, so a large screenshot needs no resizing beforehand.
+ 
+ Do NOT print graphics escapes to your own tool stdout (the agent harness escapes the control bytes)
+ and do NOT run an image viewer in your tool shell (no controlling terminal). The overlay is what makes
+-it render. Outside ngterm (`NGTERM_ENABLED` unset) there is no overlay — fall back to `open <image>`.
++it render. Outside ngterm (`NGTERM_ENABLED` unset) there is no overlay — fall back to `open <image>`
++(`Invoke-Item <image>` on Windows).
+ 
+ ## Displaying an HTML artifact
+ 
+@@ -933,6 +939,7 @@ Full detail, templates, and the exact `gh` commands are in **troubleshooting.md*
+   one as reference for a tricky workflow. The recipe list lives in the repo, not here; fetch it.
+ - **troubleshooting.md** — diagnosing common problems (keymap editor, custom actions, logs) and the
+   bug-issue / feature-Discussion reporting workflow (draft-first, scrub, never post without approval).
+-- **scripts/show-image.sh** — bundled helper that displays an image inline in an overlay (see above).
++- **scripts/show-image.sh** — bundled helper that displays an image inline in an overlay (see above);
++  **scripts/show-image.ps1** is its Windows form.
+ 
+ Read those files when you need exact flags, return shapes, or worked examples.
+diff --git a/examples.md b/examples.md
+index 0d2043f..adb1b7a 100644
+--- a/examples.md
++++ b/examples.md
+@@ -439,6 +439,13 @@ every install layout (plugin cache or the app's `~/.claude/skills/ngterm/` / `~/
+ bash <this-skill-directory>/scripts/show-image.sh /abs/path/to/img.png 60
+ ```
+ 
++On Windows the same line from Git Bash shows it in a page overlay (the pseudoconsole drops the kitty
++escapes); from PowerShell run the Windows form beside it:
++
++```powershell
++powershell -NoProfile -ExecutionPolicy Bypass -File <this-skill-directory>\scripts\show-image.ps1 C:\path\to\img.png 60
++```
++
+ The image shows in a floating overlay over the active session; dismiss it with Enter in the panel or
+ `ngtermctl session overlay close`. Do NOT emit graphics escapes to your own tool stdout (the harness
+ escapes the control bytes) and do NOT run an image viewer in your tool shell (no controlling
+diff --git a/reference.md b/reference.md
+index fa0425c..0e15c81 100644
+--- a/reference.md
++++ b/reference.md
+@@ -1160,6 +1160,12 @@ geometry query it falls back to drawing at native pixel size in the top-left cor
+ Two simpler routes fail and are why the overlay is needed: emitting graphics escapes to the agent's own
+ tool stdout (the harness escapes the control bytes) and running an image viewer in the agent's tool
+ shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage.
++On Windows a pane's program writes through the pseudoconsole (ConPTY), which drops the kitty graphics
++escapes, so the script (from Git Bash) hands over to `scripts/show-image.ps1` beside it, which also runs
++on its own from PowerShell (`powershell -NoProfile -ExecutionPolicy Bypass -File <skill-dir>\scripts\show-image.ps1
++<image> [size-percent]`): it writes a self-contained page holding the image as a data URI, scaled to fit
++and centered above "press Enter to close", under `%TEMP%`, and opens it with `session overlay open --html
++FILE --js --chromeless --size-percent N`; Enter closes it through the page bridge.
+ 
+ ## window
+ 
+diff --git a/scripts/show-image.ps1 b/scripts/show-image.ps1
+new file mode 100644
+index 0000000..dcc503d
+--- /dev/null
++++ b/scripts/show-image.ps1
+@@ -0,0 +1,88 @@
++<#
++show-image.ps1 - display an image inside the current ngterm session, on Windows.
++
++usage: powershell -NoProfile -ExecutionPolicy Bypass -File show-image.ps1 <image> [size-percent]
++
++the Windows form of show-image.sh, which runs this script when it finds itself under Git Bash. show-image.sh draws
++the image with the kitty graphics protocol in a terminal overlay, but a Windows pane's program writes through the
++pseudoconsole (ConPTY), which drops the protocol's APC escapes, so no program overlay can show an image there.
++this script shows it in a page overlay instead: a self-contained HTML page holding the image as a data URI,
++scaled to fit the panel and centered, with "press Enter to close" below it, as the overlay show-image.sh opens.
++Enter closes it (the page asks ngterm to close its overlay), as do the session's close shortcut and
++`ngtermctl session overlay close`. the page sits in a fresh ngterm-show-image-* folder under TEMP, which stays while
++the overlay may reload it (a theme change does) and goes on a later run once a day old.
++
++requires running inside ngterm (NGTERM_ENABLED=1) with ngtermctl on PATH. works under Windows PowerShell 5.1 and
++PowerShell 7.
++#>
++param(
++    [Parameter(Position = 0)] [string] $Image = '',
++    [Parameter(Position = 1)] [string] $Size = '60'
++)
++
++$ErrorActionPreference = 'Stop'
++
++if (-not $Image) { [Console]::Error.WriteLine('usage: show-image.ps1 <image> [size-percent]'); exit 2 }
++if (-not (Test-Path -LiteralPath $Image -PathType Leaf)) {
++    [Console]::Error.WriteLine("show-image.ps1: no such file: $Image"); exit 1
++}
++if (-not (Get-Command ngtermctl -ErrorAction SilentlyContinue)) {
++    [Console]::Error.WriteLine('show-image.ps1: ngtermctl not on PATH'); exit 1
++}
++if ($env:NGTERM_ENABLED -ne '1') {
++    [Console]::Error.WriteLine("show-image.ps1: not inside ngterm; try: Invoke-Item `"$Image`""); exit 1
++}
++
++$path = (Resolve-Path -LiteralPath $Image).ProviderPath
++$name = [System.Net.WebUtility]::HtmlEncode([System.IO.Path]::GetFileName($path))
++$types = @{
++    '.png' = 'image/png'; '.jpg' = 'image/jpeg'; '.jpeg' = 'image/jpeg'; '.gif' = 'image/gif'
++    '.webp' = 'image/webp'; '.bmp' = 'image/bmp'; '.svg' = 'image/svg+xml'; '.ico' = 'image/x-icon'
++}
++$type = $types[[System.IO.Path]::GetExtension($path).ToLowerInvariant()]
++if (-not $type) { $type = 'image/png' }
++$data = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($path))
++
++# the page takes the terminal theme's background and text color (it styles neither); the image fills the rows above
++# the prompt at the largest scale that keeps its aspect, centered both ways
++$page = @"
++<!doctype html>
++<html><head><meta charset="utf-8"><title>$name</title>
++<style>
++html, body { margin: 0; height: 100%; overflow: hidden; }
++body { display: flex; flex-direction: column; font-family: monospace; }
++#image { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
++#image img { width: 100%; height: 100%; object-fit: contain; }
++#prompt { text-align: center; padding: 0.3em 0; }
++</style></head>
++<body><div id="image"><img src="data:$type;base64,$data" alt="$name"></div>
++<div id="prompt">press Enter to close</div>
++<script>
++window.focus();
++document.addEventListener('keydown', function (event) {
++  if (event.key !== 'Enter') { return; }
++  event.preventDefault();
++  if (window.ngterm) {
++    ngterm.request('session.overlay.close').catch(function () { window.close(); });
++  } else {
++    window.close();
++  }
++});
++</script></body></html>
++"@
++
++$temp = [System.IO.Path]::GetTempPath()
++Get-ChildItem -LiteralPath $temp -Directory -Filter 'ngterm-show-image-*' -ErrorAction SilentlyContinue |
++    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
++    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
++$dir = New-Item -ItemType Directory -Path (Join-Path $temp ('ngterm-show-image-' + [guid]::NewGuid().ToString('N')))
++$file = Join-Path $dir.FullName 'image.html'
++[System.IO.File]::WriteAllText($file, $page, (New-Object System.Text.UTF8Encoding $false))
++
++# ngtermctl never reads NGTERM_SOCKET, and a bare call resolves the default socket, which may belong to another
++# running instance than the one that spawned this session: name the session's own socket.
++$socket = @()
++if ($env:NGTERM_SOCKET) { $socket = @('--socket', $env:NGTERM_SOCKET) }
++
++& ngtermctl session overlay open --html $file --js --chromeless --size-percent $Size @socket
++exit $LASTEXITCODE
+diff --git a/scripts/show-image.sh b/scripts/show-image.sh
+index de84154..1b76553 100755
+--- a/scripts/show-image.sh
++++ b/scripts/show-image.sh
+@@ -11,6 +11,16 @@
+ # tool shell (no controlling terminal). the overlay sidesteps both.
+ #
+ # requires running inside ngterm (NGTERM_ENABLED=1) with ngtermctl on PATH.
++#
++# on Windows (Git Bash) this hands over to show-image.ps1 beside it: a Windows pane's program writes through the
++# pseudoconsole (ConPTY), which drops the kitty protocol's APC escapes, so the PowerShell form shows the image in a
++# page overlay instead. from PowerShell, run that one directly.
++case "$(uname -s)" in
++  MINGW* | MSYS* | CYGWIN*)
++    [ -n "${1:-}" ] && [ -e "$1" ] && set -- "$(cygpath -w "$1")" "${@:2}"
++    exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$(dirname "$0")/show-image.ps1")" "$@"
++    ;;
++esac
+ 
+ # ask the terminal for a geometry report and echo the two numeric fields it carries. $1 is the CSI
+ # request (14t -> ESC [ 4 ; height-px ; width-px t, 18t -> ESC [ 8 ; rows ; cols t). the request and

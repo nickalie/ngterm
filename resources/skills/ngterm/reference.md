@@ -1160,6 +1160,12 @@ geometry query it falls back to drawing at native pixel size in the top-left cor
 Two simpler routes fail and are why the overlay is needed: emitting graphics escapes to the agent's own
 tool stdout (the harness escapes the control bytes) and running an image viewer in the agent's tool
 shell (no controlling terminal — `/dev/tty` errors). See examples.md for usage.
+On Windows a pane's program writes through the pseudoconsole (ConPTY), which drops the kitty graphics
+escapes, so the script (from Git Bash) hands over to `scripts/show-image.ps1` beside it, which also runs
+on its own from PowerShell (`powershell -NoProfile -ExecutionPolicy Bypass -File <skill-dir>\scripts\show-image.ps1
+<image> [size-percent]`): it writes a self-contained page holding the image as a data URI, scaled to fit
+and centered above "press Enter to close", under `%TEMP%`, and opens it with `session overlay open --html
+FILE --js --chromeless --size-percent N`; Enter closes it through the page bridge.
 
 ## window
 
