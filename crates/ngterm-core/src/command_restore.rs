@@ -1048,7 +1048,7 @@ mod tests {
         );
         assert_eq!(
             pane_foreground(&argv(&["powershell.exe", "-File", "-"]), None),
-            Some(PaneForeground::ForegroundShell("powershell.exe".to_owned()))
+            Some(PaneForeground::ForegroundShell("powershell".to_owned()))
         );
     }
 
@@ -1079,7 +1079,7 @@ mod tests {
         ]);
         assert_eq!(
             pane_foreground(&pwsh, None),
-            Some(PaneForeground::ForegroundShell("pwsh.exe".to_owned()))
+            Some(PaneForeground::ForegroundShell("pwsh".to_owned()))
         );
     }
 
