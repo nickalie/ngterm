@@ -31,6 +31,8 @@ tracing.workspace = true
 pkg-config.workspace = true
 
 [dev-dependencies]
+# `fakes::copy_executable`: a stand-in web process copied without this process holding it open for writing
+ngterm-host = { workspace = true, features = ["fakes"] }
 tempfile.workspace = true
 
 # One engine per process (WebKit binds its main run loop to the first thread that uses it), so the engine tests run

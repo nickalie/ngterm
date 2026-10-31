@@ -25,17 +25,15 @@ fn resources() -> PathBuf {
 /// tests (a second agent above the hook would make it a silent worker).
 #[cfg(unix)]
 fn forwarded(args: &[&str], payload: &str) -> String {
-    use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, Instant};
 
     let dir = tempfile::tempdir().unwrap();
     let stub = dir.path().join("wrapper.sh");
-    fs::write(
+    ngterm_host::fakes::write_executable(
         &stub,
         "#!/bin/sh\nprintf '%s' \"$*\" > \"$OUT.tmp\" && mv \"$OUT.tmp\" \"$OUT\"\n",
     )
     .unwrap();
-    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
     let out = dir.path().join("argv");
     let input = dir.path().join("payload.json");
     fs::write(&input, payload).unwrap();

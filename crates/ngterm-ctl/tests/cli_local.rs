@@ -84,7 +84,7 @@ impl Sandbox {
         fs::create_dir_all(&bin)?;
         let client = bin.join("ngtermctl");
         if fs::hard_link(NGTERMCTL, &client).is_err() {
-            fs::copy(NGTERMCTL, &client)?;
+            ngterm_host::fakes::copy_executable(Path::new(NGTERMCTL), &client)?;
         }
         fs::create_dir_all(root.path().join("home"))?;
         Ok(Self { state, root })

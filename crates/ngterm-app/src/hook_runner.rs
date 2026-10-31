@@ -676,12 +676,7 @@ mod tests {
         } else {
             "#!/bin/sh\nprintf '%s|%s' \"$1\" \"$2\" > \"$(dirname \"$0\")/out file.txt\"\n"
         };
-        fs::write(&tool, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        ngterm_host::fakes::write_executable(&tool, script).unwrap();
         let line = format!("\"{}\" \"a b\" c", tool.display());
         let exit = run(&LaunchSpec::command_line(&line));
         // `set /p` without input exits 1, the Windows script's last status

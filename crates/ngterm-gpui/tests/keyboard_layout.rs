@@ -20,7 +20,6 @@
 mod support;
 
 use std::io::{BufRead as _, BufReader, Write as _};
-use std::os::unix::fs::PermissionsExt as _;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -80,8 +79,7 @@ fn cyrillic_sandbox() -> TestResult<(Sandbox, X11)> {
     let x11 = X11::connect(&sandbox)?;
     set_layout(&sandbox, "ru")?;
     let recorder = sandbox.path("home/recorder.sh");
-    std::fs::write(&recorder, RECORDER)?;
-    std::fs::set_permissions(&recorder, std::fs::Permissions::from_mode(0o755))?;
+    ngterm_host::fakes::write_executable(&recorder, RECORDER)?;
     let config = sandbox.path("state/config");
     std::fs::create_dir_all(&config)?;
     // a state a launch left before (`FirstRunWelcome::has_prior_state`): no welcome dialog holds the keys
