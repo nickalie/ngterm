@@ -361,6 +361,13 @@ guest has 4 CPUs and 6.5 GB of memory.
     are left alone
   - the 10 ids (`test_overlay.py`'s eight page tests and the chromeless frame test, `test_cli_output.py`'s
     `test_overlay_page_blocks_until_submitted`) are in the Windows ratchet
+- ➕ (side task 18) Linux: `tests/html_overlay`'s 1080p animation case failed on the dev box's Mesa GPU under host
+  load (11.8–23.5 frames/s against a 24 frames/s floor). A bug in the test: the engine drew a new frame for 88 of 89
+  presents at load 19 and 6 of 6 at load 70; what slowed was the harness's own present, a debug build's 1080p
+  read-back on the test's thread (about 20 ms each idle, 300 ms loaded). The case now presents a fixed 40 times and
+  asserts the pace against that run's own presents, capped by the 60 Hz refresh (≥ 0.75 of them on dmabufs, ≥ 1/8 in
+  SHM on lavapipe), every frame handed over answered, and still no SHM frame or fall-back on dmabufs; a 50 ms delay
+  in answering a frame fails it (0.23)
 
 ### Task 7: The Windows installer (depends on Tasks 4–6)
 
