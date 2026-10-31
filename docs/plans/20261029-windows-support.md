@@ -239,6 +239,20 @@ guest has 4 CPUs and 6.5 GB of memory.
   needing `posix-command-line` skip there), and they joined the Windows ratchet (702 ids). On the VM's desktop (the
   windows job's stage, a private state dir) a braille-spinner HUD with a dimmed detail showed over the PowerShell pane,
   an update repainted it as markdown in its text color, and a close took it down, with no child process for the panel
+- ➕ (side task 29) Ctrl+C in a Windows pane: a key pressed on the desktop always interrupted the pane's program, in
+  an in-app pane and a live one, under PowerShell and `cmd.exe` (GPUI's Ctrl+C encodes `0x03`, the pseudoconsole
+  makes it the console's Ctrl+C event; no process of the pane ignored it: `ConsoleFlags` read from each one's
+  parameters, `ngterm-pty` clearing the spawner's inherited ignore flag). What failed was a `^C` typed through
+  `session.type` (`ngtermctl session type`) into an in-app pane, on every OS: each run of the text went to the key
+  encoder as an unidentified key carrying it, and `ngterm-ghostty-vt` drops a key's text that holds a control
+  character (`event.h` takes none), so the whole run (`f^Cg` too) sent nothing. Live panes type through their daemon,
+  raw, and were not affected. `ngterm-term`'s `Pane::type_text` now writes such text as Ghostty's encoder writes an
+  unidentified key's text under every keyboard mode (upstream's `inject`: `ghostty_surface_key` with only the text).
+  Tests: `platform.rs`'s `a_typed_ctrl_c_interrupts_the_program` (on Windows `ping` ends with
+  `STATUS_CONTROL_C_EXIT`), `test_session_text.py`'s `test_a_typed_ctrl_c_interrupts_the_running_program` (green on
+  the windows job, in its list); `scripts/smoke-windows-app.ps1` checks a typed `^C` and a pressed Ctrl+C. In the VM
+  (the windows job's stage, a private state dir) both ended `ping -t` in in-app and live panes, PowerShell and
+  `cmd.exe`, typed and pressed; before the fix the typed ones never did
 
 ### Task 5: Desktop integrations on Windows (depends on Task 4)
 
