@@ -709,3 +709,39 @@ The final revmux round over the whole plan found seven; each is fixed in a commi
 - ➕ [minor] `ngterm_core::pipe_security::check_server_user` holds the pipe-server user refusal and its message for
   the session pipe's, the control socket's and the instance pipe's clients; each still builds its own descriptor.
   Test: `a_pipe_served_by_another_user_is_refused_by_name` (Windows)
+
+### ➕ revmux round 2 fixes (side task 41)
+
+Round 2 (`02-after-fix`) found six and one pre-existing; each is fixed in a commit of its own:
+
+- ➕ [major] `policy::granted_file`'s volume pre-check (side task 38) compared the grant's real path with the request
+  as the page's address spells it, so a page on a mapped network drive, a `subst` drive or a junction to another
+  volume was refused its own files. The pre-check stays, as it keeps a page's `/UNC/<server>/...` from making Windows
+  open an SMB connection (and hand over NTLM credentials) to a server the page chose; a grant
+  (`policy::GrantRoot`) now keeps the volume its page named beside its real path, and a request on either is
+  resolved, anything else still refused before the file system is asked
+- ➕ [major] a share's server reaches the request lowercased (and punycoded) through the `file:` URI's host, while the
+  grant keeps the spelling it was resolved from, and `Path::starts_with` compared the prefix's server exactly.
+  Containment (`strictly_inside`) now compares the volume as Windows reads it (case-insensitive, the server through
+  `url::Host::parse` as the address spells it) and the rest exactly. Tests: `strictly_inside` and `volume` on
+  differently spelled servers (Windows), and `the_grant_serves_a_drives_and_a_shares_files_only_inside_it` grants a
+  page through the machine's name in capitals (checked to stay capitalised in the real root), a `subst` drive and a
+  `net use` drive besides the drive and the `127.0.0.1` share
+- ➕ [minor] `ShellDialect::of_shell` read `env` off the value's last component whatever came first, so a shell's
+  argument (`bash --rcfile /etc/env`) made it Unknown; the same construct took a last-component shell over the
+  first word (`pwsh -File C:\scripts\bash` read as POSIX). The program is now the value's shortest run of leading
+  words naming a known shell or `env` (a path with spaces read whole). Tests: the cases above and their kin
+- ➕ [minor] after env's `--`, its `-` and `NAME=value` words are skipped before the program, as GNU env reads them
+- ➕ [minor] the `WebView2` file-chooser guard refuses `dispatchEvent` of a `click` on a file input (Chromium activates
+  a page's synthetic click under a user gesture), and a root `attachShadow` makes gets the window's click listener,
+  which a closed root hides its inputs from. The guard moved to `webview2/guard.js`; the WPE harness runs it in
+  `WebKit` (`the_webview2_guard_keeps_scripted_and_shadowed_clicks_off_file_inputs`: a dispatched and a called click
+  never reach a file input, a text input's does, a real click on a file input in a closed shadow root arrives
+  cancelled). Gaps left, in the module docs: another realm, a closed root declared in markup, a click a page stops
+  before it reaches the root
+- ➕ [minor] `portable_ptys_openpty_failure_keeps_its_errno` reaches portable-pty's real `openpty` failure (a child
+  process that spent its descriptor limit) and reads `EMFILE` through the chain the clone race's retry reads
+  (`openpty_errno`); without patch 0007 it fails. Patch 0007 names that test; `vendor-portable-pty.sh --check` holds
+- ➕ [pre-existing, major] `parse_denylist` reads CRLF and lone-CR line endings, as `keymap.conf`, `hooks.conf` and
+  `remotes.conf` already did (the sweep of core's config readers found no other: `ghostty.conf` trims `\r`).
+  Test: `the_denylist_reads_windows_and_old_mac_line_endings`
