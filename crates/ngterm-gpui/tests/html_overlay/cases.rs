@@ -420,7 +420,7 @@ fn animation(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
         check(!after.fell_back && after.shm == 0, || {
             format!("SHM was chosen while dmabufs import: {after:?}")
         })?;
-        // 0.97 to 1.0 here at load averages of 19 to 70 (Intel, a debug build); SHM manages 2.5 frames/s at 1080p
+        // 0.93 to 1.0 here at load averages of 19 to 70 (Intel, a debug build); SHM manages 2.5 frames/s at 1080p
         check(pace >= 0.75, || {
             format!("{frames} frames in {PRESENTS} presents over {elapsed:.1} s at 1080p on dmabufs")
         })
