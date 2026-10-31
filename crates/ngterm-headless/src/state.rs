@@ -529,8 +529,8 @@ impl HeadlessState {
         }
     }
 
-    /// Quits a moment after a command asked for it (`live.reset`), so its reply is written first. Nothing relaunches
-    /// a headless instance: whoever started it (a service manager) does.
+    /// Quits a moment after a command asked for it (`live.reset`), so its reply is written first; the run then arms
+    /// the reset and starts again (`crate::relaunch`).
     fn schedule_live_quit(&self, relaunch: bool) {
         tracing::info!(relaunch, "quitting for the live sessions reset");
         self.after(LIVE_QUIT_DELAY, "live sessions reset quit", Self::request_quit);

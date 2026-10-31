@@ -39,6 +39,7 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_
 [dev-dependencies]
 # the fake terminals a model's panes hold in the layout tests
 ngterm-host = { workspace = true, features = ["fakes"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

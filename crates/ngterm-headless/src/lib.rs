@@ -17,13 +17,15 @@
 //! - It can view as well: `ngtermctl live attach` on it attaches another machine's session as a row of its own, its
 //!   presentation bridged as the GPUI frontend bridges it (no presenter draws an ask or an overlay here, though).
 //! - The quit (SIGTERM, SIGINT, SIGHUP; the console's Ctrl events on Windows) saves the state and detaches every
-//!   terminal; the sessions live on with the session server, and the next start attaches them again.
+//!   terminal; the sessions live on with the session server, and the next start attaches them again. A confirmed
+//!   Live sessions reset quits and starts again ([`relaunch`]), the new instance resetting before it attaches.
 //!
 //! Module map: [`main_loop`] (the loop of a process with no toolkit), [`state`] (the requests, the viewers' streams,
-//! the timers), [`panes`] (the terminals), [`signals`].
+//! the timers), [`panes`] (the terminals), [`signals`], [`relaunch`].
 
 pub mod main_loop;
 pub mod panes;
+pub mod relaunch;
 pub mod signals;
 pub mod state;
 
@@ -297,8 +299,28 @@ pub fn run(options: &Options) -> i32 {
             closing.close();
         }
     });
+    // a confirmed live sessions reset is armed for the next launch, which this process then starts itself; without
+    // that start nothing would consume it at the moment the reset was asked for, so it is not armed
+    let reset = state.core.arm_live_reset_on_quit();
     server.stop();
     state.teardown();
+    if reset {
+        restart_for_reset(&state, options);
+    }
     tracing::info!("quit: done");
     i32::from(!ready)
+}
+
+/// Starts this binary again for the armed live sessions reset ([`relaunch`]); on Unix it returns only when that
+/// failed. A failed start disarms the reset.
+fn restart_for_reset(state: &HeadlessState, options: &Options) {
+    tracing::info!("quit: starting again for the live sessions reset");
+    #[cfg(unix)]
+    let failed = Some(relaunch::relaunch(options));
+    #[cfg(windows)]
+    let failed = relaunch::relaunch(options).err();
+    if let Some(error) = failed {
+        tracing::error!(%error, "could not start again for the live sessions reset");
+        state.core.disarm_live_reset();
+    }
 }

@@ -4834,6 +4834,7 @@ dependencies = [
  "ngterm-term",
  "serde_json",
  "signal-hook",
+ "tempfile",
  "tracing",
  "uuid",
  "windows-sys 0.61.2",
