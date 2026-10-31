@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use ngterm_pty::{Command, Size, Spawned};
 
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 const TEST: &str = "a_child_forked_during_the_first_libnotify_use_runs";
 /// Set for a process that runs one round.
 const ROUND: &str = "FORK_NOTIFY_ROUND";
@@ -19,24 +21,24 @@ const ROUND: &str = "FORK_NOTIFY_ROUND";
 const ROUNDS: usize = 60;
 
 /// Spawn `true` on PTYs until `stop`; the statuses of the children that a signal ended.
-fn spawn_until(stop: &AtomicBool) -> Vec<String> {
+fn spawn_until(stop: &AtomicBool) -> std::io::Result<Vec<String>> {
     let mut children = Vec::new();
     while !stop.load(Ordering::Acquire) && children.len() < 500 {
-        let Spawned { master, child } = ngterm_pty::spawn(&Command::new("/usr/bin/true"), Size::cells(24, 80))
-            .unwrap_or_else(|err| panic!("spawning failed: {err}"));
+        let Spawned { master, child } = ngterm_pty::spawn(&Command::new("/usr/bin/true"), Size::cells(24, 80))?;
         children.push((master, child));
     }
-    children
-        .into_iter()
-        .filter_map(|(_master, mut child)| {
-            let status = child.wait().unwrap_or_else(|err| panic!("waiting failed: {err}"));
-            status.signal().map(|signal| format!("{status:?} ({signal})"))
-        })
-        .collect()
+    let mut killed = Vec::new();
+    for (_master, mut child) in children {
+        let status = child.wait()?;
+        if let Some(signal) = status.signal() {
+            killed.push(format!("{status:?} ({signal})"));
+        }
+    }
+    Ok(killed)
 }
 
 /// One round: PTY children spawned on three threads while this one makes the process's first libnotify use.
-fn round() {
+fn round() -> TestResult {
     let stop = Arc::new(AtomicBool::new(false));
     let spawners: Vec<_> = (0..3)
         .map(|_| {
@@ -45,35 +47,40 @@ fn round() {
         })
         .collect();
     std::thread::sleep(Duration::from_millis(20));
+    // SAFETY: plain `getuid(2)`; no memory is passed.
+    let uid = unsafe { libc::getuid() };
     // the first libnotify use, as portable-pty makes it for a command without `HOME`
     // SAFETY: `getpwuid` returns a pointer into libc's static entry, which is not read here.
-    unsafe { libc::getpwuid(libc::getuid()) };
+    unsafe { libc::getpwuid(uid) };
     std::thread::sleep(Duration::from_millis(20));
     stop.store(true, Ordering::Release);
-    let killed: Vec<String> = spawners
-        .into_iter()
-        .flat_map(|spawner| spawner.join().unwrap_or_else(|_| panic!("a spawner panicked")))
-        .collect();
-    assert!(killed.is_empty(), "children killed before their exec: {killed:?}");
+    let mut killed = Vec::new();
+    for spawner in spawners {
+        killed.extend(spawner.join().map_err(|_| "a spawner panicked")??);
+    }
+    if killed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("children killed before their exec: {killed:?}").into())
+    }
 }
 
 #[test]
-fn a_child_forked_during_the_first_libnotify_use_runs() {
+fn a_child_forked_during_the_first_libnotify_use_runs() -> TestResult {
     if std::env::var_os(ROUND).is_some() {
-        round();
-        return;
+        return round();
     }
-    let this = std::env::current_exe().unwrap_or_else(|err| panic!("no test binary: {err}"));
+    let this = std::env::current_exe()?;
     for _ in 0..ROUNDS {
         let out = std::process::Command::new(&this)
             .args([TEST, "--exact", "--test-threads=1"])
             .env(ROUND, "1")
-            .output()
-            .unwrap_or_else(|err| panic!("running a round failed: {err}"));
+            .output()?;
         assert!(
             out.status.success(),
             "a round failed: {}",
             String::from_utf8_lossy(&out.stdout)
         );
     }
+    Ok(())
 }
