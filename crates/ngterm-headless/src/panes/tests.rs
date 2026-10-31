@@ -71,3 +71,97 @@ fn a_model_without_windows_lays_out_no_pane() {
     );
     assert!(layout(&core).is_empty());
 }
+
+/// A core over one window whose first session has a split, each pane holding a fake terminal; the session's id and
+/// its primary's and split's tokens.
+fn split_core() -> (Core, Uuid, String, String) {
+    use ngterm_core::model::WindowLibrary;
+    use ngterm_host::fakes::FakeSurface;
+
+    let mut library = WindowLibrary::seeded("/home/u");
+    let window = library.active_window_id().unwrap();
+    let store = library.store_mut(window).unwrap();
+    let session = store.sessions().next().unwrap().id();
+    store.toggle_split(session, None);
+    let found = store.session_mut(session).unwrap();
+    let primary = pane_env::uuid_string(found.pane_identity);
+    let split = pane_env::uuid_string(found.split_pane_identity.unwrap());
+    drop(
+        found
+            .pane_slot_mut(StatusPane::Left)
+            .replace(Box::new(FakeSurface::new(primary.clone()))),
+    );
+    drop(
+        found
+            .pane_slot_mut(StatusPane::Right)
+            .replace(Box::new(FakeSurface::new(split.clone()))),
+    );
+    let core = Core::new(
+        ngterm_core::CoreConfig {
+            app: crate::identity(),
+            capabilities: Vec::new(),
+        },
+        ngterm_core::CoreState {
+            library,
+            ..ngterm_core::CoreState::default()
+        },
+    );
+    (core, session, primary, split)
+}
+
+/// What the panes start under, with the stock config and no login shell, resources or binaries.
+fn environment() -> PaneEnvironment {
+    let config = GhosttyConfig::default();
+    PaneEnvironment {
+        socket: "/tmp/a.sock".to_owned(),
+        program_version: "1.2.3".to_owned(),
+        host: Host::new(&config, None, None, None),
+        config,
+        grid: DEFAULT_GRID,
+        hostname: "box".to_owned(),
+    }
+}
+
+fn role(core: &Core, session: Uuid, token: &str) -> Option<StatusPane> {
+    PaneSpec::of_token(core, session, token).map(|spec| spec.pane)
+}
+
+#[test]
+fn a_token_keeps_its_role_until_the_model_moves_it() {
+    let (core, session, primary, split) = split_core();
+    assert_eq!(role(&core, session, &primary), Some(StatusPane::Left));
+    assert_eq!(role(&core, session, &split), Some(StatusPane::Right));
+    assert_eq!(role(&core, session, "no-such-token"), None);
+    assert_eq!(role(&core, Uuid::new_v4(), &primary), None);
+}
+
+#[test]
+fn a_swap_moves_each_token_to_the_other_role() {
+    let (mut core, session, primary, split) = split_core();
+    let window = core.library().active_window_id().unwrap();
+    core.library_mut()
+        .store_mut(window)
+        .unwrap()
+        .swap_panes(session)
+        .unwrap();
+    assert_eq!(role(&core, session, &split), Some(StatusPane::Left));
+    assert_eq!(role(&core, session, &primary), Some(StatusPane::Right));
+}
+
+#[test]
+fn a_promoted_split_survivor_is_the_primary() {
+    let (mut core, session, primary, split) = split_core();
+    let window = core.library().active_window_id().unwrap();
+    core.library_mut()
+        .store_mut(window)
+        .unwrap()
+        .close_primary_pane(session);
+    let spec = PaneSpec::of_token(&core, session, &split).unwrap();
+    assert_eq!(spec.pane, StatusPane::Left);
+    assert!(
+        spec.env(&environment())
+            .contains(&("NGTERM_PANE".to_owned(), "left".to_owned())),
+        "the survivor's shell is told its new role"
+    );
+    assert_eq!(role(&core, session, &primary), None);
+}

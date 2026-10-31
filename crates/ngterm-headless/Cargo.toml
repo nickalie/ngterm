@@ -36,5 +36,9 @@ signal-hook.workspace = true
 # the console's Ctrl events quit with the quit save
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Console"] }
 
+[dev-dependencies]
+# the fake terminals a model's panes hold in the layout tests
+ngterm-host = { workspace = true, features = ["fakes"] }
+
 [lints]
 workspace = true

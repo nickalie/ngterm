@@ -253,6 +253,21 @@ impl PaneSpec {
         specs
     }
 
+    /// The pane carrying `token` in `session`, as the model lays it out now (the GPUI frontend's `PaneSpec::of_token`):
+    /// a swap or a split survivor's promotion moves a token to the other role, and a session may move to another
+    /// workspace, so a spec read at mount time goes stale.
+    #[must_use]
+    pub fn of_token(core: &Core, session: Uuid, token: &str) -> Option<Self> {
+        let library = core.library();
+        library.open_ids().into_iter().find_map(|window| {
+            let store = library.store(window)?;
+            let found = store.session(session)?;
+            Self::of_session(window, store, found)
+                .into_iter()
+                .find(|spec| spec.token == token)
+        })
+    }
+
     /// The pane's environment: the session, window and workspace ids, `NGTERM_PANE` and the pane token.
     fn env(&self, environment: &PaneEnvironment) -> Vec<(String, String)> {
         pane_env::session(&SessionPane {
@@ -337,7 +352,10 @@ impl Panes {
                 session: spec.session,
                 token: spec.token.clone(),
             };
-            if !self.cells.contains_key(&key) {
+            if self.cells.contains_key(&key) {
+                // the role, workspace and directory a later grant or replacement starts with follow the model
+                self.specs.insert(key, spec);
+            } else {
                 self.mount(core, &spec);
                 fresh.push(spec);
             }
@@ -484,7 +502,10 @@ impl Panes {
             session: replacement.session,
             token: replacement.token.clone(),
         };
-        let Some(spec) = self.specs.get(&key).cloned() else {
+        if !self.cells.contains_key(&key) {
+            return false;
+        }
+        let Some(spec) = PaneSpec::of_token(core, replacement.session, &replacement.token) else {
             return false;
         };
         let mut env = spec.env(&self.environment);
@@ -524,9 +545,10 @@ impl Panes {
             previous.teardown();
         }
         self.start(&fresh, spec.session, &launch, !replacement.remote);
-        if let Some(old) = self.cells.insert(key, fresh) {
+        if let Some(old) = self.cells.insert(key.clone(), fresh) {
             old.pane.borrow_mut().take();
         }
+        self.specs.insert(key, spec);
         true
     }
 
