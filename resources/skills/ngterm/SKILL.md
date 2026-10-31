@@ -775,12 +775,18 @@ app's own **Help ▸ Install Agent Skill…** copy (`~/.claude/skills/ngterm/`, 
 bash <this-skill-directory>/scripts/show-image.sh <image> [size-percent]
 ```
 
+On Windows a pane's program writes through the pseudoconsole, which drops the kitty graphics escapes,
+so the image shows in a page overlay instead (`--html`, the image inlined, Enter closes it): run the
+same line from Git Bash, which hands over to `scripts/show-image.ps1` beside it, or from PowerShell
+`powershell -NoProfile -ExecutionPolicy Bypass -File <this-skill-directory>\scripts\show-image.ps1 <image> [size-percent]`.
+
 The size percent sizes the overlay PANEL; the image itself is scaled to fit that panel and centered
 in it, so a large screenshot needs no resizing beforehand.
 
 Do NOT print graphics escapes to your own tool stdout (the agent harness escapes the control bytes)
 and do NOT run an image viewer in your tool shell (no controlling terminal). The overlay is what makes
-it render. Outside ngterm (`NGTERM_ENABLED` unset) there is no overlay — fall back to `open <image>`.
+it render. Outside ngterm (`NGTERM_ENABLED` unset) there is no overlay — fall back to `open <image>`
+(`Invoke-Item <image>` on Windows).
 
 ## Displaying an HTML artifact
 
@@ -933,6 +939,7 @@ Full detail, templates, and the exact `gh` commands are in **troubleshooting.md*
   one as reference for a tricky workflow. The recipe list lives in the repo, not here; fetch it.
 - **troubleshooting.md** — diagnosing common problems (keymap editor, custom actions, logs) and the
   bug-issue / feature-Discussion reporting workflow (draft-first, scrub, never post without approval).
-- **scripts/show-image.sh** — bundled helper that displays an image inline in an overlay (see above).
+- **scripts/show-image.sh** — bundled helper that displays an image inline in an overlay (see above);
+  **scripts/show-image.ps1** is its Windows form.
 
 Read those files when you need exact flags, return shapes, or worked examples.

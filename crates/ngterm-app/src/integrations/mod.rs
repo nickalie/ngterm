@@ -51,8 +51,10 @@
 //!   prose, `NGTERM_*` variables, HTML bridge, installed file names, docs and bug links, and where upstream's text is
 //!   macOS-only, this build's Live login shells and the overlay hide toggle's Linux chord, and the cookbook's rule to
 //!   translate a fetched recipe's agterm names before installing it: `0004-ngterm-identity.patch`), and its
-//!   `show-image.sh` passes the pane's `NGTERM_SOCKET` through `--socket` (`0006-show-image-socket.patch`): all are
-//!   patches over upstream's tree (`build/patches/skill-ngterm`).
+//!   `show-image.sh` passes the pane's `NGTERM_SOCKET` through `--socket` (`0006-show-image-socket.patch`), and on
+//!   Windows, whose pseudoconsole drops the kitty graphics escapes, it hands over to a PowerShell form,
+//!   `show-image.ps1`, which shows the image in a page overlay (`0008-show-image-windows.patch`): all are patches over
+//!   upstream's tree (`build/patches/skill-ngterm`).
 
 pub mod cli;
 pub mod files;

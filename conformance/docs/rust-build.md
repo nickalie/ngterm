@@ -238,7 +238,7 @@ The bundled agent skill (`resources/skills/ngterm`) is upstream's with
 `build/patches/skill-ngterm/` applied (the `live` names, this build's `ngterm` and `ngtermctl`, then the attach
 contract's `AGTERM_LIVE_*`, then the rest of this build's identity, `NGTERM_*` among it, then the restore adapter, then
 `show-image.sh` passing the pane's socket, then the Windows build's paths and chord and `terminfo install`'s own
-text):
+text, then `show-image.sh`'s Windows form, `show-image.ps1`, which shows the image in a page overlay):
 `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh` rebuilds it as the new upstream tree plus those
 patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned tag verifies the copy still equals it.
 

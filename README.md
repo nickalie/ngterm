@@ -346,11 +346,11 @@ scripts/run-gpui-dev.sh [--release] [--state DIR] [-- NGTERM_ARGS...]   # an iso
 
 `stage.sh` (into a new or empty directory; `--profile debug` for a debug build) assembles the layout the suite, the
 dev script and an install run from.
-`run-gpui-dev.sh` (`scripts/lib/dev-instance.sh`) builds and stages the app into a fresh `/tmp/ngterm-dev-*` root and
-launches an isolated instance: a unique
-`NGTERM_APP_ID`, its own `NGTERM_STATE_DIR` and `NGTERM_CONTROL_SOCKET`, and `NGTERM_*`/`AGTERM_*`/`ZMX_*` inherited
-from a live terminal session dropped (all but `NGTERM_LOG`). It prints the `ngtermctl <command> --socket ...` line
-that drives the instance.
+`run-gpui-dev.sh` (`scripts/lib/dev-instance.sh`; on Windows from Git Bash, [Windows](#windows)) builds and stages
+the app into a fresh `/tmp/ngterm-dev-*` root and launches an isolated instance: a unique `NGTERM_APP_ID`, its own
+`NGTERM_STATE_DIR` and `NGTERM_CONTROL_SOCKET`, and `NGTERM_*`/`AGTERM_*`/`ZMX_*` inherited from a live terminal
+session dropped (all but `NGTERM_LOG`). It prints the `ngtermctl <command> --socket ...` line that drives the instance
+and the instance's pid, by which to stop it.
 
 The build uses the installed build's app id, state dir and socket: while an installed ngterm runs, launch a checkout's
 build only through `run-gpui-dev.sh`. A plain launch is forwarded to the running instance over the session bus (the
@@ -473,13 +473,14 @@ cargo build --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session    # ngterm
 scripts/stage.sh 'C:\ngterm-stage'
 ```
 
-A dev build beside an installed ngterm needs what `scripts/run-gpui-dev.sh` gives an instance on Linux (that script
-is not checked on Windows, and has no Windows form of its own): `NGTERM_*`, `AGTERM_*` and `ZMX_*` stripped
-from the environment, a unique `NGTERM_APP_ID` (its own instance pipe, so the launch is not forwarded to the installed
-app) and a private `NGTERM_STATE_DIR` (its config dir, its live-session namespace and its control socket,
-`<state dir>\ngterm.sock`, follow it), then the staged `bin\ngterm.exe`, driven with
-`ngtermctl <command> --socket <state dir>\ngterm.sock`. The smoke checks below and the suite's harness launch their
-instances the same way. Its window opens on the desktop it runs on.
+A dev build beside an installed ngterm runs through `scripts/run-gpui-dev.sh` from Git Bash, as on Linux
+([Build and run](#build-and-run)): it builds and stages the debug app (`--release` the release one) into a fresh
+`%TEMP%\ngterm-dev-*` root and launches it with `NGTERM_*`, `AGTERM_*` and `ZMX_*` stripped from the environment, a
+unique `NGTERM_APP_ID` (its own instance pipe, so the launch is not forwarded to the installed app) and a private
+`NGTERM_STATE_DIR` (its config dir, its live-session namespace and its control socket, `<state dir>\ngterm.sock`,
+follow it). It prints the `ngtermctl <command> --socket <state dir>\ngterm.sock` line that drives the instance and the
+app's Windows pid, by which to stop it (`taskkill /F /PID <pid>`), and waits for the app. The smoke checks below and
+the suite's harness launch their instances the same way. Its window opens on the desktop it runs on.
 
 The installer is a per-user MSI from `packaging/windows/ngterm.wxs`, whose header says what it installs and why per
 user:
