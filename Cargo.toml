@@ -212,6 +212,11 @@ multiple_unsafe_ops_per_block = "deny"
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
 
+# Debug builds keep line tables only (file:line in backtraces and panics, no variable info for a debugger): full
+# debuginfo, statically linked into every test binary, grew target/ to hundreds of GB.
+[profile.dev]
+debug = "line-tables-only"
+
 # calloop (GPUI's Linux event loop) without its unconditional request for tracing's `log` feature, which workspace
 # feature unification spread to every crate and clippy's cognitive_complexity then counted in every tracing macro:
 # vendor/calloop is the verified crates.io source plus build/patches/calloop (scripts/vendor-calloop.sh;
