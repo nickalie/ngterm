@@ -187,8 +187,16 @@ public static class SmokeWindows {
     [DllImport("user32.dll")]
     static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
     static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
     const uint AbortIfHung = 0x2;
+    // whether the foreground window is one of `pid`'s
+    public static bool InFront(uint pid) {
+        uint owner;
+        GetWindowThreadProcessId(GetForegroundWindow(), out owner);
+        return owner == pid;
+    }
     // brings the first visible top-level window of `pid` to the front; false when it has none or Windows refused.
     // An Alt press and release first: Windows lets the process that sent the last input set the foreground window.
     public static bool Raise(uint pid) {
@@ -474,6 +482,16 @@ function End-Session($process, [string] $what) {
     Check ((Count-Log 'the session is ending: quitting') -gt $quits) 'the session end ran the quit'
 }
 
+# Brings the first visible window of `id` to the front once it has one: polls until the foreground window is its.
+function Wait-Raise([int] $id) {
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    do {
+        if ([SmokeWindows]::Raise([uint32]$id) -and [SmokeWindows]::InFront([uint32]$id)) { return $true }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
 function Start-App {
     # a console window of its own: the app's log lines and Ctrl events
     Start-Process -FilePath $Exe -WorkingDirectory $homeDir -PassThru
@@ -497,7 +515,7 @@ $env:NGTERM_STATE_DIR = $state
 $env:NGTERM_APP_ID = $appId
 # the global hotkey: the key left of 1 by position, with Ctrl and Shift
 $config = New-Item -ItemType Directory -Force -Path (Join-Path $state 'config')
-Write-Utf8 (Join-Path $config 'keymap.conf') "global-hotkey ctrl+shift+``r`n"
+Write-Utf8 (Join-Path $config 'keymap.conf') ('global-hotkey ctrl+shift+`' + "`r`n")
 $env:HOME = $homeDir
 $consoleBuild = Test-ConsoleProgram $Exe
 Log "exe $Exe ($(if ($consoleBuild) { 'console: a debug build' } else { 'no console: a release build' })); state $state; pipe \\.\pipe\$pipeName; PowerShell $($PSVersionTable.PSVersion)"
@@ -552,7 +570,7 @@ try {
     Check ($tree -match '"hasSplit":true') "the session comes back with its split: $tree"
 
     # the keyboard: keys typed on the desktop, the window brought to the front, reach the focused pane
-    Check ([SmokeWindows]::Raise([uint32]$app.Id)) 'the app window comes to the front'
+    Check (Wait-Raise $app.Id) 'the app window comes to the front'
     Start-Sleep -Seconds 1
     # Escape first: a sheet the launch shows (the first-run welcome) takes the keyboard until dismissed
     [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
@@ -659,7 +677,7 @@ try {
     Check (Wait-Toasts { param($t) @($t | Where-Object { $_ -match $slot -and $_ -match 'smoke-toast-three' }).Count -eq 1 }) 'the notification center holds the toast in the session''s slot'
     Invoke-Control 'notify' @{ title = 'Smoke toast'; body = 'smoke-toast-four' } 2000 $second | Out-Null
     Check (Wait-Toasts { param($t) $held = @($t | Where-Object { $_ -match $slot }); $held.Count -eq 1 -and $held[0] -match 'smoke-toast-four' }) 'a second notify replaces the toast in its slot'
-    Check ([SmokeWindows]::Raise([uint32]$app.Id)) 'the app window comes to the front'
+    Check (Wait-Raise $app.Id) 'the app window comes to the front'
     Invoke-Control 'session.select' $null 2000 $second | Out-Null
     Check (Wait-Toasts { param($t) -not ($t | Where-Object { $_ -match $slot }) }) 'selecting the session withdraws its toast'
 
@@ -688,8 +706,7 @@ try {
         $app = Start-App
         Log "relaunched pid $($app.Id) with the layout lock on 00000419"
         Check ($null -ne (Wait-Socket)) 'the relaunched app answers'
-        Start-Sleep -Seconds 2
-        Check ([SmokeWindows]::Raise([uint32]$app.Id)) 'the app window comes to the front'
+        Check (Wait-Raise $app.Id) 'the app window comes to the front'
         Start-Sleep -Seconds 1
         [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
         Check (Wait-Log 'keyboard layout lock: layout selected') 'the lock selects Russian for the terminal'
