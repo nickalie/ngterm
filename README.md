@@ -435,8 +435,9 @@ the live probe rejects the host), each in a terminal nobody draws, so every sess
 
 ```sh
 # on the server: the staged layout (scripts/stage.sh), ngtermctl on PATH (~/.local/bin or /usr/local/bin)
-ngterm-headless [--grid 120x40] &       # one per state dir, as the app; SIGTERM, SIGINT or SIGHUP saves and ends it
-                                        # (on Windows the console's Ctrl+C, Ctrl+Break or close)
+nohup ngterm-headless [--grid 120x40] </dev/null >/dev/null 2>&1 &   # one per state dir, as the app
+# SIGTERM, SIGINT or SIGHUP saves and ends it (on Windows the console's Ctrl+C, Ctrl+Break or close); a signal ignored
+# at its start stays ignored, so under nohup it outlives the ssh session that started it
 ngtermctl session new --name build      # sessions to attach; they outlive ngterm-headless, the next start re-attaches
 # on the desktop: the server in remotes.conf (one `destination [label]` per line), key-based ssh to it, then
 # File ▸ Attach Remote, or

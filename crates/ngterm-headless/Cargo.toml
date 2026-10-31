@@ -31,6 +31,8 @@ uuid.workspace = true
 [target.'cfg(unix)'.dependencies]
 # SIGTERM, SIGINT and SIGHUP quit with the quit save
 signal-hook.workspace = true
+# a signal ignored at start (`nohup`) read back before the handlers go in
+libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # the console's Ctrl events quit with the quit save

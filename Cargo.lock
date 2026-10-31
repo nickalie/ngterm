@@ -4825,6 +4825,7 @@ name = "ngterm-headless"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "libc",
  "ngterm-app",
  "ngterm-core",
  "ngterm-host",

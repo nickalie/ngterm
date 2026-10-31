@@ -1,7 +1,9 @@
 //! The system's request to end the process quits it with the quit save, through the main loop: on Unix SIGTERM,
 //! SIGINT and SIGHUP (a service manager's stop, Ctrl+C, the terminal that started it closing), waited for on a thread
-//! of its own, a second one of the same signal getting the default action (the GPUI frontend's `signals.rs`); on
-//! Windows the console's Ctrl events and its close.
+//! of its own, a second one of the same signal getting the default action (the GPUI frontend's `signals.rs`). SIGINT
+//! or SIGHUP ignored when the process started stays ignored, as a daemon's does: `nohup` ignores SIGHUP so the process
+//! outlives the ssh session that started it, and a shell without job control starts a background job with SIGINT
+//! ignored. On Windows the console's Ctrl events and its close.
 
 use std::io;
 
@@ -27,13 +29,17 @@ pub fn quit_on_termination(poster: Poster) -> io::Result<()> {
 
     use signal_hook::iterator::Signals;
 
+    let quitting: Vec<i32> = QUITTING
+        .into_iter()
+        .filter(|signal| *signal == signal_hook::consts::SIGTERM || !ignored_at_start(*signal))
+        .collect();
     // the conditional default first, so it sees the flag the next registration sets on the first signal
-    for signal in QUITTING {
+    for signal in quitting.iter().copied() {
         let seen = Arc::new(AtomicBool::new(false));
         signal_hook::flag::register_conditional_default(signal, Arc::clone(&seen))?;
         signal_hook::flag::register(signal, seen)?;
     }
-    let mut signals = Signals::new(QUITTING)?;
+    let mut signals = Signals::new(&quitting)?;
     std::thread::Builder::new()
         .name("ngterm-headless-signals".to_owned())
         .spawn(move || {
@@ -43,6 +49,17 @@ pub fn quit_on_termination(poster: Poster) -> io::Result<()> {
             }
         })?;
     Ok(())
+}
+
+/// Whether `signal` is ignored, as it is when the process started with it ignored, before any handler is installed.
+#[cfg(unix)]
+fn ignored_at_start(signal: i32) -> bool {
+    let mut current = std::mem::MaybeUninit::<libc::sigaction>::zeroed();
+    // SAFETY: with no new action, sigaction only writes the current one into `current`, a whole `sigaction`.
+    let read = unsafe { libc::sigaction(signal, std::ptr::null(), current.as_mut_ptr()) };
+    // SAFETY: an all-zero `sigaction` is valid, and a successful call filled it.
+    let current = unsafe { current.assume_init() };
+    read == 0 && current.sa_sigaction == libc::SIG_IGN
 }
 
 /// How long the console's closing or a shutdown waits for the quit save (the GPUI frontend's
@@ -110,4 +127,23 @@ pub fn quit_on_termination(poster: Poster) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::ignored_at_start;
+
+    #[test]
+    fn a_signal_ignored_before_the_handlers_is_read_back() {
+        // SIGUSR2: nothing in the tests sends it, so its action is this test's to set and put back
+        let signal = libc::SIGUSR2;
+        // SAFETY: `SIG_IGN` installs no handler code.
+        let previous = unsafe { libc::signal(signal, libc::SIG_IGN) };
+        assert!(ignored_at_start(signal));
+        // SAFETY: `SIG_DFL` installs no handler code.
+        unsafe { libc::signal(signal, libc::SIG_DFL) };
+        assert!(!ignored_at_start(signal));
+        // SAFETY: the action read back above, put back as it was.
+        unsafe { libc::signal(signal, previous) };
+    }
 }
