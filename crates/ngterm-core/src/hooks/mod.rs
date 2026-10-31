@@ -145,7 +145,7 @@ fn trim_whitespaces(text: &str) -> &str {
 /// every hook, so it yields no hooks and one line-0 diagnostic.
 #[must_use]
 pub fn load_hooks(path: &Path) -> (Hooks, Vec<KeymapDiagnostic>) {
-    match fs::read_to_string(path) {
+    match read_config_text(path) {
         Ok(text) => parse_hooks_conf(&text),
         Err(_) if !path.exists() => (Hooks::default(), Vec::new()),
         Err(err) => {
@@ -153,6 +153,18 @@ pub fn load_hooks(path: &Path) -> (Hooks, Vec<KeymapDiagnostic>) {
             (Hooks::default(), vec![KeymapDiagnostic::new(0, message)])
         }
     }
+}
+
+/// A hand-edited config file's text, a leading UTF-8 BOM dropped: Windows' own tools write one (Windows PowerShell's
+/// `Set-Content -Encoding utf8`, Notepad's "UTF-8 with BOM"), and kept it would glue itself to the first line's
+/// first word. Ghostty's config reader skips it too (`Config.loadReader`). Shared with `keymap.conf`'s and
+/// `remotes.conf`'s loaders.
+pub(crate) fn read_config_text(path: &Path) -> io::Result<String> {
+    let text = fs::read_to_string(path)?;
+    Ok(match text.strip_prefix('\u{feff}') {
+        Some(rest) => rest.to_owned(),
+        None => text,
+    })
 }
 
 /// A readable reason for a failed read: the OS error's text without its ` (os error N)` suffix, or Foundation's
