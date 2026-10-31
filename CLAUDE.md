@@ -1,7 +1,7 @@
 # ngterm
 
 ngterm: upstream agterm in Rust, for macOS, Linux and Windows as equal targets, with one frontend on GPUI that renders
-libghostty-vt itself (built and tested on Linux so far; its macOS and Windows forms are open work, not a later phase).
+libghostty-vt itself (built and tested on Linux and Windows; its macOS form is open work, not a later phase).
 Build, run and test: [README.md](README.md). The suite and the ratchet: [conformance/README.md](conformance/README.md),
 [conformance/docs/rust-build.md](conformance/docs/rust-build.md).
 Plans in `docs/plans/` record what was decided at the time: never read one as the current state, never update one to
@@ -23,15 +23,15 @@ match a later change.
 | `ngterm-proto` | wire types | any |
 | `ngterm-host` | the seams a frontend implements, with fakes (feature `fakes`) | any |
 | `ngterm-core` | model, dispatcher (one module per command group), config, hooks, persistence, settings | any |
-| `ngterm-server` | the control socket server | Linux, macOS |
-| `ngterm-ctl` → `ngtermctl` | the CLI | Linux |
+| `ngterm-server` | the control socket server | any |
+| `ngterm-ctl` → `ngtermctl` | the CLI | any |
 | `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt` | libghostty-vt bindings and their safe wrapper | any |
 | `ngterm-pty` | PTY layer (openpty, ConPTY) | any |
 | `ngterm-term` | the toolkit-neutral pane core | any |
 | `ngterm-session` | the live-session server, its client and `SessionHost` | any |
-| `ngterm-app` | frontend-neutral app services | Linux |
+| `ngterm-app` | frontend-neutral app services | any |
 | `ngterm-wpe-sys` and kin, `ngterm-wpe` | WPE WebKit bindings and the HTML overlays' host | Linux |
-| `ngterm-gpui` → `ngterm` | the GPUI frontend | Linux |
+| `ngterm-gpui` → `ngterm` | the GPUI frontend | Linux, Windows |
 
 A crate's root docs and module list show what it holds. `any` means CI builds and tests the crate on all three OSes (README > CI
 has the list); a crate joins it in the change that makes it so. An `any` crate depends on another crate only if that
@@ -103,4 +103,5 @@ stays off it:
   touch another namespace's server or pipe.
 - Run the GUI headless only (the suite's private compositor and bus, or `xvfb-run` with a private bus), on lavapipe,
   never on the user's display, compositor, bus or GPU; README > Native dependencies and Test have the setup. The
-  render-path harnesses' offscreen GPU use is the one exception.
+  render-path harnesses' offscreen GPU use is the one exception. Windows has no headless desktop: a Windows GUI run
+  (the suite, the smoke checks) goes only on a CI runner or a throwaway VM's desktop (README > Windows).
