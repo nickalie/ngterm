@@ -652,9 +652,10 @@ mod tests {
         let exit = run(&LaunchSpec {
             stdin: Some(b"{\"kind\":\"status\"}\n".to_vec()),
             env: vec![("AGT_EVENT_KIND".to_owned(), "status".to_owned())],
+            // `set /p` without input exits 1: the line ends on `more`, whose status is the line's
             ..command_line(
-                &format!("cat > '{root}/event.json'; printf '%s' \"$AGT_EVENT_KIND\" > '{root}/kind'"),
-                &format!(r#"more > "{root}\event.json" & >"{root}\kind" <nul set /p "=%AGT_EVENT_KIND%""#),
+                &format!("printf '%s' \"$AGT_EVENT_KIND\" > '{root}/kind'; cat > '{root}/event.json'"),
+                &format!(r#">"{root}\kind" <nul set /p "=%AGT_EVENT_KIND%" & more > "{root}\event.json""#),
             )
         });
         assert_eq!((exit.status, exit.stdin_failure), (0, None));
