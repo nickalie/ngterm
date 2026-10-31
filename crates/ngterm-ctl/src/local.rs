@@ -105,6 +105,22 @@ pub fn close_inherited_descriptors() {
     }
 }
 
+/// Finishes libnotify's one-time setup before a fork whose child runs code before its exec (a `pre_exec` hook makes
+/// std fork rather than `posix_spawn`), as `ngterm-pty`'s spawn does: every forked child runs libnotify's fork
+/// handler, which reads that setup's once-gate, so a fork that catches another thread in the process's first
+/// libnotify use (`localtime_r`, `getpwuid`, `confstr`) leaves the child a gate held by a thread it lacks, and it dies
+/// of `SIGILL` before the exec while the spawn succeeds. The CLI forks from its only working thread, but a test
+/// binary runs other tests' threads beside it. The setup runs once and this call waits for one in progress.
+#[cfg(target_os = "macos")]
+pub fn settle_libnotify() {
+    unsafe extern "C" {
+        /// `<notify.h>`; the token is only looked up, and every call starts with libnotify's setup.
+        fn notify_is_valid_token(token: libc::c_int) -> bool;
+    }
+    // SAFETY: a lookup of a token number in libnotify's table, which libSystem holds; no memory is passed.
+    unsafe { notify_is_valid_token(0) };
+}
+
 /// Running a test as the real binary runs, with SIGPIPE at its default action. std ignores SIGPIPE before the test
 /// harness's `main`, and only `ngtermctl`'s own `main` restores the default, so a test of [`SigpipeIgnored`] run in the
 /// harness passes whether or not the guard does anything. Setting the default in the harness itself would let a

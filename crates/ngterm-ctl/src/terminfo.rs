@@ -361,6 +361,8 @@ fn install(
             Ok(())
         });
     }
+    #[cfg(target_os = "macos")]
+    crate::local::settle_libnotify();
     let mut child = command.spawn().map_err(|error| InstallFailure::SpawnFailed {
         operation: "posix_spawnp".to_owned(),
         reason: crate::client::os_message(&error),

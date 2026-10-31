@@ -136,6 +136,8 @@ pub(super) fn spawn(
     // SAFETY: the hook runs in the forked child after std put it in its own group (std leaves it the forking thread's
     // signal mask, which the hook clears), and calls only async-signal-safe functions, allocating nothing.
     unsafe { command.pre_exec(move || prepare_child(tty)) };
+    #[cfg(target_os = "macos")]
+    crate::local::settle_libnotify();
     let child = command.spawn()?;
     match libc::pid_t::try_from(child.id()) {
         Ok(group) => Ok(Program { child, group }),
