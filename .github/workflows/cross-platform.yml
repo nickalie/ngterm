@@ -7,6 +7,8 @@
 # its stream bridge on the console on Windows) are in PACKAGES. ngterm-app's hook runner, log file, remote
 # presentation process and agent integrations' installers have their Windows forms beside the Unix ones (macOS takes
 # the Unix forms); its tests that run the agent-status package's POSIX scripts and plugins are Unix-only.
+# ngterm-headless (the core, control socket and live sessions with no window) is in PACKAGES: its quit is signals on
+# Unix and the console's Ctrl events on Windows.
 #
 # ngterm-gpui (the app) builds, lints and tests on the Windows runner too, with its `html` feature (the HTML overlays on
 # WebView2, whose runtime the runner image carries) and without it, in steps of its own: it embeds the terminal fonts
@@ -43,7 +45,7 @@ env:
   # `-p` per crate; word-split by bash, which every step runs in (Git Bash on Windows)
   PACKAGES: >-
     -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys -p ngterm-ghostty-vt
-    -p ngterm-pty -p ngterm-term -p ngterm-server -p ngterm-ctl -p ngterm-app
+    -p ngterm-pty -p ngterm-term -p ngterm-server -p ngterm-ctl -p ngterm-app -p ngterm-headless
 
 defaults:
   run:
