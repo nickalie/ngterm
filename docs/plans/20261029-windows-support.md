@@ -760,15 +760,18 @@ Round 2 (`02-after-fix`) found six and one pre-existing; each is fixed in a comm
   takes its root from `volume`, so `contains`, `grant_error` and its home check read every spelling alike
 - ➕ the sweep (`starts_with`, `strip_prefix`, `components`, `Prefix` over grant and root paths in `ngterm-core`,
   `ngterm-gpui`, `ngterm-wpe`, `ngterm-app`) found one more: `remote::page_serve::resolve`, which serves a replica's
-  resource requests on the machine that opened the page. It compared real paths with `Path::starts_with` (a share's
-  server or name spelled otherwise was refused) and canonicalized any absolute path a presenter asked for, so a
-  replica page could make this machine open an SMB connection to a server it chose. It now refuses a request on a
+  resource requests on the machine that opened the page. It canonicalized any absolute path a presenter asked for, so a
+  replica page could make this machine open an SMB connection to a server it chose, and compared the real paths with
+  `Path::starts_with`. It now refuses a request on a
   volume the page's grant (or, without one, its file) names neither as given nor as it resolves before the file
   system is asked, as `granted_file` does, and checks containment with `strictly_inside`. Left as they are, not
   grant containment: `link_policy`'s automount roots (Unix paths), `live`'s verbatim-prefix strip (a hash's
   spelling), `remotes_watcher::concerns` (watched paths against the watcher's own events), `integrations::files`'
   test walk. Tests (Windows, CI's crates job): `a_file_page_stays_inside_its_grant_whatever_its_volumes_spelling`
   (`decide` on the finding's two cases and their kin), `a_windows_volume_compares_in_any_of_its_spellings`
-  (`grant_error`, `contains`), `a_grant_on_a_share_serves_its_files_in_any_spelling_of_the_share` (`resolve` through
-  this machine's administrative share by its name in capitals, lowercased and verbatim), and the moved `volume` and
-  `strictly_inside` cases; each of the first three fails without the fix
+  (`grant_error`, `contains`), `a_grant_serves_only_requests_on_the_volumes_it_names` (`resolve` serves this
+  machine's administrative share by its name in capitals, lowercased and verbatim, and a `subst` grant on its named
+  and its real drive, and refuses a `subst` drive onto the grant's drive that the page never named, which resolves
+  inside the grant), and the moved `volume` and `strictly_inside` cases; each of the first three fails without the
+  fix. Windows canonicalizes a share's server and name to one spelling, so `resolve`'s real paths never differed
+  there; its change shows in the volume check
