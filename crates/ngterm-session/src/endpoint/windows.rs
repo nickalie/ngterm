@@ -229,11 +229,5 @@ fn check_server_user(stream: &Stream, endpoint: &Endpoint) -> io::Result<()> {
         .peer_creds()?
         .pid()
         .ok_or_else(|| io::Error::other("the pipe's server process id is unknown"))?;
-    if ngterm_core::pipe_security::runs_as_current_user(server_pid)? {
-        return Ok(());
-    }
-    Err(io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        format!("the pipe at {endpoint} belongs to a process of another user (pid {server_pid})"),
-    ))
+    ngterm_core::pipe_security::check_server_user(endpoint, server_pid)
 }
