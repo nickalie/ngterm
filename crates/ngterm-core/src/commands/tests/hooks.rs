@@ -90,7 +90,11 @@ fn an_event_starts_its_hook_with_the_event_on_stdin_and_its_environment() {
     let [launch] = launches.as_slice() else {
         panic!("{launches:?}")
     };
-    assert_eq!(launch.args, ["-c", "cat > /dev/null"]);
+    let shell = ngterm_host::ShellCommand::new("cat > /dev/null");
+    assert_eq!(
+        (&launch.program, &launch.args, &launch.raw_tail),
+        (&shell.program, &shell.args, &shell.raw_tail)
+    );
     let event: Value = serde_json::from_slice(launch.stdin.as_deref().unwrap()).unwrap();
     assert_eq!(
         (event["kind"].as_str(), event["session"].as_str()),

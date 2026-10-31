@@ -1,7 +1,9 @@
 //! `hooks.reload` / `hooks.list` (upstream's `ControlDispatcher+Hooks.swift` and the app's `reloadHooks`/`listHooks`),
 //! and the app side of `hooks.conf`: the scheduler fed every event the ring sequences (upstream's
 //! `HookController` over `WindowLibrary.onControlEvent`), its children started through the frontend's launcher
-//! (`HookProcessRunner`), and its failures posted as banners.
+//! (`HookProcessRunner`), and its failures posted as banners. A hook's command line runs through the OS's shell
+//! (`ngterm_host::command_line`: `/bin/sh -c` as upstream's, `cmd.exe /D /S /C` on Windows) with the event's JSON on
+//! stdin and its `AGT_*` variables over the app's environment.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -55,12 +57,9 @@ impl HookLauncher for Launcher<'_> {
         let mut env = hook_environment(run.event, self.socket);
         env.push(("PATH".to_owned(), self.path.to_owned()));
         let spec = LaunchSpec {
-            program: "/bin/sh".into(),
-            args: vec!["-c".to_owned(), run.entry.command().to_owned()],
             env,
-            cwd: None,
             stdin: Some(stdin),
-            capture_stderr: false,
+            ..LaunchSpec::command_line(run.entry.command())
         };
         let token = run.token;
         let poster = Arc::clone(poster);

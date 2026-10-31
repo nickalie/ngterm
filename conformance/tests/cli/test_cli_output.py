@@ -12,6 +12,7 @@ import uuid
 
 import pytest
 from agterm_conformance import cli_format
+from agterm_conformance.command_line import CommandLines
 from agterm_conformance.match import (
     assert_absent,
     assert_ok,
@@ -1091,19 +1092,20 @@ def config_files(ctl):
 
 
 @pytest.mark.covers("cli:keymap reload", "cli:keymap list", "cli:keymap run")
-@pytest.mark.requires("posix-command-line", reason="the overlay's program or the custom command is a POSIX command line")
-def test_keymap(cli, ctl, config_files):
+def test_keymap(cli, ctl, config_files, adapter):
+    lines = CommandLines.of(adapter, "the custom commands")
     keymap, _ = config_files
     marker = ctl.instance.root / "cli-keymap-ran"
+    mark = lines.write(marker, lines.var("AGT_SESSION_ID"), atomic=False)
     keymap.write_text(
-        f'command "mark" ctrl+shift+f11 --error-hud printf \'%s\' "$AGT_SESSION_ID" > {marker}\n'
+        f'command "mark" ctrl+shift+f11 --error-hud {mark}\n'
         "map ctrl+shift+f12 new_session\nbogus line\n"
     )
     _ok(cli("keymap", "reload"), "1 diagnostic(s)\n")
     listing = _json(cli("keymap", "list", "--json"))
     assert [command["name"] for command in listing["keymap"]["commands"]] == ["mark"]
     _rendered(cli("keymap", "list"), listing)
-    keymap.write_text(f'command "mark" printf \'%s\' "$AGT_SESSION_ID" > {marker}\n')
+    keymap.write_text(f'command "mark" {mark}\n')
     assert _json(cli("keymap", "reload", "--json")) == assert_ok(ctl.request("keymap.reload"))
     _rendered(cli("keymap", "reload"), assert_ok(ctl.request("keymap.reload")))
 

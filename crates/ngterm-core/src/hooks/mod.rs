@@ -43,7 +43,7 @@ impl HookEntry {
         self.identity.kind
     }
 
-    /// The shell line, passed to `/bin/sh -c` untouched.
+    /// The shell line, passed to the OS's shell (`/bin/sh -c`, `cmd.exe /D /S /C` on Windows) untouched.
     #[must_use]
     pub fn command(&self) -> &str {
         &self.identity.command
@@ -63,7 +63,7 @@ pub fn hooks_path(config_dir: &Path) -> PathBuf {
 }
 
 /// Parses `hooks.conf` (upstream's `parseHooksConf`). Blank lines and whole-line `#` comments are skipped; everything
-/// after the kind is the shell line verbatim, so an inline `#`, quotes, pipes and `$VAR` reach `/bin/sh` untouched. A
+/// after the kind is the shell line verbatim, so an inline `#`, quotes, pipes and `$VAR` reach the shell untouched. A
 /// malformed line or a duplicate kind+command is diagnosed and skipped without stopping later lines.
 #[must_use]
 pub fn parse_hooks_conf(text: &str) -> (Hooks, Vec<KeymapDiagnostic>) {
@@ -171,9 +171,14 @@ pub(crate) fn read_error_reason(err: &io::Error) -> String {
 /// The commented starter `hooks.conf` (upstream's `ConfigPaths.starterHooksConf`): the syntax, every event kind, the
 /// delivery contract and a few examples. Every line is a comment so a fresh file runs nothing. The one change from
 /// upstream's text is the uncommentable example, which plays a sound with `canberra-gtk-play` instead of macOS's
-/// `afplay`.
+/// `afplay`; on Windows its prose names `cmd.exe` and `%VAR%` where a line runs through it.
 #[must_use]
 pub fn starter_hooks_conf() -> String {
+    crate::keymap::starter::for_this_shell(posix_starter_hooks_conf())
+}
+
+/// [`starter_hooks_conf`] as upstream words it, for a line run through `/bin/sh -c`.
+fn posix_starter_hooks_conf() -> String {
     let kinds = EventKind::iter()
         .map(EventKind::wire_name)
         .collect::<Vec<_>>()

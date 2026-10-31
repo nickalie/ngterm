@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::hud::HudPosition;
 use crate::model::OverlayPane;
 
-/// A user-defined command: a shell line run via `/bin/sh -c`, optionally bound to a shortcut, always listed in the
+/// A user-defined command: a shell line run via the OS's shell (`ngterm_host::command_line`), optionally bound to a shortcut, always listed in the
 /// action palette. The body may carry `{AGT_X}` tokens, expanded at fire time and exported as `$AGT_X`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CustomCommand {

@@ -1,8 +1,9 @@
 //! `keymap.reload`, `keymap.list` and `keymap.run` (upstream's `ControlDispatcher` keymap arms and the app's
 //! `reloadKeymap`/`listKeymap`/`runCustomCommand`), the keymap the app holds (`SettingsModel.keymap`), and the spawn
-//! half of the custom-command runner (`CustomCommandRunner.run`/`spawn`/`report`): a command runs detached as
-//! `/bin/sh -c` with the session's `{AGT_X}` tokens expanded and exported, and a failure posts a banner and, for
-//! `--error-hud`, a panel over the session.
+//! half of the custom-command runner (`CustomCommandRunner.run`/`spawn`/`report`): a command runs detached through
+//! the OS's shell (`ngterm_host::command_line`: `/bin/sh -c` as upstream's, `cmd.exe /D /S /C` on Windows) with the
+//! session's `{AGT_X}` tokens expanded and exported, and a failure posts a banner and, for `--error-hud`, a panel over
+//! the session.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -302,12 +303,10 @@ impl Core {
         let mut env = context.environment();
         env.push(("PATH".to_owned(), self.child_path()));
         let spec = LaunchSpec {
-            program: "/bin/sh".into(),
-            args: vec!["-c".to_owned(), context.expand(&command.command)],
             env,
             cwd: cwd.filter(|cwd| !cwd.is_empty()).map(PathBuf::from),
-            stdin: None,
             capture_stderr: command.error_hud,
+            ..LaunchSpec::command_line(&context.expand(&command.command))
         };
         let failed = command.clone();
         let poster = Arc::clone(&host.poster);

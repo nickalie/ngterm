@@ -9,6 +9,20 @@ use super::*;
 use BuiltinAction as A;
 
 #[test]
+fn the_starter_keymap_names_cmd_where_a_line_runs_through_it() {
+    let cmd = crate::keymap::starter::cmd_wording(starter_keymap_conf(&ShippedDefaults::upstream()));
+    for expected in [
+        "line is run via `cmd.exe /D /S /C`",
+        "exported as %AGT_X% env vars",
+        "substituted RAW into the cmd.exe line",
+        "QUOTED, e.g. \"%AGT_SELECTION%\"",
+    ] {
+        assert!(cmd.contains(expected), "missing {expected:?}");
+    }
+    assert!(!cmd.contains("/bin/sh"), "{cmd}");
+}
+
+#[test]
 fn the_starter_keymap_is_commented_and_documents_the_verbs() {
     let starter = starter_keymap_conf(&ShippedDefaults::upstream());
     for expected in [
@@ -35,7 +49,9 @@ fn the_starter_keymap_is_commented_and_documents_the_verbs() {
         "{AGT_SESSION_PWD} are equally unsafe raw",
         "environment variable, QUOTED, e.g. \"$AGT_SELECTION\"",
     ] {
-        assert!(starter.contains(expected), "missing {expected:?}");
+        // on Windows in its `cmd` wording
+        let expected = crate::keymap::starter::for_this_shell(expected.to_owned());
+        assert!(starter.contains(&expected), "missing {expected:?}");
     }
     for absent in [
         "super",
