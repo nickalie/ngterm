@@ -555,8 +555,9 @@ conformance/tools/run-windows.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS.
 
 ## Test
 
-The gates' checks. CI runs them on the whole workspace, with the full suite, on every PR and push to main. Locally, a
-change runs them only on the part it changes (these are Linux's; Windows' are in [Windows](#windows), and its and
+The gates' checks. CI runs them on the whole workspace, with the full suite, on every PR and push to main that
+changes more than Markdown nothing builds or tests (docs, plans, READMEs). Locally, a change runs them only on the part
+it changes (these are Linux's; Windows' are in [Windows](#windows), and its and
 macOS' gate is [CI](#ci)'s run on a `ci/**` branch or a PR):
 
 - `cargo fmt`, `cargo metadata --locked` and `scripts/lint-report.sh` (a source scan, seconds) stay on the whole tree.

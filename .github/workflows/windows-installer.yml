@@ -5,13 +5,16 @@
 # the next patch version and uninstalled, which must leave none of its files, its shortcut, its PATH entry or its
 # registry keys. The MSI is kept as an artifact.
 #
-# Pushes to a `ci/**` branch run it too, as cross-platform.yml.
+# Pushes to a `ci/**` branch run it too, as cross-platform.yml, and a change of Markdown alone runs nothing, with the
+# same exceptions (the bundled skill the MSI installs, vendored trees, the patch notes under build/).
 name: windows-installer
 
 on:
   pull_request:
+    paths: ["**", "!**/*.md", "resources/**", "vendor/**", "build/**"]
   push:
     branches: [main, "ci/**"]
+    paths: ["**", "!**/*.md", "resources/**", "vendor/**", "build/**"]
   workflow_dispatch:
 
 permissions:

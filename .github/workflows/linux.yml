@@ -5,10 +5,15 @@
 # checks them on Arch, and the conformance jobs run there too.
 name: linux
 
+# A change of Markdown alone runs nothing: docs, plans, backlog and READMEs are neither built nor tested. The Markdown
+# that is (the bundled skill under resources/, vendored trees, the patch notes under build/) is put back after the
+# exclusion; the two lists are the same.
 on:
   pull_request:
+    paths: ["**", "!**/*.md", "resources/**", "vendor/**", "build/**"]
   push:
     branches: [main]
+    paths: ["**", "!**/*.md", "resources/**", "vendor/**", "build/**"]
 
 permissions:
   contents: read

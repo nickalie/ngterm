@@ -239,7 +239,8 @@ that could reach it:
 
 ## CI
 
-- `conformance-gate` (ubuntu): self-tests and the coverage gate on every PR and on `main`.
+- `conformance-gate` (ubuntu): self-tests and the coverage gate on every PR and on `main`, unless only Markdown
+  outside `conformance/docs/` changed.
 - `reference-macos` (`macos-26`): protocol, cli and behaviors with `--must-pass live-sessions`, then the ui layer
   with `--reruns 1`, against the release named by the catalog's `upstream`.
 - `linux` (`ubuntu-26.04`): the Rust workspace's format check, strict clippy, lint report (in the job summary)

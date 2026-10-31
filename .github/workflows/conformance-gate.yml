@@ -1,10 +1,13 @@
 # Host-free checks on every PR: the harness self-tests and the catalog coverage gate. Nothing here launches an app.
+# A change of Markdown alone runs nothing, except conformance/docs/, whose rust-build.md a self-test checks.
 name: conformance-gate
 
 on:
   pull_request:
+    paths: ["**", "!**/*.md", "conformance/docs/**"]
   push:
     branches: [main]
+    paths: ["**", "!**/*.md", "conformance/docs/**"]
 
 permissions:
   contents: read

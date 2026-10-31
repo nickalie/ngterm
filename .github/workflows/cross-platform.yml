@@ -26,12 +26,18 @@
 # only against an MSVC installation (from Linux, simdutf and Wuffs' translate-c find no MSVC headers).
 #
 # Pushes to a `ci/**` branch run it too, so a macOS or Windows form can be checked on the runners without a PR.
+#
+# A change of Markdown alone runs nothing: docs, plans, backlog and READMEs are neither built nor tested. The Markdown
+# that is (the bundled skill under resources/, vendored trees, the patch notes under build/) is put back after the
+# exclusion; the two lists are the same.
 name: cross-platform
 
 on:
   pull_request:
+    paths: ["**", "!**/*.md", "resources/**", "vendor/**", "build/**"]
   push:
     branches: [main, "ci/**"]
+    paths: ["**", "!**/*.md", "resources/**", "vendor/**", "build/**"]
 
 permissions:
   contents: read
