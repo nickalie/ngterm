@@ -2,8 +2,8 @@
 //! `Session+Hud.swift`, and the slot mutations in `AppStore+Panes.swift`: `openOverlay`, `resizeOverlay`,
 //! `setHudSize`, `remeasureHud`, `closeOverlay`, `openHud`, `updateHud`, `closeHud`).
 //!
-//! The slot holds one occupant at a time. A HUD is a passive message panel the app paints with its bundled helper
-//! (the slot's command), re-reading a body file the HUD commands write; a caller's program or page replaces it, and
+//! The slot holds one occupant at a time. A HUD is a passive message panel the app paints itself ([`hud::painter`]),
+//! re-reading a body file the HUD commands write; a caller's program or page replaces it, and
 //! it never replaces them. Everything here is ephemeral: never persisted.
 
 use std::path::PathBuf;
@@ -56,7 +56,7 @@ pub struct HudState {
     pub spec: HudSpec,
     /// The pane whose bounds scope the panel, by its stable identity; `None` for the session's whole detail area.
     pub pane_identity: Option<Uuid>,
-    /// The body file the helper re-reads every tick (`NGTERM_HUD_FILE`).
+    /// The body file the painter re-reads every tick.
     pub file: PathBuf,
     /// The panel's measured share of the pane's height.
     pub height_percent: i64,
@@ -73,7 +73,7 @@ pub struct HudState {
 pub struct OverlaySlot {
     /// The slot is occupied, by a program or page that covers, or by a passive HUD.
     pub active: bool,
-    /// What the occupant's terminal runs; for a HUD, the bundled helper.
+    /// What the occupant's terminal runs; unset for a HUD, which the app paints itself, and a page.
     pub command: Option<String>,
     /// The occupant's working directory; `None` inherits the session's.
     pub cwd: Option<String>,
@@ -257,8 +257,6 @@ pub struct OverlayProgram {
 /// What opening a HUD takes besides its spec (upstream's `openHud` arguments).
 #[derive(Debug, Clone, PartialEq)]
 pub struct HudOpening {
-    /// The helper's command line.
-    pub command: String,
     pub file: PathBuf,
     pub size: HudPanelSize,
     pub pane_identity: Option<Uuid>,
@@ -391,7 +389,6 @@ impl AppStore {
     pub fn open_hud(&mut self, id: Uuid, spec: HudSpec, opening: HudOpening) -> bool {
         let width = hud::clamp_size_percent_for(opening.size.width_percent, &spec);
         let program = OverlayProgram {
-            command: opening.command.clone(),
             size_percent: Some(width),
             background_color: spec.background_color.clone(),
             ..OverlayProgram::default()
@@ -402,6 +399,7 @@ impl AppStore {
         let Some(session) = self.session_mut(id) else {
             return false;
         };
+        session.overlay.command = None;
         session.overlay.hud = Some(HudState {
             spec,
             pane_identity: opening.pane_identity,

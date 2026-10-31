@@ -240,9 +240,7 @@ fn opening_into_a_hidden_pane_slot_is_refused_by_name_while_the_other_slots_stay
 fn a_hud_cannot_open_over_a_hidden_program_but_a_hidden_pane_overlay_does_not_block_it() {
     let mut fixture = Fixture::new(0);
     let dir = tempfile::tempdir().unwrap();
-    let helper = dir.path().join("hud.sh");
-    std::fs::write(&helper, "#!/bin/sh\n").unwrap();
-    fixture.core.set_hud_helper(helper, dir.path().join("bodies"));
+    fixture.core.set_hud_body_dir(dir.path().join("bodies"));
     let id = fixture.sessions[0];
     let hud = |fixture: &mut Fixture| {
         overlay(fixture, SessionCmd::HudOpen, id, |a| {

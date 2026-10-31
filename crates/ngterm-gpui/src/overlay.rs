@@ -579,6 +579,7 @@ fn launch(session: &Session, program: &Program, hud: &HudContext<'_>) -> ngterm_
         env: context.local_environment(&code_file, None).into_iter().collect(),
         env_remove: Vec::new(),
         live: None,
+        painter: None,
     }
 }
 

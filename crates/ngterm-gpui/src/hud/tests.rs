@@ -243,14 +243,6 @@ fn only_ctrl_alone_is_the_link_modifier() {
     assert!(!is_link_modifier(&Modifiers::default()));
 }
 
-#[test]
-fn the_helper_is_written_once_and_kept() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = install_helper(dir.path()).unwrap();
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), HELPER);
-    assert_eq!(install_helper(dir.path()), Some(path));
-}
-
 #[gpui_kit::test]
 fn the_cell_estimate_measures_the_terminals_face(cx: &mut gpui_kit::TestAppContext) {
     let text = cx.update(|cx| {

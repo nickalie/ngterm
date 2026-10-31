@@ -2,8 +2,9 @@
 //! `OverlayPanelStyle`, the overlay surface factory in `agtermApp.swift`, `Ghostty/HudLinkClick.swift`; port of the GTK
 //! build's `hud.rs`). Captions are HUDs too (`ngtermctl caption`): sticky, frameless panels.
 //!
-//! The panel is a passive terminal ([`ViewRole::Passive`]) running the bundled painter (`resources/hud/hud.sh`), which
-//! re-reads the body file the core writes. The deck lays it out above every pane of its page ([`Place::Hud`]): each
+//! The panel is a passive terminal ([`ViewRole::Passive`]) painted in process by `ngterm-term` with `ngterm-core`'s
+//! painter (upstream's bundled `hud.sh`, ported), which re-reads the body file the core writes; no shell runs on any
+//! OS. The deck lays it out above every pane of its page ([`Place::Hud`]): each
 //! open (a new slot generation) mounts a fresh terminal and a close drops it. The panel takes no focus and no clicks,
 //! so the session underneath keeps both; a Ctrl-click (Linux's link modifier, upstream's ⌘-click) over it opens the
 //! panel's link under the pointer and goes no further, and a Ctrl-hover over a link shows the pointing hand and the
@@ -15,7 +16,7 @@
 
 use std::cell::Cell;
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -28,7 +29,6 @@ use ngterm_core::HUD_WINDOW_PADDING as WINDOW_PADDING;
 use ngterm_core::hud::{Band, HudPosition};
 use ngterm_core::link_policy::ClickOrigin;
 use ngterm_core::model::{BackgroundWatermark, OverlaySlot, Session, WatermarkKind};
-use ngterm_core::pane_env::{self, SessionPane};
 use ngterm_core::watermark;
 use uuid::Uuid;
 
@@ -37,32 +37,10 @@ use crate::split::{PanePlan, Rect, Slot};
 use crate::state::{AppState, post};
 use crate::terminal::{Shared, Terminal, TerminalEvent, TerminalSpec, TerminalView, ViewRole};
 
-/// The bundled painter, written next to the state on first use.
-const HELPER: &str = include_str!("../resources/hud/hud.sh");
-
 /// A HUD keeps the opaque backing but drops the shadow for a stronger border and a tight radius (upstream's
 /// `hudCornerRadius`, `hudBorderOpacity`).
 const CORNER_RADIUS: f32 = 8.;
 const BORDER_OPACITY: f64 = 0.30;
-
-/// Writes the painter under `state_dir` (rewritten when it differs) and returns its path; `None` when it could not be
-/// written, which leaves `session.hud.open` refused as upstream refuses a build without the helper.
-#[must_use]
-pub fn install_helper(state_dir: &Path) -> Option<PathBuf> {
-    let directory = state_dir.join("hud");
-    let path = directory.join("hud.sh");
-    if std::fs::read_to_string(&path).is_ok_and(|current| current == HELPER) {
-        return Some(path);
-    }
-    let written = std::fs::create_dir_all(&directory).and_then(|()| std::fs::write(&path, HELPER));
-    match written {
-        Ok(()) => Some(path),
-        Err(error) => {
-            tracing::error!(path = %path.display(), %error, "could not write the hud painter");
-            None
-        }
-    }
-}
 
 /// The cell estimate a HUD over a session no terminal draws yet is sized with (upstream's
 /// `ControlServer.cellSize(family:size:)`): a cell of `family` (the terminal's default face without one) at `size`
@@ -328,41 +306,20 @@ pub fn sync_page(
     }
 }
 
-/// The panel's terminal: the painter in the session's directory, with the session's environment plus the body file,
-/// at the HUD's font size, padded as the panel was measured, on the HUD's own background.
+/// The panel's terminal: the painter over the HUD's body file, run in process (no program, so no environment or
+/// directory), at the HUD's font size, padded as the panel was measured, on the HUD's own background.
 fn spawn(session: &Session, generation: u64, hud: &HudContext<'_>, cx: &mut Context<crate::deck::Deck>) -> HudPanel {
     let slot = &session.overlay;
     let state = slot.hud.as_ref();
-    let mut env: Vec<(String, String)> = pane_env::session(&SessionPane {
-        session: session.id(),
-        window: Some(hud.window),
-        workspace: Some(hud.workspace),
-        socket_path: &hud.env.context.socket,
-        program_version: &hud.env.context.program_version,
-        pane: None,
-        pane_token: None,
-    })
-    .into_iter()
-    .collect();
-    if let Some(state) = state {
-        env.push((
-            ngterm_core::hud::FILE_ENV_KEY.to_owned(),
-            state.file.to_string_lossy().into_owned(),
-        ));
-    }
     #[expect(
         clippy::cast_possible_truncation,
         reason = "a point size within the HUD's 6...72 range"
     )]
     let font_size = state.and_then(|state| state.font_size).map(|size| size as f32);
     let launch = ngterm_term::Launch {
-        command: slot.command.clone(),
-        initial_input: None,
-        working_directory: Some(PathBuf::from(session.effective_cwd())),
-        wait_after_command: false,
-        env,
-        env_remove: Vec::new(),
-        live: None,
+        // a slot without its HUD (never mounted) paints no file, which ends the panel at once
+        painter: Some(state.map_or_else(PathBuf::new, |state| state.file.clone())),
+        ..ngterm_term::Launch::default()
     };
     let overlay = config_overlay(
         slot.background_color.as_deref(),

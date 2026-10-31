@@ -1275,11 +1275,10 @@ fn a_scratch_command_replaces_a_shown_scratch(cx: &mut TestAppContext) {
     assert_eq!(last.command.as_deref(), Some("htop -d 5"), "the new program runs");
 }
 
-/// Installs the HUD's painter and the cell estimate, as the app does at launch.
+/// Installs the HUD's body directory and the cell estimate, as the app does at launch.
 fn install_hud(h: &mut Harness<'_>) {
-    let helper = crate::hud::install_helper(h.state_dir.path()).unwrap();
     let body = h.state_dir.path().join("hud-bodies");
-    h.state.core.set_hud_helper(helper, body);
+    h.state.core.set_hud_body_dir(body);
     let text = h.cx.update(|_, cx| {
         crate::terminal::register_embedded_fonts(cx.text_system());
         Arc::clone(cx.text_system())

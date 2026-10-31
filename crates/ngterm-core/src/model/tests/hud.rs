@@ -27,7 +27,6 @@ fn measured_hud(spec: HudSpec, pane: &PaneMetrics) -> (AppStore, Uuid, tempfile:
     let id = add(&mut store, ws, "/repo");
     let dir = tempfile::tempdir().unwrap();
     let opening = HudOpening {
-        command: "hud.sh".to_owned(),
         file: dir.path().join("hud"),
         size: hud::panel_size(&spec, pane),
         pane_identity: None,
