@@ -8,12 +8,15 @@ with a tolerance (Swift encodes a whole Double as an integer), and lists are ord
 from __future__ import annotations
 
 import math
+import ntpath
+import sys
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from agterm_conformance.client import Response
 
 DEFAULT_TOLERANCE = 1e-6
+WINDOWS = sys.platform == "win32"
 
 
 class _Any:
@@ -33,6 +36,18 @@ class Unordered:
 
     def __repr__(self) -> str:
         return f"Unordered({self.items!r})"
+
+
+def program_argv(argv: Any) -> Any:
+    """A foreground argv (`tree`'s `foreground`, `splitForeground`) with its program named as a POSIX shell names it,
+    to compare with the argv a test typed. On Windows a process's command line names its program as its parent
+    started it: an MSYS shell and PowerShell by the image's full path (`C:\\...\\usr\\bin\\cat.exe`), `cmd.exe` as
+    typed; there `argv[0]` becomes the image's basename without `.exe`, lowercased. Elsewhere, and for anything but a
+    non-empty list, the value as it is."""
+    if not WINDOWS or not isinstance(argv, list) or not argv or not isinstance(argv[0], str):
+        return argv
+    name = ntpath.basename(argv[0]).lower()
+    return [name.removesuffix(".exe"), *argv[1:]]
 
 
 def assert_ok(resp: Response) -> dict[str, Any]:

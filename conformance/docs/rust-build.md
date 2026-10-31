@@ -125,6 +125,10 @@ It does not claim:
   commands, hooks or custom commands are POSIX lines skip as unsupported; and `untitled-panes`: the console host
   (ConPTY) titles a pane with its program's path before any program sets one, so the title test reads that title on
   the other branch.
+- on Windows a pane's `foreground` and `foregroundShell` come from a stand-in for the console's foreground (the
+  oldest program its job runs, `ngterm-session`'s `console_foreground`), and a foreground argv's `argv[0]` is the
+  program as its parent started it (an MSYS shell's programs by their image's full path); the suite compares it by
+  the program's name (`match.program_argv`), with no capability, since the reference never runs on Windows.
 
 The table above stays the reference's profile; this list is the Rust build's.
 

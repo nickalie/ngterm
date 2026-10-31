@@ -271,6 +271,13 @@ def posix_shell(environ: Mapping[str, str] | None = None) -> str:
     )
 
 
+def posix_tools(environ: Mapping[str, str] | None = None) -> str:
+    """Where the POSIX tools beside the panes' `sh` live, for the app's `PATH` on Windows (Git for Windows' `usr\\bin`,
+    beside its `bin\\sh.exe`): a pane's command line runs through `cmd.exe` there, which finds `cat` only on `PATH`, as
+    `/bin/sh -c` finds it in the minimal `PATH`'s `/usr/bin` elsewhere."""
+    return os.path.join(os.path.dirname(os.path.dirname(posix_shell(environ))), "usr", "bin")
+
+
 def scrubbed_environ(environ: Mapping[str, str] | None = None) -> dict[str, str]:
     source = os.environ if environ is None else environ
     return {name: value for name, value in source.items() if not name.startswith(SCRUB_PREFIXES)}
@@ -592,6 +599,8 @@ class Adapter:
             # The live-session namespace, PowerShell's caches and every per-user file a pane writes stay in the root.
             for name, relative in WINDOWS_APP_DATA.items():
                 env[name] = os.fspath(home / relative)
+            # after the system directories, so their programs win over Git's same-named ones (`find`, `sort`)
+            env["PATH"] = f"{MINIMAL_PATH};{posix_tools()}"
         else:
             env.update(SHELL="/bin/sh", BROWSER="true")
         env[self.variable("STATE_DIR")] = os.fspath(state)

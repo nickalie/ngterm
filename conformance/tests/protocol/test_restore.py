@@ -5,7 +5,14 @@ Mode changes persist for the NEXT launch only, so each test that sets one puts `
 or a shell here: neither touches the directory it starts in."""
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session
+from agterm_conformance.match import (
+    assert_absent,
+    assert_error,
+    assert_ok,
+    assert_subset,
+    find_session,
+    program_argv,
+)
 
 POSIX_SHELL = pytest.mark.requires("posix-shell", reason="the foreground shell reads `sh` only for a /bin/sh pane")
 STATUS = {"configured": "none", "requestedAtLaunch": "none", "active": "none", "restartRequired": False}
@@ -27,13 +34,18 @@ def _new(ctl, **args):
     return sid
 
 
+# The fields holding a foreground argv, compared by the program's name (`program_argv`).
+ARGV_FIELDS = ("foreground", "splitForeground")
+
+
 def _node_when(ctl, sid, **fields):
     """The session node once every field reads its value; None means omitted."""
 
     def settled(tree):
         node = find_session(tree, sid)
         for name, value in fields.items():
-            assert node.get(name) == value, f"{name} is {node.get(name)!r}, want {value!r}"
+            actual = program_argv(node.get(name)) if name in ARGV_FIELDS else node.get(name)
+            assert actual == value, f"{name} is {node.get(name)!r}, want {value!r}"
         return True
 
     settled.__qualname__ = f"{sid} reading {fields}"

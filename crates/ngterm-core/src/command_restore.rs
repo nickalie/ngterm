@@ -95,6 +95,29 @@ pub fn is_idle_shell(argv: &[String], extra: Option<&str>) -> bool {
     }
 }
 
+/// Whether `argv` is the shell a pane's command line runs through, which holds no job control, so whatever it runs
+/// is the pane's creation command: `/bin/sh -c <command>` on Linux (libghostty's spelling; `-l` first inside
+/// Flatpak), and on Windows `cmd.exe /D /S /C <command>` (`ngterm-term`'s `launch.rs`; the `cmd.exe` by any path, as
+/// `%ComSpec%` names it, in any case, as Windows reads names and switches).
+#[must_use]
+pub fn is_command_wrapper(argv: &[String]) -> bool {
+    let is_cmd = |program: &str| {
+        let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+        name.eq_ignore_ascii_case("cmd.exe") || name.eq_ignore_ascii_case("cmd")
+    };
+    match argv {
+        [shell, flag, _] => shell == "/bin/sh" && flag == "-c",
+        [shell, login, flag, _] => shell == "/bin/sh" && login == "-l" && flag == "-c",
+        [cmd, no_autorun, keep_quotes, run, _] => {
+            is_cmd(cmd)
+                && [(no_autorun, "/D"), (keep_quotes, "/S"), (run, "/C")]
+                    .iter()
+                    .all(|(switch, wanted)| switch.eq_ignore_ascii_case(wanted))
+        }
+        _ => false,
+    }
+}
+
 /// Which PowerShell reads its host options: PowerShell 7 (`pwsh`) or Windows PowerShell 5.1 (`powershell`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PowerShellHost {
@@ -365,9 +388,21 @@ pub fn pane_foreground(argv: &[String], extra: Option<&str>) -> Option<PaneForeg
     let stripped = strip_login_dash(argv);
     let first = stripped.first()?;
     if is_idle_shell(argv, extra) {
-        return Some(PaneForeground::ForegroundShell(basename(first).to_owned()));
+        return Some(PaneForeground::ForegroundShell(shell_name(basename(first)).to_owned()));
     }
     Some(PaneForeground::Program(stripped))
+}
+
+/// A shell's name as the tree reports it: its basename, without the `.exe` (any case) a Windows image carries
+/// (`sh.exe` is `sh`, as `/bin/sh` is).
+fn shell_name(basename: &str) -> &str {
+    let stem = basename.len().checked_sub(".exe".len()).filter(|stem| *stem > 0);
+    match stem {
+        Some(stem) if basename.is_char_boundary(stem) && basename[stem..].eq_ignore_ascii_case(".exe") => {
+            &basename[..stem]
+        }
+        _ => basename,
+    }
 }
 
 /// `argv` without the `-` a login process's `argv[0]` is marked with, so it names a program that can be rendered and
@@ -1013,7 +1048,7 @@ mod tests {
         );
         assert_eq!(
             pane_foreground(&argv(&["powershell.exe", "-File", "-"]), None),
-            Some(PaneForeground::ForegroundShell("powershell.exe".to_owned()))
+            Some(PaneForeground::ForegroundShell("powershell".to_owned()))
         );
     }
 
@@ -1044,7 +1079,7 @@ mod tests {
         ]);
         assert_eq!(
             pane_foreground(&pwsh, None),
-            Some(PaneForeground::ForegroundShell("pwsh.exe".to_owned()))
+            Some(PaneForeground::ForegroundShell("pwsh".to_owned()))
         );
     }
 
@@ -1066,6 +1101,46 @@ mod tests {
         // a shell busy inside itself (`read`, a loop) keeps its argv, so it reads as one at a prompt.
         assert_eq!(pane_foreground(&argv(&["-bash"]), None), shell("bash"));
         assert_eq!(pane_foreground(&argv(&[]), None), None);
+    }
+
+    #[test]
+    fn a_windows_shell_is_named_without_its_exe() {
+        let shell = |name: &str| Some(PaneForeground::ForegroundShell(name.to_owned()));
+        assert_eq!(pane_foreground(&argv(&["sh.exe"]), None), shell("sh"));
+        assert_eq!(
+            pane_foreground(&argv(&["PowerShell.EXE", "-NoLogo"]), None),
+            shell("PowerShell")
+        );
+        assert_eq!(
+            pane_foreground(&argv(&["cat.exe"]), None),
+            Some(PaneForeground::Program(argv(&["cat.exe"]))),
+            "a program keeps its argv as it is"
+        );
+        assert_eq!(shell_name(".exe"), ".exe");
+    }
+
+    #[test]
+    fn the_command_wrappers_are_sh_c_and_cmds_run_of_a_line() {
+        assert!(is_command_wrapper(&argv(&["/bin/sh", "-c", "cat"])));
+        assert!(is_command_wrapper(&argv(&["/bin/sh", "-l", "-c", "cat"])));
+        assert!(is_command_wrapper(&argv(&[
+            r"C:\WINDOWS\system32\cmd.exe",
+            "/D",
+            "/S",
+            "/C",
+            "cat"
+        ])));
+        assert!(is_command_wrapper(&argv(&["CMD", "/d", "/s", "/c", "cat"])));
+        assert!(!is_command_wrapper(&argv(&["/bin/bash", "-c", "cat"])));
+        assert!(
+            !is_command_wrapper(&argv(&["cmd.exe", "/C", "cat"])),
+            "not the pane's spelling"
+        );
+        assert!(
+            !is_command_wrapper(&argv(&["cmd.exe", "/D", "/S", "/K", "cat"])),
+            "an interactive cmd"
+        );
+        assert!(!is_command_wrapper(&argv(&["notcmd.exe", "/D", "/S", "/C", "cat"])));
     }
 
     #[test]
