@@ -348,9 +348,16 @@ where
 /// Whether an `openpty` failed with one of the errnos of XNU's ptmx clone race ([`retry_clone_race`]).
 #[cfg(target_os = "macos")]
 fn lost_clone_race(err: &(dyn std::error::Error + 'static)) -> bool {
+    matches!(openpty_errno(err), Some(libc::ENXIO | EREDRIVEOPEN))
+}
+
+/// The errno of a failed `openpty`: the first `io::Error` in its chain that carries one (portable-pty's keeps it,
+/// `build/patches/portable-pty/0007-openpty-error-keeps-its-errno.patch`).
+#[cfg(any(target_os = "macos", test))]
+fn openpty_errno(err: &(dyn std::error::Error + 'static)) -> Option<i32> {
     std::iter::successors(Some(err), |err| err.source())
         .filter_map(|err| err.downcast_ref::<io::Error>())
-        .any(|err| matches!(err.raw_os_error(), Some(libc::ENXIO | EREDRIVEOPEN)))
+        .find_map(io::Error::raw_os_error)
 }
 
 pub(crate) fn spawn(builder: CommandBuilder, size: Size) -> io::Result<Spawned> {
@@ -385,7 +392,7 @@ mod tests {
 
     use super::*;
 
-    /// An `openpty` failure as portable-pty returns it: the `io::Error` under its context.
+    /// An `openpty` failure shaped as portable-pty's: the `io::Error` under its context.
     #[derive(Debug)]
     struct OpenFailed(io::Error);
 
@@ -434,6 +441,43 @@ mod tests {
         let (calls, result) = open_failing(&lost);
         assert_eq!(calls, CLONE_RACE_RETRIES + 1);
         assert_eq!(result.unwrap_err().to_string(), "failed to openpty");
+    }
+
+    /// portable-pty's own `openpty` failure carries its errno to [`openpty_errno`], which the clone race's retry reads:
+    /// a child process of this test spends its descriptor limit and opens a PTY, which fails with `EMFILE`.
+    #[test]
+    fn portable_ptys_openpty_failure_keeps_its_errno() {
+        const CHILD: &str = "NGTERM_PTY_TEST_NO_DESCRIPTORS";
+        const NAME: &str = "unix::tests::portable_ptys_openpty_failure_keeps_its_errno";
+        if std::env::var_os(CHILD).is_some() {
+            let mut limit = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: reads and sets this child process's descriptor limit through a valid `rlimit`.
+            unsafe {
+                assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit), 0);
+                let spent = libc::rlimit { rlim_cur: 0, ..limit };
+                assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &raw const spent), 0);
+            }
+            let opened = native_pty_system().openpty(Size::cells(24, 80).pty());
+            // SAFETY: as above, the limit read before.
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) };
+            let err = opened.err().expect("an open past the descriptor limit fails");
+            assert_eq!(openpty_errno(err.as_ref()), Some(libc::EMFILE), "{err:?}");
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([NAME, "--exact", "--test-threads=1", "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     /// This process's descriptors on a PTY.

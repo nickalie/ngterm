@@ -4,7 +4,7 @@ read the errno. The error now wraps the `io::Error` itself (`downcast_ref::<io::
 `ENXIO`), see `crates/ngterm-pty/src/unix/mod.rs`.
 
 ngterm's own. Remove when portable-pty keeps an `openpty` failure's `io::Error`. Its test: ngterm-pty's
-`an_open_that_lost_the_clone_race_is_retried` reads the errno through it.
+`portable_ptys_openpty_failure_keeps_its_errno` reads the errno of a real failed open (`EMFILE`) through it.
 
 diff -ruN a/src/unix.rs b/src/unix.rs
 --- a/src/unix.rs
