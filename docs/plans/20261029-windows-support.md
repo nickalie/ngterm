@@ -144,6 +144,8 @@ guest has 4 CPUs and 6.5 GB of memory.
   read `infocmp exited N: ...`. The install's unit tests run on Windows over a `.cmd` fake `ssh`; the suite's
   Windows stand-in is an `ssh.exe` (distlib's script launcher over Python) running the remote line in Git for
   Windows' `sh` and `tic`, and the killed-by-a-signal half stays POSIX only
+- ➕ (side task 25) seen on its CI run: ngterm-app's `opencode_status` order test read the reporter's `started` file
+  while the Windows reporter's `Add-Content` still held it (EBUSY); the harness now retries that read
 
 ### Task 3: App services on Windows (`ngterm-app`)
 
