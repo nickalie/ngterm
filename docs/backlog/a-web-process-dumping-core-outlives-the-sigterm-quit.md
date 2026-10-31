@@ -6,7 +6,7 @@ added: 2026-10-21
 # A web process dumping core outlives the SIGTERM quit
 
 `sigterm_saves_and_quits_within_its_deadline_with_live_sessions_busy_and_pages_open` failed once in the bash
-conformance leg of `rust-linux.yml` (run 39574804550, the Arch container with the system's wpewebkit, HTML overlays
+conformance leg of `linux.yml` (run 39574804550, the Arch container with the system's wpewebkit, HTML overlays
 on): the app quit in 0.13 s with status 0 and its state saved, but a `WPEWebProcess` (and the two `bwrap` processes
 above it) was still there 30 s later, its main thread in `do_coredump` and every other thread in `do_exit`. So the web
 process crashed when the app's quit cut its connection, and the kernel was still writing its core when the test's wait

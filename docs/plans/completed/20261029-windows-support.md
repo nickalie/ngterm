@@ -162,13 +162,13 @@ guest has 4 CPUs and 6.5 GB of memory.
 ### Task 3: App services on Windows (`ngterm-app`)
 
 - [x] the hook runner's Windows form (no `poll`; pipe readers on threads, the same timeout and output caps)
-- [ ] the log file's Windows form (open without following a reparse point, shared for appending, the same rotation
+- [x] the log file's Windows form (open without following a reparse point, shared for appending, the same rotation
   under the running instance's lock)
-- [ ] the remote presentation process's Windows form (its lifetime, stop and reap)
-- [ ] the agent integrations' installers without file modes or symlinks on Windows (what each one installs and where,
+- [x] the remote presentation process's Windows form (its lifetime, stop and reap)
+- [x] the agent integrations' installers without file modes or symlinks on Windows (what each one installs and where,
   per agent, as each agent documents for Windows)
-- [ ] `ngterm-app` joins PACKAGES; its tests pass on all three
-- [ ] Windows VM: clippy and tests green; Linux gate green
+- [x] `ngterm-app` joins PACKAGES; its tests pass on all three
+- [x] Windows VM: clippy and tests green; Linux gate green
 - ➕ (side task 12) the agent-status package's Windows forms: `ngterm-agent-status.ps1`, `ngterm-claude-status.ps1`
   (the process walk through `Win32_Process` where the POSIX one runs `ps`) and `ngterm-agent-restore.ps1`, for
   Windows PowerShell 5.1 and PowerShell 7; on Windows the Claude Code hooks call them through `powershell.exe`, and

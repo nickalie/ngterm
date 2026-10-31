@@ -509,7 +509,7 @@ mod tests {
         }
     }
 
-    /// fish, when this host has one (the `rust-linux` CI job installs it for this test): `None` otherwise.
+    /// fish, when this host has one (the `linux` CI job installs it for this test): `None` otherwise.
     fn fish() -> Option<&'static str> {
         [
             "/usr/bin/fish",

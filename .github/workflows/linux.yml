@@ -3,7 +3,7 @@
 # HTML overlays over them need a WPE WebKit Ubuntu does not package: the Ubuntu job builds the workspace without them
 # and the app without the overlays (WORKSPACE_WITHOUT_WPE and GPUI_WITHOUT_HTML in scripts/lib/native.sh), the wpe job
 # checks them on Arch, and the conformance jobs run there too.
-name: rust-linux
+name: linux
 
 on:
   pull_request:
@@ -14,11 +14,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: rust-linux-${{ github.ref }}
+  group: linux-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  rust-linux:
+  linux:
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
@@ -226,7 +226,7 @@ jobs:
   #   `live-sessions` too and the live tests run: `--must-pass live-sessions` (every test upstream holds to Live
   #   sessions) and `--must-pass live-any-shell`.
   conformance:
-    needs: rust-linux
+    needs: linux
     runs-on: ubuntu-26.04
     timeout-minutes: 150
     strategy:

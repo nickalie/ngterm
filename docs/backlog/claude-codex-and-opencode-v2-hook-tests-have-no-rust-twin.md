@@ -20,4 +20,4 @@ build ported only the OpenCode v1 suite (`crates/ngterm-app/tests/opencode_statu
 
 Found while porting the OpenCode v1 tests (docs/plans/20261023-upstream-sync-v0.38.1.md, Task 33), which was scoped
 to that suite. The ports follow the same shape: run the shipped script with a recording wrapper, in this build's
-names; the v2 one needs node, which `rust-linux.yml` already installs for the v1 tests.
+names; the v2 one needs node, which `linux.yml` already installs for the v1 tests.

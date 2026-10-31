@@ -242,7 +242,7 @@ that could reach it:
 - `conformance-gate` (ubuntu): self-tests and the coverage gate on every PR and on `main`.
 - `reference-macos` (`macos-26`): protocol, cli and behaviors with `--must-pass live-sessions`, then the ui layer
   with `--reruns 1`, against the release named by the catalog's `upstream`.
-- `rust-linux` (`ubuntu-26.04`): the Rust workspace's format check, strict clippy, lint report (in the job summary)
+- `linux` (`ubuntu-26.04`): the Rust workspace's format check, strict clippy, lint report (in the job summary)
   and `cargo test`, over the vendored libghostty-vt prefix, without what links WPE WebKit; `wpe` (an Arch container):
   the WPE crates and the app with its HTML overlays; then the staged build under the suite in the same Arch container,
   on the distribution's lavapipe, held by the ratchet, once per login shell (`conformance`, a matrix), each with

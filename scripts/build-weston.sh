@@ -10,7 +10,7 @@
 # two dependencies Ubuntu 24.04 has too old, wayland-protocols and libdisplay-info, are unpacked from their pinned
 # tarballs into the source's subprojects/ and built in; meson may download nothing. Needs no root: meson, ninja, a C
 # compiler, python3 and the development files of wayland, pixman, xkbcommon, libinput, libevdev, libudev, libdrm, EGL,
-# GLES, gbm, cairo, pango and libpng (Ubuntu: see .github/workflows/rust-linux.yml).
+# GLES, gbm, cairo, pango and libpng (Ubuntu: see .github/workflows/linux.yml).
 #
 # Usage: scripts/build-weston.sh                 build the prefix unless it is complete, then print its path
 #        scripts/build-weston.sh --print-prefix  print the prefix path only
