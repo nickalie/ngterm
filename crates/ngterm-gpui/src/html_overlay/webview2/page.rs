@@ -29,7 +29,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_ERROR_STATUS
 
 use super::super::panel::{PanelColors, TerminalColors};
 use super::super::policy::{self, LoadEvent, LoadOutcome, LoadTracker, ThemeChange};
-use super::native::{Bounds, Grant, Native, Navigation, Report};
+use super::native::{Bounds, Grant, Native, Navigation, Report, Text};
 use super::view::PageView;
 use super::{bridge, registry, scheme};
 use crate::modal::{Alert, AlertButton, AlertSpec};
@@ -78,7 +78,7 @@ struct PageState {
     reported: Option<HtmlPageInfo>,
     /// The main-frame navigation the policy refused last, whose end is that refusal's.
     refused: Option<u64>,
-    /// A text load the app started is the next main-frame navigation, at `about:blank`.
+    /// A text load the app started is the next main-frame navigation, at the text's address.
     text_pending: bool,
 }
 
@@ -122,6 +122,8 @@ pub struct Page {
     /// What ngterm's scripts in the page sign their messages with.
     nonce: String,
     grant: Grant,
+    /// The text a file page without a grant shows.
+    text: Text,
     native: RefCell<Option<Rc<Native>>>,
     /// The pump is making the web view.
     building: Cell<bool>,
@@ -162,6 +164,7 @@ impl Page {
             storage,
             nonce: bridge::nonce(),
             grant: Grant::default(),
+            text: Text::default(),
             state: RefCell::new(PageState {
                 overlay: overlay.clone(),
                 applied_revision: overlay.reload_revision,
@@ -267,6 +270,11 @@ impl Page {
     /// The grant the page's protocol serves from.
     pub fn grant(&self) -> &Grant {
         &self.grant
+    }
+
+    /// The text the page's text protocol serves.
+    pub fn text(&self) -> &Text {
+        &self.text
     }
 
     /// The theme the page's scripts carry now.
@@ -455,9 +463,10 @@ impl Page {
     // MARK: - the navigation policy
 
     /// The shared policy's decision on `navigation` and its address as the app spells it; `None` for an address that
-    /// is never asked about (a real `file:` one would bypass the grant) or does not parse.
+    /// is never asked about (a real `file:` one would bypass the grant, the text protocol serves nothing else) or does
+    /// not parse.
     fn decision(&self, navigation: &Navigation, target: HtmlNavigationTarget) -> Option<(HtmlNavigationDecision, Url)> {
-        if navigation.uri.starts_with("file:") {
+        if navigation.uri.starts_with("file:") || scheme::is_text_resource(&navigation.uri) {
             return None;
         }
         let url = Url::parse(&scheme::app_uri(&navigation.uri)).ok()?;
@@ -902,8 +911,8 @@ impl Page {
     }
 
     /// Loads the page's source (upstream's `loadOriginal`): a URL as is, a granted file through the grant's protocol, a
-    /// file without a grant from its text at `about:blank`, a replica's file through its own protocol; a page without
-    /// its store loads nothing and fails.
+    /// file without a grant from its text (read again each time) through the text protocol, a replica's file through
+    /// its own protocol; a page without its store loads nothing and fails.
     fn load_original(&self) {
         let source = {
             let mut state = self.state.borrow_mut();
@@ -938,17 +947,16 @@ impl Page {
         native.load_url(&address);
     }
 
-    /// Loads file `path`'s text at `about:blank`.
+    /// Loads file `path`'s text through the text protocol, at the one address that replaces the text shown (module
+    /// docs of `scheme`).
     fn load_text(&self, native: &Native, path: &str) {
         let html = match std::fs::read_to_string(path) {
             Ok(html) => html,
             Err(error) => return self.fail(error.to_string()),
         };
+        self.text.lock().unwrap_or_else(PoisonError::into_inner).replace(html);
         self.state.borrow_mut().text_pending = true;
-        if let Err(error) = native.load_html(&html) {
-            self.state.borrow_mut().text_pending = false;
-            self.fail(error);
-        }
+        native.load_url(&scheme::text_address(self.id));
     }
 
     pub fn set_zoom(&self, zoom: f64) {
