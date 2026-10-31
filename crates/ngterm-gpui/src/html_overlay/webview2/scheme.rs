@@ -209,11 +209,11 @@ mod tests {
         use crate::html_overlay::policy::{OUTSIDE_GRANT, granted_file};
 
         let dir = tempfile::tempdir().unwrap();
-        let real = dir.path().canonicalize().unwrap();
-        std::fs::create_dir(real.join("site")).unwrap();
-        std::fs::write(real.join("site").join("index.html"), "x").unwrap();
-        std::fs::write(real.join("outside.html"), "x").unwrap();
-        let plain = real.to_str().unwrap().strip_prefix(r"\\?\").unwrap().to_owned();
+        let canonical = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(canonical.join("site")).unwrap();
+        std::fs::write(canonical.join("site").join("index.html"), "x").unwrap();
+        std::fs::write(canonical.join("outside.html"), "x").unwrap();
+        let plain = canonical.to_str().unwrap().strip_prefix(r"\\?\").unwrap().to_owned();
         let (drive, rest) = plain.split_once(r":\").unwrap();
         let share = format!(r"\\localhost\{drive}$\{rest}");
         for base in [&plain, &share] {
