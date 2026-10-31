@@ -23,6 +23,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use ngterm_core::paths::join_relative;
+
 use super::files::{self, Unreadable};
 use super::hooks_config::{self as config, CodexMerge};
 use super::opencode::{Probe, Version};
@@ -43,7 +45,7 @@ pub fn shell_path(path: &Path) -> String {
 /// The package's destination under `home`.
 #[must_use]
 pub fn script_dir(home: &Path) -> PathBuf {
-    home.join(".config/ngterm/agent-status")
+    join_relative(home, ".config/ngterm/agent-status")
 }
 
 /// Where an earlier install put the package: upstream's directory (`AgentHooksInstaller.swift`), which this build
@@ -51,7 +53,7 @@ pub fn script_dir(home: &Path) -> PathBuf {
 /// hooks, the Codex block, the Pi and `OpenCode` plugins) at [`script_dir`]; the directory itself is left in place.
 #[must_use]
 pub fn legacy_script_dir(home: &Path) -> PathBuf {
-    home.join(".config/agterm/agent-status")
+    join_relative(home, ".config/agterm/agent-status")
 }
 
 /// A file the install writes, with the previous contents its backup keeps, if any.
@@ -406,7 +408,7 @@ pub enum OpenCodeStart {
 
 /// The default `OpenCode` 1 configuration directory under `home`.
 fn legacy_opencode_directory(home: &Path) -> PathBuf {
-    home.join(".config/opencode")
+    join_relative(home, ".config/opencode")
 }
 
 /// Upstream's decision before the chooser: no probe and no default config, or no version and neither config, skips
@@ -548,11 +550,11 @@ const LEGACY_PACKAGE_ENTRIES: [&str; 4] = [
 fn legacy_leftovers(home: &Path, script_dir: &Path, pi: &PiPlan, opencode: &OpenCodePlan) -> Leftovers {
     let package = LEGACY_PACKAGE_ENTRIES
         .iter()
-        .map(|relative| script_dir.join(relative))
+        .map(|relative| join_relative(script_dir, relative))
         .filter(|path| files::entry_exists(path) && !path.parent().is_some_and(is_link))
         .collect();
     let pi = matches!(pi, PiPlan::Install(_) | PiPlan::Current)
-        .then(|| PathBuf::from(config::legacy_pi_extension_path(&home.to_string_lossy())))
+        .then(|| config::legacy_pi_extension_path(home))
         .filter(|path| ours(path, config::LEGACY_PI_EXTENSION_MARKER));
     let opencode = match opencode {
         OpenCodePlan::Install {
@@ -617,7 +619,7 @@ fn remove_stale<'a>(stale: impl IntoIterator<Item = &'a PathBuf>) {
 }
 
 fn plan_claude(home: &Path, script_dir: &str) -> ClaudePlan {
-    let path = home.join(".claude/settings.json");
+    let path = join_relative(home, ".claude/settings.json");
     let Ok(existing) = files::read_existing(&path) else {
         return ClaudePlan::Skipped;
     };
@@ -643,7 +645,7 @@ fn plan_shell_rcs(home: &Path, script_dir: &str) -> (Vec<FileWrite>, Vec<PathBuf
         (".bashrc", config::INTEGRATION_RELATIVE_PATH),
         (".config/fish/config.fish", config::FISH_INTEGRATION_RELATIVE_PATH),
     ] {
-        let path = home.join(name);
+        let path = join_relative(home, name);
         if script == config::FISH_INTEGRATION_RELATIVE_PATH && !path.parent().is_some_and(Path::exists) {
             continue;
         }
@@ -686,15 +688,15 @@ fn plan_codex(home: &Path, script_dir: &str) -> CodexPlan {
 }
 
 fn plan_pi(home: &Path, package: &Path) -> Result<PiPlan, InstallError> {
-    if !home.join(".pi/agent").exists() {
+    if !join_relative(home, ".pi/agent").exists() {
         return Ok(PiPlan::NoPi);
     }
     let source = bundled_text(
-        &package.join(config::PI_EXTENSION_RELATIVE_PATH),
+        &join_relative(package, config::PI_EXTENSION_RELATIVE_PATH),
         config::PI_EXTENSION_MARKER,
         "The Pi status extension",
     )?;
-    let path = PathBuf::from(config::pi_extension_path(&home.to_string_lossy()));
+    let path = config::pi_extension_path(home);
     let Ok(existing) = files::read_existing(&path) else {
         return Ok(PiPlan::Unreadable);
     };

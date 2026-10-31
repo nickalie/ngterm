@@ -50,7 +50,7 @@ impl InstalledSource {
         {
             return Some(Self::Bundle(bundle.join(BUNDLE_INFO)));
         }
-        Some(Self::Staged(holder.parent()?.join(STAGED_FILE)))
+        Some(Self::Staged(crate::paths::join_relative(holder.parent()?, STAGED_FILE)))
     }
 
     /// The installed identity as the file holds it now; `None` when it cannot be read or names no version.

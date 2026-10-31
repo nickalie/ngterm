@@ -730,8 +730,8 @@ fn an_rc_block_naming_no_integration_script_is_left_alone() {
 #[test]
 fn pi_paths_and_ownership() {
     assert_eq!(
-        pi_extension_path("/home/me"),
-        "/home/me/.pi/agent/extensions/ngterm-status.ts"
+        pi_extension_path(Path::new("/home/me")),
+        Path::new("/home/me/.pi/agent/extensions/ngterm-status.ts")
     );
     assert!(may_overwrite_pi_extension(false, None));
     assert!(may_overwrite_pi_extension(
@@ -866,8 +866,8 @@ fn claude_entries_from_before_the_rename_move_onto_the_current_wrappers() {
 #[test]
 fn the_old_pi_extension_path() {
     assert_eq!(
-        legacy_pi_extension_path("/home/me"),
-        "/home/me/.pi/agent/extensions/agterm-status.ts"
+        legacy_pi_extension_path(Path::new("/home/me")),
+        Path::new("/home/me/.pi/agent/extensions/agterm-status.ts")
     );
 }
 

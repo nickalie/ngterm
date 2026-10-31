@@ -88,8 +88,8 @@ impl Runtime {
             executable,
             login_shell,
             resources_dir: var("GHOSTTY_RESOURCES_DIR")
-                .or_else(|| staged_root.map(|root| root.join(BUNDLED_RESOURCES))),
-            own_resources_dir: staged_root.map(|root| root.join(OWN_RESOURCES)),
+                .or_else(|| staged_root.map(|root| paths::join_relative(root, BUNDLED_RESOURCES))),
+            own_resources_dir: staged_root.map(|root| paths::join_relative(root, OWN_RESOURCES)),
             state_dir: paths::state_dir(env),
             inherited: Inherited::read(env),
         }

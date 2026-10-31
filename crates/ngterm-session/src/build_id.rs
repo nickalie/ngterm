@@ -126,7 +126,10 @@ impl Staged {
 
 /// The id file beside `executable`: `share/ngterm/session-BUILD` of the directory above the one holding it.
 fn staged_file(executable: &Path) -> Option<PathBuf> {
-    Some(executable.parent()?.parent()?.join(STAGED_FILE))
+    Some(ngterm_core::paths::join_relative(
+        executable.parent()?.parent()?,
+        STAGED_FILE,
+    ))
 }
 
 /// The build a client expects of a server started from `executable`: the staged id when it is the one written for that
