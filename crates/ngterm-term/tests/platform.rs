@@ -180,8 +180,9 @@ fn what_the_child_printed_selects_and_searches() -> TestResult {
 }
 
 /// Unix: a canonical read with echo off is a password prompt, and the shell's process group is the terminal's
-/// foreground. Windows says neither: the pseudoconsole gives its parent no handle on the console's input mode, and has
-/// no foreground process group.
+/// foreground. Windows has no password read: the pseudoconsole gives its parent no handle on the console's input
+/// mode; and no foreground process group, whose stand-in for a command line is `cmd.exe`, the pane's own program,
+/// which has no job control.
 #[test]
 fn a_read_without_echo_is_password_input_where_the_pty_can_say() -> TestResult {
     let pane = launch(&line(
@@ -192,7 +193,7 @@ fn a_read_without_echo_is_password_input_where_the_pty_can_say() -> TestResult {
     if cfg!(windows) {
         std::thread::sleep(Duration::from_millis(500));
         assert!(!pane.password_input());
-        assert_eq!(pane.foreground_pid(), None);
+        assert_eq!(pane.foreground_pid(), pane.pid());
     } else {
         let deadline = Instant::now() + PATIENCE;
         while !pane.password_input() {
@@ -201,5 +202,43 @@ fn a_read_without_echo_is_password_input_where_the_pty_can_say() -> TestResult {
         }
         assert!(pane.foreground_pid().is_some());
     }
+    Ok(())
+}
+
+/// Windows' stand-in foreground: an interactive `cmd.exe` at its prompt holds it, a program typed into it holds it
+/// while it runs (the oldest one: `ping` here, not anything it starts), and the shell has it back once the program
+/// ends.
+#[cfg(windows)]
+#[test]
+fn the_typed_program_stands_in_for_the_foreground_and_the_shell_takes_it_back() -> TestResult {
+    use ngterm_host::ProcessTable as _;
+    use ngterm_session::process_table::ProcTable;
+    use ngterm_term::PaneCommand;
+
+    let wait_for = |pane: &Pane, what: &str, done: &dyn Fn(Option<u32>) -> bool| {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let foreground = pane.foreground_pid();
+            if done(foreground) {
+                return foreground;
+            }
+            assert!(Instant::now() < deadline, "{what}: the foreground is {foreground:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let command = PaneCommand::new("cmd.exe").args(["/D", "/Q", "/K", "echo ready"]);
+    let pane = Pane::spawn(&command, &PaneConfig::new(SIZE))?;
+    wait_text(&pane, "ready");
+    let shell = pane.pid();
+    wait_for(&pane, "the shell at its prompt", &|foreground| foreground == shell);
+    pane.write(b"ping -n 600 127.0.0.1\r")?;
+    let program = wait_for(&pane, "the typed ping", &|foreground| {
+        foreground.is_some() && foreground != shell
+    });
+    let pid = i32::try_from(program.ok_or("no foreground")?)?;
+    let argv = ProcTable::new().argv(pid).ok_or("the ping's argv")?;
+    assert!(argv[0].to_ascii_lowercase().starts_with("ping"), "{argv:?}");
+    pane.write(b"\x03")?;
+    wait_for(&pane, "the shell after the Ctrl+C", &|foreground| foreground == shell);
     Ok(())
 }

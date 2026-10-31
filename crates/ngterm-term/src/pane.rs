@@ -344,7 +344,7 @@ impl Pane {
         #[cfg(test)]
         tests::LAST_CHILD.with(|last| last.set(Some(pid)));
         let killer = child.killer();
-        let parts = Parts::new(&master, config);
+        let parts = Parts::new(&master, &child, config);
         let parts = match parts {
             Ok(parts) => parts,
             Err(err) => {
@@ -435,8 +435,9 @@ impl Pane {
     }
 
     /// The terminal's foreground process group (`tcgetpgrp` on the PTY, as libghostty's `foreground_pid` read it): the
-    /// pid of the group's leader; `None` once the PTY cannot say (the child side closed). Always `None` on Windows,
-    /// whose pseudoconsole has no foreground process group.
+    /// pid of the group's leader; `None` once the PTY cannot say (the child side closed). On Windows, whose
+    /// pseudoconsole has no foreground process group, the process that stands in for it, read from the program's job
+    /// (`Tty::foreground_pid`); `None` once the program ended.
     #[must_use]
     pub fn foreground_pid(&self) -> Option<u32> {
         match &self.io {
@@ -828,8 +829,8 @@ struct Parts {
 }
 
 impl Parts {
-    fn new(master: &Master, config: &PaneConfig) -> Result<Self, PaneError> {
-        let tty = Tty::of(master)?;
+    fn new(master: &Master, child: &Child, config: &PaneConfig) -> Result<Self, PaneError> {
+        let tty = Tty::of(master, child)?;
         let (events_tx, events) = mpsc::channel();
         let read_pause = ReadPause::new();
         let mailbox = Arc::new(Mailbox::new(read_pause.clone()));

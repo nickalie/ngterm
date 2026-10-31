@@ -8,7 +8,9 @@
 //!   [`Child`].
 //! - [`Child::killer`]'s [`Killer`] ends the child's tree: on Windows by terminating the job, at any time; on Unix
 //!   by signalling the process group, which is never signalled once the child is reaped (its id may be reused by
-//!   then), so a caller kills the tree before it waits for the child, or the group's survivors live on.
+//!   then), so a caller kills the tree before it waits for the child, or the group's survivors live on. On Windows
+//!   `Child::job_view`'s `JobView` lists the job's processes without holding it open: what a pane's foreground is
+//!   read from there, a pseudoconsole having no foreground process group.
 //! - [`Actor::spawn`] takes the master and runs the PTY's IO: every read goes to a callback, whose replies (the
 //!   terminal's answers to queries) are written back in order with the input [`ActorHandle::write_input`] queues. On
 //!   Unix one thread polls the master and a wake pipe; on Windows a reader thread and a writer thread work the
@@ -47,6 +49,8 @@ pub use actor::{
 pub use portable_pty::ExitStatus;
 #[cfg(windows)]
 pub use portable_pty::win::conpty::ConPtyHandoff;
+#[cfg(windows)]
+pub use sys::JobView;
 pub use sys::{Child, Killer, Master};
 
 /// What a PTY runs, and how.

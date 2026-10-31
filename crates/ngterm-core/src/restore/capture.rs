@@ -29,11 +29,20 @@
 //! nothing, the `tree` shows the shell and a restart replays nothing, so a Unix PowerShell pane restores to its prompt
 //! rather than replaying a program that was not in its foreground. A PowerShell running a script or a command
 //! (`-File`, `-Command` without `-NoExit`) is a program like any other, and a descendant that leads a group of its
-//! own reads as any job does. On Windows the console's foreground is read instead (`ngterm-session`'s process table).
+//! own reads as any job does.
+//!
+//! Windows has no process groups and no terminal foreground: the terminal reports a stand-in process
+//! (`ngterm-session`'s `console_foreground`, the oldest program the pane's console runs), and the process table
+//! models the rest as above, so the same two reads apply. A process the app started onto its pseudoconsole stands in
+//! for the session leader, and a process with its descendants for its group. A `--command` pane runs its line through
+//! `cmd.exe /D /S /C`, which has no job control: the stand-in is then that wrapper, so the `tree` looks past it
+//! ([`is_command_wrapper`]) and the capture refuses it, as it refuses `/bin/sh -c`.
 
 use ngterm_host::{ProcessTable, Surface};
 
-use crate::command_restore::{PaneForeground, ProcessGroupMember, group_descent_candidates, pane_foreground};
+use crate::command_restore::{
+    PaneForeground, ProcessGroupMember, group_descent_candidates, is_command_wrapper, pane_foreground,
+};
 use crate::model::Session;
 
 /// A live pane's foreground group by its pane token.
@@ -89,8 +98,8 @@ impl<'a> ForegroundReader<'a> {
     }
 
     /// The `tree`'s read of foreground group `pgid` (upstream's `ForegroundProcess.running`): the program or the shell
-    /// holding the foreground, past libghostty's `/bin/sh -c` wrapper of a `--command` pane (module docs); `None` when
-    /// nothing in the group can be read.
+    /// holding the foreground, past the `/bin/sh -c` (`cmd.exe /D /S /C`) wrapper of a `--command` pane (module
+    /// docs); `None` when nothing in the group can be read.
     #[must_use]
     pub fn running(&self, pgid: i32) -> Option<PaneForeground> {
         self.past_command_wrapper(pgid)
@@ -115,9 +124,9 @@ impl<'a> ForegroundReader<'a> {
         pane_foreground(&argv, self.shell).map(|foreground| (member, foreground))
     }
 
-    /// The child running the command when group `pgid` is led by the terminal's own process and that is libghostty's
-    /// `/bin/sh -c` wrapper, which a `/bin/sh` that execs its last command never leaves; `None` otherwise, and while
-    /// the wrapper runs no child (a builtin).
+    /// The child running the command when group `pgid` is led by the terminal's own process and that is a command
+    /// wrapper ([`is_command_wrapper`]), which a `/bin/sh` that execs its last command never leaves (`cmd.exe` never
+    /// does); `None` otherwise, and while the wrapper runs no child (a builtin).
     fn past_command_wrapper(&self, pgid: i32) -> Option<(i32, PaneForeground)> {
         let leader = self.table.stat(pgid)?;
         if leader.session != leader.pid || !is_command_wrapper(&self.table.argv(pgid)?) {
@@ -152,16 +161,6 @@ impl<'a> ForegroundReader<'a> {
     #[must_use]
     pub fn command_in(&self, surface: &dyn Surface) -> Option<Vec<String>> {
         self.command(self.group_of(surface)?)
-    }
-}
-
-/// Whether `argv` is the shell libghostty runs a command through on Linux: `/bin/sh -c <command>` (`-l` first inside
-/// Flatpak).
-fn is_command_wrapper(argv: &[String]) -> bool {
-    match argv {
-        [shell, flag, _] => shell == "/bin/sh" && flag == "-c",
-        [shell, login, flag, _] => shell == "/bin/sh" && login == "-l" && flag == "-c",
-        _ => false,
     }
 }
 
@@ -311,6 +310,15 @@ mod tests {
             reader.running(100),
             Some(PaneForeground::Program(argv(&["sh", "-c", "cat"])))
         );
+        // Windows: `cmd.exe /D /S /C` runs a `--command` pane's line, the pane's own process (its session's
+        // stand-in leader), with cat in its tree (its group's stand-in)
+        table.insert(
+            stat(100, 1, 100, 100),
+            Some(&[r"C:\WINDOWS\system32\cmd.exe", "/D", "/S", "/C", "cat"]),
+        );
+        table.insert(stat(101, 100, 100, 0), Some(&["cat"]));
+        assert_eq!(reader.running(100), Some(PaneForeground::Program(argv(&["cat"]))));
+        assert_eq!(reader.command(100), None);
         table.insert(stat(100, 1, 100, 100), Some(&["zsh"]));
         table.insert(stat(200, 100, 200, 100), Some(&["/bin/sh", "-c", "cat"]));
         table.insert(stat(201, 200, 200, 100), Some(&["cat"]));

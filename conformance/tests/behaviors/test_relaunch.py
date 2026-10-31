@@ -6,7 +6,7 @@ import re
 import uuid
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_ok, find_session, workspaces
+from agterm_conformance.match import assert_absent, assert_ok, find_session, program_argv, workspaces
 
 LIVE = pytest.mark.requires(
     "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
@@ -127,11 +127,11 @@ def test_rerun_replays_the_captured_foreground_program(launch):
     # A job of its own: upstream captures the foreground group's leader, and an exec'd program would share the
     # shell's group, led by macOS's setuid `login`. The shell passes the pane's hangup on to it at the quit.
     assert_ok(ctl.request("session.type", sid, text="sleep 600\n"))
-    ctl.wait_tree(lambda tree: find_session(tree, sid).get("foreground") == ["sleep", "600"])
+    ctl.wait_tree(lambda tree: program_argv(find_session(tree, sid).get("foreground")) == ["sleep", "600"])
     assert assert_ok(ctl.request("restore.capture"))["count"] >= 1
     ctl = launch.relaunch(ctl)
     ctl.wait_mounted(sid, "left")
-    ctl.wait_tree(lambda tree: find_session(tree, sid).get("foreground") == ["sleep", "600"])
+    ctl.wait_tree(lambda tree: program_argv(find_session(tree, sid).get("foreground")) == ["sleep", "600"])
 
 
 @LIVE

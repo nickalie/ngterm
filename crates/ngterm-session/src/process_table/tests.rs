@@ -1,5 +1,3 @@
-use ngterm_host::ProcessRecord;
-
 use super::*;
 
 /// A synthetic `KERN_PROCARGS2` blob (upstream's test helper): host-order argc, the NUL-terminated executable path,
@@ -73,34 +71,42 @@ fn procargs_decode_lossily_and_keep_spaces_and_quotes() {
     );
 }
 
-fn entry(pid: i32, started: u64, parent: i32) -> ProcessEntry {
-    ProcessEntry {
-        record: ProcessRecord {
-            pid,
-            started,
-            group: pid,
-            foreground: 0,
-        },
-        parent,
+fn member(pid: i32, started: u64, argv: Option<&[&str]>) -> ConsoleMember {
+    ConsoleMember {
+        pid,
+        started,
+        argv: argv.map(strings),
     }
 }
 
 #[test]
-fn a_consoles_foreground_is_the_shells_newest_child_else_the_shell() {
-    let table = [
-        entry(100, 10, 1),
-        entry(200, 11, 100),
-        entry(201, 15, 100),
-        entry(300, 16, 201),
-        entry(400, 20, 1),
-    ];
-    assert_eq!(console_foreground(100, &table), Some(201));
-    assert_eq!(console_foreground(201, &table), Some(300));
-    assert_eq!(console_foreground(400, &table), Some(400), "a shell at its prompt");
-    assert_eq!(console_foreground(999, &table), None);
-    // a child older than the shell came from a process that had the shell's pid before it
-    assert_eq!(
-        console_foreground(500, &[entry(500, 50, 1), entry(600, 40, 500)]),
-        Some(500)
-    );
+fn a_consoles_foreground_is_its_oldest_program_else_the_shell() {
+    let sh = Some(&["sh.exe"][..]);
+    let shell = member(100, 10, sh);
+    // at its prompt: Git for Windows' launcher runs the shell, an MSYS fork copies it
+    let launched = member(101, 11, Some(&["bash.exe", "--login", "-i"]));
+    let fork = member(102, 12, Some(&["bash.exe", "--login", "-i"]));
+    let at_prompt = [shell.clone(), launched.clone(), fork.clone()];
+    assert_eq!(console_foreground(100, &at_prompt), Some(100));
+    // `git log`: the program the shell started, not its pager
+    let git = member(200, 20, Some(&["git", "log"]));
+    let pager = member(201, 21, Some(&["less"]));
+    let busy = [shell.clone(), launched, pager.clone(), git, fork];
+    assert_eq!(console_foreground(100, &busy), Some(200));
+    // a member whose argv cannot be read, or one older than the shell, never stands in
+    let hidden = [shell.clone(), member(150, 15, None), member(90, 5, Some(&["old"])), pager];
+    assert_eq!(console_foreground(100, &hidden), Some(201));
+    assert_eq!(console_foreground(999, &hidden), None, "the shell is gone");
+    // equal creation times go to the lower pid
+    let tied = [shell, member(301, 30, Some(&["b"])), member(300, 30, Some(&["a"]))];
+    assert_eq!(console_foreground(100, &tied), Some(300));
+}
+
+#[test]
+fn a_command_wrapper_holds_its_consoles_foreground() {
+    let wrapper = member(100, 10, Some(&["cmd.exe", "/D", "/S", "/C", "cat"]));
+    let cat = member(101, 11, Some(&["cat"]));
+    assert_eq!(console_foreground(100, &[wrapper, cat.clone()]), Some(100));
+    let interactive = member(100, 10, Some(&["cmd.exe"]));
+    assert_eq!(console_foreground(100, &[interactive, cat]), Some(101));
 }

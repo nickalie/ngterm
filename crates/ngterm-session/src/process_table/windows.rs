@@ -1,6 +1,6 @@
 //! The Windows process table: an argv from the process's command line, the parent from a tool-help snapshot, the
-//! console's stand-in foreground ([`super::console_foreground`]) and the working directory from the process
-//! environment block.
+//! console's stand-in foreground ([`super::console_foreground`], over a live pane's shell's descendants here and over
+//! an in-app pane's job in [`job_foreground`]) and the working directory from the process environment block.
 //!
 //! herdr: `src/platform/windows.rs` (`read_process_command_line`, `command_line_to_argv`, `process_cwd`,
 //! `process_cwd_descriptor`, `read_process_parameters`, `read_process_value`, `read_unicode_string`, the `Peb`,
@@ -30,9 +30,9 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
 
-use super::console_foreground;
+use super::{ConsoleMember, console_foreground};
 use crate::job;
-use crate::job::windows::{open, snapshot};
+use crate::job::windows::{creation_time, open, snapshot};
 
 /// The live Windows process table.
 #[derive(Debug, Clone, Copy, Default)]
@@ -51,7 +51,8 @@ impl ProcessTable for ProcTable {
         command_line_to_argv(&read_command_line(&process)?)
     }
 
-    /// The process with its parent; it stands in for its own group and leads no session.
+    /// The process with its parent; it stands in for its own group, and leads its session when this process started
+    /// it (a pane's program on its pseudoconsole).
     fn stat(&self, pid: i32) -> Option<ProcessStat> {
         let wanted = u32::try_from(pid).ok()?;
         let process = snapshot()?.into_iter().find(|process| process.pid == wanted)?;
@@ -59,17 +60,47 @@ impl ProcessTable for ProcTable {
             pid,
             ppid: i32::try_from(process.parent).ok()?,
             pgrp: pid,
-            session: 0,
+            session: if started_here(wanted, process.parent) { pid } else { 0 },
         })
     }
 
-    /// The one process that stands in for group `pgrp`, while it runs.
+    /// The process that stands in for group `pgrp` and its live descendants, while it runs: a shell without job
+    /// control (`cmd.exe /D /S /C`) keeps what it runs in its group.
     fn group(&self, pgrp: i32) -> Vec<ProcessStat> {
-        self.stat(pgrp).into_iter().collect()
+        let Some(leader) = self.stat(pgrp) else {
+            return Vec::new();
+        };
+        let table = job::read_table().unwrap_or_default();
+        let descendants = job::descendant_job(pgrp, &table);
+        let members = table.iter().filter(|entry| {
+            descendants
+                .iter()
+                .any(|record| record.pid == entry.record.pid && record.started == entry.record.started)
+        });
+        std::iter::once(leader)
+            .chain(members.map(|entry| ProcessStat {
+                pid: entry.record.pid,
+                ppid: entry.parent,
+                pgrp,
+                session: leader.session,
+            }))
+            .collect()
     }
 
+    /// The stand-in foreground of the console the shell `pid` holds, among the shell's live descendants (a live
+    /// pane's: the app holds no handle on its session's job).
     fn terminal_foreground(&self, pid: i32) -> Option<i32> {
-        console_foreground(pid, &job::read_table()?)
+        let table = job::read_table()?;
+        let shell = table.iter().find(|entry| entry.record.pid == pid)?.record;
+        let members: Vec<ConsoleMember> = std::iter::once(shell)
+            .chain(job::descendant_job(pid, &table))
+            .map(|record| ConsoleMember {
+                pid: record.pid,
+                started: record.started,
+                argv: self.argv(record.pid),
+            })
+            .collect();
+        console_foreground(pid, &members)
     }
 
     fn working_directory(&self, pid: i32) -> Option<String> {
@@ -84,6 +115,38 @@ impl ProcessTable for ProcTable {
         }
         Some(path)
     }
+}
+
+/// The stand-in foreground ([`console_foreground`]) of an in-app pane whose program `root` runs in a job holding
+/// `pids` (`ngterm_pty::JobView::process_ids`): the job is the pane's console, MSYS programs included, whose parent
+/// (an MSYS fork) is gone by the time they run. Each process is read through one handle, its creation time and its
+/// command line; one gone or protected meanwhile is left out. `None` once `root` is gone (the pane's program ended).
+#[must_use]
+pub fn job_foreground(root: u32, pids: &[u32]) -> Option<u32> {
+    let members: Vec<ConsoleMember> = pids.iter().filter_map(|pid| job_member(*pid)).collect();
+    let foreground = console_foreground(i32::try_from(root).ok()?, &members)?;
+    u32::try_from(foreground).ok()
+}
+
+/// Process `pid` as [`console_foreground`] weighs it; `None` when it cannot be opened or its creation time read.
+fn job_member(pid: u32) -> Option<ConsoleMember> {
+    let process = open(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+    Some(ConsoleMember {
+        pid: i32::try_from(pid).ok()?,
+        started: creation_time(&process)?,
+        argv: read_command_line(&process).and_then(|line| command_line_to_argv(&line)),
+    })
+}
+
+/// Whether this process started process `pid` whose snapshot names `parent`: the parent is this process, and `pid`
+/// was created after it (so the parent link is not left from an earlier holder of this process's pid).
+fn started_here(pid: u32, parent: u32) -> bool {
+    let own = std::process::id();
+    if parent != own {
+        return false;
+    }
+    let created = |pid| open(pid, PROCESS_QUERY_LIMITED_INFORMATION).and_then(|process| creation_time(&process));
+    matches!((created(pid), created(own)), (Some(child), Some(this)) if child >= this)
 }
 
 /// Whether a query's status says the buffer was too small for what the process holds (now).
@@ -395,8 +458,12 @@ mod tests {
         let table = ProcTable::new();
         let pid = i32::try_from(std::process::id()).unwrap();
         let own = table.stat(pid).unwrap();
-        assert_eq!((own.pid, own.pgrp, own.session), (pid, pid, 0));
-        assert_eq!(table.group(pid), [own]);
+        assert_eq!(
+            (own.pid, own.pgrp, own.session),
+            (pid, pid, 0),
+            "started by the test runner"
+        );
+        assert_eq!(table.group(pid).first(), Some(&own));
         let argv = table.argv(pid).unwrap();
         let exe = std::env::current_exe().unwrap();
         assert_eq!(std::path::Path::new(&argv[0]).file_name(), exe.file_name(), "{argv:?}");
@@ -408,5 +475,66 @@ mod tests {
         );
         assert_eq!(table.stat(-1), None);
         assert_eq!(table.argv(0), None);
+    }
+
+    /// The process `pid` is running, among `parent`'s live descendants, waited for.
+    fn descendant(parent: i32, image: &str) -> i32 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let table = job::read_table().unwrap();
+            let found = job::descendant_job(parent, &table).into_iter().find(|record| {
+                ProcTable::new()
+                    .argv(record.pid)
+                    .is_some_and(|argv| argv[0].to_ascii_lowercase().contains(image))
+            });
+            if let Some(record) = found {
+                return record.pid;
+            }
+            assert!(std::time::Instant::now() < deadline, "{image} never ran under {parent}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// A child this process started leads its session, its tree is its group, and a command line's `cmd.exe /D /S /C`
+    /// holds its console's foreground over what it runs, while an interactive `cmd.exe` hands it to its program.
+    #[test]
+    fn a_started_command_leads_its_session_and_holds_its_foreground() {
+        use std::os::windows::process::CommandExt as _;
+
+        let table = ProcTable::new();
+        for (switches, wrapper) in [(["/D", "/S", "/C"], true), (["/D", "/S", "/K"], false)] {
+            let mut child = std::process::Command::new("cmd.exe")
+                .args(switches)
+                .raw_arg("\"ping -n 600 127.0.0.1 >NUL\"")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let pid = i32::try_from(child.id()).unwrap();
+            let ping = descendant(pid, "ping");
+            let own = table.stat(pid).unwrap();
+            assert_eq!((own.pgrp, own.session), (pid, pid), "started here");
+            assert_eq!(table.stat(ping).map(|stat| stat.session), Some(0), "started by cmd");
+            assert!(
+                table
+                    .group(pid)
+                    .iter()
+                    .any(|member| member.pid == ping && member.ppid == pid)
+            );
+            let expected = if wrapper { pid } else { ping };
+            assert_eq!(table.terminal_foreground(pid), Some(expected), "{switches:?}");
+            let pids = [child.id(), u32::try_from(ping).unwrap()];
+            assert_eq!(job_foreground(child.id(), &pids), u32::try_from(expected).ok());
+            assert_eq!(job_foreground(1, &pids), None, "a root not among them");
+            let record = job::read_table()
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.record.pid == ping)
+                .unwrap()
+                .record;
+            job::signal(job::Signal::Kill, &record);
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
     }
 }

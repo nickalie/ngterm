@@ -63,7 +63,9 @@ def test_the_instance_lives_under_its_root_and_serves_the_pipe_its_path_names(la
     root = launched.root.resolve()
     for name in ("HOME", "LOCALAPPDATA", "APPDATA", "NGTERM_STATE_DIR", "NGTERM_CONTROL_SOCKET"):
         assert Path(env[name]).resolve().is_relative_to(root), name
-    assert env["PATH"] == base.MINIMAL_PATH
+    # the system directories, then the POSIX tools beside the panes' sh, for a command line's `cmd.exe`
+    tools = Path(os.environ[base.POSIX_SHELL_VARIABLE]).parents[1] / "usr" / "bin"
+    assert env["PATH"] == f"{base.MINIMAL_PATH};{tools}"
     assert env["NGTERM_APP_ID"].startswith(base.DEFAULT_APP_ID + ".conformance.")
     assert not any(name.startswith(("AGTERM_", "ZMX_")) for name in env)
     config = (launched.state_dir / "config" / "ghostty.conf").read_text()
