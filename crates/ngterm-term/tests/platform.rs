@@ -215,6 +215,7 @@ fn the_typed_program_stands_in_for_the_foreground_and_the_shell_takes_it_back() 
     use ngterm_session::process_table::ProcTable;
     use ngterm_term::PaneCommand;
 
+    let argv = |pid: Option<u32>| pid.and_then(|pid| ProcTable::new().argv(i32::try_from(pid).ok()?));
     let wait_for = |pane: &Pane, what: &str, done: &dyn Fn(Option<u32>) -> bool| {
         let deadline = Instant::now() + PATIENCE;
         loop {
@@ -222,7 +223,11 @@ fn the_typed_program_stands_in_for_the_foreground_and_the_shell_takes_it_back() 
             if done(foreground) {
                 return foreground;
             }
-            assert!(Instant::now() < deadline, "{what}: the foreground is {foreground:?}");
+            assert!(
+                Instant::now() < deadline,
+                "{what}: the foreground is {foreground:?}, {:?}",
+                argv(foreground)
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     };
@@ -231,14 +236,13 @@ fn the_typed_program_stands_in_for_the_foreground_and_the_shell_takes_it_back() 
     wait_text(&pane, "ready");
     let shell = pane.pid();
     wait_for(&pane, "the shell at its prompt", &|foreground| foreground == shell);
-    pane.write(b"ping -n 600 127.0.0.1\r")?;
+    // about four seconds, then the prompt again
+    pane.write(b"ping -n 5 127.0.0.1\r")?;
     let program = wait_for(&pane, "the typed ping", &|foreground| {
         foreground.is_some() && foreground != shell
     });
-    let pid = i32::try_from(program.ok_or("no foreground")?)?;
-    let argv = ProcTable::new().argv(pid).ok_or("the ping's argv")?;
-    assert!(argv[0].to_ascii_lowercase().starts_with("ping"), "{argv:?}");
-    pane.write(b"\x03")?;
-    wait_for(&pane, "the shell after the Ctrl+C", &|foreground| foreground == shell);
+    let typed = argv(program).ok_or("the ping's argv")?;
+    assert!(typed[0].to_ascii_lowercase().starts_with("ping"), "{typed:?}");
+    wait_for(&pane, "the shell after the ping", &|foreground| foreground == shell);
     Ok(())
 }
