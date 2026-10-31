@@ -7,13 +7,14 @@
 #   share/ngterm/{agent-status,skills/ngterm}  share/ngterm/shell-integration/pwsh/ngterm.ps1
 #
 # from cargo's target dir and the vendored prefixes, plus ngterm's PowerShell integration and the agent
-# integrations' payloads from resources/. Binaries are staged when they exist (each appears
-# with its crate's build: ngterm, ngterm-headless, ngtermctl and the live sessions' server, ngterm-session); Ghostty's resources are
+# integrations' payloads from resources/. Binaries are staged when they exist (each appears with its crate's build:
+# ngterm, ngterm-headless, ngtermctl and the live sessions' server, ngterm-session); Ghostty's resources are
 # required. There is no lib/: libghostty-vt is linked statically. The terminfo, themes and shell integration are
 # Ghostty's at LIBGHOSTTY_VT_REV, from the libghostty-vt prefix (scripts/build-ghostty-vt.sh).
 #
-# On Windows (Git Bash) the binaries are bin/{ngterm,ngtermctl,ngterm-session}.exe, the rest as on Unix; DESTINATION
-# may be given in Windows' form (C:\\...). conformance/tools/run-windows.sh stages there through this script.
+# On Windows (Git Bash) the binaries are bin/{ngterm,ngterm-headless,ngtermctl,ngterm-session}.exe, the rest as on
+# Unix; DESTINATION may be given in Windows' form (C:\\...). conformance/tools/run-windows.sh stages there through this
+# script.
 #
 # Usage: scripts/stage.sh DESTINATION [--profile release|debug]   (default: release)
 set -euo pipefail
