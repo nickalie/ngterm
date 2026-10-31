@@ -5,7 +5,9 @@ libghostty-vt itself (built and tested on Linux and Windows; its macOS form is o
 Build, run and test: [README.md](README.md). The suite and the ratchet: [conformance/README.md](conformance/README.md),
 [conformance/docs/rust-build.md](conformance/docs/rust-build.md).
 Plans in `docs/plans/` record what was decided at the time: never read one as the current state, never update one to
-match a later change.
+match a later change. Nor are they a task's brief: a task is scoped from the user's words and the code, and a plan is
+its input only when the user names it. One the user moved off `main` or deleted was set aside on purpose; don't dig it
+up from another branch or history.
 
 ## Platforms
 
