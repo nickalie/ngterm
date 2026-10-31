@@ -1,9 +1,22 @@
 //! How an overlay program starts and how its exit status comes back (upstream's `OverlayCapture.swift`).
 //!
-//! The real command and the status file's path ride environment variables, so the wrapper never interpolates the
-//! caller's command text. The wrapper redirects neither stdout nor stderr: a terminal UI program renders normally and
-//! only its exit status is captured, into a file the frontend's surface leaves behind and the core reads when the
-//! overlay's terminal is torn down.
+//! The program renders normally (nothing redirects its stdout or stderr) and only its exit status is captured, into a
+//! file the frontend's surface leaves behind and the core reads when the overlay's terminal is torn down
+//! ([`take_exit_code`]). A program its overlay's close ends writes none. Who writes the file is per OS
+//! ([`SurfaceProgram`]):
+//!
+//! - **Unix**: upstream's wrapper ([`surface_command`]), a POSIX shell line run by the overlay's terminal. The real
+//!   command and the status file's path ride environment variables, so the wrapper never interpolates the caller's
+//!   command text; it `eval`s the command in a subshell and writes `$?` to the file, so a program a signal ends reads
+//!   as 128 plus the signal, as `sh` reports it.
+//! - **Windows**: no wrapper. The terminal runs the command line itself, through the shell every command line takes
+//!   there (`ngterm_host::command_line`, `%ComSpec% /D /S /C "<command>"`, as the overlay job's helper runs it), and
+//!   the terminal writes the program's exit status to the file when it ends by itself ([`write_exit_code`], the
+//!   status read as [`status_of_exit_code`] reads it). A `cmd` form of the wrapper would have to read the status
+//!   after the command in the same parsed line (`%ERRORLEVEL%` expands before the command runs, and delayed expansion
+//!   would eat the `!` of the caller's command) and could not survive the command's own `exit`; the terminal already
+//!   holds the status, so it records it with no script at all. The environment and the working directory are the
+//!   launch's on either OS.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,11 +34,76 @@ pub const CODE_ENV_KEY: &str = "NGTERM_OVL_CODE";
 /// The wrapper's shell line: runs the command in a subshell and writes its status to the file.
 pub const SHELL_LINE: &str = r#"( eval "$NGTERM_OVL_CMD" ); echo $? > "$NGTERM_OVL_CODE""#;
 
-/// The command an overlay terminal runs (upstream's `surfaceCommand`): `env` takes the dash libghostty's `exec -l`
-/// puts on argv[0], so `/bin/sh` starts non-login.
+/// What a console program a Ctrl event ended exits with on Windows (`STATUS_CONTROL_C_EXIT`).
+pub const CONTROL_C_EXIT: u32 = 0xC000_013A;
+/// The status a Ctrl event's end reads as: 128 plus SIGINT, as a shell reports a Ctrl+C'd program.
+pub const INTERRUPTED_STATUS: i32 = 130;
+
+/// The command an overlay terminal runs on Unix (upstream's `surfaceCommand`): `env` takes the dash libghostty's
+/// `exec -l` puts on argv[0], so `/bin/sh` starts non-login.
 #[must_use]
 pub fn surface_command() -> String {
     format!("/usr/bin/env /bin/sh -c '{SHELL_LINE}'")
+}
+
+/// What an overlay terminal runs for a program, and whether the terminal itself records its exit status (module docs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SurfaceProgram {
+    /// The command line the overlay's terminal runs through its shell.
+    pub command: String,
+    /// The terminal writes the program's exit status to the status file when the program ends by itself; `false`
+    /// where the wrapper writes it.
+    pub terminal_records_status: bool,
+}
+
+impl SurfaceProgram {
+    /// This OS's form for the caller's `command`.
+    #[must_use]
+    pub fn new(command: &str) -> Self {
+        if cfg!(windows) {
+            Self::direct(command)
+        } else {
+            Self::wrapped()
+        }
+    }
+
+    /// Unix: upstream's wrapper, which reads the command from [`CMD_ENV_KEY`] and writes the status itself.
+    #[must_use]
+    pub fn wrapped() -> Self {
+        Self {
+            command: surface_command(),
+            terminal_records_status: false,
+        }
+    }
+
+    /// Windows: the command line itself, its status recorded by the terminal.
+    #[must_use]
+    pub fn direct(command: &str) -> Self {
+        Self {
+            command: command.to_owned(),
+            terminal_records_status: true,
+        }
+    }
+}
+
+/// The status a program's raw exit code reads as: a Windows `DWORD` as `cmd`'s `%ERRORLEVEL%` shows it (a signed
+/// 32-bit number), and [`CONTROL_C_EXIT`] as [`INTERRUPTED_STATUS`]; a Unix code (0 to 255) as it is.
+#[must_use]
+pub fn status_of_exit_code(code: u32) -> i32 {
+    if code == CONTROL_C_EXIT {
+        INTERRUPTED_STATUS
+    } else {
+        i32::from_ne_bytes(code.to_ne_bytes())
+    }
+}
+
+/// Writes `code` to the status file `file` as the wrapper's `echo $?` writes it.
+///
+/// # Errors
+///
+/// When the file cannot be written.
+pub fn write_exit_code(file: &Path, code: i32) -> std::io::Result<()> {
+    std::fs::write(file, format!("{code}\n"))
 }
 
 /// The status a wrapper wrote, `None` for anything that is not a whole number once trimmed.
@@ -111,6 +189,39 @@ mod tests {
             surface_command(),
             r#"/usr/bin/env /bin/sh -c '( eval "$NGTERM_OVL_CMD" ); echo $? > "$NGTERM_OVL_CODE"'"#
         );
+    }
+
+    #[test]
+    fn each_os_runs_its_own_form() {
+        let wrapped = SurfaceProgram::wrapped();
+        assert_eq!(wrapped.command, surface_command());
+        assert!(!wrapped.terminal_records_status);
+        assert_eq!(
+            SurfaceProgram::direct("exit 7"),
+            SurfaceProgram {
+                command: "exit 7".to_owned(),
+                terminal_records_status: true,
+            }
+        );
+        let expected = if cfg!(windows) {
+            SurfaceProgram::direct("exit 7")
+        } else {
+            wrapped
+        };
+        assert_eq!(SurfaceProgram::new("exit 7"), expected);
+    }
+
+    #[test]
+    fn a_written_status_reads_back_as_the_wrappers() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.code");
+        for (raw, status) in [(0, 0), (7, 7), (0xC000_013A, 130), (0xC000_0005, -1_073_741_819)] {
+            let code = status_of_exit_code(raw);
+            assert_eq!(code, status);
+            write_exit_code(&file, code).unwrap();
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), format!("{status}\n"));
+            assert_eq!(take_exit_code(&file), Some(status));
+        }
     }
 
     #[test]

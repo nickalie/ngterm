@@ -17,7 +17,8 @@
 //!   attached to it reads the same input, so the program gets the keys without one, and a console has no hangup to
 //!   watch for either (its close is the Ctrl event above).
 //! - Exit statuses map onto the Unix ones: `STATUS_CONTROL_C_EXIT` (a Ctrl event the program did not handle) reads
-//!   as 130, 128 plus SIGINT, as a shell reports a Ctrl+C'd program, and the kill sets 137, 128 plus SIGKILL.
+//!   as 130, 128 plus SIGINT, as a shell reports a Ctrl+C'd program (`overlay_capture::status_of_exit_code`, which a
+//!   local overlay's status takes too), and the kill sets 137, 128 plus SIGKILL.
 
 use std::ffi::OsString;
 use std::io;
@@ -27,7 +28,7 @@ use std::process::Child;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use ngterm_core::overlay_capture::OverlayLaunchContext;
+use ngterm_core::overlay_capture::{self, OverlayLaunchContext};
 use ngterm_host::ShellCommand;
 use windows_sys::Win32::Foundation::{FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE};
 use windows_sys::Win32::System::Console::{
@@ -55,10 +56,6 @@ pub(super) struct Terminal;
 /// The program's console process group, which its pid names.
 pub(super) type Group = u32;
 
-/// What a console program a Ctrl event ended exits with (`STATUS_CONTROL_C_EXIT`), read as an `i32`.
-const CONTROL_C_EXIT: i32 = i32::from_ne_bytes(0xC000_013A_u32.to_ne_bytes());
-/// The status a Ctrl event's end reads as: 128 plus SIGINT.
-pub(super) const INTERRUPTED_STATUS: i32 = 130;
 /// The status the kill sets: 128 plus SIGKILL.
 pub(super) const KILLED_STATUS: i32 = 137;
 /// How long the console's close waits for the cancel to report before the system ends the helper (it allows 5 s).
@@ -218,11 +215,9 @@ impl Program {
     /// The program's status once it ended, `None` while it runs.
     pub(super) fn reap(&mut self) -> Option<i32> {
         let code = self.child.try_wait().ok()??.code()?;
-        Some(if code == CONTROL_C_EXIT {
-            INTERRUPTED_STATUS
-        } else {
-            code
-        })
+        Some(overlay_capture::status_of_exit_code(u32::from_ne_bytes(
+            code.to_ne_bytes(),
+        )))
     }
 
     /// Whether any process of the job is still there.

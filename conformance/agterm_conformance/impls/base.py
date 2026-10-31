@@ -190,8 +190,9 @@ CAPABILITIES: Mapping[str, str] = {
     "left pane takes the focus back while its window is key",
     "posix-command-line": "a command line (an overlay's program, a scratch pane's command, a hook, a custom command) "
     "runs through `/bin/sh -c`, so a test's POSIX line runs as written; Windows runs it through `cmd.exe`",
-    "cmd-command-line": "Rust-only, Windows: a hook's and a custom command's line runs as `cmd.exe`'s command text "
-    "(`%ComSpec% /D /S /C`), so a test's `cmd` line runs as written where `posix-command-line` is not claimed",
+    "cmd-command-line": "Rust-only, Windows: a command line (an overlay's program, a scratch pane's command, a hook, a "
+    "custom command) runs as `cmd.exe`'s command text (`%ComSpec% /D /S /C`), so a test's `cmd` line runs as written "
+    "where `posix-command-line` is not claimed",
     "untitled-panes": "a pane has no title until a program sets one; Windows' console host titles each pane with its "
     "program's path",
 }

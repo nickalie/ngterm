@@ -32,7 +32,7 @@ use crate::windows::{ConfigHost, Windows};
 /// claimed once its commands work in this frontend (plan > Development Approach). Windows claims neither
 /// `posix-command-line` (a command line runs through `cmd.exe` there, `ngterm_host::command_line`) nor
 /// `untitled-panes` (the console host titles each pane with its program's path); it claims `cmd-command-line`, a
-/// hook's and a custom command's line run as `cmd`'s command text.
+/// hook's, a custom command's, an overlay program's and a scratch command's line run as `cmd`'s command text.
 #[cfg(not(windows))]
 pub const CAPABILITIES: &[&str] = &[
     "posix-shell",

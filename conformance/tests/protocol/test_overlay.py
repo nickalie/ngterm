@@ -1,8 +1,9 @@
 """The session overlay slot holding a caller's program or an HTML page, and the pane-scoped overlays.
 
-Every program shown here only prints a marker and then waits in `cat` until its overlay is closed, so nothing runs
-outside the instance. Every page is a static file written into the instance's own root, or served from this
-process on 127.0.0.1: no page loads anything from the network."""
+Every program shown here only prints a marker and then waits reading its terminal (`cat`, or `more` under `cmd`)
+until its overlay is closed, so nothing runs outside the instance; its line is in the build's command-line dialect
+(`agterm_conformance.command_line`). Every page is a static file written into the instance's own root, or served
+from this process on 127.0.0.1: no page loads anything from the network."""
 
 import itertools
 import os
@@ -11,6 +12,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler
 
 import pytest
+from agterm_conformance.command_line import CommandLines
 from agterm_conformance.loopback import serve
 from agterm_conformance.match import (
     ANY,
@@ -23,8 +25,13 @@ from agterm_conformance.match import (
 )
 
 UNKNOWN = "zzz"
-HOLD = "exec cat"
 _pages = itertools.count(1)
+
+
+@pytest.fixture
+def lines(adapter):
+    """The build's command-line dialect for the programs shown here."""
+    return CommandLines.of(adapter, "the overlay's program")
 
 
 def _new(ctl):
@@ -48,7 +55,7 @@ def _kinds(node):
     return {surface["kind"] for surface in node["surfaces"]}
 
 
-def _open(ctl, sid, command=HOLD, **args):
+def _open(ctl, sid, command, **args):
     assert assert_ok(ctl.request("session.overlay.open", sid, command=command, **args))["id"] == sid
 
 
@@ -121,10 +128,9 @@ def _outcome(ctl, page_id):
     "field:tree.session.overlaySizePercent",
     "field:tree.session.surfaces",
 )
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_program_overlay_covers_the_session(ctl):
+def test_program_overlay_covers_the_session(ctl, lines):
     sid = _new(ctl)
-    _open(ctl, sid)
+    _open(ctl, sid, lines.hold())
     node = _node(ctl, sid)
     assert node["overlay"] is True
     assert_absent(node, "overlaySizePercent", "hud", "htmlOverlays", "paneOverlays")
@@ -138,7 +144,6 @@ def test_program_overlay_covers_the_session(ctl):
 
 
 @pytest.mark.covers("session.overlay.result", "field:result.exitCode", "field:result.id")
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
 def test_overlay_result_reports_the_exit_status(ctl):
     sid = _new(ctl)
     assert_error(ctl.request("session.overlay.result", sid), "no overlay result")
@@ -153,11 +158,10 @@ def test_overlay_result_reports_the_exit_status(ctl):
 
 
 @pytest.mark.covers("session.overlay.text")
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_overlay_text_reads_the_covering_program(ctl):
+def test_overlay_text_reads_the_covering_program(ctl, lines):
     sid = _new(ctl)
     assert_error(ctl.request("session.overlay.text", sid), "no overlay")
-    _open(ctl, sid, "echo OVL-TEXT-1; echo OVL-TEXT-2; exec cat")
+    _open(ctl, sid, lines.then("echo OVL-TEXT-1", "echo OVL-TEXT-2", lines.hold()))
     text = _overlay_text(ctl, sid, "OVL-TEXT-2")
     assert "OVL-TEXT-1" in text
     assert _overlay_text(ctl, sid, "OVL-TEXT-1", all=True)
@@ -171,11 +175,10 @@ def test_overlay_text_reads_the_covering_program(ctl):
 
 
 @pytest.mark.covers("session.overlay.open", "session.overlay.resize", "field:tree.session.overlaySizePercent")
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_overlay_size_and_resize(ctl):
+def test_overlay_size_and_resize(ctl, lines):
     sid = _new(ctl)
     assert_error(ctl.request("session.overlay.resize", sid, sizePercent=50), "no overlay")
-    _open(ctl, sid, sizePercent=40)
+    _open(ctl, sid, lines.hold(), sizePercent=40)
     assert _node(ctl, sid)["overlaySizePercent"] == 40
     for args, size in [({"sizePercent": 75}, 75), ({"full": True}, None), ({"sizePercent": 1}, 1)]:
         assert assert_ok(ctl.request("session.overlay.resize", sid, **args))["id"] == sid
@@ -202,32 +205,30 @@ def test_overlay_size_and_resize(ctl):
 
 @pytest.mark.covers("session.overlay.open")
 @pytest.mark.parametrize("requested", [0, 101])
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_overlay_open_size_outside_its_range(ctl, requested):
+def test_overlay_open_size_outside_its_range(ctl, requested, lines):
     sid = _new(ctl)
-    response = ctl.request("session.overlay.open", sid, command=HOLD, sizePercent=requested)
+    response = ctl.request("session.overlay.open", sid, command=lines.hold(), sizePercent=requested)
     assert_error(response, "session.overlay.open: --size-percent must be 1...100")
     assert _node(ctl, sid)["overlay"] is False
 
 
 @pytest.mark.covers("session.overlay.open", "field:tree.session.active")
-def test_overlay_opens_in_the_background_unless_it_follows(ctl):
+def test_overlay_opens_in_the_background_unless_it_follows(ctl, lines):
     first, second = _new(ctl), _new(ctl)
     assert_ok(ctl.request("session.select", first))
-    _open(ctl, second)
+    _open(ctl, second, lines.hold())
     assert _node(ctl, first)["active"] is True and _node(ctl, second)["overlay"] is True
     _closed(ctl, second)
-    _open(ctl, second, follow=True)
+    _open(ctl, second, lines.hold(), follow=True)
     assert _node(ctl, second)["active"] is True
     _closed(ctl, second)
 
 
 @pytest.mark.covers("session.overlay.open")
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_overlay_runs_in_its_cwd(ctl):
+def test_overlay_runs_in_its_cwd(ctl, lines):
     sid = _new(ctl)
     root = ctl.instance.root
-    _open(ctl, sid, "pwd; exec cat", cwd=str(root), color="#203040")
+    _open(ctl, sid, lines.then(lines.pwd(), lines.hold()), cwd=str(root), color="#203040")
     text = _overlay_text(ctl, sid, root.name)
     assert str(root) in text or str(root.resolve()) in text
     _closed(ctl, sid)
@@ -276,11 +277,10 @@ def _content(ctl, sid, **args):
     "field:tree.session.overlayHeight",
     "field:tree.session.overlaySizePercent",
 )
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_overlay_points_size_and_resize(ctl):
+def test_overlay_points_size_and_resize(ctl, lines):
     sid = _new(ctl)
     assert_ok(ctl.request("session.select", sid))
-    _open(ctl, sid, sizePercent=50)
+    _open(ctl, sid, lines.hold(), sizePercent=50)
     width, height = _detail(ctl, sid)
     # a point axis replaces the percent on its own; alone, points change only their axes
     assert _content(ctl, sid, height=100) == (pytest.approx(width * 0.5), pytest.approx(100))
@@ -300,7 +300,7 @@ def test_overlay_points_size_and_resize(ctl):
     )
     _closed(ctl, sid)
     # an open takes them beside its percent
-    _open(ctl, sid, sizePercent=40, width=200)
+    _open(ctl, sid, lines.hold(), sizePercent=40, width=200)
     node = _laid_out(ctl, sid)
     assert (node["overlayWidth"], node["overlayHeight"]) == (pytest.approx(200), pytest.approx(height * 0.4))
     _closed(ctl, sid)
@@ -372,12 +372,11 @@ def test_page_points_leave_out_the_strip(ctl):
         pytest.param("session.overlay.resize", None, {"height": 240}, "no overlay", id="resize-nothing-open"),
     ],
 )
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_point_size_refusals(ctl, cmd, slot, args, error):
+def test_point_size_refusals(ctl, cmd, slot, args, error, lines):
     sid = _new(ctl)
     if slot is not None:
-        _open(ctl, sid, sizePercent=slot)
-    request = {"command": HOLD, **args} if cmd == "session.overlay.open" else args
+        _open(ctl, sid, lines.hold(), sizePercent=slot)
+    request = {"command": lines.hold(), **args} if cmd == "session.overlay.open" else args
     assert_error(ctl.request(cmd, sid, **request), error)
     node = _node(ctl, sid)
     if slot is None:
@@ -399,15 +398,15 @@ def test_point_size_refusals(ctl, cmd, slot, args, error):
     "field:tree.session.paneOverlays",
     "field:tree.session.surfaces",
 )
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_pane_overlays_cover_one_pane_each(ctl):
+def test_pane_overlays_cover_one_pane_each(ctl, lines):
     sid = _split(ctl)
-    _open(ctl, sid, "echo PANE-RIGHT; exec cat", pane="right")
+    _open(ctl, sid, lines.then("echo PANE-RIGHT", lines.hold()), pane="right")
     node = _node(ctl, sid)
     assert node["paneOverlays"] == ["right"] and node["overlay"] is False
     assert "overlay-right" in _kinds(node) and "overlay-left" not in _kinds(node)
-    assert_error(ctl.request("session.overlay.open", sid, command=HOLD, pane="right"), "pane overlay already open")
-    _open(ctl, sid, pane="left")
+    refused = ctl.request("session.overlay.open", sid, command=lines.hold(), pane="right")
+    assert_error(refused, "pane overlay already open")
+    _open(ctl, sid, lines.hold(), pane="left")
     assert _node(ctl, sid)["paneOverlays"] == ["left", "right"]
     assert _overlay_text(ctl, sid, "PANE-RIGHT", pane="right")
     assert_error(ctl.request("session.overlay.result", sid, pane="right"), "overlay still running")
@@ -429,24 +428,22 @@ def test_pane_overlays_cover_one_pane_each(ctl):
 
 
 @pytest.mark.covers("session.overlay.open", "field:tree.session.paneOverlays")
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_unsplit_session_takes_a_left_pane_overlay(ctl):
+def test_unsplit_session_takes_a_left_pane_overlay(ctl, lines):
     sid = _new(ctl)
-    _open(ctl, sid, pane="left")
+    _open(ctl, sid, lines.hold(), pane="left")
     assert _node(ctl, sid)["paneOverlays"] == ["left"]
     _closed(ctl, sid, pane="left")
 
 
 @pytest.mark.covers("session.overlay.open")
 @pytest.mark.parametrize("hidden", [False, True], ids=["unsplit", "hidden-split"])
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_pane_overlay_needs_a_rendered_pane(ctl, hidden):
+def test_pane_overlay_needs_a_rendered_pane(ctl, hidden, lines):
     sid = _split(ctl) if hidden else _new(ctl)
     if hidden:
         # A hidden split still lays out its focused pane, so the right one is hidden only behind a focused left.
         assert_ok(ctl.request("session.focus", sid, pane="left"))
         assert_ok(ctl.request("session.split", sid, mode="off"))
-    assert_error(ctl.request("session.overlay.open", sid, command=HOLD, pane="right"), "pane not visible")
+    assert_error(ctl.request("session.overlay.open", sid, command=lines.hold(), pane="right"), "pane not visible")
     assert_absent(_node(ctl, sid), "paneOverlays")
 
 
@@ -511,11 +508,10 @@ def test_submit_answers_the_page_and_closes_it(ctl, value):
 
 
 @pytest.mark.covers("session.overlay.submit")
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_submit_refusals(ctl):
+def test_submit_refusals(ctl, lines):
     sid = _new(ctl)
     assert_error(ctl.request("session.overlay.submit", sid, value="x"), "no overlay")
-    _open(ctl, sid)
+    _open(ctl, sid, lines.hold())
     assert_error(ctl.request("session.overlay.submit", sid, value="x"), "the overlay is not an html page")
     _closed(ctl, sid)
     *_, page_id = _open_page(ctl, sid)
@@ -544,12 +540,11 @@ def test_reload_and_navigate_a_page(ctl):
 
 
 @pytest.mark.covers("session.overlay.reload", "session.overlay.navigate")
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_page_commands_need_a_page(ctl):
+def test_page_commands_need_a_page(ctl, lines):
     sid = _new(ctl)
     for cmd, args in [("session.overlay.reload", {}), ("session.overlay.navigate", {"to": "back"})]:
         assert_error(ctl.request(cmd, sid, **args), "no overlay")
-        _open(ctl, sid)
+        _open(ctl, sid, lines.hold())
         assert_error(ctl.request(cmd, sid, **args), "the overlay is not an html page")
         _closed(ctl, sid)
 
@@ -1063,7 +1058,8 @@ def test_overlay_pane_selector_refusals(ctl, cmd, args):
 @pytest.mark.parametrize(
     ("cmd", "args"),
     [
-        ("session.overlay.open", {"command": HOLD}),
+        # refused before anything runs, in either dialect
+        ("session.overlay.open", {"command": "exit 0"}),
         ("session.overlay.close", {}),
         ("session.overlay.resize", {"sizePercent": 50}),
         ("session.overlay.result", {}),
@@ -1097,12 +1093,11 @@ def _left(ctl, cmd, sid, text, **args):
     "field:tree.session.overlay",
     "field:tree.session.paneOverlays",
 )
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_hide_show_and_toggle_keep_the_overlays_running(ctl):
+def test_hide_show_and_toggle_keep_the_overlays_running(ctl, lines):
     sid = _split(ctl)
     marker = f"HIDDEN-{uuid.uuid4().hex[:8].upper()}"
-    _open(ctl, sid, f"echo {marker}; exec cat")
-    _open(ctl, sid, pane="right")
+    _open(ctl, sid, lines.then(f"echo {marker}", lines.hold()))
+    _open(ctl, sid, lines.hold(), pane="right")
     _overlay_text(ctl, sid, marker)
 
     _left(ctl, "session.overlay.hide", sid, "hidden")
@@ -1127,12 +1122,11 @@ def test_hide_show_and_toggle_keep_the_overlays_running(ctl):
 
 
 @pytest.mark.covers("session.overlay.hide", "session.overlay.show", "session.overlay.toggle")
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_visibility_refusals(ctl):
+def test_visibility_refusals(ctl, lines):
     sid = _split(ctl)
     for cmd in VISIBILITY:
         assert_error(ctl.request(cmd, sid), "no overlay")
-    _open(ctl, sid, pane="right")
+    _open(ctl, sid, lines.hold(), pane="right")
     for cmd in VISIBILITY:
         assert_error(ctl.request(cmd, sid, pane="left"), "no overlay")
     _closed(ctl, sid, pane="right")
@@ -1147,33 +1141,32 @@ def test_visibility_refusals(ctl):
 
 
 @pytest.mark.covers("session.overlay.open", "session.overlay.hide", "session.hud.open", "field:tree.session.hiddenOverlays")
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_opening_into_a_hidden_slot_is_refused(ctl):
+def test_opening_into_a_hidden_slot_is_refused(ctl, lines):
     sid = _split(ctl)
-    _open(ctl, sid)
+    _open(ctl, sid, lines.hold())
     _left(ctl, "session.overlay.hide", sid, "hidden")
     path, _ = _page(ctl)
-    assert_error(ctl.request("session.overlay.open", sid, command=HOLD), "overlay hidden")
+    assert_error(ctl.request("session.overlay.open", sid, command=lines.hold()), "overlay hidden")
     assert_error(ctl.request("session.overlay.open", sid, html=str(path)), "overlay hidden")
     assert_error(ctl.request("session.hud.open", sid, message="over a hidden program"), "overlay hidden")
     assert_absent(_node(ctl, sid), "hud")
     # closing frees the slot, and a new occupant starts shown
     _closed(ctl, sid)
-    _open(ctl, sid)
+    _open(ctl, sid, lines.hold())
     assert_absent(_node(ctl, sid), "hiddenOverlays")
     _closed(ctl, sid)
 
     # a hidden pane overlay holds its own pane's slot only
-    _open(ctl, sid, pane="left")
+    _open(ctl, sid, lines.hold(), pane="left")
     _left(ctl, "session.overlay.hide", sid, "hidden", pane="left")
-    assert_error(ctl.request("session.overlay.open", sid, command=HOLD, pane="left"), "overlay hidden")
+    assert_error(ctl.request("session.overlay.open", sid, command=lines.hold(), pane="left"), "overlay hidden")
     assert assert_ok(ctl.request("session.hud.open", sid, message="over a hidden pane"))["id"] == sid
     assert_ok(ctl.request("session.hud.close", sid))
-    _open(ctl, sid)
+    _open(ctl, sid, lines.hold())
     assert _node(ctl, sid)["hiddenOverlays"] == ["left"]
     _closed(ctl, sid)
     _closed(ctl, sid, pane="left")
-    _open(ctl, sid, pane="left")
+    _open(ctl, sid, lines.hold(), pane="left")
     assert_absent(_node(ctl, sid), "hiddenOverlays")
     _closed(ctl, sid, pane="left")
 
@@ -1204,15 +1197,14 @@ def _named(ctl, name):
 
 
 @pytest.mark.covers("event:tree.changed", "session.overlay.open", "session.overlay.close")
-@pytest.mark.requires("posix-command-line", reason="the overlay's program is a POSIX command line")
-def test_program_and_page_open_and_close_invalidate_the_tree(ctl):
+def test_program_and_page_open_and_close_invalidate_the_tree(ctl, lines):
     window, sid = _named(ctl, "overlay events")
     steps = [
-        lambda: _open(ctl, sid),
+        lambda: _open(ctl, sid, lines.hold()),
         lambda: _closed(ctl, sid),
         lambda: _open_page(ctl, sid),
         lambda: _closed(ctl, sid),
-        lambda: _open(ctl, sid, pane="left"),
+        lambda: _open(ctl, sid, lines.hold(), pane="left"),
         lambda: _closed(ctl, sid, pane="left"),
     ]
     for step in steps:

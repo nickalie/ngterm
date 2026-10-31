@@ -38,7 +38,7 @@ pub use matcher::{KeybindMatcher, MatchResult};
 pub use parse::parse_keymap;
 pub use parsed::Keymap;
 pub use project::project;
-pub use starter::{editor_command, starter_keymap_conf};
+pub use starter::{editor_command, posix_editor_command, starter_keymap_conf, windows_editor_command};
 pub use store::{ensure_starter_keymap, load_keymap};
 
 /// A problem found while parsing `keymap.conf` or `hooks.conf` (upstream's `KeymapDiagnostic`). `line` is 1-based;

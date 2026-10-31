@@ -182,10 +182,62 @@ fn the_starter_examples_apply_when_uncommented() {
 #[test]
 fn the_editor_command_runs_through_an_interactive_login_shell_then_posix_sh() {
     assert_eq!(
-        editor_command("/home/test/.config/ngterm/keymap.conf"),
+        posix_editor_command("/home/test/.config/ngterm/keymap.conf"),
         "${SHELL:-/bin/sh} -ilc 'exec /bin/sh -c '\\''${VISUAL:-${EDITOR:-vi}} \"$1\"'\\'' ngterm-config-edit \
          '\\''/home/test/.config/ngterm/keymap.conf'\\'''"
     );
+}
+
+#[test]
+fn the_windows_editor_command_runs_visual_then_editor_then_waits_for_notepad() {
+    let path = r"C:\Users\a b\AppData\Roaming\ngterm\keymap.conf";
+    assert_eq!(
+        windows_editor_command(path, Some("code --wait"), Some("nvim")),
+        format!(r#"code --wait "{path}""#)
+    );
+    for visual in [None, Some(""), Some("  ")] {
+        assert_eq!(
+            windows_editor_command(path, visual, Some(r#""C:\Program Files\Neovim\bin\nvim.exe""#)),
+            format!(r#""C:\Program Files\Neovim\bin\nvim.exe" "{path}""#)
+        );
+        assert_eq!(
+            windows_editor_command(path, visual, None),
+            format!(r#"start "" /wait notepad.exe "{path}""#)
+        );
+    }
+}
+
+#[test]
+fn this_os_picks_its_own_editor_command() {
+    let path = "/home/test/k.conf";
+    if cfg!(windows) {
+        assert!(editor_command(path).ends_with(&format!("\"{path}\"")));
+    } else {
+        assert_eq!(editor_command(path), posix_editor_command(path));
+    }
+}
+
+/// The Windows editor command run as the overlay runs it (`cmd /D /S /C "<line>"`), `EDITOR` a batch file recording
+/// its first argument.
+#[cfg(windows)]
+#[test]
+fn the_windows_editor_command_hands_the_quoted_path_to_the_editor() {
+    use std::os::windows::process::CommandExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let got = dir.path().join("editor.got");
+    let editor = dir.path().join("my editor.cmd");
+    fs::write(&editor, format!("@echo off\r\n>\"{}\" echo %~1\r\n", got.display())).unwrap();
+    let path = dir.path().join("a b").join("k.conf").display().to_string();
+    let line = windows_editor_command(&path, None, Some(&format!("\"{}\"", editor.display())));
+    let shell = ngterm_host::ShellCommand::new(&line);
+    let mut command = Command::new(&shell.program);
+    command.args(&shell.args);
+    if let Some(tail) = &shell.raw_tail {
+        command.raw_arg(tail);
+    }
+    assert!(command.status().unwrap().success());
+    assert_eq!(fs::read_to_string(got).unwrap().trim_end(), path);
 }
 
 /// An executable at `<dir>/<name>` recording its first argument in `<dir>/<name>.got`.
@@ -206,7 +258,7 @@ fn run_editor_command(path: &str, home: &Path, vars: &[(&str, &str)]) -> bool {
     let mut command = Command::new("/bin/sh");
     command
         .arg("-c")
-        .arg(editor_command(path))
+        .arg(posix_editor_command(path))
         .env("HOME", home)
         .env("ZDOTDIR", home)
         .env("XDG_CONFIG_HOME", home)
@@ -270,7 +322,7 @@ fn the_editor_command_falls_back_to_sh_without_a_shell() {
     let mut command = Command::new("/bin/sh");
     command
         .arg("-c")
-        .arg(editor_command(&path))
+        .arg(posix_editor_command(&path))
         .env("HOME", home.path())
         .env_remove("SHELL");
     command

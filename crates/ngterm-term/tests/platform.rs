@@ -8,6 +8,7 @@
 #[expect(dead_code, reason = "the file helpers serve the other test files")]
 mod support;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,11 @@ fn line(unix: &str, windows: &str) -> String {
 
 /// `command` launched as a pane's command line, isolated from any ngterm the tests run under.
 fn launch(command: &str) -> TestResult<Pane> {
+    launch_recording(command, None)
+}
+
+/// [`launch`], the program's exit status written to `status_file`.
+fn launch_recording(command: &str, status_file: Option<PathBuf>) -> TestResult<Pane> {
     let isolation = std::env::vars_os()
         .map(|(key, _)| key.to_string_lossy().into_owned())
         .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_"))
@@ -33,6 +39,7 @@ fn launch(command: &str) -> TestResult<Pane> {
         command: Some(command.to_owned()),
         working_directory: Some(std::env::temp_dir()),
         env_remove: isolation,
+        status_file,
         ..Launch::default()
     };
     let host = Host::new(&GhosttyConfig::default(), None, None, None);
@@ -155,6 +162,28 @@ fn the_exit_code_is_the_programs() -> TestResult {
     // a command that is not found: the shell's own status for it (127; `cmd /C` ends with 1)
     let missing = exit_of(&launch("ngterm-no-such-command-xyz")?);
     assert_eq!(missing.code, if cfg!(windows) { 1 } else { 127 });
+    Ok(())
+}
+
+#[test]
+fn a_program_that_ends_by_itself_records_its_status_and_a_hung_up_one_none() -> TestResult {
+    // an overlay program's status file on Windows, where no wrapper writes it (`ngterm_core::overlay_capture`)
+    let dir = tempfile::tempdir()?;
+    let ended = dir.path().join("ended.code");
+    let pane = launch_recording("exit 7", Some(ended.clone()))?;
+    assert_eq!(exit_of(&pane).code, 7);
+    assert_eq!(
+        std::fs::read_to_string(&ended)?,
+        "7\n",
+        "written before the exit is reported"
+    );
+    let hung_up = dir.path().join("hung-up.code");
+    let pane = launch_recording(&print_and_stay("UP"), Some(hung_up.clone()))?;
+    wait_text(&pane, "UP");
+    drop(pane);
+    // the child is reaped on the pane's own threads: give a stray write the time it would take
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!hung_up.exists(), "the pane's hangup ended it");
     Ok(())
 }
 
