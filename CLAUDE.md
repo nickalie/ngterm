@@ -66,15 +66,10 @@ Upstream syncs and pin bumps: use the `agterm-upstream-sync` skill.
 
 ## Choosing checks
 
-Pick the checks from what the change can break; there is no fixed gate.
-
-- Docs or Markdown only: no build, no tests, no waiting on CI.
-- Scripts or config: whatever exercises them.
-- Code: clippy and tests on the touched crates, plus a partial suite run over the conformance ids for the behavior it
-  touches (README > Test).
-- The whole workspace, the full suite and the other OSes are CI's job. Wait on CI only when its result decides the
-  next step, e.g. code that only another OS's runner can prove.
-- Reviews (revmux and similar) follow the same judgment: worth it for real code changes, not for a typo.
+There is no fixed gate: you decide which checks a change needs and how far to take them. Don't overrun the gate:
+size it to what the change can break and stop there. A small change gets a small, fast check, not a long build or
+suite run; a check the change can't affect is skipped, and so is waiting on CI unless its result decides your next
+step. Reviews (revmux and similar) scale the same way. README > Test has the commands and how to scope them.
 
 ## What CI enforces
 
