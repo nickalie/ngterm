@@ -1,0 +1,20 @@
+A failed `openpty(3)` came back as an `anyhow` message holding the `io::Error`'s debug text, so a caller could not
+read the errno. The error now wraps the `io::Error` itself (`downcast_ref::<io::Error>()`), under the same
+"failed to openpty" context. ngterm-pty reads it to retry an open that lost XNU's ptmx clone race (`EREDRIVEOPEN`,
+`ENXIO`), see `crates/ngterm-pty/src/unix/mod.rs`.
+
+ngterm's own. Remove when portable-pty keeps an `openpty` failure's `io::Error`. Its test: ngterm-pty's
+`an_open_that_lost_the_clone_race_is_retried` reads the errno through it.
+
+diff -ruN a/src/unix.rs b/src/unix.rs
+--- a/src/unix.rs
++++ b/src/unix.rs
+@@ -43,7 +43,7 @@
+     };
+ 
+     if result != 0 {
+-        bail!("failed to openpty: {:?}", io::Error::last_os_error());
++        return Err(Error::new(io::Error::last_os_error()).context("failed to openpty"));
+     }
+ 
+     let tty_name = tty_name(slave);

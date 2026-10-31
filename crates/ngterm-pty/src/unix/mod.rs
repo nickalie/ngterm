@@ -303,10 +303,60 @@ fn settle_libnotify() {
     unsafe { notify_is_valid_token(0) };
 }
 
+/// XNU's internal "redrive the open" errno (`bsd/sys/errno.h`, kernel-only), which its `/dev/ptmx` open returns to
+/// user space once the kernel's own retries of a lost clone race run out.
+#[cfg(target_os = "macos")]
+const EREDRIVEOPEN: i32 = -6;
+
+/// How many times an `openpty` that lost XNU's ptmx clone race is tried again before its error is returned.
+#[cfg(target_os = "macos")]
+const CLONE_RACE_RETRIES: usize = 3;
+
+/// Open a PTY pair with `open`, again on macOS when the open lost XNU's `/dev/ptmx` clone race to another open or
+/// close of a PTY, in any process (XNU's `bsd/kern/tty_ptmx.c` and `bsd/kern/tty_dev.c`, `apple-oss-distributions/xnu`):
+///
+/// - `ptmx_clone` hands an opener the first free minor under the devfs lock, but the slot is only taken later, in
+///   `ptmx_get_ioctl` after an allocation made without the lock. Two opens can be handed one minor; the one that
+///   comes second finds the slot taken and `ptcopen` returns `EREDRIVEOPEN`. `vn_open_auth` redrives the open at
+///   most 10 times, then returns that kernel-only errno (`-6`) from `open("/dev/ptmx")`.
+/// - The same window lets an opener handed the vector's end meet a close that freed a slot meanwhile: the vector is
+///   not grown, the minor is out of range (`ptmx_get_ioctl failed because minor number ... was out of range`) and
+///   `ptcopen` returns `ENXIO`.
+/// - `ptmx_free_ioctl`, the last close of a pair, frees the minor's slot before it removes that minor's
+///   `/dev/ttysNNN` node: a new pair handed the minor meanwhile opens its replica through the old node as it is
+///   removed, and the open fails with `ENXIO`.
+///
+/// The kernel's state is consistent again once the racing open or close is through, so a fresh `openpty` gets a
+/// minor of its own. Only these two errnos are retried, a bounded number of times; anything else, and a race lost
+/// more often than that, is returned as it is.
+fn retry_clone_race<T, E>(mut open: impl FnMut() -> Result<T, E>) -> io::Result<T>
+where
+    E: std::fmt::Display + AsRef<dyn std::error::Error + Send + Sync + 'static>,
+{
+    #[cfg(target_os = "macos")]
+    for _ in 0..CLONE_RACE_RETRIES {
+        match open() {
+            Err(err) if lost_clone_race(err.as_ref()) => {
+                tracing::debug!("openpty lost the ptmx clone race ({err:#}); opening again");
+            }
+            opened => return opened.map_err(|err| pty_error(&err)),
+        }
+    }
+    open().map_err(|err| pty_error(&err))
+}
+
+/// Whether an `openpty` failed with one of the errnos of XNU's ptmx clone race ([`retry_clone_race`]).
+#[cfg(target_os = "macos")]
+fn lost_clone_race(err: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(err), |err| err.source())
+        .filter_map(|err| err.downcast_ref::<io::Error>())
+        .any(|err| matches!(err.raw_os_error(), Some(libc::ENXIO | EREDRIVEOPEN)))
+}
+
 pub(crate) fn spawn(builder: CommandBuilder, size: Size) -> io::Result<Spawned> {
     #[cfg(target_os = "macos")]
     settle_libnotify();
-    let pair = native_pty_system().openpty(size.pty()).map_err(|err| pty_error(&err))?;
+    let pair = retry_clone_race(|| native_pty_system().openpty(size.pty()))?;
     let raw = pair
         .master
         .as_raw_fd()
@@ -334,6 +384,57 @@ mod tests {
     use std::os::fd::AsRawFd;
 
     use super::*;
+
+    /// An `openpty` failure as portable-pty returns it: the `io::Error` under its context.
+    #[derive(Debug)]
+    struct OpenFailed(io::Error);
+
+    impl std::fmt::Display for OpenFailed {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failed to openpty")
+        }
+    }
+
+    impl std::error::Error for OpenFailed {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    type Failure = Box<dyn std::error::Error + Send + Sync>;
+
+    /// `retry_clone_race` over failures with these errnos, then a success; the calls it made, and its result.
+    fn open_failing(errnos: &[i32]) -> (usize, io::Result<()>) {
+        let mut calls = 0;
+        let result = retry_clone_race(|| {
+            let errno = errnos.get(calls).copied();
+            calls += 1;
+            errno.map_or(Ok(()), |errno| {
+                Err(Failure::from(OpenFailed(io::Error::from_raw_os_error(errno))))
+            })
+        });
+        (calls, result)
+    }
+
+    #[test]
+    fn an_open_that_fails_otherwise_is_not_retried() {
+        let (calls, result) = open_failing(&[libc::EACCES, libc::EACCES]);
+        assert_eq!(calls, 1);
+        assert_eq!(result.unwrap_err().to_string(), "failed to openpty");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_open_that_lost_the_clone_race_is_retried() {
+        let (calls, result) = open_failing(&[libc::ENXIO, EREDRIVEOPEN]);
+        assert_eq!(calls, 3);
+        result.unwrap();
+        // a race lost more often than the bound returns the last loss
+        let lost = [EREDRIVEOPEN; CLONE_RACE_RETRIES + 1];
+        let (calls, result) = open_failing(&lost);
+        assert_eq!(calls, CLONE_RACE_RETRIES + 1);
+        assert_eq!(result.unwrap_err().to_string(), "failed to openpty");
+    }
 
     /// This process's descriptors on a PTY.
     #[cfg(target_os = "linux")]

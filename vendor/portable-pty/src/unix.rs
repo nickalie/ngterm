@@ -43,7 +43,7 @@ fn openpty(size: PtySize) -> anyhow::Result<(UnixMasterPty, UnixSlavePty)> {
     };
 
     if result != 0 {
-        bail!("failed to openpty: {:?}", io::Error::last_os_error());
+        return Err(Error::new(io::Error::last_os_error()).context("failed to openpty"));
     }
 
     let tty_name = tty_name(slave);
