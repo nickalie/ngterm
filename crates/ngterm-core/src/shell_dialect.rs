@@ -60,8 +60,6 @@ fn is_env(word: &str) -> bool {
 /// arguments; another `env` it runs read the same way. Quotes around the program's word are dropped (`-S 'zsh -l'`
 /// splits on whitespace here into `'zsh` and `-l'`). `None` when no program follows.
 fn env_program<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<&'a str> {
-    /// The short options taking a value.
-    const VALUED: [char; 3] = ['u', 'C', 'P'];
     let mut pending: Option<&'a str> = None;
     loop {
         let word = pending.take().or_else(|| words.next())?;
@@ -83,20 +81,12 @@ fn env_program<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<&'a str> 
             pending = long.strip_prefix("split-string=").filter(|rest| !rest.is_empty());
             continue;
         }
-        if let Some(short) = word.strip_prefix('-') {
-            for (at, option) in short.char_indices() {
-                let rest = &short[at + option.len_utf8()..];
-                if VALUED.contains(&option) {
-                    if rest.is_empty() {
-                        words.next();
-                    }
-                    break;
-                }
-                if option == 'S' {
-                    pending = Some(rest).filter(|rest| !rest.is_empty());
-                    break;
-                }
+        if let Some(bundle) = word.strip_prefix('-') {
+            let (takes_next, split) = env_short_options(bundle);
+            if takes_next {
+                words.next();
             }
+            pending = split;
             continue;
         }
         let program = word.trim_matches(['\'', '"']);
@@ -104,6 +94,23 @@ fn env_program<'a>(mut words: impl Iterator<Item = &'a str>) -> Option<&'a str> 
             return Some(program);
         }
     }
+}
+
+/// What a bundle of `env`'s short options (`-iu`, `-uNAME`, `-Szsh`, without the `-`) leaves: whether the next word
+/// is an option's value, and the start of `-S`'s words joined to it.
+fn env_short_options(bundle: &str) -> (bool, Option<&str>) {
+    /// The short options taking a value.
+    const VALUED: [char; 3] = ['u', 'C', 'P'];
+    for (at, option) in bundle.char_indices() {
+        let rest = &bundle[at + option.len_utf8()..];
+        if VALUED.contains(&option) {
+            return (rest.is_empty(), None);
+        }
+        if option == 'S' {
+            return (false, Some(rest).filter(|rest| !rest.is_empty()));
+        }
+    }
+    (false, None)
 }
 
 /// What `cmd.exe` reads specially outside quotes, a caret escaping each; `%` and `"` have rules of their own.
