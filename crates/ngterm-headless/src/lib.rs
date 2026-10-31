@@ -6,9 +6,10 @@
 //! live session, the presentation (status, layout, HUD, notifications) streamed over `ngtermctl live present`, and
 //! asks, program overlays and pages shown on the viewer.
 //!
-//! - Live sessions always: the launch runs in restore mode `live` whatever the settings hold, and refuses to start
-//!   when the live probe rejects this host (no `ngterm-session` beside the binary, an unsupported login shell), since
-//!   without daemons there is nothing to attach.
+//! - Live sessions always: the launch runs in restore mode `live` whatever the settings hold (they keep what was
+//!   saved, so `live.reset` is offered only with `live` saved, as in the app), and refuses to start when the live probe
+//!   rejects this host (no `ngterm-session` beside the binary, an unsupported login shell), since without daemons
+//!   there is nothing to attach.
 //! - Every session's panes run, not only a shown one's (there is none): a session is attachable once every pane of it
 //!   has a running daemon.
 //! - One instance per state directory, as the app: the state lock refuses a second one, and an app instance on the
@@ -91,17 +92,17 @@ pub fn live_decision(env: &dyn Env) -> Result<RestoreLaunchDecision, Refused> {
     }
 }
 
-/// The model as the last run left it, with the settings in restore mode `live`.
+/// The model as the last run left it. The settings stay as saved: the launch runs live by its decision
+/// ([`live_decision`]), and a settings write (a theme, a font) saves the user's restore mode, not this launch's.
 fn load_state(env: &dyn Env) -> CoreState {
     let state_dir = paths::state_dir(env);
     let home = paths::home_dir(env).map_or_else(|| "/".to_owned(), |home| home.to_string_lossy().into_owned());
-    let mut settings = SettingsStore::new(&state_dir).load();
+    let settings = SettingsStore::new(&state_dir).load();
     if settings.effective_restore_mode() != RestoreMode::Live {
         tracing::info!(
-            was = settings.effective_restore_mode().wire_name(),
-            "restore mode set to live: a headless instance serves live sessions"
+            configured = settings.effective_restore_mode().wire_name(),
+            "this launch runs live: a headless instance serves live sessions"
         );
-        settings.restore_mode = Some(RestoreMode::Live);
     }
     let mut persistence = LibraryPersistence::new(&state_dir);
     let library = persistence.bootstrap(&home);
