@@ -256,7 +256,7 @@ mentions, upstream's pin moves reported; each thing left out of the bump and why
 **No port needed** — the no-port list, one line each.
 **Next** — `/plan-exec-revmux docs/plans/<file>` from branch `upstream-sync-TARGET`; then (the user) push the branch
 and start `reference-macos.yml` on it by hand for the new suite tests (`gh workflow run reference-macos.yml --ref
-upstream-sync-TARGET`), and open a pull request so `cross-platform.yml` and the full suite in `rust-linux.yml` run
+upstream-sync-TARGET`), and open a pull request so `cross-platform.yml` and the full suite in `linux.yml` run
 (a plain branch push starts neither); a ratchet id red there is fixed on the branch before it merges. Nothing was
 pushed.
 ```

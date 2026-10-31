@@ -2,7 +2,7 @@
 # tests of each crate in PACKAGES. Each task that makes a crate cross-platform adds it to PACKAGES and its generator
 # checks as steps of the `crates` job. No Miri job: it ran the Rust VT port's memory core (page buffers, its
 # allocators), which left this branch with the port (branch `rust-vt-port`). The rest of the workspace (GPUI, WPE)
-# is checked on Linux only, in rust-linux.yml. ngterm-server (the control socket: AF_UNIX on Linux and macOS, a named
+# is checked on Linux only, in linux.yml. ngterm-server (the control socket: AF_UNIX on Linux and macOS, a named
 # pipe on Windows) and ngterm-ctl (the CLI over it, tested against the server; its overlay job in a Job object and
 # its stream bridge on the console on Windows) are in PACKAGES. ngterm-app's hook runner, log file, remote
 # presentation process and agent integrations' installers have their Windows forms beside the Unix ones (macOS takes

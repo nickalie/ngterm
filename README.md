@@ -124,7 +124,7 @@ and how this build does it where the OS matters:
 - For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
   weston and bus); zsh or fish as the login shell for the Live tests of that shell.
 
-On Ubuntu 26.04, the `rust-linux` CI job's packages (the last two lines, with meson and ninja, build weston 15, which
+On Ubuntu 26.04, the `linux` CI job's packages (the last two lines, with meson and ninja, build weston 15, which
 the GPUI runs need and 26.04 lacks; fish and zsh run the replay scripts' tests in their shells) plus `zstd` and
 `python3-venv`. Ubuntu has no WPE WebKit, so the app builds there without its HTML overlays ([WPE WebKit](#wpe-webkit)):
 
@@ -581,7 +581,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 
 ## CI
 
-- `rust-linux.yml`: `rust-linux` (format, clippy, the lint report into the job summary, `cargo test` with node for the
+- `linux.yml`: `linux` (format, clippy, the lint report into the job summary, `cargo test` with node for the
   OpenCode plugin's tests, all on the workspace without the WPE crates and the app without its HTML overlays), `wpe`
   (clippy, tests and the bindings' regeneration check of the WPE crates on Arch's `wpewebkit`, then the app with its
   overlays, see [WPE WebKit](#wpe-webkit)), then the staged build (HTML overlays on) under the suite in the `wpe`

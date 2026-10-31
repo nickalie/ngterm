@@ -166,7 +166,7 @@ integrate).
 Its tests are in `tests/protocol/test_live_any_shell.py`; a test that branches on Live being active
 (`test_restore.py::test_seeded_live_mode_is_requested_at_launch`) takes the fallback branch only when the build has
 neither `live-sessions` nor `live-any-shell`.
-The `conformance` job of `.github/workflows/rust-linux.yml` is a matrix over three login shells, each leg with
+The `conformance` job of `.github/workflows/linux.yml` is a matrix over three login shells, each leg with
 `--must-pass live-any-shell`: bash, fish and zsh. The zsh and fish legs, the hosts where the build claims
 `live-sessions`, also run with `--must-pass live-sessions`, as reference-macos.
 PowerShell's part of the claim is held on Windows: the `windows` job of `.github/workflows/cross-platform.yml` runs

@@ -128,7 +128,7 @@ code">
 - [ ] README.md, CLAUDE.md, conformance/README.md, conformance/docs/rust-build.md describe what changed (new
       capabilities, commands, on-disk files); `tag-mentions.sh <old>` lists no `review` or stale `claim` line
 - [ ] gate passes
-- [ ] manual check (user): the pull request's CI (`rust-linux.yml`'s full suite) holds the ratchet; an id it finds
+- [ ] manual check (user): the pull request's CI (`linux.yml`'s full suite) holds the ratchet; an id it finds
       red is fixed on the branch before merge
 ````
 
