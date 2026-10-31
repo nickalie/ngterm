@@ -78,14 +78,26 @@ const UNC_SEGMENT: &str = "UNC";
 /// The `file:` URI of a granted address's path `rest` (what follows its host's `/`): a share's file by its server, any
 /// other as the drive path it spells. Only a granted share's page loads under `UNC/`: a root-relative address another
 /// page asks for there reads as a share's file too, which the grant then refuses (`policy::granted_file`).
+///
+/// A `file:` URI drops a `localhost` host, which would leave a share's path reading as a drive-less one, so a share on
+/// `localhost` reads back on its address, `127.0.0.1`, the same host to Windows and to the grant's checks
+/// (`ngterm_core::html::volume`).
 fn granted_file_uri(rest: &str) -> String {
     let share = strip_prefix_ignoring_case(rest, &format!("{UNC_SEGMENT}/"))
-        .filter(|share| share.split('/').next().is_some_and(|server| !server.is_empty()));
+        .map(|share| share.split_once('/').unwrap_or((share, "")))
+        .filter(|(server, _)| !server.is_empty());
     match share {
-        Some(share) => format!("file://{share}"),
+        Some((server, path)) if server.eq_ignore_ascii_case(LOOPBACK_NAME) => {
+            format!("file://{LOOPBACK_ADDRESS}/{path}")
+        }
+        Some((server, path)) => format!("file://{server}/{path}"),
         None => format!("file:///{rest}"),
     }
 }
+
+/// The loopback name a `file:` URI drops, and the address it reads back on.
+const LOOPBACK_NAME: &str = "localhost";
+const LOOPBACK_ADDRESS: &str = "127.0.0.1";
 
 /// The address `WebView2` loads file `path` of replica page `page` from (upstream's `HtmlPageSchemeHandler.url`).
 #[must_use]
@@ -203,6 +215,40 @@ mod tests {
         assert_eq!(app_uri("https://ngterm-file.localhost/unc/srv/s/a"), "file://srv/s/a");
     }
 
+    /// A share on `localhost` (which a `file:` URI drops) reads back on its address, so its path stays a share's.
+    #[test]
+    fn a_share_on_localhost_reads_back_on_its_address() {
+        let address = granted_address(r"\\LocalHost\C$\site\index.html").unwrap();
+        assert_eq!(
+            address,
+            "https://ngterm-file.localhost/UNC/localhost/C$/site/index.html"
+        );
+        let app = app_uri(&address);
+        assert_eq!(app, "file://127.0.0.1/C$/site/index.html");
+        let path = Url::parse(&app).unwrap().to_file_path().unwrap();
+        assert_eq!(path, std::path::Path::new(r"\\127.0.0.1\C$\site\index.html"));
+        assert_eq!(
+            request_app_uri("ngterm-file://localhost/UNC/LOCALHOST/C$/a.css"),
+            "file://127.0.0.1/C$/a.css"
+        );
+        let page = ngterm_core::html::HtmlOverlay::new(
+            ngterm_core::html::HtmlSource::File {
+                path: r"\\localhost\C$\site\index.html".to_owned(),
+                grant_root: Some(r"\\localhost\C$\site".to_owned()),
+            },
+            ngterm_core::html::HtmlPageFlags::default(),
+        );
+        let navigation = ngterm_core::html::HtmlNavigationAction {
+            url: Url::parse(&app).unwrap(),
+            target: ngterm_core::html::HtmlNavigationTarget::MainFrame,
+            user_activated: false,
+        };
+        assert_eq!(
+            ngterm_core::html::decide(&navigation, &page),
+            ngterm_core::html::HtmlNavigationDecision::Allow
+        );
+    }
+
     /// A drive letter mapped for a test's span by `map` (`subst`, `net use`) and removed on drop by `remove`.
     struct Drive {
         letter: String,
@@ -240,10 +286,11 @@ mod tests {
         line.split(' ').map(str::to_owned).collect()
     }
 
-    /// A granted page and what it reads pass the grant inside it only, however the page names its grant: a drive's
-    /// directory; this machine's administrative share of it by address (a `file:` URL drops a `localhost` host) and
-    /// by the machine's name in capitals, which a page's address lowercases; a `subst` drive and a network drive
-    /// mapped onto them, which the grant resolves to another volume.
+    /// A granted page navigates to its document, and it and what it reads pass the grant inside it only, however the
+    /// page names its grant: a drive's directory; this machine's administrative share of it by address, by
+    /// `localhost` (which a `file:` URL drops, so it reads back on its address) and by the machine's name in capitals,
+    /// which a page's address lowercases; a `subst` drive and a network drive mapped onto them, which the grant
+    /// resolves to another volume.
     #[test]
     fn the_grant_serves_a_drives_and_a_shares_files_only_inside_it() {
         use crate::html_overlay::policy::{GrantRoot, OUTSIDE_GRANT, granted_file};
@@ -256,6 +303,7 @@ mod tests {
         let plain = canonical.to_str().unwrap().strip_prefix(r"\\?\").unwrap().to_owned();
         let (drive, rest) = plain.split_once(r":\").unwrap();
         let share = format!(r"\\127.0.0.1\{drive}$\{rest}");
+        let loopback = format!(r"\\localhost\{drive}$\{rest}");
         let computer = std::env::var("COMPUTERNAME").unwrap().to_uppercase();
         assert_ne!(computer, computer.to_lowercase());
         let named = format!(r"\\{computer}\{drive}$\{rest}");
@@ -275,14 +323,33 @@ mod tests {
         );
         let substed_base = substed.letter.clone();
         let mapped_base = format!(r"{}\{rest}", mapped.letter);
-        for base in [&plain, &share, &named, &substed_base, &mapped_base] {
+        for base in [&plain, &share, &loopback, &named, &substed_base, &mapped_base] {
             let root = GrantRoot::new(std::path::Path::new(&format!(r"{base}\site"))).unwrap();
+            let app = |file: &str| Url::parse(&app_uri(&granted_address(&format!(r"{base}\{file}")).unwrap())).unwrap();
             let read = |file: &str| {
-                let app = app_uri(&granted_address(&format!(r"{base}\{file}")).unwrap());
-                let requested = Url::parse(&app).unwrap().to_file_path().unwrap();
+                let requested = app(file).to_file_path().unwrap();
                 granted_file(Some(&root), Some(&requested))
             };
-            let index = std::fs::canonicalize(format!(r"{base}\site\index.html")).unwrap();
+            // the page's navigation to its own document goes ahead, before the grant's protocol serves it
+            let page = ngterm_core::html::HtmlOverlay::new(
+                ngterm_core::html::HtmlSource::File {
+                    path: format!(r"{base}\site\index.html"),
+                    grant_root: Some(format!(r"{base}\site")),
+                },
+                ngterm_core::html::HtmlPageFlags::default(),
+            );
+            let navigation = ngterm_core::html::HtmlNavigationAction {
+                url: app(r"site\index.html"),
+                target: ngterm_core::html::HtmlNavigationTarget::MainFrame,
+                user_activated: false,
+            };
+            assert_eq!(
+                ngterm_core::html::decide(&navigation, &page),
+                ngterm_core::html::HtmlNavigationDecision::Allow,
+                "{base}"
+            );
+            // the file as the page's address names it (`localhost` reads back as `127.0.0.1`)
+            let index = std::fs::canonicalize(app(r"site\index.html").to_file_path().unwrap()).unwrap();
             assert_eq!(read(r"site\index.html"), Ok(index), "{base}");
             assert_eq!(read("outside.html"), Err(OUTSIDE_GRANT), "{base}");
             let elsewhere = std::path::Path::new(r"\\ngterm-nowhere.invalid\share\site\index.html");

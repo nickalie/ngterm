@@ -303,6 +303,27 @@ fn a_grant_serves_only_requests_on_the_volumes_it_names() {
     assert_eq!(resolve(&format!(r"{other}\index.html"), &on_share), None);
 }
 
+/// A request whose server the URL parser would read as the grant's (percent-escaped) is on a server of its own to
+/// Windows, and refused before the file system is asked: neither side exists, so only the volume check refuses it.
+#[test]
+#[cfg(windows)]
+fn a_request_on_a_server_spelled_to_read_as_the_grants_is_refused() {
+    let source = HtmlSource::File {
+        path: r"\\ngterm-nowhere.invalid\share\site\index.html".to_owned(),
+        grant_root: Some(r"\\ngterm-nowhere.invalid\share\site".to_owned()),
+    };
+    assert_eq!(
+        resolve(r"\\ngterm-nowhere.invalid\share\site\a.png", &source),
+        Some(PathBuf::from(r"\\ngterm-nowhere.invalid\share\site\a.png"))
+    );
+    for request in [
+        r"\\ngterm-nowhere%2Einvalid\share\site\a.png",
+        r"\\?\UNC\ngterm-nowhere%2einvalid\share\site\a.png",
+    ] {
+        assert_eq!(resolve(request, &source), None, "{request}");
+    }
+}
+
 /// Upstream's `testAdmissionRefusesPastItsLimitUntilASlotIsReleased`.
 #[test]
 fn admission_refuses_past_its_limit_until_a_slot_is_released() {

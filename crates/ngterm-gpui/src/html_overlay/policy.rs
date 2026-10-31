@@ -139,6 +139,13 @@ impl GrantRoot {
             named_volume: volume(root),
         })
     }
+
+    /// Whether `requested` is on a volume the grant names, as its page gave it or as it resolves; only such a request
+    /// may reach the file system ([`granted_file`]).
+    fn names_volume_of(&self, requested: &Path) -> bool {
+        let requested = volume(requested);
+        requested == volume(&self.real) || requested == self.named_volume
+    }
 }
 
 /// The file a grant's read of `requested` serves: its real path when that sits strictly inside the grant and is a
@@ -158,8 +165,7 @@ pub fn granted_file(root: Option<&GrantRoot>, requested: Option<&Path>) -> Resul
     let (Some(root), Some(requested)) = (root, requested) else {
         return Err(OUTSIDE_GRANT);
     };
-    let requested_volume = volume(requested);
-    if requested_volume != volume(&root.real) && requested_volume != root.named_volume {
+    if !root.names_volume_of(requested) {
         return Err(OUTSIDE_GRANT);
     }
     let resolved = requested.canonicalize().map_err(|_| OUTSIDE_GRANT)?;
@@ -1054,6 +1060,35 @@ mod tests {
         assert!(needs_report(Some(&cleared), Some(&titled), &titled));
         // the first report
         assert!(needs_report(None, None, &titled));
+    }
+
+    /// A request whose server the URL parser would read as the grant's (percent-escaped, a compatibility form) names
+    /// another host to Windows, and never reaches the file system; `localhost` and its address are one.
+    #[test]
+    #[cfg(windows)]
+    fn only_a_request_on_a_volume_the_grant_names_reaches_the_file_system() {
+        let grant = |named: &str, real: &str| GrantRoot {
+            real: PathBuf::from(real),
+            named_volume: volume(Path::new(named)),
+        };
+        let on_nas = grant(r"\\NAS\share\site", r"\\?\UNC\NAS\share\site");
+        assert!(on_nas.names_volume_of(Path::new(r"\\nas\Share\site\index.html")));
+        assert!(on_nas.names_volume_of(Path::new(r"\\?\UNC\nas\share\site\index.html")));
+        for request in [
+            r"\\n%61s\share\site\index.html",
+            r"\\?\UNC\n%61s\share\site\index.html",
+            r"\\ｎａｓ\share\site\index.html",
+            r"\\nas\other\site\index.html",
+        ] {
+            assert!(!on_nas.names_volume_of(Path::new(request)), "{request}");
+            assert_eq!(
+                granted_file(Some(&on_nas), Some(Path::new(request))),
+                Err(OUTSIDE_GRANT)
+            );
+        }
+        let on_localhost = grant(r"\\localhost\C$\site", r"\\?\UNC\localhost\C$\site");
+        assert!(on_localhost.names_volume_of(Path::new(r"\\127.0.0.1\c$\site\index.html")));
+        assert!(!on_localhost.names_volume_of(Path::new(r"\\local%68ost\c$\site\index.html")));
     }
 
     #[test]

@@ -775,3 +775,24 @@ Round 2 (`02-after-fix`) found six and one pre-existing; each is fixed in a comm
   inside the grant), and the moved `volume` and `strictly_inside` cases; each of the first three fails without the
   fix. Windows canonicalizes a share's server and name to one spelling, so `resolve`'s real paths never differed
   there; its change shows in the volume check
+- ➕ [major, revmux round 5] `volume` spelled a share's server through `url::Host::parse`, which percent-decodes,
+  maps compatibility forms and reads shorthand IPv4 before IDNA, so `\\n%61s\share` had `\\nas\share`'s volume while
+  Windows reads `n%61s` as a name of its own: a replica page's `ngterm-page://<id>//n%2561s/share/...` (decoded once
+  by `replica_path`) passed `page_serve::resolve`'s pre-check against a grant on `\\nas\share` and Windows then
+  resolved `n%61s` (DNS, LLMNR, NBT-NS) and opened SMB to whoever answered; `policy::granted_file` had the same hole.
+  `html::volume`'s server spelling (`volume::server`) now takes the parser's spelling only when it is the name in
+  another case or the IDNA form of a real Unicode name (read back through `idna::domain_to_unicode`, `idna` the URL
+  parser's own crate, now a direct dependency of `ngterm-core`), else keeps the name as written, lowercased; every
+  check goes through it. Tests: `a_server_is_spelled_as_its_address_only_when_windows_reads_the_same_host` (every
+  OS), `volume`, `strictly_inside`, `grant_error`/`contains`, `page_serve`'s
+  `a_request_on_a_server_spelled_to_read_as_the_grants_is_refused` (no file system answers either side, so only the
+  volume check refuses it) and `policy`'s `only_a_request_on_a_volume_the_grant_names_reaches_the_file_system` (the
+  pre-check alone, `GrantRoot::names_volume_of`); each fails without the fix
+- ➕ [major, pre-existing, revmux round 5] a grant on `\\localhost\share\site` passed `grant_error`, but its
+  `WebView2` address read back as `file://localhost/share/...`, which the URL parser shortens to `file:///share/...`:
+  the navigation was cancelled and the grant protocol found no Windows path. A share on `localhost` now reads back on
+  `127.0.0.1` (`scheme::granted_file_uri`), and `volume` spells the server `localhost` as `127.0.0.1`, the same host
+  to Windows, so the grant's checks take the page's address and its grant as one volume; the NTLM pre-check is
+  unchanged. Tests: `a_share_on_localhost_reads_back_on_its_address` (address, read-back, `decide`), and
+  `the_grant_serves_a_drives_and_a_shares_files_only_inside_it` grants through `\\localhost\<drive>$` again beside
+  `127.0.0.1`, and now runs `decide` on each route's own document before the grant serves it

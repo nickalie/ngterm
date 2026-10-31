@@ -104,6 +104,8 @@ unicode-normalization = "0.1"
 # Extended grapheme clusters: the ask field's byte cap cuts between user-perceived characters, as Swift's do.
 unicode-segmentation = "1.13"
 url = "2.5"
+# A share server's IDNA form read back (`ngterm-core`'s `html::volume`): the URL parser's own IDNA crate.
+idna = "1.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 # ngterm-wpe's build script asks the pkg-config the link used where WPE WebKit lives (scripts/pkg-config.sh).
 pkg-config = "0.3"

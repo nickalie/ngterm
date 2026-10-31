@@ -689,6 +689,7 @@ mod tests {
             (r"\\server\share\site\index.html", r"\\?\UNC\Server\Share\site"),
             (r"\\xn--as-yja\share\site\index.html", r"\\ÑAS\share\site"),
             (r"\\?\UNC\ñas\Share\site\index.html", r"\\xn--as-yja\share\site"),
+            (r"\\127.0.0.1\share\site\index.html", r"\\localhost\share\site"),
         ] {
             assert_eq!(grant_error(file, Some(grant), home), None, "{file} {grant}");
             assert!(contains(grant, file), "{file} {grant}");
@@ -698,6 +699,10 @@ mod tests {
             (r"\\other\share\site\index.html", r"\\?\UNC\server\share\site"),
             (r"\\server\other\site\index.html", r"\\server\share\site"),
             (r"\\localhost\C$\site\index.html", r"C:\site"),
+            // the URL parser would read these as `nas`; Windows reads them as names of their own
+            (r"\\n%61s\share\site\index.html", r"\\nas\share\site"),
+            (r"\\nas\share\site\index.html", r"\\n%61s\share\site"),
+            (r"\\ｎａｓ\share\site\index.html", r"\\nas\share\site"),
         ] {
             assert_eq!(
                 grant_error(file, Some(grant), home),
