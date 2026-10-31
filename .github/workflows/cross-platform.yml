@@ -88,6 +88,7 @@ jobs:
       - name: TEMP win-34 snapshot stress
         if: runner.os == 'Windows'
         run: |
+          cargo test --locked -p ngterm-session --test snapshot -- --nocapture zz_diag
           for i in $(seq 1 80); do echo "round $i"; cargo test --locked -q -p ngterm-session --test snapshot; done
       - name: test
         run: cargo test --locked $PACKAGES --all-features
