@@ -85,11 +85,6 @@ jobs:
         run: cargo fmt $PACKAGES --check
       - name: clippy
         run: cargo clippy --locked $PACKAGES --all-targets --all-features -- -D warnings
-      - name: TEMP win-34 snapshot stress
-        if: runner.os == 'Windows'
-        run: |
-          cargo test --locked -p ngterm-session --test snapshot -- --nocapture zz_diag
-          for i in $(seq 1 80); do echo "round $i"; cargo test --locked -q -p ngterm-session --test snapshot; done
       - name: test
         run: cargo test --locked $PACKAGES --all-features
       # vendor/portable-pty is a [patch] provider, not a member: its own tests of the Windows patches (malformed
