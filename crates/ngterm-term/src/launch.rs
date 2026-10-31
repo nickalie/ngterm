@@ -43,6 +43,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use ngterm_core::command_restore::PaneInput;
 use ngterm_core::ghostty_config::{
     GhosttyConfig, InputSource, ShellIntegration, ShellIntegrationFeatures, WorkingDirectory,
 };
@@ -50,6 +51,7 @@ use ngterm_core::live::shell_integration::{self, Inherited, LoginShell};
 use ngterm_core::live::support::LiveAttach;
 use ngterm_core::paths::{self, Env, ProcessEnv};
 use ngterm_core::restore::spawn_plan::LaunchSeed;
+use ngterm_core::shell_dialect::ShellDialect;
 use ngterm_host::command_line::{self, ShellCommand};
 use ngterm_session::launch::Runtime;
 
@@ -184,6 +186,10 @@ impl Host {
             None => vars.remove("GHOSTTY_SHELL_FEATURES"),
         }
         let mut line = launch.command.clone().unwrap_or_else(|| self.shell.clone());
+        let typed = launch
+            .initial_input
+            .as_ref()
+            .and_then(|input| typed_input(input, ShellDialect::of_shell(&line)));
         let force = match self.integration(launch) {
             Integration::Off => None,
             Integration::Detect => Some(None),
@@ -228,12 +234,7 @@ impl Host {
             .collect();
         Prepared {
             command,
-            initial_input: launch
-                .initial_input
-                .clone()
-                .filter(|input| !input.is_empty())
-                .map(String::into_bytes)
-                .or_else(|| self.config_input()),
+            initial_input: typed.map(String::into_bytes).or_else(|| self.config_input()),
             exit: ExitPolicy::Launched {
                 argv,
                 command: launch.command.is_some(),
@@ -334,6 +335,22 @@ impl Host {
 #[cfg(unix)]
 fn program(line: &str, _shell: bool, _cwd: Option<&Path>, _env: &dyn Env) -> (PaneCommand, String) {
     pane_command(&ShellCommand::posix(line))
+}
+
+/// `input` as typed into a program of `dialect` (the login shell's, or a command line's first program); `None`, logged,
+/// for a captured argv that shell cannot be handed safely (`ngterm_core::shell_dialect`), which leaves a plain shell.
+fn typed_input(input: &PaneInput, dialect: ShellDialect) -> Option<String> {
+    let text = input.text(dialect);
+    if text.is_none()
+        && let PaneInput::Replay(argv) = input
+    {
+        tracing::warn!(
+            ?dialect,
+            program = argv.first().map(String::as_str),
+            "the captured command cannot be typed safely into this shell: the pane starts without it"
+        );
+    }
+    text
 }
 
 /// What runs `line` in `cwd` (the login shell when `shell`), and the program line the failure report names.
@@ -502,8 +519,9 @@ pub struct Launch {
     /// A shell line run through `/bin/sh -c` (`cmd /D /S /C` on Windows: a seed's command, a live pane's attach);
     /// `None` runs the login shell.
     pub command: Option<String>,
-    /// Typed into the program as soon as it starts (a captured command replayed into the login shell).
-    pub initial_input: Option<String>,
+    /// Typed into the program as soon as it starts (a captured command replayed into the login shell), quoted for the
+    /// shell the launch runs (`ngterm_core::shell_dialect`).
+    pub initial_input: Option<PaneInput>,
     /// Where the program starts; one that is not a directory is ignored, as libghostty ignored it.
     pub working_directory: Option<PathBuf>,
     /// A command's exit holds the pane on "Process exited" until a key.
@@ -707,12 +725,13 @@ mod tests {
         let typed = host.prepare(&Launch::default(), &MapEnv::new()).initial_input;
         assert_eq!(typed.as_deref(), Some(&b"echo A\nfrom a file\nplain"[..]));
         let own = Launch {
-            initial_input: Some("ls\n".to_owned()),
+            initial_input: Some(PaneInput::Line("ls".to_owned())),
             ..Launch::default()
         };
+        // `mysh` is no shell ngterm knows: its line is submitted with Enter's own carriage return
         assert_eq!(
             host.prepare(&own, &MapEnv::new()).initial_input.as_deref(),
-            Some(&b"ls\n"[..])
+            Some(&b"ls\r"[..])
         );
         // one source missing: none of the input
         let missing = host_of(
@@ -725,6 +744,46 @@ mod tests {
         assert_eq!(missing.prepare(&Launch::default(), &MapEnv::new()).initial_input, None);
         // an empty value clears the list
         assert!(host_of("input = raw:x\ninput =\n", None).input.is_empty());
+    }
+
+    #[test]
+    fn a_replay_is_typed_for_the_shell_the_launch_runs() {
+        let replay = Launch {
+            initial_input: Some(PaneInput::Replay(vec!["tool".to_owned(), "a b".to_owned()])),
+            ..Launch::default()
+        };
+        let typed = |shell: &str| {
+            let host = Host {
+                shell: shell.to_owned(),
+                ..host(None)
+            };
+            host.prepare(&replay, &MapEnv::new())
+                .initial_input
+                .map(|bytes| String::from_utf8(bytes).unwrap())
+        };
+        assert_eq!(typed("/bin/zsh").as_deref(), Some("'tool' 'a b'\n"));
+        assert_eq!(
+            typed("pwsh -NoLogo").as_deref(),
+            Some("& { $PSNativeCommandArgumentPassing = 'Legacy' ; & 'tool' '\"a b\"' }\r")
+        );
+        assert_eq!(typed("cmd.exe").as_deref(), Some("tool ^\"a b^\"\r"));
+        if cfg!(windows) {
+            assert_eq!(
+                typed(r"C:\Program Files\PowerShell\7\pwsh.exe").as_deref(),
+                Some("& { $PSNativeCommandArgumentPassing = 'Legacy' ; & 'tool' '\"a b\"' }\r")
+            );
+        }
+        // a shell ngterm does not know gets nothing it could read differently
+        assert_eq!(typed("/usr/bin/nu"), None);
+        // a command line's input goes to its first program
+        let command = Launch {
+            command: Some("fish -l".to_owned()),
+            ..replay.clone()
+        };
+        assert_eq!(
+            host(None).prepare(&command, &MapEnv::new()).initial_input.as_deref(),
+            Some(&b"'tool' 'a b'\n"[..])
+        );
     }
 
     /// Without `HOME` (as on Windows, mostly), or with it empty, `home` is the user's own home: the password
@@ -1179,7 +1238,7 @@ mod tests {
     fn a_command_runs_through_the_command_shell_and_the_launch_wins_over_everything() {
         let launch = Launch {
             command: Some("htop -d 5".to_owned()),
-            initial_input: Some(String::new()),
+            initial_input: Some(PaneInput::Line(String::new())),
             wait_after_command: true,
             env: vec![
                 ("TERM".to_owned(), "dumb".to_owned()),
@@ -1462,7 +1521,7 @@ mod tests {
     fn a_seed_runs_with_its_variables_over_the_panes() {
         let seed = LaunchSeed {
             command: Some("ngterm-session attach x".to_owned()),
-            initial_input: Some("ls\n".to_owned()),
+            initial_input: Some(PaneInput::Line("ls".to_owned())),
             wait_after_command: false,
             env: vec![
                 ("SHELL".to_owned(), "/bin/zsh".to_owned()),
@@ -1481,7 +1540,7 @@ mod tests {
         ];
         let launch = Launch::from_seed(&seed, Some(PathBuf::from("/w")), &pane_env);
         assert_eq!(launch.command.as_deref(), Some("ngterm-session attach x"));
-        assert_eq!(launch.initial_input.as_deref(), Some("ls\n"));
+        assert_eq!(launch.initial_input, Some(PaneInput::Line("ls".to_owned())));
         assert_eq!(launch.working_directory, Some(PathBuf::from("/w")));
         assert_eq!(launch.live, seed.attach, "the attach as data, run in process");
         assert_eq!(

@@ -2,7 +2,11 @@
 //! a login shell with nothing to re-run, what a pane's foreground argv means, which pids stand in for an unreadable
 //! group leader, which argv may be replayed at all, how an argv renders back into one POSIX shell line, the seed a
 //! pane restores with ([`restore_plan`]) and the user's `restore-denylist.conf`. The process-table reads stay with the
-//! frontend; upstream's `KERN_PROCARGS2` parser is macOS-only and has no counterpart here.
+//! frontend; upstream's `KERN_PROCARGS2` parser is macOS-only and has no counterpart here. A replayed argv stays an
+//! argv in the seed ([`PaneInput::Replay`]) until the frontend types it, quoted for the shell the pane runs
+//! ([`crate::shell_dialect`]), where upstream types its POSIX line into any shell.
+
+use crate::shell_dialect::ShellDialect;
 
 /// The login shells read as "no program to restore": a shell held the pane, nothing to re-run. Upstream's, and
 /// PowerShell's two names, the shell this build's live panes also run (a Rust-only extension).
@@ -395,7 +399,7 @@ pub fn pane_foreground(argv: &[String], extra: Option<&str>) -> Option<PaneForeg
 
 /// A shell's name as the tree reports it: its basename, without the `.exe` (any case) a Windows image carries
 /// (`sh.exe` is `sh`, as `/bin/sh` is).
-fn shell_name(basename: &str) -> &str {
+pub(crate) fn shell_name(basename: &str) -> &str {
     let stem = basename.len().checked_sub(".exe".len()).filter(|stem| *stem > 0);
     match stem {
         Some(stem) if basename.is_char_boundary(stem) && basename[stem..].eq_ignore_ascii_case(".exe") => {
@@ -481,6 +485,29 @@ pub fn shell_quoted_line<S: AsRef<str>>(argv: &[S]) -> String {
         .join(" ")
 }
 
+/// What is typed into a pane's login shell once it starts, rendered for that shell by the frontend, which knows what
+/// it runs ([`PaneInput::text`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneInput {
+    /// A line typed as written, then submitted: a pinned restore command.
+    Line(String),
+    /// A captured argv, typed as one line quoted for the shell ([`ShellDialect::typed`]).
+    Replay(Vec<String>),
+}
+
+impl PaneInput {
+    /// The text typed into a shell of `dialect`, its Enter included; `None` for an empty line, or an argv that dialect
+    /// cannot be handed safely ([`ShellDialect::line`]).
+    #[must_use]
+    pub fn text(&self, dialect: ShellDialect) -> Option<String> {
+        match self {
+            Self::Line(line) if line.is_empty() => None,
+            Self::Line(line) => Some(format!("{line}{}", dialect.enter())),
+            Self::Replay(argv) => dialect.typed(argv),
+        }
+    }
+}
+
 /// The seed a pane restores or is created with (upstream's `CommandRestore.RestorePlan`), the two fields mutually
 /// exclusive: `command` takes the exec path (it replaces the shell and the pane closes on its exit); otherwise
 /// `initial_input` is typed into a login shell, and both `None` is a plain shell. `wait_after_command` holds the pane
@@ -488,7 +515,7 @@ pub fn shell_quoted_line<S: AsRef<str>>(argv: &[S]) -> String {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RestorePlan {
     pub command: Option<String>,
-    pub initial_input: Option<String>,
+    pub initial_input: Option<PaneInput>,
     pub wait_after_command: bool,
 }
 
@@ -508,8 +535,8 @@ pub struct RestoreInputs {
     /// even when suppressed (denylisted or off, so `foreground_input` is `None`), yielding a plain shell rather than
     /// the stale creation command: gate on the capture, not on the input surviving.
     pub had_foreground: bool,
-    /// The rendered foreground command line to type, or `None` (nothing captured, or suppressed).
-    pub foreground_input: Option<String>,
+    /// The captured foreground argv to replay, or `None` (nothing captured, or suppressed).
+    pub foreground_input: Option<PaneInput>,
     /// The session's persisted `--command`.
     pub initial_command: Option<String>,
     /// The pane's pinned restore command (`session.restore`): `None` is no override, `""` pins the pane to nothing,
@@ -521,22 +548,22 @@ pub struct RestoreInputs {
 
 /// A pane's `initial_input`: a pinned override when one exists (empty pins to nothing, a plain shell), else the
 /// captured foreground input. The override is gated on `restore_enabled`, keeping rerun mode the single switch, and is
-/// typed verbatim, never through [`shell_quoted_line`], so `cd x && claude --resume y` works as written; one carrying
-/// a control character is refused, since a pin loaded from a snapshot never passed `session.restore`'s write check.
-/// The captured input arrives already gated and denylist-filtered.
+/// typed verbatim ([`PaneInput::Line`]), never quoted, so `cd x && claude --resume y` works as written; one carrying a
+/// control character is refused, since a pin loaded from a snapshot never passed `session.restore`'s write check. The
+/// captured input arrives already gated and denylist-filtered.
 #[must_use]
 pub fn restore_input(
     restore_enabled: bool,
     restore_override: Option<&str>,
-    captured_input: Option<&str>,
-) -> Option<String> {
+    captured_input: Option<&PaneInput>,
+) -> Option<PaneInput> {
     let Some(restore_override) = restore_override else {
-        return captured_input.map(str::to_owned);
+        return captured_input.cloned();
     };
     if !restore_enabled || restore_override.is_empty() || has_control_character(restore_override) {
         return None;
     }
-    Some(format!("{restore_override}\n"))
+    Some(PaneInput::Line(restore_override.to_owned()))
 }
 
 /// Decides a pane's seed on create or restore. A present `restore_override` short-circuits everything: it wins over
@@ -552,7 +579,7 @@ pub fn restore_plan(inputs: &RestoreInputs) -> RestorePlan {
             initial_input: restore_input(
                 inputs.restore_enabled,
                 Some(restore_override),
-                inputs.foreground_input.as_deref(),
+                inputs.foreground_input.as_ref(),
             ),
             wait_after_command: false,
         };
@@ -677,10 +704,19 @@ mod tests {
         }
     }
 
-    fn plan(command: Option<&str>, initial_input: Option<&str>) -> RestorePlan {
+    /// A captured `top`, replayed.
+    fn top() -> PaneInput {
+        PaneInput::Replay(vec!["top".to_owned()])
+    }
+
+    fn line(text: &str) -> PaneInput {
+        PaneInput::Line(text.to_owned())
+    }
+
+    fn plan(command: Option<&str>, initial_input: Option<PaneInput>) -> RestorePlan {
         RestorePlan {
             command: command.map(str::to_owned),
-            initial_input: initial_input.map(str::to_owned),
+            initial_input,
             wait_after_command: false,
         }
     }
@@ -1192,11 +1228,11 @@ mod tests {
     #[test]
     fn a_capture_preempts_the_initial_command_even_when_suppressed() {
         let captured = RestoreInputs {
-            foreground_input: Some("top\n".to_owned()),
+            foreground_input: Some(top()),
             initial_command: Some("ssh host".to_owned()),
             ..inputs(true, true, true)
         };
-        assert_eq!(restore_plan(&captured), plan(None, Some("top\n")));
+        assert_eq!(restore_plan(&captured), plan(None, Some(top())));
         // captured but suppressed (denylisted, unreplayable or off): a plain shell, not the stale command.
         let suppressed = RestoreInputs {
             foreground_input: None,
@@ -1221,7 +1257,7 @@ mod tests {
         assert!(!restore_plan(&not_requested).wait_after_command);
         let captured = RestoreInputs {
             had_foreground: true,
-            foreground_input: Some("top\n".to_owned()),
+            foreground_input: Some(top()),
             ..holding.clone()
         };
         let captured = restore_plan(&captured);
@@ -1230,13 +1266,37 @@ mod tests {
             restore_override: Some("claude --resume split".to_owned()),
             ..holding
         };
-        assert_eq!(restore_plan(&overridden), plan(None, Some("claude --resume split\n")));
+        assert_eq!(
+            restore_plan(&overridden),
+            plan(None, Some(line("claude --resume split")))
+        );
+    }
+
+    #[test]
+    fn a_pane_input_is_typed_for_the_shell_with_its_enter() {
+        let argv = PaneInput::Replay(vec!["tool".to_owned(), "a b".to_owned()]);
+        assert_eq!(argv.text(ShellDialect::Posix).as_deref(), Some("'tool' 'a b'\n"));
+        assert_eq!(
+            argv.text(ShellDialect::PowerShell).as_deref(),
+            Some("& { $PSNativeCommandArgumentPassing = 'Legacy' ; & 'tool' '\"a b\"' }\r")
+        );
+        assert_eq!(argv.text(ShellDialect::Cmd).as_deref(), Some("tool ^\"a b^\"\r"));
+        assert_eq!(argv.text(ShellDialect::Unknown), None);
+        let pin = line("cd x && claude --resume y");
+        assert_eq!(
+            pin.text(ShellDialect::Posix).as_deref(),
+            Some("cd x && claude --resume y\n")
+        );
+        assert_eq!(
+            pin.text(ShellDialect::Cmd).as_deref(),
+            Some("cd x && claude --resume y\r")
+        );
     }
 
     #[test]
     fn restore_input_falls_through_without_an_override() {
         for enabled in [true, false] {
-            assert_eq!(restore_input(enabled, None, Some("top\n")).as_deref(), Some("top\n"));
+            assert_eq!(restore_input(enabled, None, Some(&top())), Some(top()));
             assert_eq!(restore_input(enabled, None, None), None);
         }
     }
@@ -1244,16 +1304,16 @@ mod tests {
     #[test]
     fn a_pinned_override_runs_verbatim_only_when_enabled() {
         assert_eq!(
-            restore_input(true, Some("cd x && claude --resume y"), Some("top\n")).as_deref(),
-            Some("cd x && claude --resume y\n")
+            restore_input(true, Some("cd x && claude --resume y"), Some(&top())),
+            Some(line("cd x && claude --resume y"))
         );
-        assert_eq!(restore_input(false, Some("claude --resume y"), Some("top\n")), None);
+        assert_eq!(restore_input(false, Some("claude --resume y"), Some(&top())), None);
         for enabled in [true, false] {
-            assert_eq!(restore_input(enabled, Some(""), Some("top\n")), None);
+            assert_eq!(restore_input(enabled, Some(""), Some(&top())), None);
             assert_eq!(restore_input(enabled, Some(""), None), None);
         }
         // `session.restore set` rejects these on write, but a pin loaded from a snapshot never passed that check.
-        assert_eq!(restore_input(true, Some("tail -f\u{1b}x"), Some("'top'\n")), None);
+        assert_eq!(restore_input(true, Some("tail -f\u{1b}x"), Some(&top())), None);
         assert_eq!(restore_input(true, Some("a\nrm -rf x"), None), None);
     }
 
@@ -1264,13 +1324,13 @@ mod tests {
             restore_override: Some("claude --resume y".to_owned()),
             ..inputs(false, true, false)
         };
-        assert_eq!(restore_plan(&fresh), plan(None, Some("claude --resume y\n")));
+        assert_eq!(restore_plan(&fresh), plan(None, Some(line("claude --resume y"))));
         let captured = RestoreInputs {
-            foreground_input: Some("top\n".to_owned()),
+            foreground_input: Some(top()),
             restore_override: Some("claude --resume y".to_owned()),
             ..inputs(true, true, true)
         };
-        assert_eq!(restore_plan(&captured), plan(None, Some("claude --resume y\n")));
+        assert_eq!(restore_plan(&captured), plan(None, Some(line("claude --resume y"))));
         // "" pins the pane to nothing: neither the creation command nor the capture runs.
         let pinned_empty = RestoreInputs {
             initial_command: Some("ssh host".to_owned()),

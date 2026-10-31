@@ -438,6 +438,19 @@ guest has 4 CPUs and 6.5 GB of memory.
     are: a background program (`sleep 600 &`) reads as the foreground until it ends, and a shell typed into the pane
     reads as the pane's shell; a rerun types a POSIX-quoted line, right for the suite's Git sh but not for a
     PowerShell or `cmd.exe` pane, whose replay quoting is open work
+  - ➕ (side task 28) a rerun's replay is quoted for the pane's shell (`ngterm-core`'s `shell_dialect`): the seed
+    carries the captured argv (`PaneInput::Replay`) and `ngterm-term`'s launch types it for the shell it runs, by the
+    program's name. POSIX shells keep upstream's line and its line feed; fish gets its own quoting; PowerShell (7 and
+    5.1) `& 'program' 'word'`, an argv the argument passings would not all hand on alike run under `Legacy` in a scope
+    of its own with each word quoted for the C runtime's split (exact on 5.1 and every 7, on every OS); `cmd.exe` the
+    C runtime's words with `^"` for every quote, carets before its metacharacters and after each `%` (limits: batch
+    files and internal commands, delayed expansion); both submitted with a carriage return. An unknown shell gets only
+    plain words, else nothing (a plain shell). A pinned line takes the shell's Enter too. The live replay's PowerShell
+    call is the same, so Windows PowerShell 5.1 no longer loses an empty argument or an embedded quote there. Tested
+    per dialect with nasty arguments through each shell on the host (`sh`, fish, `pwsh` on every OS; `powershell.exe`
+    and `cmd.exe` on Windows), in real panes (`ngterm-term`'s `tests/replay.rs`: PowerShell 7, 5.1 and `cmd.exe` on
+    Windows), and in the suite: the `windows-shells` capability (claimed on Windows) and `launch(pane_shell=...)` run
+    `test_relaunch.py`'s replay and pin tests in PowerShell 5.1, PowerShell 7 and `cmd.exe` panes
   - `ngtermctl terminfo install` dumps the entry with `/usr/bin/infocmp`, which Windows lacks (two
     `test_cli_only.py` ids): a Windows form (Task 2) would read the staged `share/terminfo` instead
   - a file page's title (`htmlOverlays[].title`) never comes, on the CI runner and in the VM, so eight of
