@@ -465,15 +465,21 @@ fn a_child_waited_for_unreaped_still_has_its_tree_killed() -> TestResult {
 #[cfg(unix)]
 struct Descendants(libc::pid_t);
 
+/// The background process's id from the child's `started:<pid>:` line, once its closing colon came: the line may
+/// arrive in pieces, and a read cut inside the id would name another process.
 #[cfg(unix)]
 fn descendants(session: &Session) -> TestResult<Descendants> {
-    let text = session.text();
-    let pid = text
-        .split("started:")
-        .nth(1)
-        .and_then(|rest| rest.split(':').next())
-        .ok_or("no background pid in the output")?;
-    Ok(Descendants(pid.parse()?))
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let text = session.text();
+        if let Some((pid, _)) = text.split("started:").nth(1).and_then(|rest| rest.split_once(':')) {
+            return Ok(Descendants(pid.parse()?));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("no background pid in the output: {text:?}").into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[cfg(unix)]

@@ -3,8 +3,8 @@
 //!
 //! herdr: `src/pty/backend/unix.rs` (`spawn_with_portable_pty`) at `HERDR_REV` (`build/pins.env`), licensed under the
 //! Apache License 2.0, modified: the child is waited for without reaping first (`waitid` with `WNOWAIT`), so its
-//! process group is never signalled after its id could be reused; the group's hangup and kill; on macOS, libnotify's
-//! setup finished before the fork.
+//! process group is never signalled after its id could be reused; the group's hangup and kill, the child signalled
+//! before its group; on macOS, libnotify's setup finished before the fork.
 
 mod actor;
 mod fd;
@@ -201,12 +201,21 @@ impl Killer {
         *lock(&self.reaped) = true;
     }
 
+    /// The child first, by its id, then its whole group. The group's signal is not one act: the kernel signals the
+    /// members one after another (macOS from a list it took beforehand, with nothing holding off their exits
+    /// meanwhile), so a child signalled after its children can see one of them end first and exit as it would have
+    /// anyway: a shell waiting on its `sleep` reports the `sleep` killed and exits 0 before its own `SIGKILL` comes,
+    /// which is then dropped, as it is for any process already exiting. Signalled first, the child has its signal
+    /// before any of its group ends.
     fn signal(&self, signal: libc::c_int) -> io::Result<()> {
         // held while signalling: the child cannot be reaped (and its id reused) in between
         let reaped = lock(&self.reaped);
         if *reaped {
             return Ok(());
         }
+        // SAFETY: plain `kill(2)` on the unreaped child (its id is the group's); no memory is passed. Its result is
+        // not needed: a child that already exited takes no signal, and the group's signal below reports a failure.
+        unsafe { libc::kill(self.group, signal) };
         // SAFETY: plain `killpg(2)` on the group the unreaped child leads; no memory is passed.
         if unsafe { libc::killpg(self.group, signal) } != 0 {
             let err = io::Error::last_os_error();

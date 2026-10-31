@@ -312,6 +312,26 @@ guest has 4 CPUs and 6.5 GB of memory.
   run alone (2 of 3113 at the base commit, 1 of 5992 with this change), 3 of 1306 runs of the whole binary; rarer
   still once the kill was instrumented (1 in 19950, then 0 in 23892), so the cause (the kernel skipping the group's
   leader, or the test) is not found yet; `Killer::signal` is unchanged
+- ➕ (side task 36) that `killing_the_tree_ends_the_child_and_its_descendants` flake was the build's: macOS signals a
+  process group one member at a time (`killpg1` → `pgrp_iterate` takes the members' ids, then signals each in turn,
+  nothing holding off their exits meanwhile) and drops a signal to a process already exiting (`P_LEXIT`). The
+  `sleep`, the group's newest member, is signalled first and dies; the shell waiting on it wakes, prints
+  `Killed: 9 sleep 300` and exits 0 before `killpg` reaches it, so its `SIGKILL` is dropped. A kqueue
+  (`EVFILT_PROC`, `NOTE_SIGNAL`/`NOTE_EXIT`) read the moment `killpg` returned found the shell already exited 0 in
+  35 of the 97 such runs below, the rest in their exit. Linux holds the task list across the group's signal, so no
+  member's exit is reported before all are signalled. `Killer::signal` now signals the child itself first (unreaped,
+  its id is still its own), then the group, so it has its signal before any member can end. Measured in the macOS VM
+  by the test's scenario run in a loop by 2 threads in each of 4 test processes: 15 runs of 20000 with the shell
+  exiting 0 before; 0 of 20000 with the child signalled first; 82 of 20000 with it signalled after the group (the
+  order is the fix, not the second signal; a host build ran beside that one); the committed fix 0 of 40000. The test
+  alone hit it in none of 12000 runs, nor a one-thread C reproducer of the same kill in 50000: the window needs the
+  killing thread held up between two members, which the test binary's busy threads and a loaded VM give.
+  Also: the test reads the `sleep`'s id once its line's closing colon came. `ngtermctl`'s overlay job and terminfo
+  forks (`pre_exec`) settle libnotify first too: the CLI forks from its only working thread, but its test binary
+  runs other tests' threads beside the fork
+- ➕ (side task 36, open) macOS `openpty` fails now and then while PTY tests run in parallel: `ENXIO`, or `-6`
+  (XNU's internal `EREDRIVEOPEN` from the ptmx clone open, leaking out); 3 failed runs of 1000 runs of the whole
+  `pty` binary in 4 parallel loops. Not this task's: left for one of its own
 
 ### Task 5: Desktop integrations on Windows (depends on Task 4)
 
