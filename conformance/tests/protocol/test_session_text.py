@@ -6,7 +6,7 @@ import threading
 import time
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session
+from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session, program_argv
 
 UNKNOWN = "zzz"
 POSIX_SHELL = pytest.mark.requires("posix-shell", reason="a marker round-trip needs a known shell in the pane")
@@ -167,6 +167,17 @@ def test_a_missing_pane_is_refused(ctl, cmd, pane, error):
     node = find_session(ctl.tree(), sid)
     assert_absent(node, "hasSplit")
     assert node["scratch"] is False
+
+
+@POSIX_SHELL
+@pytest.mark.covers("session.type", "field:tree.session.foreground")
+def test_a_typed_ctrl_c_interrupts_the_running_program(ctl):
+    sid = _realized(ctl)
+    assert_ok(ctl.request("session.type", sid, text="sleep 600\n"))
+    ctl.wait_tree(lambda tree: program_argv(find_session(tree, sid).get("foreground")) == ["sleep", "600"])
+    assert_ok(ctl.request("session.type", sid, text="\x03"))
+    ctl.wait_tree(lambda tree: program_argv(find_session(tree, sid).get("foreground")) != ["sleep", "600"])
+    _echo(ctl, sid)
 
 
 @pytest.mark.covers("session.type")

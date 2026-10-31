@@ -10,23 +10,24 @@ app id, home and control pipe; NGTERM_*, AGTERM_* and ZMX_* stripped), but its w
 
 The check: the app launches and serves its control socket (the named pipe its socket path names, spoken to directly, and
 with -Ctl through `ngtermctl --socket` too: its tree, a typed line and the text read back); the pane runs PowerShell (a
-typed command's output read back with `session.text`); `session.split` opens the split and its PowerShell answers too; a
-screenshot of the desktop is saved; the app quits on Ctrl+C (the console's Ctrl event, its orderly quit) with status 0;
-a second launch restores the session with its split; keys typed on the desktop (`SendKeys`: text, Enter, the Up arrow)
-run in its focused pane; the quick terminal shows, runs PowerShell and zooms (screenshots `quick.png`,
-`quick-zoomed.png`); a launch beside it forwards to it over the instance pipe and exits 0; a flip of the system's app
-mode (`AppsUseLightTheme`, announced as Settings does with `WM_SETTINGCHANGE` `ImmersiveColorSet`, then put back)
-reloads the config of a theme with both slots; the desktop integrations: keymap.conf's `global-hotkey`, pressed while
-Character Map has the keyboard, shows the quick terminal and pressed again hides it (`hotkey.png`); a `notify` to a session
-not shown posts a toast under the app's id, a click on it where Windows shows it reveals that session (`toast-N.png`,
-`toast-clicked.png`), a toast sits in its session's slot of the notification center (read back from its history), a
-second one replaces it, and it is withdrawn once its session is selected; a status sound plays (upstream's names have no Windows sound alias:
-the alert); a resume from sleep (`WM_POWERBROADCAST` sent to the hidden window) retries the remote links; with the
-keyboard-layout lock on Russian (`LoadKeyboardLayout`, unloaded at the end) the pane types Cyrillic for the US keys;
-the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the app's hidden window) quits it; `WM_CLOSE` to the
-last window asks first (it runs a session), and its Close quits the app with status 0 after the quit's save
-(`close-asked.png`). The app is stopped by its own process id at the end, whatever happened. Every step is
-logged to <StateDir>\smoke.log; the exit status is 0 when every step passed.
+typed command's output read back with `session.text`), and a ^C typed through `session.type` interrupts a `ping -t`
+there; `session.split` opens the split and its PowerShell answers too; a screenshot of the desktop is saved; the app
+quits on Ctrl+C (the console's Ctrl event, its orderly quit) with status 0; a second launch restores the session with
+its split; keys typed on the desktop (`SendKeys`: text, Enter, the Up arrow) run in its focused pane, and Ctrl+C pressed
+there interrupts a `ping -t` (`ctrl-c.png`); the quick terminal shows, runs PowerShell and zooms (screenshots
+`quick.png`, `quick-zoomed.png`); a launch beside it forwards to it over the instance pipe and exits 0; a flip of the
+system's app mode (`AppsUseLightTheme`, announced as Settings does with `WM_SETTINGCHANGE` `ImmersiveColorSet`, then put
+back) reloads the config of a theme with both slots; the desktop integrations: keymap.conf's `global-hotkey`, pressed
+while Character Map has the keyboard, shows the quick terminal and pressed again hides it (`hotkey.png`); a `notify` to
+a session not shown posts a toast under the app's id, a click on it where Windows shows it reveals that session
+(`toast-N.png`, `toast-clicked.png`), a toast sits in its session's slot of the notification center (read back from its
+history), a second one replaces it, and it is withdrawn once its session is selected; a status sound plays (upstream's
+names have no Windows sound alias: the alert); a resume from sleep (`WM_POWERBROADCAST` sent to the hidden window)
+retries the remote links; with the keyboard-layout lock on Russian (`LoadKeyboardLayout`, unloaded at the end) the pane
+types Cyrillic for the US keys; the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the app's hidden
+window) quits it; `WM_CLOSE` to the last window asks first (it runs a session), and its Close quits the app with status
+0 after the quit's save (`close-asked.png`). The app is stopped by its own process id at the end, whatever happened.
+Every step is logged to <StateDir>\smoke.log; the exit status is 0 when every step passed.
 
 .PARAMETER Exe
 The ngterm.exe to run (a debug build keeps its console, which the Ctrl+C quit needs), in a staged tree
@@ -262,6 +263,26 @@ function Wait-EitherPane([string] $marker, [int] $count = 1) {
     return $false
 }
 
+# How many times `marker` shows in both panes together.
+function Count-EitherPane([string] $marker) {
+    $count = 0
+    foreach ($pane in 'left', 'right') {
+        $reply = Invoke-Control 'session.text' @{ pane = $pane }
+        if ($reply) { $count += ($reply -split [regex]::Escape($marker)).Count - 1 }
+    }
+    return $count
+}
+
+# Polls both panes until `marker` shows `count` times in them together.
+function Wait-EitherPane-Count([string] $marker, [int] $count) {
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    while ((Get-Date) -lt $deadline) {
+        if ((Count-EitherPane $marker) -ge $count) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
 # Polls `quick.text` until it holds `marker`.
 function Wait-Quick([string] $marker) {
     $deadline = (Get-Date).AddSeconds($Timeout)
@@ -489,6 +510,12 @@ try {
     Log "tree: $tree"
     Invoke-Control 'session.type' @{ text = "Write-Output ('smoke' + '-left-' + `$PSVersionTable.PSEdition)`r" } | Out-Null
     Check (Wait-Text 'smoke-left-') 'PowerShell in the pane runs a typed command'
+    # a ^C typed through the control socket interrupts the pane's program (the console's Ctrl+C event): ping prints
+    # its statistics and `Control-C`, and the prompt is back
+    Invoke-Control 'session.type' @{ text = "ping -t 127.0.0.1`r" } | Out-Null
+    Check (Wait-Text 'Reply from') 'ping runs in the pane'
+    Invoke-Control 'session.type' @{ text = [string][char]3 } | Out-Null
+    Check (Wait-Text 'Control-C') 'a ^C typed through session.type interrupts the ping'
     $split = Invoke-Control 'session.split' @{ mode = 'on' }
     Check ($split -match '"ok":true') "session.split: $split"
     Start-Sleep -Seconds 2
@@ -528,6 +555,13 @@ try {
     Save-Screen 'keys.png'
     Check $typed 'keys typed on the desktop run in the focused pane'
     Check $again 'the Up arrow and Enter typed on the desktop run the line again'
+    # Ctrl+C pressed on the desktop interrupts the focused pane's program
+    $interrupted = Count-EitherPane 'Control-C'
+    [System.Windows.Forms.SendKeys]::SendWait('ping -t 127.0.0.1{ENTER}')
+    Check (Wait-EitherPane 'Reply from' 2) 'ping runs in the focused pane'
+    Send-Chord ([byte[]](0x11, 0x43))
+    Check (Wait-EitherPane-Count 'Control-C' ($interrupted + 1)) 'Ctrl+C pressed on the desktop interrupts the ping'
+    Save-Screen 'ctrl-c.png'
 
     # the quick terminal: its window host shows PowerShell, zoomed too
     $shown = Invoke-Control 'quick' @{ mode = 'show' }
