@@ -251,7 +251,7 @@ the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`).
 
 What builds there today is the crates the `cross-platform.yml` workflow runs ([CI](#ci)): libghostty-vt and its
 wrapper, `ngterm-pty`, `ngterm-term`, `ngterm-session`, `ngterm-proto`, `ngterm-host`, `ngterm-core`,
-`ngterm-server`, `ngterm-ctl` and `ngterm-app`. The app builds on Linux only ([CI](#ci) says what it waits for).
+`ngterm-server`, `ngterm-ctl`, `ngterm-app` and `ngterm-headless`. The app builds on Linux only ([CI](#ci) says what it waits for).
 The order is Linux's: the pinned Zig (fetched by the script when none is found), the script, then cargo:
 
 ```sh
@@ -418,6 +418,29 @@ panes keep a PTY of their own, and an instance with live sessions off starts no 
   through the old wrappers a reinstall leaves in place. A one-time migration
   (`ngterm_core::live::LEGACY_NAME_PREFIX`).
 
+### A server without a display
+
+File ▸ Attach Remote attaches the live sessions of another machine running ngterm. On a machine with no display (a
+server reached over ssh) that is `ngterm-headless` (`crates/ngterm-headless`), staged beside `ngtermctl` and
+`ngterm-session`: the core, the control socket and the session server of the app, with no window and no GPUI, Wayland
+or Vulkan. It runs every session pane of its state dir in a live session (restore mode `live` whatever the settings
+hold; it refuses to start where the live probe rejects the host), each in a terminal nobody draws, so every session
+is attachable. `ngtermctl` drives it as it drives the app; the agents' hooks and the skill work in its panes.
+
+```sh
+# on the server: the staged layout (scripts/stage.sh), ngtermctl on PATH (~/.local/bin or /usr/local/bin)
+ngterm-headless [--grid 120x40] &       # one per state dir, as the app; SIGTERM, SIGINT or SIGHUP saves and ends it
+ngtermctl session new --name build      # sessions to attach; they outlive ngterm-headless, the next start re-attaches
+# on the desktop: the server in remotes.conf (one `destination [label]` per line), key-based ssh to it, then
+# File ▸ Attach Remote, or
+ngtermctl live tree SERVER && ngtermctl live attach SERVER SESSION-ID
+```
+
+The attached row is as one from a desktop instance: each pane an ssh into its live session (the viewer claims the pty
+size), the status, context, split, HUD and notifications streamed over `ngtermctl live present`, asks, program
+overlays and pages shown on the viewer. What would be drawn on the server (banners, sounds, an overlay with no viewer)
+has no display there: banners go to its log. A session closes when its program ends, as in the app.
+
 ## Test
 
 The gates' checks. CI runs them on the whole workspace, with the full suite, on every PR and push to main. Locally, a
@@ -483,7 +506,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   too; the bash one runs the app's process tests with the overlays on first.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
   `ngterm-core`, `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt`, `ngterm-pty`, `ngterm-term`, `ngterm-server`,
-  `ngterm-ctl` and `ngterm-app` so far), on Ubuntu, macOS and Windows runners: the libghostty-vt prefix with each
+  `ngterm-ctl`, `ngterm-app` and `ngterm-headless` so far), on Ubuntu, macOS and Windows runners: the libghostty-vt prefix with each
   runner's pinned Zig (cached with Zig's global cache), format,
   clippy and `cargo test` (`crates`, a matrix), then the sys crate cross-built for the Zig targets no runner runs
   natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). It also runs on pushes to `ci/**`
