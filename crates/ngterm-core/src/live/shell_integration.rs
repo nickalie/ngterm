@@ -249,7 +249,9 @@ pub fn inject(shell: LoginShell, resources: &Path, inherited: &Inherited, enviro
             }
             set(
                 "ENV",
-                integration.join("bash/ghostty.bash").to_string_lossy().into_owned(),
+                crate::paths::join_relative(&integration, "bash/ghostty.bash")
+                    .to_string_lossy()
+                    .into_owned(),
             );
             set("GHOSTTY_BASH_INJECT", "1".to_owned());
             if inherited.histfile.is_none()

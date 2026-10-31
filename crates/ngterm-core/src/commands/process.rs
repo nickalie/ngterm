@@ -2,6 +2,7 @@
 //! main loop for their exits, the socket they are told about, and the `PATH` they run with (upstream's
 //! `CommandPath.swift`, the socket provider the runners take).
 
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,31 +47,83 @@ pub(crate) struct ProcessRuntime {
     pub(crate) config: ConfigLocator,
 }
 
-/// The `PATH` used when the app's environment carries none.
-const DEFAULT_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
+/// The `PATH` used when the app's environment carries none: the system directories a login shell starts from.
+#[cfg(unix)]
+fn default_path() -> OsString {
+    "/usr/local/bin:/usr/bin:/bin".into()
+}
+
+/// The `PATH` used when the app's environment carries none: the system part of Windows' own default `Path`
+/// (`%SystemRoot%\system32;%SystemRoot%;…\Wbem;…\WindowsPowerShell\v1.0\;…\OpenSSH\`), `SystemRoot` expanded.
+#[cfg(windows)]
+fn default_path() -> OsString {
+    let root = std::env::var_os("SystemRoot")
+        .filter(|root| !root.is_empty())
+        .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+    let dirs = [
+        root.join("System32"),
+        root.clone(),
+        root.join(r"System32\Wbem"),
+        root.join(r"System32\WindowsPowerShell\v1.0\"),
+        root.join(r"System32\OpenSSH\"),
+    ];
+    std::env::join_paths(dirs).unwrap_or_default()
+}
+
+/// Where a user-installed `ngtermctl` lands when it is not on the app's own `PATH`: `~/.local/bin`, the install's link
+/// (upstream appends its installer's target for the same reason: an app started from the desktop may lack it). Windows
+/// has none: the install puts the bundled tool's own folder on the user's `PATH`, which leads the widened one anyway,
+/// and an app started from Explorer inherits the user's whole `PATH`.
+fn user_bin_dir(home: &Path) -> Option<PathBuf> {
+    (!cfg!(windows)).then(|| home.join(".local/bin"))
+}
+
+/// Whether two `PATH` entries name the same directory: byte for byte on Unix; on Windows without case and a trailing
+/// separator, as Windows looks folders up.
+#[cfg(unix)]
+fn same_entry(left: &Path, right: &Path) -> bool {
+    left.as_os_str() == right.as_os_str()
+}
+
+#[cfg(windows)]
+fn same_entry(left: &Path, right: &Path) -> bool {
+    let fold = |entry: &Path| {
+        entry
+            .to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .replace('/', "\\")
+            .to_lowercase()
+    };
+    fold(left) == fold(right)
+}
 
 /// The `PATH` a hook or custom command runs with (upstream's `CommandPath.widened`): the bundled CLI's directory first,
-/// so a bare `ngtermctl` reaches this build, then the app's own entries, then `~/.local/bin` (where a user-installed
-/// CLI lands on Linux) when absent; duplicates and empty entries dropped.
+/// so a bare `ngtermctl` reaches this build, then the app's own entries (the platform's default when it has none), then
+/// the user's tool directory when absent ([`user_bin_dir`]); duplicates and empty entries dropped. Entries are split and
+/// joined by the platform's rules (`:` on Unix; `;` on Windows, a quoted entry kept whole).
 #[must_use]
 pub fn widened_path(path: Option<&str>, cli_dir: Option<&Path>, home: Option<&Path>) -> String {
-    let base = path.filter(|path| !path.is_empty()).unwrap_or(DEFAULT_PATH);
-    let mut entries: Vec<String> = Vec::new();
-    let mut add = |dir: String| {
-        if !dir.is_empty() && !entries.contains(&dir) {
+    let base = path
+        .filter(|path| !path.is_empty())
+        .map_or_else(default_path, OsString::from);
+    let mut entries: Vec<PathBuf> = Vec::new();
+    let mut add = |dir: PathBuf| {
+        let joinable = std::env::join_paths([&dir]).is_ok();
+        if !dir.as_os_str().is_empty() && joinable && !entries.iter().any(|entry| same_entry(entry, &dir)) {
             entries.push(dir);
         }
     };
     if let Some(dir) = cli_dir {
-        add(dir.to_string_lossy().into_owned());
+        add(dir.to_path_buf());
     }
-    for entry in base.split(':') {
-        add(entry.to_owned());
+    std::env::split_paths(&base).for_each(&mut add);
+    if let Some(dir) = home.and_then(user_bin_dir) {
+        add(dir);
     }
-    if let Some(home) = home {
-        add(home.join(".local/bin").to_string_lossy().into_owned());
-    }
-    entries.join(":")
+    std::env::join_paths(entries)
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
 }
 
 impl Core {
@@ -117,10 +170,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "PATH widening joins a POSIX PATH with ':'; the Windows form belongs to the GPUI-on-Windows plan"
-    )]
+    #[cfg(unix)]
     fn widening_puts_the_bundled_cli_first_and_appends_the_user_bin() {
         assert_eq!(
             widened_path(
@@ -130,10 +180,63 @@ mod tests {
             ),
             "/opt/ngterm/bin:/usr/bin:/bin:/home/u/.local/bin"
         );
-        assert_eq!(widened_path(Some(""), None, None), DEFAULT_PATH);
         assert_eq!(
             widened_path(Some("/home/u/.local/bin:/bin"), None, Some(Path::new("/home/u"))),
             "/home/u/.local/bin:/bin"
         );
+        // empty entries dropped, the bundled CLI already on the PATH kept first once
+        assert_eq!(
+            widened_path(
+                Some("/usr/bin::/opt/ngterm/bin:"),
+                Some(Path::new("/opt/ngterm/bin")),
+                None
+            ),
+            "/opt/ngterm/bin:/usr/bin"
+        );
+        // a directory with the separator in its name cannot be an entry
+        assert_eq!(widened_path(Some("/bin"), Some(Path::new("/opt/a:b")), None), "/bin");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn widening_splits_and_joins_by_windows_rules() {
+        // drive letters stay whole; the bundled CLI goes first, a copy differing in case or a trailing separator is
+        // dropped, and nothing is appended for the home
+        assert_eq!(
+            widened_path(
+                Some(r"C:\Windows\System32;C:\Program Files\Git\cmd;c:\windows\system32\;;D:\tools"),
+                Some(Path::new(r"C:\Program Files\ngterm")),
+                Some(Path::new(r"C:\Users\u"))
+            ),
+            r"C:\Program Files\ngterm;C:\Windows\System32;C:\Program Files\Git\cmd;D:\tools"
+        );
+        // the bundled CLI already on the PATH in another case
+        assert_eq!(
+            widened_path(
+                Some(r"c:\program files\NGTERM;C:\Windows"),
+                Some(Path::new(r"C:\Program Files\ngterm")),
+                None
+            ),
+            r"C:\Program Files\ngterm;C:\Windows"
+        );
+        // a quoted entry holding the separator is one entry, quoted again on the way out
+        assert_eq!(
+            widened_path(Some(r#""C:\a;b";C:\Windows"#), None, None),
+            r#""C:\a;b";C:\Windows"#
+        );
+    }
+
+    #[test]
+    fn widening_falls_back_to_the_platform_default() {
+        let default = default_path().into_string().unwrap();
+        assert!(!default.is_empty());
+        assert_eq!(widened_path(Some(""), None, None), default);
+        assert_eq!(widened_path(None, None, None), default);
+        let first = std::env::split_paths(&default).next().unwrap();
+        if cfg!(windows) {
+            assert!(first.ends_with("System32"), "{default}");
+        } else {
+            assert_eq!(first, Path::new("/usr/local/bin"));
+        }
     }
 }

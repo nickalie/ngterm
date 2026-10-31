@@ -6,7 +6,7 @@ import threading
 import time
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session
+from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session, program_argv
 
 UNKNOWN = "zzz"
 POSIX_SHELL = pytest.mark.requires("posix-shell", reason="a marker round-trip needs a known shell in the pane")
@@ -169,6 +169,17 @@ def test_a_missing_pane_is_refused(ctl, cmd, pane, error):
     assert node["scratch"] is False
 
 
+@POSIX_SHELL
+@pytest.mark.covers("session.type", "field:tree.session.foreground")
+def test_a_typed_ctrl_c_interrupts_the_running_program(ctl):
+    sid = _realized(ctl)
+    assert_ok(ctl.request("session.type", sid, text="sleep 600\n"))
+    ctl.wait_tree(lambda tree: program_argv(find_session(tree, sid).get("foreground")) == ["sleep", "600"])
+    assert_ok(ctl.request("session.type", sid, text="\x03"))
+    ctl.wait_tree(lambda tree: program_argv(find_session(tree, sid).get("foreground")) != ["sleep", "600"])
+    _echo(ctl, sid)
+
+
 @pytest.mark.covers("session.type")
 def test_type_text_carrying_a_nul(ctl):
     sid = _realized(ctl)
@@ -211,9 +222,13 @@ def test_search_counts_the_matches(ctl):
 
 @POSIX_SHELL
 @pytest.mark.covers("session.type", "field:tree.session.title")
-def test_title_reads_the_terminal_title_a_program_set(ctl):
+def test_title_reads_the_terminal_title_a_program_set(ctl, adapter):
     sid = _realized(ctl)
-    assert_absent(find_session(ctl.tree(), sid), "title")
+    if adapter.has("untitled-panes"):
+        assert_absent(find_session(ctl.tree(), sid), "title")
+    else:
+        # Windows: the console host titles the pane with its program's path before any program sets one.
+        ctl.wait_tree(lambda tree: bool(find_session(tree, sid).get("title")))
     title = f"agt-title-{next(_markers)}"
     # OSC 0 sets the title; the command line carries the title split in two, so only the escape can set it.
     assert_ok(ctl.request("session.type", sid, text=f"printf '\\033]0;%s%s\\007' {title[:4]} {title[4:]}\n"))

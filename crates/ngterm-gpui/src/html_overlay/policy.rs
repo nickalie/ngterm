@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use ngterm_core::html::navigation::file_path;
 #[cfg(target_os = "linux")]
 use ngterm_core::html::{HtmlNavigationAction, HtmlNavigationTarget, REPLICA_SCHEME};
-use ngterm_core::html::{HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlSource, replica_path, replica_url_of};
+use ngterm_core::html::{
+    HtmlOverlay, HtmlOverlayTheme, HtmlPageInfo, HtmlSource, replica_path, replica_url_of, strictly_inside, volume,
+};
 use url::Url;
 
 /// The scheme a granted file page loads through: every read passes the handler, which answers only inside the grant,
@@ -119,18 +121,55 @@ pub fn replica_uri(page: uuid::Uuid, path: &str) -> Option<String> {
 pub const OUTSIDE_GRANT: &str = "outside the page's granted directory";
 pub const NOT_A_FILE: &str = "not a file";
 
-/// The file a grant's read of `requested` serves: its real path when that sits strictly inside `root` (itself a real
-/// path) and is a regular file.
+/// A page's grant as its reads are checked: the directory as a real path, and the volume the page named it on. On
+/// Windows the two can differ: a mapped network drive resolves to its share, a `subst` drive or a junction to the
+/// volume behind it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantRoot {
+    real: PathBuf,
+    named_volume: Option<String>,
+}
+
+impl GrantRoot {
+    /// The grant of directory `root` as the page's source names it; `None` when it does not resolve.
+    #[must_use]
+    pub fn new(root: &Path) -> Option<Self> {
+        Some(Self {
+            real: std::fs::canonicalize(root).ok()?,
+            named_volume: volume(root),
+        })
+    }
+
+    /// Whether `requested` is on a volume the grant names, as its page gave it or as it resolves; only such a request
+    /// may reach the file system ([`granted_file`]).
+    fn names_volume_of(&self, requested: &Path) -> bool {
+        let requested = volume(requested);
+        requested == volume(&self.real) || requested == self.named_volume
+    }
+}
+
+/// The file a grant's read of `requested` serves: its real path when that sits strictly inside the grant and is a
+/// regular file.
+///
+/// A path on a volume the grant names neither as its page gave it nor as it resolves (on Windows: another drive, or
+/// another server's or share's file) is refused before the file system is asked. Resolving such a path would make
+/// Windows open it, and a page could spell any server in a root-relative `/UNC/<server>/...` address: an SMB
+/// connection to it hands over the user's NTLM credentials. The grant's own two volumes are the user's choice, so a
+/// request on either is resolved, and containment is checked on the real paths, their volumes in any spelling
+/// ([`strictly_inside`]).
 ///
 /// # Errors
 ///
 /// The refusal's text: no grant, a path outside it, or not a regular file.
-pub fn granted_file(root: Option<&Path>, requested: Option<&Path>) -> Result<PathBuf, &'static str> {
+pub fn granted_file(root: Option<&GrantRoot>, requested: Option<&Path>) -> Result<PathBuf, &'static str> {
     let (Some(root), Some(requested)) = (root, requested) else {
         return Err(OUTSIDE_GRANT);
     };
+    if !root.names_volume_of(requested) {
+        return Err(OUTSIDE_GRANT);
+    }
     let resolved = requested.canonicalize().map_err(|_| OUTSIDE_GRANT)?;
-    if resolved == root || !resolved.starts_with(root) {
+    if !strictly_inside(&resolved, &root.real) {
         return Err(OUTSIDE_GRANT);
     }
     if !resolved.is_file() {
@@ -476,7 +515,7 @@ pub fn failure_event(error: &ngterm_wpe::LoadError) -> LoadEvent {
 /// The answer to a read of `uri` through [`GRANT_SCHEME`] by a page whose grant is `root` (a real path): the file when
 /// it sits inside the grant, else the refusal (the GTK build's scheme handler).
 #[must_use]
-pub fn serve_granted(root: Option<&Path>, uri: &str) -> ngterm_wpe::SchemeResponse {
+pub fn serve_granted(root: Option<&GrantRoot>, uri: &str) -> ngterm_wpe::SchemeResponse {
     let requested = Url::parse(&app_uri(uri)).ok().and_then(|url| url.to_file_path().ok());
     match granted_file(root, requested.as_deref()) {
         Ok(path) => ngterm_wpe::SchemeResponse::File(path),
@@ -527,19 +566,23 @@ mod tests {
         let root = dir.path().canonicalize().unwrap();
         std::fs::create_dir(root.join("sub")).unwrap();
         std::fs::write(root.join("sub/page.html"), "x").unwrap();
+        let grant = GrantRoot::new(&root);
         let uri = |path: &Path| granted_uri(&path.to_string_lossy()).unwrap();
         assert_eq!(
-            serve_granted(Some(&root), &uri(&root.join("sub/page.html"))),
+            serve_granted(grant.as_ref(), &uri(&root.join("sub/page.html"))),
             ngterm_wpe::SchemeResponse::File(root.join("sub/page.html"))
         );
         assert_eq!(
-            serve_granted(Some(&root), &uri(&root.join("sub"))),
+            serve_granted(grant.as_ref(), &uri(&root.join("sub"))),
             ngterm_wpe::SchemeResponse::Error {
                 kind: ngterm_wpe::SchemeError::IsDirectory,
                 message: NOT_A_FILE.to_owned()
             }
         );
-        let outside = serve_granted(Some(&root.join("sub")), &uri(&root.join("other.html")));
+        let outside = serve_granted(
+            GrantRoot::new(&root.join("sub")).as_ref(),
+            &uri(&root.join("other.html")),
+        );
         assert_eq!(
             outside,
             ngterm_wpe::SchemeResponse::Error {
@@ -552,7 +595,7 @@ mod tests {
             ngterm_wpe::SchemeResponse::Error { .. }
         ));
         assert!(matches!(
-            serve_granted(Some(&root), "not a uri"),
+            serve_granted(grant.as_ref(), "not a uri"),
             ngterm_wpe::SchemeResponse::Error { .. }
         ));
     }
@@ -674,21 +717,22 @@ mod tests {
         std::fs::create_dir(root.join("sub")).unwrap();
         let page = root.join("sub").join("page.html");
         std::fs::write(&page, "x").unwrap();
-        assert_eq!(granted_file(Some(&root), Some(&page)), Ok(page.clone()));
+        let grant = GrantRoot::new(&root);
+        assert_eq!(granted_file(grant.as_ref(), Some(&page)), Ok(page.clone()));
         // a verbatim Windows path (what canonicalizing gives there) takes `..` as a name
         #[cfg(not(windows))]
         assert_eq!(
-            granted_file(Some(&root), Some(&root.join("sub/../sub/page.html"))),
+            granted_file(grant.as_ref(), Some(&root.join("sub/../sub/page.html"))),
             Ok(page.clone())
         );
-        assert_eq!(granted_file(Some(&root), Some(&root.join("sub"))), Err(NOT_A_FILE));
-        assert_eq!(granted_file(Some(&root), Some(&root)), Err(OUTSIDE_GRANT));
+        assert_eq!(granted_file(grant.as_ref(), Some(&root.join("sub"))), Err(NOT_A_FILE));
+        assert_eq!(granted_file(grant.as_ref(), Some(&root)), Err(OUTSIDE_GRANT));
         assert_eq!(
-            granted_file(Some(&root), Some(&root.join("..").join("x.html"))),
+            granted_file(grant.as_ref(), Some(&root.join("..").join("x.html"))),
             Err(OUTSIDE_GRANT)
         );
         assert_eq!(
-            granted_file(Some(&root), Some(&root.join("missing.html"))),
+            granted_file(grant.as_ref(), Some(&root.join("missing.html"))),
             Err(OUTSIDE_GRANT)
         );
         assert_eq!(granted_file(None, Some(&page)), Err(OUTSIDE_GRANT));
@@ -1016,6 +1060,35 @@ mod tests {
         assert!(needs_report(Some(&cleared), Some(&titled), &titled));
         // the first report
         assert!(needs_report(None, None, &titled));
+    }
+
+    /// A request whose server the URL parser would read as the grant's (percent-escaped, a compatibility form) names
+    /// another host to Windows, and never reaches the file system; `localhost` and its address are one.
+    #[test]
+    #[cfg(windows)]
+    fn only_a_request_on_a_volume_the_grant_names_reaches_the_file_system() {
+        let grant = |named: &str, real: &str| GrantRoot {
+            real: PathBuf::from(real),
+            named_volume: volume(Path::new(named)),
+        };
+        let on_nas = grant(r"\\NAS\share\site", r"\\?\UNC\NAS\share\site");
+        assert!(on_nas.names_volume_of(Path::new(r"\\nas\Share\site\index.html")));
+        assert!(on_nas.names_volume_of(Path::new(r"\\?\UNC\nas\share\site\index.html")));
+        for request in [
+            r"\\n%61s\share\site\index.html",
+            r"\\?\UNC\n%61s\share\site\index.html",
+            r"\\ｎａｓ\share\site\index.html",
+            r"\\nas\other\site\index.html",
+        ] {
+            assert!(!on_nas.names_volume_of(Path::new(request)), "{request}");
+            assert_eq!(
+                granted_file(Some(&on_nas), Some(Path::new(request))),
+                Err(OUTSIDE_GRANT)
+            );
+        }
+        let on_localhost = grant(r"\\localhost\C$\site", r"\\?\UNC\localhost\C$\site");
+        assert!(on_localhost.names_volume_of(Path::new(r"\\127.0.0.1\c$\site\index.html")));
+        assert!(!on_localhost.names_volume_of(Path::new(r"\\local%68ost\c$\site\index.html")));
     }
 
     #[test]

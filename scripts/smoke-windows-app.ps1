@@ -10,10 +10,13 @@ app id, home and control pipe; NGTERM_*, AGTERM_* and ZMX_* stripped), but its w
 
 The check: the app launches and serves its control socket (the named pipe its socket path names, spoken to directly, and
 with -Ctl through `ngtermctl --socket` too: its tree, a typed line and the text read back); the pane runs PowerShell (a
-typed command's output read back with `session.text`); `session.split` opens the split and its PowerShell answers too; a
-screenshot of the desktop is saved; the app quits on Ctrl+C (the console's Ctrl event, its orderly quit) with status 0;
+typed command's output read back with `session.text`), and a ^C typed through `session.type` interrupts a `ping -t`
+there; `session.split` opens the split and its PowerShell answers too; a
+screenshot of the desktop is saved; the app quits on Ctrl+C (the console's Ctrl event, its orderly quit) with status 0
+(a debug build; a release build has no console, so it quits at the session's end instead, the step below);
 a second launch restores the session with its split; keys typed on the desktop (`SendKeys`: text, Enter, the Up arrow)
-run in its focused pane; the quick terminal shows, runs PowerShell and zooms (screenshots `quick.png`,
+run in its focused pane, and Ctrl+C pressed there interrupts a `ping -t` (`ctrl-c.png`);
+the quick terminal shows, runs PowerShell and zooms (screenshots `quick.png`,
 `quick-zoomed.png`); a launch beside it forwards to it over the instance pipe and exits 0; a flip of the system's app
 mode (`AppsUseLightTheme`, announced as Settings does with `WM_SETTINGCHANGE` `ImmersiveColorSet`, then put back)
 reloads the config of a theme with both slots; the desktop integrations: keymap.conf's `global-hotkey`, pressed while
@@ -23,11 +26,14 @@ not shown posts a toast under the app's id, a click on it where Windows shows it
 second one replaces it, and it is withdrawn once its session is selected; a status sound plays (upstream's names have no Windows sound alias:
 the alert); a resume from sleep (`WM_POWERBROADCAST` sent to the hidden window) retries the remote links; with the
 keyboard-layout lock on Russian (`LoadKeyboardLayout`, unloaded at the end) the pane types Cyrillic for the US keys;
-the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the app's hidden window) quits it. The app is stopped by its own process id at the end, whatever happened. Every step is
+the session's end (`WM_QUERYENDSESSION`, `WM_ENDSESSION` sent to the app's hidden window) quits it; `WM_CLOSE` to the
+last window asks first (it runs a session), and its Close quits the app with status 0 after the quit's save
+(`close-asked.png`). The app is stopped by its own process id at the end, whatever happened. Every step is
 logged to <StateDir>\smoke.log; the exit status is 0 when every step passed.
 
 .PARAMETER Exe
-The ngterm.exe to run (a debug build keeps its console, which the Ctrl+C quit needs), in a staged tree
+The ngterm.exe to run, a debug or a release build (only a debug build keeps its console, which the Ctrl+C quit needs:
+on a release build that step is skipped, said so in the log), in a staged tree
 (`bin\ngterm.exe` beside `share\ghostty\themes`, scripts/stage.sh's layout), so the theme slots find Ghostty's themes.
 
 .PARAMETER Ctl
@@ -60,6 +66,20 @@ function Log([string] $line) {
 
 function Check([bool] $ok, [string] $what) {
     if ($ok) { Log "PASS $what" } else { Log "FAIL $what"; $script:failures++ }
+}
+
+# Writes `text` as UTF-8 with no BOM, under Windows PowerShell 5.1 too (its `Set-Content -Encoding utf8` writes one).
+function Write-Utf8([string] $path, [string] $text) {
+    [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Whether the executable at `path` is a console program (its PE header's subsystem, 3): a debug build is, a release
+# build (`windows_subsystem = "windows"`, 2) has no console for a Ctrl event to reach.
+function Test-ConsoleProgram([string] $path) {
+    $bytes = [System.IO.File]::ReadAllBytes($path)
+    $header = [System.BitConverter]::ToInt32($bytes, 0x3C)
+    # the optional header follows the 4-byte signature and the 20-byte file header; Subsystem is its 68th byte
+    [System.BitConverter]::ToUInt16($bytes, $header + 24 + 68) -eq 3
 }
 
 # The pipe the socket path names (ngterm_core::paths::control_pipe_name): `ngterm-control-` and the FNV-1a 64 hash of
@@ -169,8 +189,16 @@ public static class SmokeWindows {
     [DllImport("user32.dll")]
     static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
     static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
     const uint AbortIfHung = 0x2;
+    // whether the foreground window is one of `pid`'s
+    public static bool InFront(uint pid) {
+        uint owner;
+        GetWindowThreadProcessId(GetForegroundWindow(), out owner);
+        return owner == pid;
+    }
     // brings the first visible top-level window of `pid` to the front; false when it has none or Windows refused.
     // An Alt press and release first: Windows lets the process that sent the last input set the foreground window.
     public static bool Raise(uint pid) {
@@ -185,6 +213,22 @@ public static class SmokeWindows {
             }
         }
         return false;
+    }
+    // the first visible GPUI window of `pid` (class `Zed::Window`): the main window while the quick terminal is hidden
+    public static IntPtr MainWindow(uint pid) {
+        IntPtr window = IntPtr.Zero;
+        while ((window = FindWindowEx(IntPtr.Zero, window, "Zed::Window", null)) != IntPtr.Zero) {
+            uint owner;
+            GetWindowThreadProcessId(window, out owner);
+            if (owner == pid && IsWindowVisible(window)) { return window; }
+        }
+        return IntPtr.Zero;
+    }
+    // brings `window` to the front, as Raise does
+    public static bool Focus(IntPtr window) {
+        keybd_event(0x12, 0, 0, UIntPtr.Zero);
+        keybd_event(0x12, 0, 2, UIntPtr.Zero);
+        return SetForegroundWindow(window);
     }
     public static IntPtr SystemWindow(uint pid) {
         IntPtr window = IntPtr.Zero;
@@ -239,6 +283,26 @@ function Wait-EitherPane([string] $marker, [int] $count = 1) {
             $reply = Invoke-Control 'session.text' @{ pane = $pane }
             if ($reply -and ($reply -split [regex]::Escape($marker)).Count - 1 -ge $count) { return $true }
         }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
+# How many times `marker` shows in both panes together.
+function Count-EitherPane([string] $marker) {
+    $count = 0
+    foreach ($pane in 'left', 'right') {
+        $reply = Invoke-Control 'session.text' @{ pane = $pane }
+        if ($reply) { $count += ($reply -split [regex]::Escape($marker)).Count - 1 }
+    }
+    return $count
+}
+
+# Polls both panes until `marker` shows `count` times in them together.
+function Wait-EitherPane-Count([string] $marker, [int] $count) {
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    while ((Get-Date) -lt $deadline) {
+        if ((Count-EitherPane $marker) -ge $count) { return $true }
         Start-Sleep -Milliseconds 500
     }
     return $false
@@ -368,6 +432,13 @@ function Wait-Log-For([string] $line, [int] $seconds) {
     return $false
 }
 
+# How many lines of the app's log hold `line`.
+function Count-Log([string] $line) {
+    $file = Join-Path $state 'ngterm.log'
+    if (-not (Test-Path $file)) { return 0 }
+    @(Select-String -Path $file -SimpleMatch $line).Count
+}
+
 # Polls the notification center until `test` holds for its toasts.
 function Wait-Toasts([scriptblock] $test) {
     $deadline = (Get-Date).AddSeconds($Timeout)
@@ -418,6 +489,31 @@ function Wait-Quick-Visible([bool] $visible) {
     return $false
 }
 
+# The session's end sent to the app's hidden window, asked (WM_QUERYENDSESSION), then told (WM_ENDSESSION): the app quits
+# with status 0 after logging the quit.
+function End-Session($process, [string] $what) {
+    $quits = Count-Log 'the session is ending: quitting'
+    $window = [SmokeWindows]::SystemWindow([uint32]$process.Id)
+    Check ($window -ne [IntPtr]::Zero) "the app's hidden window is there ($window)"
+    $logoff = [long]0x80000000
+    $query = [SmokeWindows]::Send($window, 0x0011, 0, $logoff, 5000)
+    Check ($query -eq 1) "WM_QUERYENDSESSION lets the session end (answer $query)"
+    [SmokeWindows]::Send($window, 0x0016, 1, $logoff, 15000) | Out-Null
+    $ended = $process.WaitForExit(15000)
+    Check ($ended -and $process.ExitCode -eq 0) "$what with status $(if ($ended) { $process.ExitCode } else { 'none: still running' })"
+    Check ((Count-Log 'the session is ending: quitting') -gt $quits) 'the session end ran the quit'
+}
+
+# Brings the first visible window of `id` to the front once it has one: polls until the foreground window is its.
+function Wait-Raise([int] $id) {
+    $deadline = (Get-Date).AddSeconds($Timeout)
+    do {
+        if ([SmokeWindows]::Raise([uint32]$id) -and [SmokeWindows]::InFront([uint32]$id)) { return $true }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
 function Start-App {
     # a console window of its own: the app's log lines and Ctrl events
     Start-Process -FilePath $Exe -WorkingDirectory $homeDir -PassThru
@@ -441,9 +537,10 @@ $env:NGTERM_STATE_DIR = $state
 $env:NGTERM_APP_ID = $appId
 # the global hotkey: the key left of 1 by position, with Ctrl and Shift
 $config = New-Item -ItemType Directory -Force -Path (Join-Path $state 'config')
-Set-Content -Path (Join-Path $config 'keymap.conf') -Value 'global-hotkey ctrl+shift+`' -Encoding utf8
+Write-Utf8 (Join-Path $config 'keymap.conf') ('global-hotkey ctrl+shift+`' + "`r`n")
 $env:HOME = $homeDir
-Log "exe $Exe; state $state; pipe \\.\pipe\$pipeName"
+$consoleBuild = Test-ConsoleProgram $Exe
+Log "exe $Exe ($(if ($consoleBuild) { 'console: a debug build' } else { 'no console: a release build' })); state $state; pipe \\.\pipe\$pipeName; PowerShell $($PSVersionTable.PSVersion)"
 
 $app = $null
 try {
@@ -464,6 +561,12 @@ try {
     Log "tree: $tree"
     Invoke-Control 'session.type' @{ text = "Write-Output ('smoke' + '-left-' + `$PSVersionTable.PSEdition)`r" } | Out-Null
     Check (Wait-Text 'smoke-left-') 'PowerShell in the pane runs a typed command'
+    # a ^C typed through the control socket interrupts the pane's program (the console's Ctrl+C event): ping prints
+    # its statistics and `Control-C`, and the prompt is back
+    Invoke-Control 'session.type' @{ text = "ping -t 127.0.0.1`r" } | Out-Null
+    Check (Wait-Text 'Reply from') 'ping runs in the pane'
+    Invoke-Control 'session.type' @{ text = [string][char]3 } | Out-Null
+    Check (Wait-Text 'Control-C') 'a ^C typed through session.type interrupts the ping'
     $split = Invoke-Control 'session.split' @{ mode = 'on' }
     Check ($split -match '"ok":true') "session.split: $split"
     Start-Sleep -Seconds 2
@@ -473,10 +576,15 @@ try {
     Check ($tree -match '"split":true') "the tree shows the split: $tree"
     Start-Sleep -Seconds 1
     Save-Screen 'window.png'
-    $sent = Send-CtrlC $app.Id
-    Check ($sent -eq 0) "Ctrl+C sent to the app's console (helper status $sent)"
-    $quit = $app.WaitForExit(15000)
-    Check ($quit -and $app.ExitCode -eq 0) "the app quit on Ctrl+C with status $(if ($quit) { $app.ExitCode } else { 'none: still running' })"
+    if ($consoleBuild) {
+        $sent = Send-CtrlC $app.Id
+        Check ($sent -eq 0) "Ctrl+C sent to the app's console (helper status $sent)"
+        $quit = $app.WaitForExit(15000)
+        Check ($quit -and $app.ExitCode -eq 0) "the app quit on Ctrl+C with status $(if ($quit) { $app.ExitCode } else { 'none: still running' })"
+    } else {
+        Log "SKIP the Ctrl+C quit: $Exe is a release build, with no console for the Ctrl event; it quits at the session's end"
+        End-Session $app 'the app quit at the session''s end'
+    }
     Stop-App $app
     $app = Start-App
     Log "relaunched pid $($app.Id)"
@@ -490,7 +598,7 @@ try {
     Check ($tree -match '"hasSplit":true') "the session comes back with its split: $tree"
 
     # the keyboard: keys typed on the desktop, the window brought to the front, reach the focused pane
-    Check ([SmokeWindows]::Raise([uint32]$app.Id)) 'the app window comes to the front'
+    Check (Wait-Raise $app.Id) 'the app window comes to the front'
     Start-Sleep -Seconds 1
     # Escape first: a sheet the launch shows (the first-run welcome) takes the keyboard until dismissed
     [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
@@ -503,6 +611,13 @@ try {
     Save-Screen 'keys.png'
     Check $typed 'keys typed on the desktop run in the focused pane'
     Check $again 'the Up arrow and Enter typed on the desktop run the line again'
+    # Ctrl+C pressed on the desktop interrupts the focused pane's program
+    $interrupted = Count-EitherPane 'Control-C'
+    [System.Windows.Forms.SendKeys]::SendWait('ping -t 127.0.0.1{ENTER}')
+    Check (Wait-EitherPane 'Reply from' 2) 'ping runs in the focused pane'
+    Send-Chord ([byte[]](0x11, 0x43))
+    Check (Wait-EitherPane-Count 'Control-C' ($interrupted + 1)) 'Ctrl+C pressed on the desktop interrupts the ping'
+    Save-Screen 'ctrl-c.png'
 
     # the quick terminal: its window host shows PowerShell, zoomed too
     $shown = Invoke-Control 'quick' @{ mode = 'show' }
@@ -597,7 +712,7 @@ try {
     Check (Wait-Toasts { param($t) @($t | Where-Object { $_ -match $slot -and $_ -match 'smoke-toast-three' }).Count -eq 1 }) 'the notification center holds the toast in the session''s slot'
     Invoke-Control 'notify' @{ title = 'Smoke toast'; body = 'smoke-toast-four' } 2000 $second | Out-Null
     Check (Wait-Toasts { param($t) $held = @($t | Where-Object { $_ -match $slot }); $held.Count -eq 1 -and $held[0] -match 'smoke-toast-four' }) 'a second notify replaces the toast in its slot'
-    Check ([SmokeWindows]::Raise([uint32]$app.Id)) 'the app window comes to the front'
+    Check (Wait-Raise $app.Id) 'the app window comes to the front'
     Invoke-Control 'session.select' $null 2000 $second | Out-Null
     Check (Wait-Toasts { param($t) -not ($t | Where-Object { $_ -match $slot }) }) 'selecting the session withdraws its toast'
 
@@ -614,15 +729,7 @@ try {
     Check (Wait-Log 'network back or machine awake: retrying the remote links now') 'the resume retries the remote links'
 
     # the session's end: asked, then told; the app quits
-    $window = [SmokeWindows]::SystemWindow([uint32]$app.Id)
-    Check ($window -ne [IntPtr]::Zero) "the app's hidden window is there ($window)"
-    $logoff = [long]0x80000000
-    $query = [SmokeWindows]::Send($window, 0x0011, 0, $logoff, 5000)
-    Check ($query -eq 1) "WM_QUERYENDSESSION lets the session end (answer $query)"
-    [SmokeWindows]::Send($window, 0x0016, 1, $logoff, 15000) | Out-Null
-    $ended = $app.WaitForExit(15000)
-    Check ($ended -and $app.ExitCode -eq 0) "the app quit at the session's end with status $(if ($ended) { $app.ExitCode } else { 'none: still running' })"
-    Check (Wait-Log 'the session is ending: quitting') 'the session end ran the quit'
+    End-Session $app 'the app quit at the session''s end'
 
     # the keyboard-layout lock: Russian for the terminals, so the US keys type Cyrillic in the pane
     $russian = [SmokeDesktop]::LoadLayout('00000419')
@@ -630,12 +737,11 @@ try {
         $settingsFile = Join-Path $state 'settings.json'
         $settings = Get-Content -Raw -Path $settingsFile | ConvertFrom-Json
         $settings | Add-Member -NotePropertyName terminalInputSource -NotePropertyValue '00000419' -Force
-        $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsFile -Encoding utf8
+        Write-Utf8 $settingsFile ($settings | ConvertTo-Json -Depth 20)
         $app = Start-App
         Log "relaunched pid $($app.Id) with the layout lock on 00000419"
         Check ($null -ne (Wait-Socket)) 'the relaunched app answers'
-        Start-Sleep -Seconds 2
-        Check ([SmokeWindows]::Raise([uint32]$app.Id)) 'the app window comes to the front'
+        Check (Wait-Raise $app.Id) 'the app window comes to the front'
         Start-Sleep -Seconds 1
         [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
         Check (Wait-Log 'keyboard layout lock: layout selected') 'the lock selects Russian for the terminal'
@@ -647,6 +753,32 @@ try {
         Stop-App $app
         [SmokeDesktop]::UnloadLayout($russian)
     }
+
+    # the last window's close (WM_CLOSE, as its title bar's close button and the taskbar's Close window send it): a
+    # window running sessions asks first (upstream's `windowShouldClose`); its Close (Return, the default) closes it, and
+    # the last window closing quits the app, which saves and exits with status 0
+    $saves = Count-Log 'quit: the state is saved'
+    $app = Start-App
+    Log "relaunched pid $($app.Id) for the last window's close"
+    Check ($null -ne (Wait-Socket)) 'the relaunched app answers'
+    $main = [IntPtr]::Zero
+    for ($try = 0; $try -lt 60 -and $main -eq [IntPtr]::Zero; $try++) {
+        Start-Sleep -Milliseconds 500
+        $main = [SmokeWindows]::MainWindow([uint32]$app.Id)
+    }
+    Check ($main -ne [IntPtr]::Zero) "the app's main window is there ($main)"
+    Start-Sleep -Seconds 1
+    Check ([SmokeDesktop]::Post($main, 0x0010, 0, 0)) 'WM_CLOSE posted to the main window'
+    Start-Sleep -Seconds 2
+    Check (-not $app.HasExited) 'the window running a session asks before it closes'
+    Save-Screen 'close-asked.png'
+    Check ([SmokeWindows]::Focus($main)) 'the asking window comes to the front'
+    Start-Sleep -Milliseconds 500
+    # Return as a key press: SendKeys' Return did not reach the alert
+    Send-Chord ([byte[]](0x0D))
+    $closed = $app.WaitForExit(15000)
+    Check ($closed -and $app.ExitCode -eq 0) "closing the last window quits the app with status $(if ($closed) { $app.ExitCode } else { 'none: still running' })"
+    Check ((Count-Log 'quit: the state is saved') -gt $saves) 'the quit saved the state'
 } catch {
     Log "ERROR $_"
     $failures++

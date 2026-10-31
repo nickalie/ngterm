@@ -7,12 +7,12 @@ a stand-in server in this process, so the run never reaches an app it did not st
 
 import json
 import os
-import socket
 import sys
 import threading
 from pathlib import Path
 
 import pytest
+from agterm_conformance import transport
 from agterm_conformance.client import check_under_root
 from agterm_conformance.match import assert_version_result
 
@@ -99,16 +99,14 @@ class StandIn:
     def __init__(self, path):
         self.path = path
         self.requests = []
-        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.server.bind(os.fspath(path))
-        self.server.listen(1)
-        self.server.settimeout(30)
+        # an AF_UNIX socket, or on Windows the named pipe its path names
+        self.server = transport.Listener(path)
         self.thread = threading.Thread(target=self._serve, daemon=True)
         self.thread.start()
 
     def _serve(self):
         try:
-            connection, _ = self.server.accept()
+            connection = self.server.accept()
         except OSError:
             return
         with connection:

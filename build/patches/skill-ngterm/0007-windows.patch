@@ -1,0 +1,93 @@
+Where the skill's text names something the Windows build does otherwise, it says so: the default control socket path
+`%LOCALAPPDATA%\ngterm\ngterm.sock` and how a socket path names the control pipe there (pass the path, never the
+pipe), the config and state dirs (`%APPDATA%\ngterm`, `%LOCALAPPDATA%\ngterm`), the CLI on the user's PATH through the
+installer or Install Command Line Tool…, and the overlay hide toggle's `ctrl+alt+shift+j` on Windows as on Linux.
+`terminfo install` decompiles the compiled entry itself on every OS, since Windows has no `infocmp`
+(`crates/ngterm-ctl/src/terminfo/source.rs`), so its text and its dump failure (`could not read <file>: <reason>`
+where upstream's reads `infocmp exited N: <stderr>`) are this build's, and 128 plus the signal is a Unix exit.
+Applied after 0006-show-image-socket.patch.
+
+diff --git a/SKILL.md b/SKILL.md
+index 0030a25..a2f3f7f 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -71,7 +71,8 @@ already-poisoned tmux server, and for the Codex shared-daemon limitation, which
+ 
+ ## Running ngtermctl
+ 
+-`ngtermctl` must be on PATH (install it from ngterm's **Help ▸ Install Command Line Tool…**). If it
++`ngtermctl` must be on PATH (install it from ngterm's **Help ▸ Install Command Line Tool…**; on Windows the
++installer, or that menu item, puts its folder on the user's PATH). If it
+ is not on PATH, the user can install it, or you invoke it by absolute path.
+ 
+ - When `NGTERM_SOCKET` is set, pass `--socket "$NGTERM_SOCKET"` on every call: `ngtermctl` never reads it
+@@ -99,7 +100,7 @@ program, which is how to show the user an artifact you generated. The same sessi
+ whole session or one pane as its placement bounds. The session keeps focus and stays typable
+ under it.
+ One slot, so a session shows either a HUD or a program overlay, never both. A program or page overlay can be
+-hidden without closing it (`session overlay hide|show|toggle`, ⇧⌘J for the user, `ctrl+alt+shift+j` on Linux): it keeps running and keeps
++hidden without closing it (`session overlay hide|show|toggle`, ⇧⌘J for the user, `ctrl+alt+shift+j` on Linux and Windows): it keeps running and keeps
+ its slot until it closes, so opening another there is refused. Separately, the app has one
+ **quick terminal** (a scratch shell in a floating panel at 90% of the focused screen capped at 1100x700,
+ or whatever share Settings sets instead; not part of the tree and not owned by a window).
+diff --git a/reference.md b/reference.md
+index 1d30872..fa0425c 100644
+--- a/reference.md
++++ b/reference.md
+@@ -7,8 +7,11 @@ Full detail for every `ngtermctl` command. See `SKILL.md` for the model and addr
+ 
+ - **Socket resolution** (when `--socket` is omitted): `NGTERM_SOCKET` is the path the running app
+   bound; ngtermctl resolves the same rendezvous: `<NGTERM_STATE_DIR>/ngterm.sock`, else
+-  `~/.local/share/ngterm/ngterm.sock`. Passing `--socket "$NGTERM_SOCKET"` is the
+-  safe explicit form.
++  `~/.local/share/ngterm/ngterm.sock` (`%LOCALAPPDATA%\ngterm\ngterm.sock` on Windows). Passing
++  `--socket "$NGTERM_SOCKET"` is the safe explicit form. On Windows the path is still what every
++  `--socket` and `NGTERM_SOCKET` names, but nothing is created there: the app serves a named pipe
++  derived from that path (`\\.\pipe\ngterm-control-<hash>`), and ngtermctl connects to the pipe the
++  given path names, so pass the path, never a pipe name.
+ - **`--json`**: prints the raw response object. Without it, ordinary mutations print `ok`, batch
+   close/move prints the affected session count, and `tree`/`window list` print a human listing. Use
+   `--json` when you need to read ids or values back.
+@@ -2183,10 +2186,11 @@ text on the Mac showing it, and on the Mac it runs on as well.
+ 
+ `ngtermctl terminfo install DESTINATION [-p PORT] [-i FILE ...] [-J HOST] [-F FILE]` — install the bundled
+ `xterm-ghostty` terminfo entry into a remote account's `~/.terminfo`. Local-only: it never opens the
+-control socket, takes no `--socket`, `--window` or `--json`, and needs no running ngterm. It dumps the
+-entry with `infocmp -x` from the database next to the running `ngtermctl` (falling back to `TERMINFO`
+-from the environment outside a bundle), then runs the remote `tic -x -o "$HOME/.terminfo" -` over one
+-ssh connection with the source on stdin. Nothing is cached; run it once per host and account.
++control socket, takes no `--socket`, `--window` or `--json`, and needs no running ngterm. It reads the
++compiled entry from the database next to the running `ngtermctl` (falling back to `TERMINFO` from the
++environment outside a bundle) and decompiles it itself into the source `infocmp -x` would print, so no
++local `infocmp` is needed (Windows has none), then runs the remote `tic -x -o "$HOME/.terminfo" -` over
++one ssh connection with the source on stdin. Nothing is cached; run it once per host and account.
+ 
+ - `DESTINATION` — as ssh takes it: host, `user@host`, or an alias from `~/.ssh/config`. Refused when it
+   starts with `-` or contains whitespace or a control character.
+@@ -2197,10 +2201,10 @@ ssh connection with the source on stdin. Nothing is cached; run it once per host
+   Do not run it from a hook or a non-interactive script unless key auth already works for the host.
+ 
+ Human output on success is `installed xterm-ghostty on DESTINATION`. It exits with ssh's status (128 plus
+-the signal when ssh was killed), and 64 for a usage error. Failures before the connection open none:
++the signal when ssh was killed, on macOS and Linux), and 64 for a usage error. Failures before the connection open none:
+ 
+ - `no xterm-ghostty terminfo entry next to this ngtermctl; looked in <dirs>` — no database found.
+-- `infocmp exited N: <stderr>` — the local dump failed.
++- `could not read <file>: <reason>` — the entry's file is unreadable or not a compiled entry.
+ - `could not start ssh: <call> failed with <reason>` — the spawn failed.
+ - `ngterm: tic is not installed on this host, install ncurses first` — printed by the remote and followed
+   by `ssh exited 3; xterm-ghostty was not installed`.
+diff --git a/troubleshooting.md b/troubleshooting.md
+index 22dd692..88b5bbe 100644
+--- a/troubleshooting.md
++++ b/troubleshooting.md
+@@ -46,7 +46,8 @@ You are inside ngterm (`NGTERM_ENABLED=1`). Use:
+   `SettingsView`, `SettingsModel`, `CustomCommandRunner`, `ControlServer`.
+ - **Files** — keymap `~/.config/ngterm/keymap.conf`; ngterm-scoped ghostty config
+   `~/.config/ngterm/ghostty.conf`; settings `~/.local/share/ngterm/settings.json`;
+-  socket path in `$NGTERM_SOCKET`.
++  socket path in `$NGTERM_SOCKET`. On Windows the config dir is `%APPDATA%\ngterm` and the state dir
++  (settings, log `ngterm.log`, socket path) `%LOCALAPPDATA%\ngterm`.
+ 
+ ### "Keymap editor won't open"
+ 

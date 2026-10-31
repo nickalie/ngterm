@@ -1,5 +1,7 @@
 //! The app's [`ProcessLauncher`]: hooks and custom commands as detached children (upstream's `HookProcessRunner.swift`
-//! and the spawn half of `CustomCommandRunner.swift`); the core hands it the program, `/bin/sh -c` on Unix.
+//! and the spawn half of `CustomCommandRunner.swift`); the core hands it the program, the shell of
+//! `ngterm_host::command_line` (`/bin/sh -c` on Unix, `cmd.exe /D /S /C` with the quoted line as the command line's raw
+//! tail on Windows).
 //!
 //! stdout goes to the null device; stdin is the bytes the spec carries (written on a thread of its own, closed after,
 //! a child leaving without reading them is no failure) or the null device; stderr is the null device or, when
@@ -58,6 +60,9 @@ impl ProcessLauncher for SystemLauncher {
                 Some(Ok(file)) => Stdio::from(file),
                 _ => Stdio::null(),
             });
+        if let Some(tail) = &spec.raw_tail {
+            platform::raw_arg(&mut command, tail);
+        }
         platform::detach(&mut command);
         if let Some(cwd) = &spec.cwd {
             command.current_dir(cwd);
@@ -172,6 +177,11 @@ mod platform {
     /// Its own process group: a terminal's ^C aimed at the app does not reach it.
     pub(super) fn detach(command: &mut Command) {
         command.process_group(0);
+    }
+
+    /// One more argument: Unix has no command line to append to.
+    pub(super) fn raw_arg(command: &mut Command, tail: &str) {
+        command.arg(tail);
     }
 
     /// Created owner-only (0600) under its fresh name and unlinked at once, so no other user can open it and nothing
@@ -327,6 +337,11 @@ mod platform {
     /// A process group of its own, so no console Ctrl+C reaches it, and no console window.
     pub(super) fn detach(command: &mut Command) {
         command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    }
+
+    /// Appended to the command line as written (`cmd`'s quoted command text), past the C runtime's quoting.
+    pub(super) fn raw_arg(command: &mut Command, tail: &str) {
+        command.raw_arg(tail);
     }
 
     /// Opened unshared, so no other process can open it while the app holds it, and delete-on-close: the system
@@ -622,6 +637,61 @@ mod tests {
         });
         assert_eq!(exit.stderr_tail.len(), STDERR_TAIL_LIMIT);
         assert!(exit.stderr_tail.ends_with(b"end"));
+    }
+
+    /// `unix` on Unix, `windows` on Windows, as the user's command line the core hands over
+    /// ([`LaunchSpec::command_line`]: `/bin/sh -c`, or `cmd.exe /D /S /C` with the quoted line as written).
+    fn command_line(unix: &str, windows: &str) -> LaunchSpec {
+        LaunchSpec::command_line(if cfg!(windows) { windows } else { unix })
+    }
+
+    #[test]
+    fn a_hook_line_reads_its_event_on_stdin_and_writes_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().display();
+        let exit = run(&LaunchSpec {
+            stdin: Some(b"{\"kind\":\"status\"}\n".to_vec()),
+            env: vec![("AGT_EVENT_KIND".to_owned(), "status".to_owned())],
+            // `set /p` without input exits 1: the line ends on `more`, whose status is the line's
+            ..command_line(
+                &format!("printf '%s' \"$AGT_EVENT_KIND\" > '{root}/kind'; cat > '{root}/event.json'"),
+                &format!(r#">"{root}\kind" <nul set /p "=%AGT_EVENT_KIND%" & more > "{root}\event.json""#),
+            )
+        });
+        assert_eq!((exit.status, exit.stdin_failure), (0, None));
+        let event = fs::read_to_string(dir.path().join("event.json")).unwrap();
+        assert_eq!(event.trim_end(), "{\"kind\":\"status\"}");
+        assert_eq!(fs::read_to_string(dir.path().join("kind")).unwrap(), "status");
+    }
+
+    #[test]
+    fn a_command_line_keeps_its_quotes_and_spaces() {
+        // a quoted program path with a space, starting the line, and a quoted argument with one
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("with space");
+        fs::create_dir(&folder).unwrap();
+        let tool = folder.join(if cfg!(windows) { "copy tool.cmd" } else { "copy tool.sh" });
+        let script = if cfg!(windows) {
+            "@>\"%~dp0out file.txt\" <nul set /p \"=%~1|%~2\"\r\n"
+        } else {
+            "#!/bin/sh\nprintf '%s|%s' \"$1\" \"$2\" > \"$(dirname \"$0\")/out file.txt\"\n"
+        };
+        ngterm_host::fakes::write_executable(&tool, script).unwrap();
+        let line = format!("\"{}\" \"a b\" c", tool.display());
+        let exit = run(&LaunchSpec::command_line(&line));
+        // `set /p` without input exits 1, the Windows script's last status
+        assert_eq!(exit.status, i32::from(cfg!(windows)));
+        assert_eq!(fs::read_to_string(folder.join("out file.txt")).unwrap(), "a b|c");
+    }
+
+    #[test]
+    fn a_failing_command_line_reports_its_status_and_stderr() {
+        let exit = run(&LaunchSpec {
+            capture_stderr: true,
+            ..command_line("echo oops >&2; exit 7", ">&2 echo oops & exit 7")
+        });
+        assert_eq!(exit.status, 7);
+        assert_eq!(String::from_utf8(exit.stderr_tail).unwrap().trim_end(), "oops");
     }
 
     #[test]

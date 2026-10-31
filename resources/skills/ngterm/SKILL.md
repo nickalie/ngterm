@@ -71,7 +71,8 @@ already-poisoned tmux server, and for the Codex shared-daemon limitation, which 
 
 ## Running ngtermctl
 
-`ngtermctl` must be on PATH (install it from ngterm's **Help ▸ Install Command Line Tool…**). If it
+`ngtermctl` must be on PATH (install it from ngterm's **Help ▸ Install Command Line Tool…**; on Windows the
+installer, or that menu item, puts its folder on the user's PATH). If it
 is not on PATH, the user can install it, or you invoke it by absolute path.
 
 - When `NGTERM_SOCKET` is set, pass `--socket "$NGTERM_SOCKET"` on every call: `ngtermctl` never reads it
@@ -99,7 +100,7 @@ program, which is how to show the user an artifact you generated. The same sessi
 whole session or one pane as its placement bounds. The session keeps focus and stays typable
 under it.
 One slot, so a session shows either a HUD or a program overlay, never both. A program or page overlay can be
-hidden without closing it (`session overlay hide|show|toggle`, ⇧⌘J for the user, `ctrl+alt+shift+j` on Linux): it keeps running and keeps
+hidden without closing it (`session overlay hide|show|toggle`, ⇧⌘J for the user, `ctrl+alt+shift+j` on Linux and Windows): it keeps running and keeps
 its slot until it closes, so opening another there is refused. Separately, the app has one
 **quick terminal** (a scratch shell in a floating panel at 90% of the focused screen capped at 1100x700,
 or whatever share Settings sets instead; not part of the tree and not owned by a window).
@@ -774,12 +775,18 @@ app's own **Help ▸ Install Agent Skill…** copy (`~/.claude/skills/ngterm/`, 
 bash <this-skill-directory>/scripts/show-image.sh <image> [size-percent]
 ```
 
+On Windows a pane's program writes through the pseudoconsole, which drops the kitty graphics escapes,
+so the image shows in a page overlay instead (`--html`, the image inlined, Enter closes it): run the
+same line from Git Bash, which hands over to `scripts/show-image.ps1` beside it, or from PowerShell
+`powershell -NoProfile -ExecutionPolicy Bypass -File <this-skill-directory>\scripts\show-image.ps1 <image> [size-percent]`.
+
 The size percent sizes the overlay PANEL; the image itself is scaled to fit that panel and centered
 in it, so a large screenshot needs no resizing beforehand.
 
 Do NOT print graphics escapes to your own tool stdout (the agent harness escapes the control bytes)
 and do NOT run an image viewer in your tool shell (no controlling terminal). The overlay is what makes
-it render. Outside ngterm (`NGTERM_ENABLED` unset) there is no overlay — fall back to `open <image>`.
+it render. Outside ngterm (`NGTERM_ENABLED` unset) there is no overlay — fall back to `open <image>`
+(`Invoke-Item <image>` on Windows).
 
 ## Displaying an HTML artifact
 
@@ -932,6 +939,7 @@ Full detail, templates, and the exact `gh` commands are in **troubleshooting.md*
   one as reference for a tricky workflow. The recipe list lives in the repo, not here; fetch it.
 - **troubleshooting.md** — diagnosing common problems (keymap editor, custom actions, logs) and the
   bug-issue / feature-Discussion reporting workflow (draft-first, scrub, never post without approval).
-- **scripts/show-image.sh** — bundled helper that displays an image inline in an overlay (see above).
+- **scripts/show-image.sh** — bundled helper that displays an image inline in an overlay (see above);
+  **scripts/show-image.ps1** is its Windows form.
 
 Read those files when you need exact flags, return shapes, or worked examples.

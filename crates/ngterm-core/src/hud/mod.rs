@@ -1,11 +1,12 @@
 //! The HUD's host-free half (upstream's `Hud.swift` and `HudMarkdown.swift`): the spec a `session.hud.open`/`.update`
-//! posts, its spinner and position vocabularies, the panel's sizing math and the exact bytes the bundled painter
-//! (`hud.sh`) reads from its body file.
+//! posts, its spinner and position vocabularies, the panel's sizing math, the exact bytes the painter reads from its
+//! body file, and the painter itself (upstream's bundled `hud.sh`).
 
 use std::ops::RangeInclusive;
 
 pub mod layout;
 pub mod markdown;
+pub mod painter;
 
 pub use layout::{
     FILE_ENV_KEY, Grid, HudPaneFrame, HudPaneFrames, HudPanelSize, MAX_COLUMNS, MAX_SIZE_PERCENT, MIN_SIZE_PERCENT,

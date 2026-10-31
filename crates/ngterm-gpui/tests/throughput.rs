@@ -16,7 +16,6 @@
 mod support;
 
 use std::io::{BufRead as _, BufReader, Write as _};
-use std::os::unix::fs::PermissionsExt as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -186,8 +185,7 @@ fn flood_sandbox(lavapipe: &std::path::Path, mib: u32) -> TestResult<(Sandbox, u
     sandbox.start_xvfb()?;
     sandbox.use_software_rendering(lavapipe);
     let flood = sandbox.path("home/flood.sh");
-    std::fs::write(&flood, FLOOD)?;
-    std::fs::set_permissions(&flood, std::fs::Permissions::from_mode(0o755))?;
+    ngterm_host::fakes::write_executable(&flood, FLOOD)?;
     std::fs::write(sandbox.path("home/block"), block())?;
     std::fs::write(sandbox.path("home/count"), mib.to_string())?;
     let config = sandbox.path("state/config");

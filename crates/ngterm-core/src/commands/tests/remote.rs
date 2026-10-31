@@ -311,9 +311,7 @@ fn the_heartbeat_pings_and_a_gone_session_drops_its_streams() {
 fn a_hud_is_published_with_its_generation_and_withdrawn_once() {
     let mut live = live();
     let dir = tempfile::tempdir().unwrap();
-    let helper = dir.path().join("hud.sh");
-    std::fs::write(&helper, "#!/bin/sh\n").unwrap();
-    live.fixture.core.set_hud_helper(helper, dir.path().join("bodies"));
+    live.fixture.core.set_hud_body_dir(dir.path().join("bodies"));
     let session = live.session;
     let sid = wire(session);
     let (_, viewer) = subscribe(&mut live.fixture.core, session, "mirror");

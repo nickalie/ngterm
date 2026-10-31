@@ -52,6 +52,21 @@ The Rust build (GPUI) gets, on top of that:
 - a headless weston started with `--fake-seat`, since GPUI needs a `wl_seat`: weston 15.0 or later (the system's, or
   the one `scripts/build-weston.sh` vendors where the system's is older).
 
+On Windows (`tools/run-windows.sh`) the launch differs where the OS does:
+
+- the control socket's path is the identity, and the build serves the named pipe it names
+  (`ngterm_core::paths::control_pipe_name`; `agterm_conformance/transport.py` derives the same name);
+- `LOCALAPPDATA` and `APPDATA` lie under the root with `HOME`, a unique `NGTERM_APP_ID` names the single instance, and
+  the live-session namespace is `<LOCALAPPDATA>\ngterm\live\<hash>` over the state dir's realpath
+  (`live_socket_directory`), its server `ngterm-session.exe server <that dir>`;
+- no `SHELL`; `PATH` is the system directories alone (`System32`, the Windows directory, `Wbem`), so the login shell
+  is the inbox Windows PowerShell; the ghostty config's `command` is Git for Windows' `sh.exe` (absolute) in place of
+  `/bin/sh`;
+- no compositor, bus or lavapipe: the build renders through DirectX on the machine's adapter;
+- the quit is the session's end (the Restart Manager's `WM_QUERYENDSESSION`, then `WM_ENDSESSION` with
+  `ENDSESSION_CLOSEAPP`) posted to the build's hidden `ngterm-system-window`, which must quit within the same 10
+  seconds; the app's process tree is then ended by pid, and the Job object holding the app's processes is closed.
+
 SIGTERM must quit without a prompt within 10 seconds.
 Live sessions keep their sockets in a namespace directory named by the FNV-1a 64 hash (`%016x`, lowercase hex) over
 the UTF-8 bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists:
@@ -83,6 +98,10 @@ share is asserted directly, with no capability.
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
 | `hidden-split-holds-focus` |  | `session.focus` on a hidden split reads back as `splitFocused`; upstream's shown left pane takes the focus back while its window is key |
+| `posix-command-line` | yes | a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs through `/bin/sh -c`, so a test's POSIX line runs as written; Windows runs it through `cmd.exe` |
+| `cmd-command-line` |  | Rust-only, Windows: a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs as `cmd.exe`'s command text (`%ComSpec% /D /S /C`), so a test's `cmd` line runs as written where `posix-command-line` is not claimed |
+| `untitled-panes` | yes | a pane has no title until a program sets one; Windows' console host titles each pane with its program's path |
+| `windows-shells` |  | Rust-only, Windows: a pane runs PowerShell or `cmd.exe` as its shell (the config's `command`), and a rerun restore types a captured program's replay, and a pinned line, as that shell reads them |
 
 ## Rust target profile
 
@@ -93,6 +112,12 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `posix-shell`: panes run `/bin/sh` from the harness's ghostty config, as the reference;
 - `hidden-split-holds-focus`: upstream's documented model contract (`control-api.md`, "works shown or hidden; read
   `splitFocused`", and `AppStorePaneTests`); macOS's reversion is an AppKit first-responder effect;
+- `posix-command-line`, `untitled-panes`: on Linux and macOS, as upstream; not on Windows (below);
+- `cmd-command-line`: on Windows, where a command line (an overlay's program, a scratch pane's command, a hook, a
+  custom command) is `cmd`'s (below);
+- `windows-shells`: on Windows, where a pane's shell may be PowerShell or `cmd.exe` and a rerun restore types its
+  replay quoted for that shell (`ngterm-core`'s `shell_dialect`; the harness picks the shell with
+  `launch(pane_shell=...)`), where upstream types a POSIX line into any shell;
 - `live-sessions`: by host, where the login shell is zsh or fish (upstream's two) and `ngterm-session` is staged;
 - `live-any-shell`: by host, live sessions for bash and PowerShell login shells too, the one Rust-only extension
   (below): claimed together with `live-sessions` for a zsh or fish login shell, alone for the others.
@@ -100,8 +125,19 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 It does not claim:
 
 - `window-geometry`, `window-minimize`: Wayland gives a client no window position and no minimized read-back; their
-  tests branch, and the Rust build passes the other branch;
+  tests branch, and the Rust build passes the other branch, on Windows too, where it claims neither;
 - `sidebar-min-width`: the GPUI frontend does not claim it; its test takes the other branch.
+- on Windows, `posix-command-line`: a command line runs as `cmd.exe`'s command text there (`%ComSpec% /D /S /C`, as
+  Ghostty runs a command on Windows; `ngterm-host`'s `command_line` chooses it for every caller), so the tests of
+  hooks, custom commands, overlay programs and scratch commands take their `cmd` branch instead (`cmd-command-line`,
+  claimed on Windows only, with `agterm_conformance.command_line` building each line in either dialect), and the few
+  whose lines have no `cmd` form skip as unsupported; and `untitled-panes`: the console host
+  (ConPTY) titles a pane with its program's path before any program sets one, so the title test reads that title on
+  the other branch.
+- on Windows a pane's `foreground` and `foregroundShell` come from a stand-in for the console's foreground (the
+  oldest program its job runs, `ngterm-session`'s `console_foreground`), and a foreground argv's `argv[0]` is the
+  program as its parent started it (an MSYS shell's programs by their image's full path); the suite compares it by
+  the program's name (`match.program_argv`), with no capability, since the reference never runs on Windows.
 
 The table above stays the reference's profile; this list is the Rust build's.
 
@@ -133,10 +169,12 @@ neither `live-sessions` nor `live-any-shell`.
 The `conformance` job of `.github/workflows/rust-linux.yml` is a matrix over three login shells, each leg with
 `--must-pass live-any-shell`: bash, fish and zsh. The zsh and fish legs, the hosts where the build claims
 `live-sessions`, also run with `--must-pass live-sessions`, as reference-macos.
-No leg runs a PowerShell login shell, so the suite does not hold PowerShell's part of the claim: below it,
-`.github/workflows/cross-platform.yml` runs `ngterm-session`'s PowerShell session tests (`tests/pwsh.rs`: the
-integration's marks and working directory, the foreground read, a replay) on Linux, macOS and Windows, and
-`ngterm-core`'s replay round trip through a real `pwsh` where one is installed.
+PowerShell's part of the claim is held on Windows: the `windows` job of `.github/workflows/cross-platform.yml` runs
+the suite with `--must-pass live-any-shell` too, its login shell Windows PowerShell, and the tests type PowerShell's
+lines there (`Write-Output`, `ping -n` for a long program). No Linux leg runs a PowerShell login shell; below the
+suite, the same workflow runs `ngterm-session`'s PowerShell session tests (`tests/pwsh.rs`: the integration's marks
+and working directory, the foreground read, a replay) on Linux, macOS and Windows, and `ngterm-core`'s replay round
+trip through a real `pwsh` where one is installed.
 
 ## The `live` group
 
@@ -199,9 +237,23 @@ listed text against the Rust sources.
 The bundled agent skill (`resources/skills/ngterm`) is upstream's with
 `build/patches/skill-ngterm/` applied (the `live` names, this build's `ngterm` and `ngtermctl`, then the attach
 contract's `AGTERM_LIVE_*`, then the rest of this build's identity, `NGTERM_*` among it, then the restore adapter, then
-`show-image.sh` passing the pane's socket):
+`show-image.sh` passing the pane's socket, then the Windows build's paths and chord and `terminfo install`'s own
+text, then `show-image.sh`'s Windows form, `show-image.ps1`, which shows the image in a page overlay):
 `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh` rebuilds it as the new upstream tree plus those
 patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned tag verifies the copy still equals it.
+
+## Other strings of the build's own
+
+Outside the `live` group, where the build does a thing differently from upstream and upstream's text would name what
+it no longer does:
+
+| upstream | Rust build |
+|---|---|
+| `infocmp exited N: …` (`terminfo install`, the local dump failing) | `could not read <file>: <reason>`: the CLI decompiles the staged compiled entry itself on every OS (`ngterm-ctl`'s `terminfo/source.rs`, a port of ncurses' entry reader and `infocmp -x`'s layout), since Windows has no `infocmp` |
+
+Texts with no upstream counterpart, each the build's own: `live.reset is not supported on this platform` (above),
+and on Windows an HTML page's refusal without the WebView2 Runtime, `the Microsoft Edge WebView2 Runtime is not
+installed; get it from <link>` (`ngterm-gpui`'s `html_overlay/webview2/runtime.rs`). No suite test asserts either.
 
 ## Ratchet
 
@@ -221,6 +273,11 @@ plus a task's `--also`/`--also-k` selections), judged like a full run, a listed 
 A change's local check is a partial run over the ids that cover what it touches; the full suite runs in CI on every PR
 and push to main (conformance/README.md > Rust runner and ratchet).
 The script exits with the ratchet's status, or 1 when an instance root was left behind, whatever pytest's own status.
+
+On Windows `conformance/tools/run-windows.sh` does the same from Git Bash, against the build staged with `.exe`
+binaries (GPUI build below), into `conformance/reports/rust-windows/`, and holds its own list,
+`conformance/rust-passing-windows.txt`, with the same checker and rules (`check_ratchet.py --list`). The `windows`
+job of `.github/workflows/cross-platform.yml` runs it on every PR, push to main and push to a `ci/**` branch.
 
 ## GPUI build
 
@@ -262,3 +319,10 @@ Probes. Three scripts beside the runner check what the suite cannot see, on the 
 default; CI runs them after the bash leg): `ghostty_probe.py` (a terminal draws its first frame), `webkit_probe.py`
 (a page loads in WPE WebKit's sandbox) and `chrome_probe.py` (the title bar, the sidebar and the terminal draw the
 theme's background, the sidebar tint washing the sidebar alone).
+
+On Windows. `run-windows.sh` builds the release app with its `html` feature (the HTML overlays on WebView2, which
+needs the WebView2 Runtime), `ngterm-ctl` and `ngterm-session`, and stages them with the same script
+(`bin\ngterm.exe`, `bin\ngtermctl.exe`, `bin\ngterm-session.exe` beside the same `share\`); `--stage DIR` runs a tree
+staged elsewhere, such as the `windows` job's `rust-windows-stage` artifact on a VM. No lavapipe, weston or bus: the
+build renders through DirectX on the machine's adapter, on the desktop the run is on (Launch contract above). The
+probes are Linux's.

@@ -9,6 +9,7 @@ use std::process::Child;
 use std::thread;
 
 use ngterm_core::overlay_capture::OverlayLaunchContext;
+use ngterm_host::ShellCommand;
 
 use super::Canceler;
 
@@ -17,9 +18,8 @@ pub(super) type Terminal = RawFd;
 /// The program's process group, which its pid names.
 pub(super) type Group = libc::pid_t;
 
-/// The shell that runs the program. `eval` keeps the command's own exit status as the shell's; the command rides
-/// `NGTERM_OVL_CMD` in the context's environment, so nothing interpolates it.
-const SHELL: &str = "/bin/sh";
+/// The script the shell (`ngterm_host::command_line`'s `/bin/sh -c`) runs. `eval` keeps the command's own exit status
+/// as the shell's; the command rides `NGTERM_OVL_CMD` in the context's environment, so nothing interpolates it.
 const SHELL_SCRIPT: &str = r#"eval "$NGTERM_OVL_CMD""#;
 /// The signals the helper changes, put back to their defaults in the program.
 const RESET_SIGNALS: [libc::c_int; 7] = [
@@ -124,10 +124,10 @@ pub(super) fn spawn(
     base: &[(OsString, OsString)],
     tty: Option<Terminal>,
 ) -> io::Result<Program> {
-    let mut command = std::process::Command::new(SHELL);
+    let shell = ShellCommand::posix(SHELL_SCRIPT);
+    let mut command = std::process::Command::new(&shell.program);
     command
-        .arg("-c")
-        .arg(SHELL_SCRIPT)
+        .args(&shell.args)
         .env_clear()
         .envs(base.iter().map(|(name, value)| (name, value)))
         .envs(&context.environment)
@@ -136,6 +136,8 @@ pub(super) fn spawn(
     // SAFETY: the hook runs in the forked child after std put it in its own group (std leaves it the forking thread's
     // signal mask, which the hook clears), and calls only async-signal-safe functions, allocating nothing.
     unsafe { command.pre_exec(move || prepare_child(tty)) };
+    #[cfg(target_os = "macos")]
+    crate::local::settle_libnotify();
     let child = command.spawn()?;
     match libc::pid_t::try_from(child.id()) {
         Ok(group) => Ok(Program { child, group }),

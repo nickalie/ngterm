@@ -121,7 +121,29 @@ pub fn starter_keymap_conf(defaults: &ShippedDefaults) -> String {
         let _ = writeln!(text, "#   {{{token}}}");
     }
     text.push_str(STARTER_TAIL);
-    text
+    for_this_shell(text)
+}
+
+/// The prose a starter file says differently where a line runs through `cmd.exe` (Windows, `ngterm_host::command_line`):
+/// the shell's name and the variables' spelling. The commented examples stay POSIX lines.
+const CMD_WORDING: [(&str, &str); 5] = [
+    ("`/bin/sh -c`", "`cmd.exe /D /S /C`"),
+    ("the /bin/sh line", "the cmd.exe line"),
+    ("as $AGT_X env vars", "as %AGT_X% env vars"),
+    ("`--socket \"$AGT_SOCKET\"`", "`--socket \"%AGT_SOCKET%\"`"),
+    ("e.g. \"$AGT_SELECTION\"", "e.g. \"%AGT_SELECTION%\""),
+];
+
+/// A starter file's `text` for this OS's shell ([`CMD_WORDING`] on Windows).
+pub(crate) fn for_this_shell(text: String) -> String {
+    if cfg!(windows) { cmd_wording(text) } else { text }
+}
+
+/// `text` with [`CMD_WORDING`] applied.
+pub(crate) fn cmd_wording(text: String) -> String {
+    CMD_WORDING
+        .iter()
+        .fold(text, |text, (posix, cmd)| text.replace(posix, cmd))
 }
 
 /// A default chord as the file spells it, or `(not expressible)` when that spelling does not parse back to it
@@ -135,6 +157,19 @@ fn starter_chord_syntax(chord: &Chord) -> String {
     }
 }
 
+/// The command line that opens `path` in the user's editor, run by the Edit Keymap/Hooks overlay through this OS's
+/// shell (`ngterm_host::command_line`): [`posix_editor_command`] on Unix, [`windows_editor_command`] with the app's
+/// `VISUAL` and `EDITOR` on Windows.
+#[must_use]
+pub fn editor_command(path: &str) -> String {
+    if cfg!(windows) {
+        let var = |name| std::env::var(name).ok();
+        windows_editor_command(path, var("VISUAL").as_deref(), var("EDITOR").as_deref())
+    } else {
+        posix_editor_command(path)
+    }
+}
+
 /// The shell command that opens `path` in the user's editor (`$VISUAL`, else `$EDITOR`, else `vi`), run under
 /// `/bin/sh -c` by the overlay.
 ///
@@ -145,7 +180,7 @@ fn starter_chord_syntax(chord: &Chord) -> String {
 /// survive. `$SHELL` must accept `-ilc` (sh, bash, zsh and fish do; csh and tcsh do not), and a non-exported editor
 /// variable falls back to `vi`.
 #[must_use]
-pub fn editor_command(path: &str) -> String {
+pub fn posix_editor_command(path: &str) -> String {
     let inner = r#"${VISUAL:-${EDITOR:-vi}} "$1""#;
     let via_posix = format!(
         "exec /bin/sh -c {} ngterm-config-edit {}",
@@ -153,6 +188,31 @@ pub fn editor_command(path: &str) -> String {
         single_quoted(path)
     );
     format!("${{SHELL:-/bin/sh}} -ilc {}", single_quoted(&via_posix))
+}
+
+/// The `cmd` line that opens `path` in the user's editor on Windows: `visual`, else `editor` (an empty value counts as
+/// unset), the value a command line as written (`code --wait`, a quoted program path) followed by the quoted path, as
+/// `${VISUAL:-${EDITOR:-vi}} "$1"` runs it on Unix; else Notepad, waited for (`start "" /wait`), so the overlay
+/// closes, and the file reloads, only once Notepad does.
+///
+/// - No login shell runs first: Windows has no `$SHELL`, and a user's `VISUAL` and `EDITOR` come from the registry's
+///   user and system environment, which the app inherits, not from a shell's rc file. They are read from the app's
+///   environment, the one the overlay's program inherits, so `cmd` never parses a conditional around them.
+/// - Notepad, not the file's default handler: a `.conf` file has none by default (Windows asks which program should
+///   open it), and only a program the overlay waits for lets the editor's exit reload the file. A console editor
+///   (`vim`, `nvim`, `hx`, `micro`) set in `VISUAL` or `EDITOR` runs in the overlay's terminal as on Unix.
+/// - A Windows path holds no `"`, so the quoted path survives `cmd` as written.
+#[must_use]
+pub fn windows_editor_command(path: &str, visual: Option<&str>, editor: Option<&str>) -> String {
+    let chosen = [visual, editor]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty());
+    match chosen {
+        Some(editor) => format!("{editor} \"{path}\""),
+        None => format!("start \"\" /wait notepad.exe \"{path}\""),
+    }
 }
 
 /// POSIX single quoting: wrapped in `'…'`, each embedded `'` written `'\''` (fish reads it the same way).

@@ -15,8 +15,18 @@
 //!   auto-follow and to lift a declined hand-off's silence (upstream's `onUserInput`).
 //!
 //! With the page's JavaScript off (`IsScriptEnabled`), `WebView2` still runs these scripts and nothing of the page's.
-//! The guard script, in every frame, keeps a page from what the WPE host refuses natively: file choosers and the File
-//! System Access pickers, and files pasted onto a page (dropped ones are refused natively, `native.rs`).
+//! The guard script ([`GUARD_SCRIPT`]), in every frame, keeps a page from what the WPE host refuses natively: file
+//! choosers and the File System Access pickers, and files pasted onto a page (dropped ones are refused natively,
+//! `native.rs`). `WebView2` offers no native refusal of a file chooser: no event before one opens (webview2-com
+//! 0.39.1's API has `SaveAsUIShowing`, the page's own Save As, and `PermissionRequested`'s `FILE_READ_WRITE`, which
+//! comes after a File System Access picker, not before), no setting that turns them off, and no isolated world to
+//! run the guard in (a browser extension's content script would be one, and would see no more of a page's events).
+//! So the guard is defence in depth in the page's own world, not a boundary: it takes what it calls before any page
+//! script runs, but a page can still open a chooser through a realm it did not run in (a same-origin frame
+//! `WebView2` injects no script into, such as a fresh `about:blank` one, whose own `HTMLElement.prototype.click`
+//! clicks a detached file input), and a user's click on a file input inside a closed shadow root escapes it when the
+//! root was declared in markup (`<template shadowrootmode="closed">`), or when a page's listener stops the click
+//! before it reaches the root. The user still has to pick a file in the dialog.
 
 use std::fmt::Write as _;
 
@@ -84,32 +94,17 @@ pub fn helper_script() -> String {
     format!("if (window.top === window) {HELPER_SCRIPT}")
 }
 
-/// The guard every frame of every page runs (module docs).
-pub const GUARD_SCRIPT: &str = r"(() => {
-  const isFile = (target) => target instanceof HTMLInputElement && target.type === 'file';
-  window.addEventListener('click', (event) => {
-    const path = event.composedPath ? event.composedPath() : [event.target];
-    if (path.some(isFile)) event.preventDefault();
-  }, true);
-  const showPicker = HTMLInputElement.prototype.showPicker;
-  if (showPicker) {
-    HTMLInputElement.prototype.showPicker = function () {
-      if (isFile(this)) throw new DOMException('file choosers are not available', 'NotAllowedError');
-      return showPicker.call(this);
-    };
-  }
-  for (const name of ['showOpenFilePicker', 'showSaveFilePicker', 'showDirectoryPicker']) {
-    try { delete window[name]; } catch (error) {}
-    try { Object.defineProperty(window, name, {value: undefined, configurable: false}); } catch (error) {}
-  }
-  window.addEventListener('paste', (event) => {
-    const data = event.clipboardData;
-    if (data && data.files && data.files.length) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    }
-  }, true);
-})();";
+/// The guard every frame of every page runs (module docs). It takes every function it calls before the page's
+/// scripts run, each bound to `call` so that no later property read reaches the page's replacements: a page replacing
+/// `Event.prototype.preventDefault`, `composedPath`, `Array.prototype.some`, an input's `type` or
+/// `HTMLInputElement[Symbol.hasInstance]` afterwards changes nothing. An input is a file input by its own `type`
+/// getter, whose brand check refuses anything but an input element. A detached input's click never reaches the
+/// window's listener, so `click()` and `dispatchEvent` of a `click` (Chromium runs a file input's activation for a
+/// page's synthetic click, and for no other untrusted event) on a file input are refused, and so is its
+/// `showPicker()`; a click inside a closed shadow root is hidden from the window's `composedPath`, so a root made by
+/// `attachShadow` gets the window's listener too. The page only ever sees the guarded methods, and replacing them gives
+/// it no way back to the originals in this realm. Its limits: the module docs.
+pub const GUARD_SCRIPT: &str = include_str!("guard.js");
 
 /// What ngterm's script in a page posted.
 #[derive(Debug, Clone, PartialEq, Eq)]

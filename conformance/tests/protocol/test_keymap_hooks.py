@@ -3,13 +3,14 @@
 
 Both files live in `<state>/config`, never the account's. Every custom command and hook here only writes into the
 instance root, by absolute path: a command runs in the session's directory (HOME when that is gone), and a hook
-in the app's."""
+in the app's. Their lines are in the build's command-line dialect (`agterm_conformance.command_line`)."""
 
 import json
 import os
 import shlex
 
 import pytest
+from agterm_conformance.command_line import CommandLines
 from agterm_conformance.match import ANY, assert_absent, assert_error, assert_ok, assert_subset, window_ids
 from agterm_conformance.wait import wait_until
 
@@ -58,11 +59,10 @@ def _action(listing, name):
     return action
 
 
-def _marker_command(name, marker):
+def _marker_command(lines, name, marker):
     """A `command` line recording the session, pane and window the command ran for."""
-    tmp = _quoted(f"{marker}.tmp")
-    fields = '"$AGT_SESSION_ID" "$AGT_PANE" "$AGT_WINDOW_ID"'
-    return f"command \"{name}\" printf '%s|%s|%s' {fields} > {tmp} && mv {tmp} {_quoted(marker)}\n"
+    fields = [lines.var(name) for name in ("AGT_SESSION_ID", "AGT_PANE", "AGT_WINDOW_ID")]
+    return f'command "{name}" {lines.write(marker, *fields)}\n'
 
 
 @pytest.mark.covers("keymap.list", "keymap.reload", "field:result.keymap", "field:result.count")
@@ -177,9 +177,10 @@ def test_a_file_binding_the_toggle_overlay_chord_keeps_it(ctl, keymap):
 
 
 @pytest.mark.covers("keymap.run", "field:result.id", "behavior:protocol.target-resolution")
-def test_run_starts_the_command_for_the_addressed_session(ctl, keymap):
+def test_run_starts_the_command_for_the_addressed_session(ctl, keymap, adapter):
+    lines = CommandLines.of(adapter)
     first, second = ctl.instance.root / "run-first", ctl.instance.root / "run-active"
-    keymap.write_text(_marker_command("mark-first", first) + _marker_command("mark-active", second))
+    keymap.write_text(_marker_command(lines, "mark-first", first) + _marker_command(lines, "mark-active", second))
     assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
     window = window_ids(ctl.request("window.list"))[0]
     target = _new(ctl)
@@ -195,6 +196,11 @@ def test_run_starts_the_command_for_the_addressed_session(ctl, keymap):
 
 
 @pytest.mark.covers("keymap.run")
+@pytest.mark.requires(
+    "posix-command-line",
+    reason="the command is a POSIX command line, and Windows keeps the directory a pane's shell works in from being "
+    "removed",
+)
 def test_run_in_a_removed_session_directory_starts_in_home(ctl, keymap):
     # upstream #740: a session whose directory was removed runs its custom commands in HOME, and
     # `$AGT_SESSION_PWD` keeps the reported path
@@ -218,12 +224,13 @@ def test_run_in_a_removed_session_directory_starts_in_home(ctl, keymap):
 
 
 @pytest.mark.covers("keymap.run", "keymap.reload")
-def test_reload_reaches_every_window(ctl, keymap):
+def test_reload_reaches_every_window(ctl, keymap, adapter):
+    lines = CommandLines.of(adapter)
     marker = ctl.instance.root / "run-second-window"
     wid = assert_ok(ctl.request("window.new", name="second"))["id"]
     try:
         sid = _new(ctl, window=wid)
-        keymap.write_text(_marker_command("mark", marker))
+        keymap.write_text(_marker_command(lines, "mark", marker))
         assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
         assert assert_ok(ctl.request("keymap.run", sid, name="mark", window=wid)) == {"id": sid}
         assert _written(marker) == f"{sid}|left|{wid}"
@@ -294,19 +301,30 @@ def test_reload_reports_each_bad_line_and_keeps_the_good_ones(ctl, hooks):
     }
 
 
+def _event_recorder(lines, kind, out):
+    """A hook line saving its event's stdin and variables under `out`, in files named after the kind and session."""
+    variables = ("AGT_EVENT_KIND", "AGT_SESSION_ID", "AGT_WINDOW_ID", "AGT_SOCKET")
+    if lines.cmd:
+        base = f"{out}\\{kind}-%AGT_SESSION_ID%"
+        fields = "|".join(f"%{name}%" for name in variables)
+        return (
+            f'on {kind} more > "{base}.json.tmp" & >"{base}.env.tmp" <nul set /p "={fields}" &'
+            f' move /y "{base}.json.tmp" "{base}.json" >nul & move /y "{base}.env.tmp" "{base}.env" >nul\n'
+        )
+    base = _quoted(out) + f"/{kind}-$AGT_SESSION_ID"
+    fields = " ".join(f'"${name}"' for name in variables)
+    return (
+        f"on {kind} cat > {base}.json.tmp; printf '%s|%s|%s|%s' {fields} > {base}.env.tmp;"
+        f" mv {base}.json.tmp {base}.json; mv {base}.env.tmp {base}.env\n"
+    )
+
+
 @pytest.mark.covers("hooks.reload", "event:session.created", "event:session.closed")
-def test_hook_gets_its_event_on_stdin_and_in_its_environment(ctl, hooks):
+def test_hook_gets_its_event_on_stdin_and_in_its_environment(ctl, hooks, adapter):
+    lines = CommandLines.of(adapter)
     out = ctl.instance.root / "hook-events"
     out.mkdir()
-    lines = []
-    for kind in ("session.created", "session.closed"):
-        base = _quoted(out) + f"/{kind}-$AGT_SESSION_ID"
-        fields = '"$AGT_EVENT_KIND" "$AGT_SESSION_ID" "$AGT_WINDOW_ID" "$AGT_SOCKET"'
-        lines.append(
-            f"on {kind} cat > {base}.json.tmp; printf '%s|%s|%s|%s' {fields} > {base}.env.tmp;"
-            f" mv {base}.json.tmp {base}.json; mv {base}.env.tmp {base}.env\n"
-        )
-    hooks.write_text("".join(lines))
+    hooks.write_text("".join(_event_recorder(lines, kind, out) for kind in ("session.created", "session.closed")))
     assert assert_ok(ctl.request("hooks.reload")) == {"count": 0}
     window = window_ids(ctl.request("window.list"))[0]
     cursor = ctl.events_baseline()
@@ -323,24 +341,51 @@ def test_hook_gets_its_event_on_stdin_and_in_its_environment(ctl, hooks):
     assert _written(out / f"session.closed-{sid}.env") == f"session.closed|{sid}|{window}|{socket}"
 
 
-def _release(fifo):
-    """Let one blocked hook run past its gate; False while nothing waits on it."""
-    try:
-        descriptor = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
-    except OSError:
-        return False
-    try:
-        os.write(descriptor, b"go\n")
-    finally:
-        os.close(descriptor)
-    return True
+class _Gate:
+    """What a gated hook waits on: a FIFO it reads a line from, or for `cmd`, which has no FIFO, a file it waits to
+    find, polling every second, and deletes as it passes."""
+
+    def __init__(self, lines, path):
+        self.lines, self.path = lines, path
+        if not lines.cmd:
+            os.mkfifo(path)
+
+    def command(self):
+        """The hook's line: read stdin to its end, then wait at the gate."""
+        if self.lines.cmd:
+            gate = self.lines.quote(self.path)
+            return (
+                f"more > nul & for /l %i in (0,0,1) do @if exist {gate} (del {gate} & exit) else ping -n 2 127.0.0.1"
+                " > nul"
+            )
+        return f"cat > /dev/null; read gate < {_quoted(self.path)}"
+
+    def release(self):
+        """Let one blocked hook run past the gate; False while nothing waits on it (for `cmd`: while the last opening
+        is still untaken)."""
+        if self.lines.cmd:
+            if self.path.exists():
+                return False
+            self.path.touch()
+            return True
+        try:
+            descriptor = os.open(self.path, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError:
+            return False
+        try:
+            os.write(descriptor, b"go\n")
+        finally:
+            os.close(descriptor)
+        return True
+
+    def remove(self):
+        self.path.unlink(missing_ok=True)
 
 
 @pytest.mark.covers("hooks.list", "hooks.reload", "field:result.hooks")
-def test_a_running_hook_queues_its_events_and_survives_its_removal(ctl, hooks):
-    fifo = ctl.instance.root / "hook-gate"
-    os.mkfifo(fifo)
-    command = f"cat > /dev/null; read gate < {_quoted(fifo)}"
+def test_a_running_hook_queues_its_events_and_survives_its_removal(ctl, hooks, adapter):
+    gate = _Gate(CommandLines.of(adapter), ctl.instance.root / "hook-gate")
+    command = gate.command()
     hooks.write_text(f"on session.created {command}\n")
     assert assert_ok(ctl.request("hooks.reload")) == {"count": 0}
     sessions = []
@@ -376,14 +421,15 @@ def test_a_running_hook_queues_its_events_and_survives_its_removal(ctl, hooks):
             {"kind": "session.created", "command": command, "line": 1, "elapsedSeconds": ANY, "dropped": 0},
         )
         assert_absent(entry, "lastFailure")
-        wait_until(lambda: _release(fifo))
+        wait_until(gate.release)
         ctl.wait_response("hooks.list", None, lambda response: assert_ok(response)["hooks"]["hooks"] == [])
     finally:
         # A gated child is detached from the app and would outlive it: retire the hook, then open the gate until
         # nothing runs.
         hooks.write_text("# no hooks\n")
         ctl.request("hooks.reload")
-        wait_until(lambda: not _release(fifo) and not any("runningPid" in hook for hook in _hooks(ctl)["hooks"]))
+        wait_until(lambda: not gate.release() and not any("runningPid" in hook for hook in _hooks(ctl)["hooks"]))
+        gate.remove()
         for sid in sessions:
             ctl.request("session.close", sid)
 

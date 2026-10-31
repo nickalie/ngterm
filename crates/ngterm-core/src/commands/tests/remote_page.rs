@@ -310,7 +310,6 @@ fn a_request_over_one_frame_is_refused_before_anything_changes() {
     let session = origin.session();
     let dir = tempfile::tempdir().unwrap();
     let opening = HudOpening {
-        command: "hud.sh".to_owned(),
         file: dir.path().join("hud"),
         size: HudPanelSize::new(30, 8),
         pane_identity: None,

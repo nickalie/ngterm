@@ -14,6 +14,8 @@ path = "src/main.rs"
 [dependencies]
 ngterm-proto.workspace = true
 ngterm-core.workspace = true
+# the shell the overlay job's program runs through (`command_line`)
+ngterm-host.workspace = true
 # the control socket's client end: `AF_UNIX`, or the named pipe on Windows
 ngterm-server.workspace = true
 base64.workspace = true

@@ -44,7 +44,7 @@ fn fits(key: &str) -> bool {
 }
 
 /// `identity` as a tag: itself when it fits, else as much of it as leaves room for `~` and the 16 hex digits of its
-/// FNV-1a 64 hash.
+/// FNV-1a 64 hash (`ngterm_core::live::fnv1a64`).
 fn shortened(identity: &str) -> String {
     if fits(identity) {
         return identity.to_owned();
@@ -58,13 +58,7 @@ fn shortened(identity: &str) -> String {
             used <= room
         })
         .collect();
-    format!("{prefix}~{:016x}", fnv1a64(identity.as_bytes()))
-}
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
-    })
+    format!("{prefix}~{}", ngterm_core::live::fnv1a64(identity.as_bytes()))
 }
 
 /// The toast's XML: the generic template with the title and the body as its two lines, silent (the configured
@@ -153,8 +147,14 @@ mod tests {
         assert!(first.tag.starts_with("command-failure:xxx"));
         assert_ne!(first.tag, second.tag, "the hash keeps two long identities apart");
         assert_eq!(slot(&long), first, "the same identity, the same slot");
+        // a tag names a slot an earlier run's toast may still hold: the same text in every build
+        assert_eq!(
+            first.tag,
+            "command-failure:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx~676587a2578eb6a9"
+        );
         let wide = "ü".repeat(70);
         assert!(slot(&wide).tag.encode_utf16().count() <= MAX_KEY);
+        assert_eq!(slot(&wide).tag, format!("{}~f13177004d667775", "ü".repeat(47)));
         assert_eq!(
             slot("not-a-uuid:rest").group,
             APP_GROUP,

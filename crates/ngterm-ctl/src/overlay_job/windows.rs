@@ -1,8 +1,9 @@
 //! The overlay job's program on Windows: its whole process tree in a Job object, in a console process group of its
 //! own, under the console the helper shares with it.
 //!
-//! - The program is `%ComSpec% /d /s /c "<command>"` (`cmd.exe` by default): the command is the line cmd parses, as
-//!   `eval` makes it the line `sh` parses on Unix, and its exit status is the command's.
+//! - The program is `%ComSpec% /D /S /C "<command>"` (`cmd.exe` by default, `ngterm_host::command_line`'s shell): the
+//!   command is the line cmd parses, as `eval` makes it the line `sh` parses on Unix, and its exit status is the
+//!   command's.
 //! - It starts suspended, joins a Job object that kills every process in it once the helper's handle to it closes
 //!   (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), and only then runs, so no descendant starts outside the job. The job is
 //!   the Unix process group's counterpart: the kill (`TerminateJobObject`) and the wait for the tree after a cancel
@@ -16,7 +17,8 @@
 //!   attached to it reads the same input, so the program gets the keys without one, and a console has no hangup to
 //!   watch for either (its close is the Ctrl event above).
 //! - Exit statuses map onto the Unix ones: `STATUS_CONTROL_C_EXIT` (a Ctrl event the program did not handle) reads
-//!   as 130, 128 plus SIGINT, as a shell reports a Ctrl+C'd program, and the kill sets 137, 128 plus SIGKILL.
+//!   as 130, 128 plus SIGINT, as a shell reports a Ctrl+C'd program (`overlay_capture::status_of_exit_code`, which a
+//!   local overlay's status takes too), and the kill sets 137, 128 plus SIGKILL.
 
 use std::ffi::OsString;
 use std::io;
@@ -26,7 +28,8 @@ use std::process::Child;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use ngterm_core::overlay_capture::OverlayLaunchContext;
+use ngterm_core::overlay_capture::{self, OverlayLaunchContext};
+use ngterm_host::ShellCommand;
 use windows_sys::Win32::Foundation::{FALSE, HANDLE, INVALID_HANDLE_VALUE, TRUE};
 use windows_sys::Win32::System::Console::{
     CTRL_BREAK_EVENT, CTRL_C_EVENT, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
@@ -53,12 +56,6 @@ pub(super) struct Terminal;
 /// The program's console process group, which its pid names.
 pub(super) type Group = u32;
 
-/// The shell when `ComSpec` names none.
-const DEFAULT_SHELL: &str = "cmd.exe";
-/// What a console program a Ctrl event ended exits with (`STATUS_CONTROL_C_EXIT`), read as an `i32`.
-const CONTROL_C_EXIT: i32 = i32::from_ne_bytes(0xC000_013A_u32.to_ne_bytes());
-/// The status a Ctrl event's end reads as: 128 plus SIGINT.
-pub(super) const INTERRUPTED_STATUS: i32 = 130;
 /// The status the kill sets: 128 plus SIGKILL.
 pub(super) const KILLED_STATUS: i32 = 137;
 /// How long the console's close waits for the cancel to report before the system ends the helper (it allows 5 s).
@@ -96,13 +93,14 @@ pub(super) fn spawn(
     _terminal: Option<Terminal>,
 ) -> io::Result<Program> {
     let job = kill_on_close_job()?;
-    let shell = std::env::var_os("ComSpec")
-        .filter(|shell| !shell.is_empty())
-        .unwrap_or_else(|| DEFAULT_SHELL.into());
-    let mut command = std::process::Command::new(shell);
-    // `/s`: everything between the first and the last quote is the command line, taken as it is
+    let shell = ShellCommand::cmd(&context.command, std::env::var_os("ComSpec").as_deref());
+    let mut command = std::process::Command::new(&shell.program);
+    // `/S`: everything between the first and the last quote is the command line, taken as it is
+    command.args(&shell.args);
+    if let Some(tail) = &shell.raw_tail {
+        command.raw_arg(tail);
+    }
     command
-        .raw_arg(format!("/d /s /c \"{}\"", context.command))
         .env_clear()
         .envs(base.iter().map(|(name, value)| (name, value)))
         .envs(&context.environment)
@@ -217,11 +215,9 @@ impl Program {
     /// The program's status once it ended, `None` while it runs.
     pub(super) fn reap(&mut self) -> Option<i32> {
         let code = self.child.try_wait().ok()??.code()?;
-        Some(if code == CONTROL_C_EXIT {
-            INTERRUPTED_STATUS
-        } else {
-            code
-        })
+        Some(overlay_capture::status_of_exit_code(u32::from_ne_bytes(
+            code.to_ne_bytes(),
+        )))
     }
 
     /// Whether any process of the job is still there.

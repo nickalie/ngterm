@@ -2,7 +2,8 @@
 //! the effects as `agterm/Control/ControlServer+Hud.swift` (measure the panel against the session's geometry, take the
 //! overlay slot, write the body file the painter re-reads, arm the auto-hide).
 //!
-//! What the core cannot know itself the frontend supplies: the bundled painter's path ([`Core::set_hud_helper`]), the
+//! What the core cannot know itself the frontend supplies: the private directory the body files go to
+//! ([`Core::set_hud_body_dir`]; the frontend paints them in process, `hud::painter`), the
 //! deck's geometry ([`Core::report_hud_frames`]), a cell estimate for a font no terminal draws yet
 //! ([`Core::set_cell_estimator`]), and the auto-hide delays it arms ([`Core::take_hud_timers`]).
 
@@ -51,9 +52,7 @@ pub struct HudHideTimer {
 /// The HUD commands' state beside the model (upstream's `hudAutoHide` and the app-side inputs).
 #[derive(Default)]
 pub(crate) struct HudRuntime {
-    /// The bundled painter's script.
-    helper: Option<PathBuf>,
-    /// The private directory the body files go to.
+    /// The private directory the body files go to; `None` until the frontend can paint them.
     body_dir: Option<PathBuf>,
     cell_estimator: Option<CellEstimator>,
     /// The revision of each session's armed auto-hide; a timer of another revision is inert.
@@ -66,7 +65,6 @@ pub(crate) struct HudRuntime {
 impl fmt::Debug for HudRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HudRuntime")
-            .field("helper", &self.helper)
             .field("body_dir", &self.body_dir)
             .field("armed", &self.armed)
             .field("timers", &self.timers)
@@ -75,14 +73,8 @@ impl fmt::Debug for HudRuntime {
 }
 
 impl HudRuntime {
-    /// The eval'd command line for the painter, through `/bin/sh` so a copy without the executable bit still runs.
-    fn helper_command(&self) -> Option<String> {
-        let helper = self.helper.as_deref().filter(|path| path.is_file())?;
-        Some(format!("/bin/sh {}", shell_quoted(helper)))
-    }
-
     /// The per-session body file (upstream's `bodyFile(for:)`), so an update rewrites the path the running painter
-    /// opened and a replacement reuses it. `None` until the frontend installed the painter.
+    /// reads and a replacement reuses it. `None` until the frontend installed the body directory.
     fn body_file(&self, session: Uuid) -> Option<PathBuf> {
         let dir = self.body_dir.as_deref()?;
         Some(dir.join(format!("ngterm-hud-{}.txt", uuid_string(session))))
@@ -107,11 +99,6 @@ impl HudRuntime {
             });
         }
     }
-}
-
-/// `path` single-quoted for `/bin/sh`.
-fn shell_quoted(path: &Path) -> String {
-    format!("'{}'", path.to_string_lossy().replace('\'', r"'\''"))
 }
 
 // MARK: - validation
@@ -410,10 +397,10 @@ impl Core {
         }
     }
 
-    /// Installs the bundled painter's script and the private directory the body files go to
-    /// ([`crate::paths::hud_body_dir`], made 0700 on each write); without them `session.hud.open` is refused.
-    pub fn set_hud_helper(&mut self, script: PathBuf, body_dir: PathBuf) {
-        self.hud.helper = Some(script);
+    /// Installs the private directory the body files go to ([`crate::paths::hud_body_dir`], made owner-only on each
+    /// write), which the frontend's painter reads them from; without it `session.hud.open` is refused, as upstream
+    /// refuses a build without its painter.
+    pub fn set_hud_body_dir(&mut self, body_dir: PathBuf) {
         self.hud.body_dir = Some(body_dir);
     }
 
@@ -610,7 +597,7 @@ pub(crate) fn open(
     if session.overlay_hidden(None) {
         return Err(ControlError::rejected(crate::model::OVERLAY_HIDDEN));
     }
-    let (Some(command), Some(file)) = (core.hud.helper_command(), core.hud.body_file(id)) else {
+    let Some(file) = core.hud.body_file(id) else {
         return Err(ControlError::rejected("hud helper is not bundled in this build"));
     };
     let resolved_pane = resolve_pane_placement(
@@ -626,7 +613,6 @@ pub(crate) fn open(
         .unwrap_or_else(|| core.hud_base_font_size());
     let metrics = core.hud_metrics(session, resolved_pane.map(|(_, pane)| pane), font_size);
     let opening = HudOpening {
-        command,
         file,
         size: hud::panel_size(&spec, &metrics),
         pane_identity: resolved_pane.map(|(identity, _)| identity),

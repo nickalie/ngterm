@@ -389,6 +389,34 @@ fn killing_the_tree_ends_the_child_and_its_descendants() -> TestResult {
     Ok(())
 }
 
+/// Windows: the job's view lists the child's tree while the job is open, and nothing once the child and its killers
+/// are gone: the view never holds the job, whose last handle's close ends the tree.
+#[cfg(windows)]
+#[test]
+fn a_job_view_lists_the_tree_and_never_keeps_it() -> TestResult {
+    let command = command("cmd.exe").args(["/d", "/c", "echo started & ping -n 300 127.0.0.1 >nul"]);
+    let mut session = start(&command, Size::cells(24, 80))?;
+    session.expect("started");
+    let view = session.child.job_view();
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let pids = view.process_ids().ok_or("the job could not be read")?;
+        if pids.len() >= 2 {
+            assert!(pids.contains(&session.child.pid()), "{pids:?}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "the job never held the ping: {pids:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    session.child.killer().kill_tree()?;
+    session.child.wait()?;
+    session.handle.child_exited();
+    assert_eq!(session.exit.recv_timeout(PATIENCE)?, ExitReason::Eof);
+    drop(session);
+    assert_eq!(view.process_ids(), None, "the view held the job open");
+    Ok(())
+}
+
 /// A `^C` typed into the PTY interrupts the child's program even when the spawner ignores Ctrl+C, as a process
 /// started in a process group of its own does (the session server's detached start, a CI runner's steps) and its
 /// children would inherit: the spawn lets them take it.
@@ -437,15 +465,21 @@ fn a_child_waited_for_unreaped_still_has_its_tree_killed() -> TestResult {
 #[cfg(unix)]
 struct Descendants(libc::pid_t);
 
+/// The background process's id from the child's `started:<pid>:` line, once its closing colon came: the line may
+/// arrive in pieces, and a read cut inside the id would name another process.
 #[cfg(unix)]
 fn descendants(session: &Session) -> TestResult<Descendants> {
-    let text = session.text();
-    let pid = text
-        .split("started:")
-        .nth(1)
-        .and_then(|rest| rest.split(':').next())
-        .ok_or("no background pid in the output")?;
-    Ok(Descendants(pid.parse()?))
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let text = session.text();
+        if let Some((pid, _)) = text.split("started:").nth(1).and_then(|rest| rest.split_once(':')) {
+            return Ok(Descendants(pid.parse()?));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("no background pid in the output: {text:?}").into());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[cfg(unix)]

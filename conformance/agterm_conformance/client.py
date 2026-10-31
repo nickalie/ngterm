@@ -1,16 +1,21 @@
-"""JSON-line control-socket client confined to one instance's temp root."""
+"""JSON-line control-socket client confined to one instance's temp root.
+
+The socket path is checked against the root on every connection; what it stands for (an `AF_UNIX` socket, the Rust
+build's named pipe on Windows) is `agterm_conformance.transport`'s.
+"""
 
 from __future__ import annotations
 
 import json
 import os
-import socket
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
+
+from agterm_conformance import transport
 
 # ControlWire.maxRequestLineBytes, newline excluded: over it the server stops reading and closes
 # (macOS first replies ok:false "request too large or read failed"; Linux sends nothing).
@@ -89,7 +94,7 @@ class Stream:
     job frames. One JSON object per line in both directions; close it (or use it as a context manager) when done.
     """
 
-    def __init__(self, sock: socket.socket, path: Path, reply: Response, max_line_bytes: int) -> None:
+    def __init__(self, sock: transport.Connection, path: Path, reply: Response, max_line_bytes: int) -> None:
         self.sock = sock
         self.path = path
         # Set by `Client.open_stream` from the first line, before any frame is read.
@@ -186,15 +191,13 @@ class Client:
         if len(line) > MAX_REQUEST_LINE_BYTES:
             raise RequestTooLarge(f"request too large ({len(line)} bytes, cap {MAX_REQUEST_LINE_BYTES})")
         check_under_root(self.socket_path, self.root)
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            sock.settimeout(self.timeout)
-            try:
-                sock.connect(os.fspath(self.socket_path))
-            except TimeoutError:
-                raise ClientTimeout(f"no response from {self.socket_path} within {self.timeout}s") from None
-            except OSError as error:
-                raise ConnectFailed(f"cannot connect to {self.socket_path}: {error}") from error
+            sock = transport.connect(self.socket_path, self.timeout)
+        except TimeoutError:
+            raise ClientTimeout(f"no response from {self.socket_path} within {self.timeout}s") from None
+        except OSError as error:
+            raise ConnectFailed(f"cannot connect to {self.socket_path}: {error}") from error
+        try:
             sock.sendall(line + b"\n")
             stream = Stream(sock, self.socket_path, Response(False, None, None, {}), self.max_response_bytes)
             stream.reply = decode_response(stream.read_line(self.timeout))
@@ -213,15 +216,14 @@ class Client:
         # Re-checked per connection: the socket file can appear (or be swapped for a link) after init.
         check_under_root(self.socket_path, self.root)
         deadline = time.monotonic() + timeout
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        try:
+            sock = transport.connect(self.socket_path, timeout)
+        except TimeoutError:
+            raise ClientTimeout(f"no response from {self.socket_path} within {timeout}s") from None
+        except OSError as error:
+            raise ConnectFailed(f"cannot connect to {self.socket_path}: {error}") from error
+        with sock:
             try:
-                sock.settimeout(timeout)
-                try:
-                    sock.connect(os.fspath(self.socket_path))
-                except TimeoutError:
-                    raise
-                except OSError as error:
-                    raise ConnectFailed(f"cannot connect to {self.socket_path}: {error}") from error
                 sock.settimeout(_remaining(deadline))
                 try:
                     sock.sendall(data)
@@ -235,7 +237,7 @@ class Client:
             except TimeoutError:
                 raise ClientTimeout(f"no response from {self.socket_path} within {timeout}s") from None
 
-    def _read_line(self, sock: socket.socket, deadline: float) -> bytes:
+    def _read_line(self, sock: transport.Connection, deadline: float) -> bytes:
         buffer = bytearray()
         while True:
             sock.settimeout(_remaining(deadline))

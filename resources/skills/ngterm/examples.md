@@ -439,6 +439,13 @@ every install layout (plugin cache or the app's `~/.claude/skills/ngterm/` / `~/
 bash <this-skill-directory>/scripts/show-image.sh /abs/path/to/img.png 60
 ```
 
+On Windows the same line from Git Bash shows it in a page overlay (the pseudoconsole drops the kitty
+escapes); from PowerShell run the Windows form beside it:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File <this-skill-directory>\scripts\show-image.ps1 C:\path\to\img.png 60
+```
+
 The image shows in a floating overlay over the active session; dismiss it with Enter in the panel or
 `ngtermctl session overlay close`. Do NOT emit graphics escapes to your own tool stdout (the harness
 escapes the control bytes) and do NOT run an image viewer in your tool shell (no controlling

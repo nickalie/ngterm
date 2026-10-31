@@ -166,11 +166,9 @@ pub fn apply(plan: &CliPlan, path: Option<&str>) -> CliResult {
     }
 }
 
-/// Whether `directory` is an entry of `path`.
+/// Whether `directory` is an entry of `path`, split by the platform's rules.
 fn on_path(directory: &Path, path: Option<&str>) -> bool {
-    path.unwrap_or_default()
-        .split(':')
-        .any(|entry| !entry.is_empty() && Path::new(entry) == directory)
+    std::env::split_paths(path.unwrap_or_default()).any(|entry| !entry.as_os_str().is_empty() && entry == directory)
 }
 
 #[cfg(unix)]
@@ -259,6 +257,15 @@ mod tests {
         fs::create_dir_all(tool.parent().unwrap()).unwrap();
         fs::write(&tool, "#!/bin/sh\n").unwrap();
         tool
+    }
+
+    #[test]
+    fn on_path_matches_whole_entries_by_the_platforms_separator() {
+        let directory = Path::new("/home/me/.local/bin");
+        assert!(on_path(directory, Some("/usr/bin::/home/me/.local/bin/")));
+        assert!(!on_path(directory, Some("/usr/bin:/home/me/.local")));
+        assert!(!on_path(directory, Some("")));
+        assert!(!on_path(directory, None));
     }
 
     #[test]

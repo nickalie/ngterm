@@ -35,7 +35,7 @@ pub struct HookRun<'a> {
 
 /// Starts hook children (upstream's `HookLauncher` protocol).
 pub trait HookLauncher {
-    /// Starts `/bin/sh -c <command>` for `run`, delivering the event on its stdin and [`super::hook_environment`] in
+    /// Starts `<command>` through the OS's shell (`ngterm_host::command_line`) for `run`, delivering the event on its stdin and [`super::hook_environment`] in
     /// its environment, and returns the child's pid.
     ///
     /// A returned pid promises exactly one later [`HookScheduler::exited`] for `run.token`, after the child's stdin

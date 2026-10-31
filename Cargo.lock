@@ -4706,6 +4706,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "bitflags 2.13.2",
+ "idna",
  "mime_guess",
  "ngterm-host",
  "ngterm-proto",
@@ -4937,6 +4938,7 @@ dependencies = [
  "gio",
  "glib",
  "libc",
+ "ngterm-host",
  "ngterm-wpe-javascriptcore-sys",
  "ngterm-wpe-platform-sys",
  "ngterm-wpe-sys",

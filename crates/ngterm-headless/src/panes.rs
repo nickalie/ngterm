@@ -92,13 +92,10 @@ impl HeadlessSurface {
     }
 }
 
-/// Sends `text` as one key press typing it (an unidentified key), as the GPUI surface types a run.
+/// Sends `text` as one key press typing it (an unidentified key), control characters too ([`Pane::type_text`]), as
+/// the GPUI surface types a run.
 fn type_run(pane: &Pane, text: &str) {
-    let key = KeyInput {
-        unshifted: None,
-        ..KeyInput::press(PhysicalKey::UNIDENTIFIED, Mods::empty(), text)
-    };
-    if let Err(error) = pane.key(&key) {
+    if let Err(error) = pane.type_text(text) {
         tracing::warn!(%error, "typing into a headless terminal failed");
     }
 }
@@ -507,6 +504,8 @@ impl Panes {
             env,
             env_remove: Vec::new(),
             live: replacement.attach.clone(),
+            painter: None,
+            status_file: None,
         };
         let fresh = self.cell(&spec.token);
         let installed = core

@@ -23,9 +23,10 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR, COREWEBVIEW2_KEY_EVENT_KIND,
     COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
-    COREWEBVIEW2_WEB_ERROR_STATUS, ICoreWebView2, ICoreWebView2_11, ICoreWebView2_13, ICoreWebView2ContextMenuItem,
-    ICoreWebView2ContextMenuItemCollection, ICoreWebView2Controller, ICoreWebView2Environment,
-    ICoreWebView2NavigationCompletedEventArgs, ICoreWebView2NavigationCompletedEventArgs2,
+    COREWEBVIEW2_WEB_ERROR_STATUS, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
+    COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT, ICoreWebView2, ICoreWebView2_11, ICoreWebView2_13,
+    ICoreWebView2_22, ICoreWebView2ContextMenuItem, ICoreWebView2ContextMenuItemCollection, ICoreWebView2Controller,
+    ICoreWebView2Environment, ICoreWebView2NavigationCompletedEventArgs, ICoreWebView2NavigationCompletedEventArgs2,
     ICoreWebView2NavigationStartingEventArgs, ICoreWebView2Profile2,
 };
 use webview2_com::{
@@ -34,7 +35,7 @@ use webview2_com::{
     DocumentTitleChangedEventHandler, FocusChangedEventHandler, HistoryChangedEventHandler,
     NavigationCompletedEventHandler, NavigationStartingEventHandler, NewWindowRequestedEventHandler,
     ProcessFailedEventHandler, ScriptDialogOpeningEventHandler, SourceChangedEventHandler,
-    WebMessageReceivedEventHandler, WindowCloseRequestedEventHandler, take_pwstr,
+    WebMessageReceivedEventHandler, WebResourceRequestedEventHandler, WindowCloseRequestedEventHandler, take_pwstr,
 };
 use windows::core::{BOOL, HSTRING, Interface as _, PWSTR, Result as ComResult};
 use wry::dpi::{LogicalPosition, LogicalSize};
@@ -43,6 +44,7 @@ use wry::{
     WebViewExtWindows,
 };
 
+use super::super::policy::GrantRoot;
 use super::scheme;
 
 /// A page's content area in its window, in logical pixels.
@@ -130,13 +132,16 @@ pub type Post = Rc<dyn Fn(Report)>;
 /// The keystroke the app takes from a key pressed in the page, by its virtual key.
 pub type TakeKey = Rc<dyn Fn(u32) -> Option<gpui_kit::Keystroke>>;
 
-/// How the grant's protocol answers: the page's grant as a real path, and the last read it refused (an address and
+/// How the grant's protocol answers: the page's grant, and the last read it refused (an address and
 /// why), which a failed main-frame load reports.
 #[derive(Clone, Default)]
 pub struct Grant {
-    pub root: Arc<Mutex<Option<PathBuf>>>,
+    pub root: Arc<Mutex<Option<GrantRoot>>>,
     pub refused: Arc<Mutex<Option<(String, String)>>>,
 }
+
+/// The text a file page without a grant shows, which its text protocol serves (`scheme`); `None` before its load.
+pub type Text = Arc<Mutex<Option<String>>>;
 
 /// How a replica's protocol is answered: its read, the app's address and the responder.
 pub type ReplicaRead = Arc<dyn Fn(String, RequestAsyncResponder) + Send + Sync>;
@@ -167,6 +172,7 @@ pub struct Spec {
     pub scripts: Vec<String>,
     pub grant: Option<Grant>,
     pub replica: Option<ReplicaRead>,
+    pub text: Option<Text>,
     pub decide: Decide,
     pub post: Post,
     pub take_key: TakeKey,
@@ -203,7 +209,10 @@ impl Native {
             post: Rc::clone(&spec.post),
         };
         let webview = native.webview();
-        wire_navigation(&webview, &spec.decide, &spec.post).map_err(|err| err.to_string())?;
+        let main_document = MainDocument::default();
+        wire_navigation(&webview, &spec.decide, &spec.post, &main_document).map_err(|err| err.to_string())?;
+        wire_frame_requests(&webview, &native.environment(), &spec.decide, main_document)
+            .map_err(|err| err.to_string())?;
         wire_page(&webview, &spec.post).map_err(|err| err.to_string())?;
         wire_refusals(&webview).map_err(|err| err.to_string())?;
         wire_focus(&native.view.controller(), &spec.post).map_err(|err| err.to_string())?;
@@ -281,12 +290,6 @@ impl Native {
         if let Err(err) = self.view.load_url(address) {
             tracing::warn!(%err, "a page's load did not start");
         }
-    }
-
-    /// Loads `html` at `about:blank`; `WebView2`'s refusal text when it does not take the document (over its 2 MB
-    /// limit).
-    pub fn load_html(&self, html: &str) -> Result<(), String> {
-        self.view.load_html(html).map_err(|err| err.to_string())
     }
 
     pub fn reload(&self) {
@@ -386,6 +389,11 @@ fn build(spec: &Spec) -> Result<WebView, String> {
                 serve_granted(&grant, &request.uri().to_string(), reply);
             });
     }
+    if let Some(text) = spec.text.clone() {
+        builder = builder.with_custom_protocol(scheme::TEXT_PROTOCOL.to_owned(), move |_, request| {
+            serve_text(&text, &request.uri().to_string())
+        });
+    }
     if let Some(replica) = spec.replica.clone() {
         builder =
             builder.with_asynchronous_custom_protocol(scheme::REPLICA_PROTOCOL.to_owned(), move |_, request, reply| {
@@ -464,14 +472,31 @@ fn completion_of(args: &ICoreWebView2NavigationCompletedEventArgs) -> ComResult<
 
 // MARK: - events
 
-/// The navigation policy on the main frame and its frames, answered at once and reported.
-fn wire_navigation(webview: &ICoreWebView2, decide: &Decide, post: &Post) -> ComResult<()> {
+/// The address of the document the main frame's navigation going ahead asks for, without its fragment.
+type MainDocument = Rc<RefCell<Option<String>>>;
+
+/// `uri` without its fragment, as a request names it.
+fn without_fragment(uri: &str) -> &str {
+    uri.split_once('#').map_or(uri, |(address, _)| address)
+}
+
+/// The navigation policy on the main frame and its frames, answered at once and reported; the main frame's document
+/// going ahead is kept in `main_document`.
+fn wire_navigation(
+    webview: &ICoreWebView2,
+    decide: &Decide,
+    post: &Post,
+    main_document: &MainDocument,
+) -> ComResult<()> {
     let mut token = 0i64;
-    let (main_decide, main_post) = (Rc::clone(decide), Rc::clone(post));
+    let (main_decide, main_post, document) = (Rc::clone(decide), Rc::clone(post), Rc::clone(main_document));
     let main = NavigationStartingEventHandler::create(Box::new(move |_, args| {
         let Some(args) = args else { return Ok(()) };
         let navigation = navigation_of(&args, true)?;
         let allowed = main_decide(&navigation);
+        if allowed {
+            document.replace(Some(without_fragment(&navigation.uri).to_owned()));
+        }
         // SAFETY: the event's own arguments, answered on its thread.
         unsafe { args.SetCancel(!allowed) }?;
         main_post(Report::Navigation { navigation, allowed });
@@ -482,7 +507,9 @@ fn wire_navigation(webview: &ICoreWebView2, decide: &Decide, post: &Post) -> Com
     let frame_decide = Rc::clone(decide);
     let frames = NavigationStartingEventHandler::create(Box::new(move |_, args| {
         let Some(args) = args else { return Ok(()) };
-        let allowed = frame_decide(&navigation_of(&args, false)?);
+        let navigation = navigation_of(&args, false)?;
+        let allowed = frame_decide(&navigation);
+        tracing::debug!(uri = navigation.uri, allowed, "a page's frame navigation");
         // SAFETY: the event's own arguments, answered on its thread.
         unsafe { args.SetCancel(!allowed) }
     }));
@@ -517,6 +544,67 @@ fn wire_navigation(webview: &ICoreWebView2, decide: &Decide, post: &Post) -> Com
     }));
     // SAFETY: as above.
     unsafe { webview.add_ProcessFailed(&process, &raw mut token) }
+}
+
+/// A frame's document is asked of the policy again when the web view requests it: `WebView2` sends a frame's request
+/// even when `FrameNavigationStarting` cancelled its navigation, so another origin would see a frame the policy
+/// refused (a chromeless page's, any file page's web frame), which the WPE host never asks for. A refused one is
+/// answered here with a 403 and never reaches the network. The main frame's own document, decided at its
+/// `NavigationStarting`, and the app's protocols, which answer only what their page may read, are left alone.
+fn wire_frame_requests(
+    webview: &ICoreWebView2,
+    environment: &ICoreWebView2Environment,
+    decide: &Decide,
+    main_document: MainDocument,
+) -> ComResult<()> {
+    let filter = HSTRING::from("*");
+    // frames' requests reach the event only through the newer filter (wry's own protocols use it for that too)
+    if let Ok(newer) = webview.cast::<ICoreWebView2_22>() {
+        // SAFETY: a COM call on the web view's own thread.
+        unsafe {
+            newer.AddWebResourceRequestedFilterWithRequestSourceKinds(
+                &filter,
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
+                COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT,
+            )
+        }?;
+    } else {
+        // SAFETY: as above.
+        unsafe { webview.AddWebResourceRequestedFilter(&filter, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT) }?;
+    }
+    let (decide, environment) = (Rc::clone(decide), environment.clone());
+    let handler = WebResourceRequestedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else { return Ok(()) };
+        // SAFETY: the event's own arguments, read on its thread.
+        let request = unsafe { args.Request() }?;
+        let uri = string(|out| {
+            // SAFETY: as above.
+            unsafe { request.Uri(out) }
+        })?;
+        let main = main_document.borrow().as_deref() == Some(without_fragment(&uri));
+        if main || !scheme::is_network(&uri) {
+            return Ok(());
+        }
+        let navigation = Navigation {
+            uri,
+            main_frame: false,
+            user: false,
+            redirect: false,
+            id: 0,
+        };
+        if decide(&navigation) {
+            return Ok(());
+        }
+        tracing::debug!(uri = navigation.uri, "a page's frame request refused");
+        // SAFETY: a COM call on the web view's own thread, answering the event's own arguments.
+        let refusal =
+            unsafe { environment.CreateWebResourceResponse(None, 403, &HSTRING::from("Forbidden"), &HSTRING::new()) }?;
+        // SAFETY: as above.
+        unsafe { args.SetResponse(&refusal) }
+    }));
+    let mut token = 0i64;
+    // SAFETY: a COM registration on the web view's own thread; the handler lives as long as the web view.
+    unsafe { webview.add_WebResourceRequested(&handler, &raw mut token) }
 }
 
 /// What the page shows and asks: its address, history, title, messages, its close and new windows.
@@ -765,7 +853,7 @@ fn serve_granted(grant: &Grant, uri: &str, reply: RequestAsyncResponder) {
     let (root, refused) = (Arc::clone(&grant.root), Arc::clone(&grant.refused));
     let spawned = std::thread::Builder::new().name("page-file".to_owned()).spawn(move || {
         let root = root.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        let answer = read_granted(root.as_deref(), &app);
+        let answer = read_granted(root.as_ref(), &app);
         if let Err(message) = &answer {
             let mut refused = refused.lock().unwrap_or_else(PoisonError::into_inner);
             refused.replace((app, message.clone()));
@@ -790,11 +878,30 @@ fn serve_granted(grant: &Grant, uri: &str, reply: RequestAsyncResponder) {
 }
 
 /// The file `app` names, inside the grant `root`: its MIME type and bytes, or the refusal's text.
-fn read_granted(root: Option<&std::path::Path>, app: &str) -> Result<(String, Vec<u8>), String> {
+fn read_granted(root: Option<&GrantRoot>, app: &str) -> Result<(String, Vec<u8>), String> {
     let requested = url::Url::parse(app).ok().and_then(|url| url.to_file_path().ok());
     let path = super::super::policy::granted_file(root, requested.as_deref()).map_err(str::to_owned)?;
     let body = std::fs::read(&path).map_err(|err| err.to_string())?;
     Ok((ngterm_core::remote::page_serve::mime_type(&path), body))
+}
+
+// MARK: - the text protocol
+
+/// Answers a read of the text protocol: the page's text for its document, nothing else.
+fn serve_text(text: &Text, uri: &str) -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
+    let body = scheme::requests_text_document(uri)
+        .then(|| text.lock().unwrap_or_else(PoisonError::into_inner).clone())
+        .flatten();
+    let (status, mime, body) = match body {
+        Some(body) => (200, "text/html; charset=utf-8", body.into_bytes()),
+        None => (404, "text/plain; charset=utf-8", Vec::new()),
+    };
+    wry::http::Response::builder()
+        .status(status)
+        .header("Content-Type", mime)
+        .header("Cache-Control", "no-store")
+        .body(std::borrow::Cow::Owned(body))
+        .unwrap_or_default()
 }
 
 // MARK: - the saved store's clear

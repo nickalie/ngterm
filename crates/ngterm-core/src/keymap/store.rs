@@ -9,7 +9,7 @@ use super::defaults::ShippedDefaults;
 use super::parse::parse_keymap;
 use super::parsed::Keymap;
 use super::starter::starter_keymap_conf;
-use crate::hooks::read_error_reason;
+use crate::hooks::{read_config_text, read_error_reason};
 
 /// Loads and parses the keymap at `path`. A missing file is the empty keymap with no diagnostics; one that exists
 /// but cannot be read as UTF-8 text is the empty keymap with a single line-0 diagnostic, worded as `hooks.conf`'s.
@@ -19,7 +19,7 @@ pub fn load_keymap(path: &Path, defaults: &ShippedDefaults) -> (Keymap, Vec<Keym
         let message = format!("could not read keymap.conf: {reason}");
         (Keymap::empty(defaults), vec![KeymapDiagnostic::new(0, message)])
     };
-    match fs::read_to_string(path) {
+    match read_config_text(path) {
         Ok(text) => parse_keymap(&text, defaults),
         Err(error) if error.kind() == io::ErrorKind::NotFound => (Keymap::empty(defaults), Vec::new()),
         Err(error) => unreadable(read_error_reason(&error)),

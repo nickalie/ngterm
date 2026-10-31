@@ -2,7 +2,9 @@
 //! again, in the directory it runs in. Every refusal is decided before anything is ended. Pure, so the decisions are
 //! tested off the process table; the frontend reads the observation when live sessions arrive.
 
-use crate::command_restore::{PaneForeground, basename, is_known_shell, shell_quoted_line, should_restore};
+use crate::command_restore::{
+    PaneForeground, basename, is_known_shell, same_program, shell_quoted_line, should_restore,
+};
 
 /// The longest shell line `session.restart` takes, in UTF-8 bytes (upstream's
 /// `ControlSessionRestartOptions.maxCommandBytes`): it travels in the new shell's argv, inside the session host's
@@ -79,7 +81,7 @@ pub fn resolve<S: AsRef<str>>(
     if observation.is_daemon_leader && is_known_shell(name, shell) {
         return Err(Refusal::Shell(name.to_owned()));
     }
-    if denylist.iter().any(|entry| entry.as_ref() == name) {
+    if denylist.iter().any(|entry| same_program(name, entry.as_ref())) {
         return Err(Refusal::Denylisted(name.to_owned()));
     }
     let none: [&str; 0] = [];
@@ -212,6 +214,27 @@ mod tests {
             resolve_with(Some(program(&["tool", "a\nb"])), false, Some("/work"), None, &[]),
             Err(Refusal::Unreplayable)
         );
+    }
+
+    /// A Windows program's argv names it by its resolved path with its `.exe`, in whatever case it was installed with.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_program_is_denylisted_in_any_case_without_its_exe() {
+        for (program_path, name) in [
+            (r"C:\Program Files\zellij\zellij.exe", "zellij.exe"),
+            (r"C:\Windows\System32\OpenSSH\SSH.EXE", "SSH.EXE"),
+        ] {
+            assert_eq!(
+                resolve_with(
+                    Some(program(&[program_path, "host"])),
+                    false,
+                    Some("/work"),
+                    None,
+                    &["zellij", "ssh"]
+                ),
+                Err(Refusal::Denylisted(name.to_owned()))
+            );
+        }
     }
 
     #[test]

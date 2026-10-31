@@ -14,6 +14,7 @@ from agterm_conformance.match import (
     assert_subset,
     assert_version_result,
     find_session,
+    program_argv,
     session_ids,
     window_ids,
     workspace_ids,
@@ -233,3 +234,16 @@ def test_version_result_accepts_app_and_an_optional_profile(result: dict) -> Non
 def test_version_result_rejects(result: dict, text: str) -> None:
     with pytest.raises(AssertionError, match=re.escape(text)):
         assert_version_result(result)
+
+
+def test_program_argv_names_a_windows_image_by_its_program(monkeypatch: pytest.MonkeyPatch) -> None:
+    from agterm_conformance import match
+
+    path = [r"C:\Program Files\Git\usr\bin\Sleep.EXE", "600"]
+    monkeypatch.setattr(match, "WINDOWS", True)
+    assert program_argv(path) == ["sleep", "600"]
+    assert program_argv(["cat"]) == ["cat"]
+    assert program_argv(None) is None
+    assert program_argv([]) == []
+    monkeypatch.setattr(match, "WINDOWS", False)
+    assert program_argv(path) == path

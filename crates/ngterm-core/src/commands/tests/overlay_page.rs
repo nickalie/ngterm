@@ -603,9 +603,7 @@ fn the_dashboard_names_a_covering_page() {
 /// A HUD helper the HUD commands can launch.
 fn with_hud_helper(fixture: &mut Fixture) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    let helper = dir.path().join("hud.sh");
-    std::fs::write(&helper, "#!/bin/sh\n").unwrap();
-    fixture.core.set_hud_helper(helper, dir.path().join("bodies"));
+    fixture.core.set_hud_body_dir(dir.path().join("bodies"));
     dir
 }
 

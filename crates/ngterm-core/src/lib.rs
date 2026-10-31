@@ -53,6 +53,7 @@ pub mod resolve;
 pub mod restart_replay;
 pub mod restore;
 pub mod settings_model;
+pub mod shell_dialect;
 pub mod sidebar_actions;
 pub mod sidebar_drop;
 pub mod sound_throttle;

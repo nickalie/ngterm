@@ -47,8 +47,9 @@ impl Home {
         }
     }
 
+    /// `relative` under the home, joined as the installer joins its paths (one separator on Windows).
     fn path(&self, relative: &str) -> PathBuf {
-        self.env.home.join(relative)
+        ngterm_core::paths::join_relative(&self.env.home, relative)
     }
 
     fn mkdir(&self, relative: &str) {

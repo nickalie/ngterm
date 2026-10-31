@@ -516,9 +516,7 @@ fn text_and_copy_read_the_covering_program() {
 /// Installs the HUD painter.
 fn with_hud_helper(fixture: &mut Fixture) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    let helper = dir.path().join("hud.sh");
-    std::fs::write(&helper, "#!/bin/sh\n").unwrap();
-    fixture.core.set_hud_helper(helper, dir.path().join("bodies"));
+    fixture.core.set_hud_body_dir(dir.path().join("bodies"));
     dir
 }
 

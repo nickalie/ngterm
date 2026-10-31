@@ -27,6 +27,7 @@ use std::path::Path;
 use ngterm_core::command_restore::shell_quoted_line;
 use ngterm_core::live::replay::{self, FinalShell};
 use ngterm_core::live::shell_integration::{LoginShell, Rearm};
+use ngterm_host::fakes::write_executable;
 use ngterm_session::protocol::{ExitStatus, SessionSpec};
 use ngterm_session::server::pane::Pane;
 use support::{Client, TestResult, config};
@@ -220,17 +221,11 @@ fn script(shell: &Shell, form: Form, payload: &Path, final_shell: &FinalShell<'_
     }
 }
 
-fn executable(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::write(path, contents)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
-}
-
 /// The final shell's stand-in for `shell`, written into `dir`, with what the replay re-arms before it; its path.
 fn final_shell_probe(shell: &Shell, dir: &Path) -> TestResult<(String, Vec<Rearm>)> {
     let rearm = rearm(shell.kind);
     let probe = dir.join("final shell");
-    executable(&probe, &final_shell_script(&rearm))?;
+    write_executable(&probe, &final_shell_script(&rearm))?;
     Ok((probe.display().to_string(), rearm))
 }
 
@@ -246,7 +241,7 @@ fn spawn_replay(shell: &Shell, script: String, dir: &Path, what: &str) -> TestRe
 fn interrupted_replay(shell: &Shell, form: Form) -> TestResult {
     let dir = tempfile::tempdir()?;
     let payload = dir.path().join("interrupted payload");
-    executable(&payload, PAYLOAD)?;
+    write_executable(&payload, PAYLOAD)?;
     let (probe_path, rearm) = final_shell_probe(shell, dir.path())?;
     let final_shell = FinalShell {
         path: &probe_path,
@@ -305,7 +300,7 @@ fn an_interrupted_command_still_ends_at_the_rearmed_login_shell() -> TestResult 
 fn hung_up_replay(shell: &Shell, form: Form) -> TestResult {
     let dir = tempfile::tempdir()?;
     let payload = dir.path().join("long payload");
-    executable(&payload, LONG_PAYLOAD)?;
+    write_executable(&payload, LONG_PAYLOAD)?;
     let (probe_path, rearm) = final_shell_probe(shell, dir.path())?;
     let final_shell = FinalShell {
         path: &probe_path,

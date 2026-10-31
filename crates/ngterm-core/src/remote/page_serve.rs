@@ -30,8 +30,8 @@ use uuid::Uuid;
 
 use super::frames::{self, FrameError};
 use crate::Core;
-use crate::html::HtmlSource;
 use crate::html::bridge::{self, HtmlBridgePage};
+use crate::html::{self, HtmlSource};
 use crate::pane_env::uuid_string;
 
 /// The largest chunk body a transfer sends, and the largest one either side accepts (upstream's `maxChunkBytes`).
@@ -239,6 +239,11 @@ fn check_chunk(frame: &PageServeFrame) -> Result<(), FrameError> {
 /// grant itself. A replica asks by the origin path its scheme URL carries, so a request is an absolute path. Both sides
 /// are standardized and their symlinks resolved before the check, so a `..` or a link that escapes the folder is
 /// refused. A URL page serves nothing.
+///
+/// A request on a volume the page's file or grant names neither as its source gives it nor as it resolves (on
+/// Windows: another drive, or another server's or share's file) is refused before the file system is asked: resolving
+/// it would make Windows open it, and an SMB connection to a server a page chose hands over the user's NTLM
+/// credentials. Containment compares the volume in any of its spellings ([`html::strictly_inside`]).
 #[must_use]
 pub fn resolve(requested: &str, source: &HtmlSource) -> Option<PathBuf> {
     let HtmlSource::File { path, grant_root } = source else {
@@ -248,13 +253,16 @@ pub fn resolve(requested: &str, source: &HtmlSource) -> Option<PathBuf> {
     if !requested.is_absolute() {
         return None;
     }
+    let named = Path::new(grant_root.as_deref().unwrap_or(path));
+    let real_named = real(named);
+    let requested_volume = html::volume(requested);
+    if requested_volume != html::volume(named) && requested_volume != html::volume(&real_named) {
+        return None;
+    }
     let file = real(requested);
     match grant_root {
-        None => (file == real(Path::new(path))).then_some(file),
-        Some(root) => {
-            let root = real(Path::new(root));
-            (file.starts_with(&root) && file != root).then_some(file)
-        }
+        None => (file == real_named).then_some(file),
+        Some(_) => html::strictly_inside(&file, &real_named).then_some(file),
     }
 }
 

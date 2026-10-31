@@ -1,0 +1,19 @@
+Zoom toggles (found by the conformance suite on Windows, Task 8 of docs/plans/20261029-windows-support.md): GPUI's
+Windows `zoom` only maximizes, where its macOS, Wayland and X11 forms toggle, so `window.zoom` and the title bar's
+maximize button never restored a maximized window. A maximized window (`IsZoomed`) is restored instead.
+scripts/vendor-gpui.sh applies this to the verified crates.io archive.
+
+diff -ruN a/src/window.rs b/src/window.rs
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -947,7 +947,9 @@
+     fn zoom(&self) {
+         unsafe {
+             if IsWindowVisible(self.0.hwnd).as_bool() {
+-                ShowWindowAsync(self.0.hwnd, SW_MAXIMIZE).ok().log_err();
++                // a toggle, as on macOS, Wayland and X11: a maximized window is restored
++                let show = if IsZoomed(self.0.hwnd).as_bool() { SW_RESTORE } else { SW_MAXIMIZE };
++                ShowWindowAsync(self.0.hwnd, show).ok().log_err();
+             } else if let Some(mut status) = self.state.initial_placement.take() {
+                 status.state = WindowOpenState::Maximized;
+                 self.state.initial_placement.set(Some(status));

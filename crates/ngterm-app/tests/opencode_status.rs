@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use ngterm_host::fakes::write_executable;
 use serde_json::{Value, json};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -135,16 +136,6 @@ fn script_path(dir: &Path, stem: &str) -> PathBuf {
     } else {
         dir.join(stem)
     }
-}
-
-fn write_executable(path: &Path, text: &str) -> TestResult {
-    fs::write(path, text)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
-    }
-    Ok(())
 }
 
 /// `path` single-quoted for PowerShell.
@@ -603,15 +594,26 @@ const pending = Promise.all(events.map((event) => hooks.event({ event })));
 const startedPath = process.env.NGTERM_OPENCODE_STARTED;
 const releasePath = process.env.NGTERM_OPENCODE_RELEASE;
 const statusesPath = process.env.NGTERM_OPENCODE_STATUSES;
+// A file the reporter is still appending to: Windows refuses the read (EBUSY) while PowerShell's Add-Content holds it.
+async function readWritten(path) {
+  for (let i = 0; ; i++) {
+    try {
+      return readFileSync(path, "utf8");
+    } catch (error) {
+      if (i >= 500 || (error.code !== "EBUSY" && error.code !== "EPERM")) throw error;
+      await sleep(10);
+    }
+  }
+}
 for (let i = 0; i < 3000 && !existsSync(startedPath); i++) await sleep(10);
 // While blocked is held, the follow-up active report must not have started (the queue serializes).
-const started = existsSync(startedPath) ? readFileSync(startedPath, "utf8") : "";
+const started = existsSync(startedPath) ? await readWritten(startedPath) : "";
 if (started.includes("active")) {
   writeFileSync(releasePath, "1");
   await pending;
   process.exit(2);
 }
-if (existsSync(statusesPath) && readFileSync(statusesPath, "utf8").trim()) {
+if (existsSync(statusesPath) && (await readWritten(statusesPath)).trim()) {
   writeFileSync(releasePath, "1");
   await pending;
   process.exit(3);

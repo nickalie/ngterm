@@ -12,15 +12,16 @@ mod actor;
 use std::fs::File;
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use portable_pty::win::conpty::{ConPtyHandoff, ConPtyMasterPty, ConPtySystem};
 use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySystem};
-use windows_sys::Win32::Foundation::{FALSE, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, FALSE, GetLastError, WAIT_OBJECT_0};
 use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
 use windows_sys::Win32::System::JobObjects::{
-    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
+    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, GetProcessId, INFINITE, TerminateProcess, WaitForSingleObject,
@@ -119,6 +120,15 @@ impl Child {
     pub fn killer(&self) -> Killer {
         Killer {
             job: Arc::clone(&self.job),
+        }
+    }
+
+    /// A view of the job the child's tree runs in that lists its processes and never keeps it open: the tree still
+    /// ends when the child and its killers are gone.
+    #[must_use]
+    pub fn job_view(&self) -> JobView {
+        JobView {
+            job: Arc::downgrade(&self.job),
         }
     }
 
@@ -273,6 +283,60 @@ impl Killer {
     /// Nothing on Windows: the job names the child's tree for as long as a handle holds it, so no id is ever reused
     /// under a killer (Unix's [`Killer::retire`] stops signalling a group whose id may be).
     pub fn retire(&self) {}
+}
+
+/// The processes of a child's job, read without holding the job open ([`Child::job_view`]): what stands in for a
+/// pseudoconsole's processes, MSYS programs included, whose parent (an MSYS fork) is gone by the time they run.
+#[derive(Debug, Clone)]
+pub struct JobView {
+    job: Weak<OwnedHandle>,
+}
+
+impl JobView {
+    /// How many process ids a first read makes room for.
+    const FIRST_CAPACITY: usize = 32;
+
+    /// The ids of the processes the job holds now (those of jobs nested in it included); `None` once the job closed
+    /// (the tree ended) or cannot be queried.
+    #[must_use]
+    pub fn process_ids(&self) -> Option<Vec<u32>> {
+        let job = self.job.upgrade()?;
+        let header = std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList) / size_of::<usize>();
+        let mut capacity = Self::FIRST_CAPACITY;
+        // a process the tree starts between the reads may outgrow the room once more
+        for _ in 0..3 {
+            let mut buffer = vec![0_usize; header + capacity];
+            let bytes = u32::try_from(buffer.len() * size_of::<usize>()).ok()?;
+            // SAFETY: `buffer` is writable for `bytes` bytes and aligned for the list (its fields are at most
+            // `usize`-aligned); the job handle is open while `job` is held.
+            let read = unsafe {
+                QueryInformationJobObject(
+                    job.as_raw_handle(),
+                    JobObjectBasicProcessIdList,
+                    buffer.as_mut_ptr().cast(),
+                    bytes,
+                    std::ptr::null_mut(),
+                )
+            };
+            // SAFETY: as above; the error code is read right after the call.
+            let more = read == 0 && unsafe { GetLastError() } == ERROR_MORE_DATA;
+            if read == 0 && !more {
+                return None;
+            }
+            // SAFETY: the buffer starts with the list's header, which the call filled.
+            let list = unsafe { buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>().read() };
+            let assigned = usize::try_from(list.NumberOfAssignedProcesses).ok()?;
+            let listed = usize::try_from(list.NumberOfProcessIdsInList).ok()?;
+            if !more && listed >= assigned {
+                return buffer[header..header + listed.min(capacity)]
+                    .iter()
+                    .map(|pid| u32::try_from(*pid).ok())
+                    .collect();
+            }
+            capacity = assigned.max(capacity) + Self::FIRST_CAPACITY;
+        }
+        None
+    }
 }
 
 /// A job object whose last handle's close kills every process in it.

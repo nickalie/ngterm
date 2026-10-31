@@ -212,6 +212,33 @@ fn an_existing_file_loads_and_parses() {
 }
 
 #[test]
+fn a_leading_bom_is_dropped_from_the_config_files() {
+    // Windows PowerShell's `Set-Content -Encoding utf8` writes one before the first line
+    let dir = tempfile::tempdir().unwrap();
+    let path = hooks_path(dir.path());
+    fs::write(&path, "\u{feff}on status echo a\r\n").unwrap();
+    let (hooks, diagnostics) = load_hooks(&path);
+    assert_eq!(commands(&hooks), ["echo a"]);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+    let keymap = dir.path().join("keymap.conf");
+    fs::write(&keymap, "\u{feff}global-hotkey ctrl+shift+`\r\n").unwrap();
+    let (parsed, diagnostics) = crate::keymap::load_keymap(&keymap, &crate::keymap::linux_defaults());
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert!(parsed.global_hotkey().is_some());
+
+    let remotes = dir.path().join("remotes.conf");
+    fs::write(&remotes, "\u{feff}host.example dev box\n").unwrap();
+    let (parsed, diagnostics) = crate::remote::remotes::load_remotes(&remotes).unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert_eq!(parsed.entries[0].destination, "host.example");
+
+    // only a leading one: a BOM inside the text is the text's own
+    fs::write(&path, "on status echo \u{feff}a\n").unwrap();
+    assert_eq!(commands(&load_hooks(&path).0), ["echo \u{feff}a"]);
+}
+
+#[test]
 fn an_unreadable_file_never_loads_as_clean() {
     let dir = tempfile::tempdir().unwrap();
     let path = hooks_path(dir.path());
@@ -252,6 +279,17 @@ fn the_starter_lists_every_kind_and_parses_to_nothing() {
     let (hooks, diagnostics) = parse_hooks_conf(&text);
     assert!(hooks.entries.is_empty());
     assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn the_starter_names_cmd_where_a_line_runs_through_it() {
+    let posix = posix_starter_hooks_conf();
+    assert!(posix.contains("passed to `/bin/sh -c`") && posix.contains("`--socket \"$AGT_SOCKET\"`"));
+    let cmd = crate::keymap::starter::cmd_wording(posix.clone());
+    assert!(cmd.contains("passed to `cmd.exe /D /S /C`") && cmd.contains("`--socket \"%AGT_SOCKET%\"`"));
+    assert!(!cmd.contains("/bin/sh"));
+    let this_os = if cfg!(windows) { cmd } else { posix };
+    assert_eq!(starter_hooks_conf(), this_os);
 }
 
 #[test]

@@ -19,7 +19,8 @@ use ngterm_headless::Options;
                   (ssh, key-based, to this machine), as it does a desktop instance's.\n\
                   \n\
                   Create sessions with `ngtermctl session new`; they keep running when this process ends, and the \
-                  next start attaches them again. SIGTERM, SIGINT or SIGHUP saves the state and ends it."
+                  next start attaches them again. SIGTERM, SIGINT or SIGHUP (on Windows the console's Ctrl+C, \
+                  Ctrl+Break or close) saves the state and ends it."
 )]
 struct Cli {
     /// The grid every terminal starts at, as `COLUMNSxROWS`; an attached viewer's own grid replaces it.

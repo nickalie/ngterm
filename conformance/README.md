@@ -9,6 +9,7 @@ The same tests run against the released macOS app and the Rust build, over the c
 ```sh
 python -m venv .venv && .venv/bin/pip install -e conformance          # Linux, CI gate
 python -m venv .venv && .venv/bin/pip install -e "conformance[ax]"    # macOS: adds the ax ui driver's pyobjc
+python -m venv .venv && .venv/Scripts/python.exe -m pip install -e conformance   # Windows, from Git Bash
 ```
 
 ## Running
@@ -27,6 +28,9 @@ bundle=$(.venv/bin/python conformance/tools/fetch_reference.py --tag v0.38.1 | s
 # the Rust build of this checkout: build, stage, protocol, cli and behaviors, then the ratchet;
 # report in conformance/reports/rust-linux/
 conformance/tools/run-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
+
+# the same on Windows, from Git Bash (Windows runner and ratchet below); report in conformance/reports/rust-windows/
+conformance/tools/run-windows.sh [--stage DIR] [-- PYTEST_ARGS...]
 
 # whether the staged Rust build's WPE WebKit loads a page under the same headless isolation (a diagnosis of the web
 # process's bubblewrap sandbox; the report carries the frame mode from the app's log)
@@ -99,6 +103,17 @@ capability the reference does not claim: its tests skip as unsupported there and
 `--must-pass` on the capability (see rust-build.md > Rust-only extensions).
 
 ## Rust runner and ratchet
+
+On Windows the runner is `tools/run-windows.sh`, run from Git Bash: it builds the release app (with its WebView2 HTML
+overlays), `ngtermctl` and `ngterm-session`, stages them with `scripts/stage.sh` (`bin\ngterm.exe`, `bin\ngtermctl.exe`
+and `bin\ngterm-session.exe` beside `share\ghostty` and `share\terminfo`) into `target/conformance-stage`, runs the
+same layers with the same options and holds its own list, `conformance/rust-passing-windows.txt`, with the same
+`check_ratchet.py` (`--list`). The panes run Git for Windows' `sh.exe` (`CONFORMANCE_POSIX_SHELL`, else the one
+beside `git`, else Git's default install directory) in place of `/bin/sh`, with `PATH` the system directories, then
+Git's `usr\bin` (the POSIX tools a command line's `cmd.exe` finds there, as `/bin/sh -c` finds them in `/usr/bin`). A
+foreground argv names its program by the path its parent started it with there (an MSYS shell gives the image's full
+path), so the tests compare it by the program's name (`match.program_argv`).
+The rest of this section describes the Linux runner.
 
 `tools/run-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` into
 `target/conformance-stage` (or runs an existing stage given with `--stage DIR`) and runs the protocol, cli and
@@ -209,6 +224,18 @@ that could reach it:
 - `CFFIXED_USER_HOME` does not isolate the `com.umputun.agterm` defaults domain, which every macOS instance shares
   with the account.
   Run reference-macos only on an ephemeral runner, never on a Mac with a live agterm.
+- A Windows instance (the Rust build's) keeps its local and roaming application data (`LOCALAPPDATA`, `APPDATA`) in
+  its root with its home, so its live-session namespace (`<LOCALAPPDATA>\ngterm\live\<hash>`) and everything a pane
+  writes per user stay there too; its control socket's path names a named pipe, which nothing else serves. It gets a
+  unique app id, starts in a process group of its own, quits on the session's end posted to its hidden window (the
+  Restart Manager's `WM_QUERYENDSESSION`/`WM_ENDSESSION`), and its process tree (every app process launched on the
+  root and their descendants, each re-checked by its creation time) is ended by pid at the stop, never by image name;
+  a Job object the harness puts each of its app processes in ends what is left of them at the stop, a program whose
+  parent chain no longer leads to the app included (Git for Windows' `sh.exe` launcher, ended alone, leaves its
+  `bash.exe` running), while breakaway lets the live-session server leave the job as it is built to. Windows offers no
+  headless desktop and no no-op URI handler: the instance's window opens on the desktop the run is on, and
+  `session.reveal` or a clicked link reaches the system's handlers. Run it only on a CI runner or a throwaway VM,
+  never beside a live ngterm.
 
 ## CI
 
@@ -220,3 +247,7 @@ that could reach it:
   the WPE crates and the app with its HTML overlays; then the staged build under the suite in the same Arch container,
   on the distribution's lavapipe, held by the ratchet, once per login shell (`conformance`, a matrix), each with
   `--must-pass live-any-shell`: bash, fish and zsh (the last two with `--must-pass live-sessions` too).
+- `cross-platform`'s `windows` job (`windows-2025`): the harness's Windows self-tests (the pipe transport, the client,
+  the launch and stop), then `tools/run-windows.sh` with `--must-pass live-any-shell` (the login shell is Windows
+  PowerShell): protocol, cli and behaviors against the staged Windows build, held by `rust-passing-windows.txt`. The
+  staged tree is kept as an artifact, for a run on a Windows VM against the same build (`--stage DIR`).

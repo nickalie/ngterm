@@ -12,12 +12,14 @@ import uuid
 
 import pytest
 from agterm_conformance import cli_format
+from agterm_conformance.command_line import CommandLines
 from agterm_conformance.match import (
     assert_absent,
     assert_ok,
     assert_subset,
     assert_version_result,
     find_session,
+    sessions,
     window_ids,
     workspaces,
 )
@@ -94,6 +96,23 @@ def _new(ctl, **args):
     return sid
 
 
+def _titles_settled(ctl, adapter):
+    """Wait until no pane's first title is still on its way, before two reads of the tree are compared.
+
+    Where `untitled-panes` is not claimed (Windows), the console host titles each pane with its program's path a
+    moment after the pane mounts, so every realized session reports a `title` (its left pane's) only some time after
+    `wait_mounted`; a tree read before that title and one read after it differ."""
+    if adapter.has("untitled-panes"):
+        return
+
+    def titled(tree):
+        pending = [node["name"] for node in sessions(tree) if node.get("realized") and node.get("title") is None]
+        assert not pending, f"untitled: {pending}"
+        return True
+
+    ctl.wait_tree(titled)
+
+
 def _node(ctl, sid):
     return find_session(ctl.tree(), sid)
 
@@ -135,8 +154,9 @@ def test_version_prints_the_installed_build_when_it_differs(launch, adapter):
 
 
 @pytest.fixture
-def tree_workspace(ctl):
+def tree_workspace(ctl, adapter):
     """A workspace holding a session in each state `agtermctl tree` tags, removed afterwards."""
+    hold = CommandLines.of(adapter, "the overlay's program").hold()
     wid = assert_ok(ctl.request("workspace.new", name=_name("cli-tree")))["id"]
     plain = _new(ctl, workspace=wid, name="plain")
     shown = _new(ctl, workspace=wid, name="shown")
@@ -150,7 +170,7 @@ def tree_workspace(ctl):
     assert_ok(ctl.request("session.scratch", scratch, mode="on"))
     ctl.wait_mounted(scratch, "scratch")
     covered = _new(ctl, workspace=wid, name="covered")
-    assert_ok(ctl.request("session.overlay.open", covered, command="exec cat"))
+    assert_ok(ctl.request("session.overlay.open", covered, command=hold))
     ctl.wait_tree(lambda tree: find_session(tree, covered)["overlay"] is True)
     assert_ok(ctl.request("session.select", plain))
     yield wid
@@ -159,7 +179,8 @@ def tree_workspace(ctl):
 
 
 @pytest.mark.covers("cli:tree")
-def test_tree_lists_workspaces_and_tagged_sessions(cli, ctl, tree_workspace):
+def test_tree_lists_workspaces_and_tagged_sessions(cli, ctl, adapter, tree_workspace):
+    _titles_settled(ctl, adapter)
     top = _json(cli("tree", "--json"))["tree"]
     human = _ok(cli("tree"))
     assert human == cli_format.tree(top) + "\n"
@@ -592,10 +613,12 @@ def _overlay_up(ctl, sid):
     "cli:session overlay result",
     "cli:session overlay copy",
 )
-def test_overlay_program(cli, ctl):
+def test_overlay_program(cli, ctl, adapter):
+    lines = CommandLines.of(adapter, "the overlay's program")
     sid = _new(ctl)
     marker = f"OVL{uuid.uuid4().hex[:8].upper()}"
-    _ok(cli("session", "overlay", "open", "--size-percent", "60", "--target", sid, f"echo {marker}; exec cat"), "ok\n")
+    program = lines.then(f"echo {marker}", lines.hold())
+    _ok(cli("session", "overlay", "open", "--size-percent", "60", "--target", sid, program), "ok\n")
     _overlay_up(ctl, sid)
     assert _node(ctl, sid)["overlaySizePercent"] == 60
     _refused(cli("session", "overlay", "result", "--target", sid), "overlay still running")
@@ -621,10 +644,11 @@ def test_overlay_program(cli, ctl):
 
 
 @pytest.mark.covers("cli:session overlay open", "cli:session overlay resize")
-def test_overlay_points(cli, ctl):
+def test_overlay_points(cli, ctl, adapter):
+    hold = CommandLines.of(adapter, "the overlay's program").hold()
     sid = _new(ctl)
     assert_ok(ctl.request("session.select", sid))
-    opened = cli("session", "overlay", "open", "--size-percent", "50", "--height", "100", "--target", sid, "exec cat")
+    opened = cli("session", "overlay", "open", "--size-percent", "50", "--height", "100", "--target", sid, hold)
     _ok(opened, "ok\n")
     _overlay_up(ctl, sid)
     node = find_session(ctl.wait_tree(lambda tree: "overlayHeight" in find_session(tree, sid)), sid)
@@ -657,12 +681,14 @@ def test_overlay_points(cli, ctl):
 
 
 @pytest.mark.covers("cli:session overlay hide", "cli:session overlay show", "cli:session overlay toggle", "cli:tree")
-def test_session_overlay_visibility(cli, ctl):
+def test_session_overlay_visibility(cli, ctl, adapter):
+    hold = CommandLines.of(adapter, "the overlay's program").hold()
     sid = _new(ctl)
-    _ok(cli("session", "overlay", "open", "--target", sid, "exec cat"), "ok\n")
+    _ok(cli("session", "overlay", "open", "--target", sid, hold), "ok\n")
     _overlay_up(ctl, sid)
     _ok(cli("session", "overlay", "hide", "--target", sid), "hidden\n")
     assert _node(ctl, sid)["hiddenOverlays"] == ["session"]
+    _titles_settled(ctl, adapter)
     top = _json(cli("tree", "--json"))["tree"]
     human = _ok(cli("tree"))
     assert human == cli_format.tree(top) + "\n"
@@ -678,10 +704,11 @@ def test_session_overlay_visibility(cli, ctl):
     # a pane-scoped hide names its pane in the read-back and leaves the session's tag plain
     assert_ok(ctl.request("session.split", sid, mode="on"))
     ctl.wait_mounted(sid, "right")
-    _ok(cli("session", "overlay", "open", "--pane", "left", "--target", sid, "exec cat"), "ok\n")
+    _ok(cli("session", "overlay", "open", "--pane", "left", "--target", sid, hold), "ok\n")
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("paneOverlays") == ["left"])
     _ok(cli("session", "overlay", "hide", "--pane", "left", "--target", sid), "hidden\n")
     assert _node(ctl, sid)["hiddenOverlays"] == ["left"]
+    _titles_settled(ctl, adapter)
     top = _json(cli("tree", "--json"))["tree"]
     human = _ok(cli("tree"))
     assert human == cli_format.tree(top) + "\n"
@@ -1087,18 +1114,20 @@ def config_files(ctl):
 
 
 @pytest.mark.covers("cli:keymap reload", "cli:keymap list", "cli:keymap run")
-def test_keymap(cli, ctl, config_files):
+def test_keymap(cli, ctl, config_files, adapter):
+    lines = CommandLines.of(adapter, "the custom commands")
     keymap, _ = config_files
     marker = ctl.instance.root / "cli-keymap-ran"
+    mark = lines.write(marker, lines.var("AGT_SESSION_ID"), atomic=False)
     keymap.write_text(
-        f'command "mark" ctrl+shift+f11 --error-hud printf \'%s\' "$AGT_SESSION_ID" > {marker}\n'
+        f'command "mark" ctrl+shift+f11 --error-hud {mark}\n'
         "map ctrl+shift+f12 new_session\nbogus line\n"
     )
     _ok(cli("keymap", "reload"), "1 diagnostic(s)\n")
     listing = _json(cli("keymap", "list", "--json"))
     assert [command["name"] for command in listing["keymap"]["commands"]] == ["mark"]
     _rendered(cli("keymap", "list"), listing)
-    keymap.write_text(f'command "mark" printf \'%s\' "$AGT_SESSION_ID" > {marker}\n')
+    keymap.write_text(f'command "mark" {mark}\n')
     assert _json(cli("keymap", "reload", "--json")) == assert_ok(ctl.request("keymap.reload"))
     _rendered(cli("keymap", "reload"), assert_ok(ctl.request("keymap.reload")))
 

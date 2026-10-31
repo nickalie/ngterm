@@ -136,9 +136,7 @@ impl Attach {
         };
         let mut fixture = Fixture::with_settings(0, settings);
         // the attach's panels are HUDs, which need the painter
-        let helper = config.path().join("hud.sh");
-        std::fs::write(&helper, "#!/bin/sh\n").unwrap();
-        fixture.core.set_hud_helper(helper, config.path().join("bodies"));
+        fixture.core.set_hud_body_dir(config.path().join("bodies"));
         let runner = Arc::new(GatedRunner::default());
         fixture.core.set_remote_runner(runner.clone());
         let session = fixture.store().selected_session_id().unwrap();

@@ -1,7 +1,8 @@
 //! `ngtermctl terminfo install` (`agtermctlKit/TerminfoCommands.swift`, `agtermCore/TerminfoInstall.swift`): installs
-//! the bundled `xterm-ghostty` terminfo entry on a remote host over one ssh connection. A local `infocmp` dumps the
-//! entry as source and the remote `tic` compiles it into that account's `~/.terminfo`. Local-only: it never opens the
-//! control socket, so it has no `--socket` or `--json` and needs no running ngterm.
+//! the bundled `xterm-ghostty` terminfo entry on a remote host over one ssh connection. The compiled entry is
+//! decompiled into source here, as upstream's local `infocmp -x` dumps it ([`source`]: Windows has no `infocmp`), and
+//! the remote `tic` compiles it into that account's `~/.terminfo`. Local-only: it never opens the control socket, so
+//! it has no `--socket` or `--json` and needs no running ngterm.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -12,16 +13,19 @@ use std::process::{Command, ExitCode, Stdio};
 use ngterm_core::command_restore::shell_quoted_line;
 
 use crate::Failure;
-use crate::local::{SigpipeIgnored, exit_status};
+use crate::local::SigpipeIgnored;
 #[cfg(unix)]
 use crate::local::{close_inherited_descriptors, reset_signals};
 use crate::version::client_path;
 
+mod names;
+pub mod source;
+
 /// The entry this installs.
 pub const ENTRY: &str = "xterm-ghostty";
 
-/// The local `infocmp` (upstream's default).
-const INFOCMP: &str = "/usr/bin/infocmp";
+/// Where a database files the entry: under its first letter (ncurses) or its hex code (Darwin's hashed layout).
+const LAYOUTS: [&str; 2] = ["x", "78"];
 
 /// What the remote account runs, with the source on stdin. One line, because the account's login shell parses the
 /// quoted command before `/bin/sh` sees it and tcsh rejects a quoted newline.
@@ -82,9 +86,9 @@ impl Terminfo {
 #[command(
     about = "Install the xterm-ghostty terminfo entry on a remote host over ssh.",
     long_about = "ngterm's shells run with TERM=xterm-ghostty. A host without that entry makes less, vim and other \
-                  full-screen programs warn that the terminal is not fully functional. This dumps the bundled entry \
-                  with infocmp and compiles it into the remote account's ~/.terminfo with tic, over one ssh \
-                  connection. Run it once per host and account; nothing is cached and ssh itself is untouched.\n\nThe \
+                  full-screen programs warn that the terminal is not fully functional. This decompiles the bundled \
+                  entry into source, as infocmp -x prints it, and compiles it into the remote account's ~/.terminfo \
+                  with tic, over one ssh connection. Run it once per host and account; nothing is cached and ssh itself is untouched.\n\nThe \
                   connection is interactive: a password or host-key prompt is answered on this terminal. Other \
                   connection settings belong in ~/.ssh/config under a host alias, which ssh reads as usual; the \
                   settings that decide how the command itself runs (no pty, stdin kept, a plain session, no fork, no \
@@ -135,14 +139,8 @@ impl Install {
 
     fn run(&self) -> Result<(), Failure> {
         let environment: HashMap<OsString, OsString> = std::env::vars_os().collect();
-        let outcome = run(
-            &self.connection(),
-            client_path().as_deref(),
-            &environment,
-            "ssh",
-            Path::new(INFOCMP),
-        )
-        .map_err(|failure| Failure::Local(failure.message()))?;
+        let outcome = run(&self.connection(), client_path().as_deref(), &environment, "ssh")
+            .map_err(|failure| Failure::Local(failure.message()))?;
         match outcome {
             Outcome::Exited(0) => {
                 println!("installed {ENTRY} on {}", self.destination);
@@ -185,10 +183,8 @@ pub enum InstallFailure {
     InvalidDestination,
     /// No terminfo database holding the entry was found at the searched paths.
     TerminfoNotFound { searched: Vec<PathBuf> },
-    /// `infocmp` exited non-zero; its stderr is carried for the user.
-    DumpFailed { status: i32, stderr: String },
-    /// `infocmp` could not be started (upstream lets Foundation's own error through).
-    DumpUnavailable { infocmp: PathBuf, reason: String },
+    /// The entry's file could not be read or is not a compiled entry (upstream's `infocmp` exits non-zero there).
+    EntryUnreadable { entry: PathBuf, reason: String },
     /// A system call on the way to running ssh failed with this OS error text.
     SpawnFailed { operation: String, reason: String },
 }
@@ -208,8 +204,7 @@ impl InstallFailure {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            Self::DumpFailed { status, stderr } => format!("infocmp exited {status}: {}", stderr.trim()),
-            Self::DumpUnavailable { infocmp, reason } => format!("could not start {}: {reason}", infocmp.display()),
+            Self::EntryUnreadable { entry, reason } => format!("could not read {}: {reason}", entry.display()),
             Self::SpawnFailed { operation, reason } => {
                 format!("could not start ssh: {operation} failed with {reason}")
             }
@@ -245,7 +240,7 @@ pub fn candidate_directories(client: Option<&Path>, environment: &HashMap<OsStri
     if let Some(client) = client {
         let bin = client.parent().unwrap_or_else(|| Path::new("/"));
         let prefix = bin.parent().unwrap_or_else(|| Path::new("/"));
-        candidates.push(prefix.join("share/terminfo"));
+        candidates.push(ngterm_core::paths::join_relative(prefix, "share/terminfo"));
     }
     if let Some(terminfo) = environment
         .get(&OsString::from("TERMINFO"))
@@ -262,11 +257,15 @@ pub fn candidate_directories(client: Option<&Path>, environment: &HashMap<OsStri
 pub fn terminfo_directory(client: Option<&Path>, environment: &HashMap<OsString, OsString>) -> Option<PathBuf> {
     candidate_directories(client, environment)
         .into_iter()
-        .find(|directory| {
-            ["78", "x"]
-                .iter()
-                .any(|layout| directory.join(layout).join(ENTRY).exists())
-        })
+        .find(|directory| entry_file(directory).is_some())
+}
+
+/// The entry's file in `directory`, under the first layout that has it.
+fn entry_file(directory: &Path) -> Option<PathBuf> {
+    LAYOUTS
+        .iter()
+        .map(|layout| directory.join(layout).join(ENTRY))
+        .find(|file| file.exists())
 }
 
 /// The ssh invocation. `-T` because the source travels on stdin and the remote must see EOF, which a pty would never
@@ -299,13 +298,12 @@ pub fn install_command(connection: &Connection, ssh: &str) -> Result<Vec<String>
 
 /// Dumps locally, then installs remotely. The dump completes before ssh starts, so a missing or broken local entry
 /// never opens a connection. ssh inherits stdout and stderr, which is where its prompts and the remote diagnostics
-/// go. `ssh` and `infocmp` are injectable so tests can stand in fakes.
+/// go. `ssh` is injectable so tests can stand in a fake.
 pub fn run(
     connection: &Connection,
     client: Option<&Path>,
     environment: &HashMap<OsString, OsString>,
     ssh: &str,
-    infocmp: &Path,
 ) -> Result<Outcome, InstallFailure> {
     let argv = install_command(connection, ssh)?;
     let Some(directory) = terminfo_directory(client, environment) else {
@@ -313,36 +311,21 @@ pub fn run(
             searched: candidate_directories(client, environment),
         });
     };
-    let source = dump(&directory, infocmp)?;
+    let source = dump(&directory)?;
     install(&argv, &source, environment)
 }
 
-/// `infocmp -x` so the entry's extended capabilities (the ones worth installing it for) come along, with `TERMINFO`
-/// the child's whole environment so it reads the chosen database and nothing else. `-A` names the database too: an
-/// ncurses built with `--disable-root-environ` (Arch's) ignores `TERMINFO` for root, and upstream's environment alone
-/// would find no entry there. Both pipes are drained before the wait, or a dump larger than the pipe buffer would
-/// deadlock.
-fn dump(directory: &Path, infocmp: &Path) -> Result<Vec<u8>, InstallFailure> {
-    let output = Command::new(infocmp)
-        .arg("-x")
-        .arg("-A")
-        .arg(directory)
-        .arg(ENTRY)
-        .env_clear()
-        .env("TERMINFO", directory)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| InstallFailure::DumpUnavailable {
-            infocmp: infocmp.to_path_buf(),
-            reason: crate::client::os_message(&error),
-        })?;
-    if !output.status.success() {
-        return Err(InstallFailure::DumpFailed {
-            status: exit_status(output.status),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
-    }
-    Ok(output.stdout)
+/// The entry's source with its extended capabilities (the ones worth installing it for), as upstream's `infocmp -x`
+/// dumps it from the chosen database and nothing else.
+fn dump(directory: &Path) -> Result<Vec<u8>, InstallFailure> {
+    let entry = entry_file(directory).unwrap_or_else(|| directory.join(LAYOUTS[0]).join(ENTRY));
+    let unreadable = |reason: String| InstallFailure::EntryUnreadable {
+        entry: entry.clone(),
+        reason,
+    };
+    let compiled = std::fs::read(&entry).map_err(|error| unreadable(crate::client::os_message(&error)))?;
+    let decoded = source::read(&compiled).map_err(|corrupt| unreadable(corrupt.reason().to_owned()))?;
+    Ok(source::source(&decoded, &entry))
 }
 
 /// Runs ssh with the source on its stdin. The child stays in the caller's process group (ssh reads its password and
@@ -378,6 +361,8 @@ fn install(
             Ok(())
         });
     }
+    #[cfg(target_os = "macos")]
+    crate::local::settle_libnotify();
     let mut child = command.spawn().map_err(|error| InstallFailure::SpawnFailed {
         operation: "posix_spawnp".to_owned(),
         reason: crate::client::os_message(&error),

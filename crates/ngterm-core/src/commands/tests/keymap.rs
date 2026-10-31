@@ -81,6 +81,14 @@ fn result(response: &ngterm_proto::Response) -> Value {
     response.result.clone().unwrap_or(Value::Null)
 }
 
+/// What the fake launcher's refusal says: it names the OS's shell (`ngterm_host::command_line`).
+fn fake_launch_failure() -> String {
+    format!(
+        "fake launch of {} failed",
+        ngterm_host::ShellCommand::new("").program.display()
+    )
+}
+
 fn app_banners(host: &mut Host) -> Vec<(String, String)> {
     host.fixture
         .core
@@ -261,10 +269,10 @@ fn run_starts_the_expanded_command_with_the_sessions_context() {
     let [launch] = launches.as_slice() else {
         panic!("{launches:?}")
     };
-    assert_eq!(launch.program, std::path::Path::new("/bin/sh"));
+    let shell = ngterm_host::ShellCommand::new(&format!("printf '%s' {} \"$AGT_PANE\"", wire(target)));
     assert_eq!(
-        launch.args,
-        ["-c".to_owned(), format!("printf '%s' {} \"$AGT_PANE\"", wire(target))]
+        (&launch.program, &launch.args, &launch.raw_tail),
+        (&shell.program, &shell.args, &shell.raw_tail)
     );
     assert_eq!(launch.cwd.as_deref(), Some(std::path::Path::new("/tmp")));
     assert!(!launch.capture_stderr && launch.stdin.is_none());
@@ -331,7 +339,10 @@ fn a_launch_error_refuses_the_run() {
     assert!(host.keymap(KeymapCmd::Reload, None, Args::default()).ok);
     host.launcher.fail_with(Some(std::io::ErrorKind::NotFound));
     let response = host.keymap(KeymapCmd::Run, None, args(|a| a.name = Some("mark".into())));
-    assert_eq!(response, failure("mark did not start: fake launch of /bin/sh failed"));
+    assert_eq!(
+        response,
+        failure(&format!("mark did not start: {}", fake_launch_failure()))
+    );
     assert_eq!(app_banners(&mut host).len(), 1);
 }
 
@@ -396,9 +407,7 @@ fn a_session_directory_that_is_not_a_directory_here_runs_the_command_in_home() {
 #[test]
 fn a_launch_failure_opens_the_failure_panel_only_when_opted_in() {
     let mut host = Host::new(0);
-    let helper = host.dir.path().join("hud.sh");
-    std::fs::write(&helper, "#!/bin/sh\n").unwrap();
-    host.fixture.core.set_hud_helper(helper, host.dir.path().join("bodies"));
+    host.fixture.core.set_hud_body_dir(host.dir.path().join("bodies"));
     host.write(
         "keymap.conf",
         "command \"quiet\" true\n\
@@ -412,7 +421,7 @@ fn a_launch_failure_opens_the_failure_panel_only_when_opted_in() {
         panic!("two commands")
     };
     let (quiet, loud) = (quiet.clone(), loud.clone());
-    let reason = "fake launch of /bin/sh failed".to_owned();
+    let reason = fake_launch_failure();
     // every panel opening takes a new slot generation, so its count stands in for upstream's `posts.count`
     let generation = |host: &Host| host.fixture.store().session(session).unwrap().overlay.generation;
     let before = generation(&host);

@@ -104,6 +104,8 @@ unicode-normalization = "0.1"
 # Extended grapheme clusters: the ask field's byte cap cuts between user-perceived characters, as Swift's do.
 unicode-segmentation = "1.13"
 url = "2.5"
+# A share server's IDNA form read back (`ngterm-core`'s `html::volume`): the URL parser's own IDNA crate.
+idna = "1.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 # ngterm-wpe's build script asks the pkg-config the link used where WPE WebKit lives (scripts/pkg-config.sh).
 pkg-config = "0.3"
@@ -212,6 +214,11 @@ multiple_unsafe_ops_per_block = "deny"
 allow_attributes = "deny"
 allow_attributes_without_reason = "deny"
 
+# Debug builds keep line tables only (file:line in backtraces and panics, no variable info for a debugger): full
+# debuginfo, statically linked into every test binary, grew target/ to hundreds of GB.
+[profile.dev]
+debug = "line-tables-only"
+
 # calloop (GPUI's Linux event loop) without its unconditional request for tracing's `log` feature, which workspace
 # feature unification spread to every crate and clippy's cognitive_complexity then counted in every tracing macro:
 # vendor/calloop is the verified crates.io source plus build/patches/calloop (scripts/vendor-calloop.sh;
@@ -235,5 +242,6 @@ gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 # ngterm-pty's PTY and child: vendor/portable-pty is the verified crates.io source plus build/patches/portable-pty
 # (scripts/vendor-portable-pty.sh): ConPTY from kernel32 only, herdr's Windows environment and PATH fixes, a child
-# spawned into its job, and a ConPTY session's handles exported and imported for the session server's update handoff.
+# spawned into its job, a ConPTY session's handles exported and imported for the session server's update handoff, and
+# a failed openpty's errno kept (the macOS ptmx clone race's retry).
 portable-pty = { path = "vendor/portable-pty" }

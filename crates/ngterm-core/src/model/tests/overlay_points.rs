@@ -195,7 +195,6 @@ fn a_hud_takes_no_point_sizes() {
     let (mut store, id) = launched();
     let dir = tempfile::tempdir().unwrap();
     let opening = HudOpening {
-        command: "hud.sh".to_owned(),
         file: dir.path().join("hud"),
         size: HudPanelSize::new(35, 12),
         pane_identity: None,
@@ -259,7 +258,6 @@ fn the_tree_leaves_out_a_hud_and_an_empty_slot() {
     assert_eq!(read_back(&store, id), (None, None));
     let dir = tempfile::tempdir().unwrap();
     let opening = HudOpening {
-        command: "hud.sh".to_owned(),
         file: dir.path().join("hud"),
         size: HudPanelSize::new(35, 12),
         pane_identity: None,

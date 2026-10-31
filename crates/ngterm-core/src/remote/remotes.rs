@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::tree::is_host;
+use crate::hooks::read_config_text;
 use crate::keymap::KeymapDiagnostic;
 
 /// One line of `remotes.conf`. The destination is its identity; the label equals it when the line gives none.
@@ -91,7 +92,7 @@ pub fn parse_remotes_conf(text: &str) -> (Remotes, Vec<KeymapDiagnostic>) {
 ///
 /// The file exists and cannot be read, which is never mistaken for "no remotes".
 pub fn load_remotes(path: &Path) -> io::Result<(Remotes, Vec<KeymapDiagnostic>)> {
-    match std::fs::read_to_string(path) {
+    match read_config_text(path) {
         Ok(text) => Ok(parse_remotes_conf(&text)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok((Remotes::default(), Vec::new())),
         Err(error) => Err(error),

@@ -98,9 +98,13 @@ def test_browser_commands_take_no_target_or_window(ctl, link_mode, cmd, target, 
 
 
 class _Jar(BaseHTTPRequestHandler):
-    """Sets a cookie on every response and records the `Cookie` header each request carried."""
+    """Sets a cookie on every response for the page and records the `Cookie` header each of its requests carried; any
+    other path (the favicon WebView2 asks for once a page loaded, with the cookie just set) is not found."""
 
     def do_GET(self):
+        if self.path != "/jar.html":
+            self.send_error(404)
+            return
         self.server.cookies.append(self.headers.get("Cookie"))
         body = b"<!doctype html><title>Jar</title><body><p>jar</p></body>"
         self.send_response(200)

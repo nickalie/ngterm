@@ -8,6 +8,7 @@
 #[expect(dead_code, reason = "the file helpers serve the other test files")]
 mod support;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,11 @@ fn line(unix: &str, windows: &str) -> String {
 
 /// `command` launched as a pane's command line, isolated from any ngterm the tests run under.
 fn launch(command: &str) -> TestResult<Pane> {
+    launch_recording(command, None)
+}
+
+/// [`launch`], the program's exit status written to `status_file`.
+fn launch_recording(command: &str, status_file: Option<PathBuf>) -> TestResult<Pane> {
     let isolation = std::env::vars_os()
         .map(|(key, _)| key.to_string_lossy().into_owned())
         .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_"))
@@ -33,6 +39,7 @@ fn launch(command: &str) -> TestResult<Pane> {
         command: Some(command.to_owned()),
         working_directory: Some(std::env::temp_dir()),
         env_remove: isolation,
+        status_file,
         ..Launch::default()
     };
     let host = Host::new(&GhosttyConfig::default(), None, None, None);
@@ -159,6 +166,28 @@ fn the_exit_code_is_the_programs() -> TestResult {
 }
 
 #[test]
+fn a_program_that_ends_by_itself_records_its_status_and_a_hung_up_one_none() -> TestResult {
+    // an overlay program's status file on Windows, where no wrapper writes it (`ngterm_core::overlay_capture`)
+    let dir = tempfile::tempdir()?;
+    let ended = dir.path().join("ended.code");
+    let pane = launch_recording("exit 7", Some(ended.clone()))?;
+    assert_eq!(exit_of(&pane).code, 7);
+    assert_eq!(
+        std::fs::read_to_string(&ended)?,
+        "7\n",
+        "written before the exit is reported"
+    );
+    let hung_up = dir.path().join("hung-up.code");
+    let pane = launch_recording(&print_and_stay("UP"), Some(hung_up.clone()))?;
+    wait_text(&pane, "UP");
+    drop(pane);
+    // the child is reaped on the pane's own threads: give a stray write the time it would take
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!hung_up.exists(), "the pane's hangup ended it");
+    Ok(())
+}
+
+#[test]
 fn what_the_child_printed_selects_and_searches() -> TestResult {
     let pane = launch(&print_and_stay("alpha needle omega"))?;
     let (row, column) = wait_text(&pane, "needle");
@@ -180,8 +209,9 @@ fn what_the_child_printed_selects_and_searches() -> TestResult {
 }
 
 /// Unix: a canonical read with echo off is a password prompt, and the shell's process group is the terminal's
-/// foreground. Windows says neither: the pseudoconsole gives its parent no handle on the console's input mode, and has
-/// no foreground process group.
+/// foreground. Windows has no password read: the pseudoconsole gives its parent no handle on the console's input
+/// mode; and no foreground process group, whose stand-in for a command line is `cmd.exe`, the pane's own program,
+/// which has no job control.
 #[test]
 fn a_read_without_echo_is_password_input_where_the_pty_can_say() -> TestResult {
     let pane = launch(&line(
@@ -192,7 +222,7 @@ fn a_read_without_echo_is_password_input_where_the_pty_can_say() -> TestResult {
     if cfg!(windows) {
         std::thread::sleep(Duration::from_millis(500));
         assert!(!pane.password_input());
-        assert_eq!(pane.foreground_pid(), None);
+        assert_eq!(pane.foreground_pid(), pane.pid());
     } else {
         let deadline = Instant::now() + PATIENCE;
         while !pane.password_input() {
@@ -201,5 +231,77 @@ fn a_read_without_echo_is_password_input_where_the_pty_can_say() -> TestResult {
         }
         assert!(pane.foreground_pid().is_some());
     }
+    Ok(())
+}
+
+/// A `^C` typed as `session.type` types text ([`Pane::type_text`]) interrupts the pane's program: the line
+/// discipline's SIGINT on Unix; on Windows the console's Ctrl+C event, which ends `ping` with `STATUS_CONTROL_C_EXIT`.
+#[test]
+fn a_typed_ctrl_c_interrupts_the_program() -> TestResult {
+    use ngterm_term::PaneCommand;
+
+    let (command, started) = if cfg!(windows) {
+        (
+            PaneCommand::new("ping.exe").args(["-n", "600", "127.0.0.1"]),
+            "127.0.0.1",
+        )
+    } else {
+        (
+            PaneCommand::new("/bin/sh").args(["-c", "echo ready; exec sleep 600"]),
+            "ready",
+        )
+    };
+    let pane = Pane::spawn(&command, &PaneConfig::new(SIZE))?;
+    wait_text(&pane, started);
+    assert!(pane.type_text("\x03")?, "the typed ^C sent nothing");
+    let status = exit_of(&pane);
+    if cfg!(windows) {
+        const STATUS_CONTROL_C_EXIT: u32 = 0xC000_013A;
+        assert_eq!(status.code, STATUS_CONTROL_C_EXIT, "{status:?}");
+    } else {
+        assert!(status.signal.is_some(), "{status:?}");
+    }
+    Ok(())
+}
+
+/// Windows' stand-in foreground: an interactive `cmd.exe` at its prompt holds it, a program typed into it holds it
+/// while it runs (the oldest one: `ping` here, not anything it starts), and the shell has it back once the program
+/// ends.
+#[cfg(windows)]
+#[test]
+fn the_typed_program_stands_in_for_the_foreground_and_the_shell_takes_it_back() -> TestResult {
+    use ngterm_host::ProcessTable as _;
+    use ngterm_session::process_table::ProcTable;
+    use ngterm_term::PaneCommand;
+
+    let argv = |pid: Option<u32>| pid.and_then(|pid| ProcTable::new().argv(i32::try_from(pid).ok()?));
+    let wait_for = |pane: &Pane, what: &str, done: &dyn Fn(Option<u32>) -> bool| {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let foreground = pane.foreground_pid();
+            if done(foreground) {
+                return foreground;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{what}: the foreground is {foreground:?}, {:?}",
+                argv(foreground)
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let command = PaneCommand::new("cmd.exe").args(["/D", "/Q", "/K", "echo ready"]);
+    let pane = Pane::spawn(&command, &PaneConfig::new(SIZE))?;
+    wait_text(&pane, "ready");
+    let shell = pane.pid();
+    wait_for(&pane, "the shell at its prompt", &|foreground| foreground == shell);
+    // about four seconds, then the prompt again
+    pane.write(b"ping -n 5 127.0.0.1\r")?;
+    let program = wait_for(&pane, "the typed ping", &|foreground| {
+        foreground.is_some() && foreground != shell
+    });
+    let typed = argv(program).ok_or("the ping's argv")?;
+    assert!(typed[0].to_ascii_lowercase().starts_with("ping"), "{typed:?}");
+    wait_for(&pane, "the shell after the ping", &|foreground| foreground == shell);
     Ok(())
 }

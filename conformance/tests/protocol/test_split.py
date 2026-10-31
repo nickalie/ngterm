@@ -4,6 +4,7 @@ its own, so the module's shared instance never carries one test's panes into ano
 import shlex
 
 import pytest
+from agterm_conformance.command_line import CommandLines
 from agterm_conformance.match import assert_absent, assert_error, assert_ok, assert_subset, find_session
 from agterm_conformance.wait import wait_until
 
@@ -310,8 +311,11 @@ def test_scratch_rejects_an_unknown_mode(ctl):
     assert _node(ctl, sid)["scratch"] is False
 
 
-def _marking_command(marker):
-    """A scratch program that writes `ran` to `marker`, then stays up reading its input."""
+def _marking_command(adapter, marker):
+    """A scratch program that writes `ran` to `marker`, then stays up reading its input, in the build's dialect."""
+    lines = CommandLines.of(adapter, "the scratch command and the overlay's program")
+    if lines.cmd:
+        return lines.then(f"echo ran> {lines.quote(marker)}", lines.hold())
     return "sh -c " + shlex.quote(f"echo ran > {shlex.quote(str(marker))}; exec cat")
 
 
@@ -333,11 +337,11 @@ def _background_and_selected(ctl):
 
 
 @pytest.mark.covers("session.scratch", "field:tree.session.scratch")
-def test_scratch_on_a_background_session_starts_without_switching_unless_followed(ctl):
+def test_scratch_on_a_background_session_starts_without_switching_unless_followed(ctl, adapter):
     background, selected = _background_and_selected(ctl)
     marker = ctl.instance.root / "background-scratch-ran"
     marker.unlink(missing_ok=True)
-    assert_ok(ctl.request("session.scratch", background, mode="on", command=_marking_command(marker)))
+    assert_ok(ctl.request("session.scratch", background, mode="on", command=_marking_command(adapter, marker)))
     _ran(marker)
     assert _node(ctl, background)["scratch"] is True
     assert _node(ctl, selected)["active"] is True
@@ -359,13 +363,13 @@ def test_scratch_follow_selects_only_when_showing(ctl):
 
 
 @pytest.mark.covers("session.scratch")
-def test_scratch_command_replaces_a_shown_scratch(ctl):
+def test_scratch_command_replaces_a_shown_scratch(ctl, adapter):
     sid = _mounted(ctl)
     assert_ok(ctl.request("session.scratch", sid, mode="on"))
     ctl.wait_mounted(sid, "scratch")
     marker = ctl.instance.root / "replaced-scratch-ran"
     marker.unlink(missing_ok=True)
-    assert_ok(ctl.request("session.scratch", sid, mode="on", command=_marking_command(marker)))
+    assert_ok(ctl.request("session.scratch", sid, mode="on", command=_marking_command(adapter, marker)))
     _ran(marker)
     assert _node(ctl, sid)["scratch"] is True
 
@@ -391,9 +395,11 @@ def test_zoom_one_surface_and_back(ctl):
 
 
 @pytest.mark.covers("surface.zoom", "session.overlay.open")
-def test_zoom_the_pane_under_a_running_overlay(ctl):
+def test_zoom_the_pane_under_a_running_overlay(ctl, adapter):
+    lines = CommandLines.of(adapter, "the overlay's program")
     sid = _mounted(ctl)
-    assert assert_ok(ctl.request("session.overlay.open", sid, command="printf 'under-zoom\\n'; exec cat"))["id"] == sid
+    command = lines.then("echo under-zoom", lines.hold())
+    assert assert_ok(ctl.request("session.overlay.open", sid, command=command))["id"] == sid
 
     def showing(response):
         assert response.ok, response.error

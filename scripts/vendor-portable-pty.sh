@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Vendor portable-pty (ngterm-pty's PTY and child: openpty on Unix, ConPTY on Windows) into vendor/portable-pty with
-# build/patches/portable-pty applied, for the workspace's [patch.crates-io]. Every patch is a Windows one; each file's
-# leading description says why it exists, where it came from and when it can go:
+# build/patches/portable-pty applied, for the workspace's [patch.crates-io]. Each file's leading description says why
+# it exists, where it came from and when it can go:
 #   0001 the ConPTY functions of the already loaded kernel32 only, never a bare conpty.dll through the DLL search path
 #        (herdr's 0001 reduced: herdr also loads a hash-checked app-local conpty.dll, which ngterm does not ship)
 #   0002 malformed Windows environments rejected (herdr's 0003)
@@ -11,6 +11,7 @@
 #        session server's update handoff)
 #   0006 a raw command-line tail, appended without ArgvQuote escaping (herdr's 0002): a pane's command line runs as
 #        cmd.exe's command text
+#   0007 a failed openpty's io::Error kept, so ngterm-pty reads its errno (the macOS ptmx clone race's retry)
 #
 # The source is the crates.io archive of PORTABLE_PTY_VERSION, verified against PORTABLE_PTY_SHA256 (the checksum
 # Cargo.lock records for it), unpacked verbatim apart from its Cargo.lock (which pins nothing for a dependency), then
@@ -45,7 +46,7 @@ case "${1:-}" in
   "") ;;
   --check) mode=check ;;
   --diff) mode=diff ;;
-  -h | --help) sed -n '2,27s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  -h | --help) sed -n '2,28s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
   *) die "unknown argument: $1 (see --help)" ;;
 esac
 

@@ -1,5 +1,7 @@
 """The Rust build: it reports its own parity level and capabilities on `version`; its GPUI frontend renders through
-Vulkan, on lavapipe only, and needs a seat on its compositor."""
+Vulkan, on lavapipe only, and needs a seat on its compositor. On Windows it renders through DirectX on the machine's
+adapter (a runner's or a VM's, WARP without one), serves its control socket on a named pipe and quits on the session's
+end sent to its hidden window (base.py's module docs)."""
 
 from __future__ import annotations
 
@@ -67,8 +69,11 @@ class RustAdapter(Adapter):
     # `live.*`, `ngtermctl live`, `result.live`, `backedByLive`: upstream's `zmx` group renamed
     # (conformance/docs/rust-build.md > The `live` group).
     vocabulary = LIVE
-    needs_app_id = sys.platform.startswith("linux")
+    # Windows names its single instance by the app id and the state dir: a unique id keeps it off the user's too.
+    needs_app_id = sys.platform.startswith("linux") or sys.platform == "win32"
     needs_runtime_dir = sys.platform.startswith("linux")
+    # crates/ngterm-gpui/src/system_window.rs
+    quit_window_class = "ngterm-system-window"
 
     def __init__(self, bin: Path | None, ctl: Path | None = None) -> None:
         super().__init__(bin, ctl)
@@ -82,7 +87,8 @@ class RustAdapter(Adapter):
 
     def platform_env(self, env: dict[str, str]) -> None:
         super().platform_env(env)
-        software_rendering_env(env, lavapipe_icd())
+        if sys.platform.startswith("linux"):
+            software_rendering_env(env, lavapipe_icd())
 
     @property
     def profile(self) -> Profile:
@@ -110,8 +116,9 @@ class RustAdapter(Adapter):
         settings: Mapping[str, Any] | None = None,
         first_run: bool = False,
         private_install: bool = False,
+        pane_shell: str | None = None,
     ) -> Instance:
-        instance = super().launch(timeout, app_id, settings, first_run, private_install)
+        instance = super().launch(timeout, app_id, settings, first_run, private_install, pane_shell)
         return instance if first_run else self._profiled(instance)
 
     def serving(self, instance: Instance, timeout: float = LAUNCH_TIMEOUT) -> Instance:
@@ -129,7 +136,7 @@ class RustAdapter(Adapter):
     def default_ctl(self) -> Path | None:
         if self.bin is None:
             return None
-        sibling = Path(self.bin).parent / self.ctl_name
+        sibling = Path(self.bin).parent / (self.ctl_name + (".exe" if sys.platform == "win32" else ""))
         return sibling if sibling.exists() else None
 
     def instance_executable(self, root: Path, private_install: bool = False) -> list[str]:
@@ -179,7 +186,20 @@ def _mirror(stage: Path, install: Path, relative: Path, copied: set[Path]) -> No
         elif any(path in item.parents for item in copied):
             _mirror(stage, install, path, copied)
         else:
-            os.symlink(entry, install / path)
+            _link(entry, install / path)
+
+
+def _link(source: Path, destination: Path) -> None:
+    """A symlink; on Windows, where one needs a privilege the account may lack, a copy instead."""
+    try:
+        os.symlink(source, destination, target_is_directory=source.is_dir())
+    except OSError:
+        if sys.platform != "win32":
+            raise
+        if source.is_dir():
+            shutil.copytree(source, destination, symlinks=True)
+        else:
+            shutil.copy2(source, destination)
 
 
 def _copy(source: Path, destination: Path) -> None:

@@ -172,12 +172,17 @@ impl Api {
         }
     }
 
-    /// The active screen of `name` once it shows only `ready` with the cursor right after it.
-    fn ready_screen(&mut self, name: &str) -> TestResult<Screen> {
+    /// The active screen of `name` once it shows exactly `text`, which ends in `ready`, with the cursor right after it:
+    /// a program that said `ready` and waits on its input writes nothing more.
+    fn ready_screen(&mut self, name: &str, text: &str) -> TestResult<Screen> {
+        let cursor = (
+            u32::try_from(text.lines().count().saturating_sub(1))?,
+            u32::try_from(text.lines().last().unwrap_or_default().len())?,
+        );
         let deadline = Instant::now() + PATIENCE;
         loop {
             let screen = self.screen(name, false)?.map_err(|err| err.message)?;
-            if screen.text == "ready" && (screen.cursor_row, screen.cursor_column) == (0, 5) {
+            if screen.text == text && (screen.cursor_row, screen.cursor_column) == cursor {
                 return Ok(screen);
             }
             assert!(Instant::now() < deadline, "not ready: {screen:?}");
@@ -472,22 +477,27 @@ fn the_screen_comes_from_the_servers_terminal_and_its_revision_moves_only_with_i
 }
 
 /// More lines than the screen of `name` holds: the first only in the scrollback, which `all` reads before the screen.
-/// The last read of everything.
+/// The last read of everything. The typed line ends in a program that says `ready` and waits on its input, so nothing
+/// comes after the screen that shows it: cmd writes a blank line and its prompt after a command, in a read of its own,
+/// and one coming between the two reads scrolled the screen (seen under load on Windows).
 fn scrollback_then_screen(api: &mut Api, name: &str) -> TestResult<Screen> {
     let lines = if cfg!(windows) {
-        "for /l %i in (1,1,60) do @echo row-%i-end".to_owned()
+        "(for /l %i in (1,1,60) do @echo row-%i-end) & set /p line=ready".to_owned()
     } else {
-        "i=1; while [ $i -le 60 ]; do echo row-$i-end; i=$((i+1)); done".to_owned()
+        "i=1; while [ $i -le 60 ]; do echo row-$i-end; i=$((i+1)); done; printf ready; read line".to_owned()
     };
     api.type_text(name, &format!("{lines}\r"))?.map_err(|err| err.message)?;
-    api.expect_screen(name, false, "row-60-end")?;
-    let active = api.screen(name, false)?.map_err(|err| err.message)?;
-    assert!(!active.text.contains("row-1-end\n"), "{:?}", active.text);
-    let all = api.expect_screen(name, true, "row-60-end")?;
+    // the screen's rows: as many of the last printed as fit above `ready`
+    let first = 62 - SIZE.rows;
+    let mut shown = (first..=60).map(|row| format!("row-{row}-end")).collect::<Vec<_>>();
+    shown.push("ready".to_owned());
+    let active = api.ready_screen(name, &shown.join("\n"))?;
+    let all = api.screen(name, true)?.map_err(|err| err.message)?;
     assert!(all.text.contains("row-1-end\n"), "{:?}", all.text);
     assert!(
         all.text.ends_with(active.text.as_str()),
-        "the scrollback, then the screen"
+        "the scrollback, then the screen: {:?}",
+        all.text
     );
     Ok(all)
 }
@@ -555,7 +565,7 @@ fn a_print_reaches_every_attached_client_in_the_output() -> TestResult {
     let mut two = server.attach("printed", None, None)?;
     two.attached()?;
     let mut api = server.api()?;
-    let before = api.ready_screen("printed")?;
+    let before = api.ready_screen("printed", "ready")?;
     // `ngtermctl clipboard set`'s write: OSC 52 of "copied"
     let write = b"\x1b]52;c;Y29waWVk\x1b\\";
     assert_eq!(api.print("printed", write)?, Ok(ApiResponse::Done));

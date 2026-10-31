@@ -3,7 +3,8 @@
 //! polling thread on Unix, a reader and a writer on Windows), the IO worker (feeds the mailbox's output to the VT,
 //! stopping at clipboard reads for their answers), and the waiter (reports the child's exit). A live pane has no PTY
 //! and no child: its session's attach stream, read and written by threads of [`crate::session_io`], takes the
-//! actor's and the waiter's places, and the same IO worker feeds its output to the VT.
+//! actor's and the waiter's places, and the same IO worker feeds its output to the VT. A HUD's painted pane has neither
+//! either: the painter's thread ([`crate::painted`]) takes their places.
 //!
 //! Locks (Technical Details > Threads): `vt` → `capture` → leaves (`armed`, `published`, `divert`), and `vt` →
 //! `search`, never the reverse. The IO thread holds `vt` for one bounded slice of `vt_write` at a time; input
@@ -19,12 +20,14 @@
 //! While the worker waits on a clipboard answer, the program's output waits in the mailbox until the mailbox's high
 //! mark pauses the actor's reads ([`crate::mailbox`]); the actor keeps writing the program's input.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use ngterm_core::overlay_capture;
 use ngterm_ghostty_vt::{self as vt, ReadCandidate, Scanner};
 use ngterm_pty::{Actor, ActorConfig, ActorHandle, Child, Killer, Master, ReadPause, Spawned};
 use ngterm_session::cli::{Outcome, Prepared};
@@ -36,6 +39,7 @@ use crate::effects::{
 use crate::exit::{ExitPolicy, Layout};
 use crate::input::InputState;
 use crate::mailbox::{Answer, Mail, Mailbox};
+use crate::painted::Painted;
 use crate::pty::{GridSize, PaneCommand, ReplyOutlet, Tty};
 use crate::render::{Capture, CursorDefaults, Frame, MouseShape, ThemeColors};
 use crate::search::SearchSlot;
@@ -69,6 +73,10 @@ pub struct PaneConfig {
     pub kitty_image_limit: u64,
     /// What the end of the program leaves on screen.
     pub exit: ExitPolicy,
+    /// Where the program's exit status is written when it ends by itself, before its exit is reported: an overlay
+    /// program's status file where no wrapper writes it ([`ngterm_core::overlay_capture`]). A program the pane hangs
+    /// up as it goes writes none, as a wrapper the hangup ends writes none.
+    pub status_file: Option<PathBuf>,
     /// Grapheme clustering (mode 2027) as the terminal's default, which a reset restores: Ghostty's
     /// `grapheme-width-method = unicode`, its default; `false` is `legacy`.
     pub grapheme_clusters: bool,
@@ -88,6 +96,7 @@ impl PaneConfig {
             write_limit: DEFAULT_WRITE_LIMIT,
             kitty_image_limit: DEFAULT_KITTY_IMAGE_LIMIT,
             exit: ExitPolicy::default(),
+            status_file: None,
             grapheme_clusters: true,
             color_scheme: ColorScheme::default(),
             wake: None,
@@ -105,6 +114,7 @@ impl std::fmt::Debug for PaneConfig {
             .field("write_limit", &self.write_limit)
             .field("kitty_image_limit", &self.kitty_image_limit)
             .field("exit", &self.exit)
+            .field("status_file", &self.status_file)
             .field("grapheme_clusters", &self.grapheme_clusters)
             .field("color_scheme", &self.color_scheme)
             .field("wake", &self.wake.is_some())
@@ -221,6 +231,9 @@ pub(crate) struct Shared {
     write_limit: usize,
     /// How the program's end is handled, and when the program started (an early failure is reported as one).
     exit: ExitPolicy,
+    /// [`PaneConfig::status_file`], taken by whichever comes first: the child's own end, which writes it, or the
+    /// pane's drop, which hangs the child up and so drops it.
+    status_file: Mutex<Option<PathBuf>>,
     started: Instant,
     /// Set once the IO worker fed the last of the output (or stopped).
     eof: (Mutex<bool>, Condvar),
@@ -321,6 +334,8 @@ enum Io {
     },
     /// A live pane's attach to its session.
     Live(Arc<Live>),
+    /// A HUD's painter.
+    Painted(Arc<Painted>),
 }
 
 impl std::fmt::Debug for Pane {
@@ -344,7 +359,7 @@ impl Pane {
         #[cfg(test)]
         tests::LAST_CHILD.with(|last| last.set(Some(pid)));
         let killer = child.killer();
-        let parts = Parts::new(&master, config);
+        let parts = Parts::new(&master, &child, config);
         let parts = match parts {
             Ok(parts) => parts,
             Err(err) => {
@@ -424,24 +439,65 @@ impl Pane {
         })
     }
 
+    /// A pane of `config.size` painting the HUD body `file` in process ([`crate::painted`]): no PTY and no child; the
+    /// painter runs on the pane's thread, so this returns at once.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneError::Pty`] when a thread of the pane cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
+    /// the size or cannot allocate.
+    pub(crate) fn paint(file: PathBuf, config: &PaneConfig) -> Result<Self, PaneError> {
+        let (events_tx, events) = mpsc::channel();
+        let mailbox = Arc::new(Mailbox::new(ReadPause::new()));
+        let shared = Arc::new(shared(config, events_tx, mailbox)?);
+        // nothing reads the terminal's replies
+        shared.replies.close();
+        let painted = Arc::new(Painted::new(file));
+        let worker = Worker {
+            shared: Arc::clone(&shared),
+            reads: Reads::Painted,
+            scanner: Scanner::default(),
+            next_read: 0,
+            child_exited: false,
+        };
+        let worker = spawn_thread("pane-io", move || worker.run())?;
+        let paint_thread = {
+            let (painted, shared) = (Arc::clone(&painted), Arc::clone(&shared));
+            spawn_thread("pane-paint", move || painted.run(&shared))
+        };
+        if let Err(err) = paint_thread {
+            shared.mailbox.shutdown();
+            let _ = worker.join();
+            return Err(err);
+        }
+        Ok(Self {
+            shared,
+            io: Io::Painted(painted),
+            events: Mutex::new(events),
+            pid: None,
+            worker: Some(worker),
+        })
+    }
+
     pub(crate) fn shared(&self) -> &Arc<Shared> {
         &self.shared
     }
 
-    /// The child's process id; `None` for a live pane, whose program runs under the session server.
+    /// The child's process id; `None` for a live pane, whose program runs under the session server, and a painted one.
     #[must_use]
     pub fn pid(&self) -> Option<u32> {
         self.pid
     }
 
     /// The terminal's foreground process group (`tcgetpgrp` on the PTY, as libghostty's `foreground_pid` read it): the
-    /// pid of the group's leader; `None` once the PTY cannot say (the child side closed). Always `None` on Windows,
-    /// whose pseudoconsole has no foreground process group.
+    /// pid of the group's leader; `None` once the PTY cannot say (the child side closed). On Windows, whose
+    /// pseudoconsole has no foreground process group, the process that stands in for it, read from the program's job
+    /// (`Tty::foreground_pid`); `None` once the program ended.
     #[must_use]
     pub fn foreground_pid(&self) -> Option<u32> {
         match &self.io {
             Io::Pty { tty, .. } => tty.foreground_pid(),
-            Io::Live(_) => None,
+            Io::Live(_) | Io::Painted(_) => None,
         }
     }
 
@@ -454,7 +510,7 @@ impl Pane {
     pub fn password_input(&self) -> bool {
         match &self.io {
             Io::Pty { tty, .. } => tty.password_input(),
-            Io::Live(_) => false,
+            Io::Live(_) | Io::Painted(_) => false,
         }
     }
 
@@ -468,6 +524,7 @@ impl Pane {
         match &self.io {
             Io::Pty { actor, .. } => actor.write_input(bytes).map_err(PaneError::from),
             Io::Live(live) => live.input(bytes),
+            Io::Painted(_) => Ok(()),
         }
     }
 
@@ -491,6 +548,7 @@ impl Pane {
                 live.resize(size);
                 self.update_metadata();
             }
+            Io::Painted(painted) => painted.resized(),
         }
         self.shared.wake();
         Ok(())
@@ -604,7 +662,7 @@ impl Pane {
     /// Answer the clipboard read `id` ([`PaneEvent::ClipboardRead`]); an answer for any other id is ignored.
     pub fn answer_clipboard_read(&self, id: u64, answer: ClipboardAnswer) {
         match &self.io {
-            Io::Pty { .. } => self.shared.mailbox.answer(id, answer),
+            Io::Pty { .. } | Io::Painted(_) => self.shared.mailbox.answer(id, answer),
             Io::Live(live) => live.answer(id, answer),
         }
     }
@@ -615,6 +673,7 @@ impl Pane {
         match &self.io {
             Io::Pty { actor, .. } => actor.queued(),
             Io::Live(live) => live.queued(),
+            Io::Painted(_) => 0,
         }
     }
 
@@ -637,6 +696,7 @@ impl Drop for Pane {
     /// live pane detaches instead, leaving its session running.
     fn drop(&mut self) {
         self.shared.mailbox.shutdown();
+        lock(&self.shared.status_file).take();
         match &self.io {
             Io::Pty { actor, killer, .. } => {
                 if let Err(err) = killer.hang_up() {
@@ -645,6 +705,7 @@ impl Drop for Pane {
                 actor.shutdown();
             }
             Io::Live(live) => live.leave(),
+            Io::Painted(painted) => painted.stop(),
         }
         self.shared.replies.close();
         if let Some(worker) = self.worker.take() {
@@ -721,6 +782,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
         counters: Counters::default(),
         write_limit: config.write_limit,
         exit: config.exit.clone(),
+        status_file: Mutex::new(config.status_file.clone()),
         started: Instant::now(),
         eof: (Mutex::new(false), Condvar::new()),
         #[cfg(test)]
@@ -828,8 +890,8 @@ struct Parts {
 }
 
 impl Parts {
-    fn new(master: &Master, config: &PaneConfig) -> Result<Self, PaneError> {
-        let tty = Tty::of(master)?;
+    fn new(master: &Master, child: &Child, config: &PaneConfig) -> Result<Self, PaneError> {
+        let tty = Tty::of(master, child)?;
         let (events_tx, events) = mpsc::channel();
         let read_pause = ReadPause::new();
         let mailbox = Arc::new(Mailbox::new(read_pause.clone()));
@@ -950,9 +1012,21 @@ fn wait_child(mut child: Child, shared: &Shared, actor: &ActorHandle) {
             (1, None)
         }
     };
+    record_status(shared, code);
     shared.mailbox.child_exited();
     actor.child_exited();
     report_exit(shared, Some(code), signal);
+}
+
+/// Writes the child's exit `code` to the pane's status file, unless the pane's drop took it first.
+fn record_status(shared: &Shared, code: u32) {
+    let Some(file) = lock(&shared.status_file).take() else {
+        return;
+    };
+    let status = overlay_capture::status_of_exit_code(code);
+    if let Err(error) = overlay_capture::write_exit_code(&file, status) {
+        tracing::warn!(file = %file.display(), %error, "could not write the program's exit status");
+    }
 }
 
 /// The program ended with `code` (`None`: unknown, reported as 0) and `signal`: give the IO worker a moment to feed
@@ -995,10 +1069,12 @@ fn dispatch(shared: &Shared, byte: u8, read: ReadCandidate, answer: ClipboardAns
     shared.counters.bytes.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Whose reads the mailbox pauses and resumes: the PTY's actor, or a live pane's reader.
+/// Whose reads the mailbox pauses and resumes: the PTY's actor, or a live pane's reader; a painter's few bytes a tick
+/// need no pause.
 enum Reads {
     Actor(ActorHandle),
     Live(Arc<Live>),
+    Painted,
 }
 
 impl Reads {
@@ -1006,6 +1082,7 @@ impl Reads {
         match self {
             Self::Actor(actor) => actor.wake_reader(),
             Self::Live(live) => live.wake_reader(),
+            Self::Painted => {}
         }
     }
 }
@@ -1238,7 +1315,16 @@ mod tests {
             .cwd(dir.path());
         let pane = Pane::spawn(&command, &PaneConfig::new(SIZE)).unwrap();
         lock(&pane.shared.vt).terminal.vt_write(b"abc");
-        let first = pane.frame().frame;
+        // the IO thread may hold a lock for a moment on a loaded machine, and a stale paint is the empty first frame
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let first = loop {
+            let snapshot = pane.frame();
+            if !snapshot.stale {
+                break snapshot.frame;
+            }
+            assert!(Instant::now() < deadline, "the first paint never got the terminal");
+            std::thread::sleep(Duration::from_millis(1));
+        };
         assert_eq!(first.lines()[0], "abc");
         // view B starts painting; before it looks at the terminal, the row changes in place (the cursor moves too)
         // and view A paints the change completely

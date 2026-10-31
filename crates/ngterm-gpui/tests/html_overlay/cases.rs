@@ -28,7 +28,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 9] = [
+pub const CASES: [(&str, Case); 10] = [
     ("the_engine_renders_on_the_renderers_gpu_in_its_mode", mode),
     ("a_page_loads_and_its_frames_reach_the_screen", loads),
     ("a_page_moved_to_another_window_draws_there", moved),
@@ -46,6 +46,10 @@ pub const CASES: [(&str, Case); 9] = [
     (
         "a_tagged_control_on_a_replica_relays_with_page_script_off",
         replica_tagged,
+    ),
+    (
+        "the_webview2_guard_keeps_scripted_and_shadowed_clicks_off_file_inputs",
+        file_chooser_guard,
     ),
 ];
 
@@ -366,8 +370,20 @@ fn moved(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     })
 }
 
-/// A canvas animation at 1080p keeps its frame rate on dmabufs (the path video takes) and never falls back to SHM;
-/// on lavapipe it keeps running in SHM at a small size.
+/// Presents an animation's pace is measured over: a count, not a period, so a loaded host lengthens the measure
+/// instead of thinning it.
+const PRESENTS: u64 = 40;
+/// The engine's display refresh (WPE's default screen): `requestAnimationFrame` never runs faster.
+const REFRESH_HZ: f64 = 60.;
+
+/// A canvas animation at 1080p stays on dmabufs (the path video takes), never falls back to SHM, and keeps pace with
+/// the presenter: every frame is answered, and the engine draws the next one within the present that follows, so
+/// all but a few presents (each a 1080p read-back here, the headless counterpart of a window's present) show a new
+/// frame. On lavapipe it keeps running in SHM at a small size.
+///
+/// The pace is the frames over the presents of the same run, capped by the refresh, never an absolute rate: the
+/// presents themselves (a debug build's read-back on the test's own thread) are what a loaded host slows, by 20 ms to
+/// 300 ms each here, and with them every frame the engine may draw.
 fn animation(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     let dmabuf = dmabuf_mode();
     let (width, height) = if dmabuf { (1920., 1080.) } else { (480., 270.) };
@@ -386,27 +402,36 @@ fn animation(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     })?;
     let before = fixture.stats(&element);
     let started = Instant::now();
-    let period = Duration::from_secs(2);
-    // every frame rendered and read back: the headless renderer submits (and so completes frames) only for a read-back,
-    // the headless counterpart of a window's present; at 1080p the read-back itself costs a good part of each frame
-    while started.elapsed() < period {
+    // every present read back: the headless renderer submits (and so completes frames) only for a read-back
+    for _ in 0..PRESENTS {
         fixture.frame()?;
-        std::thread::sleep(Duration::from_millis(1));
     }
+    let elapsed = started.elapsed().as_secs_f64();
     let after = fixture.stats(&element);
     let frames = (after.dmabuf + after.shm) - (before.dmabuf + before.shm);
-    #[expect(clippy::cast_precision_loss, reason = "a frame count")]
-    let fps = frames as f64 / started.elapsed().as_secs_f64();
-    println!("    {width}x{height}: {fps:.1} frames/s, {after:?}");
+    #[expect(clippy::cast_precision_loss, reason = "frame and present counts")]
+    let (pace, fps) = {
+        let possible = (PRESENTS as f64).min((elapsed * REFRESH_HZ).ceil());
+        (frames as f64 / possible, frames as f64 / elapsed)
+    };
+    println!(
+        "    {width}x{height}: {frames} frames in {PRESENTS} presents ({pace:.2} of possible), {fps:.1} frames/s, {after:?}"
+    );
+    check((after.dmabuf + after.shm).saturating_sub(after.answered) <= 1, || {
+        format!("frames handed over were never answered: {after:?}")
+    })?;
     if dmabuf {
         check(!after.fell_back && after.shm == 0, || {
             format!("SHM was chosen while dmabufs import: {after:?}")
         })?;
-        // ~40 here (Intel UHD, a debug build, a 1080p read-back per frame); SHM manages 2.5 at 1080p (Task 2)
-        check(fps >= 24.0, || format!("{fps:.1} frames/s at 1080p on dmabufs"))
+        // 0.93 to 1.0 here at load averages of 19 to 70 (Intel, a debug build); SHM manages 2.5 frames/s at 1080p
+        check(pace >= 0.75, || {
+            format!("{frames} frames in {PRESENTS} presents over {elapsed:.1} s at 1080p on dmabufs")
+        })
     } else {
-        check(after.dmabuf == 0 && fps >= 2.0, || {
-            format!("{fps:.1} frames/s in SHM, {after:?}")
+        // 0.2 to 0.7 here: lavapipe draws both sides on the CPU, and the engine copies each frame out
+        check(after.dmabuf == 0 && pace >= 0.125, || {
+            format!("{frames} frames in {PRESENTS} presents over {elapsed:.1} s in SHM, {after:?}")
         })
     }
 }
@@ -597,6 +622,59 @@ fn replica_tagged(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
         bridged.len() == 1 && bridged[0].contains("session.select") && bridged[0].contains("3F2A"),
         || format!("the origin got {bridged:?}"),
     )
+}
+
+/// The `WebView2` host's file-chooser guard (`webview2/bridge.rs`), which no harness runs on Windows, run here in
+/// `WebKit` ahead of a page's script: what it refuses is DOM behaviour the engines share. A file input's click that a
+/// page dispatches or calls never reaches it, a text input's still does, and a user's click on a file input inside a
+/// closed shadow root arrives cancelled. The page paints yellow once its scripted checks hold, green once the click
+/// arrived cancelled, blue on a failure.
+fn file_chooser_guard(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    const GUARD: &str = include_str!("../../src/html_overlay/webview2/guard.js");
+    const YELLOW: [u8; 4] = [0xc0, 0xc0, 0x30, 0xff];
+    const GREEN: [u8; 4] = [0x30, 0xc0, 0x30, 0xff];
+    const BLUE: [u8; 4] = [0x30, 0x30, 0xc0, 0xff];
+    let page = format!(
+        "<html><body style='margin:0;background:#c03030'>\
+         <div id='host' style='position:fixed;left:0;top:0;width:100%;height:100%'></div>\
+         <script>{GUARD}</script><script>
+           const paint = (color) => {{ document.body.style.background = color; }};
+           const root = document.getElementById('host').attachShadow({{mode: 'closed'}});
+           root.innerHTML = \"<input type='file' style='position:absolute;left:0;top:0;width:100%;height:100%;opacity:0'>\";
+           const detached = document.createElement('input');
+           detached.type = 'file';
+           let reached = 0;
+           detached.addEventListener('click', () => {{ reached += 1; }});
+           const dispatched = detached.dispatchEvent(new MouseEvent('click', {{cancelable: true}}));
+           detached.click();
+           const text = document.createElement('input');
+           let typed = 0;
+           text.addEventListener('click', () => {{ typed += 1; }});
+           text.dispatchEvent(new MouseEvent('click'));
+           const scripted = dispatched === false && reached === 0 && typed === 1;
+           root.querySelector('input').addEventListener('click', (event) => {{
+             paint(scripted && event.defaultPrevented ? '#30c030' : '#3030c0');
+           }});
+           paint(scripted ? '#c0c030' : '#3030c0');
+         </script></body></html>"
+    );
+    let element = fixture.show(&page, 320., 240.)?;
+    let mut seen = [0; 4];
+    fixture.until("the page's scripted checks", &element, |_, width, pixels| {
+        seen = pixel(pixels, width, width / 2, 200);
+        close(seen, YELLOW) || close(seen, BLUE)
+    })?;
+    check(close(seen, YELLOW), || {
+        "a click the page dispatched or called reached a file input, or a text input's did not".to_owned()
+    })?;
+    fixture.click(point(px(160.), px(120.)))?;
+    fixture.until("the shadowed file input's click", &element, |_, width, pixels| {
+        seen = pixel(pixels, width, width / 2, 200);
+        close(seen, GREEN) || close(seen, BLUE)
+    })?;
+    check(close(seen, GREEN), || {
+        "a click on a file input inside a closed shadow root was not cancelled".to_owned()
+    })
 }
 
 fn check(condition: bool, message: impl FnOnce() -> String) -> Result<(), String> {

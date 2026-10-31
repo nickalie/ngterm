@@ -43,7 +43,9 @@ RULES: list[tuple[str, str]] = [
     ("tests-cli", r"^agtermCore/Tests/agtermctlKitTests/"),
     ("tests-app", r"^agtermTests/"),
     ("tests-ui", r"^agtermUITests/"),
-    ("vendored", r"^agterm/Resources/(agent-status|hud)/"),
+    # upstream's HUD painter script, ported to Rust (`ngterm-core`'s `hud::painter`) rather than copied
+    ("core", r"^agterm/Resources/hud/"),
+    ("vendored", r"^agterm/Resources/agent-status/"),
     ("vendored", r"^agterm/Resources/ghostty-defaults\.conf$"),
     ("vendored", r"^plugins/agterm/skills/agterm/"),
     ("native-pins", r"^scripts/zmx-patches/"),

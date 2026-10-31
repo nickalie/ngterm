@@ -12,6 +12,7 @@ mod support;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use ngterm_core::command_restore::PaneInput;
 use ngterm_core::ghostty_config::GhosttyConfig;
 use ngterm_term::{ExitStatus, Host, Launch, Pane, PaneConfig, PaneEvent, TextRegion};
 use support::{DEADLINE, SIZE, TestResult, wait_events, wait_text};
@@ -206,7 +207,7 @@ fn a_command_not_waited_for_ends_its_pane() -> TestResult {
 fn initial_input_is_typed_into_the_login_shell() -> TestResult {
     let pane = Pane::launch(
         &Launch {
-            initial_input: Some("echo typed-$((40+2))\n".to_owned()),
+            initial_input: Some(PaneInput::Line("echo typed-$((40+2))".to_owned())),
             ..launch(None)
         },
         &host("/bin/sh", None),

@@ -17,9 +17,9 @@
 //!   [`PaneEvent::SearchTotal`] and [`PaneEvent::SearchSelected`] as libghostty reported them.
 //! - Kitty graphics: every [`Frame`] carries a [`KittyView`] of its images and placements.
 //! - Launch: [`Pane::launch`] runs a [`Launch`] (a session pane's seed: a live pane's attach to its session, made in
-//!   process with no PTY, a plain pane's command or login shell) under a [`Host`] (the terminal identity and shell integration libghostty gave a
+//!   process with no PTY, a plain pane's command or login shell; or a HUD's painter, in process too) under a [`Host`] (the terminal identity and shell integration libghostty gave a
 //!   surface), with the [`ExitPolicy`] of a launched pane; [`Pane::foreground_pid`] is the terminal's foreground
-//!   process group.
+//!   process group (on Windows the process that stands in for it, from the program's job).
 //! - Threads and locks: Technical Details > Threads of the GPUI plan; the details are in [`pane`]'s and
 //!   [`effects`]'s docs. The IO thread holds the VT lock for one bounded slice of `vt_write` at a time; painting only
 //!   ever `try_lock`s it.
@@ -39,6 +39,7 @@ mod input;
 mod kitty;
 mod launch;
 mod mailbox;
+mod painted;
 mod pane;
 mod placeholder;
 mod png;

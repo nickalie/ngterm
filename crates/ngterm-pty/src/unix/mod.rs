@@ -3,7 +3,8 @@
 //!
 //! herdr: `src/pty/backend/unix.rs` (`spawn_with_portable_pty`) at `HERDR_REV` (`build/pins.env`), licensed under the
 //! Apache License 2.0, modified: the child is waited for without reaping first (`waitid` with `WNOWAIT`), so its
-//! process group is never signalled after its id could be reused; the group's hangup and kill.
+//! process group is never signalled after its id could be reused; the group's hangup and kill, the child signalled
+//! before its group; on macOS, libnotify's setup finished before the fork.
 
 mod actor;
 mod fd;
@@ -200,12 +201,21 @@ impl Killer {
         *lock(&self.reaped) = true;
     }
 
+    /// The child first, by its id, then its whole group. The group's signal is not one act: the kernel signals the
+    /// members one after another (macOS from a list it took beforehand, with nothing holding off their exits
+    /// meanwhile), so a child signalled after its children can see one of them end first and exit as it would have
+    /// anyway: a shell waiting on its `sleep` reports the `sleep` killed and exits 0 before its own `SIGKILL` comes,
+    /// which is then dropped, as it is for any process already exiting. Signalled first, the child has its signal
+    /// before any of its group ends.
     fn signal(&self, signal: libc::c_int) -> io::Result<()> {
         // held while signalling: the child cannot be reaped (and its id reused) in between
         let reaped = lock(&self.reaped);
         if *reaped {
             return Ok(());
         }
+        // SAFETY: plain `kill(2)` on the unreaped child (its id is the group's); no memory is passed. Its result is
+        // not needed: a child that already exited takes no signal, and the group's signal below reports a failure.
+        unsafe { libc::kill(self.group, signal) };
         // SAFETY: plain `killpg(2)` on the group the unreaped child leads; no memory is passed.
         if unsafe { libc::killpg(self.group, signal) } != 0 {
             let err = io::Error::last_os_error();
@@ -275,8 +285,85 @@ fn signal_members(group: libc::pid_t, signal: libc::c_int) {
     }
 }
 
+/// Finish libnotify's one-time setup in this process before it forks (macOS). Every forked child runs libnotify's
+/// fork handler (`_notify_fork_child`, from `fork` itself, before the exec), which reads that setup's once-gate: a
+/// fork that catches another thread in the middle of the process's first libnotify use (`getpwuid`, which
+/// portable-pty calls for a command without `HOME`, `localtime`, `confstr`) leaves the child a gate held by a thread
+/// it does not have, and the child dies of `SIGILL` (`os_once_t is corrupt`, crashed on the child side of the fork,
+/// pre-exec). The spawn still succeeds, as the child closed std's error pipe without a word, and the PTY ends with
+/// nothing read. Once the setup is done it never runs again, and this call waits for one in progress, so no fork
+/// after it can catch one.
+#[cfg(target_os = "macos")]
+fn settle_libnotify() {
+    unsafe extern "C" {
+        /// `<notify.h>`; the token is only looked up, and every call starts with libnotify's setup.
+        fn notify_is_valid_token(token: libc::c_int) -> bool;
+    }
+    // SAFETY: a lookup of a token number in libnotify's table, which libSystem holds; no memory is passed.
+    unsafe { notify_is_valid_token(0) };
+}
+
+/// XNU's internal "redrive the open" errno (`bsd/sys/errno.h`, kernel-only), which its `/dev/ptmx` open returns to
+/// user space once the kernel's own retries of a lost clone race run out.
+#[cfg(target_os = "macos")]
+const EREDRIVEOPEN: i32 = -6;
+
+/// How many times an `openpty` that lost XNU's ptmx clone race is tried again before its error is returned.
+#[cfg(target_os = "macos")]
+const CLONE_RACE_RETRIES: usize = 3;
+
+/// Open a PTY pair with `open`, again on macOS when the open lost XNU's `/dev/ptmx` clone race to another open or
+/// close of a PTY, in any process (XNU's `bsd/kern/tty_ptmx.c` and `bsd/kern/tty_dev.c`, `apple-oss-distributions/xnu`):
+///
+/// - `ptmx_clone` hands an opener the first free minor under the devfs lock, but the slot is only taken later, in
+///   `ptmx_get_ioctl` after an allocation made without the lock. Two opens can be handed one minor; the one that
+///   comes second finds the slot taken and `ptcopen` returns `EREDRIVEOPEN`. `vn_open_auth` redrives the open at
+///   most 10 times, then returns that kernel-only errno (`-6`) from `open("/dev/ptmx")`.
+/// - The same window lets an opener handed the vector's end meet a close that freed a slot meanwhile: the vector is
+///   not grown, the minor is out of range (`ptmx_get_ioctl failed because minor number ... was out of range`) and
+///   `ptcopen` returns `ENXIO`.
+/// - `ptmx_free_ioctl`, the last close of a pair, frees the minor's slot before it removes that minor's
+///   `/dev/ttysNNN` node: a new pair handed the minor meanwhile opens its replica through the old node as it is
+///   removed, and the open fails with `ENXIO`.
+///
+/// The kernel's state is consistent again once the racing open or close is through, so a fresh `openpty` gets a
+/// minor of its own. Only these two errnos are retried, a bounded number of times; anything else, and a race lost
+/// more often than that, is returned as it is.
+fn retry_clone_race<T, E>(mut open: impl FnMut() -> Result<T, E>) -> io::Result<T>
+where
+    E: std::fmt::Display + AsRef<dyn std::error::Error + Send + Sync + 'static>,
+{
+    #[cfg(target_os = "macos")]
+    for _ in 0..CLONE_RACE_RETRIES {
+        match open() {
+            Err(err) if lost_clone_race(err.as_ref()) => {
+                tracing::debug!("openpty lost the ptmx clone race ({err:#}); opening again");
+            }
+            opened => return opened.map_err(|err| pty_error(&err)),
+        }
+    }
+    open().map_err(|err| pty_error(&err))
+}
+
+/// Whether an `openpty` failed with one of the errnos of XNU's ptmx clone race ([`retry_clone_race`]).
+#[cfg(target_os = "macos")]
+fn lost_clone_race(err: &(dyn std::error::Error + 'static)) -> bool {
+    matches!(openpty_errno(err), Some(libc::ENXIO | EREDRIVEOPEN))
+}
+
+/// The errno of a failed `openpty`: the first `io::Error` in its chain that carries one (portable-pty's keeps it,
+/// `build/patches/portable-pty/0007-openpty-error-keeps-its-errno.patch`).
+#[cfg(any(target_os = "macos", test))]
+fn openpty_errno(err: &(dyn std::error::Error + 'static)) -> Option<i32> {
+    std::iter::successors(Some(err), |err| err.source())
+        .filter_map(|err| err.downcast_ref::<io::Error>())
+        .find_map(io::Error::raw_os_error)
+}
+
 pub(crate) fn spawn(builder: CommandBuilder, size: Size) -> io::Result<Spawned> {
-    let pair = native_pty_system().openpty(size.pty()).map_err(|err| pty_error(&err))?;
+    #[cfg(target_os = "macos")]
+    settle_libnotify();
+    let pair = retry_clone_race(|| native_pty_system().openpty(size.pty()))?;
     let raw = pair
         .master
         .as_raw_fd()
@@ -304,6 +391,93 @@ mod tests {
     use std::os::fd::AsRawFd;
 
     use super::*;
+
+    /// An `openpty` failure shaped as portable-pty's: the `io::Error` under its context.
+    #[derive(Debug)]
+    struct OpenFailed(io::Error);
+
+    impl std::fmt::Display for OpenFailed {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("failed to openpty")
+        }
+    }
+
+    impl std::error::Error for OpenFailed {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    type Failure = Box<dyn std::error::Error + Send + Sync>;
+
+    /// `retry_clone_race` over failures with these errnos, then a success; the calls it made, and its result.
+    fn open_failing(errnos: &[i32]) -> (usize, io::Result<()>) {
+        let mut calls = 0;
+        let result = retry_clone_race(|| {
+            let errno = errnos.get(calls).copied();
+            calls += 1;
+            errno.map_or(Ok(()), |errno| {
+                Err(Failure::from(OpenFailed(io::Error::from_raw_os_error(errno))))
+            })
+        });
+        (calls, result)
+    }
+
+    #[test]
+    fn an_open_that_fails_otherwise_is_not_retried() {
+        let (calls, result) = open_failing(&[libc::EACCES, libc::EACCES]);
+        assert_eq!(calls, 1);
+        assert_eq!(result.unwrap_err().to_string(), "failed to openpty");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_open_that_lost_the_clone_race_is_retried() {
+        let (calls, result) = open_failing(&[libc::ENXIO, EREDRIVEOPEN]);
+        assert_eq!(calls, 3);
+        result.unwrap();
+        // a race lost more often than the bound returns the last loss
+        let lost = [EREDRIVEOPEN; CLONE_RACE_RETRIES + 1];
+        let (calls, result) = open_failing(&lost);
+        assert_eq!(calls, CLONE_RACE_RETRIES + 1);
+        assert_eq!(result.unwrap_err().to_string(), "failed to openpty");
+    }
+
+    /// portable-pty's own `openpty` failure carries its errno to [`openpty_errno`], which the clone race's retry reads:
+    /// a child process of this test spends its descriptor limit and opens a PTY, which fails with `EMFILE`.
+    #[test]
+    fn portable_ptys_openpty_failure_keeps_its_errno() {
+        const CHILD: &str = "NGTERM_PTY_TEST_NO_DESCRIPTORS";
+        const NAME: &str = "unix::tests::portable_ptys_openpty_failure_keeps_its_errno";
+        if std::env::var_os(CHILD).is_some() {
+            let mut limit = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: reads this child process's descriptor limit into a valid `rlimit`.
+            assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) }, 0);
+            let spent = libc::rlimit { rlim_cur: 0, ..limit };
+            // SAFETY: sets this child process's descriptor limit from a valid `rlimit`.
+            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const spent) }, 0);
+            let opened = native_pty_system().openpty(Size::cells(24, 80).pty());
+            // SAFETY: as above, the limit read before.
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) };
+            let err = opened.err().expect("an open past the descriptor limit fails");
+            assert_eq!(openpty_errno(err.as_ref()), Some(libc::EMFILE), "{err:?}");
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([NAME, "--exact", "--test-threads=1", "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     /// This process's descriptors on a PTY.
     #[cfg(target_os = "linux")]

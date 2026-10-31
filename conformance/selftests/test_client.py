@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from agterm_conformance import transport
 from agterm_conformance.client import (
     MAX_REQUEST_LINE_BYTES,
     BadResponse,
@@ -20,12 +21,15 @@ from agterm_conformance.client import (
 )
 
 Handler = Callable[[bytes], bytes | None]
+# Either end of a connection: a socket, or on Windows a named pipe's (agterm_conformance.transport).
+Conn = socket.socket | transport.PipeConnection
 
 
 class FakeServer:
     """Serves one connection at a time; `handler` maps the request line to raw reply bytes (None: close).
 
-    With `limit`, it stops reading once the line exceeds it and leaves the rest unread, as upstream does.
+    With `limit`, it stops reading once the line exceeds it and leaves the rest unread, as upstream does. It serves the
+    path through `transport.Listener`: an `AF_UNIX` socket, or on Windows the named pipe the path names.
     """
 
     def __init__(self, path: Path, handler: Handler, limit: int | None = None) -> None:
@@ -34,16 +38,14 @@ class FakeServer:
         self.limit = limit
         self.lines: list[bytes] = []
         self.release = threading.Event()
-        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.listener.bind(str(path))
-        self.listener.listen()
+        self.listener = transport.Listener(path)
         self.thread = threading.Thread(target=self._serve, daemon=True)
         self.thread.start()
 
     def _serve(self) -> None:
         while True:
             try:
-                conn, _ = self.listener.accept()
+                conn = self.listener.accept()
             except OSError:
                 return
             with conn:
@@ -63,8 +65,6 @@ class FakeServer:
 
     def close(self) -> None:
         self.release.set()
-        # close() alone does not wake a blocked accept() on Linux.
-        self.listener.shutdown(socket.SHUT_RDWR)
         self.listener.close()
         self.thread.join(timeout=5)
 
@@ -213,10 +213,18 @@ def test_socket_escaping_root_refused(root: Path, relative: str) -> None:
         Client(root / relative, root)
 
 
+def symlink(link: Path, target: Path) -> None:
+    """Windows grants symlinks only with a privilege or developer mode."""
+    try:
+        link.symlink_to(target)
+    except OSError as error:
+        pytest.skip(f"no symlink here: {error}")
+
+
 def test_symlink_out_of_root_refused_at_connect(live_server: FakeServer, root: Path) -> None:
     link = root / "s.sock"
     client = Client(link, root)
-    link.symlink_to(live_server.path)
+    symlink(link, live_server.path)
     with pytest.raises(SocketOutsideRoot):
         client.request("tree")
     assert live_server.lines == []
@@ -228,17 +236,18 @@ def test_symlink_out_of_root_refused_at_connect(live_server: FakeServer, root: P
 class StreamServer:
     """Accepts one connection, reads its request line and hands the open connection to `script`."""
 
-    def __init__(self, path: Path, script: Callable[[socket.socket, bytes], None]) -> None:
+    def __init__(self, path: Path, script: Callable[[Conn, bytes], None]) -> None:
         self.path = path
         self.request: bytes | None = None
-        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.listener.bind(str(path))
-        self.listener.listen()
+        self.listener = transport.Listener(path)
         self.thread = threading.Thread(target=self._serve, args=(script,), daemon=True)
         self.thread.start()
 
-    def _serve(self, script: Callable[[socket.socket, bytes], None]) -> None:
-        conn, _ = self.listener.accept()
+    def _serve(self, script: Callable[[Conn, bytes], None]) -> None:
+        try:
+            conn = self.listener.accept()
+        except OSError:
+            return
         with conn:
             line = bytearray()
             while not line.endswith(b"\n"):
@@ -254,7 +263,7 @@ class StreamServer:
         self.thread.join(timeout=5)
 
 
-def frames(conn: socket.socket):
+def frames(conn: Conn):
     buffer = b""
     while True:
         while b"\n" not in buffer:
@@ -267,10 +276,10 @@ def frames(conn: socket.socket):
 
 
 @pytest.fixture
-def stream_server(root: Path) -> Iterator[Callable[[Callable[[socket.socket, bytes], None]], StreamServer]]:
+def stream_server(root: Path) -> Iterator[Callable[[Callable[[Conn, bytes], None]], StreamServer]]:
     servers: list[StreamServer] = []
 
-    def start(script: Callable[[socket.socket, bytes], None]) -> StreamServer:
+    def start(script: Callable[[Conn, bytes], None]) -> StreamServer:
         servers.append(StreamServer(root / "st.sock", script))
         return servers[-1]
 
@@ -282,7 +291,7 @@ def stream_server(root: Path) -> Iterator[Callable[[Callable[[socket.socket, byt
 def test_stream_keeps_the_connection_after_an_ok_reply(stream_server, root: Path) -> None:
     received: list[dict] = []
 
-    def echo(conn: socket.socket, _line: bytes) -> None:
+    def echo(conn: Conn, _line: bytes) -> None:
         # The reply and the first frame in one write: the client must split them.
         conn.sendall(b'{"ok":true,"result":{"id":"s1"}}\n{"kind":"hello","gen":1}\n')
         for frame in frames(conn):
@@ -311,7 +320,7 @@ def test_stream_refused_reply_then_closed(stream_server, root: Path) -> None:
 def test_stream_read_times_out(stream_server, root: Path) -> None:
     release = threading.Event()
 
-    def hold(conn: socket.socket, _line: bytes) -> None:
+    def hold(conn: Conn, _line: bytes) -> None:
         conn.sendall(b'{"ok":true}\n')
         release.wait(5)
 
@@ -338,7 +347,7 @@ def test_stream_frame_must_be_a_json_object(stream_server, root: Path) -> None:
 def test_stream_symlink_out_of_root_refused(live_server: FakeServer, root: Path) -> None:
     link = root / "st.sock"
     client = Client(link, root)
-    link.symlink_to(live_server.path)
+    symlink(link, live_server.path)
     with pytest.raises(SocketOutsideRoot):
         client.open_stream("zmx.present", "s1")
     assert live_server.lines == []
