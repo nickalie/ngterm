@@ -8,10 +8,11 @@
 //! reads its grant scheme back (`policy::app_uri`). A URL page registers none of the protocols, so those names reach
 //! nothing of the app's from it, and the policy refuses them as the file addresses they read as.
 //!
-//! The text loads through a protocol rather than `NavigateToString`: `WebView2` reports no address for a string's
-//! document (it stays `about:blank`, so no `SourceChanged` comes and the page never reports its title), each string
-//! load adds a history entry where `WebKit`'s `about:blank` reload adds none, and a string is capped at 2 MB. A load of
-//! the text's one address over the shown one replaces it, as a same-address load does in a browser.
+//! The text loads through a protocol rather than `NavigateToString`: a string's document never reported its title
+//! (granted and URL pages did, through the same events: the page report waits on an address, and a string's stays
+//! the `about:blank` the web view started at), each string load added a history entry where `WebKit`'s reload of its
+//! `about:blank` text adds none, and a string is capped at 2 MB. A load of the text's one address over the shown one
+//! replaces it, as a same-address load does in a browser.
 
 use ngterm_core::html::REPLICA_SCHEME;
 use url::Url;
@@ -102,6 +103,18 @@ pub fn request_app_uri(request: &str) -> String {
     }
 }
 
+/// Whether `engine` reaches the network: an HTTP(S) address none of the app's protocols serves.
+#[must_use]
+pub fn is_network(engine: &str) -> bool {
+    let web = ["http://", "https://"]
+        .iter()
+        .any(|scheme| strip_prefix_ignoring_case(engine, scheme).is_some());
+    let own = [GRANT_PROTOCOL, REPLICA_PROTOCOL, TEXT_PROTOCOL]
+        .iter()
+        .any(|protocol| strip_prefix_ignoring_case(engine, &format!("{ENGINE_SCHEME}://{protocol}.")).is_some());
+    web && !own
+}
+
 /// The protocol names wry registers, by what a page loads through them.
 pub const GRANT_PROTOCOL: &str = GRANT_SCHEME;
 pub const REPLICA_PROTOCOL: &str = REPLICA_SCHEME;
@@ -169,6 +182,17 @@ mod tests {
         assert!(requests_text_document(&format!("{request}/?x=1")));
         assert!(!requests_text_document(&format!("{request}/style.css")));
         assert!(!requests_text_document("ngterm-file://localhost/"));
+    }
+
+    #[test]
+    fn only_addresses_off_the_apps_protocols_reach_the_network() {
+        assert!(is_network("http://127.0.0.1:8000/a.html"));
+        assert!(is_network("HTTPS://example.com/"));
+        assert!(!is_network("https://ngterm-file.localhost/C:/a.html"));
+        assert!(!is_network(&replica_address(Uuid::new_v4(), "/a.html").unwrap()));
+        assert!(!is_network(&text_address(Uuid::new_v4())));
+        assert!(!is_network("about:blank"));
+        assert!(!is_network("data:text/html,x"));
     }
 
     #[test]

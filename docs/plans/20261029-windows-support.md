@@ -273,6 +273,21 @@ guest has 4 CPUs and 6.5 GB of memory.
   bridge round-trips, a login survives a restart (`scripts/smoke-windows-pages.ps1`; CI's Windows job runs
   ngterm-gpui's clippy and tests with `html`)
 - [x] the WebView2 runtime's presence is checked at start, with a message when it is missing
+- ➕ (side task 26) the gaps Task 8's suite found, fixed in `ngterm-gpui/src/html_overlay/webview2*`:
+  - a file page without a grant never reported its title (the hooks were there: granted and URL pages reported
+    theirs; a `NavigateToString` document did not): its text now loads through a protocol of its own
+    (`https://ngterm-text.<page id>/`, serving that text alone, read back as the `about:blank` it loads at on Linux),
+    which also lifts `NavigateToString`'s 2 MB cap
+  - the reload of such a page added a history entry: a reload now loads the text (read again) at that one address,
+    which replaces the shown entry, so `canGoBack` stays false as upstream's does (VM: two reloads, `navigate back`
+    refused, an edited file's new title after a third)
+  - a chromeless URL page asked another origin for a frame: `WebView2` sends a frame's request even when
+    `FrameNavigationStarting` cancelled its navigation (VM log: the decision `allowed=false`, the server still asked);
+    a frame's document request is now decided by the policy again (`WebResourceRequested`, documents only) and a
+    refused one answered with a 403 before it reaches the network; the app's protocols and the main frame's document
+    are left alone
+  - the 10 ids (`test_overlay.py`'s eight page tests and the chromeless frame test, `test_cli_output.py`'s
+    `test_overlay_page_blocks_until_submitted`) are in the Windows ratchet
 
 ### Task 7: The Windows installer (depends on Tasks 4–6)
 
