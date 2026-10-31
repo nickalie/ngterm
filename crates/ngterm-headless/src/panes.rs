@@ -34,8 +34,8 @@ use ngterm_core::restore::spawn_plan::LaunchSeed;
 use ngterm_core::{Core, PaneReplacement, PaneReport, PaneSpawn};
 use ngterm_host::{Surface, TextScope};
 use ngterm_term::{
-    CursorDefaults, ExitStatus, GridSize, Host, KeyInput, Launch, Pane, PaneConfig, PaneEvent, SelectionText,
-    TextRegion, ThemeColors, Wake,
+    ClipboardAnswer, CursorDefaults, ExitStatus, GridSize, Host, KeyInput, Launch, Pane, PaneConfig, PaneEvent,
+    SelectionText, TextRegion, ThemeColors, Wake,
 };
 use uuid::Uuid;
 
@@ -567,7 +567,14 @@ impl Panes {
             return Vec::new();
         };
         let ran = cell.ran.get();
-        pane.take_events()
+        let events = pane.take_events();
+        for event in &events {
+            // no clipboard here: a program's read is denied at once, as a waiting one holds the session's output
+            if let PaneEvent::ClipboardRead(read) = event {
+                pane.answer_clipboard_read(read.id, ClipboardAnswer::Denied);
+            }
+        }
+        events
             .iter()
             .filter_map(|event| report(event, ran, &self.environment.hostname))
             .collect()
