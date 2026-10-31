@@ -2,198 +2,82 @@
 
 ## Overview
 
-- Bring ngterm from upstream `umputun/agterm` v0.38.1 to v0.39.1 (45 commits, releases v0.39.0, v0.39.1). The
-  mechanical part is done on branch `upstream-sync-v0.39.1` (commit `09cd3da1`): the parity-target mentions bumped
-  (README.md, conformance/README.md, .revmux/profile.md) and the reference adapter's `PARITY_LEVEL`
-  (`conformance/agterm_conformance/impls/swift_macos.py`, its assert in `conformance/selftests/test_impls.py`).
-  Upstream's pins did not move (ZMX_REV and GHOSTTY_REV unchanged, no zmx patch changed). Three parts did not go
-  through cleanly and are tasks here: the catalog generator refuses v0.39.1's `commands.html` (Task 1), the
-  agent-status copy's `0002-ngterm-identity.patch` no longer applies (Task 20), and the bundled skill's
-  `0001-live-group.patch` no longer applies (Task 21).
-- This plan ports the behavior: the catalog and every new wire name first; then `lastSelectedAt`, row tints,
-  `session close --undoable`, the two attention-navigation settings, the flagged view's saved order, the palette
-  membership editors, sized link overlays with the browser override, the pane-overlay-over-cover fix and the pane
-  ask shade, the page strip's Hide gate and the undo chord on a focused page, the Live `--command` exit change; then
-  companion sessions in seven tasks (model and wire, group close and undo, parent respawn, sidebar and flat-list
-  labels, page companions, Duplicate as Companion, remote companions); then the agent-status and skill copies, the
-  split divider color with the small terminal tests, Ignore Reduce Transparency with the system rule under it, the
-  UI-only items and the parity claim.
-- Out of scope: upstream CI and its hosted-test notes, packaging (the Homebrew cask's quarantine strip #801),
-  release metadata and plugin manifests, upstream's README/ARCHITECTURE/CLAUDE.md and site pages other than
-  commands/docs, the cookbook recipes (annotate-document #805, claude-pasted-images #830, flag-recent-agents
-  08ccd78, the two-agent-chat composer fix #806, the flagged-dashboard note: the bundled skill fetches recipes from
-  upstream's repository, they are not part of this build), upstream's Ghostty teardown backport and its
-  `scripts/test-surface-teardown.py` (#819: libghostty's full App/Surface, which this build does not use; see
-  Context), upstream's docs/backlog and completed plans (design intent only).
+- Bring ngterm from upstream `umputun/agterm` v0.38.1 to v0.39.1 (45 commits; releases v0.39.0, v0.39.1).
+- The mechanical bump is done on branch `upstream-sync-v0.39.1` (commit `c8f16b00`): parity-target mentions and the
+  reference adapter's `PARITY_LEVEL`. Upstream's pins didn't move.
+- Three parts of the bump didn't apply cleanly and are tasks here: the catalog generator (Task 1), the agent-status
+  copy (Task 20) and the bundled skill (Task 21).
+- Order of the plan:
+  - the catalog and the new wire names (Task 1);
+  - the smaller features (Tasks 2–12);
+  - companion sessions in seven parts (Tasks 13–19);
+  - the vendored copies, the split divider, Reduce Transparency and the UI-only items (Tasks 20–24);
+  - the parity claim (Task 25).
+- Not ported:
+  - upstream CI, packaging (#801), release metadata and plugin manifests;
+  - upstream's README, ARCHITECTURE, CLAUDE.md and site pages other than commands and docs;
+  - the cookbook recipes (#805, #806, #830, 08ccd78), which the bundled skill fetches from upstream;
+  - upstream's Ghostty teardown backport (#819), since this build doesn't use libghostty's App/Surface;
+  - upstream's docs/backlog and completed plans.
 
-## Context (from the sync)
+## Context
 
-- Upstream range: `.upstream/agterm` at v0.39.1 (`405911244e46`); diff `git -C .upstream/agterm diff
-  v0.38.1..v0.39.1`. Changelog of the range (the release notes in `.upstream/agterm/CHANGELOG.md`):
-  - v0.39.0: companion sessions #840 (`session new --parent`, `session collapse|expand`, `session overlay open
-    --companion`, `session duplicate --companion`, tree `parent`/`collapsed`/`content`, remote companions, a parent's
-    shell respawn); tinted rows #836; flagged view reorder #833 (`session flag move`, `flaggedOrder`); palette
-    membership editors #803; links in a 95/75/50% overlay #812 and the ⌘⇧-click browser override #813; attention
-    navigation across windows #824 and including active sessions #807; Ignore Reduce Transparency (36970bc);
-    `session close --undoable` #804; tree `lastSelectedAt` #818 (and 21dc990); Interface toggles beside their icons
-    #810; Codex blocker poll every 2 s #802; troubleshooting docs #821; Ghostty teardown freeze #819; generated
-    config written before libghostty loads it (5b5c437); Live `--command` now closes the pane when its command exits,
-    `--wait` holds (behavior change, #840); `split-divider-color` #829; bash hook exit status #828; Codex memory
-    consolidation thread ignored #822; pane overlay drawn above the session overlay #831; pane ask over a cover
-    unshaded #832 (401ff29); page strip Hide only with the Hide overlays button on #834 (c43bf01); ⌘Z in a page form
-    during close grace #827 (00fc83d); AppKit tooltips #816; cask quarantine #801; two-agent-chat #806.
-  - v0.39.1: the GUI `ask` one-line field style #842; companion status glyphs kept in view, Duplicate as Companion's
-    refusal in a HUD, a removed binary started through the pane's PATH #841; the duplicate focuses its left pane #842.
-- Reference rule (CLAUDE.md): upstream is the reference for protocol, semantics, error strings, `agtermctl`,
-  on-disk formats, model and UI. Upstream's `zmx.*` is `live.*` here (`conformance/docs/rust-build.md` > The `live`
-  group); upstream's session host and zmx daemons are `ngterm-session`. Upstream's "Mac" in a user string stays
-  verbatim; an `agterm`/`agtermctl` name in one becomes `ngterm`/`ngtermctl` (identity rule).
-- Baseline after the mechanical commit (the bump touches no crate, only docs and `conformance/`):
-  - `cargo fmt --all --check`: ok; `cargo metadata --locked`: ok; `scripts/lint-report.sh`: ok
-  - clippy and `cargo test`: not run, no crate touched
-  - selftests (`PYTHONPATH=conformance .venv/bin/python -m pytest conformance/selftests`): ok (853 passed, 18
-    skipped)
-  - coverage gate: ok (the catalog is still v0.38.1's, so no new key exists yet: Task 1)
-  - `run-linux.sh`: not run, no app behavior touched
-  - No expected red at the baseline: `ngterm-proto/tests/catalog.rs` and ngterm-ctl's
-    `the_command_tree_is_the_catalogs_cli` are green only because the catalog did not move. Task 1's regeneration
-    turns them red until its skeletons land in the same task.
-  - WPE WebKit is installed on the sync host, so the WPE crates and the HTML overlays build here.
-- `gen_catalog.py --tag v0.39.1` refused with (nothing written):
-  - `site/commands.html:1121: `session duplicate` maps to both {'wire': 'session.duplicate'} and {'wire': 'session.companion.duplicate'}`
-  - `site/commands.html:1150: `session new` maps to both {'wire': 'session.new'} and {'wire': 'session.companion.new'}`
-  - `site/commands.html:2137: `session overlay open` maps to both {'wire': 'session.overlay.open'} and {'wire': 'session.companion.page'}`
-- Already in the Rust build (no port task):
-  - The generated ghostty config written before the first terminal loads it (5b5c437): `launch_core` calls
-    `core.write_settings_config()` (`crates/ngterm-gpui/src/app.rs:311-312`) before `windows(...)` loads
-    `AppConfig::load` (`app.rs:322`); headless does the same (`crates/ngterm-headless/src/lib.rs:219` before `:266`).
-    No test pins the order: Task 22 adds two conformance tests.
-  - Tooltips while the pointer moves (#816): GPUI's tooltip timer does not restart on movement
-    (`vendor/gpui-pre/src/elements/div.rs:3814-3870`, 500 ms `DEFAULT_TOOLTIP_SHOW_DELAY`), hidden elements register
-    no tooltip (`div.rs:2534-2536`), and covering layers `.occlude()`. AppKit workaround: no counterpart on any OS.
-  - Closing a busy terminal freezing every window (#819): the hazard is libghostty's App mailbox; this build's pane
-    worker never blocks posting to the main thread (`try_send` wake, `crates/ngterm-gpui/src/terminal.rs:737-739`;
-    unbounded event channel, `crates/ngterm-term/src/pane.rs:269-271`; unbounded `MainLoop`,
-    `crates/ngterm-gpui/src/main_loop.rs:37`; `Pane::drop` shuts the mailbox down before the join,
-    `pane.rs:693-720`). Only the Unix drop test exists (`crates/ngterm-term/tests/pane.rs:199`): Task 22 adds the
-    three-case regression test on all OSes.
-- Not run on this host: the sync host has no zsh, so ratchet ids needing a zsh login shell (`live-sessions`) do not
-  run here; CI's zsh job runs them. A task touching Live (Tasks 12, 15, 19) cannot see those ids green locally.
-- Ratchet ids that assert behavior upstream reversed in this release (Task 12 rewrites them and swaps their ids by
-  hand in `conformance/rust-passing.txt` and `conformance/rust-passing-windows.txt`, since `check_ratchet.py --add`
-  never removes one; this is a contract change, not a regression):
-  - `tests/protocol/test_zmx.py::test_new_command_interrupted_by_ctrl_c_leaves_a_prompt` (rust-passing.txt)
-  - `tests/protocol/test_live_any_shell.py::test_an_interrupted_live_command_leaves_the_login_shell_prompt`
-    (rust-passing.txt and rust-passing-windows.txt)
-  - `tests/protocol/test_overlay.py::test_hide_show_and_toggle_keep_the_overlays_running` opens the cover before a
-    pane overlay; Task 10 reorders it (as upstream reordered its `openAll`) so the id stays green.
-- Upstream's pins (none is a pin here): ZMX_REV unchanged (`8bab1f0`), no change under `scripts/zmx-patches/`;
-  GHOSTTY_REV unchanged (`683d8db`). Upstream added `scripts/ghostty-patches/0001-drain-mailbox-during-surface-teardown.patch`
-  over its pin: not applicable to libghostty-vt (Already in the Rust build, above).
-- Cross-cluster seams, so the order below matters:
-  - tint (Task 3) before companions: `session new --parent` takes the creation tint (`aCompanionTakesItsCreationTint`).
-  - the tree and snapshot session fields land in upstream's order: `statusChangedAt`, `lastSelectedAt` (Task 2),
-    `tint`/`tintOn` (Task 3), `parent`/`collapsed`/`content` (Task 13), then `background`. The result fields:
-    `undoable` (Task 4), `parent`, `closed` (Tasks 13-14).
-  - the BuiltinAction count pin (`crates/ngterm-core/src/keymap/tests/builtin.rs`, 50 today) grows in Tasks 8 (+2),
-    16 (+1) and 18 (+1): upstream ends at 54. The palette catalog count pin grows in Tasks 3, 8, 16 and 18.
-  - Task 6 builds on Task 5's stop predicate; Task 10's hold is what Task 10's ask shade reads.
-  - the Live `--command` ending (Task 12) before Duplicate as Companion (Task 18) and the parent respawn's Live leg
-    (Task 15).
-  - the main checkout has another session's uncommitted HTML-overlay work under `crates/ngterm-gpui/src/html_overlay`
-    and `crates/ngterm-wpe`; Tasks 11 and 17 touch those directories, so expect a merge there when this branch and
-    that work meet.
+- **Upstream range:** `.upstream/agterm` at v0.39.1; read a file's diff with
+  `git -C .upstream/agterm diff v0.38.1 v0.39.1 -- <path>`. The release notes are in `.upstream/agterm/CHANGELOG.md`.
+- **Design intent** (never a target) is in upstream's `docs/plans/completed/`: `20261028-companion-sessions.md`,
+  `20261027-flagged-view-reorder.md` and `20261024-palette-membership-editors.md`.
+- **Naming:**
+  - upstream's `zmx.*` is `live.*` here (`conformance/docs/rust-build.md` > The `live` group);
+  - upstream's session host is `ngterm-session`;
+  - "Mac" in a user string stays verbatim; `agterm`/`agtermctl` in one becomes `ngterm`/`ngtermctl`.
+- **Unsupported-host refusals:** Swift's `ControlActions` default overloads that refuse on an older host ("... is not
+  supported on this platform / by this control host") have no target here, because one dispatcher serves both the
+  app and `ngterm-headless`. Note that in the module docs and don't port the string.
+- **`gen_catalog.py --tag v0.39.1` refused** (Task 1 fixes this):
+  - `site/commands.html:1121`: `session duplicate` maps to both `session.duplicate` and `session.companion.duplicate`;
+  - `:1150`: `session new` maps to both `session.new` and `session.companion.new`;
+  - `:2137`: `session overlay open` maps to both `session.overlay.open` and `session.companion.page`.
+- **Already in the Rust build** (no port task):
+  - **Generated config written before the first terminal loads it (5b5c437):**
+    - the app: `crates/ngterm-gpui/src/app.rs:311` comes before `:322`;
+    - headless: `crates/ngterm-headless/src/lib.rs:219` comes before `:266`;
+    - Task 22 adds the tests.
+  - **Tooltips while the pointer moves (#816):** GPUI's tooltip timer doesn't restart on movement
+    (`vendor/gpui-pre/src/elements/div.rs:3814-3870`). This is an AppKit workaround with no counterpart.
+  - **Closing a busy terminal froze every window (#819):** this build's pane worker never blocks posting to the
+    main thread (`crates/ngterm-gpui/src/terminal.rs:737`, `crates/ngterm-term/src/pane.rs:269`, `:693-720`). Task 22
+    adds the cross-OS regression test.
+- **Ratchet ids for behavior upstream reversed:** Task 12 rewrites these and swaps their ids by hand in both ratchet
+  lists, because `check_ratchet.py --add` never removes an id:
+  - `tests/protocol/test_zmx.py::test_new_command_interrupted_by_ctrl_c_leaves_a_prompt`;
+  - `tests/protocol/test_live_any_shell.py::test_an_interrupted_live_command_leaves_the_login_shell_prompt`.
 
-## Safety rules
+  Separately, Task 10 reorders `tests/protocol/test_overlay.py::test_hide_show_and_toggle_keep_the_overlays_running`
+  so that it stays green.
+- **No zsh on the sync host:** ids that need a zsh login shell only run on CI. This affects Tasks 12, 15 and 19.
+- **Cross-task seams** (why the order matters):
+  - Task 3's tint comes before the companions, because `session new --parent` takes the creation tint.
+  - Session fields in the tree and the snapshot follow upstream's order:
+    `statusChangedAt`, `lastSelectedAt` (Task 2), `tint`/`tintOn` (Task 3), `parent`/`collapsed`/`content`
+    (Task 13), then `background`.
+  - Result fields: `undoable` (Task 4), then `parent` and `closed` (Tasks 13–14).
+  - The BuiltinAction count pin (50 today) grows in Tasks 8 (+2), 16 (+1) and 18 (+1), ending at upstream's 54.
+    The palette catalog count grows in Tasks 3, 8, 16 and 18.
+  - Task 6 builds on Task 5's stop predicate.
+  - Task 12's Live `--command` ending comes before Tasks 15 and 18.
+  - The main checkout has another session's uncommitted HTML-overlay work. Tasks 11 and 17 touch the same
+    directories, so expect a merge there.
 
-HARD RULES (ngterm upstream sync). They hold for every command you run, no matter what the task says:
+## Approach
 
-1. Never touch the user's running ngterm. This session usually runs inside a pane of an installed ngterm, whose
-   `NGTERM_*` variables point at it, or of an agterm, whose `AGTERM_*` variables (and `ZMX_*`, where it runs its
-   sessions on zmx) do.
-   - Strip them before launching anything: `env -u NGTERM_SESSION_ID ...` is not enough, use
-     `env $(env | grep -oE '^(NGTERM|AGTERM|ZMX)_[A-Z0-9_]*' | sed 's/^/-u /') <command>`, or `scripts/run-gpui-dev.sh`, or
-     the suite's runners, which strip them themselves.
-   - Every `ngtermctl` call gets an explicit `--socket <dev instance socket>`, written after the subcommand name
-     (`ngtermctl tree --socket /tmp/ngterm-dev-.../state/ngterm.sock`). Without it the CLI resolves
-     `$XDG_DATA_HOME/ngterm/ngterm.sock`, the live instance's; `NGTERM_CONTROL_SOCKET` is ignored by ngtermctl.
-   - A dev instance gets a private state dir, so its live-session namespace (`/tmp/ngterm-live-<FNV-1a 64 of the
-     state dir>`) and the one session server serving it (`ngterm-session server <that dir>`) are private too. Reap
-     only through that server (`NGTERM_LIVE_DIR=<that dir> ngterm-session kill --force <name>...`) or processes
-     carrying that instance's `NGTERM_LIVE_DIR`. Never `pkill ngterm-session` or `pkill zmx`, never `killall`, never
-     run `ngterm-session` without that instance's `NGTERM_LIVE_DIR`.
-   - GUI runs headless only: the suite's private weston and dbus (`conformance/tools/run-linux.sh`), or
-     `GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test -p <crate>`, which gives the tests a display and a
-     session bus of their own. Never a window on the user's desktop, never a connection to its session bus or
-     compositor. GPUI renders through Vulkan: a headless app instance renders on Mesa's lavapipe alone
-     (`scripts/fetch-lavapipe.sh`), never on the machine's GPU, and on Wayland it needs a seat, which only a recent
-     headless weston gives (`scripts/build-weston.sh`). A compositor started by hand copies the setup in
-     `conformance/agterm_conformance/impls/base.py`.
-   - While an installed ngterm runs, launch a checkout's build only through `scripts/run-gpui-dev.sh` or the suite: a plain launch is forwarded to the running instance through the shared
-     app id, or both write one `windows.json`.
-   - If a command did reach the live instance, stop and report exactly what changed; do not undo it through the
-     live socket yourself.
-2. `.upstream/agterm` is read-only: read it, `git diff`/`git show`/`git log` in it, never edit, commit, reset or
-   clean there. The only write allowed is the sync's own fetch and checkout of the new tag.
-3. Never push, never create tags or releases, never open PRs. Commits stay local.
-4. Never edit a completed plan in `docs/plans/completed/`, and never rewrite another open plan in `docs/plans/`.
-5. Anything that runs longer than about 30 seconds (cargo build/test/clippy, zig builds, `run-linux.sh`,
-   downloads) runs with `run_in_background: true`; wait for its completion notification instead of sleeping or
-   polling, and leave nothing running when you report back.
-6. Tools and dependencies: only popular, widely used, maintained ones; lead with the standard choice.
-
-## Development Approach
-
-- Each task follows CLAUDE.md > "Porting a command group": read upstream's implementation, its Swift tests (exact
-  strings, edge cases, field order), `site/commands.html` and the matching `.claude/rules/*.md`; implement in
-  `ngterm-core` against the `ngterm-host` fakes with unit tests asserting upstream's full error string; wire the
-  app side (`ngterm-gpui`); add the `ngtermctl` part, ported from `agtermctlKit`; claim a capability only once its
-  commands implement it. Read a file's whole upstream diff with `git -C .upstream/agterm diff v0.38.1 v0.39.1 --
-  <path>`, a commit's with `git -C .upstream/agterm show <hash> -- <paths>`.
-- Upstream's own design notes give the intent (never a target): `.upstream/agterm/docs/plans/completed/20261028-companion-sessions.md`,
-  `20261027-flagged-view-reorder.md`, `20261024-palette-membership-editors.md`.
-- A Swift `ControlActions` default overload that refuses on a host predating a feature ("session.new --tint is not
-  supported on this platform", "session.close --undoable is not supported by this control host", the companions'
-  "... unsupported" defaults) has no target here: one dispatcher in `ngterm-core` serves the GPUI app and
-  `ngterm-headless`. Record that in the module docs; do not port the string.
-- New conformance tests follow conformance/README.md > Reference discipline: a test is accepted only when green on
-  the reference. reference-macos runs only in CI on macOS (`reference-macos.yml`), so a task that adds a suite test
-  marks "green on reference-macos" as a manual check for the user. A test of a v0.39 behavior carries
-  `@since("0.39.1")` (it skips as `not-yet-at-level` on the Rust build until Task 25 claims the level, so its id
-  turns green in the ratchet only then, never by committing the claim early).
-- Gate of every task (CLAUDE.md > Porting a command group, step 6): README > Test's checks on the task's changed part,
-  scoped as README > Test says (the window tests under `xvfb-run` and `dbus-run-session`), each pytest command with
-  `PYTHONPATH=conformance` in front; then
-  `PYTHONPATH=conformance .venv/bin/python -m pytest conformance --coverage-gate` (until the task that closes the
-  last uncovered key, only the keys listed for later tasks may stay uncovered); then a partial
-  `conformance/tools/run-linux.sh -- -k <expr>` over the ids covering the task's behavior, its newly green ids added
-  with `.venv/bin/python conformance/tools/check_ratchet.py --report conformance/reports/rust-linux/nodeids.jsonl --add`.
-- No task runs the whole workspace or the full suite, not even the last: CI runs both on the pull request, and a
-  ratchet id red there is fixed on the branch before it merges.
-- Platforms (CLAUDE.md > Platforms): macOS, Linux and Windows are equal targets and upstream is macOS only. A
-  behavior upstream builds on a macOS API is ported with its macOS form and its Linux and Windows forms in the same
-  task (on Linux per desktop, with a fallback); "no counterpart on <OS>" only for a behavior with no meaning there,
-  with the reason. CI builds macOS and Windows code only in the crates `cross-platform.yml`'s package list names:
-  the OS-specific logic goes into such a crate wherever it can, and that part ends with the manual check "green on
-  `cross-platform.yml`" for the user, who opens a pull request or pushes the branch as `ci/<name>`; code left in a
-  crate the list does not hold yet is recorded as "not built on macOS/Windows by CI until `<crate>` joins
-  `cross-platform.yml`", never as verified.
-- A ratchet id never goes red; no reruns; a function over a `clippy.toml` limit is split, not excused.
-
-## Testing Strategy
-
-- unit: `cargo test` on each task's crates, on the `ngterm-host` fakes; the app's tests under `xvfb-run`.
-- conformance: partial `run-linux.sh -k` runs per task locally, the full suite in CI on the pull request; `tests/ui`
-  skips on Linux.
-- macOS and Windows: `cross-platform.yml` builds and tests the crates its package list names there; the user runs
-  it through a pull request or a `ci/**` push of the branch.
-
-## Progress Tracking
-
-- mark completed items with `[x]` immediately when done
-- add newly discovered tasks with ➕ prefix
-- document issues/blockers with ⚠️ prefix
-- update plan if implementation deviates from original scope
+- Each task follows CLAUDE.md > Porting a command group. Upstream's Swift sources and tests hold the exact strings.
+- Size each task's checks to what it changed (CLAUDE.md > Choosing checks). Add the newly green conformance ids to
+  the ratchet.
+- A new conformance test of v0.39 behavior carries `@since("0.39.1")`. It skips on the Rust build until Task 25
+  claims the level, so its ids go into the ratchet then.
+- macOS-API behavior gets a form per OS, or a reason why an OS has none (CLAUDE.md > Platforms). A task's
+  **Platforms** note says which.
+- The user runs `reference-macos.yml` and the cross-platform CI on the pull request. Tasks list no manual checks.
 
 ## Implementation Steps
 
@@ -208,8 +92,6 @@ CLI tree), `agterm/**/*.swift` (ui ids).
 `request.rs`, `result.rs`, `tree.rs`, `events.rs` (modify); `crates/ngterm-core/src/dispatch.rs` (modify: the new
 commands answer the refusal it gives any command it does not implement yet); `crates/ngterm-ctl/src/*` (modify: the
 new subcommands and flags, parse only, sending what upstream sends).
-
-**Platforms:** no OS-specific code.
 
 **Conformance:** `ngterm-proto/tests/catalog.rs` and ngterm-ctl's `the_command_tree_is_the_catalogs_cli` must be
 green at the end; the coverage gate lists the new keys, all owned by later tasks.
@@ -236,8 +118,7 @@ green at the end; the coverage gate lists the new keys, all owned by later tasks
       overlay open --companion`, `browser links` new modes (parse and send only; validation strings come in each
       feature's task)
 - [ ] write tests: proto round-trip and omission of every new field; the key-order lists in `tree.rs` tests
-- [ ] gate passes (fmt, clippy on ngterm-proto/ngterm-core/ngterm-ctl and their dependents, tests on those crates,
-      selftests, coverage gate with only later tasks' keys uncovered)
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 2: `tree` `lastSelectedAt` per session (#818, 21dc990)
 
@@ -253,8 +134,6 @@ Tests: `AppStoreTreeProjectionTests.swift` (`selectionStampsTheSessionEnteredAnd
 (`soft_close_sessions`), `persist/snapshot.rs`, `model/snapshot.rs`, `projection.rs`, `crates/ngterm-proto/src/tree.rs`
 (modify).
 
-**Platforms:** no OS-specific code.
-
 **Conformance:** new `tests/protocol/test_tree.py::test_last_selected_at_stamps_the_session_entered_and_left` and
 `tests/behaviors/test_relaunch.py::test_last_selected_at_survives_a_relaunch`, covering
 `field:tree.session.lastSelectedAt` (key name as the regenerated catalog spells it).
@@ -268,8 +147,7 @@ Tests: `AppStoreTreeProjectionTests.swift` (`selectionStampsTheSessionEnteredAnd
 - [ ] tree session node `lastSelectedAt` after `statusChangedAt`, omitted when nil
 - [ ] write tests: the five Swift cases above on the fakes
 - [ ] write tests: the two conformance tests (`@since("0.39.1")`)
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 3: Tinted session and workspace rows (#836)
 
@@ -296,8 +174,6 @@ Tests: `AppStoreTintTests.swift` (all 10), `SidebarTintTests.swift` (all 9), `Co
 (create), `session.rs`, `workspace.rs` (modify); `crates/ngterm-gpui/src/sidebar/{menu,context,rows,look,view,tests}.rs`
 (modify). Beware grep traps: "tint" also matches the chrome's sidebar wash, the status glyph's `#rrggbb` color,
 `row_icon` mask coloring, the watermark and the WPE bindings.
-
-**Platforms:** no OS-specific code.
 
 **Conformance:** existing `tests/protocol/test_session.py::test_duplicate_inserts_a_plain_copy_after_the_source`,
 `tests/behaviors/test_relaunch.py::test_relaunch_keeps_workspaces_sessions_and_their_metadata`,
@@ -335,8 +211,7 @@ extend, keep green). New: `test_session.py::test_tint_set_recolor_place_and_clea
 - [ ] ngterm's skill copy mentions are Task 21's
 - [ ] write tests: every Swift case listed above as Rust unit tests (core, ctl, gpui sidebar menu model and render)
 - [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 4: `session close --undoable` (#804)
 
@@ -349,8 +224,6 @@ extend, keep green). New: `test_session.py::test_tint_set_recolor_place_and_clea
 
 **Rust side:** `crates/ngterm-core/src/commands/session.rs` (`close`), `commands/tests/session.rs`;
 `crates/ngterm-ctl/src/session.rs`, `output.rs` (modify).
-
-**Platforms:** no OS-specific code.
 
 **Conformance:** existing `test_session.py::test_close_removes_the_session_and_reselects`,
 `::test_close_requires_a_target`, `::test_close_several_targets_at_once`, `::test_close_several_targets_is_atomic`,
@@ -368,8 +241,7 @@ extend, keep green). New: `test_session.py::test_tint_set_recolor_place_and_clea
       closes at once when Settings turns undo off."), output `<ok|N sessions> (undoable|not undoable)`
 - [ ] write tests: the Swift cases above (core, ctl output)
 - [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 5: Attention navigation includes active sessions (#807)
 
@@ -387,8 +259,6 @@ extend, keep green). New: `test_session.py::test_tint_set_recolor_place_and_clea
 `crates/ngterm-proto/src/tree.rs`; `crates/ngterm-ctl/src/session.rs`; `crates/ngterm-gpui/src/settings/agent_status.rs`,
 `settings/tests.rs` (modify).
 
-**Platforms:** no OS-specific code.
-
 **Conformance:** existing `test_session.py::test_go_steps_through_sessions_and_wraps`, `test_tree.py::test_auto_follow_timeout_reads_back_from_settings`
 (listed). New: `test_tree.py::test_attention_includes_active_reads_back_from_settings`,
 `test_session.py::test_go_next_attention_stops_on_active_when_included`,
@@ -405,8 +275,7 @@ gains `ui:settings-attention-includes-active`.
       navigation includes active sessions" (`settings-attention-includes-active`)
 - [ ] write tests: the Swift cases above (settings, projection, navigation `next → 1, next → 2, next → 1, prev → 2`)
 - [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 6: Cross-window attention navigation (#824)
 
@@ -455,8 +324,7 @@ gains `ui:settings-attention-across-windows`. The chord's cross-window raise has
       Navigation; the hint "Only applies while auto-follow is on." goes
 - [ ] write tests: the Swift cases above on the fakes (`take_window_requests` holds `Raise(target)`, frontmost moves)
 - [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 7: The flagged view's saved order and `session flag move` (#833)
 
@@ -481,8 +349,6 @@ flag`, tree `flaggedOrder`), `control-api.md`, `sidebar.md`, `menu-actions.md`.
 `sidebar_drop.rs`, `sidebar_actions.rs`, `commands/metadata.rs`, `projection.rs`; `crates/ngterm-proto/src/tree.rs`;
 `crates/ngterm-ctl/src/session_meta.rs`, `tests/cli.rs` (help snapshots and the old refusal string);
 `crates/ngterm-gpui/src/sidebar/{rows,drag,view,context}.rs`, `sidebar.rs` (modify).
-
-**Platforms:** no OS-specific code.
 
 **Conformance:** existing `test_session.py::test_flag_modes`, `::test_flag_clear_unflags_every_session`,
 `::test_flag_rejects_an_unknown_mode`, `test_cli_output.py::test_session_metadata`, `test_workspace.py` flag ids,
@@ -515,8 +381,7 @@ flag`, tree `flaggedOrder`), `control-api.md`, `sidebar.md`, `menu-actions.md`.
 - [ ] write tests: every Swift case listed above (core model, sidebar_drop, metadata command, settings model, ctl,
       gpui sidebar drag)
 - [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 8: Palette membership editors: Edit Flagged Sessions, Edit Focused Workspaces (#803)
 
@@ -531,8 +396,6 @@ editor cases), `PaletteTests.swift` (`testOnlyTheMembershipEditorsStayOpenAfterA
 **Rust side:** `crates/ngterm-core/src/keymap/builtin.rs`, `keymap/tests/builtin.rs`, `palette_catalog.rs`,
 `app_actions.rs` (open, not toggle), `palette/{mod,feeds,run,search}.rs`, `commands/tests/palette.rs`;
 `crates/ngterm-gpui/src/palette.rs`, `app_menu.rs`, `sidebar.rs`, `sidebar/view.rs` (modify).
-
-**Platforms:** no OS-specific code.
 
 **Conformance:** existing `tests/protocol/test_keymap_hooks.py::test_list_without_a_file_reports_the_builtins_alone`
 (listed). New: `test_keymap_hooks.py::test_membership_editors_are_keyless_builtins`; ui ids `palette-editor-hint`,
@@ -552,8 +415,7 @@ editor cases), `PaletteTests.swift` (`testOnlyTheMembershipEditorsStayOpenAfterA
 - [ ] write tests: the Swift cases above (builtin count, catalog order and count, enablement, run keeps the palette
       open, gpui click-then-Return, the empty-state link)
 - [ ] write tests: the conformance test above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 9: Links in a 95/75/50% overlay and the browser override chord (#812, #813)
 
@@ -593,8 +455,7 @@ form. The policy lives in `ngterm-core`; the GPUI mouse part is "not built on ma
       links in gains "Session overlay at 95%", "… 75%", "… 50%"
 - [ ] write tests: the Swift cases above (core policy, commands, ctl, gpui mouse)
 - [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 10: A pane overlay draws above the session overlay it opened over (#831); a pane ask over a cover is unshaded (401ff29)
 
@@ -611,8 +472,6 @@ form. The policy lives in `ngterm-core`; the GPUI mouse part is "not built on ma
 `projection.rs`, `app_actions.rs` (the editor-open bell), `model/tests/overlay_visibility.rs`,
 `model/tests/ask_draft.rs` (or a new `ask.rs`), `commands/tests/replica_page.rs`; `crates/ngterm-gpui/src/split.rs`
 (`HiddenOverlays::of`), `ask_dialog.rs`, `ask_dialog/tests.rs`, `deck.rs` (`sync_ask`) (modify).
-
-**Platforms:** no OS-specific code.
 
 **Conformance:** `test_overlay.py::test_hide_show_and_toggle_keep_the_overlays_running` (listed) is reordered to open
 the pane overlay first so it stays green. New (`@since("0.39.1")`):
@@ -635,8 +494,7 @@ program/page), `::test_a_session_page_under_a_pane_opener_reads_back_hidden`,
 - [ ] write tests: the Swift cases above (13 visibility cases, 2 replica cases, 6 ask shade cases plus a held-cover
       one, the gpui deck and ask layer)
 - [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 11: The page strip's Hide only with the Hide overlays button on (c43bf01); the undo chord on a focused page (00fc83d)
 
@@ -670,8 +528,7 @@ focused WebView2 page keeps it when `keymap_dispatch::takes` returns false for i
       strip follows the setting; keymap_dispatch with a focused page (nothing fires, the page gets the key) and with
       the terminal focused (UndoClose fires); a `cfg(windows)` unit test of `takes()`
 - [ ] write tests: the ui tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 12: Live `--command` sessions close when their command exits, `--wait` holds (#840)
 
@@ -695,7 +552,7 @@ expectation); `conformance/tests/protocol/test_zmx.py`, `test_live_any_shell.py`
 '<line>'"` (exits with the command's status, execs no shell); fish `builtin status job-control full; builtin eval
 '<line>'`; PowerShell (Windows, and macOS/Linux as a login shell) `-Command` without `-NoExit`, then `exit
 $LASTEXITCODE` (an ngterm adaptation: upstream has no PowerShell). The hold uses the existing `wait_after_command`
-path on every OS. `ngterm-core` is `any`: green on `cross-platform.yml` is the manual check.
+path on every OS. `ngterm-core` is `any`.
 
 **Conformance:** the two listed ids that assert the old behavior (Context) are rewritten and their ids swapped by
 hand in both ratchet lists, the commit message saying why. New: `test_zmx.py::test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wait`
@@ -712,9 +569,7 @@ hand in both ratchet lists, the commit message saying why. New: `test_zmx.py::te
 - [ ] write tests: the Swift cases above (real zsh and bash where present, exit 7; real fish when present; a pwsh
       form test), the spawn-plan wait cases, the restart's returning form
 - [ ] write tests: the conformance rewrites and new tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos; green on `cross-platform.yml`
-      (Windows Live any-shell)
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 13: Companion sessions, part 1: the model, persistence, create, fold and move (#840)
 
@@ -740,8 +595,6 @@ too-old cases), `EventCommandsTests.swift`, `agtermUITests/ControlCompanionsUITe
 `persist/snapshot.rs` (`parentID`, `collapsed` only when true), `projection.rs`, `commands/{mod,session}.rs`,
 `model/tests/{organization,snapshot}.rs` (modify); `crates/ngterm-ctl/src/session.rs`, `events.rs`, a too-old mapping
 in `crates/ngterm-ctl/src/companions.rs` (create), `tests/cli.rs` (modify).
-
-**Platforms:** no OS-specific code.
 
 **Conformance:** existing `test_session.py` move ids (`test_move_*`, 10 ids), `test_tree.py::test_fresh_session_node`,
 `test_events.py::test_session_lifecycle_events`, `test_cli_output.py::test_session_move_and_go` (listed). New
@@ -775,8 +628,7 @@ in `crates/ngterm-ctl/src/companions.rs` (create), `tests/cli.rs` (modify).
       too old for companions", exit 1; the raw reply under `--json`), shared with Tasks 17-18
 - [ ] write tests: every Swift case listed above on the fakes; ctl parse and the too-old mapping
 - [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 14: Companion sessions, part 2: group close, close undo and Recent Closed (#840)
 
@@ -792,8 +644,6 @@ in `crates/ngterm-ctl/src/companions.rs` (create), `tests/cli.rs` (modify).
 **Rust side:** `crates/ngterm-core/src/model/{store,pending_close,recent_closed,window_library}.rs`,
 `persist/recent_closed.rs` (`companions`, optional), `commands/{session,recent}.rs`, their tests;
 `crates/ngterm-ctl/src/recent.rs` (modify).
-
-**Platforms:** no OS-specific code.
 
 **Conformance:** existing close and recent ids in `test_session.py`, `test_recent.py`, `test_cli_output.py` (listed;
 they assert subsets, so an added `closed` keeps them green). New: `test_companions.py::test_closing_a_parent_closes_its_group`,
@@ -815,8 +665,7 @@ test seeding `recent-closed.json` for "parent session is not open or in Recent C
 - [ ] CLI: `recent list` row " +N companion(s)"; a parent's close prints "N sessions"
 - [ ] write tests: every Swift case listed above
 - [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 15: Companion sessions, part 3: a parent's exiting shell restarts while it has companions (#840)
 
@@ -847,8 +696,7 @@ cwd. No new OS-specific code.
 - [ ] the GPUI deck remounts the primary on a respawn
 - [ ] write tests: the six Swift cases with an injected clock
 - [ ] write tests: the conformance test above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 16: Companion sessions, part 4: sidebar nesting and folding, New Companion, `parent › child` in flat lists (#840, #841)
 
@@ -890,8 +738,7 @@ session menu is ported); that menu would use `list_label`.
       with its companion moves the group; Move to only for a parent
 - [ ] write tests: every Swift case listed above (core naming, catalog, builtin count, sidebar_drop; gpui sidebar)
 - [ ] write tests: the ui test above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 17: Companion sessions, part 5: page companions (#840)
 
@@ -945,8 +792,7 @@ macOS GPUI page host when it lands. Loopback detection reuses the existing check
       terminal
 - [ ] write tests: every Swift case listed above
 - [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 18: Companion sessions, part 6: Duplicate as Companion (#840, #841, #842)
 
@@ -984,7 +830,7 @@ absolute `:` entries with the executable bit; Windows `;` entries, drive or UNC 
 `/usr/bin:/bin:/usr/sbin:/sbin` or `%SystemRoot%\System32;%SystemRoot%`. The copied command line is POSIX-quoted on
 macOS/Linux and in the pane shell's dialect on Windows. The backslash refusal applies to POSIX and fish lines only
 (a Windows path separator is a backslash): an ngterm adaptation to record in the module docs. `ngterm-session`,
-`ngterm-host` and `ngterm-core` are `any`: green on `cross-platform.yml` is the manual check.
+`ngterm-host` and `ngterm-core` are `any`.
 
 **Conformance:** existing `test_session.py::test_duplicate_inserts_a_plain_copy_after_the_source`,
 `test_zmx.py::test_restart_without_a_command_replays_the_foreground_program`,
@@ -1013,8 +859,7 @@ Live, `test_a_duplicated_program_pane_closes_when_the_program_exits`.
 - [ ] write tests: every Swift case listed above, with a resolved-file seam; the environment parsers per OS; real
       zsh and fish argv round trips where present; process_table image/PATH reads per OS (CI runners)
 - [ ] write tests: the conformance tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos; green on `cross-platform.yml`
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 19: Companion sessions, part 7: remote companions and the parent respawn carried to viewers (#840)
 
@@ -1041,8 +886,7 @@ for each new string that names zmx.
 companion control lines (`control_command`) only unless the change means to cover present/run-job/page-serve too; a
 Windows origin needs its own remote form, already open for the existing remote lines (`remote/ssh.rs:61-62`).
 Respawn leader detection uses `ngterm-session`'s leader listing; liveness `kill(pid, 0)` on POSIX, `OpenProcess` +
-`GetExitCodeProcess == STILL_ACTIVE` on Windows. `ngterm-core` is `any`: green on `cross-platform.yml` is the manual
-check.
+`GetExitCodeProcess == STILL_ACTIVE` on Windows.
 
 **Conformance:** existing `test_zmx.py::test_present_mirrors_a_live_session`, `::test_tree_rows_carry_the_session_status`,
 `::test_tree_without_a_host_lists_no_attachable_session_outside_live`, `::test_page_serve_serves_a_page_a_presenter_shows`,
@@ -1078,8 +922,7 @@ the viewer side of a remote page companion.
 - [ ] write tests: every Swift case listed above on a fake remote runner in `ngterm-core`; `control_command` quoting
       through real sh/zsh/fish (tcsh where present) on POSIX CI
 - [ ] write tests: the origin-side conformance tests and the exemptions above
-- [ ] manual check (user): the new conformance tests are green on reference-macos; green on `cross-platform.yml`
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 20: Agent-status copy: merge the v0.39.1 hooks and port their tests (#802, #822, #828)
 
@@ -1110,7 +953,7 @@ only; fish is unchanged upstream.
       wrappers, in this build's names, with python3 and with jq) and of `precmdKeepsTheLastCommandStatusForLaterPromptCommandEntries`
       (bash with a user `PROMPT_COMMAND` entry, `agentRan` × status 0/3); the rest of the Codex suite stays the
       backlog item `docs/backlog/claude-codex-and-opencode-v2-hook-tests-have-no-rust-twin.md`
-- [ ] gate passes (ngterm-app tests and clippy, the integrations tests)
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 21: Bundled skill: rebuild `resources/skills/ngterm` on the v0.39.1 tree
 
@@ -1131,7 +974,7 @@ correction #821).
       conflicting patch as `diff -u` of upstream's files and the hand-merged copy; every new `agtermctl zmx`/`agtermctl`
       call becomes `ngtermctl live`/`ngtermctl`
 - [ ] `sync-resources.sh --check v0.39.1 v0.39.1` holds; the skill's installer tests in `ngterm-app` stay green
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 22: `split-divider-color` and the themed divider (#829); the launch-order and teardown tests (5b5c437, #819)
 
@@ -1148,7 +991,7 @@ carries it, `separator()` paints it opaque) (modify); `crates/ngterm-term/tests/
 regression); `conformance/tests/protocol/test_font_theme.py` (modify).
 
 **Platforms:** no OS-specific code; the teardown test runs on real PTYs on all three OSes (a POSIX shell loop, a
-cmd/pwsh loop under ConPTY), in `ngterm-term` (`any`): green on `cross-platform.yml` is the manual check.
+cmd/pwsh loop under ConPTY), in `ngterm-term` (`any`).
 
 **Conformance:** existing `test_font_theme.py::test_font_steps_the_main_pane_by_one_point_and_resets` (listed). New:
 `test_font_theme.py::test_a_fresh_state_dir_starts_its_first_terminal_on_the_seeded_settings` (seeded fontSize 27,
@@ -1164,8 +1007,7 @@ backgroundOpacity 0.6, backgroundBlur 20 → the first session's `fontSize` 27) 
       returns within 5 s; eight such panes, one dropped, the other seven keep getting titles and screen text; eight idle
       panes, one dropped; plus a live pane's drop (its `writer.detach()` must not block)
 - [ ] write tests: the two conformance tests above (no Rust change expected: Context)
-- [ ] manual check (user): the new conformance tests are green on reference-macos; green on `cross-platform.yml`
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 23: Reduce Transparency: the system rule and Ignore Reduce Transparency (36970bc)
 
@@ -1207,8 +1049,7 @@ CI until `ngterm-gpui` joins `cross-platform.yml`".
       rule holds, else "Blur needs opacity below 100%."; follows the system flag live
 - [ ] write tests: the Swift cases above (core truth table, settings round trip; gpui `Translucency`)
 - [ ] write tests: the ui tests above
-- [ ] manual check (user): the new conformance tests are green on reference-macos
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 24: UI-only changes
 
@@ -1225,7 +1066,7 @@ CI until `ngterm-gpui` joins `cross-platform.yml`".
       decide whether `form_min_height` follows the +12/+4 split
 - [ ] no counterpart on any OS: the AppKit tooltip workaround (#816, Context); no macOS form yet for the items above
       beyond the GPUI macOS frontend's open work
-- [ ] gate passes
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 25: Claim v0.39.1 parity and update the docs
 
@@ -1240,6 +1081,4 @@ CI until `ngterm-gpui` joins `cross-platform.yml`".
       met (historical citations of v0.38.1 in `build/patches/gpui-pre-linux/0004-keymap-change.patch`,
       `crates/ngterm-app/tests/opencode_status.rs`, `crates/ngterm-session/src/server/upkeep.rs`, `docs/backlog/*`,
       `scripts/vendor-gpui.sh`: `keep`)
-- [ ] gate passes
-- [ ] manual check (user): the pull request's CI (`linux.yml`'s full suite) holds the ratchet; an id it finds
-      red is fixed on the branch before merge
+- [ ] checks sized to the change pass; newly green ids added to the ratchet
