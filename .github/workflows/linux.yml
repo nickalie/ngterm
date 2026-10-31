@@ -202,10 +202,12 @@ jobs:
       # The app with its HTML overlays (feature `html`, the default): its clippy, its unit tests and the headless page
       # harness (the real engine on lavapipe, in SHM: no render node here). It links the static libghostty-vt, which
       # ngterm-ghostty-vt-sys builds from the source the script prepares (with its own pinned Zig), and embeds the
-      # terminal fonts the other script fetches; its unit tests measure DejaVu Sans Mono through fontconfig.
+      # terminal fonts the other script fetches; its unit tests measure DejaVu Sans Mono through fontconfig. The
+      # harness's audio case needs GStreamer's playbin (gst-plugins-base) and its WAV parser (gst-plugins-good), which
+      # wpewebkit leaves optional.
       - name: what the app builds on
         run: |
-          pacman-archive curl xz patch vulkan-swrast mesa fontconfig ttf-dejavu
+          pacman-archive curl xz patch vulkan-swrast mesa fontconfig ttf-dejavu gst-plugins-base gst-plugins-good
           scripts/build-ghostty-vt.sh
           scripts/fetch-fonts.sh
           scripts/fetch-lavapipe.sh

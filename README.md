@@ -107,6 +107,8 @@ and how this build does it where the OS matters:
   instance).
 - For the app's tests: Xvfb's `xvfb-run` and dbus' `dbus-run-session`, so they get a display and a session bus of
   their own instead of the desktop's.
+- For the HTML page harness (`cargo test -p ngterm-gpui --test html_overlay`): GStreamer's base and good plugins,
+  whose absence fails its audio case (it is not skipped).
 - For the app's process tests (`crates/ngterm-gpui/tests`): dbus-daemon, a private bus per test; the ones with a
   display also need weston, Xvfb and Mesa's lavapipe (`mesa-vulkan-drivers`, an unpacked one under the vendor dir, or
   `NGTERM_LAVAPIPE_ICD`), the keyboard layout tests `setxkbmap` (`x11-xkb-utils`). A missing one skips the test
@@ -151,7 +153,9 @@ Run-time dependencies of every `ngterm` binary:
 - a Vulkan driver (GPUI renders through wgpu), Wayland or X11;
 - WPE WebKit, linked under `ngterm-gpui`'s default `html` feature (HTML overlays). Without the feature
   (`--no-default-features`) the app refuses every page. On Ubuntu 23.10+ see
-  [WebKit sandbox on Ubuntu (AppArmor)](#webkit-sandbox-on-ubuntu-apparmor);
+  [WebKit sandbox on Ubuntu (AppArmor)](#webkit-sandbox-on-ubuntu-apparmor). A page's audio and video play through
+  GStreamer's plugins, which WPE WebKit leaves optional: base for any media (playbin, Ogg, Opus, Vorbis), good, bad
+  and libav for the other formats;
 - for Live sessions, `ngterm-session`, the live-session server the workspace builds, staged next to the binaries with
   its build id. libghostty-vt is linked statically; the quick terminal's layer-shell panel is GPUI's own Wayland
   surface, a window where the compositor offers no layer-shell.

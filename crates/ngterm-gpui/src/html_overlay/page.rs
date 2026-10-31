@@ -32,6 +32,11 @@ use super::view::PageView;
 use crate::modal::{Alert, AlertButton, AlertSpec};
 use crate::state::{AppState, Poster, post};
 
+/// Plays media a file page names beside it from a blob, which `WebKit`'s media player reads where it reads no app
+/// scheme (`media.js`): in the page's own world when its scripts run (it watches the elements they make), in the
+/// bridge's [`WORLD`] when they don't.
+const MEDIA_SCRIPT: &str = include_str!("media.js");
+
 /// The script world the theme runs in, apart from the page's and the bridge's (upstream's `themeWorld`).
 const THEME_WORLD: &str = "ngterm-theme";
 
@@ -375,6 +380,8 @@ impl Page {
             scripts.push(script(RELAY_SCRIPT, InjectionTime::Start, Some(WORLD)));
             scripts.push(script(HELPER_SCRIPT, InjectionTime::Start, None));
         }
+        let media_world = (!overlay.flags.javascript).then_some(WORLD);
+        scripts.push(script(MEDIA_SCRIPT, InjectionTime::Start, media_world));
         scripts.push(script(ADAPTER_SCRIPT, InjectionTime::End, Some(WORLD)));
         scripts
     }
@@ -949,6 +956,20 @@ impl Page {
         }
         if let Some(element) = self.element() {
             element.update(cx, PageView::release);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MEDIA_SCRIPT;
+    use super::policy::GRANT_SCHEME;
+    use ngterm_core::html::REPLICA_SCHEME;
+
+    #[test]
+    fn the_media_script_rescues_both_app_schemes() {
+        for scheme in [GRANT_SCHEME, REPLICA_SCHEME] {
+            assert!(MEDIA_SCRIPT.contains(&format!("'{scheme}:'")), "{scheme} is missing");
         }
     }
 }
