@@ -2,15 +2,13 @@
 
 One subagent per feature cluster (a command group, or one changelog entry with its commits). Spawn them in parallel,
 `subagent_type: "general-purpose"`, read-only work. Replace every `<...>` before sending; the subagent sees nothing
-of this skill. Paste the hard-rules block from `references/safety.md` where it says so.
+of this skill.
 
 ```
 You analyse one upstream agterm change for a port into ngterm (Rust, GPUI; macOS, Linux and Windows are equal
 targets, while upstream is macOS only). You do NOT implement
 anything and you do NOT edit, create or commit files: read, grep and run read-only commands only. Do not run cargo
 (build, test, clippy): the gates share target/ and are running or about to. Your answer is a draft plan task.
-
-<HARD RULES block from references/safety.md, verbatim>
 
 Repository: <ROOT> (ngterm). Upstream clone (read-only): <UPSTREAM>, range <OLD>..<NEW>.
 Read <ROOT>/CLAUDE.md first (crate map, reference rule, porting order).
@@ -35,11 +33,9 @@ Do this:
    are in `conformance/rust-passing.txt`, and the tests still missing (propose file, function name, `covers` keys,
    and what each asserts). A UI-only behavior has no suite test on Linux: propose its UI item
    (the GPUI form) instead.
-4. Platforms (CLAUDE.md > Platforms): a behavior upstream builds on a macOS API (AppKit, Finder, NSEvent,
-   keyboard layouts, pasteboards, Notification Center) is ported for macOS, Linux and Windows: name the mechanism
-   per OS (on Linux per desktop, with its fallback). Only a behavior with no meaning on an OS (a Homebrew cask fix,
-   an AppKit bug workaround) gets "no counterpart on <OS>" with the reason. Upstream's session host
-   (`SessionHostRuntime`) maps to `ngterm-session`/`ngterm-pty`, on all three OSes.
+4. Platforms (CLAUDE.md > Platforms): for a behavior upstream builds on a macOS API, name its mechanism on macOS,
+   Linux and Windows, or why an OS has no counterpart. Upstream's `SessionHostRuntime` maps to
+   `ngterm-session`/`ngterm-pty`.
 5. Decide STATUS per behavior: `absent` (no Rust code); `partial` (part of it missing, or the code is there but no
    Rust unit test asserts what the Swift tests assert, or no conformance id covers a suite-testable behavior: then the
    task ports the tests); `already-ported` (code and tests both there: cite them); `no-behavior-change` (a move,

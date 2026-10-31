@@ -55,22 +55,10 @@ that group's change touches. The per-commit block in the classify report ("Commi
 
 ## Platforms
 
-ngterm targets macOS, Linux and Windows equally (CLAUDE.md > Platforms), and upstream is macOS only. So a behavior
-upstream builds on a macOS API is ported for all three, not dropped as "macOS only": the macOS form follows upstream,
-and the Linux and Windows forms are designed in the same task (per desktop on Linux, with a fallback for every
-compositor-specific path). A keyboard-layout API, the Command key table, a pasteboard, a Notification Center slot,
-the dock or Finder each name their counterpart per OS. Only a behavior that has no meaning on an OS (a fix for a
-Homebrew cask, an AppKit workaround for an AppKit bug) is recorded as "no counterpart on <OS>" with the reason.
-Code for an OS the dev box is not runs on CI for that OS, and `cross-platform.yml` builds and tests on macOS and
-Windows only the crates its package list names (the `any` crates of CLAUDE.md's crate map; `ngterm-gpui`,
-`ngterm-app`, `ngterm-ctl` and `ngterm-server` are not in it yet). So:
-
-- the OS-specific logic goes into an `any` crate wherever it can live there (`ngterm-core`, `ngterm-term`,
-  `ngterm-session`, `ngterm-pty`), and the frontend keeps the thin call into it;
-- that part ends with the manual check "green on `cross-platform.yml`" for the user, who runs it by opening a pull
-  request or pushing the branch as `ci/<name>` (the workflow runs on nothing else, and the sync never pushes);
-- code that has to stay in a crate the list does not hold is still written for all three OSes, but the task
-  records it as "not built on macOS/Windows by CI until `<crate>` joins `cross-platform.yml`", never as verified.
+Upstream is macOS only; ngterm targets all three OSes (CLAUDE.md > Platforms). A behavior upstream builds on a macOS
+API (keyboard layouts, the Command key, pasteboard, Notification Center, dock, Finder) gets a counterpart per OS, or a
+recorded reason why an OS has none (a Homebrew cask fix, an AppKit bug workaround). Put OS-specific logic in an `any`
+crate where it can live, since CI builds only those on macOS and Windows.
 
 ## Evidence areas
 
@@ -128,15 +116,6 @@ area by reading it, and add a rule to `classify-diff.py` when it will recur.
 
 ## Telling ported from not ported
 
-The Rust build can already hold part of a release (a feature ported early, or a sync rerun after partial work), so
-before writing a task check the Rust side:
-
-- the new wire names, fields and CLI subcommands: `grep -rn '<name>' crates/` and `coverage-map.py <key>`;
-- the new strings from the classify report: `grep -rnF '<string>' crates/` (drop the Swift interpolation);
-- the Swift test's behavior against the Rust unit tests of that module.
-
-Then apply SKILL.md > Step 3 "What gets a task": absent → port; present without the tests upstream's Swift tests
-imply (Rust unit twins, a conformance id where the suite can see it) → a test-port task, which may still find the
-code wrong; present and tested → no task, listed under "already in the Rust build" with file and test id. A Rust
-behavior that comes from a dependency rather than our code (std's `UnixListener` already listens with the system
-maximum backlog on Linux) is "already in the build" too, with that evidence.
+Grep `crates/` for the new wire names, fields, subcommands and strings (without the Swift interpolation), run
+`coverage-map.py <key>`, and compare the Swift tests with the module's Rust tests. A behavior that comes from a
+dependency rather than our code counts as already in the build, with that evidence.
