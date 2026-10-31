@@ -3,7 +3,8 @@
 //!
 //! herdr: `src/pty/backend/unix.rs` (`spawn_with_portable_pty`) at `HERDR_REV` (`build/pins.env`), licensed under the
 //! Apache License 2.0, modified: the child is waited for without reaping first (`waitid` with `WNOWAIT`), so its
-//! process group is never signalled after its id could be reused; the group's hangup and kill.
+//! process group is never signalled after its id could be reused; the group's hangup and kill; on macOS, libnotify's
+//! setup finished before the fork.
 
 mod actor;
 mod fd;
@@ -275,7 +276,27 @@ fn signal_members(group: libc::pid_t, signal: libc::c_int) {
     }
 }
 
+/// Finish libnotify's one-time setup in this process before it forks (macOS). Every forked child runs libnotify's
+/// fork handler (`_notify_fork_child`, from `fork` itself, before the exec), which reads that setup's once-gate: a
+/// fork that catches another thread in the middle of the process's first libnotify use (`getpwuid`, which
+/// portable-pty calls for a command without `HOME`, `localtime`, `confstr`) leaves the child a gate held by a thread
+/// it does not have, and the child dies of `SIGILL` (`os_once_t is corrupt`, crashed on the child side of the fork,
+/// pre-exec). The spawn still succeeds, as the child closed std's error pipe without a word, and the PTY ends with
+/// nothing read. Once the setup is done it never runs again, and this call waits for one in progress, so no fork
+/// after it can catch one.
+#[cfg(target_os = "macos")]
+fn settle_libnotify() {
+    unsafe extern "C" {
+        /// `<notify.h>`; the token is only looked up, and every call starts with libnotify's setup.
+        fn notify_is_valid_token(token: libc::c_int) -> bool;
+    }
+    // SAFETY: a lookup of a token number in libnotify's table, which libSystem holds; no memory is passed.
+    unsafe { notify_is_valid_token(0) };
+}
+
 pub(crate) fn spawn(builder: CommandBuilder, size: Size) -> io::Result<Spawned> {
+    #[cfg(target_os = "macos")]
+    settle_libnotify();
     let pair = native_pty_system().openpty(size.pty()).map_err(|err| pty_error(&err))?;
     let raw = pair
         .master

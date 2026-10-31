@@ -281,6 +281,25 @@ guest has 4 CPUs and 6.5 GB of memory.
   the windows job, in its list); `scripts/smoke-windows-app.ps1` checks a typed `^C` and a pressed Ctrl+C. In the VM
   (the windows job's stage, a private state dir) both ended `ping -t` in in-app and live panes, PowerShell and
   `cmd.exe`, typed and pressed; before the fix the typed ones never did
+- ➕ (side task 33) the macOS flake of `ngterm-pty`'s `paused_reads_hold_the_output_back_but_not_the_input` (CI run
+  41181727627, no output at all for 60 s) was the build's: its `/bin/sh` died of `SIGILL` between the fork and the
+  exec (macOS crash reports: `os_once_t is corrupt` in libnotify's fork handler `_notify_fork_child`, "crashed on
+  child side of fork pre-exec"), and the spawn still succeeded. A fork that catches another thread in the process's
+  first libnotify use (here `the_environment_and_the_working_directory_are_as_given`, whose command without `HOME`
+  makes portable-pty call `getpwuid`; in the app any first `getpwuid`, `localtime` or `confstr`) leaves the child a
+  once-gate held by a thread it lacks. `ngterm-pty`'s Unix spawn now finishes libnotify's setup before the fork on
+  macOS (`notify_is_valid_token`, which waits for a setup in progress). In the macOS VM, four parallel loops of the
+  `pty` binary for 8 minutes: 9 failures in 1472 runs before (8 this test, 1 another's `openpty` `ENXIO`), all 17
+  crash reports that signature; after, none of this test in 1306 runs. New `tests/fork_notify.rs` (macOS) runs the
+  race in 60 fresh processes: 10 of 10 runs failed before, 0 of 10 after. `ngtermctl`'s own `pre_exec` forks
+  (overlay job, terminfo) were left as they are
+- ➕ (side task 33, open) another macOS flake of `pty.rs`, there before this change:
+  `killing_the_tree_ends_the_child_and_its_descendants` sees its `/bin/sh` exit 0 after `kill_tree`
+  (`assert!(!status.success())`). The shell outlives the group's `SIGKILL` and reports its `sleep` killed
+  (`Killed: 9 sleep 300`), though `killpg` returned 0 and the group listed both just before. About 1 run in 3000
+  run alone (2 of 3113 at the base commit, 1 of 5992 with this change), 3 of 1306 runs of the whole binary; rarer
+  still once the kill was instrumented (1 in 19950, then 0 in 23892), so the cause (the kernel skipping the group's
+  leader, or the test) is not found yet; `Killer::signal` is unchanged
 
 ### Task 5: Desktop integrations on Windows (depends on Task 4)
 
