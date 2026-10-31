@@ -24,7 +24,9 @@
 //! So the guard is defence in depth in the page's own world, not a boundary: it takes what it calls before any page
 //! script runs, but a page can still open a chooser through a realm it did not run in (a same-origin frame
 //! `WebView2` injects no script into, such as a fresh `about:blank` one, whose own `HTMLElement.prototype.click`
-//! clicks a detached file input). The user still has to pick a file in the dialog.
+//! clicks a detached file input), and a user's click on a file input inside a closed shadow root escapes it when the
+//! root was declared in markup (`<template shadowrootmode="closed">`), or when a page's listener stops the click
+//! before it reaches the root. The user still has to pick a file in the dialog.
 
 use std::fmt::Write as _;
 
@@ -96,59 +98,13 @@ pub fn helper_script() -> String {
 /// scripts run, each bound to `call` so that no later property read reaches the page's replacements: a page replacing
 /// `Event.prototype.preventDefault`, `composedPath`, `Array.prototype.some`, an input's `type` or
 /// `HTMLInputElement[Symbol.hasInstance]` afterwards changes nothing. An input is a file input by its own `type`
-/// getter, whose brand check refuses anything but an input element. `click()` on a file input (a detached one's click
-/// never reaches the window's listener) and its `showPicker()` are refused too: the page only ever sees the guarded
-/// methods, and replacing them gives it no way back to the originals in this realm.
-pub const GUARD_SCRIPT: &str = r"(() => {
-  const call = Function.prototype.call;
-  const bound = (fn) => call.bind(fn);
-  const inputType = bound(Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'type').get);
-  const composedPath = bound(Event.prototype.composedPath);
-  const preventDefault = bound(Event.prototype.preventDefault);
-  const stopImmediatePropagation = bound(Event.prototype.stopImmediatePropagation);
-  const listen = bound(EventTarget.prototype.addEventListener);
-  const define = Object.defineProperty;
-  const isFile = (target) => {
-    try { return inputType(target) === 'file'; } catch (error) { return false; }
-  };
-  listen(window, 'click', (event) => {
-    const path = composedPath(event);
-    for (let index = 0; index < path.length; index += 1) {
-      if (isFile(path[index])) { preventDefault(event); return; }
-    }
-  }, true);
-  const refuse = () => new DOMException('file choosers are not available', 'NotAllowedError');
-  const method = (prototype, name, guarded) => {
-    const original = prototype[name];
-    if (!original) return;
-    const run = bound(original);
-    define(prototype, name, {value: {[name](...rest) { return guarded(this, run, rest); }}[name],
-      writable: true, enumerable: true, configurable: true});
-  };
-  method(HTMLElement.prototype, 'click', (target, run) => { if (!isFile(target)) run(target); });
-  method(HTMLInputElement.prototype, 'showPicker', (target, run) => {
-    if (isFile(target)) throw refuse();
-    return run(target);
-  });
-  for (const name of ['showOpenFilePicker', 'showSaveFilePicker', 'showDirectoryPicker']) {
-    try { delete window[name]; } catch (error) {}
-    try { define(window, name, {value: undefined, configurable: false}); } catch (error) {}
-  }
-  const clipboardData = bound(Object.getOwnPropertyDescriptor(ClipboardEvent.prototype, 'clipboardData').get);
-  const files = bound(Object.getOwnPropertyDescriptor(DataTransfer.prototype, 'files').get);
-  const count = bound(Object.getOwnPropertyDescriptor(FileList.prototype, 'length').get);
-  listen(window, 'paste', (event) => {
-    let pasted = 0;
-    try {
-      const data = clipboardData(event);
-      pasted = data ? count(files(data)) : 0;
-    } catch (error) {}
-    if (pasted) {
-      preventDefault(event);
-      stopImmediatePropagation(event);
-    }
-  }, true);
-})();";
+/// getter, whose brand check refuses anything but an input element. A detached input's click never reaches the
+/// window's listener, so `click()` and `dispatchEvent` of a `click` (Chromium runs a file input's activation for a
+/// page's synthetic click, and for no other untrusted event) on a file input are refused, and so is its
+/// `showPicker()`; a click inside a closed shadow root is hidden from the window's `composedPath`, so a root made by
+/// `attachShadow` gets the window's listener too. The page only ever sees the guarded methods, and replacing them gives
+/// it no way back to the originals in this realm. Its limits: the module docs.
+pub const GUARD_SCRIPT: &str = include_str!("guard.js");
 
 /// What ngterm's script in a page posted.
 #[derive(Debug, Clone, PartialEq, Eq)]

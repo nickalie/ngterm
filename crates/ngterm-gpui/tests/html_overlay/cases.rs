@@ -28,7 +28,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 9] = [
+pub const CASES: [(&str, Case); 10] = [
     ("the_engine_renders_on_the_renderers_gpu_in_its_mode", mode),
     ("a_page_loads_and_its_frames_reach_the_screen", loads),
     ("a_page_moved_to_another_window_draws_there", moved),
@@ -46,6 +46,10 @@ pub const CASES: [(&str, Case); 9] = [
     (
         "a_tagged_control_on_a_replica_relays_with_page_script_off",
         replica_tagged,
+    ),
+    (
+        "the_webview2_guard_keeps_scripted_and_shadowed_clicks_off_file_inputs",
+        file_chooser_guard,
     ),
 ];
 
@@ -618,6 +622,59 @@ fn replica_tagged(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
         bridged.len() == 1 && bridged[0].contains("session.select") && bridged[0].contains("3F2A"),
         || format!("the origin got {bridged:?}"),
     )
+}
+
+/// The `WebView2` host's file-chooser guard (`webview2/bridge.rs`), which no harness runs on Windows, run here in
+/// `WebKit` ahead of a page's script: what it refuses is DOM behaviour the engines share. A file input's click that a
+/// page dispatches or calls never reaches it, a text input's still does, and a user's click on a file input inside a
+/// closed shadow root arrives cancelled. The page paints yellow once its scripted checks hold, green once the click
+/// arrived cancelled, blue on a failure.
+fn file_chooser_guard(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    const GUARD: &str = include_str!("../../src/html_overlay/webview2/guard.js");
+    const YELLOW: [u8; 4] = [0xc0, 0xc0, 0x30, 0xff];
+    const GREEN: [u8; 4] = [0x30, 0xc0, 0x30, 0xff];
+    const BLUE: [u8; 4] = [0x30, 0x30, 0xc0, 0xff];
+    let page = format!(
+        "<html><body style='margin:0;background:#c03030'>\
+         <div id='host' style='position:fixed;left:0;top:0;width:100%;height:100%'></div>\
+         <script>{GUARD}</script><script>
+           const paint = (color) => {{ document.body.style.background = color; }};
+           const root = document.getElementById('host').attachShadow({{mode: 'closed'}});
+           root.innerHTML = \"<input type='file' style='position:absolute;left:0;top:0;width:100%;height:100%;opacity:0'>\";
+           const detached = document.createElement('input');
+           detached.type = 'file';
+           let reached = 0;
+           detached.addEventListener('click', () => {{ reached += 1; }});
+           const dispatched = detached.dispatchEvent(new MouseEvent('click', {{cancelable: true}}));
+           detached.click();
+           const text = document.createElement('input');
+           let typed = 0;
+           text.addEventListener('click', () => {{ typed += 1; }});
+           text.dispatchEvent(new MouseEvent('click'));
+           const scripted = dispatched === false && reached === 0 && typed === 1;
+           root.querySelector('input').addEventListener('click', (event) => {{
+             paint(scripted && event.defaultPrevented ? '#30c030' : '#3030c0');
+           }});
+           paint(scripted ? '#c0c030' : '#3030c0');
+         </script></body></html>"
+    );
+    let element = fixture.show(&page, 320., 240.)?;
+    let mut seen = [0; 4];
+    fixture.until("the page's scripted checks", &element, |_, width, pixels| {
+        seen = pixel(pixels, width, width / 2, 200);
+        close(seen, YELLOW) || close(seen, BLUE)
+    })?;
+    check(close(seen, YELLOW), || {
+        "a click the page dispatched or called reached a file input, or a text input's did not".to_owned()
+    })?;
+    fixture.click(point(px(160.), px(120.)))?;
+    fixture.until("the shadowed file input's click", &element, |_, width, pixels| {
+        seen = pixel(pixels, width, width / 2, 200);
+        close(seen, GREEN) || close(seen, BLUE)
+    })?;
+    check(close(seen, GREEN), || {
+        "a click on a file input inside a closed shadow root was not cancelled".to_owned()
+    })
 }
 
 fn check(condition: bool, message: impl FnOnce() -> String) -> Result<(), String> {
