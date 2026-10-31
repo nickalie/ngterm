@@ -4,6 +4,7 @@
 //! - [`Surface`]: one live terminal (libghostty-vt in the frontend's terminal element), owned on the main thread.
 //! - [`SessionHost`]: the daemons that keep live sessions alive across app restarts (the session server's).
 //! - [`ProcessLauncher`]: starts helper processes (overlay programs, hooks, custom commands).
+//! - [`ShellCommand`]: the shell a user's command line runs through, per OS ([`command_line`]).
 //! - [`ProcessTable`]: reads the process table (a pane's foreground program for the tree and the restore capture).
 //!
 //! In-memory fakes of each live in [`fakes`] behind the `fakes` feature.
@@ -13,8 +14,11 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub mod command_line;
 #[cfg(any(test, feature = "fakes"))]
 pub mod fakes;
+
+pub use command_line::ShellCommand;
 
 /// A unit of work for the main thread, run with the state the main loop owns.
 pub type MainTask<S> = Box<dyn FnOnce(&mut S) + Send + 'static>;
@@ -249,6 +253,9 @@ pub struct LaunchSpec {
     /// The executable, a path or a name looked up in `PATH`.
     pub program: PathBuf,
     pub args: Vec<String>,
+    /// Appended to the command line as written after `args` on Windows (`CommandExt::raw_arg`: `cmd`'s quoted command
+    /// text, [`ShellCommand::raw_tail`]); one more argument on Unix.
+    pub raw_tail: Option<String>,
     /// Variables set on top of the app's own environment.
     pub env: Vec<(String, String)>,
     /// The working directory; the app's own when `None`.
@@ -258,6 +265,21 @@ pub struct LaunchSpec {
     /// Capture the tail of what the process writes to stderr (to a temp file, never a pipe, so a descendant outliving
     /// the app is not killed by a broken pipe) and hand it back on exit; stderr is null otherwise.
     pub capture_stderr: bool,
+}
+
+impl LaunchSpec {
+    /// A spec running the user's command line `line` through this OS's shell ([`ShellCommand::new`]), with the
+    /// rest left empty.
+    #[must_use]
+    pub fn command_line(line: &str) -> Self {
+        let shell = ShellCommand::new(line);
+        Self {
+            program: shell.program,
+            args: shell.args,
+            raw_tail: shell.raw_tail,
+            ..Self::default()
+        }
+    }
 }
 
 /// A started helper process.

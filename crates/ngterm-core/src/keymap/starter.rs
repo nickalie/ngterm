@@ -121,7 +121,29 @@ pub fn starter_keymap_conf(defaults: &ShippedDefaults) -> String {
         let _ = writeln!(text, "#   {{{token}}}");
     }
     text.push_str(STARTER_TAIL);
-    text
+    for_this_shell(text)
+}
+
+/// The prose a starter file says differently where a line runs through `cmd.exe` (Windows, `ngterm_host::command_line`):
+/// the shell's name and the variables' spelling. The commented examples stay POSIX lines.
+const CMD_WORDING: [(&str, &str); 5] = [
+    ("`/bin/sh -c`", "`cmd.exe /D /S /C`"),
+    ("the /bin/sh line", "the cmd.exe line"),
+    ("as $AGT_X env vars", "as %AGT_X% env vars"),
+    ("`--socket \"$AGT_SOCKET\"`", "`--socket \"%AGT_SOCKET%\"`"),
+    ("e.g. \"$AGT_SELECTION\"", "e.g. \"%AGT_SELECTION%\""),
+];
+
+/// A starter file's `text` for this OS's shell ([`CMD_WORDING`] on Windows).
+pub(crate) fn for_this_shell(text: String) -> String {
+    if cfg!(windows) { cmd_wording(text) } else { text }
+}
+
+/// `text` with [`CMD_WORDING`] applied.
+pub(crate) fn cmd_wording(text: String) -> String {
+    CMD_WORDING
+        .iter()
+        .fold(text, |text, (posix, cmd)| text.replace(posix, cmd))
 }
 
 /// A default chord as the file spells it, or `(not expressible)` when that spelling does not parse back to it

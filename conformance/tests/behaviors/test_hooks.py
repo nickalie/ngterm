@@ -1,12 +1,11 @@
 """When `hooks.conf` hooks fire: read at launch, after an edit only once `hooks.reload` runs, and once per matching
 event in event order. Each test runs its own instance; every hook only writes into the instance root, by absolute
-path."""
+path, in the build's command-line dialect (`agterm_conformance.command_line`)."""
 
 import json
-import os
-import shlex
 
 import pytest
+from agterm_conformance.command_line import CommandLines
 from agterm_conformance.match import assert_absent, assert_ok, session_ids
 from agterm_conformance.wait import wait_until
 
@@ -15,10 +14,10 @@ def _hooks(ctl):
     return ctl.instance.state_dir / "config" / "hooks.conf"
 
 
-def _recording(kind, marker, tag):
+def _recording(lines, kind, marker, tag):
     """A hook line that writes `tag` and the session id into `marker` when `kind` fires."""
-    tmp, done = shlex.quote(os.fspath(marker) + ".tmp"), shlex.quote(os.fspath(marker))
-    return f"on {kind} cat > /dev/null; printf '%s %s' {tag} \"$AGT_SESSION_ID\" > {tmp} && mv {tmp} {done}\n"
+    record = lines.write(marker, tag, lines.var("AGT_SESSION_ID"), sep=" ")
+    return f"on {kind} {lines.then(lines.drain_stdin(), record)}\n"
 
 
 def _written(marker):
@@ -26,11 +25,11 @@ def _written(marker):
 
 
 @pytest.mark.covers("behavior:hooks.loaded-at-launch")
-@pytest.mark.requires("posix-command-line", reason="the hooks are POSIX command lines")
-def test_hooks_file_is_read_at_launch(launch):
+def test_hooks_file_is_read_at_launch(launch, adapter):
+    lines = CommandLines.of(adapter)
     ctl = launch()
     marker = ctl.instance.root / "created-marker"
-    _hooks(ctl).write_text(_recording("session.created", marker, "launch"))
+    _hooks(ctl).write_text(_recording(lines, "session.created", marker, "launch"))
     ctl = launch.relaunch(ctl)
     assert [hook["kind"] for hook in assert_ok(ctl.request("hooks.list"))["hooks"]["hooks"]] == ["session.created"]
     sid = assert_ok(ctl.request("session.new"))["id"]
@@ -38,13 +37,13 @@ def test_hooks_file_is_read_at_launch(launch):
 
 
 @pytest.mark.covers("behavior:hooks.edit-needs-reload")
-@pytest.mark.requires("posix-command-line", reason="the hooks are POSIX command lines")
-def test_an_edit_takes_effect_only_on_reload(launch):
+def test_an_edit_takes_effect_only_on_reload(launch, adapter):
+    lines = CommandLines.of(adapter)
     ctl = launch()
     marker = ctl.instance.root / "created-marker"
-    _hooks(ctl).write_text(_recording("session.created", marker, "v1"))
+    _hooks(ctl).write_text(_recording(lines, "session.created", marker, "v1"))
     assert_ok(ctl.request("hooks.reload"))
-    _hooks(ctl).write_text(_recording("session.created", marker, "v2"))
+    _hooks(ctl).write_text(_recording(lines, "session.created", marker, "v2"))
 
     sid = assert_ok(ctl.request("session.new"))["id"]
     assert _written(marker) == f"v1 {sid}"
@@ -55,11 +54,11 @@ def test_an_edit_takes_effect_only_on_reload(launch):
 
 
 @pytest.mark.covers("behavior:hooks.once-per-event-in-order", "event:status")
-@pytest.mark.requires("posix-command-line", reason="the hooks are POSIX command lines")
-def test_a_hook_runs_once_per_event_in_event_order(launch):
+def test_a_hook_runs_once_per_event_in_event_order(launch, adapter):
+    lines = CommandLines.of(adapter)
     ctl = launch()
     log = ctl.instance.root / "status-log"
-    _hooks(ctl).write_text(f"on status cat >> {shlex.quote(os.fspath(log))}; echo >> {shlex.quote(os.fspath(log))}\n")
+    _hooks(ctl).write_text(f"on status {lines.append_stdin_line(log)}\n")
     assert_ok(ctl.request("hooks.reload"))
     (sid,) = session_ids(ctl.tree())
     cursor = ctl.events_baseline()
@@ -81,12 +80,11 @@ def test_a_hook_runs_once_per_event_in_event_order(launch):
 
 
 @pytest.mark.covers("behavior:hooks.loaded-at-launch", "event:app.launched")
-@pytest.mark.requires("posix-command-line", reason="the hooks are POSIX command lines")
-def test_app_launched_runs_its_hook_once_per_launch(launch):
+def test_app_launched_runs_its_hook_once_per_launch(launch, adapter):
+    lines = CommandLines.of(adapter)
     ctl = launch()
     log = ctl.instance.root / "launched-log"
-    quoted = shlex.quote(os.fspath(log))
-    _hooks(ctl).write_text(f"on app.launched cat >> {quoted}; echo >> {quoted}\n")
+    _hooks(ctl).write_text(f"on app.launched {lines.append_stdin_line(log)}\n")
 
     def logged(count):
         def check():

@@ -50,17 +50,20 @@ use ngterm_core::live::shell_integration::{self, Inherited, LoginShell};
 use ngterm_core::live::support::LiveAttach;
 use ngterm_core::paths::{self, Env, ProcessEnv};
 use ngterm_core::restore::spawn_plan::LaunchSeed;
+use ngterm_host::command_line::{self, ShellCommand};
 use ngterm_session::launch::Runtime;
 
 use crate::exit::ExitPolicy;
 use crate::{Pane, PaneCommand, PaneConfig, PaneError};
 
 /// The shell a command line runs through, as libghostty ran a surface's command on Linux: `/bin/sh -c <line>`; on
-/// Windows `cmd.exe` (`%ComSpec%` when set) `/D /S /C "<line>"`.
-pub const COMMAND_SHELL: &str = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
-/// `cmd`'s switches before a command line: no `AutoRun`, and exactly the outer quotes stripped.
-#[cfg(any(windows, test))]
-const WINDOWS_SHELL_ARGS: &[&str] = &["/D", "/S", "/C"];
+/// Windows `cmd.exe` (`%ComSpec%` when set) `/D /S /C "<line>"` (`ngterm_host::command_line`, the one place that
+/// chooses it).
+pub const COMMAND_SHELL: &str = if cfg!(windows) {
+    command_line::CMD_SHELL
+} else {
+    command_line::POSIX_SHELL
+};
 /// The login shell a host without one runs: Ghostty's default (`sh`, `cmd.exe` on Windows).
 const DEFAULT_SHELL: &str = if cfg!(windows) { "cmd.exe" } else { "sh" };
 /// What separates `PATH`'s entries.
@@ -330,8 +333,7 @@ impl Host {
 /// What runs `line` in `cwd` (the login shell when `shell`), and the program line the failure report names.
 #[cfg(unix)]
 fn program(line: &str, _shell: bool, _cwd: Option<&Path>, _env: &dyn Env) -> (PaneCommand, String) {
-    let command = PaneCommand::new(COMMAND_SHELL).arg("-c").arg(line);
-    (command, format!("{COMMAND_SHELL} -c {line}"))
+    pane_command(&ShellCommand::posix(line))
 }
 
 /// What runs `line` in `cwd` (the login shell when `shell`), and the program line the failure report names.
@@ -340,20 +342,17 @@ fn program(line: &str, shell: bool, cwd: Option<&Path>, env: &dyn Env) -> (PaneC
     if shell {
         return windows_shell(line, cwd, Path::is_file);
     }
-    let comspec = env.var("ComSpec").filter(|comspec| !comspec.is_empty()).map_or_else(
-        || COMMAND_SHELL.to_owned(),
-        |comspec| comspec.to_string_lossy().into_owned(),
-    );
-    windows_command(line, &comspec)
+    pane_command(&ShellCommand::cmd(line, env.var("ComSpec").as_deref()))
 }
 
-/// `cmd`'s run of the command line `line`: `/D /S /C`, then the line in quotes, passed as written.
-#[cfg(any(windows, test))]
-fn windows_command(line: &str, cmd: &str) -> (PaneCommand, String) {
-    let tail = format!("\"{line}\"");
-    let argv = format!("{cmd} {} {tail}", WINDOWS_SHELL_ARGS.join(" "));
-    let command = PaneCommand::new(cmd).args(WINDOWS_SHELL_ARGS).raw_arg(tail);
-    (command, argv)
+/// The pane's run of `shell`, and the program line the failure report names.
+fn pane_command(shell: &ShellCommand) -> (PaneCommand, String) {
+    let command = PaneCommand::new(&shell.program).args(&shell.args);
+    let command = match &shell.raw_tail {
+        Some(tail) => command.raw_arg(tail),
+        None => command,
+    };
+    (command, shell.display())
 }
 
 /// The Windows login shell `value` run directly: whole when it names a file, else split on whitespace as Ghostty
@@ -1277,7 +1276,7 @@ mod tests {
     #[test]
     fn a_windows_command_line_runs_as_cmds_command_text_with_its_quotes_kept() {
         let line = r#""C:\Program Files\ngterm\ngterm-session.exe" attach "my session""#;
-        let (command, argv) = windows_command(line, r"C:\Windows\System32\cmd.exe");
+        let (command, argv) = pane_command(&ShellCommand::cmd(line, Some(r"C:\Windows\System32\cmd.exe".as_ref())));
         assert_eq!(command.program, OsString::from(r"C:\Windows\System32\cmd.exe"));
         assert_eq!(command.args, ["/D", "/S", "/C"].map(OsString::from));
         // the whole line in one more pair of quotes, which `/S` strips: the line's own reach cmd as written

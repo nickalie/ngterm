@@ -255,6 +255,17 @@ fn the_starter_lists_every_kind_and_parses_to_nothing() {
 }
 
 #[test]
+fn the_starter_names_cmd_where_a_line_runs_through_it() {
+    let posix = posix_starter_hooks_conf();
+    assert!(posix.contains("passed to `/bin/sh -c`") && posix.contains("`--socket \"$AGT_SOCKET\"`"));
+    let cmd = crate::keymap::starter::cmd_wording(posix.clone());
+    assert!(cmd.contains("passed to `cmd.exe /D /S /C`") && cmd.contains("`--socket \"%AGT_SOCKET%\"`"));
+    assert!(!cmd.contains("/bin/sh"));
+    let this_os = if cfg!(windows) { cmd } else { posix };
+    assert_eq!(starter_hooks_conf(), this_os);
+}
+
+#[test]
 fn the_starter_is_written_with_its_directory_only_when_missing() {
     let dir = tempfile::tempdir().unwrap();
     let path = hooks_path(&dir.path().join("nested").join("ngterm"));

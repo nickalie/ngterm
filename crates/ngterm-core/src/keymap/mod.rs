@@ -17,7 +17,7 @@ mod matcher;
 mod parse;
 mod parsed;
 mod project;
-mod starter;
+pub(crate) mod starter;
 mod store;
 pub mod usage;
 
