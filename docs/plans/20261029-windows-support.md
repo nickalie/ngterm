@@ -311,6 +311,17 @@ guest has 4 CPUs and 6.5 GB of memory.
   task's code (it fails before `main`); worth watching in Task 8's suite runs
 - ➕ the first-run welcome's command line tool sentence is per platform: upstream's Homebrew one on macOS, a package
   install on Linux, the installer on Windows (upstream has no wording for either)
+- ➕ (side task 31) the smoke's global-hotkey and layout-lock checks failed on a CI release stage (side task 29's run)
+  not because of a later merge or the release build: that run's smoke ran under Windows PowerShell 5.1, whose
+  `Set-Content -Encoding utf8` writes a UTF-8 BOM, so `keymap.conf`'s first line read as an unknown binding (the
+  "Keymap: 1 issue" banner) and `settings.json` did not decode (no `terminalInputSource`); Task 5's runs used
+  PowerShell 7, which writes none. The app now drops a leading BOM from `keymap.conf`, `hooks.conf`, `remotes.conf`
+  and `settings.json` (`ngterm_core::hooks::read_config_text`, as Ghostty's config reader does), since Windows' own
+  tools write one; the smoke writes its files without one, waits for a relaunched app's window before raising it (a
+  single raise 0.2 s after the launch found none and the desktop keys went elsewhere), and on a release build (no
+  console: the PE header's subsystem) skips the Ctrl+C quit, saying so, and quits at the session's end instead. The
+  full smoke passed in the VM on CI's release stage (Windows PowerShell 5.1, 0 failures) and on a debug build
+  (PowerShell 7 and 5.1, 0 failures, the Ctrl+C quit included)
 
 ### Task 6: HTML overlays on Windows (WebView2, depends on Task 4)
 
