@@ -195,9 +195,10 @@ fn assert_page_opened(root: &Root, size: &str) -> TestResult {
     );
     assert_eq!(page.file_name().and_then(std::ffi::OsStr::to_str), Some("image.html"));
     let folder = page.parent().ok_or("a folder")?;
+    // compared canonical: PowerShell's TEMP has the long names of a short (8.3) one the test gave it
     assert_eq!(
-        folder.parent(),
-        Some(root.path.join("temp").as_path()),
+        fs::canonicalize(folder.parent().ok_or("a folder")?)?,
+        fs::canonicalize(root.path.join("temp"))?,
         "under TEMP: {}",
         page.display()
     );
