@@ -626,6 +626,18 @@ guest has 4 CPUs and 6.5 GB of memory.
   the session server's private image (run only on Windows, and in tests only compared), Windows-only copies
   (`adapter_tests`' `cmd.exe`), and the app's own installs (`integrations::files::write_file` writes the agent hooks
   for the agents to run, never this process). No Rust helper sits under `conformance/`.
+- ➕ (side task 43) `test_cli_output.py::test_tree_lists_workspaces_and_tagged_sessions` failed now and then on
+  Windows (CI run 41221397790): the human `tree` carried `title: C:\Program Files\Git\bin\sh.exe` on the last session
+  where the `--json` read just before it had none. The test's: the console host (ConPTY) titles each pane with its
+  program's path (`untitled-panes` unclaimed, rust-build.md), and a VM probe over 20 new sessions found the title
+  absent at `wait_mounted` every time and arriving 0.3 to 1.1 s later, so the fixture's newest session could take
+  its title between the two reads. The build is right as it stands: the tree reports the left pane's terminal title
+  as upstream's does (`SocketClient.swift`'s `  title: ` suffix), and macOS's and Linux's `/bin/sh` set none.
+  `_titles_settled` waits until every realized session has its title where `untitled-panes` is not claimed (no-op
+  elsewhere), before each `--json`/human `tree` comparison: the tree test and `test_session_overlay_visibility`'s
+  two, the sweep's only other two-read `tree` comparisons in `tests/cli` (the title is the one session field
+  `ngtermctl tree` prints). On the VM, the CI stage of main at 1a38010d, one fresh instance per run of both tests:
+  the old test failed 1 in 25 runs with this very diff, the new one passed 40 of 40
 
 ### Task 9: Docs
 
