@@ -554,10 +554,11 @@ guest has 4 CPUs and 6.5 GB of memory.
   no such write: on Unix the stager (`scripts/stage.sh`), another process, writes the binary before the app runs it,
   and the Windows server's private image is written in-process but runs only after it is closed, with nothing
   inheriting its handle. Rate on Linux (the handoff test binary in a loop): 3 ETXTBSY failures in 200 runs before,
-  0 failures in 400 after (where 3 in 200 would leave about a 0.2% chance of none). Left as they are, the same pattern in other crates' tests, none seen failing: scripts written in
-  process and run by `ngterm-app` (`hook_runner`'s quoted command line, `adapter_tests`, `restore_tests`,
-  `tests/opencode_status.rs`, `tests/show_image.rs`) and by `ngterm-gpui`'s app (`tests/keyboard_layout.rs`,
-  `tests/throughput.rs`); `write_executable` is their fix
+  0 failures in 400 after (where 3 in 200 would leave about a 0.2% chance of none). Left as they are, the same
+  pattern in other crates' tests, none seen failing: scripts written in process and run by `ngterm-app`
+  (`hook_runner`'s quoted command line, `adapter_tests`, `restore_tests`, `tests/opencode_status.rs`,
+  `tests/show_image.rs`) and by `ngterm-gpui`'s app (`tests/keyboard_layout.rs`, `tests/throughput.rs`);
+  `write_executable` is their fix
 
 ### Task 9: Docs
 
