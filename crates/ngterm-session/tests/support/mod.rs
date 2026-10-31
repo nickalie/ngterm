@@ -273,12 +273,8 @@ impl Client {
         while !self.text().contains(needle) {
             assert!(
                 Instant::now() < deadline && self.exit.is_none(),
-                "no {needle:?} in the output: {:?} (TEMP win-34 events: {:?})",
-                self.text(),
-                self.events
-                    .iter()
-                    .filter(|event| !matches!(event, ClientEvent::Output { .. } | ClientEvent::Snapshot { .. }))
-                    .collect::<Vec<_>>()
+                "no {needle:?} in the output: {:?}",
+                self.text()
             );
             self.receive(Duration::from_millis(100));
         }

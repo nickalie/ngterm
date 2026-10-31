@@ -11,6 +11,7 @@
 #[expect(dead_code, reason = "the helpers serve the pane, lead and snapshot tests alike")]
 mod support;
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ngterm_ghostty_vt::{Format, FormatExtras, FormatOptions, Region, Terminal};
@@ -243,19 +244,28 @@ fn managed(nonce: &str, claim: bool) -> Managed {
 /// The lines a flood chunk prints, each about 60 bytes: one chunk fits in the tests' 16 KiB client queue, two do not.
 const FLOOD_LINES: usize = 150;
 
-/// The line that makes [`shell`] print [`FLOOD_LINES`] numbered lines, then [`flood_end`] of `chunk` (which the echoed
-/// line does not hold).
-fn flood(chunk: usize) -> String {
+/// The file under `dir` holding [`FLOOD_LINES`] numbered lines, written when missing.
+fn flood_lines(dir: &Path) -> TestResult<PathBuf> {
+    let path = dir.join("flood.txt");
+    if !path.exists() {
+        let newline = if cfg!(windows) { "\r\n" } else { "\n" };
+        let x = "x".repeat(50);
+        let lines: String = (1..=FLOOD_LINES).map(|i| format!("line-{i}-{x}{newline}")).collect();
+        std::fs::write(&path, lines)?;
+    }
+    Ok(path)
+}
+
+/// The line that makes [`shell`] print the flood file `lines`, then [`flood_end`] of `chunk` (which the echoed line
+/// does not hold). One command prints the lines: cmd titles its console with every command it runs, an `echo` in a
+/// loop too, and `ConPTY` passes each title on (an OSC of about 110 bytes), which took a chunk printed by a loop past
+/// the queue on Windows.
+fn flood(lines: &Path, chunk: usize) -> String {
+    let lines = lines.display();
     if cfg!(windows) {
-        format!(
-            "(for /l %i in (1,1,{FLOOD_LINES}) do @echo line-%i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) \
-             & echo chunk-{chunk}^-end"
-        )
+        format!("type \"{lines}\" & echo chunk-{chunk}^-end")
     } else {
-        format!(
-            "i=0; while [ $i -lt {FLOOD_LINES} ]; do echo line-$i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; \
-             i=$((i+1)); done; echo chunk-{chunk}\"\"-end"
-        )
+        format!("cat '{lines}'; echo chunk-{chunk}\"\"-end")
     }
 }
 
@@ -263,12 +273,15 @@ fn flood_end(chunk: usize) -> String {
     format!("chunk-{chunk}-end")
 }
 
-/// Flood the session with `chunks`, each read by `watcher` before the next is asked for, while the client that is to
-/// fall behind reads nothing. On Windows the next chunk also waits for `cmd`'s prompt after the last one's end: the
-/// console drops a line typed before `cmd` reads again (the end's echo is not yet the prompt).
-fn flood_past(pane: &Pane, watcher: &mut Client, chunks: std::ops::RangeInclusive<usize>) -> TestResult {
+/// Flood the session with `chunks` (of the flood file under `dir`), each read by `watcher` before the next is asked
+/// for, while the client that is to fall behind reads nothing. On Windows the next chunk also waits for `cmd`'s prompt
+/// after the last one's end: the console drops a line typed before `cmd` reads again (the end's echo is not yet the
+/// prompt). The watcher's queue is thus empty but for the prompt when a chunk starts, and one chunk fits in it,
+/// however late the watcher reads.
+fn flood_past(pane: &Pane, watcher: &mut Client, dir: &Path, chunks: std::ops::RangeInclusive<usize>) -> TestResult {
+    let lines = flood_lines(dir)?;
     for chunk in chunks {
-        type_line(pane, &flood(chunk))?;
+        type_line(pane, &flood(&lines, chunk))?;
         watcher.expect(&flood_end(chunk));
         if cfg!(windows) {
             expect_prompt_after(watcher, &flood_end(chunk));
@@ -310,7 +323,7 @@ fn slow_session(name: &str, dir: &tempfile::TempDir, budget: ResyncBudget) -> Te
 fn a_slow_client_is_resynced_in_band_and_keeps_its_role() -> TestResult {
     let dir = tempfile::tempdir()?;
     let (pane, mut slow, mut watcher) = slow_session("resync", &dir, ResyncBudget::default())?;
-    flood_past(&pane, &mut watcher, 1..=3)?;
+    flood_past(&pane, &mut watcher, dir.path(), 1..=3)?;
     slow.drain();
     assert!(
         matches!(
@@ -361,10 +374,10 @@ fn a_client_past_its_resync_budget_is_disconnected() -> TestResult {
         window: Duration::from_secs(3600),
     };
     let (pane, mut slow, mut watcher) = slow_session("budget", &dir, budget)?;
-    flood_past(&pane, &mut watcher, 1..=3)?;
+    flood_past(&pane, &mut watcher, dir.path(), 1..=3)?;
     pane.resync(slow.id())?;
     // it still reads nothing: the resync's snapshot is dropped unsent with the rest
-    flood_past(&pane, &mut watcher, 4..=6)?;
+    flood_past(&pane, &mut watcher, dir.path(), 4..=6)?;
     assert_eq!(pane.resync(slow.id()), Err(ResyncError::OverBudget));
     assert_eq!(pane.clients(), 1, "only the watcher is left");
     assert_eq!(pane.role(slow.id()), None);
@@ -412,7 +425,7 @@ fn assert_last_snapshot(pane: &Pane, slow: &mut Client) -> TestResult {
 fn a_client_behind_when_the_session_ends_gets_its_last_snapshot_before_the_exit() -> TestResult {
     let dir = tempfile::tempdir()?;
     let (pane, mut slow, mut watcher) = slow_session("last", &dir, ResyncBudget::default())?;
-    flood_past(&pane, &mut watcher, 1..=3)?;
+    flood_past(&pane, &mut watcher, dir.path(), 1..=3)?;
     quit(&pane)?;
     watcher.finish();
     // its writer comes to the overflow only after the end: no resync then, the last snapshot is queued instead
@@ -436,7 +449,7 @@ fn a_session_ending_while_a_resync_waits_for_a_cut_gives_the_last_snapshot() -> 
     config.snapshot_wait = PATIENCE;
     let (pane, creator) = Pane::spawn(config)?;
     let (mut slow, mut watcher) = (Client::new(creator), Client::attach(&pane)?);
-    flood_past(&pane, &mut watcher, 1..=3)?;
+    flood_past(&pane, &mut watcher, dir.path(), 1..=3)?;
     // a title longer than the terminal hands on, left open: no cut until the program ends (the shell's `read` takes
     // the doubled backslash for one)
     type_line(
@@ -515,10 +528,10 @@ fn a_resync_gives_a_client_each_clipboards_latest_write_it_missed() -> TestResul
     let (pane, mut slow, mut watcher) = slow_session("clipboard", &dir, ResyncBudget::default())?;
     // printed while it read nothing yet, then overwritten while it was behind: only the latest is its to get
     pane.print(&clipboard_write('c', "first"))?;
-    flood_past(&pane, &mut watcher, 1..=2)?;
+    flood_past(&pane, &mut watcher, dir.path(), 1..=2)?;
     pane.print(&clipboard_write('c', "latest"))?;
     pane.print(&clipboard_write('p', "primary"))?;
-    flood_past(&pane, &mut watcher, 3..=3)?;
+    flood_past(&pane, &mut watcher, dir.path(), 3..=3)?;
     slow.drain();
     pane.resync(slow.id())?;
     slow.receive(PATIENCE);
@@ -553,11 +566,11 @@ fn a_resync_gives_a_client_each_clipboards_latest_write_it_missed() -> TestResul
 fn a_resync_snapshot_dropped_unsent_leaves_the_missed_writes_to_the_next() -> TestResult {
     let dir = tempfile::tempdir()?;
     let (pane, mut slow, mut watcher) = slow_session("redrop", &dir, ResyncBudget::default())?;
-    flood_past(&pane, &mut watcher, 1..=2)?;
+    flood_past(&pane, &mut watcher, dir.path(), 1..=2)?;
     pane.print(&clipboard_write('c', "missed"))?;
     pane.resync(slow.id())?;
     // the resync's snapshot is dropped unsent with the flood after it
-    flood_past(&pane, &mut watcher, 3..=4)?;
+    flood_past(&pane, &mut watcher, dir.path(), 3..=4)?;
     slow.drain();
     pane.resync(slow.id())?;
     slow.receive(PATIENCE);
@@ -572,7 +585,7 @@ fn a_resync_snapshot_dropped_unsent_leaves_the_missed_writes_to_the_next() -> Te
 fn a_client_behind_when_the_session_ends_gets_the_writes_it_missed_in_its_last_snapshot() -> TestResult {
     let dir = tempfile::tempdir()?;
     let (pane, mut slow, mut watcher) = slow_session("lastclip", &dir, ResyncBudget::default())?;
-    flood_past(&pane, &mut watcher, 1..=2)?;
+    flood_past(&pane, &mut watcher, dir.path(), 1..=2)?;
     pane.print(&clipboard_write('s', "selected"))?;
     quit(&pane)?;
     watcher.finish();
@@ -589,7 +602,7 @@ fn a_client_behind_when_the_session_ends_gets_the_writes_it_missed_in_its_last_s
 fn a_programs_own_clipboard_write_is_given_back_too() -> TestResult {
     let dir = tempfile::tempdir()?;
     let (pane, mut slow, mut watcher) = slow_session("programclip", &dir, ResyncBudget::default())?;
-    flood_past(&pane, &mut watcher, 1..=2)?;
+    flood_past(&pane, &mut watcher, dir.path(), 1..=2)?;
     // "bW9pbg==" is "moin"; then a line the watcher waits for (the shell's `read` takes a doubled backslash for one)
     type_line(&pane, "printf '\\\\033]52;c;bW9pbg==\\\\007'; echo written\"\"-now")?;
     watcher.expect("written-now");
@@ -601,63 +614,4 @@ fn a_programs_own_clipboard_write_is_given_back_too() -> TestResult {
     slow.finish();
     watcher.finish();
     Ok(())
-}
-
-// TEMP win-34 diagnostics: the raw size of a flood chunk on this OS, its control strings, and the watcher's backlog
-#[test]
-fn zz_diag_flood() -> TestResult {
-    let dir = tempfile::tempdir()?;
-    let (pane, _slow, mut watcher) = slow_session("diag", &dir, ResyncBudget::default())?;
-    for chunk in 1..=3 {
-        let before = watcher.output.len();
-        let mut max_queued = 0;
-        let mut receives = 0;
-        type_line(&pane, &flood(chunk))?;
-        let deadline = Instant::now() + PATIENCE;
-        while !watcher.text().contains(&flood_end(chunk)) {
-            max_queued = max_queued.max(watcher.subscription.queued());
-            watcher.receive(Duration::from_millis(100));
-            receives += 1;
-            assert!(Instant::now() < deadline, "DIAG stuck: {:?}", diag_events(&watcher));
-        }
-        if cfg!(windows) {
-            expect_prompt_after(&mut watcher, &flood_end(chunk));
-        }
-        let raw = &watcher.output[before..];
-        let oscs: Vec<_> = raw
-            .windows(2)
-            .enumerate()
-            .filter(|(_, w)| *w == b"\x1b]")
-            .map(|(at, _)| String::from_utf8_lossy(&raw[at..raw.len().min(at + 90)]).into_owned())
-            .collect();
-        let csis = raw.windows(2).filter(|w| *w == b"\x1b[").count();
-        eprintln!(
-            "DIAG chunk {chunk}: raw {} bytes, shown {} bytes, {} OSCs, {csis} CSIs, max queued {max_queued}, {receives} \
-             receives, events {:?}",
-            raw.len(),
-            support::shown(raw).len(),
-            oscs.len(),
-            diag_events(&watcher)
-        );
-        for osc in oscs.iter().take(4) {
-            eprintln!("DIAG   {osc:?}");
-        }
-    }
-    quit(&pane)?;
-    watcher.finish();
-    Ok(())
-}
-
-fn diag_events(client: &Client) -> Vec<String> {
-    client
-        .events
-        .iter()
-        .filter(|event| !matches!(event, ClientEvent::Output { .. }))
-        .map(|event| match event {
-            ClientEvent::Snapshot {
-                epoch, offset, data, ..
-            } => format!("Snapshot {epoch} at {offset}, {}", data.len()),
-            other => format!("{other:?}"),
-        })
-        .collect()
 }
