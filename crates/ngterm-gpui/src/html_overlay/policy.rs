@@ -120,7 +120,9 @@ pub const OUTSIDE_GRANT: &str = "outside the page's granted directory";
 pub const NOT_A_FILE: &str = "not a file";
 
 /// The file a grant's read of `requested` serves: its real path when that sits strictly inside `root` (itself a real
-/// path) and is a regular file.
+/// path) and is a regular file. A path on another volume than the grant's (on Windows: another drive, or another
+/// server's or share's file) is refused before the file system is asked, so no page's address makes Windows reach
+/// out to a server the grant does not name.
 ///
 /// # Errors
 ///
@@ -129,6 +131,9 @@ pub fn granted_file(root: Option<&Path>, requested: Option<&Path>) -> Result<Pat
     let (Some(root), Some(requested)) = (root, requested) else {
         return Err(OUTSIDE_GRANT);
     };
+    if volume(root) != volume(requested) {
+        return Err(OUTSIDE_GRANT);
+    }
     let resolved = requested.canonicalize().map_err(|_| OUTSIDE_GRANT)?;
     if resolved == root || !resolved.starts_with(root) {
         return Err(OUTSIDE_GRANT);
@@ -137,6 +142,26 @@ pub fn granted_file(root: Option<&Path>, requested: Option<&Path>) -> Result<Pat
         return Err(NOT_A_FILE);
     }
     Ok(resolved)
+}
+
+/// The volume `path` names, in one spelling whether verbatim (`\\?\`) or not and in any case, as Windows reads it: a
+/// drive's letter, or a share's server and name; `None` for a path without one (every Unix path).
+fn volume(path: &Path) -> Option<String> {
+    use std::path::{Component, Prefix};
+
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        return None;
+    };
+    Some(
+        match prefix.kind() {
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => format!("{}:", char::from(letter)),
+            Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+                format!(r"\\{}\{}", server.to_string_lossy(), share.to_string_lossy())
+            }
+            Prefix::Verbatim(_) | Prefix::DeviceNS(_) => prefix.as_os_str().to_string_lossy().into_owned(),
+        }
+        .to_lowercase(),
+    )
 }
 
 /// One thing a page's main-frame load reports.
@@ -1016,6 +1041,19 @@ mod tests {
         assert!(needs_report(Some(&cleared), Some(&titled), &titled));
         // the first report
         assert!(needs_report(None, None, &titled));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_volume_is_a_drive_or_a_share_in_any_spelling() {
+        let volume = |path: &str| volume(Path::new(path));
+        assert_eq!(volume(r"C:\a\b"), volume(r"\\?\c:\x"));
+        assert_ne!(volume(r"C:\a"), volume(r"D:\a"));
+        assert_eq!(volume(r"\\Server\Share\a"), volume(r"\\?\UNC\server\share\b"));
+        assert_ne!(volume(r"\\server\share\a"), volume(r"\\server\other\a"));
+        assert_ne!(volume(r"\\server\share\a"), volume(r"\\elsewhere\share\a"));
+        assert_ne!(volume(r"C:\a"), volume(r"\\localhost\C$\a"));
+        assert_eq!(volume(r"\a\b"), None);
     }
 
     #[test]
