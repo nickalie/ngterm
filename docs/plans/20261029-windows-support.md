@@ -559,6 +559,18 @@ guest has 4 CPUs and 6.5 GB of memory.
   (`hook_runner`'s quoted command line, `adapter_tests`, `restore_tests`, `tests/opencode_status.rs`,
   `tests/show_image.rs`) and by `ngterm-gpui`'s app (`tests/keyboard_layout.rs`, `tests/throughput.rs`);
   `write_executable` is their fix
+- ➕ (side task 40) the write-then-run sweep: every test that wrote a file in its own process and then ran it now
+  stages it through `ngterm-host`'s fakes (`write_executable` for a script, `copy_executable` for a binary). The
+  seven sites side task 37 listed take `write_executable`; the sweep (every exec mode set, `fs::copy`/`hard_link`
+  of something then started, every shebang written) found two more, both copies of a binary: `ngterm-ctl`'s
+  `tests/cli_local.rs` copies `ngtermctl` when a hard link fails, and `ngterm-wpe`'s `engine::spares` tests copy
+  `/bin/sleep` as a stand-in web process (`ngterm-wpe` gains the `fakes` dev-dependency). Checked and left: files
+  given an exec mode but never run (`restore::mode`'s and `launch`'s probes, `integrations::files`' mode tests, the
+  WPE provider's stand-in `WPEWebProcess`), scripts copied and run through `bash`/`powershell` (a read, not an exec:
+  `show_image`'s skill script, the `-sys` crates' build scripts), stubs written without an exec mode (never run),
+  the session server's private image (run only on Windows, and in tests only compared), Windows-only copies
+  (`adapter_tests`' `cmd.exe`), and the app's own installs (`integrations::files::write_file` writes the agent hooks
+  for the agents to run, never this process). No Rust helper sits under `conformance/`.
 
 ### Task 9: Docs
 
