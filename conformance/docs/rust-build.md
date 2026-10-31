@@ -52,6 +52,21 @@ The Rust build (GPUI) gets, on top of that:
 - a headless weston started with `--fake-seat`, since GPUI needs a `wl_seat`: weston 15.0 or later (the system's, or
   the one `scripts/build-weston.sh` vendors where the system's is older).
 
+On Windows (`tools/run-windows.sh`) the launch differs where the OS does:
+
+- the control socket's path is the identity, and the build serves the named pipe it names
+  (`ngterm_core::paths::control_pipe_name`; `agterm_conformance/transport.py` derives the same name);
+- `LOCALAPPDATA` and `APPDATA` lie under the root with `HOME`, a unique `NGTERM_APP_ID` names the single instance, and
+  the live-session namespace is `<LOCALAPPDATA>\ngterm\live\<hash>` over the state dir's realpath
+  (`live_socket_directory`), its server `ngterm-session.exe server <that dir>`;
+- no `SHELL`; `PATH` is the system directories alone (`System32`, the Windows directory, `Wbem`), so the login shell
+  is the inbox Windows PowerShell; the ghostty config's `command` is Git for Windows' `sh.exe` (absolute) in place of
+  `/bin/sh`;
+- no compositor, bus or lavapipe: the build renders through DirectX on the machine's adapter;
+- the quit is the session's end (the Restart Manager's `WM_QUERYENDSESSION`, then `WM_ENDSESSION` with
+  `ENDSESSION_CLOSEAPP`) posted to the build's hidden `ngterm-system-window`, which must quit within the same 10
+  seconds; the app's process tree is then ended by pid, and the Job object holding the app's processes is closed.
+
 SIGTERM must quit without a prompt within 10 seconds.
 Live sessions keep their sockets in a namespace directory named by the FNV-1a 64 hash (`%016x`, lowercase hex) over
 the UTF-8 bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists:
@@ -83,6 +98,8 @@ share is asserted directly, with no capability.
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
 | `hidden-split-holds-focus` |  | `session.focus` on a hidden split reads back as `splitFocused`; upstream's shown left pane takes the focus back while its window is key |
+| `posix-command-line` | yes | a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs through `/bin/sh -c`, so a test's POSIX line runs as written; Windows runs it through `cmd.exe` |
+| `untitled-panes` | yes | a pane has no title until a program sets one; Windows' console host titles each pane with its program's path |
 
 ## Rust target profile
 
@@ -93,6 +110,7 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
 - `posix-shell`: panes run `/bin/sh` from the harness's ghostty config, as the reference;
 - `hidden-split-holds-focus`: upstream's documented model contract (`control-api.md`, "works shown or hidden; read
   `splitFocused`", and `AppStorePaneTests`); macOS's reversion is an AppKit first-responder effect;
+- `posix-command-line`, `untitled-panes`: on Linux and macOS, as upstream; not on Windows (below);
 - `live-sessions`: by host, where the login shell is zsh or fish (upstream's two) and `ngterm-session` is staged;
 - `live-any-shell`: by host, live sessions for bash and PowerShell login shells too, the one Rust-only extension
   (below): claimed together with `live-sessions` for a zsh or fish login shell, alone for the others.
@@ -102,6 +120,11 @@ It does not claim:
 - `window-geometry`, `window-minimize`: Wayland gives a client no window position and no minimized read-back; their
   tests branch, and the Rust build passes the other branch;
 - `sidebar-min-width`: the GPUI frontend does not claim it; its test takes the other branch.
+- on Windows, `posix-command-line`: a command line runs as `cmd.exe`'s command text there (`%ComSpec% /D /S /C`, as
+  Ghostty runs a command on Windows, `ngterm-term`'s `launch.rs`), so the tests whose overlay programs, scratch
+  commands, hooks or custom commands are POSIX lines skip as unsupported; and `untitled-panes`: the console host
+  (ConPTY) titles a pane with its program's path before any program sets one, so the title test reads that title on
+  the other branch.
 
 The table above stays the reference's profile; this list is the Rust build's.
 

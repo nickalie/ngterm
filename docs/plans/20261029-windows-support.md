@@ -323,14 +323,59 @@ guest has 4 CPUs and 6.5 GB of memory.
 
 ### Task 8: The conformance suite on Windows (depends on Tasks 2 and 4)
 
-- [ ] the harness's transport over the named pipe and its launch of the staged Windows build (private state dir,
+- [x] the harness's transport over the named pipe and its launch of the staged Windows build (private state dir,
   stripped env, the app's process tree reaped at the end)
-- [ ] a staging script for Windows beside `run-linux.sh`
-- [ ] a `windows` CI job: protocol, cli and behaviors on the Windows runner, the ids green there held by
+- [x] a staging script for Windows beside `run-linux.sh`
+- [x] a `windows` CI job: protocol, cli and behaviors on the Windows runner, the ids green there held by
   `--must-pass` (a Windows list beside `rust-passing.txt`, kept by `check_ratchet.py`)
-- [ ] the selftests cover the transport and the launch
-- [ ] Windows VM: the suite runs there; the failures are fixed in the build or recorded as platform divergences
+- [x] the selftests cover the transport and the launch
+- [x] Windows VM: the suite runs there; the failures are fixed in the build or recorded as platform divergences
   (conformance/README.md > Reference discipline)
+- ➕ the VM runs (2026-10-31, the windows job's own stage of 13d0004 through `run-windows.sh --stage`): the full suite
+  658 passed, 55 failed, 4 errors in 1 h 45 min, while another agent's CPU stress (four busy loops on the guest's four
+  CPUs) and a cargo build ran beside it; besides the windows job's red set (below) its failures were control-socket
+  timeouts and waits run out on two shared instances. A re-run of the modules holding those ids (protocol's session,
+  session_text, surface, window, ask_pick, live_any_shell, config_browser and the chromeless and page-result overlay
+  tests, 255 ids) on the quieter guest: 251 passed; red were the CI-red chromeless frame test, `browser.clear`
+  outliving the client's 10 s (green in three windows-job runs, kept out of the list), and the run's first instance,
+  the profile probe, quitting 12 s after the session's end on a freshly unpacked stage. No pane shell, `ngterm*.exe`,
+  `OpenConsole.exe`, PowerShell or session server was left after either run (`ps -ef`, `tasklist`). The windows job is
+  the gate: green on every job at f71891c (run 41139442458, 696 passed, the ratchet holding)
+- ➕ `run-windows.sh` no longer ends before its report on a source copy without `.git` (the VM's layout)
+- ➕ the pane shells "leaked" in the VM run of 2026-10-30 (about 35 `/usr/bin/bash` between 22:02 and 22:08) were no
+  leak: they were the panes of `test_dashboard_quick.py`'s shared instance, which its tests open and leave until the
+  module's stop (19 at once in a 2026-10-31 slice, none left once the module stopped; `ps -ef` and `tasklist` showed
+  no `bash.exe`, `ngterm*.exe`, `OpenConsole.exe` or session server of the run afterwards). Their parent pid of 1 and
+  console of their own are what every pane shell shows there: Git for Windows' `bin\sh.exe` is a native launcher of
+  `usr\bin\bash.exe`, and each pane has its own pseudoconsole. The guest was loaded by another agent's CPU stress at
+  the time. A probe showed the launcher's `bash.exe` in the pane's kill-on-close job, outliving the launcher ended
+  alone by pid but not the job's close; the harness now holds each instance's processes in a Job object of its own
+  (breakaway allowed for the session server), closed at the stop, which also ends them should the harness die
+- ➕ the `windows` job runs with `--must-pass live-any-shell`: the login shell there is Windows PowerShell, so the
+  live-any-shell tests type PowerShell's lines on Windows (`Write-Output`, `ping -n` for a long program, the prompt
+  waited for after a Ctrl+C, which the console drops typing before); the stage it ran is kept as an artifact
+  (`rust-windows-stage`) for a VM run against the same build
+- ➕ the Windows ratchet holds 638 ids: the 620 less one found flaky (below), the 16 more green in three windows-job
+  runs, and the three live-any-shell tests (held by `--must-pass` too); HUD ids stay out (below)
+- ➕ red on Windows and not in the list, each a build gap found by the suite and left to its task:
+  - ⚠️ the HUD (`session.hud.*`, 4–6 ids red per run, the rest green only by timing): its painter is
+    `ngterm-gpui/resources/hud/hud.sh`, which `ngterm-core`'s `HudRuntime::helper_command` runs as `/bin/sh <path>`,
+    a command line Windows hands to `cmd.exe`: it exits at once and the HUD's slot closes. A Windows painter (or the
+    panel drawn by GPUI) is open work for the frontend (Task 4)
+  - in-app panes report no foreground on Windows (`ngterm-term`'s `Pty::foreground_pid` is `None` there; only live
+    panes get the console stand-in, `ngterm-session`'s `console_foreground`): `restore.capture`, `foreground` and the
+    relaunch's rerun stay red (`test_restore.py`'s three, `test_relaunch.py`'s
+    `test_rerun_replays_the_captured_foreground_program`). Under Git for Windows' sh a newest-child stand-in would
+    still name `bash.exe` (the launcher's) or an MSYS fork stub rather than the program
+  - `ngtermctl terminfo install` dumps the entry with `/usr/bin/infocmp`, which Windows lacks (two
+    `test_cli_only.py` ids): a Windows form (Task 2) would read the staged `share/terminfo` instead
+  - a file page's title (`htmlOverlays[].title`) never comes, on the CI runner and in the VM, so eight of
+    `test_overlay.py`'s page tests wait out their read-back; and a chromeless URL page asks another origin for a
+    frame (`test_chromeless_url_page_keeps_frames_on_its_origin`) (Task 6)
+  - a file page without a grant reloads its text through `NavigateToString` again, which adds a history entry, so
+    `canGoBack` turns true once `WebView2`'s `HistoryChanged` lands: `navigate back` after a reload is refused or not
+    by that race (`test_cli_output.py::test_overlay_page_blocks_until_submitted`, green in three runs, red in the
+    fourth, taken out of the list); upstream's reload of such a page adds none (Task 6)
 
 ### Task 9: Docs
 

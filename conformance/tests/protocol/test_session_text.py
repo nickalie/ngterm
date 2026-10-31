@@ -211,9 +211,13 @@ def test_search_counts_the_matches(ctl):
 
 @POSIX_SHELL
 @pytest.mark.covers("session.type", "field:tree.session.title")
-def test_title_reads_the_terminal_title_a_program_set(ctl):
+def test_title_reads_the_terminal_title_a_program_set(ctl, adapter):
     sid = _realized(ctl)
-    assert_absent(find_session(ctl.tree(), sid), "title")
+    if adapter.has("untitled-panes"):
+        assert_absent(find_session(ctl.tree(), sid), "title")
+    else:
+        # Windows: the console host titles the pane with its program's path before any program sets one.
+        ctl.wait_tree(lambda tree: bool(find_session(tree, sid).get("title")))
     title = f"agt-title-{next(_markers)}"
     # OSC 0 sets the title; the command line carries the title split in two, so only the escape can set it.
     assert_ok(ctl.request("session.type", sid, text=f"printf '\\033]0;%s%s\\007' {title[:4]} {title[4:]}\n"))

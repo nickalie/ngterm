@@ -29,7 +29,18 @@ use crate::state::{AppState, Poster, post};
 use crate::windows::{ConfigHost, Windows};
 
 /// The capabilities of the Rust target profile this build implements (`conformance/docs/rust-build.md`). Each is
-/// claimed once its commands work in this frontend (plan > Development Approach).
+/// claimed once its commands work in this frontend (plan > Development Approach). Windows claims neither
+/// `posix-command-line` (a command line runs through `cmd.exe` there, `ngterm-term`'s `launch.rs`) nor
+/// `untitled-panes` (the console host titles each pane with its program's path).
+#[cfg(not(windows))]
+pub const CAPABILITIES: &[&str] = &[
+    "posix-shell",
+    "hidden-split-holds-focus",
+    "posix-command-line",
+    "untitled-panes",
+];
+/// The capabilities of the Rust target profile this build implements on Windows (see the other OSes' above).
+#[cfg(windows)]
 pub const CAPABILITIES: &[&str] = &["posix-shell", "hidden-split-holds-focus"];
 
 /// The capabilities this host claims: the profile's, and the `live` ones by host

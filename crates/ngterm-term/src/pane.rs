@@ -1238,7 +1238,16 @@ mod tests {
             .cwd(dir.path());
         let pane = Pane::spawn(&command, &PaneConfig::new(SIZE)).unwrap();
         lock(&pane.shared.vt).terminal.vt_write(b"abc");
-        let first = pane.frame().frame;
+        // the IO thread may hold a lock for a moment on a loaded machine, and a stale paint is the empty first frame
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let first = loop {
+            let snapshot = pane.frame();
+            if !snapshot.stale {
+                break snapshot.frame;
+            }
+            assert!(Instant::now() < deadline, "the first paint never got the terminal");
+            std::thread::sleep(Duration::from_millis(1));
+        };
         assert_eq!(first.lines()[0], "abc");
         // view B starts painting; before it looks at the terminal, the row changes in place (the cursor moves too)
         // and view A paints the change completely

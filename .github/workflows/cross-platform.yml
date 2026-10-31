@@ -118,3 +118,68 @@ jobs:
             rustup target add "$target"
             cargo build --locked -p ngterm-ghostty-vt-sys --target "$target"
           done
+
+  # The conformance suite on Windows (conformance/tools/run-windows.sh): the release app with its HTML overlays, the
+  # CLI and the live sessions' server staged by scripts/stage.sh, the protocol, cli and behaviors layers run against
+  # them over the control socket's named pipe, each instance on a private root (its home, application data, state dir
+  # and pipe; its window on the runner's desktop, which no one uses), its panes in Git for Windows' sh, its process
+  # tree reaped by pid. Held by conformance/rust-passing-windows.txt, the Windows ratchet beside rust-passing.txt. The
+  # harness's Windows self-tests (the pipe transport, the launch and stop) run first.
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: conformance
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite
+        run: |
+          python -m venv .venv
+          .venv/Scripts/python.exe -m pip install -e conformance
+      - name: the harness's Windows self-tests
+        run: >-
+          .venv/Scripts/python.exe -m pytest conformance/selftests/test_transport.py
+          conformance/selftests/test_client.py conformance/selftests/test_windows_launch.py
+      # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
+      # every stopped instance's logs (the harness's and the app's own), named after its test, uploaded with the report
+      # --must-pass live-any-shell: the login shell is Windows PowerShell, which the build runs its live sessions in; a
+      # skipped, failed or deselected Live test fails the job, as does finding none.
+      - name: suite (protocol, cli, behaviors)
+        run: >-
+          CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows/instances")"
+          conformance/tools/run-windows.sh -- --must-pass live-any-shell
+      - name: report into the summary
+        if: always()
+        run: |
+          report=conformance/reports/rust-windows/report.md
+          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-windows-conformance
+          path: conformance/reports/rust-windows/
+          if-no-files-found: warn
+      # the staged tree the suite ran, for a run on a Windows VM against the same build (run-windows.sh --stage)
+      - name: upload the stage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-windows-stage
+          path: target/conformance-stage/
+          retention-days: 5
+          if-no-files-found: warn

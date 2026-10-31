@@ -359,6 +359,23 @@ def test_launch_isolates_and_stop_cleans_up(roots: list[Path], fake_bin: Path, m
     assert not instance.root.exists()
 
 
+def test_stop_keeps_the_instances_logs_where_asked(
+    roots: list[Path], fake_bin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kept = tmp_path / "kept"
+    monkeypatch.setenv(base.KEEP_LOGS_VARIABLE, str(kept))
+    adapter = UpstreamVocabularyAdapter(fake_bin)
+    instance = adapter.launch()
+    (instance.state_dir / "ngterm.log").write_text("the app's own log\n")
+    adapter.stop(instance)
+    assert not instance.root.exists()
+    (directory,) = kept.iterdir()
+    assert directory.name.endswith("." + instance.root.name)
+    assert "test_stop_keeps_the_instances_logs_where_asked" in directory.name
+    assert sorted(path.name for path in directory.iterdir()) == ["app.log", "ngterm.log"]
+    assert (directory / "ngterm.log").read_text() == "the app's own log\n"
+
+
 def test_stop_removes_a_stopped_session_servers_namespace(tmp_path: Path) -> None:
     live_dir = tmp_path / "ngterm-live-x"
     live_dir.mkdir()

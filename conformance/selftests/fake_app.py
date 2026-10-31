@@ -1,7 +1,8 @@
 """A stand-in app for adapter self-tests: serves the JSON-line protocol on `AGTERM_CONTROL_SOCKET` (under the Rust
 adapter, `NGTERM_CONTROL_SOCKET`: whichever prefix the adapter set).
 
-FAKE_APP_MODE: serve (default), exit (exit 3 before binding), silent (never binds), refuse (`version` fails),
+FAKE_APP_MODE: serve (default), exit (exit 3 before binding), silent (never binds), refuse (`version` fails), no-window
+(Windows: serve without the quit window),
 ignore-term (serve, ignoring SIGTERM and SIGABRT, each recorded in `fake-signals`; FAKE_ABORT=exit makes SIGABRT
 exit 134 instead, without a core). FAKE_VERSION: JSON for the `version` result. FAKE_ZMX_LIST: JSON
 replacing the `zmx.list` result. FAKE_LIVE_GROUP: the live-session group's name, `zmx` (upstream's) by default; the
@@ -11,6 +12,12 @@ killing a left pane promotes the session's right pane into the left slot, as ups
 `tree` serves a settable tree (`fake.set_tree {tree?, error?, delay?}`); `events.read` serves a ring with
 upstream's cursor semantics, appended to by `fake.emit {kind, session?, payload?, delay?}`. A delay applies the
 change from a timer after the reply, as an app does work after acknowledging a command.
+
+On Windows it serves the named pipe the socket path names (agterm_conformance.transport) and opens a hidden top-level
+window of the class FAKE_QUIT_WINDOW_CLASS (default: the Rust build's `ngterm-system-window`) whose `WM_ENDSESSION`
+quits it with 0, as the app's does; in ignore-term mode it records `ENDSESSION` in `fake-signals` and keeps running.
+FAKE_CHILD=1 starts a child that sleeps, its pid written to `fake-child`, for the stop's process-tree reap;
+FAKE_CHILD=orphan starts it through a launcher that leaves at once, its pid written to `fake-grandchild`.
 """
 
 import json
@@ -33,7 +40,93 @@ if mode == "exit":
     sys.exit(3)
 if mode == "silent":
     threading.Event().wait()
-if mode == "ignore-term":
+WINDOWS = sys.platform == "win32"
+
+
+def record_signal(name: str) -> None:
+    with open(os.path.join(state, "fake-signals"), "a") as sink:
+        sink.write(f"{name}\n")
+
+
+def quit_window() -> None:
+    """The app's hidden window (crates/ngterm-gpui/src/system_window.rs): the session's end quits."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    procedure = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+    user32.DefWindowProcW.restype = ctypes.c_ssize_t
+    user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+
+    def on_message(window: int, message: int, wparam: int, lparam: int) -> int:
+        if message == 0x0011:  # WM_QUERYENDSESSION
+            return 1
+        if message == 0x0016:  # WM_ENDSESSION
+            if wparam:
+                if mode == "ignore-term":
+                    record_signal("ENDSESSION")
+                else:
+                    os._exit(0)
+            return 0
+        return user32.DefWindowProcW(window, message, wparam, lparam)
+
+    class WindowClass(ctypes.Structure):
+        _fields_ = [
+            ("style", wintypes.UINT),
+            ("lpfnWndProc", procedure),
+            ("cbClsExtra", ctypes.c_int),
+            ("cbWndExtra", ctypes.c_int),
+            ("hInstance", wintypes.HINSTANCE),
+            ("hIcon", wintypes.HICON),
+            ("hCursor", wintypes.HANDLE),
+            ("hbrBackground", wintypes.HBRUSH),
+            ("lpszMenuName", wintypes.LPCWSTR),
+            ("lpszClassName", wintypes.LPCWSTR),
+        ]
+
+    name = os.environ.get("FAKE_QUIT_WINDOW_CLASS", "ngterm-system-window")
+    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+    instance = kernel32.GetModuleHandleW(None)
+    callback = procedure(on_message)
+    description = WindowClass(lpfnWndProc=callback, hInstance=instance, lpszClassName=name)
+    if not user32.RegisterClassW(ctypes.byref(description)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    user32.CreateWindowExW.restype = wintypes.HWND
+    user32.CreateWindowExW.argtypes = [
+        wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        ctypes.c_int, wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
+    ]
+    if not user32.CreateWindowExW(0, name, name, 0, 0, 0, 0, 0, None, None, instance, None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    message = wintypes.MSG()
+    while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+        user32.TranslateMessage(ctypes.byref(message))
+        user32.DispatchMessageW(ctypes.byref(message))
+
+
+if WINDOWS and mode != "no-window":
+    threading.Thread(target=quit_window, daemon=True).start()
+if os.environ.get("FAKE_CHILD") == "1":
+    import subprocess
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    with open(os.path.join(state, "fake-child"), "w") as sink:
+        sink.write(str(child.pid))
+if os.environ.get("FAKE_CHILD") == "orphan":
+    import subprocess
+
+    # a launcher that starts the sleeper and leaves at once, as Git for Windows' sh.exe leaves its bash.exe: the
+    # sleeper's parent pid then names a process that is gone
+    grandchild = os.path.join(state, "fake-grandchild")
+    launcher = (
+        "import subprocess, sys; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)']); "
+        f"open({grandchild!r}, 'w').write(str(child.pid))"
+    )
+    subprocess.Popen([sys.executable, "-c", launcher]).wait()
+
+if mode == "ignore-term" and not WINDOWS:
 
     def record(signum: int, frame: object) -> None:
         name = signal.Signals(signum).name.removeprefix("SIG")
@@ -161,16 +254,23 @@ def handle(request: dict) -> dict:
     return {"ok": False, "error": f"unknown command: {cmd}"}
 
 
-listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-# A previous run on the same state dir (a relaunch) leaves its socket file behind, as a quit app may.
-try:
-    os.unlink(os.environ[PREFIX + "CONTROL_SOCKET"])
-except FileNotFoundError:
-    pass
-listener.bind(os.environ[PREFIX + "CONTROL_SOCKET"])
-listener.listen()
+if WINDOWS:
+    from agterm_conformance import transport
+
+    listener = transport.Listener(os.environ[PREFIX + "CONTROL_SOCKET"])
+else:
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    # A previous run on the same state dir (a relaunch) leaves its socket file behind, as a quit app may.
+    try:
+        os.unlink(os.environ[PREFIX + "CONTROL_SOCKET"])
+    except FileNotFoundError:
+        pass
+    listener.bind(os.environ[PREFIX + "CONTROL_SOCKET"])
+    listener.listen()
 while True:
-    conn, _ = listener.accept()
+    conn = listener.accept()
+    if not WINDOWS:
+        conn = conn[0]
     with conn:
         data = b""
         while b"\n" not in data:

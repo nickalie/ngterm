@@ -159,6 +159,7 @@ def tree_workspace(ctl):
 
 
 @pytest.mark.covers("cli:tree")
+@pytest.mark.requires("posix-command-line", reason="the overlay's program or the custom command is a POSIX command line")
 def test_tree_lists_workspaces_and_tagged_sessions(cli, ctl, tree_workspace):
     top = _json(cli("tree", "--json"))["tree"]
     human = _ok(cli("tree"))
@@ -592,6 +593,7 @@ def _overlay_up(ctl, sid):
     "cli:session overlay result",
     "cli:session overlay copy",
 )
+@pytest.mark.requires("posix-command-line", reason="the overlay's program or the custom command is a POSIX command line")
 def test_overlay_program(cli, ctl):
     sid = _new(ctl)
     marker = f"OVL{uuid.uuid4().hex[:8].upper()}"
@@ -621,6 +623,7 @@ def test_overlay_program(cli, ctl):
 
 
 @pytest.mark.covers("cli:session overlay open", "cli:session overlay resize")
+@pytest.mark.requires("posix-command-line", reason="the overlay's program or the custom command is a POSIX command line")
 def test_overlay_points(cli, ctl):
     sid = _new(ctl)
     assert_ok(ctl.request("session.select", sid))
@@ -657,6 +660,7 @@ def test_overlay_points(cli, ctl):
 
 
 @pytest.mark.covers("cli:session overlay hide", "cli:session overlay show", "cli:session overlay toggle", "cli:tree")
+@pytest.mark.requires("posix-command-line", reason="the overlay's program or the custom command is a POSIX command line")
 def test_session_overlay_visibility(cli, ctl):
     sid = _new(ctl)
     _ok(cli("session", "overlay", "open", "--target", sid, "exec cat"), "ok\n")
@@ -1087,6 +1091,7 @@ def config_files(ctl):
 
 
 @pytest.mark.covers("cli:keymap reload", "cli:keymap list", "cli:keymap run")
+@pytest.mark.requires("posix-command-line", reason="the overlay's program or the custom command is a POSIX command line")
 def test_keymap(cli, ctl, config_files):
     keymap, _ = config_files
     marker = ctl.instance.root / "cli-keymap-ran"
