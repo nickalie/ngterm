@@ -332,6 +332,10 @@ guest has 4 CPUs and 6.5 GB of memory.
 - ➕ (side task 36, open) macOS `openpty` fails now and then while PTY tests run in parallel: `ENXIO`, or `-6`
   (XNU's internal `EREDRIVEOPEN` from the ptmx clone open, leaking out); 3 failed runs of 1000 runs of the whole
   `pty` binary in 4 parallel loops. Not this task's: left for one of its own
+- ➕ (side task 39) that `openpty` flake is XNU's ptmx clone race (`bsd/kern/tty_ptmx.c`, `tty_dev.c`): two opens
+  handed one minor, or a minor freed before its `/dev/ttysNNN` node goes, fail with `EREDRIVEOPEN` (-6) or `ENXIO`
+  until the racing open or close is through. ngterm-pty opens again on those two errnos only, at most 3 times;
+  portable-pty's patch 0007 keeps the failure's `io::Error`, so the errno is readable
 
 ### Task 5: Desktop integrations on Windows (depends on Task 4)
 
