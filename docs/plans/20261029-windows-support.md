@@ -521,6 +521,13 @@ guest has 4 CPUs and 6.5 GB of memory.
 
 ### Task 9: Docs
 
-- [ ] README: Windows build, run, install and test; CI list; prerequisites (WebView2, WiX)
-- [ ] CLAUDE.md's crate table: each crate's platform column as it now stands
-- [ ] `conformance/docs/rust-build.md`: the Windows profile, divergences and renamed strings, if any
+- [x] README: Windows build, run, install and test; CI list; prerequisites (WebView2, WiX)
+- [x] CLAUDE.md's crate table: each crate's platform column as it now stands
+- [x] `conformance/docs/rust-build.md`: the Windows profile, divergences and renamed strings, if any
+- ➕ the bundled skill's copy had drifted from upstream plus its patches (side task 25 edited `terminfo install`'s text
+  in `reference.md` without a patch, so `sync-resources.sh --check` read `would-apply`); `0007-windows.patch` carries
+  that text with the skill's Windows paths, and the check reads `unchanged` again
+- ➕ `scripts/run-gpui-dev.sh` has no Windows form and was not run there; README > Windows names what a private dev
+  instance needs on Windows (the smoke scripts' and the harness's launch)
+- ➕ left open: the skill's `scripts/show-image.sh` opens its overlay as `/bin/bash <script>`, a POSIX line `cmd.exe`
+  cannot run on Windows

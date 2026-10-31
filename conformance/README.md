@@ -9,6 +9,7 @@ The same tests run against the released macOS app and the Rust build, over the c
 ```sh
 python -m venv .venv && .venv/bin/pip install -e conformance          # Linux, CI gate
 python -m venv .venv && .venv/bin/pip install -e "conformance[ax]"    # macOS: adds the ax ui driver's pyobjc
+python -m venv .venv && .venv/Scripts/python.exe -m pip install -e conformance   # Windows, from Git Bash
 ```
 
 ## Running
