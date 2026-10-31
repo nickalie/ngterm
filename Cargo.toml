@@ -240,5 +240,6 @@ gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 # ngterm-pty's PTY and child: vendor/portable-pty is the verified crates.io source plus build/patches/portable-pty
 # (scripts/vendor-portable-pty.sh): ConPTY from kernel32 only, herdr's Windows environment and PATH fixes, a child
-# spawned into its job, and a ConPTY session's handles exported and imported for the session server's update handoff.
+# spawned into its job, a ConPTY session's handles exported and imported for the session server's update handoff, and
+# a failed openpty's errno kept (the macOS ptmx clone race's retry).
 portable-pty = { path = "vendor/portable-pty" }
