@@ -146,6 +146,18 @@ guest has 4 CPUs and 6.5 GB of memory.
   restore and `OpenCode` plugin tests run on Windows too
 - ➕ left open: Codex's Windows hooks (`command_windows`) still run the POSIX Codex adapter under Git Bash: it has no
   PowerShell form yet (its blocker watcher and question check are the largest script of the package)
+- ➕ (side task 22) hooks, keymap and custom commands got a broken `PATH` on Windows: `widened_path` (`ngterm-core`)
+  split and joined it with `:`, cutting every `C:\...` entry at the drive's colon and never splitting at `;`. It now
+  splits and joins with `std::env::split_paths`/`join_paths` (a quoted Windows entry kept whole), compares entries
+  without case or a trailing separator on Windows, falls back to Windows' default system `Path` (`SystemRoot`
+  expanded) when the app has none, and appends `~/.local/bin` on Unix only: on Windows the CLI install puts the
+  bundled tool's folder on the user's `PATH`, which the widened one already leads with. Its test runs on Windows
+  (drive letters, a `;` input, a quoted entry, duplicates in another case). The CLI installer's Unix `on_path` check
+  splits by the platform's rules too. Checked and left: `ngterm-term`'s `GHOSTTY_BIN_DIR` append (the platform's
+  separator already, exact match as Ghostty's `Exec.zig`), the Windows CLI install's `HKCU` `Path` (`;`, no case),
+  the live fish `XDG_DATA_DIRS` (`:` by the XDG spec), the remote tree's `PATH` (a POSIX remote shell), the session's
+  Windows shell lookup (`split_paths`), `ngtermctl`'s `PATHEXT` (`;`), and the `ngterm-gpui` build's WPE libdirs
+  (Linux only)
 
 ### Task 4: The GPUI frontend on Windows (`ngterm-gpui`, depends on Tasks 1 and 3)
 
