@@ -196,6 +196,17 @@ guest has 4 CPUs and 6.5 GB of memory.
   the folder chooser, monitors and window frames, the live reset relauncher (`--relaunch-after`)
 - ➕ the HTML clipboard is plain text on Windows (GPUI's Windows clipboard writes no `CF_HTML`)
 - ➕ the folder chooser on Windows has no title and no starting folder (GPUI's path prompt takes the accept label only)
+- ➕ (side task 23) the HUD works on Windows: its painter, upstream's `hud.sh` (run as `/bin/sh <path>`, which Windows
+  handed to `cmd.exe`, so the panel closed at once), is ported to Rust (`ngterm-core`'s `hud::painter`, tested byte for
+  byte against the script's frames) and run in process by `ngterm-term` (a painted pane: no PTY, no child, no shell on
+  any OS) through `Launch::painter`; the body file, its header, the lifetime (the file's removal ends the panel, a
+  replacement keeps the slot), the slot sharing and the close are unchanged. `hud.sh` and its install under the state
+  dir are gone, `Core::set_hud_helper` became `set_hud_body_dir`, and the upstream-sync skill files a change to
+  upstream's `hud.sh` as a port into the painter. `test_hud_hides_itself_after_its_interval` no longer reads the panel
+  back after a 2 s auto-hide was armed (it could be down by then). The windows job ran every HUD id green (60; the two
+  needing `posix-command-line` skip there), and they joined the Windows ratchet (702 ids). On the VM's desktop (the
+  windows job's stage, a private state dir) a braille-spinner HUD with a dimmed detail showed over the PowerShell pane,
+  an update repainted it as markdown in its text color, and a close took it down, with no child process for the panel
 
 ### Task 5: Desktop integrations on Windows (depends on Task 4)
 
