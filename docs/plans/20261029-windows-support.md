@@ -136,6 +136,16 @@ guest has 4 CPUs and 6.5 GB of memory.
   `/proc/*/status`, `/proc/*/fd`); with those fixed, 2 CLI tests failed the same way (`mknod`, tic's hex directory
   layout) and a stream-bridge test hung: macOS can leave a `recv` blocked in one thread asleep after another thread's
   `shutdown` of the same socket, so the bridge and run-job's listener now wait on a wake pipe too (`read_wake`)
+- ➕ (side task 25) `ngtermctl terminfo install` failed on Windows, which has no `infocmp` (two `test_cli_only.py` ids
+  red in the suite). The CLI now decompiles the staged compiled entry itself on every OS (`terminfo/source.rs`, a port
+  of ncurses 6.6's entry reader and `infocmp -x`'s layout, credited in `NOTICE`), byte for byte what `infocmp -x`
+  prints apart from its comment line: its tests compare it with the real `infocmp` on Linux over a `tic`-compiled
+  fixture and the system database's entries. A failed dump reads `could not read <file>: <reason>` where upstream's
+  read `infocmp exited N: ...`. The install's unit tests run on Windows over a `.cmd` fake `ssh`; the suite's
+  Windows stand-in is an `ssh.exe` (distlib's script launcher over Python) running the remote line in Git for
+  Windows' `sh` and `tic`, and the killed-by-a-signal half stays POSIX only
+- ➕ (side task 25) seen on its CI run: ngterm-app's `opencode_status` order test read the reporter's `started` file
+  while the Windows reporter's `Add-Content` still held it (EBUSY); the harness now retries that read
 
 ### Task 3: App services on Windows (`ngterm-app`)
 

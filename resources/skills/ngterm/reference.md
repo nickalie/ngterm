@@ -2183,10 +2183,11 @@ text on the Mac showing it, and on the Mac it runs on as well.
 
 `ngtermctl terminfo install DESTINATION [-p PORT] [-i FILE ...] [-J HOST] [-F FILE]` — install the bundled
 `xterm-ghostty` terminfo entry into a remote account's `~/.terminfo`. Local-only: it never opens the
-control socket, takes no `--socket`, `--window` or `--json`, and needs no running ngterm. It dumps the
-entry with `infocmp -x` from the database next to the running `ngtermctl` (falling back to `TERMINFO`
-from the environment outside a bundle), then runs the remote `tic -x -o "$HOME/.terminfo" -` over one
-ssh connection with the source on stdin. Nothing is cached; run it once per host and account.
+control socket, takes no `--socket`, `--window` or `--json`, and needs no running ngterm. It reads the
+compiled entry from the database next to the running `ngtermctl` (falling back to `TERMINFO` from the
+environment outside a bundle) and decompiles it itself into the source `infocmp -x` would print, so no
+local `infocmp` is needed (Windows has none), then runs the remote `tic -x -o "$HOME/.terminfo" -` over
+one ssh connection with the source on stdin. Nothing is cached; run it once per host and account.
 
 - `DESTINATION` — as ssh takes it: host, `user@host`, or an alias from `~/.ssh/config`. Refused when it
   starts with `-` or contains whitespace or a control character.
@@ -2197,10 +2198,10 @@ ssh connection with the source on stdin. Nothing is cached; run it once per host
   Do not run it from a hook or a non-interactive script unless key auth already works for the host.
 
 Human output on success is `installed xterm-ghostty on DESTINATION`. It exits with ssh's status (128 plus
-the signal when ssh was killed), and 64 for a usage error. Failures before the connection open none:
+the signal when ssh was killed, on macOS and Linux), and 64 for a usage error. Failures before the connection open none:
 
 - `no xterm-ghostty terminfo entry next to this ngtermctl; looked in <dirs>` — no database found.
-- `infocmp exited N: <stderr>` — the local dump failed.
+- `could not read <file>: <reason>` — the entry's file is unreadable or not a compiled entry.
 - `could not start ssh: <call> failed with <reason>` — the spawn failed.
 - `ngterm: tic is not installed on this host, install ncurses first` — printed by the remote and followed
   by `ssh exited 3; xterm-ghostty was not installed`.
