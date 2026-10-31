@@ -213,6 +213,9 @@ pub struct Session {
     /// When the status was last set, repeats included; wall clock, since `tree` ships it as epoch seconds a client
     /// compares against event timestamps. Never persisted.
     pub status_changed_at: Option<SystemTime>,
+    /// When the session last became or stopped being its window's selection, on the clock of `status_changed_at`.
+    /// Persisted.
+    pub last_selected_at: Option<SystemTime>,
     auto_follow: FollowMark,
     remote_host: Option<String>,
     /// Membership of the flagged working set, the sidebar's cross-workspace flagged view. Persisted.
@@ -312,6 +315,7 @@ impl Session {
             unseen_count: 0,
             agent_indicator: AgentIndicator::default(),
             status_changed_at: None,
+            last_selected_at: None,
             auto_follow: FollowMark::Fresh,
             remote_host: seed.remote_host,
             flagged: false,

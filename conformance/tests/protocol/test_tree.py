@@ -2,6 +2,7 @@
 so it stays fresh for all of them; a test that changes state takes an instance of its own."""
 
 import shutil
+import time
 
 import pytest
 from agterm_conformance.match import (
@@ -214,3 +215,21 @@ def test_index_unsaved_while_windows_json_cannot_be_written(app, ctl):
     assert_ok(ctl.request("window.rename", window["id"], name="saved"))
     assert_absent(ctl.tree()["tree"], "indexUnsaved")
     wait_until(index.is_file)
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.select", "field:tree.session.lastSelectedAt")
+def test_last_selected_at_stamps_the_session_entered_and_left(app, ctl):
+    (first,) = session_ids(ctl.tree())
+    second = assert_ok(ctl.request("session.new", noSelect=True))["id"]
+    never = assert_ok(ctl.request("session.new", noSelect=True))["id"]
+    before = time.time()
+    assert_ok(ctl.request("session.select", second))
+    after = time.time()
+
+    tree = ctl.tree()
+    left, entered = find_session(tree, first)["lastSelectedAt"], find_session(tree, second)["lastSelectedAt"]
+    # One stamp for both ends of the move, on the wall clock as epoch seconds; slack for the clocks' rounding.
+    assert left == entered
+    assert before - 1 <= entered <= after + 1
+    assert_absent(find_session(tree, never), "lastSelectedAt")

@@ -11,7 +11,7 @@
 //! when it happened, and its Open Recent entries stay.
 
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use uuid::Uuid;
 
@@ -378,6 +378,12 @@ impl AppStore {
             return ids.first().is_some_and(|id| self.soft_close_session(*id));
         }
         let previous = self.selected_session_id;
+        // the selection write cannot stamp a session already removed, and undo may select a batch mate
+        if let Some(active) = previous.filter(|id| targets.contains(id))
+            && let Some(session) = self.session_mut(active)
+        {
+            session.last_selected_at = Some(SystemTime::now());
+        }
         for id in &targets {
             if self.location(*id).is_some() {
                 self.release_leaving_session(*id);

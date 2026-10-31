@@ -140,16 +140,17 @@ Tests: `AppStoreTreeProjectionTests.swift` (`selectionStampsTheSessionEnteredAnd
 `tests/behaviors/test_relaunch.py::test_last_selected_at_survives_a_relaunch`, covering
 `field:tree.session.lastSelectedAt` (key name as the regenerated catalog spells it).
 
-- [ ] `Session.last_selected_at` (wall clock, the clock of `statusChangedAt`), stamped on the session entered and
+- [x] `Session.last_selected_at` (wall clock, the clock of `statusChangedAt`), stamped on the session entered and
       the one left with one `now` at every selection change, never while restoring
-- [ ] a batch soft close stamps the selected member before removal, so an undo selecting a batch mate still records
+- [x] a batch soft close stamps the selected member before removal, so an undo selecting a batch mate still records
       the departure
-- [ ] snapshot key `lastSelectedAt` (epoch seconds, fractional) after `context`, omitted when nil, lossy decode; a
+- [x] snapshot key `lastSelectedAt` (epoch seconds, fractional) after `context`, omitted when nil, lossy decode; a
       restore keeps the stored value
-- [ ] tree session node `lastSelectedAt` after `statusChangedAt`, omitted when nil
-- [ ] write tests: the five Swift cases above on the fakes
-- [ ] write tests: the two conformance tests (`@since("0.39.1")`)
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] tree session node `lastSelectedAt` after `statusChangedAt`, omitted when nil
+- [x] write tests: the five Swift cases above on the fakes
+- [x] write tests: the two conformance tests (`@since("0.39.1")`)
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none yet: both new ids are
+      `since("0.39.1")` and skip until Task 25; green on a local run at a temporary 0.39.1 level)
 
 ### Task 3: Tinted session and workspace rows (#836)
 

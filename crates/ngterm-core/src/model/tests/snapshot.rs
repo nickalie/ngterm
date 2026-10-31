@@ -378,6 +378,67 @@ fn flags_fonts_contexts_and_collapse_round_trip() {
     assert!(back.workspace(work).unwrap().is_expanded);
 }
 
+/// `lastSelectedAtSurvivesARestoreThatReselectsTheSession`: the snapshot writes the stamp, and the restore, which
+/// reselects the session, keeps it instead of restamping.
+#[test]
+fn last_selected_at_survives_a_restore_that_reselects_the_session() {
+    let mut store = AppStore::new();
+    let work = store.add_workspace("work");
+    let session = add(&mut store, work, "/a");
+    let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    store.session_mut(session).unwrap().last_selected_at = Some(stamp);
+    let snapshot = store.snapshot();
+    assert_eq!(
+        snapshot.workspaces[0].sessions[0].last_selected_at,
+        Some(1_700_000_000.0)
+    );
+    assert_eq!(snapshot.selected_session_id, Some(session));
+
+    let back = restored(&snapshot, false);
+
+    assert_eq!(back.selected_session_id(), Some(session));
+    assert_eq!(first(&back).last_selected_at, Some(stamp));
+}
+
+/// The one path by which a restore selects: the focus filter hides the saved selection, so the closing repair moves
+/// it into view. Still a restore, so neither the hidden session nor its replacement is restamped.
+#[test]
+fn a_restore_that_repairs_a_hidden_selection_keeps_both_stamps() {
+    let (hidden, shown) = (Uuid::new_v4(), Uuid::new_v4());
+    let shown_workspace = Uuid::new_v4();
+    let stamped = |id, cwd, secs| SessionSnapshot {
+        last_selected_at: Some(secs),
+        ..SessionSnapshot::new(id, cwd)
+    };
+    let workspace = |id, name: &str, session| WorkspaceSnapshot {
+        id,
+        name: name.to_owned(),
+        sessions: vec![session],
+        collapsed: None,
+    };
+    let snapshot = Snapshot {
+        workspaces: vec![
+            workspace(Uuid::new_v4(), "hidden", stamped(hidden, "/a", 1_600_000_000.0)),
+            workspace(shown_workspace, "shown", stamped(shown, "/b", 1_700_000_000.0)),
+        ],
+        selected_session_id: Some(hidden),
+        focused_workspace_ids: Some(vec![shown_workspace]),
+        focus_enabled: Some(true),
+        ..Snapshot::default()
+    };
+
+    let back = restored(&snapshot, false);
+
+    assert_eq!(
+        back.selected_session_id(),
+        Some(shown),
+        "the repair moved the selection"
+    );
+    let at = |secs| Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs));
+    assert_eq!(back.session(hidden).unwrap().last_selected_at, at(1_600_000_000));
+    assert_eq!(back.session(shown).unwrap().last_selected_at, at(1_700_000_000));
+}
+
 #[test]
 fn the_focus_set_round_trips_in_tree_order() {
     let mut store = AppStore::new();

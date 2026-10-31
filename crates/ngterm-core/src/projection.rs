@@ -128,6 +128,7 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
         .then(|| serde_json::to_value(&session.pane_backgrounds).ok())
         .flatten();
     node.status_changed_at = session.status_changed_at.map(epoch_seconds);
+    node.last_selected_at = session.last_selected_at.map(epoch_seconds);
     node.backed_by_live = Some(all_panes_backed(session));
     node.surfaces = Some(surface_nodes(session));
     node.realized = Some(session.surface.get().is_some_and(ngterm_host::Surface::is_realized));
@@ -396,13 +397,18 @@ mod tests {
 
     #[test]
     fn a_fresh_window_projects_upstreams_defaults() {
-        let library = WindowLibrary::seeded("/home/u");
-        let store = library.active_store().unwrap();
+        let mut library = WindowLibrary::seeded("/home/u");
+        let store = library.active_store_mut().unwrap();
         let workspace = store.workspaces()[0].id();
         let session = store.selected_session_id().unwrap();
+        // the seeding selection stamped it with the wall clock: pinned to compare
+        let stamped = store.session_mut(session).unwrap();
+        assert!(stamped.last_selected_at.is_some());
+        stamped.last_selected_at = Some(UNIX_EPOCH + Duration::from_secs(1_700_000_000));
         let expected = json!({
             "workspaces": [{"id": id(workspace), "name": "workspace 1", "active": true, "sessions": [{
                 "id": id(session), "name": "u", "cwd": "/home/u", "active": true, "split": false,
+                "lastSelectedAt": 1_700_000_000.0,
                 "backedByLive": false, "overlay": false, "scratch": false, "flagged": false,
                 "surfaces": [{"id": format!("surface:{}:left", id(session)), "kind": "left", "active": true,
                               "visible": true, "backedByLive": false}],
@@ -439,11 +445,13 @@ mod tests {
         assert_eq!(second_tree["workspaces"][0]["sessions"][0]["active"], false);
     }
 
-    /// A session with a shown top/bottom split, the split pane focused, both panes realized.
+    /// A session with a shown top/bottom split, the split pane focused, both panes realized, its selection stamp
+    /// pinned to 2s.
     fn split_session(store: &mut AppStore) -> Uuid {
         let workspace = store.workspaces()[0].id();
         let sid = store.add_session(workspace, NewSession::at_cwd("/repo")).unwrap();
         let session = store.session_mut(sid).unwrap();
+        session.last_selected_at = Some(UNIX_EPOCH + Duration::from_secs(2));
         session.split = SplitLayout {
             shown: true,
             exists: true,
@@ -471,7 +479,7 @@ mod tests {
             "id": id(sid), "name": "sub", "cwd": "/repo", "splitCwd": "/repo/sub", "active": true, "split": true,
             "hasSplit": true, "backedByLive": false, "splitAxis": "horizontal", "splitRatio": 0.3,
             "splitFocused": true, "overlay": false, "scratch": false, "flagged": false,
-            "fontSize": 13.0, "splitFontSize": 13.0,
+            "fontSize": 13.0, "splitFontSize": 13.0, "lastSelectedAt": 2.0,
             "surfaces": [
                 {"id": surface("left"), "kind": "left", "active": false, "visible": true, "backedByLive": false,
                  "paneID": "TOKEN-L"},
@@ -655,5 +663,28 @@ mod tests {
         }
         // `statusChangedAt` is reported whenever it exists, idle included (`control-api.md`)
         assert_eq!(node["statusChangedAt"], json!(2.0));
+    }
+
+    /// Upstream's tree projection pins of `lastSelectedAt`: each session's own stamp as epoch seconds, and no key for
+    /// a session with none.
+    #[test]
+    fn last_selected_at_projects_each_sessions_stamp() {
+        let mut store = AppStore::new();
+        let work = store.add_workspace("work");
+        let a = store.add_session(work, NewSession::at_cwd("/repo/a")).unwrap();
+        let b = store.add_session(work, NewSession::at_cwd("/repo/b")).unwrap();
+        let background = NewSession {
+            select: false,
+            ..NewSession::at_cwd("/repo/c")
+        };
+        let never = store.add_session(work, background).unwrap();
+        store.session_mut(a).unwrap().last_selected_at = system_time(1_600_000_000.0);
+        store.session_mut(b).unwrap().last_selected_at = system_time(1_700_000_100.0);
+        store.session_mut(never).unwrap().last_selected_at = None;
+        let tree = tree_json(&store, &AppSettings::default(), false);
+        let nodes = &tree["workspaces"][0]["sessions"];
+        assert_eq!(nodes[0]["lastSelectedAt"], json!(1_600_000_000.0));
+        assert_eq!(nodes[1]["lastSelectedAt"], json!(1_700_000_100.0));
+        assert!(!nodes[2].as_object().unwrap().contains_key("lastSelectedAt"));
     }
 }

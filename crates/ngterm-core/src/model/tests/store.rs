@@ -1320,3 +1320,47 @@ fn filtering_out_the_fresh_workspace_drops_it_for_good() {
         "un-filtering must not revive a target already handed back"
     );
 }
+
+/// `selectionStampsTheSessionEnteredAndTheSessionLeft`: one `now` on the session left and the one entered, nothing on
+/// a bystander, and the tree reading the stamps back (no key for the bystander).
+#[test]
+fn selection_stamps_the_session_entered_and_the_session_left() {
+    let mut store = AppStore::new();
+    let work = store.add_workspace("work");
+    let a = add(&mut store, work, "/repo/a");
+    let b = add_background(&mut store, work, "/repo/b");
+    let never = add_background(&mut store, work, "/repo/c");
+    store.session_mut(never).unwrap().last_selected_at = None;
+    store.session_mut(a).unwrap().last_selected_at = Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1));
+    let before = SystemTime::now();
+
+    store.select_session(Some(b));
+
+    let after = SystemTime::now();
+    let stamp = get(&store, a).last_selected_at.expect("the session left is stamped");
+    assert!(before <= stamp && stamp <= after);
+    assert_eq!(get(&store, b).last_selected_at, Some(stamp));
+    assert_eq!(get(&store, never).last_selected_at, None);
+    let seconds = crate::projection::epoch_seconds(stamp);
+    let nodes: Vec<Option<f64>> = [a, b, never]
+        .into_iter()
+        .map(|id| crate::projection::session_node(get(&store, id), false).last_selected_at)
+        .collect();
+    assert_eq!(nodes, [Some(seconds), Some(seconds), None]);
+    let bare = serde_json::to_string(&crate::projection::session_node(get(&store, never), false)).unwrap();
+    assert!(!bare.contains("lastSelectedAt"), "{bare}");
+}
+
+/// Reselecting the active session moves nobody, so it stamps nobody.
+#[test]
+fn reselecting_the_active_session_stamps_nothing() {
+    let mut store = AppStore::new();
+    let work = store.add_workspace("work");
+    let a = add(&mut store, work, "/repo/a");
+    let pinned = Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1));
+    store.session_mut(a).unwrap().last_selected_at = pinned;
+
+    store.select_session(Some(a));
+
+    assert_eq!(get(&store, a).last_selected_at, pinned);
+}

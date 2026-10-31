@@ -200,6 +200,7 @@ pub fn session_snapshot(session: &Session) -> SessionSnapshot {
         restore_command: session.restore.command.clone(),
         split_restore_command: session.split_restore.command.clone(),
         context: session.context.clone(),
+        last_selected_at: session.last_selected_at.map(crate::projection::epoch_seconds),
     }
 }
 
@@ -229,6 +230,7 @@ pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool) -
     session.initial_split_cwd.clone_from(&snapshot.split_cwd);
     session.flagged = snapshot.flagged.unwrap_or(false);
     session.context.clone_from(&snapshot.context);
+    session.last_selected_at = snapshot.last_selected_at.and_then(crate::projection::system_time);
     session.launch.command.clone_from(&snapshot.initial_command);
     session.launch.wait = snapshot.command_wait.unwrap_or(false);
     if has_split {

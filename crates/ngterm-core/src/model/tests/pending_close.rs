@@ -111,6 +111,26 @@ fn a_batch_soft_close_keeps_every_member() {
     assert_eq!(marked(&member_ids(&store)), marked(&sessions));
 }
 
+/// `batchCloseStampsTheActiveSessionLeftWhenUndoSelectsABatchMate`: the batch removes the active member before the
+/// selection moves, so the close itself records its departure.
+#[test]
+fn a_batch_close_stamps_the_active_session_left_when_undo_selects_a_batch_mate() {
+    let (mut store, _, sessions) = fixture(&["one", "two", "three"]);
+    let (first, second) = (sessions[0], sessions[1]);
+    store.select_session(Some(first));
+    store.session_mut(first).unwrap().last_selected_at =
+        Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1));
+
+    let before = std::time::SystemTime::now();
+    assert!(store.soft_close_sessions(&[first, second]));
+    let after = std::time::SystemTime::now();
+    assert!(store.undo_pending_close_selecting(None, Some(second)));
+
+    assert_eq!(store.selected_session_id(), Some(second));
+    let stamp = store.session(first).unwrap().last_selected_at.expect("stamped");
+    assert!(before <= stamp && stamp <= after);
+}
+
 #[test]
 fn finalizing_one_pending_session_keeps_its_batch_mates_and_other_records_undoable() {
     let (mut store, _, sessions) = fixture(&["one", "two", "three"]);

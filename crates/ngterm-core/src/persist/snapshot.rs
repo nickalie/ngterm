@@ -214,6 +214,9 @@ pub struct SessionSnapshot {
     pub split_restore_command: Option<String>,
     #[serde(default, deserialize_with = "lossy_context", skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    /// `Session::last_selected_at` as epoch seconds; `None` when no selection timestamp has been recorded.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub last_selected_at: Option<f64>,
 }
 
 impl SessionSnapshot {
@@ -430,6 +433,7 @@ mod tests {
             r#""paneIdentity": "nope""#,
             r#""splitAxis": "diagonal""#,
             r#""paneBackgrounds": 1"#,
+            r#""lastSelectedAt": "yesterday""#,
         ];
         for bad in bad_values {
             let snapshot = decode(&with_session_key(bad));
@@ -548,6 +552,26 @@ mod tests {
         assert_eq!(snapshot.workspaces[0].sessions[0].context, None);
         let snapshot = decode(&with_session_key(r#""context": "  PR #517  ""#));
         assert_eq!(snapshot.workspaces[0].sessions[0].context.as_deref(), Some("PR #517"));
+    }
+
+    /// `snapshotWithoutLastSelectedAtDecodesNil`, and the key's place: fractional epoch seconds after `context`,
+    /// omitted when unset.
+    #[test]
+    fn last_selected_at_decodes_none_when_absent_and_writes_after_context() {
+        let snapshot = decode(&with_session_key(r#""customName": "keep""#));
+        assert_eq!(snapshot.workspaces[0].sessions[0].last_selected_at, None);
+        let bare = serde_json::to_string(&SessionSnapshot::new(session(), "/a")).unwrap();
+        assert!(!bare.contains("lastSelectedAt"), "{bare}");
+
+        let snapshot = decode(&with_session_key(
+            r#""lastSelectedAt": 1700000000.25, "context": "PR #517""#,
+        ));
+        let stored = &snapshot.workspaces[0].sessions[0];
+        assert_eq!(stored.last_selected_at, Some(1_700_000_000.25));
+        let text = serde_json::to_string(stored).unwrap();
+        let context = text.find("\"context\"").unwrap();
+        let selected = text.find("\"lastSelectedAt\":1700000000.25").unwrap();
+        assert!(context < selected, "{text}");
     }
 
     #[test]

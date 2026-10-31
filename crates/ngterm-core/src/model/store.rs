@@ -532,8 +532,10 @@ impl AppStore {
 
     // MARK: - Selection
 
-    /// The one write point of the selection: a change drops the fresh-workspace preference and emits
-    /// `session.selected`; a same-value write does neither, since reselecting the active session moves nobody.
+    /// The one write point of the selection: a change drops the fresh-workspace preference, stamps
+    /// `last_selected_at` on the session left and the one entered with one `now` (never while restoring, so a reload
+    /// keeps the persisted value), and emits `session.selected`; a same-value write does none of it, since
+    /// reselecting the active session moves nobody.
     pub(crate) fn set_selected(&mut self, id: Option<Uuid>) {
         let previous = self.selected_session_id;
         if previous == id {
@@ -541,6 +543,14 @@ impl AppStore {
         }
         self.selected_session_id = id;
         self.fresh_workspace_id = None;
+        if !self.restoring_selection {
+            let now = SystemTime::now();
+            for id in [previous, id].into_iter().flatten() {
+                if let Some(session) = self.session_mut(id) {
+                    session.last_selected_at = Some(now);
+                }
+            }
+        }
         self.emit_session_selected(previous);
     }
 

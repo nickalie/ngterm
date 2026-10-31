@@ -111,6 +111,27 @@ def test_relaunch_forgets_what_is_not_persisted(launch):
     assert_absent(node, "status", "statusChangedAt", "unseen")
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("behavior:restore.relaunch-keeps-layout", "field:tree.session.lastSelectedAt")
+def test_last_selected_at_survives_a_relaunch(launch):
+    ctl = launch()
+    first = _new(ctl)
+    second = _new(ctl)
+    assert_ok(ctl.request("session.select", first))
+    assert_ok(ctl.request("session.select", second))
+    # A structural change after the selections: upstream saves a selection 0.3s later, and SIGTERM ends it unsaved.
+    assert_ok(ctl.request("workspace.new", name="saved", collapsed=True))
+    before = ctl.tree()
+    stamps = {sid: find_session(before, sid)["lastSelectedAt"] for sid in (first, second)}
+
+    ctl = launch.relaunch(ctl)
+    # The restore reselects `second` without restamping either one; approx for the epoch's float round trip.
+    after = ctl.wait_tree(lambda tree: find_session(tree, second)["realized"] is True)
+    assert find_session(after, second)["active"] is True
+    for sid, stamp in stamps.items():
+        assert find_session(after, sid)["lastSelectedAt"] == pytest.approx(stamp, abs=1e-3), sid
+
+
 @pytest.mark.covers("behavior:restore.rerun-types-pinned-command")
 @pytest.mark.requires("posix-shell", reason="the pinned line runs in /bin/sh")
 def test_rerun_types_the_pinned_line_at_the_next_launch(launch):
