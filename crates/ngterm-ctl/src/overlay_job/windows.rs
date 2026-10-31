@@ -17,7 +17,8 @@
 //!   attached to it reads the same input, so the program gets the keys without one, and a console has no hangup to
 //!   watch for either (its close is the Ctrl event above).
 //! - Exit statuses map onto the Unix ones: `STATUS_CONTROL_C_EXIT` (a Ctrl event the program did not handle) reads
-//!   as 130, 128 plus SIGINT, as a shell reports a Ctrl+C'd program, and the kill sets 137, 128 plus SIGKILL.
+//!   as 130, 128 plus SIGINT, as a shell reports a Ctrl+C'd program (`overlay_capture::status_of_exit_code`, which a
+//!   local overlay's status takes too), and the kill sets 137, 128 plus SIGKILL.
 
 use std::ffi::OsString;
 use std::io;
@@ -55,8 +56,6 @@ pub(super) struct Terminal;
 /// The program's console process group, which its pid names.
 pub(super) type Group = u32;
 
-/// The status a Ctrl event's end reads as: 128 plus SIGINT (`overlay_capture`'s, which a local overlay reads too).
-pub(super) const INTERRUPTED_STATUS: i32 = overlay_capture::INTERRUPTED_STATUS;
 /// The status the kill sets: 128 plus SIGKILL.
 pub(super) const KILLED_STATUS: i32 = 137;
 /// How long the console's close waits for the cancel to report before the system ends the helper (it allows 5 s).

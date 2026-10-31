@@ -511,7 +511,7 @@ mod tests {
         let ready = dir.join("ready");
         (
             probe(Probe::Sleep, &[(PROBE_READY, &ready)]),
-            sys::INTERRUPTED_STATUS,
+            ngterm_core::overlay_capture::INTERRUPTED_STATUS,
             Some(ready),
         )
     }
