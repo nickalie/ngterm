@@ -15,8 +15,16 @@
 //!   auto-follow and to lift a declined hand-off's silence (upstream's `onUserInput`).
 //!
 //! With the page's JavaScript off (`IsScriptEnabled`), `WebView2` still runs these scripts and nothing of the page's.
-//! The guard script, in every frame, keeps a page from what the WPE host refuses natively: file choosers and the File
-//! System Access pickers, and files pasted onto a page (dropped ones are refused natively, `native.rs`).
+//! The guard script ([`GUARD_SCRIPT`]), in every frame, keeps a page from what the WPE host refuses natively: file
+//! choosers and the File System Access pickers, and files pasted onto a page (dropped ones are refused natively,
+//! `native.rs`). `WebView2` offers no native refusal of a file chooser: no event before one opens (webview2-com
+//! 0.39.1's API has `SaveAsUIShowing`, the page's own Save As, and `PermissionRequested`'s `FILE_READ_WRITE`, which
+//! comes after a File System Access picker, not before), no setting that turns them off, and no isolated world to
+//! run the guard in (a browser extension's content script would be one, and would see no more of a page's events).
+//! So the guard is defence in depth in the page's own world, not a boundary: it takes what it calls before any page
+//! script runs, but a page can still open a chooser through a realm it did not run in (a same-origin frame
+//! `WebView2` injects no script into, such as a fresh `about:blank` one, whose own `HTMLElement.prototype.click`
+//! clicks a detached file input). The user still has to pick a file in the dialog.
 
 use std::fmt::Write as _;
 
@@ -84,29 +92,60 @@ pub fn helper_script() -> String {
     format!("if (window.top === window) {HELPER_SCRIPT}")
 }
 
-/// The guard every frame of every page runs (module docs).
+/// The guard every frame of every page runs (module docs). It takes every function it calls before the page's
+/// scripts run, each bound to `call` so that no later property read reaches the page's replacements: a page replacing
+/// `Event.prototype.preventDefault`, `composedPath`, `Array.prototype.some`, an input's `type` or
+/// `HTMLInputElement[Symbol.hasInstance]` afterwards changes nothing. An input is a file input by its own `type`
+/// getter, whose brand check refuses anything but an input element. `click()` on a file input (a detached one's click
+/// never reaches the window's listener) and its `showPicker()` are refused too: the page only ever sees the guarded
+/// methods, and replacing them gives it no way back to the originals in this realm.
 pub const GUARD_SCRIPT: &str = r"(() => {
-  const isFile = (target) => target instanceof HTMLInputElement && target.type === 'file';
-  window.addEventListener('click', (event) => {
-    const path = event.composedPath ? event.composedPath() : [event.target];
-    if (path.some(isFile)) event.preventDefault();
+  const call = Function.prototype.call;
+  const bound = (fn) => call.bind(fn);
+  const inputType = bound(Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'type').get);
+  const composedPath = bound(Event.prototype.composedPath);
+  const preventDefault = bound(Event.prototype.preventDefault);
+  const stopImmediatePropagation = bound(Event.prototype.stopImmediatePropagation);
+  const listen = bound(EventTarget.prototype.addEventListener);
+  const define = Object.defineProperty;
+  const isFile = (target) => {
+    try { return inputType(target) === 'file'; } catch (error) { return false; }
+  };
+  listen(window, 'click', (event) => {
+    const path = composedPath(event);
+    for (let index = 0; index < path.length; index += 1) {
+      if (isFile(path[index])) { preventDefault(event); return; }
+    }
   }, true);
-  const showPicker = HTMLInputElement.prototype.showPicker;
-  if (showPicker) {
-    HTMLInputElement.prototype.showPicker = function () {
-      if (isFile(this)) throw new DOMException('file choosers are not available', 'NotAllowedError');
-      return showPicker.call(this);
-    };
-  }
+  const refuse = () => new DOMException('file choosers are not available', 'NotAllowedError');
+  const method = (prototype, name, guarded) => {
+    const original = prototype[name];
+    if (!original) return;
+    const run = bound(original);
+    define(prototype, name, {value: {[name](...rest) { return guarded(this, run, rest); }}[name],
+      writable: true, enumerable: true, configurable: true});
+  };
+  method(HTMLElement.prototype, 'click', (target, run) => { if (!isFile(target)) run(target); });
+  method(HTMLInputElement.prototype, 'showPicker', (target, run) => {
+    if (isFile(target)) throw refuse();
+    return run(target);
+  });
   for (const name of ['showOpenFilePicker', 'showSaveFilePicker', 'showDirectoryPicker']) {
     try { delete window[name]; } catch (error) {}
-    try { Object.defineProperty(window, name, {value: undefined, configurable: false}); } catch (error) {}
+    try { define(window, name, {value: undefined, configurable: false}); } catch (error) {}
   }
-  window.addEventListener('paste', (event) => {
-    const data = event.clipboardData;
-    if (data && data.files && data.files.length) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
+  const clipboardData = bound(Object.getOwnPropertyDescriptor(ClipboardEvent.prototype, 'clipboardData').get);
+  const files = bound(Object.getOwnPropertyDescriptor(DataTransfer.prototype, 'files').get);
+  const count = bound(Object.getOwnPropertyDescriptor(FileList.prototype, 'length').get);
+  listen(window, 'paste', (event) => {
+    let pasted = 0;
+    try {
+      const data = clipboardData(event);
+      pasted = data ? count(files(data)) : 0;
+    } catch (error) {}
+    if (pasted) {
+      preventDefault(event);
+      stopImmediatePropagation(event);
     }
   }, true);
 })();";
