@@ -354,8 +354,8 @@ def make_adapter(bin: Path) -> Any:
             super().platform_env(env)
             env[RustAdapter.variable("LOG")] = LOG_FILTER
 
-        def ghostty_config(self) -> str:
-            return super().ghostty_config() + f"cursor-color = {hex_rgb(CURSOR)}\ncursor-style-blink = false\n"
+        def ghostty_config(self, pane_shell: str | None = None) -> str:
+            return super().ghostty_config(pane_shell) + f"cursor-color = {hex_rgb(CURSOR)}\ncursor-style-blink = false\n"
 
     return ChromeAdapter(bin)
 

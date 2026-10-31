@@ -149,3 +149,15 @@ def test_a_probe_without_a_build_reports_it(tmp_path: Path, monkeypatch: pytest.
     report = chrome_probe.probe(tmp_path / "bin" / "ngterm", 1.0, None)
     assert report == {"bin": str(tmp_path / "bin" / "ngterm"), "checks": {}, "ok": False,
                       "error": f"no ngterm at {tmp_path / 'bin' / 'ngterm'}"}
+
+
+def test_the_adapter_keeps_the_harness_config_and_adds_the_cursor(tmp_path: Path) -> None:
+    """The adapter overrides the harness's `ghostty_config` the way the launch calls it, a pane shell included."""
+    from agterm_conformance.impls.rust import RustAdapter
+
+    adapter = chrome_probe.make_adapter(tmp_path / "ngterm")
+    base = RustAdapter(tmp_path / "ngterm")
+    for shell in (None, "/bin/zsh"):
+        config = adapter.ghostty_config(shell)
+        assert config.startswith(base.ghostty_config(shell))
+        assert "cursor-style-blink = false\n" in config
