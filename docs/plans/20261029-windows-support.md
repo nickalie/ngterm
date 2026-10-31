@@ -531,3 +531,25 @@ guest has 4 CPUs and 6.5 GB of memory.
   instance needs on Windows (the smoke scripts' and the harness's launch)
 - ➕ left open: the skill's `scripts/show-image.sh` opens its overlay as `/bin/bash <script>`, a POSIX line `cmd.exe`
   cannot run on Windows
+- ➕ (side task 32) the skill's `show-image.sh` and `scripts/run-gpui-dev.sh` have Windows forms. A Windows pane's
+  program writes through the pseudoconsole, and kernel32's ConPTY drops the kitty graphics protocol's APC escapes (a VM
+  probe: an overlay running Git Bash's `printf` of a PNG transmission showed the text around it and no image; its
+  `CSI 14t`/`18t` geometry replies did come back), so no program overlay can draw an image on Windows, whatever runs
+  it. `scripts/show-image.ps1` (PowerShell 5.1 and 7) shows the image in a page overlay instead: a self-contained
+  page under `%TEMP%` holding it as a data URI, scaled to fit and centered above "press Enter to close", opened with
+  `session overlay open --html FILE --js --chromeless --size-percent N` on the pane's `NGTERM_SOCKET`; Enter closes it
+  through the page bridge (the page takes the keyboard as it opens, as a program overlay does). `show-image.sh` under
+  Git Bash hands over to it, so the skill's one line works from Claude Code's Git Bash; SKILL.md, reference.md and
+  examples.md give the PowerShell line. Recorded as `build/patches/skill-ngterm/0008-show-image-windows.patch`;
+  `sync-resources.sh --check v0.38.1 v0.38.1` reads `unchanged`. `ngterm-app`'s `tests/show_image.rs` runs the
+  script with a recording `ngtermctl`: the program overlay and its `--emit` line on Unix, the page and its contents on
+  Windows from PowerShell and from Git Bash, and the refusals (no image, a missing one, outside ngterm) everywhere.
+  `run-gpui-dev.sh` (`scripts/lib/dev-instance.sh`) runs under Git Bash: the root under `%TEMP%`, Windows paths in
+  what it sets and prints, no socket-length limit (the path names a pipe), and the app started as its child, whose
+  Windows pid it prints (`taskkill /F /PID`) before waiting for it; on Linux it now prints the pid too (`exec` keeps
+  the script's). README > Windows points at it in place of Task 9's note. Checked on Linux headless (Xvfb, a private
+  bus, lavapipe): the dev instance started, `show-image.sh` opened its overlay there, `kill <pid>` stopped it. On the
+  VM's desktop: the CI stage with a private state dir showed the image from PowerShell and from Git Bash and Enter
+  closed it; `run-gpui-dev.sh` from Git Bash built, staged and launched the debug app on a private state dir and app
+  id, `ngtermctl --socket` drove it, the image showed there too, and `taskkill /F /PID` on the printed pid stopped it
+  and ended the script
