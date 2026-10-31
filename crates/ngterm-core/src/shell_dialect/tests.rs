@@ -119,7 +119,7 @@ fn posix_keeps_upstreams_line_and_fish_escapes_its_backslashes() {
     let argv = ["/bin/tool", "it's", r"C:\dir\", "$HOME"];
     assert_eq!(
         ShellDialect::Posix.line(&argv).as_deref(),
-        Some(r#"'/bin/tool' 'it'\''s' 'C:\dir\' '$HOME'"#)
+        Some(r"'/bin/tool' 'it'\''s' 'C:\dir\' '$HOME'")
     );
     assert_eq!(
         ShellDialect::Fish.line(&argv).as_deref(),

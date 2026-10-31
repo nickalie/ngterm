@@ -99,7 +99,7 @@ fn wait_record(pane: &Pane, record: &Path) -> Vec<String> {
     let deadline = Instant::now() + PATIENCE;
     loop {
         if let Ok(bytes) = std::fs::read(record) {
-            let text = String::from_utf8(bytes).unwrap();
+            let text = String::from_utf8_lossy(&bytes);
             return text.split('\0').map(str::to_owned).collect();
         }
         assert!(
