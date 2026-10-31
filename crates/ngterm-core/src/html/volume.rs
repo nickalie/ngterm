@@ -45,7 +45,8 @@ pub fn volume(path: &Path) -> Option<String> {
 /// equal: the URL spelling is its own host's.
 #[must_use]
 pub fn server(name: &str) -> String {
-    let lower = name.to_lowercase();
+    // Each letter on its own, as IDNA maps it: `str::to_lowercase` spells a word-final capital sigma `ς`, UTS #46 `σ`.
+    let lower: String = name.chars().flat_map(char::to_lowercase).collect();
     let Ok(host) = url::Host::parse(name) else {
         return lower;
     };
@@ -98,6 +99,8 @@ mod tests {
         assert_eq!(server("NAS"), "nas");
         assert_eq!(server("ÑAS"), "xn--as-yja");
         assert_eq!(server("xn--as-yja"), "xn--as-yja");
+        assert_eq!(server("ΒΌΛΟΣ"), "xn--nxasmq6b");
+        assert_eq!(server("βόλοσ"), "xn--nxasmq6b");
         assert_eq!(server("LocalHost"), "127.0.0.1");
         assert_eq!(server("127.0.0.1"), "127.0.0.1");
         assert_eq!(server("Host.Example"), "host.example");
