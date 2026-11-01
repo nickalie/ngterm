@@ -12,8 +12,8 @@
 //! theme set or previewed, a config reload, a settings change, a desktop light/dark flip) reaches it; it replaces the
 //! global only when a color changed.
 //!
-//! gpui-kit's widgets (the menus, the buttons' hover, the tooltips, the fields, the switches, the sliders, the color
-//! pickers) paint from the library's own theme, which [`kit`] keeps on the chrome's light or dark side and colors:
+//! Every button the app draws is a [`button::Button`], a plain element in these colors. gpui-kit's widgets (the menus,
+//! the tooltips, the fields, the switches, the sliders, the color pickers) paint from the library's own theme, which [`kit`] keeps on the chrome's light or dark side and colors:
 //! [`sync`] brings it along on every run, whether the chrome changed or not.
 //!
 //! The windows draw their own decorations where the compositor lets them (client-side decorations, Wayland and X11):
@@ -29,6 +29,7 @@ use ngterm_core::persist::AppSettings;
 
 use crate::terminal::{Pick, TerminalConfig};
 
+pub mod button;
 pub mod kit;
 
 /// The opacity of the chrome text the title bar's group dividers draw with (upstream's `chromeText.opacity(0.25)`).

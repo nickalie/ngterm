@@ -1,6 +1,6 @@
 //! gpui-kit's theme in the chrome's colors, so the library's widgets read as the window around them: the popup,
-//! dropdown and context menus, the ghost buttons' hover and pressed fills (the sidebar footer, the app menu button,
-//! Settings' pickers), the tooltips, the text fields, the switches, the sliders, the color pickers and the scrollbars.
+//! dropdown and context menus, the tooltips, the text fields, the switches, the sliders, the color pickers and the
+//! scrollbars. The buttons are the app's own (`super::button`).
 //!
 //! The library paints from a theme of its own (`gpui_kit::component::Theme`), which `gpui_kit::init` leaves on its
 //! light palette and nothing in it follows by itself. [`sync`] puts it on the chrome's side: dark when the chrome
@@ -89,7 +89,7 @@ pub const SLOTS: [(&str, Slot, Ink); 38] = [
     slot!(caret, Ink::Text),
     slot!(secondary, Ink::Wash(MUTED)),
     slot!(secondary_hover, Ink::Wash(HOVER)),
-    // a ghost button toggled on (the sidebar's flagged view)
+    // a ghost button toggled on
     slot!(secondary_active, Ink::Wash(ACTIVE)),
     slot!(secondary_foreground, Ink::Text),
     slot!(button, Ink::Wash(MUTED)),

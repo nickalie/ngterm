@@ -44,8 +44,6 @@ pub const SELECTED_ICON_ALPHA: f64 = 0.85;
 pub const FOOTER_BUTTON: (f32, f32) = (24.0, 22.0);
 pub const FOOTER_GAP: f32 = 2.0;
 pub const FOOTER_PADDING: (f32, f32) = (6.0, 4.0);
-/// A footer toggle with nothing to toggle is muted by hand (upstream's 0.35).
-pub const DISABLED_ALPHA: f32 = 0.35;
 /// The divider's grab handle: wider than the 1-point line it centers on (upstream's `sidebarDivider`).
 pub const DIVIDER_HANDLE: f32 = 12.0;
 

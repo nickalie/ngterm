@@ -16,10 +16,9 @@
 
 use std::rc::Rc;
 
-use gpui_kit::component::Disableable as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use crate::chrome::button::Button as ChromeButton;
 use gpui_kit::component::input::{Escape, Input};
-use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, AppContext as _, ClickEvent, Context, CursorStyle, DismissEvent, DragMoveEvent, ElementId,
@@ -31,9 +30,9 @@ use uuid::Uuid;
 
 use super::drag::{DragPayload, DropView, Highlight};
 use super::look::{
-    BADGE_FONT_SIZE, BADGE_GAP, BADGE_HEIGHT, BADGE_RED, BADGE_TEXT_ROOM, CONTENT_INSET, DISABLED_ALPHA, DISCLOSURE,
-    DIVIDER_HANDLE, FOOTER_BUTTON, FOOTER_GAP, FOOTER_PADDING, GAP, Look, NESTED_INDENT, PILL_INSET_X, PILL_INSET_Y,
-    PILL_RADIUS, color,
+    BADGE_FONT_SIZE, BADGE_GAP, BADGE_HEIGHT, BADGE_RED, BADGE_TEXT_ROOM, CONTENT_INSET, DISCLOSURE, DIVIDER_HANDLE,
+    FOOTER_BUTTON, FOOTER_GAP, FOOTER_PADDING, GAP, Look, NESTED_INDENT, PILL_INSET_X, PILL_INSET_Y, PILL_RADIUS,
+    color,
 };
 use super::menu;
 use super::rows::badge_text;
@@ -217,8 +216,7 @@ impl Sidebar {
     /// A row's content, leading to trailing.
     fn row_content(&self, row: &SidebarRow, selected: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let look = self.look;
-        // the disclosure and the hover "+" keep the theme's ink; a tint colors only the glyph and the name
-        let icon_color = look.icon(selected);
+        // the disclosure and the hover "+" keep the theme's ink (`Look::icon`); a tint colors only the glyph and the name
         let (name_ink, glyph_ink) = look.row_inks(row.tint, selected);
         let workspace = row.is_workspace();
         let shows_add = workspace && self.hovered == Some(row.id) && self.context.row_add_session;
@@ -230,12 +228,12 @@ impl Sidebar {
         let content = div().flex().flex_row().items_center().size_full().min_w(px(0.));
         let content = match (row.kind, row.group()) {
             (RowKind::Workspace { expanded }, _) => content
-                .child(Self::disclosure(row.id, expanded, icon_color, cx))
+                .child(Self::disclosure(row.id, expanded, &look, selected, cx))
                 .child(div().flex_none().w(px(NESTED_INDENT - DISCLOSURE))),
             // a parent's disclosure takes the last of its indent, right before its glyph
             (_, RowGroup::Parent { expanded }) => content
                 .child(div().flex_none().w(px(lead - DISCLOSURE)))
-                .child(Self::disclosure(row.id, expanded, icon_color, cx)),
+                .child(Self::disclosure(row.id, expanded, &look, selected, cx)),
             _ => content.pl(px(lead)),
         };
         content
@@ -244,7 +242,7 @@ impl Sidebar {
             .child(self.name(row, name_ink, available, window, cx))
             .child(div().flex_none().w(px(GAP)))
             .when(shows_add, |content| {
-                content.child(Self::add_button(row.id, icon_color, cx))
+                content.child(Self::add_button(row.id, &look, selected, cx))
             })
             .when(!row.folded_attention.is_empty(), |content| {
                 content.child(companion_marker(row))
@@ -320,14 +318,15 @@ impl Sidebar {
 
     /// A workspace row's disclosure, or a parent row's: opens or folds the row (a parent's companions) at once,
     /// whatever the whole-row setting.
-    fn disclosure(id: Uuid, expanded: bool, color: Hsla, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("disclosure")
+    fn disclosure(id: Uuid, expanded: bool, look: &Look, selected: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        ChromeButton::with_element_id("disclosure")
             .debug_selector(move || format!("disclosure:{id}"))
             .flex_none()
             .size(px(DISCLOSURE))
-            .child(row_icon::icon(Glyph::Disclosure { expanded }, color))
-            .tooltip(move |window, cx| Tooltip::new(if expanded { "Collapse" } else { "Expand" }).build(window, cx))
+            .rounded(px(4.))
+            .wash(look.text(selected))
+            .hint(if expanded { "Collapse" } else { "Expand" }, &look.colors)
+            .child(row_icon::icon(Glyph::Disclosure { expanded }, look.icon(selected)))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 this.cancel_toggle();
@@ -336,17 +335,18 @@ impl Sidebar {
     }
 
     /// A workspace row's hover "+": a session in that workspace.
-    fn add_button(id: Uuid, color: Hsla, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("workspace-add-session")
-            .accessibility_id("workspace-add-session")
-            .role(gpui_kit::Role::Button)
-            .aria_label("New Session")
+    fn add_button(id: Uuid, look: &Look, selected: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        ChromeButton::new("workspace-add-session")
             .debug_selector(move || format!("workspace-add-session:{id}"))
             .flex_none()
             .size(px(SLOT))
-            .child(row_icon::icon(interface_glyph::WORKSPACE_ADD_SESSION, color))
-            .tooltip(|window, cx| Tooltip::new("New Session").build(window, cx))
+            .rounded(px(4.))
+            .wash(look.text(selected))
+            .hint("New Session", &look.colors)
+            .child(row_icon::icon(
+                interface_glyph::WORKSPACE_ADD_SESSION,
+                look.icon(selected),
+            ))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 this.add_session_clicked(id);
@@ -385,7 +385,6 @@ impl Sidebar {
     /// the flagged view toggles on the right, each hidden by its Interface setting.
     fn footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.context.footer;
-        let ink = self.look.text(false);
         let sidebar = cx.entity().downgrade();
         let run = move |action: FooterAction, _: &mut Context<Self>| {
             let sidebar = sidebar.clone();
@@ -417,63 +416,57 @@ impl Sidebar {
             .py(px(FOOTER_PADDING.1))
             .when(state.new_workspace, |footer| {
                 footer.child(
-                    footer_button("new-workspace", interface_glyph::NEW_WORKSPACE, ink, "New Workspace")
-                        .accessibility_label("New Workspace")
-                        .on_click(run(FooterAction::NewWorkspace, cx)),
+                    footer_button(
+                        "new-workspace",
+                        interface_glyph::NEW_WORKSPACE,
+                        "New Workspace",
+                        &self.look,
+                    )
+                    .on_click(run(FooterAction::NewWorkspace, cx)),
                 )
             })
             .when(state.new_session, |footer| {
-                footer.child(Self::add_session_menu(ink, cx))
+                footer.child(Self::add_session_menu(&self.look, cx))
             })
             .child(div().flex_1())
             .when(state.focus_filter, |footer| {
+                let glyph = if state.filter_on {
+                    Glyph::Grid { filled: true }
+                } else {
+                    interface_glyph::FOCUS_FILTER
+                };
                 footer.child(
-                    footer_button(
-                        "focus-filter-toggle",
-                        if state.filter_on {
-                            Glyph::Grid { filled: true }
-                        } else {
-                            interface_glyph::FOCUS_FILTER
-                        },
-                        ink,
-                        focus_tip,
-                    )
-                    .accessibility_label("Toggle Workspace Filter")
-                    // the filter's on/off, upstream's accessibility value
-                    .toggled(state.filter_on)
-                    // nothing marked, nothing to filter to: the store refuses an empty set too
-                    .disabled(!state.has_members)
-                    .when(!state.has_members, |button| button.opacity(DISABLED_ALPHA))
-                    .on_click(run(FooterAction::ToggleFocusFilter, cx)),
+                    footer_button("focus-filter-toggle", glyph, focus_tip, &self.look)
+                        .aria_label("Toggle Workspace Filter")
+                        // the filter's on/off, upstream's accessibility value
+                        .toggled(state.filter_on)
+                        // nothing marked, nothing to filter to: the store refuses an empty set too
+                        .disabled(!state.has_members)
+                        .on_click(run(FooterAction::ToggleFocusFilter, cx)),
                 )
             })
             .when(state.flagged_view, |footer| {
+                let glyph = if state.flagged_mode {
+                    Glyph::Flag { filled: true }
+                } else {
+                    interface_glyph::FLAGGED_VIEW
+                };
                 footer.child(
-                    footer_button(
-                        "flagged-view-toggle",
-                        if state.flagged_mode {
-                            Glyph::Flag { filled: true }
-                        } else {
-                            interface_glyph::FLAGGED_VIEW
-                        },
-                        ink,
-                        flagged_tip,
-                    )
-                    .accessibility_label("Toggle Flagged View")
-                    .toggled(state.flagged_mode)
-                    .disabled(!flagged_usable)
-                    .when(!flagged_usable, |button| button.opacity(DISABLED_ALPHA))
-                    .on_click(run(FooterAction::ToggleFlaggedView, cx)),
+                    footer_button("flagged-view-toggle", glyph, flagged_tip, &self.look)
+                        .aria_label("Toggle Flagged View")
+                        .toggled(state.flagged_mode)
+                        .disabled(!flagged_usable)
+                        .on_click(run(FooterAction::ToggleFlaggedView, cx)),
                 )
             })
     }
 
     /// The footer's add-session menu: New Session and Open Directory…, opening upward.
-    fn add_session_menu(ink: Hsla, cx: &mut Context<Self>) -> impl IntoElement {
+    fn add_session_menu(look: &Look, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = cx.entity().downgrade();
-        footer_button("add-session", interface_glyph::NEW_SESSION, ink, "New Session")
-            .accessibility_label("Add session")
-            .dropdown_menu_with_anchor(gpui_kit::Anchor::BottomLeft, move |popup: PopupMenu, _, _| {
+        footer_button("add-session", interface_glyph::NEW_SESSION, "New Session", look)
+            .aria_label("Add session")
+            .menu(gpui_kit::Anchor::BottomLeft, move |popup: PopupMenu, _, _| {
                 popup
                     .item(footer_item(&sidebar, "New Session", FooterAction::NewSession))
                     .item(footer_item(&sidebar, "Open Directory…", FooterAction::OpenDirectory))
@@ -559,18 +552,15 @@ fn footer_item(sidebar: &WeakEntity<Sidebar>, label: &'static str, action: Foote
     })
 }
 
-/// A footer control: a borderless 24x22 button with a glyph, which never takes the keyboard.
-fn footer_button(id: &'static str, glyph: Glyph, ink: Hsla, tooltip: &'static str) -> Button {
-    Button::new(id)
-        .accessibility_id(id)
-        .debug_selector(move || id.to_owned())
-        .ghost()
-        .tab_stop(false)
-        .p_0()
+/// A footer control: a borderless 24x22 button with a glyph and the hover text `hint`.
+fn footer_button(id: &'static str, glyph: Glyph, hint: &'static str, look: &Look) -> ChromeButton {
+    ChromeButton::new(id)
         .w(px(FOOTER_BUTTON.0))
         .h(px(FOOTER_BUTTON.1))
-        .tooltip(tooltip)
-        .child(row_icon::icon(glyph, ink))
+        .rounded(px(5.))
+        .wash(look.text(false))
+        .hint(hint, &look.colors)
+        .child(row_icon::icon(glyph, look.text(false)))
 }
 
 /// The selection pill behind a selected row.

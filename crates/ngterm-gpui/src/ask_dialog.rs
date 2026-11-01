@@ -51,6 +51,7 @@ use ngterm_core::model::{
 use ngterm_proto::{AskButton, ControlAskOutcome, ControlAskResult};
 use uuid::Uuid;
 
+use crate::chrome::button::Button;
 use crate::modal::{self, ButtonLook, NavKey};
 use crate::split::{AskScope, Slot};
 use crate::state::{AppState, Poster, post};
@@ -843,15 +844,10 @@ impl AskDialog {
         let cell = self.look.cell(self.ask.style);
         let selector = format!("ask-button-{}", button.id);
         let reveal = highlighted.then(|| Self::reveal_canvas(self.scroll.clone(), Rc::clone(&self.reveal)));
-        div()
-            .id(SharedString::from(selector.clone()))
-            .accessibility_id(SharedString::from(selector.clone()))
-            .role(gpui_kit::Role::Button)
-            .debug_selector(move || selector)
+        // a press on a button is the button's: it does not focus the dialog or select its pane
+        Button::new(selector)
             .relative()
             .when_some(width, |button, width| button.w(modal::logical(width)))
-            .flex()
-            .justify_center()
             .text_center()
             .bg(fill)
             .text_color(ink)
@@ -863,8 +859,6 @@ impl AskDialog {
             .cursor_pointer()
             .child(text)
             .children(reveal)
-            // a press on a button is the button's: it does not focus the dialog or select its pane
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |dialog, _, window, cx| {
                 dialog.finish(Answer::Button(index), window, cx);
                 cx.notify();

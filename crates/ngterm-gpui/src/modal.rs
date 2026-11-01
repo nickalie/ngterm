@@ -732,18 +732,14 @@ impl Alert {
             Some(id) => (id.clone().into(), id.to_string()),
             None => (("alert-button", index).into(), format!("alert-button-{index}")),
         };
-        div()
-            .id(id)
+        crate::chrome::button::Button::with_element_id(id)
             .debug_selector(move || selector)
             .when_some(
                 button.id.clone(),
                 gpui_kit::StatefulInteractiveElement::accessibility_id,
             )
-            .role(gpui_kit::Role::Button)
             .aria_label(button.label.clone())
             .when(!stacked, gpui_kit::Styled::flex_1)
-            .flex()
-            .justify_center()
             .px_3()
             .py(px(7.))
             .rounded(px(8.))
@@ -758,7 +754,6 @@ impl Alert {
             })
             .cursor_pointer()
             .child(button.label.clone())
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |alert, _, window, cx| alert.answer(index, window, cx)))
     }
 }

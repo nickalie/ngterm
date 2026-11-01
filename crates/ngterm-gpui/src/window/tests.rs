@@ -157,7 +157,7 @@ fn the_terminal_area_starts_past_a_shown_sidebar() {
 
 #[gpui_kit::test]
 fn the_shell_titles_its_window_and_keeps_its_modal_layers_in_order(cx: &mut TestAppContext) {
-    // the sidebar's footer draws gpui-kit buttons, which read its theme
+    // the sidebar's and the title bar's dropdown menus are gpui-kit's, which read its theme
     cx.update(gpui_kit::init);
     let mut library = WindowLibrary::seeded("/home/u");
     let window = library.active_window_id().unwrap();
@@ -1383,10 +1383,10 @@ impl Shell<'_> {
     }
 }
 
-/// The library's widgets (the ghost buttons' hover, the dropdown and context menus) paint in the chrome's colors on
-/// its dark and light sides and after a flip either way, never the library's own light palette over a dark chrome.
+/// The buttons' hovers and the library's dropdown and context menus paint in the chrome's colors on its dark and light
+/// sides and after a flip either way, never the library's own light palette over a dark chrome.
 #[gpui_kit::test]
-fn the_librarys_hovers_and_menus_paint_in_the_chromes_dark_and_light(cx: &mut TestAppContext) {
+fn the_hovers_and_menus_paint_in_the_chromes_dark_and_light(cx: &mut TestAppContext) {
     let mut s = shell(cx);
     let dark = themed((0x10, 0x20, 0x30), (0xe0, 0xe0, 0xe0));
     let light = themed((0xfa, 0xfa, 0xf5), (0x20, 0x20, 0x28));
@@ -1800,3 +1800,40 @@ fn a_control_gone_with_its_page_leaves_the_keyboard_on_the_settings_popup(cx: &m
 }
 
 mod overlay_visibility;
+
+/// The buttons are one kind everywhere (`chrome::button`): the sidebar footer's and the app menu's show their hover
+/// text as the bar's own do, and take the same hover wash, see-through over the sidebar or the bar under them.
+#[gpui_kit::test]
+fn every_button_hints_and_hovers_as_the_bars_own(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    s.settle();
+    let colors = s.cx.cx.update(|cx| crate::chrome::current(cx));
+    let wash = crate::chrome::color(colors.foreground, f64::from(crate::chrome::button::HOVER));
+    let away = gpui_kit::point(px(700.), px(400.));
+    for (selector, under) in [
+        ("sidebar-toggle-button", colors.background),
+        ("app-menu-button", colors.background),
+        ("new-workspace", colors.sidebar),
+        ("add-session", colors.sidebar),
+    ] {
+        let shown = s.hovered(selector, under);
+        assert_eq!(
+            shown,
+            crate::chrome::color(under, 1.0).blend(wash),
+            "{selector}'s hover"
+        );
+        let button = s.cx.debug_bounds(selector).expect("the button is drawn");
+        let fills = s.new_fills(|s| {
+            s.cx.simulate_mouse_move(button.center(), None, gpui_kit::Modifiers::default());
+            s.cx.run_until_parked();
+            s.cx.executor().advance_clock(std::time::Duration::from_secs(2));
+        });
+        assert!(
+            fills.iter().any(|(bounds, _)| !button.contains(&bounds.center())),
+            "{selector} shows its hover text: {fills:?}"
+        );
+        s.cx.simulate_mouse_move(away, None, gpui_kit::Modifiers::default());
+        s.cx.executor().advance_clock(std::time::Duration::from_secs(2));
+        s.cx.run_until_parked();
+    }
+}

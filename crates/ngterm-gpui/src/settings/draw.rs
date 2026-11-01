@@ -6,9 +6,8 @@ use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::Disableable as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::color_picker::ColorPicker;
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::slider::Slider;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -22,6 +21,7 @@ use ngterm_core::model::StatusShape;
 
 use super::form::{Action, Control, GlyphSlot, Item, Picker, Section, SliderKey};
 use super::{Edits, SettingsView, TITLE, Tab};
+use crate::chrome::button::Button;
 use crate::interface_glyph;
 use crate::modal::{self, ButtonLook};
 
@@ -53,8 +53,6 @@ const HEADER_HEIGHT: f32 = 36.;
 const CLOSE_BUTTON: f32 = 24.;
 /// The opacity of secondary text: hints, a path not set, "No issues.", the labels of controls that take no input.
 const DIM: f64 = 0.55;
-/// A disabled control's opacity.
-const DISABLED: f32 = 0.45;
 
 /// What drawing needs: the colors, and where edits go.
 #[derive(Clone)]
@@ -108,23 +106,12 @@ pub fn panel(view: &SettingsView, cx: &mut Context<SettingsView>) -> impl IntoEl
 
 /// The title row: the title centered, the close button trailing.
 fn header(look: &Look, cx: &mut Context<SettingsView>) -> Div {
-    let close = div()
-        .id("settings-close")
-        .accessibility_id("settings-close")
-        .role(Role::Button)
-        .aria_label("Close")
-        .debug_selector(|| "settings-close".to_owned())
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
+    let close = Button::new("settings-close")
         .size(px(CLOSE_BUTTON))
         .rounded(px(6.))
         .cursor_pointer()
-        .hover({
-            let hover = look.ink(0.12);
-            move |style| style.bg(hover)
-        })
+        .wash(look.ink(1.0))
+        .hint("Close", &look.colors)
         .child(glyph(IconName::X, look.ink(0.75), px(14.)))
         .on_click(cx.listener(|view, _, _, cx| view.dismiss(cx)));
     div()
@@ -426,27 +413,18 @@ fn picker_button(id: &str, title: &str, picker: Picker, look: &Look) -> AnyEleme
             .into_any_element(),
     };
     let edits = look.edits.clone();
-    let selector = id.to_owned();
     Button::new(SharedString::from(id.to_owned()))
-        .accessibility_id(SharedString::from(id.to_owned()))
-        .accessibility_label(SharedString::from(title.to_owned()))
-        .debug_selector(move || selector.clone())
-        .ghost()
+        .aria_label(SharedString::from(title.to_owned()))
         .h(px(24.))
         .px(px(8.))
         .rounded(px(6.))
         .border_1()
         .border_color(look.ink(0.15))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.))
-                .child(face)
-                .child(glyph(IconName::ChevronDown, look.ink(0.6), px(12.))),
-        )
-        .dropdown_menu_with_anchor(gpui_kit::Anchor::TopRight, move |menu, _, _| {
+        .wash(ink)
+        .gap(px(6.))
+        .child(face)
+        .child(glyph(IconName::ChevronDown, look.ink(0.6), px(12.)))
+        .menu(gpui_kit::Anchor::TopRight, move |menu, _, _| {
             options_menu(menu, &picker, &edits)
         })
         .into_any_element()
@@ -565,28 +543,16 @@ fn step_button(
 ) -> impl IntoElement {
     let (fill, ink) = modal::button_colors(ButtonLook::Plain, look.colors);
     let hover = look.ink(0.16);
-    let selector = id.clone();
     let (edits, set) = (look.edits.clone(), Rc::clone(set));
-    let id = SharedString::from(id);
-    div()
-        .id(id.clone())
-        .accessibility_id(id)
-        .role(Role::Button)
+    Button::new(id)
         .aria_label(label)
-        .debug_selector(move || selector.clone())
-        .flex()
-        .items_center()
-        .justify_center()
         .size(px(24.))
         .rounded(px(6.))
         .bg(fill)
+        .hover_fill(hover)
         .child(glyph(name, ink, px(14.)))
-        .when(!enabled, |button| button.opacity(DISABLED))
-        .when(enabled, |button| {
-            button
-                .hover(move |style| style.bg(hover))
-                .on_click(move |_, _, _| edits.send(set(to)))
-        })
+        .disabled(!enabled)
+        .on_click(move |_, _, _| edits.send(set(to)))
 }
 
 /// A slider in the accent with its readout, grouped under `title`.
@@ -713,24 +679,20 @@ fn diagnostics(
 }
 
 /// A push button in the app's native look, running its action.
-fn push_button(action: Action, look: &Look) -> Stateful<Div> {
+fn push_button(action: Action, look: &Look) -> Button {
     let Action { id, label, run } = action;
     let (fill, ink) = modal::button_colors(ButtonLook::Plain, look.colors);
     let hover = look.ink(0.16);
     let edits = look.edits.clone();
-    div()
-        .id(id)
-        .accessibility_id(id)
-        .role(Role::Button)
+    Button::new(id)
         .aria_label(label)
-        .debug_selector(move || id.to_owned())
         .flex_shrink_0()
         .px(px(10.))
         .py(px(3.))
         .rounded(px(6.))
         .bg(fill)
         .text_color(ink)
-        .hover(move |style| style.bg(hover))
+        .hover_fill(hover)
         .child(label)
         .on_click(move |_, window, cx| edits.run(&run, window, cx))
 }

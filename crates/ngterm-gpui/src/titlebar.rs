@@ -31,13 +31,12 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button as KitButton, ButtonVariants as _};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu};
+use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{
-    AnyElement, AppContext as _, AssetSource, Context, Decorations, Div, ElementId, EntityId, EventEmitter, FontWeight,
-    Hsla, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _,
-    Pixels, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowButton,
-    WindowButtonLayout, WindowControls, div, prelude::FluentBuilder as _, px, svg,
+    AnyElement, AssetSource, Context, Decorations, Div, EntityId, EventEmitter, FontWeight, Hsla,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowButton, WindowButtonLayout,
+    WindowControls, div, prelude::FluentBuilder as _, px, svg,
 };
 use ngterm_core::Core;
 use ngterm_core::app_actions::ActionEffect;
@@ -49,6 +48,7 @@ use ngterm_core::titlebar::{AttentionBell, SplitGlyph, Titlebar as Model, Titleb
 use uuid::Uuid;
 
 use crate::app_menu::AppMenu;
+use crate::chrome::button::Button as ChromeButton;
 use crate::chrome::{self, DIM_ALPHA, DIVIDER_ALPHA};
 use crate::interface_glyph;
 use crate::state::{AppState, Poster, post};
@@ -60,8 +60,6 @@ pub const COMPACT_HEIGHT: Pixels = px(30.);
 /// The blocked bell's color when the settings set none (upstream's `blockedStatusColor` default, macOS
 /// `systemOrange`).
 pub const BLOCKED_DEFAULT: Rgb = Rgb::new(0xFF, 0x95, 0x00);
-/// A disabled button's opacity (upstream's 0.35).
-const DISABLED_OPACITY: f32 = 0.35;
 /// A button's square and the glyph inside it.
 const BUTTON: Pixels = px(24.);
 const GLYPH_NORMAL: Pixels = px(18.);
@@ -461,27 +459,6 @@ struct Button {
     hint: String,
 }
 
-/// A hover text, in the chrome's colors (the search bar's buttons' too).
-pub(crate) struct Hint {
-    pub(crate) text: SharedString,
-    pub(crate) colors: ChromeColors,
-}
-
-impl Render for Hint {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .rounded(px(5.))
-            .border_1()
-            .border_color(chrome::color(self.colors.foreground, DIVIDER_ALPHA))
-            .bg(chrome::color(self.colors.background, 1.0))
-            .text_color(chrome::color(self.colors.foreground, 1.0))
-            .text_size(px(12.))
-            .child(self.text.clone())
-    }
-}
-
 /// `host` cut in the middle past `limit` characters, so an ssh target keeps both its ends (the GTK build's
 /// `max_width_chars(30)` with middle ellipsizing).
 #[must_use]
@@ -630,44 +607,28 @@ impl Titlebar {
         cx.stop_propagation();
     }
 
-    /// A flat button: its glyph, its hover text, enabled or dimmed and inert.
+    /// A flat button: its glyph, its hover text (its accessibility name too), enabled or dimmed and inert.
     fn button(
         spec: Button,
         colors: ChromeColors,
         click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
-    ) -> gpui_kit::Stateful<Div> {
+    ) -> ChromeButton {
         let Button {
             id,
             glyph,
             enabled,
             hint,
         } = spec;
-        let text: SharedString = hint.into();
-        div()
-            .id(id)
-            .debug_selector(move || id.to_owned())
-            // upstream's accessibility identifier, and the hover text as the button's name, for AccessKit
-            .accessibility_id(id)
-            .role(gpui_kit::Role::Button)
-            .aria_label(text.clone())
-            .flex()
+        // the id is upstream's accessibility identifier
+        ChromeButton::new(id)
             .flex_shrink_0()
-            .items_center()
-            .justify_center()
             .size(BUTTON)
             .rounded(px(5.))
-            .when(!enabled, |button| button.opacity(DISABLED_OPACITY))
-            .when(enabled, |button| {
-                button
-                    .hover(move |style| style.bg(chrome::color(colors.foreground, 0.12)))
-                    .on_click(cx.listener(move |bar, _, window, cx| click(bar, window, cx)))
-            })
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .tooltip(move |_, cx| {
-                let (text, colors) = (text.clone(), colors);
-                cx.new(|_| Hint { text, colors }).into()
-            })
+            .wash(chrome::color(colors.foreground, 1.0))
+            .hint(hint, &colors)
+            .disabled(!enabled)
+            .on_click(cx.listener(move |bar, _, window, cx| click(bar, window, cx)))
             .child(glyph)
     }
 
@@ -1024,15 +985,14 @@ impl Titlebar {
         };
         let (track, poster) = (Rc::clone(&self.menu), self.poster.clone());
         let (built, released) = (Rc::clone(&track), poster.clone());
-        KitButton::new("app-menu-button")
-            .debug_selector(|| "app-menu-button".to_owned())
-            .ghost()
-            .tab_stop(false)
-            .p_0()
+        ChromeButton::new("app-menu-button")
+            .flex_shrink_0()
             .size(BUTTON)
-            .tooltip("Main Menu")
+            .rounded(px(5.))
+            .wash(ink)
+            .hint("Main Menu", &colors)
             .child(icon(IconName::Menu, ink, glyph))
-            .dropdown_menu_with_anchor(
+            .menu(
                 gpui_kit::Anchor::TopRight,
                 move |popup: PopupMenu, window: &mut Window, cx: &mut Context<PopupMenu>| {
                     let id = cx.entity_id();
@@ -1049,7 +1009,7 @@ impl Titlebar {
                 },
             )
             // a sync either way: the deck holds the keyboard while it is open and gives it back once it closes
-            .on_open_change(move |opened, _, _| track.set_open(*opened, &poster))
+            .on_menu_open_change(move |opened, _, _| track.set_open(*opened, &poster))
     }
 
     /// The window controls of one side.
@@ -1066,19 +1026,12 @@ impl Titlebar {
                 WindowButton::Close => IconName::WindowClose,
             };
             let poster = poster.clone();
-            div()
-                .id(ElementId::Name(format!("window-{}", button.id()).into()))
-                .flex()
+            ChromeButton::new(format!("window-{}", button.id()))
                 .flex_shrink_0()
-                .items_center()
-                .justify_center()
                 .w(CONTROL)
                 .h_full()
-                .hover(move |style| style.bg(chrome::color(colors.foreground, 0.12)))
-                .on_mouse_down(MouseButton::Left, |_, window, cx| {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                })
+                .wash(ink)
+                .keeps_keyboard()
                 .on_click(move |_, window, _| match button {
                     WindowButton::Minimize => window.minimize_window(),
                     WindowButton::Maximize => window.zoom_window(),

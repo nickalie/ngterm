@@ -27,6 +27,7 @@ use ngterm_core::ghostty_config::binds::Mods;
 use ngterm_core::model::{AppStore, SearchState, StatusPane};
 use uuid::Uuid;
 
+use crate::chrome::button::Button;
 use crate::state::{AppState, Poster, post};
 use crate::terminal::input::KeyStroke;
 
@@ -207,26 +208,15 @@ impl SearchBar {
     ) -> AnyElement {
         let colors = crate::chrome::current(cx);
         let ink = crate::chrome::color(colors.foreground, 0.8);
-        div()
-            .id(id)
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .justify_center()
+        Button::new(id)
             .size(px(20.))
             .rounded(px(4.))
             .cursor_pointer()
-            .hover(move |style| style.bg(crate::chrome::color(colors.foreground, 0.12)))
+            .wash(crate::chrome::color(colors.foreground, 1.0))
+            .hint(hint, &colors)
             // a button never takes the keyboard from the field
-            .on_mouse_down(MouseButton::Left, |_, window, cx| {
-                window.prevent_default();
-                cx.stop_propagation();
-            })
+            .keeps_keyboard()
             .on_click(cx.listener(move |bar, _, _, _| bar.send(input.clone())))
-            .tooltip(move |_, cx| {
-                let text = SharedString::from(hint);
-                cx.new(|_| crate::titlebar::Hint { text, colors }).into()
-            })
             .child(crate::picker::glyph(icon, ink, px(14.)))
             .into_any_element()
     }

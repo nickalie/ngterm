@@ -2,7 +2,7 @@
 //! layout, the traced glyphs (the GTK build's glyph tests), the glyph assets, and the bar over a core in GPUI's test
 //! window following the toolbar mode, the toggles and the covers.
 
-use gpui_kit::{Entity, TestAppContext, Tiling, VisualTestContext, px, size};
+use gpui_kit::{AppContext as _, Entity, TestAppContext, Tiling, VisualTestContext, px, size};
 use ngterm_core::model::WindowLibrary;
 use ngterm_core::{CoreConfig, CoreState};
 use ngterm_proto::AppIdentity;

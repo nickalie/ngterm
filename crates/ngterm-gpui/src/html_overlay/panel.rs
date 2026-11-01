@@ -5,8 +5,8 @@
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, Context, Global, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
-    Role, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, div, px, svg,
+    AnyElement, App, Context, Global, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Role,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, div, px, svg,
 };
 use ngterm_core::app_actions::ActionEffect;
 use ngterm_core::chrome::FALLBACK_BACKGROUND;
@@ -15,6 +15,7 @@ use ngterm_core::model::is_valid_color_hex;
 use uuid::Uuid;
 
 use super::policy::{self, StripItem};
+use crate::chrome::button::Button;
 use crate::state::{AppState, Poster, post};
 
 /// The theme foreground when the terminal's is unknown (upstream's `HtmlOverlayRegistry` falls back to white).
@@ -291,34 +292,21 @@ fn button(id: Uuid, item: StripItem, enabled: bool, colors: &PanelColors, poster
         StripItem::Hide => ("icons/minus.svg", "Hide"),
         StripItem::Close | StripItem::Identity => ("icons/x.svg", "Close"),
     };
-    let ink = colors.ink(if enabled { 1.0 } else { 0.3 });
+    let ink = colors.ink(1.0);
     let poster = poster.clone();
-    let element_id = accessibility_id(item);
-    div()
-        .id(element_id)
-        .debug_selector(move || element_id.to_owned())
-        .accessibility_id(element_id)
-        .role(Role::Button)
-        .aria_label(tooltip)
+    // a press here is the button's, no click into the page
+    Button::new(accessibility_id(item))
         .flex_shrink_0()
         .w(px(22.))
         .h(px(20.))
-        .flex()
-        .items_center()
-        .justify_center()
         .rounded(px(4.))
-        .when(enabled, |button| {
-            button.hover(|style| style.bg(gpui_kit::hsla(0., 0., 0.5, 0.15)))
-        })
+        .wash(ink)
+        .hint_in(tooltip, ink, colors.strip())
+        .disabled(!enabled)
         .child(svg().path(icon).size(px(14.)).text_color(ink))
-        .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tooltip).build(window, cx))
-        // the page keeps the keyboard: a press here is no click into the page
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .when(enabled, |button| {
-            button.on_click(move |_, _, cx| {
-                cx.stop_propagation();
-                act(id, item, &poster, cx);
-            })
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            act(id, item, &poster, cx);
         })
         .into_any_element()
 }
