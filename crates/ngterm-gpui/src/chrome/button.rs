@@ -66,6 +66,17 @@ struct Menu {
     on_open_change: Option<OpenChange>,
 }
 
+/// What a button does with the keyboard's focus.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Keyboard {
+    /// A menu button takes it (a press, assistive technology), out of the Tab order; other buttons leave it alone.
+    Takes,
+    /// A press leaves it where it is (a field or a page behind keeps it).
+    Keeps,
+    /// A menu button Tab reaches too.
+    TabStop,
+}
+
 /// A button (module docs). Its content is its children; it centers them in a flex row.
 #[derive(IntoElement)]
 pub struct Button {
@@ -76,7 +87,7 @@ pub struct Button {
     disabled: bool,
     toggled: Option<bool>,
     open: bool,
-    keeps_keyboard: bool,
+    keyboard: Keyboard,
     on_click: Option<Click>,
     menu: Option<Menu>,
 }
@@ -110,7 +121,7 @@ impl Button {
             disabled: false,
             toggled: None,
             open: false,
-            keeps_keyboard: false,
+            keyboard: Keyboard::Takes,
             on_click: None,
             menu: None,
         }
@@ -169,7 +180,7 @@ impl Button {
     /// A press leaves the keyboard where it is (a field or a page behind keeps it).
     #[must_use]
     pub fn keeps_keyboard(mut self) -> Self {
-        self.keeps_keyboard = true;
+        self.keyboard = Keyboard::Keeps;
         self
     }
 
@@ -195,6 +206,15 @@ impl Button {
         self
     }
 
+    /// A menu button Tab reaches (Settings' pickers). Every menu button takes the keyboard focus, so assistive
+    /// technology can move to it, and Enter or Space opens its menu while it holds it; one outside the Tab order is
+    /// reached by a press only, which leaves the keyboard where it was otherwise (a terminal keeps Tab).
+    #[must_use]
+    pub fn in_tab_order(mut self) -> Self {
+        self.keyboard = Keyboard::TabStop;
+        self
+    }
+
     /// What hears the menu ([`Self::menu`]) open (`true`) and close.
     #[must_use]
     pub fn on_menu_open_change(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
@@ -215,11 +235,12 @@ impl Button {
             disabled,
             toggled,
             open,
-            keeps_keyboard,
+            keyboard,
             on_click,
             menu: _,
         } = self;
         let shows_pressed = open || toggled == Some(true);
+        let keeps_keyboard = keyboard == Keyboard::Keeps;
         let on_click = on_click.map(Rc::new);
         base.when_some(toggled, |button, on| {
             button.aria_toggled(if on { Toggled::True } else { Toggled::False })
@@ -255,13 +276,26 @@ impl Button {
     }
 }
 
-/// A menu's trigger: the button, its press left to the popover around it.
+/// A menu's trigger: the button, its press left to the popover around it, holding a focus of its own (the library's
+/// popover opens its menu on Enter or Space while its trigger is focused).
 #[derive(IntoElement)]
 struct Trigger(Button);
 
 impl RenderOnce for Trigger {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.0.element(false)
+    fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let (hover, in_tab_order) = (self.0.hover, self.0.keyboard == Keyboard::TabStop);
+        let focus = self.0.interactivity().element_id.clone().map(|id| {
+            window
+                .use_keyed_state(id, cx, |_, cx| cx.focus_handle())
+                .read(cx)
+                .clone()
+                .tab_stop(in_tab_order)
+        });
+        self.0
+            .element(false)
+            .when_some(focus, |button, focus| button.track_focus(&focus))
+            // the keyboard's focus shows as the pointer's hover does
+            .when_some(hover, |button, fill| button.focus_visible(move |style| style.bg(fill)))
     }
 }
 
@@ -326,3 +360,6 @@ impl ParentElement for Button {
         self.base.extend(elements);
     }
 }
+
+#[cfg(test)]
+mod tests;

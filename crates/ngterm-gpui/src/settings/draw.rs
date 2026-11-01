@@ -424,6 +424,7 @@ fn picker_button(id: &str, title: &str, picker: Picker, look: &Look) -> AnyEleme
         .gap(px(6.))
         .child(face)
         .child(glyph(IconName::ChevronDown, look.ink(0.6), px(12.)))
+        .in_tab_order()
         .menu(gpui_kit::Anchor::TopRight, move |menu, _, _| {
             options_menu(menu, &picker, &edits)
         })
