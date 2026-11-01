@@ -145,6 +145,10 @@ def test_an_interrupted_live_restart_command_leaves_the_login_shell_prompt(launc
         return True
 
     ctl.wait_tree(sleeping)
+    if WINDOWS:
+        # A Windows process gets the console's Ctrl+C only once its startup has joined it to the console, after the
+        # process table already lists it: a Ctrl+C typed in between is lost. ping's first line proves it joined.
+        ctl.wait_text(sid, r"127\.0\.0\.1")
     before = _daemon_row(ctl, sid)
     # Ctrl+C ends the command, not the pane: a restart's line goes on into the login shell (#773), where a pane's own
     # creation command now ends the pane (#840)

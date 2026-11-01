@@ -12,6 +12,7 @@ from agterm_conformance.match import (
     assert_ok,
     assert_subset,
     find_session,
+    program_argv,
     session_ids,
 )
 from agterm_conformance.command_line import CommandLines
@@ -395,11 +396,12 @@ def _work(ctl):
 
 
 def _runs(ctl, sid, program, field="foreground"):
-    """The tree once `sid`'s `field` pane runs `program` (by its name, whatever path started it): its argv."""
+    """The tree once `sid`'s `field` pane runs `program` (by its name, whatever path started it, on Windows without
+    `.exe`): its argv."""
 
     def running(tree):
         argv = find_session(tree, sid).get(field) or []
-        return argv if argv and os.path.basename(argv[0]) == program else None
+        return argv if argv and os.path.basename(program_argv(argv)[0]) == program else None
 
     return running(ctl.wait_tree(running))
 
