@@ -156,8 +156,10 @@ pub enum AgentStatusChange {
     AutoFollowAwayFromRunning(bool),
     /// Whether attention navigation also stops on `active` sessions (`attentionIncludesActive`, default off).
     AttentionIncludesActive(bool),
-    /// Reset to defaults: colors, shapes, the blocked sound and the status reset; not auto-follow or
-    /// `attentionIncludesActive`.
+    /// Whether GUI attention navigation walks every open window (`attentionNavigationAcrossWindows`, default off).
+    AttentionNavigationAcrossWindows(bool),
+    /// Reset to defaults: colors, shapes, the blocked sound and the status reset; not auto-follow or the attention
+    /// navigation toggles.
     Reset,
 }
 
@@ -393,6 +395,9 @@ impl AgentStatusChange {
             }
             Self::AutoFollowAwayFromRunning(away) => settings.auto_follow_stay_on_active = default_off(!away),
             Self::AttentionIncludesActive(on) => settings.attention_includes_active = default_off(on),
+            Self::AttentionNavigationAcrossWindows(on) => {
+                settings.attention_navigation_across_windows = default_off(on);
+            }
             Self::Reset => {
                 for status in [AgentStatus::Active, AgentStatus::Blocked, AgentStatus::Completed] {
                     if let Some(slot) = status_color_slot(settings, status) {

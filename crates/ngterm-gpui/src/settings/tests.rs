@@ -170,6 +170,7 @@ fn every_upstream_control_id_names_a_row() {
         "settings-status-blocked-sound",
         "settings-status-clear",
         "settings-attention-includes-active",
+        "settings-attention-across-windows",
         "settings-auto-follow",
         "settings-auto-follow-stay-active",
         "settings-status-reset",

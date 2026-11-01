@@ -5,6 +5,7 @@ mod actions;
 mod ask;
 mod ask_form;
 mod attach_remote;
+mod attention_nav;
 mod auto_follow;
 mod background;
 mod config_browser;

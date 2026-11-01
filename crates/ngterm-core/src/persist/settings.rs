@@ -299,6 +299,10 @@ pub struct AppSettings {
     /// Whether attention navigation also stops on `active` sessions, not only blocked and completed ones; nil = off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attention_includes_active: Option<bool>,
+    /// Whether GUI attention navigation walks every open window, in window order, instead of the active one only;
+    /// nil = off. `session.go` stays window-scoped either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention_navigation_across_windows: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sidebar_font_size: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -795,6 +799,27 @@ mod tests {
         let text = fs::read_to_string(store.path()).unwrap();
         assert!(text.contains(r#""attentionIncludesActive" : true"#), "{text}");
         assert_eq!(store.load().attention_includes_active, Some(true));
+        assert_eq!(
+            original.ghostty_config_lines(),
+            AppSettings::default().ghostty_config_lines()
+        );
+    }
+
+    /// Upstream's `attentionNavigationAcrossWindowsDefaultsNilAndRoundTrips`.
+    #[test]
+    fn attention_navigation_across_windows_defaults_nil_and_round_trips() {
+        assert_eq!(AppSettings::default().attention_navigation_across_windows, None);
+        let json = serde_json::to_string(&AppSettings::default()).unwrap();
+        assert!(!json.contains("attentionNavigationAcrossWindows"), "{json}");
+        let original = AppSettings {
+            attention_navigation_across_windows: Some(true),
+            ..AppSettings::default()
+        };
+        let (_dir, store) = store();
+        store.save(&original).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(text.contains(r#""attentionNavigationAcrossWindows" : true"#), "{text}");
+        assert_eq!(store.load().attention_navigation_across_windows, Some(true));
         assert_eq!(
             original.ghostty_config_lines(),
             AppSettings::default().ghostty_config_lines()

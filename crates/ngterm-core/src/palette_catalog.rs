@@ -50,6 +50,9 @@ bitflags! {
         const PICKER_ACTIVE = 1 << 19;
         /// The active session holds a program or page that can be hidden or shown.
         const ACTIVE_SESSION_HAS_OVERLAY = 1 << 20;
+        /// The `attentionNavigationAcrossWindows` setting: attention steps walk every open window, so a window with
+        /// no active session can still step out.
+        const ATTENTION_ACROSS_WINDOWS = 1 << 21;
     }
 }
 
@@ -210,10 +213,11 @@ impl PaletteCommand {
             | Self::Find
             | Self::PreviousSession
             | Self::NextSession
-            | Self::PreviousAttentionSession
-            | Self::NextAttentionSession
             | Self::FirstSession
             | Self::LastSession => context.has(PaletteFacts::HAS_ACTIVE_SESSION),
+            Self::PreviousAttentionSession | Self::NextAttentionSession => context
+                .facts
+                .intersects(PaletteFacts::HAS_ACTIVE_SESSION.union(PaletteFacts::ATTENTION_ACROSS_WINDOWS)),
             Self::SwapPanes => context.has(PaletteFacts::HAS_ACTIVE_SESSION | PaletteFacts::ACTIVE_SESSION_HAS_SPLIT),
             Self::ToggleOverlay => {
                 context.has(PaletteFacts::HAS_ACTIVE_SESSION | PaletteFacts::ACTIVE_SESSION_HAS_OVERLAY)
@@ -747,6 +751,25 @@ mod tests {
                 !NEED_SESSION.contains(&command),
                 "{command:?}"
             );
+        }
+    }
+
+    /// Upstream's `attentionStepsAcrossWindowsNeedNoActiveSession`: the setting stands in for an active session, but
+    /// every cover still disables the steps.
+    #[test]
+    fn attention_steps_across_windows_need_no_active_session() {
+        for command in [
+            PaletteCommand::PreviousAttentionSession,
+            PaletteCommand::NextAttentionSession,
+        ] {
+            assert!(!command.is_enabled(&ctx(F::empty())), "{command:?}");
+            assert!(command.is_enabled(&ctx(F::ATTENTION_ACROSS_WINDOWS)), "{command:?}");
+            for cover in [F::TERMINAL_ZOOM_ACTIVE, F::DASHBOARD_OPEN, F::PICKER_ACTIVE] {
+                assert!(
+                    !command.is_enabled(&ctx(F::ATTENTION_ACROSS_WINDOWS | cover)),
+                    "{command:?} under {cover:?}"
+                );
+            }
         }
     }
 

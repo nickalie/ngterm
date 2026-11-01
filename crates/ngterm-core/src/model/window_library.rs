@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::ask::EndedAsk;
 use super::naming::{default_window_name, is_auto_window_name, sanitized, trimmed_or_none};
-use super::navigation::{WorkspaceNavigation, wrapped};
+use super::navigation::{WorkspaceNavigation, stops_attention_navigation, wrapped};
 use super::outbox::{ModelEvent, RecentClosedChange, SaveRequest, WatermarkRemoval, next_emission};
 use super::pending_close::PendingCloseTimer;
 use super::recent_closed::{RecentClosedList, RecentClosedReopen};
@@ -189,6 +189,53 @@ impl WindowLibrary {
         let current = self.active_window_id()?;
         let index = ids.iter().position(|id| *id == current)?;
         Some(ids[wrapped(index, direction.step(), ids.len())])
+    }
+
+    /// The next or previous attention target across every open window, as `(window, session)`, for GUI navigation
+    /// under the `attentionNavigationAcrossWindows` setting (upstream's `WindowLibrary.attentionStep`). Walks windows
+    /// in window order and each window's [`AppStore::navigable_sessions`] in sidebar order, so every window keeps its
+    /// own filter; a session stops the step by [`stops_attention_navigation`] with `includes_active` (the
+    /// `attentionIncludesActive` setting, app-wide here where upstream pushes it into every store). Scans from
+    /// `source`'s selection, wrapping and excluding it; with no selection in the walk it enters at the first (forward)
+    /// or last (backward) candidate. `eligible` skips a window under a cover (zoom, dashboard, a pending pick) without
+    /// stopping the scan; `source` always counts, since the caller gates it. `None` when nothing else stops.
+    #[must_use]
+    pub fn attention_step(
+        &self,
+        source: Uuid,
+        forward: bool,
+        includes_active: bool,
+        eligible: impl Fn(Uuid) -> bool,
+    ) -> Option<(Uuid, Uuid)> {
+        let candidates: Vec<(Uuid, &Session)> = self
+            .windows
+            .iter()
+            .filter(|info| info.id == source || eligible(info.id))
+            .filter_map(|info| self.store(info.id).map(|store| (info.id, store)))
+            .flat_map(|(window, store)| {
+                store
+                    .navigable_sessions()
+                    .into_iter()
+                    .map(move |session| (window, session))
+            })
+            .collect();
+        let count = candidates.len();
+        let selected = self.store(source).and_then(AppStore::selected_session_id);
+        let current = candidates
+            .iter()
+            .position(|(window, session)| *window == source && Some(session.id()) == selected);
+        let start = match (current, forward) {
+            (Some(index), _) => index,
+            (None, true) => count.checked_sub(1)?,
+            (None, false) => 0,
+        };
+        let step: isize = if forward { 1 } else { -1 };
+        (1..=count)
+            .map(|offset| wrapped(start, step * offset.cast_signed(), count))
+            .take_while(|index| Some(*index) != current)
+            .map(|index| candidates[index])
+            .find(|(_, session)| stops_attention_navigation(session, includes_active))
+            .map(|(window, session)| (window, session.id()))
     }
 
     /// The open window owning `session`; closed windows are not searched.

@@ -428,6 +428,22 @@ fn tree_projects_attention_includes_active() {
     let json = serde_json::to_value(&tree).unwrap();
     assert_eq!(json["attentionIncludesActive"], serde_json::Value::Bool(true));
 }
+/// Upstream's `controlTreeProjectsAttentionNavigationAcrossWindows`: always present, `false` until the setting is on.
+#[test]
+fn tree_projects_attention_navigation_across_windows() {
+    let fixture = Fixture::new(0);
+    let tree = fixture.core.tree(None).unwrap();
+    assert_eq!(tree.attention_navigation_across_windows, Some(false));
+    let settings = AppSettings {
+        attention_navigation_across_windows: Some(true),
+        ..AppSettings::default()
+    };
+    let fixture = Fixture::with_settings(0, settings);
+    let tree = fixture.core.tree(None).unwrap();
+    assert_eq!(tree.attention_navigation_across_windows, Some(true));
+    let json = serde_json::to_value(&tree).unwrap();
+    assert_eq!(json["attentionNavigationAcrossWindows"], serde_json::Value::Bool(true));
+}
 
 // MARK: - arming: activity, settings, attention changes
 

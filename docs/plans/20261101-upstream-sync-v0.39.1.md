@@ -314,23 +314,24 @@ the chord fires; macOS `makeKeyAndOrderFront` with the GPUI macOS form (open wor
 `test_session.py::test_go_next_attention_stays_in_its_window_with_cross_window_on`; `test_settings.py::test_agent_status_tab`
 gains `ui:settings-attention-across-windows`. The chord's cross-window raise has no protocol driver: unit tests.
 
-- [ ] settings.json `attentionNavigationAcrossWindows` (nil = off, omitted when nil; Reset leaves it)
-- [ ] `WindowLibrary::attention_step(source, forward, eligible)`: windows in library order × each window's navigable
+- [x] settings.json `attentionNavigationAcrossWindows` (nil = off, omitted when nil; Reset leaves it)
+- [x] `WindowLibrary::attention_step(source, forward, eligible)`: windows in library order × each window's navigable
       sessions in sidebar order; a window refusing UI actions (zoom, dashboard, picker) skipped; scan from the source's
       selection, wrap, exclude it; no selection enters at the first/last candidate; Task 5's stop rule
-- [ ] the GUI step under the setting: same-window target selects at once and reveals its captured pane; another
+- [x] the GUI step under the setting: same-window target selects at once and reveals its captured pane; another
       window's target raises it and selects there after the palette has dismissed; no target reveals the current
       session's tagged pane. With the setting off: the in-window step plus the reveal and window-activity note (also
       closes today's gap where the chord ran a bare `session.go`)
-- [ ] `session go --to next-attention|prev-attention` stays within its window either way
-- [ ] Previous/Next Attention enabled with an active session or with the setting on; still off under zoom, dashboard,
+- [x] `session go --to next-attention|prev-attention` stays within its window either way
+- [x] Previous/Next Attention enabled with an active session or with the setting on; still off under zoom, dashboard,
       picker
-- [ ] tree top-level `attentionNavigationAcrossWindows` after `attentionIncludesActive`
-- [ ] Settings toggle "Attention navigation crosses windows" (`settings-attention-across-windows`) second in
+- [x] tree top-level `attentionNavigationAcrossWindows` after `attentionIncludesActive`
+- [x] Settings toggle "Attention navigation crosses windows" (`settings-attention-across-windows`) second in
       Navigation; the hint "Only applies while auto-follow is on." goes
-- [ ] write tests: the Swift cases above on the fakes (`take_window_requests` holds `Raise(target)`, frontmost moves)
-- [ ] write tests: the conformance tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the Swift cases above on the fakes (`take_window_requests` holds `Raise(target)`, frontmost moves)
+- [x] write tests: the conformance tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the three new
+      tests are since(0.39.1); green at a temporary 0.39.1 level, they join the ratchet at Task 25)
 
 ### Task 7: The flagged view's saved order and `session flag move` (#833)
 

@@ -65,6 +65,7 @@ pub fn control_tree(store: &AppStore, context: &TreeContext<'_>) -> ControlTree 
             .timeout_secs()
             .map(|secs| i64::from(secs) * 1000),
         attention_includes_active: Some(settings.attention_includes_active.unwrap_or(false)),
+        attention_navigation_across_windows: Some(settings.attention_navigation_across_windows.unwrap_or(false)),
         sidebar_visible: Some(sidebar.visible),
         sidebar_mode: Some(sidebar.mode.wire_name().to_owned()),
         sidebar_flagged_layout: Some(settings.effective_flagged_view_layout().raw().to_owned()),
@@ -417,7 +418,7 @@ mod tests {
                               "visible": true, "backedByLive": false}],
                 "realized": false,
             }]}],
-            "attentionIncludesActive": false,
+            "attentionIncludesActive": false, "attentionNavigationAcrossWindows": false,
             "sidebarVisible": true, "sidebarMode": "tree", "sidebarFlaggedLayout": "flat", "linkOpenMode": "browser",
             "sidebarWidth": 220.0, "workspaceFilter": false, "quickVisible": false,
             "app": {"version": "0.1.0", "commit": "abc1234"},

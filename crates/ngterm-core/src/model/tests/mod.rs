@@ -5,6 +5,7 @@ mod ask_draft;
 mod duplicate;
 mod hud;
 mod library;
+mod library_attention;
 mod navigation;
 mod organization;
 mod overlay_events;

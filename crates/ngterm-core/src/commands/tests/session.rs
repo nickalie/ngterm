@@ -555,6 +555,36 @@ fn go_attention_steps_stop_on_active_only_under_the_setting() {
     }
 }
 
+/// Upstream's `theStoreStepStaysInItsWindowWithTheFlagOn`: `attentionNavigationAcrossWindows` is GUI navigation only,
+/// so `session.go` stays in its window with nothing else to stop on there.
+#[test]
+fn go_attention_steps_stay_in_their_window_with_cross_window_on() {
+    let settings = AppSettings {
+        attention_navigation_across_windows: Some(true),
+        ..AppSettings::default()
+    };
+    let mut fixture = Fixture::with_settings(1, settings);
+    let origin = fixture.sessions[1];
+    let other = fixture.core.library_mut().new_window(None);
+    let store = fixture.core.library_mut().store_mut(other).unwrap();
+    let remote = store.sessions().next().unwrap().id();
+    let mut indicator = store.session(remote).unwrap().agent_indicator.clone();
+    indicator.status = AgentStatus::Blocked;
+    store.set_agent_indicator(indicator, remote);
+    let window = wire(fixture.window);
+    for to in ["next-attention", "prev-attention"] {
+        let response = fixture.session(
+            SessionCmd::Go,
+            None,
+            args(|a| {
+                a.to = Some(to.into());
+                a.window = Some(window.clone());
+            }),
+        );
+        assert_eq!(answered_id(&response), Some(origin), "{to}");
+    }
+}
+
 #[test]
 fn go_requires_a_direction_and_a_session() {
     let mut fixture = Fixture::new(0);

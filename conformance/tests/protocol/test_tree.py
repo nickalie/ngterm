@@ -212,6 +212,19 @@ def test_attention_includes_active_reads_back_from_settings(ctl, launch):
     assert seeded.tree()["tree"]["attentionIncludesActive"] is True
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("window.new", "field:tree.attentionNavigationAcrossWindows")
+def test_attention_across_windows_reaches_every_window(ctl, launch):
+    # A Settings toggle with no command: always reported, off unless settings.json turns it on, and the same in a
+    # window opened after launch.
+    assert ctl.tree()["tree"]["attentionNavigationAcrossWindows"] is False
+    seeded = launch(settings={"attentionNavigationAcrossWindows": True})
+    assert seeded.tree()["tree"]["attentionNavigationAcrossWindows"] is True
+    second = assert_ok(seeded.request("window.new", name="second"))["id"]
+    tree = assert_ok(seeded.request("tree", window=second))["tree"]
+    assert tree["attentionNavigationAcrossWindows"] is True
+
+
 @pytest.mark.covers("window.rename", "field:tree.indexUnsaved")
 def test_index_unsaved_while_windows_json_cannot_be_written(app, ctl):
     (window,) = assert_ok(ctl.request("window.list"))["windows"]

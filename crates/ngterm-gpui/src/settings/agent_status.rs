@@ -110,7 +110,7 @@ fn status_reset(settings: &AppSettings) -> Item {
     )
 }
 
-/// The attention-navigation toggle, then auto-follow.
+/// The attention-navigation toggles, then auto-follow.
 fn navigation(settings: &AppSettings) -> Vec<Item> {
     let follow = settings.effective_auto_follow_attention();
     vec![
@@ -119,6 +119,12 @@ fn navigation(settings: &AppSettings) -> Vec<Item> {
             "Attention navigation includes active sessions",
             settings.attention_includes_active.unwrap_or(false),
             |on| change(AgentStatusChange::AttentionIncludesActive(on)),
+        ),
+        toggle(
+            "settings-attention-across-windows",
+            "Attention navigation crosses windows",
+            settings.attention_navigation_across_windows.unwrap_or(false),
+            |on| change(AgentStatusChange::AttentionNavigationAcrossWindows(on)),
         ),
         picker(
             "settings-auto-follow",
@@ -141,6 +147,5 @@ fn navigation(settings: &AppSettings) -> Vec<Item> {
             |away| change(AgentStatusChange::AutoFollowAwayFromRunning(away)),
         )
         .enabled(follow != AutoFollowAttention::Off),
-        Item::hint("settings-auto-follow-hint", "Only applies while auto-follow is on."),
     ]
 }

@@ -337,6 +337,22 @@ def test_go_next_attention_stops_on_active_when_included(launch):
     assert _attention_steps(seeded, steps) == [active, blocked, active, blocked]
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.go", "window.new", "field:tree.attentionNavigationAcrossWindows")
+def test_go_next_attention_stays_in_its_window_with_cross_window_on(launch):
+    # The setting steers the GUI's attention steps only: `session.go` never leaves its window, even when the only
+    # session needing attention is in another one.
+    seeded = launch(settings={"attentionNavigationAcrossWindows": True})
+    first = _window(seeded)
+    (origin,) = session_ids(seeded.tree())
+    second = assert_ok(seeded.request("window.new", name="second"))["id"]
+    (remote,) = session_ids(assert_ok(seeded.request("tree", window=second)))
+    assert_ok(seeded.request("session.status", remote, status="blocked"))
+    for to in ["next-attention", "prev-attention"]:
+        assert assert_ok(seeded.request("session.go", to=to, window=first))["id"] == origin, to
+    assert active_session_id(assert_ok(seeded.request("tree", window=first))) == origin
+
+
 @pytest.mark.covers("session.go")
 @pytest.mark.parametrize("to", [None, "sideways"])
 def test_go_requires_a_direction(ctl, to):

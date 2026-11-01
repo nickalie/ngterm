@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::Core;
 use crate::keymap::BuiltinAction;
-use crate::model::{AppStore, Session, SidebarMode};
+use crate::model::{AgentIndicator, AppStore, Session, SessionNavigation, SidebarMode};
 use crate::palette::PaletteMode;
 use crate::palette_catalog::{PaletteCommand, PaletteContext, PaletteFacts};
 use crate::pane_env::uuid_string;
@@ -104,6 +104,10 @@ impl Core {
             return PaletteContext::new(facts);
         };
         facts |= store_facts(store, self.settings().effective_flagged_view_layout());
+        facts.set(
+            PaletteFacts::ATTENTION_ACROSS_WINDOWS,
+            self.settings().attention_navigation_across_windows.unwrap_or(false),
+        );
         let mut context = PaletteContext::new(facts);
         if let Some(axis) = store
             .active_session()
@@ -300,6 +304,10 @@ impl Core {
             | BuiltinAction::IncreaseFontSize
             | BuiltinAction::DecreaseFontSize
             | BuiltinAction::ResetFontSize => self.perform_app_action(window, action),
+            BuiltinAction::PreviousAttentionSession | BuiltinAction::NextAttentionSession => {
+                self.step_attention(window, action == BuiltinAction::NextAttentionSession);
+                ActionEffect::Done
+            }
             _ => self.perform_session_action(window, action),
         }
     }
@@ -434,6 +442,68 @@ impl Core {
             return ActionEffect::Done;
         };
         self.perform_on_session(window, session, action)
+    }
+
+    /// Previous/Next Attention Session from window `window` (upstream's `stepAttention(forward:)`): activity noted,
+    /// then a step through the sessions [`crate::model::stops_attention_navigation`] stops on, landing on the pane
+    /// that set the status. With the `attentionNavigationAcrossWindows` setting off the step stays in the window (the
+    /// same step as `session.go next-attention|prev-attention`); on, it walks every open window
+    /// ([`WindowLibrary::attention_step`], covered windows skipped): a target in this window is selected at once, one
+    /// in another window is raised and selected there through [`Core::select_attention`]. A palette row has already
+    /// closed the palette by then ([`Core::run_palette_entry`]), so the raise never competes with its dismissal. With
+    /// no target the current session's tagged pane is still revealed: the step excludes the current session, which
+    /// may be the one asking. Commit afterwards.
+    ///
+    /// [`WindowLibrary::attention_step`]: crate::model::WindowLibrary::attention_step
+    fn step_attention(&mut self, window: Uuid, forward: bool) {
+        self.note_window_activity(window);
+        let settings = self.settings();
+        let includes_active = settings.attention_includes_active.unwrap_or(false);
+        if !settings.attention_navigation_across_windows.unwrap_or(false) {
+            self.step_attention_in_window(window, forward, includes_active);
+            return;
+        }
+        let target = self
+            .library()
+            .attention_step(window, forward, includes_active, |id| self.ui_actions_enabled(id));
+        match target {
+            Some((owner, session)) if owner != window => {
+                self.select_attention(owner, session);
+            }
+            Some((_, session)) => {
+                let indicator = self
+                    .library_mut()
+                    .store_mut(window)
+                    .and_then(|store| store.select_session(Some(session)));
+                self.reveal_blocked_pane_in(window, session, indicator.as_ref());
+            }
+            None => self.reveal_active_tagged_pane(window, None),
+        }
+    }
+
+    /// The in-window attention step (the setting off): the same step as `session.go`, then the reveal.
+    fn step_attention_in_window(&mut self, window: Uuid, forward: bool, includes_active: bool) {
+        let direction = if forward {
+            SessionNavigation::NextAttention
+        } else {
+            SessionNavigation::PreviousAttention
+        };
+        let captured = self
+            .library_mut()
+            .store_mut(window)
+            .and_then(|store| store.navigate_session_with(direction, includes_active));
+        self.reveal_active_tagged_pane(window, captured);
+    }
+
+    /// Reveals the pane that tagged window `window`'s active session: from `captured`, the indicator a selection
+    /// returned before its auto-reset, else the session's current one (upstream's `?? activeSession?.agentIndicator`).
+    fn reveal_active_tagged_pane(&mut self, window: Uuid, captured: Option<AgentIndicator>) {
+        let Some(active) = self.library().store(window).and_then(AppStore::active_session) else {
+            return;
+        };
+        let session = active.id();
+        let indicator = captured.unwrap_or_else(|| active.agent_indicator.clone());
+        self.reveal_blocked_pane_in(window, session, Some(&indicator));
     }
 
     fn perform_on_session(&mut self, window: Uuid, session: Uuid, action: BuiltinAction) -> ActionEffect {
@@ -781,8 +851,6 @@ fn window_args(window: Uuid, args: Args) -> Args {
 fn session_step(action: BuiltinAction) -> &'static str {
     match action {
         BuiltinAction::PreviousSession => "prev",
-        BuiltinAction::PreviousAttentionSession => "prev-attention",
-        BuiltinAction::NextAttentionSession => "next-attention",
         BuiltinAction::FirstSession => "first",
         BuiltinAction::LastSession => "last",
         _ => "next",
