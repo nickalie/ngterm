@@ -709,15 +709,29 @@ pub fn key_down(
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
-    let pages: Vec<Rc<Page>> = with(|registry| registry.pages.values().cloned().collect());
-    let focused = pages.into_iter().find(|page| {
-        page.element()
-            .is_some_and(|element| element.read(cx).focus().is_focused(window))
-    });
-    let Some(page) = focused else { return false };
+    let Some(page) = focused_page(window, cx) else {
+        return false;
+    };
     if !page.holds_native_keyboard() {
         page.placement_changed();
         sync_later(page.id());
     }
     true
+}
+
+/// Whether a page's element holds `window`'s keyboard (upstream's `htmlPageOwnsKeys` with no session), never a page
+/// that merely covers the session while the terminal, the sidebar or the chrome has it. A key pressed in the web view
+/// itself never reaches the window's interceptor: `keys::app_key` decides those.
+#[must_use]
+pub fn page_holds_keyboard(window: &Window, cx: &App) -> bool {
+    focused_page(window, cx).is_some()
+}
+
+/// The page whose element holds `window`'s keyboard.
+fn focused_page(window: &Window, cx: &App) -> Option<Rc<Page>> {
+    let pages: Vec<Rc<Page>> = with(|registry| registry.pages.values().cloned().collect());
+    pages.into_iter().find(|page| {
+        page.element()
+            .is_some_and(|element| element.read(cx).focus().is_focused(window))
+    })
 }

@@ -439,10 +439,11 @@ pub enum StripItem {
 }
 
 /// The strip of `overlay` (upstream's `HtmlOverlayView.strip`): `None` for a chromeless page; navigation adds the
-/// history and reload buttons before the identity and the hand-offs after it; the hide and close buttons always end
-/// it.
+/// history and reload buttons before the identity and the hand-offs after it; the close button always ends it, after
+/// the hide button while `hide_shown` (upstream's `hideShown`): Settings ▸ Interface ▸ Hide overlays puts the title
+/// bar's overlays button on, without which nothing on screen would bring a hidden page back.
 #[must_use]
-pub fn strip_items(overlay: &HtmlOverlay) -> Option<Vec<StripItem>> {
+pub fn strip_items(overlay: &HtmlOverlay, hide_shown: bool) -> Option<Vec<StripItem>> {
     if overlay.flags.chromeless {
         return None;
     }
@@ -462,7 +463,10 @@ pub fn strip_items(overlay: &HtmlOverlay) -> Option<Vec<StripItem>> {
     {
         items.extend([StripItem::Browser, sharing]);
     }
-    items.extend([StripItem::Hide, StripItem::Close]);
+    if hide_shown {
+        items.push(StripItem::Hide);
+    }
+    items.push(StripItem::Close);
     Some(items)
 }
 
@@ -961,7 +965,7 @@ mod tests {
     fn the_strip_follows_the_flags_and_the_source() {
         use StripItem::{Back, Browser, Close, CopyLink, Files, Forward, Hide, Identity, Reload};
         assert_eq!(
-            strip_items(&file_page(None, HtmlPageFlags::default())),
+            strip_items(&file_page(None, HtmlPageFlags::default()), true),
             Some(vec![Identity, Hide, Close])
         );
         let navigation = HtmlPageFlags {
@@ -969,11 +973,11 @@ mod tests {
             ..HtmlPageFlags::default()
         };
         assert_eq!(
-            strip_items(&file_page(None, navigation)),
+            strip_items(&file_page(None, navigation), true),
             Some(vec![Back, Forward, Reload, Identity, Browser, Files, Hide, Close])
         );
         assert_eq!(
-            strip_items(&url_page(navigation)),
+            strip_items(&url_page(navigation), true),
             Some(vec![Back, Forward, Reload, Identity, Browser, CopyLink, Hide, Close])
         );
         let chromeless = HtmlPageFlags {
@@ -981,7 +985,7 @@ mod tests {
             navigation: true,
             ..HtmlPageFlags::default()
         };
-        assert_eq!(strip_items(&file_page(None, chromeless)), None);
+        assert_eq!(strip_items(&file_page(None, chromeless), true), None);
         // a chromeless loopback URL page (#750) has no strip either
         let loopback = HtmlOverlay::new(
             HtmlSource::Url(url("http://127.0.0.1:8792/")),
@@ -990,7 +994,7 @@ mod tests {
                 ..HtmlPageFlags::default()
             },
         );
-        assert_eq!(strip_items(&loopback), None);
+        assert_eq!(strip_items(&loopback, true), None);
         // a page shown for another machine offers no hand-off of a file that is not here
         let mut replica = HtmlOverlay::new(
             HtmlSource::Replica {
@@ -1000,11 +1004,52 @@ mod tests {
         );
         replica.replica_of = Some(uuid::Uuid::new_v4());
         assert_eq!(
-            strip_items(&replica),
+            strip_items(&replica, true),
             Some(vec![Back, Forward, Reload, Identity, Hide, Close])
         );
         assert_eq!(browser_url(&replica, None, None), None);
         assert_eq!(identity_tooltip(&replica), "/origin/docs/index.html");
+    }
+
+    /// Upstream's c43bf01: the strip offers Hide only while the title bar's overlays button is on, for every kind of
+    /// page; the close button ends it either way, and a chromeless page still has no strip.
+    #[test]
+    fn the_strip_offers_hide_only_while_the_overlays_button_is_on() {
+        use StripItem::{Back, Browser, Close, CopyLink, Files, Forward, Hide, Identity, Reload};
+        let navigation = HtmlPageFlags {
+            navigation: true,
+            ..HtmlPageFlags::default()
+        };
+        let mut replica = HtmlOverlay::new(
+            HtmlSource::Replica {
+                path: "/origin/docs/index.html".to_owned(),
+            },
+            navigation,
+        );
+        replica.replica_of = Some(uuid::Uuid::new_v4());
+        let pages = [
+            (file_page(None, HtmlPageFlags::default()), vec![Identity, Close]),
+            (
+                file_page(None, navigation),
+                vec![Back, Forward, Reload, Identity, Browser, Files, Close],
+            ),
+            (
+                url_page(navigation),
+                vec![Back, Forward, Reload, Identity, Browser, CopyLink, Close],
+            ),
+            (replica, vec![Back, Forward, Reload, Identity, Close]),
+        ];
+        for (page, without) in pages {
+            assert_eq!(strip_items(&page, false), Some(without.clone()), "{:?}", page.source);
+            let mut with = without;
+            with.insert(with.len() - 1, Hide);
+            assert_eq!(strip_items(&page, true), Some(with), "{:?}", page.source);
+        }
+        let chromeless = HtmlPageFlags {
+            chromeless: true,
+            ..HtmlPageFlags::default()
+        };
+        assert_eq!(strip_items(&file_page(None, chromeless), false), None);
     }
 
     /// A replica loads from its page's own `ngterm-page` address, and reports the origin's path as what it shows, never

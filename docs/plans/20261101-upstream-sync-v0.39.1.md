@@ -529,16 +529,17 @@ focused WebView2 page keeps it when `keymap_dispatch::takes` returns false for i
 `settings={"shownInterfaceElements": ["overlayToggle"]}`; new `tests/ui/test_html_overlay.py::test_the_page_strip_offers_hide_only_while_the_overlays_button_is_on`
 (`@since("0.39.1")`, ui layer).
 
-- [ ] the strip's Hide button shows only while Settings ▸ Interface ▸ Hide overlays is on, for session and pane
+- [x] the strip's Hide button shows only while Settings ▸ Interface ▸ Hide overlays is on, for session and pane
       pages, live on an open page; the View menu, palette, toggle_overlay chord and `session overlay show` still
       restore a hidden page
-- [ ] while an HTML page holds the window's keyboard, the undo_close chord goes to the page; with focus on the
+- [x] while an HTML page holds the window's keyboard, the undo_close chord goes to the page; with focus on the
       terminal, sidebar or chrome it still undoes a pending close, even when a page covers the session
-- [ ] write tests: `strip_items` with the flag off and on for file, URL, navigation and replica pages; an open page's
+- [x] write tests: `strip_items` with the flag off and on for file, URL, navigation and replica pages; an open page's
       strip follows the setting; keymap_dispatch with a focused page (nothing fires, the page gets the key) and with
       the terminal focused (UndoClose fires); a `cfg(windows)` unit test of `takes()`
-- [ ] write tests: the ui tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the ui tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the ui layer runs only on the
+      reference, and the new test is `@since("0.39.1")`)
 
 ### Task 12: Live `--command` sessions close when their command exits, `--wait` holds (#840)
 

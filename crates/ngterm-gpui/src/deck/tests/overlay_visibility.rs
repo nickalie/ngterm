@@ -408,6 +408,8 @@ fn a_hidden_page_keeps_its_document_and_comes_back_without_a_reload(cx: &mut Tes
 fn the_strips_hide_hides_only_its_own_pane(cx: &mut TestAppContext) {
     let (mut h, session, _) = overlay_harness(cx);
     let _web = page_host(&mut h);
+    // the strip offers Hide only with Settings > Interface's Hide overlays button on
+    h.cx.update(|_, cx| crate::html_overlay::sync_strip_hide(true, cx));
     let (_, right) = split(&mut h, session);
     h.dispatch(Command::Session(SessionCmd::OverlayOpen), session, |args| {
         args.command = Some("exec cat".to_owned());

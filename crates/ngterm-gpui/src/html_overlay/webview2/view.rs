@@ -31,13 +31,14 @@ impl PageView {
         let focus = cx.focus_handle();
         let focused = cx.on_focus(&focus, window, |view, _, _| view.focus_changed(true));
         let blurred = cx.on_blur(&focus, window, |view, _, _| view.focus_changed(false));
+        let hide_shown = panel::observe_hide_shown(cx);
         page.set_element(cx.entity().downgrade(), window.window_handle(), parent);
         Self {
             page,
             focus,
             released: false,
             error: None,
-            _subscriptions: vec![focused, blurred],
+            _subscriptions: vec![focused, blurred, hide_shown],
         }
     }
 
@@ -134,7 +135,7 @@ impl Render for PageView {
             .flex_col()
             .overflow_hidden()
             .bg(colors.background())
-            .children(panel::strip(&overlay, &colors, &poster))
+            .children(panel::strip(&overlay, &colors, &poster, panel::hide_shown(cx)))
             .child(
                 div()
                     .id("htmlOverlay.page")

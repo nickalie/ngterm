@@ -858,3 +858,76 @@ fn escape_goes_to_the_page_and_no_further(cx: &mut TestAppContext) {
         "full screen unchanged"
     );
 }
+
+/// Upstream's c43bf01 (`testThePageStripOffersHideOnlyWhileTheOverlaysButtonIsOn`): an open page's strip offers Hide
+/// only while Settings ▸ Interface ▸ Hide overlays is on, following the setting live; Close stays either way.
+#[gpui_kit::test]
+fn an_open_pages_strip_offers_hide_only_while_the_overlays_button_is_on(cx: &mut TestAppContext) {
+    let (_harness, cx) = harness(cx);
+    assert!(cx.debug_bounds("htmlOverlay.close").is_some());
+    assert!(
+        cx.debug_bounds("htmlOverlay.hide").is_none(),
+        "no Hide while the overlays button is off, the default"
+    );
+    cx.update(|_, cx| crate::html_overlay::sync_strip_hide(true, cx));
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("htmlOverlay.hide").is_some(),
+        "enabling the button adds Hide to the open page"
+    );
+    cx.update(|_, cx| crate::html_overlay::sync_strip_hide(false, cx));
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("htmlOverlay.hide").is_none(),
+        "disabling it takes Hide away again"
+    );
+    assert!(cx.debug_bounds("htmlOverlay.close").is_some());
+}
+
+/// Upstream's 00fc83d: while the page holds the keyboard the `undo_close` chord (Ctrl+Shift+Z) goes to its engine
+/// and fires nothing; with the keyboard elsewhere it still undoes a pending close, though the page covers the session.
+#[gpui_kit::test]
+fn the_undo_close_chord_goes_to_a_focused_page_and_undoes_the_close_otherwise(cx: &mut TestAppContext) {
+    let (harness, cx) = harness(cx);
+    cx.update(|window, cx| {
+        crate::keymap_dispatch::init(cx);
+        crate::keymap_dispatch::register_window(
+            window.window_handle(),
+            crate::keymap_dispatch::KeyOrigin::Window(uuid::Uuid::new_v4()),
+        );
+    });
+    let (keymap, _) = ngterm_core::keymap::parse_keymap("", &ngterm_core::keymap::linux_defaults());
+    crate::keymap_dispatch::load_keymap(&keymap);
+    let chord = || gpui_kit::Keystroke::parse("ctrl-shift-z").unwrap();
+    // the release as the page's listener and the window's (`crate::window`, not in this harness) both see it
+    let press = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.dispatch_keystroke(chord(), cx));
+        let up = gpui_kit::KeyUpEvent { keystroke: chord() };
+        cx.simulate_event(up.clone());
+        cx.update(|window, cx| crate::keymap_dispatch::key_up(&up, window, cx));
+        cx.run_until_parked();
+    };
+    let undo = vec![crate::keymap_dispatch::Fired::Builtin(
+        ngterm_core::keymap::BuiltinAction::UndoClose,
+    )];
+    press(cx);
+    assert_eq!(
+        crate::keymap_dispatch::take_fired(),
+        undo,
+        "the page covers the session but does not hold the keyboard"
+    );
+    harness.focus_page(cx);
+    harness.web.take();
+    press(cx);
+    assert!(crate::keymap_dispatch::take_fired().is_empty(), "nothing fires");
+    let keys: Vec<bool> = harness
+        .web
+        .take()
+        .iter()
+        .filter_map(|call| match call {
+            Call::Input(Input::Key(key)) => Some(key.pressed),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(keys, [true, false], "the page's engine gets the chord and its release");
+}

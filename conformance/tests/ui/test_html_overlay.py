@@ -5,6 +5,7 @@ import socket
 from http.server import BaseHTTPRequestHandler
 
 import pytest
+from agterm_conformance.drivers.base import ElementNotFound
 from agterm_conformance.loopback import serve
 from agterm_conformance.match import assert_ok, find_session
 from agterm_conformance.wait import wait_until
@@ -80,9 +81,12 @@ def test_file_page_strip_names_the_page_and_closes_it(ctl, ui):
 
 
 @pytest.mark.covers("ui:htmlOverlay.hide")
-def test_page_strip_hide_hides_its_own_pane(ctl, ui):
+def test_page_strip_hide_hides_its_own_pane(launch, ui_for):
     # The strip's Hide hides its page with the page's scope: a pane page its pane, the session overlay left as it was
-    # (upstream's testThePageStripHideButtonHidesItsOwnPane).
+    # (upstream's testThePageStripHideButtonHidesItsOwnPane). The strip offers Hide only while the title bar's overlays
+    # button is enabled, which the launch seeds.
+    ctl = launch(settings={"shownInterfaceElements": ["overlayToggle"]})
+    ui = ui_for(ctl)
     sid = _new(ctl)
     assert_ok(ctl.request("session.split", sid, mode="on"))
     ctl.wait_mounted(sid, "right")
@@ -99,6 +103,38 @@ def test_page_strip_hide_hides_its_own_pane(ctl, ui):
         ui.absent("htmlOverlay.hide")
     finally:
         ctl.request("session.overlay.close", sid, pane="right")
+        ctl.request("session.overlay.close", sid)
+        ctl.request("session.close", sid)
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("ui:htmlOverlay.hide", "ui:settings-interface-{element}")
+def test_the_page_strip_offers_hide_only_while_the_overlays_button_is_on(launch, ui_for):
+    # Without the title bar's overlays button nothing on screen brings a hidden page back, so the strip offers Hide only
+    # while Settings ▸ Interface enables that button, live on an open page (upstream's
+    # testThePageStripOffersHideOnlyWhileTheOverlaysButtonIsOn).
+    ctl = launch()
+    ui = ui_for(ctl)
+    sid = _new(ctl)
+    page = ctl.instance.root / "ui-gated.html"
+    page.write_text("<!doctype html><title>UI Gated</title><body><p>gated page</p></body>")
+    try:
+        assert_ok(ctl.request("session.overlay.open", sid, html=str(page)))
+        _state(ctl, sid, "loaded", "UI Gated")
+        ui.find("htmlOverlay.close", role="button")
+        ui.absent("htmlOverlay.hide")
+        toggle = ui.ui_ids.expand("settings-interface-{element}", element="overlayToggle")
+        try:
+            found = ui.tab("Interface", timeout=1)
+        except ElementNotFound:
+            ui.press("cmd+,")
+            found = ui.tab("Interface")
+        ui.click(found)
+        ui.click(ui.find(toggle, role="checkbox", value=0))
+        ui.find("htmlOverlay.hide", role="button")
+        ui.click(ui.find(toggle, role="checkbox", value=1))
+        ui.absent("htmlOverlay.hide")
+    finally:
         ctl.request("session.overlay.close", sid)
         ctl.request("session.close", sid)
 

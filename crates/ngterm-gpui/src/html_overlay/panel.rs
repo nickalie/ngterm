@@ -5,8 +5,8 @@
 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Role, SharedString,
-    StatefulInteractiveElement as _, Styled as _, div, px, svg,
+    AnyElement, App, Context, Global, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
+    Role, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, div, px, svg,
 };
 use ngterm_core::chrome::FALLBACK_BACKGROUND;
 use ngterm_core::html::{HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlOverlayTheme, HtmlReloadTarget};
@@ -151,10 +151,38 @@ fn rgb(hex: &str) -> Option<(f64, f64, f64)> {
 
 // MARK: - the strip
 
-/// The identity strip of `overlay` in `colors`, its buttons acting on page `id`; `None` for a chromeless page.
+/// Whether the strips offer Hide (upstream's `hideShown`, `shows(.overlayToggle)`): Settings ▸ Interface ▸ Hide
+/// overlays is on, as the app's global. A page's element re-renders when it changes ([`observe_hide_shown`]), so an
+/// open page's strip follows the setting live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HideShown(bool);
+
+impl Global for HideShown {}
+
+/// Keeps the strips' Hide in step with Settings ▸ Interface ▸ Hide overlays (`shown`); the page elements observing it
+/// re-render on a change.
+pub fn sync_hide_shown(shown: bool, cx: &mut App) {
+    if cx.try_global::<HideShown>() != Some(&HideShown(shown)) {
+        cx.set_global(HideShown(shown));
+    }
+}
+
+/// Whether the strips offer Hide now; not before the first sync, as the setting is off by default.
 #[must_use]
-pub fn strip(overlay: &HtmlOverlay, colors: &PanelColors, poster: &Poster) -> Option<AnyElement> {
-    let items = policy::strip_items(overlay)?;
+pub fn hide_shown(cx: &App) -> bool {
+    cx.try_global::<HideShown>().is_some_and(|shown| shown.0)
+}
+
+/// Re-renders the element of `cx` whenever the strips' Hide comes or goes.
+pub fn observe_hide_shown<V: 'static>(cx: &mut Context<V>) -> Subscription {
+    cx.observe_global::<HideShown>(|_, cx| cx.notify())
+}
+
+/// The identity strip of `overlay` in `colors`, its buttons acting on page `id`, with Hide while `hide_shown`
+/// ([`hide_shown`]); `None` for a chromeless page.
+#[must_use]
+pub fn strip(overlay: &HtmlOverlay, colors: &PanelColors, poster: &Poster, hide_shown: bool) -> Option<AnyElement> {
+    let items = policy::strip_items(overlay, hide_shown)?;
     let current = overlay.current.as_ref();
     let mut bar = div()
         .id(SharedString::from(format!("html-strip-{}", overlay.id)))

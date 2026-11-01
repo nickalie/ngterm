@@ -42,7 +42,8 @@ mod store;
 mod view;
 
 pub use registry::{
-    answer, apply, init, install, key_down, mount, refresh_themes, reject, set_covered, settle, shutdown,
+    answer, apply, init, install, key_down, mount, page_holds_keyboard, refresh_themes, reject, set_covered, settle,
+    shutdown,
 };
 pub(super) use registry::{copy_link, navigate};
 pub use view::PageView;

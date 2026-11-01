@@ -8,7 +8,14 @@
 //! session switches, pane swaps and the soft-close window; it drops a page only when the core releases it ([`settle`]).
 //! The session-wide page lies over the page as a program does and a pane page over the pane it covers, mounted by
 //! `crate::overlay` ([`mount`]); every page is drawn in the terminal's colors and its scripts carry them as the page's
-//! theme ([`refresh_themes`]). The registry is the core's [`ngterm_core::html::HtmlHost`] ([`install`]).
+//! theme ([`refresh_themes`]). A page's strip offers Hide only while Settings ▸ Interface ▸ Hide overlays puts the
+//! title bar's overlays button on, live on open pages ([`sync_settings`], upstream's c43bf01); the View menu, the
+//! palette, the `toggle_overlay` chord and `session overlay show` bring a hidden page back either way. The registry is
+//! the core's [`ngterm_core::html::HtmlHost`] ([`install`]).
+//!
+//! While a page holds the keyboard ([`page_holds_keyboard`]) the `undo_close` chord is the page's own undo, not the
+//! pending close's (`crate::keymap_dispatch`, upstream's 00fc83d). On macOS, which has no page host yet, upstream's
+//! form is the responder check in `UndoCloseShortcut.yieldsChord`.
 //!
 //! What a page may not do is refused as in the GTK build: new windows, script dialogs (answered silently), file
 //! choosers, permissions, full screen, notifications and downloads (the engine's), a context menu's window and
@@ -53,11 +60,11 @@ mod view;
 mod webview2;
 
 #[cfg(all(feature = "html", any(target_os = "linux", windows)))]
-pub use panel::TerminalColors;
+pub use panel::{TerminalColors, sync_hide_shown as sync_strip_hide};
 #[cfg(all(feature = "html", target_os = "linux"))]
 pub use registry::{
-    ReplicaLink, answer, answer_resource, answer_value, apply, init, install, key_down, mount, refresh_themes, reject,
-    set_replica_link, settle, shutdown,
+    ReplicaLink, answer, answer_resource, answer_value, apply, init, install, key_down, mount, page_holds_keyboard,
+    refresh_themes, reject, set_replica_link, settle, shutdown,
 };
 #[cfg(all(feature = "html", target_os = "linux"))]
 use registry::{copy_link, navigate};
@@ -65,8 +72,8 @@ use registry::{copy_link, navigate};
 pub use view::{FrameStats, PageView};
 #[cfg(all(feature = "html", windows))]
 pub use webview2::{
-    PageView, answer, apply, hide, init, install, key_down, mount, refresh_themes, reject, set_covered, settle,
-    shutdown,
+    PageView, answer, apply, hide, init, install, key_down, mount, page_holds_keyboard, refresh_themes, reject,
+    set_covered, settle, shutdown,
 };
 #[cfg(all(feature = "html", windows))]
 use webview2::{copy_link, navigate};
@@ -76,6 +83,13 @@ use webview2::{copy_link, navigate};
 #[must_use]
 pub fn colors_of(config: &crate::terminal::TerminalConfig) -> TerminalColors {
     TerminalColors::of(&config.theme)
+}
+
+/// Keeps the pages in step with `settings` (the windows' sync): their strips offer Hide while Settings ▸ Interface ▸
+/// Hide overlays shows the title bar's overlays button (upstream's c43bf01).
+pub fn sync_settings(settings: &ngterm_core::persist::AppSettings, cx: &mut gpui_kit::App) {
+    let overlay_toggle = ngterm_core::persist::settings::InterfaceElement::OverlayToggle;
+    sync_strip_hide(!settings.is_interface_element_hidden(overlay_toggle), cx);
 }
 
 /// Marks `element`'s page off screen: its deck page is held out of the tree (a pending close) or hidden.
@@ -148,6 +162,14 @@ mod unavailable {
 
     pub fn refresh_themes(_: &TerminalColors, _: &mut App) {}
 
+    pub fn sync_strip_hide(_: bool, _: &mut App) {}
+
+    /// No page holds the keyboard.
+    #[must_use]
+    pub fn page_holds_keyboard(_: &Window, _: &App) -> bool {
+        false
+    }
+
     pub fn answer(_: u64, _: &Response) {}
 
     pub fn reject(_: u64, _: &str) {}
@@ -167,6 +189,6 @@ mod unavailable {
 
 #[cfg(not(all(feature = "html", any(target_os = "linux", windows))))]
 pub use unavailable::{
-    PageView, TerminalColors, answer, apply, colors_of, hide, init, install, key_down, mount, refresh_themes, reject,
-    settle, shutdown,
+    PageView, TerminalColors, answer, apply, colors_of, hide, init, install, key_down, mount, page_holds_keyboard,
+    refresh_themes, reject, settle, shutdown, sync_strip_hide,
 };

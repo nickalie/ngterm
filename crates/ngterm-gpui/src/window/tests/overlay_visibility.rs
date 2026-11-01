@@ -96,9 +96,17 @@ impl Shell<'_> {
 impl Shell<'_> {
     /// Shows the title bar's overlay toggle, as its Settings toggle does.
     fn show_overlay_toggle(&mut self) {
+        self.set_overlay_toggle(true);
+    }
+
+    /// Shows or hides the title bar's overlay toggle, the pages following as the windows' sync has them.
+    fn set_overlay_toggle(&mut self, shown: bool) {
         self.state.core.update_settings(|settings| {
-            settings.shown_interface_elements = Some(vec!["overlayToggle".to_owned()]);
+            settings.shown_interface_elements = shown.then(|| vec!["overlayToggle".to_owned()]);
         });
+        let settings = self.state.core.settings().clone();
+        self.cx
+            .update(|_, cx| crate::html_overlay::sync_settings(&settings, cx));
         self.state.settle();
         self.settle();
     }
@@ -223,6 +231,33 @@ fn the_toggle_overlay_chord_reaches_the_keymap_from_a_focused_page(cx: &mut Test
     s.press(&keys);
     assert!(s.hidden(var).is_empty());
     assert!(page_focused(&mut s), "and the page takes the keyboard back");
+}
+
+/// Upstream's c43bf01 through the window's sync: an open page's strip offers Hide once Settings ▸ Interface ▸ Hide
+/// overlays shows the title bar's button, and drops it when the button goes again.
+#[cfg(all(feature = "html", target_os = "linux"))]
+#[gpui_kit::test]
+fn an_open_pages_strip_offers_hide_while_the_overlay_toggle_is_shown(cx: &mut TestAppContext) {
+    let mut s = shell(cx);
+    let _web = crate::html_overlay::testing::install();
+    let poster = s.state.poster().clone();
+    let pages = tempfile::tempdir().unwrap();
+    crate::html_overlay::install(&mut s.state.core, pages.path().to_path_buf(), poster);
+    let var = s.session("var").unwrap();
+    let args = Args {
+        url: Some("https://example.invalid/".to_owned()),
+        ..Args::default()
+    };
+    s.session_request(SessionCmd::OverlayOpen, var, args);
+    assert!(s.cx.debug_bounds("htmlOverlay.close").is_some(), "the page's strip");
+    assert!(
+        s.cx.debug_bounds("htmlOverlay.hide").is_none(),
+        "no Hide while the button is off"
+    );
+    s.set_overlay_toggle(true);
+    assert!(s.cx.debug_bounds("htmlOverlay.hide").is_some());
+    s.set_overlay_toggle(false);
+    assert!(s.cx.debug_bounds("htmlOverlay.hide").is_none());
 }
 
 #[gpui_kit::test]

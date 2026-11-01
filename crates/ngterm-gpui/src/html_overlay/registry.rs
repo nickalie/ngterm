@@ -857,14 +857,25 @@ pub fn key_down(
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
-    let elements: Vec<Entity<PageView>> =
-        with(|registry| registry.pages.values().filter_map(|page| page.element()).collect());
-    let Some(focused) = elements
-        .into_iter()
-        .find(|element| element.read(cx).focus().is_focused(window))
-    else {
+    let Some(focused) = focused_element(window, cx) else {
         return false;
     };
     let source = crate::terminal::input::current_source(keystroke);
     focused.update(cx, |element, cx| element.key_down(keystroke, stroke, &source, cx))
+}
+
+/// Whether a page holds `window`'s keyboard (upstream's `htmlPageOwnsKeys` with no session): focus inside a page's
+/// element, never a page that merely covers the session while the terminal, the sidebar or the chrome has it.
+#[must_use]
+pub fn page_holds_keyboard(window: &Window, cx: &App) -> bool {
+    focused_element(window, cx).is_some()
+}
+
+/// The element of the page holding `window`'s keyboard.
+fn focused_element(window: &Window, cx: &App) -> Option<Entity<PageView>> {
+    let elements: Vec<Entity<PageView>> =
+        with(|registry| registry.pages.values().filter_map(|page| page.element()).collect());
+    elements
+        .into_iter()
+        .find(|element| element.read(cx).focus().is_focused(window))
 }

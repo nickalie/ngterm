@@ -8,7 +8,8 @@
 //! did, and an ask's editor handing its dialog keys to its dialog, `crate::ask_dialog::intercept_key`), then the keymap
 //! in a registered window ([`register_window`]) — custom commands, the `map` alternatives, leaders timing out after
 //! 1.5 s, a `--repeat` tail live until 0.5 s after its release, then the built-in menu chords (except
-//! `toggle_fullscreen`'s after a half-typed leader) — then, when a terminal's own view holds the keyboard,
+//! `toggle_fullscreen`'s after a half-typed leader, and `undo_close`'s while an HTML page holds the keyboard, which
+//! keeps it for its own undo: upstream's 00fc83d) — then, when a terminal's own view holds the keyboard,
 //! ghostty's binds and the key encoder (`crate::terminal`), or when an HTML page holds it, the page's engine
 //! (`crate::html_overlay`). A key either takes stops there: GPUI's binding matcher and
 //! pending-keystroke buffering never see it, and the platform's input handler does not type it again. A focused text
@@ -175,12 +176,21 @@ pub fn takes(stroke: &KeyStroke) -> bool {
         return true;
     }
     ROUTER.with_borrow(|router| {
-        router.menu.contains_key(&chord)
+        // the key was pressed in the web view, so the page holds the keyboard
+        router.menu.get(&chord).is_some_and(|action| !page_keeps(*action))
             || router
                 .engine
                 .as_ref()
                 .is_some_and(|engine| !matches!(engine.clone().advance(&chord), EngineOutcome::Unmatched))
     })
+}
+
+/// Whether an HTML page holding the keyboard keeps `action`'s menu chord for itself (upstream's
+/// `UndoCloseShortcut.yieldsChord`, 00fc83d): `undo_close`, so the chord undoes an edit in the page's form field rather
+/// than a pending session close. With the terminal, the sidebar or the chrome focused the chord still undoes the
+/// close, even while a page covers the session. Every other menu chord stays the app's.
+fn page_keeps(action: BuiltinAction) -> bool {
+    action == BuiltinAction::UndoClose
 }
 
 /// Lets go of `keystroke`, a press dispatched for an HTML page's native web view (`takes`), whose release the window
@@ -248,7 +258,8 @@ fn intercept(event: &KeystrokeEvent, window: &mut Window, cx: &mut App) {
     });
     if let Some(origin) = origin {
         let now = Instant::now();
-        let fired = ROUTER.with_borrow_mut(|router| router.press(&stroke, now));
+        let page_keys = crate::html_overlay::page_holds_keyboard(window, cx);
+        let fired = ROUTER.with_borrow_mut(|router| router.press(&stroke, now, page_keys));
         match fired {
             Press::Passed => {}
             Press::Consumed => {
@@ -330,8 +341,8 @@ impl Router {
         self.reset();
     }
 
-    /// One press: whether it is consumed, and what it fired.
-    fn press(&mut self, stroke: &KeyStroke, now: Instant) -> Press {
+    /// One press, with an HTML page holding the keyboard while `page_keys`: whether it is consumed, and what it fired.
+    fn press(&mut self, stroke: &KeyStroke, now: Instant, page_keys: bool) -> Press {
         self.released.remove(&stroke.identity);
         if self.deadline.is_some_and(|deadline| now >= deadline) {
             self.lapse();
@@ -366,14 +377,14 @@ impl Router {
         let Some(chord) = chord else {
             return Press::Passed;
         };
-        let outcome = self.advance(stroke.identity, &chord, now);
+        let outcome = self.advance(stroke.identity, &chord, now, page_keys);
         if outcome != Press::Passed {
             self.consumed.insert(stroke.identity);
         }
         outcome
     }
 
-    fn advance(&mut self, identity: u32, chord: &Chord, now: Instant) -> Press {
+    fn advance(&mut self, identity: u32, chord: &Chord, now: Instant, page_keys: bool) -> Press {
         let Some(engine) = self.engine.as_mut() else {
             return Press::Passed;
         };
@@ -397,7 +408,7 @@ impl Router {
                 let Some(action) = self.menu.get(chord).copied() else {
                     return Press::Passed;
                 };
-                if was_armed && action == BuiltinAction::ToggleFullscreen {
+                if (was_armed && action == BuiltinAction::ToggleFullscreen) || (page_keys && page_keeps(action)) {
                     return Press::Passed;
                 }
                 Press::Fired(Fired::Builtin(action))

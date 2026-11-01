@@ -23,7 +23,12 @@ fn router(keymap: &str) -> Router {
 
 /// Presses `text` at `now`; whether it was consumed, recording what fired.
 fn press(router: &mut Router, text: &str, now: Instant) -> bool {
-    match router.press(&stroke(text), now) {
+    press_in(router, text, now, false)
+}
+
+/// Presses `text` at `now`, with an HTML page holding the keyboard while `page_keys`.
+fn press_in(router: &mut Router, text: &str, now: Instant, page_keys: bool) -> bool {
+    match router.press(&stroke(text), now, page_keys) {
         Press::Passed => false,
         Press::Consumed => true,
         Press::Fired(fired) => {
@@ -177,4 +182,42 @@ fn a_shifted_symbol_spells_its_base_key() {
         super::input::chord(&stroke("ctrl-!")).map(|chord| chord.key),
         Some("1".to_owned())
     );
+}
+
+/// Upstream's 00fc83d (`testTextFieldAndFocusedPageKeepTheChord`, `testTerminalAndChromeFocusLeaveTheChordToUndoClose`):
+/// with an HTML page holding the keyboard the `undo_close` chord passes on to the page, unconsumed, firing nothing;
+/// with the terminal, the sidebar or the chrome focused it still undoes the close. Every other menu chord stays the
+/// app's either way.
+#[test]
+fn a_page_holding_the_keyboard_keeps_the_undo_close_chord() {
+    let now = Instant::now();
+    let mut router = router("");
+    assert!(
+        !press_in(&mut router, "ctrl-shift-z", now, true),
+        "the page gets the key"
+    );
+    assert!(router.fired.is_empty());
+    assert!(
+        !release(&mut router, "ctrl-shift-z", now),
+        "its release is the page's too"
+    );
+    assert!(
+        press_in(&mut router, "ctrl-shift-t", now, true),
+        "other menu chords stay the app's"
+    );
+    assert!(press_in(&mut router, "ctrl-shift-z", now, false));
+    assert_eq!(names(&router), ["new_session", "undo_close"]);
+}
+
+/// The `undo_close` chord pressed in a page's native web view (Windows) stays the page's; the app's other chords and
+/// Ctrl+Tab's switcher still go to the window.
+#[test]
+#[cfg(all(feature = "html", windows))]
+fn a_web_view_keeps_the_undo_close_chord() {
+    let (keymap, _) = parse_keymap("", &linux_defaults());
+    super::load_keymap(&keymap);
+    assert!(!super::takes(&stroke("ctrl-shift-z")));
+    assert!(super::takes(&stroke("ctrl-shift-t")));
+    assert!(super::takes(&stroke("ctrl-tab")));
+    assert!(!super::takes(&stroke("a")));
 }
