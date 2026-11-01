@@ -370,12 +370,17 @@ impl RequestCommand for Open {
 
     /// The open request; `--block` changes the run, not the request, and `--companion` sends the same arguments as
     /// `session.companion.page`. A page's file and `--cwd` are made absolute against the caller's directory, since the
-    /// app never learns it; a program's `--cwd` goes as typed.
+    /// app never learns it (a companion's as [`overlay_page::companion_path`] says); a program's `--cwd` goes as typed.
     fn make_request(&self) -> Request {
         let page = self.html.is_some();
+        let absolute = if self.companion {
+            overlay_page::companion_path
+        } else {
+            overlay_page::absolute_path
+        };
         let args = Args {
             cwd: if page {
-                self.cwd.as_deref().map(overlay_page::absolute_path)
+                self.cwd.as_deref().map(absolute)
             } else {
                 self.cwd.clone()
             },
@@ -387,13 +392,18 @@ impl RequestCommand for Open {
             width: self.width,
             height: self.height,
             color: self.background_color.clone(),
-            html: self.html.as_deref().map(overlay_page::absolute_path),
+            html: self.html.as_deref().map(absolute),
             navigation: flag(self.navigation),
             url: self.url.clone(),
             javascript: flag(self.javascript),
             chromeless: flag(self.chromeless),
             persistent: flag(self.persistent),
             browse: flag(self.browse),
+            caller_drive: if self.companion && page {
+                overlay_page::companion_drive([self.html.as_deref(), self.cwd.as_deref()])
+            } else {
+                None
+            },
             ..Args::default()
         };
         let cmd = if self.companion {
@@ -955,10 +965,16 @@ mod tests {
     #[test]
     fn open_with_companion_sends_the_page_companion_command() {
         let html = "/tmp/p.html";
+        // a Windows caller adds its drive, for a local row to put the driveless path on
+        let mut args = json!({"html": html});
+        if let Some(drive) = overlay_page::companion_drive([Some(html)]) {
+            args["callerDrive"] = json!(drive);
+        }
         assert_eq!(
             request(&["open", "--html", html, "--companion", "--target", "p1"]),
-            json!({"cmd": "session.companion.page", "target": "p1", "args": {"html": native(html)}})
+            json!({"cmd": "session.companion.page", "target": "p1", "args": args})
         );
+        assert!(args.get("callerDrive").is_some() == cfg!(windows), "{args}");
         assert!(open(&["--html", html, "--companion"]).echoes_result_id());
         assert!(!open(&["--html", html]).echoes_result_id());
     }

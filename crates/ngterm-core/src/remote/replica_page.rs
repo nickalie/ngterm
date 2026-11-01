@@ -49,6 +49,15 @@ const NO_HELPER: &str = "no page helper";
 /// The MIME type of an answer that named none.
 const OCTET_STREAM: &str = "application/octet-stream";
 
+/// How a page another machine opened is shown here (upstream's `replicaSource`): a file page from its replica scheme,
+/// a URL page directly; `None` for an address that is no web URL.
+pub(crate) fn replica_source(source: &PresentationPageSource) -> Option<HtmlSource> {
+    match source {
+        PresentationPageSource::File { path, .. } => Some(HtmlSource::Replica { path: path.clone() }),
+        PresentationPageSource::Url { address } => crate::html::web_url(address).map(HtmlSource::Url),
+    }
+}
+
 /// One launch of a page's helper, as its reports name it: a report from an earlier helper of the same page is dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HelperKey {
@@ -106,6 +115,9 @@ struct ReplicaRecord {
     applied_seq: i64,
     /// The state the origin last got.
     reported: Option<PresentationPageState>,
+    /// The origin's host when the page is a page companion's row here: the page ending there reads its outcome from
+    /// that host before the row closes ([`super::companions`]).
+    companion: Option<String>,
 }
 
 /// The pages shown here for origins, by local page id, and how their helpers start.
@@ -246,6 +258,16 @@ impl Core {
             .replica_page_slot(local)
             .and_then(|(_, overlay)| overlay.replica_of)
             .ok_or(NOT_SHOWN)?;
+        self.follow_replica(local, session, origin, None);
+        if let Some(argv) = argv {
+            self.start_page_helper(local, &argv);
+        }
+        Ok(())
+    }
+
+    /// Follows page `local`, which session `session` shows for page `origin`; `companion` is the origin's host for a
+    /// page companion's own page.
+    fn follow_replica(&mut self, local: Uuid, session: Uuid, origin: Uuid, companion: Option<String>) {
         self.track_page(local);
         self.remote.viewer.pages.records.insert(
             local,
@@ -255,6 +277,7 @@ impl Core {
                 link: None,
                 applied_seq: 0,
                 reported: None,
+                companion,
             },
         );
         // the state the page starts in is what the origin assumed: only a change is reported
@@ -262,10 +285,20 @@ impl Core {
         if let Some(record) = self.remote.viewer.pages.records.get_mut(&local) {
             record.reported = initial;
         }
-        if let Some(argv) = argv {
-            self.start_page_helper(local, &argv);
-        }
-        Ok(())
+    }
+
+    /// Follows page `local`, the row `row` shows for `host`'s page companion page `origin`, and starts its channel
+    /// (upstream's `attachRemotePage` record): the channel runs for a URL page too, as its end there ends the row.
+    pub(crate) fn follow_companion_replica(
+        &mut self,
+        local: Uuid,
+        row: Uuid,
+        origin: Uuid,
+        host: &str,
+        serve: &[String],
+    ) {
+        self.follow_replica(local, row, origin, Some(host.to_owned()));
+        self.start_page_helper(local, serve);
     }
 
     /// Places `page` in the mapped pane or the session-wide slot under a new id (upstream's `presentReplicaPage`): no
@@ -277,12 +310,7 @@ impl Core {
             .filter(|found| found.remote_presentation().is_some())
             .ok_or(NO_SESSION)?;
         let origin = frames::parse_uuid(&request.page).ok_or(INVALID_PAGE)?;
-        let source = match &request.source {
-            PresentationPageSource::File { path, .. } => HtmlSource::Replica { path: path.clone() },
-            PresentationPageSource::Url { address } => {
-                HtmlSource::Url(crate::html::web_url(address).ok_or(INVALID_URL)?)
-            }
-        };
+        let source = replica_source(&request.source).ok_or(INVALID_URL)?;
         let pane = match &request.pane {
             None => None,
             Some(remote) => Some(
@@ -393,10 +421,12 @@ impl Core {
         let Some(found) = self.library_mut().held_session_mut(session) else {
             return;
         };
+        // a page companion's own page is the row: its close released it, and closing it again closes the row again
+        let row = found.content() == crate::model::SessionContent::Page;
         let pages: Vec<Option<OverlayPane>> = found
             .html_overlays()
             .into_iter()
-            .filter(|(_, page)| page.replica_of.is_some())
+            .filter(|(pane, page)| page.replica_of.is_some() && !(row && pane.is_none()))
             .map(|(pane, _)| pane)
             .collect();
         if pages.is_empty() {
@@ -678,8 +708,18 @@ impl Core {
         }
         let closed = settled.closed;
         settled.run();
-        if closed {
-            self.library_mut().close_html_overlay(id);
+        if !closed {
+            return;
+        }
+        let companion = self.remote.viewer.pages.records.get(&id).and_then(|record| {
+            let host = record.companion.clone()?;
+            Some((record.session, record.origin, host))
+        });
+        match companion {
+            Some((row, origin, host)) => self.page_companion_ended(id, row, origin, &host),
+            None => {
+                self.library_mut().close_html_overlay(id);
+            }
         }
     }
 }

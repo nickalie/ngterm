@@ -56,6 +56,18 @@ impl<R> Response<R> {
             error: Some(error.into()),
         }
     }
+
+    /// Whether this is the refusal an app predating `command` gives (upstream's `ControlResponse.refusesUnknown`): it
+    /// could not decode the command, so it refused the request before doing anything. Every other error is the
+    /// server's own.
+    #[must_use]
+    pub fn refuses_unknown(&self, command: crate::Command) -> bool {
+        !self.ok
+            && self
+                .error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("invalid request:") && error.contains(command.wire_name()))
+    }
 }
 
 #[cfg(test)]

@@ -413,6 +413,9 @@ cli:
   version: {status: uncovered, wire: version}
 behaviors:
   zmx.tree.remote-host: {status: uncovered}
+  companion.remote-create: {status: uncovered}
+  companion.remote-page: {status: uncovered}
+  zmx.present.respawn-reattach: {status: uncovered}
   protocol.target-resolution: {status: uncovered}
   protocol.malformed-request: {status: uncovered}
   cli.socket-resolution: {status: uncovered}
@@ -432,6 +435,14 @@ exemptions:
   zmx.attach: a successful attach re-discovers the remote over ssh before creating anything, which the suite's no-network,
     no-remote-host constraints exclude; its refusals are still tested
   behavior:zmx.tree.remote-host: remote discovery runs ssh, excluded by the suite's no-network constraints
+  behavior:companion.remote-create: a companion of a row attached from another machine is created on that machine over ssh
+    and attached here, which needs zmx.attach over ssh, excluded by the suite's no-network constraints; the origin side is
+    tested through the companion commands and zmx.tree
+  behavior:companion.remote-page: the viewer side of a remote page companion (session.companion.page.attach over ssh and
+    its page channel) needs zmx.attach over ssh, excluded by the suite's no-network constraints; the origin's listing of
+    the page row is tested through zmx.tree
+  behavior:zmx.present.respawn-reattach: the viewer's reattach of a held pane its origin respawned needs zmx.attach over
+    ssh, excluded by the suite's no-network constraints; the origin's pane.respawn is tested through zmx.present
   session.paste: a successful paste reads the desktop's own clipboard, which an isolated GUI instance shares with the user's
     session and which no test may seed without overwriting the user's; its refusals are still tested
   session.overlay.copy: no protocol command makes a selection inside an overlay terminal (session.selectall acts on the panes

@@ -10,8 +10,8 @@
 //! copy keeps the argv beside it ([`crate::model::PaneLaunch::argv`]), which each launch quotes for the shell that
 //! runs it then ([`crate::restore::spawn_plan`]), so a change of restore mode or login shell later does not hand the
 //! line to a shell that reads it differently. An argv that line, or the live login shell when new panes run in Live
-//! sessions now, cannot carry is refused as unreplayable. A remote source answers upstream's local-path refusal until
-//! remote companions are ported.
+//! sessions now, cannot carry is refused as unreplayable. A remote source is its origin's to copy
+//! ([`crate::remote::companions`]); here it keeps upstream's local-path refusal.
 
 use std::path::Path;
 

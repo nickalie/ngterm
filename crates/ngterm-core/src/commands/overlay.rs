@@ -159,7 +159,9 @@ pub(super) enum OverlayContent {
 }
 
 /// Sorts a program from a page and refuses the flag combinations either cannot take (upstream's `overlayContent`).
-pub(super) fn overlay_content(command: &str, args: &Args, home: &str) -> Result<OverlayContent, ControlError> {
+/// A file page's path and `--cwd` grant are checked by this machine's rules against `home`; `None` leaves them to the
+/// machine they name (a remote row's origin), which checks them by its own.
+pub(super) fn overlay_content(command: &str, args: &Args, home: Option<&str>) -> Result<OverlayContent, ControlError> {
     let reject = |message: &str| Err(ControlError::rejected(message));
     let set = |flag: Option<bool>| flag == Some(true);
     match (args.html.as_deref(), args.url.as_deref()) {
@@ -201,7 +203,9 @@ pub(super) fn overlay_content(command: &str, args: &Args, home: &str) -> Result<
             if set(args.browse) {
                 return reject(BROWSE_REQUIRES_URL);
             }
-            if let Some(error) = html::grant_error(file, args.cwd.as_deref(), home) {
+            if let Some(home) = home
+                && let Some(error) = html::grant_error(file, args.cwd.as_deref(), home)
+            {
                 return reject(&format!("session.overlay.open: {error}"));
             }
             Ok(OverlayContent::Page(HtmlSource::File {
@@ -250,7 +254,7 @@ fn url_content(command: &str, text: &str, args: &Args) -> Result<OverlayContent,
 /// the session; `--follow` does.
 fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let command = args.command.clone().unwrap_or_default();
-    let content = overlay_content(&command, args, core.library().home())?;
+    let content = overlay_content(&command, args, Some(core.library().home()))?;
     if content == OverlayContent::Program {
         if command.contains('\0') {
             return Err(ControlError::rejected(COMMAND_NUL));

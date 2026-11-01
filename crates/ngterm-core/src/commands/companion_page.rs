@@ -4,9 +4,12 @@
 //! `agterm/Control/ControlServer+Companions.swift` and `attachCompanionPage` in `ControlServer+CompanionPage.swift`.
 //!
 //! A page companion is a row whose page is its session-wide overlay, full size, with no shell under it: never
-//! persisted, never archived, closing with its page. A remote parent answers upstream's local-path refusal until remote
-//! companions are ported; the loopback refusal ahead of it is already upstream's. The web views are the frontend's
-//! ([`crate::html::HtmlHost`]): a build or a host without them refuses the page as `session.overlay.open` does.
+//! persisted, never archived, closing with its page. A remote row's page companion is its origin's to create
+//! ([`remote_page`], [`crate::remote::companions`]), refused here first when its URL is this machine's loopback or this
+//! machine could not show it. The web views are the frontend's ([`crate::html::HtmlHost`]): a build or a host without
+//! them refuses the page as `session.overlay.open` does, a remote row's page included (a Rust-only refusal).
+
+use std::borrow::Cow;
 
 use super::overlay::{OverlayContent, overlay_content};
 use super::overlay_page::PageOpening;
@@ -18,6 +21,7 @@ use crate::model::{
     CompanionRefusal, OverlayPointSize, PageCompanionOptions, Session, SessionContent, is_valid_color_hex,
 };
 use crate::pane_env::uuid_string;
+use crate::remote::companions::{RemoteCompanionRequest, RemotePage};
 use crate::resolve::{ACTIVE, Resolver};
 use ngterm_proto::command::{AskCmd, SessionCmd, SurfaceCmd};
 use ngterm_proto::{Args, Command, ControlResult, Request};
@@ -59,8 +63,16 @@ const PAGE_REFUSED: [SessionCmd; 18] = [
 /// `session.companion.page` (upstream's `dispatchCompanionPage`): the page's own checks as `session.overlay.open`'s, a
 /// program refused, then anything but full size and a malformed color, before the target resolves.
 pub(crate) fn page(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
+    let args = on_this_drive(args);
+    let source = validated_source(args.as_ref(), Some(core.library().home()))?;
+    create(core, target, &args, source)
+}
+
+/// The page `session.companion.page` asks for, once its own checks passed; a file page's paths are checked against
+/// `home` by this machine's rules, or left to a remote origin's with `None`.
+fn validated_source(args: &Args, home: Option<&str>) -> Result<HtmlSource, ControlError> {
     let command = args.command.as_deref().unwrap_or_default();
-    let source = match overlay_content(command, args, core.library().home())? {
+    let source = match overlay_content(command, args, home)? {
         OverlayContent::Program => return Err(ControlError::rejected(NEEDS_PAGE)),
         OverlayContent::Page(source) => source,
     };
@@ -72,7 +84,77 @@ pub(crate) fn page(core: &mut Core, target: Option<&str>, args: &Args) -> Outcom
     {
         return Err(ControlError::rejected(format!("invalid color: {color} (#rrggbb)")));
     }
-    create(core, target, args, source)
+    Ok(source)
+}
+
+/// A local page companion's `--html` and `--cwd` as this machine reads them. On Windows a rooted path with no drive
+/// (`/srv/r.html`, which `ngtermctl` sends as typed since it may name a remote origin's file) lands on the caller's
+/// drive (`callerDrive`), as the caller's shell would have put it, or on the current drive when the caller sent none;
+/// elsewhere, and for any other path, the arguments are unchanged.
+fn on_this_drive(args: &Args) -> Cow<'_, Args> {
+    let drive = args.caller_drive.as_deref();
+    let completed = |path: &Option<String>| path.as_deref().and_then(|path| drive_completed(path, drive));
+    let (html, cwd) = (completed(&args.html), completed(&args.cwd));
+    if html.is_none() && cwd.is_none() {
+        return Cow::Borrowed(args);
+    }
+    Cow::Owned(Args {
+        html: html.or_else(|| args.html.clone()),
+        cwd: cwd.or_else(|| args.cwd.clone()),
+        ..args.clone()
+    })
+}
+
+/// `path` on `drive` (or the current drive, when `drive` is `None` or does not root it) when it is a rooted path with
+/// no drive on Windows; `None` anywhere else.
+fn drive_completed(path: &str, drive: Option<&str>) -> Option<String> {
+    let driveless = cfg!(windows) && path.starts_with(['/', '\\']) && !html::is_absolute(path);
+    if !driveless {
+        return None;
+    }
+    let on_drive = drive
+        .map(|drive| format!("{drive}{path}"))
+        .filter(|on_drive| html::is_absolute(on_drive));
+    std::path::absolute(on_drive.as_deref().unwrap_or(path))
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// `session.companion.page` on a row attached from another machine (upstream's remote branch of
+/// `createPageCompanion`): the page's checks, then what this machine must be able to show, before the origin is asked.
+/// A file page's path and `--cwd` are the origin's, sent as they came and checked there by that machine's rules,
+/// since this one's (a Windows viewer's, its home) say nothing about them. The request for the origin and whether the
+/// row is selected (`--follow`).
+pub(crate) fn remote_page(core: &Core, args: &Args) -> Result<(RemoteCompanionRequest, bool), ControlError> {
+    let source = validated_source(args, None)?;
+    let opening = PageOpening::from_args(source, args, None, OverlayPointSize::default());
+    // the page would load the origin's loopback here, where nothing answers for it
+    if let HtmlSource::Url(url) = &opening.source
+        && html::is_loopback(url.as_str())
+    {
+        return Err(ControlError::rejected(REMOTE_LOOPBACK));
+    }
+    shows_pages(core, opening.flags.persistent)?;
+    let page = RemotePage {
+        source: opening.source,
+        flags: opening.flags,
+        background_color: opening.background_color,
+    };
+    Ok((RemoteCompanionRequest::Page(page), opening.follow))
+}
+
+/// Refuses a page this build or host cannot show: no web views, or a persistent page without the saved store.
+fn shows_pages(core: &Core, persistent: bool) -> Result<(), ControlError> {
+    let host = core
+        .html_host()
+        .ok_or_else(|| ControlError::rejected(PAGES_UNAVAILABLE))?;
+    if let Some(reason) = host.web_views_unavailable() {
+        return Err(ControlError::rejected(format!("{PAGES_UNAVAILABLE_HERE}: {reason}")));
+    }
+    if persistent && let Some(failure) = host.persistent_store_failure() {
+        return Err(ControlError::rejected(format!("session.companion.page: {failure}")));
+    }
+    Ok(())
 }
 
 /// Creates the page companion (upstream's `createPageCompanion`): the row lands after the parent's group showing the
@@ -93,17 +175,7 @@ fn create(core: &mut Core, target: Option<&str>, args: &Args, source: HtmlSource
         }
         return Err(ControlError::rejected(REMOTE_PARENT));
     }
-    let host = core
-        .html_host()
-        .ok_or_else(|| ControlError::rejected(PAGES_UNAVAILABLE))?;
-    if let Some(reason) = host.web_views_unavailable() {
-        return Err(ControlError::rejected(format!("{PAGES_UNAVAILABLE_HERE}: {reason}")));
-    }
-    if opening.flags.persistent
-        && let Some(failure) = host.persistent_store_failure()
-    {
-        return Err(ControlError::rejected(format!("session.companion.page: {failure}")));
-    }
+    shows_pages(core, opening.flags.persistent)?;
     let overlay = HtmlOverlay::new(opening.source, opening.flags);
     let page_id = overlay.id;
     let home = core.library().home().to_owned();
@@ -186,5 +258,27 @@ fn session_part(target: &str) -> &str {
     match parts.as_slice() {
         ["surface", session, _] => session,
         _ => target,
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::drive_completed;
+
+    #[test]
+    fn a_driveless_rooted_path_lands_on_the_callers_drive() {
+        assert_eq!(
+            drive_completed("/reports/./r.html", Some("D:")).as_deref(),
+            Some(r"D:\reports\r.html")
+        );
+        assert_eq!(
+            drive_completed("/r.html", Some(r"\\host\share")).as_deref(),
+            Some(r"\\host\share\r.html")
+        );
+        assert_eq!(drive_completed(r"E:\r.html", Some("D:")), None);
+        assert_eq!(drive_completed("r.html", Some("D:")), None);
+        let current = std::path::absolute("/r.html").unwrap().to_string_lossy().into_owned();
+        assert_eq!(drive_completed("/r.html", None), Some(current.clone()));
+        assert_eq!(drive_completed("/r.html", Some("junk")), Some(current));
     }
 }

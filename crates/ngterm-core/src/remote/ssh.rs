@@ -210,6 +210,45 @@ pub fn probe_command(host: &str) -> Result<Vec<String>, InvocationError> {
     Ok(argv)
 }
 
+/// One ssh invocation running the far side's `ngtermctl` with `arguments` plus `--json`, so the reply is the server's
+/// own response line (upstream's `RemoteSession.controlCommand`). The arguments carry user text, so the outer layer is
+/// quoted for any login shell ([`account_shell_quoted`]); only the companion control lines use it. A Windows origin
+/// needs its own remote form, as the other remote lines do.
+///
+/// # Errors
+///
+/// A host ssh may not take.
+pub fn control_command<S: AsRef<str>>(host: &str, arguments: &[S]) -> Result<Vec<String>, InvocationError> {
+    validate(host)?;
+    let mut words: Vec<&str> = arguments.iter().map(AsRef::as_ref).collect();
+    words.push("--json");
+    let chain = format!(
+        "{} && {REMOTE_CLI} {}",
+        super::tree::cli_path_prefix(),
+        shell_quoted_line(&words)
+    );
+    let remote = ["/bin/sh", "-c", chain.as_str()].map(account_shell_quoted).join(" ");
+    let mut argv = ssh_arguments(host, 5, false);
+    argv.push(remote);
+    Ok(argv)
+}
+
+/// `value` quoted as one word that sh, zsh, tcsh and fish all read alike (upstream's `accountShellQuoted`): an
+/// apostrophe or a backslash goes outside the quotes, escaped, since fish treats both specially inside single quotes.
+fn account_shell_quoted(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for ch in value.chars() {
+        match ch {
+            '\'' => quoted.push_str(r"'\''"),
+            '\\' => quoted.push_str(r"'\\'"),
+            other => quoted.push(other),
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -362,6 +401,85 @@ mod tests {
             attach_command("buildbox", &hostile, &daemon, None),
             Err(InvocationError::InvalidEndpoint)
         );
+    }
+
+    #[test]
+    fn control_is_non_interactive_and_ends_in_json() {
+        let argv = control_command("buildbox", &["session", "new"]).unwrap();
+        assert_eq!(
+            &argv[..7],
+            ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "buildbox"]
+        );
+        assert_eq!(argv.len(), 8);
+        assert!(argv[7].starts_with("'/bin/sh' '-c' '"), "{}", argv[7]);
+        assert!(argv[7].contains("ngtermctl"), "{}", argv[7]);
+        assert_eq!(
+            control_command("-oProxyCommand=x", &["tree"]),
+            Err(InvocationError::InvalidHost)
+        );
+        assert_eq!(account_shell_quoted(r"it's a\b"), r"'it'\''s a'\\'b'");
+    }
+
+    /// Upstream's `controlReachesTheCliWithEveryArgumentIntactUnderAnyLoginShell`: sshd hands the remote line to the
+    /// account's login shell with `-c`, so every shell present here reads it, and the CLI gets each argument intact.
+    #[cfg(unix)]
+    #[test]
+    fn control_reaches_the_cli_with_every_argument_intact_under_any_login_shell() {
+        let shells: Vec<&str> = [
+            "/bin/sh",
+            "/bin/zsh",
+            "/usr/bin/zsh",
+            "/bin/tcsh",
+            "/usr/bin/tcsh",
+            "/usr/bin/fish",
+            "/usr/local/bin/fish",
+            "/opt/homebrew/bin/fish",
+        ]
+        .into_iter()
+        .filter(|shell| std::path::Path::new(shell).is_file())
+        .collect();
+        assert!(!shells.is_empty());
+        let arguments = [
+            "session",
+            "new",
+            "--parent",
+            "p1",
+            "--command",
+            r"tail -f 'my log' a\b \\ end\",
+            "--name",
+            "it's",
+            "--cwd",
+            "",
+        ];
+        let line = control_command("buildbox", &arguments).unwrap().pop().unwrap();
+        let mut expected: Vec<&str> = arguments.to_vec();
+        expected.push("--json");
+        for shell in shells {
+            let home = tempfile::tempdir().unwrap();
+            let bin = home.path().join(".local/bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let calls = home.path().join("calls");
+            let script = format!("#!/bin/sh\nprintf '%s\\0' \"$@\" > '{}'\n", calls.display());
+            ngterm_host::fakes::write_executable(&bin.join("ngtermctl"), &script).unwrap();
+            let ran = Command::new(shell)
+                .args(["-c", &line])
+                .env_clear()
+                .env("HOME", home.path())
+                .env("ZDOTDIR", home.path())
+                .env("XDG_CONFIG_HOME", home.path())
+                .env("PATH", "/usr/bin:/bin")
+                .output()
+                .unwrap();
+            assert_eq!(ran.status.code(), Some(0), "{shell}: {ran:?}");
+            let recorded = std::fs::read(&calls).unwrap();
+            let words: Vec<String> = recorded
+                .split(|byte| *byte == 0)
+                .map(|word| String::from_utf8_lossy(word).into_owned())
+                .collect();
+            let mut want: Vec<String> = expected.iter().map(|word| (*word).to_owned()).collect();
+            want.push(String::new());
+            assert_eq!(words, want, "{shell}");
+        }
     }
 
     #[test]

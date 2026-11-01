@@ -121,8 +121,10 @@ fn companion_new_refuses_wait_without_a_command_and_a_bad_tint_before_resolving(
     assert_eq!(fixture.order(fixture.workspace).len(), 1);
 }
 
+/// A remote row's companion is its origin's to create, which a row with no binding to it cannot reach (upstream's
+/// `createRemoteCompanion` guard); the cases with an origin are `remote_companions.rs`'s.
 #[test]
-fn a_remote_parent_answers_the_local_refusal() {
+fn an_unattached_remote_row_has_no_origin_to_create_a_companion() {
     let mut fixture = Fixture::new(0);
     let workspace = fixture.workspace;
     let remote = fixture
@@ -139,7 +141,7 @@ fn a_remote_parent_answers_the_local_refusal() {
         .unwrap();
     assert_eq!(
         new_companion(&mut fixture, remote, Args::default()),
-        failure("companions of a remote session are not supported yet")
+        failure("the remote session is not attached")
     );
     assert!(fixture.store().companions(remote).is_empty());
 }

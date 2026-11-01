@@ -16,6 +16,7 @@ use crate::model::{
     TintChoice,
 };
 use crate::persist::settings::NewSessionPlacementSetting;
+use crate::remote::companions::RemoteCompanionRequest;
 
 /// One sidebar gesture, already resolved to ids.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,9 +226,13 @@ impl Core {
     }
 
     /// New Companion of `session` (upstream's `newCompanion`): a companion in its parent's focused directory, selected
-    /// and focused; a sibling for a companion row. A remote parent's companion is its origin's to create, which this
-    /// build does not reach yet, so the store's refusal leaves nothing created.
+    /// and focused; a sibling for a companion row. A remote row's companion is its origin's to create, with the waits
+    /// and a failure in a HUD over the row ([`Core::begin_gui_remote_companion`]).
     fn new_companion(&mut self, window: Uuid, session: Uuid) -> bool {
+        if self.remote_row(window, session) {
+            let request = RemoteCompanionRequest::Terminal(CompanionOptions::default());
+            return self.begin_gui_remote_companion(request, window, session, "New Companion");
+        }
         let home = self.library().home().to_owned();
         let created = self
             .library_mut()
@@ -238,8 +243,12 @@ impl Core {
 
     /// Duplicate as Companion of `session` (upstream's `AppActions.duplicateAsCompanion`): the copy selected and
     /// focused; a refusal shows in a timed HUD over the session (#841), a banner without one. A remote row's copy is
-    /// its origin's to make, which this build does not reach yet, so it is refused by name.
+    /// its origin's to make, as New Companion's.
     fn duplicate_as_companion(&mut self, window: Uuid, session: Uuid) -> bool {
+        if self.remote_row(window, session) {
+            let request = RemoteCompanionRequest::Duplicate;
+            return self.begin_gui_remote_companion(request, window, session, "Duplicate as Companion");
+        }
         match self.duplicate_companion(session, true) {
             Ok(copy) => self.created_by_user(copy),
             Err(reason) => {
@@ -264,6 +273,14 @@ impl Core {
             .filter_map(|directory| store.add_session(workspace, NewSession::at_cwd(directory.clone())))
             .last();
         created.is_some_and(|id| self.created_by_user(id))
+    }
+
+    /// Whether `session` of window `window` is a row attached from another machine.
+    fn remote_row(&self, window: Uuid, session: Uuid) -> bool {
+        self.library()
+            .store(window)
+            .and_then(|store| store.session(session))
+            .is_some_and(|found| found.remote_host().is_some())
     }
 
     /// A session the user just created and the store selected: user activity, and its terminal takes the keyboard.

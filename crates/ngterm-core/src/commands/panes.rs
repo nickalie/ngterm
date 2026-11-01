@@ -71,6 +71,13 @@ impl Core {
     /// [`AppStore::close_primary_pane_at`]: crate::model::AppStore::close_primary_pane_at
     /// [`AppStore::close_split_pane_at`]: crate::model::AppStore::close_split_pane_at
     pub(crate) fn close_exited_pane(&mut self, session: Uuid, role: StatusPane, now: Instant) {
+        // the daemon's leader is read before the respawn replaces it, so its successor can be told apart
+        let live = (role == StatusPane::Left)
+            .then(|| self.library().store_for_session(session)?.session(session))
+            .flatten()
+            .filter(|found| found.surface.get().is_some_and(ngterm_host::Surface::is_live_session))
+            .map(|found| found.pane_identity);
+        let prior = live.and_then(|identity| self.prior_leader(identity));
         let Some(store) = self.library_mut().store_for_session_mut(session) else {
             return;
         };
@@ -86,6 +93,9 @@ impl Core {
             .map(|found| found.pane_identity);
         if let Some(identity) = respawned {
             self.primary_respawned(identity);
+            if live == Some(identity) {
+                self.owner_respawned(session, identity, prior);
+            }
         }
     }
 

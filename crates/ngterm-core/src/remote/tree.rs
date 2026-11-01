@@ -110,6 +110,9 @@ pub fn tree_command(host: &str) -> Result<Vec<String>, InvocationError> {
     Ok(argv)
 }
 
+/// `ngtermctl`'s exit status for an argument error, `EX_USAGE` as upstream's.
+const USAGE_EXIT: i32 = 64;
+
 /// What running a remote command produced. `status` is ssh's exit code, which carries the far side's own once the
 /// connection itself succeeded; -1 when it never ran or did not finish in time.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +123,13 @@ pub struct RemoteCommandResult {
 }
 
 impl RemoteCommandResult {
+    /// The far `ngtermctl` rejecting its own command line before sending anything (upstream's `refusedArguments`):
+    /// the usage exit, 64, with nothing on stdout, which is what a CLI older than an option or subcommand answers.
+    #[must_use]
+    pub fn refused_arguments(&self) -> bool {
+        self.status == USAGE_EXIT && self.stdout.trim().is_empty()
+    }
+
     fn failed(stderr: impl Into<String>) -> Self {
         Self {
             status: -1,
@@ -302,7 +312,7 @@ pub fn candidates(
         daemons.entry(session).or_default().insert(pane, entry.daemon.as_str());
     }
     let none = std::collections::HashMap::new();
-    let sessions = windows
+    let terminals: Vec<ControlRemoteSession> = windows
         .iter()
         .flat_map(|window| {
             window
@@ -315,11 +325,50 @@ pub fn candidates(
             remote_session(node, window, workspace, daemons.get(node.id.as_str()).unwrap_or(&none))
         })
         .collect();
+    // a page companion owns no daemon, so it is listed with no panes when its parent is: it attaches under that
+    // parent's row through `session.companion.page.attach`, never on its own
+    let attachable: std::collections::HashSet<&str> = terminals.iter().map(|session| session.id.as_str()).collect();
+    let pages: Vec<ControlRemoteSession> = nodes(windows)
+        .filter(|(_, _, node)| node.content.as_deref() == Some("page"))
+        .filter_map(|(window, workspace, node)| {
+            let parent = node.parent.as_deref().filter(|parent| attachable.contains(parent))?;
+            Some(ControlRemoteSession {
+                id: node.id.clone(),
+                name: node.name.clone(),
+                window_id: window.id.clone(),
+                window_name: window.name.clone(),
+                workspace_id: workspace.id.clone(),
+                workspace_name: workspace.name.clone(),
+                context: None,
+                cwd: node.cwd.clone(),
+                split_axis: None,
+                panes: Vec::new(),
+                status: None,
+                status_color: None,
+                status_shape: None,
+                parent: Some(parent.to_owned()),
+                content: Some("page".to_owned()),
+            })
+        })
+        .collect();
     Ok(ControlRemoteTree {
         host: None,
         endpoint,
-        sessions,
+        sessions: terminals.into_iter().chain(pages).collect(),
         presentation: Some(frames::VERSION),
+    })
+}
+
+/// Every session node of `windows`, with the window and workspace it sits in.
+fn nodes(
+    windows: &[RemoteWindowProjection],
+) -> impl Iterator<Item = (&RemoteWindowProjection, &ControlWorkspaceNode, &ControlSessionNode)> {
+    windows.iter().flat_map(|window| {
+        window
+            .tree
+            .workspaces
+            .iter()
+            .flat_map(move |workspace| workspace.sessions.iter().map(move |node| (window, workspace, node)))
     })
 }
 
@@ -358,6 +407,8 @@ fn remote_session(
         status: node.status.clone(),
         status_color: node.status_color.clone(),
         status_shape: node.status_shape.clone(),
+        parent: node.parent.clone(),
+        content: None,
     })
 }
 
@@ -460,6 +511,58 @@ mod tests {
             ),
             ("main", "work")
         );
+    }
+
+    /// Upstream's `RemoteTreeTests.onlyAUsageExitWithNothingOnStdoutIsAnArgumentRefusal`.
+    #[test]
+    fn only_a_usage_exit_with_nothing_on_stdout_is_an_argument_refusal() {
+        let result = |status: i32, stdout: &str, stderr: &str| RemoteCommandResult {
+            status,
+            stdout: stdout.to_owned(),
+            stderr: stderr.to_owned(),
+        };
+        let cases = [
+            (result(64, "", "Error: Unknown option '--parent'"), true),
+            (result(64, " \n", ""), true),
+            (result(64, r#"{"ok":false,"error":"x"}"#, ""), false),
+            (result(1, "", "Error: Unknown option '--parent'"), false),
+            (result(255, "", "ssh: connect to host"), false),
+        ];
+        for (result, refused) in cases {
+            assert_eq!(result.refused_arguments(), refused, "{result:?}");
+        }
+    }
+
+    /// Upstream's `RemoteTreeTests.aPageCompanionIsListedWithNoPanesOnlyUnderAListedParent`.
+    #[test]
+    fn a_page_companion_is_listed_with_no_panes_only_under_a_listed_parent() {
+        let left = daemon_name(Uuid::new_v4());
+        let page_node = |id: &str, name: &str, parent: &str| {
+            let mut page = node(id, name, "/srv", false, None);
+            page.parent = Some(parent.to_owned());
+            page.content = Some("page".to_owned());
+            page
+        };
+        let windows = [window(
+            "w-1",
+            "main",
+            vec![workspace(
+                "ws-1",
+                "work",
+                vec![
+                    node("s1", "build", "/repo", false, Some(true)),
+                    page_node("pg", "report", "s1"),
+                    page_node("pg2", "lost", "gone"),
+                ],
+            )],
+        )];
+        let tree = candidates(&windows, &inventory(&[running("s1", "left", &left)], true)).unwrap();
+        let ids: Vec<&str> = tree.sessions.iter().map(|session| session.id.as_str()).collect();
+        assert_eq!(ids, ["s1", "pg"]);
+        assert!(tree.sessions[1].panes.is_empty());
+        assert_eq!(tree.sessions[1].parent.as_deref(), Some("s1"));
+        assert_eq!(tree.sessions[1].content.as_deref(), Some("page"));
+        assert_eq!(tree.sessions[0].parent, None);
     }
 
     /// Upstream's `RemoteTreeTests.aSessionCarriesItsAgentStatusAndAnIdleOneCarriesNone`.
@@ -704,6 +807,8 @@ mod tests {
                 status: Some("blocked".to_owned()),
                 status_color: Some("#ff8800".to_owned()),
                 status_shape: Some("star".to_owned()),
+                parent: None,
+                content: None,
             }],
             presentation: Some(1),
         };

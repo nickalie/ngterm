@@ -211,6 +211,7 @@ Every other field, every semantic and every error string that names no zmx is up
 | `the zmx executable path is not absolute`, `the zmx executable is unavailable` (`restore.mode`'s `unavailableReason`) | `the live-session executable path is not absolute`, `the live-session executable is unavailable` |
 | `this pane has no zmx daemon; run it in a main or split pane started under Live sessions` (`clipboard set`) | `this pane has no live session; run it in a main or split pane started under Live sessions` |
 | `no zmx next to this agtermctl[; looked for PATH]`, `zmx print exited N: …` (`clipboard set`) | `no live-session executable next to this ngtermctl[; looked for PATH]`, `the live-session print exited N: …` |
+| `created companion ID on HOST but the connection failed before attaching it; ``agtermctl zmx attach HOST ID`` attaches it`, `created companion ID on HOST but could not attach it: REASON; ``agtermctl zmx attach HOST ID`` attaches it` (a remote row's companion) | the same naming `` `ngtermctl live attach HOST ID` `` |
 
 The help texts of `ngtermctl live` and `restore mode` speak of live-session daemons and the session host the same way.
 

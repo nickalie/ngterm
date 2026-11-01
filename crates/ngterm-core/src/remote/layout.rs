@@ -328,6 +328,26 @@ mod tests {
         assert!(!a.store.session(a.id).unwrap().split.shown);
     }
 
+    /// Upstream's `aLocalPaneHeldExitIsIgnoredByTheRemoteHandlers`.
+    #[test]
+    fn a_local_pane_held_exit_is_ignored_by_the_remote_handlers() {
+        let mut store = AppStore::new();
+        let workspace = store.add_workspace("work");
+        let spec = crate::model::NewSession {
+            command: Some("sleep 1".to_owned()),
+            wait: true,
+            ..crate::model::NewSession::at_cwd("/tmp")
+        };
+        let id = store.add_session(workspace, spec).unwrap();
+        let pane = store.session(id).unwrap().pane_identity;
+
+        store.remote_pane_held(pane, id);
+
+        assert!(!store.remote_pane_is_held(pane, id));
+        assert!(!store.can_close_removed_remote_pane(pane, id));
+        assert!(store.session(id).is_some());
+    }
+
     #[test]
     fn a_replica_that_attached_again_is_no_longer_held() {
         let mut a = attached();

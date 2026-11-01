@@ -33,9 +33,9 @@ use crate::resolve::{Resolver, trimmed};
 /// How often a waiting `live.attach` checks for the far side's answer.
 const ATTACH_POLL: Duration = Duration::from_millis(50);
 /// How long an attach's error HUD stays up (upstream's `remoteAttachErrorSeconds`).
-const ERROR_SECONDS: f64 = 5.0;
+pub(super) const ERROR_SECONDS: f64 = 5.0;
 /// A progress panel is timed, so a soft-closed session drops it (upstream's `remoteAttachProgressSeconds`).
-const PROGRESS_SECONDS: f64 = 30.0;
+pub(super) const PROGRESS_SECONDS: f64 = 30.0;
 
 /// What a finished remote read says: the far side's own refusal from stdout first, since its ngtermctl prints it there
 /// and exits nonzero; ssh's failures reach stderr. An ok-looking payload from a nonzero process is never accepted
@@ -61,8 +61,17 @@ pub(crate) fn read_remote_tree(result: &RemoteCommandResult, host: &str) -> Resu
 ///
 /// `invalid host`: the host is not echoed, as it is refused for carrying control characters a terminal would print.
 pub(crate) fn start_tree_read(core: &Core, host: &str) -> Result<Answer, ControlError> {
+    start_tree_read_within(core, host, tree::TREE_DEADLINE)
+}
+
+/// [`start_tree_read`] given `deadline` to answer.
+///
+/// # Errors
+///
+/// As [`start_tree_read`].
+pub(crate) fn start_tree_read_within(core: &Core, host: &str, deadline: Duration) -> Result<Answer, ControlError> {
     let argv = tree::tree_command(host).map_err(|_| ControlError::rejected("invalid host"))?;
-    run_off_thread(&core.remote.runner, argv, tree::TREE_DEADLINE)
+    run_off_thread(&core.remote.runner, argv, deadline)
         .ok_or_else(|| ControlError::rejected(format!("the remote command failed on {host}")))
 }
 
@@ -98,13 +107,41 @@ fn poll_attach(answer: Answer, request: AttachRequest) -> Dispatched {
     Dispatched::Pending {
         after: ATTACH_POLL,
         resume: Box::new(move |core: &mut Core| match take_answer(&answer) {
-            Some(result) => Dispatched::done(core.finish_attach(&result, &request)),
+            Some(result) => core.attach_answered(&result, &request),
             None => poll_attach(answer, request),
         }),
     }
 }
 
+/// Where an attached row goes (upstream's `RemotePlacement`): a workspace of a window, or under `parent`, a remote row
+/// of the same host, at `at`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Placement {
+    pub(crate) window: Uuid,
+    pub(crate) workspace: Uuid,
+    pub(crate) at: Option<usize>,
+    pub(crate) parent: Option<Uuid>,
+    pub(crate) select: bool,
+}
+
 impl Core {
+    /// `live.attach` once its host's list arrived: a page companion attaches under the one row here showing its
+    /// parent ([`super::companions`]), any other session as a row of its own.
+    fn attach_answered(&mut self, result: &RemoteCommandResult, request: &AttachRequest) -> Dispatched {
+        let remote_tree = match read_remote_tree(result, &request.host) {
+            Ok(tree) => tree,
+            Err(error) => return Dispatched::done(Err(ControlError::rejected(error))),
+        };
+        let page = remote_tree
+            .sessions
+            .iter()
+            .find(|candidate| candidate.id == request.session && candidate.content.as_deref() == Some("page"));
+        match page {
+            Some(page) => super::companions::begin_page_row_attach(self, page, &remote_tree, request),
+            None => Dispatched::done(self.attach_from(&remote_tree, request)),
+        }
+    }
+
     /// Creates the local session attached to `request`'s remote session once its host's list arrived (upstream's
     /// `attachRemoteSession`).
     pub(crate) fn finish_attach(&mut self, result: &RemoteCommandResult, request: &AttachRequest) -> Outcome {
@@ -120,6 +157,33 @@ impl Core {
             .iter()
             .find(|candidate| candidate.id == request.session)
             .ok_or_else(|| ControlError::rejected(format!("no attachable session {} on {host}", request.session)))?;
+        let window = Resolver::new(self.library()).open_placement_window(request.window.as_deref())?;
+        let workspace = self
+            .library()
+            .store(window)
+            .ok_or(ControlError::NoOpenWindow)?
+            .current_workspace_id()
+            .ok_or_else(|| ControlError::rejected("no window to attach into"))?;
+        let placement = Placement {
+            window,
+            workspace,
+            at: None,
+            parent: None,
+            select: true,
+        };
+        self.attach_remote_session(remote, remote_tree, host, placement)
+    }
+
+    /// Creates the local row for `remote`, one session of `remote_tree`, where `placement` says, and binds its panes
+    /// (upstream's `attach(_:from:host:placement:)`). Everything that can fail is checked before the model is touched;
+    /// `{id, parent}`.
+    pub(crate) fn attach_remote_session(
+        &mut self,
+        remote: &ControlRemoteSession,
+        remote_tree: &ControlRemoteTree,
+        host: &str,
+        placement: Placement,
+    ) -> Outcome {
         let (left, right) = panes_by_role(remote)
             .ok_or_else(|| ControlError::rejected(format!("{host} reported panes ngterm cannot address")))?;
         // attaching is the user asking for the session HERE, so every pane claims the lead at once
@@ -138,21 +202,23 @@ impl Core {
             .map(|daemon| command(daemon, "right", &leads.1))
             .transpose()
             .map_err(|_| unaddressable())?;
-        let window = Resolver::new(self.library()).open_placement_window(request.window.as_deref())?;
         // the LOCAL working directory, not the remote one: a path on the far side may not exist here
         let home = self.library().home().to_owned();
-        let store = self.library_mut().store_mut(window).ok_or(ControlError::NoOpenWindow)?;
-        let workspace = store
-            .current_workspace_id()
-            .ok_or_else(|| ControlError::rejected("no window to attach into"))?;
+        let store = self
+            .library_mut()
+            .store_mut(placement.window)
+            .ok_or(ControlError::NoOpenWindow)?;
         let created = store
             .add_session(
-                workspace,
+                placement.workspace,
                 NewSession {
                     command: Some(primary),
                     name: Some(remote.name.clone()),
                     wait: true,
                     remote_host: Some(host.to_owned()),
+                    at: placement.at,
+                    select: placement.select,
+                    parent: placement.parent,
                     ..NewSession::at_cwd(home)
                 },
             )
@@ -179,8 +245,13 @@ impl Core {
         }
         // the row's created event fired before the binding existed
         self.start_remote_presentation(created);
-        self.request_pane_focus(created);
-        Ok(ControlResult::id(uuid_string(created)))
+        if placement.select {
+            self.request_pane_focus(created);
+        }
+        Ok(ControlResult {
+            parent: placement.parent.map(uuid_string),
+            ..ControlResult::id(uuid_string(created))
+        })
     }
 }
 
@@ -244,10 +315,10 @@ enum Step {
 }
 
 /// Where an action's HUD goes: over `session` in `window`, its message headed by `action`.
-struct ActionPanel<'a> {
-    action: &'a str,
-    window: Uuid,
-    session: Uuid,
+pub(super) struct ActionPanel<'a> {
+    pub(super) action: &'a str,
+    pub(super) window: Uuid,
+    pub(super) session: Uuid,
 }
 
 /// One File ▸ Attach Remote in progress (upstream's `attachRemote` task with its `RemoteAttachHud`).
@@ -462,8 +533,13 @@ impl Core {
 
     /// The listing arrived: the window's picker asks which session to attach.
     fn listed(&mut self, mut flow: AttachFlow, host: &str, result: &RemoteCommandResult) -> Option<AttachFlow> {
-        let sessions = match read_remote_tree(result, host) {
-            Ok(remote) => remote.sessions,
+        // a page companion attaches only under its parent's row, which the picker has no place for
+        let sessions: Vec<ControlRemoteSession> = match read_remote_tree(result, host) {
+            Ok(remote) => remote
+                .sessions
+                .into_iter()
+                .filter(|session| session.content.is_none())
+                .collect(),
             Err(error) => {
                 self.attach_failed(&mut flow, &format!("{host}: {error}"));
                 return None;
@@ -551,7 +627,13 @@ impl Core {
 
     /// Opens `panel`'s HUD saying `text` (upstream's `RemoteAttachHud`); the slot generation of the panel it opened,
     /// `None` when none opened.
-    fn open_action_hud(&mut self, panel: &ActionPanel<'_>, text: &str, hide_after: f64, spinner: bool) -> Option<u64> {
+    pub(super) fn open_action_hud(
+        &mut self,
+        panel: &ActionPanel<'_>,
+        text: &str,
+        hide_after: f64,
+        spinner: bool,
+    ) -> Option<u64> {
         let args = Args {
             message: Some(crate::keymap::failure::message(panel.action, text)),
             spinner: spinner.then(|| "bar".to_owned()),
@@ -600,9 +682,14 @@ impl Core {
 
     /// Closes the panel this flow opened, never one another caller posted meanwhile.
     fn attach_close_hud(&mut self, flow: &mut AttachFlow) {
-        let (Some(session), Some(owned)) = (flow.hud_session, flow.owned_hud.take()) else {
-            return;
-        };
+        if let (Some(session), Some(owned)) = (flow.hud_session, flow.owned_hud.take()) {
+            self.close_owned_hud(session, owned);
+        }
+    }
+
+    /// Closes `session`'s panel when it is still the one posted as generation `owned`, never one another caller
+    /// posted meanwhile.
+    pub(super) fn close_owned_hud(&mut self, session: Uuid, owned: u64) {
         let Some(store) = self.library_mut().store_for_session_mut(session) else {
             return;
         };

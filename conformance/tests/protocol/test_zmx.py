@@ -677,6 +677,72 @@ def test_tree_rows_carry_the_session_status(live):
     assert_ok(live.request("session.close", sid))
 
 
+@LIVE
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("zmx.tree", "field:result.remote", "session.companion.page", "session.companion.new")
+def test_tree_lists_a_page_companion_without_panes_under_its_listed_parent(live, tmp_path):
+    """A page companion owns no daemon, so the hostless tree lists it with no panes, naming its parent, beside that
+    listed parent; a terminal companion is listed as any session, with its parent (#840)."""
+    sid = _live_session(live)
+    page_path = tmp_path / "report.html"
+    page_path.write_text("<!doctype html><title>report</title><p>companion page</p>")
+    page = assert_ok(live.request("session.companion.page", sid, html=str(page_path)))["id"]
+    companion = assert_ok(live.request("session.companion.new", sid, noSelect=True))["id"]
+    tree_cmd = live.vocabulary.command("zmx.tree")
+
+    def rows(response):
+        return {session["id"]: session for session in assert_ok(response)["remote"]["sessions"]}
+
+    listed = rows(live.wait_response(tree_cmd, None, lambda r: {sid, page, companion} <= rows(r).keys()))
+    assert_subset(listed[page], {"panes": [], "parent": sid, "content": "page", "cwd": listed[sid]["cwd"]})
+    assert_absent(listed[page], "splitAxis", "status")
+    assert_subset(listed[companion], {"parent": sid})
+    assert_absent(listed[companion], "content")
+    assert_absent(listed[sid], "parent", "content")
+    assert [entry["pane"] for entry in listed[companion]["panes"]] == ["left"]
+    assert_ok(live.request("session.close", sid))
+    live.wait_tree(lambda tree: not {sid, page, companion} & set(session_ids(tree)))
+
+
+@LIVE
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("zmx.present", "session.companion.new", streams=("zmx.present",))
+def test_a_respawned_live_parent_publishes_its_respawn_to_a_presenter(live):
+    """A parent whose shell exits while it has companions restarts it under the same daemon name; once a new leader
+    runs under that name the origin publishes `pane.respawn` with the pane's count, under the epoch every snapshot
+    carries, so a viewer whose attach exited cleanly can attach again (#840)."""
+    sid = _live_session(live)
+    companion = assert_ok(live.request("session.companion.new", sid, noSelect=True))["id"]
+    daemon = _entries(live, sid)["left"]["daemon"]
+    stream = live.stream(live.vocabulary.command("zmx.present"), sid)
+    assert stream.reply.ok, stream.reply.raw
+    with stream:
+        stream.send(_hello("mirror"))
+        wait_frame(stream.read, "hello", stream.send)
+        respawns = wait_frame(stream.read, "snapshot", stream.send)["snapshot"]["respawns"]
+        assert respawns["generations"] == {} and respawns["epoch"]
+        assert_ok(live.request("session.type", sid, text="exit\n"))
+        frame = wait_frame(stream.read, "pane.respawn", stream.send, timeout=30)
+        assert frame["respawn"] == {"epoch": respawns["epoch"], "generations": {daemon: 1}}
+    assert sid in session_ids(live.tree())
+
+    def running(response):
+        row = _rows(live, response, sid).get("left", {})
+        assert row.get("observation") == "running", row
+        return True
+
+    live.wait_response(live.vocabulary.command("zmx.list"), None, running)
+    # a later viewer's snapshot carries every count under the same epoch
+    later = live.stream(live.vocabulary.command("zmx.present"), sid)
+    with later:
+        later.send(_hello("mirror"))
+        wait_frame(later.read, "hello", later.send)
+        snapshot = wait_frame(later.read, "snapshot", later.send)["snapshot"]
+        assert snapshot["respawns"] == {"epoch": respawns["epoch"], "generations": {daemon: 1}}
+    assert_ok(live.request("session.close", sid))
+    live.wait_tree(lambda tree: not {sid, companion} & set(session_ids(tree)))
+
+
 # -- pages handed to a presenter
 
 PAGE_KINDS = ["page.request", "page.rejected", "page.close", "page.closed", "page.command", "page.state"]

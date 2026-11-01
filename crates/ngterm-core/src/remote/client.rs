@@ -17,7 +17,8 @@ use uuid::Uuid;
 use super::frames::{
     self, Body, PresentationAsk, PresentationAskRef, PresentationFrame, PresentationHello, PresentationHud,
     PresentationLayout, PresentationMode, PresentationNotify, PresentationOverlay, PresentationOverlayChange,
-    PresentationPage, PresentationPageChange, PresentationPageCommand, PresentationSound, PresentationStatus,
+    PresentationPage, PresentationPageChange, PresentationPageCommand, PresentationRespawns, PresentationSound,
+    PresentationStatus,
 };
 use super::hub::{PAGE_KINDS, SUPPORTED_KINDS};
 use super::reconnect::retry_delay;
@@ -90,6 +91,8 @@ pub enum ClientEffect {
     PageRequest(PresentationPage),
     PageClose(PresentationPageChange),
     PageCommand(PresentationPageCommand),
+    /// The origin's respawn counts; `true` for a snapshot's, which a first attach takes as its baseline.
+    Respawns(PresentationRespawns, bool),
     Warn(String),
 }
 
@@ -284,6 +287,9 @@ impl PresentationClient {
                 effects.push(ClientEffect::SnapshotStatus(snapshot.status));
                 effects.push(ClientEffect::Hud(snapshot.hud));
                 effects.push(ClientEffect::Context(snapshot.context));
+                if let Some(respawns) = snapshot.respawns {
+                    effects.push(ClientEffect::Respawns(respawns, true));
+                }
             }
             Body::Status(status) => effects.push(ClientEffect::Status(status)),
             Body::Context(context) => effects.push(ClientEffect::Context(context)),
@@ -304,6 +310,7 @@ impl PresentationClient {
             Body::PageRequest(page) => effects.push(ClientEffect::PageRequest(page)),
             Body::PageClose(change) => effects.push(ClientEffect::PageClose(change)),
             Body::PageCommand(command) => effects.push(ClientEffect::PageCommand(command)),
+            Body::Respawn(respawns) => effects.push(ClientEffect::Respawns(respawns, false)),
             Body::Hello(_)
             | Body::Ack
             | Body::PresenterAcquire
@@ -815,6 +822,30 @@ mod tests {
             harness.connections(),
             [RemoteConnection::Connecting, RemoteConnection::Connected]
         );
+    }
+
+    #[test]
+    fn a_snapshots_respawns_are_a_seed_and_a_frames_are_not() {
+        let mut harness = Harness::started();
+        let counts = |generation: i64| PresentationRespawns {
+            epoch: "e1".to_owned(),
+            generations: [("ngterm-a".to_owned(), generation)].into(),
+        };
+        let snapshot = PresentationSnapshot {
+            respawns: Some(counts(1)),
+            ..PresentationSnapshot::default()
+        };
+        harness.connect(snapshot, 7, PresentationMode::Mirror);
+        harness.deliver(&line(Body::Respawn(counts(2)), 7, 2));
+        let respawns: Vec<(PresentationRespawns, bool)> = harness
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+                ClientEffect::Respawns(respawns, seed) => Some((respawns.clone(), *seed)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(respawns, [(counts(1), true), (counts(2), false)]);
     }
 
     #[test]

@@ -167,6 +167,7 @@ fn a_page_companion_needs_web_views_and_a_local_parent() {
             Some(crate::html::os_path("/tmp/p.html"))),
         failure("session.companion.page: html overlays are not available here: no GPU")
     );
+    log.borrow_mut().unavailable = None;
     let workspace = fixture.workspace;
     let remote = fixture
         .store_mut()
@@ -184,10 +185,7 @@ fn a_page_companion_needs_web_views_and_a_local_parent() {
         failure("a loopback page cannot be a companion of a remote session")
     );
     let elsewhere = companion_page(&mut fixture, remote, |a| a.url = Some("https://example.com/".into()));
-    assert_eq!(
-        elsewhere,
-        failure("companions of a remote session are not supported yet")
-    );
+    assert_eq!(elsewhere, failure("the remote session is not attached"));
 }
 
 #[test]

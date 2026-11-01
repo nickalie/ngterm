@@ -72,6 +72,12 @@ impl RemoteBinding {
         self.daemons_by_local.get(&local).map(String::as_str)
     }
 
+    /// The origin daemon each local pane attaches to (upstream's `daemonsByPane`).
+    #[must_use]
+    pub fn daemons_by_pane(&self) -> &HashMap<Uuid, String> {
+        &self.daemons_by_local
+    }
+
     /// The origin's pane the local pane `local` stands for.
     #[must_use]
     pub fn remote_pane(&self, local: Uuid) -> Option<Uuid> {

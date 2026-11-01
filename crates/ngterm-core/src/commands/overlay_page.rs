@@ -358,6 +358,22 @@ impl Core {
         self.pages.outcomes.register(page);
     }
 
+    /// Whether page `page` is still open and unanswered.
+    pub(crate) fn page_outcome_pending(&self, page: Uuid) -> bool {
+        self.pages.outcomes.is_pending(page)
+    }
+
+    /// Where page `page`'s outcome stands: the tests' read.
+    #[cfg(test)]
+    pub(crate) fn page_outcome(&self, page: Uuid) -> Option<ngterm_proto::ControlHtmlPageOutcome> {
+        self.pages.outcomes.outcome(page)
+    }
+
+    /// Answers pending page `page` the way another machine answered the page it shows.
+    pub(crate) fn settle_page_outcome(&mut self, page: Uuid, like: Option<&ngterm_proto::ControlHtmlPageOutcome>) {
+        self.pages.outcomes.settle(page, like);
+    }
+
     /// Records page `page` closed unanswered; a no-op for one already answered.
     pub(crate) fn dismiss_page_outcome(&mut self, page: Uuid) {
         self.pages.outcomes.dismiss(page);

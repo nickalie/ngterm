@@ -464,7 +464,7 @@ impl Page {
         let token = registry::park(message.token);
         let id = self.id;
         // a page shown for another machine acts there: its request goes as sent, and that machine fills the defaults
-        if matches!(self.overlay().source, HtmlSource::Replica { .. }) {
+        if ngterm_core::html::bridge::relays_to_origin(&self.overlay(), &body) {
             if !registry::relay(id, body, token) {
                 super::reject(token, "page closed");
             }

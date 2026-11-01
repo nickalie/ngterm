@@ -68,6 +68,9 @@ impl Core {
 
 /// Starts a command that may wait on the frontend; `None` for every other command.
 pub(crate) fn deferred(core: &mut Core, request: &Request) -> Option<Dispatched> {
+    if let Some(remote) = super::companions::begin_remote(core, request) {
+        return Some(remote);
+    }
     match request.cmd {
         Command::Session(SessionCmd::Type) => Some(super::typing::begin(core, request)),
         Command::Session(SessionCmd::Search) => Some(super::search::begin(core, request)),

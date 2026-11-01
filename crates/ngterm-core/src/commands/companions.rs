@@ -4,18 +4,23 @@
 //! `agterm/Control/ControlServer+Companions.swift`.
 //!
 //! Upstream's `ControlActions` default that refuses companions on an older host has no target here: one dispatcher
-//! serves the app and `ngterm-headless`. A remote parent answers upstream's local-path refusal until remote
-//! companions are ported. The page forms are [`super::companion_page`]'s, the duplicate form
-//! [`super::companion_duplicate`]'s.
+//! serves the app and `ngterm-headless`. A remote row's companion is its origin's to create ([`begin_remote`]); the
+//! store's remote-parent refusal stays as upstream's local-path one. The page forms are [`super::companion_page`]'s,
+//! the duplicate form [`super::companion_duplicate`]'s.
+
+use std::time::Duration;
 
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Command, Request};
 
 use super::{Outcome, args_of, session_store, with_id};
 use crate::Core;
+use crate::dispatch::Dispatched;
 use crate::error::ControlError;
 use crate::model::{CompanionOptions, CompanionRefusal};
 use crate::pane_env::uuid_string;
+use crate::remote::companions::RemoteCompanionRequest;
+use crate::resolve::Resolver;
 
 /// The refusal of a session move that would take a companion out of its group.
 pub(crate) const COMPANION_MOVE_ERROR: &str = "a companion moves only among its siblings";
@@ -35,9 +40,44 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
     }
 }
 
-/// `session.companion.new`: a companion lands under its parent, so a raw client's workspace or placement field is
-/// refused, not dropped; the target's parent stands in for a companion target.
-fn new(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
+/// Starts a companion command whose target is a row attached from another machine (upstream's
+/// `createRemoteCompanion` branches of `createCompanion`, `createPageCompanion` and `duplicateAsCompanion`): the
+/// command's own checks first, then the origin creates it ([`crate::remote::companions`]). `None` for any other target,
+/// which the command answers at once.
+pub(crate) fn begin_remote(core: &mut Core, request: &Request) -> Option<Dispatched> {
+    let Command::Session(cmd @ (SessionCmd::CompanionNew | SessionCmd::CompanionPage | SessionCmd::CompanionDuplicate)) =
+        request.cmd
+    else {
+        return None;
+    };
+    let args = args_of(request);
+    let resolved = Resolver::new(core.library())
+        .session(request.target.as_deref(), args.window.as_deref())
+        .ok()?;
+    core.library()
+        .store(resolved.window)?
+        .session(resolved.session)?
+        .remote_host()?;
+    let remote = match cmd {
+        SessionCmd::CompanionNew => validated_options(args).map(|options| {
+            let select = options.select;
+            (RemoteCompanionRequest::Terminal(options), select)
+        }),
+        SessionCmd::CompanionPage => super::companion_page::remote_page(core, args),
+        _ => Ok((RemoteCompanionRequest::Duplicate, args.no_select != Some(true))),
+    };
+    let started = remote.and_then(|(remote, select)| {
+        core.start_remote_companion(remote, resolved.session, select)
+            .map_err(ControlError::rejected)
+    });
+    Some(match started {
+        Ok(flow) => crate::remote::companions::drive(flow, Duration::ZERO),
+        Err(error) => Dispatched::done(Err(error)),
+    })
+}
+
+/// What `session.companion.new` asks for, once its own checks passed.
+fn validated_options(args: &Args) -> Result<CompanionOptions, ControlError> {
     if args.workspace.is_some()
         || args.workspace_name.is_some()
         || args.create_workspace == Some(true)
@@ -52,14 +92,20 @@ fn new(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         return Err(ControlError::rejected("--wait requires --command"));
     }
     let tint = super::tint::creation_tint(args)?;
-    let options = CompanionOptions {
+    Ok(CompanionOptions {
         cwd: args.cwd.clone(),
         command: args.command.clone(),
         name: args.name.clone(),
         wait: args.wait == Some(true),
         select: args.no_select != Some(true),
         tint,
-    };
+    })
+}
+
+/// `session.companion.new`: a companion lands under its parent, so a raw client's workspace or placement field is
+/// refused, not dropped; the target's parent stands in for a companion target.
+fn new(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
+    let options = validated_options(args)?;
     let home = core.library().home().to_owned();
     let (store, id) = session_store(core, target, args.window.as_deref())?;
     let companion = store

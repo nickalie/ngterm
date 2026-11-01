@@ -234,6 +234,12 @@ pub struct ControlRemoteSession {
     pub status_color: Option<String>,
     #[serde(default)]
     pub status_shape: Option<String>,
+    /// The far side's parent session of a companion, omitted for a top-level session.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// `page` for a page companion, which has no panes and attaches only under its parent's row.
+    #[serde(default)]
+    pub content: Option<String>,
 }
 
 /// `live.tree [HOST]` (upstream's `ControlRemoteTree`): every open window's attachable sessions and the one endpoint

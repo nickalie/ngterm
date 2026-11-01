@@ -17,11 +17,7 @@ pub const TOO_OLD: &str = "error: the running app is too old for companions";
 /// the request before doing anything. Every other error is the server's own.
 #[must_use]
 pub fn refuses_unknown(response: &Response, command: Command) -> bool {
-    !response.ok
-        && response
-            .error
-            .as_deref()
-            .is_some_and(|error| error.starts_with("invalid request:") && error.contains(command.wire_name()))
+    response.refuses_unknown(command)
 }
 
 /// Sends a companion request once and prints the reply as [`RequestCommand::default_run`] does, except that an app

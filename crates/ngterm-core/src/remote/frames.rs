@@ -797,6 +797,14 @@ impl<'de> Deserialize<'de> for PresentationLayout {
     }
 }
 
+/// How often the origin respawned each of a session's panes, by daemon name, in one origin app lifetime (upstream's
+/// `PresentationRespawns`): `epoch` changes on every launch, so a counter that restarted is never read as older.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PresentationRespawns {
+    pub epoch: String,
+    pub generations: std::collections::BTreeMap<String, i64>,
+}
+
 /// The replaceable state a subscriber starts from.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct PresentationSnapshot {
@@ -808,6 +816,9 @@ pub struct PresentationSnapshot {
     pub context: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<PresentationLayout>,
+    /// `None` from an origin that predates parent respawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub respawns: Option<PresentationRespawns>,
 }
 
 /// What one frame carries (upstream's `PresentationFrame.Body`).
@@ -849,6 +860,8 @@ pub enum Body {
     PageClosed(PresentationPageChange),
     PageCommand(PresentationPageCommand),
     PageState(PresentationPageState),
+    /// The origin respawned a pane's shell under the same daemon name; carries that pane's new count alone.
+    Respawn(PresentationRespawns),
     /// A kind this build does not speak, kept with its place in the order.
     Unknown(String),
 }
@@ -886,6 +899,7 @@ impl Body {
             Self::PageClosed(_) => "page.closed",
             Self::PageCommand(_) => "page.command",
             Self::PageState(_) => "page.state",
+            Self::Respawn(_) => "pane.respawn",
             Self::Unknown(kind) => kind,
         }
     }
@@ -916,6 +930,7 @@ impl Body {
             }
             Self::PageCommand(command) => entry("page", serde_json::to_value(command)),
             Self::PageState(state) => entry("page", serde_json::to_value(state)),
+            Self::Respawn(respawns) => entry("respawn", serde_json::to_value(respawns)),
             Self::Status(None)
             | Self::Context(None)
             | Self::Hud(None)
@@ -1064,6 +1079,7 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "page.closed" => Body::PageClosed(required(object, "page")?),
         "page.command" => Body::PageCommand(required(object, "page")?),
         "page.state" => Body::PageState(required(object, "page")?),
+        "pane.respawn" => Body::Respawn(required(object, "respawn")?),
         other => Body::Unknown(other.to_owned()),
     })
 }
@@ -1190,6 +1206,11 @@ mod tests {
                 hud: Some(pane_hud()),
                 ..PresentationSnapshot::default()
             }),
+            Body::Snapshot(PresentationSnapshot {
+                respawns: Some(respawns()),
+                ..PresentationSnapshot::default()
+            }),
+            Body::Respawn(respawns()),
             Body::Notify(PresentationNotify {
                 title: "build".to_owned(),
                 body: "done".to_owned(),
@@ -1288,6 +1309,13 @@ mod tests {
             pane,
             size_percent: pane.is_none().then_some(80),
             follow: pane.is_none(),
+        }
+    }
+
+    fn respawns() -> PresentationRespawns {
+        PresentationRespawns {
+            epoch: "e1".to_owned(),
+            generations: [("ngterm-a".to_owned(), 2)].into(),
         }
     }
 

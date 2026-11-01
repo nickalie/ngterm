@@ -25,6 +25,55 @@ pub fn absolute_path(path: &str) -> String {
     absolute_path_from(&base, path)
 }
 
+/// A page companion's file or `--cwd`: as [`absolute_path`], except that on Windows a `/`-spelled path with no drive
+/// (`/srv/r.html`) goes as typed, `.` and `..` resolved by name, since the target may be a row attached from a Unix
+/// origin whose file it names; for a local row the app puts it on [`companion_drive`].
+pub fn companion_path(path: &str) -> String {
+    if leaves_driveless(path) {
+        slash_rooted(path)
+    } else {
+        absolute_path(path)
+    }
+}
+
+/// The drive or share of the caller's directory (`D:`, `\\server\share`) that a page companion sends as `callerDrive`
+/// when [`companion_path`] leaves one of `paths` with no drive, so a local row puts it where the caller's shell would;
+/// `None` otherwise, and always off Windows.
+pub fn companion_drive<'a>(paths: impl IntoIterator<Item = Option<&'a str>>) -> Option<String> {
+    if !paths.into_iter().flatten().any(leaves_driveless) {
+        return None;
+    }
+    drive_of(&std::env::current_dir().ok()?)
+}
+
+/// Whether [`companion_path`] sends `path` with no drive: a `/`-spelled rooted path on Windows.
+fn leaves_driveless(path: &str) -> bool {
+    cfg!(windows) && path.starts_with('/') && !path.starts_with("//")
+}
+
+/// The drive or share `base` starts with, if any (only a Windows path has one).
+fn drive_of(base: &Path) -> Option<String> {
+    match base.components().next()? {
+        Component::Prefix(prefix) => Some(prefix.as_os_str().to_string_lossy().into_owned()),
+        _ => None,
+    }
+}
+
+/// A `/`-rooted path with `.` and `..` resolved by name, `..` never climbing past `/`, and empty names dropped.
+fn slash_rooted(path: &str) -> String {
+    let mut names: Vec<&str> = Vec::new();
+    for name in path.split('/') {
+        match name {
+            "" | "." => {}
+            ".." => {
+                names.pop();
+            }
+            name => names.push(name),
+        }
+    }
+    format!("/{}", names.join("/"))
+}
+
 /// [`absolute_path`] against `base`. A Windows path keeps its drive or share (`C:\`, `\\server\share\`), which `..`
 /// never climbs past, as it never climbs past `/`.
 fn absolute_path_from(base: &Path, path: &str) -> String {
@@ -357,6 +406,13 @@ mod tests {
         })
     }
 
+    #[test]
+    fn a_slash_rooted_path_resolves_by_name() {
+        assert_eq!(slash_rooted("/srv/a/../a/./r.html"), "/srv/a/r.html");
+        assert_eq!(slash_rooted("/srv//a/"), "/srv/a");
+        assert_eq!(slash_rooted("/../.."), "/");
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_path_resolves_as_the_callers_shell_sees_it() {
@@ -381,6 +437,29 @@ mod tests {
         assert_eq!(absolute_path_from(base, r"\..\.."), r"C:\");
         assert_eq!(absolute_path_from(base, r"\\host\share\a\..\..\b"), r"\\host\share\b");
         assert_eq!(absolute_path_from(base, "."), r"C:\Users\u\work");
+    }
+
+    #[test]
+    fn a_companion_sends_the_callers_drive_only_for_a_driveless_path() {
+        assert_eq!(companion_drive([None, Some(r"\tmp")]), None);
+        assert_eq!(companion_drive([Some("out/r.html"), None]), None);
+        let expected = if cfg!(windows) {
+            drive_of(&std::env::current_dir().unwrap())
+        } else {
+            None
+        };
+        assert_eq!(companion_drive([Some("/srv/r.html"), None]), expected);
+        assert_eq!(drive_of(Path::new("/home/u")), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_is_the_directorys_prefix() {
+        assert_eq!(drive_of(Path::new(r"D:\work")).as_deref(), Some("D:"));
+        assert_eq!(
+            drive_of(Path::new(r"\\host\share\work")).as_deref(),
+            Some(r"\\host\share")
+        );
     }
 
     /// A blocked page companion refused by an app predating companions names that, and `--json` keeps the raw reply.

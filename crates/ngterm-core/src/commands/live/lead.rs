@@ -142,6 +142,7 @@ impl Core {
         let Some(role) = self.live.leads.apply(identity, notice) else {
             return false;
         };
+        self.remote.viewer.respawns.acknowledged(identity);
         if role == LeadRole::Unowned {
             self.reattach_pane(session, token, false);
         }
@@ -157,7 +158,9 @@ impl Core {
         if stopped {
             self.live.leaders.borrow_mut().note_lifecycle_change();
         }
-        self.remote_pane_held(session, token) || stopped
+        let changed = self.remote_pane_held(session, token) || stopped;
+        self.respawn_pane_held(session, token);
+        changed
     }
 
     /// The cover over the pane carrying `token`, `None` while it is uncovered.

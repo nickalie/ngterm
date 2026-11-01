@@ -723,7 +723,7 @@ impl Page {
         let token = registry::park(self.id, id);
         let page = self.id;
         // a page shown for another machine acts there: its request goes as sent, and that machine fills the defaults
-        if matches!(self.overlay().source, HtmlSource::Replica { .. }) {
+        if ngterm_core::html::bridge::relays_to_origin(&self.overlay(), &body) {
             registry::relay(page, body, token);
             return;
         }

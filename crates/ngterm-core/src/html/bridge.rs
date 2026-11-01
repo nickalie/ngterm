@@ -296,6 +296,32 @@ pub fn reply(response: &Response) -> Result<Value, String> {
     })
 }
 
+/// Whether request `body`, which `page` sent, goes to the machine that opened it (upstream's replica branch of
+/// `handleBridgeRequest`): a file page shown for another machine acts there, except a page companion's reload or
+/// navigation of itself, since each of its viewers shows its own copy (upstream's `ownPageCommandsLocal`).
+#[must_use]
+pub fn relays_to_origin(page: &super::HtmlOverlay, body: &str) -> bool {
+    matches!(page.source, super::HtmlSource::Replica { .. }) && !(page.row && addresses_own_page(body))
+}
+
+/// A reload or navigation that names no target, batch or window, which the page means for itself; an explicit null
+/// counts as absent, as the bridge reads it (upstream's `addressesOwnPage`).
+#[must_use]
+pub fn addresses_own_page(body: &str) -> bool {
+    let Ok(Value::Object(request)) = serde_json::from_str::<Value>(body) else {
+        return false;
+    };
+    let own = matches!(
+        request.get("cmd").and_then(Value::as_str),
+        Some("session.overlay.reload" | "session.overlay.navigate")
+    );
+    let named = |value: Option<&Value>| value.is_some_and(|value| !value.is_null());
+    let args = request.get("args");
+    own && !named(request.get("target"))
+        && !named(args.and_then(|args| args.get("targets")))
+        && !named(args.and_then(|args| args.get("window")))
+}
+
 /// The answer a page shown for another machine gets from the reply that machine sent as JSON text (upstream's
 /// `HtmlOverlayBridge.reply(raw:)`): read untyped, so a result field this build does not know still reaches the page.
 ///
@@ -325,6 +351,48 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Upstream's `HtmlOverlayRegistry.addressesOwnPage` and the `ownPageCommandsLocal` link of a page companion.
+    #[test]
+    fn only_a_page_companions_reload_or_navigation_of_itself_stays_here() {
+        let own = [
+            r#"{"cmd":"session.overlay.reload"}"#,
+            r#"{"cmd":"session.overlay.navigate","target":null,"args":{"to":"back","window":null}}"#,
+        ];
+        let elsewhere = [
+            r#"{"cmd":"session.overlay.reload","target":"active"}"#,
+            r#"{"cmd":"session.overlay.navigate","args":{"targets":["a"]}}"#,
+            r#"{"cmd":"session.overlay.reload","args":{"window":"W1"}}"#,
+            r#"{"cmd":"session.overlay.result"}"#,
+            "not json",
+        ];
+        for body in own {
+            assert!(addresses_own_page(body), "{body}");
+        }
+        for body in elsewhere {
+            assert!(!addresses_own_page(body), "{body}");
+        }
+        let source = super::super::HtmlSource::Replica {
+            path: "/srv/r.html".to_owned(),
+        };
+        let mut page = super::super::HtmlOverlay::new(source, super::super::HtmlPageFlags::default());
+        assert!(
+            relays_to_origin(&page, own[0]),
+            "a handed-over page's own reload acts on its origin"
+        );
+        page.row = true;
+        assert!(!relays_to_origin(&page, own[0]));
+        assert!(relays_to_origin(&page, elsewhere[0]));
+        let url = super::super::web_url("https://example.com/").unwrap();
+        let local = super::super::HtmlOverlay::new(
+            super::super::HtmlSource::Url(url),
+            super::super::HtmlPageFlags::default(),
+        );
+        assert!(
+            !relays_to_origin(&local, elsewhere[0]),
+            "a URL page has no origin to relay to"
+        );
+    }
 
     /// Upstream's `HtmlBridgeTests` fixture: a page in the right pane of a session in window `W1`.
     struct Fixture {

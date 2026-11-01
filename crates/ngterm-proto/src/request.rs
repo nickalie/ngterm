@@ -192,6 +192,9 @@ pub struct Args {
     /// `ask.open` text field.
     pub value: Option<String>,
     pub page: Option<String>,
+    /// ngterm's own, not upstream's: the drive (`D:`) or share of a Windows `ngtermctl`'s directory, sent with a page
+    /// companion whose `--html` or `--cwd` is rooted with no drive (`\srv\r.html`), which a local row puts on it.
+    pub caller_drive: Option<String>,
 }
 
 /// One caller-provided choice for `pick.open` (upstream's `ControlPickItem`).

@@ -915,33 +915,34 @@ origin side only (LIVE): `test_zmx.py::test_tree_lists_a_page_companion_without_
 over ssh, excluded by the suite's no-network constraints": the remote creation path, the viewer reattach on respawn,
 the viewer side of a remote page companion.
 
-- [ ] `createRemoteCompanion` (terminal | duplicate | page): "the remote session is not attached", "invalid host",
+- [x] `createRemoteCompanion` (terminal | duplicate | page): "the remote session is not attached", "invalid host",
       "the session on <host> is not attachable now; nothing was created", one origin run (30 s, never retried, never
       done locally) with upstream's argv (`session new --parent O --no-select …`, `session duplicate --companion
       --target O --no-select`, `session overlay open --companion …`, each `--json`)
-- [ ] reply handling: "the ngterm on <host> is too old for companions", "<host> gave no answer[ (stderr)]; whether
+- [x] reply handling: "the ngterm on <host> is too old for companions", "<host> gave no answer[ (stderr)]; whether
       the companion was created there is unknown", "created companion <id> on <host> but the connection failed before
       attaching it; `ngtermctl live attach <host> <id>` attaches it", "the remote command failed on <host>", "<host>
       created a companion but did not name it"; then the tree poll (20 s) and the attach under the parent:
       "its parent row here was closed", "created companion <id> on <host> but could not attach it: <reason>;
       `ngtermctl live attach <host> <id>` attaches it" ("it did not become attachable", "attach failed")
-- [ ] remote page companions: "the ngterm on <host> is too old for page companions", "<host> did not hand the page
+- [x] remote page companions: "the ngterm on <host> is too old for page companions", "<host> did not hand the page
       over", "a page on <host>'s loopback cannot be shown on this Mac", "a loopback page cannot be a companion of a
       remote session" (before the origin is asked), "the parent row here is gone", "the page cannot be shown here",
       "the page cannot be reached on <host>"; the page's outcome there becomes the view's
-- [ ] `live attach HOST ID` of a page row: "attach the page's parent session from <host> first", "more than one row
+- [x] `live attach HOST ID` of a page row: "attach the page's parent session from <host> first", "more than one row
       here shows the page's parent"; the Attach Remote picker hides page rows; `live tree` lists page companions with
       no panes under a listed parent, plus `parent`
-- [ ] respawn: the origin publishes `pane.respawn` {epoch, generations} once a different live leader runs under the
+- [x] respawn: the origin publishes `pane.respawn` {epoch, generations} once a different live leader runs under the
       name (wait up to 10 s), the snapshot carries every count; the viewer's RemoteRespawnBook (seed once from a
       snapshot, an epoch change never read as older, 3 attempts per generation, pruned on the tick while no open or
       soft-closed row owns the pane) reattaches a held clean exit; closing a remote companion here only detaches it
-- [ ] GUI: New Companion and Duplicate as Companion on a remote row show the progress HUD ("<Action>: creating a
+- [x] GUI: New Companion and Duplicate as Companion on a remote row show the progress HUD ("<Action>: creating a
       companion on HOST…", "attaching the companion…") and the failure HUD
-- [ ] write tests: every Swift case listed above on a fake remote runner in `ngterm-core`; `control_command` quoting
+- [x] write tests: every Swift case listed above on a fake remote runner in `ngterm-core`; `control_command` quoting
       through real sh/zsh/fish (tcsh where present) on POSIX CI
-- [ ] write tests: the origin-side conformance tests and the exemptions above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the origin-side conformance tests and the exemptions above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the three new conformance ids
+      are since(0.39.1), green at a temporary 0.39.1 level; they go in at Task 25)
 
 ### Task 20: Agent-status copy: merge the v0.39.1 hooks and port their tests (#802, #822, #828)
 

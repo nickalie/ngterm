@@ -1577,3 +1577,20 @@ def test_live_run_job_runs_the_handed_over_program(cli, live):
             assert assert_ok(live.request("session.overlay.result", sid))["exitCode"] == 3
             _refused(cli("session", "overlay", "run-job", job), "job not claimable")
     assert_ok(live.request("session.close", sid))
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("cli:session overlay page-attach")
+def test_page_attach_hands_out_one_attachment_of_a_page_companion(cli, ctl):
+    """What a viewer's ssh runs on the origin to show a page companion there: one attachment, `--json` (#840)."""
+    parent = _new(ctl)
+    page_file = ctl.instance.root / f"{_name('page-attach')}.html"
+    page_file.write_text("<!doctype html><title>attached</title><p>companion page</p>")
+    page = assert_ok(ctl.request("session.companion.page", parent, html=str(page_file)))["id"]
+    attached = _json(cli("session", "overlay", "page-attach", "--target", page, "--json"))
+    assert (attached["id"], attached["parent"]) == (page, parent)
+    handed = attached["companionPage"]
+    assert_subset(handed, {"identity": page_file.name, "source": {"file": {"path": str(page_file)}}})
+    assert handed["token"]
+    _refused(cli("session", "overlay", "page-attach", "--target", parent), "not a page companion")
+    assert_ok(ctl.request("session.close", parent))

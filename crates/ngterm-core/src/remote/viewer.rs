@@ -96,6 +96,12 @@ pub(crate) struct ViewerRuntime {
     pub(crate) attach_flows: Vec<super::attach::AttachFlow>,
     /// The pages origins handed to this machine ([`super::replica_page`]).
     pub(crate) pages: super::replica_page::ReplicaPages,
+    /// Each remote pane's held exit joined with its origin's respawns ([`super::respawn`]).
+    pub(crate) respawns: super::respawn::RemoteRespawnBook,
+    /// The GUI's remote companions being created ([`super::companions`]).
+    pub(crate) companion_flows: Vec<super::companions::GuiCompanion>,
+    /// Page companions whose page ended on their origin, waiting for its outcome before their rows close.
+    pub(crate) page_endings: Vec<super::companions::PageEnding>,
     /// The id of the last client made, so a row's recreated client never reuses an earlier one's link keys.
     last_client: u64,
 }
@@ -187,18 +193,28 @@ impl Core {
             let effects = client.tick(transport.as_ref(), now);
             self.apply_client_effects(session, effects);
         }
+        self.prune_respawn_book();
+        self.tick_respawn_watches();
         self.tick_reconnects(now);
         self.advance_attach_flows();
+        self.advance_companion_flows(now);
+        self.settle_page_endings();
     }
 
     /// When the frontend should run [`Core::remote_tick`] next, `None` while nothing remote is up.
     #[must_use]
     pub fn remote_wake(&self) -> Option<Duration> {
         let viewer = &self.remote.viewer;
-        if !viewer.probes.is_empty() || !viewer.attach_flows.is_empty() {
+        if !viewer.probes.is_empty()
+            || !viewer.attach_flows.is_empty()
+            || !viewer.companion_flows.is_empty()
+            || !viewer.page_endings.is_empty()
+            || self.remote.respawns.waiting()
+        {
             return Some(POLL);
         }
-        (!viewer.clients.is_empty() || !viewer.reconnects.is_empty()).then_some(TICK)
+        // respawn entries keep it alive so the last row's own prune still runs after that row is gone
+        (!viewer.clients.is_empty() || !viewer.reconnects.is_empty() || !viewer.respawns.is_empty()).then_some(TICK)
     }
 
     /// Every waiting pane and dropped stream retries now, not on its backoff (upstream's `retryRemoteLinksNow`).
@@ -430,6 +446,7 @@ impl Core {
             }
             ClientEffect::PageClose(change) => self.close_replica_page(&change.page, session),
             ClientEffect::PageCommand(command) => self.apply_replica_page_command(&command, session),
+            ClientEffect::Respawns(respawns, seed) => self.apply_remote_respawns(&respawns, seed, session),
             ClientEffect::Warn(reason) => {
                 tracing::warn!(%session, %reason, "presentation stream");
             }
@@ -955,6 +972,7 @@ impl Core {
         };
         // kept until the frontend reports the replacement installed or dropped, as a live pane's reattach
         self.begin_replacement_lead(&token, pane, lead, cover);
+        self.remote.viewer.respawns.attach_started(pane, session);
         self.request_pane_replacement(crate::commands::live::PaneReplacement {
             session,
             token,

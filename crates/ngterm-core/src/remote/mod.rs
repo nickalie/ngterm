@@ -14,7 +14,9 @@
 //!   presenter instead of being drawn here; a handed-over page's files and bridge calls come back over the channel its
 //!   presenter's helper claims ([`page_serve`]);
 //! - on the presenter, the pages an origin handed over ([`replica_page`]) and their end of that channel
-//!   ([`page_channel`]).
+//!   ([`page_channel`]);
+//! - a remote row's companions, which its origin creates and this machine attaches under the row ([`companions`]), and
+//!   a parent's respawn on the origin carried to its viewers' held panes ([`respawn`]).
 //!
 //! The streams are the frontend's: it hands the core each adopted connection as a [`LineChannel`] and reports
 //! the lines read from it and its close, arms the hello deadline and the heartbeat, and the core does the rest (upstream's
@@ -24,6 +26,7 @@
 pub(crate) mod attach;
 pub mod client;
 mod companion_page;
+pub(crate) mod companions;
 pub mod frames;
 mod handoff;
 pub mod hub;
@@ -34,6 +37,7 @@ pub mod page_serve;
 pub mod reconnect;
 pub mod remotes;
 pub mod replica_page;
+pub mod respawn;
 pub mod ssh;
 pub mod tree;
 mod viewer;
@@ -155,6 +159,10 @@ pub(crate) struct PresentationRuntime {
     pub(crate) remotes: remotes::RemotesState,
     /// The page-serve channels of the pages handed to presenters, and their pending claims.
     pub(crate) page_serve: page_serve::PageServeRuntime,
+    /// The origin's respawn counts and the waits for a respawned daemon's new leader.
+    pub(crate) respawns: respawn::OriginRespawns,
+    /// The clock a remote companion's wait for its session to become attachable is timed by (tests advance it).
+    pub(crate) clock: Box<dyn Fn() -> Instant>,
 }
 
 impl Default for PresentationRuntime {
@@ -169,6 +177,8 @@ impl Default for PresentationRuntime {
             viewer: viewer::ViewerRuntime::default(),
             remotes: remotes::RemotesState::default(),
             page_serve: page_serve::PageServeRuntime::default(),
+            respawns: respawn::OriginRespawns::default(),
+            clock: Box::new(Instant::now),
         }
     }
 }
@@ -365,17 +375,22 @@ impl Core {
         self.library().store_for_session(id).and_then(|store| store.session(id))
     }
 
-    /// The replaceable state a viewer of `session` starts from; empty for a session gone (upstream's
-    /// `presentationSnapshot`).
+    /// The replaceable state a viewer of `session` starts from; empty but for the respawn counts for a session gone
+    /// (upstream's `presentationSnapshot` and `subscribePresentation`).
     fn presentation_snapshot(&self, session: Uuid) -> PresentationSnapshot {
+        let respawns = Some(self.remote.respawns.snapshot(session));
         let Some(found) = self.presented_session(session) else {
-            return PresentationSnapshot::default();
+            return PresentationSnapshot {
+                respawns,
+                ..PresentationSnapshot::default()
+            };
         };
         PresentationSnapshot {
             status: presentation_status(found),
             hud: self.remote.hud(found, Instant::now()),
             context: found.context.clone(),
             layout: presentation_layout(found),
+            respawns,
         }
     }
 
