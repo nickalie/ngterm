@@ -279,13 +279,19 @@ fn a_pane_events_report_what_the_gtk_build_routed() {
     );
     assert_eq!(
         report(
-            &TerminalEvent::OpenUrl("https://x.dev".to_owned()),
+            &TerminalEvent::OpenUrl {
+                url: "https://x.dev".to_owned(),
+                browser: true
+            },
             shell,
             "box",
             12.0,
             false
         ),
-        [Report::OpenUrl("https://x.dev".to_owned())]
+        [Report::OpenUrl {
+            url: "https://x.dev".to_owned(),
+            browser: true
+        }]
     );
     assert!(report(&TerminalEvent::Pane(PaneEvent::Bell), shell, "box", 12.0, false).is_empty());
 }

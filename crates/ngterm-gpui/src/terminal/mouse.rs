@@ -16,7 +16,10 @@
 //!   follows `right-click-action` (`paste`, `copy`, `copy-or-paste`, `ignore`, or `context-menu`: the word or link
 //!   under it selected and copied per `copy-on-select`, with no menu to show).
 //! - Links ([`super::links`]) are refreshed on every move and modifier change, opened on a click; while the program
-//!   has the mouse, Shift is not counted (Ghostty's `mouseModsWithCapture`).
+//!   has the mouse, Shift is not counted (Ghostty's `mouseModsWithCapture`). In an overlay link-open mode with no
+//!   mouse capture, Ctrl+Shift or Super+Shift exactly (upstream's ⌘⇧) on a session's terminal is the browser chord
+//!   ([`links::wants_browser`]): Shift is not counted then either, so the link lights and a click opens it in the
+//!   browser (and Shift alone still extends the selection).
 //! - The wheel goes to `Pane::wheel` (alternate scroll, a report, or the viewport) in whole steps: precise deltas
 //!   accumulate per cell height, `mouse-scroll-multiplier` (default `precision:1,discrete:3`) applies.
 //! - The pointer's shape is the program's (OSC 22; the I-beam by default), a hand over a live link. Hiding it while
@@ -27,11 +30,13 @@
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
-    Bounds, Context, CursorStyle, DispatchPhase, ElementInputHandler, Entity, Hitbox, MouseButton, MouseDownEvent,
+    App, Bounds, Context, CursorStyle, DispatchPhase, ElementInputHandler, Entity, Hitbox, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent, Task, Window,
 };
 use ngterm_core::ghostty_config::binds::{Action, CopyFormat, Mods};
 use ngterm_core::ghostty_config::{MiddleClickAction, MouseShiftCapture, RightClickAction};
+use ngterm_core::keymap::SurfaceOwner;
+use ngterm_core::link_policy::ClickOrigin;
 use ngterm_term::{
     Autoscroll, ClipboardLocation, GestureEvent, GridPoint, MouseAction, MouseButton as PaneButton, MouseInput,
     MouseShape, Pane, PasteSource, WheelInput,
@@ -218,9 +223,34 @@ impl TerminalView {
         !self.shared.is_readonly() && pane.mouse_tracking()
     }
 
-    /// The modifiers links are looked up with: Shift dropped while the program has the mouse and may not capture
-    /// Shift (Ghostty's `mouseModsWithCapture`), since Shift then only takes the mouse back.
-    fn link_mods(&self, pane: &Pane, mods: Mods) -> Mods {
+    /// Where a link clicked in this terminal comes from, for the browser chord: a session pane's (main, split or
+    /// scratch) or a program overlay's; `None` for a terminal with no owning session (a HUD's, the quick terminal's).
+    fn link_origin(&self) -> Option<ClickOrigin> {
+        match self.shared.owner()? {
+            SurfaceOwner::Pane { session, .. } => Some(ClickOrigin::Pane(session)),
+            SurfaceOwner::Overlay { .. } => Some(ClickOrigin::ProgramOverlay),
+        }
+    }
+
+    /// Whether `mods` are the browser chord here now ([`links::wants_browser`]).
+    fn wants_browser(&self, pane: &Pane, mods: Mods, cx: &App) -> bool {
+        links::wants_browser(mods, self.link_origin(), self.tracking(pane), cx)
+    }
+
+    /// `mods` with the browser chord's Shift dropped (upstream's `linkMods`), so the chord acts as Ctrl or Super alone.
+    fn chord_mods(&self, pane: &Pane, mods: Mods, cx: &App) -> Mods {
+        if self.wants_browser(pane, mods, cx) {
+            mods - Mods::SHIFT
+        } else {
+            mods
+        }
+    }
+
+    /// The modifiers links are looked up with: the browser chord's Shift dropped ([`Self::chord_mods`]), and Shift
+    /// dropped while the program has the mouse and may not capture Shift (Ghostty's `mouseModsWithCapture`), since
+    /// Shift then only takes the mouse back.
+    fn link_mods(&self, pane: &Pane, mods: Mods, cx: &App) -> Mods {
+        let mods = self.chord_mods(pane, mods, cx);
         if mods.contains(Mods::SHIFT) && !self.shift_capture() && self.tracking(pane) {
             mods - Mods::SHIFT
         } else {
@@ -285,8 +315,10 @@ impl TerminalView {
 
     fn press(&mut self, pane: &Pane, index: usize, (x, y): (f32, f32), cx: &mut Context<Self>) {
         let held = self.pointer.mods;
-        // Shift-click extends the selection a single click made, past the repeat interval
-        if index == 0 && held.contains(Mods::SHIFT) && !self.shift_capture() && self.extends_selection(pane) {
+        // Shift-click extends the selection a single click made, past the repeat interval; the browser chord's Shift
+        // does not
+        let extends = self.chord_mods(pane, held, cx).contains(Mods::SHIFT);
+        if index == 0 && extends && !self.shift_capture() && self.extends_selection(pane) {
             self.drag_selection(pane, (x, y), cx);
             return;
         }
@@ -301,7 +333,7 @@ impl TerminalView {
         match index {
             0 => self.left_press(pane, (x, y)),
             1 => self.middle_press(pane, cx),
-            _ => self.right_press(pane, (x, y)),
+            _ => self.right_press(pane, (x, y), cx),
         }
     }
 
@@ -369,7 +401,7 @@ impl TerminalView {
     /// `right-click-action` (Ghostty's `mouseButtonCallback`): `copy` copies the selection (plain and HTML) to the
     /// clipboard and drops it, `paste` drops the selection and pastes the clipboard, `copy-or-paste` copies with a
     /// selection and pastes without one, `context-menu` selects what is under the pointer, `ignore` does nothing.
-    fn right_press(&self, pane: &Pane, (x, y): (f32, f32)) {
+    fn right_press(&self, pane: &Pane, (x, y): (f32, f32), cx: &App) {
         let has_selection = pane.selection().is_some();
         let copy = |view: &Self| {
             let _ = view.perform(&Action::CopyToClipboard(CopyFormat::Mixed));
@@ -380,7 +412,7 @@ impl TerminalView {
         };
         match self.shared.config().mouse.right_click_action {
             RightClickAction::Ignore => {}
-            RightClickAction::ContextMenu => self.context_menu_select(pane, (x, y)),
+            RightClickAction::ContextMenu => self.context_menu_select(pane, (x, y), cx),
             RightClickAction::Copy => {
                 if has_selection {
                     copy(self);
@@ -398,7 +430,7 @@ impl TerminalView {
 
     /// `right-click-action = context-menu`: the word (or link) under the pointer selected and copied per
     /// `copy-on-select`, unless the selection holds it.
-    fn context_menu_select(&self, pane: &Pane, (x, y): (f32, f32)) {
+    fn context_menu_select(&self, pane: &Pane, (x, y): (f32, f32), cx: &App) {
         let at = pane.cell_at(x, y);
         let Some(frame) = self.painted.as_ref() else {
             return;
@@ -418,7 +450,7 @@ impl TerminalView {
             pane,
             frame,
             at,
-            self.link_mods(pane, self.pointer.mods),
+            self.link_mods(pane, self.pointer.mods, cx),
             self.link_url(),
         );
         let selected = match link
@@ -483,8 +515,10 @@ impl TerminalView {
         if !u16::try_from(at.y).is_ok_and(|row| link.covers(at.x, row)) {
             return false;
         }
-        self.terminal
-            .update(cx, |_, cx| cx.emit(TerminalEvent::OpenUrl(link.url)));
+        let browser = self.wants_browser(pane, self.pointer.mods, cx);
+        self.terminal.update(cx, |_, cx| {
+            cx.emit(TerminalEvent::OpenUrl { url: link.url, browser });
+        });
         true
     }
 
@@ -629,7 +663,7 @@ impl TerminalView {
         self.pointer.link_key = key;
         // a drag that left its first cell shows no link until the button is up
         let dragging = self.pointer.held[0] && pane.gesture_state().dragged;
-        let link_mods = self.link_mods(pane, mods);
+        let link_mods = self.link_mods(pane, mods, cx);
         let link = at.filter(|_| !dragging).and_then(|at| {
             let frame = self.painted.as_ref()?;
             links::link_at(pane, frame, at, link_mods, self.link_url())
@@ -738,8 +772,12 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         if let Some(link) = self.link_under(position, bounds, modifiers) {
-            self.terminal
-                .update(cx, |_, cx| cx.emit(TerminalEvent::OpenUrl(link.url)));
+            self.terminal.update(cx, |_, cx| {
+                cx.emit(TerminalEvent::OpenUrl {
+                    url: link.url,
+                    browser: false,
+                });
+            });
         }
     }
 

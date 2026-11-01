@@ -365,10 +365,10 @@ fn panel_event(poster: &crate::state::Poster, session: Uuid, generation: u64, ev
                 state.settle();
             }
         }),
-        TerminalEvent::OpenUrl(url) => {
-            let url = url.clone();
+        TerminalEvent::OpenUrl { url, browser } => {
+            let (url, browser) = (url.clone(), *browser);
             post(poster, move |state: &mut AppState| {
-                state.follow_link(&url, ClickOrigin::Hud);
+                state.follow_link(&url, ClickOrigin::Hud, browser);
             });
         }
         _ => {}

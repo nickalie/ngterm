@@ -681,10 +681,10 @@ impl Route {
             TerminalEvent::Keystroke(_) => post(&self.poster, move |state: &mut AppState| {
                 state.overlay_keystroke(session);
             }),
-            TerminalEvent::OpenUrl(url) => {
-                let url = url.clone();
+            TerminalEvent::OpenUrl { url, browser } => {
+                let (url, browser) = (url.clone(), *browser);
                 post(&self.poster, move |state: &mut AppState| {
-                    state.follow_link(&url, ClickOrigin::ProgramOverlay);
+                    state.follow_link(&url, ClickOrigin::ProgramOverlay, browser);
                 });
             }
             _ => {}

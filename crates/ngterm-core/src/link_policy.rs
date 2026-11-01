@@ -6,7 +6,8 @@
 //! hands it to the default application for its type, which for a script or a `.desktop` file can run it, while a
 //! reveal only selects it. A `file://` whose host is not this machine is ignored, as is a path under an automount
 //! root, where even looking at the path can mount a network share. [`route`] adds the link-open setting on top: a
-//! web link clicked in a pane or the scratch terminal may go to a session overlay instead of the browser.
+//! web link clicked in a pane or the scratch terminal may go to a session overlay (full size, 95%, 75% or 50%)
+//! instead of the browser, and [`wants_browser`] says when a Ctrl/Super+Shift click overrides that for one link.
 //!
 //! Host-free: the local host names are injected (the `*_for_hosts` variants), and the frontend only carries out the
 //! route. URLs are parsed here as RFC 3986 references, strictly (a space, a control character or a broken
@@ -20,6 +21,7 @@ use std::sync::OnceLock;
 
 use uuid::Uuid;
 
+use crate::interrupt::KeyModifiers;
 use crate::persist::settings::LinkOpenMode;
 
 /// The schemes safe to hand to the desktop's opener: web and mail only, none that hands off to a local executable or
@@ -57,7 +59,12 @@ pub enum ClickOrigin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
     Browser(String),
-    Overlay { url: String, session: Uuid },
+    /// A session web overlay over `session`, at `size_percent` of it (`None`: full size).
+    Overlay {
+        url: String,
+        session: Uuid,
+        size_percent: Option<i64>,
+    },
     Reveal(PathBuf),
     Ignore,
 }
@@ -155,9 +162,25 @@ pub fn route(raw: &str, mode: LinkOpenMode, origin: ClickOrigin) -> Route {
     route_for_hosts(raw, mode, origin, local_host_names())
 }
 
+/// Whether a Ctrl+Shift or Super+Shift link click (upstream's ⌘⇧, exactly that chord) overrides an overlay mode and
+/// sends the link to the browser: only from a pane or the scratch terminal, and not while the program captures the
+/// mouse (`mouse_captured`), where the chord is the only link click and so follows the setting.
+#[must_use]
+pub fn wants_browser(modifiers: KeyModifiers, mode: LinkOpenMode, origin: ClickOrigin, mouse_captured: bool) -> bool {
+    let chord = modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+        || modifiers == (KeyModifiers::COMMAND | KeyModifiers::SHIFT);
+    if !chord || mode == LinkOpenMode::Browser || mouse_captured {
+        return false;
+    }
+    match origin {
+        ClickOrigin::Pane(_) | ClickOrigin::Scratch(_) => true,
+        ClickOrigin::Hud | ClickOrigin::ProgramOverlay | ClickOrigin::Quick => false,
+    }
+}
+
 /// The route of a raw link: [`disposition_for_hosts`] decides open, reveal or ignore, then a web link an overlay can
-/// show, clicked in a pane or the scratch terminal, goes to that session's overlay under [`LinkOpenMode::Overlay`].
-/// Whether the overlay is free right now is the caller's check.
+/// show, clicked in a pane or the scratch terminal, goes to that session's overlay at the mode's size under any mode
+/// but [`LinkOpenMode::Browser`]. Whether the overlay is free right now is the caller's check.
 #[must_use]
 pub fn route_for_hosts<S: BuildHasher>(
     raw: &str,
@@ -169,11 +192,15 @@ pub fn route_for_hosts<S: BuildHasher>(
         LinkDisposition::Ignore => Route::Ignore,
         LinkDisposition::Reveal(path) => Route::Reveal(path),
         LinkDisposition::Open(url) => {
-            if mode != LinkOpenMode::Overlay || !overlay_can_show(&url) {
+            if mode == LinkOpenMode::Browser || !overlay_can_show(&url) {
                 return Route::Browser(url);
             }
             match origin {
-                ClickOrigin::Pane(session) | ClickOrigin::Scratch(session) => Route::Overlay { url, session },
+                ClickOrigin::Pane(session) | ClickOrigin::Scratch(session) => Route::Overlay {
+                    url,
+                    session,
+                    size_percent: mode.overlay_size_percent(),
+                },
                 ClickOrigin::Hud | ClickOrigin::ProgramOverlay | ClickOrigin::Quick => Route::Browser(url),
             }
         }
@@ -556,9 +583,35 @@ mod tests {
                 let url = raw.to_owned();
                 assert_eq!(
                     route_of(raw, LinkOpenMode::Overlay, origin),
-                    Route::Overlay { url, session }
+                    Route::Overlay {
+                        url,
+                        session,
+                        size_percent: None
+                    }
                 );
             }
+        }
+    }
+
+    /// Upstream's `eachOverlayModeCarriesItsSizeToTheRoute`.
+    #[test]
+    fn each_overlay_mode_carries_its_size_to_the_route() {
+        let session = Uuid::new_v4();
+        for (mode, size_percent) in [
+            (LinkOpenMode::Overlay, None),
+            (LinkOpenMode::Overlay95, Some(95)),
+            (LinkOpenMode::Overlay75, Some(75)),
+            (LinkOpenMode::Overlay50, Some(50)),
+        ] {
+            assert_eq!(
+                route_of("https://example.com/a", mode, ClickOrigin::Pane(session)),
+                Route::Overlay {
+                    url: "https://example.com/a".to_owned(),
+                    session,
+                    size_percent
+                },
+                "{mode:?}"
+            );
         }
     }
 
@@ -585,7 +638,11 @@ mod tests {
         ] {
             let url = raw.to_owned();
             let expected = if overlay {
-                Route::Overlay { url, session }
+                Route::Overlay {
+                    url,
+                    session,
+                    size_percent: None,
+                }
             } else {
                 Route::Browser(url)
             };
@@ -624,6 +681,85 @@ mod tests {
                 );
                 assert_eq!(route_of("x-custom://run", *mode, origin), Route::Ignore);
                 assert_eq!(route_of("file://elsewhere/tmp/x.md", *mode, origin), Route::Ignore);
+            }
+        }
+    }
+
+    // wants_browser (the Ctrl/Super+Shift override)
+
+    const OVERLAY_MODES: [LinkOpenMode; 4] = [
+        LinkOpenMode::Overlay,
+        LinkOpenMode::Overlay95,
+        LinkOpenMode::Overlay75,
+        LinkOpenMode::Overlay50,
+    ];
+
+    fn chords() -> [KeyModifiers; 2] {
+        [
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            KeyModifiers::COMMAND | KeyModifiers::SHIFT,
+        ]
+    }
+
+    /// Upstream's `commandShiftAsksForTheBrowserInEveryOverlayMode` (Ctrl or Super standing for ⌘).
+    #[test]
+    fn the_chord_asks_for_the_browser_in_every_overlay_mode() {
+        let session = Uuid::new_v4();
+        for origin in [ClickOrigin::Pane(session), ClickOrigin::Scratch(session)] {
+            for chord in chords() {
+                for mode in OVERLAY_MODES {
+                    assert!(wants_browser(chord, mode, origin, false), "{mode:?} {origin:?}");
+                }
+                assert!(!wants_browser(chord, LinkOpenMode::Browser, origin, false));
+            }
+        }
+    }
+
+    /// Upstream's `onlyTheExactCommandShiftChordAsksForTheBrowser`.
+    #[test]
+    fn only_the_exact_chord_asks_for_the_browser() {
+        let (ctrl, sup, alt, shift) = (
+            KeyModifiers::CONTROL,
+            KeyModifiers::COMMAND,
+            KeyModifiers::OPTION,
+            KeyModifiers::SHIFT,
+        );
+        for modifiers in [
+            ctrl,
+            sup,
+            shift,
+            KeyModifiers::NONE,
+            ctrl | shift | alt,
+            sup | shift | alt,
+            sup | shift | ctrl,
+            ctrl | alt,
+            sup | alt,
+        ] {
+            let session = ClickOrigin::Pane(Uuid::new_v4());
+            assert!(
+                !wants_browser(modifiers, LinkOpenMode::Overlay, session, false),
+                "{modifiers:?}"
+            );
+        }
+    }
+
+    /// Upstream's `commandShiftUnderMouseCaptureFollowsTheSetting`.
+    #[test]
+    fn the_chord_under_mouse_capture_follows_the_setting() {
+        let session = Uuid::new_v4();
+        for origin in [ClickOrigin::Pane(session), ClickOrigin::Scratch(session)] {
+            for chord in chords() {
+                assert!(!wants_browser(chord, LinkOpenMode::Overlay, origin, true));
+            }
+        }
+    }
+
+    /// Upstream's `sessionlessOriginsNeverTakeTheOverride`.
+    #[test]
+    fn sessionless_origins_never_take_the_override() {
+        for origin in [ClickOrigin::Hud, ClickOrigin::ProgramOverlay, ClickOrigin::Quick] {
+            for chord in chords() {
+                assert!(!wants_browser(chord, LinkOpenMode::Overlay, origin, false));
             }
         }
     }

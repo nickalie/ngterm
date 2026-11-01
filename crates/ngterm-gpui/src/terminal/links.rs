@@ -15,7 +15,7 @@
 use std::sync::LazyLock;
 
 use fancy_regex::Regex;
-use gpui_kit::App;
+use gpui_kit::{App, Global};
 use ngterm_core::ghostty_config::binds::Mods;
 use ngterm_core::link_policy::{self, ClickOrigin, Route};
 use ngterm_core::persist::settings::LinkOpenMode;
@@ -324,6 +324,38 @@ fn cells_of(line: &Line, span: std::ops::Range<usize>, frame: &Frame) -> Vec<(u1
         }
     }
     cells
+}
+
+/// The link-open setting as the terminals read it for the browser chord (Settings ▸ General ▸ Open links in), kept in
+/// step with the model by the windows' sync ([`sync_link_open_mode`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LinkSetting(LinkOpenMode);
+
+impl Global for LinkSetting {}
+
+/// Mirrors the link-open setting for the terminals' mouse.
+pub fn sync_link_open_mode(mode: LinkOpenMode, cx: &mut App) {
+    if cx.try_global::<LinkSetting>() != Some(&LinkSetting(mode)) {
+        cx.set_global(LinkSetting(mode));
+    }
+}
+
+/// The link-open setting now; browser before the first sync.
+#[must_use]
+pub fn link_open_mode(cx: &App) -> LinkOpenMode {
+    cx.try_global::<LinkSetting>()
+        .map_or(LinkOpenMode::Browser, |setting| setting.0)
+}
+
+/// Whether a click with `mods` held is the browser chord (upstream's ⌘⇧ override, [`link_policy::wants_browser`]):
+/// Ctrl+Shift or Super+Shift exactly, in an overlay mode, from a terminal with an owning session (`origin`), while
+/// the program does not capture the mouse (`captured`). The chord then makes links live as Ctrl or Super alone does,
+/// and the click opens its link in the browser.
+#[must_use]
+pub fn wants_browser(mods: Mods, origin: Option<ClickOrigin>, captured: bool, cx: &App) -> bool {
+    origin.is_some_and(|origin| {
+        link_policy::wants_browser(super::input::key_modifiers(mods), link_open_mode(cx), origin, captured)
+    })
 }
 
 /// Carries out what the link policy decides for a clicked link (the GTK build's `follow_link`): the desktop's handler

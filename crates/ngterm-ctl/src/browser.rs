@@ -80,17 +80,18 @@ impl RequestCommand for Clear {
     }
 }
 
-/// `ngtermctl browser links [browser|overlay]`: no mode reads the setting.
+/// `ngtermctl browser links [MODE]`: no mode reads the setting. App-wide, so no `--window`.
 #[derive(Debug, clap::Args)]
 #[command(
-    about = "Set or read where a clicked web link in a terminal opens (browser|overlay).",
+    about = "Set or read where a clicked web link in a terminal opens \
+             (browser|overlay|overlay95|overlay75|overlay50).",
     long_about = "overlay opens http and https links in a full session web overlay with JavaScript, navigation \
-                  buttons and the saved browser store; with no MODE the current one is printed. A link in a HUD, a \
-                  link clicked while a HUD is up or the terminal is zoomed, and a link the overlay cannot show open \
-                  in the browser."
+                  buttons and the saved browser store; overlay95, overlay75 and overlay50 open it at that percent of \
+                  the session. With no MODE the current one is printed. A link in a HUD, a link clicked while a HUD \
+                  is up or the terminal is zoomed, and a link the overlay cannot show open in the browser."
 )]
 pub struct Links {
-    #[arg(help = "Mode: browser or overlay. Omit to read the current mode.")]
+    #[arg(help = "Mode: browser, overlay, overlay95, overlay75 or overlay50. Omit to read the current mode.")]
     mode: Option<String>,
 
     #[command(flatten)]
@@ -104,7 +105,9 @@ impl RequestCommand for Links {
 
     fn validate(&self) -> Result<(), String> {
         match &self.mode {
-            Some(mode) if LinkOpenMode::from_raw(mode).is_none() => Err("mode must be browser or overlay".to_owned()),
+            Some(mode) if LinkOpenMode::from_raw(mode).is_none() => {
+                Err("mode must be browser, overlay, overlay95, overlay75 or overlay50".to_owned())
+            }
             _ => Ok(()),
         }
     }
@@ -146,16 +149,18 @@ mod tests {
     #[test]
     fn links_sends_its_mode_or_none_and_takes_no_window() {
         assert_eq!(outcome(&["links"]).unwrap(), json!({"cmd": "browser.links"}));
-        for mode in ["browser", "overlay"] {
+        for mode in ["browser", "overlay", "overlay95", "overlay75", "overlay50"] {
             assert_eq!(
                 outcome(&["links", mode]).unwrap(),
                 json!({"cmd": "browser.links", "args": {"mode": mode}})
             );
         }
-        assert_eq!(
-            outcome(&["links", "tab"]).unwrap_err(),
-            "mode must be browser or overlay"
-        );
+        for mode in ["tab", "overlay60"] {
+            assert_eq!(
+                outcome(&["links", mode]).unwrap_err(),
+                "mode must be browser, overlay, overlay95, overlay75 or overlay50"
+            );
+        }
         assert!(outcome(&["links", "overlay", "--window", "w1"]).is_err());
     }
 }

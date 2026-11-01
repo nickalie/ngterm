@@ -1276,6 +1276,20 @@ def test_browser_and_config(cli, ctl):
     _rendered(cli("config", "reload"), reloaded)
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("cli:browser links")
+def test_browser_links_takes_the_sized_overlay_modes(cli, ctl):
+    mode = assert_ok(ctl.request("browser.links"))["text"]
+    try:
+        _ok(cli("browser", "links", "overlay75"), "overlay75\n")
+        assert ctl.tree()["tree"]["linkOpenMode"] == "overlay75"
+        _rendered(cli("browser", "links"), {"text": "overlay75"})
+        _usage(cli("browser", "links", "overlay60"), "mode must be browser, overlay, overlay95, overlay75 or overlay50")
+        assert ctl.tree()["tree"]["linkOpenMode"] == "overlay75"
+    finally:
+        assert_ok(ctl.request("browser.links", mode=mode))
+
+
 # -- recent
 
 

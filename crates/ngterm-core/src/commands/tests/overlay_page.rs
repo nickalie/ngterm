@@ -542,12 +542,12 @@ fn a_clicked_link_opens_a_browsing_page_unless_a_hud_or_a_zoom_is_up() {
         }),
     );
     assert!(
-        !fixture.core.open_link_overlay(url.clone(), zoomed),
+        !fixture.core.open_link_overlay(url.clone(), zoomed, None),
         "a zoom refuses it"
     );
     assert!(node(&mut fixture, zoomed).get("htmlOverlays").is_none());
     fixture.core.set_zoom_target(window, None);
-    assert!(fixture.core.open_link_overlay(url.clone(), id));
+    assert!(fixture.core.open_link_overlay(url.clone(), id, None));
     let page = node(&mut fixture, id)["htmlOverlays"][0].clone();
     assert_eq!(page["url"], json!("https://example.com/docs"));
     assert_eq!(
@@ -559,7 +559,10 @@ fn a_clicked_link_opens_a_browsing_page_unless_a_hud_or_a_zoom_is_up() {
         ),
         (&json!(true), &json!(true), &json!(true), &json!(true))
     );
-    assert!(!fixture.core.open_link_overlay(url.clone(), id), "the slot is taken");
+    assert!(
+        !fixture.core.open_link_overlay(url.clone(), id, None),
+        "the slot is taken"
+    );
     let other = fixture.sessions[1];
     let _helper = with_hud_helper(&mut fixture);
     assert!(
@@ -567,7 +570,7 @@ fn a_clicked_link_opens_a_browsing_page_unless_a_hud_or_a_zoom_is_up() {
             Some("hi".into()))
         .ok
     );
-    assert!(!fixture.core.open_link_overlay(url, other), "a hud refuses it");
+    assert!(!fixture.core.open_link_overlay(url, other, None), "a hud refuses it");
     assert!(node(&mut fixture, other).get("hud").is_some());
 }
 
@@ -653,7 +656,7 @@ fn a_link_opens_a_full_browsing_page_on_its_session_without_selecting_it() {
     let (id, other) = (fixture.sessions[0], fixture.sessions[1]);
     fixture.store_mut().unwrap().select_session(Some(other));
     let url = url::Url::parse("http://127.0.0.1:1/pr/1").unwrap();
-    assert!(fixture.core.open_link_overlay(url.clone(), id));
+    assert!(fixture.core.open_link_overlay(url.clone(), id, None));
     let page = slot_page(&fixture, id).expect("the link's page");
     assert_eq!(page.source, crate::html::HtmlSource::Url(url));
     let flags = page.flags;
@@ -664,6 +667,21 @@ fn a_link_opens_a_full_browsing_page_on_its_session_without_selecting_it() {
     assert_eq!(fixture.selected(), Some(other), "the link's session is not selected");
 }
 
+/// Upstream's `testALinkOpensAtTheSizeItsModeNames`.
+#[test]
+fn a_link_opens_at_the_size_its_mode_names() {
+    let (mut fixture, _) = fixture_with_host(0);
+    let id = fixture.sessions[0];
+    let url = url::Url::parse("http://127.0.0.1:1/pr/1").unwrap();
+    assert!(fixture.core.open_link_overlay(url.clone(), id, Some(75)));
+    assert_eq!(
+        slot_page(&fixture, id).map(|page| page.source),
+        Some(crate::html::HtmlSource::Url(url))
+    );
+    assert_eq!(fixture.store().session(id).unwrap().overlay.size_percent, Some(75));
+    assert_eq!(node(&mut fixture, id)["overlaySizePercent"], json!(75));
+}
+
 /// Upstream's `testALinkIsRefusedWithoutAUsableSavedStoreOrAKnownSession` and
 /// `testALinkIsRefusedWhileAProgramHoldsTheSlot`.
 #[test]
@@ -672,19 +690,19 @@ fn a_link_is_refused_without_a_usable_saved_store_or_a_known_session() {
     let id = fixture.sessions[0];
     let url = url::Url::parse("http://127.0.0.1:1/").unwrap();
     log.borrow_mut().store_failure = Some(errors::PERSISTENT_UNAVAILABLE.to_owned());
-    assert!(!fixture.core.open_link_overlay(url.clone(), id));
+    assert!(!fixture.core.open_link_overlay(url.clone(), id, None));
     let read = node(&mut fixture, id);
     assert_eq!(read["overlay"], json!(false));
     assert!(read.get("htmlOverlays").is_none());
     log.borrow_mut().store_failure = None;
-    assert!(!fixture.core.open_link_overlay(url.clone(), Uuid::new_v4()));
+    assert!(!fixture.core.open_link_overlay(url.clone(), Uuid::new_v4(), None));
     assert!(
         overlay(&mut fixture, SessionCmd::OverlayOpen, id, |a| a.command =
             Some("exec cat".into()))
         .ok
     );
     assert!(
-        !fixture.core.open_link_overlay(url.clone(), id),
+        !fixture.core.open_link_overlay(url.clone(), id, None),
         "a program holds the slot"
     );
     assert!(slot_page(&fixture, id).is_none());
@@ -694,7 +712,7 @@ fn a_link_is_refused_without_a_usable_saved_store_or_a_known_session() {
 
     let mut bare = Fixture::new(0);
     let id = bare.sessions[0];
-    assert!(!bare.core.open_link_overlay(url, id), "a build without web views");
+    assert!(!bare.core.open_link_overlay(url, id, None), "a build without web views");
     assert!(bare.store().session(id).unwrap().overlay.html.is_none());
 }
 

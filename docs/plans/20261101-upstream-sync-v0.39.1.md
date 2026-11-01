@@ -453,18 +453,19 @@ form. The policy lives in `ngterm-core`; the GPUI mouse part is "not built on ma
 `test_cli_output.py::test_browser_and_config` (listed). New: `test_config_browser.py::test_links_takes_the_sized_overlay_modes`
 (`@since("0.39.1")`), "overlay60" refused under `since`, the CLI sibling for `browser links overlay75`.
 
-- [ ] `browser.links` accepts overlay95/overlay75/overlay50 (stored raw as `linkOpenMode`; a stored `overlay` stays
+- [x] `browser.links` accepts overlay95/overlay75/overlay50 (stored raw as `linkOpenMode`; a stored `overlay` stays
       full size); refusals unchanged ("browser.links takes no target or --window", "invalid link mode: <raw>")
-- [ ] any non-browser mode routes a showable web link from a pane or scratch to an overlay at the mode's size, read
+- [x] any non-browser mode routes a showable web link from a pane or scratch to an overlay at the mode's size, read
       back as `overlaySizePercent`
-- [ ] Ctrl/Super+Shift-click (exactly) in an overlay mode with no mouse capture opens the browser; Shift alone extends
+- [x] Ctrl/Super+Shift-click (exactly) in an overlay mode with no mouse capture opens the browser; Shift alone extends
       the selection; under capture the chord follows the setting; in browser mode it is not a link click; the link
       lights on hover and on a modifier change under a still pointer
-- [ ] CLI help and "mode must be browser, overlay, overlay95, overlay75 or overlay50"; Settings ▸ General ▸ Open
+- [x] CLI help and "mode must be browser, overlay, overlay95, overlay75 or overlay50"; Settings ▸ General ▸ Open
       links in gains "Session overlay at 95%", "… 75%", "… 50%"
-- [ ] write tests: the Swift cases above (core policy, commands, ctl, gpui mouse)
-- [ ] write tests: the conformance tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the Swift cases above (core policy, commands, ctl, gpui mouse)
+- [x] write tests: the conformance tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the three new conformance
+      tests are `since(0.39.1)`; green at a temporary 0.39.1 level, their ids go in at Task 25)
 
 ### Task 10: A pane overlay draws above the session overlay it opened over (#831); a pane ask over a cover is unshaded (401ff29)
 

@@ -4241,25 +4241,27 @@ SUBCOMMANDS:
   clear                   Remove every cookie and all site data the saved
                           browser store holds.
   links                   Set or read where a clicked web link in a terminal
-                          opens (browser|overlay).
+                          opens (browser|overlay|overlay95|overlay75|overlay50).
 
   See 'ngtermctl help browser <subcommand>' for detailed help.
 ";
 
 const BROWSER_LINKS_HELP: &str = "\
 OVERVIEW: Set or read where a clicked web link in a terminal opens
-(browser|overlay).
+(browser|overlay|overlay95|overlay75|overlay50).
 
 overlay opens http and https links in a full session web overlay with
-JavaScript, navigation buttons and the saved browser store; with no MODE the
-current one is printed. A link in a HUD, a link clicked while a HUD is up or
-the terminal is zoomed, and a link the overlay cannot show open in the browser.
+JavaScript, navigation buttons and the saved browser store; overlay95,
+overlay75 and overlay50 open it at that percent of the session. With no MODE
+the current one is printed. A link in a HUD, a link clicked while a HUD is up
+or the terminal is zoomed, and a link the overlay cannot show open in the
+browser.
 
 USAGE: ngtermctl browser links [<mode>] [--socket <socket>] [--json]
 
 ARGUMENTS:
-  <mode>                  Mode: browser or overlay. Omit to read the current
-                          mode.
+  <mode>                  Mode: browser, overlay, overlay95, overlay75 or
+                          overlay50. Omit to read the current mode.
 
 OPTIONS:
   --socket <socket>       Override the control socket path.
@@ -4412,7 +4414,10 @@ fn browser_and_config_usage_errors_come_before_connecting() -> TestResult {
     // nothing listens here: a connection attempt would exit 1, not 64
     let socket = dir.path().join("ngterm.sock");
     let cases: [(&[&str], &str); 5] = [
-        (&["browser", "links", "tab"], "Error: mode must be browser or overlay\n"),
+        (
+            &["browser", "links", "tab"],
+            "Error: mode must be browser, overlay, overlay95, overlay75 or overlay50\n",
+        ),
         (&["browser", "links", "overlay", "--window", "w1"], "Error: "),
         (&["browser", "clear", "--window", "w1"], "Error: "),
         (&["browser", "clear", "--target", "s1"], "Error: "),

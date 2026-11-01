@@ -71,7 +71,7 @@ pub use element::{Layer as PaintLayer, PlacedGlyph, ShapedRow, TerminalElement};
 pub use font::{DEFAULT_FAMILIES, DEFAULT_FAMILY, Fonts, SYMBOLS_FAMILY, register_embedded as register_embedded_fonts};
 pub(crate) use keyboard::terminal_holds_keyboard;
 pub use keyboard::{key_down, typing_surface};
-pub use links::{Link, LinkKind, follow_link};
+pub use links::{Link, LinkKind, follow_link, link_open_mode, sync_link_open_mode};
 pub use metrics::{CellMetrics, DEFAULT_DPI, FaceMetrics, Geometry, Padding, cell_metrics, points_to_px};
 pub use mouse::{cursor_style, scroll_multiplier};
 pub use row_cache::{Cluster, Decoration, Line, RowCache, RowLayout, RowMarks, Span, SpriteCell, TextRun, TextStyle};
@@ -212,8 +212,10 @@ pub enum TerminalEvent {
     /// An `end_search` binding ended the search.
     EndSearch,
     /// A link was clicked, or `write_*_file:open` asked for its file: the frontend opens it through the link
-    /// policy ([`follow_link`] is the default route), as libghostty's `OPEN_URL` asked.
-    OpenUrl(String),
+    /// policy ([`follow_link`] is the default route), as libghostty's `OPEN_URL` asked. `browser`: the click was the
+    /// Ctrl/Super+Shift chord that sends this one link to the browser over an overlay link-open setting
+    /// ([`ngterm_core::link_policy::wants_browser`]).
+    OpenUrl { url: String, browser: bool },
     /// `toggle_readonly` turned read-only mode on or off: the frontend shows it.
     Readonly(bool),
     /// `focus-follows-mouse`: the pointer moved over this terminal's owner view, which does not hold the keyboard,

@@ -41,7 +41,7 @@ pub struct ControlTree {
     /// is flagged.
     #[serde(default)]
     pub flagged_order: Option<Vec<String>>,
-    /// `browser` or `overlay`; app-wide.
+    /// `browser`, `overlay`, `overlay95`, `overlay75` or `overlay50` (the read side of `browser.links`); app-wide.
     #[serde(default)]
     pub link_open_mode: Option<String>,
     #[serde(default)]

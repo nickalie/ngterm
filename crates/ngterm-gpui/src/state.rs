@@ -22,6 +22,7 @@ use ngterm_core::events::{PANE_FOCUS_DEBOUNCE, PaneFocusTimer, TREE_CHANGED_DEBO
 use ngterm_core::keymap::TypingSurface;
 use ngterm_core::link_policy::{self, ClickOrigin, Route};
 use ngterm_core::model::{PendingCloseTimer, StatusKeystroke};
+use ngterm_core::persist::settings::LinkOpenMode;
 use ngterm_core::persist::{DebouncedSave, arm_debounced_saves};
 use ngterm_core::remote::page_serve::{self, BridgeReply, PageChannel, PageServeStream, PageServeWork};
 use ngterm_core::sidebar_actions::SidebarAction;
@@ -439,13 +440,24 @@ impl AppState {
         spawns
     }
 
-    /// A link clicked in a terminal (the GTK build's `follow_link_in`): through the link policy as a click from
-    /// `origin`, under the link-open setting; a session overlay opens over its session, the rest goes to the desktop.
-    pub fn follow_link(&mut self, raw: &str, origin: ClickOrigin) {
-        let mode = self.core.settings().effective_link_open_mode();
+    /// A link clicked in a terminal (the GTK build's `follow_link_in`, upstream's `LinkOpener.follow`): through the link
+    /// policy as a click from `origin`, under the link-open setting, or as browser mode when the click was the
+    /// Ctrl/Super+Shift override (`browser`); a session overlay opens over its session at the mode's size, the rest
+    /// goes to the desktop.
+    pub fn follow_link(&mut self, raw: &str, origin: ClickOrigin, browser: bool) {
+        let mode = if browser {
+            LinkOpenMode::Browser
+        } else {
+            self.core.settings().effective_link_open_mode()
+        };
         match link_policy::route(raw, mode, origin) {
-            Route::Overlay { url, session } => {
-                let shown = url::Url::parse(&url).is_ok_and(|parsed| self.core.open_link_overlay(parsed, session));
+            Route::Overlay {
+                url,
+                session,
+                size_percent,
+            } => {
+                let shown = url::Url::parse(&url)
+                    .is_ok_and(|parsed| self.core.open_link_overlay(parsed, session, size_percent));
                 if shown {
                     self.settle();
                 } else {

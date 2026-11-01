@@ -176,11 +176,25 @@ fn links_sets_and_reads_the_link_open_mode() {
     );
 }
 
+/// Upstream's `browserLinksSetsTheModeAndKeepsTheReply` over the sized modes: each is stored raw and read back.
+#[test]
+fn links_takes_the_sized_overlay_modes() {
+    let mut fixture = Fixture::new(0);
+    for mode in ["overlay95", "overlay75", "overlay50", "overlay"] {
+        assert_eq!(
+            links(&mut fixture, Some(mode)),
+            Response::with_result(json!({"text": mode}))
+        );
+        assert_eq!(fixture.core.settings().link_open_mode.as_deref(), Some(mode));
+        assert_eq!(links(&mut fixture, None), Response::with_result(json!({"text": mode})));
+    }
+}
+
 #[test]
 fn links_refuses_an_unknown_mode_and_leaves_the_setting() {
     let mut fixture = Fixture::new(0);
     links(&mut fixture, Some("overlay"));
-    for mode in ["bogus", "Overlay", ""] {
+    for mode in ["bogus", "Overlay", "", "overlay60", "Overlay75"] {
         assert_eq!(
             links(&mut fixture, Some(mode)),
             failure(&format!("invalid link mode: {mode}"))

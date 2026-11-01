@@ -41,6 +41,9 @@ fn mouse(snapshot: &Snapshot) -> Vec<Item> {
             &[
                 ("Browser", LinkOpenMode::Browser),
                 ("Session overlay", LinkOpenMode::Overlay),
+                ("Session overlay at 95%", LinkOpenMode::Overlay95),
+                ("Session overlay at 75%", LinkOpenMode::Overlay75),
+                ("Session overlay at 50%", LinkOpenMode::Overlay50),
             ],
             &settings.effective_link_open_mode(),
             |mode| change(GeneralChange::LinkOpenMode(mode)),

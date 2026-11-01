@@ -210,7 +210,11 @@ pub enum Report {
     Held,
     /// The live font size changed.
     FontSize(f64),
-    OpenUrl(String),
+    /// A clicked link; `browser`: the Ctrl/Super+Shift override ([`TerminalEvent::OpenUrl`]).
+    OpenUrl {
+        url: String,
+        browser: bool,
+    },
     /// A key the user pressed in the pane: user activity, and the status glyph it clears.
     Keystroke(StatusKeystroke),
     /// OSC 9/777; the focus sample travels beside it (`post_report`'s `focus`).
@@ -232,7 +236,10 @@ pub fn report(event: &TerminalEvent, ran: Ran, hostname: &str, points: f32, cove
         ))],
         TerminalEvent::EndSearch => vec![Report::Search(SearchReport::Ended)],
         TerminalEvent::FontSize => vec![Report::FontSize(f64::from(points))],
-        TerminalEvent::OpenUrl(url) => vec![Report::OpenUrl(url.clone())],
+        TerminalEvent::OpenUrl { url, browser } => vec![Report::OpenUrl {
+            url: url.clone(),
+            browser: *browser,
+        }],
         TerminalEvent::Keystroke(_) if covered => Vec::new(),
         TerminalEvent::Keystroke(keystroke) => vec![Report::Keystroke(*keystroke)],
         _ => Vec::new(),
@@ -278,7 +285,7 @@ pub fn post_report(poster: &Poster, session: Uuid, token: &str, report: Report, 
                 state.settle();
             }
         }
-        Report::OpenUrl(url) => state.follow_link(&url, ClickOrigin::Pane(session)),
+        Report::OpenUrl { url, browser } => state.follow_link(&url, ClickOrigin::Pane(session), browser),
         Report::Keystroke(keystroke) => state.pane_keystroke(session, &token, keystroke),
         Report::Notification { title, body } => state.terminal_notification(session, &token, &title, &body, focus),
     });

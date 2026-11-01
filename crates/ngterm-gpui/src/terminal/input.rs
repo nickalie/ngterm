@@ -255,18 +255,23 @@ pub fn status_keystroke(stroke: &KeyStroke) -> StatusKeystroke {
         "key_c" => interrupt::Key::C,
         _ => interrupt::Key::Other,
     };
+    let character = Some(stroke.text.as_str()).filter(|text| !text.is_empty());
+    interrupt::classify(key, character, key_modifiers(stroke.mods))
+}
+
+/// Upstream's `KeyModifiers` of ghostty's (Super standing for ⌘); the lock keys are dropped.
+#[must_use]
+pub fn key_modifiers(mods: Mods) -> interrupt::KeyModifiers {
     let pairs = [
         (Mods::CTRL, interrupt::KeyModifiers::CONTROL),
         (Mods::SUPER, interrupt::KeyModifiers::COMMAND),
         (Mods::ALT, interrupt::KeyModifiers::OPTION),
         (Mods::SHIFT, interrupt::KeyModifiers::SHIFT),
     ];
-    let modifiers = pairs
+    pairs
         .into_iter()
-        .filter(|(mods, _)| stroke.mods.contains(*mods))
-        .fold(interrupt::KeyModifiers::NONE, |modifiers, (_, bit)| modifiers | bit);
-    let character = Some(stroke.text.as_str()).filter(|text| !text.is_empty());
-    interrupt::classify(key, character, modifiers)
+        .filter(|(held, _)| mods.contains(*held))
+        .fold(interrupt::KeyModifiers::NONE, |modifiers, (_, bit)| modifiers | bit)
 }
 
 /// The ghostty modifiers of GPUI's (Super is GPUI's `platform` on Linux).

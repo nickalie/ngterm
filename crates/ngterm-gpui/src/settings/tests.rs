@@ -951,6 +951,27 @@ fn a_picked_menu_row_writes_through_the_core(cx: &mut TestAppContext) {
     assert_eq!(h.item(cx, "settings-notification-sound"), Some(Shown::Row(Some(1))));
 }
 
+/// Upstream's `SettingsUITests` link picker cases for the sized overlays: each row stores its raw mode.
+#[gpui_kit::test]
+fn the_link_picker_offers_the_sized_overlays(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx, AppSettings::default());
+    click(cx, "settings-link-open-mode");
+    h.settle(cx);
+    // Browser, Session overlay, at 95%, at 75%
+    cx.simulate_keystrokes("down down down down enter");
+    h.settle(cx);
+    assert_eq!(h.settings().effective_link_open_mode(), LinkOpenMode::Overlay75);
+    assert_eq!(h.settings().link_open_mode.as_deref(), Some("overlay75"));
+    assert_eq!(h.item(cx, "settings-link-open-mode"), Some(Shown::Row(Some(3))));
+    for (row, mode) in [(2, LinkOpenMode::Overlay95), (4, LinkOpenMode::Overlay50)] {
+        h.state
+            .core
+            .change_settings(SettingsChange::General(GeneralChange::LinkOpenMode(mode)));
+        h.settle(cx);
+        assert_eq!(h.item(cx, "settings-link-open-mode"), Some(Shown::Row(Some(row))));
+    }
+}
+
 #[gpui_kit::test]
 fn a_button_runs_its_edit(cx: &mut TestAppContext) {
     let (mut h, cx) = harness(

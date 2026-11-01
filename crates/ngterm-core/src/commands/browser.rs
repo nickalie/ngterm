@@ -25,8 +25,9 @@ fn refuse_scope(cmd: BrowserCmd, request: &Request) -> Result<(), ControlError> 
     Ok(())
 }
 
-/// `browser.links [browser|overlay]`: sets where a clicked web link in a terminal opens, through the settings setter
-/// (the default `browser` is stored as no value), and answers the effective mode; without a mode it only reads it.
+/// `browser.links [MODE]` (`browser`, `overlay`, `overlay95`, `overlay75` or `overlay50`): sets where a clicked web
+/// link in a terminal opens, through the settings setter (the default `browser` is stored as no value), and answers
+/// the effective mode; without a mode it only reads it.
 pub(crate) fn links(core: &mut Core, request: &Request) -> Outcome {
     refuse_scope(BrowserCmd::Links, request)?;
     if let Some(raw) = args_of(request).mode.as_deref() {

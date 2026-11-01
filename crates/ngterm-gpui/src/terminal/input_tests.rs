@@ -700,20 +700,12 @@ fn a_ctrl_click_on_a_link_opens_it_through_the_link_route(cx: &mut TestAppContex
     assert_eq!(copied.as_deref(), Some("https://osc8.test/x"));
     f.click(5, 1, Modifiers::control());
     f.cx.run_until_parked();
-    assert!(
-        f.events
-            .borrow()
-            .contains(&TerminalEvent::OpenUrl("https://osc8.test/x".into()))
-    );
+    assert!(f.events.borrow().contains(&open_url("https://osc8.test/x", false)));
     // a detected URL, the same way
     f.cx.simulate_mouse_move(Fixture::at(20, 1), None, Modifiers::control());
     f.click(20, 1, Modifiers::control());
     f.cx.run_until_parked();
-    assert!(
-        f.events
-            .borrow()
-            .contains(&TerminalEvent::OpenUrl("https://example.com/p".into()))
-    );
+    assert!(f.events.borrow().contains(&open_url("https://example.com/p", false)));
     // the default route hands a web link to the platform's opener (the test platform only records it)
     f.cx.update(|_, cx| {
         links::follow_link("https://example.com/p", LinkOpenMode::Browser, ClickOrigin::Quick, cx);
@@ -876,7 +868,7 @@ fn releasing_a_lone_modifier_puts_out_the_link_it_lit(cx: &mut TestAppContext) {
         !f.events
             .borrow()
             .iter()
-            .any(|event| matches!(event, TerminalEvent::OpenUrl(_))),
+            .any(|event| matches!(event, TerminalEvent::OpenUrl { .. })),
         "a plain click opens nothing"
     );
 }
@@ -898,12 +890,194 @@ fn links_open_with_ctrl_shift_while_the_program_has_the_mouse(cx: &mut TestAppCo
     assert_eq!(hovered.as_deref(), Some("https://example.com/p"));
     f.click(8, 1, ctrl_shift);
     f.cx.run_until_parked();
-    assert!(
-        f.events
-            .borrow()
-            .contains(&TerminalEvent::OpenUrl("https://example.com/p".into()))
-    );
+    assert!(f.events.borrow().contains(&open_url("https://example.com/p", false)));
     assert!(!f.painted().contains("^[[M"), "Shift kept the click from the program");
+}
+
+// the browser chord (upstream's ⌘⇧ link override, `GhosttySurfaceViewInputTests`)
+
+fn open_url(url: &str, browser: bool) -> TerminalEvent {
+    TerminalEvent::OpenUrl {
+        url: url.to_owned(),
+        browser,
+    }
+}
+
+const CTRL_SHIFT: Modifiers = Modifiers {
+    control: true,
+    alt: false,
+    shift: true,
+    platform: false,
+    function: false,
+};
+
+const SUPER_SHIFT: Modifiers = Modifiers {
+    control: false,
+    alt: false,
+    shift: true,
+    platform: true,
+    function: false,
+};
+
+/// The fixture's terminal as a session pane's (`pane`) or a sessionless one, under link-open `mode`.
+fn link_owner(f: &mut Fixture<'_>, pane: bool, mode: LinkOpenMode) {
+    let shared = f.view.read_with(f.cx, |view, _| Rc::clone(view.shared()));
+    shared.set_owner(pane.then(|| ngterm_core::keymap::SurfaceOwner::Pane {
+        session: uuid::Uuid::from_u128(7),
+        token: "pane-token".into(),
+    }));
+    f.cx.update(|_, cx| links::sync_link_open_mode(mode, cx));
+}
+
+/// The links the terminal asked to open, in order.
+fn opened_links(f: &Fixture<'_>) -> Vec<TerminalEvent> {
+    f.events
+        .borrow()
+        .iter()
+        .filter(|event| matches!(event, TerminalEvent::OpenUrl { .. }))
+        .cloned()
+        .collect()
+}
+
+/// Upstream's `testCommandShiftClickOnADetectedURLOpensTheBrowserInOverlayMode` and
+/// `testCommandShiftClickOnAnOSC8LinkOpensItsTargetInTheBrowser`, in every overlay mode, Ctrl or Super standing
+/// for ⌘.
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn the_chord_opens_a_detected_url_or_an_osc8_link_in_the_browser(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\nsee \\033]8;;https://osc8.test/x\\033\\\\here\\033]8;;\\033\\\\ or https://example.com/p'; exec sleep 30";
+    let mut f = fixture(cx, script, config(""));
+    f.wait_painted("example.com/p");
+    link_owner(&mut f, true, LinkOpenMode::Overlay);
+    f.cx.simulate_mouse_move(Fixture::at(20, 1), None, Modifiers::control());
+    f.click(20, 1, Modifiers::control());
+    f.cx.run_until_parked();
+    assert_eq!(
+        opened_links(&f),
+        [open_url("https://example.com/p", false)],
+        "Ctrl follows the setting"
+    );
+    for (index, mode) in [
+        LinkOpenMode::Overlay,
+        LinkOpenMode::Overlay95,
+        LinkOpenMode::Overlay75,
+        LinkOpenMode::Overlay50,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        link_owner(&mut f, true, mode);
+        f.events.borrow_mut().clear();
+        let chord = if index % 2 == 0 { CTRL_SHIFT } else { SUPER_SHIFT };
+        f.cx.simulate_mouse_move(Fixture::at(20, 1), None, chord);
+        let hovered = f
+            .view
+            .read_with(f.cx, |view, _| view.hovered_link().map(|link| link.url.clone()));
+        assert_eq!(hovered.as_deref(), Some("https://example.com/p"), "{mode:?}");
+        f.click(20, 1, chord);
+        f.cx.simulate_mouse_move(Fixture::at(5, 1), None, chord);
+        f.click(5, 1, chord);
+        f.cx.run_until_parked();
+        assert_eq!(
+            opened_links(&f),
+            [
+                open_url("https://example.com/p", true),
+                open_url("https://osc8.test/x", true)
+            ],
+            "{mode:?}"
+        );
+    }
+}
+
+/// In an overlay mode Shift alone still extends a selection; the chord's Shift does not (upstream: "where the override
+/// applies, use Shift-click to extend a selection").
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn shift_alone_extends_the_selection_in_an_overlay_mode_and_the_chord_does_not(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\nhello world\\r\\n'; exec sleep 30";
+    let mut f = fixture(cx, script, config(""));
+    link_owner(&mut f, true, LinkOpenMode::Overlay);
+    for (modifiers, extends) in [(Modifiers::shift(), true), (CTRL_SHIFT, false)] {
+        std::thread::sleep(Duration::from_millis(600));
+        f.click(1, 1, Modifiers::default());
+        f.click(1, 1, Modifiers::default());
+        assert_eq!(f.selection().as_deref(), Some("hello"));
+        std::thread::sleep(Duration::from_millis(600));
+        f.click(8, 1, modifiers);
+        assert_eq!(
+            f.selection().as_deref() == Some("hello world"),
+            extends,
+            "{modifiers:?}"
+        );
+    }
+}
+
+/// Upstream's `testShiftPressedUnderAStillPointerKeepsTheLinkHovered`.
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn shift_pressed_under_a_still_pointer_keeps_the_link_hovered(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\nsee https://example.com/p'; exec sleep 30";
+    let mut f = fixture(cx, script, config(""));
+    f.wait_painted("example.com/p");
+    f.focus();
+    link_owner(&mut f, true, LinkOpenMode::Overlay);
+    f.cx.simulate_mouse_move(Fixture::at(8, 1), None, Modifiers::control());
+    assert!(f.view.read_with(f.cx, |view, _| view.hovered_link().is_some()));
+    f.cx.simulate_modifiers_change(CTRL_SHIFT);
+    assert!(
+        f.view.read_with(f.cx, |view, _| view.hovered_link().is_some()),
+        "the chord keeps it lit"
+    );
+    // in browser mode the chord is no link modifier: Shift puts the link out
+    link_owner(&mut f, true, LinkOpenMode::Browser);
+    f.cx.simulate_modifiers_change(Modifiers::control());
+    f.cx.simulate_modifiers_change(CTRL_SHIFT);
+    assert!(f.view.read_with(f.cx, |view, _| view.hovered_link().is_none()));
+}
+
+/// Upstream's `testCommandShiftClickOnAStillPointerWithoutAModifierChangeOpensTheBrowser`.
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn the_chord_on_a_still_pointer_without_a_modifier_change_opens_the_browser(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\nsee https://example.com/p'; exec sleep 30";
+    let mut f = fixture(cx, script, config(""));
+    f.wait_painted("example.com/p");
+    link_owner(&mut f, true, LinkOpenMode::Overlay);
+    f.cx.simulate_mouse_move(Fixture::at(8, 1), None, Modifiers::default());
+    f.click(8, 1, CTRL_SHIFT);
+    f.cx.run_until_parked();
+    assert_eq!(opened_links(&f), [open_url("https://example.com/p", true)]);
+}
+
+/// Upstream's `testCommandShiftClickUnderMouseCaptureFollowsTheOverlaySetting`.
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn the_chord_under_mouse_capture_follows_the_overlay_setting(cx: &mut TestAppContext) {
+    let script = "stty -echo -icanon; printf '\\033[?1000hready\\r\\nsee https://example.com/p\\r\\n'; exec cat -v";
+    let mut f = fixture(cx, script, config(""));
+    link_owner(&mut f, true, LinkOpenMode::Overlay);
+    f.cx.simulate_mouse_move(Fixture::at(8, 1), None, CTRL_SHIFT);
+    f.click(8, 1, CTRL_SHIFT);
+    f.cx.run_until_parked();
+    assert_eq!(opened_links(&f), [open_url("https://example.com/p", false)]);
+}
+
+/// Upstream's `testCommandShiftClickInBrowserModeIsNotALinkClick`, and a terminal with no owning session (a HUD's,
+/// the quick terminal's) takes no chord in an overlay mode either.
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn the_chord_in_browser_mode_or_without_a_session_is_not_a_link_click(cx: &mut TestAppContext) {
+    let script = "printf 'ready\\r\\nsee https://example.com/p'; exec sleep 30";
+    let mut f = fixture(cx, script, config(""));
+    f.wait_painted("example.com/p");
+    for (pane, mode) in [(true, LinkOpenMode::Browser), (false, LinkOpenMode::Overlay)] {
+        link_owner(&mut f, pane, mode);
+        f.cx.simulate_mouse_move(Fixture::at(8, 1), None, CTRL_SHIFT);
+        assert!(f.view.read_with(f.cx, |view, _| view.hovered_link().is_none()));
+        f.click(8, 1, CTRL_SHIFT);
+        f.cx.run_until_parked();
+        assert!(opened_links(&f).is_empty(), "{pane} {mode:?}");
+    }
 }
 
 #[gpui_kit::test]

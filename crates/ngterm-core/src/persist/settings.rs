@@ -131,8 +131,25 @@ impl Default for FlaggedViewLayout {
 }
 
 raw_enum! {
-    /// Where a clicked web link from terminal output opens.
-    LinkOpenMode { Browser => "browser", Overlay => "overlay" }
+    /// Where a clicked web link from terminal output opens: the desktop's browser, or a session web overlay at full
+    /// size (`overlay`), 95%, 75% or 50%.
+    LinkOpenMode {
+        Browser => "browser", Overlay => "overlay", Overlay95 => "overlay95", Overlay75 => "overlay75",
+        Overlay50 => "overlay50",
+    }
+}
+
+impl LinkOpenMode {
+    /// The overlay's `--size-percent`: `None` for full size and for the browser.
+    #[must_use]
+    pub fn overlay_size_percent(self) -> Option<i64> {
+        match self {
+            Self::Browser | Self::Overlay => None,
+            Self::Overlay95 => Some(95),
+            Self::Overlay75 => Some(75),
+            Self::Overlay50 => Some(50),
+        }
+    }
 }
 
 raw_enum! {

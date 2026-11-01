@@ -86,6 +86,22 @@ def test_links_refuses_an_unknown_mode(ctl, link_mode, mode):
     assert ctl.tree()["tree"]["linkOpenMode"] == link_mode
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("browser.links", "field:result.text", "field:tree.linkOpenMode")
+def test_links_takes_the_sized_overlay_modes(ctl, link_mode):
+    for mode in ("overlay95", "overlay75", "overlay50"):
+        _set_links(ctl, mode)
+        assert assert_ok(ctl.request("browser.links")) == {"text": mode}
+    _set_links(ctl, "overlay")
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("browser.links")
+def test_links_refuses_an_overlay_size_it_does_not_offer(ctl, link_mode):
+    assert_error(ctl.request("browser.links", mode="overlay60"), "invalid link mode: overlay60")
+    assert ctl.tree()["tree"]["linkOpenMode"] == link_mode
+
+
 @pytest.mark.covers("browser.links", "browser.clear")
 @pytest.mark.parametrize("cmd", ["browser.links", "browser.clear"])
 @pytest.mark.parametrize(("target", "args"), [("active", {}), (UNKNOWN, {}), (None, {"window": UNKNOWN})])

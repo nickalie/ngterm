@@ -457,10 +457,11 @@ impl Core {
         bridge::request(body, &page).map_err(|error| error.message)
     }
 
-    /// Shows a clicked link as a browsing page over its session (upstream's `openLinkOverlay`), and says whether it
-    /// did; the caller opens the link in the browser otherwise. A HUD on the session and a zoomed terminal in its window
-    /// refuse it up front: the page would close the HUD for good, or show nowhere.
-    pub fn open_link_overlay(&mut self, url: Url, session: Uuid) -> bool {
+    /// Shows a clicked link as a browsing page over its session (upstream's `openLinkOverlay`), at `size_percent` of
+    /// it (`None`: full size, as `--size-percent` takes it), and says whether it did; the caller opens the link in the
+    /// browser otherwise. A HUD on the session and a zoomed terminal in its window refuse it up front: the page would
+    /// close the HUD for good, or show nowhere.
+    pub fn open_link_overlay(&mut self, url: Url, session: Uuid, size_percent: Option<i64>) -> bool {
         let Some(found) = self
             .library()
             .store_for_session(session)
@@ -488,7 +489,7 @@ impl Core {
                 browse: true,
             },
             pane: None,
-            size_percent: None,
+            size_percent,
             points: OverlayPointSize::default(),
             background_color: None,
             follow: false,

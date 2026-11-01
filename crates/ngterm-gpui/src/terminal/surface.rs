@@ -326,7 +326,10 @@ impl Actions<'_> {
         };
         match write.action {
             WriteAction::Copy => self.queue(Effect::Copy(path, ClipboardLocation::Standard)),
-            WriteAction::Open => self.queue(Effect::Emit(TerminalEvent::OpenUrl(path))),
+            WriteAction::Open => self.queue(Effect::Emit(TerminalEvent::OpenUrl {
+                url: path,
+                browser: false,
+            })),
             WriteAction::Paste => {
                 if !self.shared.is_readonly() && pane.write(path.as_bytes()).is_err() {
                     tracing::debug!(target: "ngterm::surface", "the terminal's input queue refused the file's path");

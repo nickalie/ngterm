@@ -1552,7 +1552,7 @@ fn take_screen_file(cx: &mut VisualTestContext) -> (String, String) {
 /// The path of the first `OpenUrl` event.
 fn opened(events: &Events) -> Option<std::path::PathBuf> {
     events.borrow().iter().find_map(|event| match event {
-        TerminalEvent::OpenUrl(path) => Some(std::path::PathBuf::from(path)),
+        TerminalEvent::OpenUrl { url, browser: false } => Some(std::path::PathBuf::from(url)),
         _ => None,
     })
 }

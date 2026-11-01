@@ -145,6 +145,7 @@ impl Windows {
         // after any reload, so the chrome takes the colors the terminals now render; before the windows render, so a
         // new window's first frame has them
         crate::chrome::sync(&state.core, &self.env.config.borrow(), cx);
+        crate::terminal::sync_link_open_mode(state.core.settings().effective_link_open_mode(), cx);
         // before the decks: a released page's element leaves its slot first
         crate::html_overlay::settle(&mut state.core, cx);
         // a dashboard follows the model before anything renders it
