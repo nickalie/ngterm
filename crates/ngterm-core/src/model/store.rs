@@ -13,6 +13,7 @@ use std::time::SystemTime;
 use ngterm_proto::events::EventKind;
 use uuid::Uuid;
 
+use super::companions::{SessionContent, group_end};
 use super::naming::{default_workspace_name, sanitized, trimmed_or_none};
 use super::outbox::{EventPayload, ModelEvent, Outbox, RecentClosedChange, SaveRequest, WatermarkRemoval};
 use super::pending_close::PendingCloses;
@@ -131,6 +132,11 @@ pub struct NewSession {
     pub remote_host: Option<String>,
     /// The creation tint (`session.new --tint`), set before the first save.
     pub tint: Option<SidebarTint>,
+    /// The parent of a companion, which lands inside the parent's group; `None` for a top-level session, which lands
+    /// outside any group.
+    pub parent: Option<Uuid>,
+    /// What the session shows.
+    pub content: SessionContent,
 }
 
 impl NewSession {
@@ -146,6 +152,8 @@ impl NewSession {
             select: true,
             remote_host: None,
             tint: None,
+            parent: None,
+            content: SessionContent::Terminal,
         }
     }
 }
@@ -428,8 +436,15 @@ impl AppStore {
         }
     }
 
+    /// `session.created`, naming a companion's parent.
     pub(crate) fn emit_session_created(&mut self, session: Uuid, workspace: Uuid) {
-        let payload = self.session(session).map(Self::named).unwrap_or_default();
+        let payload = self
+            .session(session)
+            .map(|found| EventPayload {
+                parent: found.parent_id().map(uuid_string),
+                ..Self::named(found)
+            })
+            .unwrap_or_default();
         self.emit(EventKind::SessionCreated, Some(workspace), Some(session), payload);
         if let Some(found) = self.session(session) {
             let visibility = Self::remote_visibility(found);
@@ -921,13 +936,17 @@ impl AppStore {
     // MARK: - Sessions
 
     /// Creates a session in `workspace`, selecting it unless `spec.select` is off. Name and cwd are sanitized; a
-    /// blank name means the automatic basename. `None` when no workspace matches.
+    /// blank name means the automatic basename. A companion without `at` lands at its parent's group end, and an `at`
+    /// keeps a companion inside its parent's group and a top-level session outside any group. `None` when no
+    /// workspace matches.
     pub fn add_session(&mut self, workspace: Uuid, spec: NewSession) -> Option<Uuid> {
         let index = self.workspace_index(workspace)?;
         let mut session = Session::new(SessionSeed {
             initial_cwd: sanitized(&spec.cwd),
             custom_name: spec.name.as_deref().map(sanitized).as_deref().and_then(trimmed_or_none),
             remote_host: spec.remote_host,
+            parent_id: spec.parent,
+            content: spec.content,
             ..SessionSeed::default()
         });
         session.launch.command = spec.command;
@@ -935,8 +954,15 @@ impl AppStore {
         session.tint = spec.tint;
         let id = session.id();
         let sessions = &mut self.workspaces[index].sessions;
-        match spec.at {
-            Some(at) => sessions.insert(at.min(sessions.len()), session),
+        let parent_end = spec
+            .parent
+            .and_then(|parent| sessions.iter().position(|candidate| candidate.id() == parent))
+            .map(|parent| group_end(parent, sessions));
+        match spec.at.or(parent_end) {
+            Some(at) => {
+                let destination = Self::insertion_index(&session, at, sessions);
+                sessions.insert(destination, session);
+            }
             None => sessions.push(session),
         }
         // ahead of the selection, so a consumer hears of the session before it hears it was selected
@@ -1002,94 +1028,6 @@ impl AppStore {
         session.custom_name = renamed;
         self.schedule_tree_changed();
         self.save();
-    }
-
-    /// Moves a session to another workspace or within one, keeping the session itself (and so its live terminals).
-    /// `index` is the destination after the move's removal, clamped; `None` appends. Moving the selected session out
-    /// of the marked set suspends the focus filter, keeping the set.
-    pub fn move_session(&mut self, id: Uuid, target: Uuid, index: Option<usize>) {
-        let Some(source) = self.location(id) else { return };
-        let Some(target_index) = self.workspace_index(target) else {
-            return;
-        };
-        let before = self.tree_order();
-        let session = self.workspaces[source.workspace].sessions.remove(source.session);
-        let sessions = &mut self.workspaces[target_index].sessions;
-        let destination = index.unwrap_or(sessions.len()).min(sessions.len());
-        sessions.insert(destination, session);
-        if self.selected_session_id == Some(id) {
-            self.disable_focus_if_selection_outside_set(Some(id));
-        }
-        self.prune_sidebar_selection();
-        if self.tree_order() != before {
-            self.schedule_tree_changed();
-        }
-        self.save();
-    }
-
-    /// Moves several sessions in their tree order and returns how many moved. Without `index`, a multi-session move
-    /// appends the sessions from other workspaces and leaves those already in the target alone, while a single one
-    /// appends as [`AppStore::move_session`] does. With `index` (a drop), the whole block is removed first and then
-    /// inserted at that post-removal index.
-    pub fn move_sessions(&mut self, ids: &[Uuid], target: Uuid, index: Option<usize>) -> usize {
-        if self.workspace(target).is_none() {
-            return 0;
-        }
-        let before = self.tree_order();
-        let wanted: HashSet<Uuid> = ids.iter().copied().collect();
-        let mut moving_ids: Vec<Uuid> = self
-            .sessions()
-            .map(Session::id)
-            .filter(|id| wanted.contains(id))
-            .collect();
-        if index.is_none() && moving_ids.len() > 1 {
-            moving_ids.retain(|id| self.workspace_for_session(*id).map(Workspace::id) != Some(target));
-        }
-        if moving_ids.is_empty() {
-            return 0;
-        }
-        let mut moving = Vec::with_capacity(moving_ids.len());
-        for id in &moving_ids {
-            if let Some(at) = self.location(*id) {
-                moving.push(self.workspaces[at.workspace].sessions.remove(at.session));
-            }
-        }
-        let Some(target_index) = self.workspace_index(target) else {
-            self.prune_sidebar_selection();
-            return 0;
-        };
-        let count = moving.len();
-        let sessions = &mut self.workspaces[target_index].sessions;
-        let destination = index.unwrap_or(sessions.len()).min(sessions.len());
-        sessions.splice(destination..destination, moving);
-        if let Some(selected) = self.selected_session_id
-            && moving_ids.contains(&selected)
-        {
-            self.disable_focus_if_selection_outside_set(Some(selected));
-        }
-        self.prune_sidebar_selection();
-        if self.tree_order() != before {
-            self.schedule_tree_changed();
-        }
-        self.save();
-        count
-    }
-
-    /// Moves a session one step within its workspace; a no-op (no write) when already at that end.
-    pub fn reorder_session(&mut self, id: Uuid, direction: ReorderDirection) {
-        let Some(at) = self.location(id) else { return };
-        let workspace = &self.workspaces[at.workspace];
-        if let Some(destination) = direction.destination_index(at.session, workspace.sessions.len()) {
-            let target = workspace.id();
-            self.move_session(id, target, Some(destination));
-        }
-    }
-
-    fn tree_order(&self) -> Vec<Vec<Uuid>> {
-        self.workspaces
-            .iter()
-            .map(|workspace| workspace.sessions.iter().map(Session::id).collect())
-            .collect()
     }
 
     // MARK: - Per-session state

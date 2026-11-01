@@ -1,5 +1,6 @@
 //! The model ↔ snapshot boundary (upstream's `AppStore+Snapshot.swift` and `AppStore.restore(from:launchRestore:)`):
-//! building a [`Snapshot`] from a window's live tree, and rebuilding the tree from one.
+//! building a [`Snapshot`] from a window's live tree, and rebuilding the tree from one. A rebuilt workspace regroups
+//! its companions under their parents, so a hand-edited order or a dangling link cannot split a group.
 //!
 //! `launch_restore` marks an app-bootstrap restore, the only path that arms anything executable: the captured
 //! foreground commands and the sticky `session.restore` override go to each pane's transient pending slots, which a
@@ -10,6 +11,7 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use super::background::PaneBackgrounds;
+use super::companions::regrouped_companions;
 use super::pane::{SplitAxis, clamp_split_ratio};
 use super::recency::{RECENCY_LIMIT, RecencyStack};
 use super::session::{Session, SessionSeed};
@@ -149,17 +151,23 @@ fn restored_workspaces(snapshot: &Snapshot, launch_restore: bool) -> Vec<Workspa
         workspace.tint = persisted.tint;
         restored.push(workspace);
     }
+    // after the folding, so a group split across two copies of a workspace comes back whole
+    for workspace in &mut restored {
+        workspace.sessions = regrouped_companions(std::mem::take(&mut workspace.sessions));
+    }
     restored
 }
 
 /// Rebuilds one workspace with nothing armed (upstream's `workspace(from:)`, an Open Recent reopen).
 pub(crate) fn workspace_from_snapshot(snapshot: &WorkspaceSnapshot) -> Workspace {
     let mut workspace = Workspace::with_id(snapshot.id, snapshot.name.clone());
-    workspace.sessions = snapshot
-        .sessions
-        .iter()
-        .map(|session| session_from_snapshot(session, false))
-        .collect();
+    workspace.sessions = regrouped_companions(
+        snapshot
+            .sessions
+            .iter()
+            .map(|session| session_from_snapshot(session, false))
+            .collect(),
+    );
     workspace.is_expanded = !snapshot.collapsed.unwrap_or(false);
     workspace.tint = snapshot.tint;
     workspace
@@ -214,10 +222,13 @@ pub fn session_snapshot(session: &Session) -> SessionSnapshot {
         context: session.context.clone(),
         last_selected_at: session.last_selected_at.map(crate::projection::epoch_seconds),
         tint: session.tint,
+        parent_id: session.parent_id(),
+        collapsed: (!session.companion.expanded).then_some(true),
     }
 }
 
-/// Rebuilds one session. A hidden split keeps its identity and restore state, so showing it reattaches the surviving
+/// Rebuilds one session, its companion link as persisted: the workspace's regrouping drops one naming no top-level
+/// session. A hidden split keeps its identity and restore state, so showing it reattaches the surviving
 /// daemon; focus is not persisted and returns to the primary pane. Missing pane identities (a legacy snapshot) are
 /// minted.
 #[must_use]
@@ -230,7 +241,10 @@ pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool) -
         pane_identity: Some(snapshot.pane_identity.unwrap_or_else(Uuid::new_v4)),
         split_pane_identity: has_split.then(|| snapshot.split_pane_identity.unwrap_or_else(Uuid::new_v4)),
         remote_host: None,
+        parent_id: snapshot.parent_id,
+        ..SessionSeed::default()
     });
+    session.companion.expanded = !snapshot.collapsed.unwrap_or(false);
     session.split.shown = snapshot.is_split.unwrap_or(false);
     session.split.exists = has_split;
     session.split.axis = if has_split {

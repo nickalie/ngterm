@@ -6,6 +6,7 @@ mod ask;
 mod browser;
 mod client;
 mod clipboard;
+mod companions;
 mod config;
 mod dashboard;
 mod events;

@@ -4,6 +4,7 @@
 //! state: overlays, asks, the dashboard, zoom, the quick terminal and live sessions arrive with their command
 //! groups, and the live foreground-process read with the host seam that answers it.
 
+use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ngterm_proto::AppIdentity;
@@ -16,7 +17,8 @@ use uuid::Uuid;
 use crate::html::{HtmlOverlay, HtmlSource};
 use crate::hud::HudSpinner;
 use crate::model::{
-    AgentStatus, AppStore, OverlayPane, RemotePresentationState, Session, StatusPane, SurfaceSlot, Workspace,
+    AgentStatus, AppStore, OverlayPane, RemotePresentationState, Session, SessionContent, StatusPane, SurfaceSlot,
+    Workspace,
 };
 use crate::pane_env::uuid_string;
 use crate::persist::AppSettings;
@@ -87,6 +89,7 @@ fn workspace_node(
     selected: Option<Uuid>,
 ) -> ControlWorkspaceNode {
     let id = workspace.id();
+    let parents: HashSet<Uuid> = workspace.sessions.iter().filter_map(Session::parent_id).collect();
     ControlWorkspaceNode {
         id: uuid_string(id),
         name: workspace.name.clone(),
@@ -98,7 +101,12 @@ fn workspace_node(
         sessions: workspace
             .sessions
             .iter()
-            .map(|session| session_node(session, selected == Some(session.id())))
+            .map(|session| {
+                let mut node = session_node(session, selected == Some(session.id()));
+                // a fold outlives its last companion, which leaves nothing folded to report
+                node.collapsed = (!session.companion.expanded && parents.contains(&session.id())).then_some(true);
+                node
+            })
             .collect(),
     }
 }
@@ -134,6 +142,8 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
     node.last_selected_at = session.last_selected_at.map(epoch_seconds);
     node.tint = session.tint.map(|tint| tint.color().wire_name().to_owned());
     node.tint_on = session.tint.map(|tint| tint.parts().wire_names());
+    node.parent = session.parent_id().map(uuid_string);
+    node.content = (session.content() == SessionContent::Page).then(|| "page".to_owned());
     node.backed_by_live = Some(all_panes_backed(session));
     node.surfaces = Some(surface_nodes(session));
     node.realized = Some(session.surface.get().is_some_and(ngterm_host::Surface::is_realized));

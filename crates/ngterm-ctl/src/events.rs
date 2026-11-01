@@ -401,9 +401,11 @@ fn format_human(event: &ControlEvent, zone: Zone) -> String {
             payload.title.as_deref().unwrap_or(name),
             payload.body.as_deref().unwrap_or_default()
         ),
-        EventKind::SessionCreated | EventKind::SessionClosed | EventKind::TreeChanged => {
-            format!("{time} {kind} {name}")
-        }
+        EventKind::SessionCreated => match &payload.parent {
+            Some(parent) => format!("{time} {kind} {name} parent={parent}"),
+            None => format!("{time} {kind} {name}"),
+        },
+        EventKind::SessionClosed | EventKind::TreeChanged => format!("{time} {kind} {name}"),
         EventKind::AppLaunched => format!("{time} {kind}"),
         EventKind::SessionSelected => format!(
             "{time} {kind} {name} previous={}",
@@ -787,6 +789,10 @@ mod tests {
             (
                 json!({"kind": "session.created", "payload": {"name": "new"}}),
                 "00:00:00 session.created new",
+            ),
+            (
+                json!({"kind": "session.created", "payload": {"name": "logs", "parent": "P1"}}),
+                "00:00:00 session.created logs parent=P1",
             ),
             (
                 json!({"kind": "session.closed", "payload": {"name": "old"}}),

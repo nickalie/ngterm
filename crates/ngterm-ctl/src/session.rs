@@ -8,10 +8,13 @@
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Command, Request};
 
+use ngterm_core::paths::Env;
+
 use crate::tint::{SessionTint, TintCreateOptions};
 use crate::{
-    BasicOptions, BatchTargetOptions, ClientOptions, RequestCommand, TargetOptions, session_background, session_hud,
-    session_io, session_meta, session_overlay, session_panes, session_restore, session_wait,
+    BasicOptions, BatchTargetOptions, ClientOptions, Failure, RequestCommand, TargetOptions, companions,
+    session_background, session_hud, session_io, session_meta, session_overlay, session_panes, session_restore,
+    session_wait,
 };
 
 /// `ngtermctl session <subcommand>`.
@@ -225,7 +228,10 @@ impl RequestCommand for New {
         self.tint.validate()?;
         let placed = self.after.is_some() || self.before.is_some();
         let addressed = self.workspace.is_some() || self.workspace_name.is_some();
-        let message = if self.after.is_some() && self.before.is_some() {
+        let message = if self.parent.is_some() && (placed || addressed || self.create_workspace) {
+            // a companion lands under its parent
+            "--parent takes no --workspace, --workspace-name, --create-workspace, --after or --before"
+        } else if self.after.is_some() && self.before.is_some() {
             "use either --after or --before, not both"
         } else if placed && addressed {
             // the anchor already names the workspace, so placement cannot also address one
@@ -240,6 +246,13 @@ impl RequestCommand for New {
             return Ok(());
         };
         Err(message.to_owned())
+    }
+
+    fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
+        if self.parent.is_some() {
+            return companions::run(self, env);
+        }
+        self.default_run(env)
     }
 
     fn make_request(&self) -> Request {
@@ -309,6 +322,20 @@ impl RequestCommand for Duplicate {
 
     fn echoes_result_id(&self) -> bool {
         true
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.no_select && !self.companion {
+            return Err("--no-select needs --companion".to_owned());
+        }
+        Ok(())
+    }
+
+    fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
+        if self.companion {
+            return companions::run(self, env);
+        }
+        self.default_run(env)
     }
 
     fn make_request(&self) -> Request {
@@ -869,6 +896,25 @@ mod tests {
         );
     }
 
+    /// Upstream's `sessionNewWithParentRefusesPlacement`, with `--create-workspace` beside the name it needs.
+    #[test]
+    fn new_with_a_parent_refuses_a_workspace_or_a_placement() {
+        let extras: [&[&str]; 5] = [
+            &["--workspace", "w"],
+            &["--workspace-name", "w"],
+            &["--workspace-name", "w", "--create-workspace"],
+            &["--after", "a"],
+            &["--before", "b"],
+        ];
+        for extra in extras {
+            assert_eq!(
+                refusal(&[&["new", "--parent", "p1"][..], extra].concat()),
+                "--parent takes no --workspace, --workspace-name, --create-workspace, --after or --before",
+                "{extra:?}"
+            );
+        }
+    }
+
     #[test]
     fn duplicate_as_companion_sends_its_own_command() {
         assert_eq!(
@@ -876,9 +922,10 @@ mod tests {
             json!({"cmd": "session.companion.duplicate", "target": "active"})
         );
         assert_eq!(
-            sent(&["duplicate", "--companion", "--no-select", "--target", "s1"]),
+            request(&["duplicate", "--companion", "--no-select", "--target", "s1"]),
             json!({"cmd": "session.companion.duplicate", "target": "s1", "args": {"noSelect": true}})
         );
+        assert_eq!(refusal(&["duplicate", "--no-select"]), "--no-select needs --companion");
     }
 
     #[test]

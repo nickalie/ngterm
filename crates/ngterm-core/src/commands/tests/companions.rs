@@ -1,0 +1,267 @@
+//! `session.companion.new`, `session.collapse`/`session.expand` and the companion refusals of `session.move`
+//! (upstream's `ControlDispatcherCompanionsTests` new/collapse/expand cases and `ControlServerCompanionsTests`
+//! create, move-refusal and fold cases).
+
+use ngterm_proto::command::SessionCmd;
+use ngterm_proto::{Args, Response};
+use serde_json::json;
+use uuid::Uuid;
+
+use super::{Fixture, UNKNOWN, answered_affected, answered_id, args, failure, wire};
+use crate::model::{NewSession, SaveRequest, SidebarTint, TintColor};
+
+const PLACEMENT: &str = "a companion takes no workspace or placement: it lands under its parent";
+const MOVE_REFUSED: &str = "a companion moves only among its siblings";
+
+fn new_companion(fixture: &mut Fixture, target: Uuid, args: Args) -> Response {
+    fixture.session(SessionCmd::CompanionNew, Some(&wire(target)), args)
+}
+
+/// A fixture whose first workspace holds `parent` with two companions, then `after`.
+fn group(fixture: &mut Fixture) -> (Uuid, [Uuid; 2], Uuid) {
+    let (parent, after) = (fixture.sessions[0], fixture.sessions[1]);
+    let children = [(); 2].map(|()| {
+        let response = new_companion(fixture, parent, args(|a| a.no_select = Some(true)));
+        answered_id(&response).expect("a companion")
+    });
+    (parent, children, after)
+}
+
+#[test]
+fn a_companion_is_created_under_its_parent_with_its_options_and_answers_with_the_parent() {
+    let mut fixture = Fixture::new(1);
+    let (parent, after) = (fixture.sessions[0], fixture.sessions[1]);
+    let response = new_companion(
+        &mut fixture,
+        parent,
+        args(|a| {
+            a.cwd = Some("/tmp".into());
+            a.name = Some("logs".into());
+            a.command = Some("tail -f log".into());
+            a.wait = Some(true);
+            a.no_select = Some(true);
+            a.tint = Some("red".into());
+        }),
+    );
+    let id = answered_id(&response).expect("an id");
+    assert_eq!(response.result.as_ref().unwrap()["parent"], json!(wire(parent)));
+    let companion = fixture.store().session(id).unwrap();
+    assert_eq!(companion.parent_id(), Some(parent));
+    assert_eq!(companion.custom_name.as_deref(), Some("logs"));
+    assert_eq!(companion.initial_cwd(), "/tmp");
+    assert_eq!(companion.launch.command.as_deref(), Some("tail -f log"));
+    assert!(companion.launch.wait);
+    assert_eq!(companion.tint, Some(SidebarTint::on_icon(TintColor::Red)));
+    assert_eq!(fixture.selected(), Some(after));
+    assert_eq!(fixture.order(fixture.workspace), [parent, id, after]);
+}
+
+#[test]
+fn a_companion_target_means_its_parent_and_the_parents_cwd_is_the_default() {
+    let mut fixture = Fixture::new(0);
+    let parent = fixture.sessions[0];
+    let first = answered_id(&new_companion(&mut fixture, parent, Args::default())).unwrap();
+    let sibling = answered_id(&new_companion(&mut fixture, first, Args::default())).unwrap();
+    let store = fixture.store();
+    assert_eq!(store.session(sibling).unwrap().parent_id(), Some(parent));
+    assert_eq!(
+        store.session(first).unwrap().initial_cwd(),
+        store.session(parent).unwrap().effective_cwd()
+    );
+    // a foreground create takes the selection
+    assert_eq!(fixture.selected(), Some(sibling));
+}
+
+#[test]
+fn companion_new_refuses_a_workspace_or_a_placement_before_anything_else() {
+    let mut fixture = Fixture::new(0);
+    let parent = fixture.sessions[0];
+    let forms: [fn(&mut Args); 5] = [
+        |a| a.workspace = Some("w".into()),
+        |a| a.workspace_name = Some("w".into()),
+        |a| a.create_workspace = Some(true),
+        |a| a.after = Some("a".into()),
+        |a| a.before = Some("b".into()),
+    ];
+    for form in forms {
+        // the placement refusal wins over a bad tint and an unknown target
+        let refused = fixture.session(
+            SessionCmd::CompanionNew,
+            Some(UNKNOWN),
+            args(|a| {
+                form(a);
+                a.wait = Some(true);
+                a.tint = Some("mauve".into());
+            }),
+        );
+        assert_eq!(refused, failure(PLACEMENT));
+    }
+    assert_eq!(fixture.order(fixture.workspace), [parent]);
+}
+
+#[test]
+fn companion_new_refuses_wait_without_a_command_and_a_bad_tint_before_resolving() {
+    let mut fixture = Fixture::new(0);
+    let wait = fixture.session(SessionCmd::CompanionNew, Some(UNKNOWN), args(|a| a.wait = Some(true)));
+    assert_eq!(wait, failure("--wait requires --command"));
+    let tint = fixture.session(
+        SessionCmd::CompanionNew,
+        Some(UNKNOWN),
+        args(|a| a.tint = Some("mauve".into())),
+    );
+    assert!(!tint.ok);
+    assert!(
+        tint.error.as_deref().unwrap().starts_with("invalid tint: mauve"),
+        "{tint:?}"
+    );
+    let unknown = fixture.session(SessionCmd::CompanionNew, Some(UNKNOWN), Args::default());
+    assert!(!unknown.ok);
+    assert_eq!(fixture.order(fixture.workspace).len(), 1);
+}
+
+#[test]
+fn a_remote_parent_answers_the_local_refusal() {
+    let mut fixture = Fixture::new(0);
+    let workspace = fixture.workspace;
+    let remote = fixture
+        .store_mut()
+        .and_then(|store| {
+            store.add_session(
+                workspace,
+                NewSession {
+                    remote_host: Some("far".to_owned()),
+                    ..NewSession::at_cwd("/r")
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        new_companion(&mut fixture, remote, Args::default()),
+        failure("companions of a remote session are not supported yet")
+    );
+    assert!(fixture.store().companions(remote).is_empty());
+}
+
+#[test]
+fn folding_a_parent_saves_and_a_lone_session_is_refused() {
+    let mut fixture = Fixture::new(1);
+    let (parent, _, after) = group(&mut fixture);
+    fixture.store_mut().unwrap().take_outbox();
+    let folded = fixture.session(SessionCmd::Collapse, Some(&wire(parent)), Args::default());
+    assert_eq!(answered_id(&folded), Some(parent));
+    assert!(!fixture.store().session(parent).unwrap().companion.expanded);
+    assert_eq!(fixture.store().outbox().save, SaveRequest::Now);
+    // an unchanged value still answers ok, without a save
+    fixture.store_mut().unwrap().take_outbox();
+    let again = fixture.session(SessionCmd::Collapse, Some(&wire(parent)), Args::default());
+    assert_eq!(answered_id(&again), Some(parent));
+    assert_eq!(fixture.store().outbox().save, SaveRequest::None);
+    let unfolded = fixture.session(SessionCmd::Expand, Some(&wire(parent)), Args::default());
+    assert_eq!(answered_id(&unfolded), Some(parent));
+    assert!(fixture.store().session(parent).unwrap().companion.expanded);
+    for cmd in [SessionCmd::Collapse, SessionCmd::Expand] {
+        assert_eq!(
+            fixture.session(cmd, Some(&wire(after)), Args::default()),
+            failure("session has no companions")
+        );
+    }
+}
+
+#[test]
+fn the_tree_reads_back_the_parent_and_the_fold() {
+    let mut fixture = Fixture::new(1);
+    let (parent, [first, _], _) = group(&mut fixture);
+    fixture.session(SessionCmd::Collapse, Some(&wire(parent)), Args::default());
+    let tree = fixture.send(ngterm_proto::Command::Tree, None, Args::default());
+    let sessions = tree.result.unwrap()["tree"]["workspaces"][0]["sessions"].clone();
+    let node = |id: Uuid| {
+        sessions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == json!(wire(id)))
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(node(first)["parent"], json!(wire(parent)));
+    assert_eq!(node(parent)["collapsed"], json!(true));
+    assert!(node(parent).get("parent").is_none());
+    assert!(node(first).get("collapsed").is_none());
+}
+
+#[test]
+fn moving_a_companion_out_of_its_group_is_refused_and_an_ordinary_no_op_is_not() {
+    let mut fixture = Fixture::new(1);
+    let (parent, children, after) = group(&mut fixture);
+    let (other, _) = fixture.add_workspace("other", 0);
+    let home = fixture.workspace;
+    let to_other = |a: &mut Args| a.workspace = Some(wire(other));
+
+    let refused = fixture.session(SessionCmd::Move, Some(&wire(children[0])), args(to_other));
+    assert_eq!(refused, failure(MOVE_REFUSED));
+    let batch = fixture.session(
+        SessionCmd::Move,
+        Some(&wire(children[0])),
+        args(|a| {
+            to_other(a);
+            a.targets = Some(children.iter().copied().map(wire).collect());
+        }),
+    );
+    assert_eq!(batch, failure(MOVE_REFUSED));
+    // a batch already in its workspace moves nothing, which is no refusal
+    let no_op = fixture.session(
+        SessionCmd::Move,
+        Some(&wire(parent)),
+        args(|a| {
+            a.workspace = Some(wire(home));
+            a.targets = Some(vec![wire(parent), wire(after)]);
+        }),
+    );
+    assert_eq!(answered_affected(&no_op), Some(0));
+    // next to an anchor outside the group
+    let placed = fixture.session(
+        SessionCmd::Move,
+        Some(&wire(children[1])),
+        args(|a| a.after = Some(wire(after))),
+    );
+    assert_eq!(placed, failure(MOVE_REFUSED));
+    let placed_batch = fixture.session(
+        SessionCmd::Move,
+        Some(&wire(children[0])),
+        args(|a| {
+            a.before = Some(wire(parent));
+            a.targets = Some(children.iter().copied().map(wire).collect());
+        }),
+    );
+    assert_eq!(placed_batch, failure(MOVE_REFUSED));
+    assert_eq!(fixture.order(home), [parent, children[0], children[1], after]);
+}
+
+#[test]
+fn a_companion_moves_among_its_siblings_and_a_parent_carries_its_group() {
+    let mut fixture = Fixture::new(1);
+    let (parent, [first, second], after) = group(&mut fixture);
+    let (other, _) = fixture.add_workspace("other", 0);
+    let up = fixture.session(
+        SessionCmd::Move,
+        Some(&wire(second)),
+        args(|a| a.to = Some("up".into())),
+    );
+    assert_eq!(answered_id(&up), Some(second));
+    assert_eq!(fixture.order(fixture.workspace), [parent, second, first, after]);
+    let before = fixture.session(
+        SessionCmd::Move,
+        Some(&wire(first)),
+        args(|a| a.before = Some(wire(second))),
+    );
+    assert_eq!(answered_id(&before), Some(first));
+    assert_eq!(fixture.order(fixture.workspace), [parent, first, second, after]);
+    let moved = fixture.session(
+        SessionCmd::Move,
+        Some(&wire(parent)),
+        args(|a| a.workspace = Some(wire(other))),
+    );
+    assert_eq!(answered_id(&moved), Some(parent));
+    assert_eq!(fixture.order(fixture.workspace), [after]);
+    assert_eq!(fixture.order(other), [parent, first, second]);
+}

@@ -896,6 +896,49 @@ fn a_session_refusal_exits_1_with_the_server_error() -> TestResult {
     Ok(())
 }
 
+/// Upstream's `anAppTooOldForCompanionsIsNamedAndNothingElseIsSent` and `...KeepsTheRawReplyUnderJSON`: an app that
+/// cannot decode a companion command is named as too old, the raw reply kept under `--json`; any other refusal prints
+/// as usual.
+#[test]
+fn an_app_too_old_for_companions_is_named_and_json_keeps_the_raw_reply() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    let _server = serve(&socket, (), |(), request: Request| {
+        let error = match request.cmd.wire_name() {
+            "session.companion.new" | "session.companion.duplicate" => format!(
+                "invalid request: Cannot initialize Command from invalid String value {}",
+                request.cmd
+            ),
+            _ => "no such session: p1".to_owned(),
+        };
+        Response::failure(error).into()
+    })?;
+    let too_old = (
+        Some(1),
+        String::new(),
+        "error: the running app is too old for companions\n".to_owned(),
+    );
+    for argv in [
+        &["session", "new", "--parent", "p1"][..],
+        &["session", "duplicate", "--companion", "--target", "p1"],
+    ] {
+        assert_eq!(outcome(&run_on(dir.path(), &socket, argv)?), too_old, "{argv:?}");
+    }
+    let json = run_on(dir.path(), &socket, &["session", "new", "--parent", "p1", "--json"])?;
+    let line = "{\"ok\":false,\"error\":\"invalid request: Cannot initialize Command from invalid String value \
+                session.companion.new\"}\n";
+    assert_eq!(outcome(&json), (Some(1), line.to_owned(), String::new()));
+    assert_eq!(
+        outcome(&run_on(
+            dir.path(),
+            &socket,
+            &["session", "collapse", "--target", "p1"]
+        )?),
+        (Some(1), String::new(), "error: no such session: p1\n".to_owned())
+    );
+    Ok(())
+}
+
 #[test]
 fn restore_prints_its_note_and_background_and_restart_send_their_args() -> TestResult {
     let dir = short_dir()?;

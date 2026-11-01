@@ -1,4 +1,5 @@
-//! `session.*` lifecycle and order: `new`, `duplicate`, `close`, `select`, `go`, `rename`, `reveal` and `move`.
+//! `session.*` lifecycle and order: `new`, `duplicate`, `close`, `select`, `go`, `rename`, `reveal` and `move`. A move
+//! that would take a companion out of its group is refused; the companion commands live in `companions.rs`.
 //! Validation and its messages follow `dispatchSessionCommand`/`dispatchSessionMove` in upstream's
 //! `ControlDispatcher.swift`; the effects follow `agterm/Control/ControlServer+SessionActions.swift`
 //! (`createSession`, `duplicateSession`, `closeSession(s)`, `moveSession(s)`, `placeSession(s)`, ...).
@@ -13,6 +14,7 @@ use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Command, Request};
 use uuid::Uuid;
 
+use super::companions::COMPANION_MOVE_ERROR;
 use super::{
     Outcome, args_of, in_placement_store, session_batch_store, session_in, session_store, with_affected, with_id,
 };
@@ -70,6 +72,12 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::Background => super::background::dispatch(core, request),
         SessionCmd::Tint => super::tint::session(core, target, args),
         SessionCmd::Restore => super::restore::dispatch(core, request),
+        SessionCmd::CompanionNew
+        | SessionCmd::CompanionPage
+        | SessionCmd::CompanionDuplicate
+        | SessionCmd::CompanionPageAttach
+        | SessionCmd::Collapse
+        | SessionCmd::Expand => super::companions::dispatch(core, cmd, request),
         other => Err(ControlError::NotSupported(Command::Session(other))),
     }
 }
@@ -332,7 +340,9 @@ fn move_batch(core: &mut Core, targets: &[String], window: Option<&str>, form: &
             match form {
                 MoveForm::Workspace(workspace) => {
                     let workspace = workspace_in(store, workspace)?;
-                    Ok(with_affected(store.move_sessions(&ids, workspace, None)))
+                    let affected = store.move_sessions(&ids, workspace, None);
+                    refuse_companion_move(store, &ids, affected)?;
+                    Ok(with_affected(affected))
                 }
                 MoveForm::Place { anchor, after } => place_block(store, &ids, anchor, *after),
                 MoveForm::Reorder(_) => Err(ControlError::rejected(
@@ -350,7 +360,9 @@ fn move_one(core: &mut Core, target: Option<&str>, window: Option<&str>, form: &
         MoveForm::Reorder(direction) => store.reorder_session(id, *direction),
         MoveForm::Workspace(workspace) => {
             let workspace = workspace_in(store, workspace)?;
-            store.move_session(id, workspace, None);
+            if !store.move_session(id, workspace, None) {
+                return Err(ControlError::rejected(COMPANION_MOVE_ERROR));
+            }
         }
         MoveForm::Place { anchor, after } => {
             let source = location_of(store, id)?;
@@ -360,8 +372,10 @@ fn move_one(core: &mut Core, target: Option<&str>, window: Option<&str>, form: &
                 index: source.index,
             };
             // `None`: the session is already there
-            if let Some(resolution) = resolve_relative(source, anchor, *after) {
-                store.move_session(id, resolution.workspace, Some(resolution.destination));
+            if let Some(resolution) = resolve_relative(source, anchor, *after)
+                && !store.move_session(id, resolution.workspace, Some(resolution.destination))
+            {
+                return Err(ControlError::rejected(COMPANION_MOVE_ERROR));
             }
         }
     }
@@ -390,10 +404,24 @@ fn place_block(store: &mut AppStore, ids: &[Uuid], anchor: &str, after: bool) ->
     } else {
         DropIndex::Before(anchor.index)
     };
-    let affected = resolve_sessions(&sources, target, child_index).map_or(0, |resolution| {
-        store.move_sessions(ids, resolution.workspace, Some(resolution.destination))
-    });
+    let Some(resolution) = resolve_sessions(&sources, target, child_index) else {
+        return Ok(with_affected(0));
+    };
+    let affected = store.move_sessions(ids, resolution.workspace, Some(resolution.destination));
+    refuse_companion_move(store, ids, affected)?;
     Ok(with_affected(affected))
+}
+
+/// A batch of companions alone that moved nothing was refused, while one carrying a parent may be a no-op
+/// (upstream's `refusesCompanionMove`).
+fn refuse_companion_move(store: &AppStore, ids: &[Uuid], affected: usize) -> Result<(), ControlError> {
+    let companions_only = ids
+        .iter()
+        .all(|id| store.session(*id).is_some_and(|session| session.parent_id().is_some()));
+    if affected == 0 && companions_only {
+        return Err(ControlError::rejected(COMPANION_MOVE_ERROR));
+    }
+    Ok(())
 }
 
 // MARK: - resolution in one store

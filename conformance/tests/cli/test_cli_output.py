@@ -490,6 +490,31 @@ def test_session_flag_move(cli, ctl):
 
 
 @pytest.mark.since("0.39.1")
+@pytest.mark.covers("cli:session new", "cli:session collapse", "cli:session expand")
+def test_session_new_parent_collapse_and_expand(cli, ctl):
+    parent, lone = _new(ctl), _new(ctl)
+    child = _created(cli("session", "new", "--parent", parent, "--name", "logs", "--no-select"))
+    assert _node(ctl, child)["parent"] == parent and _node(ctl, child)["name"] == "logs"
+    # a companion target means its parent
+    sibling = _json(cli("session", "new", "--parent", child, "--no-select", "--json"))
+    assert sibling["parent"] == parent and _node(ctl, sibling["id"])["parent"] == parent
+
+    _ok(cli("session", "collapse", "--target", parent), "ok\n")
+    assert _node(ctl, parent)["collapsed"] is True
+    assert _json(cli("session", "expand", "--target", parent, "--json")) == {"id": parent}
+    assert_absent(_node(ctl, parent), "collapsed")
+    _refused(cli("session", "collapse", "--target", lone), "session has no companions")
+    _refused_json(cli("session", "expand", "--target", lone, "--json"), "session has no companions")
+    for extra in (("--workspace", "active"), ("--after", parent), ("--workspace-name", "x", "--create-workspace")):
+        _usage(
+            cli("session", "new", "--parent", parent, *extra),
+            "--parent takes no --workspace, --workspace-name, --create-workspace, --after or --before",
+        )
+    for sid in (child, sibling["id"], parent, lone):
+        assert_ok(ctl.request("session.close", sid))
+
+
+@pytest.mark.since("0.39.1")
 @pytest.mark.covers("cli:session tint", "cli:workspace tint", "cli:session new", "cli:workspace new")
 def test_tint_commands(cli, ctl):
     sid = _new(ctl)

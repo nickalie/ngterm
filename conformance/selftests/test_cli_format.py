@@ -305,6 +305,11 @@ def utc() -> Iterator[None]:
         ({"kind": "notify", "payload": {"name": "one", "body": "hi"}}, "01:02:03 notify one one: hi"),
         ({"kind": "notify", "payload": {"name": "one", "title": "T"}}, "01:02:03 notify one T: "),
         ({"kind": "session.selected", "payload": {"name": "one"}}, "01:02:03 session.selected one previous=-"),
+        ({"kind": "session.created", "payload": {"name": "one"}}, "01:02:03 session.created one"),
+        (
+            {"kind": "session.created", "payload": {"name": "logs", "parent": "P1"}},
+            "01:02:03 session.created logs parent=P1",
+        ),
         ({"kind": "pane.split", "payload": {"name": "one", "status": "on"}}, "01:02:03 pane.split one on"),
         ({"kind": "tree.changed", "window": WID, "payload": {}}, f"01:02:03 tree.changed {WID}"),
         ({"kind": "session.closed", "payload": {"name": ""}, "window": WID}, "01:02:03 session.closed "),

@@ -8,6 +8,7 @@ mod attach_remote;
 mod attention_nav;
 mod auto_follow;
 mod background;
+mod companions;
 mod config_browser;
 mod dashboard;
 mod events;

@@ -7,6 +7,7 @@
 mod ask;
 mod ask_form;
 mod background;
+mod companions;
 mod duplicate;
 mod flagged_order;
 mod focus;
@@ -29,6 +30,7 @@ mod remote_presentation;
 mod restore;
 mod search;
 mod session;
+mod session_moves;
 mod snapshot;
 mod status;
 mod store;
@@ -44,6 +46,7 @@ pub use ask_form::{AskChoiceForm, AskDraft, AskForm, AskInputForm, AskInputMode,
 pub use background::{
     BackdropWashRegion, BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition,
 };
+pub use companions::{CompanionOptions, CompanionRefusal, CompanionState, SessionContent};
 pub use flagged_order::FlaggedOrderPlacement;
 pub use focus::FocusMode;
 pub use html_overlay::{HtmlOverlayCommandFailure, HtmlOverlayOpenFailure, HtmlPageSlot};

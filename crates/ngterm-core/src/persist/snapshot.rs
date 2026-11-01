@@ -230,6 +230,18 @@ pub struct SessionSnapshot {
     /// The sidebar row's tint (`session.tint`); an unknown color drops the tint alone.
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
     pub tint: Option<SidebarTint>,
+    /// A companion's parent; absent for a top-level session.
+    #[serde(
+        rename = "parentID",
+        default,
+        deserialize_with = "lossy",
+        serialize_with = "upper::option"
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<Uuid>,
+    /// A parent's folded companions; written only when true, so an unfolded tree writes what a legacy snapshot held.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub collapsed: Option<bool>,
 }
 
 impl SessionSnapshot {

@@ -11,6 +11,7 @@ use std::time::SystemTime;
 use uuid::Uuid;
 
 use super::background::{BackgroundWatermark, PaneBackgrounds};
+use super::companions::{CompanionState, SessionContent};
 use super::naming::{self, last_path_component, sanitized, trimmed_or_none};
 use super::overlay::OverlaySlot;
 use super::pane::{PaneLaunch, PaneRestore, SplitLayout, StatusPane, SurfaceSlot};
@@ -224,6 +225,9 @@ pub struct Session {
     pub flagged: bool,
     /// The sidebar row's tint (`session.tint`). Persisted for a local session, never copied by a duplicate.
     pub tint: Option<SidebarTint>,
+    /// The companion group fields.
+    pub companion: CompanionState,
+    content: SessionContent,
     /// What the session is FOR, shown in the title bar. Persisted for a local session.
     pub context: Option<String>,
     /// The context mirrored from a remote origin; a local one wins over it. Ephemeral.
@@ -299,6 +303,10 @@ pub struct SessionSeed {
     pub split_pane_identity: Option<Uuid>,
     /// The host a session attached from another machine lives on; `None` for a local one.
     pub remote_host: Option<String>,
+    /// The parent of a companion; `None` for a top-level session.
+    pub parent_id: Option<Uuid>,
+    /// What the session shows, fixed at construction as the remote host is.
+    pub content: SessionContent,
 }
 
 impl Session {
@@ -324,6 +332,11 @@ impl Session {
             remote_host: seed.remote_host,
             flagged: false,
             tint: None,
+            companion: CompanionState {
+                parent: seed.parent_id,
+                expanded: true,
+            },
+            content: seed.content,
             context: None,
             mirrored_context: None,
             split: SplitLayout::default(),
@@ -384,17 +397,30 @@ impl Session {
         self.remote_host.as_deref()
     }
 
-    /// Whether the session may be written to disk at all: a remote one never is.
+    /// The session this one is a companion of; `None` for a top-level session.
+    #[must_use]
+    pub fn parent_id(&self) -> Option<Uuid> {
+        self.companion.parent
+    }
+
+    /// What the session shows: a terminal, or a page with no shell under it. Set at construction and immutable.
+    #[must_use]
+    pub fn content(&self) -> SessionContent {
+        self.content
+    }
+
+    /// Whether the session may be written to disk at all: a remote one never is, nor a page, which lives only as long
+    /// as the app showing it.
     #[must_use]
     pub fn is_persistable(&self) -> bool {
-        self.remote_host.is_none()
+        self.remote_host.is_none() && self.content == SessionContent::Terminal
     }
 
     /// The pane identities this instance's live-session daemons own: none for a remote session, whose panes run
-    /// ssh.
+    /// ssh, nor for a page, which has no panes.
     #[must_use]
     pub fn locally_managed_pane_identities(&self) -> Vec<Uuid> {
-        if self.remote_host.is_some() {
+        if self.remote_host.is_some() || self.content != SessionContent::Terminal {
             return Vec::new();
         }
         std::iter::once(self.pane_identity)

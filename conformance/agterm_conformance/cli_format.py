@@ -308,7 +308,10 @@ def event(item: Mapping[str, Any]) -> str:
         return " ".join(parts)
     if kind == "notify":
         return f"{clock} {kind} {name} {_or(payload.get('title'), name)}: {_or(payload.get('body'), '')}"
-    if kind in ("session.created", "session.closed", "tree.changed"):
+    if kind == "session.created":
+        parent = payload.get("parent")
+        return f"{clock} {kind} {name}" + (f" parent={parent}" if parent is not None else "")
+    if kind in ("session.closed", "tree.changed"):
         return f"{clock} {kind} {name}"
     if kind == "session.selected":
         return f"{clock} {kind} {name} previous={_or(payload.get('previous'), '-')}"

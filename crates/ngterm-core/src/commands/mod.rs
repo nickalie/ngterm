@@ -5,6 +5,7 @@
 pub(crate) mod ask;
 pub(crate) mod background;
 pub(crate) mod browser;
+pub(crate) mod companions;
 pub(crate) mod config;
 pub(crate) mod dashboard;
 pub(crate) mod debug;

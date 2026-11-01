@@ -613,33 +613,34 @@ in `crates/ngterm-ctl/src/companions.rs` (create), `tests/cli.rs` (modify).
 `test_companion_new_refusals`, `test_collapse_and_expand_fold_a_parent`, `test_a_companion_moves_only_among_its_siblings`,
 `test_a_companion_created_event_names_its_parent`; `test_cli_output.py::test_session_new_parent_collapse_and_expand`.
 
-- [ ] Session `parent_id` (fixed at creation), `is_expanded` (default true), `content` (terminal | page, only Task 17
+- [x] Session `parent_id` (fixed at creation), `is_expanded` (default true), `content` (terminal | page, only Task 17
       makes pages), `is_persistable = local && terminal`
-- [ ] `add_companion`: a companion target means its parent; lands at the parent's group end; cwd defaults to the
+- [x] `add_companion`: a companion target means its parent; lands at the parent's group end; cwd defaults to the
       parent's focused directory; `noSelect` keeps the selection; the creation tint (Task 3); a remote parent answers
       upstream's local-path refusal "companions of a remote session are not supported yet" until Task 19
-- [ ] insertion invariants: a top-level insertion inside a group moves past it; plain duplicate of a parent lands
+- [x] insertion invariants: a top-level insertion inside a group moves past it; plain duplicate of a parent lands
       after its group; an anchored `session.new` lands outside a group
-- [ ] moves (port `AppStore+SessionMoves.swift`): a companion moves only among its siblings, a parent carries its
+- [x] moves (port `AppStore+SessionMoves.swift`): a companion moves only among its siblings, a parent carries its
       block, batches carry companions once; `can_move_sessions`
-- [ ] `session.collapse`/`session.expand`: "session has no companions" for a lone session; unchanged value answers
+- [x] `session.collapse`/`session.expand`: "session has no companions" for a lone session; unchanged value answers
       ok without saving
-- [ ] snapshot `parentID`, `collapsed` (only true), lossy; restore regroups and drops a link to no top-level session
+- [x] snapshot `parentID`, `collapsed` (only true), lossy; restore regroups and drops a link to no top-level session
       of that workspace; an old `windows.json` decodes top-level and expanded
-- [ ] tree `parent`, `collapsed` (only for a folded parent that still has companions), `content` ("page" only);
+- [x] tree `parent`, `collapsed` (only for a folded parent that still has companions), `content` ("page" only);
       `session.created` payload `parent`
-- [ ] `session.companion.new` refusal order: "a companion takes no workspace or placement: it lands under its
+- [x] `session.companion.new` refusal order: "a companion takes no workspace or placement: it lands under its
       parent", "--wait requires --command", the creation tint, the target; "could not create companion"; result
       `{id, parent}`
-- [ ] `session.move` refusal "a companion moves only among its siblings" (single, batch, anchor forms); an ordinary
+- [x] `session.move` refusal "a companion moves only among its siblings" (single, batch, anchor forms); an ordinary
       no-op stays ok
-- [ ] CLI `session new --parent SID` ("--parent takes no --workspace, --workspace-name, --create-workspace, --after or
+- [x] CLI `session new --parent SID` ("--parent takes no --workspace, --workspace-name, --create-workspace, --after or
       --before"), `session collapse`, `session expand`, the events line `... session.created NAME parent=ID`, and the
       too-old mapping (an `invalid request:` reply naming a companion wire command prints "error: the running app is
       too old for companions", exit 1; the raw reply under `--json`), shared with Tasks 17-18
-- [ ] write tests: every Swift case listed above on the fakes; ctl parse and the too-old mapping
-- [ ] write tests: the conformance tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: every Swift case listed above on the fakes; ctl parse and the too-old mapping
+- [x] write tests: the conformance tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the six new ids are since(0.39.1)
+      and skip at 0.38.1; green at a temporary 0.39.1 level, they go in at Task 25)
 
 ### Task 14: Companion sessions, part 2: group close, close undo and Recent Closed (#840)
 
