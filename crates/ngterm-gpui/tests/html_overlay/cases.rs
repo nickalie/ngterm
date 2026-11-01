@@ -28,7 +28,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 22] = [
+pub const CASES: [(&str, Case); 24] = [
     ("the_engine_renders_on_the_renderers_gpu_in_its_mode", mode),
     ("a_page_loads_and_its_frames_reach_the_screen", loads),
     ("a_page_moved_to_another_window_draws_there", moved),
@@ -85,12 +85,20 @@ pub const CASES: [(&str, Case); 22] = [
         replica_pause_before_rescue_autoplay,
     ),
     (
+        "a_pause_as_the_rescued_blob_is_swapped_in_still_aborts_the_play",
+        replica_pause_on_blob_swap,
+    ),
+    (
         "a_later_sources_failure_stays_silent_while_an_earlier_one_is_rescued",
         granted_later_source_silent,
     ),
     (
         "a_later_sources_held_failure_is_told_once_the_earlier_one_is_removed",
         replica_held_failure_told_on_removal,
+    ),
+    (
+        "a_source_moved_to_another_element_during_its_read_plays_there",
+        replica_source_moved,
     ),
     (
         "a_play_after_a_reload_of_a_file_that_appeared_waits_for_a_fresh_rescue",
@@ -1061,7 +1069,7 @@ fn replica_pause_during_rescue(fixture: &mut Fixture, _: &Gpu) -> Result<(), Str
         fixture,
         Pause {
             autoplay: false,
-            with_play: false,
+            at: PauseAt::Click,
         },
     )
 }
@@ -1073,7 +1081,7 @@ fn replica_pause_during_rescue_autoplay(fixture: &mut Fixture, _: &Gpu) -> Resul
         fixture,
         Pause {
             autoplay: true,
-            with_play: false,
+            at: PauseAt::Click,
         },
     )
 }
@@ -1085,7 +1093,19 @@ fn replica_pause_before_rescue_autoplay(fixture: &mut Fixture, _: &Gpu) -> Resul
         fixture,
         Pause {
             autoplay: true,
-            with_play: true,
+            at: PauseAt::Play,
+        },
+    )
+}
+
+/// A `pause()` from the page's observer of the element's `src`, which runs in the same microtask checkpoint as the
+/// rescue's outcome (the blob's address is set just before it), still aborts the play waiting on that rescue.
+fn replica_pause_on_blob_swap(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    pause_and_rescue(
+        fixture,
+        Pause {
+            autoplay: false,
+            at: PauseAt::Swap,
         },
     )
 }
@@ -1095,8 +1115,28 @@ fn replica_pause_before_rescue_autoplay(fixture: &mut Fixture, _: &Gpu) -> Resul
 struct Pause {
     /// The element has `autoplay`.
     autoplay: bool,
-    /// The click that plays pauses at once, rather than a second click while the rescue's read is held.
-    with_play: bool,
+    at: PauseAt,
+}
+
+/// When a pause case's page pauses its audio.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PauseAt {
+    /// A second click, while the rescue's read is held.
+    Click,
+    /// The click that plays, right after the `play()`.
+    Play,
+    /// Its observer of the element's `src`, when the rescue gives it the blob's address.
+    Swap,
+}
+
+impl PauseAt {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Click => "click",
+            Self::Play => "play",
+            Self::Swap => "swap",
+        }
+    }
 }
 
 /// A replica page's audio, played by a click and paused (see [`Pause`]) while its rescue's read is held by the
@@ -1111,7 +1151,10 @@ fn pause_and_rescue(fixture: &mut Fixture, pause: Pause) -> Result<(), String> {
            const a = new Audio('slow.wav');
            a.preload = 'auto';
            a.autoplay = {autoplay};
-           const withPlay = {with_play};
+           const pauseAt = '{at}';
+           new MutationObserver(() => {{
+             if (pauseAt === 'swap' && a.src.startsWith('blob:')) a.pause();
+           }}).observe(a, {{ attributes: true, attributeFilter: ['src'] }});
            let clicks = 0;
            let outcome = 'pending';
            let playing = false;
@@ -1124,14 +1167,14 @@ fn pause_and_rescue(fixture: &mut Fixture, pause: Pause) -> Result<(), String> {
              clicks += 1;
              if (clicks === 1) {{
                a.play().then(() => {{ outcome = 'resolved'; }}, (error) => {{ outcome = error.name; }});
-               if (withPlay) a.pause();
-             }} else {{
+               if (pauseAt === 'play') a.pause();
+             }} else if (pauseAt === 'click') {{
                a.pause();
              }}
            }});
          </script></body>",
         autoplay = pause.autoplay,
-        with_play = pause.with_play,
+        at = pause.at.name(),
     );
     let mut origin = FakeOrigin::new(&[("/docs/index.html", "text/html", page)]);
     let fake = Rc::get_mut(&mut origin).ok_or("the origin is shared")?;
@@ -1147,7 +1190,7 @@ fn pause_and_rescue(fixture: &mut Fixture, pause: Pause) -> Result<(), String> {
     fixture.click(point(px(160.), px(120.)))?;
     let held = Rc::clone(&origin);
     fixture.wait("the rescue's read", || !held.parked.borrow().is_empty())?;
-    if !pause.with_play {
+    if pause.at == PauseAt::Click {
         fixture.click(point(px(160.), px(120.)))?;
     }
     // let the pause reach the page before the file does
@@ -1285,6 +1328,71 @@ fn replica_held_failure_told_on_removal(fixture: &mut Fixture, _: &Gpu) -> Resul
     })?;
     check(close(seen, GREEN), || {
         "the last source's failure was told more than once".to_owned()
+    })
+}
+
+/// A `<source>` the page moves to another element while its rescue's read is on its way (held by the origin) plays
+/// there once the read lands: that element's selection reached it meanwhile and ended, and it runs again. A click
+/// moves it. Green once the second element loaded the file.
+fn replica_source_moved(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    const GREEN: [u8; 4] = [0x30, 0xc0, 0x30, 0xff];
+    let mut origin = FakeOrigin::new(&[(
+        "/docs/index.html",
+        "text/html",
+        "<body style='margin:0;background:#c03030'>\
+         <div id=go style='position:fixed;left:0;top:0;width:100%;height:100%'></div>\
+         <audio id=a preload=auto><source id=s src='slow.wav'></audio>\
+         <audio id=b preload=auto></audio>\
+         <script>
+           const b = document.getElementById('b');
+           b.addEventListener('loadedmetadata', () => {
+             if (b.duration > 0.9) document.body.style.background = '#30c030';
+           });
+           document.getElementById('go').addEventListener('click', () => {
+             b.appendChild(document.getElementById('s'));
+           });
+         </script></body>"
+            .to_owned(),
+    )]);
+    let fake = Rc::get_mut(&mut origin).ok_or("the origin is shared")?;
+    fake.files.insert("/docs/slow.wav", ("audio/wav", wav_second()));
+    fake.held = Some("/docs/slow.wav");
+    // WebKit's own sniffing read is answered; the rescue's is held
+    fake.answered_first = 1;
+    let overlay = Fixture::replica(&origin, true);
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    let held = Rc::clone(&origin);
+    fixture.wait("the source's rescue read", || !held.parked.borrow().is_empty())?;
+    fixture.click(point(px(160.), px(120.)))?;
+    // the second element's own sniffing read of the moved source is held too: answer it, and keep the rescue's held
+    fixture.wait("the second element's sniffing read", || held.parked.borrow().len() > 1)?;
+    let sniffs: Vec<_> = origin.parked.borrow_mut().drain(1..).collect();
+    for token in sniffs {
+        html_overlay::answer_resource(
+            token,
+            Ok(PageResource {
+                mime_type: "audio/wav".to_owned(),
+                body: wav_second(),
+            }),
+        );
+    }
+    // let the second element's selection reach the moved source and end
+    let settle = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < settle {
+        fixture.frame()?;
+    }
+    let parked: Vec<_> = origin.parked.borrow_mut().drain(..).collect();
+    for token in parked {
+        html_overlay::answer_resource(
+            token,
+            Ok(PageResource {
+                mime_type: "audio/wav".to_owned(),
+                body: wav_second(),
+            }),
+        );
+    }
+    fixture.until("the second element's metadata", &element, |_, width, pixels| {
+        close(pixel(pixels, width, width / 2, 200), GREEN)
     })
 }
 

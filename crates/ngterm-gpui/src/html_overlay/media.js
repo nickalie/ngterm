@@ -209,26 +209,31 @@
     }
     const entry = { url, state: 'reading', told: false };
     sources.set(source, entry);
+    // the elements a settled read speaks for: the one it failed in, which a `<source>` the page moved or removed
+    // holds back nothing in any more, and the one it is in now, whose selection may have reached it meanwhile
+    const settledIn = () => {
+      const now = source.parentElement;
+      return now instanceof HTMLMediaElement && now !== media ? [media, now] : [media];
+    };
     readWhole(url).then(
       (blob) => {
         if (sources.get(source) !== entry) return;
         sources.delete(source);
-        // the page gave the `<source>` another address meanwhile, or took it out of `media`: it holds back no
-        // failure after it there now
+        const elements = settledIn();
+        // unless the page gave the `<source>` another address meanwhile
         if (source.src === url) {
           // in place, so the page's own order, a later change of its address and its removal all hold
           playBlob(source, blob);
           untried.add(source);
-          if (source.parentElement === media) selectionEnded(media);
+          if (source.parentElement instanceof HTMLMediaElement) selectionEnded(source.parentElement);
         }
-        tell(media);
+        for (const element of elements) tell(element);
       },
       () => {
         if (sources.get(source) !== entry) return;
         entry.state = 'failed';
-        // told once no earlier candidate holds the selection back from it, by this walk or a later one; the
-        // element it failed in, which a removed `<source>` holds back nothing in any more
-        tell(media);
+        // told once no earlier candidate holds the selection back from it, by this walk or a later one
+        for (const element of settledIn()) tell(element);
       },
     );
     return true;
@@ -269,7 +274,14 @@
         if (this.error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED && fromApp(url)) rescueSrc(this, url);
         const rescue = rescues.get(this);
         if (rescue && !current) throw failure('AbortError');
-        if (rescue) return Promise.race([rescue.outcome, stop.aborted]).then(() => play.call(this));
+        if (rescue) {
+          return Promise.race([rescue.outcome, stop.aborted]).then(() => {
+            // a stop in the same checkpoint as the rescue's outcome (a page's observer of the blob's address) may
+            // lose the race to it
+            if (stops.get(this) !== stop) throw failure('AbortError');
+            return play.call(this);
+          });
+        }
       }
       if (error?.name === 'AbortError' && reloading.has(this) && current) return play.call(this);
       throw error;
