@@ -123,6 +123,13 @@ raw_enum! {
     FlaggedViewLayout { Flat => "flat", Plain => "plain", Tree => "tree" }
 }
 
+/// The flat list, as an unset setting reads.
+impl Default for FlaggedViewLayout {
+    fn default() -> Self {
+        Self::Flat
+    }
+}
+
 raw_enum! {
     /// Where a clicked web link from terminal output opens.
     LinkOpenMode { Browser => "browser", Overlay => "overlay" }
@@ -416,7 +423,7 @@ impl AppSettings {
         self.flagged_view_layout
             .as_deref()
             .and_then(FlaggedViewLayout::from_raw)
-            .unwrap_or(FlaggedViewLayout::Flat)
+            .unwrap_or_default()
     }
 
     #[must_use]

@@ -19,7 +19,8 @@ use crate::persist::{SessionSnapshot, Snapshot, WorkspaceSnapshot};
 
 impl AppStore {
     /// The window's tree as persisted: remote sessions are left out, the focus set in tree order (both focus keys
-    /// omitted while nothing is marked), the recency list without the sessions left out.
+    /// omitted while nothing is marked), the recency list and the flagged order (omitted while nothing is flagged)
+    /// without the sessions left out.
     #[must_use]
     pub fn snapshot(&self) -> Snapshot {
         let workspaces: Vec<WorkspaceSnapshot> = self.workspaces.iter().map(workspace_snapshot).collect();
@@ -40,6 +41,11 @@ impl AppStore {
             .copied()
             .filter(|id| persistable.contains(id))
             .collect();
+        let flagged_order: Vec<Uuid> = self
+            .ordered_flagged_session_ids()
+            .into_iter()
+            .filter(|id| persistable.contains(id))
+            .collect();
         Snapshot {
             selected_session_id: self.persisted_selection(&persistable, &recency),
             workspaces,
@@ -49,6 +55,7 @@ impl AppStore {
             focused_workspace_ids: (!focus_ids.is_empty()).then_some(focus_ids),
             focus_enabled: self.focus.enabled.then_some(true),
             session_recency: Some(recency),
+            flagged_order: (!flagged_order.is_empty()).then_some(flagged_order),
             ..Snapshot::default()
         }
     }
@@ -68,7 +75,8 @@ impl AppStore {
 
     /// Rebuilds the tree from `snapshot`, replacing the current state wholesale: fresh sessions keyed by the
     /// persisted ids (their terminals spawn on first display), duplicate workspace ids folded into the first, a
-    /// repeated session id kept once, the sidebar width clamped, stale focus members pruned, a selection naming no
+    /// repeated session id kept once, the sidebar width clamped, the flagged order kept to the flagged sessions (the
+    /// ones it lacks appended in tree order), stale focus members pruned, a selection naming no
     /// session cleared, the recency order re-seeded with the selection in front, and a selection the restored focus
     /// filter hides moved into view. A reload is not a selection, so it emits no `session.selected` and settles the
     /// selected panes without a `pane.focused`, and it asks for no save of its own: only the closing repair of a
@@ -87,6 +95,7 @@ impl AppStore {
         self.sidebar.width = clamp_sidebar_width(snapshot.sidebar_width.unwrap_or(SIDEBAR_WIDTH_DEFAULT));
         self.sidebar.visible = snapshot.sidebar_visible.unwrap_or(true);
         self.sidebar.mode = snapshot.sidebar_mode.unwrap_or(SidebarMode::Tree);
+        self.restore_flagged_order(snapshot.flagged_order.as_deref());
         self.restore_focus(snapshot);
         let selected = snapshot.selected_session_id.filter(|id| self.session(*id).is_some());
         self.selected_session_id = selected;

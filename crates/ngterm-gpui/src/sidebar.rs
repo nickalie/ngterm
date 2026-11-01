@@ -672,15 +672,7 @@ impl Sidebar {
     }
 
     fn propose(&self, payload: &DragPayload, y: f64) -> Option<(Proposal, Highlight)> {
-        if !self.context.drop.tree {
-            return None;
-        }
-        let spans = self.spans();
-        if payload.workspace {
-            drag::propose_workspace(&self.rows, &spans, y, *payload.ids.first()?, &self.context.drop)
-        } else {
-            drag::propose_sessions(&self.rows, &spans, y, &payload.ids, &self.context.drop)
-        }
+        drag::propose_rows(&self.rows, &self.spans(), y, payload, &self.context.drop)
     }
 
     /// The rows drag of `payload` hovers at `y`: the drop it proposes is highlighted, and a session drag spring-loads
@@ -708,6 +700,18 @@ impl Sidebar {
                 sessions,
                 workspace,
                 destination,
+            },
+            Some((
+                Proposal::Flagged {
+                    sessions,
+                    placement,
+                    anchor,
+                },
+                _,
+            )) => SidebarAction::DropFlagged {
+                sessions,
+                placement,
+                anchor,
             },
             Some((Proposal::Workspace { workspace, destination }, _)) => {
                 SidebarAction::DropWorkspace { workspace, destination }
@@ -770,7 +774,8 @@ impl Sidebar {
             return;
         }
         self.drag.spring_pending = None;
-        let Some(id) = hovered.filter(|_| self.context.drop.tree) else {
+        // wherever workspace rows render: the ordinary and the flagged tree
+        let Some(id) = hovered.filter(|_| self.context.drop.view.has_workspace_rows()) else {
             return;
         };
         let task = cx.spawn(async move |this, cx| {

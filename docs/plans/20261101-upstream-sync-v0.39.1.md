@@ -363,32 +363,33 @@ flag`, tree `flaggedOrder`), `control-api.md`, `sidebar.md`, `menu-actions.md`.
 `::test_flagged_order_follows_flagging`, `::test_flag_move_refusals`, `::test_flag_move_to_the_same_place_answers_ok`;
 `test_relaunch.py::test_flagged_order_survives_relaunch`; `test_cli_output.py::test_session_flag_move`.
 
-- [ ] per-store `flagged_order`; `ordered_flagged_sessions()` = the saved ids still flagged, then the missing flagged
+- [x] per-store `flagged_order`; `ordered_flagged_sessions()` = the saved ids still flagged, then the missing flagged
       ones in tree order; `flagged_sessions()` stays tree order for the flagged tree and counts
-- [ ] maintenance: flag appends arrivals (flag-all keeps arranged positions), unflag drops, clear empties (parked
+- [x] maintenance: flag appends arrivals (flag-all keeps arranged positions), unflag drops, clear empties (parked
       ids too), close and workspace removal drop after reselection, finalize drops, undo appends a cleared id and keeps
       a parked one in its slot, every Recent Closed reopen appends in arrival order
-- [ ] `move_flagged(ids, placement, anchor)`: refuses an empty block, an anchor in the block, ids outside the flagged
+- [x] `move_flagged(ids, placement, anchor)`: refuses an empty block, an anchor in the block, ids outside the flagged
       set; an unchanged order saves nothing and emits no `tree.changed`
-- [ ] snapshot `flaggedOrder` (upper-case uuids) after `sessionRecency`, omitted when empty, lenient; restore keeps
+- [x] snapshot `flaggedOrder` (upper-case uuids) after `sessionRecency`, omitted when empty, lenient; restore keeps
       flagged, de-duplicated ids and appends the rest
-- [ ] the flagged layout mirrored into every open store, seeded before its restore picks a selection; navigation
+- [x] the flagged layout mirrored into every open store, seeded before its restore picks a selection; navigation
       (`session go`, Ctrl-Tab, ⌃P, restore reselection) follows the displayed order; close reselection takes the
       saved-order neighbour in flat/plain layouts
-- [ ] dispatcher (before the target resolves): "session.flag move requires exactly one of --before or --after"; any
+- [x] dispatcher (before the target resolves): "session.flag move requires exactly one of --before or --after"; any
       other mode with an anchor: "--before and --after apply only to session.flag move"; app side: "a session cannot
       be its own anchor", "session.flag move needs a flagged session and a flagged anchor"; answer `{"id"}` also when
       the order did not change
-- [ ] tree top-level `flaggedOrder` after `sidebarFlaggedLayout`, omitted when nothing is flagged
-- [ ] CLI `session flag` gains `move --before|--after`, upstream's help, "mode must be on, off, toggle, clear, or
+- [x] tree top-level `flaggedOrder` after `sidebarFlaggedLayout`, omitted when nothing is flagged
+- [x] CLI `session flag` gains `move --before|--after`, upstream's help, "mode must be on, off, toggle, clear, or
       move", "--before and --after apply only to move", "move requires exactly one of --before or --after"
-- [ ] GPUI: flat and plain lists render the saved order; session rows drag in every flagged layout (workspace rows
+- [x] GPUI: flat and plain lists render the saved order; session rows drag in every flagged layout (workspace rows
       only in the ordinary tree); the flat drop → `move_flagged`; the flagged-tree drop through `move_sessions` with
       the no-op check; spring-load wherever workspace rows render
-- [ ] write tests: every Swift case listed above (core model, sidebar_drop, metadata command, settings model, ctl,
+- [x] write tests: every Swift case listed above (core model, sidebar_drop, metadata command, settings model, ctl,
       gpui sidebar drag)
-- [ ] write tests: the conformance tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the conformance tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the six new tests are
+      since(0.39.1); green at a temporary 0.39.1 level, they join the ratchet at Task 25)
 
 ### Task 8: Palette membership editors: Edit Flagged Sessions, Edit Focused Workspaces (#803)
 

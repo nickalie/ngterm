@@ -19,6 +19,7 @@ use super::pending_close::PendingCloseTimer;
 use super::recent_closed::{RecentClosedList, RecentClosedReopen};
 use super::session::Session;
 use super::store::{AppStore, NewSession};
+use crate::persist::settings::FlaggedViewLayout;
 use crate::persist::{RecentClosedItem, RecentClosedKind};
 
 /// One window's metadata (upstream's `WindowInfo`).
@@ -92,6 +93,8 @@ pub struct WindowLibrary {
     pending_ended_asks: Vec<EndedAsk>,
     /// Remote overlay changes of stores no longer open, for [`WindowLibrary::take_remote_overlay_changes`].
     pending_remote_overlay_changes: Vec<super::remote_overlay::RemoteOverlayChange>,
+    /// The app-wide flagged layout, copied onto every store as it is made, before its restore picks a selection.
+    flagged_layout: FlaggedViewLayout,
 }
 
 impl WindowLibrary {
@@ -102,6 +105,29 @@ impl WindowLibrary {
             home: home.into(),
             ..Self::default()
         }
+    }
+
+    /// The app-wide flagged layout the stores mirror.
+    #[must_use]
+    pub fn flagged_layout(&self) -> FlaggedViewLayout {
+        self.flagged_layout
+    }
+
+    /// Sets the app-wide flagged layout on the library and every open store (upstream's `setFlaggedLayout`).
+    pub fn set_flagged_layout(&mut self, layout: FlaggedViewLayout) {
+        self.flagged_layout = layout;
+        for store in self.stores.values_mut() {
+            store.set_flagged_layout(layout);
+        }
+    }
+
+    /// An empty store carrying the library's flagged layout, for a load to restore into: the restore's selection
+    /// repair follows the order that layout shows.
+    #[must_use]
+    pub fn blank_store(&self) -> AppStore {
+        let mut store = AppStore::new();
+        store.set_flagged_layout(self.flagged_layout);
+        store
     }
 
     /// A library seeded with one fresh window, as a first launch with no state has.
@@ -331,7 +357,7 @@ impl WindowLibrary {
             .and_then(|name| trimmed_or_none(&sanitized(name)))
             .unwrap_or_else(|| self.default_window_name());
         let id = Uuid::new_v4();
-        let mut store = AppStore::new();
+        let mut store = self.blank_store();
         store.recent_closed = self.recent_closed.share();
         let workspace = store.add_workspace("workspace 1");
         store.add_session(workspace, NewSession::at_cwd(self.home.clone()));
@@ -342,13 +368,14 @@ impl WindowLibrary {
         id
     }
 
-    /// Opens a window with an already built store (a load from disk). A no-op for an id with no metadata or an open
-    /// window.
+    /// Opens a window with an already built store (a load from disk, best built from [`Self::blank_store`]), which
+    /// takes the library's flagged layout. A no-op for an id with no metadata or an open window.
     pub fn open_window(&mut self, id: Uuid, mut store: AppStore) {
         if self.info(id).is_none() || self.is_open(id) {
             return;
         }
         store.recent_closed = self.recent_closed.share();
+        store.set_flagged_layout(self.flagged_layout);
         self.stores.insert(id, store);
         self.index_dirty = true;
     }

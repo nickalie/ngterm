@@ -3,6 +3,7 @@
 
 mod ask_draft;
 mod duplicate;
+mod flagged_order;
 mod hud;
 mod library;
 mod library_attention;

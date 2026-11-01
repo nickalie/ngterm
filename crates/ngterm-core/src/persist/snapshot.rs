@@ -85,6 +85,9 @@ pub struct Snapshot {
     /// The most recently selected sessions, current first.
     #[serde(serialize_with = "upper::option_vec", skip_serializing_if = "Option::is_none")]
     pub session_recency: Option<Vec<Uuid>>,
+    /// The flagged view's saved order; `None` restores in tree order.
+    #[serde(serialize_with = "upper::option_vec", skip_serializing_if = "Option::is_none")]
+    pub flagged_order: Option<Vec<Uuid>>,
 }
 
 impl Default for Snapshot {
@@ -99,6 +102,7 @@ impl Default for Snapshot {
             focused_workspace_ids: None,
             focus_enabled: None,
             session_recency: None,
+            flagged_order: None,
         }
     }
 }
@@ -127,6 +131,8 @@ struct RawSnapshot {
     focus_enabled: Option<bool>,
     #[serde(default, deserialize_with = "lossy")]
     session_recency: Option<Vec<Uuid>>,
+    #[serde(default, deserialize_with = "lossy")]
+    flagged_order: Option<Vec<Uuid>>,
 }
 
 impl From<RawSnapshot> for Snapshot {
@@ -146,6 +152,7 @@ impl From<RawSnapshot> for Snapshot {
             focused_workspace_ids,
             focus_enabled,
             session_recency: raw.session_recency,
+            flagged_order: raw.flagged_order,
         }
     }
 }
@@ -395,7 +402,7 @@ mod tests {
     #[test]
     fn malformed_snapshot_optionals_drop_alone() {
         type Nilled = fn(&Snapshot) -> bool;
-        let cases: [(&str, Nilled); 7] = [
+        let cases: [(&str, Nilled); 8] = [
             (r#""selectedSessionID": "not-a-uuid","#, |s| {
                 s.selected_session_id.is_none()
             }),
@@ -407,6 +414,7 @@ mod tests {
             }),
             (r#""focusEnabled": 42,"#, |s| s.focus_enabled.is_none()),
             (r#""sessionRecency": ["not-a-uuid"],"#, |s| s.session_recency.is_none()),
+            (r#""flaggedOrder": ["not-a-uuid"],"#, |s| s.flagged_order.is_none()),
         ];
         for (bad, nilled) in cases {
             let snapshot = decode(&with_snapshot_key(bad));

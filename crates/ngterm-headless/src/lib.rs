@@ -107,7 +107,7 @@ fn load_state(env: &dyn Env) -> CoreState {
         );
     }
     let mut persistence = LibraryPersistence::new(&state_dir);
-    let library = persistence.bootstrap(&home);
+    let library = persistence.bootstrap_with_flagged_layout(&home, settings.effective_flagged_view_layout());
     CoreState {
         library,
         settings,

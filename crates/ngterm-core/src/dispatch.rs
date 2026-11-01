@@ -260,6 +260,7 @@ impl Core {
             remote: crate::remote::PresentationRuntime::default(),
         };
         core.sync_session_naming();
+        core.sync_flagged_layout();
         core.repoint_remotes();
         core
     }
@@ -270,6 +271,14 @@ impl Core {
         crate::model::naming::set_names_from_terminal_title(
             self.settings.session_name_from_terminal_title.unwrap_or(false),
         );
+    }
+
+    /// Pushes the effective flagged layout to the library and every open store, which navigation reads (upstream's
+    /// `SettingsModel.applyFlaggedViewLayout`). A launch passes it to the bootstrap too, so the restores that ran
+    /// before the core existed already picked their selections under it.
+    fn sync_flagged_layout(&mut self) {
+        let layout = self.settings.effective_flagged_view_layout();
+        self.library.set_flagged_layout(layout);
     }
 
     /// Whether this host claims the conformance capability `name` (`window-geometry` decides whether `window.move`
@@ -387,7 +396,7 @@ impl Core {
             Some(persistence) => {
                 persistence.load_window(&mut self.library, id);
             }
-            None => self.library.open_window(id, AppStore::new()),
+            None => self.library.open_window(id, self.library.blank_store()),
         }
     }
 
@@ -495,6 +504,7 @@ impl Core {
             return false;
         }
         self.sync_session_naming();
+        self.sync_flagged_layout();
         self.save_settings();
         true
     }

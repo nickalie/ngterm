@@ -11,7 +11,9 @@ use uuid::Uuid;
 
 use crate::Core;
 use crate::commands::ToggleMode;
-use crate::model::{AgentIndicator, AppStore, NewSession, NewSessionPlacement, SidebarMode, TintChoice};
+use crate::model::{
+    AgentIndicator, AppStore, FlaggedOrderPlacement, NewSession, NewSessionPlacement, SidebarMode, TintChoice,
+};
 use crate::persist::settings::NewSessionPlacementSetting;
 
 /// One sidebar gesture, already resolved to ids.
@@ -92,6 +94,13 @@ pub enum SidebarAction {
         sessions: Vec<Uuid>,
         workspace: Uuid,
         destination: usize,
+    },
+    /// A session drag landing on the flat or plain flagged list: the block moves next to `anchor` in the saved flagged
+    /// order.
+    DropFlagged {
+        sessions: Vec<Uuid>,
+        placement: FlaggedOrderPlacement,
+        anchor: Uuid,
     },
     /// A workspace drag landing at the post-removal `destination`.
     DropWorkspace {
@@ -237,6 +246,11 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool) -> boo
             workspace,
             destination,
         } => return store.move_sessions(&sessions, workspace, Some(destination)) > 0,
+        SidebarAction::DropFlagged {
+            sessions,
+            placement,
+            anchor,
+        } => return store.move_flagged(&sessions, placement, anchor),
         SidebarAction::DropWorkspace { workspace, destination } => store.move_workspace(workspace, destination),
         SidebarAction::ToggleFlags(ids) => {
             let ids: Vec<Uuid> = ids.into_iter().filter(|id| store.session(*id).is_some()).collect();
@@ -656,6 +670,23 @@ mod tests {
             destination: 0,
         }));
         assert_eq!(f.store().workspaces()[0].id(), two);
+    }
+
+    #[test]
+    fn a_flagged_list_drop_moves_the_saved_order_only() {
+        let mut f = fixture(AppSettings::default());
+        let [one, _] = f.workspaces;
+        let [first, second, third] = f.sessions;
+        assert!(f.act(SidebarAction::ToggleFlags(vec![first, second, third])));
+        let drop = |anchor| SidebarAction::DropFlagged {
+            sessions: vec![third],
+            placement: FlaggedOrderPlacement::Before,
+            anchor,
+        };
+        assert!(f.act(drop(first)));
+        assert_eq!(f.store().ordered_flagged_session_ids(), [third, first, second]);
+        assert_eq!(f.order(one), [first, second, third], "the tree keeps its order");
+        assert!(!f.act(drop(first)), "already there");
     }
 
     #[test]

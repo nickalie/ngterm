@@ -69,6 +69,7 @@ pub fn control_tree(store: &AppStore, context: &TreeContext<'_>) -> ControlTree 
         sidebar_visible: Some(sidebar.visible),
         sidebar_mode: Some(sidebar.mode.wire_name().to_owned()),
         sidebar_flagged_layout: Some(settings.effective_flagged_view_layout().raw().to_owned()),
+        flagged_order: store.flagged_order_readback(),
         link_open_mode: Some(settings.effective_link_open_mode().raw().to_owned()),
         sidebar_width: Some(sidebar.width),
         workspace_filter: Some(store.focus().enabled()),
@@ -691,5 +692,29 @@ mod tests {
         assert_eq!(nodes[0]["lastSelectedAt"], json!(1_600_000_000.0));
         assert_eq!(nodes[1]["lastSelectedAt"], json!(1_700_000_100.0));
         assert!(!nodes[2].as_object().unwrap().contains_key("lastSelectedAt"));
+    }
+
+    /// Upstream's `controlTreeReportsTheSavedFlaggedOrderAndOmitsItWhenNothingIsFlagged`.
+    #[test]
+    fn the_tree_reports_the_saved_flagged_order_and_omits_it_when_nothing_is_flagged() {
+        let mut store = AppStore::new();
+        let work = store.add_workspace("work");
+        let a = store.add_session(work, NewSession::at_cwd("/a")).unwrap();
+        let b = store.add_session(work, NewSession::at_cwd("/b")).unwrap();
+        let empty = tree_json(&store, &AppSettings::default(), false);
+        assert!(!empty.as_object().unwrap().contains_key("flaggedOrder"));
+
+        store.set_flag(true, b);
+        store.set_flag(true, a);
+        let tree = tree_json(&store, &AppSettings::default(), false);
+        assert_eq!(tree["flaggedOrder"], json!([id(b), id(a)]));
+        assert_eq!(
+            tree["workspaces"][0]["sessions"][0]["id"],
+            json!(id(a)),
+            "the tree keeps tree order"
+        );
+        let keys: Vec<&String> = tree.as_object().unwrap().keys().collect();
+        let at = |key: &str| keys.iter().position(|candidate| *candidate == key).unwrap();
+        assert_eq!(at("flaggedOrder"), at("sidebarFlaggedLayout") + 1);
     }
 }

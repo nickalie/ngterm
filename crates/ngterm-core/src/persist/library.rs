@@ -31,6 +31,7 @@ use crate::model::{
     WindowLibrary,
 };
 use crate::pane_env::uuid_string;
+use crate::persist::settings::FlaggedViewLayout;
 use crate::watermark;
 
 /// The window index's file name in the state directory.
@@ -152,9 +153,17 @@ impl LibraryPersistence {
 
     /// Builds the library at launch: a valid index reopens its open set (never windowless: the frontmost, else the
     /// first window), else surviving window files are recovered, else a legacy file migrates, else one window is
-    /// seeded with a session in `home`. The launch emits no events; what it wants written is written now.
+    /// seeded with a session in `home`. The launch emits no events; what it wants written is written now. The stores
+    /// take the default flagged layout; [`Self::bootstrap_with_flagged_layout`] takes the saved setting.
     pub fn bootstrap(&mut self, home: &str) -> WindowLibrary {
+        self.bootstrap_with_flagged_layout(home, FlaggedViewLayout::default())
+    }
+
+    /// [`Self::bootstrap`] with the saved flagged layout, which the restored stores need before they pick their
+    /// selections.
+    pub fn bootstrap_with_flagged_layout(&mut self, home: &str, flagged_layout: FlaggedViewLayout) -> WindowLibrary {
         let mut library = WindowLibrary::new(home);
+        library.set_flagged_layout(flagged_layout);
         library.set_recent_closed_items(self.recent_closed_store().load());
         if let Some(index) = WindowsIndex::load(&self.index_path()) {
             for entry in &index.windows {
@@ -224,7 +233,7 @@ impl LibraryPersistence {
             return false;
         }
         let id = Uuid::new_v4();
-        let mut store = AppStore::new();
+        let mut store = library.blank_store();
         store.restore(&snapshot, true);
         store.request_save(SaveRequest::Now);
         library.insert_window(WindowInfo {
@@ -253,7 +262,7 @@ impl LibraryPersistence {
             return true;
         }
         let snapshot = self.window_store(id).load();
-        let mut store = AppStore::new();
+        let mut store = library.blank_store();
         store.restore(&snapshot, launch_restore);
         let carried_captures = snapshot
             .workspaces

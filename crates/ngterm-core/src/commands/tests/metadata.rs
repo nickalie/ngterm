@@ -390,6 +390,140 @@ fn flag_resolves_the_target_before_refusing_the_mode() {
     );
 }
 
+// MARK: - session.flag move
+
+/// A fixture of three sessions, all flagged in tree order.
+fn all_flagged() -> Fixture {
+    let mut fixture = Fixture::new(2);
+    let ids = fixture.sessions.clone();
+    fixture.store_mut().unwrap().set_flags(true, &ids);
+    fixture
+}
+
+fn flag_move(fixture: &mut Fixture, target: Option<&str>, edit: impl FnOnce(&mut Args)) -> Response {
+    fixture.session(
+        SessionCmd::Flag,
+        target,
+        args(|a| {
+            a.mode = Some("move".into());
+            edit(a);
+        }),
+    )
+}
+
+fn flagged_order(fixture: &Fixture) -> Vec<Uuid> {
+    fixture.store().ordered_flagged_session_ids()
+}
+
+/// Upstream's `testMoveFlaggedSessionReordersTheSavedOrderAndTheTreeReadsItBack` and the dispatcher's routing of the one
+/// anchor and its side.
+#[test]
+fn flag_move_reorders_the_saved_order_and_the_tree_reads_it_back() {
+    let mut fixture = all_flagged();
+    let [a, b, c] = [fixture.sessions[0], fixture.sessions[1], fixture.sessions[2]];
+
+    let response = flag_move(&mut fixture, Some(&wire(c)), |a_| a_.before = Some(wire(a)));
+    assert_eq!(
+        serde_json::to_value(&response).unwrap(),
+        json!({"ok": true, "result": {"id": wire(c)}})
+    );
+    assert_eq!(flagged_order(&fixture), [c, a, b]);
+    let tree = fixture.core.tree(None).unwrap();
+    assert_eq!(tree.flagged_order, Some(vec![wire(c), wire(a), wire(b)]));
+
+    let window = wire(fixture.window);
+    let response = flag_move(&mut fixture, Some(&wire(c)), |a_| {
+        a_.after = Some(wire(b));
+        a_.window = Some(window);
+    });
+    assert_eq!(answered_id(&response), Some(c));
+    assert_eq!(flagged_order(&fixture), [a, b, c]);
+}
+
+#[test]
+fn flag_move_to_the_same_place_answers_the_id_and_changes_nothing() {
+    let mut fixture = all_flagged();
+    let [a, b] = [fixture.sessions[0], fixture.sessions[1]];
+    fixture
+        .core
+        .library_mut()
+        .store_mut(fixture.window)
+        .unwrap()
+        .take_outbox();
+
+    let response = flag_move(&mut fixture, Some(&wire(b)), |a_| a_.after = Some(wire(a)));
+
+    assert_eq!(answered_id(&response), Some(b));
+    assert_eq!(flagged_order(&fixture), fixture.sessions);
+    assert!(fixture.store().outbox().events.is_empty(), "no tree.changed");
+}
+
+/// Upstream's `sessionFlagMoveRefusesNoAnchorOrBoth` and `sessionFlagRefusesAnAnchorOutsideMove`: checked before the
+/// target resolves.
+#[test]
+fn flag_anchors_are_checked_before_the_target_resolves() {
+    let mut fixture = all_flagged();
+    let exactly_one = failure("session.flag move requires exactly one of --before or --after");
+    assert_eq!(flag_move(&mut fixture, Some(UNKNOWN), |_| {}), exactly_one);
+    let both = flag_move(&mut fixture, Some(UNKNOWN), |a| {
+        a.before = Some("b".into());
+        a.after = Some("c".into());
+    });
+    assert_eq!(both, exactly_one);
+    for mode in [Some("on"), Some("toggle"), Some("clear"), None] {
+        let response = fixture.session(
+            SessionCmd::Flag,
+            Some(UNKNOWN),
+            args(|a| {
+                a.mode = mode.map(Into::into);
+                a.after = Some("c".into());
+            }),
+        );
+        assert_eq!(
+            response,
+            failure("--before and --after apply only to session.flag move"),
+            "{mode:?}"
+        );
+    }
+    assert_eq!(flagged_order(&fixture), fixture.sessions);
+}
+
+/// Upstream's `testMoveFlaggedSessionRefusesAnUnflaggedOrUnknownAnchorAndItself` and
+/// `testMoveFlaggedSessionRefusesAnAnchorInAnotherWindow`.
+#[test]
+fn flag_move_refuses_an_unflagged_unknown_or_foreign_anchor_and_itself() {
+    let mut fixture = Fixture::new(2);
+    let [a, b, unflagged] = [fixture.sessions[0], fixture.sessions[1], fixture.sessions[2]];
+    fixture.store_mut().unwrap().set_flags(true, &[a, b]);
+    let other = fixture.core.library_mut().new_window(Some("other"));
+    let elsewhere = {
+        let store = fixture.core.library_mut().store_mut(other).unwrap();
+        let elsewhere = store.selected_session_id().unwrap();
+        store.set_flag(true, elsewhere);
+        elsewhere
+    };
+    let target = wire(a);
+    let cases = [
+        (
+            wire(unflagged),
+            "session.flag move needs a flagged session and a flagged anchor".to_owned(),
+        ),
+        (UNKNOWN.to_owned(), format!("no such session: {UNKNOWN}")),
+        (wire(a), "a session cannot be its own anchor".to_owned()),
+        (wire(elsewhere), format!("no such session: {}", wire(elsewhere))),
+    ];
+    for (anchor, error) in cases {
+        let response = flag_move(&mut fixture, Some(&target), |a_| a_.after = Some(anchor.clone()));
+        assert_eq!(response, failure(&error), "{anchor}");
+    }
+    let response = flag_move(&mut fixture, Some(&wire(unflagged)), |a_| a_.before = Some(wire(a)));
+    assert_eq!(
+        response,
+        failure("session.flag move needs a flagged session and a flagged anchor")
+    );
+    assert_eq!(flagged_order(&fixture), [a, b]);
+}
+
 // MARK: - session.context
 
 #[test]

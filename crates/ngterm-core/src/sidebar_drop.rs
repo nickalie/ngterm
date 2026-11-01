@@ -4,10 +4,18 @@
 //! control channel's `session.move --after/--before` share it; the caller resolves ids to indices and applies the
 //! result through [`crate::model::AppStore::move_session`], [`crate::model::AppStore::move_sessions`] or
 //! [`crate::model::AppStore::move_workspace`].
+//!
+//! The flagged view: a drop on the flat or plain list is a move in the saved flagged order
+//! ([`resolve_flagged_reorder`], applied through [`crate::model::AppStore::move_flagged`], which shares
+//! [`reordered_flagged`] with `session.flag move`); the flagged tree moves sessions in the real workspace order, a
+//! move that changes no visible row counting as a no-op ([`FlaggedTree::changes_view`]).
+
+use std::collections::HashSet;
+use std::hash::BuildHasher;
 
 use uuid::Uuid;
 
-use crate::model::{SessionLocation, SidebarMode};
+use crate::model::{FlaggedOrderPlacement, SessionLocation, SidebarMode};
 
 /// Prevents an accidental file-manager multi-selection from spawning an unbounded number of shells.
 pub const MAXIMUM_DIRECTORY_IMPORT_COUNT: usize = 20;
@@ -219,6 +227,136 @@ pub fn resolve_workspace(source_index: usize, count: usize, child_index: DropInd
         drop_child_index,
         destination,
     })
+}
+
+// MARK: - the flagged view
+
+/// A drop on the flat or plain flagged list, resolved into the arguments of
+/// [`crate::model::AppStore::move_flagged`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlaggedReorder {
+    /// The dragged rows, in the list's order.
+    pub ids: Vec<Uuid>,
+    pub placement: FlaggedOrderPlacement,
+    pub anchor: Uuid,
+}
+
+/// Resolves a drop on the flat or plain flagged list, whose rows are `order` (upstream's `resolveFlaggedReorder`). A
+/// drop on a row (`on_row`) lands after it. A drop into the gap before row `slot` lands before the first undragged row
+/// at or below the gap, else after the last undragged row above it. `None` when the order would not change.
+#[must_use]
+pub fn resolve_flagged_reorder(
+    order: &[Uuid],
+    dragged: &[Uuid],
+    on_row: Option<Uuid>,
+    slot: usize,
+) -> Option<FlaggedReorder> {
+    let moving: HashSet<Uuid> = dragged.iter().copied().collect();
+    let block: Vec<Uuid> = order.iter().copied().filter(|id| moving.contains(id)).collect();
+    if block.is_empty() {
+        return None;
+    }
+    let (placement, anchor) = if let Some(row) = on_row {
+        if moving.contains(&row) || !order.contains(&row) {
+            return None;
+        }
+        (FlaggedOrderPlacement::After, row)
+    } else {
+        let slot = slot.min(order.len());
+        let undragged = |id: &&Uuid| !moving.contains(*id);
+        if let Some(below) = order[slot..].iter().find(undragged) {
+            (FlaggedOrderPlacement::Before, *below)
+        } else {
+            (
+                FlaggedOrderPlacement::After,
+                *order[..slot].iter().rev().find(undragged)?,
+            )
+        }
+    };
+    reordered_flagged(order, &moving, placement, anchor)?;
+    Some(FlaggedReorder {
+        ids: block,
+        placement,
+        anchor,
+    })
+}
+
+/// `order` with the `moving` rows, kept in their order, taken out and put just before or after `anchor`; `None` when
+/// the anchor is not left in the list or nothing changes. The one reorder step a drop and `session.flag move` share,
+/// so the sidebar never accepts a drop the store would refuse.
+#[must_use]
+pub fn reordered_flagged<S: BuildHasher>(
+    order: &[Uuid],
+    moving: &HashSet<Uuid, S>,
+    placement: FlaggedOrderPlacement,
+    anchor: Uuid,
+) -> Option<Vec<Uuid>> {
+    let (block, mut reordered): (Vec<Uuid>, Vec<Uuid>) = order.iter().partition(|id| moving.contains(id));
+    let at = reordered.iter().position(|id| *id == anchor)?;
+    let at = match placement {
+        FlaggedOrderPlacement::Before => at,
+        FlaggedOrderPlacement::After => at + 1,
+    };
+    reordered.splice(at..at, block);
+    (reordered != order).then_some(reordered)
+}
+
+/// Maps a gap among a flagged-tree workspace's visible rows onto the full workspace's pre-removal child index that
+/// [`resolve_sessions`] takes (upstream's `flaggedTreeChildIndex`). `visible_indices` are the flagged rows' full
+/// indices, ascending. A gap above a visible row lands right before it and the gap after the last one right after it,
+/// so a hidden unflagged sibling never crosses the drop; a drop on the workspace row passes through and appends after
+/// the workspace's last session, flagged or not.
+#[must_use]
+pub fn flagged_tree_child_index(visible_indices: &[usize], slot: DropIndex) -> DropIndex {
+    let DropIndex::Before(slot) = slot else {
+        return DropIndex::OnItem;
+    };
+    let Some(&last) = visible_indices.last() else {
+        return DropIndex::Before(0);
+    };
+    DropIndex::Before(visible_indices.get(slot).copied().unwrap_or(last + 1))
+}
+
+/// The workspace tree as the flagged tree layout sees it: every session in its workspace, and which are flagged.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FlaggedTree {
+    pub workspaces: Vec<(Uuid, Vec<Uuid>)>,
+    pub flagged: HashSet<Uuid>,
+}
+
+impl FlaggedTree {
+    /// Whether moving `dragged` as `resolution` describes changes any workspace's flagged rows or their order. A move
+    /// that only shifts hidden unflagged siblings, which the full-tree no-op check of [`resolve_sessions`] cannot see,
+    /// changes nothing on screen.
+    #[must_use]
+    pub fn changes_view(&self, dragged: &[Uuid], resolution: &SessionResolution) -> bool {
+        let mut after: Vec<(Uuid, Vec<Uuid>)> = self
+            .workspaces
+            .iter()
+            .map(|(id, sessions)| {
+                let kept = sessions.iter().copied().filter(|id| !dragged.contains(id)).collect();
+                (*id, kept)
+            })
+            .collect();
+        let Some((_, target)) = after.iter_mut().find(|(id, _)| *id == resolution.workspace) else {
+            return false;
+        };
+        let destination = resolution.destination.min(target.len());
+        target.splice(destination..destination, dragged.iter().copied());
+        self.flagged_rows(&after) != self.flagged_rows(&self.workspaces)
+    }
+
+    fn flagged_rows(&self, tree: &[(Uuid, Vec<Uuid>)]) -> Vec<Vec<Uuid>> {
+        tree.iter()
+            .map(|(_, sessions)| {
+                sessions
+                    .iter()
+                    .copied()
+                    .filter(|id| self.flagged.contains(id))
+                    .collect()
+            })
+            .collect()
+    }
 }
 
 /// Ported from upstream's `SidebarDropTests.swift`.
@@ -434,5 +572,269 @@ mod tests {
         // B released just below its own midpoint stays
         let insert = workspace_insert_index(&[1, 3], 1);
         assert_eq!(resolve_workspace(1, 4, at(insert)), None);
+    }
+
+    // MARK: - the flagged view
+
+    const FLAT: [Uuid; 4] = [
+        Uuid::from_u128(0x10),
+        Uuid::from_u128(0x11),
+        Uuid::from_u128(0x12),
+        Uuid::from_u128(0x13),
+    ];
+
+    fn flat(indices: &[usize]) -> Vec<Uuid> {
+        indices.iter().map(|index| FLAT[*index]).collect()
+    }
+
+    fn flat_drop(dragged: &[usize], on_row: Option<usize>, slot: usize) -> Option<FlaggedReorder> {
+        resolve_flagged_reorder(&FLAT, &flat(dragged), on_row.map(|row| FLAT[row]), slot)
+    }
+
+    /// The dragged rows, the row dropped on and the gap slot.
+    type FlatDrop = (&'static [usize], Option<usize>, usize);
+    /// The moved rows, the side and the anchor row.
+    type FlatMove = (&'static [usize], FlaggedOrderPlacement, usize);
+
+    #[test]
+    fn a_flat_drop_resolves_to_a_move_of_the_block_in_list_order() {
+        use FlaggedOrderPlacement::{After, Before};
+        let cases: [(FlatDrop, FlatMove); 6] = [
+            ((&[3], None, 0), (&[3], Before, 0)),
+            ((&[0], None, 4), (&[0], After, 3)),
+            ((&[0], None, 2), (&[0], Before, 2)),
+            ((&[1], Some(3), 0), (&[1], After, 3)),
+            ((&[2, 0], None, 2), (&[0, 2], Before, 3)),
+            ((&[3, 2], None, 0), (&[2, 3], Before, 0)),
+        ];
+        for ((dragged, on_row, slot), (ids, placement, anchor)) in cases {
+            assert_eq!(
+                flat_drop(dragged, on_row, slot),
+                Some(FlaggedReorder {
+                    ids: flat(ids),
+                    placement,
+                    anchor: FLAT[anchor]
+                }),
+                "{dragged:?} {on_row:?} {slot}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_flat_drop_that_keeps_the_order_is_a_no_op() {
+        let cases: [(&[usize], Option<usize>, usize); 7] = [
+            (&[1], None, 1),
+            (&[1], None, 2),
+            (&[1], Some(1), 0),
+            (&[1], Some(0), 0),
+            (&[3], None, 4),
+            (&[0, 1], None, 0),
+            (&[0, 1, 2, 3], None, 2),
+        ];
+        for (dragged, on_row, slot) in cases {
+            assert_eq!(flat_drop(dragged, on_row, slot), None, "{dragged:?} {on_row:?} {slot}");
+        }
+    }
+
+    #[test]
+    fn reordered_flagged_moves_the_block_in_list_order() {
+        use FlaggedOrderPlacement::{After, Before};
+        let cases: [(FlatMove, Option<&[usize]>); 5] = [
+            ((&[3, 1], Before, 0), Some(&[1, 3, 0, 2])),
+            ((&[0], After, 3), Some(&[1, 2, 3, 0])),
+            ((&[1], Before, 2), None),
+            ((&[1], After, 0), None),
+            ((&[1], Before, 1), None),
+        ];
+        for ((moving, placement, anchor), want) in cases {
+            let moving: HashSet<Uuid> = flat(moving).into_iter().collect();
+            assert_eq!(
+                reordered_flagged(&FLAT, &moving, placement, FLAT[anchor]),
+                want.map(flat),
+                "{moving:?} {placement:?} {anchor}"
+            );
+        }
+        let first: HashSet<Uuid> = [FLAT[0]].into();
+        assert_eq!(
+            reordered_flagged(&FLAT, &first, FlaggedOrderPlacement::Before, Uuid::new_v4()),
+            None,
+            "an anchor outside the list"
+        );
+    }
+
+    #[test]
+    fn a_flat_drop_of_rows_outside_the_list_is_a_no_op() {
+        assert_eq!(resolve_flagged_reorder(&FLAT, &[Uuid::new_v4()], None, 0), None);
+        assert_eq!(resolve_flagged_reorder(&[], &[FLAT[0]], None, 0), None);
+    }
+
+    #[test]
+    fn a_flagged_tree_gap_maps_next_to_the_visible_row_it_was_aimed_at() {
+        let cases: [(&[usize], DropIndex, DropIndex); 6] = [
+            (&[1, 3], at(0), at(1)),
+            (&[1, 3], at(1), at(3)),
+            (&[1, 3], at(2), at(4)),
+            (&[0, 1], at(2), at(2)),
+            (&[1, 3], ON_ITEM, ON_ITEM),
+            (&[], at(0), at(0)),
+        ];
+        for (visible, slot, want) in cases {
+            assert_eq!(flagged_tree_child_index(visible, slot), want, "{visible:?} {slot:?}");
+        }
+    }
+
+    /// Workspace A holds a, the hidden unflagged h, then b; workspace B holds c, then the hidden k.
+    struct FlaggedTreeFixture {
+        tree: FlaggedTree,
+        a: Uuid,
+        b: Uuid,
+    }
+
+    #[derive(Clone, Copy)]
+    enum TreeTarget {
+        Gap {
+            workspace: Uuid,
+            visible: &'static [usize],
+            count: usize,
+            slot: usize,
+        },
+        OnWorkspace(Uuid, usize),
+        OnSession {
+            workspace: Uuid,
+            index: usize,
+            count: usize,
+        },
+    }
+
+    fn flagged_tree() -> FlaggedTreeFixture {
+        let [a, hidden_a, b, c, hidden_c] = [0x20, 0x21, 0x22, 0x23, 0x24].map(Uuid::from_u128);
+        FlaggedTreeFixture {
+            tree: FlaggedTree {
+                workspaces: vec![(WS_A, vec![a, hidden_a, b]), (WS_B, vec![c, hidden_c])],
+                flagged: [a, b, c].into(),
+            },
+            a,
+            b,
+        }
+    }
+
+    fn tree_drop(
+        fixture: &FlaggedTreeFixture,
+        dragged: Uuid,
+        from: (Uuid, usize),
+        target: TreeTarget,
+    ) -> Option<SessionResolution> {
+        let sources = [source(from.0, from.1)];
+        let resolution = match target {
+            TreeTarget::Gap {
+                workspace,
+                visible,
+                count,
+                slot,
+            } => resolve_sessions(
+                &sources,
+                workspace_row(workspace, count),
+                flagged_tree_child_index(visible, at(slot)),
+            ),
+            TreeTarget::OnWorkspace(workspace, count) => resolve_sessions(
+                &sources,
+                workspace_row(workspace, count),
+                flagged_tree_child_index(&[], ON_ITEM),
+            ),
+            TreeTarget::OnSession {
+                workspace,
+                index,
+                count,
+            } => resolve_sessions(&sources, session_row(workspace, index, count), ON_ITEM),
+        }?;
+        fixture.tree.changes_view(&[dragged], &resolution).then_some(resolution)
+    }
+
+    fn resolution(workspace: Uuid, drop_child_index: DropIndex, destination: usize) -> SessionResolution {
+        SessionResolution {
+            workspace,
+            drop_child_index,
+            destination,
+        }
+    }
+
+    #[test]
+    fn a_flagged_tree_drop_back_above_the_next_flagged_row_across_a_hidden_sibling_is_a_no_op() {
+        let f = flagged_tree();
+        let gap = TreeTarget::Gap {
+            workspace: WS_A,
+            visible: &[0, 2],
+            count: 3,
+            slot: 1,
+        };
+        assert_eq!(tree_drop(&f, f.a, (WS_A, 0), gap), None);
+    }
+
+    #[test]
+    fn a_flagged_tree_reorder_inside_a_workspace_keeps_the_hidden_sibling_in_place() {
+        let f = flagged_tree();
+        let gap = |slot| TreeTarget::Gap {
+            workspace: WS_A,
+            visible: &[0, 2],
+            count: 3,
+            slot,
+        };
+        assert_eq!(tree_drop(&f, f.b, (WS_A, 2), gap(0)), Some(resolution(WS_A, at(0), 0)));
+        assert_eq!(tree_drop(&f, f.a, (WS_A, 0), gap(2)), Some(resolution(WS_A, at(3), 2)));
+    }
+
+    #[test]
+    fn a_flagged_tree_move_to_another_workspace_counts_even_when_the_flat_order_stays_the_same() {
+        let f = flagged_tree();
+        let gap = TreeTarget::Gap {
+            workspace: WS_B,
+            visible: &[0],
+            count: 2,
+            slot: 0,
+        };
+        assert_eq!(tree_drop(&f, f.b, (WS_A, 2), gap), Some(resolution(WS_B, at(0), 0)));
+    }
+
+    #[test]
+    fn a_flagged_tree_end_of_group_gap_lands_right_after_the_last_flagged_row() {
+        let f = flagged_tree();
+        let gap = TreeTarget::Gap {
+            workspace: WS_B,
+            visible: &[0],
+            count: 2,
+            slot: 1,
+        };
+        assert_eq!(tree_drop(&f, f.a, (WS_A, 0), gap), Some(resolution(WS_B, at(1), 1)));
+    }
+
+    #[test]
+    fn a_flagged_tree_drop_on_a_workspace_row_appends_after_its_last_session() {
+        let f = flagged_tree();
+        assert_eq!(
+            tree_drop(&f, f.a, (WS_A, 0), TreeTarget::OnWorkspace(WS_B, 2)),
+            Some(resolution(WS_B, ON_ITEM, 2))
+        );
+    }
+
+    #[test]
+    fn a_flagged_tree_drop_on_a_session_row_lands_right_after_it() {
+        let f = flagged_tree();
+        let on = TreeTarget::OnSession {
+            workspace: WS_B,
+            index: 0,
+            count: 2,
+        };
+        assert_eq!(tree_drop(&f, f.a, (WS_A, 0), on), Some(resolution(WS_B, at(1), 1)));
+    }
+
+    #[test]
+    fn a_flagged_tree_drop_on_its_own_row_is_a_no_op() {
+        let f = flagged_tree();
+        let on = TreeTarget::OnSession {
+            workspace: WS_A,
+            index: 2,
+            count: 3,
+        };
+        assert_eq!(tree_drop(&f, f.b, (WS_A, 2), on), None);
     }
 }

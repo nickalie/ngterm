@@ -120,8 +120,9 @@ pub fn rows(store: &AppStore, expanded: &HashSet<Uuid>, settings: RowSettings<'_
         selection: &selection,
     };
     if !store.renders_workspace_rows(settings.layout()) {
+        // the flat and plain lists show the saved flagged order
         return store
-            .flagged_sessions()
+            .ordered_flagged_sessions()
             .into_iter()
             .map(|session| builder.session_row(session, false))
             .collect();
@@ -590,6 +591,45 @@ mod tests {
         assert_eq!(rows[0].badge, 0, "the header sums only its flagged sessions");
         assert_eq!(rows[2].badge, 2);
         assert_eq!(rows[1].label, "u");
+    }
+
+    /// Upstream's flat and plain rows follow `orderedFlaggedSessions`; the flagged tree keeps tree order.
+    #[test]
+    fn the_flat_and_plain_lists_show_the_saved_flagged_order() {
+        let (mut store, [one, two], [first, second, third]) = store();
+        for id in [third, first, second] {
+            store.set_flag(true, id);
+        }
+        assert!(store.move_flagged(&[second], ngterm_core::model::FlaggedOrderPlacement::Before, third));
+        store.set_sidebar_mode(SidebarMode::Flagged);
+        let mut expansion = Expansion::default();
+        for layout in ["flat", "plain"] {
+            let settings = AppSettings {
+                flagged_view_layout: Some(layout.into()),
+                ..AppSettings::default()
+            };
+            let rows = built(&store, &mut expansion, &settings);
+            assert_eq!(
+                shape(&rows),
+                [(second, false), (third, false), (first, false)],
+                "{layout}"
+            );
+        }
+        let tree = AppSettings {
+            flagged_view_layout: Some("tree".into()),
+            ..AppSettings::default()
+        };
+        let rows = built(&store, &mut expansion, &tree);
+        assert_eq!(
+            shape(&rows),
+            [
+                (one, true),
+                (first, false),
+                (second, false),
+                (two, true),
+                (third, false)
+            ]
+        );
     }
 
     #[test]

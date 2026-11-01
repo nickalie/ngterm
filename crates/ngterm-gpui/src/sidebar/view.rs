@@ -24,7 +24,7 @@ use gpui_kit::{
 };
 use uuid::Uuid;
 
-use super::drag::{DragPayload, Highlight};
+use super::drag::{DragPayload, DropView, Highlight};
 use super::look::{
     BADGE_FONT_SIZE, BADGE_GAP, BADGE_HEIGHT, BADGE_RED, BADGE_TEXT_ROOM, CONTENT_INSET, DISABLED_ALPHA, DISCLOSURE,
     DIVIDER_HANDLE, FOOTER_BUTTON, FOOTER_GAP, FOOTER_PADDING, GAP, Look, NESTED_INDENT, PILL_INSET_X, PILL_INSET_Y,
@@ -169,7 +169,10 @@ impl Sidebar {
                 this.set_hovered(id, *hovered, cx);
             }));
         }
-        if self.context.drop.tree && self.editing.is_none() {
+        // session rows drag in every flagged layout too; a workspace row only in the ordinary tree, as the flagged tree
+        // omits workspaces with nothing flagged and so has no slot to aim a workspace at
+        let draggable = !workspace || self.context.drop.view == DropView::Tree;
+        if draggable && self.editing.is_none() {
             let payload = if workspace {
                 DragPayload {
                     workspace: true,

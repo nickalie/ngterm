@@ -1,8 +1,10 @@
 //! `session.status`, `session.flag`, `session.context` and `session.seen`: the per-session metadata commands
 //! (`session.tint`'s is [`super::tint`]).
-//! Validation and its messages follow the `.sessionStatus` arm and `dispatchSessionContext` in upstream's
-//! `ControlDispatcher.swift`; the effects follow `setSessionStatus`, `setSessionFlag`, `setSessionContext` and
-//! `markSessionSeen` in `agterm/Control/ControlServer+SessionActions.swift`.
+//! Validation and its messages follow the `.sessionStatus` arm, `dispatchSessionContext` and `dispatchSessionFlag`
+//! (`ControlDispatcher+SessionFlag.swift`) in upstream's `ControlDispatcher.swift`; the effects follow
+//! `setSessionStatus`, `setSessionFlag`, `moveFlaggedSession`, `setSessionContext` and `markSessionSeen` in
+//! `agterm/Control/ControlServer+SessionActions.swift`. Upstream's refusal of `session.flag move` by an older host has
+//! no target here: one dispatcher serves the app and `ngterm-headless`.
 //!
 //! Status sounds are queued for the frontend ([`Core::take_status_sounds`]); upstream resolves a name with
 //! `NSSound(named:)`, here a name is known when it is `default`, `beep` or one of upstream's standard names. While a
@@ -12,12 +14,14 @@
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Command, ControlResult, Request};
 
-use super::{Outcome, ToggleMode, args_of, in_placement_store, not_found, parse_pane, session_store, with_id};
+use super::{
+    Outcome, ToggleMode, args_of, in_placement_store, not_found, parse_pane, session_in, session_store, with_id,
+};
 use crate::Core;
 use crate::error::{ControlError, Noun};
 use crate::model::{
-    AgentIndicator, AgentStatus, STANDARD_SOUND_NAMES, StatusPane, StatusShape, StatusWriteResult, is_known_sound,
-    is_valid_color_hex, validate_context,
+    AgentIndicator, AgentStatus, FlaggedOrderPlacement, STANDARD_SOUND_NAMES, StatusPane, StatusShape,
+    StatusWriteResult, is_known_sound, is_valid_color_hex, validate_context,
 };
 use crate::remote::frames::PresentationSound;
 use crate::resolve::ACTIVE;
@@ -33,7 +37,10 @@ pub(crate) fn dispatch(
     let window = args.window.as_deref();
     match cmd {
         SessionCmd::Status => status(core, target, args).map(Some),
-        SessionCmd::Flag => flag(core, target, window, args.mode.as_deref().unwrap_or("toggle")),
+        SessionCmd::Flag => match flag_move(args)? {
+            Some((anchor, placement)) => move_flagged(core, target, window, anchor, placement).map(Some),
+            None => flag(core, target, window, args.mode.as_deref().unwrap_or("toggle")),
+        },
         SessionCmd::Context => {
             let context = parse_context(args)?;
             let (store, id) = session_store(core, target, window)?;
@@ -181,6 +188,52 @@ fn flag(
     let flagged = store.session(id).is_some_and(|session| session.flagged);
     store.set_flag(toggle.desired_value(flagged), id);
     Ok(Some(with_id(id)))
+}
+
+/// `session.flag`'s anchor, checked before the target resolves (upstream's `dispatchSessionFlag`): `move` takes exactly
+/// one of `--before`/`--after`, any other mode none. `None` for a mode other than `move`.
+fn flag_move(args: &Args) -> Result<Option<(&str, FlaggedOrderPlacement)>, ControlError> {
+    let anchors = (args.before.as_deref(), args.after.as_deref());
+    if args.mode.as_deref() != Some("move") {
+        if anchors != (None, None) {
+            return Err(ControlError::rejected(
+                "--before and --after apply only to session.flag move",
+            ));
+        }
+        return Ok(None);
+    }
+    match anchors {
+        (Some(anchor), None) => Ok(Some((anchor, FlaggedOrderPlacement::Before))),
+        (None, Some(anchor)) => Ok(Some((anchor, FlaggedOrderPlacement::After))),
+        _ => Err(ControlError::rejected(
+            "session.flag move requires exactly one of --before or --after",
+        )),
+    }
+}
+
+/// `session.flag move`: the flagged target goes just before or after the flagged `anchor` in its window's saved order,
+/// the anchor resolved in the target's window (upstream's `moveFlaggedSession`). An unchanged order still answers the
+/// id.
+fn move_flagged(
+    core: &mut Core,
+    target: Option<&str>,
+    window: Option<&str>,
+    anchor: &str,
+    placement: FlaggedOrderPlacement,
+) -> Result<ControlResult, ControlError> {
+    let (store, id) = session_store(core, target, window)?;
+    let anchor = session_in(store, anchor)?;
+    if anchor == id {
+        return Err(ControlError::rejected("a session cannot be its own anchor"));
+    }
+    let flagged = |id| store.session(id).is_some_and(|session| session.flagged);
+    if !flagged(id) || !flagged(anchor) {
+        return Err(ControlError::rejected(
+            "session.flag move needs a flagged session and a flagged anchor",
+        ));
+    }
+    store.move_flagged(&[id], placement, anchor);
+    Ok(with_id(id))
 }
 
 /// `session.context`'s value: `set` takes the text, trimmed and validated, `clear` takes none. An invalid value is

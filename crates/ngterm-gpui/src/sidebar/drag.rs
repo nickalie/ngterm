@@ -4,8 +4,12 @@
 //!
 //! - A session drag lands on a workspace row (appended), on the upper half of a session row (before it) or on its
 //!   lower half (just after it); a selected row drags the whole selection, in visible order.
+//! - The flagged view drags session rows in every layout (upstream's #833). The flat and plain lists reorder the saved
+//!   flagged order across workspaces; the flagged tree moves sessions in the real workspace order like the ordinary
+//!   tree, its rows addressed by their full indices so a hidden unflagged sibling keeps its side, and a move that
+//!   changes no visible row proposes nothing.
 //! - A workspace drag ignores session rows: the slot is the count of workspace rows whose midpoint sits above the
-//!   cursor, mapped onto the full workspace list through the focus filter's visible indices.
+//!   cursor, mapped onto the full workspace list through the focus filter's visible indices; the ordinary tree only.
 //! - A file-manager folder drop opens a session per directory in the hovered row's workspace, else the sole focused
 //!   one, else the current one; the tree only.
 //!
@@ -13,9 +17,10 @@
 
 use std::collections::HashMap;
 
-use ngterm_core::model::SessionLocation;
+use ngterm_core::model::{FlaggedOrderPlacement, SessionLocation};
 use ngterm_core::sidebar_drop::{
-    self, DropIndex, SessionDropTarget, SessionSource, resolve_sessions, resolve_workspace, workspace_insert_index,
+    self, DropIndex, FlaggedTree, SessionDropTarget, SessionSource, resolve_flagged_reorder, resolve_sessions,
+    resolve_workspace, workspace_insert_index,
 };
 use uuid::Uuid;
 
@@ -65,6 +70,12 @@ pub enum Proposal {
         workspace: Uuid,
         destination: usize,
     },
+    /// A move in the flat or plain flagged list's saved order.
+    Flagged {
+        sessions: Vec<Uuid>,
+        placement: FlaggedOrderPlacement,
+        anchor: Uuid,
+    },
     Workspace {
         workspace: Uuid,
         destination: usize,
@@ -74,13 +85,37 @@ pub enum Proposal {
     },
 }
 
+/// Which list the rows are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DropView {
+    /// The ordinary workspace tree.
+    #[default]
+    Tree,
+    /// The flagged view's tree layout: workspace rows with only their flagged sessions.
+    FlaggedTree,
+    /// The flagged view's flat or plain list: session rows in the saved flagged order.
+    FlaggedList,
+}
+
+impl DropView {
+    /// Whether the rows include workspace rows, which a drag can spring-load open.
+    #[must_use]
+    pub fn has_workspace_rows(self) -> bool {
+        self != Self::FlaggedList
+    }
+}
+
 /// What the drop math reads of the window.
 #[derive(Debug, Clone, Default)]
 pub struct DropContext {
     pub locations: HashMap<Uuid, SessionLocation>,
     /// Every workspace in tree order, with its session count.
     pub workspaces: Vec<(Uuid, usize)>,
-    pub tree: bool,
+    pub view: DropView,
+    /// The flat and plain lists' rows: the saved flagged order.
+    pub flagged_order: Vec<Uuid>,
+    /// The workspaces' sessions and which are flagged, for the flagged tree's no-op check.
+    pub flagged_tree: FlaggedTree,
     pub sole_focus: Option<Uuid>,
     pub current_workspace: Option<Uuid>,
 }
@@ -100,8 +135,55 @@ pub fn row_at(spans: &[RowSpan], y: f64) -> Option<usize> {
     spans.iter().position(|span| span.contains(y))
 }
 
-/// A session drag of `dragged` hovering at `y`: the move it would perform and how to draw it; `None` over empty space
-/// or for a drop that changes nothing.
+/// A rows drag of `payload` hovering at `y`, in whichever list the rows are: a workspace drag only in the ordinary
+/// tree, a session drag in every view.
+#[must_use]
+pub fn propose_rows(
+    rows: &[SidebarRow],
+    spans: &[RowSpan],
+    y: f64,
+    payload: &DragPayload,
+    context: &DropContext,
+) -> Option<(Proposal, Highlight)> {
+    match (payload.workspace, context.view) {
+        (true, DropView::Tree) => propose_workspace(rows, spans, y, *payload.ids.first()?, context),
+        (true, _) => None,
+        (false, DropView::FlaggedList) => propose_flagged(rows, spans, y, &payload.ids, context),
+        (false, _) => propose_sessions(rows, spans, y, &payload.ids, context),
+    }
+}
+
+/// A session drag of `dragged` over the flat or plain flagged list at `y` (upstream's `resolveFlaggedReorder`): the
+/// upper half of a row is the gap before it, the lower half a drop on it, which lands just after it.
+#[must_use]
+pub fn propose_flagged(
+    rows: &[SidebarRow],
+    spans: &[RowSpan],
+    y: f64,
+    dragged: &[Uuid],
+    context: &DropContext,
+) -> Option<(Proposal, Highlight)> {
+    let index = row_at(spans, y)?;
+    let row = rows.get(index)?;
+    let slot = context.flagged_order.iter().position(|id| *id == row.id)?;
+    let (on_row, highlight) = if y < spans[index].mid() {
+        (None, Highlight::Above(index))
+    } else {
+        (Some(row.id), Highlight::Below(index))
+    };
+    let reorder = resolve_flagged_reorder(&context.flagged_order, dragged, on_row, slot)?;
+    Some((
+        Proposal::Flagged {
+            sessions: reorder.ids,
+            placement: reorder.placement,
+            anchor: reorder.anchor,
+        },
+        highlight,
+    ))
+}
+
+/// A session drag of `dragged` hovering at `y` over the ordinary or the flagged tree: the move it would perform and how
+/// to draw it; `None` over empty space or for a drop that changes nothing, in the flagged tree nothing it shows.
 #[must_use]
 pub fn propose_sessions(
     rows: &[SidebarRow],
@@ -147,6 +229,9 @@ pub fn propose_sessions(
         return None;
     }
     let resolution = resolve_sessions(&sources, target, child_index)?;
+    if context.view == DropView::FlaggedTree && !context.flagged_tree.changes_view(dragged, &resolution) {
+        return None;
+    }
     Some((
         Proposal::Sessions {
             sessions: dragged.to_vec(),
@@ -210,7 +295,7 @@ pub fn propose_directories(
             RowKind::Workspace { .. } => row.id,
             RowKind::Session { workspace, .. } => workspace,
         });
-    let mode = if context.tree {
+    let mode = if context.view == DropView::Tree {
         ngterm_core::model::SidebarMode::Tree
     } else {
         ngterm_core::model::SidebarMode::Flagged
@@ -310,7 +395,9 @@ mod tests {
                 (c, location(two, 0, 1)),
             ]),
             workspaces: vec![(one, 2), (two, 1)],
-            tree: true,
+            view: DropView::Tree,
+            flagged_order: Vec::new(),
+            flagged_tree: FlaggedTree::default(),
             sole_focus: None,
             current_workspace: Some(one),
         };
@@ -396,8 +483,124 @@ mod tests {
             Some((Proposal::Directories { workspace: one }, Some(Highlight::OnRow(0)))),
             "empty space takes the current workspace"
         );
-        context.tree = false;
+        context.view = DropView::FlaggedTree;
         assert_eq!(propose_directories(&rows, &spans, 85.0, &context), None);
+    }
+
+    fn spans_of(count: usize) -> Vec<RowSpan> {
+        (0..count)
+            .map(|index| RowSpan {
+                top: f64::from(u8::try_from(index).unwrap()) * 20.0,
+                height: 20.0,
+            })
+            .collect()
+    }
+
+    fn sessions(dragged: &[Uuid]) -> DragPayload {
+        DragPayload {
+            workspace: false,
+            ids: dragged.to_vec(),
+        }
+    }
+
+    /// The flat list shows the saved order c, a, b across both workspaces of [`tree`].
+    #[test]
+    fn the_flagged_list_reorders_the_saved_order_and_drags_no_workspace() {
+        let (_, _, mut context, [one, two], [a, b, c]) = tree();
+        context.view = DropView::FlaggedList;
+        context.flagged_order = vec![c, a, b];
+        let rows = vec![session_row(c, two), session_row(a, one), session_row(b, one)];
+        let spans = spans_of(rows.len());
+        let flagged = |sessions: Vec<Uuid>, placement, anchor, highlight| {
+            Some((
+                Proposal::Flagged {
+                    sessions,
+                    placement,
+                    anchor,
+                },
+                highlight,
+            ))
+        };
+        // the upper half of c's row: before c
+        assert_eq!(
+            propose_rows(&rows, &spans, 5.0, &sessions(&[b]), &context),
+            flagged(vec![b], FlaggedOrderPlacement::Before, c, Highlight::Above(0))
+        );
+        // the lower half of b's row: after b
+        assert_eq!(
+            propose_rows(&rows, &spans, 55.0, &sessions(&[a, c]), &context),
+            flagged(vec![c, a], FlaggedOrderPlacement::After, b, Highlight::Below(2))
+        );
+        // a just below c, which is where it is
+        assert_eq!(propose_rows(&rows, &spans, 15.0, &sessions(&[a]), &context), None);
+        let workspace = DragPayload {
+            workspace: true,
+            ids: vec![one],
+        };
+        assert_eq!(propose_rows(&rows, &spans, 5.0, &workspace, &context), None);
+    }
+
+    /// The flagged tree of workspace one (a, the hidden unflagged h, b) and two (c).
+    #[test]
+    fn the_flagged_tree_moves_in_the_real_order_and_skips_moves_it_does_not_show() {
+        let (_, _, mut context, [one, two], [a, b, c]) = tree();
+        let h = Uuid::new_v4();
+        context.view = DropView::FlaggedTree;
+        let location = |workspace, index, count| SessionLocation {
+            workspace,
+            index,
+            count,
+        };
+        context.locations = HashMap::from([
+            (a, location(one, 0, 3)),
+            (h, location(one, 1, 3)),
+            (b, location(one, 2, 3)),
+            (c, location(two, 0, 1)),
+        ]);
+        context.workspaces = vec![(one, 3), (two, 1)];
+        context.flagged_tree = FlaggedTree {
+            workspaces: vec![(one, vec![a, h, b]), (two, vec![c])],
+            flagged: [a, b, c].into(),
+        };
+        let rows = vec![
+            workspace_row(one),
+            session_row(a, one),
+            session_row(b, one),
+            workspace_row(two),
+            session_row(c, two),
+        ];
+        let spans = spans_of(rows.len());
+        // a over the upper half of b: before b, past h, which shows nothing new
+        assert_eq!(propose_rows(&rows, &spans, 42.0, &sessions(&[a]), &context), None);
+        // b over the upper half of a: before a, h staying put
+        assert_eq!(
+            propose_rows(&rows, &spans, 22.0, &sessions(&[b]), &context),
+            Some((
+                Proposal::Sessions {
+                    sessions: vec![b],
+                    workspace: one,
+                    destination: 0
+                },
+                Highlight::Above(1)
+            ))
+        );
+        // a onto two's row: appended there
+        assert_eq!(
+            propose_rows(&rows, &spans, 65.0, &sessions(&[a]), &context),
+            Some((
+                Proposal::Sessions {
+                    sessions: vec![a],
+                    workspace: two,
+                    destination: 1
+                },
+                Highlight::OnRow(3)
+            ))
+        );
+        let workspace = DragPayload {
+            workspace: true,
+            ids: vec![two],
+        };
+        assert_eq!(propose_rows(&rows, &spans, 5.0, &workspace, &context), None);
     }
 
     #[test]

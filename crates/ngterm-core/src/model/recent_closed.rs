@@ -236,6 +236,7 @@ impl AppStore {
         let at = recent.session_index.min(sessions.len());
         sessions.insert(at, session);
         self.emit_session_created(id, workspace_id);
+        self.append_flagged_arrivals();
         self.reselect_after_removal(Some(id));
         self.save();
         RecentClosedRestore::COMPLETE
@@ -274,6 +275,7 @@ impl AppStore {
         for id in &ids {
             self.emit_session_created(*id, workspace_id);
         }
+        self.append_flagged_arrivals();
         if ids.is_empty() {
             self.schedule_tree_changed();
         }
@@ -346,6 +348,7 @@ impl AppStore {
         for id in ids {
             self.emit_session_created(id, workspace_id);
         }
+        self.append_flagged_arrivals();
         if recent.focus_member == Some(true) {
             self.mark_focus_member(workspace_id);
         }

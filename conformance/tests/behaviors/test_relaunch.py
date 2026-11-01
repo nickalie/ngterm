@@ -148,6 +148,20 @@ def test_last_selected_at_survives_a_relaunch(launch):
         assert find_session(after, sid)["lastSelectedAt"] == pytest.approx(stamp, abs=1e-3), sid
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("behavior:restore.relaunch-keeps-layout", "field:tree.flaggedOrder")
+def test_flagged_order_survives_relaunch(launch):
+    ctl = launch()
+    first, second, third = _new(ctl), _new(ctl), _new(ctl)
+    for sid in (third, first, second):
+        assert_ok(ctl.request("session.flag", sid, mode="on"))
+    assert_ok(ctl.request("session.flag", second, mode="move", before=third))
+    assert ctl.tree()["tree"]["flaggedOrder"] == [second, third, first]
+
+    ctl = launch.relaunch(ctl)
+    assert ctl.tree()["tree"]["flaggedOrder"] == [second, third, first]
+
+
 @pytest.mark.covers("behavior:restore.rerun-types-pinned-command")
 @pytest.mark.requires("posix-shell", reason="the pinned line runs in /bin/sh")
 def test_rerun_types_the_pinned_line_at_the_next_launch(launch):

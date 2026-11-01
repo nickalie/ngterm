@@ -8,6 +8,7 @@ mod ask;
 mod ask_form;
 mod background;
 mod duplicate;
+mod flagged_order;
 mod focus;
 mod html_overlay;
 pub mod naming;
@@ -43,6 +44,7 @@ pub use ask_form::{AskChoiceForm, AskDraft, AskForm, AskInputForm, AskInputMode,
 pub use background::{
     BackdropWashRegion, BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition,
 };
+pub use flagged_order::FlaggedOrderPlacement;
 pub use focus::FocusMode;
 pub use html_overlay::{HtmlOverlayCommandFailure, HtmlOverlayOpenFailure, HtmlPageSlot};
 pub use navigation::{NewSessionPlacement, SessionNavigation, WorkspaceNavigation, stops_attention_navigation};

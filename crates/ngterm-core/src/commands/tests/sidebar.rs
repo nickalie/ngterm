@@ -177,6 +177,27 @@ fn flagged_layout_is_written_to_the_settings_file_once_it_changes() {
     assert_eq!(saved.flagged_view_layout.as_deref(), Some("tree"));
 }
 
+/// Upstream's `testSetFlaggedViewLayoutReachesTheLibraryAndEveryOpenStore`, and the layout a core starts with.
+#[test]
+fn the_flagged_layout_reaches_the_library_and_every_open_store() {
+    let settings = AppSettings {
+        flagged_view_layout: Some("tree".into()),
+        ..AppSettings::default()
+    };
+    let mut fixture = Fixture::with_settings(0, settings);
+    let second = fixture.core.library_mut().new_window(Some("second"));
+    let layouts = |fixture: &Fixture| {
+        let library = fixture.core.library();
+        [fixture.window, second].map(|window| library.store(window).unwrap().flagged_layout())
+    };
+    assert_eq!(layouts(&fixture), [FlaggedViewLayout::Tree; 2], "the core's start");
+
+    fixture.sidebar(SidebarCmd::FlaggedLayout, Fixture::mode_arg(Some("plain")));
+
+    assert_eq!(fixture.core.library().flagged_layout(), FlaggedViewLayout::Plain);
+    assert_eq!(layouts(&fixture), [FlaggedViewLayout::Plain; 2]);
+}
+
 // MARK: - width
 
 #[test]

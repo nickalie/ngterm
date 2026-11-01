@@ -176,6 +176,10 @@ pub struct AppStore {
     pub(crate) sidebar_selection_raw: Vec<Uuid>,
     pub(crate) sidebar: SidebarState,
     pub(crate) focus: FocusFilter,
+    /// The flagged view's saved order, which the flat and plain layouts render (`flagged_order.rs`). Persisted.
+    pub(crate) flagged_order: Vec<Uuid>,
+    /// The app-wide flagged layout, mirrored so navigation follows the order the view shows. Not persisted.
+    pub(crate) flagged_layout: FlaggedViewLayout,
     pub(crate) session_recency: RecencyStack<Uuid>,
     /// The workspace that holds the target without owning the selection: a foreground create, or selecting an empty
     /// workspace. Dropped by a selection change, by selecting a workspace that has a session, by removing it, by the
@@ -352,7 +356,8 @@ impl AppStore {
         self.workspaces.len() > 1
     }
 
-    /// The flagged sessions across all workspaces, in tree order: what the flagged view renders.
+    /// The flagged sessions across all workspaces, in tree order: the flagged tree's rows and what membership readers
+    /// count. The flat and plain layouts show [`Self::ordered_flagged_sessions`].
     #[must_use]
     pub fn flagged_sessions(&self) -> Vec<&Session> {
         self.sessions().filter(|session| session.flagged).collect()
@@ -790,6 +795,8 @@ impl AppStore {
         } else {
             self.prune_sidebar_selection();
         }
+        let removed: Vec<Uuid> = workspace.sessions.iter().map(Session::id).collect();
+        self.drop_from_flagged_order(&removed);
         self.save();
         Some(workspace)
     }
@@ -966,11 +973,12 @@ impl AppStore {
         self.outbox.finalize_panes(&removed);
         self.session_recency.remove(id);
         if was_active {
-            let target = self.close_reselection_target(at);
+            let target = self.close_reselection_target(at, id);
             self.reselect_after_removal(target);
         } else {
             self.prune_sidebar_selection();
         }
+        self.drop_from_flagged_order(&[id]);
         self.save();
         Some(removed)
     }
@@ -1118,6 +1126,11 @@ impl AppStore {
             return;
         }
         session.flagged = on;
+        if on {
+            self.append_flagged_arrivals();
+        } else {
+            self.drop_from_flagged_order(&[id]);
+        }
         self.prune_sidebar_selection();
         self.reselect_if_selection_hidden();
         self.save();
@@ -1137,6 +1150,11 @@ impl AppStore {
             }
         }
         if changed {
+            if on {
+                self.append_flagged_arrivals();
+            } else {
+                self.drop_from_flagged_order(ids);
+            }
             self.prune_sidebar_selection();
             self.reselect_if_selection_hidden();
             self.save();
@@ -1164,9 +1182,10 @@ impl AppStore {
         self.set_flags(on, &ids);
     }
 
-    /// Unflags every session in one write. Clearing every flag leaves the flagged view empty, so there is nowhere to
-    /// move the selection.
+    /// Unflags every session in one write and empties the flagged order, parked pending-close ids too. Clearing every
+    /// flag leaves the flagged view empty, so there is nowhere to move the selection.
     pub fn clear_flags(&mut self) {
+        self.clear_flagged_order();
         let mut changed = false;
         for session in self
             .workspaces

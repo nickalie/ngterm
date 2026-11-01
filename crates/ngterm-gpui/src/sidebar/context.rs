@@ -5,12 +5,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use ngterm_core::model::{AgentStatus, AppStore, SidebarMode};
+use ngterm_core::model::{AgentStatus, AppStore, Session, SidebarMode};
 use ngterm_core::persist::AppSettings;
 use ngterm_core::persist::settings::InterfaceElement;
+use ngterm_core::sidebar_drop::FlaggedTree;
 use uuid::Uuid;
 
-use super::drag::DropContext;
+use super::drag::{DropContext, DropView};
 use super::menu::{MenuContext, SessionFacts, WorkspaceFacts};
 
 /// What the footer shows.
@@ -67,7 +68,7 @@ impl SidebarContext {
         let has_flagged = store.sessions().any(|session| session.flagged);
         Self {
             menu: menu_context(store),
-            drop: drop_context(store),
+            drop: drop_context(store, settings),
             footer: FooterState {
                 new_workspace: shows(InterfaceElement::NewWorkspace),
                 new_session: shows(InterfaceElement::NewSession),
@@ -131,7 +132,22 @@ fn menu_context(store: &AppStore) -> MenuContext {
     }
 }
 
-fn drop_context(store: &AppStore) -> DropContext {
+fn drop_context(store: &AppStore, settings: &AppSettings) -> DropContext {
+    let view = match store.sidebar().mode {
+        SidebarMode::Tree => DropView::Tree,
+        SidebarMode::Flagged if store.renders_workspace_rows(settings.effective_flagged_view_layout()) => {
+            DropView::FlaggedTree
+        }
+        SidebarMode::Flagged => DropView::FlaggedList,
+    };
+    let flagged_tree = FlaggedTree {
+        workspaces: store
+            .workspaces()
+            .iter()
+            .map(|workspace| (workspace.id(), workspace.sessions.iter().map(Session::id).collect()))
+            .collect(),
+        flagged: store.flagged_sessions().into_iter().map(Session::id).collect(),
+    };
     DropContext {
         locations: store
             .sessions()
@@ -142,7 +158,9 @@ fn drop_context(store: &AppStore) -> DropContext {
             .iter()
             .map(|workspace| (workspace.id(), workspace.sessions.len()))
             .collect(),
-        tree: store.sidebar().mode == SidebarMode::Tree,
+        view,
+        flagged_order: store.ordered_flagged_session_ids(),
+        flagged_tree,
         sole_focus: store.sole_focused_workspace_id(),
         current_workspace: store.current_workspace_id(),
     }

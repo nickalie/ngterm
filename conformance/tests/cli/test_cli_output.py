@@ -461,6 +461,35 @@ def test_session_metadata(cli, ctl):
 
 
 @pytest.mark.since("0.39.1")
+@pytest.mark.covers("cli:session flag", "field:tree.flaggedOrder")
+def test_session_flag_move(cli, ctl):
+    assert_ok(ctl.request("session.flag", mode="clear"))
+    first, second = _new(ctl), _new(ctl)
+    for sid in (first, second):
+        assert_ok(ctl.request("session.flag", sid, mode="on"))
+    try:
+        _ok(cli("session", "flag", "move", "--target", second, "--before", first), "ok\n")
+        assert ctl.tree()["tree"]["flaggedOrder"] == [second, first]
+        assert _json(cli("session", "flag", "move", "--target", second, "--after", first, "--json")) == {"id": second}
+        assert ctl.tree()["tree"]["flaggedOrder"] == [first, second]
+        _usage(cli("session", "flag", "move", "--target", second), "move requires exactly one of --before or --after")
+        _usage(
+            cli("session", "flag", "move", "--target", second, "--before", first, "--after", first),
+            "move requires exactly one of --before or --after",
+        )
+        _usage(cli("session", "flag", "on", "--after", first), "--before and --after apply only to move")
+        _usage(cli("session", "flag", "pin"), "mode must be on, off, toggle, clear, or move")
+        _refused(
+            cli("session", "flag", "move", "--target", second, "--before", second),
+            "a session cannot be its own anchor",
+        )
+    finally:
+        assert_ok(ctl.request("session.flag", mode="clear"))
+        for sid in (first, second):
+            assert_ok(ctl.request("session.close", sid))
+
+
+@pytest.mark.since("0.39.1")
 @pytest.mark.covers("cli:session tint", "cli:workspace tint", "cli:session new", "cli:workspace new")
 def test_tint_commands(cli, ctl):
     sid = _new(ctl)

@@ -364,7 +364,7 @@ impl AppStore {
             }),
         );
         if was_active {
-            let target = self.close_reselection_target(at);
+            let target = self.close_reselection_target(at, id);
             self.reselect_after_removal(target);
         } else {
             self.prune_sidebar_selection();
@@ -479,10 +479,13 @@ impl AppStore {
                         other.workspace_index == close.workspace_index && other.session_index < close.session_index
                     })
                     .count();
-                self.close_reselection_target(Location {
-                    workspace: close.workspace_index,
-                    session: close.session_index - removed_before,
-                })
+                self.close_reselection_target(
+                    Location {
+                        workspace: close.workspace_index,
+                        session: close.session_index - removed_before,
+                    },
+                    close.session.id(),
+                )
             })
             .or_else(|| {
                 self.workspaces
@@ -612,6 +615,8 @@ impl AppStore {
                 self.remove_recent_closed_item(close_id);
             }
         }
+        // a parked id still in the saved order returns in place; a cleared one appends
+        self.append_flagged_arrivals();
         self.save();
         true
     }
@@ -741,6 +746,8 @@ impl AppStore {
     /// Tears the sessions' terminals down, drops them from the recency order and deletes their rendered text, as a
     /// hard close does.
     fn hard_finalize_pending_sessions(&mut self, sessions: Vec<Session>) {
+        let ids: Vec<Uuid> = sessions.iter().map(Session::id).collect();
+        self.drop_from_flagged_order(&ids);
         for mut session in sessions {
             session.teardown_surfaces();
             self.outbox

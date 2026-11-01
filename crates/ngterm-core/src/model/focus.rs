@@ -10,6 +10,7 @@ use uuid::Uuid;
 use super::session::Session;
 use super::store::AppStore;
 use super::workspace::{SidebarMode, Workspace};
+use crate::persist::settings::FlaggedViewLayout;
 
 /// One `workspace.focus` mode, applied to a workspace by [`AppStore::apply_focus_mode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -271,12 +272,17 @@ impl AppStore {
         }
     }
 
-    /// The session set navigation works over: the flagged sessions in flagged mode, else the visible workspaces'
+    /// The session set navigation works over: the flagged sessions in flagged mode, in the order the layout shows
+    /// (the saved order in the flat and plain lists, tree order in the flagged tree), else the visible workspaces'
     /// sessions.
     #[must_use]
     pub fn navigable_sessions(&self) -> Vec<&Session> {
         if self.sidebar.mode == SidebarMode::Flagged {
-            return self.flagged_sessions();
+            return if self.flagged_layout == FlaggedViewLayout::Tree {
+                self.flagged_sessions()
+            } else {
+                self.ordered_flagged_sessions()
+            };
         }
         self.visible_workspaces()
             .into_iter()

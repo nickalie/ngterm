@@ -113,7 +113,7 @@ impl RequestCommand for Status {
 }
 
 /// `ngtermctl session flag [on|off|toggle|clear|move] [--before SID | --after SID]`; the anchors place the target in
-/// the flagged order (`move`). Which modes take an anchor is checked by the server.
+/// the flagged order, so `move` takes exactly one and every other mode none.
 #[derive(Debug, clap::Args)]
 #[command(about = "Flag a session for the flagged working-set view (on|off|toggle|clear|move).")]
 pub struct Flag {
@@ -143,10 +143,19 @@ impl RequestCommand for Flag {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if ["on", "off", "toggle", "clear", "move"].contains(&self.mode.as_str()) {
-            Ok(())
-        } else {
-            Err("mode must be on, off, toggle, clear, or move".to_owned())
+        if !["on", "off", "toggle", "clear", "move"].contains(&self.mode.as_str()) {
+            return Err("mode must be on, off, toggle, clear, or move".to_owned());
+        }
+        let anchored = (self.before.is_some(), self.after.is_some());
+        if self.mode != "move" {
+            return match anchored {
+                (false, false) => Ok(()),
+                _ => Err("--before and --after apply only to move".to_owned()),
+            };
+        }
+        match anchored {
+            (true, false) | (false, true) => Ok(()),
+            _ => Err("move requires exactly one of --before or --after".to_owned()),
         }
     }
 
@@ -378,9 +387,39 @@ mod tests {
             "mode must be on, off, toggle, clear, or move"
         );
         assert_eq!(
-            request(&["flag", "move", "--before", "s2", "--target", "s1"]),
-            json!({"cmd": "session.flag", "target": "s1", "args": {"mode": "move", "before": "s2"}})
+            request(&["flag", "off", "--target", "aa"]),
+            json!({"cmd": "session.flag", "target": "aa", "args": {"mode": "off"}})
         );
+    }
+
+    /// Upstream's `SessionMetadataCommandsTests` flag-move cases.
+    #[test]
+    fn flag_move_carries_one_anchor_and_refuses_anchors_elsewhere() {
+        assert_eq!(
+            request(&["flag", "move", "--target", "aa", "--before", "bb", "--window", "w1"]),
+            json!({"cmd": "session.flag", "target": "aa", "args": {"mode": "move", "before": "bb", "window": "w1"}})
+        );
+        assert_eq!(
+            request(&["flag", "move", "--after", "cc"]),
+            json!({"cmd": "session.flag", "target": "active", "args": {"mode": "move", "after": "cc"}})
+        );
+        for argv in [
+            &["flag", "move"][..],
+            &["flag", "move", "--before", "b", "--after", "c"],
+        ] {
+            assert_eq!(
+                refusal(argv),
+                "move requires exactly one of --before or --after",
+                "{argv:?}"
+            );
+        }
+        for mode in ["on", "toggle", "clear"] {
+            assert_eq!(
+                refusal(&["flag", mode, "--after", "c"]),
+                "--before and --after apply only to move",
+                "{mode}"
+            );
+        }
     }
 
     #[test]

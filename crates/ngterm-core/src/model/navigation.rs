@@ -223,12 +223,13 @@ impl AppStore {
         self.select_workspace(target)
     }
 
-    /// The next selection after closing the active session at `at` (already removed): the most recent surviving
-    /// session in scope, else a positional pick. The scope is the closed session's workspace within the visible set,
-    /// widening to everything visible and then the whole tree when empty. Without recency, a narrowed view (flagged
-    /// mode or the filter) walks its widened scope in flattened sidebar order; otherwise the positional
+    /// The next selection after closing the active session `removed` at `at` (already out of the tree): the most
+    /// recent surviving session in scope, else a positional pick. The scope is the closed session's workspace within
+    /// the visible set, widening to everything visible and then the whole tree when empty. Without recency, a narrowed
+    /// view (flagged mode or the filter) takes `removed`'s neighbour in the saved flagged order under the flat and
+    /// plain layouts, else walks its widened scope in flattened sidebar order; otherwise the positional
     /// [`AppStore::reselection_target`] applies.
-    pub(crate) fn close_reselection_target(&self, at: Location) -> Option<Uuid> {
+    pub(crate) fn close_reselection_target(&self, at: Location, removed: Uuid) -> Option<Uuid> {
         let visible: HashSet<Uuid> = self.navigable_session_ids().into_iter().collect();
         let everything: HashSet<Uuid> = self.sessions().map(Session::id).collect();
         let same_workspace: HashSet<Uuid> = self.workspaces[at.workspace]
@@ -248,6 +249,9 @@ impl AppStore {
             return Some(recent);
         }
         let narrowed = self.sidebar.mode == SidebarMode::Flagged || self.focus.enabled;
+        if narrowed && let Some(in_order) = self.nearest_in_saved_flagged_order(removed, &scope) {
+            return Some(in_order);
+        }
         if narrowed && let Some(in_scope) = self.nearest_in_scope_target(at, &scope) {
             return Some(in_scope);
         }

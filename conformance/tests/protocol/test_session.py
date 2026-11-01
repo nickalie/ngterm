@@ -511,6 +511,86 @@ def test_flag_rejects_an_unknown_mode(ctl):
     assert_error(ctl.request("session.flag", "active", mode="pin"), "invalid flag mode: pin")
 
 
+# -- the flagged view's saved order
+
+
+def _flagged_order(ctl):
+    return ctl.tree()["tree"].get("flaggedOrder")
+
+
+def _flag_fresh(ctl, count, order=None):
+    """`count` new sessions flagged in `order` (indices; creation order by default), every other flag cleared first."""
+    assert_ok(ctl.request("session.flag", mode="clear"))
+    sids = [_new(ctl) for _ in range(count)]
+    for index in order or range(count):
+        assert_ok(ctl.request("session.flag", sids[index], mode="on"))
+    return sids
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.flag", "field:tree.flaggedOrder")
+def test_flag_move_reorders_the_saved_order(ctl):
+    a, b, c = _flag_fresh(ctl, 3)
+    assert _flagged_order(ctl) == [a, b, c]
+
+    assert assert_ok(ctl.request("session.flag", c, mode="move", before=a))["id"] == c
+    assert _flagged_order(ctl) == [c, a, b]
+    assert assert_ok(ctl.request("session.flag", c, mode="move", after=a))["id"] == c
+    assert _flagged_order(ctl) == [a, c, b]
+    # The order arranges the flagged view only: the workspace keeps its own.
+    assert [sid for sid in session_ids(ctl.tree()) if sid in (a, b, c)] == [a, b, c]
+    assert_ok(ctl.request("session.flag", mode="clear"))
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.flag", "session.close", "field:tree.flaggedOrder")
+def test_flagged_order_follows_flagging(ctl):
+    a, b, c = _flag_fresh(ctl, 3, order=[2, 0, 1])
+    assert _flagged_order(ctl) == [c, a, b]
+    # An unflag drops, a flag appends, a close drops.
+    assert_ok(ctl.request("session.flag", c, mode="off"))
+    assert _flagged_order(ctl) == [a, b]
+    assert_ok(ctl.request("session.flag", c))
+    assert _flagged_order(ctl) == [a, b, c]
+    assert_ok(ctl.request("session.close", a))
+    assert _flagged_order(ctl) == [b, c]
+    # Omitted once nothing is flagged.
+    assert_ok(ctl.request("session.flag", mode="clear"))
+    assert_absent(ctl.tree()["tree"], "flaggedOrder")
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.flag")
+def test_flag_move_refusals(ctl):
+    a, b, unflagged = _flag_fresh(ctl, 3, order=[0, 1])
+    exactly_one = "session.flag move requires exactly one of --before or --after"
+    # The anchors are checked before the target resolves.
+    assert_error(ctl.request("session.flag", UNKNOWN, mode="move"), exactly_one)
+    assert_error(ctl.request("session.flag", UNKNOWN, mode="move", before=a, after=b), exactly_one)
+    outside_move = "--before and --after apply only to session.flag move"
+    for mode in ("on", "toggle", "clear", None):
+        args = {"after": a} if mode is None else {"mode": mode, "after": a}
+        assert_error(ctl.request("session.flag", UNKNOWN, **args), outside_move)
+    assert_error(ctl.request("session.flag", a, mode="move", after=a), "a session cannot be its own anchor")
+    not_flagged = "session.flag move needs a flagged session and a flagged anchor"
+    assert_error(ctl.request("session.flag", a, mode="move", after=unflagged), not_flagged)
+    assert_error(ctl.request("session.flag", unflagged, mode="move", before=a), not_flagged)
+    assert_error(ctl.request("session.flag", a, mode="move", after=UNKNOWN), f"no such session: {UNKNOWN}")
+    assert _flagged_order(ctl) == [a, b]
+    assert _node(ctl, unflagged)["flagged"] is False
+    assert_ok(ctl.request("session.flag", mode="clear"))
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.flag", "field:tree.flaggedOrder")
+def test_flag_move_to_the_same_place_answers_ok(ctl):
+    a, b = _flag_fresh(ctl, 2)
+    assert assert_ok(ctl.request("session.flag", b, mode="move", after=a)) == {"id": b}
+    assert assert_ok(ctl.request("session.flag", a, mode="move", before=b)) == {"id": a}
+    assert _flagged_order(ctl) == [a, b]
+    assert_ok(ctl.request("session.flag", mode="clear"))
+
+
 @pytest.mark.covers("session.seen", "field:tree.session.unseen")
 def test_seen_clears_the_unseen_count(ctl):
     sid = _new(ctl, noSelect=True)
