@@ -345,6 +345,111 @@ fn close_batch_of_one_session_closes_it_and_answers_its_id() {
     assert_eq!(fixture.order(fixture.workspace), [fixture.sessions[1]]);
 }
 
+fn undoable(on: bool, targets: Option<&[&str]>) -> Args {
+    args(|a| {
+        a.undoable = Some(on);
+        a.targets = targets.map(|ids| ids.iter().map(|id| (*id).to_owned()).collect());
+    })
+}
+
+fn grace(enabled: Option<bool>) -> AppSettings {
+    AppSettings {
+        close_grace_undo_enabled: enabled,
+        ..AppSettings::default()
+    }
+}
+
+#[test]
+fn undoable_single_close_is_soft_while_grace_undo_is_on() {
+    for enabled in [None, Some(true)] {
+        let mut fixture = Fixture::with_settings(1, grace(enabled));
+        let closing = fixture.sessions[1];
+        let response = fixture.session(SessionCmd::Close, Some(&wire(closing)), undoable(true, None));
+        assert_eq!(
+            serde_json::to_value(&response).unwrap(),
+            json!({"ok": true, "result": {"id": wire(closing), "undoable": true}}),
+            "{enabled:?}"
+        );
+        assert!(fixture.store().session(closing).is_none());
+        assert!(fixture.store().pending_close_session(closing).is_some());
+        assert!(fixture.store_mut().unwrap().undo_pending_close(None));
+        assert_eq!(fixture.order(fixture.workspace), fixture.sessions, "{enabled:?}");
+    }
+}
+
+#[test]
+fn undoable_single_close_is_hard_and_says_so_when_grace_undo_is_off() {
+    let mut fixture = Fixture::with_settings(1, grace(Some(false)));
+    let closing = fixture.sessions[1];
+    let response = fixture.session(SessionCmd::Close, Some(&wire(closing)), undoable(true, None));
+    assert_eq!(
+        serde_json::to_value(&response).unwrap(),
+        json!({"ok": true, "result": {"id": wire(closing), "undoable": false}})
+    );
+    assert!(fixture.store().session(closing).is_none());
+    assert!(fixture.store().pending_close_session(closing).is_none());
+}
+
+#[test]
+fn plain_single_close_stays_hard_without_an_undoable_answer() {
+    for request in [Args::default(), undoable(false, None)] {
+        let mut fixture = Fixture::new(1);
+        let closing = fixture.sessions[1];
+        let response = fixture.session(SessionCmd::Close, Some(&wire(closing)), request);
+        assert_eq!(
+            serde_json::to_value(&response).unwrap(),
+            json!({"ok": true, "result": {"id": wire(closing)}})
+        );
+        assert!(fixture.store().pending_close_session(closing).is_none());
+    }
+}
+
+#[test]
+fn a_batch_deduplicated_to_one_target_honors_undoable() {
+    let mut fixture = Fixture::new(1);
+    let closing = wire(fixture.sessions[0]);
+    let response = fixture.session(SessionCmd::Close, None, undoable(true, Some(&[&closing, &closing])));
+    assert_eq!(
+        serde_json::to_value(&response).unwrap(),
+        json!({"ok": true, "result": {"id": closing, "undoable": true}})
+    );
+    assert!(fixture.store().pending_close_session(fixture.sessions[0]).is_some());
+}
+
+#[test]
+fn undoable_batch_reports_whether_the_group_stayed_undoable() {
+    for (enabled, stays) in [(None, true), (Some(false), false)] {
+        let mut fixture = Fixture::with_settings(2, grace(enabled));
+        let [first, last] = [0, 2].map(|at| wire(fixture.sessions[at]));
+        let response = fixture.session(SessionCmd::Close, None, undoable(true, Some(&[&first, &last])));
+        assert_eq!(
+            serde_json::to_value(&response).unwrap(),
+            json!({"ok": true, "result": {"affected": 2, "undoable": stays}}),
+            "{enabled:?}"
+        );
+        assert_eq!(fixture.order(fixture.workspace), [fixture.sessions[1]]);
+        assert_eq!(fixture.store().pending_close_summary().is_some(), stays, "{enabled:?}");
+    }
+    // without the flag the batch answer is unchanged
+    let mut fixture = Fixture::new(1);
+    let ids: Vec<String> = fixture.sessions.iter().map(|id| wire(*id)).collect();
+    let response = fixture.session(SessionCmd::Close, None, undoable(false, Some(&[&ids[0], &ids[1]])));
+    assert_eq!(
+        serde_json::to_value(&response).unwrap(),
+        json!({"ok": true, "result": {"affected": 2}})
+    );
+}
+
+#[test]
+fn undoable_empty_batch_is_refused_before_anything_closes() {
+    let mut fixture = Fixture::new(1);
+    assert_eq!(
+        fixture.session(SessionCmd::Close, None, undoable(true, Some(&[]))),
+        failure("session.close requires at least one --target")
+    );
+    assert_eq!(fixture.order(fixture.workspace), fixture.sessions);
+}
+
 // MARK: - session.select and session.go
 
 #[test]

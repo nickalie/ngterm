@@ -412,6 +412,25 @@ def test_session_create_select_and_close(cli, ctl):
     _usage(cli("session", "new", "--workspace", "active", "--workspace-name", "x"))
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("cli:session close", "field:result.undoable")
+def test_session_close_undoable(cli, ctl, launch, adapter):
+    single, first, second = _new(ctl), _new(ctl), _new(ctl)
+    _ok(cli("session", "close", "--target", single, "--undoable"), "ok (undoable)\n")
+    _ok(cli("session", "close", "--target", first, "--target", second, "--undoable"), "2 sessions (undoable)\n")
+    assert {single, first, second}.isdisjoint(s["id"] for node in workspaces(ctl.tree()) for s in node["sessions"])
+
+    seeded = launch(settings={"closeGraceUndoEnabled": False})
+    seeded_cli = Cli(adapter.ctl_path, seeded.instance, adapter.ctl_name)
+    single, first, second = _new(seeded), _new(seeded), _new(seeded)
+    _ok(seeded_cli("session", "close", "--target", single, "--undoable"), "ok (not undoable)\n")
+    _ok(
+        seeded_cli("session", "close", "--target", first, "--target", second, "--undoable"),
+        "2 sessions (not undoable)\n",
+    )
+    assert _json(seeded_cli("session", "close", "--target", _new(seeded), "--undoable", "--json"))["undoable"] is False
+
+
 @pytest.mark.covers(
     "cli:session rename", "cli:session reveal", "cli:session flag", "cli:session context", "cli:session seen"
 )

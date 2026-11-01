@@ -34,6 +34,10 @@ def swift_double(value: float) -> str:
     return repr(float(value))
 
 
+def _affected(count: int) -> str:
+    return "1 session" if count == 1 else f"{count} sessions"
+
+
 def human(result: Mapping[str, Any] | None, echo_id: bool = False, vocabulary: Vocabulary = UPSTREAM) -> str:
     """`formatResponse` for an ok response, without the trailing newline `print` adds; `vocabulary` names the key the
     implementation answers `zmx.list` under."""
@@ -66,8 +70,11 @@ def human(result: Mapping[str, Any] | None, echo_id: bool = False, vocabulary: V
         return result["text"]
     if "exitCode" in result:
         return f"exit {result['exitCode']}"
+    if "undoable" in result:
+        closed = _affected(result["affected"]) if "affected" in result else "ok"
+        return f"{closed} ({'undoable' if result['undoable'] else 'not undoable'})"
     if "affected" in result:
-        return "1 session" if result["affected"] == 1 else f"{result['affected']} sessions"
+        return _affected(result["affected"])
     if "count" in result:
         return "ok" if result["count"] == 0 else f"{result['count']} diagnostic(s)"
     if "cursor" in result:

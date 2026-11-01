@@ -891,6 +891,24 @@ mod tests {
             request(&["close", "--target", "b", "--target", "a", "--undoable"]),
             json!({"cmd": "session.close", "target": "b", "args": {"targets": ["b", "a"], "undoable": true}})
         );
+        assert_eq!(
+            request(&["close", "--target", "x", "--undoable"]),
+            json!({"cmd": "session.close", "target": "x", "args": {"undoable": true}})
+        );
+        assert_eq!(
+            request(&[
+                "close",
+                "--target",
+                "a",
+                "--target",
+                "b",
+                "--undoable",
+                "--window",
+                "w1"
+            ]),
+            json!({"cmd": "session.close", "target": "a",
+                   "args": {"targets": ["a", "b"], "window": "w1", "undoable": true}})
+        );
     }
 
     #[test]

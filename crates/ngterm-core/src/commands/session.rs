@@ -173,31 +173,50 @@ fn duplicate_in(store: &mut AppStore, id: Uuid, home: &str) -> Outcome {
 
 // MARK: - close, go, reveal
 
-/// `session.close`: the target alone closes for good; a `targets` batch of two or more is one undoable soft close
-/// while close-grace undo is on (the default), else each closes for good. A batch answers how many it closed; every
-/// target must resolve before anything closes.
+/// `session.close`: the target alone closes for good, unless `undoable` gives it the close chord's grace while
+/// close-grace undo is on (the default); a `targets` batch of two or more is one undoable soft close while close-grace
+/// undo is on, else each closes for good. A batch answers how many it closed; every target must resolve before
+/// anything closes. With `undoable` every reply carries whether the close was left undoable
+/// (`ControlServer+SessionClose.swift`). Upstream's refusal of `undoable` by an older host has no target here: one
+/// dispatcher serves the app and `ngterm-headless`.
 fn close(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let window = args.window.as_deref();
+    let undoable = args.undoable == Some(true);
+    let grace_undo = core.settings().close_grace_undo_enabled.unwrap_or(true);
     let Some(targets) = &args.targets else {
         let (store, id) = session_store(core, target, window)?;
-        store.close_session(id);
-        return Ok(with_id(id));
+        return close_one(store, id, undoable, grace_undo);
     };
     if targets.is_empty() {
         return Err(ControlError::rejected("session.close requires at least one --target"));
     }
-    let grace_undo = core.settings().close_grace_undo_enabled.unwrap_or(true);
     let (store, ids) = session_batch_store(core, targets, window)?;
     if let [id] = ids.as_slice() {
-        store.close_session(*id);
-        return Ok(with_id(*id));
+        return close_one(store, *id, undoable, grace_undo);
     }
     let affected = if grace_undo {
         if store.soft_close_sessions(&ids) { ids.len() } else { 0 }
     } else {
         ids.iter().filter(|id| store.close_session(**id).is_some()).count()
     };
-    Ok(with_affected(affected))
+    let mut result = with_affected(affected);
+    result.undoable = undoable.then_some(grace_undo && affected > 0);
+    Ok(result)
+}
+
+/// One resolved session's close: soft as the close chord's when `undoable` asks and grace undo is on, else for good.
+fn close_one(store: &mut AppStore, id: Uuid, undoable: bool, grace_undo: bool) -> Outcome {
+    let mut result = with_id(id);
+    if undoable && grace_undo {
+        if !store.soft_close_session(id) {
+            return Err(ControlError::rejected("could not close session"));
+        }
+        result.undoable = Some(true);
+        return Ok(result);
+    }
+    store.close_session(id);
+    result.undoable = undoable.then_some(false);
+    Ok(result)
 }
 
 /// `session.go`: a relative step of the selection in the `--window` (else frontmost) window.

@@ -237,16 +237,17 @@ extend, keep green). New: `test_session.py::test_tint_set_recolor_place_and_clea
 `::test_plain_close_carries_no_undoable`; `test_cli_output.py::test_session_close_undoable`, covering
 `field:result.undoable`.
 
-- [ ] single target (or a batch deduplicated to one) with `undoable` and close grace on: soft close as the close
+- [x] single target (or a batch deduplicated to one) with `undoable` and close grace on: soft close as the close
       chord does, `{"id", "undoable": true}`; "could not close session" when the soft close fails
-- [ ] grace off: hard close, `{"id", "undoable": false}`; without `undoable`: unchanged, no field
-- [ ] a batch of two or more is unchanged; with `undoable` the reply adds `undoable: grace_on && affected > 0`;
+- [x] grace off: hard close, `{"id", "undoable": false}`; without `undoable`: unchanged, no field
+- [x] a batch of two or more is unchanged; with `undoable` the reply adds `undoable: grace_on && affected > 0`;
       "session.close requires at least one --target" still first
-- [ ] CLI `--undoable` (help "Give a single close ⌘W's undo grace, so undo inside it brings the running shell back;
+- [x] CLI `--undoable` (help "Give a single close ⌘W's undo grace, so undo inside it brings the running shell back;
       closes at once when Settings turns undo off."), output `<ok|N sessions> (undoable|not undoable)`
-- [ ] write tests: the Swift cases above (core, ctl output)
-- [ ] write tests: the conformance tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the Swift cases above (core, ctl output)
+- [x] write tests: the conformance tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none added: the five new ids are
+      since(0.39.1), green at a temporary 0.39.1 level; Task 25 lists them)
 
 ### Task 5: Attention navigation includes active sessions (#807)
 

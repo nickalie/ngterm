@@ -24,9 +24,10 @@ use crate::window::format_windows;
 
 /// Renders a response as its human-readable summary (no trailing newline): an `error:` line, the tree or window
 /// listing, the theme listing, the keymap or hooks listing, the restore policy, the serving app's version, the text
-/// read (or a search's counter), an overlay program's `exit N`, a batch's affected count, a count of diagnostics, a
-/// cursor column, a resized window's `W H`, a resized split's ratio, the applied sidebar width, the affected id (only
-/// with `echo_id`, for the create commands), or a bare `ok`. Never JSON: `--json` prints the server's own line.
+/// read (or a search's counter), an overlay program's `exit N`, an undoable close's outcome, a batch's affected count,
+/// a count of diagnostics, a cursor column, a resized window's `W H`, a resized split's ratio, the applied sidebar
+/// width, the affected id (only with `echo_id`, for the create commands), or a bare `ok`. Never JSON: `--json` prints
+/// the server's own line.
 ///
 /// The result's fields are tested in upstream's fixed order (`formatResponse`: `tree` first, `app` after the
 /// listings); each command group adds its branch at its place in that order.
@@ -48,6 +49,18 @@ pub fn format_response(response: &Response, echo_id: bool) -> String {
     // `session.overlay.result`: the program's exit status
     if let Some(code) = result.and_then(|result| result.get("exitCode")).and_then(Value::as_i64) {
         return format!("exit {code}");
+    }
+    // `session.close --undoable`: what closed, then whether undo can bring it back
+    if let Some(undoable) = result
+        .and_then(|result| result.get("undoable"))
+        .and_then(Value::as_bool)
+    {
+        let closed = result
+            .and_then(|result| result.get("affected"))
+            .and_then(Value::as_i64)
+            .map_or_else(|| "ok".to_owned(), format_affected);
+        let state = if undoable { "undoable" } else { "not undoable" };
+        return format!("{closed} ({state})");
     }
     if let Some(affected) = result.and_then(|result| result.get("affected")).and_then(Value::as_i64) {
         return format_affected(affected);
@@ -420,6 +433,18 @@ mod tests {
             format_response(&ok(json!({"themes": [], "app": {"version": "1"}, "text": "t"})), false),
             "* default ghostty"
         );
+    }
+
+    #[test]
+    fn an_undoable_close_says_whether_undo_can_bring_it_back() {
+        for (result, expected) in [
+            (json!({"id": "9f3c", "undoable": true}), "ok (undoable)"),
+            (json!({"id": "9f3c", "undoable": false}), "ok (not undoable)"),
+            (json!({"affected": 2, "undoable": true}), "2 sessions (undoable)"),
+            (json!({"affected": 1, "undoable": false}), "1 session (not undoable)"),
+        ] {
+            assert_eq!(format_response(&ok(result), false), expected);
+        }
     }
 
     #[test]
