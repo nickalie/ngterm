@@ -183,6 +183,8 @@ tests/protocol/test_ask_pick.py::test_terminal_ask_pane_must_be_laid_out
 tests/protocol/test_ask_pick.py::test_terminal_ask_waits_hidden_on_an_unselected_session
 tests/protocol/test_ask_pick.py::test_terminal_ask_waits_on_its_session
 tests/protocol/test_ask_pick.py::test_terminal_ask_without_a_target_lands_on_the_selected_session
+tests/protocol/test_companions.py::test_a_duplicated_program_pane_closes_when_the_program_exits[plain]
+tests/protocol/test_companions.py::test_duplicate_as_companion_copies_the_split_and_runs_each_program
 tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[None-args2-browser.clear]
 tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[None-args2-browser.links]
 tests/protocol/test_config_browser.py::test_browser_commands_take_no_target_or_window[active-args0-browser.clear]
