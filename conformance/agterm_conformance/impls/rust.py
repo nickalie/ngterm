@@ -28,7 +28,7 @@ from agterm_conformance.impls.base import (
 )
 from agterm_conformance.vocabulary import LIVE
 
-# `version` -> result.conformance = {"parityLevel": "0.38.1", "capabilities": ["posix-shell", ...]}.
+# `version` -> result.conformance = {"parityLevel": "0.39.1", "capabilities": ["posix-shell", ...]}.
 # Optional: a build without it, like a run without a binary, is below every level.
 CONFORMANCE_FIELD = "conformance"
 # The staged layout's installed-build identity, relative to the stage root (scripts/stage.sh,

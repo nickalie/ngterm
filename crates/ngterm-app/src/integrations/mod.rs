@@ -58,8 +58,9 @@
 //!   `show-image.ps1`, which shows the image in a page overlay (`0008-show-image-windows.patch`), and where v0.39's
 //!   text names macOS behavior this build has otherwise it says what ngterm does (the row tints and the link browser
 //!   chord on Linux and Windows, the companion items in the File menu, no Windows far side for a remote attach, and
-//!   links with `mouse-reporting = false`: `0009-other-platforms.patch`): all are patches over upstream's tree
-//!   (`build/patches/skill-ngterm`).
+//!   links with `mouse-reporting = false`: `0009-other-platforms.patch`), and its Live `--command` text says the
+//!   pane ends with the command, as upstream's #840 made it and its own skill text still predates
+//!   (`0010-live-creation-ends-pane.patch`): all are patches over upstream's tree (`build/patches/skill-ngterm`).
 
 pub mod cli;
 pub mod files;

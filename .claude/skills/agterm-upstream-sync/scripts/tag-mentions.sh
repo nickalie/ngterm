@@ -19,7 +19,10 @@
 #              texts and tests (quick.rs; identity.rs's installed-version values, ported from upstream's
 #              AppIdentityTests), and the files that name the release code was ported from (the ghostty-vt
 #              patch taken from upstream's zmx patch and its README entry, the libghostty config counts, the HUD
-#              store tests, docs/ghostty-config-parity.md): a citation stays at the release it cites
+#              store tests, docs/ghostty-config-parity.md), the sync tasks a patch or vendor script cites
+#              (gpui-pre-linux's keymap patch, vendor-gpui.sh), the upstream files a port cites (opencode_status.rs,
+#              the session server's upkeep.rs) and docs/backlog/ items naming where they were found: a citation stays
+#              at the release it cites
 #   review     no rule knows this path: decide, then add a rule here
 # With NEW_TAG --apply, rewrites the `bump` lines in place (vX.Y.Z and X.Y.Z forms) and lists the rest.
 set -euo pipefail
@@ -46,6 +49,9 @@ classify() {
     crates/ngterm-core/src/ghostty_config/counts_tests.rs|crates/ngterm-core/src/model/tests/hud.rs) echo keep ;;
     crates/ngterm-core/src/identity.rs) echo keep ;;
     docs/ghostty-config-parity.md) echo keep ;;
+    build/patches/gpui-pre-linux/0004-keymap-change.patch|scripts/vendor-gpui.sh) echo keep ;;
+    crates/ngterm-app/tests/opencode_status.rs|crates/ngterm-session/src/server/upkeep.rs) echo keep ;;
+    docs/backlog/*) echo keep ;;
     *) echo review ;;
   esac
 }

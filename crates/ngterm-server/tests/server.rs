@@ -157,7 +157,7 @@ fn version_round_trips_through_the_main_loop() -> TestResult {
         serde_json::to_value(&response)?,
         json!({"ok": true, "result": {
             "app": {"version": "0.1.0", "commit": "abc1234"},
-            "conformance": {"parityLevel": "0.38.1", "capabilities": ["posix-shell"]}
+            "conformance": {"parityLevel": "0.39.1", "capabilities": ["posix-shell"]}
         }})
     );
     #[cfg(unix)]

@@ -1091,15 +1091,16 @@ CI until `ngterm-gpui` joins `cross-platform.yml`".
 
 ### Task 25: Claim v0.39.1 parity and update the docs
 
-- [ ] bump `PARITY_LEVEL` in `crates/ngterm-proto/src/version.rs` and its mirrors (`tag-mentions.sh v0.38.1 v0.39.1`
+- [x] bump `PARITY_LEVEL` in `crates/ngterm-proto/src/version.rs` and its mirrors (`tag-mentions.sh v0.38.1 v0.39.1`
       class `claim`: the version.rs test, `ngterm-core/src/dispatch.rs` and `ngterm-server/tests/server.rs`
       expectations, `conformance/agterm_conformance/impls/rust.py`, `conformance/docs/rust-build.md`), only once every
       task above is done; then run the `@since("0.39.1")` tests the earlier tasks added (a partial `run-linux.sh -k`)
-      and add their newly green ids with `check_ratchet.py --add`
-- [ ] README.md, CLAUDE.md, conformance/README.md, conformance/docs/rust-build.md describe what changed (companions,
+      and add their newly green ids with `check_ratchet.py --add` (all 90 green; `rust-passing.txt` only)
+- [x] README.md, CLAUDE.md, conformance/README.md, conformance/docs/rust-build.md describe what changed (companions,
       tints, the flagged order, the new settings keys, the Live `--command` behavior change); `tag-mentions.sh
       v0.38.1 v0.39.1` lists no stale `claim` line; add rules to `tag-mentions.sh` for the `review` lines this sync
       met (historical citations of v0.38.1 in `build/patches/gpui-pre-linux/0004-keymap-change.patch`,
       `crates/ngterm-app/tests/opencode_status.rs`, `crates/ngterm-session/src/server/upkeep.rs`, `docs/backlog/*`,
-      `scripts/vendor-gpui.sh`: `keep`)
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+      `scripts/vendor-gpui.sh`: `keep`); also the skill patch lists name `0010-live-creation-ends-pane.patch`, and the
+      ui coverage gate is green (two new `since("0.39.1")` ui tests, `ui:palette-mark` exempted)
+- [x] checks sized to the change pass; newly green ids added to the ratchet (the 90 above)

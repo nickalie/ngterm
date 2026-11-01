@@ -85,9 +85,34 @@ and how this build does it where the OS matters:
 - `notify` banners get a notification slot of their own per session, replaced and cleared as upstream's
   (freedesktop `replaces_id` and `CloseNotification` on Linux, a toast's group and tag on Windows).
 - Live sessions: a fish login shell claims `live-sessions` as zsh does, with the shell integration's root merged into
-  the pane's `XDG_DATA_DIRS`; an interrupted restored command or `--command` still leaves the login shell's prompt;
-  the session server touches its namespace lock hourly, so a temp-dir cleaner never ages it out.
+  the pane's `XDG_DATA_DIRS`; a `session new --command` pane closes when its command exits, as outside Live, and
+  `--wait` holds its final output (v0.39 reversed v0.38's return to the login shell), while a captured command
+  replayed after a clean quit and a `session restart --command` still return to the login shell's prompt; the
+  session server touches its namespace lock hourly, so a temp-dir cleaner never ages it out.
 - A custom command in a session whose directory is gone runs in `HOME`.
+- Companion sessions (v0.39): `session new --parent` nests a companion under its parent's row, `session
+  collapse|expand` folds the group, a companion moves only among its siblings, closes with its parent's group and
+  comes back with it from close undo and Open Recent, and a parent whose shell exits restarts it while it has
+  companions; New Companion and Duplicate as Companion sit on the row menu, in the File menu and in the palette, and
+  flat lists label a companion `parent › child`. `session overlay open --companion` opens a page as a companion row
+  (WPE WebKit on Linux, WebView2 on Windows). `session duplicate --companion` re-runs the source pane's foreground
+  program, read from the process table: `/proc/<pid>/exe` and `environ` on Linux, `proc_pidpath` and `KERN_PROCARGS2`
+  on macOS, `QueryFullProcessImageNameW` and the process's environment block on Windows. A companion of a session
+  attached from another machine is made on that machine over ssh (a Windows machine is never that far side).
+- Row tints (v0.39): `session tint`/`workspace tint` and `--tint`/`--tint-on` on both `new`s color a row's icon
+  and/or name (tree `tint`/`tintOn`), with a Tint submenu on the row menu and Tint Session rows in the palette; the
+  colors are AppKit's system ones on every OS, their dark variants on a dark sidebar.
+- The flagged view keeps a saved order (tree `flaggedOrder`): rows drag in every flagged layout, `session flag move
+  --before|--after` reorders them, and navigation follows it. Edit Flagged Sessions… and Edit Focused Workspaces…
+  (View menu, palette, the empty flagged view's Add Sessions… link) toggle membership in a palette that stays open.
+- `session close --undoable` (and the `undoable` result field); the tree's per-session `lastSelectedAt`.
+- New settings: `attentionIncludesActive` (the attention steps stop on active sessions too),
+  `attentionNavigationAcrossWindows` (they reach the other windows, raised through GPUI's window activation),
+  `ignoreReduceTransparency` (Appearance ▸ Window: the window stays translucent when the system asks for less
+  transparency, which on Windows is the transparency effects switch, `UISettings.AdvancedEffectsEnabled`; Linux has no
+  such rule, and macOS's waits on the macOS frontend), the `linkOpenMode` values `overlay95`, `overlay75` and
+  `overlay50` (a link in an overlay of that size, Ctrl+Shift-click sending one to the browser instead where upstream
+  has ⌘⇧-click), and the Ghostty config key `split-divider-color` for the split divider.
 - Selecting text stays off the system clipboard ([The selection clipboard](#the-selection-clipboard)).
 
 ## Prerequisites

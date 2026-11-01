@@ -2,7 +2,7 @@
 Every test leaves the shared instance's flags, focus set and sidebar mode as it found them."""
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_ok, find_session, session_ids, workspace_ids
+from agterm_conformance.match import assert_absent, assert_ok, find_session, session_ids, sessions, workspace_ids
 from agterm_conformance.wait import wait_until
 
 
@@ -138,6 +138,30 @@ def test_flagged_view_toggle_switches_the_sidebar_mode(ctl, ui):
         ctl.wait_tree(lambda tree: tree["tree"]["sidebarMode"] == "flagged")
         ui.click("flagged-view-toggle")
         ctl.wait_tree(lambda tree: tree["tree"]["sidebarMode"] == "tree")
+    finally:
+        ctl.request("sidebar.mode", mode="tree")
+        ctl.request("session.flag", mode="clear")
+        ctl.request("session.close", sid)
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("ui:flagged-empty-add", "ui:palette-item-{item}")
+def test_the_empty_flagged_view_link_opens_the_session_editor(ctl, ui):
+    """The empty flagged view's Add Sessions… link opens Edit Flagged Sessions, whose Return flags the highlighted
+    (first) row and keeps the editor open."""
+    sid = _new(ctl)
+    ctl.request("session.flag", mode="clear")
+    assert_ok(ctl.request("sidebar.mode", mode="flagged"))
+    try:
+        ui.click(ui.find("flagged-empty-add"))
+        ui.find("palette-editor-hint")
+        ui.find(ui.ui_ids.expand("palette-item-{item}", item=sid))
+        ui.press("return")
+        tree = ctl.wait_tree(lambda tree: [s for s in sessions(tree) if s.get("flagged")])
+        assert [s["id"] for s in sessions(tree) if s.get("flagged")] == session_ids(tree)[:1]
+        ui.find("palette-editor-hint")
+        ui.press("escape")
+        ui.absent("command-palette")
     finally:
         ctl.request("sidebar.mode", mode="tree")
         ctl.request("session.flag", mode="clear")

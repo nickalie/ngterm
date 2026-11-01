@@ -9,7 +9,7 @@ Rust build reports, and no other key (`assert_version_result` in `agterm_conform
 ```json
 {"app": {"version": "0.1.0", "commit": "abc1234"},
  "installed": {"version": "0.1.0", "commit": "abc1234"},
- "conformance": {"parityLevel": "0.38.1", "capabilities": ["posix-shell", "live-sessions"]}}
+ "conformance": {"parityLevel": "0.39.1", "capabilities": ["posix-shell", "live-sessions"]}}
 ```
 
 - `app.version`: a non-empty string; `app.commit` is optional, and the CLI's `version` prints `version (commit)`.
@@ -22,8 +22,8 @@ Rust build reports, and no other key (`assert_version_result` in `agterm_conform
 - `conformance.parityLevel`: the upstream version whose behavior the build claims, a dotted version with an optional
   `v` (no suffix such as `-beta`).
   A test marked `since(V)` above it skips as `not-yet-at-level`.
-  The Rust build claims `0.38.1` (`PARITY_LEVEL` in `ngterm-proto`), the release the catalog describes: it was
-  raised once the port of v0.37.0 to v0.38.1 had landed, never ahead of it, so every `since` test runs against it.
+  The Rust build claims `0.39.1` (`PARITY_LEVEL` in `ngterm-proto`), the release the catalog describes: it was
+  raised once the port of the v0.39 releases had landed, never ahead of it, so every `since` test runs against it.
 - `conformance.capabilities`: names from the vocabulary below; a test whose `requires` names one missing skips as
   `unsupported`.
   Names outside the vocabulary match nothing.
@@ -240,7 +240,8 @@ The bundled agent skill (`resources/skills/ngterm`) is upstream's with
 contract's `AGTERM_LIVE_*`, then the rest of this build's identity, `NGTERM_*` among it, then the restore adapter, then
 `show-image.sh` passing the pane's socket, then the Windows build's paths and chord and `terminfo install`'s own
 text, then `show-image.sh`'s Windows form, `show-image.ps1`, which shows the image in a page overlay, then what this
-build does where upstream's v0.39 text names macOS behavior):
+build does where upstream's v0.39 text names macOS behavior, then the Live `--command` text matching #840's change,
+which upstream's skill still predates):
 `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh` rebuilds it as the new upstream tree plus those
 patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned tag verifies the copy still equals it.
 
@@ -256,6 +257,11 @@ it no longer does:
 Texts with no upstream counterpart, each the build's own: `live.reset is not supported on this platform` (above),
 and on Windows an HTML page's refusal without the WebView2 Runtime, `the Microsoft Edge WebView2 Runtime is not
 installed; get it from <link>` (`ngterm-gpui`'s `html_overlay/webview2/runtime.rs`). No suite test asserts either.
+
+A request field with no upstream counterpart: `callerDrive`, the drive (`D:`) or share of a Windows `ngtermctl`'s
+directory, sent only with a page companion (`session overlay open --companion`) whose `--html` or `--cwd` is rooted
+with no drive; a local row puts the path on that drive, a remote row ignores it. No other client sends it, so the
+wire is upstream's everywhere else.
 
 ## Ratchet
 
