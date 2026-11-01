@@ -28,7 +28,7 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 24] = [
+pub const CASES: [(&str, Case); 25] = [
     ("the_engine_renders_on_the_renderers_gpu_in_its_mode", mode),
     ("a_page_loads_and_its_frames_reach_the_screen", loads),
     ("a_page_moved_to_another_window_draws_there", moved),
@@ -99,6 +99,10 @@ pub const CASES: [(&str, Case); 24] = [
     (
         "a_source_moved_to_another_element_during_its_read_plays_there",
         replica_source_moved,
+    ),
+    (
+        "a_moved_sources_failed_read_is_told_once_in_its_new_element",
+        replica_moved_source_fails,
     ),
     (
         "a_play_after_a_reload_of_a_file_that_appeared_waits_for_a_fresh_rescue",
@@ -1393,6 +1397,67 @@ fn replica_source_moved(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
     }
     fixture.until("the second element's metadata", &element, |_, width, pixels| {
         close(pixel(pixels, width, width / 2, 200), GREEN)
+    })
+}
+
+/// A `<source>` of a missing file, moved by the page to another element while its rescue's read is on its way, has
+/// its failure told once in that element: the read fails before that element's own attempt at it does (both are held
+/// by the origin and failed in that order), and that attempt's failure is the one told. A click moves it. Green when
+/// the element saw one failure, blue when more.
+fn replica_moved_source_fails(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    const GREEN: [u8; 4] = [0x30, 0xc0, 0x30, 0xff];
+    const BLUE: [u8; 4] = [0x30, 0x30, 0xc0, 0xff];
+    let mut origin = FakeOrigin::new(&[(
+        "/docs/index.html",
+        "text/html",
+        "<body style='margin:0;background:#c03030'>\
+         <div id=go style='position:fixed;left:0;top:0;width:100%;height:100%'></div>\
+         <audio id=a preload=auto><source id=s src='missing.wav'></audio>\
+         <audio id=b preload=auto></audio>\
+         <script>
+           const s = document.getElementById('s');
+           let moved = false;
+           let failures = 0;
+           s.addEventListener('error', () => {
+             if (!moved) return;
+             failures += 1;
+             if (failures === 1) setTimeout(() => {
+               document.body.style.background = failures === 1 ? '#30c030' : '#3030c0';
+             }, 1000);
+           });
+           document.getElementById('go').addEventListener('click', () => {
+             moved = true;
+             document.getElementById('b').appendChild(s);
+           });
+         </script></body>"
+            .to_owned(),
+    )]);
+    let fake = Rc::get_mut(&mut origin).ok_or("the origin is shared")?;
+    fake.held = Some("/docs/missing.wav");
+    // WebKit's own sniffing read is answered (the file is missing); the rescue's is held
+    fake.answered_first = 1;
+    let overlay = Fixture::replica(&origin, true);
+    let element = fixture.mount(&overlay, 320., 240.)?;
+    let held = Rc::clone(&origin);
+    fixture.wait("the source's rescue read", || !held.parked.borrow().is_empty())?;
+    fixture.click(point(px(160.), px(120.)))?;
+    fixture.wait("the second element's sniffing read", || held.parked.borrow().len() > 1)?;
+    let parked: Vec<_> = origin.parked.borrow_mut().drain(..).collect();
+    // the rescue's read fails first, then the second element's own
+    for token in parked {
+        html_overlay::answer_resource(token, Err("file cannot be read".to_owned()));
+        let settle = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < settle {
+            fixture.frame()?;
+        }
+    }
+    let mut seen = [0; 4];
+    fixture.until("the moved source's failures counted", &element, |_, width, pixels| {
+        seen = pixel(pixels, width, width / 2, 200);
+        close(seen, GREEN) || close(seen, BLUE)
+    })?;
+    check(close(seen, GREEN), || {
+        "the moved source's failure was told more than once in its new element".to_owned()
     })
 }
 

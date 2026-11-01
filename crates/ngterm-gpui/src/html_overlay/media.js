@@ -197,7 +197,10 @@
     const url = source.src;
     const known = sources.get(source);
     if (known?.url === url) {
-      if (known.state === 'reading') return true;
+      if (known.state === 'reading') {
+        known.heldIn.add(media);
+        return true;
+      }
       // a failure held back until a selection reaches it is told by the first one that does
       if (!known.told) {
         if (!reached(source, media)) return true;
@@ -207,13 +210,15 @@
       // a failed read was told once; again only when the page ran the selection itself
       return reloading.has(media);
     }
-    const entry = { url, state: 'reading', told: false };
+    // `heldIn`: the elements whose selection reached it while its read was under way, and held its failure back
+    const entry = { url, state: 'reading', told: false, heldIn: new Set([media]) };
     sources.set(source, entry);
     // the elements a settled read speaks for: the one it failed in, which a `<source>` the page moved or removed
-    // holds back nothing in any more, and the one it is in now, whose selection may have reached it meanwhile
+    // holds back nothing in any more, and the one it is in now when that one's selection reached it meanwhile (one
+    // whose selection has yet to reach it tells the failure itself, when it does)
     const settledIn = () => {
       const now = source.parentElement;
-      return now instanceof HTMLMediaElement && now !== media ? [media, now] : [media];
+      return now instanceof HTMLMediaElement && now !== media && entry.heldIn.has(now) ? [media, now] : [media];
     };
     readWhole(url).then(
       (blob) => {
