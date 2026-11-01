@@ -4,6 +4,11 @@
 //! configuration, the launch disposition and the attach command a wrapped pane's surface runs. Upstream wraps a zsh or
 //! fish login shell; this build also wraps bash and PowerShell ([`super::shell_integration`], capability
 //! `live-any-shell`).
+//!
+//! A new daemon's creation payload comes in two forms ([`Creation`], upstream's v0.39.0): a line that returns to the
+//! login shell after it runs (`session restart --command`), and the pane's own creation command, which the pane ends
+//! with as it does outside Live (`session new --command`, `session split --command`). A replayable captured argv wins
+//! over either and always returns to the shell.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -279,21 +284,31 @@ impl LiveAttach {
     }
 }
 
+/// A shell line a new daemon runs when no captured argv is replayed (upstream's `ZmxSupport.Creation`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Creation<'a> {
+    /// Runs, then the login shell takes the pane ([`replay::render_command_line`]): `session restart --command`.
+    ReturningToShell(&'a str),
+    /// The pane's own creation command, which the pane ends with ([`replay::render_ending`]): `session new --command`,
+    /// `session split --command`.
+    EndingPane(&'a str),
+}
+
 /// The attach a wrapped pane runs: with the creation payload a new daemon runs (a replayable captured `argv` first,
-/// else the durable `creation_command`). A refused replay (denylisted, unreplayable) keeps the bare attach rather than
-/// falling back to the creation command. Without a payload a bash daemon still starts its login shell in POSIX mode,
-/// the one way it reads its integration.
+/// else the `creation` line in its form). A refused replay (denylisted, unreplayable) keeps the bare attach rather than
+/// falling back to the creation line. Without a payload a bash daemon still starts its login shell in POSIX mode, the
+/// one way it reads its integration.
 #[must_use]
 pub fn live_attach<S: AsRef<str>>(
     configuration: &Configuration,
     replaying: Option<&[String]>,
-    creation_command: Option<&str>,
+    creation: Option<Creation<'_>>,
     denylist: &[S],
 ) -> LiveAttach {
     LiveAttach {
         executable: configuration.executable.clone(),
         session: configuration.daemon_name.clone(),
-        argv: creation_arguments(configuration, replaying, creation_command, denylist),
+        argv: creation_arguments(configuration, replaying, creation, denylist),
     }
 }
 
@@ -317,7 +332,7 @@ pub fn attach_line(configuration: &Configuration, attach: &LiveAttach) -> String
 fn creation_arguments<S: AsRef<str>>(
     configuration: &Configuration,
     replaying: Option<&[String]>,
-    creation_command: Option<&str>,
+    creation: Option<Creation<'_>>,
     denylist: &[S],
 ) -> Vec<String> {
     let environment = &configuration.environment;
@@ -336,14 +351,17 @@ fn creation_arguments<S: AsRef<str>>(
         kind,
         rearm: &rearm,
     };
-    let script = match (replaying, creation_command) {
+    let (flags, script) = match (replaying, creation) {
         (Some(argv), _) if !should_restore(argv, denylist) => return login,
-        (Some(argv), _) => replay::render_argv(argv, &final_shell),
-        (None, Some(line)) => replay::render_command_line(line, &final_shell),
+        (Some(argv), _) => (kind.script_flags(), replay::render_argv(argv, &final_shell)),
+        (None, Some(Creation::ReturningToShell(line))) => {
+            (kind.script_flags(), replay::render_command_line(line, &final_shell))
+        }
+        (None, Some(Creation::EndingPane(line))) => (kind.ending_flags(), replay::render_ending(line, kind)),
         (None, None) => return login,
     };
     let mut arguments = vec![shell.clone()];
-    arguments.extend(kind.script_flags().iter().map(|flag| (*flag).to_owned()));
+    arguments.extend(flags.iter().map(|flag| (*flag).to_owned()));
     arguments.push(script);
     arguments
 }
@@ -361,12 +379,12 @@ mod tests {
     fn attach_command<S: AsRef<str>>(
         configuration: &Configuration,
         replaying: Option<&[String]>,
-        creation_command: Option<&str>,
+        creation: Option<Creation<'_>>,
         denylist: &[S],
     ) -> String {
         attach_line(
             configuration,
-            &live_attach(configuration, replaying, creation_command, denylist),
+            &live_attach(configuration, replaying, creation, denylist),
         )
     }
 
@@ -700,7 +718,12 @@ mod tests {
             .to_vec();
         let script = zsh_script(&argv);
         assert_eq!(
-            attach_command(&configuration, Some(&argv), Some("echo durable"), &NO_DENYLIST),
+            attach_command(
+                &configuration,
+                Some(&argv),
+                Some(Creation::ReturningToShell("echo durable")),
+                &NO_DENYLIST
+            ),
             format!(
                 "{} {}",
                 bare_line(&configuration),
@@ -717,7 +740,12 @@ mod tests {
             .to_vec();
         let script = zsh_script(&argv);
         assert_eq!(
-            attach_command(&configuration, Some(&argv), Some("do not run"), &NO_DENYLIST),
+            attach_command(
+                &configuration,
+                Some(&argv),
+                Some(Creation::ReturningToShell("do not run")),
+                &NO_DENYLIST
+            ),
             shell_quoted_line(&[
                 "/bundle's files/agterm-session-host",
                 "client",
@@ -739,8 +767,8 @@ mod tests {
         let argv: Vec<String> = ["printf", "%s", "two words"].map(str::to_owned).to_vec();
         for (replaying, creation) in [
             (None, None),
-            (Some(argv.as_slice()), Some("echo durable")),
-            (None, Some("echo durable")),
+            (Some(argv.as_slice()), Some(Creation::ReturningToShell("echo durable"))),
+            (None, Some(Creation::ReturningToShell("echo durable"))),
         ] {
             let attach = live_attach(&configuration, replaying, creation, &NO_DENYLIST);
             assert_eq!(
@@ -772,7 +800,12 @@ mod tests {
         ] {
             let argv: Vec<String> = argv.into_iter().map(str::to_owned).collect();
             assert_eq!(
-                attach_command(&configuration, Some(&argv), Some("echo durable"), &denylist),
+                attach_command(
+                    &configuration,
+                    Some(&argv),
+                    Some(Creation::ReturningToShell("echo durable")),
+                    &denylist
+                ),
                 bare_line(&configuration)
             );
         }
@@ -794,7 +827,12 @@ mod tests {
             },
         );
         assert_eq!(
-            attach_command(&configuration, None, Some(line), &NO_DENYLIST),
+            attach_command(
+                &configuration,
+                None,
+                Some(Creation::ReturningToShell(line)),
+                &NO_DENYLIST
+            ),
             format!(
                 "{} {}",
                 bare_line(&configuration),
@@ -805,6 +843,133 @@ mod tests {
             attach_command(&configuration, None, None, &NO_DENYLIST),
             bare_line(&configuration)
         );
+    }
+
+    /// The `ngterm-session attach` behind `replay_configuration`'s session host, as words.
+    fn hosted_prefix() -> Vec<&'static str> {
+        vec![
+            "/bundle/host",
+            "client",
+            "ngterm-pane",
+            "--",
+            "/bin/ngterm-session",
+            "attach",
+            "ngterm-pane",
+        ]
+    }
+
+    /// upstream's `paneCommandEndsThePaneWhileCreationCommandReturnsToTheShell`.
+    #[test]
+    fn a_pane_command_ends_the_pane_while_a_creation_command_returns_to_the_shell() {
+        let configuration = replay_configuration(Some("/bundle/host"));
+        let line = "lazygit --path 'two words'";
+        let ending = replay::render_ending(line, LoginShell::Zsh);
+        let rearm = shell_integration::rearm(LoginShell::Zsh, &configuration.environment).unwrap();
+        let returning = replay::render_command_line(
+            line,
+            &FinalShell {
+                path: "/bin/zsh",
+                kind: LoginShell::Zsh,
+                rearm: &rearm,
+            },
+        );
+        let with = |script: &str| {
+            let mut words = hosted_prefix();
+            words.extend(["/bin/zsh", "-lic", script]);
+            shell_quoted_line(&words)
+        };
+        assert_eq!(
+            attach_command(&configuration, None, Some(Creation::EndingPane(line)), &NO_DENYLIST),
+            with(&ending)
+        );
+        assert_eq!(
+            attach_command(
+                &configuration,
+                None,
+                Some(Creation::ReturningToShell(line)),
+                &NO_DENYLIST
+            ),
+            with(&returning)
+        );
+        assert!(!ending.contains("exec") && !ending.contains("ZDOTDIR"), "{ending}");
+    }
+
+    /// upstream's `capturedReplayWinsOverThePaneCommand`: a captured argv replays and returns to the shell, and a
+    /// refused one keeps the bare attach, never the pane command.
+    #[test]
+    fn a_captured_replay_wins_over_the_pane_command() {
+        let configuration = replay_configuration(Some("/bundle/host"));
+        let htop = vec!["htop".to_owned()];
+        let mut replayed = hosted_prefix();
+        let script = zsh_script(&htop);
+        replayed.extend(["/bin/zsh", "-lic", &script]);
+        assert_eq!(
+            attach_command(
+                &configuration,
+                Some(&htop),
+                Some(Creation::EndingPane("lazygit")),
+                &NO_DENYLIST
+            ),
+            shell_quoted_line(&replayed)
+        );
+        let tmux = vec!["tmux".to_owned()];
+        assert_eq!(
+            attach_command(
+                &configuration,
+                Some(&tmux),
+                Some(Creation::EndingPane("lazygit")),
+                &["tmux"]
+            ),
+            shell_quoted_line(&hosted_prefix())
+        );
+    }
+
+    /// upstream's `fishPaneCommandEndsThePane`, and the bash and PowerShell forms: each shell runs the ending script
+    /// with its ending flags, PowerShell's without `-NoExit`.
+    #[test]
+    fn every_shell_runs_a_pane_command_with_its_ending_flags() {
+        let forms = [
+            (
+                "/usr/bin/fish",
+                LoginShell::Fish,
+                vec![("GHOSTTY_SHELL_INTEGRATION_XDG_DIR", "/bundle/shell-integration")],
+            ),
+            (
+                "/bin/bash",
+                LoginShell::Bash,
+                vec![("ENV", "/bundle/bash/ghostty.bash"), ("GHOSTTY_BASH_INJECT", "1")],
+            ),
+            (
+                "/usr/bin/pwsh",
+                LoginShell::Pwsh,
+                vec![("NGTERM_PWSH_INTEGRATION", "/bundle/pwsh/ngterm.ps1")],
+            ),
+        ];
+        for (shell, kind, variables) in forms {
+            let mut configuration = replay_configuration(None);
+            configuration.environment = std::iter::once(("SHELL", shell))
+                .chain(variables)
+                .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                .collect();
+            let mut words = vec![shell.to_owned()];
+            words.extend(kind.ending_flags().iter().map(|flag| (*flag).to_owned()));
+            words.push(replay::render_ending("lazygit", kind));
+            assert_eq!(
+                attach_command(
+                    &configuration,
+                    None,
+                    Some(Creation::EndingPane("lazygit")),
+                    &NO_DENYLIST
+                ),
+                format!("{} {}", bare_line(&configuration), shell_quoted_line(&words)),
+                "{shell}"
+            );
+            assert!(!kind.ending_flags().contains(&"-NoExit"), "{shell}");
+        }
+        assert_eq!(LoginShell::Fish.ending_flags(), ["-lic"]);
+        assert_eq!(LoginShell::Bash.ending_flags(), ["--posix", "-lic"]);
+        assert!(LoginShell::Pwsh.script_flags().contains(&"-NoExit"));
+        assert_eq!(LoginShell::Pwsh.ending_flags().last(), Some(&"-Command"));
     }
 
     /// A resources directory bundling the integration file `loader` (under `shell-integration`) with `contents`.
@@ -853,7 +1018,12 @@ mod tests {
         assert_eq!(attach_command(&configuration, None, None, &NO_DENYLIST), posix_login);
         let denied: Vec<String> = vec!["tmux".to_owned()];
         assert_eq!(
-            attach_command(&configuration, Some(&denied), Some("echo durable"), &["tmux"]),
+            attach_command(
+                &configuration,
+                Some(&denied),
+                Some(Creation::ReturningToShell("echo durable")),
+                &["tmux"]
+            ),
             posix_login
         );
         let argv: Vec<String> = vec!["top".to_owned()];
@@ -901,7 +1071,12 @@ mod tests {
             rearm: &rearm,
         };
         assert_eq!(
-            attach_command(&configuration, None, Some(line), &NO_DENYLIST),
+            attach_command(
+                &configuration,
+                None,
+                Some(Creation::ReturningToShell(line)),
+                &NO_DENYLIST
+            ),
             format!(
                 "{} {}",
                 bare_line(&configuration),

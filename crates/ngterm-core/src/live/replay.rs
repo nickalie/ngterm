@@ -37,6 +37,18 @@
 //! quoted for the C runtime's split, which hands it on whole on Windows PowerShell 5.1 and every PowerShell 7, on every
 //! OS, the user's preference left as it is for later commands. Exact for programs that split their command line as the
 //! C runtime does; `cmd.exe`, batch files and `msiexec` parse theirs their own way.
+//!
+//! The scripts above return to the login shell: a captured argv's replay, and a durable line that is not the pane's own
+//! (`session restart --command`, [`render_command_line`]). A pane's own creation command (`session new --command`,
+//! `session split --command`) ends the pane with it instead, as it does outside Live (upstream's `renderEnding` and
+//! `renderFishEnding`, v0.39.0): [`render_ending`] runs the line and starts no shell after it, so the login shell that
+//! ran it exits with the command's status, the daemon's session ends and its pane closes, or holds on `--wait`. zsh
+//! and bash evaluate the line as one quoted word; fish evaluates it under job control; PowerShell runs it as a script
+//! block in a shell started without `-NoExit` ([`LoginShell::ending_flags`]), with the global `$LASTEXITCODE` cleared
+//! first so a native command of the user's profile leaves no stale code: it exits 0 when the line's last statement
+//! succeeded, else with the last native exit code, 1 when none ran (a failed cmdlet), read without tripping a
+//! profile's strict mode. Unlike a plain `-Command`, which turns every failure into 1, a native command's own status
+//! is kept, as the POSIX shells keep it.
 use super::shell_integration::{DEFAULT_XDG_DATA_DIRS, LoginShell, PWSH_LOAD, Rearm};
 use crate::command_restore::shell_quoted_line;
 use crate::shell_dialect::powershell_call;
@@ -84,6 +96,34 @@ pub fn render_command_line(command_line: &str, shell: &FinalShell<'_>) -> String
     };
     render(&statement, shell)
 }
+
+/// The script for a pane's own creation command, which the pane ends with: the line alone, no re-arm and no final
+/// shell, run by the login shell `kind` with [`LoginShell::ending_flags`].
+#[must_use]
+pub fn render_ending(command_line: &str, kind: LoginShell) -> String {
+    match kind {
+        LoginShell::Zsh | LoginShell::Bash => format!("'builtin' 'eval' -- {}", quoted(command_line)),
+        LoginShell::Fish => format!(
+            "builtin status job-control full; builtin eval {}",
+            fish_quoted(command_line)
+        ),
+        // the status is read inside the line's own block: `$?` after a dot-sourced block reads true whatever its last
+        // statement did; the newline (`[char]10`) is made by PowerShell, so the script stays one line with no double
+        // quote to escape on a Windows command line, and a trailing comment of the line ends there
+        LoginShell::Pwsh => format!(
+            "$global:LASTEXITCODE = $null ; . ([scriptblock]::Create({} + [char]10 + {}))",
+            powershell_quoted(command_line),
+            powershell_quoted(PWSH_ENDING_EXIT)
+        ),
+    }
+}
+
+/// How a PowerShell ending exits once its line ran: 0 when the last statement succeeded, else the last native exit
+/// code, 1 when that is 0 or unset (a failed cmdlet). The code is read through `Get-Variable`, since a bare
+/// `$LASTEXITCODE` that was never set is an error under a profile's strict mode.
+const PWSH_ENDING_EXIT: &str = "if ($?) { exit 0 } ; $__ngtermStatus = [int](Microsoft.PowerShell.Utility\\Get-Variable \
+                                -Name LASTEXITCODE -Scope Global -ValueOnly -ErrorAction Ignore) ; \
+                                if ($__ngtermStatus) { exit $__ngtermStatus } ; exit 1";
 
 fn render(statement: &str, shell: &FinalShell<'_>) -> String {
     match shell.kind {
@@ -509,6 +549,51 @@ mod tests {
         }
     }
 
+    /// upstream's `endingCommandRunsItsLineAndExitsWithItsStatus`, under bash and, where present, zsh.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "runs its script with the POSIX shell /bin/sh, which Windows has not"
+    )]
+    fn an_ending_command_runs_its_line_and_exits_with_its_status() {
+        for (kind, path) in posix_shells() {
+            let dir = tempfile::tempdir().unwrap();
+            let result = dir.path().join("ending");
+            let output = shell_quoted_line(&[result.display().to_string()]);
+            let line = format!("printf '%s' 'two words' > {output} && exit 7");
+            let script = render_ending(&line, kind);
+            assert_eq!(script, format!("'builtin' 'eval' -- {}", shell_quoted_line(&[&line])));
+            let flag = if path.ends_with("zsh") { "-fc" } else { "-c" };
+            let status = Command::new(path).arg(flag).arg(&script).status().unwrap();
+            assert_eq!(status.code(), Some(7), "{path}");
+            assert_eq!(fs::read_to_string(&result).unwrap(), "two words", "{path}");
+        }
+    }
+
+    /// upstream's `endingCommandStartsNoShellAfterIt`, and the PowerShell form: the global exit code cleared, then the
+    /// line in a script block that ends with the exit.
+    #[test]
+    fn an_ending_command_starts_no_shell_after_it() {
+        for kind in [LoginShell::Zsh, LoginShell::Bash] {
+            let script = render_ending("lazygit", kind);
+            assert!(!script.contains("exec") && !script.contains("ZDOTDIR"), "{script}");
+        }
+        assert_eq!(
+            render_ending("printf '%s' 'two words'", LoginShell::Fish),
+            r"builtin status job-control full; builtin eval 'printf \'%s\' \'two words\''"
+        );
+        let pwsh = render_ending("Get-Item 'it''s'", LoginShell::Pwsh);
+        assert_eq!(
+            pwsh,
+            format!(
+                "$global:LASTEXITCODE = $null ; . ([scriptblock]::Create('Get-Item ''it''''s''' + [char]10 + {}))",
+                powershell_quoted(PWSH_ENDING_EXIT)
+            )
+        );
+        assert!(!pwsh.contains(PWSH_LOAD) && !pwsh.contains(['\n', '"']), "{pwsh}");
+        assert!(PWSH_ENDING_EXIT.contains("-Scope Global -ValueOnly"));
+    }
+
     /// fish, when this host has one (the `linux` CI job installs it for this test): `None` otherwise.
     fn fish() -> Option<&'static str> {
         [
@@ -676,6 +761,24 @@ mod tests {
         }
     }
 
+    /// upstream's `fishEndingCommandRunsItsLineAndStartsNoShell`: the line runs and its status is fish's.
+    #[test]
+    #[cfg_attr(windows, ignore = "runs the ending under fish, which Windows has not")]
+    fn a_fish_ending_command_runs_its_line_and_starts_no_shell() {
+        let Some(fish) = fish() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let result = dir.path().join("ending");
+        let line = format!(
+            "printf '%s' 'two words' > {}; and exit 7",
+            shell_quoted_line(&[result.display().to_string()])
+        );
+        let output = run_fish(fish, &render_ending(&line, LoginShell::Fish), dir.path(), None);
+        assert_eq!(output.status.code(), Some(7), "{output:?}");
+        assert_eq!(fs::read_to_string(&result).unwrap(), "two words");
+    }
+
     fn pwsh_shell<'a>(rearm: &'a [Rearm], path: &'a str) -> FinalShell<'a> {
         FinalShell {
             path,
@@ -836,6 +939,58 @@ mod tests {
             fs::read_to_string(dir.path().join("line")).unwrap(),
             "two words and more"
         );
+    }
+
+    /// A PowerShell ending exits 0 when its last statement succeeded, else with the last native exit code, 1 for a
+    /// failed cmdlet, a profile's strict mode and stale exit code included.
+    #[test]
+    fn a_powershell_ending_command_exits_with_its_last_status() {
+        let Some(pwsh) = pwsh() else {
+            eprintln!("SKIPPED: no pwsh on PATH");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let result = dir.path().join("ending");
+        let line = format!(
+            "Set-Content -LiteralPath {} -Value 'two words' -NoNewline; & {} -NoLogo -NoProfile -Command 'exit 7'",
+            powershell_quoted(&result.display().to_string()),
+            powershell_quoted(&pwsh.display().to_string())
+        );
+        let output = run_pwsh(
+            &pwsh,
+            &render_ending(&line, LoginShell::Pwsh),
+            &dir.path().join("unused"),
+        );
+        assert_eq!(output.status.code(), Some(7), "{output:?}");
+        assert_eq!(fs::read_to_string(&result).unwrap(), "two words");
+        let strict = format!(
+            "Set-StrictMode -Version Latest ; {}",
+            render_ending("$words = 'two words'", LoginShell::Pwsh)
+        );
+        let output = run_pwsh(&pwsh, &strict, &dir.path().join("unused"));
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        // a profile's native command leaves no stale code to a line of cmdlets; a failed last cmdlet exits 1, a native
+        // command that ran before a successful last statement does not count, and a comment ends with the line
+        let missing = powershell_quoted(&dir.path().join("missing").display().to_string());
+        let native = format!(
+            "& {} -NoLogo -NoProfile -Command 'exit 7'",
+            powershell_quoted(&pwsh.display().to_string())
+        );
+        let cases = [
+            ("$words = 'two words'".to_owned(), 0),
+            (format!("Get-Item -LiteralPath {missing}"), 1),
+            (format!("{native} ; $words = 'two words'"), 0),
+            (format!("$words = 'two words' # {native}"), 0),
+        ];
+        for (line, code) in cases {
+            let script = format!(
+                "Set-StrictMode -Version Latest ; $global:LASTEXITCODE = 5 ; {}",
+                render_ending(&line, LoginShell::Pwsh)
+            );
+            let output = run_pwsh(&pwsh, &script, &dir.path().join("unused"));
+            assert_eq!(output.status.code(), Some(code), "{line}: {output:?}");
+        }
     }
 
     /// The repository's PowerShell integration script.

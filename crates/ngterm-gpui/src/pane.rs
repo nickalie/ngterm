@@ -178,12 +178,12 @@ pub struct PaneContext {
 /// Starts a launch: the spawn a terminal runs at its first size.
 pub type Launcher = Rc<dyn Fn(&Launch) -> Spawn>;
 
-/// What a terminal ran: a command (not the login shell), held after it exits. A held command's end is reported as
-/// held (a remote pane's ssh, a replica overlay's job), and every held exit closes on the next key.
+/// What a terminal ran: a command (not the login shell). A command's exit is held only when it waits, by its own
+/// launch (`--wait`, a remote pane's ssh) or the config's `wait-after-command` alike, so a held command's end is
+/// reported as held (a Live pane's attach, a remote pane's ssh), and every held exit closes on the next key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Ran {
     pub command: bool,
-    pub wait: bool,
 }
 
 impl Ran {
@@ -191,7 +191,6 @@ impl Ran {
     pub fn of(launch: &Launch) -> Self {
         Self {
             command: launch.command.is_some(),
-            wait: launch.wait_after_command,
         }
     }
 }
@@ -259,7 +258,7 @@ fn pane_report(event: &PaneEvent, ran: Ran, hostname: &str) -> Vec<Report> {
             body: body.clone(),
         }],
         PaneEvent::Exited(status) if !status.held => vec![Report::Exited],
-        PaneEvent::Exited(_) if ran.command && ran.wait => vec![Report::Held],
+        PaneEvent::Exited(_) if ran.command => vec![Report::Held],
         _ => Vec::new(),
     }
 }
@@ -276,7 +275,7 @@ pub fn post_report(poster: &Poster, session: Uuid, token: &str, report: Report, 
         }
         Report::Exited => state.pane_exited(session, &token),
         Report::Held => {
-            if state.core.remote_pane_held(session, &token) {
+            if state.core.pane_held(session, &token) {
                 state.settle();
             }
         }

@@ -5,11 +5,16 @@
 //! the captured argv and the pin stay on the session, so `restore.clear` still disarms them and a clean quit still
 //! captures across that window. The seed takes the pane's live role, since `session.swap` moves a terminal and its
 //! pending payloads to the other slot together.
+//!
+//! A live pane's command comes in two forms ([`crate::live::support::Creation`]): the pane's own creation command
+//! (`session new --command`, `session split --command`) ends the pane when it exits, as outside Live, and holds on
+//! `--wait` ([`resolve_live_seed`]); a captured argv's replay returns to the login shell, as `session restart
+//! --command` does (`commands::restart_live`).
 
 use std::collections::{BTreeSet, HashSet};
 
 use crate::command_restore::{PaneInput, RestoreInputs, restore_plan, should_restore};
-use crate::live::support::{Configuration, LiveAttach, attach_line, live_attach, settled};
+use crate::live::support::{Configuration, Creation, LiveAttach, attach_line, live_attach, settled};
 use crate::model::{Session, StatusPane};
 
 /// What a pane spawns with: the exec `command`, the `initial_input` typed into a login shell, and whether a command's
@@ -92,10 +97,13 @@ pub fn resolve_seed(session: &mut Session, pane: StatusPane, policy: &LaunchSeed
     }
 }
 
-/// Pane `pane`'s seed under the wrapped live disposition `configuration` (upstream's `ZmxLaunch.surfaceSeed`): the
-/// attach, carrying the pane's captured argv as the payload a new daemon runs, else its durable creation command. The
+/// Pane `pane`'s seed under the wrapped live disposition `configuration` (upstream's `ZmxLaunch.surfaceSeed` and
+/// `LaunchSeed.swift`): the attach, carrying the pane's captured argv as the payload a new daemon runs, which returns
+/// to the login shell, else the pane's own creation command, which the pane ends with ([`Creation::EndingPane`]). The
 /// capture is consumed either way; a suppressed daemon attaches with neither. The pending `session.restore` pin is
-/// never read here: a daemon that survived runs its own program. The attach's exit always closes the pane.
+/// never read here: a daemon that survived runs its own program. The attach's exit closes the pane, unless the pane's
+/// launch asked `--wait`: the hold stays with the pane across reattachment and a captured replay, as upstream's
+/// `requestedWait` (the left pane's own, the right one's own; the scratch has none).
 pub fn resolve_live_seed(
     session: &mut Session,
     pane: StatusPane,
@@ -105,17 +113,23 @@ pub fn resolve_live_seed(
     let suppressed = policy.suppressed_daemons.contains(&configuration.daemon_name);
     let captured = session.take_pending_foreground(pane);
     let replay = captured.filter(|_| !suppressed);
-    let creation = if replay.is_none() && !suppressed {
-        session.pane_launch(pane).and_then(|launch| launch.command.clone())
+    let launch = session.pane_launch(pane);
+    let pane_command = if replay.is_none() && !suppressed {
+        launch.and_then(|launch| launch.command.as_deref())
     } else {
         None
     };
     let denylist: Vec<&str> = policy.denylist.iter().map(String::as_str).collect();
-    let attach = live_attach(configuration, replay.as_deref(), creation.as_deref(), &denylist);
+    let attach = live_attach(
+        configuration,
+        replay.as_deref(),
+        pane_command.map(Creation::EndingPane),
+        &denylist,
+    );
     LaunchSeed {
         command: Some(settled(&attach_line(configuration, &attach))),
         initial_input: None,
-        wait_after_command: false,
+        wait_after_command: launch.is_some_and(|launch| launch.wait),
         env: configuration.environment.clone().into_iter().collect(),
         live: true,
         attach: configuration.in_process(attach),
@@ -223,6 +237,80 @@ mod tests {
             Some(PaneInput::Line("cd x && claude --resume y".to_owned()))
         );
         assert_eq!(seed.command, None);
+    }
+
+    fn wrapped() -> Configuration {
+        Configuration {
+            executable: "/bin/ngterm-session".to_owned(),
+            session_host_executable: None,
+            environment: [("SHELL", "/bin/zsh"), ("ZDOTDIR", "/bundle/zsh")]
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                .collect(),
+            daemon_name: "ngterm-pane".to_owned(),
+            socket_directory: "/tmp/ngterm-live-x".to_owned(),
+            pane_id: "pane".to_owned(),
+        }
+    }
+
+    /// The seed command of a live pane whose attach carries `replaying` or `creation`.
+    fn live_command(replaying: Option<&[String]>, creation: Option<Creation<'_>>) -> String {
+        let configuration = wrapped();
+        let attach = live_attach(&configuration, replaying, creation, &[] as &[&str]);
+        settled(&attach_line(&configuration, &attach))
+    }
+
+    /// upstream's `testWrappedPaneCommandEndsThePaneAndCarriesItsWait`.
+    #[test]
+    fn a_wrapped_pane_command_ends_the_pane_and_carries_its_wait() {
+        let mut fresh = session(Some("lazygit"), true, false);
+        fresh.split_launch.command = Some("htop".to_owned());
+        let rerun = policy(true, &[]);
+        let primary = resolve_live_seed(&mut fresh, StatusPane::Left, &rerun, &wrapped());
+        assert_eq!(
+            primary.command,
+            Some(live_command(None, Some(Creation::EndingPane("lazygit"))))
+        );
+        assert!(primary.wait_after_command && primary.live);
+        let split = resolve_live_seed(&mut fresh, StatusPane::Right, &rerun, &wrapped());
+        assert_eq!(
+            split.command,
+            Some(live_command(None, Some(Creation::EndingPane("htop"))))
+        );
+        assert!(!split.wait_after_command);
+    }
+
+    /// upstream's `testWrappedSplitCarriesItsOwnWait`; the scratch never holds.
+    #[test]
+    fn a_wrapped_split_carries_its_own_wait() {
+        let mut fresh = session(None, false, false);
+        fresh.split_launch.command = Some("htop".to_owned());
+        fresh.split_launch.wait = true;
+        let rerun = policy(true, &[]);
+        assert!(resolve_live_seed(&mut fresh, StatusPane::Right, &rerun, &wrapped()).wait_after_command);
+        assert!(!resolve_live_seed(&mut fresh, StatusPane::Left, &rerun, &wrapped()).wait_after_command);
+        assert!(!resolve_live_seed(&mut fresh, StatusPane::Scratch, &rerun, &wrapped()).wait_after_command);
+    }
+
+    /// A captured argv replays (and returns to the shell) in place of the pane command, and a suppressed daemon
+    /// attaches with neither; the hold stays with the pane either way.
+    #[test]
+    fn the_wait_stays_with_the_pane_across_a_replay_and_a_suppressed_daemon() {
+        let mut restored = session(Some("lazygit"), true, true);
+        restored.restore.pending_foreground = Some(argv(&["top"]));
+        let rerun = policy(true, &[]);
+        let replayed = resolve_live_seed(&mut restored, StatusPane::Left, &rerun, &wrapped());
+        assert_eq!(replayed.command, Some(live_command(Some(&argv(&["top"])), None)));
+        assert!(replayed.wait_after_command);
+        restored.restore.pending_foreground = Some(argv(&["top"]));
+        let suppressed = LaunchSeedPolicy {
+            suppressed_daemons: BTreeSet::from(["ngterm-pane".to_owned()]),
+            ..rerun
+        };
+        let bare = resolve_live_seed(&mut restored, StatusPane::Left, &suppressed, &wrapped());
+        assert_eq!(bare.command, Some(live_command(None, None)));
+        assert!(bare.wait_after_command);
+        assert_eq!(restored.restore.pending_foreground, None, "consumed either way");
     }
 
     #[test]

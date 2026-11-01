@@ -28,8 +28,9 @@ impl LeadBook {
         self.states.insert(pane, LeadState::new(attachment, reattaching));
     }
 
-    pub(crate) fn forget(&mut self, pane: Uuid) {
-        self.states.remove(&pane);
+    /// Forgets `pane`'s state; whether it had any.
+    pub(crate) fn forget(&mut self, pane: Uuid) -> bool {
+        self.states.remove(&pane).is_some()
     }
 
     /// `pane`'s state as it stands, for a replacement that may still be dropped to put back.
@@ -145,6 +146,18 @@ impl Core {
             self.reattach_pane(session, token, false);
         }
         true
+    }
+
+    /// The attach of the pane carrying `token` of `session` stopped on its exit prompt, its terminal held (upstream's
+    /// `onExitHeld` and `remotePaneStopped`): no client is left to report a role and a cover would hide the line saying
+    /// what happened, so the pane's lead state is forgotten and its reads go to the terminal it keeps; a replica the
+    /// origin removed closes now ([`Core::remote_pane_held`]). Whether the tree changed.
+    pub fn pane_held(&mut self, session: Uuid, token: &str) -> bool {
+        let stopped = Uuid::parse_str(token).is_ok_and(|identity| self.live.leads.forget(identity));
+        if stopped {
+            self.live.leaders.borrow_mut().note_lifecycle_change();
+        }
+        self.remote_pane_held(session, token) || stopped
     }
 
     /// The cover over the pane carrying `token`, `None` while it is uncovered.

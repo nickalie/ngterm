@@ -68,6 +68,12 @@ const PWSH_SCRIPT_FLAGS: &[&str] = if cfg!(windows) {
 } else {
     &["-Login", "-NoLogo", "-NoExit", "-Command"]
 };
+/// [`PWSH_SCRIPT_FLAGS`] without `-NoExit`: the shell that runs a pane's own creation command ends with it.
+const PWSH_ENDING_FLAGS: &[&str] = if cfg!(windows) {
+    &["-NoLogo", "-Command"]
+} else {
+    &["-Login", "-NoLogo", "-Command"]
+};
 
 /// A login shell a pane can be wrapped in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +165,17 @@ impl LoginShell {
             Self::Zsh | Self::Fish => &["-lic"],
             Self::Bash => &["--posix", "-lic"],
             Self::Pwsh => PWSH_SCRIPT_FLAGS,
+        }
+    }
+
+    /// The flags of the login shell that runs a pane's own creation command and ends the pane with it
+    /// (`<shell> <flags> <script>`, [`super::replay::render_ending`]): [`Self::script_flags`], except that PowerShell
+    /// leaves out `-NoExit`, so no shell stays after the command.
+    #[must_use]
+    pub fn ending_flags(self) -> &'static [&'static str] {
+        match self {
+            Self::Pwsh => PWSH_ENDING_FLAGS,
+            Self::Zsh | Self::Bash | Self::Fish => self.script_flags(),
         }
     }
 

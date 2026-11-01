@@ -473,6 +473,26 @@ fn a_live_launch_wraps_the_pane_in_its_daemon() {
     );
 }
 
+/// upstream's v0.39.0 behavior change: a live `--command` session runs its command as the pane's ending creation (no
+/// login shell after it) and holds on `--wait`.
+#[test]
+fn a_live_command_session_ends_its_pane_with_the_command_and_holds_on_wait() {
+    let mut live = live();
+    let session = live.session;
+    let found = live.fixture.store_mut().unwrap().session_mut(session).unwrap();
+    found.launch.command = Some("lazygit --path 'two words'".to_owned());
+    found.launch.wait = true;
+    let token = uuid_string(live.left);
+    let seed = live.fixture.core.request_pane_spawn(session, &token).unwrap();
+    assert!(seed.live && seed.wait_after_command);
+    let attach = seed.attach.unwrap();
+    let ending = crate::live::replay::render_ending(
+        "lazygit --path 'two words'",
+        crate::live::shell_integration::LoginShell::Zsh,
+    );
+    assert_eq!(attach.argv, ["/bin/zsh", "-lic", ending.as_str()]);
+}
+
 /// Lazy restore: a dormant Live session's daemon runs on unattached, so the tree reads it as live-backed, and
 /// `live.present` and `session.restart` wake it rather than refuse it as not live.
 #[test]
@@ -917,6 +937,39 @@ fn an_unowned_report_reattaches_without_the_claim() {
     );
 }
 
+/// Upstream's `remotePaneStopped` on a held exit: a `--wait` pane whose command ended holds its terminal, and with
+/// its daemon gone its reads and cover fall back to that terminal.
+#[test]
+fn a_held_live_pane_reads_its_own_terminal_once_its_daemon_ended() {
+    for role in ["leader", "follower"] {
+        let mut live = live();
+        let token = uuid_string(live.left);
+        let nonce = spawn_live(&mut live);
+        assert!(report(&mut live, &token, &nonce, role, 1));
+        live.probe.set_lines(["held output"]);
+        live.probe.set_cursor_column(Some(3));
+        // the session server forgot the ended daemon: nothing answers by name
+        let sid = wire(live.session);
+        let text = |live: &mut Live| {
+            live.fixture
+                .session(SessionCmd::Text, Some(&sid), args(|a| a.all = Some(true)))
+        };
+        assert_eq!(text(&mut live), failure("failed to read surface buffer"), "{role}");
+        assert!(live.fixture.core.pane_held(live.session, &token), "{role}");
+        assert_eq!(result(&text(&mut live))["text"], json!("held output"), "{role}");
+        let cursor = live.fixture.send(
+            Command::Surface(ngterm_proto::command::SurfaceCmd::Cursor),
+            Some(&format!("surface:{sid}:left")),
+            Args::default(),
+        );
+        assert_eq!(result(&cursor)["cursor"], json!({"column": 3}), "{role}");
+        assert_eq!(live.core().pane_lead_cover(&token), None, "{role}");
+        assert_eq!(live.core().pane_lead(&token), None, "{role}");
+        // a second held report changes nothing
+        assert!(!live.fixture.core.pane_held(live.session, &token), "{role}");
+    }
+}
+
 // MARK: - session.restart
 
 /// Runs `dispatched` step by step, calling `between` before each pending step.
@@ -964,7 +1017,15 @@ fn a_restart_ends_the_old_shell_and_rebuilds_the_pane_on_its_daemon() {
             assert!(core.live.claimed_exits.contains(&token));
             assert!(!core.pane_exited(session, &token), "the dying client closed the pane");
         }
-        if !core.take_pane_replacements().is_empty() {
+        if let Some(replacement) = core.take_pane_replacements().first() {
+            // upstream's `testARestartCommandStillReturnsToTheLoginShell`: the line hands the pane back to a login
+            // shell, unlike a pane's own creation command
+            let argv = &replacement.attach.as_ref().unwrap().argv;
+            assert!(
+                argv[2].contains("cat") && argv[2].contains("'builtin' 'exec'"),
+                "{argv:?}"
+            );
+            assert!(argv[2].contains(" -il"), "{argv:?}");
             host.set_record(&daemon, Some(1), Some(200), None);
         }
         std::thread::sleep(std::time::Duration::from_millis(20));

@@ -571,16 +571,16 @@ hand in both ratchet lists, the commit message saying why. New: `test_zmx.py::te
 `::test_an_interrupted_live_restart_command_leaves_the_login_shell_prompt` (LIVE_ANY_SHELL, including Windows).
 `test_zmx.py::test_restart_command_interrupted_by_ctrl_c_leaves_a_prompt` (listed) stays green.
 
-- [ ] a pane's own launch command (`session new --command`, `split --command`, later Duplicate as Companion's copied
+- [x] a pane's own launch command (`session new --command`, `split --command`, later Duplicate as Companion's copied
       programs) runs as an ending creation: no login shell after it, the pane closes when it exits, as outside Live
-- [ ] a captured argv replay still wins over the pane command and returns to the shell; a suppressed daemon attaches
+- [x] a captured argv replay still wins over the pane command and returns to the shell; a suppressed daemon attaches
       with neither; `session restart --command` and restored commands keep returning to the login shell
-- [ ] `--wait` keeps the final output after the command exits (left, right per its own launch; scratch never)
-- [ ] module docs in `live/replay.rs`, `live/support.rs`, `restore/spawn_plan.rs` describe the two forms
-- [ ] write tests: the Swift cases above (real zsh and bash where present, exit 7; real fish when present; a pwsh
+- [x] `--wait` keeps the final output after the command exits (left, right per its own launch; scratch never)
+- [x] module docs in `live/replay.rs`, `live/support.rs`, `restore/spawn_plan.rs` describe the two forms
+- [x] write tests: the Swift cases above (real zsh and bash where present, exit 7; real fish when present; a pwsh
       form test), the spawn-plan wait cases, the restart's returning form
-- [ ] write tests: the conformance rewrites and new tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the conformance rewrites and new tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 13: Companion sessions, part 1: the model, persistence, create, fold and move (#840)
 

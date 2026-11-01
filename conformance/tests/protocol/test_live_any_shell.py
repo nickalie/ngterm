@@ -12,7 +12,7 @@ import sys
 import uuid
 
 import pytest
-from agterm_conformance.match import assert_ok, find_session
+from agterm_conformance.match import assert_ok, find_session, session_ids
 
 LIVE_ANY_SHELL = pytest.mark.requires(
     "live-any-shell",
@@ -21,6 +21,8 @@ LIVE_ANY_SHELL = pytest.mark.requires(
 
 
 WINDOWS = sys.platform == "win32"
+# The line a `--wait` pane holds on once its command ended (Ghostty's `wait-after-command`).
+HELD_PROMPT = r"Process exited\. Press any key to close the terminal\."
 # A program that runs until interrupted, and its name in the pane's foreground. PowerShell's `sleep` is its own
 # Start-Sleep, which starts no process.
 LONG_COMMAND, LONG_PROGRAM = ("ping -n 600 127.0.0.1", "ping") if WINDOWS else ("sleep 600", "sleep")
@@ -50,10 +52,22 @@ def _runs(foreground, program):
     return name == program
 
 
-def _daemon_row(ctl, sid):
-    rows = assert_ok(ctl.request(ctl.vocabulary.command("zmx.list")))[ctl.vocabulary.result_key]["entries"]
+def _daemon_row(ctl, sid, response=None):
+    response = response or ctl.request(ctl.vocabulary.command("zmx.list"))
+    rows = assert_ok(response)[ctl.vocabulary.result_key]["entries"]
     (row,) = [row for row in rows if row.get("sessionID") == sid and row["pane"] == "left"]
     return row
+
+
+def _wait_observation(ctl, sid, running):
+    """Until the left pane's daemon is observed running, or (`running` false) no longer is."""
+
+    def observed(response):
+        row = _daemon_row(ctl, sid, response)
+        assert (row["observation"] == "running") == running, row
+        return True
+
+    ctl.wait_response(ctl.vocabulary.command("zmx.list"), None, observed)
 
 
 @LIVE_ANY_SHELL
@@ -91,12 +105,39 @@ def test_a_live_pane_in_the_login_shell_reports_its_cwd_and_survives_the_relaunc
 
 
 @LIVE_ANY_SHELL
-@pytest.mark.covers("session.new", "session.type")
-def test_an_interrupted_live_command_leaves_the_login_shell_prompt(launch):
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.new")
+def test_an_ended_live_command_closes_its_pane(launch):
+    # A pane's own creation command ends the pane in every login shell, as outside Live (#840): no shell after it.
     ctl = launch(settings={"restoreMode": "live"})
-    sid = assert_ok(ctl.request("session.new", command=LONG_COMMAND))["id"]
+    marker = _marker()
+    command = (
+        f"Write-Output ('{marker[:4]}' + '{marker[4:]}'); Start-Sleep -Seconds 1"
+        if WINDOWS
+        else f"printf '%s%s\\n' {marker[:4]} {marker[4:]}; sleep 1"
+    )
+    sid = assert_ok(ctl.request("session.new", command=command, wait=True))["id"]
+    ctl.wait_mounted(sid, "left")
+    ctl.wait_text(sid, rf"(?m)^{marker}$")
+    # held by --wait once the command and its daemon have ended
+    _wait_observation(ctl, sid, running=False)
+    # only the exit prompt proves the hold: the pane closes a moment after its daemon reads as ended
+    ctl.wait_text(sid, HELD_PROMPT)
+    assert sid in session_ids(ctl.tree())
+    assert_ok(ctl.request("session.close", sid))
+    closing = assert_ok(ctl.request("session.new", command=command))["id"]
+    ctl.wait_tree(lambda tree: closing not in session_ids(tree))
+
+
+@LIVE_ANY_SHELL
+@pytest.mark.covers("session.restart", "session.type")
+def test_an_interrupted_live_restart_command_leaves_the_login_shell_prompt(launch):
+    ctl = launch(settings={"restoreMode": "live"})
+    sid = assert_ok(ctl.request("session.new"))["id"]
     ctl.wait_mounted(sid, "left")
     ctl.wait_tree(lambda tree: find_session(tree, sid).get(ctl.vocabulary.backed_key) is True)
+    _wait_observation(ctl, sid, running=True)
+    assert_ok(ctl.request("session.restart", sid, pane="left", command=LONG_COMMAND))
 
     def sleeping(tree):
         foreground = find_session(tree, sid).get("foreground") or []
@@ -105,7 +146,8 @@ def test_an_interrupted_live_command_leaves_the_login_shell_prompt(launch):
 
     ctl.wait_tree(sleeping)
     before = _daemon_row(ctl, sid)
-    # Ctrl+C ends the command, not the pane: the replay goes on into the login shell (#773)
+    # Ctrl+C ends the command, not the pane: a restart's line goes on into the login shell (#773), where a pane's own
+    # creation command now ends the pane (#840)
     assert_ok(ctl.request("session.type", sid, text="\x03"))
     ctl.wait_tree(lambda tree: not _runs(find_session(tree, sid).get("foreground"), LONG_PROGRAM))
     if WINDOWS:

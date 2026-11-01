@@ -600,7 +600,7 @@ pub enum Report {
     },
     /// The program ended: the pane closes by its role.
     Exited,
-    /// A held command ended (a remote replica's ssh): the core decides what stays.
+    /// A held command ended (a `--wait` Live pane, a remote replica's ssh): the core decides what stays.
     Held,
 }
 

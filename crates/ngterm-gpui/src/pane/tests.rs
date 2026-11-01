@@ -226,10 +226,7 @@ fn exited(held: bool) -> TerminalEvent {
 #[test]
 fn a_pane_events_report_what_the_gtk_build_routed() {
     let shell = Ran::default();
-    let waited = Ran {
-        command: true,
-        wait: true,
-    };
+    let command = Ran { command: true };
     let title = TerminalEvent::Pane(PaneEvent::Title("vim".to_owned()));
     assert_eq!(
         report(&title, shell, "box", 12.0, false),
@@ -251,10 +248,11 @@ fn a_pane_events_report_what_the_gtk_build_routed() {
         "a held login shell waits for a key"
     );
     assert_eq!(
-        report(&exited(true), waited, "box", 12.0, false),
+        report(&exited(true), command, "box", 12.0, false),
         [Report::Held],
-        "a held command is reported held"
+        "a held command is reported held, whether its launch or the config's wait-after-command held it"
     );
+    assert_eq!(report(&exited(false), command, "box", 12.0, false), [Report::Exited]);
     assert_eq!(
         report(&TerminalEvent::FontSize, shell, "box", 13.5, false),
         [Report::FontSize(13.5)]

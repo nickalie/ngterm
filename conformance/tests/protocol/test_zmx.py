@@ -31,6 +31,8 @@ LIVE = pytest.mark.requires(
 )
 ATTRIBUTIONS = ("supervisor", "app", "orphaned", "unknown")
 PRESENTATION_VERSION = 1
+# The line a `--wait` pane holds on once its command ended (Ghostty's `wait-after-command`).
+HELD_PROMPT = r"Process exited\. Press any key to close the terminal\."
 _markers = itertools.count(1)
 
 
@@ -422,10 +424,30 @@ def test_restart_command_interrupted_by_ctrl_c_leaves_a_prompt(live):
 
 
 @LIVE
+@pytest.mark.since("0.39.1")
 @pytest.mark.covers("session.new")
-def test_new_command_interrupted_by_ctrl_c_leaves_a_prompt(live):
-    sid = _live_session(live, command="sleep 600")
-    _ctrl_c_leaves_a_prompt(live, sid, _entries(live, sid)["left"]["daemon"])
+def test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wait(live):
+    """A Live `--command` session closes when its command exits, as outside Live, and `--wait` holds its final output
+    after the command and its daemon have ended (#840). This replaced #773's Ctrl+C-leaves-a-prompt case for
+    `session new --command`, which v0.39.0 reversed; `session restart --command` keeps it (above)."""
+    closing = assert_ok(live.request("session.new", command="sleep 1"))["id"]
+    live.wait_tree(lambda tree: closing not in session_ids(tree))
+
+    holding = assert_ok(live.request("session.new", command="echo held-output; sleep 1", wait=True))["id"]
+    live.wait_mounted(holding, "left")
+    live.wait_text(holding, r"(?m)^held-output$")
+
+    def ended(response):
+        row = _rows(live, response, holding).get("left", {})
+        assert row.get("observation") != "running", row
+        return True
+
+    live.wait_response(live.vocabulary.command("zmx.list"), None, ended)
+    # only the exit prompt proves the hold: the pane closes a moment after its daemon reads as ended
+    live.wait_text(holding, HELD_PROMPT)
+    assert holding in session_ids(live.tree())
+    live.wait_text(holding, r"(?m)^held-output$")
+    assert_ok(live.request("session.close", holding))
 
 
 @LIVE

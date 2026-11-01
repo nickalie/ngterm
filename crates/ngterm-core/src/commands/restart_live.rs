@@ -1,6 +1,7 @@
 //! The live half of `session.restart` (upstream's `restartSessionPane` in `ControlServer+Restart.swift`): ends a live
 //! pane's daemon and builds the pane a new terminal whose daemon runs the caller's line, or the pane's foreground
-//! program again, under the same pane identity, so the daemon keeps its name.
+//! program again, under the same pane identity, so the daemon keeps its name. Either returns to the login shell after
+//! it ([`crate::live::support::Creation::ReturningToShell`]), unlike a pane's own creation command, which ends the pane.
 //!
 //! The steps wait on the daemons, each probe a main-loop hop apart ([`Dispatched::Pending`]): the old shell is listed
 //! first (a pane just created reads as backed before its daemon exists), every replay refusal is decided before
@@ -21,7 +22,7 @@ use crate::command_restore::shell_quoted_line;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
 use crate::live::lead::LeadAttachment;
-use crate::live::support::{attach_line, live_attach};
+use crate::live::support::{Creation, attach_line, live_attach};
 use crate::model::StatusPane;
 use crate::pane_env::uuid_string;
 use crate::restart_replay::{self, Launch, Observation};
@@ -204,7 +205,7 @@ fn rebuild(core: &mut Core, job: Job, ending: &Ending) -> Dispatched {
     let attach = live_attach(
         &configuration,
         ending.replay.as_ref().map(|launch| launch.argv.as_slice()),
-        job.command.as_deref(),
+        job.command.as_deref().map(Creation::ReturningToShell),
         &none,
     );
     let command = attach_line(&configuration, &attach);
