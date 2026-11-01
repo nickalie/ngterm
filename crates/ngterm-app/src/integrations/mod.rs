@@ -12,11 +12,13 @@
 //! of the XDG Base Directory spec, instead of an admin-owned `/usr/local/bin`. The
 //! agents' own configs live where upstream puts them.
 //!
-//! The payloads under the repository's `resources/` are upstream v0.38.1's `agterm/Resources/agent-status` and
-//! `plugins/agterm/skills/agterm` (MIT, `resources/LICENSE.upstream`), at `resources/agent-status` and
+//! The payloads under the repository's `resources/` are upstream v0.39.1's `agterm/Resources/agent-status` and
+//! v0.38.1's `plugins/agterm/skills/agterm` (MIT, `resources/LICENSE.upstream`), at `resources/agent-status` and
 //! `resources/skills/ngterm` (the skill's directory renamed with the skill), with these deviations:
 //!
-//! - the Codex adapter reads the hook payload with `python3` or `jq` where macOS has `plutil`;
+//! - the Codex adapter reads the hook payload (the Stop's `last_assistant_message`, and the null `transcript_path` of
+//!   Codex's ephemeral memory-consolidation thread, whose events it ignores) with `python3` or `jq` where macOS has
+//!   `plutil`, and with none of the three reports such an event as any other;
 //! - the Claude adapter reads a `completed` call's payload and reports a `Stop` whose `background_tasks` lists work in
 //!   flight as `active --blink` (upstream's goes `completed` at once), and the installer adds a sixth Claude hook,
 //!   `SessionEnd` → `completed --auto-reset`, so that claim cannot outlive the agent ([`hooks_config`]);

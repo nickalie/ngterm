@@ -94,10 +94,10 @@ index 30825d2..26c0bd7 100755
 +
  exec "$status_wrapper" "$@"
 diff --git a/agterm-codex-status.sh b/agterm-codex-status.sh
-index 67b1a94..89ffaf0 100755
+index 6395bd8..0dfdc06 100755
 --- a/agterm-codex-status.sh
 +++ b/agterm-codex-status.sh
-@@ -28,20 +28,38 @@ report_status() {
+@@ -28,20 +28,59 @@ report_status() {
  
  assistant_message_contains_question() {
    local message prose question quoted_mark
@@ -134,13 +134,34 @@ index 67b1a94..89ffaf0 100755
    [[ "$prose" =~ $question ]]
  }
  
++# whether the payload's transcript_path is there and null. plutil types a null as "(any)"; with no plutil, python3 or
++# jq reads it, and with none of the three nothing counts as null, so the event is reported (fail open)
++transcript_path_is_null() {
++  if [ -x /usr/bin/plutil ]; then
++    [ "$(/usr/bin/plutil -type transcript_path - 2>/dev/null)" = "(any)" ]
++  elif command -v python3 >/dev/null 2>&1; then
++    python3 -c '
++import json
++import sys
++
++payload = json.load(sys.stdin)
++if not (isinstance(payload, dict) and "transcript_path" in payload and payload["transcript_path"] is None):
++    raise SystemExit(1)
++' 2>/dev/null
++  elif command -v jq >/dev/null 2>&1; then
++    jq -e 'type == "object" and has("transcript_path") and .transcript_path == null' >/dev/null 2>&1
++  else
++    return 1
++  fi
++}
++
  read_visible_screen() {
 -  "${AGTERMCTL:-agtermctl}" session text \
 +  "${AGTERMCTL:-ngtermctl}" session text \
      --target "$AGTERM_SESSION_ID" \
      "${socket_args[@]+"${socket_args[@]}"}" \
      "${pane_args[@]+"${pane_args[@]}"}" 2>/dev/null
-@@ -54,7 +72,7 @@ watch_file_path() {
+@@ -54,7 +93,7 @@ watch_file_path() {
    fi
    local key pane_key
    pane_key=${AGTERM_PANE_ID:-${AGTERM_PANE:-left}}
@@ -149,7 +170,7 @@ index 67b1a94..89ffaf0 100755
    printf '%s/agterm-codex-watch-%s-%s' "${TMPDIR:-/tmp}" "${UID:-0}" "$key"
  }
  
-@@ -83,7 +101,7 @@ watch_for_blocker() {
+@@ -83,7 +122,7 @@ watch_for_blocker() {
      current_token=$(cat "$token_file" 2>/dev/null) || break
      [ "$current_token" = "$token" ] || break
      screen=$(read_visible_screen) || break
@@ -158,8 +179,17 @@ index 67b1a94..89ffaf0 100755
  
      case "$footer" in
        *"press enter to confirm"*|*"enter to submit answer"*|*"enter to submit all"*|*"allow command?"*)
+@@ -123,7 +162,7 @@ case "$action" in
+     # events would leave the pane active and replace the foreground watcher. it is ephemeral, so its
+     # transcript_path is null, which plutil types as "(any)". foreground ephemeral sessions lose
+     # these updates too.
+-    [ "$(/usr/bin/plutil -type transcript_path - 2>/dev/null)" = "(any)" ] && exit 0
++    transcript_path_is_null && exit 0
+     ;;
+ esac
+ 
 diff --git a/opencode/agterm-status.js b/opencode/agterm-status.js
-index 4aea984..c4001bf 100644
+index d46005e..47a9386 100644
 --- a/opencode/agterm-status.js
 +++ b/opencode/agterm-status.js
 @@ -29,7 +29,7 @@ const ABORT_ERROR_NAMES = new Set(["MessageAbortedError", "AbortError"]);

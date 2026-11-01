@@ -145,10 +145,10 @@ index 26c0bd7..0560a8c 100755
  done
  
 diff --git a/agterm-codex-status.sh b/ngterm-codex-status.sh
-similarity index 83%
+similarity index 86%
 rename from agterm-codex-status.sh
 rename to ngterm-codex-status.sh
-index 89ffaf0..a9543b7 100755
+index 0dfdc06..e7368f8 100755
 --- a/agterm-codex-status.sh
 +++ b/ngterm-codex-status.sh
 @@ -1,26 +1,26 @@
@@ -194,7 +194,7 @@ index 89ffaf0..a9543b7 100755
    # tr and tail are found on PATH (NixOS, Guix and a non-merged /usr have no /usr/bin copies)
    if [ -x /usr/bin/plutil ]; then
      message=$(/usr/bin/plutil -extract last_assistant_message raw -o - - 2>/dev/null) || return 1
-@@ -59,21 +59,21 @@ sys.stdout.write(value)
+@@ -80,21 +80,21 @@ if not (isinstance(payload, dict) and "transcript_path" in payload and payload["
  }
  
  read_visible_screen() {
@@ -223,22 +223,22 @@ index 89ffaf0..a9543b7 100755
  }
  
  stop_watcher() {
-@@ -92,8 +92,8 @@ watch_for_blocker() {
+@@ -113,8 +113,8 @@ watch_for_blocker() {
    local token=${1:-} token_file=${2:-}
    [ -n "$token" ] && [ -n "$token_file" ] || return 0
  
--  local max_checks=${AGTERM_CODEX_WATCH_MAX_CHECKS:-21600}
--  local interval=${AGTERM_CODEX_WATCH_INTERVAL:-0.5}
-+  local max_checks=${NGTERM_CODEX_WATCH_MAX_CHECKS:-21600}
-+  local interval=${NGTERM_CODEX_WATCH_INTERVAL:-0.5}
-   case "$max_checks" in ''|*[!0-9]*) max_checks=21600 ;; esac
+-  local max_checks=${AGTERM_CODEX_WATCH_MAX_CHECKS:-5400}
+-  local interval=${AGTERM_CODEX_WATCH_INTERVAL:-2}
++  local max_checks=${NGTERM_CODEX_WATCH_MAX_CHECKS:-5400}
++  local interval=${NGTERM_CODEX_WATCH_INTERVAL:-2}
+   case "$max_checks" in ''|*[!0-9]*) max_checks=5400 ;; esac
  
    local checks=0 prompt_was_visible=0 current_token screen footer
 diff --git a/opencode/agterm-status.js b/opencode/ngterm-status.js
 similarity index 94%
 rename from opencode/agterm-status.js
 rename to opencode/ngterm-status.js
-index c4001bf..64f7a23 100644
+index 47a9386..c956bf6 100644
 --- a/opencode/agterm-status.js
 +++ b/opencode/ngterm-status.js
 @@ -1,7 +1,7 @@
@@ -435,7 +435,7 @@ index f7490bb..41e2cf6 100644
      end
  end
 diff --git a/shell/integration.sh b/shell/integration.sh
-index 0419e93..f05913b 100755
+index ae4274f..a977435 100755
 --- a/shell/integration.sh
 +++ b/shell/integration.sh
 @@ -1,23 +1,23 @@
@@ -490,7 +490,7 @@ index 0419e93..f05913b 100755
    add-zsh-hook preexec _ags_preexec
    add-zsh-hook precmd  _ags_precmd
  
-@@ -42,12 +42,12 @@ elif [ -n "${BASH_VERSION:-}" ]; then
+@@ -42,13 +42,13 @@ elif [ -n "${BASH_VERSION:-}" ]; then
      local cmd="${1:-$BASH_COMMAND}"               # bash-preexec passes the command as $1; a raw DEBUG trap uses $BASH_COMMAND
      [ -n "${COMP_LINE:-}" ] && return             # ignore tab-completion
      case "$cmd" in _ags_*) return ;; esac
@@ -501,12 +501,13 @@ index 0419e93..f05913b 100755
        _ags_active=1
      fi
    }
--  _ags_precmd() { [ -n "${_ags_active:-}" ] && { "$AGTERM_AGENT_BIN" idle; unset _ags_active; }; }
-+  _ags_precmd() { [ -n "${_ags_active:-}" ] && { "$NGTERM_AGENT_BIN" idle; unset _ags_active; }; }
+   # preserve the command status for the rest of PROMPT_COMMAND
+-  _ags_precmd() { local s=$?; [ -n "${_ags_active:-}" ] && { "$AGTERM_AGENT_BIN" idle; unset _ags_active; }; return "$s"; }
++  _ags_precmd() { local s=$?; [ -n "${_ags_active:-}" ] && { "$NGTERM_AGENT_BIN" idle; unset _ags_active; }; return "$s"; }
  
    if [ -n "${bash_preexec_imported:-}${__bp_imported:-}" ]; then
      # bash-preexec is active: register into its additive arrays so we don't clobber other consumers
-@@ -59,7 +59,7 @@ elif [ -n "${BASH_VERSION:-}" ]; then
+@@ -60,7 +60,7 @@ elif [ -n "${BASH_VERSION:-}" ]; then
      case "$(trap -p DEBUG 2>/dev/null)" in
        "")             trap '_ags_preexec' DEBUG ;;   # nothing there: safe to install
        *_ags_preexec*) : ;;                            # already ours: idempotent

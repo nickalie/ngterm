@@ -965,15 +965,15 @@ only; fish is unchanged upstream.
 
 **Conformance:** none (hook scripts).
 
-- [ ] rebuild `resources/agent-status` as upstream's v0.39.1 tree plus the refreshed patches, keeping the Linux glue
+- [x] rebuild `resources/agent-status` as upstream's v0.39.1 tree plus the refreshed patches, keeping the Linux glue
       and the `ngterm-*`/`NGTERM_*` identity; `bash .claude/skills/agterm-upstream-sync/scripts/sync-resources.sh
       --check v0.39.1 v0.39.1` (or the script's check mode) holds; bump the release in
       `crates/ngterm-app/src/integrations/mod.rs`'s header
-- [ ] write tests: Rust twins of the two new Codex cases (run the shipped `ngterm-codex-status.sh` with recording
+- [x] write tests: Rust twins of the two new Codex cases (run the shipped `ngterm-codex-status.sh` with recording
       wrappers, in this build's names, with python3 and with jq) and of `precmdKeepsTheLastCommandStatusForLaterPromptCommandEntries`
       (bash with a user `PROMPT_COMMAND` entry, `agentRan` × status 0/3); the rest of the Codex suite stays the
       backlog item `docs/backlog/claude-codex-and-opencode-v2-hook-tests-have-no-rust-twin.md`
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: hook scripts have no conformance ids)
 
 ### Task 21: Bundled skill: rebuild `resources/skills/ngterm` on the v0.39.1 tree
 
