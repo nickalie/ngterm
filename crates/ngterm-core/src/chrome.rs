@@ -93,6 +93,24 @@ pub fn sidebar_shift_amount(strength: i64) -> f64 {
     f64::from(steps) * 0.06
 }
 
+/// The split divider's color (upstream's `GhosttyApp.splitDividerColor`): the config's `split-divider-color`, else the
+/// theme `background` moved a tenth toward its `foreground` per sRGB channel, the opaque form of the
+/// [`ChromeColors::SEPARATOR_ALPHA`] hairline the title bar and the sidebar draw. Opaque, as upstream's is.
+#[must_use]
+pub fn split_divider_color(configured: Option<Rgb>, background: Rgb, foreground: Rgb) -> Rgb {
+    configured.unwrap_or_else(|| {
+        let mix = |from: u8, toward: u8| {
+            let from = f64::from(from);
+            to_channel(from + (f64::from(toward) - from) * ChromeColors::SEPARATOR_ALPHA)
+        };
+        Rgb::new(
+            mix(background.r, foreground.r),
+            mix(background.g, foreground.g),
+            mix(background.b, foreground.b),
+        )
+    })
+}
+
 /// Black or white, whichever contrasts better with `color` by WCAG relative luminance (upstream's
 /// `GhosttyApp.contrastingText`): gamma-linearized, so a saturated mid-tone such as a system green reads light.
 #[must_use]
@@ -208,6 +226,29 @@ mod tests {
         assert_eq!(color.washed(false, 0.30), Rgb::new(15, 85, 169));
         assert_eq!(color.washed(true, 0.30), Rgb::new(91, 161, 245));
         assert_eq!(color.washed(true, 2.0), Rgb::WHITE, "the opacity clamps");
+    }
+
+    #[test]
+    fn the_configured_split_divider_color_wins() {
+        // upstream's GhosttyAppTests.testTheConfiguredSplitDividerColorWins
+        let red = Rgb::new(0xff, 0x3b, 0x30);
+        assert_eq!(split_divider_color(Some(red), Rgb::BLACK, Rgb::WHITE), red);
+    }
+
+    #[test]
+    fn the_default_split_divider_is_the_background_a_tenth_toward_the_foreground() {
+        // upstream's testTheDefaultSplitDividerIsTheBackgroundATenthTowardTheForeground: 0.1 a channel within 0.01
+        let divider = split_divider_color(None, Rgb::BLACK, Rgb::WHITE);
+        for channel in [divider.r, divider.g, divider.b] {
+            assert!((25..=26).contains(&channel), "{divider}");
+        }
+        let light = split_divider_color(None, Rgb::WHITE, Rgb::BLACK);
+        assert!((229..=230).contains(&light.r), "{light}");
+        assert_eq!(
+            split_divider_color(None, Rgb::new(100, 200, 0), Rgb::new(200, 100, 50)),
+            Rgb::new(110, 190, 5),
+            "each channel on its own"
+        );
     }
 
     #[test]

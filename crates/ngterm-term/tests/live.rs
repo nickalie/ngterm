@@ -1,6 +1,6 @@
 //! Live panes attached in process to the cargo-built session server (`crate::session_io`), on every OS: a fresh
 //! session's prompt, typing and a resize reaching it, its environment and directory, the pane dropped leaving the
-//! session running and a reattach painting its snapshot, the role a managed pane is told, the session's end and an
+//! session running and a reattach painting its snapshot, a pane looping on titles dropped in time, the role a managed pane is told, the session's end and an
 //! attach that cannot start ending the pane, and, as reply owner, the server answering the program with the pane's
 //! theme, a clipboard read and a Kitty query answered through the pane. Each test runs under its own state directory,
 //! so its own namespace and server, reaped through that server alone.
@@ -421,6 +421,29 @@ fn a_dropped_live_pane_leaves_its_session_and_a_reattach_paints_its_snapshot() -
     wait_text(&again, "kept-here");
     again.write(&typed("echo still-\"\"there", "echo ('still-' + 'there')"))?;
     wait_text(&again, "still-there");
+    Ok(())
+}
+
+/// Upstream #819: a live pane whose program loops on titles and output drops within 5 s, its detach included.
+#[test]
+fn a_live_pane_looping_on_titles_drops_in_time() -> TestResult {
+    let live = Live::new()?;
+    let pane = live.pane(&live.configuration()?)?;
+    wait_frame(&pane, prompt_painted);
+    pane.write(&typed(
+        "n=0; while :; do n=$((n+1)); printf '\\033]2;title%d\\007busy%d\\n' $n $n; done",
+        "$n=0; while($true){$n++; [Console]::Write([char]27 + ']2;title' + $n + [char]7 + 'busy' + $n + [char]13 + \
+         [char]10)}",
+    ))?;
+    wait_events(&pane, |events| {
+        events
+            .iter()
+            .any(|event| matches!(event, PaneEvent::Title(title) if title.starts_with("title")))
+    });
+    let started = Instant::now();
+    drop(pane);
+    let took = started.elapsed();
+    assert!(took < Duration::from_secs(5), "dropping the live pane took {took:?}");
     Ok(())
 }
 

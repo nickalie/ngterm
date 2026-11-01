@@ -4,7 +4,7 @@ font tests close the sessions they open and the theme tests put back the slots t
 the instance's own state dir, never the account's config."""
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session
+from agterm_conformance.match import active_session_id, assert_absent, assert_error, assert_ok, find_session
 
 UNKNOWN = "zzz"
 SIZE_FIELD = {"left": "fontSize", "right": "splitFontSize", "scratch": "scratchFontSize"}
@@ -127,6 +127,40 @@ def test_font_refusals(ctl, fresh, cmd, target, pane, error):
     args = {} if pane is None else {"pane": pane}
     assert_error(ctl.request(cmd, fresh if target == "fresh" else target, **args), error)
     assert _size(ctl, fresh) == base
+
+
+# -- the settings the first terminal starts on (upstream's SeededSettingsLaunchUITests, 5b5c437)
+
+SEEDED = {"fontSize": 27, "backgroundOpacity": 0.6, "backgroundBlur": 20}
+
+
+def _first_terminal_size(ctl):
+    """The active session's live `fontSize` once its terminal reports one."""
+
+    def reported(tree):
+        assert find_session(tree, active_session_id(tree)).get("fontSize") is not None
+        return True
+
+    reported.__qualname__ = "the active session reporting a fontSize"
+    tree = ctl.wait_tree(reported)
+    return find_session(tree, active_session_id(tree))["fontSize"]
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("field:tree.session.fontSize")
+def test_a_fresh_state_dir_starts_its_first_terminal_on_the_seeded_settings(launch):
+    seeded = launch(settings=SEEDED)
+    assert _first_terminal_size(seeded) == 27
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("field:tree.session.fontSize")
+def test_a_stale_generated_config_is_rewritten_before_the_first_terminal_loads_it(launch):
+    seeded = launch(settings=SEEDED)
+    assert _first_terminal_size(seeded) == 27
+    (seeded.instance.state_dir / "ghostty-settings.conf").write_text("font-size = 11\n")
+    relaunched = launch.relaunch(seeded)
+    assert _first_terminal_size(relaunched) == 27
 
 
 # -- theme

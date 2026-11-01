@@ -1059,6 +1059,38 @@ fn shell_features_term_keybind_and_title() {
 }
 
 #[test]
+fn split_divider_color_is_read_as_set_changed_and_removed() {
+    // upstream's GhosttyAppTests.testReadsSplitDividerColorAsSetChangedAndRemoved
+    let divider = |text: &str| load(text).config.split_divider_color;
+    assert_eq!(
+        divider("split-divider-color = #808080\n"),
+        Some(Rgb::new(128, 128, 128))
+    );
+    assert_eq!(divider("split-divider-color = #ff8000\n"), Some(Rgb::new(255, 128, 0)));
+    assert_eq!(divider("font-size = 13\n"), None);
+    assert_eq!(
+        divider("split-divider-color = #808080\nsplit-divider-color = #ff8000\n"),
+        Some(Rgb::new(255, 128, 0)),
+        "a later line changes it"
+    );
+    assert_eq!(
+        divider("split-divider-color = #808080\nsplit-divider-color =\n"),
+        None,
+        "an empty later line clears it"
+    );
+    assert_eq!(
+        divider("split-divider-color = #808080\nsplit-divider-color = nope\n"),
+        Some(Rgb::new(128, 128, 128)),
+        "a refused line changes nothing"
+    );
+    // ghostty's unfocused-split dimming stays unread: the config is the default one
+    assert_eq!(
+        load("unfocused-split-fill = #ff0000\nunfocused-split-opacity = 0.5\n").config,
+        load("").config
+    );
+}
+
+#[test]
 fn refused_lines_change_nothing_and_unsupported_keys_are_ignored() {
     let config = load("font-size = 20\nfont-size = big\nmacos-titlebar-style = tabs\n").config;
     assert!((config.font.size - 20.0).abs() < f32::EPSILON);

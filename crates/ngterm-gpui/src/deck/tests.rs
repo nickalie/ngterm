@@ -128,6 +128,20 @@ fn a_replacement_runs_over_the_panes_own_environment() {
     );
 }
 
+#[test]
+fn the_look_carries_the_split_divider_color() {
+    let core = core_of(three_sessions().0);
+    let configured = Look::of(&config_with("split-divider-color = #ff8000\n"), &core, 1.0);
+    assert_eq!(configured.divider, Rgb::new(255, 128, 0), "the configured color wins");
+    let themed = Look::of(&config_with("background = #000000\nforeground = #ffffff\n"), &core, 1.0);
+    assert_eq!(
+        themed.divider,
+        ngterm_core::chrome::split_divider_color(None, Rgb::BLACK, Rgb::WHITE),
+        "else the theme background a tenth toward its foreground"
+    );
+    assert_ne!(themed.divider, themed.background);
+}
+
 // MARK: - the deck in a window
 
 /// A loop that keeps what is posted for the test to run.

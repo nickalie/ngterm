@@ -111,6 +111,8 @@ pub struct TerminalConfig {
     pub grapheme_width_method: ghostty_config::GraphemeWidthMethod,
     /// `image-storage-limit`, applied to live terminals on a reload too.
     pub kitty_image_limit: u64,
+    /// `split-divider-color`, `None` for the theme's: the deck's split divider takes it (upstream #829).
+    pub split_divider_color: Option<ngterm_core::chrome::Rgb>,
 }
 
 /// The keybinds a config loaded, shared by every terminal of it (equal when they are the same load).
@@ -154,6 +156,7 @@ impl TerminalConfig {
             word_chars: config.selection.word_chars.clone(),
             grapheme_width_method: config.grapheme_width_method,
             kitty_image_limit: u64::from(config.image_storage_limit),
+            split_divider_color: config.split_divider_color,
         }
     }
 

@@ -13,7 +13,7 @@ diagnostics. The typed model (`GhosttyConfig`, `model.rs`) carries only a subset
 "ghostty config key not supported; ignored" arms of `GhosttyConfig::apply` (logged at debug level) and change nothing.
 A user who sets one gets Ghostty's default behavior, or ngterm's own behavior where ngterm owns the feature.
 
-148 keys are in that state. The list comes from the key table itself: each key in `known_keys()` was applied to a
+147 keys are in that state. The list comes from the key table itself: each key in `known_keys()` was applied to a
 default `GhosttyConfig`, and the keys the model refused were collected. Three more keys miss the model but are read
 elsewhere, so they are not listed: `keybind` (`binds.rs`), `config-file` (the loader's includes) and `command`
 (`ngterm-gpui` `session_host.rs`, a pane's default program).
@@ -160,7 +160,7 @@ upstream macOS agterm gets the libghostty-gated ones (`macos-option-as-alt`, `fo
 | `quick-terminal-animation-duration` | the quick terminal's slide animation | macOS app ("only implemented on macOS") |
 | `quick-terminal-space-behavior` | the quick terminal across Spaces | macOS app |
 
-## 3. Ghostty app-runtime keys the GTK build did not honor (64)
+## 3. Ghostty app-runtime keys the GTK build did not honor (63)
 
 Ghostty's own GTK app runtime (or both of its runtimes) reads these keys. The GTK build ran the embedded runtime, and
 `agterm-gtk` did not read them, so setting them changed nothing there either. Several of them shape UI that ngterm
@@ -198,7 +198,6 @@ draws itself, after upstream: windows, titlebar, sidebar, splits, quick terminal
 | `resize-overlay-duration` | how long it shows | `apprt/gtk/class/surface.zig` |
 | `scrollbar` | show a scrollbar | Ghostty app runtimes |
 | `drag-handle` | the split drag handle | `apprt/gtk/class/surface.zig` |
-| `split-divider-color` | the split divider's color | `apprt/gtk/class/application.zig` |
 | `unfocused-split-opacity` | dim unfocused splits | `apprt/gtk/class/application.zig`, macOS app (`config/CApi.zig`) |
 | `unfocused-split-fill` | the dimming color | as above |
 | `split-preserve-zoom` | keep a zoomed split zoomed on navigation | Ghostty app runtimes |

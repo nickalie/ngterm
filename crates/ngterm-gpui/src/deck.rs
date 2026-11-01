@@ -207,6 +207,9 @@ pub struct Look {
     pub foreground: Rgb,
     /// The inactive pane and backdrop mute's opacity.
     pub mute: f64,
+    /// The split divider, opaque: the config's `split-divider-color`, else the theme's
+    /// ([`ngterm_core::chrome::split_divider_color`]).
+    pub divider: Rgb,
 }
 
 impl Look {
@@ -216,10 +219,12 @@ impl Look {
     #[must_use]
     pub fn of(config: &TerminalConfig, core: &Core, window_opacity: f64) -> Self {
         let rgb = |color: ngterm_term::Rgb| Rgb::new(color.r, color.g, color.b);
+        let (background, foreground) = (rgb(config.theme.background), rgb(config.theme.foreground));
         Self {
-            background: rgb(config.theme.background),
-            foreground: rgb(config.theme.foreground),
+            background,
+            foreground,
             mute: core.settings().inactive_pane_mute_opacity() * window_opacity,
+            divider: ngterm_core::chrome::split_divider_color(config.split_divider_color, background, foreground),
         }
     }
 }
@@ -490,6 +495,7 @@ impl Deck {
             background: Rgb::BLACK,
             foreground: Rgb::WHITE,
             mute: 0.0,
+            divider: ngterm_core::chrome::split_divider_color(None, Rgb::BLACK, Rgb::WHITE),
         };
         Self {
             window,
@@ -1204,7 +1210,7 @@ impl Deck {
         }
         if plan.shows_divider() {
             element = element
-                .child(separator(self.look.foreground), Place::Separator)
+                .child(separator(self.look.divider), Place::Separator)
                 .child(Self::divider(session, plan.axis, cx), Place::Divider);
         }
         element = with_pane_overlays(element, page, plan, cx);
@@ -1401,12 +1407,9 @@ fn wash(rgb: Rgb, opacity: f64) -> impl IntoElement {
     div().size_full().bg(mute::color(rgb, opacity))
 }
 
-/// The separator line between the split's panes, in the terminal's foreground at the chrome's separator alpha.
-fn separator(foreground: Rgb) -> impl IntoElement {
-    div().size_full().bg(mute::color(
-        foreground,
-        ngterm_core::chrome::ChromeColors::SEPARATOR_ALPHA,
-    ))
+/// The separator line between the split's panes, opaque in the divider's color ([`Look::divider`]).
+fn separator(divider: Rgb) -> impl IntoElement {
+    div().size_full().bg(mute::color(divider, 1.0))
 }
 
 /// A floating program's backdrop: its regions flattened over the page as laid out at paint time.

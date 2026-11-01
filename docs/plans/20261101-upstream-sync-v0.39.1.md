@@ -1018,16 +1018,16 @@ cmd/pwsh loop under ConPTY), in `ngterm-term` (`any`).
 backgroundOpacity 0.6, backgroundBlur 20 → the first session's `fontSize` 27) and a stale-file variant (a
 `ghostty-settings.conf` overwritten with `font-size = 11` before relaunch still yields 27).
 
-- [ ] read `split-divider-color` on every config load (set, changed, removed → none); the divider takes it, else the
+- [x] read `split-divider-color` on every config load (set, changed, removed → none); the divider takes it, else the
       theme background mixed 10% toward its foreground per sRGB channel, opaque; a reload repaints it;
       `unfocused-split-fill`/`unfocused-split-opacity` stay unread
-- [ ] write tests: core (configured wins; black/white → about 25-26 per channel; "#808080" → (128,128,128),
+- [x] write tests: core (configured wins; black/white → about 25-26 per channel; "#808080" → (128,128,128),
       "#ff8000" → (255,128,0); "font-size = 13" → none; an empty later line clears it); gpui `Look::of` carries it
-- [ ] write tests: the `ngterm-term` teardown regression: one pane looping on OSC 2 titles and output, dropped,
+- [x] write tests: the `ngterm-term` teardown regression: one pane looping on OSC 2 titles and output, dropped,
       returns within 5 s; eight such panes, one dropped, the other seven keep getting titles and screen text; eight idle
       panes, one dropped; plus a live pane's drop (its `writer.detach()` must not block)
-- [ ] write tests: the two conformance tests above (no Rust change expected: Context)
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the two conformance tests above (no Rust change expected: Context)
+- [x] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 23: Reduce Transparency: the system rule and Ignore Reduce Transparency (36970bc)
 

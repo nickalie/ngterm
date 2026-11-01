@@ -485,6 +485,8 @@ pub struct GhosttyConfig {
     pub keybind: Keybinds,
     /// A static window title in place of the programs' own.
     pub title: Option<String>,
+    /// `split-divider-color`: the split divider's color, `None` for the theme's ([`crate::chrome::split_divider_color`]).
+    pub split_divider_color: Option<Rgb>,
 }
 
 /// `image-storage-limit`'s default: 320 MB.
@@ -516,6 +518,7 @@ impl Default for GhosttyConfig {
             term: DEFAULT_TERM.to_owned(),
             keybind: Keybinds::defaults(),
             title: None,
+            split_divider_color: None,
         }
     }
 }
@@ -668,6 +671,7 @@ impl GhosttyConfig {
                     .unwrap_or(DEFAULT_IMAGE_STORAGE_LIMIT);
             }
             "title" => self.title = value.map(str::to_owned),
+            "split-divider-color" => self.split_divider_color = value.and_then(|value| parse_color(value).ok()),
             "link-url" => self.link.url = bool_or(value, true),
             _ => return false,
         }

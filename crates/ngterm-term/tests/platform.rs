@@ -1,6 +1,7 @@
 //! A pane on a real PTY on every OS (openpty on Unix, the pseudoconsole on Windows), launched as a pane's command
 //! line is (`/bin/sh -c`, or `cmd.exe /D /S /C "<line>"`): its output on screen, an echo round trip, a resize reaching
-//! the child, exit codes, selection and search over what the child printed, and the password-input detection.
+//! the child, exit codes, selection and search over what the child printed, the password-input detection, and a pane
+//! dropped in time while it, or seven beside it, loop on titles and output (upstream #819).
 //!
 //! The other test files drive the child with POSIX shell scripts and check the VT byte for byte, so they run on Unix
 //! only: Windows' pseudoconsole renders the child's output itself and re-emits it, which they cannot pin.
@@ -230,6 +231,91 @@ fn a_read_without_echo_is_password_input_where_the_pty_can_say() -> TestResult {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(pane.foreground_pid().is_some());
+    }
+    Ok(())
+}
+
+// MARK: - teardown under load (upstream #819, `scripts/test-surface-teardown.py`)
+
+/// How long dropping a pane may take: upstream's close call limit.
+const DROP_LIMIT: Duration = Duration::from_secs(5);
+
+/// A command line that sets an OSC 2 title and prints a counted line in a loop, as fast as it can (upstream's
+/// teardown producer).
+fn title_spam() -> String {
+    line(
+        "n=0; while :; do n=$((n+1)); printf '\\033]2;title%d\\007busy%d\\n' $n $n; done",
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"$n=0; while($true){$n++; \
+         [Console]::Write([char]27 + ']2;title' + $n + [char]7 + 'busy' + $n + [char]13 + [char]10)}\"",
+    )
+}
+
+/// Waits for a title the spam set and a counted line on screen.
+fn wait_busy(pane: &Pane) {
+    wait_events(pane, |events| {
+        events
+            .iter()
+            .any(|event| matches!(event, PaneEvent::Title(title) if title.starts_with("title")))
+    });
+    wait_text(pane, "busy");
+}
+
+/// Drops `pane`, asserting it took less than [`DROP_LIMIT`].
+fn drop_in_time(pane: Pane) {
+    let started = Instant::now();
+    drop(pane);
+    let took = started.elapsed();
+    assert!(took < DROP_LIMIT, "dropping the pane took {took:?}");
+}
+
+/// A pane still setting titles and printing: a new title and a new screen from now on.
+fn keeps_going(pane: &Pane) {
+    let _ = pane.take_events();
+    let before = pane.frame().frame.lines();
+    wait_events(pane, |events| {
+        events.iter().any(|event| matches!(event, PaneEvent::Title(_)))
+    });
+    wait_frame(pane, |frame| frame.lines() != before);
+}
+
+#[test]
+fn a_pane_looping_on_titles_drops_in_time() -> TestResult {
+    let pane = launch(&title_spam())?;
+    wait_busy(&pane);
+    drop_in_time(pane);
+    Ok(())
+}
+
+#[test]
+fn one_of_eight_busy_panes_drops_in_time_and_the_others_keep_going() -> TestResult {
+    let mut panes = (0..8).map(|_| launch(&title_spam())).collect::<TestResult<Vec<_>>>()?;
+    for pane in &panes {
+        wait_busy(pane);
+    }
+    drop_in_time(panes.remove(0));
+    for pane in &panes {
+        keeps_going(pane);
+    }
+    Ok(())
+}
+
+#[test]
+fn one_of_eight_idle_panes_drops_in_time() -> TestResult {
+    let mut panes = (0..8)
+        .map(|_| launch(&print_and_stay("IDLE")))
+        .collect::<TestResult<Vec<_>>>()?;
+    for pane in &panes {
+        wait_text(pane, "IDLE");
+    }
+    drop_in_time(panes.remove(0));
+    for pane in &panes {
+        assert!(
+            !pane
+                .take_events()
+                .iter()
+                .any(|event| matches!(event, PaneEvent::Exited(_))),
+            "a pane beside the dropped one ended"
+        );
     }
     Ok(())
 }
