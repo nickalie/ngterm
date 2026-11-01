@@ -25,12 +25,12 @@ pub fn pick_custom_row_label(query: &str, filtered_count: usize, allow_custom: b
 
 /// The rows `query` shows of a built-in palette's `entries`, as indices into them (upstream's `updateFiltered`): the
 /// matching rows best first, ties A→Z by title; a blank query (trimmed of whitespace and newlines) lists everything
-/// A→Z, except the attention palette and the membership editors, which keep their source order so Return runs their
+/// A→Z, except the palettes that keep their source order ([`PaletteMode::keeps_source_order`]), so Return runs their
 /// first row.
 #[must_use]
 pub fn filter_entries(entries: &[PaletteEntry], query: &str, mode: PaletteMode) -> Vec<usize> {
     let query = query.trim();
-    if query.is_empty() && (mode == PaletteMode::Attention || mode.keeps_open_on_run()) {
+    if query.is_empty() && mode.keeps_source_order() {
         return (0..entries.len()).collect();
     }
     fuzzy_rank(query, 0..entries.len(), |index| {
@@ -133,10 +133,11 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_query_lists_a_builtin_palette_a_to_z_but_keeps_the_attention_order() {
+    fn a_blank_query_lists_a_builtin_palette_a_to_z_but_keeps_the_feed_order() {
         let entries = [entry("beta", None), entry("Alpha", None), entry("gamma", None)];
         assert_eq!(filter_entries(&entries, "", PaletteMode::Actions), [1, 0, 2]);
-        assert_eq!(filter_entries(&entries, " \n", PaletteMode::Sessions), [1, 0, 2]);
+        assert_eq!(filter_entries(&entries, "", PaletteMode::Themes), [1, 0, 2]);
+        assert_eq!(filter_entries(&entries, " \n", PaletteMode::Sessions), [0, 1, 2]);
         assert_eq!(filter_entries(&entries, "  ", PaletteMode::Attention), [0, 1, 2]);
         assert_eq!(filter_entries(&entries, "", PaletteMode::FlaggedEditor), [0, 1, 2]);
         assert_eq!(filter_entries(&entries, "\n", PaletteMode::FocusEditor), [0, 1, 2]);
@@ -145,6 +146,22 @@ mod tests {
             [2],
             "a query still filters"
         );
+    }
+
+    /// Upstream's `testEmptyQueriesKeepTheFeedOrderExceptForActionsThemesAndCustomCommands`.
+    #[test]
+    fn empty_queries_keep_the_feed_order_except_for_actions_themes_and_custom_commands() {
+        for mode in [
+            PaletteMode::Sessions,
+            PaletteMode::Attention,
+            PaletteMode::FlaggedEditor,
+            PaletteMode::FocusEditor,
+        ] {
+            assert!(mode.keeps_source_order(), "{mode:?}");
+        }
+        for mode in [PaletteMode::Actions, PaletteMode::Themes, PaletteMode::CustomCommands] {
+            assert!(!mode.keeps_source_order(), "{mode:?}");
+        }
     }
 
     /// Upstream's `testOnlyTheMembershipEditorsStayOpenAfterARun`.

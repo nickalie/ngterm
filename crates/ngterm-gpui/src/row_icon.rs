@@ -3,8 +3,8 @@
 //! `square.grid.2x2`, `terminal`, `rectangle.split.2x1`/`1x2`, `cloud`, `icloud.slash` and `flag`, picked by
 //! `WorkspaceSidebar.swift`'s row icons, `iconForSession` in `WorkspaceSidebar+RowRendering.swift` and the footer
 //! toggles of `WindowContentView.swift`), and the controls GTK took from its icon theme: the disclosure chevron, the
-//! workspace row's hover "+", and the footer's New Workspace (`rectangle.stack.badge.plus`) and add-session
-//! (`plus.rectangle`) symbols.
+//! workspace row's hover "+", the footer's New Workspace (`rectangle.stack.badge.plus`) and add-session
+//! (`plus.rectangle`) symbols, and a folded parent's companion marker (`square.stack.fill`).
 //!
 //! The sidebar spends the outline/filled distinction: a FILL marks a flagged session (or an active footer toggle), a
 //! heavier WEIGHT marks a focus-set workspace or a remote split. So the glyphs are traced here ([`rasterize`], through
@@ -117,6 +117,8 @@ pub enum Glyph {
     NewWorkspace,
     /// The footer's add-session menu (`plus.rectangle`).
     AddSession,
+    /// A folded parent row's companion marker (`square.stack.fill`): its hidden companions need attention.
+    CompanionStack,
 }
 
 /// The atlas owner of the sidebar's glyph masks.
@@ -208,6 +210,7 @@ fn trace(ink: &mut Ink, glyph: Glyph) {
         Glyph::Plus => plus(ink, (8.0, 8.0), 4.5),
         Glyph::NewWorkspace => new_workspace(ink),
         Glyph::AddSession => add_session(ink),
+        Glyph::CompanionStack => square_stack(ink),
     }
 }
 
@@ -383,6 +386,17 @@ fn add_session(ink: &mut Ink) {
     cross.polyline(&[(5.0, 8.0), (11.0, 8.0)]);
     cross.polyline(&[(8.0, 5.0), (8.0, 11.0)]);
     ink.stroke(cross, REGULAR);
+}
+
+/// `square.stack.fill`: a solid square with the edges of two more stacked behind it.
+fn square_stack(ink: &mut Ink) {
+    let mut front = Trace::new();
+    front.rounded_rect((2.0, 6.0, 12.0, 8.5), 2.0);
+    ink.fill(front);
+    let mut behind = Trace::new();
+    behind.polyline(&[(3.75, 3.75), (12.25, 3.75)]);
+    behind.polyline(&[(5.5, 1.5), (10.5, 1.5)]);
+    ink.stroke(behind, REGULAR);
 }
 
 /// Continues `trace` clockwise along `circle` (`(center x, center y, radius)`) from the point `from` to the point

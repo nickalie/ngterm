@@ -4,6 +4,11 @@
 //!
 //! - A session drag lands on a workspace row (appended), on the upper half of a session row (before it) or on its
 //!   lower half (just after it); a selected row drags the whole selection, in visible order.
+//! - Companions (upstream's #840 `resolveSessionMove`): in the ordinary tree, where they nest, a companion dragged
+//!   without its parent has no workspace-level slot (a workspace row, the gap before a top-level row), and the gap
+//!   before a nested companion row takes only that parent's own companions. Any drop the store would refuse
+//!   ([`MoveTree::can_move_sessions`]: a companion moves only among its siblings) proposes nothing, and a top-level
+//!   session dropped inside a group is drawn after the group, where the store lands it.
 //! - The flagged view drags session rows in every layout (upstream's #833). The flat and plain lists reorder the saved
 //!   flagged order across workspaces; the flagged tree moves sessions in the real workspace order like the ordinary
 //!   tree, its rows addressed by their full indices so a hidden unflagged sibling keeps its side, and a move that
@@ -17,14 +22,14 @@
 
 use std::collections::HashMap;
 
-use ngterm_core::model::{FlaggedOrderPlacement, SessionLocation};
+use ngterm_core::model::{FlaggedOrderPlacement, MoveTree, SessionLocation};
 use ngterm_core::sidebar_drop::{
-    self, DropIndex, FlaggedTree, SessionDropTarget, SessionSource, resolve_flagged_reorder, resolve_sessions,
-    resolve_workspace, workspace_insert_index,
+    self, DropIndex, FlaggedTree, SessionDropTarget, SessionSource, companion_child_index, resolve_flagged_reorder,
+    resolve_sessions, resolve_workspace, workspace_insert_index,
 };
 use uuid::Uuid;
 
-use super::rows::{RowKind, SidebarRow};
+use super::rows::{RowGroup, RowKind, SidebarRow};
 
 /// What a sidebar row drag carries; local to the app, so no other drop target (a terminal) takes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +121,8 @@ pub struct DropContext {
     pub flagged_order: Vec<Uuid>,
     /// The workspaces' sessions and which are flagged, for the flagged tree's no-op check.
     pub flagged_tree: FlaggedTree,
+    /// The tree as a move sees it, each session with its parent: which drops the store takes.
+    pub moves: MoveTree,
     pub sole_focus: Option<Uuid>,
     pub current_workspace: Option<Uuid>,
 }
@@ -194,7 +201,16 @@ pub fn propose_sessions(
 ) -> Option<(Proposal, Highlight)> {
     let index = row_at(spans, y)?;
     let row = rows.get(index)?;
+    // where companions nest, one dragged without its parent has a slot only among its siblings
+    let orphans = context.view == DropView::Tree
+        && dragged.iter().any(|id| {
+            context
+                .moves
+                .parent(*id)
+                .is_some_and(|parent| !dragged.contains(&parent))
+        });
     let (target, child_index, highlight) = match row.kind {
+        RowKind::Workspace { .. } if orphans => return None,
         RowKind::Workspace { .. } => (
             SessionDropTarget::WorkspaceRow {
                 id: row.id,
@@ -210,10 +226,16 @@ pub fn propose_sessions(
                 session_index: location.index,
                 session_count: location.count,
             };
-            if y < spans[index].mid() {
-                (target, DropIndex::Before(location.index), Highlight::Above(index))
+            if y >= spans[index].mid() {
+                let below = if orphans { index } else { group_last_row(rows, index) };
+                (target, DropIndex::OnItem, Highlight::Below(below))
+            } else if row.group() == (RowGroup::Companion { nested: true }) {
+                let before = sibling_gap(row.id, location, dragged, context)?;
+                (target, DropIndex::Before(before), Highlight::Above(index))
+            } else if orphans {
+                return None;
             } else {
-                (target, DropIndex::OnItem, Highlight::Below(index))
+                (target, DropIndex::Before(location.index), Highlight::Above(index))
             }
         }
     };
@@ -232,6 +254,12 @@ pub fn propose_sessions(
     if context.view == DropView::FlaggedTree && !context.flagged_tree.changes_view(dragged, &resolution) {
         return None;
     }
+    if !context
+        .moves
+        .can_move_sessions(dragged, resolution.workspace, Some(resolution.destination))
+    {
+        return None;
+    }
     Some((
         Proposal::Sessions {
             sessions: dragged.to_vec(),
@@ -240,6 +268,35 @@ pub fn propose_sessions(
         },
         highlight,
     ))
+}
+
+/// The gap before nested companion row `companion` (at `location`) as a workspace child index: only that parent's own
+/// companions take it (upstream's `companionChildIndex` gap).
+fn sibling_gap(companion: Uuid, location: &SessionLocation, dragged: &[Uuid], context: &DropContext) -> Option<usize> {
+    let parent = context.moves.parent(companion)?;
+    if !dragged.iter().all(|id| context.moves.parent(*id) == Some(parent)) {
+        return None;
+    }
+    let parent_index = context.locations.get(&parent)?.index;
+    let slot = location.index.checked_sub(parent_index + 1)?;
+    Some(companion_child_index(parent_index, DropIndex::Before(slot)))
+}
+
+/// The last row of the group row `index` sits in, a parent's shown companions after it: a top-level session dropped
+/// on a parent or one of its companions lands after the whole group.
+fn group_last_row(rows: &[SidebarRow], index: usize) -> usize {
+    let nested = |row: &SidebarRow| row.group() == (RowGroup::Companion { nested: true });
+    let starts_group = rows
+        .get(index)
+        .is_some_and(|row| nested(row) || matches!(row.group(), RowGroup::Parent { .. }));
+    if !starts_group {
+        return index;
+    }
+    let mut last = index;
+    while rows.get(last + 1).is_some_and(nested) {
+        last += 1;
+    }
+    last
 }
 
 /// A workspace drag of `dragged` hovering at `y` (upstream's `resolveWorkspaceMove`): session rows are ignored, the
@@ -343,16 +400,22 @@ mod tests {
             status: None,
             icon_tooltip: None,
             tint: None,
+            folded_attention: Vec::new(),
         }
     }
 
     fn session_row(id: Uuid, workspace: Uuid) -> SidebarRow {
+        grouped_row(id, workspace, RowGroup::Plain)
+    }
+
+    fn grouped_row(id: Uuid, workspace: Uuid, group: RowGroup) -> SidebarRow {
         SidebarRow {
             id,
             kind: RowKind::Session {
                 workspace,
                 nested: true,
                 selected: false,
+                group,
             },
             label: String::new(),
             badge: 0,
@@ -363,6 +426,7 @@ mod tests {
             status: None,
             icon_tooltip: None,
             tint: None,
+            folded_attention: Vec::new(),
         }
     }
 
@@ -398,6 +462,9 @@ mod tests {
             view: DropView::Tree,
             flagged_order: Vec::new(),
             flagged_tree: FlaggedTree::default(),
+            moves: MoveTree {
+                workspaces: vec![(one, vec![(a, None), (b, None)]), (two, vec![(c, None)])],
+            },
             sole_focus: None,
             current_workspace: Some(one),
         };
@@ -601,6 +668,149 @@ mod tests {
             ids: vec![two],
         };
         assert_eq!(propose_rows(&rows, &spans, 5.0, &workspace, &context), None);
+    }
+
+    /// Upstream's `CompanionRows` in the ordinary tree: workspace one holds parent p with companions f and s, then a;
+    /// workspace two holds c. Rows: one, p, f, s, a, two, c, every row 20 high.
+    fn companion_tree() -> (Vec<SidebarRow>, Vec<RowSpan>, DropContext, [Uuid; 2], [Uuid; 5]) {
+        let [one, two] = [Uuid::new_v4(), Uuid::new_v4()];
+        let ids = [0; 5].map(|_| Uuid::new_v4());
+        let [parent, first, second, after, other] = ids;
+        let rows = vec![
+            workspace_row(one),
+            grouped_row(parent, one, RowGroup::Parent { expanded: true }),
+            grouped_row(first, one, RowGroup::Companion { nested: true }),
+            grouped_row(second, one, RowGroup::Companion { nested: true }),
+            session_row(after, one),
+            workspace_row(two),
+            session_row(other, two),
+        ];
+        let location = |workspace, index, count| SessionLocation {
+            workspace,
+            index,
+            count,
+        };
+        let context = DropContext {
+            locations: HashMap::from([
+                (parent, location(one, 0, 4)),
+                (first, location(one, 1, 4)),
+                (second, location(one, 2, 4)),
+                (after, location(one, 3, 4)),
+                (other, location(two, 0, 1)),
+            ]),
+            workspaces: vec![(one, 4), (two, 1)],
+            view: DropView::Tree,
+            moves: MoveTree {
+                workspaces: vec![
+                    (
+                        one,
+                        vec![
+                            (parent, None),
+                            (first, Some(parent)),
+                            (second, Some(parent)),
+                            (after, None),
+                        ],
+                    ),
+                    (two, vec![(other, None)]),
+                ],
+            },
+            ..DropContext::default()
+        };
+        (rows, spans_of(7), context, [one, two], ids)
+    }
+
+    /// The proposal of a session move to `destination` of `workspace`, drawn as `highlight`.
+    fn moved(sessions: &[Uuid], workspace: Uuid, destination: usize, highlight: Highlight) -> (Proposal, Highlight) {
+        (
+            Proposal::Sessions {
+                sessions: sessions.to_vec(),
+                workspace,
+                destination,
+            },
+            highlight,
+        )
+    }
+
+    /// Upstream's `testASiblingDroppedOnItsSiblingRowReordersTheGroup`, and the gap among siblings.
+    #[test]
+    fn a_companion_reorders_among_its_siblings_only() {
+        let (rows, spans, context, [one, _], [_, f, s, ..]) = companion_tree();
+        // f on the lower half of s: after s
+        assert_eq!(
+            propose_sessions(&rows, &spans, 75.0, &[f], &context),
+            Some(moved(&[f], one, 2, Highlight::Below(3)))
+        );
+        // s on the upper half of f: the gap before f, among its siblings
+        assert_eq!(
+            propose_sessions(&rows, &spans, 42.0, &[s], &context),
+            Some(moved(&[s], one, 1, Highlight::Above(2)))
+        );
+        // s on the lower half of the parent: the first slot of the group
+        assert_eq!(
+            propose_sessions(&rows, &spans, 35.0, &[s], &context),
+            Some(moved(&[s], one, 1, Highlight::Below(1)))
+        );
+        // nowhere outside the group: below a or c, on a workspace row, in the gap before a top-level row
+        for y in [95.0, 135.0, 5.0, 105.0, 125.0, 82.0, 22.0] {
+            assert_eq!(propose_sessions(&rows, &spans, y, &[f], &context), None, "at {y}");
+        }
+    }
+
+    /// Upstream's `testATopLevelSessionDroppedOnARowBelowAGroupLandsRightAfterThatRow`, and a top-level session
+    /// kept out of a group: the gap before a companion takes none, a drop on the group lands after it.
+    #[test]
+    fn a_top_level_session_lands_outside_any_group() {
+        let (rows, spans, context, [one, two], [p, _, _, _, c]) = companion_tree();
+        assert_eq!(
+            propose_sessions(&rows, &spans, 42.0, &[c], &context),
+            None,
+            "the gap before f"
+        );
+        // on the lower half of the parent or a companion: after the group, which the store keeps whole
+        assert_eq!(
+            propose_sessions(&rows, &spans, 35.0, &[c], &context),
+            Some(moved(&[c], one, 1, Highlight::Below(3)))
+        );
+        assert_eq!(
+            propose_sessions(&rows, &spans, 55.0, &[c], &context),
+            Some(moved(&[c], one, 2, Highlight::Below(3)))
+        );
+        // on the lower half of a, below the group: right after a
+        assert_eq!(
+            propose_sessions(&rows, &spans, 95.0, &[c], &context),
+            Some(moved(&[c], one, 4, Highlight::Below(4)))
+        );
+        // the parent carries its group, here onto two's row
+        assert_eq!(
+            propose_sessions(&rows, &spans, 105.0, &[p], &context),
+            Some(moved(&[p], two, 1, Highlight::OnRow(5)))
+        );
+    }
+
+    /// Upstream's `testAParentDraggedWithItsCompanionMovesTheGroupToAnotherWorkspace`.
+    #[test]
+    fn a_parent_dragged_with_its_companion_moves_the_group() {
+        let (rows, spans, context, [_, two], [p, f, ..]) = companion_tree();
+        assert_eq!(
+            propose_sessions(&rows, &spans, 105.0, &[p, f], &context),
+            Some(moved(&[p, f], two, 1, Highlight::OnRow(5)))
+        );
+    }
+
+    /// The flagged tree lists companions unindented: no nesting rule, but the store's still holds (upstream's
+    /// `aFlaggedCompanionOfAnUnflaggedParentCannotLeaveItsGroupInTheFlaggedTree`).
+    #[test]
+    fn a_flagged_companion_cannot_leave_its_group_in_the_flagged_tree() {
+        let (_, _, mut context, [one, _], [p, f, s, a, _]) = companion_tree();
+        context.view = DropView::FlaggedTree;
+        context.flagged_tree = FlaggedTree {
+            workspaces: vec![(one, vec![p, f, s, a])],
+            flagged: [f, a].into(),
+        };
+        let rows = vec![workspace_row(one), session_row(f, one), session_row(a, one)];
+        let spans = spans_of(rows.len());
+        // f below a: out of its group
+        assert_eq!(propose_sessions(&rows, &spans, 55.0, &[f], &context), None);
     }
 
     #[test]

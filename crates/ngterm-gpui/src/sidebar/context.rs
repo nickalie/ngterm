@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use ngterm_core::model::{AgentStatus, AppStore, Session, SidebarMode};
+use ngterm_core::model::{AgentStatus, AppStore, MoveTree, Session, SidebarMode};
 use ngterm_core::persist::AppSettings;
 use ngterm_core::persist::settings::InterfaceElement;
 use ngterm_core::sidebar_drop::FlaggedTree;
@@ -130,6 +130,7 @@ fn menu_context(store: &AppStore) -> MenuContext {
         sessions,
         workspaces,
         can_remove_workspace: store.can_remove_workspace(),
+        moves: MoveTree::of(store),
     }
 }
 
@@ -162,6 +163,7 @@ fn drop_context(store: &AppStore, settings: &AppSettings) -> DropContext {
         view,
         flagged_order: store.ordered_flagged_session_ids(),
         flagged_tree,
+        moves: MoveTree::of(store),
         sole_focus: store.sole_focused_workspace_id(),
         current_workspace: store.current_workspace_id(),
     }

@@ -114,29 +114,11 @@ impl AppStore {
     }
 
     /// Whether [`AppStore::move_sessions`] accepts this destination, without moving: the sidebar asks it so a drop
-    /// indicator or a Move to entry never offers a destination the move refuses.
+    /// indicator or a Move to entry never offers a destination the move refuses. [`MoveTree::can_move_sessions`]
+    /// answers the same on a snapshot.
     #[must_use]
     pub fn can_move_sessions(&self, ids: &[Uuid], target: Uuid, index: Option<usize>) -> bool {
-        if self.workspace(target).is_none() {
-            return false;
-        }
-        let selected = self.ordered_session_ids(ids);
-        if let [id] = selected.as_slice()
-            && self
-                .session(*id)
-                .is_some_and(|session| session.companion.parent.is_none())
-        {
-            return true;
-        }
-        let mut parents = self.top_level_ids(&selected);
-        if parents.is_empty() {
-            return self.owner_of(selected.first().copied()) == Some(target)
-                && self.companion_destination(&selected, index).is_some();
-        }
-        if index.is_none() {
-            parents.retain(|id| self.owner_of(Some(*id)) != Some(target));
-        }
-        !parents.is_empty()
+        MoveTree::of(self).can_move_sessions(ids, target, index)
     }
 
     /// The sessions of `ids` in tree order, unknown ones dropped.
@@ -244,28 +226,9 @@ impl AppStore {
         true
     }
 
-    /// The workspace index of a sibling move and its destination among the sessions left once the siblings are out;
-    /// `None` unless every id is a companion of one parent and the destination falls inside that parent's group.
+    /// The workspace index of a sibling move and its destination (see [`MoveTree`]).
     fn companion_destination(&self, ids: &[Uuid], index: Option<usize>) -> Option<(usize, usize)> {
-        let first = self.location(*ids.first()?)?;
-        let sessions = &self.workspaces[first.workspace].sessions;
-        let parent_id = sessions[first.session].companion.parent?;
-        let siblings = ids.iter().all(|id| {
-            sessions
-                .iter()
-                .any(|session| session.id() == *id && session.companion.parent == Some(parent_id))
-        });
-        if !siblings {
-            return None;
-        }
-        let remaining: Vec<&Session> = sessions.iter().filter(|session| !ids.contains(&session.id())).collect();
-        let parent = remaining.iter().position(|session| session.id() == parent_id)?;
-        let mut end = parent + 1;
-        while end < remaining.len() && remaining[end].companion.parent.is_some() {
-            end += 1;
-        }
-        let destination = index.unwrap_or(end);
-        (destination > parent && destination <= end).then_some((first.workspace, destination))
+        MoveTree::of(self).companion_destination(ids, index)
     }
 
     fn tree_order(&self) -> Vec<Vec<Uuid>> {
@@ -273,5 +236,115 @@ impl AppStore {
             .iter()
             .map(|workspace| workspace.sessions.iter().map(Session::id).collect())
             .collect()
+    }
+}
+
+/// One session as a move sees it: its id and its parent's.
+pub type MoveRow = (Uuid, Option<Uuid>);
+
+/// The tree as a move sees it: each workspace's sessions in order, each with its parent. A snapshot the sidebar keeps
+/// to ask [`MoveTree::can_move_sessions`] while a drag hovers, with the model out of reach; the store asks the same
+/// questions of a fresh one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MoveTree {
+    /// Each workspace's id and its sessions as (id, parent), in tree order.
+    pub workspaces: Vec<(Uuid, Vec<MoveRow>)>,
+}
+
+impl MoveTree {
+    /// The snapshot of `store`.
+    #[must_use]
+    pub fn of(store: &AppStore) -> Self {
+        Self {
+            workspaces: store
+                .workspaces
+                .iter()
+                .map(|workspace| {
+                    let sessions = workspace
+                        .sessions
+                        .iter()
+                        .map(|session| (session.id(), session.companion.parent))
+                        .collect();
+                    (workspace.id(), sessions)
+                })
+                .collect(),
+        }
+    }
+
+    /// The parent of companion `id`; `None` for a top-level or unknown session.
+    #[must_use]
+    pub fn parent(&self, id: Uuid) -> Option<Uuid> {
+        self.workspaces
+            .iter()
+            .flat_map(|(_, sessions)| sessions)
+            .find(|(session, _)| *session == id)
+            .and_then(|(_, parent)| *parent)
+    }
+
+    /// Whether [`AppStore::move_sessions`] would accept moving `ids` to workspace `target` at `index` (counted with
+    /// every selected session removed; `None` appends): a lone top-level session always moves; companions selected
+    /// without their parent only reorder among their siblings, inside their group; a batch needs a parent that moves.
+    #[must_use]
+    pub fn can_move_sessions(&self, ids: &[Uuid], target: Uuid, index: Option<usize>) -> bool {
+        if !self.workspaces.iter().any(|(id, _)| *id == target) {
+            return false;
+        }
+        let wanted: HashSet<Uuid> = ids.iter().copied().collect();
+        let selected: Vec<(Uuid, Option<Uuid>, Uuid)> = self
+            .workspaces
+            .iter()
+            .flat_map(|(workspace, sessions)| {
+                sessions
+                    .iter()
+                    .filter(|(id, _)| wanted.contains(id))
+                    .map(|(id, parent)| (*id, *parent, *workspace))
+            })
+            .collect();
+        if let [(_, None, _)] = selected.as_slice() {
+            return true;
+        }
+        let mut parents: Vec<Uuid> = selected
+            .iter()
+            .filter(|(_, parent, _)| parent.is_none())
+            .map(|(_, _, owner)| *owner)
+            .collect();
+        if parents.is_empty() {
+            let ids: Vec<Uuid> = selected.iter().map(|(id, _, _)| *id).collect();
+            return selected.first().is_some_and(|(_, _, owner)| *owner == target)
+                && self.companion_destination(&ids, index).is_some();
+        }
+        if index.is_none() {
+            parents.retain(|owner| *owner != target);
+        }
+        !parents.is_empty()
+    }
+
+    /// The workspace index of a sibling move and its destination among the sessions left once the siblings are out;
+    /// `None` unless every id is a companion of one parent and the destination falls inside that parent's group, from
+    /// right after the parent to the group's end (`None` `index` takes the end).
+    #[must_use]
+    pub fn companion_destination(&self, ids: &[Uuid], index: Option<usize>) -> Option<(usize, usize)> {
+        let first = *ids.first()?;
+        let (workspace, sessions) =
+            self.workspaces.iter().enumerate().find_map(|(at, (_, sessions))| {
+                sessions.iter().any(|(id, _)| *id == first).then_some((at, sessions))
+            })?;
+        let parent_id = sessions.iter().find(|(id, _)| *id == first)?.1?;
+        let siblings = ids.iter().all(|id| {
+            sessions
+                .iter()
+                .any(|(session, parent)| session == id && *parent == Some(parent_id))
+        });
+        if !siblings {
+            return None;
+        }
+        let remaining: Vec<&MoveRow> = sessions.iter().filter(|(id, _)| !ids.contains(id)).collect();
+        let parent = remaining.iter().position(|(id, _)| *id == parent_id)?;
+        let mut end = parent + 1;
+        while end < remaining.len() && remaining[end].1.is_some() {
+            end += 1;
+        }
+        let destination = index.unwrap_or(end);
+        (destination > parent && destination <= end).then_some((workspace, destination))
     }
 }

@@ -524,6 +524,7 @@ impl Core {
         match action {
             BuiltinAction::RenameSession => return frontend(FrontendAction::RenameSession { window, session }),
             BuiltinAction::DuplicateSession => self.sidebar_act(window, SidebarAction::Duplicate(session)),
+            BuiltinAction::NewCompanion => self.sidebar_act(window, SidebarAction::NewCompanion(session)),
             BuiltinAction::ClearStatus => self.sidebar_act(window, SidebarAction::ClearStatus(vec![session])),
             BuiltinAction::ToggleFlag => self.sidebar_act(window, SidebarAction::ToggleFlags(vec![session])),
             BuiltinAction::ToggleSplit | BuiltinAction::ToggleHorizontalSplit => {

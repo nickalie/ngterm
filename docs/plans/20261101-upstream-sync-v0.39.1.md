@@ -739,20 +739,22 @@ session menu is ported); that menu would use `list_label`.
 **Conformance:** new `tests/ui/test_sidebar_rows.py::test_companion_rows_nest_fold_and_mark_attention` (ui layer,
 `ui:companion-marker`).
 
-- [ ] `list_label`: "PARENT › CHILD" (U+203A with spaces) for a companion; `list_ordered`: A-Z by label, each parent
+- [x] `list_label`: "PARENT › CHILD" (U+203A with spaces) for a companion; `list_ordered`: A-Z by label, each parent
       followed by its companions; ⌃P's empty query uses it; Ctrl-Tab, the attention palette, both titlebar
       popovers, dashboard captions and flagged layouts label `parent › child`; the tree, rename and Copy Name keep
       the bare name
-- [ ] built-in `new_companion` (keyless), palette "New Companion" (needs an active session), the row menu item beside
+- [x] built-in `new_companion` (keyless), palette "New Companion" (needs an active session), the row menu item beside
       Duplicate Session and the Session menu item; New Companion selects and focuses the new row
-- [ ] GPUI sidebar: companion rows indent under their parent in the ordinary tree (unindented in flagged layouts); a
+- [x] GPUI sidebar: companion rows indent under their parent in the ordinary tree (unindented in flagged layouts); a
       disclosure triangle folds, persisting only on a user toggle; a selection reveal opens without persisting; a
       folded parent shows a companion marker for blocked, completed or unseen companions; no row's status glyph or
       badge leaves the sidebar's bounds (#841); a drop moves a companion only among its siblings; a parent dragged
       with its companion moves the group; Move to only for a parent
-- [ ] write tests: every Swift case listed above (core naming, catalog, builtin count, sidebar_drop; gpui sidebar)
-- [ ] write tests: the ui test above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: every Swift case listed above (core naming, catalog, builtin count, sidebar_drop; gpui sidebar)
+- [x] write tests: the ui test above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the ui test runs on the macOS
+      reference only, and the new `test_keymap_hooks.py::test_new_companion_is_a_keyless_builtin` is since(0.39.1),
+      green at a temporary 0.39.1 level; it goes in at Task 25)
 
 ### Task 17: Companion sessions, part 5: page companions (#840)
 

@@ -1,14 +1,18 @@
 //! How the sidebar is drawn (upstream's `SidebarCellView`, `SidebarRowView`, `BadgeView` and the cell builder in
 //! `WorkspaceSidebar+RowRendering.swift`; `WindowContentView.swift`'s `sidebarColumn`, `sidebarDivider` and
-//! `bottomBar`): the column in the sidebar color, its rows (a workspace row's disclosure, the leading glyph, the name
-//! or the rename field, a workspace row's hover "+", the agent-status glyph and the unseen badge; the selection pill
-//! behind a selected row), the drop highlight, the empty flagged view's hint with its Add Sessions… link, the footer,
-//! and the divider with its grab handle overhanging the terminal.
+//! `bottomBar`): the column in the sidebar color, its rows (a workspace or parent row's disclosure, the leading glyph,
+//! the name or the rename field, a workspace row's hover "+", a folded parent's companion marker, the agent-status
+//! glyph and the unseen badge; the selection pill behind a selected row), the drop highlight, the empty flagged view's
+//! hint with its Add Sessions… link, the footer, and the divider with its grab handle overhanging the terminal.
 //!
-//! The element ids are upstream's accessibility ids: `workspace-row`/`session-row` on the name,
-//! `workspace-icon`/`session-icon`, `edit-field`, `workspace-add-session`, `notify-badge`, `agent-status`, and the
-//! footer's `add-session`, `focus-filter-toggle`, `flagged-view-toggle`, and the empty flagged view's
-//! `flagged-empty-add`.
+//! A row's indent follows its depth: a session under its workspace one level, a companion under its parent two
+//! (upstream's outline indents a level per nesting). Every row keeps the same trailing edge, the name taking what is
+//! left, so no row's status glyph or badge runs past the sidebar (upstream's #841).
+//!
+//! The element ids are upstream's accessibility ids: `workspace-row`/`session-row` on the name (a companion's labelled
+//! `companion`, its name the value), `workspace-icon`/`session-icon`, `edit-field`, `workspace-add-session`,
+//! `companion-marker`, `notify-badge`, `agent-status`, and the footer's `add-session`, `focus-filter-toggle`,
+//! `flagged-view-toggle`, and the empty flagged view's `flagged-empty-add`.
 
 use std::rc::Rc;
 
@@ -34,7 +38,8 @@ use super::look::{
 use super::menu;
 use super::rows::badge_text;
 use super::{
-    DividerDrag, EMPTY_FLAGGED, EMPTY_FLAGGED_ADD, FooterAction, RowDrag, RowKind, Sidebar, SidebarRow, context,
+    DividerDrag, EMPTY_FLAGGED, EMPTY_FLAGGED_ADD, FooterAction, RowDrag, RowGroup, RowKind, Sidebar, SidebarRow,
+    context,
 };
 use crate::row_icon::{self, Glyph, SLOT};
 use crate::status_glyph;
@@ -43,6 +48,8 @@ use crate::status_glyph;
 const DROP_ACCENT: u32 = 0x000A_84FF;
 /// The drop line's thickness.
 const DROP_LINE: f32 = 2.0;
+/// The companion marker's color: macOS `controlAccentColor`'s default blue.
+const COMPANION_ACCENT: u32 = 0x0000_7AFF;
 /// The empty flagged view's hint: its distance from the top and the sides, and its text's opacity.
 const HINT_INSETS: (f32, f32) = (40.0, 16.0);
 const HINT_ALPHA: f64 = 0.55;
@@ -216,19 +223,19 @@ impl Sidebar {
         let shows_add = workspace && self.hovered == Some(row.id) && self.context.row_add_session;
         let status = row.status.as_ref();
         let trailing = trailing_width(window, row, status.is_some(), shows_add);
-        let lead = match row.kind {
-            RowKind::Workspace { .. } | RowKind::Session { nested: true, .. } => NESTED_INDENT,
-            RowKind::Session { nested: false, .. } => 0.0,
-        };
+        let lead = row_lead(row);
         #[expect(clippy::cast_possible_truncation, reason = "a sidebar width is a few hundred points")]
         let available = self.width() as f32 - 2.0 * CONTENT_INSET - lead - SLOT - GAP - trailing;
         let content = div().flex().flex_row().items_center().size_full().min_w(px(0.));
-        let content = match row.kind {
-            RowKind::Workspace { expanded } => content
+        let content = match (row.kind, row.group()) {
+            (RowKind::Workspace { expanded }, _) => content
                 .child(Self::disclosure(row.id, expanded, icon_color, cx))
                 .child(div().flex_none().w(px(NESTED_INDENT - DISCLOSURE))),
-            RowKind::Session { nested: true, .. } => content.pl(px(NESTED_INDENT)),
-            RowKind::Session { nested: false, .. } => content,
+            // a parent's disclosure takes the last of its indent, right before its glyph
+            (_, RowGroup::Parent { expanded }) => content
+                .child(div().flex_none().w(px(lead - DISCLOSURE)))
+                .child(Self::disclosure(row.id, expanded, icon_color, cx)),
+            _ => content.pl(px(lead)),
         };
         content
             .child(leading_icon(row, glyph_ink))
@@ -237,6 +244,9 @@ impl Sidebar {
             .child(div().flex_none().w(px(GAP)))
             .when(shows_add, |content| {
                 content.child(Self::add_button(row.id, icon_color, cx))
+            })
+            .when(!row.folded_attention.is_empty(), |content| {
+                content.child(companion_marker(row))
             })
             .when_some(status, |content, look| {
                 content.child(status_glyph::glyph(look, status_glyph::animations_enabled(cx)))
@@ -281,11 +291,18 @@ impl Sidebar {
         let label: SharedString = row.label.clone().into();
         let truncated = text_width(window, &label, self.look.font_size, weight) > available;
         let row_id = if workspace { "workspace-row" } else { "session-row" };
+        // a companion's name is the row's value, so its role goes in the label (upstream's accessibility label)
+        let companion = matches!(row.group(), RowGroup::Companion { .. });
         div()
             .id(row_id)
             .accessibility_id(row_id)
             .role(gpui_kit::Role::TreeItem)
-            .aria_label(label.clone())
+            .when(companion, |name| {
+                name.aria_label("companion")
+                    .aria_value(label.clone())
+                    .debug_selector(|| "companion-row".to_owned())
+            })
+            .when(!companion, |name| name.aria_label(label.clone()))
             .flex_1()
             .min_w(px(0.))
             .overflow_hidden()
@@ -300,7 +317,8 @@ impl Sidebar {
             .into_any_element()
     }
 
-    /// A workspace row's disclosure: opens or folds the row at once, whatever the whole-row setting.
+    /// A workspace row's disclosure, or a parent row's: opens or folds the row (a parent's companions) at once,
+    /// whatever the whole-row setting.
     fn disclosure(id: Uuid, expanded: bool, color: Hsla, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("disclosure")
@@ -592,10 +610,43 @@ fn leading_icon(row: &SidebarRow, color: Hsla) -> impl IntoElement {
         })
 }
 
+/// How far a row's content is indented: a level per nesting, the workspace row's disclosure taking its first.
+fn row_lead(row: &SidebarRow) -> f32 {
+    match row.kind {
+        RowKind::Workspace { .. } => NESTED_INDENT,
+        RowKind::Session { .. } => match row.depth() {
+            0 => 0.0,
+            1 => NESTED_INDENT,
+            _ => 2.0 * NESTED_INDENT,
+        },
+    }
+}
+
+/// A folded parent's companion marker (upstream's `companionMarker`): beside the parent's own status glyph, naming
+/// the hidden companions that need attention.
+fn companion_marker(row: &SidebarRow) -> impl IntoElement {
+    let label = SharedString::from(format!(
+        "companions need attention: {}",
+        row.folded_attention.join(", ")
+    ));
+    let id = row.id;
+    div()
+        .id("companion-marker")
+        .accessibility_id("companion-marker")
+        .role(gpui_kit::Role::Image)
+        .aria_label(label.clone())
+        .debug_selector(move || format!("companion-marker:{id}"))
+        .flex_none()
+        .size(px(SLOT))
+        .child(row_icon::icon(Glyph::CompanionStack, rgb(COMPANION_ACCENT).into()))
+        .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
+}
+
 /// The unseen-notification badge: a red capsule with the count in white, a single digit a circle.
 fn badge(count: usize) -> impl IntoElement {
     div()
         .id("notify-badge")
+        .debug_selector(|| "notify-badge".to_owned())
         .accessibility_id("notify-badge")
         .role(gpui_kit::Role::Status)
         .aria_label(SharedString::from(badge_text(count)))
@@ -618,10 +669,14 @@ fn badge(count: usize) -> impl IntoElement {
         )
 }
 
-/// The width of what trails a row's name: the gap, the hover "+", the status glyph and the badge.
+/// The width of what trails a row's name: the gap, the hover "+", the companion marker, the status glyph and the
+/// badge.
 fn trailing_width(window: &Window, row: &SidebarRow, status: bool, add: bool) -> f32 {
     let mut width = GAP;
     if add {
+        width += SLOT;
+    }
+    if !row.folded_attention.is_empty() {
         width += SLOT;
     }
     if status {

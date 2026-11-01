@@ -40,6 +40,7 @@ fn names_are_the_kitty_style_names() {
         (A::ToggleFullscreen, "toggle_fullscreen"),
         (A::Dashboard, "dashboard"),
         (A::DuplicateSession, "duplicate_session"),
+        (A::NewCompanion, "new_companion"),
         (A::PreviousWorkspace, "previous_workspace"),
         (A::NextWorkspace, "next_workspace"),
         (A::ToggleWorkspaceCollapse, "toggle_workspace_collapse"),
@@ -52,7 +53,7 @@ fn names_are_the_kitty_style_names() {
     ] {
         assert_eq!(action.name(), name);
     }
-    assert_eq!(BuiltinAction::all().count(), 52);
+    assert_eq!(BuiltinAction::all().count(), 53);
 }
 
 #[test]
@@ -107,6 +108,7 @@ fn the_default_chord_matches_the_shipped_table() {
         (A::OpenDirectory, Some(chord(CMD, "o"))),
         (A::RenameSession, None),
         (A::DuplicateSession, None),
+        (A::NewCompanion, None),
         (A::CloseSession, Some(chord(CMD, "w"))),
         (A::ReopenRecent, Some(chord(CMD | SHIFT, "t"))),
         (A::UndoClose, Some(chord(CMD, "z"))),
@@ -148,7 +150,7 @@ fn the_default_chord_matches_the_shipped_table() {
         (A::EditFlaggedSessions, None),
         (A::EditFocusedWorkspaces, None),
     ];
-    assert_eq!(expected.len(), 52);
+    assert_eq!(expected.len(), 53);
     for (action, chord) in expected {
         assert_eq!(default_chord(action), chord, "{}", action.name());
     }
@@ -204,6 +206,7 @@ fn keyless_actions_have_no_default() {
         A::DeleteWorkspace,
         A::RenameSession,
         A::DuplicateSession,
+        A::NewCompanion,
         A::ClearStatus,
         A::FirstSession,
         A::LastSession,

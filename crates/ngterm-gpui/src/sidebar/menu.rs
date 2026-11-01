@@ -10,7 +10,7 @@ use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::{
     Context, ElementId, IntoElement as _, ParentElement as _, SharedString, Styled as _, Text, Window, div, px,
 };
-use ngterm_core::model::{SidebarTint, TintChoice, TintColor, TintParts};
+use ngterm_core::model::{MoveTree, SidebarTint, TintChoice, TintColor, TintParts};
 use uuid::Uuid;
 
 /// What a session row's menu reads of its session.
@@ -55,6 +55,9 @@ pub struct MenuContext {
     /// Every workspace in tree order.
     pub workspaces: Vec<WorkspaceFacts>,
     pub can_remove_workspace: bool,
+    /// The tree as a move sees it: Move to offers only the workspaces the move takes (a companion moves only among
+    /// its siblings).
+    pub moves: MoveTree,
 }
 
 impl MenuContext {
@@ -84,6 +87,8 @@ pub enum MenuAction {
     /// Copy a name to the clipboard; `None` (a blank workspace name) leaves the clipboard alone.
     CopyName(Option<String>),
     Duplicate(Uuid),
+    /// New Companion of a row's session.
+    NewCompanion(Uuid),
     MoveTo {
         sessions: Vec<Uuid>,
         workspace: Uuid,
@@ -150,8 +155,9 @@ pub enum MenuEntry {
 }
 
 /// A session row's menu: Clear Status first while a target has a status and Mark for Attention while one is idle,
-/// Rename and Copy Name and Duplicate Session for one target, Move to the workspaces the targets are not all in, Flag
-/// or Unflag, Reveal for one target, Close.
+/// Rename and Copy Name and Duplicate Session and New Companion for one target, Move to the workspaces the targets are
+/// not all in and can move to (none for a companion, which moves only among its siblings), Flag or Unflag, Reveal for
+/// one target, Close.
 #[must_use]
 pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl Fn(&str) -> bool) -> Vec<MenuEntry> {
     let targets = context.targets(clicked);
@@ -185,27 +191,12 @@ pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl F
             "Duplicate Session",
             MenuAction::Duplicate(clicked),
         )));
+        menu.push(MenuEntry::Item(MenuItem::new(
+            "New Companion",
+            MenuAction::NewCompanion(clicked),
+        )));
     }
-    let destinations: Vec<MenuEntry> = context
-        .workspaces
-        .iter()
-        .filter(|workspace| facts.iter().any(|facts| facts.workspace != workspace.id))
-        .map(|workspace| {
-            MenuEntry::Item(MenuItem::new(
-                workspace.name.clone(),
-                MenuAction::MoveTo {
-                    sessions: targets.clone(),
-                    workspace: workspace.id,
-                },
-            ))
-        })
-        .collect();
-    if !destinations.is_empty() {
-        menu.push(MenuEntry::Submenu {
-            label: "Move to".to_owned(),
-            items: destinations,
-        });
-    }
+    menu.extend(move_to_submenu(context, &facts, &targets));
     let all_flagged = !facts.is_empty() && facts.iter().all(|facts| facts.flagged);
     let flag = match (single, all_flagged) {
         (true, true) => "Unflag",
@@ -231,6 +222,32 @@ pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl F
     };
     menu.push(MenuEntry::Item(MenuItem::new(close, MenuAction::Close(targets))));
     menu
+}
+
+/// Move to: the workspaces the targets are not all in and the store moves them to (upstream's `canMoveSessions`);
+/// `None` when there is none.
+fn move_to_submenu(context: &MenuContext, facts: &[&SessionFacts], targets: &[Uuid]) -> Option<MenuEntry> {
+    let destinations: Vec<MenuEntry> = context
+        .workspaces
+        .iter()
+        .filter(|workspace| {
+            facts.iter().any(|facts| facts.workspace != workspace.id)
+                && context.moves.can_move_sessions(targets, workspace.id, None)
+        })
+        .map(|workspace| {
+            MenuEntry::Item(MenuItem::new(
+                workspace.name.clone(),
+                MenuAction::MoveTo {
+                    sessions: targets.to_vec(),
+                    workspace: workspace.id,
+                },
+            ))
+        })
+        .collect();
+    (!destinations.is_empty()).then(|| MenuEntry::Submenu {
+        label: "Move to".to_owned(),
+        items: destinations,
+    })
 }
 
 /// A workspace row's menu: Rename, Copy Name, the session creators, the focus pair, Flag All Sessions or Unflag All
@@ -438,6 +455,9 @@ mod tests {
             sessions: HashMap::from([(a, facts("a", one)), (b, facts("b", one)), (c, facts("c", two))]),
             workspaces: vec![workspace(one, "one", 2), workspace(two, "two", 1)],
             can_remove_workspace: true,
+            moves: MoveTree {
+                workspaces: vec![(one, vec![(a, None), (b, None)]), (two, vec![(c, None)])],
+            },
         };
         (context, [one, two], [a, b, c])
     }
@@ -454,6 +474,7 @@ mod tests {
                 "Rename",
                 "Copy Name",
                 "Duplicate Session",
+                "New Companion",
                 "Move to [1]",
                 "Flag",
                 "Tint [13]",
@@ -461,6 +482,10 @@ mod tests {
                 "Close Session"
             ]
         );
+        assert!(menu.contains(&MenuEntry::Item(MenuItem::new(
+            "New Companion",
+            MenuAction::NewCompanion(a)
+        ))));
         assert!(menu.contains(&MenuEntry::Submenu {
             label: "Move to".into(),
             items: vec![MenuEntry::Item(MenuItem::new(
@@ -471,7 +496,26 @@ mod tests {
                 }
             ))],
         }));
-        assert_eq!(labels(&session_menu(&context, a, |_| false))[8], "(Reveal in Files)");
+        assert_eq!(labels(&session_menu(&context, a, |_| false))[9], "(Reveal in Files)");
+    }
+
+    /// Upstream's `testMoveToIsOfferedForAParentAndNotForACompanion`: b becomes a's companion.
+    #[test]
+    fn move_to_is_offered_for_a_parent_and_not_for_a_companion() {
+        let (mut context, [one, two], [a, b, c]) = context();
+        context.moves = MoveTree {
+            workspaces: vec![(one, vec![(a, None), (b, Some(a))]), (two, vec![(c, None)])],
+        };
+        let has_move_to = |context: &MenuContext, clicked| {
+            labels(&session_menu(context, clicked, |_| true))
+                .iter()
+                .any(|label| label.starts_with("Move to"))
+        };
+        assert!(has_move_to(&context, a));
+        assert!(!has_move_to(&context, b), "a companion moves only among its siblings");
+        // a parent selected with its companion carries the group
+        context.selection = vec![a, b];
+        assert!(has_move_to(&context, b));
     }
 
     #[test]

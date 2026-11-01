@@ -19,6 +19,7 @@ pub enum BuiltinAction {
     OpenDirectory,
     RenameSession,
     DuplicateSession,
+    NewCompanion,
     CloseSession,
     ReopenRecent,
     UndoClose,
@@ -85,15 +86,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fifty_two_actions_with_upstreams_names() {
+    fn fifty_three_actions_with_upstreams_names() {
         let names: Vec<&str> = BuiltinAction::all().map(BuiltinAction::name).collect();
-        assert_eq!(names.len(), 52);
+        assert_eq!(names.len(), 53);
         assert_eq!(names[0], "new_window");
-        assert_eq!(names[49], "attach_remote");
-        assert_eq!(names[50..], ["edit_flagged_sessions", "edit_focused_workspaces"]);
+        assert_eq!(names[11..13], ["duplicate_session", "new_companion"]);
+        assert_eq!(names[50], "attach_remote");
+        assert_eq!(names[51..], ["edit_flagged_sessions", "edit_focused_workspaces"]);
         assert_eq!(BuiltinAction::ToggleOverlay.name(), "toggle_overlay");
         assert_eq!(
-            names[23], "toggle_overlay",
+            names[24], "toggle_overlay",
             "after toggle_terminal_zoom, as upstream declares it"
         );
         assert!(names.contains(&"toggle_horizontal_split"));

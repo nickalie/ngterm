@@ -200,6 +200,17 @@ def test_membership_editors_are_keyless_builtins(ctl, keymap):
     assert _action(listing, "edit_focused_workspaces") == {"action": "edit_focused_workspaces"}
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("keymap.list", "field:result.keymap")
+def test_new_companion_is_a_keyless_builtin(ctl, keymap):
+    """New Companion (#840) is a built-in that ships with no chord, listed right after `duplicate_session`."""
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    listing = _listed(ctl)
+    names = [action["action"] for action in listing["actions"]]
+    assert names[names.index("duplicate_session") + 1] == "new_companion"
+    assert _action(listing, "new_companion") == {"action": "new_companion"}, "keyless"
+
+
 @pytest.mark.covers("keymap.run", "field:result.id", "behavior:protocol.target-resolution")
 def test_run_starts_the_command_for_the_addressed_session(ctl, keymap, adapter):
     lines = CommandLines.of(adapter)

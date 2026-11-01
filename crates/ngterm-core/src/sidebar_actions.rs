@@ -12,7 +12,8 @@ use uuid::Uuid;
 use crate::Core;
 use crate::commands::ToggleMode;
 use crate::model::{
-    AgentIndicator, AppStore, FlaggedOrderPlacement, NewSession, NewSessionPlacement, SidebarMode, TintChoice,
+    AgentIndicator, AppStore, CompanionOptions, FlaggedOrderPlacement, NewSession, NewSessionPlacement, SidebarMode,
+    TintChoice,
 };
 use crate::persist::settings::NewSessionPlacementSetting;
 
@@ -43,6 +44,15 @@ pub enum SidebarAction {
     },
     /// Row menu: Duplicate Session.
     Duplicate(Uuid),
+    /// Row menu and New Companion: a companion of the row's session, selected and focused (upstream's
+    /// `newCompanion`).
+    NewCompanion(Uuid),
+    /// A user open or fold of a parent row's companions, persisted (the outline's expand and collapse callbacks on
+    /// a session row).
+    SetSessionExpanded {
+        session: Uuid,
+        expanded: bool,
+    },
     /// Row menu: Move to.
     MoveSessions {
         sessions: Vec<Uuid>,
@@ -158,6 +168,7 @@ impl Core {
                     .and_then(|store| store.duplicate_session(session, &home));
                 created.is_some_and(|id| self.created_by_user(id))
             }
+            SidebarAction::NewCompanion(session) => self.new_companion(window, session),
             other => {
                 let grace = self.settings().close_grace_undo_enabled.unwrap_or(true);
                 self.library_mut()
@@ -209,6 +220,18 @@ impl Core {
         created.is_some_and(|id| self.created_by_user(id))
     }
 
+    /// New Companion of `session` (upstream's `newCompanion`): a companion in its parent's focused directory, selected
+    /// and focused; a sibling for a companion row. A remote parent's companion is its origin's to create, which this
+    /// build does not reach yet, so the store's refusal leaves nothing created.
+    fn new_companion(&mut self, window: Uuid, session: Uuid) -> bool {
+        let home = self.library().home().to_owned();
+        let created = self
+            .library_mut()
+            .store_mut(window)
+            .and_then(|store| store.add_companion(session, CompanionOptions::default(), &home).ok());
+        created.is_some_and(|id| self.created_by_user(id))
+    }
+
     /// Sessions at each directory in `workspace`, appended (Open Directory… and a folder drop).
     fn open_directories(&mut self, window: Uuid, workspace: Uuid, directories: &[String]) -> bool {
         let Some(store) = self.library_mut().store_mut(window) else {
@@ -235,6 +258,9 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool) -> boo
         SidebarAction::SetSelection(ids) => store.set_sidebar_selection(ids),
         SidebarAction::SetWorkspaceExpanded { workspace, expanded } => {
             store.set_workspace_expanded(workspace, expanded);
+        }
+        SidebarAction::SetSessionExpanded { session, expanded } => {
+            return store.set_session_expanded(session, expanded);
         }
         SidebarAction::RenameSession { session, name } => store.rename_session(session, &name),
         SidebarAction::RenameWorkspace { workspace, name } => store.rename_workspace(workspace, &name),
@@ -304,6 +330,7 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool) -> boo
         | SidebarAction::NewSessionInCurrent
         | SidebarAction::OpenDirectories { .. }
         | SidebarAction::Duplicate(_)
+        | SidebarAction::NewCompanion(_)
         | SidebarAction::FocusActiveTerminal => return false,
     }
     true
@@ -735,5 +762,32 @@ mod tests {
         assert!(!f.store().workspace(one).unwrap().is_expanded);
         assert!(f.act(SidebarAction::Duplicate(first)));
         assert_eq!(f.order(one)[1], f.store().selected_session_id().unwrap());
+    }
+
+    /// Upstream's `testRowMenuNewCompanionAddsASiblingUnderTheParent`, on the core half: a companion row's New
+    /// Companion adds a sibling at the group's end and selects it; the fold persists only for a parent.
+    #[test]
+    fn new_companion_adds_a_selected_sibling_and_the_fold_persists() {
+        let mut f = fixture(AppSettings::default());
+        let [one, _] = f.workspaces;
+        let [first, second, third] = f.sessions;
+        assert!(f.act(SidebarAction::NewCompanion(first)));
+        let child = f.store().selected_session_id().unwrap();
+        assert_eq!(f.store().session(child).unwrap().parent_id(), Some(first));
+        assert!(f.act(SidebarAction::NewCompanion(child)));
+        let sibling = f.store().selected_session_id().unwrap();
+        assert_eq!(f.order(one), [first, child, sibling, second, third]);
+        assert_eq!(f.store().session(sibling).unwrap().parent_id(), Some(first));
+
+        assert!(f.act(SidebarAction::SetSessionExpanded {
+            session: first,
+            expanded: false,
+        }));
+        assert!(!f.store().session(first).unwrap().companion.expanded);
+        assert!(!f.act(SidebarAction::SetSessionExpanded {
+            session: second,
+            expanded: false,
+        }));
+        assert!(!f.act(SidebarAction::NewCompanion(Uuid::new_v4())));
     }
 }

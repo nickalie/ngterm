@@ -121,6 +121,7 @@ pub enum PaletteCommand {
     OpenDirectory,
     RenameSession,
     DuplicateSession,
+    NewCompanion,
     RenameWorkspace,
     CloseSession,
     ReopenRecent,
@@ -210,6 +211,7 @@ impl PaletteCommand {
         match self {
             Self::RenameSession
             | Self::DuplicateSession
+            | Self::NewCompanion
             | Self::ClearStatus
             | Self::ToggleFlag
             | Self::ToggleSplit
@@ -317,6 +319,7 @@ impl PaletteCommand {
             Self::OpenDirectory => "Open Directory…",
             Self::RenameSession => "Rename Session",
             Self::DuplicateSession => "Duplicate Session",
+            Self::NewCompanion => "New Companion",
             Self::RenameWorkspace => "Rename Workspace",
             Self::CloseSession => "Close Session",
             Self::ReopenRecent => "Reopen Last Closed Item",
@@ -383,6 +386,7 @@ impl PaletteCommand {
             Self::OpenDirectory => BuiltinAction::OpenDirectory,
             Self::RenameSession => BuiltinAction::RenameSession,
             Self::DuplicateSession => BuiltinAction::DuplicateSession,
+            Self::NewCompanion => BuiltinAction::NewCompanion,
             Self::RenameWorkspace => BuiltinAction::RenameWorkspace,
             Self::CloseSession => BuiltinAction::CloseSession,
             Self::ReopenRecent => BuiltinAction::ReopenRecent,
@@ -484,9 +488,10 @@ mod tests {
         PaletteCommand::ToggleTerminalZoom,
     ];
 
-    const NEED_SESSION: [PaletteCommand; 16] = [
+    const NEED_SESSION: [PaletteCommand; 17] = [
         PaletteCommand::RenameSession,
         PaletteCommand::DuplicateSession,
+        PaletteCommand::NewCompanion,
         PaletteCommand::ClearStatus,
         PaletteCommand::ToggleFlag,
         PaletteCommand::ToggleSplit,
@@ -520,6 +525,7 @@ mod tests {
                 "Open Directory…",
                 "Rename Session",
                 "Duplicate Session",
+                "New Companion",
                 "Rename Workspace",
                 "Close Session",
                 "Reopen Last Closed Item",
@@ -583,7 +589,7 @@ mod tests {
 
     #[test]
     fn catalog_has_the_expected_static_command_count() {
-        assert_eq!(PaletteCommand::all().count(), 59);
+        assert_eq!(PaletteCommand::all().count(), 60);
     }
 
     #[test]
@@ -816,6 +822,17 @@ mod tests {
         );
         assert!(editor.is_visible(&ctx(F::empty())), "stays listed, inert");
         assert!(!editor.is_enabled(&ctx(F::HAS_SESSIONS | F::PICKER_ACTIVE)));
+    }
+
+    /// Upstream's `newCompanionNeedsAnActiveSession`.
+    #[test]
+    fn new_companion_needs_an_active_session() {
+        let command = PaletteCommand::NewCompanion;
+        assert!(command.is_enabled(&ctx(F::HAS_ACTIVE_SESSION)));
+        assert!(!command.is_enabled(&ctx(F::empty())));
+        assert_eq!(command.builtin_action(), Some(BuiltinAction::NewCompanion));
+        assert_eq!(PaletteCommand::for_builtin(BuiltinAction::NewCompanion), Some(command));
+        assert_eq!(command.title_default(), "New Companion");
     }
 
     /// Upstream's `membershipEditorsStayListedInEitherSidebarMode`.

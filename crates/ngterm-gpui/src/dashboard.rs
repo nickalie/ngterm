@@ -129,8 +129,10 @@ impl GridModel {
             .iter()
             .map(|member| {
                 let session = store.and_then(|store| store.session(member.session));
-                let caption = session
-                    .map(|session| format!("{}{}", session.display_name(), pane_marker(*member, session)))
+                // a companion's caption names its parent, as every flat list does
+                let caption = store
+                    .zip(session)
+                    .map(|(store, session)| format!("{}{}", store.list_label(session), pane_marker(*member, session)))
                     .unwrap_or_default();
                 let pane = if member.surface == ZoomSurface::Split {
                     OverlayPane::Right

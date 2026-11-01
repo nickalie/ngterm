@@ -2,8 +2,8 @@
 //! `WindowContentView.swift`: the divider, the tint wash, the footer; ported from the GTK build's `sidebar/`): a list
 //! of workspace and session rows ([`rows`], a pure function of the model), the session rows' multi-selection, per-row
 //! context menus ([`menu`]), inline rename, drag-and-drop reorder, spring-loaded folders and the file manager's folder
-//! drops ([`drag`]), the flagged view's three layouts and its empty-state hint, the footer, and the divider that
-//! resizes it. [`view`] draws it.
+//! drops ([`drag`]), the flagged view's three layouts and its empty-state hint, companion rows nested and folded under
+//! their parent (`WorkspaceSidebar+Companions.swift`), the footer, and the divider that resizes it. [`view`] draws it.
 //!
 //! RULE: the handlers never touch the model. They read the snapshot the last sync took ([`context`]) and post a
 //! [`SidebarAction`] for the window to the main loop; what needs a dialog, the clipboard or the rename field happens
@@ -37,7 +37,7 @@ use ngterm_core::sidebar_actions::SidebarAction;
 use uuid::Uuid;
 
 pub use self::look::Look;
-pub use self::rows::{RowKind, SidebarRow};
+pub use self::rows::{RowGroup, RowKind, SidebarRow};
 
 use self::context::SidebarContext;
 use self::drag::{DragPayload, Highlight, Proposal, RowSpan};
@@ -253,9 +253,9 @@ impl Sidebar {
         self.width = store.sidebar().width;
         self.expansion.apply_requests(store);
         let layout = rows::shown_flagged_layout(store, &settings);
-        let expanded = self.expansion.sync(store, layout).clone();
-        let rows = rows::rows(store, &expanded, RowSettings { settings: &settings });
-        store.note_sidebar_expansion(expanded);
+        let open = self.expansion.sync(store, layout).clone();
+        let rows = rows::rows(store, &open, RowSettings { settings: &settings });
+        store.note_sidebar_expansion(open.workspaces);
         self.context = SidebarContext::take(store, &settings);
         let selected = store.selected_session_id();
         self.show(rows, selected, cx);
@@ -414,13 +414,27 @@ impl Sidebar {
         }));
     }
 
-    /// Opens or folds workspace row `id`, persisted (a user toggle: the disclosure, or a row click).
+    /// Opens or folds workspace row `id`, or parent row `id`'s companions, persisted (a user toggle: the disclosure,
+    /// or a workspace row click). A parent row follows at once, the fold persisting through the store (upstream's
+    /// `parentExpansionChanged`).
     pub fn toggle(&mut self, id: Uuid) {
-        let Some(RowKind::Workspace { expanded }) = self.row(id).map(|row| row.kind) else {
-            return;
-        };
-        let window = self.window;
-        self.post(move |state: &mut AppState| state.sidebar_toggle_workspace(window, id, !expanded));
+        match self.row(id).map(|row| row.kind) {
+            Some(RowKind::Workspace { expanded }) => {
+                let window = self.window;
+                self.post(move |state: &mut AppState| state.sidebar_toggle_workspace(window, id, !expanded));
+            }
+            Some(RowKind::Session {
+                group: RowGroup::Parent { expanded },
+                ..
+            }) => {
+                self.expansion.set_parent(id, !expanded);
+                self.act(SidebarAction::SetSessionExpanded {
+                    session: id,
+                    expanded: !expanded,
+                });
+            }
+            _ => {}
+        }
     }
 
     /// The workspace row's hover "+": a session in it.
@@ -528,6 +542,7 @@ impl Sidebar {
             MenuAction::CopyName(Some(name)) => cx.write_to_clipboard(ClipboardItem::new_string(name)),
             MenuAction::CopyName(None) => {}
             MenuAction::Duplicate(id) => self.act(SidebarAction::Duplicate(id)),
+            MenuAction::NewCompanion(id) => self.act(SidebarAction::NewCompanion(id)),
             MenuAction::MoveTo { sessions, workspace } => self.act(SidebarAction::MoveSessions { sessions, workspace }),
             MenuAction::ToggleFlags(ids) => self.act(SidebarAction::ToggleFlags(ids)),
             MenuAction::Reveal(cwd) => cx.reveal_path(Path::new(&cwd)),

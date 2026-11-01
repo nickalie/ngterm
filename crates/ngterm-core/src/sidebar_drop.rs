@@ -8,7 +8,9 @@
 //! The flagged view: a drop on the flat or plain list is a move in the saved flagged order
 //! ([`resolve_flagged_reorder`], applied through [`crate::model::AppStore::move_flagged`], which shares
 //! [`reordered_flagged`] with `session.flag move`); the flagged tree moves sessions in the real workspace order, a
-//! move that changes no visible row counting as a no-op ([`FlaggedTree::changes_view`]).
+//! move that changes no visible row counting as a no-op ([`FlaggedTree::changes_view`]). A gap among a parent's nested
+//! companion rows maps onto the workspace index through [`companion_child_index`]; whether the store takes the move
+//! (a companion only among its siblings) is [`crate::model::MoveTree::can_move_sessions`].
 
 use std::collections::HashSet;
 use std::hash::BuildHasher;
@@ -315,6 +317,17 @@ pub fn flagged_tree_child_index(visible_indices: &[usize], slot: DropIndex) -> D
         return DropIndex::Before(0);
     };
     DropIndex::Before(visible_indices.get(slot).copied().unwrap_or(last + 1))
+}
+
+/// Maps a gap among a parent's nested companion rows onto the workspace child index [`resolve_sessions`] takes
+/// (upstream's `companionChildIndex`): `parent_index` is the parent's index in its workspace, `slot` the gap among its
+/// companions; a drop on the parent row (upstream's -1) is the gap before its first companion.
+#[must_use]
+pub fn companion_child_index(parent_index: usize, slot: DropIndex) -> usize {
+    match slot {
+        DropIndex::OnItem => parent_index + 1,
+        DropIndex::Before(slot) => parent_index + 1 + slot,
+    }
 }
 
 /// The workspace tree as the flagged tree layout sees it: every session in its workspace, and which are flagged.
@@ -681,6 +694,27 @@ mod tests {
         for (visible, slot, want) in cases {
             assert_eq!(flagged_tree_child_index(visible, slot), want, "{visible:?} {slot:?}");
         }
+    }
+
+    /// Upstream's `companionGapMapsPastTheParentRow`.
+    #[test]
+    fn a_companion_gap_maps_past_the_parent_row() {
+        assert_eq!(companion_child_index(2, at(0)), 3);
+        assert_eq!(companion_child_index(2, at(2)), 5);
+        assert_eq!(companion_child_index(0, ON_ITEM), 1);
+    }
+
+    /// Upstream's `aSiblingDraggedAboveItsFirstSiblingResolvesInsideTheGroup`.
+    #[test]
+    fn a_sibling_dragged_above_its_first_sibling_resolves_inside_the_group() {
+        let resolution = resolve_sessions(
+            &[source(WS_A, 2)],
+            workspace_row(WS_A, 4),
+            at(companion_child_index(0, at(0))),
+        )
+        .expect("the sibling moves");
+        assert_eq!(resolution.destination, 1);
+        assert_eq!(resolution.workspace, WS_A);
     }
 
     /// Workspace A holds a, the hidden unflagged h, then b; workspace B holds c, then the hidden k.

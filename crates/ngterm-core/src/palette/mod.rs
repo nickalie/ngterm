@@ -70,6 +70,13 @@ impl PaletteMode {
     pub fn keeps_open_on_run(self) -> bool {
         matches!(self, Self::FlaggedEditor | Self::FocusEditor)
     }
+
+    /// Whether a blank query lists the rows in the order the feed supplied rather than A→Z (upstream's
+    /// `keepsSourceOrder`): the session palette's grouped list order, the attention order and the editors' tree order.
+    #[must_use]
+    pub fn keeps_source_order(self) -> bool {
+        matches!(self, Self::Sessions | Self::Attention) || self.keeps_open_on_run()
+    }
 }
 
 /// A membership editor row's live mark (upstream's `PaletteMark`): a session's flag, a workspace's focus membership.

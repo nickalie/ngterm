@@ -128,8 +128,9 @@ impl Core {
     }
 
     /// The frontmost window's navigable sessions (the flagged set in flagged mode, the marked workspaces' under the
-    /// focus filter, else all), subtitled `workspace · detail`, each with its status glyph (upstream's
-    /// `paletteSessions`). The rows are rebuilt on every sync, so an open palette follows a status change.
+    /// focus filter, else all) in list order, A-Z with each parent's companions after it, titled by list label and
+    /// subtitled `workspace · detail`, each with its status glyph (upstream's `paletteSessions`). The rows are rebuilt
+    /// on every sync, so an open palette follows a status change.
     fn palette_sessions(&self) -> Vec<PaletteEntry> {
         let Some(store) = self
             .library()
@@ -139,7 +140,7 @@ impl Core {
             return Vec::new();
         };
         store
-            .navigable_sessions()
+            .list_ordered(&store.navigable_sessions())
             .into_iter()
             .map(|session| {
                 let id = session.id();
@@ -151,7 +152,7 @@ impl Core {
                     indicator: Some(session.agent_indicator.clone()),
                     ..plain_entry(
                         uuid_string(id),
-                        session.display_name(),
+                        store.list_label(session),
                         PaletteAction::SelectSession(id),
                     )
                 }
@@ -173,7 +174,7 @@ impl Core {
                     indicator: Some(entry.session.agent_indicator.clone()),
                     ..plain_entry(
                         uuid_string(session),
-                        entry.session.display_name(),
+                        library.attention_label(entry),
                         PaletteAction::Attention {
                             window: entry.window,
                             session,
@@ -202,7 +203,8 @@ impl Core {
 }
 
 /// The flagged-session editor's rows (upstream's `paletteFlaggedEditor`): every session of the window in tree order,
-/// the ones the focus filter hides included, subtitled with its workspace, with its status glyph and live flag mark.
+/// the ones the focus filter hides included, titled by list label and subtitled with its workspace, with its status
+/// glyph and live flag mark.
 /// Each row names its session, never the selection, as unflagging can move the selection.
 fn flagged_editor_entries(store: &AppStore) -> Vec<PaletteEntry> {
     store
@@ -215,7 +217,11 @@ fn flagged_editor_entries(store: &AppStore) -> Vec<PaletteEntry> {
                     subtitle: Some(workspace.name.clone()),
                     indicator: Some(session.agent_indicator.clone()),
                     mark: Some(PaletteMark::Flag(session.flagged)),
-                    ..plain_entry(uuid_string(id), session.display_name(), PaletteAction::ToggleFlag(id))
+                    ..plain_entry(
+                        uuid_string(id),
+                        store.list_label(session),
+                        PaletteAction::ToggleFlag(id),
+                    )
                 }
             })
         })

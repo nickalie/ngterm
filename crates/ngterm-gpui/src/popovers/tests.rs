@@ -217,3 +217,41 @@ fn a_recent_row_draws_its_status_glyph_trailing(cx: &mut TestAppContext) {
         "the glyph trails the row: {glyph:?} in {panel:?}"
     );
 }
+
+/// Upstream's `testPopoversNameACompanionAfterItsParent`: the clock and the bell list a companion as `parent › child`.
+#[gpui_kit::test]
+fn the_popovers_name_a_companion_after_its_parent(cx: &mut TestAppContext) {
+    use ngterm_core::model::{AgentIndicator, AgentStatus, CompanionOptions};
+
+    let (mut h, cx) = harness(cx);
+    h.state
+        .core
+        .update_settings(|settings| settings.attention_button_enabled = Some(true));
+    let parent = h.sessions[2];
+    let store = h.state.core.library_mut().store_mut(h.window).unwrap();
+    store.rename_session(parent, "api");
+    let options = CompanionOptions {
+        name: Some("logs".to_owned()),
+        ..CompanionOptions::default()
+    };
+    let companion = store.add_companion(parent, options, "/home/u").unwrap();
+    store.set_agent_indicator(
+        AgentIndicator {
+            status: AgentStatus::Blocked,
+            ..AgentIndicator::default()
+        },
+        companion,
+    );
+    store.select_session(Some(parent));
+    h.settle(cx);
+
+    h.open(PopoverKind::Recent, cx);
+    let rows = h.view.read_with(cx, |p, _| p.row_titles());
+    assert!(rows.contains(&"api › logs".to_owned()), "clock popover rows: {rows:?}");
+    h.view.update(cx, Popovers::close);
+    h.settle(cx);
+
+    h.open(PopoverKind::Attention, cx);
+    let rows = h.view.read_with(cx, |p, _| p.row_titles());
+    assert_eq!(rows, ["api › logs"], "bell popover rows");
+}

@@ -1,9 +1,16 @@
 //! Name and path text rules shared by the model: the control-character strip every stored name and cwd passes
 //! through (upstream's `TerminalText.sanitized`), the "blank after trim" normalizer (`String.trimmedOrNil`), the
 //! basename a session row falls back to (`NSString.lastPathComponent` with upstream's pins), whether a terminal title
-//! may name a session instead, and the auto names of new workspaces and windows.
+//! may name a session instead, the auto names of new workspaces and windows, and how a flat list names and orders
+//! sessions (`AppStore+Naming.swift`'s `listLabel` and `listOrdered`: a companion reads `parent › child`).
 
 use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
+
+use uuid::Uuid;
+
+use super::session::Session;
+use super::store::AppStore;
 
 /// Strips the C0 control range (U+0000–U+001F, tab, newline and carriage return included) and DEL (U+007F), keeping
 /// every other scalar, as upstream's `TerminalText.sanitized`.
@@ -68,6 +75,43 @@ pub fn names_from_terminal_title() -> bool {
 /// Sets [`names_from_terminal_title`] for this thread.
 pub fn set_names_from_terminal_title(on: bool) {
     NAMES_FROM_TERMINAL_TITLE.set(on);
+}
+
+impl AppStore {
+    /// A session's name in a list that drops the tree (upstream's `listLabel`): `parent › child` for a companion. The
+    /// sidebar tree, rename and Copy Name keep the bare [`Session::display_name`].
+    #[must_use]
+    pub fn list_label(&self, session: &Session) -> String {
+        match self.parent_of(session) {
+            Some(parent) => format!("{} › {}", parent.display_name(), session.display_name()),
+            None => session.display_name(),
+        }
+    }
+
+    /// `sessions` A-Z by label for a flat list (upstream's `listOrdered`), each parent followed by its companions in
+    /// input order wherever they sit in the input; a companion listed without its parent sorts on its own label. Equal
+    /// labels keep their input order.
+    #[must_use]
+    pub fn list_ordered<'a>(&self, sessions: &[&'a Session]) -> Vec<&'a Session> {
+        let present: HashSet<Uuid> = sessions.iter().map(|session| session.id()).collect();
+        let mut groups: Vec<(String, Vec<&'a Session>)> = Vec::new();
+        let mut group_of_parent: HashMap<Uuid, usize> = HashMap::new();
+        for session in sessions {
+            if session.parent_id().is_some_and(|parent| present.contains(&parent)) {
+                continue;
+            }
+            group_of_parent.insert(session.id(), groups.len());
+            groups.push((self.list_label(session).to_lowercase(), vec![*session]));
+        }
+        for session in sessions {
+            if let Some(group) = session.parent_id().and_then(|parent| group_of_parent.get(&parent)) {
+                groups[*group].1.push(*session);
+            }
+        }
+        // a stable sort, so equal labels keep their input order
+        groups.sort_by(|a, b| a.0.cmp(&b.0));
+        groups.into_iter().flat_map(|(_, members)| members).collect()
+    }
 }
 
 /// The auto name of the `n`-th workspace (`workspace 1`, …), upstream's `AppStore.defaultWorkspaceName`.

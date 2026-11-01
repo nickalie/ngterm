@@ -74,6 +74,7 @@ pub use search::{SearchFollowUp, SearchReport, SearchState};
 pub use session::{
     AgentIndicator, AgentStatus, CONTEXT_BYTE_LIMIT, PaneAddress, Session, SessionSeed, validate_context,
 };
+pub use session_moves::MoveTree;
 pub use status::{
     STANDARD_SOUND_NAMES, StatusKeystroke, StatusReset, StatusShape, StatusWriteResult, is_known_sound,
     is_valid_color_hex,

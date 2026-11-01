@@ -186,6 +186,7 @@ fn session_row(id: Uuid, selected: bool) -> SidebarRow {
             workspace: Uuid::nil(),
             nested: true,
             selected,
+            group: RowGroup::Plain,
         },
         label: String::new(),
         badge: 0,
@@ -196,6 +197,7 @@ fn session_row(id: Uuid, selected: bool) -> SidebarRow {
         status: None,
         icon_tooltip: None,
         tint: None,
+        folded_attention: Vec::new(),
     }
 }
 
@@ -893,9 +895,9 @@ fn the_row_menu_and_the_footers_add_session_menu_run_their_items(cx: &mut TestAp
         },
         "Mark for Attention ran on the clicked row"
     );
-    // Clear Status, Rename, Copy Name, Duplicate Session, Move to, Flag: the sixth item
+    // Clear Status, Rename, Copy Name, Duplicate Session, New Companion, Move to, Flag: the seventh item
     right_click(cx, "row:srv");
-    cx.simulate_keystrokes("down down down down down down enter");
+    cx.simulate_keystrokes("down down down down down down down enter");
     h.settle(cx);
     assert!(h.store().session(srv).unwrap().flagged, "Flag ran on the clicked row");
 
@@ -1011,4 +1013,174 @@ fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppCon
         Some(SidebarTint::on_icon(TintColor::Purple))
     );
     assert!(cx.debug_bounds("workspace-icon:purple tint").is_some());
+}
+
+// MARK: - companions (upstream's `WorkspaceSidebarCompanionsTests`, `SidebarRowIndentTests`)
+
+/// [`library`] with companions of "srv" named by `names`, created in the background.
+fn library_with_companions(names: &[&str]) -> (WindowLibrary, Uuid, Vec<Uuid>) {
+    let (mut library, window) = library();
+    let store = library.store_mut(window).unwrap();
+    let srv = store.selected_session_id().unwrap();
+    let companions = names
+        .iter()
+        .map(|name| {
+            let options = ngterm_core::model::CompanionOptions {
+                name: Some((*name).to_owned()),
+                select: false,
+                ..ngterm_core::model::CompanionOptions::default()
+            };
+            store.add_companion(srv, options, "/home/u").unwrap()
+        })
+        .collect();
+    (library, srv, companions)
+}
+
+/// Upstream's `testACompanionRowIndentsOneLevelPastItsParent`, on the rows.
+#[test]
+fn a_companion_indents_one_level_past_its_parent() {
+    let row = |group| {
+        let mut row = session_row(Uuid::new_v4(), false);
+        row.kind = RowKind::Session {
+            workspace: Uuid::nil(),
+            nested: true,
+            selected: false,
+            group,
+        };
+        row
+    };
+    let parent = row(RowGroup::Parent { expanded: true });
+    let companion = row(RowGroup::Companion { nested: true });
+    assert_eq!(parent.depth(), 1);
+    assert_eq!(companion.depth(), parent.depth() + 1);
+}
+
+/// Upstream's `testCompanionRowsNestUnderTheirParent`, `testFoldingAParentPersistsAndShowsTheCompanionsThatNeedAttention`
+/// and the fold persisting, in the window.
+#[gpui_kit::test]
+fn a_parents_disclosure_folds_its_companions_and_its_marker_names_the_ones_needing_attention(cx: &mut TestAppContext) {
+    let (library, srv, companions) = library_with_companions(&["log"]);
+    let log = companions[0];
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    assert_eq!(
+        h.names(cx),
+        ["w:workspace 1", "s:u", "s:srv*", "s:log", "w:two", "s:var"]
+    );
+    assert!(
+        cx.debug_bounds("companion-row").is_some(),
+        "the companion's name is labelled so"
+    );
+    assert_eq!(
+        bounds(cx, "row:srv").size.width,
+        bounds(cx, "row:log").size.width,
+        "one trailing edge"
+    );
+    h.store_mut().set_agent_indicator(
+        AgentIndicator {
+            status: AgentStatus::Blocked,
+            ..AgentIndicator::default()
+        },
+        log,
+    );
+    h.settle(cx);
+    let marker: &'static str = Box::leak(format!("companion-marker:{srv}").into_boxed_str());
+    assert!(cx.debug_bounds(marker).is_none(), "an open parent shows its companions");
+
+    let disclosure: &'static str = Box::leak(format!("disclosure:{srv}").into_boxed_str());
+    let at = bounds(cx, disclosure).center();
+    cx.simulate_click(at, Modifiers::default());
+    h.settle(cx);
+    assert_eq!(h.names(cx), ["w:workspace 1", "s:u", "s:srv*", "w:two", "s:var"]);
+    assert!(
+        !h.store().session(srv).unwrap().companion.expanded,
+        "a user fold persists"
+    );
+    assert!(bounds(cx, "row:srv").contains(&bounds(cx, marker).center()));
+    let row = h.view.read_with(cx, |sidebar, _| sidebar.rows()[2].clone());
+    assert_eq!(row.folded_attention, ["log"]);
+
+    let at = bounds(cx, disclosure).center();
+    cx.simulate_click(at, Modifiers::default());
+    h.settle(cx);
+    assert_eq!(h.names(cx).len(), 6);
+    assert!(h.store().session(srv).unwrap().companion.expanded);
+    assert!(cx.debug_bounds(marker).is_none());
+}
+
+/// Upstream's `testRowMenuNewCompanionAddsASiblingUnderTheParent`.
+#[gpui_kit::test]
+fn the_row_menus_new_companion_adds_a_sibling_under_the_parent(cx: &mut TestAppContext) {
+    let (library, srv, _) = library_with_companions(&["log"]);
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    // Mark for Attention, Rename, Copy Name, Duplicate Session, New Companion: the fifth item
+    right_click(cx, "row:log");
+    cx.simulate_keystrokes("down down down down down enter");
+    h.settle(cx);
+    let companions: Vec<Uuid> = h.store().companions(srv).iter().map(|session| session.id()).collect();
+    assert_eq!(companions.len(), 2);
+    assert_eq!(h.store().selected_session_id(), companions.last().copied());
+}
+
+/// Upstream's `testCompanionsNestFoldAndReorderAmongSiblings`, its drag: the last companion dragged above its sibling
+/// reorders inside the group, and one dropped on another workspace stays put.
+#[gpui_kit::test]
+fn a_companion_drags_only_among_its_siblings(cx: &mut TestAppContext) {
+    let (library, srv, companions) = library_with_companions(&["a1", "a2"]);
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let one = h.store().workspaces()[0].id();
+    let order = |h: &Harness| -> Vec<Uuid> {
+        h.store()
+            .workspace(one)
+            .unwrap()
+            .sessions
+            .iter()
+            .map(ngterm_core::model::Session::id)
+            .collect()
+    };
+    let u = order(&h)[0];
+    let first = bounds(cx, "row:a1");
+    let at = bounds(cx, "row:a2").center();
+    drag(cx, at, point(first.center().x, first.origin.y + px(2.)));
+    h.settle(cx);
+    assert_eq!(order(&h), [u, srv, companions[1], companions[0]]);
+
+    let two = bounds(cx, "row:two").center();
+    let at = bounds(cx, "row:a1").center();
+    drag(cx, at, two);
+    h.settle(cx);
+    assert_eq!(
+        order(&h),
+        [u, srv, companions[1], companions[0]],
+        "no workspace slot for a companion"
+    );
+}
+
+/// Upstream's `testACompanionAddedLaterKeepsStatusAndBadgeInsideTheSidebar` (#841): a nested row's status glyph and
+/// badge stay inside the sidebar, however long its name.
+#[gpui_kit::test]
+fn a_companions_status_glyph_and_badge_stay_inside_the_sidebar(cx: &mut TestAppContext) {
+    let (library, _, companions) = library_with_companions(&["a companion with a name far too long to fit the row"]);
+    let log = companions[0];
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    h.store_mut().set_agent_indicator(
+        AgentIndicator {
+            status: AgentStatus::Blocked,
+            ..AgentIndicator::default()
+        },
+        log,
+    );
+    h.store_mut().session_mut(log).unwrap().unseen_count = 3;
+    h.settle(cx);
+    let left = bounds(cx, "sidebar").origin.x;
+    let width = h.view.read_with(cx, |sidebar, _| sidebar.width());
+    #[expect(clippy::cast_possible_truncation, reason = "a sidebar width is a few hundred points")]
+    let edge = left + px(width as f32);
+    for selector in ["agent-status", "notify-badge"] {
+        let item = bounds(cx, selector);
+        assert!(item.size.width > px(0.), "{selector} shows");
+        assert!(
+            item.origin.x + item.size.width <= edge,
+            "{selector} runs past the sidebar edge: {item:?} past {edge:?}"
+        );
+    }
 }

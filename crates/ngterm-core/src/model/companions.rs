@@ -214,6 +214,17 @@ impl AppStore {
         true
     }
 
+    /// [`AppStore::set_session_expanded`] plus a request that the outline open or fold the parent row to match, even
+    /// on an unchanged value, since a reveal may have opened a row the saved fold calls folded (upstream's
+    /// `AppActions.setSessionExpanded` posting `.agtermSetSessionExpanded`). False for a session without companions.
+    pub fn set_session_expanded_in_outline(&mut self, id: Uuid, expanded: bool) -> bool {
+        if !self.set_session_expanded(id, expanded) {
+            return false;
+        }
+        self.sidebar.expansion_requests.insert(id, expanded);
+        true
+    }
+
     /// A parent's companions that are blocked, completed or carry unseen notifications: the ones a folded parent row
     /// must still surface.
     #[must_use]

@@ -33,7 +33,12 @@ fn render(glyph: Glyph, side: u32) -> Alpha {
 }
 
 fn every_glyph() -> Vec<Glyph> {
-    let mut glyphs = vec![Glyph::Plus, Glyph::NewWorkspace, Glyph::AddSession];
+    let mut glyphs = vec![
+        Glyph::Plus,
+        Glyph::NewWorkspace,
+        Glyph::AddSession,
+        Glyph::CompanionStack,
+    ];
     for on in [false, true] {
         glyphs.push(Glyph::Workspace { focus_member: on });
         glyphs.push(Glyph::Flag { filled: on });

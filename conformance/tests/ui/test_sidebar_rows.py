@@ -98,6 +98,35 @@ def test_tinted_icon_names_its_tint(ctl, ui):
     assert_ok(ctl.request("session.close", sid))
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("ui:companion-marker", "ui:session-row")
+def test_companion_rows_nest_fold_and_mark_attention(ctl, ui):
+    """A companion's row is labelled `companion` with its name the value; folding its parent hides it, and the
+    parent's marker names it while it needs attention."""
+    wid = assert_ok(ctl.request("workspace.new", name="ui-companions-ws"))["id"]
+    parent = _new(ctl, workspace=wid)
+    assert_ok(ctl.request("session.rename", parent, name="ui-parent"))
+    child = assert_ok(ctl.request("session.companion.new", parent, name="ui-child", noSelect=True))["id"]
+    marker = "companions need attention: ui-child"
+
+    def markers():
+        return [element for element in ui.all("companion-marker") if element.name == marker]
+
+    try:
+        wait_until(lambda: "ui-child" in _texts(ui, "session-row"))
+        assert [row for row in ui.all("session-row") if row.name == "companion" and ui.text(row) == "ui-child"]
+        assert_ok(ctl.request("session.status", child, status="blocked"))
+        assert not markers(), "an open parent shows its companions"
+        assert_ok(ctl.request("session.collapse", parent))
+        wait_until(lambda: "ui-child" not in _texts(ui, "session-row"))
+        wait_until(markers)
+        assert_ok(ctl.request("session.expand", parent))
+        wait_until(lambda: "ui-child" in _texts(ui, "session-row"))
+        wait_until(lambda: not markers())
+    finally:
+        assert_ok(ctl.request("workspace.delete", wid))
+
+
 @pytest.mark.covers("ui:flagged-view-toggle")
 def test_flagged_view_toggle_switches_the_sidebar_mode(ctl, ui):
     assert ctl.tree()["tree"]["sidebarMode"] == "tree"

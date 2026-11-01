@@ -74,10 +74,11 @@ fn new(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     Ok(result)
 }
 
-/// `session.collapse`/`session.expand`: folds or unfolds a parent's companions; a session without any is refused.
+/// `session.collapse`/`session.expand`: folds or unfolds a parent's companions, the sidebar row following even on an
+/// unchanged value; a session without any is refused.
 fn set_expanded(core: &mut Core, target: Option<&str>, args: &Args, expanded: bool) -> Outcome {
     let (store, id) = session_store(core, target, args.window.as_deref())?;
-    if !store.set_session_expanded(id, expanded) {
+    if !store.set_session_expanded_in_outline(id, expanded) {
         return Err(ControlError::rejected("session has no companions"));
     }
     Ok(with_id(id))

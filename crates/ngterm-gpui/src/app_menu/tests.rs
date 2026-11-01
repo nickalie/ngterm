@@ -150,7 +150,8 @@ fn file_carries_the_live_lists_and_help_the_docs_installers_and_about() {
         "the seeded window, then the closed one"
     );
     assert!(position("Open Recent") < position("No Recent Items"));
-    assert_eq!(position("Reveal in Files"), position("Duplicate Session") + 1);
+    assert_eq!(position("New Companion"), position("Duplicate Session") + 1);
+    assert_eq!(position("Reveal in Files"), position("New Companion") + 1);
     assert!(position("Help") < position("Developer Documentation…"));
     assert!(position("Developer Documentation…") < position("Install Command Line Tool…"));
     assert!(position("Install Agent Status Hooks…") < position("Install Agent Skill…"));

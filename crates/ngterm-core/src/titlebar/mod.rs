@@ -360,6 +360,14 @@ impl WindowLibrary {
         entries
     }
 
+    /// An attention row's title (upstream's `attentionLabel`): the session's list label, `parent › child` for a
+    /// companion.
+    #[must_use]
+    pub fn attention_label(&self, entry: &AttentionEntry<'_>) -> String {
+        self.store(entry.window)
+            .map_or_else(|| entry.session.display_name(), |store| store.list_label(entry.session))
+    }
+
     /// The subtitle every attention row shares: "`workspace` · detail", led by the window name once more than one
     /// window is open.
     #[must_use]
@@ -496,7 +504,7 @@ impl Core {
             .map(|session| SessionRow {
                 window,
                 session: session.id(),
-                title: session.display_name(),
+                title: store.list_label(session),
                 subtitle: session_subtitle(Some(store), session),
                 remote: session.remote_host().is_some(),
                 indicator: Some(session.agent_indicator.clone()),
@@ -515,7 +523,7 @@ impl Core {
             .map(|entry| SessionRow {
                 window: entry.window,
                 session: entry.session.id(),
-                title: entry.session.display_name(),
+                title: library.attention_label(entry),
                 subtitle: library.attention_subtitle(entry),
                 remote: entry.session.remote_host().is_some(),
                 indicator: Some(entry.session.agent_indicator.clone()),

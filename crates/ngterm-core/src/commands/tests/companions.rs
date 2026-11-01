@@ -153,20 +153,33 @@ fn folding_a_parent_saves_and_a_lone_session_is_refused() {
     assert_eq!(answered_id(&folded), Some(parent));
     assert!(!fixture.store().session(parent).unwrap().companion.expanded);
     assert_eq!(fixture.store().outbox().save, SaveRequest::Now);
-    // an unchanged value still answers ok, without a save
+    // an unchanged value still answers ok, without a save, and still asks the outline to fold the row (a reveal may
+    // have opened it)
     fixture.store_mut().unwrap().take_outbox();
+    fixture.store_mut().unwrap().take_sidebar_expansion_requests();
     let again = fixture.session(SessionCmd::Collapse, Some(&wire(parent)), Args::default());
     assert_eq!(answered_id(&again), Some(parent));
     assert_eq!(fixture.store().outbox().save, SaveRequest::None);
+    let requests = fixture.store_mut().unwrap().take_sidebar_expansion_requests();
+    assert_eq!(requests.into_iter().collect::<Vec<_>>(), [(parent, false)]);
     let unfolded = fixture.session(SessionCmd::Expand, Some(&wire(parent)), Args::default());
     assert_eq!(answered_id(&unfolded), Some(parent));
     assert!(fixture.store().session(parent).unwrap().companion.expanded);
+    fixture.store_mut().unwrap().take_sidebar_expansion_requests();
     for cmd in [SessionCmd::Collapse, SessionCmd::Expand] {
         assert_eq!(
             fixture.session(cmd, Some(&wire(after)), Args::default()),
             failure("session has no companions")
         );
     }
+    assert!(
+        fixture
+            .store_mut()
+            .unwrap()
+            .take_sidebar_expansion_requests()
+            .is_empty(),
+        "a refusal asks nothing of the outline"
+    );
 }
 
 #[test]

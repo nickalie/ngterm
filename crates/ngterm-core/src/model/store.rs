@@ -910,8 +910,9 @@ impl AppStore {
         self.sidebar.expansion_requests.insert(id, expanded);
     }
 
-    /// Takes the outline's pending per-row open and fold requests (see
-    /// [`AppStore::set_workspace_expanded_in_outline`]); called by the sidebar alone.
+    /// Takes the outline's pending per-row open and fold requests, workspace and parent rows keyed by their id (see
+    /// [`AppStore::set_workspace_expanded_in_outline`] and [`AppStore::set_session_expanded_in_outline`]); called by
+    /// the sidebar alone.
     pub fn take_sidebar_expansion_requests(&mut self) -> HashMap<Uuid, bool> {
         std::mem::take(&mut self.sidebar.expansion_requests)
     }

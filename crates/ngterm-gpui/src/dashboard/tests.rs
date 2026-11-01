@@ -93,6 +93,28 @@ fn the_model_names_each_cell_marks_the_highlight_and_carries_the_status() {
     assert!(cells.iter().all(|cell| cell.cover.is_none()));
 }
 
+/// Upstream's `testACompanionCaptionNamesItsParent`.
+#[test]
+fn a_companion_caption_names_its_parent() {
+    let mut store = AppStore::new();
+    let workspace = store.add_workspace("work");
+    let parent = store.add_session(workspace, NewSession::at_cwd("/tmp")).unwrap();
+    store.rename_session(parent, "api");
+    let options = ngterm_core::model::CompanionOptions {
+        name: Some("logs".to_owned()),
+        ..ngterm_core::model::CompanionOptions::default()
+    };
+    let companion = store.add_companion(parent, options, "/home/u").unwrap();
+    let model = GridModel {
+        members: vec![DashboardMember::primary(companion), DashboardMember::primary(parent)],
+        highlighted: None,
+        font_size: None,
+    };
+    let cells = model.cells(Some(&store), &AppSettings::default());
+    assert_eq!(cells[0].caption, "api › logs");
+    assert_eq!(cells[1].caption, "api");
+}
+
 #[test]
 fn the_pulse_rises_to_its_peak_and_back() {
     assert!(pulse_at(0.0).abs() < 1e-6);

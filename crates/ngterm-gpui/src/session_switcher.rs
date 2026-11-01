@@ -118,7 +118,8 @@ pub fn switch_key(stroke: &KeyStroke) -> Option<SwitchKey> {
     }
 }
 
-/// One candidate row: the display name over `workspace · detail`, its status glyph trailing.
+/// One candidate row: the list label (`parent › child` for a companion) over `workspace · detail`, its status glyph
+/// trailing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub id: Uuid,
@@ -145,7 +146,7 @@ pub fn candidates(core: &Core, window: Uuid) -> Vec<Candidate> {
                 .map_or("", |workspace| workspace.name.as_str());
             Some(Candidate {
                 id,
-                title: session.display_name(),
+                title: store.list_label(session),
                 subtitle: format!("{workspace} · {}", session.switcher_detail()),
                 remote: session.remote_host().is_some(),
                 glyph: status_glyph::resolve(&session.agent_indicator, core.settings()),
