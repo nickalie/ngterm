@@ -214,6 +214,12 @@ pub struct SessionSnapshot {
     pub split_initial_command: Option<String>,
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
     pub split_command_wait: Option<bool>,
+    /// A Duplicate as Companion copy's program, word by word ([`crate::model::PaneLaunch::argv`]); a Rust-only field.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub initial_argv: Option<Vec<String>>,
+    /// The split pane's [`Self::initial_argv`].
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub split_initial_argv: Option<Vec<String>>,
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
     pub background_watermark: Option<BackgroundWatermark>,
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]

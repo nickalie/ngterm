@@ -858,27 +858,27 @@ macOS/Linux and in the pane shell's dialect on Windows. The backslash refusal ap
 `test_duplicate_as_companion_refusals`; `tests/cli/test_cli_only.py::test_duplicate_no_select_needs_companion`; under
 Live, `test_a_duplicated_program_pane_closes_when_the_program_exits`.
 
-- [ ] `session.companion.duplicate` (target, window, noSelect), reply `{id, parent}`; a remote source goes to Task 19
-- [ ] source checks: "no such session", "a page companion has no terminal to duplicate", "a program overlay covers
+- [x] `session.companion.duplicate` (target, window, noSelect), reply `{id, parent}`; a remote source goes to Task 19
+- [x] source checks: "no such session", "a page companion has no terminal to duplicate", "a program overlay covers
       the session; nothing was created"; per pane, left then right: "<pane> pane is covered by a program overlay;
       nothing was created", "<pane> pane is not realized; nothing was created", then the replay plan from one fresh
       leader listing
-- [ ] `DuplicateReplay.resolve` per upstream (plain shell for a foreground shell; a bare name by the first PATH entry
+- [x] `DuplicateReplay.resolve` per upstream (plain shell for a foreground shell; a bare name by the first PATH entry
       resolving to the image, else the first executable entry; a relative name under its cwd; the system dirs
       without a PATH; an image gone after an upgrade starts the first PATH entry that resolves (#841)); every
       RestartReplay refusal on both the started path and the image; refusals "<pane> pane: <reason>; nothing was
       created", with the reasons "the foreground program's arguments contain a backslash, which cannot be copied",
       "the foreground program's executable path cannot be read", "the path the foreground program was started from
       cannot be found"
-- [ ] the copy: a companion after the parent's group, each program as its pane's ending creation command (Task 12),
+- [x] the copy: a companion after the parent's group, each program as its pane's ending creation command (Task 12),
       the split's axis and ratio, focus on the left pane (#842)
-- [ ] the GUI refusal in a timed HUD over the session ("Duplicate as Companion: <reason>"), a banner only without a
+- [x] the GUI refusal in a timed HUD over the session ("Duplicate as Companion: <reason>"), a banner only without a
       session (#841); built-in `duplicate_companion` (keyless), palette row (needs a terminal), row and Session menu
       items after New Companion; ctl `--companion --no-select` ("--no-select needs --companion")
-- [ ] write tests: every Swift case listed above, with a resolved-file seam; the environment parsers per OS; real
+- [x] write tests: every Swift case listed above, with a resolved-file seam; the environment parsers per OS; real
       zsh and fish argv round trips where present; process_table image/PATH reads per OS (CI runners)
-- [ ] write tests: the conformance tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the conformance tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 19: Companion sessions, part 7: remote companions and the parent respawn carried to viewers (#840)
 

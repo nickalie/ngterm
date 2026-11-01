@@ -243,6 +243,13 @@ enum Step {
     Attaching { request: AttachRequest, answer: Answer },
 }
 
+/// Where an action's HUD goes: over `session` in `window`, its message headed by `action`.
+struct ActionPanel<'a> {
+    action: &'a str,
+    window: Uuid,
+    session: Uuid,
+}
+
 /// One File ▸ Attach Remote in progress (upstream's `attachRemote` task with its `RemoteAttachHud`).
 #[derive(Debug)]
 pub(crate) struct AttachFlow {
@@ -528,37 +535,63 @@ impl Core {
 
     // MARK: - the attach's panels
 
-    fn attach_hud_message(text: &str) -> String {
-        crate::keymap::failure::message("Attach Remote", text)
-    }
-
     /// Opens the attach's panel over the session it started from; whether it opened.
     fn attach_open_hud(&mut self, flow: &mut AttachFlow, text: &str, hide_after: f64, spinner: bool) -> bool {
         let Some(session) = flow.hud_session else {
             return false;
         };
+        let panel = ActionPanel {
+            action: "Attach Remote",
+            window: flow.window,
+            session,
+        };
+        flow.owned_hud = self.open_action_hud(&panel, text, hide_after, spinner);
+        flow.owned_hud.is_some()
+    }
+
+    /// Opens `panel`'s HUD saying `text` (upstream's `RemoteAttachHud`); the slot generation of the panel it opened,
+    /// `None` when none opened.
+    fn open_action_hud(&mut self, panel: &ActionPanel<'_>, text: &str, hide_after: f64, spinner: bool) -> Option<u64> {
         let args = Args {
-            message: Some(Self::attach_hud_message(text)),
+            message: Some(crate::keymap::failure::message(panel.action, text)),
             spinner: spinner.then(|| "bar".to_owned()),
             hide_after: Some(hide_after),
-            window: Some(uuid_string(flow.window)),
+            window: Some(uuid_string(panel.window)),
             ..Args::default()
         };
         let response: Response = self.dispatch(&Request {
             cmd: Command::Session(SessionCmd::HudOpen),
-            target: Some(uuid_string(session)),
+            target: Some(uuid_string(panel.session)),
             args: Some(args),
         });
         if !response.ok {
-            return false;
+            return None;
         }
-        flow.owned_hud = self
-            .library()
-            .store_for_session(session)
-            .and_then(|store| store.session(session))
+        self.library()
+            .store_for_session(panel.session)
+            .and_then(|store| store.session(panel.session))
             .filter(|found| found.overlay.hud_active())
-            .map(|found| found.overlay.generation);
-        true
+            .map(|found| found.overlay.generation)
+    }
+
+    /// `action` failed: a timed error panel over `session` in `window`, else a banner (upstream's
+    /// `RemoteAttachHud.fail` and its `notifyCommandFailure` fallback).
+    pub(crate) fn action_failed(&mut self, action: &str, window: Uuid, session: Option<Uuid>, text: &str) {
+        let opened = session.and_then(|session| {
+            let panel = ActionPanel {
+                action,
+                window,
+                session,
+            };
+            self.open_action_hud(&panel, text, ERROR_SECONDS, false)
+        });
+        if opened.is_none() {
+            self.post_app_banner(
+                format!("command-failure:{action}"),
+                "Command failed",
+                format!("{action} ({text})"),
+            );
+        }
     }
 
     fn attach_progress(&mut self, flow: &mut AttachFlow, text: &str) {
@@ -589,11 +622,7 @@ impl Core {
             return;
         }
         self.attach_close_hud(flow);
-        self.post_app_banner(
-            "command-failure:Attach Remote",
-            "Command failed",
-            format!("Attach Remote ({text})"),
-        );
+        self.action_failed("Attach Remote", flow.window, None, text);
     }
 }
 

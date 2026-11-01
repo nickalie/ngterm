@@ -112,6 +112,7 @@ fn menu_context(store: &AppStore) -> MenuContext {
                     hidden_overlays: !session.hidden_overlay_names().is_empty(),
                     companions: store.companions(session.id()).into_iter().map(Session::id).collect(),
                     tint: session.tint,
+                    content: session.content(),
                 },
             );
         }

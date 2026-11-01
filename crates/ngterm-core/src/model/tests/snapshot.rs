@@ -322,6 +322,52 @@ fn creation_commands_round_trip_and_an_unset_hold_writes_nothing() {
     assert!(!back.session(plain).unwrap().launch.wait);
 }
 
+/// A Duplicate as Companion copy's argv round-trips beside its line through the file; an absent or malformed one, or
+/// one without a line, loads as none, and the line stays as it was.
+#[test]
+fn a_copied_argv_round_trips_and_a_malformed_one_loads_as_none() {
+    let (mut store, _, id) = store_with("/a");
+    {
+        let session = store.session_mut(id).unwrap();
+        session.launch.command = Some("'htop' '-d' '5'".to_owned());
+        session.launch.argv = Some(vec!["htop".to_owned(), "-d".to_owned(), "5".to_owned()]);
+        session.split.exists = true;
+        session.split_launch.command = Some("'top'".to_owned());
+        session.split_launch.argv = Some(vec!["top".to_owned()]);
+    }
+    let text = serde_json::to_string(&store.snapshot().workspaces[0].sessions[0]).unwrap();
+    assert!(text.contains(r#""initialArgv":["htop","-d","5"]"#), "{text}");
+    assert!(text.contains(r#""splitInitialArgv":["top"]"#), "{text}");
+    let decoded: SessionSnapshot = serde_json::from_str(&text).unwrap();
+    let back = restored(&one_workspace(vec![decoded]), false);
+    let session = first(&back);
+    assert_eq!(
+        session.launch.argv,
+        Some(vec!["htop".to_owned(), "-d".to_owned(), "5".to_owned()])
+    );
+    assert_eq!(session.split_launch.argv, Some(vec!["top".to_owned()]));
+    let load = |argv: &str, command: &str| {
+        let mut value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        value["initialArgv"] = serde_json::from_str(argv).unwrap();
+        value["initialCommand"] = serde_json::from_str(command).unwrap();
+        let decoded: SessionSnapshot = serde_json::from_str(&value.to_string()).unwrap();
+        let back = restored(&one_workspace(vec![decoded]), false);
+        first(&back).launch.clone()
+    };
+    for malformed in [r#""htop""#, "[1, 2]", "{}", "[]", "null"] {
+        let launch = load(malformed, r#""'htop'""#);
+        assert_eq!(launch.argv, None, "{malformed}");
+        assert_eq!(launch.command.as_deref(), Some("'htop'"), "{malformed}");
+    }
+    assert_eq!(load(r#"["htop"]"#, "null").argv, None, "no line, no argv");
+    let mut legacy: serde_json::Value = serde_json::from_str(&text).unwrap();
+    legacy.as_object_mut().unwrap().remove("initialArgv");
+    let decoded: SessionSnapshot = serde_json::from_str(&legacy.to_string()).unwrap();
+    let back = restored(&one_workspace(vec![decoded]), false);
+    assert_eq!(first(&back).launch.argv, None);
+    assert_eq!(first(&back).launch.command.as_deref(), Some("'htop' '-d' '5'"));
+}
+
 #[test]
 fn the_sidebar_round_trips_defaults_when_absent_and_clamps() {
     let (mut store, _, _) = store_with("/a");

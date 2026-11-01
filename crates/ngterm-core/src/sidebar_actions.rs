@@ -47,6 +47,9 @@ pub enum SidebarAction {
     /// Row menu and New Companion: a companion of the row's session, selected and focused (upstream's
     /// `newCompanion`).
     NewCompanion(Uuid),
+    /// Row menu and Duplicate as Companion: a companion copying the row's session, each pane's program started
+    /// again (upstream's `duplicateAsCompanion`).
+    DuplicateAsCompanion(Uuid),
     /// A user open or fold of a parent row's companions, persisted (the outline's expand and collapse callbacks on
     /// a session row).
     SetSessionExpanded {
@@ -169,6 +172,7 @@ impl Core {
                 created.is_some_and(|id| self.created_by_user(id))
             }
             SidebarAction::NewCompanion(session) => self.new_companion(window, session),
+            SidebarAction::DuplicateAsCompanion(session) => self.duplicate_as_companion(window, session),
             other => {
                 let grace = self.settings().close_grace_undo_enabled.unwrap_or(true);
                 self.library_mut()
@@ -232,6 +236,24 @@ impl Core {
         created.is_some_and(|id| self.created_by_user(id))
     }
 
+    /// Duplicate as Companion of `session` (upstream's `AppActions.duplicateAsCompanion`): the copy selected and
+    /// focused; a refusal shows in a timed HUD over the session (#841), a banner without one. A remote row's copy is
+    /// its origin's to make, which this build does not reach yet, so it is refused by name.
+    fn duplicate_as_companion(&mut self, window: Uuid, session: Uuid) -> bool {
+        match self.duplicate_companion(session, true) {
+            Ok(copy) => self.created_by_user(copy),
+            Err(reason) => {
+                let over = self
+                    .library()
+                    .store(window)
+                    .and_then(|store| store.session(session))
+                    .map(crate::model::Session::id);
+                self.action_failed("Duplicate as Companion", window, over, &reason);
+                true
+            }
+        }
+    }
+
     /// Sessions at each directory in `workspace`, appended (Open Directory… and a folder drop).
     fn open_directories(&mut self, window: Uuid, workspace: Uuid, directories: &[String]) -> bool {
         let Some(store) = self.library_mut().store_mut(window) else {
@@ -278,23 +300,8 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool) -> boo
             anchor,
         } => return store.move_flagged(&sessions, placement, anchor),
         SidebarAction::DropWorkspace { workspace, destination } => store.move_workspace(workspace, destination),
-        SidebarAction::ToggleFlags(ids) => {
-            let ids: Vec<Uuid> = ids.into_iter().filter(|id| store.session(*id).is_some()).collect();
-            if ids.is_empty() {
-                return false;
-            }
-            let all_flagged = ids.iter().all(|id| store.session(*id).is_some_and(|s| s.flagged));
-            store.set_flags(!all_flagged, &ids);
-        }
-        SidebarAction::ToggleWorkspaceFlags(id) => {
-            if store
-                .workspace(id)
-                .is_none_or(|workspace| workspace.sessions.is_empty())
-            {
-                return false;
-            }
-            store.apply_workspace_flag(ToggleMode::Toggle, id);
-        }
+        SidebarAction::ToggleFlags(ids) => return toggle_flags(store, ids),
+        SidebarAction::ToggleWorkspaceFlags(id) => return toggle_workspace_flags(store, id),
         SidebarAction::TintSessions { sessions, choice } => return store.apply_session_tints(choice, &sessions),
         SidebarAction::TintWorkspace { workspace, choice } => {
             let current = store.workspace(workspace).and_then(|workspace| workspace.tint);
@@ -331,8 +338,32 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool) -> boo
         | SidebarAction::OpenDirectories { .. }
         | SidebarAction::Duplicate(_)
         | SidebarAction::NewCompanion(_)
+        | SidebarAction::DuplicateAsCompanion(_)
         | SidebarAction::FocusActiveTerminal => return false,
     }
+    true
+}
+
+/// Flags `ids`, or unflags them when every one is flagged; false when none exists.
+fn toggle_flags(store: &mut AppStore, ids: Vec<Uuid>) -> bool {
+    let ids: Vec<Uuid> = ids.into_iter().filter(|id| store.session(*id).is_some()).collect();
+    if ids.is_empty() {
+        return false;
+    }
+    let all_flagged = ids.iter().all(|id| store.session(*id).is_some_and(|s| s.flagged));
+    store.set_flags(!all_flagged, &ids);
+    true
+}
+
+/// Toggles the flags of workspace `id`'s sessions; false for an unknown or empty workspace.
+fn toggle_workspace_flags(store: &mut AppStore, id: Uuid) -> bool {
+    if store
+        .workspace(id)
+        .is_none_or(|workspace| workspace.sessions.is_empty())
+    {
+        return false;
+    }
+    store.apply_workspace_flag(ToggleMode::Toggle, id);
     true
 }
 

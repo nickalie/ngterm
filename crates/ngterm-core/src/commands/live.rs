@@ -131,6 +131,11 @@ impl LiveRuntime {
     fn require_host(&self) -> Result<Arc<dyn SessionHost>, ControlError> {
         self.host.clone().ok_or_else(|| ControlError::rejected(UNAVAILABLE))
     }
+
+    /// The login shell a wrapped pane's daemon runs; `None` when this instance wraps no pane or names none.
+    pub(crate) fn login_shell(&self) -> Option<&str> {
+        self.wrap.as_ref()?.login_shell.as_deref()
+    }
 }
 
 /// The refusal of a `live.*` command in an instance without a session host (upstream's `ControlZmxError.unavailable`).

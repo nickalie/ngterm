@@ -275,8 +275,9 @@ fn closing_the_split_hides_it_tears_it_down_and_drops_what_it_owned() {
     session.split_restore.foreground = Some(vec!["htop".to_owned()]);
     session.split_restore.pending_foreground = Some(vec!["htop".to_owned()]);
     session.split_launch = PaneLaunch {
-        command: Some("ssh split-host".to_owned()),
+        command: Some("'ssh' 'split-host'".to_owned()),
         wait: true,
+        argv: Some(vec!["ssh".to_owned(), "split-host".to_owned()]),
     };
     session.pane_backgrounds.right = Some(watermark(WatermarkKind::Text, "R"));
     session.search.active = true;
@@ -372,15 +373,20 @@ fn a_promotion_carries_the_split_creation_command_and_restore_halves() {
     let session = get_mut(&mut store, id);
     session.launch.command = Some("ssh primary-host".to_owned());
     session.split_launch = PaneLaunch {
-        command: Some("ssh split-host".to_owned()),
+        command: Some("'ssh' 'split-host'".to_owned()),
         wait: true,
+        argv: Some(vec!["ssh".to_owned(), "split-host".to_owned()]),
     };
     session.restore.command = Some("primary pin".to_owned());
     session.split_restore.command = None;
     session.split_restore.pending_command = Some("split armed".to_owned());
     store.close_primary_pane(id);
     let session = get(&store, id);
-    assert_eq!(session.launch.command.as_deref(), Some("ssh split-host"));
+    assert_eq!(session.launch.command.as_deref(), Some("'ssh' 'split-host'"));
+    assert_eq!(
+        session.launch.argv,
+        Some(vec!["ssh".to_owned(), "split-host".to_owned()])
+    );
     assert!(session.launch.wait);
     assert_eq!(session.split_launch, PaneLaunch::default());
     assert_eq!(session.restore.command, None, "an absent split pin migrates as a clear");
@@ -542,10 +548,12 @@ fn seeded_swap() -> (AppStore, Uuid, FakeSurfaceProbe, FakeSurfaceProbe) {
     session.launch = PaneLaunch {
         command: Some("left command".to_owned()),
         wait: false,
+        argv: None,
     };
     session.split_launch = PaneLaunch {
         command: Some("right command".to_owned()),
         wait: true,
+        argv: Some(vec!["right".to_owned(), "command".to_owned()]),
     };
     session.pane_backgrounds.left = Some(watermark(WatermarkKind::Text, "DRIVER"));
     session.pane_backgrounds.right = Some(watermark(WatermarkKind::Color, "#201414"));
@@ -596,6 +604,11 @@ fn a_swap_exchanges_the_restore_state_creation_commands_and_backgrounds() {
     assert_eq!((&session.restore, &session.split_restore), (&right, &left));
     assert_eq!(session.launch.command.as_deref(), Some("right command"));
     assert!(session.launch.wait && !session.split_launch.wait);
+    assert_eq!(
+        session.launch.argv,
+        Some(vec!["right".to_owned(), "command".to_owned()])
+    );
+    assert_eq!(session.split_launch.argv, None);
     assert_eq!(
         session
             .pane_backgrounds

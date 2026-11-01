@@ -277,6 +277,7 @@ fn confirmations_use_upstreams_words() {
             hidden_overlays: false,
             companions: Vec::new(),
             tint: None,
+            content: ngterm_core::model::SessionContent::Terminal,
         },
     );
     assert_eq!(
@@ -332,6 +333,7 @@ fn a_parents_close_confirmation_names_the_companions_not_chosen_with_it() {
         hidden_overlays: false,
         companions,
         tint: None,
+        content: ngterm_core::model::SessionContent::Terminal,
     };
     context.menu.sessions.insert(parent, facts("api", vec![logs, tests]));
     context.menu.sessions.insert(logs, facts("logs", Vec::new()));
@@ -895,9 +897,10 @@ fn the_row_menu_and_the_footers_add_session_menu_run_their_items(cx: &mut TestAp
         },
         "Mark for Attention ran on the clicked row"
     );
-    // Clear Status, Rename, Copy Name, Duplicate Session, New Companion, Move to, Flag: the seventh item
+    // Clear Status, Rename, Copy Name, Duplicate Session, New Companion, Duplicate as Companion, Move to, Flag: the
+    // eighth item
     right_click(cx, "row:srv");
-    cx.simulate_keystrokes("down down down down down down down enter");
+    cx.simulate_keystrokes("down down down down down down down down enter");
     h.settle(cx);
     assert!(h.store().session(srv).unwrap().flagged, "Flag ran on the clicked row");
 

@@ -543,6 +543,7 @@ impl Sidebar {
             MenuAction::CopyName(None) => {}
             MenuAction::Duplicate(id) => self.act(SidebarAction::Duplicate(id)),
             MenuAction::NewCompanion(id) => self.act(SidebarAction::NewCompanion(id)),
+            MenuAction::DuplicateAsCompanion(id) => self.act(SidebarAction::DuplicateAsCompanion(id)),
             MenuAction::MoveTo { sessions, workspace } => self.act(SidebarAction::MoveSessions { sessions, workspace }),
             MenuAction::ToggleFlags(ids) => self.act(SidebarAction::ToggleFlags(ids)),
             MenuAction::Reveal(cwd) => cx.reveal_path(Path::new(&cwd)),

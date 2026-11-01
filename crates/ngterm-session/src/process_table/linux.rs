@@ -76,6 +76,18 @@ impl ProcessTable for ProcTable {
         let link = fs::read_link(self.process_file(pid, "cwd")).ok()?;
         link.into_os_string().into_string().ok()
     }
+
+    /// The `exe` link; `None` for an image an upgrade deleted.
+    fn executable_path(&self, pid: i32) -> Option<String> {
+        let link = fs::read_link(self.process_file(pid, "exe")).ok()?;
+        let link = link.into_os_string().into_string().ok()?;
+        procfs::live_image(&link).map(str::to_owned)
+    }
+
+    fn search_path(&self, pid: i32) -> Option<String> {
+        let environ = fs::read(self.process_file(pid, "environ")).ok()?;
+        super::search_path_of(&procfs::parse_environ(&environ), false)
+    }
 }
 
 #[cfg(test)]
@@ -159,5 +171,27 @@ mod tests {
         assert!(table.group(own.pgrp).contains(&own));
         let cwd = std::env::current_dir().unwrap();
         assert_eq!(table.working_directory(pid).as_deref(), cwd.to_str());
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(table.executable_path(pid).as_deref(), exe.to_str());
+        assert!(table.search_path(pid).is_some(), "the test runner has a PATH");
+        assert_eq!(table.executable_path(-1), None);
+        assert_eq!(table.search_path(-1), None);
+    }
+
+    #[test]
+    fn a_fake_tree_answers_the_image_and_the_path() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("7");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("environ"), b"HOME=/h\0PATH=/opt/bin:/usr/bin\0").unwrap();
+        std::os::unix::fs::symlink("/usr/bin/codex (deleted)", dir.join("exe")).unwrap();
+        let table = ProcTable::at(root.path());
+        assert_eq!(table.search_path(7).as_deref(), Some("/opt/bin:/usr/bin"));
+        assert_eq!(table.executable_path(7), None, "an upgrade removed the image");
+        fs::remove_file(dir.join("exe")).unwrap();
+        std::os::unix::fs::symlink("/usr/bin/htop", dir.join("exe")).unwrap();
+        assert_eq!(table.executable_path(7).as_deref(), Some("/usr/bin/htop"));
+        fs::write(dir.join("environ"), b"HOME=/h\0").unwrap();
+        assert_eq!(table.search_path(7), None);
     }
 }

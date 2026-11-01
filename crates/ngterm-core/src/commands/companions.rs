@@ -5,8 +5,8 @@
 //!
 //! Upstream's `ControlActions` default that refuses companions on an older host has no target here: one dispatcher
 //! serves the app and `ngterm-headless`. A remote parent answers upstream's local-path refusal until remote
-//! companions are ported. The page forms are [`super::companion_page`]'s; the duplicate form is refused by name until
-//! its task ports it.
+//! companions are ported. The page forms are [`super::companion_page`]'s, the duplicate form
+//! [`super::companion_duplicate`]'s.
 
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Command, Request};
@@ -30,6 +30,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::Expand => set_expanded(core, target, args, true),
         SessionCmd::CompanionPage => super::companion_page::page(core, target, args),
         SessionCmd::CompanionPageAttach => super::companion_page::attach(core, target, args.window.as_deref()),
+        SessionCmd::CompanionDuplicate => super::companion_duplicate::duplicate(core, request),
         other => Err(ControlError::NotSupported(Command::Session(other))),
     }
 }

@@ -668,6 +668,10 @@ pub struct FakeProcessTable {
     foregrounds: std::cell::RefCell<BTreeMap<i32, i32>>,
     /// The working directory each process reports.
     directories: std::cell::RefCell<BTreeMap<i32, String>>,
+    /// The image path each process reports.
+    executables: std::cell::RefCell<BTreeMap<i32, String>>,
+    /// The `PATH` each process reports.
+    search_paths: std::cell::RefCell<BTreeMap<i32, String>>,
 }
 
 impl FakeProcessTable {
@@ -679,6 +683,16 @@ impl FakeProcessTable {
     /// Makes process `pid` report `directory` as its working directory.
     pub fn set_working_directory(&self, pid: i32, directory: &str) {
         self.directories.borrow_mut().insert(pid, directory.to_owned());
+    }
+
+    /// Makes process `pid` report `path` as its image.
+    pub fn set_executable_path(&self, pid: i32, path: &str) {
+        self.executables.borrow_mut().insert(pid, path.to_owned());
+    }
+
+    /// Makes process `pid` report `path` as its `PATH`.
+    pub fn set_search_path(&self, pid: i32, path: &str) {
+        self.search_paths.borrow_mut().insert(pid, path.to_owned());
     }
 
     /// Adds process `stat` with `argv` (`None` for one whose argv cannot be read), replacing one with its pid.
@@ -727,6 +741,14 @@ impl crate::ProcessTable for FakeProcessTable {
 
     fn working_directory(&self, pid: i32) -> Option<String> {
         self.directories.borrow().get(&pid).cloned()
+    }
+
+    fn executable_path(&self, pid: i32) -> Option<String> {
+        self.executables.borrow().get(&pid).cloned()
+    }
+
+    fn search_path(&self, pid: i32) -> Option<String> {
+        self.search_paths.borrow().get(&pid).cloned()
     }
 }
 

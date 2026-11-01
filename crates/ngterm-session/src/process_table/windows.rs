@@ -1,6 +1,7 @@
 //! The Windows process table: an argv from the process's command line, the parent from a tool-help snapshot, the
 //! console's stand-in foreground ([`super::console_foreground`], over a live pane's shell's descendants here and over
-//! an in-app pane's job in [`job_foreground`]) and the working directory from the process environment block.
+//! an in-app pane's job in [`job_foreground`]), the working directory and the environment's `Path` from the process
+//! environment block, and the image path from `QueryFullProcessImageNameW`.
 //!
 //! herdr: `src/platform/windows.rs` (`read_process_command_line`, `command_line_to_argv`, `process_cwd`,
 //! `process_cwd_descriptor`, `read_process_parameters`, `read_process_value`, `read_unicode_string`, the `Peb`,
@@ -27,7 +28,8 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::Threading::{
-    PROCESS_BASIC_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    PROCESS_BASIC_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    QueryFullProcessImageNameW,
 };
 use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
 
@@ -116,6 +118,86 @@ impl ProcessTable for ProcTable {
         }
         Some(path)
     }
+
+    /// `QueryFullProcessImageNameW`, the image's Win32 path.
+    fn executable_path(&self, pid: i32) -> Option<String> {
+        let process = open(u32::try_from(pid).ok()?, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        let mut units = vec![0_u16; 32_768];
+        let mut size = u32::try_from(units.len()).ok()?;
+        // SAFETY: `units` is writable for `size` units, and `size` is writable.
+        let ok = unsafe {
+            QueryFullProcessImageNameW(
+                process.as_raw_handle(),
+                PROCESS_NAME_WIN32,
+                units.as_mut_ptr(),
+                &raw mut size,
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        units.truncate(usize::try_from(size).ok()?);
+        String::from_utf16(&units).ok().filter(|path| !path.is_empty())
+    }
+
+    /// `Path`, in any case, from the environment block the process parameters name.
+    fn search_path(&self, pid: i32) -> Option<String> {
+        let process = open(
+            u32::try_from(pid).ok()?,
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+        )?;
+        let block = read_environment(process.as_raw_handle(), environment_address(process.as_raw_handle())?)?;
+        super::search_path_of(&environment_strings(&block), true)
+    }
+}
+
+/// The longest environment block read, in UTF-16 units; a block that runs on past it is not read.
+const MAX_ENVIRONMENT_UNITS: usize = 1 << 20;
+
+/// The `KEY=value` strings of a UTF-16 environment block, each decoded lossily, up to the empty string ending it.
+fn environment_strings(block: &[u16]) -> Vec<(String, String)> {
+    super::environment_entries(
+        block
+            .split(|unit| *unit == 0)
+            .take_while(|entry| !entry.is_empty())
+            .map(String::from_utf16_lossy),
+    )
+}
+
+/// The environment block at `address` in `process`, through the empty string that ends it: read a page at a time, so
+/// no read runs past the block's last mapped page. `None` when it cannot be read or never ends.
+fn read_environment(process: HANDLE, address: usize) -> Option<Vec<u16>> {
+    const PAGE: usize = 4096;
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut at = address;
+    while bytes.len() / 2 < MAX_ENVIRONMENT_UNITS {
+        let chunk = PAGE - at % PAGE;
+        let mut page = vec![0_u8; chunk];
+        let mut read = 0_usize;
+        // SAFETY: `page` is writable for `chunk` bytes, and `read` is writable.
+        let ok = unsafe {
+            ReadProcessMemory(
+                process,
+                std::ptr::without_provenance(at),
+                page.as_mut_ptr().cast(),
+                chunk,
+                &raw mut read,
+            )
+        };
+        if ok == 0 || read != chunk {
+            return None;
+        }
+        bytes.extend_from_slice(&page);
+        at += chunk;
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        if let Some(end) = units.windows(2).position(|pair| pair == [0, 0]) {
+            return Some(units[..end + 2].to_vec());
+        }
+    }
+    None
 }
 
 /// The stand-in foreground ([`console_foreground`]) of an in-app pane whose program `root` runs in a job holding
@@ -276,7 +358,8 @@ struct Peb {
     process_parameters: *mut c_void,
 }
 
-/// The prefix of a native `RTL_USER_PROCESS_PARAMETERS`, through the current directory's DOS path.
+/// The prefix of a native `RTL_USER_PROCESS_PARAMETERS`, through the environment block's address: the current
+/// directory (its DOS path and handle), the DLL path, the image path and the command line come before it.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct ProcessParameters {
@@ -285,6 +368,9 @@ struct ProcessParameters {
     _console_flags: u32,
     _standard_handles: [HANDLE; 3],
     current_directory: UNICODE_STRING,
+    _current_directory_handle: HANDLE,
+    _paths_and_command_line: [UNICODE_STRING; 3],
+    environment: *mut c_void,
 }
 
 /// The current directory of `process` (its length in bytes and its address in the process); `None` when it cannot
@@ -297,6 +383,24 @@ fn current_directory(process: HANDLE) -> Option<(u16, *const c_void)> {
             return wow64::current_directory(process, peb32);
         }
     }
+    let directory = process_parameters(process)?.current_directory;
+    Some((directory.Length, directory.Buffer.cast_const().cast()))
+}
+
+/// The address of `process`'s environment block; `None` when it cannot be read.
+fn environment_address(process: HANDLE) -> Option<usize> {
+    #[cfg(target_pointer_width = "64")]
+    {
+        let peb32 = wow64::peb_address(process)?;
+        if peb32 != 0 {
+            return wow64::environment(process, peb32);
+        }
+    }
+    Some(process_parameters(process)?.environment.addr()).filter(|address| *address != 0)
+}
+
+/// The native process parameters of `process`; `None` when they cannot be read.
+fn process_parameters(process: HANDLE) -> Option<ProcessParameters> {
     let mut basic = PROCESS_BASIC_INFORMATION::default();
     let size = u32::try_from(size_of::<PROCESS_BASIC_INFORMATION>()).ok()?;
     // SAFETY: `basic` is a writable `PROCESS_BASIC_INFORMATION` of exactly `size` bytes.
@@ -313,9 +417,7 @@ fn current_directory(process: HANDLE) -> Option<(u16, *const c_void)> {
         return None;
     }
     let peb = read_remote::<Peb>(process, basic.PebBaseAddress.cast_const().cast())?;
-    let parameters = read_remote::<ProcessParameters>(process, peb.process_parameters.cast_const())?;
-    let directory = parameters.current_directory;
-    Some((directory.Length, directory.Buffer.cast_const().cast()))
+    read_remote::<ProcessParameters>(process, peb.process_parameters.cast_const())
 }
 
 /// A 32-bit process under `WoW64` keeps its current directory in its own 32-bit environment block (the native one may
@@ -340,12 +442,15 @@ mod wow64 {
         process_parameters: u32,
     }
 
-    /// The prefix of a 32-bit `RTL_USER_PROCESS_PARAMETERS`, through the current directory's DOS path.
+    /// The prefix of a 32-bit `RTL_USER_PROCESS_PARAMETERS`, through the environment block's address.
     #[repr(C)]
     #[derive(Clone, Copy)]
     struct ProcessParameters32 {
         _reserved: [u32; 9],
         current_directory: STRING32,
+        _current_directory_handle: u32,
+        _paths_and_command_line: [STRING32; 3],
+        environment: u32,
     }
 
     /// The address of the 32-bit environment block of `process`, zero for a native process; `None` when the query
@@ -366,12 +471,21 @@ mod wow64 {
         (status >= 0).then_some(peb32)
     }
 
-    /// The current directory of the 32-bit `process` whose environment block is at `peb32`.
-    pub(super) fn current_directory(process: HANDLE, peb32: usize) -> Option<(u16, *const c_void)> {
+    fn parameters(process: HANDLE, peb32: usize) -> Option<ProcessParameters32> {
         let peb = read_remote::<Peb32>(process, std::ptr::without_provenance(peb32))?;
         let address = usize::try_from(peb.process_parameters).ok()?;
-        let parameters = read_remote::<ProcessParameters32>(process, std::ptr::without_provenance(address))?;
-        let directory = parameters.current_directory;
+        read_remote::<ProcessParameters32>(process, std::ptr::without_provenance(address))
+    }
+
+    /// The environment block's address in the 32-bit `process` whose environment block is at `peb32`.
+    pub(super) fn environment(process: HANDLE, peb32: usize) -> Option<usize> {
+        let address = usize::try_from(parameters(process, peb32)?.environment).ok()?;
+        (address != 0).then_some(address)
+    }
+
+    /// The current directory of the 32-bit `process` whose environment block is at `peb32`.
+    pub(super) fn current_directory(process: HANDLE, peb32: usize) -> Option<(u16, *const c_void)> {
+        let directory = parameters(process, peb32)?.current_directory;
         let buffer = usize::try_from(directory.Buffer).ok()?;
         Some((directory.Length, std::ptr::without_provenance(buffer)))
     }
@@ -481,8 +595,23 @@ mod tests {
             read.eq_ignore_ascii_case(cwd.to_str().unwrap().trim_end_matches('\\')),
             "{read} {cwd:?}"
         );
+        let image = table.executable_path(pid).unwrap();
+        assert!(image.eq_ignore_ascii_case(exe.to_str().unwrap()), "{image} {exe:?}");
+        assert!(table.search_path(pid).is_some(), "the test runner has a Path");
         assert_eq!(table.stat(-1), None);
         assert_eq!(table.argv(0), None);
+        assert_eq!(table.executable_path(0), None);
+    }
+
+    #[test]
+    fn an_environment_block_ends_at_its_empty_string() {
+        let block = wide("=C:=C:\\work\0Path=C:\\bin;C:\\tools\0HOME=x\0\0Path=late\0");
+        let entries = environment_strings(&block);
+        assert_eq!(
+            super::super::search_path_of(&entries, true).as_deref(),
+            Some("C:\\bin;C:\\tools")
+        );
+        assert_eq!(entries.len(), 2, "{entries:?}");
     }
 
     /// The process `pid` is running, among `parent`'s live descendants, waited for.

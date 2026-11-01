@@ -79,6 +79,24 @@ pub fn parse_cmdline(bytes: &[u8]) -> Option<Vec<String>> {
     )
 }
 
+/// The environment in a `/proc/<pid>/environ`: NUL-separated `KEY=value` strings, each decoded lossily, the first of
+/// a repeated key kept.
+#[must_use]
+pub fn parse_environ(bytes: &[u8]) -> Vec<(String, String)> {
+    crate::process_table::environment_entries(
+        bytes
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| String::from_utf8_lossy(entry).into_owned()),
+    )
+}
+
+/// The image path a `/proc/<pid>/exe` link names, `None` once the file is gone (the kernel appends ` (deleted)`).
+#[must_use]
+pub fn live_image(link: &str) -> Option<&str> {
+    (!link.ends_with(" (deleted)")).then_some(link)
+}
+
 /// Whether a `/proc` directory entry's name is a pid.
 #[must_use]
 pub fn is_pid(name: &str) -> bool {
@@ -88,6 +106,22 @@ pub fn is_pid(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_environ_gives_its_first_value_of_each_key() {
+        let entries = parse_environ(b"PATH=/a:/b\0HOME=/h\0PATH=/c\0junk\0EMPTY=\0");
+        assert_eq!(
+            entries,
+            [("PATH", "/a:/b"), ("HOME", "/h"), ("EMPTY", "")].map(|(key, value)| (key.to_owned(), value.to_owned()))
+        );
+        assert!(parse_environ(b"").is_empty());
+    }
+
+    #[test]
+    fn a_deleted_image_reads_as_gone() {
+        assert_eq!(live_image("/usr/bin/codex"), Some("/usr/bin/codex"));
+        assert_eq!(live_image("/usr/bin/codex (deleted)"), None);
+    }
 
     const LINE: &[u8] = b"4242 (a (b) c) S 4200 4250 4242 34817 4260 4194560 0 0 0 0 1 2 0 0 20 0 1 0 987654 0 0";
 

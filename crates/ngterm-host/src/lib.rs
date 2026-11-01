@@ -352,4 +352,16 @@ pub trait ProcessTable {
     fn working_directory(&self, _pid: i32) -> Option<String> {
         None
     }
+
+    /// The absolute path of process `pid`'s image; `None` when it cannot be read or the file is gone (an upgrade
+    /// removed it).
+    fn executable_path(&self, _pid: i32) -> Option<String> {
+        None
+    }
+
+    /// Process `pid`'s own `PATH` (`Path` on Windows, any case); `None` when its environment cannot be read or has
+    /// none.
+    fn search_path(&self, _pid: i32) -> Option<String> {
+        None
+    }
 }

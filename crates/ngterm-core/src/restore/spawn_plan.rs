@@ -10,12 +10,48 @@
 //! (`session new --command`, `session split --command`) ends the pane when it exits, as outside Live, and holds on
 //! `--wait` ([`resolve_live_seed`]); a captured argv's replay returns to the login shell, as `session restart
 //! --command` does (`commands::restart_live`).
+//!
+//! A Duplicate as Companion copy's creation command is quoted at spawn for the shell that runs it, from the argv the
+//! copy keeps ([`crate::model::PaneLaunch::argv`]): [`ORDINARY_DIALECT`] outside Live, the live login shell's dialect
+//! in a wrapped pane. A shell that cannot carry the argv brings the pane up as its plain login shell, never with a
+//! line quoted for another shell; a pane without an argv runs its stored line as it is.
 
 use std::collections::{BTreeSet, HashSet};
 
 use crate::command_restore::{PaneInput, RestoreInputs, restore_plan, should_restore};
 use crate::live::support::{Configuration, Creation, LiveAttach, attach_line, live_attach, settled};
-use crate::model::{Session, StatusPane};
+use crate::model::{PaneLaunch, Session, StatusPane};
+use crate::shell_dialect::ShellDialect;
+
+/// The dialect a pane's command line is read in outside Live: `/bin/sh -c`'s, `cmd.exe /D /S /C`'s on Windows
+/// (`ngterm_term`'s launch).
+pub const ORDINARY_DIALECT: ShellDialect = if cfg!(windows) {
+    ShellDialect::Cmd
+} else {
+    ShellDialect::Posix
+};
+
+/// A copied argv the launching shell's dialect cannot carry.
+struct Uncarried;
+
+/// `launch`'s creation command as a shell of `dialect` reads it: its copied argv quoted for that shell, else the stored
+/// line as it is.
+fn creation_command(launch: &PaneLaunch, dialect: ShellDialect) -> Result<Option<String>, Uncarried> {
+    match &launch.argv {
+        Some(argv) => dialect.line(argv).map(Some).ok_or(Uncarried),
+        None => Ok(launch.command.clone()),
+    }
+}
+
+/// Logs a creation command left out because the pane's shell cannot carry its argv (the argv itself is not logged).
+fn warn_uncarried(session: &Session, pane: StatusPane, dialect: ShellDialect) {
+    tracing::warn!(
+        session = %session.id(),
+        pane = pane.as_str(),
+        ?dialect,
+        "the pane's shell cannot run its copied program; it starts a plain shell"
+    );
+}
 
 /// What a pane spawns with: the exec `command`, the `initial_input` typed into a login shell, and whether a command's
 /// exit holds on the "press any key" prompt (upstream's `LaunchSeed`). `command` and `initial_input` exclude each
@@ -63,8 +99,23 @@ impl LaunchSeedPolicy {
 /// Pane `pane`'s seed, consuming the slots the launch armed for it (upstream's `LaunchSeedProvider.seed`). The scratch
 /// has none.
 pub fn resolve_seed(session: &mut Session, pane: StatusPane, policy: &LaunchSeedPolicy) -> LaunchSeed {
+    resolve_seed_in(session, pane, policy, ORDINARY_DIALECT)
+}
+
+/// [`resolve_seed`] with a copied argv quoted for `dialect`.
+fn resolve_seed_in(
+    session: &mut Session,
+    pane: StatusPane,
+    policy: &LaunchSeedPolicy,
+    dialect: ShellDialect,
+) -> LaunchSeed {
     let Some(launch) = session.pane_launch(pane).cloned() else {
         return LaunchSeed::default();
+    };
+    // an argv the shell cannot carry is planned with its stored line, so it is left out only where it would run
+    let (initial_command, uncarried) = match creation_command(&launch, dialect) {
+        Ok(command) => (command, false),
+        Err(Uncarried) => (launch.command.clone(), true),
     };
     let inputs = if policy.live_fell_back {
         RestoreInputs {
@@ -72,7 +123,7 @@ pub fn resolve_seed(session: &mut Session, pane: StatusPane, policy: &LaunchSeed
             restore_enabled: false,
             had_foreground: false,
             foreground_input: None,
-            initial_command: launch.command,
+            initial_command,
             restore_override: None,
             requested_wait: launch.wait,
         }
@@ -83,12 +134,16 @@ pub fn resolve_seed(session: &mut Session, pane: StatusPane, policy: &LaunchSeed
             restore_enabled: policy.restore_enabled,
             had_foreground: capture.is_some(),
             foreground_input: policy.restore_initial_input(capture.as_deref()),
-            initial_command: launch.command,
+            initial_command,
             restore_override: session.take_pending_restore_override(pane),
             requested_wait: launch.wait,
         }
     };
-    let plan = restore_plan(&inputs);
+    let mut plan = restore_plan(&inputs);
+    if uncarried && plan.command.take().is_some() {
+        warn_uncarried(session, pane, dialect);
+        plan.wait_after_command = false;
+    }
     LaunchSeed {
         command: plan.command,
         initial_input: plan.initial_input,
@@ -113,9 +168,8 @@ pub fn resolve_live_seed(
     let suppressed = policy.suppressed_daemons.contains(&configuration.daemon_name);
     let captured = session.take_pending_foreground(pane);
     let replay = captured.filter(|_| !suppressed);
-    let launch = session.pane_launch(pane);
     let pane_command = if replay.is_none() && !suppressed {
-        launch.and_then(|launch| launch.command.as_deref())
+        live_creation_command(session, pane, configuration)
     } else {
         None
     };
@@ -123,17 +177,32 @@ pub fn resolve_live_seed(
     let attach = live_attach(
         configuration,
         replay.as_deref(),
-        pane_command.map(Creation::EndingPane),
+        pane_command.as_deref().map(Creation::EndingPane),
         &denylist,
     );
     LaunchSeed {
         command: Some(settled(&attach_line(configuration, &attach))),
         initial_input: None,
-        wait_after_command: launch.is_some_and(|launch| launch.wait),
+        wait_after_command: session.pane_launch(pane).is_some_and(|launch| launch.wait),
         env: configuration.environment.clone().into_iter().collect(),
         live: true,
         attach: configuration.in_process(attach),
     }
+}
+
+/// Pane `pane`'s creation command in a wrapped pane, quoted for the live login shell that evaluates it; `None` (a plain
+/// login shell) when that shell cannot carry the pane's copied argv.
+fn live_creation_command(session: &Session, pane: StatusPane, configuration: &Configuration) -> Option<String> {
+    let launch = session.pane_launch(pane)?;
+    let Some(shell) = configuration.environment.get("SHELL") else {
+        // no login shell: the attach runs no creation payload at all
+        return launch.command.clone();
+    };
+    let dialect = ShellDialect::of_shell(shell);
+    creation_command(launch, dialect).unwrap_or_else(|Uncarried| {
+        warn_uncarried(session, pane, dialect);
+        None
+    })
 }
 
 #[cfg(test)]
@@ -332,5 +401,122 @@ mod tests {
             "kept for the next launch"
         );
         assert!(restored.restore.pending_command.is_some());
+    }
+
+    /// A Duplicate as Companion copy of `argv`, its stored line quoted in the `stored` dialect.
+    fn copied(argv: &[&str], stored: ShellDialect, restored: bool) -> Session {
+        let argv: Vec<String> = argv.iter().map(|word| (*word).to_owned()).collect();
+        let mut copy = session(stored.line(&argv).as_deref(), false, restored);
+        copy.launch.argv = Some(argv);
+        copy
+    }
+
+    /// `wrapped()` with `shell` as the live login shell.
+    fn wrapped_in(shell: &str) -> Configuration {
+        let mut configuration = wrapped();
+        configuration.environment.insert("SHELL".to_owned(), shell.to_owned());
+        configuration
+    }
+
+    const NODE: [&str; 2] = [r"C:\Program Files\nodejs\node.exe", "app.js"];
+
+    /// A copy made outside Live on Windows (or while Live had fallen back) stores cmd's line; launched later with Live
+    /// working under PowerShell, its argv is quoted with the call operator, not handed to the script block as cmd's
+    /// line.
+    #[test]
+    fn a_cmd_copy_launched_under_live_powershell_runs_the_call_operator() {
+        let mut copy = copied(&NODE, ShellDialect::Cmd, true);
+        assert_eq!(
+            copy.launch.command.as_deref(),
+            Some(r#""C:\Program Files\nodejs\node.exe" app.js"#)
+        );
+        let pwsh = wrapped_in(if cfg!(windows) {
+            r"C:\Program Files\PowerShell\7\pwsh.exe"
+        } else {
+            "/usr/bin/pwsh"
+        });
+        assert_eq!(
+            live_creation_command(&copy, StatusPane::Left, &pwsh).as_deref(),
+            Some(r"& 'C:\Program Files\nodejs\node.exe' 'app.js'")
+        );
+        let seed = resolve_live_seed(&mut copy, StatusPane::Left, &policy(true, &[]), &pwsh);
+        assert!(seed.live && seed.command.is_some());
+    }
+
+    /// A copy made under Live PowerShell, launched later outside Live through `cmd.exe /D /S /C`, runs cmd's line of
+    /// its argv, never the call operator.
+    #[test]
+    fn a_powershell_era_copy_launched_through_cmd_runs_cmds_line() {
+        let mut copy = copied(&NODE, ShellDialect::PowerShell, true);
+        assert_eq!(
+            copy.launch.command.as_deref(),
+            Some(r"& 'C:\Program Files\nodejs\node.exe' 'app.js'")
+        );
+        let seed = resolve_seed_in(&mut copy, StatusPane::Left, &policy(true, &[]), ShellDialect::Cmd);
+        assert_eq!(
+            seed.command.as_deref(),
+            Some(r#""C:\Program Files\nodejs\node.exe" app.js"#)
+        );
+    }
+
+    /// A copy made while Live had fallen back stores the POSIX line; a later launch with Live working under fish runs
+    /// fish's quoting of its argv, under zsh the POSIX line, and under PowerShell (on Linux or macOS too) the call
+    /// operator.
+    #[test]
+    fn a_fallback_copy_is_quoted_for_the_live_login_shell_at_launch() {
+        let argv = ["/usr/bin/tool", "it's", "a b"];
+        let posix = r"'/usr/bin/tool' 'it'\''s' 'a b'";
+        let mut copy = copied(&argv, ShellDialect::Posix, false);
+        let fallback = LaunchSeedPolicy {
+            live_fell_back: true,
+            ..LaunchSeedPolicy::default()
+        };
+        let seed = resolve_seed_in(&mut copy, StatusPane::Left, &fallback, ShellDialect::Posix);
+        assert_eq!(seed.command.as_deref(), Some(posix));
+        copy.was_restored = true;
+        let fish = wrapped_in("/usr/bin/fish");
+        assert_eq!(
+            live_creation_command(&copy, StatusPane::Left, &fish).as_deref(),
+            Some(r"'/usr/bin/tool' 'it\'s' 'a b'")
+        );
+        let pwsh = live_creation_command(&copy, StatusPane::Left, &wrapped_in("/usr/bin/pwsh"));
+        assert!(
+            pwsh.as_deref().is_some_and(|line| line.contains("& '/usr/bin/tool'")),
+            "{pwsh:?}"
+        );
+        assert_eq!(pwsh, ShellDialect::PowerShell.line(&argv));
+        let zsh = resolve_live_seed(&mut copy, StatusPane::Left, &policy(true, &[]), &wrapped());
+        assert_eq!(zsh.command, Some(live_command(None, Some(Creation::EndingPane(posix)))));
+    }
+
+    /// A shell that cannot carry the copied argv brings the pane up as its plain login shell, never with the stored
+    /// line, and the hold goes with the command; a pane without an argv runs its stored line as it is.
+    #[test]
+    fn a_shell_that_cannot_carry_the_argv_starts_a_plain_shell() {
+        let mut copy = copied(&[r"C:\100%\tool.exe", "x"], ShellDialect::PowerShell, false);
+        copy.launch.wait = true;
+        let seed = resolve_seed_in(&mut copy, StatusPane::Left, &policy(true, &[]), ShellDialect::Cmd);
+        assert_eq!(seed, LaunchSeed::default());
+        let nu = wrapped_in("/usr/bin/nu");
+        let mut words = copied(&["tool", "a b"], ShellDialect::Posix, false);
+        assert_eq!(live_creation_command(&words, StatusPane::Left, &nu), None);
+        words.launch.argv = None;
+        assert_eq!(
+            live_creation_command(&words, StatusPane::Left, &nu).as_deref(),
+            Some("'tool' 'a b'")
+        );
+        let mut user = session(Some("lazygit && echo done"), false, false);
+        let seed = resolve_seed_in(&mut user, StatusPane::Left, &policy(false, &[]), ShellDialect::Cmd);
+        assert_eq!(seed.command.as_deref(), Some("lazygit && echo done"));
+    }
+
+    /// Where the creation command would not run (a captured job preempts it), an uncarried argv changes nothing.
+    #[test]
+    fn an_uncarried_argv_keeps_the_precedence_of_the_creation_command() {
+        let mut restored = copied(&[r"C:\100%\tool.exe"], ShellDialect::PowerShell, true);
+        restored.restore.pending_foreground = Some(argv(&["vim"]));
+        let seed = resolve_seed_in(&mut restored, StatusPane::Left, &policy(true, &[]), ShellDialect::Cmd);
+        assert_eq!(seed.initial_input, Some(PaneInput::Replay(argv(&["vim"]))));
+        assert_eq!(seed.command, None);
     }
 }

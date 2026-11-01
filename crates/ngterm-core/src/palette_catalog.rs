@@ -124,6 +124,7 @@ pub enum PaletteCommand {
     RenameSession,
     DuplicateSession,
     NewCompanion,
+    DuplicateCompanion,
     RenameWorkspace,
     CloseSession,
     ReopenRecent,
@@ -217,6 +218,7 @@ impl PaletteCommand {
                 | Self::Find
                 | Self::FocusLeftPane
                 | Self::FocusRightPane
+                | Self::DuplicateCompanion
         )
     }
 
@@ -234,6 +236,7 @@ impl PaletteCommand {
             Self::RenameSession
             | Self::DuplicateSession
             | Self::NewCompanion
+            | Self::DuplicateCompanion
             | Self::ClearStatus
             | Self::ToggleFlag
             | Self::ToggleSplit
@@ -342,6 +345,7 @@ impl PaletteCommand {
             Self::RenameSession => "Rename Session",
             Self::DuplicateSession => "Duplicate Session",
             Self::NewCompanion => "New Companion",
+            Self::DuplicateCompanion => "Duplicate as Companion",
             Self::RenameWorkspace => "Rename Workspace",
             Self::CloseSession => "Close Session",
             Self::ReopenRecent => "Reopen Last Closed Item",
@@ -409,6 +413,7 @@ impl PaletteCommand {
             Self::RenameSession => BuiltinAction::RenameSession,
             Self::DuplicateSession => BuiltinAction::DuplicateSession,
             Self::NewCompanion => BuiltinAction::NewCompanion,
+            Self::DuplicateCompanion => BuiltinAction::DuplicateCompanion,
             Self::RenameWorkspace => BuiltinAction::RenameWorkspace,
             Self::CloseSession => BuiltinAction::CloseSession,
             Self::ReopenRecent => BuiltinAction::ReopenRecent,
@@ -510,10 +515,11 @@ mod tests {
         PaletteCommand::ToggleTerminalZoom,
     ];
 
-    const NEED_SESSION: [PaletteCommand; 17] = [
+    const NEED_SESSION: [PaletteCommand; 18] = [
         PaletteCommand::RenameSession,
         PaletteCommand::DuplicateSession,
         PaletteCommand::NewCompanion,
+        PaletteCommand::DuplicateCompanion,
         PaletteCommand::ClearStatus,
         PaletteCommand::ToggleFlag,
         PaletteCommand::ToggleSplit,
@@ -548,6 +554,7 @@ mod tests {
                 "Rename Session",
                 "Duplicate Session",
                 "New Companion",
+                "Duplicate as Companion",
                 "Rename Workspace",
                 "Close Session",
                 "Reopen Last Closed Item",
@@ -611,7 +618,7 @@ mod tests {
 
     #[test]
     fn catalog_has_the_expected_static_command_count() {
-        assert_eq!(PaletteCommand::all().count(), 60);
+        assert_eq!(PaletteCommand::all().count(), 61);
     }
 
     #[test]
@@ -855,6 +862,21 @@ mod tests {
         assert_eq!(command.builtin_action(), Some(BuiltinAction::NewCompanion));
         assert_eq!(PaletteCommand::for_builtin(BuiltinAction::NewCompanion), Some(command));
         assert_eq!(command.title_default(), "New Companion");
+    }
+
+    /// Upstream's `duplicateAsCompanionNeedsATerminal`.
+    #[test]
+    fn duplicate_as_companion_needs_a_terminal() {
+        let command = PaletteCommand::DuplicateCompanion;
+        assert!(command.is_enabled(&ctx(F::HAS_ACTIVE_SESSION)));
+        assert!(!command.is_enabled(&ctx(F::HAS_ACTIVE_SESSION | F::ACTIVE_SESSION_IS_PAGE)));
+        assert!(!command.is_enabled(&ctx(F::empty())));
+        assert_eq!(command.builtin_action(), Some(BuiltinAction::DuplicateCompanion));
+        assert_eq!(
+            PaletteCommand::for_builtin(BuiltinAction::DuplicateCompanion),
+            Some(command)
+        );
+        assert_eq!(command.title_default(), "Duplicate as Companion");
     }
 
     /// Upstream's `aPageCompanionDisablesTerminalOnlyCommands`.

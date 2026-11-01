@@ -215,6 +215,8 @@ pub fn session_snapshot(session: &Session) -> SessionSnapshot {
         command_wait: session.launch.wait.then_some(true),
         split_initial_command: session.split_launch.command.clone(),
         split_command_wait: session.split_launch.wait.then_some(true),
+        initial_argv: session.launch.argv.clone(),
+        split_initial_argv: session.split_launch.argv.clone(),
         background_watermark: session.background_watermark.clone(),
         pane_backgrounds: session.pane_backgrounds.persisted(),
         restore_command: session.restore.command.clone(),
@@ -225,6 +227,12 @@ pub fn session_snapshot(session: &Session) -> SessionSnapshot {
         parent_id: session.parent_id(),
         collapsed: (!session.companion.expanded).then_some(true),
     }
+}
+
+/// A pane's persisted copied argv, kept only beside the creation command it stands for and never empty: a stray or
+/// empty one would start a program the pane was not created with.
+fn copied_argv(command: Option<&String>, argv: Option<&Vec<String>>) -> Option<Vec<String>> {
+    argv.filter(|argv| command.is_some() && !argv.is_empty()).cloned()
 }
 
 /// Rebuilds one session, its companion link as persisted: the workspace's regrouping drops one naming no top-level
@@ -261,9 +269,14 @@ pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool) -
     session.last_selected_at = snapshot.last_selected_at.and_then(crate::projection::system_time);
     session.launch.command.clone_from(&snapshot.initial_command);
     session.launch.wait = snapshot.command_wait.unwrap_or(false);
+    session.launch.argv = copied_argv(snapshot.initial_command.as_ref(), snapshot.initial_argv.as_ref());
     if has_split {
         session.split_launch.command.clone_from(&snapshot.split_initial_command);
         session.split_launch.wait = snapshot.split_command_wait.unwrap_or(false);
+        session.split_launch.argv = copied_argv(
+            snapshot.split_initial_command.as_ref(),
+            snapshot.split_initial_argv.as_ref(),
+        );
         session
             .split_restore
             .command

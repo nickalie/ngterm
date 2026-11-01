@@ -294,6 +294,8 @@ fn replay_launch(core: &Core, job: &Job, old: i32) -> Result<Launch, String> {
         is_daemon_leader: observed.as_ref().is_some_and(|(pid, _)| *pid == old),
         foreground: observed.map(|(_, foreground)| foreground),
         working_directory,
+        executable_path: None,
+        search_path: None,
     };
     let denylist: Vec<&str> = core.restore.denylist().iter().map(String::as_str).collect();
     restart_replay::resolve(&observation, core.restore.shell(), &denylist).map_err(|refusal| refusal.message())

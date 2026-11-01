@@ -84,6 +84,11 @@ pub struct PaneLaunch {
     /// Whether the pane HOLDS after the command exits (libghostty's "press any key to close" prompt) instead of
     /// closing. Meaningful only with `command`.
     pub wait: bool,
+    /// The program `command` starts, word by word, when the pane is a Duplicate as Companion copy: a launch quotes it
+    /// for the shell that runs it ([`crate::restore::spawn_plan`]), so the copy survives a change of restore mode or
+    /// login shell. `command` holds it as `/bin/sh -c` (`cmd.exe` on Windows) reads it. A user's `--command` line has
+    /// none. Persisted alongside `command`.
+    pub argv: Option<Vec<String>>,
 }
 
 impl PaneLaunch {
@@ -200,6 +205,7 @@ mod tests {
         let mut launch = PaneLaunch {
             command: None,
             wait: true,
+            argv: None,
         };
         assert!(!launch.holds());
         launch.command = Some("htop".to_owned());

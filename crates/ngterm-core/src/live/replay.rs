@@ -570,6 +570,45 @@ mod tests {
         }
     }
 
+    /// A Duplicate as Companion pane's creation command (`crate::duplicate_replay`, `shell_quoted_line`) as each shell
+    /// ends with it.
+    fn duplicated_line(dir: &Path, result: &Path, expected: &[&str]) -> String {
+        let record = recorder(dir);
+        let mut argv = vec![record.display().to_string(), result.display().to_string()];
+        argv.extend(expected.iter().map(|value| (*value).to_owned()));
+        shell_quoted_line(&argv)
+    }
+
+    const DUPLICATED: [&str; 5] = ["can't", "two words", "", "$HOME", "semi;colon"];
+
+    /// upstream's `aDuplicatedProgramsCreationCommandKeepsItsArgvThroughZsh`, under bash and, where present, zsh.
+    #[test]
+    #[cfg_attr(windows, ignore = "runs its script with a POSIX shell, which Windows has not")]
+    fn a_duplicated_programs_creation_command_keeps_its_argv_through_a_posix_shell() {
+        for (kind, path) in posix_shells() {
+            let dir = tempfile::tempdir().unwrap();
+            let result = dir.path().join("argv");
+            let line = duplicated_line(dir.path(), &result, &DUPLICATED);
+            assert!(run(path, &render_ending(&line, kind)), "{path}");
+            assert_eq!(recorded(&result), DUPLICATED, "{path}");
+        }
+    }
+
+    /// upstream's `aDuplicatedProgramsCreationCommandKeepsItsArgvThroughFish`, where fish is present.
+    #[test]
+    #[cfg_attr(windows, ignore = "runs the ending under fish, which Windows has not")]
+    fn a_duplicated_programs_creation_command_keeps_its_argv_through_fish() {
+        let Some(fish) = fish() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let result = dir.path().join("argv");
+        let line = duplicated_line(dir.path(), &result, &DUPLICATED);
+        let output = run_fish(fish, &render_ending(&line, LoginShell::Fish), dir.path(), None);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(recorded(&result), DUPLICATED);
+    }
+
     /// upstream's `endingCommandStartsNoShellAfterIt`, and the PowerShell form: the global exit code cleared, then the
     /// line in a script block that ends with the exit.
     #[test]

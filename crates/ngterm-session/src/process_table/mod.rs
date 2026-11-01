@@ -19,6 +19,12 @@
 //!   stands in for it, over an in-app pane's job ([`job_foreground`]) or a live pane's shell's descendants
 //!   ([`ProcessTable::terminal_foreground`](ngterm_host::ProcessTable::terminal_foreground)).
 //!
+//! A process's image path and its own `PATH` (Duplicate as Companion's lookup, upstream's `executablePath` and
+//! `parseProcEnvironment`): Linux's `/proc/<pid>/exe` link (a ` (deleted)` suffix means the image is gone) and
+//! `/proc/<pid>/environ`; macOS's `proc_pidpath` and the environment after argv in the same `KERN_PROCARGS2` blob
+//! ([`parse_proc_environment`]; a platform binary's is withheld); Windows' `QueryFullProcessImageNameW` and the
+//! environment block its process parameters name, read as the working directory is (`Path` in any case).
+//!
 //! An argv is decoded lossily everywhere, so an undecodable byte (or an unpaired UTF-16 surrogate) becomes U+FFFD,
 //! which the restore then refuses to replay, as upstream's lossy decode does.
 
@@ -43,9 +49,52 @@ const MAX_ARG_COUNT: i32 = 4096;
 
 /// The argv in a macOS `KERN_PROCARGS2` blob (upstream's `CommandRestore.parseProcArgs`): a host-order `i32` argc,
 /// the NUL-terminated executable path, zero or more NUL padding bytes, then `argc` NUL-terminated arguments (the
-/// environment follows, ignored), each decoded lossily. `None` for a truncated or implausible blob.
+/// environment follows, [`parse_proc_environment`]), each decoded lossily. `None` for a truncated or implausible blob.
 #[must_use]
 pub fn parse_procargs(bytes: &[u8]) -> Option<Vec<String>> {
+    procargs_fields(bytes).map(|(argv, _)| argv)
+}
+
+/// The environment in a `KERN_PROCARGS2` blob (upstream's `CommandRestore.parseProcEnvironment`): the `KEY=value`
+/// strings after argv up to the first empty one, which separates them from the kernel's own `key=value` strings; the
+/// first of a repeated key wins. `None` when argv is unreadable.
+#[must_use]
+pub fn parse_proc_environment(bytes: &[u8]) -> Option<Vec<(String, String)>> {
+    let (_, rest) = procargs_fields(bytes)?;
+    let strings = rest
+        .split(|byte| *byte == 0)
+        .take_while(|entry| !entry.is_empty())
+        .map(|entry| String::from_utf8_lossy(entry).into_owned());
+    Some(environment_entries(strings))
+}
+
+/// `KEY=value` strings as pairs, in order, the first of a repeated key kept; a string whose first `=` is missing or
+/// comes first (an empty key, as in Windows' hidden `=C:=C:\work` drive entries) is skipped.
+#[must_use]
+pub fn environment_entries(strings: impl IntoIterator<Item = String>) -> Vec<(String, String)> {
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for entry in strings {
+        let Some((key, value)) = entry.split_once('=').filter(|(key, _)| !key.is_empty()) else {
+            continue;
+        };
+        if !entries.iter().any(|(known, _)| known == key) {
+            entries.push((key.to_owned(), value.to_owned()));
+        }
+    }
+    entries
+}
+
+/// The value of `PATH` among `entries`; `any_case` reads Windows' `Path` too.
+#[must_use]
+pub fn search_path_of(entries: &[(String, String)], any_case: bool) -> Option<String> {
+    entries
+        .iter()
+        .find(|(key, _)| key == "PATH" || (any_case && key.eq_ignore_ascii_case("PATH")))
+        .map(|(_, value)| value.clone())
+}
+
+/// A `KERN_PROCARGS2` blob's argv and the bytes after it.
+fn procargs_fields(bytes: &[u8]) -> Option<(Vec<String>, &[u8])> {
     if bytes.len() <= 4 {
         return None;
     }
@@ -66,7 +115,7 @@ pub fn parse_procargs(bytes: &[u8]) -> Option<Vec<String>> {
         argv.push(String::from_utf8_lossy(&rest[..end]).into_owned());
         rest = rest.get(end + 1..).unwrap_or_default();
     }
-    (argv.len() == count).then_some(argv)
+    (argv.len() == count).then_some((argv, rest))
 }
 
 /// One process of a console, as [`console_foreground`] weighs it.
@@ -114,3 +163,6 @@ pub fn console_foreground(shell: i32, members: &[ConsoleMember]) -> Option<i32> 
         .min_by_key(|member| (member.started, member.pid));
     Some(oldest.map_or(shell, |member| member.pid))
 }
+
+#[cfg(test)]
+mod tests;

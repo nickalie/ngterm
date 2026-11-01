@@ -72,6 +72,24 @@ impl ProcessTable for ProcTable {
             .collect();
         String::from_utf8(bytes).ok().filter(|path| !path.is_empty())
     }
+
+    /// `proc_pidpath` (upstream's `executablePath`).
+    fn executable_path(&self, pid: i32) -> Option<String> {
+        let mut buffer = vec![0_u8; usize::try_from(libc::PROC_PIDPATHINFO_MAXSIZE).ok()?];
+        let size = u32::try_from(buffer.len()).ok()?;
+        // SAFETY: the buffer is writable for `size` bytes.
+        let read = unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), size) };
+        let read = usize::try_from(read).ok().filter(|read| *read > 0)?;
+        buffer.truncate(read);
+        let end = buffer.iter().position(|byte| *byte == 0).unwrap_or(buffer.len());
+        buffer.truncate(end);
+        String::from_utf8(buffer).ok().filter(|path| !path.is_empty())
+    }
+
+    /// The `PATH` after argv in the `KERN_PROCARGS2` blob; macOS withholds a platform binary's environment.
+    fn search_path(&self, pid: i32) -> Option<String> {
+        super::search_path_of(&super::parse_proc_environment(&procargs(pid)?)?, false)
+    }
 }
 
 /// The `kinfo_proc` of `pid`; `None` when it is gone or cannot be read.
@@ -165,6 +183,12 @@ mod tests {
             .working_directory(pid)
             .map(|path| std::path::PathBuf::from(path).canonicalize().unwrap());
         assert_eq!(read, Some(cwd));
+        let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
+        let image = table
+            .executable_path(pid)
+            .map(|path| std::path::PathBuf::from(path).canonicalize().unwrap());
+        assert_eq!(image, Some(exe));
+        assert!(table.search_path(pid).is_some(), "the test runner has a PATH");
         assert_eq!(table.stat(-1), None);
         assert_eq!(table.argv(-1), None);
         assert_eq!(table.group(-1), []);

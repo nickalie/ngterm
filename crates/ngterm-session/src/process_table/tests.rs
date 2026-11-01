@@ -94,7 +94,12 @@ fn a_consoles_foreground_is_its_oldest_program_else_the_shell() {
     let busy = [shell.clone(), launched, pager.clone(), git, fork];
     assert_eq!(console_foreground(100, &busy), Some(200));
     // a member whose argv cannot be read, or one older than the shell, never stands in
-    let hidden = [shell.clone(), member(150, 15, None), member(90, 5, Some(&["old"])), pager];
+    let hidden = [
+        shell.clone(),
+        member(150, 15, None),
+        member(90, 5, Some(&["old"])),
+        pager,
+    ];
     assert_eq!(console_foreground(100, &hidden), Some(201));
     assert_eq!(console_foreground(999, &hidden), None, "the shell is gone");
     // equal creation times go to the lower pid
@@ -111,10 +116,63 @@ fn a_command_wrapper_holds_its_consoles_foreground() {
     let split = member(
         100,
         10,
-        Some(&["cmd.exe", "/D", "/S", "/C", r"C:\Program", r"Files\nodejs\node.exe server.js"]),
+        Some(&[
+            "cmd.exe",
+            "/D",
+            "/S",
+            "/C",
+            r"C:\Program",
+            r"Files\nodejs\node.exe server.js",
+        ]),
     );
     let node = member(101, 11, Some(&[r"C:\Program Files\nodejs\node.exe", "server.js"]));
     assert_eq!(console_foreground(100, &[split, node]), Some(100));
     let interactive = member(100, 10, Some(&["cmd.exe"]));
     assert_eq!(console_foreground(100, &[interactive, cat]), Some(101));
+}
+
+/// Upstream's `parseProcEnvironmentReadsTheStringsAfterArgvUpToTheFirstEmptyOne`.
+#[test]
+fn proc_environment_reads_the_strings_after_argv_up_to_the_first_empty_one() {
+    let pairs = |entries: &[(&str, &str)]| {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect::<Vec<_>>()
+    };
+    let data = blob(
+        2,
+        "/usr/bin/vim",
+        2,
+        &[
+            b"vimdiff",
+            b"a",
+            b"PATH=/work/.venv/bin:/usr/bin",
+            b"HOME=/Users/x",
+            b"",
+            b"executable_path=/usr/bin/vim",
+        ],
+    );
+    assert_eq!(
+        parse_proc_environment(&data),
+        Some(pairs(&[("PATH", "/work/.venv/bin:/usr/bin"), ("HOME", "/Users/x")]))
+    );
+    assert_eq!(
+        parse_proc_environment(&blob(1, "/bin/ls", 0, &[b"ls"])),
+        Some(Vec::new())
+    );
+    let argv_path = blob(2, "/usr/bin/env", 0, &[b"env", b"PATH=/evil", b"PATH=/real"]);
+    assert_eq!(parse_procargs(&argv_path), Some(strings(&["env", "PATH=/evil"])));
+    assert_eq!(parse_proc_environment(&argv_path), Some(pairs(&[("PATH", "/real")])));
+    assert_eq!(parse_proc_environment(&blob(2, "/bin/ls", 0, &[b"ls"])), None);
+}
+
+#[test]
+fn the_search_path_is_the_first_path_and_any_case_on_windows() {
+    let entries = environment_entries(
+        [r"=C:=C:\work", r"Path=C:\bin", "PATH=/usr/bin", "PATH=/later", "junk"].map(str::to_owned),
+    );
+    assert_eq!(search_path_of(&entries, false).as_deref(), Some("/usr/bin"));
+    assert_eq!(search_path_of(&entries, true).as_deref(), Some(r"C:\bin"));
+    assert_eq!(search_path_of(&[], false), None);
 }

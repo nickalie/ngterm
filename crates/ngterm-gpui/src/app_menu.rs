@@ -70,6 +70,7 @@ const FILE: &[&[Item]] = &[
         Item::Row(PaletteCommand::RenameSession),
         Item::Row(PaletteCommand::DuplicateSession),
         Item::Row(PaletteCommand::NewCompanion),
+        Item::Row(PaletteCommand::DuplicateCompanion),
         Item::Row(PaletteCommand::CloseSession),
         Item::Row(PaletteCommand::UndoClose),
         Item::Row(PaletteCommand::ClearStatus),
@@ -412,7 +413,7 @@ struct Live {
 }
 
 /// Appends `item` to `entries`, with the live parts upstream places around it: Open Window after New Window, Open Recent
-/// before Reopen Last Closed Item, Reveal in Files after New Companion.
+/// before Reopen Last Closed Item, Reveal in Files after Duplicate as Companion.
 fn with_live_parts(entries: &mut Vec<Entry>, which: Item, item: MenuItem, live: &Live) {
     if which == Item::Row(PaletteCommand::ReopenRecent) {
         entries.push(Entry::Submenu {
@@ -426,7 +427,7 @@ fn with_live_parts(entries: &mut Vec<Entry>, which: Item, item: MenuItem, live: 
             title: "Open Window".to_owned(),
             entries: window_menu(&live.windows, live.available),
         }),
-        Item::Row(PaletteCommand::NewCompanion) => entries.push(Entry::Item(
+        Item::Row(PaletteCommand::DuplicateCompanion) => entries.push(Entry::Item(
             MenuItem::new(
                 "reveal-session",
                 "Reveal in Files",

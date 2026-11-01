@@ -16,6 +16,7 @@ pub mod command_restore;
 mod commands;
 pub mod dashboard;
 pub mod dispatch;
+pub mod duplicate_replay;
 pub mod error;
 pub mod events;
 pub mod first_run;

@@ -50,6 +50,7 @@ pub use companions::{
     CompanionOptions, CompanionRefusal, CompanionState, PageCompanionOptions, PrimaryPaneExit, RESPAWN_MINIMUM_UPTIME,
     SessionContent,
 };
+pub use duplicate::{CompanionCopy, PaneCopy};
 pub use flagged_order::FlaggedOrderPlacement;
 pub use focus::FocusMode;
 pub use html_overlay::{HtmlOverlayCommandFailure, HtmlOverlayOpenFailure, HtmlPageSlot};

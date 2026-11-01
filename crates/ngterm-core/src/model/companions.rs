@@ -124,11 +124,11 @@ impl Default for PageCompanionOptions {
 }
 
 /// Where a companion goes: the parent's workspace, the end of its group, and the cwd it starts in.
-struct CompanionSlot {
-    workspace: Uuid,
-    index: usize,
-    parent: Uuid,
-    cwd: String,
+pub(super) struct CompanionSlot {
+    pub(super) workspace: Uuid,
+    pub(super) index: usize,
+    pub(super) parent: Uuid,
+    pub(super) cwd: String,
 }
 
 impl AppStore {
@@ -238,7 +238,12 @@ impl AppStore {
         Ok(id)
     }
 
-    fn companion_slot(&self, target: Uuid, cwd: Option<String>, home: &str) -> Result<CompanionSlot, CompanionRefusal> {
+    pub(super) fn companion_slot(
+        &self,
+        target: Uuid,
+        cwd: Option<String>,
+        home: &str,
+    ) -> Result<CompanionSlot, CompanionRefusal> {
         let target = self.session(target).ok_or(CompanionRefusal::NoSuchSession)?;
         let parent = self.parent_of(target).unwrap_or(target);
         let at = self.location(parent.id()).ok_or(CompanionRefusal::NoSuchSession)?;

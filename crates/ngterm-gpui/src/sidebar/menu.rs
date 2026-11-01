@@ -10,7 +10,7 @@ use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::{
     Context, ElementId, IntoElement as _, ParentElement as _, SharedString, Styled as _, Text, Window, div, px,
 };
-use ngterm_core::model::{MoveTree, SidebarTint, TintChoice, TintColor, TintParts};
+use ngterm_core::model::{MoveTree, SessionContent, SidebarTint, TintChoice, TintColor, TintParts};
 use uuid::Uuid;
 
 /// What a session row's menu reads of its session.
@@ -29,6 +29,8 @@ pub struct SessionFacts {
     pub companions: Vec<Uuid>,
     /// The row's tint, what the Tint submenu checks.
     pub tint: Option<SidebarTint>,
+    /// What the row shows: a page companion has no terminal to duplicate.
+    pub content: SessionContent,
 }
 
 /// What a workspace row's menu reads of its workspace.
@@ -89,6 +91,8 @@ pub enum MenuAction {
     Duplicate(Uuid),
     /// New Companion of a row's session.
     NewCompanion(Uuid),
+    /// Duplicate as Companion of a row's session.
+    DuplicateAsCompanion(Uuid),
     MoveTo {
         sessions: Vec<Uuid>,
         workspace: Uuid,
@@ -195,6 +199,15 @@ pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl F
             "New Companion",
             MenuAction::NewCompanion(clicked),
         )));
+        if facts
+            .first()
+            .is_some_and(|facts| facts.content == SessionContent::Terminal)
+        {
+            menu.push(MenuEntry::Item(MenuItem::new(
+                "Duplicate as Companion",
+                MenuAction::DuplicateAsCompanion(clicked),
+            )));
+        }
     }
     menu.extend(move_to_submenu(context, &facts, &targets));
     let all_flagged = !facts.is_empty() && facts.iter().all(|facts| facts.flagged);
@@ -440,6 +453,7 @@ mod tests {
             hidden_overlays: false,
             companions: Vec::new(),
             tint: None,
+            content: SessionContent::Terminal,
         };
         let workspace = |id, name: &str, count| WorkspaceFacts {
             id,
@@ -463,6 +477,18 @@ mod tests {
     }
 
     #[test]
+    fn a_page_rows_menu_offers_no_duplicate_as_companion() {
+        let (mut context, _, [a, ..]) = context();
+        context.sessions.get_mut(&a).unwrap().content = SessionContent::Page;
+        let labels = labels(&session_menu(&context, a, |_| true));
+        assert!(labels.iter().any(|label| label == "New Companion"), "{labels:?}");
+        assert!(
+            !labels.iter().any(|label| label == "Duplicate as Companion"),
+            "{labels:?}"
+        );
+    }
+
+    #[test]
     fn a_single_session_menu_offers_the_single_target_items() {
         let (context, [_, two], [a, ..]) = context();
         let menu = session_menu(&context, a, |_| true);
@@ -475,6 +501,7 @@ mod tests {
                 "Copy Name",
                 "Duplicate Session",
                 "New Companion",
+                "Duplicate as Companion",
                 "Move to [1]",
                 "Flag",
                 "Tint [13]",
@@ -486,6 +513,10 @@ mod tests {
             "New Companion",
             MenuAction::NewCompanion(a)
         ))));
+        assert!(menu.contains(&MenuEntry::Item(MenuItem::new(
+            "Duplicate as Companion",
+            MenuAction::DuplicateAsCompanion(a)
+        ))));
         assert!(menu.contains(&MenuEntry::Submenu {
             label: "Move to".into(),
             items: vec![MenuEntry::Item(MenuItem::new(
@@ -496,7 +527,7 @@ mod tests {
                 }
             ))],
         }));
-        assert_eq!(labels(&session_menu(&context, a, |_| false))[9], "(Reveal in Files)");
+        assert_eq!(labels(&session_menu(&context, a, |_| false))[10], "(Reveal in Files)");
     }
 
     /// Upstream's `testMoveToIsOfferedForAParentAndNotForACompanion`: b becomes a's companion.

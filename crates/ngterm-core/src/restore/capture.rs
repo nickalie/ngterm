@@ -107,6 +107,14 @@ impl<'a> ForegroundReader<'a> {
             .map(|(_, foreground)| foreground)
     }
 
+    /// The process a copy of group `pgid`'s foreground starts again, and what it is: [`ForegroundReader::running`]'s
+    /// read with the pid it read, so the `/bin/sh -c` (`cmd.exe /D /S /C`) wrapper of a `--command` pane is passed
+    /// over for the program it runs.
+    #[must_use]
+    pub fn replayed(&self, pgid: i32) -> Option<(i32, PaneForeground)> {
+        self.past_command_wrapper(pgid).or_else(|| self.observed(pgid))
+    }
+
     /// The first readable member of group `pgid`'s descent (upstream's `groupDescentCandidates`).
     fn descent(&self, pgid: i32) -> Option<(i32, PaneForeground)> {
         let members: Vec<ProcessGroupMember> = self

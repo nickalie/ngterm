@@ -3,6 +3,7 @@ moved with it. The module shares one instance, so every test builds the group it
 parent's respawn also runs on an instance of its own under Live sessions."""
 
 import itertools
+import os
 
 import pytest
 from agterm_conformance.match import (
@@ -13,6 +14,7 @@ from agterm_conformance.match import (
     find_session,
     session_ids,
 )
+from agterm_conformance.command_line import CommandLines
 from agterm_conformance.plugin import Ctl
 from agterm_conformance.wait import wait_until
 
@@ -374,4 +376,139 @@ def test_page_attach_hands_out_a_claim_only_for_a_page_companion(ctl):
         assert helper.read() == {"kind": "head", "id": 1, "mimeType": "text/html"}
     # a viewer leaving ends nothing here
     assert page in session_ids(ctl.tree(), wid)
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+# -- Duplicate as Companion
+
+POSIX_SHELL = pytest.mark.requires(
+    "posix-shell", reason="the program is typed as a POSIX line, and its copy started on the app's own path"
+)
+_copies = itertools.count(1)
+
+
+def _work(ctl):
+    """A directory of its own under the instance's root."""
+    folder = ctl.instance.root / f"companion-copies-{next(_copies)}"
+    folder.mkdir()
+    return folder
+
+
+def _runs(ctl, sid, program, field="foreground"):
+    """The tree once `sid`'s `field` pane runs `program` (by its name, whatever path started it): its argv."""
+
+    def running(tree):
+        argv = find_session(tree, sid).get(field) or []
+        return argv if argv and os.path.basename(argv[0]) == program else None
+
+    return running(ctl.wait_tree(running))
+
+
+def _duplicate(ctl, target, **args):
+    return assert_ok(ctl.request("session.companion.duplicate", target, **args))
+
+
+@POSIX_SHELL
+@pytest.mark.covers(
+    "session.companion.duplicate",
+    "field:result.parent",
+    "field:tree.session.splitAxis",
+    "field:tree.session.splitRatio",
+    "field:tree.session.foreground",
+    "field:tree.session.splitForegroundShell",
+)
+def test_duplicate_as_companion_copies_the_split_and_runs_each_program(ctl):
+    """The copy keeps the split's axis and ratio and starts each pane's program again in its directory, by the path it
+    was started from, its own pane focused on the left (#840, #842)."""
+    work = _work(ctl)
+    wid = assert_ok(ctl.request("workspace.new"))["id"]
+    parent = assert_ok(ctl.request("session.new", workspace=wid, cwd=str(work)))["id"]
+    ctl.wait_mounted(parent, "left")
+    assert_ok(ctl.request("session.split", parent, mode="on", axis="horizontal"))
+    ctl.wait_mounted(parent, "right")
+    assert_ok(ctl.request("session.resize", parent, ratio=0.3))
+    assert_ok(ctl.request("session.type", parent, pane="left", text="tee copied.txt\n"))
+    _runs(ctl, parent, "tee")
+
+    created = _duplicate(ctl, parent)
+    copy = created["id"]
+    assert created["parent"] == parent
+    node = find_session(ctl.tree(), copy)
+    assert_subset(node, {"parent": parent, "splitAxis": "horizontal", "active": True})
+    assert node["splitRatio"] == pytest.approx(0.3, abs=0.01)
+    argv = _runs(ctl, copy, "tee")
+    assert os.path.isabs(argv[0]) and argv[1:] == ["copied.txt"], argv
+    ctl.wait_tree(lambda tree: find_session(tree, copy).get("splitForegroundShell"))
+    assert session_ids(ctl.tree(), wid) == [parent, copy]
+    assert_ok(ctl.request("session.type", copy, pane="left", text="from the copy\n"))
+    copied = work / "copied.txt"
+    wait_until(lambda: copied.exists() and copied.read_text() == "from the copy\n")
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+@POSIX_SHELL
+@pytest.mark.covers("session.companion.duplicate")
+def test_duplicate_as_companion_with_no_select_keeps_the_selection(ctl):
+    """A shell at its prompt copies as a plain shell where it sits, after the parent's group; `noSelect` leaves the
+    selection alone, and a companion's copy is its parent's (#840)."""
+    work = _work(ctl)
+    wid = assert_ok(ctl.request("workspace.new"))["id"]
+    parent = assert_ok(ctl.request("session.new", workspace=wid, cwd=str(work)))["id"]
+    child = _companion(ctl, parent)
+    other = assert_ok(ctl.request("session.new", workspace=wid, cwd="/tmp"))["id"]
+    ctl.wait_mounted(child, "left")
+    _prints(ctl, child)
+
+    copy = _duplicate(ctl, child, noSelect=True)["id"]
+    tree = ctl.tree()
+    assert session_ids(tree, wid) == [parent, child, copy, other]
+    assert_subset(find_session(tree, copy), {"parent": parent, "active": False})
+    assert find_session(tree, other)["active"] is True
+    assert os.path.realpath(find_session(tree, copy)["cwd"]) == os.path.realpath(work)
+    ctl.wait_tree(lambda tree: find_session(tree, copy).get("foregroundShell"))
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+@pytest.mark.covers("session.companion.duplicate", "session.overlay.open")
+def test_duplicate_as_companion_refusals(ctl, adapter):
+    """Every pane is checked before anything is created: a page row, a program over the session or over a pane, and
+    an unknown target are refused, and nothing is added (#840)."""
+    lines = CommandLines.of(adapter, "the covering program")
+    wid, (covered, pane_covered) = _workspace(ctl, sessions=2)
+    for sid in (covered, pane_covered):
+        ctl.wait_mounted(sid, "left")
+    page, _, _ = _page_companion(ctl, covered)
+    assert_ok(ctl.request("session.overlay.open", covered, command=lines.hold()))
+    assert_ok(ctl.request("session.overlay.open", pane_covered, command=lines.hold(), pane="left"))
+    before = session_ids(ctl.tree(), wid)
+
+    for target, error in (
+        (page, "a page companion has no terminal to duplicate"),
+        (covered, "a program overlay covers the session; nothing was created"),
+        (pane_covered, "left pane is covered by a program overlay; nothing was created"),
+        (UNKNOWN, f"no such session: {UNKNOWN}"),
+    ):
+        assert_error(ctl.request("session.companion.duplicate", target), error)
+    assert session_ids(ctl.tree(), wid) == before
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+@POSIX_SHELL
+@pytest.mark.parametrize("shells", ["plain", pytest.param("live", marks=LIVE)], indirect=True)
+@pytest.mark.covers("session.companion.duplicate")
+def test_a_duplicated_program_pane_closes_when_the_program_exits(shells):
+    """A copied program is its pane's own creation command: the pane ends with it, under Live too (#840)."""
+    ctl = shells
+    work = _work(ctl)
+    wid = assert_ok(ctl.request("workspace.new"))["id"]
+    parent = assert_ok(ctl.request("session.new", workspace=wid, cwd=str(work)))["id"]
+    ctl.wait_mounted(parent, "left")
+    assert_ok(ctl.request("session.type", parent, text="cat\n"))
+    _runs(ctl, parent, "cat")
+
+    copy = _duplicate(ctl, parent, noSelect=True)["id"]
+    _runs(ctl, copy, "cat")
+    assert_ok(ctl.request("session.type", copy, text="\x04"))
+    ctl.wait_tree(lambda tree: copy not in session_ids(tree, wid))
+    assert session_ids(ctl.tree(), wid) == [parent]
     assert_ok(ctl.request("workspace.delete", wid))

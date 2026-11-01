@@ -20,6 +20,10 @@ pub struct Observation {
     pub is_daemon_leader: bool,
     /// `None` when unreadable or not a directory.
     pub working_directory: Option<String>,
+    /// The process image's absolute path, `None` when unreadable or gone.
+    pub executable_path: Option<String>,
+    /// The process's own `PATH`, `None` when its environment is unreadable or has none.
+    pub search_path: Option<String>,
 }
 
 /// What the new shell is asked to run, and where.
@@ -46,7 +50,16 @@ impl Refusal {
     /// The wire error: the reason, then the way out.
     #[must_use]
     pub fn message(&self) -> String {
-        let reason = match self {
+        format!(
+            "{}; pass --command to name the line. nothing was changed",
+            self.reason()
+        )
+    }
+
+    /// The refusal alone, for a caller other than restart to word its own advice around.
+    #[must_use]
+    pub fn reason(&self) -> String {
+        match self {
             Self::Unreadable => "the pane's foreground program cannot be read".to_owned(),
             Self::Shell(name) => format!("no replayable foreground program: {name} holds the pane"),
             Self::Denylisted(name) => format!("{name} is on the restore denylist"),
@@ -55,8 +68,7 @@ impl Refusal {
                 format!("the foreground program's command line is too long to replay (max {MAX_COMMAND_BYTES} bytes)")
             }
             Self::NoDirectory => "the foreground program's working directory is unavailable".to_owned(),
-        };
-        format!("{reason}; pass --command to name the line. nothing was changed")
+        }
     }
 }
 
@@ -117,6 +129,8 @@ mod tests {
             foreground,
             is_daemon_leader: leader,
             working_directory: directory.map(str::to_owned),
+            executable_path: None,
+            search_path: None,
         };
         resolve(&observation, shell, denylist)
     }
@@ -286,6 +300,7 @@ mod tests {
             ),
         ];
         for (refusal, reason) in cases {
+            assert_eq!(refusal.reason(), reason);
             assert_eq!(
                 refusal.message(),
                 format!("{reason}; pass --command to name the line. nothing was changed")

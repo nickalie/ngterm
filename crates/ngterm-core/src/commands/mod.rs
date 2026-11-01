@@ -5,6 +5,7 @@
 pub(crate) mod ask;
 pub(crate) mod background;
 pub(crate) mod browser;
+pub(crate) mod companion_duplicate;
 pub(crate) mod companion_page;
 pub(crate) mod companions;
 pub(crate) mod config;

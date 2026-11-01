@@ -425,3 +425,10 @@ COMPANION_FULL_SIZE = "--companion is full size: it takes no --pane, --size-perc
 def test_overlay_open_companion_validation(cli, args, message):
     """The page companion's usage errors come before any connection: it is a page, and full size."""
     _usage(cli("session", "overlay", "open", *args, "--companion"), message)
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("cli:session duplicate")
+def test_duplicate_no_select_needs_companion(cli):
+    """A plain duplicate always selects its copy: `--no-select` belongs to Duplicate as Companion."""
+    _usage(cli("session", "duplicate", "--no-select"), "--no-select needs --companion")
