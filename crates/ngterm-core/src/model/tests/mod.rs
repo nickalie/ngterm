@@ -2,6 +2,7 @@
 //! `WindowLibraryTests`.
 
 mod ask_draft;
+mod companion_close;
 mod companions;
 mod duplicate;
 mod flagged_order;

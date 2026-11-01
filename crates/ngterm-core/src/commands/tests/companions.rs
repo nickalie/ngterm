@@ -1,14 +1,16 @@
-//! `session.companion.new`, `session.collapse`/`session.expand` and the companion refusals of `session.move`
-//! (upstream's `ControlDispatcherCompanionsTests` new/collapse/expand cases and `ControlServerCompanionsTests`
-//! create, move-refusal and fold cases).
+//! `session.companion.new`, `session.collapse`/`session.expand`, the companion refusals of `session.move`, a group's
+//! `session.close` receipts and the orphan refusal of `recent.open` (upstream's `ControlDispatcherCompanionsTests`
+//! new/collapse/expand cases and `ControlServerCompanionsTests` create, move-refusal, fold, close, receipt and reopen
+//! cases).
 
-use ngterm_proto::command::SessionCmd;
-use ngterm_proto::{Args, Response};
+use ngterm_proto::command::{RecentCmd, SessionCmd};
+use ngterm_proto::{Args, Command, Response};
 use serde_json::json;
 use uuid::Uuid;
 
 use super::{Fixture, UNKNOWN, answered_affected, answered_id, args, failure, wire};
-use crate::model::{NewSession, SaveRequest, SidebarTint, TintColor};
+use crate::model::{NewSession, SaveRequest, Session, SidebarTint, TintColor};
+use crate::persist::{AppSettings, RecentClosedItem, RecentClosedKind, RecentClosedSession, SessionSnapshot};
 
 const PLACEMENT: &str = "a companion takes no workspace or placement: it lands under its parent";
 const MOVE_REFUSED: &str = "a companion moves only among its siblings";
@@ -264,4 +266,150 @@ fn a_companion_moves_among_its_siblings_and_a_parent_carries_its_group() {
     assert_eq!(answered_id(&moved), Some(parent));
     assert_eq!(fixture.order(fixture.workspace), [after]);
     assert_eq!(fixture.order(other), [parent, first, second]);
+}
+
+// MARK: - Close and reopen (`ControlServerCompanionsTests` close, receipt and reopen cases)
+
+fn grace(enabled: bool) -> AppSettings {
+    AppSettings {
+        close_grace_undo_enabled: Some(enabled),
+        ..AppSettings::default()
+    }
+}
+
+fn close_targets(ids: &[Uuid]) -> Args {
+    args(|a| a.targets = Some(wires(ids)))
+}
+
+fn wires(ids: &[Uuid]) -> Vec<String> {
+    ids.iter().map(|id| wire(*id)).collect()
+}
+
+fn closed(response: &Response) -> Vec<String> {
+    assert!(response.ok, "{response:?}");
+    serde_json::from_value(response.result.as_ref().unwrap()["closed"].clone()).unwrap()
+}
+
+#[test]
+fn closing_a_parent_reports_every_closed_id_and_the_group_count() {
+    let mut fixture = Fixture::with_settings(1, grace(false));
+    let (parent, [first, second], _) = group(&mut fixture);
+
+    let response = fixture.session(SessionCmd::Close, Some(&wire(parent)), Args::default());
+
+    assert_eq!(answered_id(&response), Some(parent));
+    assert_eq!(answered_affected(&response), Some(3));
+    assert_eq!(closed(&response), wires(&[parent, first, second]));
+    assert!(fixture.store().session(first).is_none());
+}
+
+#[test]
+fn an_undoable_close_of_a_parent_counts_its_group_and_one_undo_brings_it_back() {
+    let mut fixture = Fixture::new(1);
+    let (parent, [first, second], after) = group(&mut fixture);
+
+    let response = fixture.session(
+        SessionCmd::Close,
+        Some(&wire(parent)),
+        args(|a| a.undoable = Some(true)),
+    );
+
+    let receipt =
+        json!({"id": wire(parent), "affected": 3, "undoable": true, "closed": wires(&[parent, first, second])});
+    assert_eq!(
+        serde_json::to_value(&response).unwrap(),
+        json!({"ok": true, "result": receipt})
+    );
+    assert_eq!(fixture.order(fixture.workspace), [after]);
+    assert!(fixture.store_mut().unwrap().undo_pending_close(None));
+    assert_eq!(fixture.order(fixture.workspace), [parent, first, second, after]);
+}
+
+#[test]
+fn a_plain_close_keeps_its_bare_receipt() {
+    let mut fixture = Fixture::new(1);
+    let (_, [first, _], after) = group(&mut fixture);
+    for lone in [after, first] {
+        let response = fixture.session(SessionCmd::Close, Some(&wire(lone)), Args::default());
+        assert_eq!(answered_affected(&response), None);
+        assert_eq!(closed(&response), [wire(lone)]);
+    }
+}
+
+#[test]
+fn a_batch_naming_a_parent_and_its_child_counts_each_once_hard_and_soft() {
+    for soft in [false, true] {
+        let mut fixture = Fixture::with_settings(1, grace(soft));
+        let (parent, [first, second], other) = group(&mut fixture);
+
+        let response = fixture.session(SessionCmd::Close, None, close_targets(&[parent, first, other]));
+
+        assert_eq!(answered_affected(&response), Some(4), "soft: {soft}");
+        assert_eq!(
+            closed(&response),
+            wires(&[parent, first, second, other]),
+            "soft: {soft}"
+        );
+        assert!(fixture.order(fixture.workspace).is_empty(), "soft: {soft}");
+    }
+}
+
+// a child named before its parent was archived on its own, so reopening the parent lost the child
+#[test]
+fn a_hard_batch_naming_the_child_first_keeps_the_group_in_one_recent_entry() {
+    let mut fixture = Fixture::with_settings(1, grace(false));
+    let (parent, children, _) = group(&mut fixture);
+
+    let response = fixture.session(SessionCmd::Close, None, close_targets(&[children[1], parent]));
+
+    assert_eq!(closed(&response), wires(&[parent, children[0], children[1]]));
+    let items = fixture.core.library().recent_closed_items();
+    let entry_of = |id: Uuid| {
+        items
+            .iter()
+            .find(|item| item.session.as_ref().is_some_and(|recent| recent.snapshot.id == id))
+            .map(|item| item.id)
+    };
+    assert_eq!(entry_of(children[1]), None, "the child rides the parent's entry");
+    let entry = entry_of(parent).expect("the parent's entry");
+    assert!(fixture.core.library_mut().reopen_recent_closed(entry, None));
+    let companions: Vec<Uuid> = fixture
+        .store()
+        .companions(parent)
+        .into_iter()
+        .map(Session::id)
+        .collect();
+    assert_eq!(companions, children);
+}
+
+#[test]
+fn reopening_a_companion_whose_parent_is_gone_names_that_reason() {
+    let mut fixture = Fixture::new(0);
+    let entry = Uuid::new_v4();
+    let snapshot = SessionSnapshot {
+        custom_name: Some("logs".to_owned()),
+        parent_id: Some(Uuid::new_v4()),
+        ..SessionSnapshot::new(Uuid::new_v4(), "/tmp")
+    };
+    let item = RecentClosedItem {
+        id: entry,
+        kind: RecentClosedKind::Session,
+        title: "logs".to_owned(),
+        subtitle: None,
+        closed_at: std::time::SystemTime::now(),
+        session: Some(RecentClosedSession {
+            workspace_id: Uuid::new_v4(),
+            workspace_name: "gone".to_owned(),
+            workspace_index: 0,
+            session_index: 0,
+            snapshot,
+            companions: None,
+        }),
+        workspace: None,
+    };
+    fixture.core.library_mut().set_recent_closed_items(vec![item]);
+
+    let response = fixture.send(Command::Recent(RecentCmd::Open), Some(&wire(entry)), Args::default());
+
+    assert_eq!(response, failure("parent session is not open or in Recent Closed"));
 }

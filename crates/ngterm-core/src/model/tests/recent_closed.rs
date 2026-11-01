@@ -113,6 +113,7 @@ fn session_item(workspace: Uuid, name: &str, snapshot: SessionSnapshot) -> Recen
             workspace_index: 0,
             session_index: 0,
             snapshot,
+            companions: None,
         }),
         workspace: None,
     }

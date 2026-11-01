@@ -20,7 +20,8 @@ use super::{
 };
 use crate::Core;
 use crate::error::{ControlError, Noun};
-use crate::model::{AppStore, NewSession, ReorderDirection, SessionLocation, SessionNavigation, Workspace};
+use crate::model::{AppStore, NewSession, ReorderDirection, Session, SessionLocation, SessionNavigation, Workspace};
+use crate::pane_env::uuid_string;
 use crate::resolve::{ACTIVE, resolve_id, workspace_ids};
 use crate::sidebar_drop::{DropIndex, SessionDropTarget, SessionSource, resolve_relative, resolve_sessions};
 
@@ -187,6 +188,9 @@ fn duplicate_in(store: &mut AppStore, id: Uuid, home: &str) -> Outcome {
 /// anything closes. With `undoable` every reply carries whether the close was left undoable
 /// (`ControlServer+SessionClose.swift`). Upstream's refusal of `undoable` by an older host has no target here: one
 /// dispatcher serves the app and `ngterm-headless`.
+///
+/// A parent closes with its companions: every reply lists the ids it `closed`, a parent's group counts in `affected`,
+/// and a batch drops a companion named beside its parent, whose close takes it into the parent's Open Recent entry.
 fn close(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     let window = args.window.as_deref();
     let undoable = args.undoable == Some(true);
@@ -202,29 +206,72 @@ fn close(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     if let [id] = ids.as_slice() {
         return close_one(store, *id, undoable, grace_undo);
     }
-    let affected = if grace_undo {
-        if store.soft_close_sessions(&ids) { ids.len() } else { 0 }
+    let closing = closing_group(store, &ids);
+    let closed: Vec<Uuid> = if grace_undo {
+        // one grouped grace record is the batch behavior scripts cannot reproduce by looping
+        if store.soft_close_sessions(&ids) {
+            closing
+        } else {
+            Vec::new()
+        }
     } else {
-        ids.iter().filter(|id| store.close_session(**id).is_some()).count()
+        for id in close_roots(store, &ids) {
+            store.close_session(id);
+        }
+        gone(store, closing)
     };
-    let mut result = with_affected(affected);
-    result.undoable = undoable.then_some(grace_undo && affected > 0);
+    let mut result = with_affected(closed.len());
+    result.undoable = undoable.then_some(grace_undo && !closed.is_empty());
+    result.closed = Some(closed.into_iter().map(uuid_string).collect());
     Ok(result)
 }
 
-/// One resolved session's close: soft as the close chord's when `undoable` asks and grace undo is on, else for good.
+/// One resolved session's close: soft as the close chord's when `undoable` asks and grace undo is on, else for good. A
+/// parent's group count rides `affected`; a lone session keeps the bare receipt.
 fn close_one(store: &mut AppStore, id: Uuid, undoable: bool, grace_undo: bool) -> Outcome {
+    let closing = closing_group(store, &[id]);
     let mut result = with_id(id);
+    result.affected = (closing.len() > 1).then(|| i64::try_from(closing.len()).unwrap_or(i64::MAX));
     if undoable && grace_undo {
         if !store.soft_close_session(id) {
             return Err(ControlError::rejected("could not close session"));
         }
         result.undoable = Some(true);
+        result.closed = Some(closing.into_iter().map(uuid_string).collect());
         return Ok(result);
     }
     store.close_session(id);
     result.undoable = undoable.then_some(false);
+    result.closed = Some(gone(store, closing).into_iter().map(uuid_string).collect());
     Ok(result)
+}
+
+/// The ids a close acts on (upstream's `closeRoots`): a companion named beside its parent leaves the list, since the
+/// parent's close takes it and records it in the parent's entry.
+fn close_roots(store: &AppStore, ids: &[Uuid]) -> Vec<Uuid> {
+    ids.iter()
+        .copied()
+        .filter(|id| {
+            store
+                .session(*id)
+                .and_then(Session::parent_id)
+                .is_none_or(|parent| !ids.contains(&parent))
+        })
+        .collect()
+}
+
+/// The ids a close of `ids` removes, each root followed by its companions (upstream's `closingGroup`); read before
+/// the close, which takes the companions with it.
+fn closing_group(store: &AppStore, ids: &[Uuid]) -> Vec<Uuid> {
+    close_roots(store, ids)
+        .into_iter()
+        .flat_map(|root| std::iter::once(root).chain(store.companions(root).into_iter().map(Session::id)))
+        .collect()
+}
+
+/// Those of `ids` no longer in the tree.
+fn gone(store: &AppStore, ids: Vec<Uuid>) -> Vec<Uuid> {
+    ids.into_iter().filter(|id| store.session(*id).is_none()).collect()
 }
 
 /// `session.go`: a relative step of the selection in the `--window` (else frontmost) window.

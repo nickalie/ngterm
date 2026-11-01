@@ -231,6 +231,17 @@ def test_recent_rows_carry_the_full_id_kind_title_and_subtitle():
     assert cli_format.human({"recent": rows}) == f"{SID}  session  api (project)\n{WID}  workspace  project"
 
 
+def test_recent_rows_count_a_parent_entrys_companions():
+    rows = [
+        {"id": "R1", "kind": "session", "title": "api", "subtitle": "work", "sessionIDs": ["P", "C1", "C2"]},
+        {"id": "R2", "kind": "session", "title": "db", "sessionIDs": ["S"]},
+        {"id": "R3", "kind": "workspace", "title": "work", "subtitle": "2 sessions", "sessionIDs": ["A", "B"]},
+    ]
+    assert cli_format.recent(rows) == (
+        "R1  session  api (work) +2 companion(s)\nR2  session  db\nR3  workspace  work (2 sessions)"
+    )
+
+
 def test_zmx_rows_carry_owner_and_state():
     entry = {
         "daemon": "agterm-5e1d",

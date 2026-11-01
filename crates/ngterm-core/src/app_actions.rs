@@ -810,36 +810,46 @@ fn store_facts(store: &AppStore, layout: FlaggedViewLayout) -> PaletteFacts {
     facts
 }
 
-/// The close confirmation's body for `sessions` (upstream's `closeConfirmationText(for:)`): the soft-close setting's
-/// sentence, then the hidden overlays that go with them, since a hidden overlay is out of sight and the alert is the
-/// last place it can be noticed.
+/// The close confirmation's body for `sessions` (upstream's `closeConfirmationText(for:companions:)`): the soft-close
+/// setting's sentence, then the `companions` closing with them, then the hidden overlays that go with them all, since a
+/// hidden overlay is out of sight and the alert is the last place it can be noticed.
 #[must_use]
-pub fn close_confirmation_text(sessions: &[&Session], close_grace: bool) -> String {
+pub fn close_confirmation_text(sessions: &[&Session], companions: &[&Session], close_grace: bool) -> String {
     let hidden = sessions
         .iter()
+        .chain(companions)
         .any(|session| !session.hidden_overlay_names().is_empty());
-    close_confirmation_body(sessions.len() > 1, hidden, close_grace)
+    let names: Vec<String> = companions.iter().map(|companion| companion.display_name()).collect();
+    close_confirmation_body(sessions.len() > 1, &names, hidden, close_grace)
 }
 
 /// [`close_confirmation_text`] from what a frontend's snapshot keeps of the closing sessions: whether there are
-/// several, and whether any of them has a hidden overlay.
+/// several, the names of the companions closing with them, and whether any of them all has a hidden overlay.
 #[must_use]
-pub fn close_confirmation_body(plural: bool, hidden_overlays: bool, close_grace: bool) -> String {
+pub fn close_confirmation_body(
+    plural: bool,
+    companions: &[String],
+    hidden_overlays: bool,
+    close_grace: bool,
+) -> String {
     let noun = if plural { "sessions" } else { "session" };
-    let base = if close_grace {
+    let mut text = if close_grace {
         format!("The {noun} will close after a short undo window.")
     } else {
         format!("The {noun} will close immediately and can be reopened from File > Open Recent.")
     };
-    if !hidden_overlays {
-        return base;
+    if !companions.is_empty() {
+        text = format!("{text} Companions close too: {}.", companions.join(", "));
     }
-    let suffix = if plural {
+    if !hidden_overlays {
+        return text;
+    }
+    let suffix = if plural || !companions.is_empty() {
         " Their hidden overlays close with them."
     } else {
         " Its hidden overlays close with it."
     };
-    base + suffix
+    text + suffix
 }
 
 fn frontend(action: FrontendAction) -> ActionEffect {

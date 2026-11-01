@@ -216,6 +216,65 @@ def test_open_during_the_grace_window_restores_the_original_group(ctl, workspace
     assert _listed(ctl) == []
 
 
+def _companion(ctl, parent):
+    return assert_ok(ctl.request("session.companion.new", parent, noSelect=True))["id"]
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("recent.list", "recent.open", "field:tree.session.parent")
+def test_a_parent_entry_reopens_its_companions(ctl, workspaces_made):
+    wid, _ = _workspace(ctl, workspaces_made)
+    parent, _ = _session(ctl, wid)
+    after, _ = _session(ctl, wid)
+    first, second = _companion(ctl, parent), _companion(ctl, parent)
+    assert_ok(ctl.request("session.close", parent))
+
+    (entry,) = _listed(ctl)
+    assert entry["sessionIDs"] == [parent, first, second]
+    assert _opened(ctl.request("recent.open", entry["id"]))["complete"] is True
+    tree = ctl.tree()
+    assert session_ids(tree, wid) == [parent, first, second, after]
+    assert find_session(tree, second)["parent"] == parent
+
+    # a lone companion reopens under its live parent, wherever the parent moved
+    assert_ok(ctl.request("session.close", second))
+    other, _ = _workspace(ctl, workspaces_made)
+    assert_ok(ctl.request("session.move", parent, workspace=other))
+    (entry,) = _listed(ctl)
+    assert entry["sessionIDs"] == [second]
+    assert_ok(ctl.request("recent.open", entry["id"]))
+    assert session_ids(ctl.tree(), other) == [parent, first, second]
+
+    # a lone companion of a closed parent brings the parent's entry back first
+    assert_ok(ctl.request("session.close", first))
+    assert_ok(ctl.request("session.close", parent))
+    (lone,) = [entry for entry in _listed(ctl) if entry["sessionIDs"] == [first]]
+    assert_ok(ctl.request("recent.open", lone["id"]))
+    assert session_ids(ctl.tree(), other) == [parent, first, second]
+    assert _listed(ctl) == []
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("recent.open", "session.close")
+def test_a_soft_closed_group_is_one_undo(ctl, workspaces_made):
+    wid, _ = _workspace(ctl, workspaces_made)
+    parent, _ = _session(ctl, wid)
+    after, _ = _session(ctl, wid)
+    first, second = _companion(ctl, parent), _companion(ctl, parent)
+    # a batch naming the parent takes its companions into the one grace record
+    assert assert_ok(ctl.request("session.close", targets=[parent, after]))["affected"] == 4
+    assert session_ids(ctl.tree(), wid) == []
+    entries = sorted(entry["sessionIDs"] for entry in _listed(ctl))
+    assert entries == sorted([[parent, first, second], [after]])
+
+    opened = _opened(ctl.request("recent.open"))
+
+    # reopening either entry undoes the whole pending close and consumes both entries
+    assert opened["complete"] is True
+    assert session_ids(ctl.tree(), wid) == [parent, first, second, after]
+    assert _listed(ctl) == []
+
+
 @pytest.mark.covers("recent.list", "recent.clear", "recent.open")
 def test_recent_refusals(ctl, workspaces_made):
     for cmd in ("recent.list", "recent.clear"):

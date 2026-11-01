@@ -221,7 +221,7 @@ def test_close_undoable_keeps_the_running_shell_for_reopen(ctl):
     assert_ok(ctl.request("session.type", sid, text="echo undoable-$((40+2))\n"))
     ctl.wait_text(sid, r"(?m)^undoable-42$")
 
-    assert assert_ok(ctl.request("session.close", sid, undoable=True)) == {"id": sid, "undoable": True}
+    assert assert_ok(ctl.request("session.close", sid, undoable=True)) == {"id": sid, "undoable": True, "closed": [sid]}
     assert sid not in session_ids(ctl.tree())
 
     (entry,) = [item for item in assert_ok(ctl.request("recent.list"))["recent"] if item["sessionIDs"] == [sid]]
@@ -236,7 +236,8 @@ def test_close_undoable_keeps_the_running_shell_for_reopen(ctl):
 def test_close_undoable_is_hard_and_says_so_when_undo_is_off(launch):
     seeded = launch(settings={"closeGraceUndoEnabled": False})
     sid = _new(seeded)
-    assert assert_ok(seeded.request("session.close", sid, undoable=True)) == {"id": sid, "undoable": False}
+    receipt = assert_ok(seeded.request("session.close", sid, undoable=True))
+    assert receipt == {"id": sid, "undoable": False, "closed": [sid]}
     assert sid not in session_ids(seeded.tree())
 
 
@@ -245,13 +246,13 @@ def test_close_undoable_is_hard_and_says_so_when_undo_is_off(launch):
 def test_close_undoable_batch_reports_whether_the_group_stayed_undoable(ctl, launch):
     wid, (first, keep, last) = _new_workspace(ctl, sessions=3)
     result = assert_ok(ctl.request("session.close", targets=[first, last], undoable=True))
-    assert result == {"affected": 2, "undoable": True}
+    assert result == {"affected": 2, "undoable": True, "closed": [first, last]}
     assert session_ids(ctl.tree(), wid) == [keep]
 
     seeded = launch(settings={"closeGraceUndoEnabled": False})
     wid, (first, keep, last) = _new_workspace(seeded, sessions=3)
     result = assert_ok(seeded.request("session.close", targets=[first, last], undoable=True))
-    assert result == {"affected": 2, "undoable": False}
+    assert result == {"affected": 2, "undoable": False, "closed": [first, last]}
     assert session_ids(seeded.tree(), wid) == [keep]
 
 
@@ -259,8 +260,9 @@ def test_close_undoable_batch_reports_whether_the_group_stayed_undoable(ctl, lau
 @pytest.mark.covers("session.close", "field:result.affected")
 def test_plain_close_carries_no_undoable(ctl):
     wid, (single, first, last, keep) = _new_workspace(ctl, sessions=4)
-    assert assert_ok(ctl.request("session.close", single)) == {"id": single}
-    assert assert_ok(ctl.request("session.close", targets=[first, last], undoable=False)) == {"affected": 2}
+    assert assert_ok(ctl.request("session.close", single)) == {"id": single, "closed": [single]}
+    batch = assert_ok(ctl.request("session.close", targets=[first, last], undoable=False))
+    assert batch == {"affected": 2, "closed": [first, last]}
     assert session_ids(ctl.tree(), wid) == [keep]
     assert_error(
         ctl.request("session.close", targets=[], undoable=True), "session.close requires at least one --target"

@@ -27,6 +27,10 @@ use crate::resolve::{Resolver, TargetResolution, resolution_error, resolve};
 /// `RecentClosedTarget.emptyError`).
 pub const NO_RECENT_ITEMS: &str = "no recently closed items";
 
+/// The refusal of `recent.open` for a lone companion whose parent is neither open nor in the list (upstream's
+/// `ControlServer.companionWithoutParentError`).
+pub const COMPANION_WITHOUT_PARENT: &str = "parent session is not open or in Recent Closed";
+
 /// The Unix epoch's distance from Foundation's reference date, in seconds (`timeIntervalSince1970` minus
 /// `timeIntervalSinceReferenceDate`).
 const UNIX_TO_REFERENCE: f64 = 978_307_200.0;
@@ -60,13 +64,20 @@ pub(crate) fn dispatch(
 }
 
 /// One entry as `recent.list` reports it (upstream's `ControlRecentItem.init(_:)`): a session entry names its parent
-/// workspace and its one session, a workspace entry itself and every session of its snapshot.
+/// workspace and its session, a parent's companions after it, a workspace entry itself and every session of its
+/// snapshot.
 #[must_use]
 pub fn project(item: &RecentClosedItem) -> ControlRecentItem {
     let (workspace, sessions): (Option<Uuid>, Vec<Uuid>) = match item.kind {
         RecentClosedKind::Session => (
             item.session.as_ref().map(|recent| recent.workspace_id),
-            item.session.iter().map(|recent| recent.snapshot.id).collect(),
+            item.session
+                .iter()
+                .flat_map(|recent| {
+                    let companions = recent.companions.iter().flatten().map(|companion| companion.id);
+                    std::iter::once(recent.snapshot.id).chain(companions)
+                })
+                .collect(),
         ),
         RecentClosedKind::Workspace => (
             item.workspace.as_ref().map(|recent| recent.snapshot.id),
@@ -112,7 +123,8 @@ pub fn resolve_recent_target(target: Option<&str>, items: &[RecentClosedItem]) -
 
 impl Core {
     /// `recent.open`: resolves the `--window` placement first, so an unknown or closed window restores nothing, then
-    /// the entry, then reopens it there unless another window holds its session or workspace.
+    /// the entry, then reopens it there unless another window holds its session or workspace. A lone companion whose
+    /// parent is nowhere to come back under is refused by name.
     fn open_recent_closed(
         &mut self,
         target: Option<&str>,
@@ -121,6 +133,9 @@ impl Core {
         let into = Resolver::new(&self.library).open_placement_window(window)?;
         let items = self.library.recent_closed_items();
         let id = resolve_recent_target(target, &items)?;
+        if self.library.recent_closed_item_lacks_parent(id) {
+            return Err(ControlError::rejected(COMPANION_WITHOUT_PARENT));
+        }
         let reopened = items
             .iter()
             .find(|item| item.id == id)

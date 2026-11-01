@@ -1,6 +1,8 @@
 //! Companion sessions (upstream's `AppStore+Companions.swift`): a session created under another one, its parent,
 //! sitting right after it in the parent's workspace. A parent and its companions form a group the sidebar nests and
-//! folds, a move carries whole and an insertion never splits.
+//! folds, a move carries whole and an insertion never splits. A parent's close takes its companions along into one
+//! Open Recent entry and, when soft, one undo (`store.rs`, `pending_close.rs`); a lone companion reopens only under
+//! its parent (`window_library.rs`).
 //!
 //! The tree stays flat: a group is a top-level session followed by the run of companions naming it, so every
 //! placement rule here keeps a companion inside its parent's run and a top-level session outside any run. Companions

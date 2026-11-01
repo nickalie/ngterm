@@ -121,6 +121,7 @@ impl Entries {
                 workspace_index: 0,
                 session_index: 1,
                 snapshot: self.first.clone(),
+                companions: None,
             }),
             workspace: None,
         }
@@ -168,6 +169,17 @@ fn a_session_entry_projects_its_parent_workspace_and_one_session() {
             workspace_id: wire(entries.workspace),
             session_ids: vec![wire(entries.first.id)],
         }
+    );
+}
+
+#[test]
+fn a_parent_entry_lists_its_companions_after_it() {
+    let entries = Entries::new();
+    let mut item = entries.session_item(Uuid::new_v4());
+    item.session.as_mut().unwrap().companions = Some(vec![entries.second.clone()]);
+    assert_eq!(
+        project(&item).session_ids,
+        [wire(entries.first.id), wire(entries.second.id)]
     );
 }
 

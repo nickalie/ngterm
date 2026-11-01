@@ -15,6 +15,7 @@ use std::time::{Duration, SystemTime};
 
 use uuid::Uuid;
 
+use super::companions::regrouped_companions;
 use super::outbox::WatermarkRemoval;
 use super::recent_closed::ClosedSessionPlace;
 use super::session::Session;
@@ -326,9 +327,13 @@ impl AppStore {
     }
 
     /// Hides a session from the tree, keeping its terminals for [`PENDING_CLOSE_GRACE`]: an undo restores it, the
-    /// grace timer makes it final. When it was selected, the next selection is the hard close's. False when no
-    /// session matches.
+    /// grace timer makes it final. When it was selected, the next selection is the hard close's. A parent closes with
+    /// its companions as one undoable close ([`AppStore::soft_close_sessions`]). False when no session matches.
     pub fn soft_close_session(&mut self, id: Uuid) -> bool {
+        let companions: Vec<Uuid> = self.companions(id).into_iter().map(Session::id).collect();
+        if !companions.is_empty() {
+            return self.soft_close_sessions(&[&[id][..], &companions].concat());
+        }
         let Some(at) = self.location(id) else {
             return false;
         };
@@ -347,7 +352,7 @@ impl AppStore {
             workspace_index: at.workspace,
             session_index: at.session,
         };
-        self.record_recent_closed_session(&session, &place, close_id);
+        self.record_recent_closed_session(&session, &[], &place, close_id);
         let close = PendingSessionClose {
             session,
             workspace_id,
@@ -373,10 +378,14 @@ impl AppStore {
         true
     }
 
-    /// Hides several sessions as one undoable close: one grace timer, one undo restoring all of them. One distinct
-    /// id is [`AppStore::soft_close_session`]. False when none of them exists.
+    /// Hides several sessions as one undoable close: one grace timer, one undo restoring all of them. A parent takes
+    /// its companions along, and they ride in its Open Recent entry. One distinct id is
+    /// [`AppStore::soft_close_session`]. False when none of them exists.
     pub fn soft_close_sessions(&mut self, ids: &[Uuid]) -> bool {
-        let targets: HashSet<Uuid> = ids.iter().copied().collect();
+        let mut targets: HashSet<Uuid> = ids.iter().copied().collect();
+        for id in ids {
+            targets.extend(self.companions(*id).into_iter().map(Session::id));
+        }
         if targets.len() < 2 {
             return ids.first().is_some_and(|id| self.soft_close_session(*id));
         }
@@ -397,16 +406,7 @@ impl AppStore {
         if closes.is_empty() {
             return false;
         }
-        for close in &closes {
-            let place = ClosedSessionPlace {
-                workspace_id: close.workspace_id,
-                workspace_name: &close.workspace_name,
-                workspace_index: close.workspace_index,
-                session_index: close.session_index,
-            };
-            self.record_recent_closed_session(&close.session, &place, close.recent_id);
-            self.emit_session_closed(&close.session, close.workspace_id);
-        }
+        self.record_soft_closed_sessions(&closes);
         let removing_active = previous.is_some_and(|id| targets.contains(&id));
         if removing_active {
             let target = self.batch_close_target(previous, &closes);
@@ -429,6 +429,35 @@ impl AppStore {
         );
         self.arm_pending_close(close_id);
         true
+    }
+
+    /// Records a batch's Open Recent entries and announces each close. A companion closing with its parent rides in the
+    /// parent's entry rather than its own.
+    fn record_soft_closed_sessions(&mut self, closes: &[PendingSessionClose]) {
+        let closing: HashSet<Uuid> = closes.iter().map(|close| close.session.id()).collect();
+        for close in closes {
+            if close
+                .session
+                .parent_id()
+                .is_some_and(|parent| closing.contains(&parent))
+            {
+                self.emit_session_closed(&close.session, close.workspace_id);
+                continue;
+            }
+            let companions: Vec<&Session> = closes
+                .iter()
+                .map(|other| &other.session)
+                .filter(|other| other.parent_id() == Some(close.session.id()))
+                .collect();
+            let place = ClosedSessionPlace {
+                workspace_id: close.workspace_id,
+                workspace_name: &close.workspace_name,
+                workspace_index: close.workspace_index,
+                session_index: close.session_index,
+            };
+            self.record_recent_closed_session(&close.session, &companions, &place, close.recent_id);
+            self.emit_session_closed(&close.session, close.workspace_id);
+        }
     }
 
     /// Takes the `targets` out of the tree, last first so the recorded indices stay the pre-close ones, and returns
@@ -627,23 +656,41 @@ impl AppStore {
         let target = held(requested)
             .or_else(|| held(close.selected_session_id))
             .or_else(|| ids.first().copied());
+        let mut destinations: Vec<Uuid> = Vec::new();
         for member in close.sessions {
-            self.restore_pending_session(member);
+            let workspace = self.restore_pending_session(member);
+            if !destinations.contains(&workspace) {
+                destinations.push(workspace);
+            }
+        }
+        // a companion can come back before its parent does, so each group is rebuilt once all are in
+        for workspace in destinations {
+            if let Some(index) = self.workspace_index(workspace) {
+                let sessions = std::mem::take(&mut self.workspaces[index].sessions);
+                self.workspaces[index].sessions = regrouped_companions(sessions);
+            }
         }
         if target.is_some() {
             self.reselect_after_removal(target);
         }
     }
 
-    /// Puts one session back at its recorded place, rebuilding its workspace as a shell when the tree lost it.
-    fn restore_pending_session(&mut self, close: PendingSessionClose) {
-        let workspace_index =
-            self.workspace_index_or_shell(close.workspace_id, close.workspace_index, &close.workspace_name);
+    /// Puts one session back at its recorded place, rebuilding its workspace as a shell when the tree lost it, and
+    /// returns the workspace it went to. A companion follows a parent that moved since, or regrouping would detach
+    /// it; a top-level session lands outside a group that grew into its slot.
+    fn restore_pending_session(&mut self, close: PendingSessionClose) -> Uuid {
+        let parent = close.session.parent_id().and_then(|parent| self.location(parent));
+        let workspace_index = match parent {
+            Some(at) => at.workspace,
+            None => self.workspace_index_or_shell(close.workspace_id, close.workspace_index, &close.workspace_name),
+        };
         let id = close.session.id();
+        let workspace_id = self.workspaces[workspace_index].id();
         let sessions = &mut self.workspaces[workspace_index].sessions;
-        let at = close.session_index.min(sessions.len());
+        let at = Self::insertion_index(&close.session, close.session_index, sessions);
         sessions.insert(at, close.session);
-        self.emit_session_created(id, close.workspace_id);
+        self.emit_session_created(id, workspace_id);
+        workspace_id
     }
 
     /// Puts a workspace back. A shell a session undo or an Open Recent reopen rebuilt under its id is merged into
@@ -711,9 +758,36 @@ impl AppStore {
         }
     }
 
-    /// Makes one held session's close final, leaving the rest of its record and every other record undoable. False
-    /// when no pending close holds the session.
+    /// Makes one held session's close final, with its own parked companions, leaving the rest of its record and every
+    /// other record undoable. False when no pending close holds the session.
     pub fn finalize_pending_close_of_session(&mut self, session: Uuid) -> bool {
+        if !self.finalize_pending_member(session) {
+            return false;
+        }
+        self.finalize_parked_companions(&[session]);
+        true
+    }
+
+    /// Makes final the pending close of every companion of `parents`, which are closing for good: undone, one would
+    /// come back with no parent to sit under.
+    pub(crate) fn finalize_parked_companions(&mut self, parents: &[Uuid]) {
+        let parked: Vec<Uuid> = self
+            .pending_close_members()
+            .into_iter()
+            .filter(|member| {
+                member
+                    .session
+                    .parent_id()
+                    .is_some_and(|parent| parents.contains(&parent))
+            })
+            .map(|member| member.session.id())
+            .collect();
+        for session in parked {
+            self.finalize_pending_close_of_session(session);
+        }
+    }
+
+    fn finalize_pending_member(&mut self, session: Uuid) -> bool {
         let Some(index) = self
             .pending
             .records

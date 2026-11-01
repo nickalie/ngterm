@@ -126,3 +126,30 @@ def test_a_companion_created_event_names_its_parent(ctl):
     created = ctl.wait_event(cursor, "session.created", {"session": top})
     assert_absent(created["payload"], "parent")
     assert_ok(ctl.request("workspace.delete", wid))
+
+
+@pytest.mark.covers("session.close", "field:result.closed", "event:session.closed")
+def test_closing_a_parent_closes_its_group(ctl):
+    wid, (parent, after) = _workspace(ctl, sessions=2)
+    first, second, third = _companion(ctl, parent), _companion(ctl, parent), _companion(ctl, parent)
+    # closing a companion closes only it, with the bare receipt
+    assert assert_ok(ctl.request("session.close", third)) == {"id": third, "closed": [third]}
+    assert session_ids(ctl.tree(), wid) == [parent, first, second, after]
+
+    cursor = ctl.events_baseline()
+    receipt = assert_ok(ctl.request("session.close", parent))
+    assert receipt == {"id": parent, "affected": 3, "closed": [parent, first, second]}
+    assert session_ids(ctl.tree(), wid) == [after]
+    # each member announces its own close, the companions last first, then the parent
+    read = ctl.request("events.read", run=cursor.run, after=str(cursor.after), kinds=["session.closed"])
+    group = {parent, first, second}
+    closed = [event["session"] for event in assert_ok(read)["events"]["items"] if event.get("session") in group]
+    assert closed == [second, first, parent]
+
+    # a batch naming a companion beside its parent counts each session once
+    first, second = _companion(ctl, after), _companion(ctl, after)
+    other = assert_ok(ctl.request("session.new", workspace=wid, noSelect=True))["id"]
+    batch = assert_ok(ctl.request("session.close", targets=[after, first, other]))
+    assert (batch["affected"], batch["closed"]) == (4, [after, first, second, other])
+    assert session_ids(ctl.tree(), wid) == []
+    assert_ok(ctl.request("workspace.delete", wid))

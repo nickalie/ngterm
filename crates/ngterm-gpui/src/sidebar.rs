@@ -874,12 +874,26 @@ pub fn click_selection(
 }
 
 /// The close confirmation's heading and body (upstream's `confirmCloseSession` and `confirmCloseSessions`): the body
-/// names the hidden overlays that close with the sessions (upstream's `closeConfirmationText`).
+/// names the companions closing with a parent, unless chosen themselves, and the hidden overlays that close with them
+/// all (upstream's `closeConfirmationText`).
 fn close_confirmation(context: &SidebarContext, ids: &[Uuid]) -> (String, String) {
+    let facts = |id: &Uuid| context.menu.sessions.get(id);
+    let companions: Vec<Uuid> = ids
+        .iter()
+        .filter_map(facts)
+        .flat_map(|facts| facts.companions.iter().copied())
+        .filter(|companion| !ids.contains(companion))
+        .collect();
     let hidden = ids
         .iter()
-        .any(|id| context.menu.sessions.get(id).is_some_and(|facts| facts.hidden_overlays));
-    let body = ngterm_core::app_actions::close_confirmation_body(ids.len() > 1, hidden, context.close_grace);
+        .chain(&companions)
+        .any(|id| facts(id).is_some_and(|facts| facts.hidden_overlays));
+    let names: Vec<String> = companions
+        .iter()
+        .filter_map(facts)
+        .map(|facts| facts.name.clone())
+        .collect();
+    let body = ngterm_core::app_actions::close_confirmation_body(ids.len() > 1, &names, hidden, context.close_grace);
     if let [id] = ids {
         let name = context.menu.sessions.get(id).map_or("", |facts| facts.name.as_str());
         return (format!("Close “{name}”?"), body);

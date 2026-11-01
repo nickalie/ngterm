@@ -125,7 +125,8 @@ impl RequestCommand for Clear {
     }
 }
 
-/// `recent.list`: one entry per row with its full id, which `recent open` takes as is (upstream's `formatRecent`).
+/// `recent.list`: one entry per row with its full id, which `recent open` takes as is, and a parent's companions counted
+/// (upstream's `formatRecent`).
 pub(crate) fn format_recent(items: &[ControlRecentItem]) -> String {
     if items.is_empty() {
         return NO_RECENT_ITEMS.to_owned();
@@ -138,7 +139,12 @@ pub(crate) fn format_recent(items: &[ControlRecentItem]) -> String {
                 .as_ref()
                 .map(|subtitle| format!(" ({subtitle})"))
                 .unwrap_or_default();
-            format!("{}  {}  {}{subtitle}", item.id, item.kind, item.title)
+            let companions = if item.kind == "session" && item.session_ids.len() > 1 {
+                format!(" +{} companion(s)", item.session_ids.len() - 1)
+            } else {
+                String::new()
+            };
+            format!("{}  {}  {}{subtitle}{companions}", item.id, item.kind, item.title)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -238,6 +244,26 @@ mod tests {
             "R1  session  api (project)\nR2  workspace  project"
         );
         assert_eq!(format_recent(&[]), "no recently closed items");
+    }
+
+    #[test]
+    fn format_recent_counts_a_parent_entrys_companions() {
+        let ids = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect();
+        let rows = [
+            ControlRecentItem {
+                session_ids: ids(&["P", "C1", "C2"]),
+                ..item("R1", "session", "api", Some("work"))
+            },
+            item("R2", "session", "db", None),
+            ControlRecentItem {
+                session_ids: ids(&["A", "B"]),
+                ..item("R3", "workspace", "work", Some("2 sessions"))
+            },
+        ];
+        assert_eq!(
+            format_recent(&rows),
+            "R1  session  api (work) +2 companion(s)\nR2  session  db\nR3  workspace  work (2 sessions)"
+        );
     }
 
     #[test]

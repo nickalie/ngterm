@@ -13,6 +13,7 @@ use std::rc::Rc;
 
 use uuid::Uuid;
 
+use super::companions::group_end;
 use super::outbox::RecentClosedChange;
 use super::session::Session;
 use super::snapshot::{session_from_snapshot, session_snapshot, workspace_from_snapshot, workspace_snapshot};
@@ -22,6 +23,7 @@ use super::workspace::Workspace;
 use crate::persist::recent_closed::{record_recent_closed, reference_date};
 use crate::persist::{
     RECENT_CLOSED_LIMIT, RecentClosedItem, RecentClosedKind, RecentClosedSession, RecentClosedWorkspace,
+    SessionSnapshot,
 };
 
 /// The Open Recent entries, newest first, shared between a library and its open stores.
@@ -127,11 +129,23 @@ impl AppStore {
 
     // MARK: - Recording
 
-    /// Records a closed session as entry `id`; a remote one is never written to disk, so it records nothing.
-    pub(crate) fn record_recent_closed_session(&mut self, session: &Session, place: &ClosedSessionPlace<'_>, id: Uuid) {
+    /// Records a closed session as entry `id`, with the `companions` that closed with it (the persistable ones); a
+    /// remote one is never written to disk, so it records nothing.
+    pub(crate) fn record_recent_closed_session(
+        &mut self,
+        session: &Session,
+        companions: &[&Session],
+        place: &ClosedSessionPlace<'_>,
+        id: Uuid,
+    ) {
         if !session.is_persistable() {
             return;
         }
+        let companions: Vec<SessionSnapshot> = companions
+            .iter()
+            .filter(|companion| companion.is_persistable())
+            .map(|companion| session_snapshot(companion))
+            .collect();
         self.record_recent_closed(RecentClosedItem {
             id,
             kind: RecentClosedKind::Session,
@@ -144,6 +158,7 @@ impl AppStore {
                 workspace_index: place.workspace_index,
                 session_index: place.session_index,
                 snapshot: session_snapshot(session),
+                companions: (!companions.is_empty()).then_some(companions),
             }),
             workspace: None,
         });
@@ -228,18 +243,50 @@ impl AppStore {
         if occupied_elsewhere.contains(&recent.snapshot.id) {
             return RecentClosedRestore::FAILED;
         }
-        let index = self.workspace_index_or_shell(recent.workspace_id, recent.workspace_index, &recent.workspace_name);
+        let index = match recent.snapshot.parent_id {
+            // a lone companion goes under its parent wherever the parent lives now, never on its own
+            Some(parent) => match self.location(parent) {
+                Some(at) => at.workspace,
+                None => return RecentClosedRestore::FAILED,
+            },
+            None => self.workspace_index_or_shell(recent.workspace_id, recent.workspace_index, &recent.workspace_name),
+        };
         let session = session_from_snapshot(&recent.snapshot, false);
         let id = session.id();
         let workspace_id = self.workspaces[index].id();
         let sessions = &mut self.workspaces[index].sessions;
-        let at = recent.session_index.min(sessions.len());
+        let at = Self::insertion_index(&session, recent.session_index, sessions);
         sessions.insert(at, session);
         self.emit_session_created(id, workspace_id);
+        self.restore_recent_companions(index, id, recent, occupied_elsewhere);
         self.append_flagged_arrivals();
         self.reselect_after_removal(Some(id));
         self.save();
         RecentClosedRestore::COMPLETE
+    }
+
+    /// Rebuilds a reopened parent's companions at the end of its group, each one no window or pending close already
+    /// holds.
+    fn restore_recent_companions(
+        &mut self,
+        index: usize,
+        parent: Uuid,
+        recent: &RecentClosedSession,
+        occupied_elsewhere: &HashSet<Uuid>,
+    ) {
+        let workspace_id = self.workspaces[index].id();
+        for snapshot in recent.companions.iter().flatten() {
+            if self.session(snapshot.id).is_some() || occupied_elsewhere.contains(&snapshot.id) {
+                continue;
+            }
+            let sessions = &mut self.workspaces[index].sessions;
+            let Some(at) = sessions.iter().position(|session| session.id() == parent) else {
+                break;
+            };
+            let end = group_end(at, sessions);
+            sessions.insert(end, session_from_snapshot(snapshot, false));
+            self.emit_session_created(snapshot.id, workspace_id);
+        }
     }
 
     /// Undoes the pending close holding the session (selecting it), or selects it when it is in the tree.

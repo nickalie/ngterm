@@ -292,7 +292,7 @@ fn close_batch_deduplicates_and_counts_with_grace_undo_on_or_off() {
         let response = fixture.session(SessionCmd::Close, None, targets(&[&first, &last, &first]));
         assert_eq!(
             serde_json::to_value(&response).unwrap(),
-            json!({"ok": true, "result": {"affected": 2}}),
+            json!({"ok": true, "result": {"affected": 2, "closed": [first, last]}}),
             "{grace:?}"
         );
         assert_eq!(
@@ -367,7 +367,7 @@ fn undoable_single_close_is_soft_while_grace_undo_is_on() {
         let response = fixture.session(SessionCmd::Close, Some(&wire(closing)), undoable(true, None));
         assert_eq!(
             serde_json::to_value(&response).unwrap(),
-            json!({"ok": true, "result": {"id": wire(closing), "undoable": true}}),
+            json!({"ok": true, "result": {"id": wire(closing), "undoable": true, "closed": [wire(closing)]}}),
             "{enabled:?}"
         );
         assert!(fixture.store().session(closing).is_none());
@@ -384,7 +384,7 @@ fn undoable_single_close_is_hard_and_says_so_when_grace_undo_is_off() {
     let response = fixture.session(SessionCmd::Close, Some(&wire(closing)), undoable(true, None));
     assert_eq!(
         serde_json::to_value(&response).unwrap(),
-        json!({"ok": true, "result": {"id": wire(closing), "undoable": false}})
+        json!({"ok": true, "result": {"id": wire(closing), "undoable": false, "closed": [wire(closing)]}})
     );
     assert!(fixture.store().session(closing).is_none());
     assert!(fixture.store().pending_close_session(closing).is_none());
@@ -398,7 +398,7 @@ fn plain_single_close_stays_hard_without_an_undoable_answer() {
         let response = fixture.session(SessionCmd::Close, Some(&wire(closing)), request);
         assert_eq!(
             serde_json::to_value(&response).unwrap(),
-            json!({"ok": true, "result": {"id": wire(closing)}})
+            json!({"ok": true, "result": {"id": wire(closing), "closed": [wire(closing)]}})
         );
         assert!(fixture.store().pending_close_session(closing).is_none());
     }
@@ -411,7 +411,7 @@ fn a_batch_deduplicated_to_one_target_honors_undoable() {
     let response = fixture.session(SessionCmd::Close, None, undoable(true, Some(&[&closing, &closing])));
     assert_eq!(
         serde_json::to_value(&response).unwrap(),
-        json!({"ok": true, "result": {"id": closing, "undoable": true}})
+        json!({"ok": true, "result": {"id": closing, "undoable": true, "closed": [closing]}})
     );
     assert!(fixture.store().pending_close_session(fixture.sessions[0]).is_some());
 }
@@ -424,7 +424,7 @@ fn undoable_batch_reports_whether_the_group_stayed_undoable() {
         let response = fixture.session(SessionCmd::Close, None, undoable(true, Some(&[&first, &last])));
         assert_eq!(
             serde_json::to_value(&response).unwrap(),
-            json!({"ok": true, "result": {"affected": 2, "undoable": stays}}),
+            json!({"ok": true, "result": {"affected": 2, "undoable": stays, "closed": [first, last]}}),
             "{enabled:?}"
         );
         assert_eq!(fixture.order(fixture.workspace), [fixture.sessions[1]]);
@@ -436,7 +436,7 @@ fn undoable_batch_reports_whether_the_group_stayed_undoable() {
     let response = fixture.session(SessionCmd::Close, None, undoable(false, Some(&[&ids[0], &ids[1]])));
     assert_eq!(
         serde_json::to_value(&response).unwrap(),
-        json!({"ok": true, "result": {"affected": 2}})
+        json!({"ok": true, "result": {"affected": 2, "closed": [ids[0], ids[1]]}})
     );
 }
 

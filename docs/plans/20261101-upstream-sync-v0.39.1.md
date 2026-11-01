@@ -663,21 +663,22 @@ they assert subsets, so an added `closed` keeps them green). New: `test_companio
 test seeding `recent-closed.json` for "parent session is not open or in Recent Closed",
 `test_cli_output.py::test_recent_list_counts_companions_and_close_prints_the_group`.
 
-- [ ] a parent's hard close closes its companions (reverse order) then itself, one Recent Closed entry holding the
+- [x] a parent's hard close closes its companions (reverse order) then itself, one Recent Closed entry holding the
       persistable companions; closing a companion closes only it; each member emits its own `session.closed`
-- [ ] a parent's soft close is one undo for the group; `soft_close_sessions` widens to companions; one entry per
+- [x] a parent's soft close is one undo for the group; `soft_close_sessions` widens to companions; one entry per
       group at finalize; undo follows a parent that moved and regroups each destination; a top-level undo lands
       outside a group that grew into its slot; a parent's hard close, its finalize, or a hard workspace delete ends
       the undo of its parked companions
-- [ ] `session.close` result `{id, closed, affected (group > 1)}`; batches drop a companion named beside its parent;
+- [x] `session.close` result `{id, closed, affected (group > 1)}`; batches drop a companion named beside its parent;
       merge with Task 4's `undoable` in field order `undoable`, `parent`, `closed`
-- [ ] recent: an entry's `sessionIDs` lists its companions; a lone companion reopens under its live parent, else
+- [x] recent: an entry's `sessionIDs` lists its companions; a lone companion reopens under its live parent, else
       the entry holding the parent first, else "parent session is not open or in Recent Closed"; an older
       `recent-closed.json` still decodes
-- [ ] CLI: `recent list` row " +N companion(s)"; a parent's close prints "N sessions"
-- [ ] write tests: every Swift case listed above
-- [ ] write tests: the conformance tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] CLI: `recent list` row " +N companion(s)"; a parent's close prints "N sessions"
+- [x] write tests: every Swift case listed above
+- [x] write tests: the conformance tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the new ids are since(0.39.1);
+      green at a temporary 0.39.1 level, they go in at Task 25)
 
 ### Task 15: Companion sessions, part 3: a parent's exiting shell restarts while it has companions (#840)
 

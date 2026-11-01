@@ -25,6 +25,8 @@ pub struct SessionFacts {
     pub cwd: String,
     /// A hidden overlay goes with the session, which its close confirmation names.
     pub hidden_overlays: bool,
+    /// A parent's companions in sidebar order, which close with it and its close confirmation names.
+    pub companions: Vec<Uuid>,
     /// The row's tint, what the Tint submenu checks.
     pub tint: Option<SidebarTint>,
 }
@@ -419,6 +421,7 @@ mod tests {
             has_status: false,
             cwd: "/tmp".to_owned(),
             hidden_overlays: false,
+            companions: Vec::new(),
             tint: None,
         };
         let workspace = |id, name: &str, count| WorkspaceFacts {

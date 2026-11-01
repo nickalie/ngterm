@@ -120,13 +120,15 @@ def restore_status(status: Mapping[str, Any], vocabulary: Vocabulary = UPSTREAM)
 
 
 def recent(items: Sequence[Mapping[str, Any]]) -> str:
-    """`formatRecent`: one row per entry with its full id, or the empty line."""
+    """`formatRecent`: one row per entry with its full id, a parent's companions counted, or the empty line."""
     if not items:
         return "no recently closed items"
     rows = []
     for item in items:
         subtitle = f" ({item['subtitle']})" if item.get("subtitle") is not None else ""
-        rows.append(f"{item['id']}  {item['kind']}  {item['title']}{subtitle}")
+        sessions = item.get("sessionIDs", [])
+        companions = f" +{len(sessions) - 1} companion(s)" if item["kind"] == "session" and len(sessions) > 1 else ""
+        rows.append(f"{item['id']}  {item['kind']}  {item['title']}{subtitle}{companions}")
     return "\n".join(rows)
 
 

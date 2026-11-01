@@ -62,6 +62,10 @@ pub struct RecentClosedSession {
     pub workspace_index: usize,
     pub session_index: usize,
     pub snapshot: SessionSnapshot,
+    /// The parent's companions, reopened under it; absent for a session without any, and in an entry older than the
+    /// field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companions: Option<Vec<SessionSnapshot>>,
 }
 
 /// A closed workspace (upstream's `RecentClosedWorkspace`).
@@ -307,6 +311,7 @@ mod tests {
                     custom_name: Some(title.to_owned()),
                     ..SessionSnapshot::new(snapshot_id, "/tmp")
                 },
+                companions: None,
             }),
             workspace: None,
         }
@@ -452,6 +457,30 @@ mod tests {
         let loaded = store.load();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].workspace.as_ref().unwrap().focus_member, Some(true));
+    }
+
+    #[test]
+    fn a_parent_entry_round_trips_its_companions_and_an_older_entry_decodes_without_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = RecentClosedStore::new(dir.path());
+        let parent = Uuid::new_v4();
+        let mut item = session_item(parent, "api");
+        let companion = SessionSnapshot {
+            parent_id: Some(parent),
+            ..SessionSnapshot::new(Uuid::new_v4(), "/tmp")
+        };
+        item.session.as_mut().unwrap().companions = Some(vec![companion.clone()]);
+        store.record(item).unwrap();
+        let loaded = store.load();
+        let session = loaded[0].session.as_ref().unwrap();
+        assert_eq!(session.companions.as_deref(), Some(&[companion][..]));
+
+        // an entry written before the field: no companions key at all
+        let older = session_item(Uuid::new_v4(), "db");
+        json::save_json(store.path(), &RecentClosedState::new(vec![older])).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(!text.contains("companions"), "{text}");
+        assert_eq!(store.load()[0].session.as_ref().unwrap().companions, None);
     }
 
     #[test]

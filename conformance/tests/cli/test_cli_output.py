@@ -1353,6 +1353,28 @@ def test_recent_list_open_clear(cli, ctl):
         assert_ok(ctl.request("recent.clear"))
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("cli:recent list", "cli:session close")
+def test_recent_list_counts_companions_and_close_prints_the_group(cli, ctl):
+    assert_ok(ctl.request("recent.clear"))
+    wid = assert_ok(ctl.request("workspace.new", name=_name("recent-group")))["id"]
+    try:
+        parent = assert_ok(ctl.request("session.new", workspace=wid, name=_name("parent")))["id"]
+        children = [assert_ok(ctl.request("session.companion.new", parent, noSelect=True))["id"] for _ in range(2)]
+        # a parent's close counts its group; a lone session's stays a bare ok
+        _ok(cli("session", "close", "--target", parent), "3 sessions\n")
+        listing = _json(cli("recent", "list", "--json"))
+        (entry,) = listing["recent"]
+        assert entry["sessionIDs"] == [parent, *children]
+        _ok(cli("recent", "list"), f"{entry['id']}  session  {entry['title']} ({entry['subtitle']}) +2 companion(s)\n")
+        _rendered(cli("recent", "list"), listing)
+        lone = assert_ok(ctl.request("session.new", workspace=wid, noSelect=True))["id"]
+        _ok(cli("session", "close", "--target", lone), "ok\n")
+    finally:
+        assert_ok(ctl.request("workspace.delete", wid))
+        assert_ok(ctl.request("recent.clear"))
+
+
 # -- restore and the zmx group
 
 

@@ -13,7 +13,7 @@ use super::{Fixture, UNKNOWN, args, failure, wire};
 use crate::app_actions::{ActionEffect, ActionOrigin, FrontendAction, close_confirmation_text};
 use crate::html::{HtmlHost, HtmlNavigation};
 use crate::keymap::BuiltinAction;
-use crate::model::{OverlayPane, OverlayVisibilityFailure, RemoteOverlaySlot};
+use crate::model::{CompanionOptions, OverlayPane, OverlayVisibilityFailure, RemoteOverlaySlot};
 use crate::palette_catalog::{PaletteCommand, PaletteFacts};
 
 const VISIBILITY: [(SessionCmd, &str); 3] = [
@@ -415,7 +415,7 @@ fn the_close_confirmation_names_hidden_overlays_only_when_there_are_any() {
     store_open(&mut fixture, first, None, "less");
     let text = |fixture: &Fixture, ids: &[Uuid], grace: bool| {
         let sessions: Vec<_> = ids.iter().map(|id| fixture.store().session(*id).unwrap()).collect();
-        close_confirmation_text(&sessions, grace)
+        close_confirmation_text(&sessions, &[], grace)
     };
     assert_eq!(
         text(&fixture, &[first], true),
@@ -437,6 +437,46 @@ fn the_close_confirmation_names_hidden_overlays_only_when_there_are_any() {
     assert_eq!(
         text(&fixture, &[other], false),
         "The session will close immediately and can be reopened from File > Open Recent."
+    );
+}
+
+#[test]
+fn the_close_confirmation_names_the_companions_closing_with_a_parent() {
+    let mut fixture = Fixture::new(1);
+    let (parent, other) = (fixture.sessions[0], fixture.sessions[1]);
+    let options = |name: &str| CompanionOptions {
+        name: Some(name.to_owned()),
+        select: false,
+        ..CompanionOptions::default()
+    };
+    let store = fixture.store_mut().unwrap();
+    let logs = store.add_companion(parent, options("logs"), "/home/u").unwrap();
+    store.add_companion(parent, options("tests"), "/home/u").unwrap();
+    let text = |fixture: &Fixture, grace: bool| {
+        let store = fixture.store();
+        let parent = store.session(parent).unwrap();
+        close_confirmation_text(&[parent], &store.companions(parent.id()), grace)
+    };
+    assert_eq!(
+        text(&fixture, true),
+        "The session will close after a short undo window. Companions close too: logs, tests."
+    );
+    store_open(&mut fixture, logs, None, "less");
+    fixture
+        .store_mut()
+        .unwrap()
+        .set_overlays_hidden(logs, None, true)
+        .unwrap();
+    // a companion's hidden overlay counts, and the group reads as plural
+    assert_eq!(
+        text(&fixture, false),
+        "The session will close immediately and can be reopened from File > Open Recent. Companions close too: logs, \
+         tests. Their hidden overlays close with them."
+    );
+    let lone = fixture.store().session(other).unwrap();
+    assert_eq!(
+        close_confirmation_text(&[lone], &[], true),
+        "The session will close after a short undo window."
     );
 }
 

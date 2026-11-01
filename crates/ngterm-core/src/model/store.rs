@@ -804,13 +804,14 @@ impl AppStore {
         }
         self.drop_focus_member(id);
         self.forget_fresh_workspace(id);
+        let removed: Vec<Uuid> = workspace.sessions.iter().map(Session::id).collect();
+        self.finalize_parked_companions(&removed);
         if removing_active {
             let target = self.workspace_removal_target(index);
             self.reselect_after_removal(target);
         } else {
             self.prune_sidebar_selection();
         }
-        let removed: Vec<Uuid> = workspace.sessions.iter().map(Session::id).collect();
         self.drop_from_flagged_order(&removed);
         self.save();
         Some(workspace)
@@ -977,8 +978,25 @@ impl AppStore {
     }
 
     /// Removes a session, tears its terminals down, records it in Open Recent and returns it. When it was selected,
-    /// the most recent visible session of its scope takes the selection (`close_reselection_target`).
+    /// the most recent visible session of its scope takes the selection (`close_reselection_target`). A parent closes
+    /// with its companions, last first, and its one Open Recent entry carries them; a companion of its own that a
+    /// soft close parked can no longer be undone, having no parent to come back under.
     pub fn close_session(&mut self, id: Uuid) -> Option<Session> {
+        let companions: Vec<Uuid> = self.companions(id).into_iter().map(Session::id).collect();
+        let mut closed: Vec<Session> = companions
+            .iter()
+            .rev()
+            .filter_map(|companion| self.close_one_session(*companion, None))
+            .collect();
+        closed.reverse();
+        let removed = self.close_one_session(id, Some(&closed));
+        self.finalize_parked_companions(&[id]);
+        removed
+    }
+
+    /// One session's hard close: with `recorded`, its Open Recent entry holding those companions; `None` records
+    /// nothing (a companion riding its parent's entry).
+    fn close_one_session(&mut self, id: Uuid, recorded: Option<&[Session]>) -> Option<Session> {
         let at = self.location(id)?;
         self.release_leaving_session(id);
         let was_active = self.selected_session_id == Some(id);
@@ -992,7 +1010,10 @@ impl AppStore {
             workspace_index: at.workspace,
             session_index: at.session,
         };
-        self.record_recent_closed_session(&removed, &place, Uuid::new_v4());
+        if let Some(companions) = recorded {
+            let companions: Vec<&Session> = companions.iter().collect();
+            self.record_recent_closed_session(&removed, &companions, &place, Uuid::new_v4());
+        }
         removed.teardown_surfaces();
         // the session is gone, and its rendered text and live-session daemons with it
         self.outbox.removed_watermarks.push(WatermarkRemoval::Session(id));

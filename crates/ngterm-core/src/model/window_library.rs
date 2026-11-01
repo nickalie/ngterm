@@ -689,7 +689,21 @@ impl WindowLibrary {
     /// list after the restore rather than from its coverage. The list here is the in-memory one; whether the removal
     /// reached `recent-closed.json` is for the caller holding the persistence to read back
     /// ([`LibraryPersistence::sync_recent_closed`](crate::persist::LibraryPersistence::sync_recent_closed)).
+    ///
+    /// A lone companion reopens only under its parent: a live one, else the entry holding the parent (its own, or its
+    /// removed workspace's) is reopened first; with neither, nothing is.
     pub fn reopen_recent_closed_outcome(&mut self, item: Uuid, into: Option<Uuid>) -> Option<RecentClosedReopen> {
+        let entry = self.recent_closed.item(item)?;
+        if let Some(parent) = companion_parent(&entry)
+            && self.window_with_session_in_tree(parent).is_none()
+        {
+            let holder = self
+                .recent_closed
+                .items()
+                .into_iter()
+                .find(|candidate| holds_top_level_session(candidate, parent))?;
+            self.reopen_recent_closed_outcome(holder.id, into)?;
+        }
         let item = self.recent_closed.item(item)?;
         let window = self.restore_destination(&item, into)?;
         let occupied = self.session_ids_held_outside(window);
@@ -710,9 +724,33 @@ impl WindowLibrary {
         })
     }
 
-    /// Which window restores `item`: the one holding the session itself, then the one holding its workspace, then
-    /// the requested one. Session first, since an old snapshot can leave one session in two windows, where the stale
-    /// workspace would rebuild the copy just closed.
+    /// Whether `item` is a lone companion whose parent is neither open nor held by another entry: the one reopen that
+    /// cannot proceed (upstream's `recentClosedItemLacksParent`).
+    #[must_use]
+    pub fn recent_closed_item_lacks_parent(&self, item: Uuid) -> bool {
+        let Some(parent) = self.recent_closed.item(item).as_ref().and_then(companion_parent) else {
+            return false;
+        };
+        self.window_with_session_in_tree(parent).is_none()
+            && !self
+                .recent_closed
+                .items()
+                .iter()
+                .any(|candidate| holds_top_level_session(candidate, parent))
+    }
+
+    /// The open window whose tree holds `session`.
+    fn window_with_session_in_tree(&self, session: Uuid) -> Option<Uuid> {
+        self.open_ids().into_iter().find(|id| {
+            self.stores
+                .get(id)
+                .is_some_and(|store| store.session(session).is_some())
+        })
+    }
+
+    /// Which window restores `item`: the one holding the session itself, then for a lone companion the one holding
+    /// its parent, then the one holding its workspace, then the requested one. Session first, since an old snapshot
+    /// can leave one session in two windows, where the stale workspace would rebuild the copy just closed.
     fn restore_destination(&self, item: &RecentClosedItem, requested: Option<Uuid>) -> Option<Uuid> {
         if item.kind == RecentClosedKind::Session
             && let Some(owner) = item
@@ -721,6 +759,9 @@ impl WindowLibrary {
                 .and_then(|recent| self.window_holding_session(recent.snapshot.id))
         {
             return Some(owner);
+        }
+        if let Some(parent) = companion_parent(item) {
+            return self.window_with_session_in_tree(parent);
         }
         self.window_holding_workspace(item)
             .or_else(|| requested.filter(|id| self.is_open(*id)))
@@ -750,5 +791,30 @@ impl WindowLibrary {
             held.extend(store.pending_held_session_ids());
         }
         held
+    }
+}
+
+/// The parent a session entry's snapshot names: the entry is a lone companion.
+fn companion_parent(item: &RecentClosedItem) -> Option<Uuid> {
+    item.session.as_ref().and_then(|recent| recent.snapshot.parent_id)
+}
+
+/// Whether `item` would reopen `session` as a top-level session: a session entry of it, or a workspace entry holding
+/// it outside any group. Either way the snapshot must name no parent, so an entry claiming to be its own or another
+/// companion's parent (a hand-edited `recent-closed.json`) holds nothing and a reopen cannot loop through it.
+/// Upstream's `holdsTopLevelSession` checks this for the workspace entry only.
+fn holds_top_level_session(item: &RecentClosedItem, session: Uuid) -> bool {
+    match item.kind {
+        RecentClosedKind::Session => item
+            .session
+            .as_ref()
+            .is_some_and(|recent| recent.snapshot.id == session && recent.snapshot.parent_id.is_none()),
+        RecentClosedKind::Workspace => item.workspace.as_ref().is_some_and(|recent| {
+            recent
+                .snapshot
+                .sessions
+                .iter()
+                .any(|snapshot| snapshot.id == session && snapshot.parent_id.is_none())
+        }),
     }
 }

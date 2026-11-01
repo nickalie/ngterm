@@ -273,6 +273,7 @@ fn confirmations_use_upstreams_words() {
             has_status: false,
             cwd: "/".into(),
             hidden_overlays: false,
+            companions: Vec::new(),
             tint: None,
         },
     );
@@ -310,6 +311,39 @@ fn confirmations_use_upstreams_words() {
     assert_eq!(
         delete_confirmation(3, false),
         "This closes 3 sessions immediately. You can reopen it from File > Open Recent."
+    );
+}
+
+#[test]
+fn a_parents_close_confirmation_names_the_companions_not_chosen_with_it() {
+    let mut context = SidebarContext {
+        close_grace: true,
+        ..SidebarContext::default()
+    };
+    let [parent, logs, tests] = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+    let facts = |name: &str, companions: Vec<Uuid>| menu::SessionFacts {
+        name: name.into(),
+        workspace: Uuid::nil(),
+        flagged: false,
+        has_status: false,
+        cwd: "/".into(),
+        hidden_overlays: false,
+        companions,
+        tint: None,
+    };
+    context.menu.sessions.insert(parent, facts("api", vec![logs, tests]));
+    context.menu.sessions.insert(logs, facts("logs", Vec::new()));
+    context.menu.sessions.insert(tests, facts("tests", Vec::new()));
+    assert_eq!(
+        close_confirmation(&context, &[parent]).1,
+        "The session will close after a short undo window. Companions close too: logs, tests."
+    );
+    // a companion chosen with its parent is one of the sessions, not a companion closing too
+    context.menu.sessions.get_mut(&tests).unwrap().hidden_overlays = true;
+    assert_eq!(
+        close_confirmation(&context, &[parent, logs]).1,
+        "The sessions will close after a short undo window. Companions close too: tests. Their hidden overlays close \
+         with them."
     );
 }
 

@@ -110,6 +110,7 @@ fn menu_context(store: &AppStore) -> MenuContext {
                     has_status: session.agent_indicator.status != AgentStatus::Idle,
                     cwd: session.focused_cwd().to_owned(),
                     hidden_overlays: !session.hidden_overlay_names().is_empty(),
+                    companions: store.companions(session.id()).into_iter().map(Session::id).collect(),
                     tint: session.tint,
                 },
             );

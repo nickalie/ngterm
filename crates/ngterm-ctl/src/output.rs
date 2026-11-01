@@ -460,6 +460,15 @@ mod tests {
     }
 
     #[test]
+    fn a_parents_close_prints_its_group_and_a_lone_close_stays_ok() {
+        let group = json!({"id": "P", "affected": 3, "closed": ["P", "C1", "C2"]});
+        assert_eq!(format_response(&ok(group), false), "3 sessions");
+        let undoable = json!({"id": "P", "affected": 2, "undoable": true, "closed": ["P", "C1"]});
+        assert_eq!(format_response(&ok(undoable), false), "2 sessions (undoable)");
+        assert_eq!(format_response(&ok(json!({"id": "S", "closed": ["S"]})), false), "ok");
+    }
+
+    #[test]
     fn a_resize_prints_the_applied_width_and_height() {
         assert_eq!(
             format_response(&ok(json!({"width": 900, "height": 640})), false),
