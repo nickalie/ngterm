@@ -57,6 +57,8 @@ pub enum BuiltinAction {
     ShowAttention,
     Dashboard,
     AttachRemote,
+    EditFlaggedSessions,
+    EditFocusedWorkspaces,
 }
 
 impl BuiltinAction {
@@ -83,11 +85,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fifty_actions_with_upstreams_names() {
+    fn fifty_two_actions_with_upstreams_names() {
         let names: Vec<&str> = BuiltinAction::all().map(BuiltinAction::name).collect();
-        assert_eq!(names.len(), 50);
+        assert_eq!(names.len(), 52);
         assert_eq!(names[0], "new_window");
         assert_eq!(names[49], "attach_remote");
+        assert_eq!(names[50..], ["edit_flagged_sessions", "edit_focused_workspaces"]);
         assert_eq!(BuiltinAction::ToggleOverlay.name(), "toggle_overlay");
         assert_eq!(
             names[23], "toggle_overlay",

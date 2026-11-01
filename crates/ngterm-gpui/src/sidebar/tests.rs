@@ -712,6 +712,33 @@ fn the_hover_plus_adds_a_session_and_the_footer_toggles_the_flagged_view(cx: &mu
     assert!(h.view.read_with(cx, |sidebar, _| sidebar.context.empty_flagged));
 }
 
+/// Upstream's `testEmptyFlaggedViewLinkOpensTheSessionEditorAndHidesOnceSomethingIsFlagged`: the empty flagged view
+/// says so and links to Edit Flagged Sessions…, which its click opens; the link goes once a session is flagged.
+#[gpui_kit::test]
+fn the_empty_flagged_views_link_opens_the_session_editor_and_goes_once_something_is_flagged(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let u = h.id_of("u", cx);
+    h.store_mut().set_sidebar_mode(SidebarMode::Flagged);
+    h.settle(cx);
+    assert_eq!(EMPTY_FLAGGED, "No flagged sessions.");
+    let link = bounds(cx, "flagged-empty-add").center();
+    cx.simulate_click(link, Modifiers::default());
+    h.settle(cx);
+    assert_eq!(
+        h.state.core.palette_mode(),
+        Some(ngterm_core::palette::PaletteMode::FlaggedEditor)
+    );
+
+    h.state.core.close_palette();
+    h.store_mut().set_flag(true, u);
+    h.settle(cx);
+    assert!(
+        cx.debug_bounds("flagged-empty-add").is_none(),
+        "the link goes with the hint"
+    );
+}
+
 #[gpui_kit::test]
 fn a_confirmed_close_closes_and_a_cancelled_one_does_not(cx: &mut TestAppContext) {
     let (library, _) = library();

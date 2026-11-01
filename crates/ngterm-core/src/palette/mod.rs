@@ -1,6 +1,10 @@
 //! The command palettes (upstream's `PaletteController` and the palette half of `AppActions+Palette.swift`): one
-//! app-global palette, drawn in the frontmost window, in one of five modes, each listing its own rows
+//! app-global palette, drawn in the frontmost window, in one of seven modes, each listing its own rows
 //! ([`feeds`]), ranked by the fuzzy search ([`search`]) and run here ([`run`]).
+//!
+//! Two modes are membership editors (upstream's `flaggedEditor` and `focusEditor`, #803): every session of the window
+//! with its live flag mark, or every workspace with its live focus mark. A run toggles the row in place and the palette
+//! stays open on the same query and selection ([`PaletteMode::keeps_open_on_run`]); Escape closes it.
 //!
 //! The palette owns the keyboard while it is open, so it opens only where the frontmost window takes UI actions (no
 //! terminal zoom, no dashboard, no picker or GUI ask in its modal slot, upstream's `uiActionsEnabled`), and every
@@ -39,6 +43,10 @@ pub enum PaletteMode {
     CustomCommands,
     /// Every open window's sessions that need attention.
     Attention,
+    /// Every session of the frontmost window, flagged or unflagged in place.
+    FlaggedEditor,
+    /// Every workspace of the frontmost window, marked into or out of the focus set in place.
+    FocusEditor,
 }
 
 impl PaletteMode {
@@ -51,9 +59,28 @@ impl PaletteMode {
             Self::Themes => "Select a theme…",
             Self::CustomCommands => "Run a custom command…",
             Self::Attention => "Go to a session that needs attention…",
+            Self::FlaggedEditor => "Flag or unflag sessions…",
+            Self::FocusEditor => "Add or remove focused workspaces…",
         }
     }
+
+    /// Whether a row that runs leaves the palette open (upstream's `keepsOpenOnRun`): the membership editors toggle in
+    /// place, every other palette closes.
+    #[must_use]
+    pub fn keeps_open_on_run(self) -> bool {
+        matches!(self, Self::FlaggedEditor | Self::FocusEditor)
+    }
 }
+
+/// A membership editor row's live mark (upstream's `PaletteMark`): a session's flag, a workspace's focus membership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteMark {
+    Flag(bool),
+    Focus(bool),
+}
+
+/// The membership editors' footer (upstream's `editorHint`).
+pub const EDITOR_HINT: &str = "Return toggles · Esc closes · Changes apply immediately";
 
 /// A row's right-aligned shortcut hint: a built-in's live chord, or a custom command's shortcut as the user spelled it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +114,11 @@ pub enum PaletteAction {
     Attention { window: Uuid, session: Uuid },
     /// Commits a theme (`None` is ghostty's built-in colors).
     Theme(Option<String>),
+    /// Flags or unflags this session of the frontmost window, whichever it is not when the row runs.
+    ToggleFlag(Uuid),
+    /// Marks or unmarks this workspace of the frontmost window in the focus set, whichever it is not when the row
+    /// runs; never turns the filter on.
+    ToggleFocusMember(Uuid),
 }
 
 /// One palette row (upstream's `PaletteItem`); its enablement is asked of live state, never stored
@@ -102,6 +134,8 @@ pub struct PaletteEntry {
     /// The trailing status glyph of a session row (the session and attention palettes'); `None` on other rows, and
     /// an idle one draws nothing.
     pub indicator: Option<AgentIndicator>,
+    /// A membership editor row's mark as it is when the rows are read; `None` on other rows.
+    pub mark: Option<PaletteMark>,
     pub action: PaletteAction,
 }
 
@@ -175,6 +209,31 @@ impl Core {
     /// Closes the palette (Escape, its scrim, a run), an uncommitted theme preview reverted. Commit afterwards.
     pub fn close_palette(&mut self) {
         self.set_palette_mode(None);
+    }
+
+    /// The open membership editor's footer in window `window` (upstream's `editorHint`): [`EDITOR_HINT`], and for the
+    /// focus editor whether the filter is on, noting that it applies in the tree view while the sidebar shows the
+    /// flagged view. `None` for every other palette.
+    #[must_use]
+    pub fn palette_editor_hint(&self, window: Uuid) -> Option<String> {
+        let mode = self.palette.mode.filter(|mode| mode.keeps_open_on_run())?;
+        let store = self
+            .library()
+            .store(window)
+            .filter(|_| mode == PaletteMode::FocusEditor);
+        let Some(store) = store else {
+            return Some(EDITOR_HINT.to_owned());
+        };
+        let filter = if store.focus().enabled() {
+            "Filter on"
+        } else {
+            "Filter off"
+        };
+        Some(if store.sidebar().mode == crate::model::SidebarMode::Flagged {
+            format!("{EDITOR_HINT}\n{filter}, applies in tree view")
+        } else {
+            format!("{EDITOR_HINT}\n{filter}")
+        })
     }
 
     fn palette_launchable(&self, window: Uuid) -> bool {

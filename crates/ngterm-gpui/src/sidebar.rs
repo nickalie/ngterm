@@ -51,7 +51,9 @@ const SPRING_DELAY: Duration = Duration::from_millis(650);
 /// `gtk-double-click-time`, which GPUI's Linux platform counts clicks with too).
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// The empty flagged view's hint (upstream's `installEmptyState`).
-pub const EMPTY_FLAGGED: &str = "No flagged sessions.\nRight-click a session → Flag.";
+pub const EMPTY_FLAGGED: &str = "No flagged sessions.";
+/// The empty flagged view's link to Edit Flagged Sessions….
+pub const EMPTY_FLAGGED_ADD: &str = "Add Sessions…";
 
 /// What the footer's controls ask for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,6 +302,17 @@ impl Sidebar {
     fn act(&self, action: SidebarAction) {
         let window = self.window;
         self.post(move |state: &mut AppState| state.sidebar_action(window, action));
+    }
+
+    /// The empty flagged view's Add Sessions… link: Edit Flagged Sessions…, as its chord runs it.
+    fn edit_flagged_sessions(&self) {
+        let window = self.window;
+        self.post(move |state: &mut AppState| {
+            state.menu_activated(
+                window,
+                crate::app_menu::Item::Builtin(ngterm_core::keymap::BuiltinAction::EditFlaggedSessions),
+            );
+        });
     }
 
     // MARK: - selection

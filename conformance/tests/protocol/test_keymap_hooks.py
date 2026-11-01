@@ -176,6 +176,30 @@ def test_a_file_binding_the_toggle_overlay_chord_keeps_it(ctl, keymap):
     }
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("keymap.list", "keymap.reload", "field:result.keymap", "field:result.count")
+def test_membership_editors_are_keyless_builtins(ctl, keymap):
+    """The palette's membership editors (#803) are built-ins that ship with no chord, listed after `attach_remote`;
+    a file maps one like any other built-in."""
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    listing = _listed(ctl)
+    names = [action["action"] for action in listing["actions"]]
+    assert names[names.index("attach_remote") + 1 :][:2] == ["edit_flagged_sessions", "edit_focused_workspaces"]
+    for name in ("edit_flagged_sessions", "edit_focused_workspaces"):
+        assert _action(listing, name) == {"action": name}, "keyless"
+
+    keymap.write_text("map ctrl+shift+f9 edit_flagged_sessions\n")
+    assert assert_ok(ctl.request("keymap.reload")) == {"count": 0}
+    listing = _listed(ctl)
+    assert listing["diagnostics"] == []
+    assert _action(listing, "edit_flagged_sessions") == {
+        "action": "edit_flagged_sessions",
+        "chord": "ctrl+shift+f9",
+        "overridden": True,
+    }
+    assert _action(listing, "edit_focused_workspaces") == {"action": "edit_focused_workspaces"}
+
+
 @pytest.mark.covers("keymap.run", "field:result.id", "behavior:protocol.target-resolution")
 def test_run_starts_the_command_for_the_addressed_session(ctl, keymap, adapter):
     lines = CommandLines.of(adapter)

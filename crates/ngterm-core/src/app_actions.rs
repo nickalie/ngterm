@@ -299,6 +299,8 @@ impl Core {
             | BuiltinAction::CustomCommandPalette
             | BuiltinAction::ShowAttention
             | BuiltinAction::SelectTheme
+            | BuiltinAction::EditFlaggedSessions
+            | BuiltinAction::EditFocusedWorkspaces
             | BuiltinAction::AttachRemote
             | BuiltinAction::ReopenRecent
             | BuiltinAction::IncreaseFontSize
@@ -405,6 +407,15 @@ impl Core {
             BuiltinAction::ShowAttention => self.launch_palette(window, PaletteMode::Attention),
             BuiltinAction::SelectTheme => {
                 self.open_palette(window, PaletteMode::Themes);
+                None
+            }
+            // the membership editors open, never toggle: their action-palette row has closed that palette already
+            BuiltinAction::EditFlaggedSessions => {
+                self.open_palette(window, PaletteMode::FlaggedEditor);
+                None
+            }
+            BuiltinAction::EditFocusedWorkspaces => {
+                self.open_palette(window, PaletteMode::FocusEditor);
                 None
             }
             // File ▸ Attach Remote runs in the core: its pickers are the window's modal slot ([`crate::remote`])
@@ -790,6 +801,7 @@ fn store_facts(store: &AppStore, layout: FlaggedViewLayout) -> PaletteFacts {
     );
     facts.set(PaletteFacts::HAS_PENDING_CLOSE, store.pending_close_summary().is_some());
     facts.set(PaletteFacts::HAS_ACTIVE_SESSION, active.is_some());
+    facts.set(PaletteFacts::HAS_SESSIONS, store.sessions().next().is_some());
     facts.set(
         PaletteFacts::HAS_CURRENT_WORKSPACE,
         store.current_workspace_id().is_some(),

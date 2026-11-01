@@ -1,10 +1,10 @@
 //! The rows each palette lists (upstream's `paletteActions`, `paletteSessions`, `paletteThemes`,
-//! `paletteCustomCommands` and `paletteAttention`); the attention palette reads the cross-window attention list the
-//! title bar's bell shares ([`WindowLibrary::attention_across_windows`]).
+//! `paletteCustomCommands`, `paletteAttention`, `paletteFlaggedEditor` and `paletteFocusEditor`); the attention palette
+//! reads the cross-window attention list the title bar's bell shares ([`WindowLibrary::attention_across_windows`]).
 
 use uuid::Uuid;
 
-use super::{PaletteAction, PaletteEntry, PaletteMode, PaletteShortcut};
+use super::{PaletteAction, PaletteEntry, PaletteMark, PaletteMode, PaletteShortcut};
 use crate::Core;
 use crate::keymap::{BuiltinAction, CustomCommand};
 use crate::model::{AppStore, TintColor, WindowLibrary};
@@ -22,7 +22,14 @@ impl Core {
             PaletteMode::Themes => self.palette_themes(),
             PaletteMode::CustomCommands => self.custom_command_entries(None),
             PaletteMode::Attention => self.palette_attention(),
+            PaletteMode::FlaggedEditor => self.frontmost_store().map(flagged_editor_entries).unwrap_or_default(),
+            PaletteMode::FocusEditor => self.frontmost_store().map(focus_editor_entries).unwrap_or_default(),
         }
+    }
+
+    fn frontmost_store(&self) -> Option<&AppStore> {
+        let library = self.library();
+        library.active_window_id().and_then(|window| library.store(window))
     }
 
     /// The id of the row the theme palette opens on: the theme on screen, a no-op preview.
@@ -53,6 +60,7 @@ impl Core {
                 shortcut: command.builtin_action().and_then(|action| self.shortcut(action)),
                 badge: None,
                 indicator: None,
+                mark: None,
                 action: PaletteAction::Command(command),
             })
             .collect();
@@ -70,6 +78,7 @@ impl Core {
             shortcut: self.shortcut(action),
             badge: None,
             indicator: None,
+            mark: None,
             action: PaletteAction::Builtin(action),
         }));
         entries.push(plain_entry(
@@ -112,6 +121,7 @@ impl Core {
                 shortcut: (!command.shortcut.is_empty()).then(|| PaletteShortcut::Text(command.shortcut.clone())),
                 badge: badge.map(str::to_owned),
                 indicator: None,
+                mark: None,
                 action: PaletteAction::Custom(command.id),
             })
             .collect()
@@ -191,6 +201,55 @@ impl Core {
     }
 }
 
+/// The flagged-session editor's rows (upstream's `paletteFlaggedEditor`): every session of the window in tree order,
+/// the ones the focus filter hides included, subtitled with its workspace, with its status glyph and live flag mark.
+/// Each row names its session, never the selection, as unflagging can move the selection.
+fn flagged_editor_entries(store: &AppStore) -> Vec<PaletteEntry> {
+    store
+        .workspaces()
+        .iter()
+        .flat_map(|workspace| {
+            workspace.sessions.iter().map(|session| {
+                let id = session.id();
+                PaletteEntry {
+                    subtitle: Some(workspace.name.clone()),
+                    indicator: Some(session.agent_indicator.clone()),
+                    mark: Some(PaletteMark::Flag(session.flagged)),
+                    ..plain_entry(uuid_string(id), session.display_name(), PaletteAction::ToggleFlag(id))
+                }
+            })
+        })
+        .collect()
+}
+
+/// The focus editor's rows (upstream's `paletteFocusEditor`): every workspace of the window in tree order, subtitled
+/// with its session count, with its live focus mark.
+fn focus_editor_entries(store: &AppStore) -> Vec<PaletteEntry> {
+    let marked = store.focus().ids();
+    store
+        .workspaces()
+        .iter()
+        .map(|workspace| {
+            let id = workspace.id();
+            let count = workspace.sessions.len();
+            let sessions = if count == 1 {
+                "1 session".to_owned()
+            } else {
+                format!("{count} sessions")
+            };
+            PaletteEntry {
+                subtitle: Some(sessions),
+                mark: Some(PaletteMark::Focus(marked.contains(&id))),
+                ..plain_entry(
+                    uuid_string(id),
+                    workspace.name.clone(),
+                    PaletteAction::ToggleFocusMember(id),
+                )
+            }
+        })
+        .collect()
+}
+
 /// A "Move Session to <workspace>" row per workspace other than the selected session's own (upstream skips the
 /// session's workspace, not the current one: a fresh workspace is current while the selection sits elsewhere).
 fn move_session_entries(store: &AppStore) -> Vec<PaletteEntry> {
@@ -244,6 +303,7 @@ fn plain_entry(id: String, title: String, action: PaletteAction) -> PaletteEntry
         shortcut: None,
         badge: None,
         indicator: None,
+        mark: None,
         action,
     }
 }

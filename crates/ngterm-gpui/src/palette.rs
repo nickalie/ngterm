@@ -15,6 +15,11 @@
 //! The theme palette opens on the theme on screen and previews the selected row live, debounced (upstream's 70 ms
 //! preview debounce); its run commits the theme.
 //!
+//! The membership editors (Edit Flagged Sessions…, Edit Focused Workspaces…) lead each row with its live mark
+//! (`palette-mark`: the flag, filled while flagged, or the workspace grid, heavy while in the focus set, as the sidebar
+//! spends fill and weight) and state their footer under the rows (`palette-editor-hint`). A run toggles the row and the
+//! palette stays open on the same query and row; a click selects its row first, so the next Return hits it.
+//!
 //! The core decides when a palette shows and with which rows; every sync hands the window a fresh [`PaletteView`],
 //! which a new generation builds afresh (an empty query) and an unchanged one only refreshes. What the user does is
 //! posted to [`AppState`] with the generation it was built for, so a stale palette's request does nothing.
@@ -31,26 +36,29 @@ use gpui_kit::{
 use ngterm_core::Core;
 use ngterm_core::app_actions::ActionEffect;
 use ngterm_core::keymap::BuiltinAction;
-use ngterm_core::palette::{PaletteAction, PaletteEntry, PaletteMode, PaletteShortcut, filter_entries};
+use ngterm_core::palette::{PaletteAction, PaletteEntry, PaletteMark, PaletteMode, PaletteShortcut, filter_entries};
 use ngterm_core::palette_catalog::PaletteCommand;
 use uuid::Uuid;
 
 use crate::keymap_dispatch::{Fired, KeyOrigin};
 use crate::modal::{self, Metrics};
 use crate::picker::{self, Frame, Ids, PickKey, Placement, moved};
+use crate::row_icon::{self, Glyph};
 use crate::state::{AppState, Poster, post};
 use crate::status_glyph::GlyphLook;
 
 /// How long the theme palette waits for the selection to settle before previewing it (upstream's
 /// `previewThemeDebounceInterval`).
 pub const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(70);
-/// The launchers whose chord reaches its action from the search field.
-pub const LAUNCHERS: [BuiltinAction; 5] = [
+/// The launchers whose chord reaches its action from the search field: every built-in that opens a palette mode.
+pub const LAUNCHERS: [BuiltinAction; 7] = [
     BuiltinAction::SessionPalette,
     BuiltinAction::CommandPalette,
     BuiltinAction::CustomCommandPalette,
     BuiltinAction::ShowAttention,
     BuiltinAction::SelectTheme,
+    BuiltinAction::EditFlaggedSessions,
+    BuiltinAction::EditFocusedWorkspaces,
 ];
 
 /// What the frontmost window shows of the open palette: its rows and how each renders now.
@@ -62,6 +70,8 @@ pub struct PaletteView {
     pub looks: Vec<RowLook>,
     /// The row the palette opens on (the theme on screen); the first row otherwise.
     pub initial: Option<String>,
+    /// A membership editor's footer ([`Core::palette_editor_hint`]).
+    pub hint: Option<String>,
 }
 
 /// How one row renders beyond its entry.
@@ -96,6 +106,7 @@ impl PaletteView {
             entries,
             looks,
             initial: (mode == PaletteMode::Themes).then(|| core.palette_current_theme_id()),
+            hint: core.palette_editor_hint(window),
         })
     }
 }
@@ -231,6 +242,12 @@ impl Palette {
         self.selection
     }
 
+    /// The query typed (tests).
+    #[must_use]
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
     /// What takes the keyboard: the search field.
     #[must_use]
     pub fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -334,6 +351,7 @@ impl Palette {
         let (entry, look) = self.entry_at(row)?;
         let (metrics, colors) = (self.metrics, crate::chrome::current(cx));
         let dim = crate::chrome::color(colors.foreground, crate::chrome::DIM_ALPHA);
+        let mark = entry.mark.map(|mark| mark_element(mark, colors));
         let glyph = look
             .glyph
             .as_ref()
@@ -367,6 +385,7 @@ impl Palette {
             metrics,
             colors,
         )
+        .children(mark)
         .child(picker::text_column(
             &entry.title,
             entry.subtitle.as_deref(),
@@ -378,11 +397,66 @@ impl Palette {
         .children(shortcut)
         .children(glyph)
         .on_click(cx.listener(move |palette, _, _, cx| {
+            // an editor stays open after the click, so the next Return must hit this row
+            if palette.view.mode.keeps_open_on_run() {
+                palette.select(row, false, cx);
+            }
             palette.run(row, cx);
             cx.notify();
         }));
         Some(element.into_any_element())
     }
+
+    /// The membership editor's footer under the rows.
+    fn footer(&self, cx: &App) -> Option<AnyElement> {
+        let hint = self.view.hint.clone()?;
+        let colors = crate::chrome::current(cx);
+        let footer = div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .child(div().h(px(1.)).flex_shrink_0().bg(crate::chrome::separator(&colors)))
+            .child(
+                div()
+                    .id("palette-editor-hint")
+                    .accessibility_id("palette-editor-hint")
+                    .role(gpui_kit::Role::Label)
+                    .aria_label(SharedString::from(hint.clone()))
+                    .debug_selector(|| "palette-editor-hint".to_owned())
+                    .px(modal::logical(self.metrics.scaled(12.0)))
+                    .py(modal::logical(self.metrics.scaled(6.0)))
+                    .text_size(modal::logical(self.metrics.secondary))
+                    .text_color(crate::chrome::color(colors.foreground, crate::chrome::DIM_ALPHA))
+                    .children(
+                        hint.lines()
+                            .map(|line| div().child(SharedString::from(line.to_owned()))),
+                    ),
+            );
+        Some(footer.into_any_element())
+    }
+}
+
+/// A membership editor row's leading mark (upstream's `markImage`): the flag, filled while flagged, or the workspace
+/// grid, at the heavy weight while in the focus set, so the two never read alike; in full ink while on, dimmed off.
+fn mark_element(mark: PaletteMark, colors: ngterm_core::chrome::ChromeColors) -> AnyElement {
+    let (on, glyph, value) = match mark {
+        PaletteMark::Flag(on) => (on, Glyph::Flag { filled: on }, if on { "flagged" } else { "unflagged" }),
+        PaletteMark::Focus(on) => (
+            on,
+            Glyph::Workspace { focus_member: on },
+            if on { "focused" } else { "unfocused" },
+        ),
+    };
+    let ink = crate::chrome::color(colors.foreground, if on { 1.0 } else { crate::chrome::DIM_ALPHA });
+    div()
+        .id("palette-mark")
+        .accessibility_id("palette-mark")
+        .role(gpui_kit::Role::Image)
+        .aria_value(value)
+        .debug_selector(move || format!("palette-mark:{value}"))
+        .flex_none()
+        .child(row_icon::icon(glyph, ink))
+        .into_any_element()
 }
 
 impl Render for Palette {
@@ -393,6 +467,7 @@ impl Render for Palette {
             .filter_map(|row| self.render_row(row, animate, cx))
             .collect();
         let placement = Placement::of(window.viewport_size(), self.inset, picker::PANEL_WIDTH, self.metrics);
+        let footer = self.footer(cx);
         let palette = cx.entity().downgrade();
         picker::frame(
             Frame {
@@ -403,6 +478,7 @@ impl Render for Palette {
                 placement,
                 header: picker::header(&self.field, self.metrics, colors),
                 rows,
+                footer,
                 scroll: &self.scroll,
                 metrics: self.metrics,
                 colors,

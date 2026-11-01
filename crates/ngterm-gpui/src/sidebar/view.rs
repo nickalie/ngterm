@@ -2,12 +2,13 @@
 //! `WorkspaceSidebar+RowRendering.swift`; `WindowContentView.swift`'s `sidebarColumn`, `sidebarDivider` and
 //! `bottomBar`): the column in the sidebar color, its rows (a workspace row's disclosure, the leading glyph, the name
 //! or the rename field, a workspace row's hover "+", the agent-status glyph and the unseen badge; the selection pill
-//! behind a selected row), the drop highlight, the empty flagged view's hint, the footer, and the divider with its
-//! grab handle overhanging the terminal.
+//! behind a selected row), the drop highlight, the empty flagged view's hint with its Add Sessions… link, the footer,
+//! and the divider with its grab handle overhanging the terminal.
 //!
 //! The element ids are upstream's accessibility ids: `workspace-row`/`session-row` on the name,
 //! `workspace-icon`/`session-icon`, `edit-field`, `workspace-add-session`, `notify-badge`, `agent-status`, and the
-//! footer's `add-session`, `focus-filter-toggle`, `flagged-view-toggle`.
+//! footer's `add-session`, `focus-filter-toggle`, `flagged-view-toggle`, and the empty flagged view's
+//! `flagged-empty-add`.
 
 use std::rc::Rc;
 
@@ -32,7 +33,9 @@ use super::look::{
 };
 use super::menu;
 use super::rows::badge_text;
-use super::{DividerDrag, EMPTY_FLAGGED, FooterAction, RowDrag, RowKind, Sidebar, SidebarRow, context};
+use super::{
+    DividerDrag, EMPTY_FLAGGED, EMPTY_FLAGGED_ADD, FooterAction, RowDrag, RowKind, Sidebar, SidebarRow, context,
+};
 use crate::row_icon::{self, Glyph, SLOT};
 use crate::status_glyph;
 
@@ -131,7 +134,7 @@ impl Sidebar {
                     .flex_1()
                     .min_h(px(0.))
                     .child(list)
-                    .when(self.context.empty_flagged, |area| area.child(empty_hint(look))),
+                    .when(self.context.empty_flagged, |area| area.child(self.empty_hint(cx))),
             )
             .child(self.footer(cx))
     }
@@ -641,18 +644,36 @@ fn text_width(window: &Window, text: &SharedString, size: f32, weight: FontWeigh
     f32::from(line.width)
 }
 
-/// The empty flagged view's hint, over the list and never taking the pointer.
-fn empty_hint(look: Look) -> impl IntoElement {
-    div()
-        .absolute()
-        .top(px(HINT_INSETS.0))
-        .left(px(HINT_INSETS.1))
-        .right(px(HINT_INSETS.1))
-        .flex()
-        .flex_col()
-        .items_center()
-        .text_color(color(look.colors.foreground, HINT_ALPHA))
-        .children(EMPTY_FLAGGED.lines().map(|line| div().text_center().child(line)))
+impl Sidebar {
+    /// The empty flagged view's hint over the list, taking the pointer only on its underlined Add Sessions… link,
+    /// which opens Edit Flagged Sessions… through the keymap path, so its enablement is asked at the click (upstream's
+    /// `installEmptyState`). A window's first click activates it as well on Linux: there is no first-mouse refusal to
+    /// port.
+    fn empty_hint(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let hint_color = color(self.look.colors.foreground, HINT_ALPHA);
+        let link = div()
+            .id("flagged-empty-add")
+            .accessibility_id("flagged-empty-add")
+            .role(gpui_kit::Role::Link)
+            .aria_label(EMPTY_FLAGGED_ADD)
+            .debug_selector(|| "flagged-empty-add".to_owned())
+            .cursor_pointer()
+            .underline()
+            .child(EMPTY_FLAGGED_ADD)
+            .on_click(cx.listener(|sidebar, _: &ClickEvent, _, _| sidebar.edit_flagged_sessions()));
+        div()
+            .absolute()
+            .top(px(HINT_INSETS.0))
+            .left(px(HINT_INSETS.1))
+            .right(px(HINT_INSETS.1))
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(6.))
+            .text_color(hint_color)
+            .child(div().text_center().truncate().child(EMPTY_FLAGGED))
+            .child(link)
+    }
 }
 
 /// What a row drag shows under the pointer: the row's label on a pill in the sidebar's colors.

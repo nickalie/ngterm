@@ -409,21 +409,22 @@ editor cases), `PaletteTests.swift` (`testOnlyTheMembershipEditorsStayOpenAfterA
 (listed). New: `test_keymap_hooks.py::test_membership_editors_are_keyless_builtins`; ui ids `palette-editor-hint`,
 `palette-mark`, `flagged-empty-add` (ui layer).
 
-- [ ] built-ins `edit_flagged_sessions`, `edit_focused_workspaces`, keyless; palette commands "Edit Flagged
+- [x] built-ins `edit_flagged_sessions`, `edit_focused_workspaces`, keyless; palette commands "Edit Flagged
       Sessions…" (after Clear Flagged, enabled when the window has any session) and "Edit Focused Workspaces…"
       (after Clear Focus, enabled with a current workspace), visible in either sidebar mode
-- [ ] palette modes FlaggedEditor ("Flag or unflag sessions…") and FocusEditor ("Add or remove focused
+- [x] palette modes FlaggedEditor ("Flag or unflag sessions…") and FocusEditor ("Add or remove focused
       workspaces…"): rows in tree order (focus-hidden ones included) with a live mark; Return or a click toggles and
       the palette stays open on the same query and highlight; an empty query keeps source order; a gone row is inert;
       marking never turns the focus filter on
-- [ ] footer hint "Return toggles · Esc closes · Changes apply immediately" (+ "\nFilter on|off", ", applies in tree
+- [x] footer hint "Return toggles · Esc closes · Changes apply immediately" (+ "\nFilter on|off", ", applies in tree
       view" for the focus editor); View menu items; one opener for the palette row, keymap, menu and empty-state link
-- [ ] empty flagged view: "No flagged sessions." with an "Add Sessions…" link that opens the session editor and
+- [x] empty flagged view: "No flagged sessions." with an "Add Sessions…" link that opens the session editor and
       hides once something is flagged
-- [ ] write tests: the Swift cases above (builtin count, catalog order and count, enablement, run keeps the palette
+- [x] write tests: the Swift cases above (builtin count, catalog order and count, enablement, run keeps the palette
       open, gpui click-then-Return, the empty-state link)
-- [ ] write tests: the conformance test above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the conformance test above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the new conformance test is
+      `since(0.39.1)`; green at a temporary 0.39.1 level, its id goes in at Task 25)
 
 ### Task 9: Links in a 95/75/50% overlay and the browser override chord (#812, #813)
 

@@ -47,10 +47,12 @@ fn names_are_the_kitty_style_names() {
         (A::NextWindow, "next_window"),
         (A::AttachRemote, "attach_remote"),
         (A::ToggleOverlay, "toggle_overlay"),
+        (A::EditFlaggedSessions, "edit_flagged_sessions"),
+        (A::EditFocusedWorkspaces, "edit_focused_workspaces"),
     ] {
         assert_eq!(action.name(), name);
     }
-    assert_eq!(BuiltinAction::all().count(), 50);
+    assert_eq!(BuiltinAction::all().count(), 52);
 }
 
 #[test]
@@ -143,8 +145,10 @@ fn the_default_chord_matches_the_shipped_table() {
         (A::ShowAttention, Some(chord(CTRL | SHIFT, "i"))),
         (A::Dashboard, Some(chord(CMD | SHIFT, "g"))),
         (A::AttachRemote, Some(chord(CMD | SHIFT, "r"))),
+        (A::EditFlaggedSessions, None),
+        (A::EditFocusedWorkspaces, None),
     ];
-    assert_eq!(expected.len(), 50);
+    assert_eq!(expected.len(), 52);
     for (action, chord) in expected {
         assert_eq!(default_chord(action), chord, "{}", action.name());
     }
@@ -212,6 +216,8 @@ fn keyless_actions_have_no_default() {
         A::ToggleWorkspaceCollapse,
         A::PreviousWindow,
         A::NextWindow,
+        A::EditFlaggedSessions,
+        A::EditFocusedWorkspaces,
     ];
     let without_default: HashSet<BuiltinAction> = BuiltinAction::all()
         .filter(|&action| default_chord(action).is_none())

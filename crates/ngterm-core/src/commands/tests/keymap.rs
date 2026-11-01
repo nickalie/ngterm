@@ -114,7 +114,7 @@ fn list_without_a_file_reports_the_linux_builtins_alone() {
     assert_eq!(listing["diagnostics"], json!([]));
     assert!(listing.get("menu").is_none());
     let actions = listing["actions"].as_array().unwrap();
-    assert_eq!(actions.len(), 50);
+    assert_eq!(actions.len(), 52);
     let new_session = actions.iter().find(|action| action["action"] == "new_session").unwrap();
     assert_eq!(new_session, &json!({"action": "new_session", "chord": "ctrl+shift+t"}));
     let toggle_overlay = actions

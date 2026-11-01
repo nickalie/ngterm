@@ -2,7 +2,8 @@
 //!
 //! A row's enablement is asked of live state when it renders and again when it runs, so a row that went inert while
 //! the palette sat open neither runs nor closes the palette. A row that runs closes the palette first, so a launcher
-//! row (Show Attention, Select Theme…) can open the next palette; a theme row commits its preview before the close.
+//! row (Show Attention, Select Theme…) can open the next palette; a theme row commits its preview before the close. A
+//! membership editor's row toggles in place and leaves its palette open ([`PaletteMode::keeps_open_on_run`]).
 
 use ngterm_proto::command::WindowCmd;
 use ngterm_proto::{Args, Command};
@@ -19,8 +20,9 @@ use crate::windows::WindowRequest;
 impl Core {
     /// Whether `action`, a row of the palette window `window` draws, can run now. The static rows read the menu's
     /// predicate; an attention row asks its own window's modal gate (upstream's `canSelectAttention`); a Tint Session
-    /// row needs that gate and a selected session (the `isEnabled` of upstream's `tintItems`); the rest are gated when
-    /// they run.
+    /// row needs that gate and a selected session (the `isEnabled` of upstream's `tintItems`); a membership editor's row
+    /// needs the gate and its session or workspace still in the window, so a gone row goes inert; the rest are gated
+    /// when they run.
     #[must_use]
     pub fn palette_entry_enabled(&self, window: Uuid, action: &PaletteAction) -> bool {
         match action {
@@ -34,6 +36,16 @@ impl Core {
                         .and_then(AppStore::selected_session_id)
                         .is_some()
             }
+            PaletteAction::ToggleFlag(session) => {
+                self.ui_actions_enabled(window) && window_holds(self.library(), window, *session)
+            }
+            PaletteAction::ToggleFocusMember(workspace) => {
+                self.ui_actions_enabled(window)
+                    && self
+                        .library()
+                        .store(window)
+                        .is_some_and(|store| store.workspace(*workspace).is_some())
+            }
             _ => true,
         }
     }
@@ -41,8 +53,13 @@ impl Core {
     /// Runs the palette row `action` from window `window`: `None` when it is inert (the palette stays open), else
     /// what the frontend finishes. Commit afterwards.
     pub fn run_palette_entry(&mut self, window: Uuid, action: &PaletteAction) -> Option<ActionEffect> {
-        if self.palette.mode.is_none() || !self.palette_entry_enabled(window, action) {
+        let mode = self.palette.mode?;
+        if !self.palette_entry_enabled(window, action) {
             return None;
+        }
+        if mode.keeps_open_on_run() {
+            self.toggle_membership(window, action);
+            return Some(ActionEffect::Done);
         }
         if let PaletteAction::Theme(name) = action {
             self.preview_palette_theme(name.as_deref());
@@ -119,6 +136,27 @@ impl Core {
             }
             PaletteAction::SelectSession(session) if window_holds(self.library(), window, *session) => {
                 self.pick_session(window, *session);
+            }
+            _ => {}
+        }
+    }
+
+    /// A membership editor's row (upstream's editor `run` closures): a session's flag or a workspace's focus
+    /// membership flips from what it is now. Marking never turns the focus filter on; unmarking the last member turns
+    /// it off ([`AppStore::set_focus_membership`]).
+    fn toggle_membership(&mut self, window: Uuid, action: &PaletteAction) {
+        let Some(store) = self.library_mut().store_mut(window) else {
+            return;
+        };
+        match action {
+            PaletteAction::ToggleFlag(session) => {
+                if let Some(flagged) = store.session(*session).map(|session| session.flagged) {
+                    store.set_flag(!flagged, *session);
+                }
+            }
+            PaletteAction::ToggleFocusMember(workspace) => {
+                let member = store.focus().ids().contains(workspace);
+                store.set_focus_membership(*workspace, !member);
             }
             _ => {}
         }

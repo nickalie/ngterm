@@ -992,6 +992,68 @@ fn a_palette_takes_the_keyboard_runs_a_row_and_its_launcher_closes_it(cx: &mut T
     assert!(s.terminal_focused());
 }
 
+/// The membership editor in a real window (upstream's `testFlaggedEditorTogglesInPlaceAndStaysOpen` and
+/// `testEditorClickThenReturnBothHitTheClickedRow`): Edit Flagged Sessions… lists every session, a click flags its row
+/// and selects it, the palette stays open with the keyboard, Return then unflags that same row, typing still filters,
+/// and Escape closes it.
+#[gpui_kit::test]
+fn the_flagged_editor_toggles_in_place_and_stays_open(cx: &mut TestAppContext) {
+    use ngterm_core::palette::PaletteMode;
+
+    let mut s = shell(cx);
+    s.with_keys();
+    s.state.menu_activated(
+        s.window,
+        crate::app_menu::Item::Row(ngterm_core::palette_catalog::PaletteCommand::EditFlaggedSessions),
+    );
+    s.settle();
+    assert_eq!(s.state.core.palette_mode(), Some(PaletteMode::FlaggedEditor));
+    let generation = s.state.core.palette_generation();
+    let titles = |s: &mut Shell<'_>| {
+        s.view
+            .read_with(s.cx, |view, cx| view.palette().unwrap().read(cx).titles())
+    };
+    assert_eq!(titles(&mut s), ["u", "var"], "every session, in tree order");
+    let u = s.session("u").unwrap();
+    let flagged = |s: &Shell<'_>| {
+        s.state
+            .core
+            .library()
+            .store(s.window)
+            .and_then(|store| store.session(u))
+            .is_some_and(|session| session.flagged)
+    };
+    let selector: &'static str =
+        Box::leak(format!("palette-item-{}", ngterm_core::pane_env::uuid_string(u)).into_boxed_str());
+    s.click(selector);
+    s.settle();
+    assert!(flagged(&s), "the click flagged its row");
+    assert_eq!(
+        s.state.core.palette_mode(),
+        Some(PaletteMode::FlaggedEditor),
+        "stays open"
+    );
+    assert_eq!(s.state.core.palette_generation(), generation);
+    assert!(s.holds(|view, cx| view.palette().map(|palette| palette.read(cx).focus_handle(cx))));
+
+    s.cx.simulate_keystrokes("enter");
+    s.settle();
+    assert!(!flagged(&s), "Return hit the clicked row again");
+    s.cx.simulate_keystrokes("v");
+    s.settle();
+    assert_eq!(titles(&mut s), ["var"], "typing still reaches the field");
+    s.cx.simulate_keystrokes("enter");
+    s.settle();
+    let query = s
+        .view
+        .read_with(s.cx, |view, cx| view.palette().unwrap().read(cx).query().to_owned());
+    assert_eq!(query, "v", "the editor stays on its query");
+    s.cx.simulate_keystrokes("escape");
+    s.settle();
+    assert!(s.state.core.palette_mode().is_none(), "Escape closes it");
+    assert!(s.terminal_focused());
+}
+
 /// A session row of the open ⌃P palette draws its session's status glyph trailing and follows a status change while
 /// the palette stays open (upstream's `testASessionRowShowsTheStatusOfTheMomentUnderTheOpenPalette`).
 #[gpui_kit::test]

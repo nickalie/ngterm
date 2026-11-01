@@ -53,6 +53,9 @@ bitflags! {
         /// The `attentionNavigationAcrossWindows` setting: attention steps walk every open window, so a window with
         /// no active session can still step out.
         const ATTENTION_ACROSS_WINDOWS = 1 << 21;
+        /// The frontmost window holds any session, selected or not (upstream's `hasSessions`): the flagged-session
+        /// editor lists them all.
+        const HAS_SESSIONS = 1 << 22;
     }
 }
 
@@ -162,7 +165,9 @@ pub enum PaletteCommand {
     DeleteWorkspace,
     ToggleFlaggedView,
     ClearFlagged,
+    EditFlaggedSessions,
     ClearFocus,
+    EditFocusedWorkspaces,
     AddWorkspaceToFocus,
     ToggleWorkspaceFilter,
     ExpandWorkspaces,
@@ -225,7 +230,10 @@ impl PaletteCommand {
             Self::RenameWorkspace
             | Self::FocusWorkspace
             | Self::AddWorkspaceToFocus
-            | Self::ToggleWorkspaceCollapse => context.has(PaletteFacts::HAS_CURRENT_WORKSPACE),
+            | Self::ToggleWorkspaceCollapse
+            | Self::EditFocusedWorkspaces => context.has(PaletteFacts::HAS_CURRENT_WORKSPACE),
+            // any session will do: the editor lists them all, the selection need not be one
+            Self::EditFlaggedSessions => context.has(PaletteFacts::HAS_SESSIONS),
             // a step needs somewhere to go, so a lone visible workspace disables rather than no-ops
             Self::PreviousWorkspace | Self::NextWorkspace => {
                 context.has(PaletteFacts::HAS_CURRENT_WORKSPACE | PaletteFacts::CAN_STEP_WORKSPACES)
@@ -353,7 +361,9 @@ impl PaletteCommand {
             Self::DeleteWorkspace => "Delete Workspace",
             Self::ToggleFlaggedView => "Show Flagged Sessions",
             Self::ClearFlagged => "Clear Flagged",
+            Self::EditFlaggedSessions => "Edit Flagged Sessions…",
             Self::ClearFocus => "Clear Focus",
+            Self::EditFocusedWorkspaces => "Edit Focused Workspaces…",
             Self::AddWorkspaceToFocus => "Add Workspace to Focus",
             Self::ToggleWorkspaceFilter => "Toggle Workspace Filter",
             Self::ExpandWorkspaces => "Expand Workspaces",
@@ -412,6 +422,8 @@ impl PaletteCommand {
             Self::FocusLeftPane => BuiltinAction::FocusLeftPane,
             Self::FocusRightPane => BuiltinAction::FocusRightPane,
             Self::AttachRemote => BuiltinAction::AttachRemote,
+            Self::EditFlaggedSessions => BuiltinAction::EditFlaggedSessions,
+            Self::EditFocusedWorkspaces => BuiltinAction::EditFocusedWorkspaces,
             Self::EditKeymap
             | Self::ReloadKeymap
             | Self::EditHooks
@@ -457,7 +469,8 @@ mod tests {
         .union(F::HAS_ACTIVE_SESSION)
         .union(F::HAS_CURRENT_WORKSPACE)
         .union(F::HAS_REMOTES)
-        .union(F::ACTIVE_SESSION_HAS_OVERLAY);
+        .union(F::ACTIVE_SESSION_HAS_OVERLAY)
+        .union(F::HAS_SESSIONS);
 
     /// The commands whose menu item carries no modal term at all.
     const COVER_PROOF: [PaletteCommand; 8] = [
@@ -551,7 +564,9 @@ mod tests {
                 "Delete Workspace",
                 "Show Flagged Sessions",
                 "Clear Flagged",
+                "Edit Flagged Sessions…",
                 "Clear Focus",
+                "Edit Focused Workspaces…",
                 "Add Workspace to Focus",
                 "Toggle Workspace Filter",
                 "Expand Workspaces",
@@ -568,7 +583,7 @@ mod tests {
 
     #[test]
     fn catalog_has_the_expected_static_command_count() {
-        assert_eq!(PaletteCommand::all().count(), 57);
+        assert_eq!(PaletteCommand::all().count(), 59);
     }
 
     #[test]
@@ -789,6 +804,49 @@ mod tests {
         );
     }
 
+    /// Upstream's `flaggedEditorNeedsAnySessionNotAnActiveOne`.
+    #[test]
+    fn flagged_editor_needs_any_session_not_an_active_one() {
+        let editor = PaletteCommand::EditFlaggedSessions;
+        assert!(editor.is_enabled(&ctx(F::HAS_SESSIONS)));
+        assert!(!editor.is_enabled(&ctx(F::empty())));
+        assert!(
+            !editor.is_enabled(&ctx(F::HAS_ACTIVE_SESSION)),
+            "a selection alone is not a session list"
+        );
+        assert!(editor.is_visible(&ctx(F::empty())), "stays listed, inert");
+        assert!(!editor.is_enabled(&ctx(F::HAS_SESSIONS | F::PICKER_ACTIVE)));
+    }
+
+    /// Upstream's `membershipEditorsStayListedInEitherSidebarMode`.
+    #[test]
+    fn membership_editors_stay_listed_in_either_sidebar_mode() {
+        let present = F::HAS_SESSIONS | F::HAS_CURRENT_WORKSPACE;
+        let tree = ctx(present | F::SIDEBAR_SHOWS_WORKSPACE_TREE);
+        let flagged = ctx(present | F::SIDEBAR_SHOWS_FLAGGED_ONLY);
+        for context in [tree, flagged] {
+            assert!(PaletteCommand::EditFlaggedSessions.is_enabled(&context));
+            assert!(PaletteCommand::EditFocusedWorkspaces.is_enabled(&context));
+        }
+        assert!(!PaletteCommand::EditFocusedWorkspaces.is_enabled(&ctx(F::HAS_SESSIONS)));
+        assert_eq!(
+            PaletteCommand::EditFlaggedSessions.title_default(),
+            "Edit Flagged Sessions…"
+        );
+        assert_eq!(
+            PaletteCommand::EditFocusedWorkspaces.title_default(),
+            "Edit Focused Workspaces…"
+        );
+        assert_eq!(
+            PaletteCommand::EditFlaggedSessions.builtin_action(),
+            Some(BuiltinAction::EditFlaggedSessions)
+        );
+        assert_eq!(
+            PaletteCommand::EditFocusedWorkspaces.builtin_action(),
+            Some(BuiltinAction::EditFocusedWorkspaces)
+        );
+    }
+
     /// Upstream's `toggleOverlayNeedsAnOverlayToHideOrShow`.
     #[test]
     fn toggle_overlay_needs_an_overlay_to_hide_or_show() {
@@ -820,6 +878,7 @@ mod tests {
             C::NextWorkspace,
             C::ToggleWorkspaceCollapse,
             C::AttachRemote,
+            C::EditFocusedWorkspaces,
         ];
         for command in PaletteCommand::all() {
             assert_eq!(

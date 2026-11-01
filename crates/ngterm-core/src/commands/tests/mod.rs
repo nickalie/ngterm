@@ -24,6 +24,7 @@ mod overlay_points;
 mod overlay_visibility;
 mod page_serve;
 mod palette;
+mod palette_editors;
 mod pane_focus;
 mod panes;
 mod pick;

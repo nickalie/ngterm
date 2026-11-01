@@ -295,6 +295,8 @@ pub struct Frame<'a> {
     pub placement: Placement,
     pub header: AnyElement,
     pub rows: Vec<AnyElement>,
+    /// What sits under the rows (the palette's membership editors' hint); nothing for the rest.
+    pub footer: Option<AnyElement>,
     pub scroll: &'a ScrollHandle,
     pub metrics: Metrics,
     pub colors: ChromeColors,
@@ -309,6 +311,7 @@ pub fn frame(parts: Frame<'_>, dismiss: impl Fn(&MouseDownEvent, &mut Window, &m
         placement,
         header,
         rows,
+        footer,
         scroll,
         metrics,
         colors,
@@ -355,7 +358,8 @@ pub fn frame(parts: Frame<'_>, dismiss: impl Fn(&MouseDownEvent, &mut Window, &m
                         .overflow_y_scroll()
                         .track_scroll(scroll)
                         .children(rows),
-                ),
+                )
+                .children(footer),
         )
 }
 
@@ -571,6 +575,7 @@ impl Render for Picker {
                 placement,
                 header: header(&self.field, self.metrics, colors),
                 rows,
+                footer: None,
                 scroll: &self.scroll,
                 metrics: self.metrics,
                 colors,

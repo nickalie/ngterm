@@ -25,11 +25,12 @@ pub fn pick_custom_row_label(query: &str, filtered_count: usize, allow_custom: b
 
 /// The rows `query` shows of a built-in palette's `entries`, as indices into them (upstream's `updateFiltered`): the
 /// matching rows best first, ties A→Z by title; a blank query (trimmed of whitespace and newlines) lists everything
-/// A→Z, except the attention palette, which keeps its source order so Return runs its first row.
+/// A→Z, except the attention palette and the membership editors, which keep their source order so Return runs their
+/// first row.
 #[must_use]
 pub fn filter_entries(entries: &[PaletteEntry], query: &str, mode: PaletteMode) -> Vec<usize> {
     let query = query.trim();
-    if query.is_empty() && mode == PaletteMode::Attention {
+    if query.is_empty() && (mode == PaletteMode::Attention || mode.keeps_open_on_run()) {
         return (0..entries.len()).collect();
     }
     fuzzy_rank(query, 0..entries.len(), |index| {
@@ -126,6 +127,7 @@ mod tests {
             shortcut: None,
             badge: None,
             indicator: None,
+            mark: None,
             action: PaletteAction::Command(PaletteCommand::NewSession),
         }
     }
@@ -136,6 +138,29 @@ mod tests {
         assert_eq!(filter_entries(&entries, "", PaletteMode::Actions), [1, 0, 2]);
         assert_eq!(filter_entries(&entries, " \n", PaletteMode::Sessions), [1, 0, 2]);
         assert_eq!(filter_entries(&entries, "  ", PaletteMode::Attention), [0, 1, 2]);
+        assert_eq!(filter_entries(&entries, "", PaletteMode::FlaggedEditor), [0, 1, 2]);
+        assert_eq!(filter_entries(&entries, "\n", PaletteMode::FocusEditor), [0, 1, 2]);
+        assert_eq!(
+            filter_entries(&entries, "gam", PaletteMode::FlaggedEditor),
+            [2],
+            "a query still filters"
+        );
+    }
+
+    /// Upstream's `testOnlyTheMembershipEditorsStayOpenAfterARun`.
+    #[test]
+    fn only_the_membership_editors_stay_open_after_a_run() {
+        assert!(PaletteMode::FlaggedEditor.keeps_open_on_run());
+        assert!(PaletteMode::FocusEditor.keeps_open_on_run());
+        for mode in [
+            PaletteMode::Actions,
+            PaletteMode::Sessions,
+            PaletteMode::Themes,
+            PaletteMode::CustomCommands,
+            PaletteMode::Attention,
+        ] {
+            assert!(!mode.keeps_open_on_run(), "{mode:?}");
+        }
     }
 
     #[test]

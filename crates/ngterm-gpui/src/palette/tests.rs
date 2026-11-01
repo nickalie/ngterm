@@ -17,6 +17,7 @@ fn entry(id: &str, action: PaletteAction) -> PaletteEntry {
         shortcut: None,
         badge: None,
         indicator: None,
+        mark: None,
         action,
     }
 }
@@ -35,6 +36,7 @@ fn view(mode: PaletteMode, generation: u64, entries: Vec<PaletteEntry>, enabled:
             .collect(),
         entries,
         initial: None,
+        hint: None,
     }
 }
 
@@ -153,4 +155,54 @@ fn the_theme_palette_opens_on_the_theme_on_screen_and_previews_once_the_selectio
         [Request::Run(PaletteAction::Theme(Some("B".to_owned())))],
         "a run drops the preview still waiting"
     );
+}
+
+/// Upstream's `testEditorClickThenReturnBothHitTheClickedRow`: a membership editor's click selects its row before it
+/// runs, so the Return after it toggles the same row; the editor draws each row's mark and its footer.
+#[gpui_kit::test]
+fn an_editor_click_selects_its_row_so_the_next_return_hits_it(cx: &mut TestAppContext) {
+    let ids = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+    let entries = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| PaletteEntry {
+            mark: Some(PaletteMark::Flag(index == 0)),
+            ..entry(&format!("row{index}"), PaletteAction::ToggleFlag(*id))
+        })
+        .collect();
+    let mut opened = view(PaletteMode::FlaggedEditor, 3, entries, &[true, true, true]);
+    opened.hint = Some(ngterm_core::palette::EDITOR_HINT.to_owned());
+    let (palette, cx, requests) = open(cx, opened);
+    assert!(cx.debug_bounds("palette-editor-hint").is_some(), "the footer is drawn");
+    assert!(cx.debug_bounds("palette-mark:flagged").is_some());
+    assert!(cx.debug_bounds("palette-mark:unflagged").is_some());
+    assert_eq!(palette.read_with(cx, |palette, _| palette.selection()), 0);
+    let row = cx
+        .debug_bounds("palette-item-row2")
+        .expect("the third row is drawn")
+        .center();
+    cx.simulate_click(row, gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        palette.read_with(cx, |palette, _| palette.selection()),
+        2,
+        "the click selected it"
+    );
+    palette.update(cx, |palette, cx| palette.key(PickKey::Run, cx));
+    assert_eq!(
+        *requests.borrow(),
+        [
+            Request::Run(PaletteAction::ToggleFlag(ids[2])),
+            Request::Run(PaletteAction::ToggleFlag(ids[2])),
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn another_palette_draws_no_editor_footer(cx: &mut TestAppContext) {
+    let entries = vec![entry("New Session", PaletteAction::Command(PaletteCommand::NewSession))];
+    let (_, cx, _) = open(cx, view(PaletteMode::Actions, 1, entries, &[true]));
+    assert!(cx.debug_bounds("command-palette").is_some());
+    assert!(cx.debug_bounds("palette-editor-hint").is_none());
+    assert!(cx.debug_bounds("palette-mark:unflagged").is_none());
 }
