@@ -409,14 +409,18 @@ impl DashboardController {
 
 impl AppStore {
     /// The cells of `targets` in order: a bare target takes the session's primary pane plus its split when it has one
-    /// (shown or hidden), an explicit pane that cell alone. Unknown sessions are skipped and repeated cells collapse,
-    /// so no terminal is hosted twice. Uncapped (upstream's `dashboardPaneCells`).
+    /// (shown or hidden), an explicit pane that cell alone. Unknown sessions and page companions are skipped and
+    /// repeated cells collapse, so no terminal is hosted twice. Uncapped (upstream's `dashboardPaneCells`).
     #[must_use]
     pub fn dashboard_pane_cells(&self, targets: &[ResolvedDashboardTarget]) -> Vec<DashboardMember> {
         let mut seen = HashSet::new();
         let mut members = Vec::new();
         for target in targets {
-            let Some(session) = self.session(target.session) else {
+            // a page companion has no terminal to host
+            let Some(session) = self
+                .session(target.session)
+                .filter(|session| session.content() == crate::model::SessionContent::Terminal)
+            else {
                 continue;
             };
             let mut cells = vec![DashboardMember {

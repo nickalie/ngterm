@@ -225,3 +225,153 @@ def test_a_parent_whose_shell_exits_restarts_it(shells):
     node = find_session(ctl.tree(), command)
     assert (node.get("foreground") or [])[:1] != ["sleep"], node
     assert_ok(ctl.request("workspace.delete", wid))
+
+
+# -- page companions
+
+_pages = itertools.count(1)
+PAGE_FULL_SIZE = "a page companion is full size: it takes no --pane, --size-percent, --width or --height"
+
+
+def _page_file(ctl):
+    """A static page in a folder of its own under the instance's root: `(path, title)`."""
+    number = next(_pages)
+    folder = ctl.instance.root / f"companion-pages-{number}"
+    folder.mkdir()
+    path = folder / f"page-{number}.html"
+    path.write_text(f"<!doctype html><title>Companion {number}</title><body><p>companion page</p></body>")
+    return path, f"Companion {number}"
+
+
+def _loaded(ctl, row, title=None):
+    """The tree once row `row`'s page loaded (titled `title` when given)."""
+
+    def loaded(tree):
+        pages = find_session(tree, row).get("htmlOverlays") or []
+        return any(page["state"] == "loaded" and title in (None, page.get("title")) for page in pages)
+
+    return ctl.wait_tree(loaded)
+
+
+def _page_companion(ctl, parent, **args):
+    """A page companion of `parent` showing a fresh page, loaded: `(row id, page id, page path)`."""
+    path, title = _page_file(ctl)
+    result = assert_ok(ctl.request("session.companion.page", parent, html=str(path), **args))
+    _loaded(ctl, result["id"], title)
+    return result["id"], result["pageID"], path
+
+
+@pytest.mark.covers(
+    "session.companion.page",
+    "field:result.pageID",
+    "field:result.parent",
+    "field:tree.session.content",
+    "field:tree.session.htmlOverlays",
+)
+def test_page_companion_opens_a_page_row_with_no_shell_under_its_parent(ctl):
+    wid, (parent, after) = _workspace(ctl, sessions=2)
+    path, _ = _page_file(ctl)
+    created = assert_ok(ctl.request("session.companion.page", parent, html=str(path), color="#102030"))
+    page = created["id"]
+    assert created["parent"] == parent and created["pageID"]
+
+    tree = _loaded(ctl, page)
+    assert session_ids(tree, wid) == [parent, page, after]
+    node = find_session(tree, page)
+    # named for its page, where its parent stands, with no terminal ever created under it
+    assert_subset(node, {"content": "page", "parent": parent, "name": path.name, "realized": False, "overlay": True})
+    assert node["cwd"] == find_session(tree, parent)["cwd"]
+    (shown,) = node["htmlOverlays"]
+    assert_subset(shown, {"id": created["pageID"], "file": str(path)})
+    assert_absent(shown, "pane")
+    assert_absent(node, "overlaySizePercent")
+    # the parent's own slot stays free, and the page opened in the background
+    assert find_session(tree, parent)["overlay"] is False
+    assert node["active"] is False
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+@pytest.mark.covers("session.companion.page")
+def test_page_companion_refusals(ctl):
+    wid, (parent,) = _workspace(ctl)
+    html = str(_page_file(ctl)[0])
+    for args in ({"pane": "right"}, {"sizePercent": 50}, {"width": 300}, {"height": 300}):
+        assert_error(ctl.request("session.companion.page", parent, html=html, **args), PAGE_FULL_SIZE)
+    assert_error(ctl.request("session.companion.page", parent, command="top"), "a page companion needs --html or --url")
+    assert_error(ctl.request("session.companion.page", parent), "session.overlay.open requires a command")
+    assert_error(ctl.request("session.companion.page", parent, html=html, color="red"), "invalid color: red (#rrggbb)")
+    assert_error(
+        ctl.request("session.companion.page", parent, html=html, wait=True),
+        "session.overlay.open: --wait cannot be combined with --html",
+    )
+    assert_error(ctl.request("session.companion.page", UNKNOWN, html=html), f"no such session: {UNKNOWN}")
+    assert session_ids(ctl.tree(), wid) == [parent]
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+@pytest.mark.covers("session.companion.page", "session.type", "session.split", "session.rename")
+def test_a_page_companion_refuses_terminal_commands(ctl):
+    wid, (parent,) = _workspace(ctl)
+    page, _, _ = _page_companion(ctl, parent)
+    for cmd, args in (
+        ("session.type", {"text": "ls\n"}),
+        ("session.split", {}),
+        ("session.scratch", {}),
+        ("session.hud.open", {"text": "hi"}),
+        ("session.overlay.open", {"command": "top"}),
+        ("session.overlay.resize", {"sizePercent": 50}),
+    ):
+        assert_error(ctl.request(cmd, page, **args), f"{cmd}: not available on a page companion")
+    # the parent takes them as before, and the page row is renamed like any row
+    assert_ok(ctl.request("session.type", parent, text="true\n"))
+    assert_ok(ctl.request("session.rename", page, name="notes"))
+    assert find_session(ctl.tree(), page)["name"] == "notes"
+    # a page is never hidden: showing it is already done, hiding it has nothing to hide
+    assert_ok(ctl.request("session.overlay.show", page))
+    assert_error(ctl.request("session.overlay.hide", page), "no overlay")
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+@pytest.mark.covers("session.companion.page", "session.overlay.close", "field:result.pageOutcome")
+def test_closing_the_page_closes_its_row(ctl):
+    wid, (parent,) = _workspace(ctl)
+    page, page_id, _ = _page_companion(ctl, parent)
+    assert assert_ok(ctl.request("session.overlay.close", page))["id"] == page
+    ctl.wait_tree(lambda tree: page not in session_ids(tree, wid))
+    assert session_ids(ctl.tree(), wid) == [parent]
+    outcome = assert_ok(ctl.request("session.overlay.result", page=page_id))["pageOutcome"]
+    assert outcome == {"pageID": page_id, "outcome": "dismissed"}
+    # closing the parent takes a page companion along, and Open Recent keeps no page
+    page, _, _ = _page_companion(ctl, parent)
+    assert assert_ok(ctl.request("session.close", parent))["closed"] == [parent, page]
+    entry = assert_ok(ctl.request("recent.list"))["recent"][0]
+    assert entry["sessionIDs"] == [parent]
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+@pytest.mark.covers(
+    "session.companion.page.attach",
+    "session.overlay.page.serve",
+    "field:result.companionPage",
+    streams=("session.overlay.page.serve",),
+)
+def test_page_attach_hands_out_a_claim_only_for_a_page_companion(ctl):
+    wid, (parent,) = _workspace(ctl)
+    assert_error(ctl.request("session.companion.page.attach", parent), "not a page companion")
+    page, page_id, path = _page_companion(ctl, parent)
+    attached = assert_ok(ctl.request("session.companion.page.attach", page))
+    assert (attached["id"], attached["parent"]) == (page, parent)
+    handed = attached["companionPage"]
+    assert_subset(handed, {"page": page_id, "identity": path.name, "source": {"file": {"path": str(path)}}})
+    assert handed["token"]
+    # the token is claimed once, under a claim of its own; the attachment serves the page's file
+    with ctl.stream("session.overlay.page.serve", handed["token"]) as helper:
+        assert helper.reply.ok, helper.reply.raw
+        assert helper.reply.result["id"] not in (page, page_id)
+        with ctl.stream("session.overlay.page.serve", handed["token"]) as again:
+            assert_error(again.reply, "page not claimable")
+        helper.send({"kind": "resource", "id": 1, "path": str(path)})
+        assert helper.read() == {"kind": "head", "id": 1, "mimeType": "text/html"}
+    # a viewer leaving ends nothing here
+    assert page in session_ids(ctl.tree(), wid)
+    assert_ok(ctl.request("workspace.delete", wid))

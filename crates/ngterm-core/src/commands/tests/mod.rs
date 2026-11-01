@@ -9,6 +9,7 @@ mod attention_nav;
 mod auto_follow;
 mod background;
 mod companion_lists;
+mod companion_pages;
 mod companions;
 mod config_browser;
 mod dashboard;

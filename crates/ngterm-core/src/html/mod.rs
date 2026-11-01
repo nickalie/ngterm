@@ -378,6 +378,9 @@ pub struct HtmlOverlay {
     /// Bumped by every reload; the frontend reloads what `reload_target` names when it moves.
     pub reload_revision: u64,
     pub reload_target: HtmlReloadTarget,
+    /// The page is a page companion's row (upstream's `content == .page`): it never hides, so its strip offers no
+    /// Hide, and its Close closes the row.
+    pub row: bool,
 }
 
 impl HtmlOverlay {
@@ -409,6 +412,7 @@ impl HtmlOverlay {
             current: None,
             reload_revision: 0,
             reload_target: HtmlReloadTarget::Original,
+            row: false,
         }
     }
 

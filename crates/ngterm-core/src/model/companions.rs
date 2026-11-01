@@ -18,9 +18,11 @@ use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
+use super::html_overlay::HtmlOverlayOpenFailure;
 use super::session::{AgentStatus, Session};
 use super::store::{AppStore, NewSession};
 use super::tint::SidebarTint;
+use crate::html::HtmlOverlay;
 
 /// What a session shows: a terminal, or an HTML page with no shell under it (a page companion).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
@@ -90,12 +92,35 @@ impl Default for CompanionOptions {
     }
 }
 
-/// Why a companion was not created (upstream's `CompanionRefusal`; the page refusal joins with page companions).
+/// Why a companion was not created (upstream's `CompanionRefusal`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompanionRefusal {
     NoSuchSession,
     /// The parent is attached from another machine.
     RemoteParent,
+    /// A page companion's page could not take its row's slot; the row was not kept.
+    PageNotOpened(HtmlOverlayOpenFailure),
+}
+
+/// How a page companion's row starts (upstream's `addPageCompanion` arguments beside the page).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageCompanionOptions {
+    /// The custom name; `None` names the row for its page.
+    pub name: Option<String>,
+    /// Select the row; `false` creates it in the background.
+    pub select: bool,
+    /// The page's own solid background, `#rrggbb`.
+    pub background_color: Option<String>,
+}
+
+impl Default for PageCompanionOptions {
+    fn default() -> Self {
+        Self {
+            name: None,
+            select: true,
+            background_color: None,
+        }
+    }
 }
 
 /// Where a companion goes: the parent's workspace, the end of its group, and the cwd it starts in.
@@ -177,6 +202,40 @@ impl AppStore {
         };
         self.add_session(slot.workspace, spec)
             .ok_or(CompanionRefusal::NoSuchSession)
+    }
+
+    /// Creates a page companion showing `overlay` full size in its own session-wide slot, with no shell under it
+    /// (upstream's `addPageCompanion`): it lands after the parent's group and starts in the parent's focused cwd. A
+    /// page the slot refuses leaves no row behind. The caller registers the page's outcome.
+    ///
+    /// # Errors
+    ///
+    /// As [`AppStore::add_companion`], and [`CompanionRefusal::PageNotOpened`] when the page could not open.
+    pub fn add_page_companion(
+        &mut self,
+        target: Uuid,
+        overlay: HtmlOverlay,
+        page: PageCompanionOptions,
+        home: &str,
+    ) -> Result<Uuid, CompanionRefusal> {
+        let slot = self.companion_slot(target, None, home)?;
+        let spec = NewSession {
+            name: page.name,
+            at: Some(slot.index),
+            select: page.select,
+            parent: Some(slot.parent),
+            content: SessionContent::Page,
+            ..NewSession::at_cwd(slot.cwd)
+        };
+        let id = self
+            .add_session(slot.workspace, spec)
+            .ok_or(CompanionRefusal::NoSuchSession)?;
+        let overlay = HtmlOverlay { row: true, ..overlay };
+        if let Err(failure) = self.open_html_overlay(id, None, overlay, None, page.background_color) {
+            self.close_session(id);
+            return Err(CompanionRefusal::PageNotOpened(failure));
+        }
+        Ok(id)
     }
 
     fn companion_slot(&self, target: Uuid, cwd: Option<String>, home: &str) -> Result<CompanionSlot, CompanionRefusal> {

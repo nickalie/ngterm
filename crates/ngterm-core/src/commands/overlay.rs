@@ -153,13 +153,13 @@ fn parse_overlay_pane(raw: Option<&str>) -> Result<Option<OverlayPane>, ControlE
 
 /// What `session.overlay.open` shows (upstream's `OverlayContent`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum OverlayContent {
+pub(super) enum OverlayContent {
     Program,
     Page(HtmlSource),
 }
 
 /// Sorts a program from a page and refuses the flag combinations either cannot take (upstream's `overlayContent`).
-fn overlay_content(command: &str, args: &Args, home: &str) -> Result<OverlayContent, ControlError> {
+pub(super) fn overlay_content(command: &str, args: &Args, home: &str) -> Result<OverlayContent, ControlError> {
     let reject = |message: &str| Err(ControlError::rejected(message));
     let set = |flag: Option<bool>| flag == Some(true);
     match (args.html.as_deref(), args.url.as_deref()) {
@@ -759,6 +759,11 @@ fn claim_job(core: &mut Core, target: Option<&str>) -> Outcome {
 fn claim_page_serve(core: &mut Core, target: Option<&str>) -> Outcome {
     let token = trimmed(target).ok_or_else(|| ControlError::rejected(PAGE_TOKEN_REQUIRED))?;
     crate::remote::frames::parse_uuid(token).ok_or_else(|| ControlError::rejected(INVALID_PAGE_TOKEN))?;
+    // a page companion's attachment is claimed under a claim id of its own, which its adoption takes
+    if let Some(claimed) = core.claim_companion_page(token, std::time::Instant::now()) {
+        let claim = claimed.map_err(|()| ControlError::rejected(PAGE_NOT_CLAIMABLE))?;
+        return Ok(ControlResult::id(crate::pane_env::uuid_string(claim)));
+    }
     let (page, source) = core
         .claim_remote_page(token, std::time::Instant::now())
         .ok_or_else(|| ControlError::rejected(PAGE_NOT_CLAIMABLE))?;

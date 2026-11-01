@@ -267,7 +267,8 @@ impl AppStore {
         let Some(session) = self.session_mut(session) else {
             return false;
         };
-        if session.ask.is_some() {
+        // a page companion has no terminal to ask over
+        if session.ask.is_some() || session.content() != super::SessionContent::Terminal {
             return false;
         }
         let draft = AskDraft::new(ask.form.as_ref());

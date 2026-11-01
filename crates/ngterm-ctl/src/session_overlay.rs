@@ -326,8 +326,21 @@ impl RequestCommand for Open {
         &self.options.basic
     }
 
+    // a page companion's open prints the new row's id, as `session new` does
+    fn echoes_result_id(&self) -> bool {
+        self.companion
+    }
+
     // the mutually exclusive combinations and a malformed color are refused before any connection
     fn validate(&self) -> Result<(), String> {
+        if self.companion && self.html.is_none() && self.url.is_none() {
+            return Err("--companion requires --html or --url".to_owned());
+        }
+        if self.companion
+            && (self.pane.is_some() || self.size_percent.is_some() || self.width.is_some() || self.height.is_some())
+        {
+            return Err("--companion is full size: it takes no --pane, --size-percent, --width or --height".to_owned());
+        }
         if self.block && self.wait {
             return Err("--block cannot be combined with --wait".to_owned());
         }
@@ -392,6 +405,9 @@ impl RequestCommand for Open {
     }
 
     fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
+        if self.companion && !self.block {
+            return crate::companions::run(self, env);
+        }
         if !self.block {
             return self.default_run(env);
         }
@@ -924,6 +940,62 @@ mod tests {
             OverlayCommand::Open(open) => open,
             other => panic!("not overlay open: {other:?}"),
         }
+    }
+
+    /// Upstream's `overlayPageAttachSendsTheAttachCommandForTheTarget`.
+    #[test]
+    fn page_attach_sends_the_attach_command_for_the_target() {
+        assert_eq!(
+            request(&["page-attach", "--target", "pg", "--window", "win"]),
+            json!({"cmd": "session.companion.page.attach", "target": "pg", "args": {"window": "win"}})
+        );
+    }
+
+    /// Upstream's `overlayOpenWithCompanionSendsThePageCompanionCommand`.
+    #[test]
+    fn open_with_companion_sends_the_page_companion_command() {
+        let html = "/tmp/p.html";
+        assert_eq!(
+            request(&["open", "--html", html, "--companion", "--target", "p1"]),
+            json!({"cmd": "session.companion.page", "target": "p1", "args": {"html": native(html)}})
+        );
+        assert!(open(&["--html", html, "--companion"]).echoes_result_id());
+        assert!(!open(&["--html", html]).echoes_result_id());
+    }
+
+    /// Upstream's `anHtmlCompanionMayBlockOnItsPageAndAURLOneMayNot`.
+    #[test]
+    fn an_html_companion_may_block_on_its_page_and_a_url_one_may_not() {
+        assert_eq!(
+            request(&["open", "--html", "/tmp/p.html", "--companion", "--block"])["cmd"],
+            json!("session.companion.page")
+        );
+        assert!(rejects(&[
+            "open",
+            "--url",
+            "http://localhost:1",
+            "--companion",
+            "--block"
+        ]));
+    }
+
+    /// Upstream's `overlayOpenWithCompanionRefusesAnythingButFullSize` and `overlayOpenWithCompanionNeedsAPage`.
+    #[test]
+    fn open_with_companion_refuses_anything_but_full_size_and_needs_a_page() {
+        let full = "--companion is full size: it takes no --pane, --size-percent, --width or --height";
+        for extra in [
+            ["--pane", "right"],
+            ["--size-percent", "50"],
+            ["--width", "300"],
+            ["--height", "300"],
+        ] {
+            let argv = [&["open", "--html", "/tmp/p.html", "--companion"][..], &extra[..]].concat();
+            assert_eq!(refusal(&argv), full, "{extra:?}");
+        }
+        assert_eq!(
+            refusal(&["open", "top", "--companion"]),
+            "--companion requires --html or --url"
+        );
     }
 
     #[test]

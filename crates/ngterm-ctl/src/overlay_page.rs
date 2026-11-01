@@ -81,9 +81,17 @@ pub struct PageRunner<'a> {
 
 impl PageRunner<'_> {
     /// Opens the page with `open`, then polls its outcome until it leaves `pending`, prints it and exits with its
-    /// status.
+    /// status. A page companion's open refused by an app predating companions names that, outside `--json` (upstream's
+    /// `companionSend`).
     pub fn block(&mut self, open: &Request) -> Result<(), Failure> {
         let opened = self.io.send(open)?;
+        if !self.json
+            && open.cmd == Command::Session(SessionCmd::CompanionPage)
+            && crate::companions::refuses_unknown(&opened.response, open.cmd)
+        {
+            self.io.error_output(crate::companions::TOO_OLD);
+            return Err(Failure::Exit(ExitCode::FAILURE));
+        }
         self.require_success(&opened)?;
         let page_id = control_result(&opened).and_then(|result| result.page_id);
         let Some(page_id) = page_id else {
@@ -373,6 +381,27 @@ mod tests {
         assert_eq!(absolute_path_from(base, r"\..\.."), r"C:\");
         assert_eq!(absolute_path_from(base, r"\\host\share\a\..\..\b"), r"\\host\share\b");
         assert_eq!(absolute_path_from(base, "."), r"C:\Users\u\work");
+    }
+
+    /// A blocked page companion refused by an app predating companions names that, and `--json` keeps the raw reply.
+    #[test]
+    fn a_blocked_page_companion_on_an_app_too_old_for_it_says_so() {
+        let companion = Request {
+            cmd: Command::Session(SessionCmd::CompanionPage),
+            ..open_request()
+        };
+        let unknown = r#"{"ok":false,"error":"invalid request: unknown variant session.companion.page"}"#;
+        for json in [false, true] {
+            let mut io = FakeIo::new(|_: &Request| Ok(reply(unknown)));
+            let status = exit_status(PageRunner { json, io: &mut io }.block(&companion));
+            assert_eq!(status, Some(ExitCode::FAILURE));
+            assert_eq!(io.requests.len(), 1);
+            if json {
+                assert_eq!(io.lines, [unknown]);
+            } else {
+                assert_eq!(io.errors, [crate::companions::TOO_OLD]);
+            }
+        }
     }
 
     #[test]

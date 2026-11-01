@@ -706,6 +706,10 @@ impl Core {
 
     /// Answers one request, or starts a command that waits on the frontend and hands back its next step.
     pub fn begin(&mut self, request: &Request) -> Dispatched {
+        // a page companion refuses the terminal commands before any of them runs
+        if let Some(refusal) = commands::companion_page::refusal(self, request) {
+            return Dispatched::Done(refusal.into());
+        }
         match commands::deferred(self, request) {
             Some(dispatched) => dispatched,
             None => Dispatched::Done(self.route(request).unwrap_or_else(Response::from)),
@@ -1053,18 +1057,12 @@ mod tests {
     /// The v0.39 commands decode and are refused by name until their command groups are ported.
     #[test]
     fn the_v0_39_commands_are_refused_as_not_supported() {
-        for cmd in [
-            Command::Session(SessionCmd::CompanionPage),
-            Command::Session(SessionCmd::CompanionDuplicate),
-            Command::Session(SessionCmd::CompanionPageAttach),
-        ] {
-            let line = format!(r#"{{"cmd":"{cmd}","target":"active"}}"#);
-            assert_eq!(
-                core().dispatch_line(line.as_bytes()),
-                Response::failure(format!("{cmd} is not supported by this host")),
-                "{cmd}"
-            );
-        }
+        let cmd = Command::Session(SessionCmd::CompanionDuplicate);
+        let line = format!(r#"{{"cmd":"{cmd}","target":"active"}}"#);
+        assert_eq!(
+            core().dispatch_line(line.as_bytes()),
+            Response::failure(format!("{cmd} is not supported by this host"))
+        );
     }
 
     /// The cases of `test_undecodable_request_is_refused` (`conformance/tests/protocol/test_addressing.py`), with the

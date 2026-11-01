@@ -788,27 +788,30 @@ macOS GPUI page host when it lands. Loopback detection reuses the existing check
 `test_page_attach_hands_out_a_claim_only_for_a_page_companion`; `test_relaunch.py::test_a_page_companion_is_not_restored_after_relaunch`;
 `tests/cli/test_cli_only.py::test_overlay_open_companion_validation`.
 
-- [ ] `session.companion.page`: "a page companion needs --html or --url", "a page companion is full size: it takes no
+- [x] `session.companion.page`: "a page companion needs --html or --url", "a page companion is full size: it takes no
       --pane, --size-percent, --width or --height", "invalid color: <c> (#rrggbb)", "session.companion.page:
       <failure>"; the row lands after the parent's group, named for its page, reporting its parent's cwd; the page
       opens full size in the row's own slot; "could not create page companion"; reply `{id, pageID, parent}`
-- [ ] never persisted, never archived, not restored after relaunch; no dashboard cell; closing the page closes the
+- [x] never persisted, never archived, not restored after relaunch; no dashboard cell; closing the page closes the
       row (the parent stays)
-- [ ] one guard ahead of every command: "<cmd>: not available on a page companion" for the terminal commands upstream
+- [x] one guard ahead of every command: "<cmd>: not available on a page companion" for the terminal commands upstream
       lists (type, text, copy, paste, selectall, search, background, lead, swap, focus, resize, split, split.close,
       scratch, restart, restore, overlay.open, hud.open, overlay.resize without full, ask.open unless gui,
       surface.cursor/zoom with an explicit target, `surface:<sid>:<slot>` read as its session); rename stays ok
-- [ ] `session.companion.page.attach`: "not a page companion", "a page on this Mac's loopback cannot be shown on
+- [x] `session.companion.page.attach`: "not a page companion", "a page on this Mac's loopback cannot be shown on
       another Mac"; a single-use token per viewer, each claim its own stream, the page's final release ends every
       token; a soft-closed page keeps serving through undo
-- [ ] `HtmlPageOutcomes.settle`; ctl `session overlay open --companion` ("--companion requires --html or --url",
+- [x] `HtmlPageOutcomes.settle`; ctl `session overlay open --companion` ("--companion requires --html or --url",
       "--companion is full size: it takes no --pane, --size-percent, --width or --height"), `session overlay
       page-attach`, the too-old mapping (Task 13)
-- [ ] GPUI: a page row nests with a page glyph and no status glyph; the session view shows the page full size with no
+- [x] GPUI: a page row nests with a page glyph and no status glyph; the session view shows the page full size with no
       terminal
-- [ ] write tests: every Swift case listed above
-- [ ] write tests: the conformance tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: every Swift case listed above
+      (`aReplicaPageCompanionClosesOnceWithItsPage` and `addReplicaPageCompanion` go with Task 19's remote page
+      companions, which create the replica rows)
+- [x] write tests: the conformance tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the new ids are since(0.39.1);
+      green at a temporary 0.39.1 level, they go in at Task 25)
 
 ### Task 18: Companion sessions, part 6: Duplicate as Companion (#840, #841, #842)
 

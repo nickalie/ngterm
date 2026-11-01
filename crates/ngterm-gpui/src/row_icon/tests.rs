@@ -44,6 +44,7 @@ fn every_glyph() -> Vec<Glyph> {
         glyphs.push(Glyph::Flag { filled: on });
         glyphs.push(Glyph::Grid { filled: on });
         glyphs.push(Glyph::Disclosure { expanded: on });
+        glyphs.push(Glyph::Page { flagged: on });
         for split in [None, Some(SplitAxis::LeftRight), Some(SplitAxis::TopBottom)] {
             glyphs.push(Glyph::Session { split, flagged: on });
         }
@@ -110,6 +111,20 @@ fn a_flagged_session_fills_its_icon() {
             "{split:?}: the flagged icon is filled"
         );
     }
+}
+
+/// Upstream's `testAPageCompanionRowShowsThePageIconFilledWhenFlagged`, the glyph half.
+#[test]
+fn a_flagged_page_fills_its_icon_and_knocks_its_lines_out() {
+    let plain = render(Glyph::Page { flagged: false }, 64);
+    let flagged = render(Glyph::Page { flagged: true }, 64);
+    assert!(flagged.opaque() > plain.opaque(), "the flagged page is filled");
+    // between the first two lines: clear inside the outline, solid inside the fill
+    assert_eq!(plain.at(40, 27), 0);
+    assert_eq!(flagged.at(40, 27), 255);
+    // the middle line runs at y 8 of 16: inked on the outline, knocked out of the fill
+    assert!(plain.at(36, 32) > 200);
+    assert!(flagged.at(36, 32) < 50);
 }
 
 #[test]

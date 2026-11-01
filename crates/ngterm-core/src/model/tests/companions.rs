@@ -483,7 +483,7 @@ fn parent_and_collapsed_are_omitted_from_json_for_a_plain_session() {
     assert!(!json.contains("\"content\""));
 }
 
-fn tree_context() -> crate::projection::TreeContext<'static> {
+pub(super) fn tree_context() -> crate::projection::TreeContext<'static> {
     static APP: std::sync::LazyLock<ngterm_proto::AppIdentity> =
         std::sync::LazyLock::new(|| ngterm_proto::AppIdentity::from_recorded("0.1.0", None));
     static SETTINGS: std::sync::LazyLock<crate::persist::AppSettings> =

@@ -47,7 +47,8 @@ pub use background::{
     BackdropWashRegion, BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition,
 };
 pub use companions::{
-    CompanionOptions, CompanionRefusal, CompanionState, PrimaryPaneExit, RESPAWN_MINIMUM_UPTIME, SessionContent,
+    CompanionOptions, CompanionRefusal, CompanionState, PageCompanionOptions, PrimaryPaneExit, RESPAWN_MINIMUM_UPTIME,
+    SessionContent,
 };
 pub use flagged_order::FlaggedOrderPlacement;
 pub use focus::FocusMode;

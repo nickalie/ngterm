@@ -103,6 +103,12 @@ fn workspace_node(
             .iter()
             .map(|session| {
                 let mut node = session_node(session, selected == Some(session.id()));
+                // a page companion has no shell of its own: it reports where its parent stands
+                if session.content() == SessionContent::Page
+                    && let Some(parent) = store.parent_of(session)
+                {
+                    parent.effective_cwd().clone_into(&mut node.cwd);
+                }
                 // a fold outlives its last companion, which leaves nothing folded to report
                 node.collapsed = (!session.companion.expanded && parents.contains(&session.id())).then_some(true);
                 node

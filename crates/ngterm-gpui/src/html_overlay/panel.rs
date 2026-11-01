@@ -8,6 +8,7 @@ use gpui_kit::{
     AnyElement, App, Context, Global, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
     Role, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, div, px, svg,
 };
+use ngterm_core::app_actions::ActionEffect;
 use ngterm_core::chrome::FALLBACK_BACKGROUND;
 use ngterm_core::html::{HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlOverlayTheme, HtmlReloadTarget};
 use ngterm_core::model::is_valid_color_hex;
@@ -363,9 +364,14 @@ pub fn act(id: Uuid, item: StripItem, poster: &Poster, cx: &mut App) {
         }
         StripItem::Close | StripItem::Identity => {
             return post(poster, move |state: &mut AppState| {
-                if state.core.close_html_overlay(id) {
-                    state.settle();
+                let Some(effect) = state.core.close_html_overlay_from_strip(id) else {
+                    return;
+                };
+                // a page row's close confirmation is the sidebar's alert, as Close Session's is
+                if let ActionEffect::Frontend(action) = effect {
+                    state.frontend_action(action);
                 }
+                state.settle();
             });
         }
     };

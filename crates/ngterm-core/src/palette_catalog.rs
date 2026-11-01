@@ -56,6 +56,8 @@ bitflags! {
         /// The frontmost window holds any session, selected or not (upstream's `hasSessions`): the flagged-session
         /// editor lists them all.
         const HAS_SESSIONS = 1 << 22;
+        /// The active session is a page companion, which has no terminal (upstream's `activeSessionIsPage`).
+        const ACTIVE_SESSION_IS_PAGE = 1 << 23;
     }
 }
 
@@ -202,10 +204,30 @@ impl PaletteCommand {
         Self::all().find(|command| command.builtin_action() == Some(action))
     }
 
-    /// Whether the command can run right now: relevance, then the modal cover, then the presence terms.
+    /// Whether the command acts on a terminal, which a page companion does not have (upstream's `terminalOnly`).
+    #[must_use]
+    pub const fn is_terminal_only(self) -> bool {
+        matches!(
+            self,
+            Self::ToggleSplit
+                | Self::ToggleHorizontalSplit
+                | Self::CloseSplit
+                | Self::SwapPanes
+                | Self::ToggleScratch
+                | Self::Find
+                | Self::FocusLeftPane
+                | Self::FocusRightPane
+        )
+    }
+
+    /// Whether the command can run right now: relevance, then the modal cover, then a page companion's terminal-only
+    /// gate, then the presence terms.
     #[must_use]
     pub fn is_enabled(self, context: &PaletteContext) -> bool {
         if !self.is_visible(context) || self.is_covered_by_modal(*context) {
+            return false;
+        }
+        if context.has(PaletteFacts::ACTIVE_SESSION_IS_PAGE) && self.is_terminal_only() {
             return false;
         }
         match self {
@@ -833,6 +855,23 @@ mod tests {
         assert_eq!(command.builtin_action(), Some(BuiltinAction::NewCompanion));
         assert_eq!(PaletteCommand::for_builtin(BuiltinAction::NewCompanion), Some(command));
         assert_eq!(command.title_default(), "New Companion");
+    }
+
+    /// Upstream's `aPageCompanionDisablesTerminalOnlyCommands`.
+    #[test]
+    fn a_page_companion_disables_terminal_only_commands() {
+        let page = ctx(F::ACTIVE_SESSION_HAS_SPLIT | F::HAS_ACTIVE_SESSION | F::ACTIVE_SESSION_IS_PAGE);
+        for command in [
+            PaletteCommand::ToggleSplit,
+            PaletteCommand::Find,
+            PaletteCommand::ToggleScratch,
+        ] {
+            assert!(!command.is_enabled(&page), "{command:?}");
+        }
+        assert!(PaletteCommand::RenameSession.is_enabled(&page));
+        assert!(PaletteCommand::CloseSession.is_enabled(&page));
+        let terminal = ctx(F::ACTIVE_SESSION_HAS_SPLIT | F::HAS_ACTIVE_SESSION);
+        assert!(PaletteCommand::ToggleSplit.is_enabled(&terminal));
     }
 
     /// Upstream's `membershipEditorsStayListedInEitherSidebarMode`.

@@ -227,9 +227,13 @@ pub struct PaneSpec {
 
 impl PaneSpec {
     /// The panes of `session` in window `window`'s `store`: its primary, and its split while it has one (shown or
-    /// not: a hidden split keeps its terminal, as in a window).
+    /// not: a hidden split keeps its terminal, as in a window); none for a page companion.
     #[must_use]
     pub fn of_session(window: Uuid, store: &AppStore, session: &Session) -> Vec<Self> {
+        // a page companion has no terminal
+        if session.content() != ngterm_core::model::SessionContent::Terminal {
+            return Vec::new();
+        }
         let Some(workspace) = store
             .workspace_for_session(session.id())
             .map(ngterm_core::model::Workspace::id)

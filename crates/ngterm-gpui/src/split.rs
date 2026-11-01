@@ -411,7 +411,9 @@ pub fn needs(session: &Session, zoom: Option<SurfaceId>) -> Needs {
             && session.split_pane_identity.is_some()
             && !session.split_surface.is_present()
             && (session.renders_pane(true) || zoomed_split),
-        scratch: session.scratch_active && !session.scratch_surface.is_present(),
+        scratch: session.scratch_active
+            && !session.scratch_surface.is_present()
+            && session.content() == ngterm_core::model::SessionContent::Terminal,
     }
 }
 

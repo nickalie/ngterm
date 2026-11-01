@@ -457,13 +457,19 @@ impl Session {
         self.split.focused && self.split_surface.is_present()
     }
 
-    /// The sidebar label: a non-blank custom name, else the basename of [`Session::focused_cwd`] (`/` stays `/`, a
-    /// trailing slash is ignored, an empty path reads `~`). The focused pane's non-blank terminal title comes before
-    /// the basename only while [`naming::names_from_terminal_title`] is on.
+    /// The sidebar label: a non-blank custom name, else a page companion's page identity, else the basename of
+    /// [`Session::focused_cwd`] (`/` stays `/`, a trailing slash is ignored, an empty path reads `~`). The focused
+    /// pane's non-blank terminal title comes before the basename only while [`naming::names_from_terminal_title`] is
+    /// on.
     #[must_use]
     pub fn display_name(&self) -> String {
         if let Some(name) = self.custom_name.as_deref().and_then(trimmed_or_none) {
             return name;
+        }
+        if self.content == SessionContent::Page
+            && let Some(identity) = self.overlay.page().and_then(|page| trimmed_or_none(&page.identity()))
+        {
+            return identity;
         }
         if naming::names_from_terminal_title()
             && let Some(title) = self.focused_osc_title().and_then(trimmed_or_none)
@@ -624,10 +630,10 @@ impl Session {
     }
 
     /// Whether the detail pane lays pane `right` (else the left one) out: both while the split is shown, else only
-    /// the focused one, maximized (upstream's `rendersPane`).
+    /// the focused one, maximized (upstream's `rendersPane`); none for a page companion, which has no panes.
     #[must_use]
     pub fn renders_pane(&self, right: bool) -> bool {
-        self.split.shown || right == self.focuses_split()
+        self.content == SessionContent::Terminal && (self.split.shown || right == self.focuses_split())
     }
 
     /// The pane a command reads when none is named (upstream's `onScreenSurface`): the scratch while shown, else the

@@ -18,11 +18,11 @@ use crate::model::OverlayPane;
 
 /// What a fake host was asked, and what it answers.
 #[derive(Default)]
-struct HostLog {
-    navigations: Vec<(Uuid, HtmlNavigation)>,
-    navigate_error: Option<String>,
-    store_failure: Option<String>,
-    unavailable: Option<String>,
+pub(super) struct HostLog {
+    pub(super) navigations: Vec<(Uuid, HtmlNavigation)>,
+    pub(super) navigate_error: Option<String>,
+    pub(super) store_failure: Option<String>,
+    pub(super) unavailable: Option<String>,
 }
 
 /// The frontend's web views, faked: it records navigations and answers what the test set.
@@ -45,7 +45,7 @@ impl HtmlHost for FakeHost {
 }
 
 /// A fixture whose core has web views, and their log.
-fn fixture_with_host(extra: usize) -> (Fixture, Rc<RefCell<HostLog>>) {
+pub(super) fn fixture_with_host(extra: usize) -> (Fixture, Rc<RefCell<HostLog>>) {
     let mut fixture = Fixture::new(extra);
     let log = Rc::new(RefCell::new(HostLog::default()));
     fixture.core.set_html_host(Box::new(FakeHost(Rc::clone(&log))));

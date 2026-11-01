@@ -69,7 +69,7 @@ pub(crate) enum RemotePageCommand {
 }
 
 /// A page's full source on the wire; a replica, itself shown for another machine, is never handed on.
-fn presentation_source(source: &HtmlSource) -> Option<PresentationPageSource> {
+pub(super) fn presentation_source(source: &HtmlSource) -> Option<PresentationPageSource> {
     match source {
         HtmlSource::File { path, grant_root } => Some(PresentationPageSource::File {
             path: path.clone(),

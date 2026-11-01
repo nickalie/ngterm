@@ -23,6 +23,7 @@
 
 pub(crate) mod attach;
 pub mod client;
+mod companion_page;
 pub mod frames;
 mod handoff;
 pub mod hub;
@@ -47,6 +48,7 @@ use ngterm_proto::{ControlResult, ControlTree, Request, Response};
 use uuid::Uuid;
 
 pub use self::client::{LinkKey, PresentationLink, PresentationTransport};
+pub use self::companion_page::CompanionPageServing;
 use self::frames::{
     Body, PresentationFrame, PresentationHud, PresentationLayout, PresentationNotify, PresentationPane,
     PresentationSnapshot, PresentationStatus,

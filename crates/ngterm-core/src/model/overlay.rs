@@ -321,10 +321,13 @@ impl AppStore {
         size_percent: Option<i64>,
         points: OverlayPointSize,
     ) -> bool {
-        let Some(slot) = self.session_mut(id).map(|session| &mut session.overlay) else {
+        let Some(session) = self.session_mut(id) else {
             return false;
         };
-        if !slot.active {
+        // a page companion's page is the row, so it stays full size
+        let page = session.content() == super::SessionContent::Page;
+        let slot = &mut session.overlay;
+        if !slot.active || (page && size_percent.is_some()) {
             return false;
         }
         if let Some(hud) = slot.hud.as_mut() {
@@ -376,6 +379,13 @@ impl AppStore {
     /// Closes the session-wide slot (upstream's `closeOverlay`): its surface torn down and a HUD discarded. False with
     /// nothing open.
     pub fn close_overlay(&mut self, id: Uuid) -> bool {
+        // a page companion is its page: every way the page closes ends the row, which releases the page once
+        if self
+            .session(id)
+            .is_some_and(|session| session.content() == super::SessionContent::Page && session.overlay.page().is_some())
+        {
+            return self.close_session(id).is_some();
+        }
         let closed = self.session_mut(id).is_some_and(|session| session.overlay.close());
         if closed {
             self.schedule_tree_changed();

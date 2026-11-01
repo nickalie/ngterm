@@ -162,6 +162,26 @@ def test_flagged_order_survives_relaunch(launch):
     assert ctl.tree()["tree"]["flaggedOrder"] == [second, third, first]
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("behavior:restore.relaunch-keeps-layout", "session.companion.page")
+def test_a_page_companion_is_not_restored_after_relaunch(launch):
+    ctl = launch()
+    parent = _new(ctl)
+    page_file = ctl.instance.root / "companion.html"
+    page_file.write_text("<!doctype html><title>Companion</title><p>companion page</p>")
+    page = assert_ok(ctl.request("session.companion.page", parent, html=str(page_file)))["id"]
+    terminal = assert_ok(ctl.request("session.companion.new", parent, noSelect=True))["id"]
+    assert find_session(ctl.tree(), page)["content"] == "page"
+    # A structural change after the creates, so the saved layout is current when SIGTERM ends the run.
+    assert_ok(ctl.request("workspace.new", name="saved", collapsed=True))
+
+    ctl = launch.relaunch(ctl)
+    tree = ctl.wait_tree(lambda tree: find_session(tree, parent)["realized"] is True)
+    ids = [session["id"] for workspace in workspaces(tree) for session in workspace["sessions"]]
+    assert page not in ids
+    assert find_session(tree, terminal)["parent"] == parent
+
+
 @pytest.mark.covers("behavior:restore.rerun-types-pinned-command")
 @pytest.mark.requires("posix-shell", reason="the pinned line runs in /bin/sh")
 def test_rerun_types_the_pinned_line_at_the_next_launch(launch):

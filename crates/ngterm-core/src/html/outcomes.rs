@@ -49,6 +49,21 @@ impl HtmlPageOutcomes {
         );
     }
 
+    /// Answers pending page `id` the way another machine answered the page it shows (upstream's `settle`): submitted
+    /// with that value, otherwise dismissed.
+    pub fn settle(&mut self, id: Uuid, like: Option<&ControlHtmlPageOutcome>) {
+        match like {
+            Some(ControlHtmlPageOutcome {
+                outcome: ControlHtmlPageOutcomeState::Submitted,
+                value: Some(value),
+                ..
+            }) => {
+                self.submit(id, value);
+            }
+            _ => self.dismiss(id),
+        }
+    }
+
     /// Whether page `id` is still open and unanswered.
     #[must_use]
     pub fn is_pending(&self, id: Uuid) -> bool {
@@ -94,6 +109,31 @@ mod tests {
 
     fn value(outcomes: &HtmlPageOutcomes, id: Uuid) -> Option<String> {
         outcomes.outcome(id).and_then(|outcome| outcome.value)
+    }
+
+    /// Upstream's `settleCopiesAnotherMacsSubmissionAndDismissesOtherwise`.
+    #[test]
+    fn settle_copies_another_machines_submission_and_dismisses_otherwise() {
+        let mut outcomes = HtmlPageOutcomes::default();
+        let (answered, unknown) = (Uuid::new_v4(), Uuid::new_v4());
+        outcomes.register(answered);
+        outcomes.register(unknown);
+        let origin = ControlHtmlPageOutcome {
+            page_id: "origin".to_owned(),
+            outcome: ControlHtmlPageOutcomeState::Submitted,
+            value: Some("yes".to_owned()),
+        };
+        outcomes.settle(answered, Some(&origin));
+        assert_eq!(
+            outcomes.outcome(answered),
+            Some(ControlHtmlPageOutcome {
+                page_id: uuid_string(answered),
+                outcome: ControlHtmlPageOutcomeState::Submitted,
+                value: Some("yes".to_owned()),
+            })
+        );
+        outcomes.settle(unknown, None);
+        assert_eq!(state(&outcomes, unknown), Some(ControlHtmlPageOutcomeState::Dismissed));
     }
 
     #[test]

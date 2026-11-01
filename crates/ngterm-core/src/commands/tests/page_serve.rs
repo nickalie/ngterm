@@ -36,14 +36,14 @@ struct Queue {
 
 /// A connection with the stream's writer queue: lines wait in it until the test reads them, as they would wait for a
 /// helper that has not read them yet.
-struct FakeChannel {
+pub(super) struct FakeChannel {
     capacity: usize,
     queue: Mutex<Queue>,
     changed: Condvar,
 }
 
 impl FakeChannel {
-    fn new(capacity: usize) -> Arc<Self> {
+    pub(super) fn new(capacity: usize) -> Arc<Self> {
         Arc::new(Self {
             capacity,
             queue: Mutex::new(Queue::default()),
@@ -56,7 +56,7 @@ impl FakeChannel {
     }
 
     /// The next frame, waiting for one; `None` once the channel is closed with nothing left to read.
-    fn frame(&self) -> Option<PageServeFrame> {
+    pub(super) fn frame(&self) -> Option<PageServeFrame> {
         let deadline = Instant::now() + PATIENCE;
         let mut queue = self.lock();
         loop {
@@ -97,7 +97,7 @@ impl FakeChannel {
         }
     }
 
-    fn closed(&self) -> bool {
+    pub(super) fn closed(&self) -> bool {
         self.lock().closed
     }
 
@@ -633,7 +633,7 @@ fn a_bridge_request_for_a_page_that_ended_is_refused() {
         path: served.path("index.html"),
         grant_root: Some(text(&served.docs)),
     };
-    let stream = PageServeStream::start(Uuid::new_v4(), source, fake.clone()).unwrap();
+    let stream = PageServeStream::start(Uuid::new_v4(), source, fake.clone(), None).unwrap();
     let work = stream.take(br#"{"id":3,"kind":"bridge","request":"{\"cmd\":\"tree\"}"}"#);
     assert!(served.origin.fixture().core.page_serve_work(work.unwrap()).is_none());
     assert_eq!(

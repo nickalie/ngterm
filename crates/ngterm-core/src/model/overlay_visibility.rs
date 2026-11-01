@@ -162,7 +162,9 @@ impl Session {
                 Vec::new()
             };
         }
-        let session = self.cover_overlay_active().then_some(None);
+        // a page companion's page is the row: it never hides
+        let session =
+            (self.cover_overlay_active() && self.content() == super::SessionContent::Terminal).then_some(None);
         session
             .into_iter()
             .chain(
@@ -361,6 +363,15 @@ impl AppStore {
         pane: Option<OverlayPane>,
         mode: OverlayVisibilityMode,
     ) -> Result<(), OverlayVisibilityFailure> {
+        // a page companion's page is never hidden, so showing it is already done
+        if mode == OverlayVisibilityMode::Show
+            && pane.is_none()
+            && self
+                .session(id)
+                .is_some_and(|session| session.content() == super::SessionContent::Page)
+        {
+            return Ok(());
+        }
         match mode {
             OverlayVisibilityMode::Hide => self.set_overlays_hidden(id, pane, true),
             OverlayVisibilityMode::Show => self.set_overlays_hidden(id, pane, false),

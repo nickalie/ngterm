@@ -783,8 +783,20 @@ impl Deck {
         crate::dashboard::grid(self.window, cells, look, &self.env.poster, animate)
     }
 
+    /// Mounts a page for `spec`'s session with its primary terminal; a page companion's page holds no terminal, its
+    /// page being the session-wide overlay the overlay layer mounts.
     fn add_page(&mut self, core: &mut Core, spec: &PaneSpec, window: &mut Window, cx: &mut Context<Self>) {
         let mut page = Page::new(spec.session);
+        let terminal_less = core
+            .library()
+            .store(spec.window)
+            .and_then(|store| store.session(spec.session))
+            .is_some_and(|session| session.content() != ngterm_core::model::SessionContent::Terminal);
+        if terminal_less {
+            self.pages.insert(spec.session, page);
+            self.order.push(spec.session);
+            return;
+        }
         let terminal = mount(&self.env, spec, window, cx);
         let surface = terminal.terminal.read(cx).surface();
         page.panes.push(terminal);

@@ -28,6 +28,7 @@ use ngterm_proto::{Request, Response};
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::companion_page::{CompanionPageRuntime, CompanionPageServing};
 use super::frames::{self, FrameError};
 use crate::Core;
 use crate::html::bridge::{self, HtmlBridgePage};
@@ -56,6 +57,8 @@ pub const CONTROL_UNAVAILABLE: &str = "control is unavailable";
 const OUTSIDE_FOLDER: &str = "file is outside the page's folder";
 const UNREADABLE: &str = "file cannot be read";
 const PAGE_CLOSED: &str = "page closed";
+/// A URL page companion loads on the other machine with no file of this one's, and its bridge is not served.
+const URL_NO_BRIDGE: &str = "a URL page has no bridge";
 const ANSWER_TOO_LARGE: &str = "answer too large for the channel";
 const UNENCODABLE: &str = "reply could not be encoded";
 
@@ -383,6 +386,8 @@ struct Workers {
 /// files from inside its grant and runs the page's bridge requests here.
 pub struct PageServeStream {
     page: Uuid,
+    /// Set for one attachment of a page companion, whose channel ends nothing but itself.
+    companion: Option<CompanionPageServing>,
     source: HtmlSource,
     channel: Arc<dyn PageChannel>,
     resources: Admission,
@@ -460,14 +465,21 @@ fn failure(id: i64, error: &str) -> PageServeFrame {
 }
 
 impl PageServeStream {
-    /// A stream for `page`, whose source decides what it serves, over `channel`, with its worker threads started.
+    /// A stream for `page`, whose source decides what it serves, over `channel`, with its worker threads started;
+    /// `companion` for one attachment of a page companion.
     ///
     /// # Errors
     ///
     /// A worker thread could not be started; the channel is shut then.
-    pub(crate) fn start(page: Uuid, source: HtmlSource, channel: Arc<dyn PageChannel>) -> std::io::Result<Arc<Self>> {
+    pub(crate) fn start(
+        page: Uuid,
+        source: HtmlSource,
+        channel: Arc<dyn PageChannel>,
+        companion: Option<CompanionPageServing>,
+    ) -> std::io::Result<Arc<Self>> {
         let stream = Arc::new(Self {
             page,
+            companion,
             source,
             channel,
             resources: Admission::new(RESOURCE_LIMIT),
@@ -694,6 +706,8 @@ pub(crate) struct PageServeRuntime {
     streams: HashMap<Uuid, Arc<PageServeStream>>,
     /// Claim expiry runs the frontend owes, each after its delay.
     pub(super) expiries: Vec<Duration>,
+    /// The page companions' attachments.
+    pub(super) companions: CompanionPageRuntime,
 }
 
 impl PageServeRuntime {
@@ -705,13 +719,17 @@ impl PageServeRuntime {
 
 impl Core {
     /// Takes over the connection of a page whose claim was just answered `ok` (upstream's `adoptPageServeStream`).
-    /// A page that ended between its claim and now gets no channel: its connection is shut and `None` comes back.
+    /// A page that ended between its claim and now gets no channel: its connection is shut and `None` comes back. A page
+    /// companion's claim is adopted as its own attachment, keyed by the claim.
     pub fn adopt_page_serve_stream(
         &mut self,
         page: &str,
         channel: Arc<dyn PageChannel>,
     ) -> Option<Arc<PageServeStream>> {
         let page = frames::parse_uuid(page);
+        if let Some(serving) = page.and_then(|claim| self.remote.page_serve.companions.take_claim(claim)) {
+            return self.adopt_companion_page_stream(serving, channel);
+        }
         let source = page.and_then(|page| self.remote.page_serve.pending_claims.remove(&page));
         let (Some(page), Some(source)) = (page, source) else {
             channel.shutdown();
@@ -721,7 +739,7 @@ impl Core {
             channel.shutdown();
             return None;
         }
-        match PageServeStream::start(page, source, channel) {
+        match PageServeStream::start(page, source, channel, None) {
             Ok(stream) => {
                 self.remote.page_serve.streams.insert(page, Arc::clone(&stream));
                 Some(stream)
@@ -729,6 +747,33 @@ impl Core {
             Err(error) => {
                 tracing::error!(%error, "ending a page whose channel could not start");
                 self.end_remote_page_anywhere(page);
+                None
+            }
+        }
+    }
+
+    /// Takes over a claimed page companion attachment's connection (upstream's `adoptCompanionPageStream`); a page that
+    /// closed meanwhile gets none.
+    fn adopt_companion_page_stream(
+        &mut self,
+        serving: CompanionPageServing,
+        channel: Arc<dyn PageChannel>,
+    ) -> Option<Arc<PageServeStream>> {
+        let Some(source) = self
+            .served_companion_page(serving.session, serving.page)
+            .map(|overlay| overlay.source.clone())
+        else {
+            channel.shutdown();
+            return None;
+        };
+        match PageServeStream::start(serving.page, source, channel, Some(serving)) {
+            Ok(stream) => {
+                let streams = &mut self.remote.page_serve.companions.streams;
+                streams.insert(serving.claim, Arc::clone(&stream));
+                Some(stream)
+            }
+            Err(error) => {
+                tracing::error!(%error, "a page companion's channel could not start");
                 None
             }
         }
@@ -749,7 +794,15 @@ impl Core {
     }
 
     fn page_serve_bridge(&mut self, stream: Arc<PageServeStream>, id: i64, request: &str) -> Option<PageServeCall> {
-        let Some(place) = self.remote_page_place(stream.page) else {
+        if stream.companion.is_some() && matches!(stream.source, HtmlSource::Url(_)) {
+            stream.reply(failure(id, URL_NO_BRIDGE));
+            return None;
+        }
+        let place = match &stream.companion {
+            Some(serving) => self.companion_page_place(serving),
+            None => self.remote_page_place(stream.page),
+        };
+        let Some(place) = place else {
             stream.reply(failure(id, PAGE_CLOSED));
             return None;
         };
@@ -780,13 +833,28 @@ impl Core {
             return;
         }
         tracing::error!(reason, "ending a page whose channel misbehaved");
-        self.end_remote_page_anywhere(stream.page);
+        // a page companion's attachment ends alone: the page and its other viewers stay
+        if stream.companion.is_none() {
+            self.end_remote_page_anywhere(stream.page);
+        }
         stream.shutdown();
     }
 
     /// A channel's connection closed (upstream's `PageServeStream.closed`): a page whose end was not already under way
-    /// ends, as nobody is left to load it. A claim whose reply never reached the helper closes this way too.
+    /// ends, as nobody is left to load it. A claim whose reply never reached the helper closes this way too. A page
+    /// companion's attachment closing ends nothing but itself.
     pub fn page_serve_closed(&mut self, stream: &Arc<PageServeStream>) {
+        if let Some(serving) = &stream.companion {
+            let streams = &mut self.remote.page_serve.companions.streams;
+            if streams
+                .get(&serving.claim)
+                .is_some_and(|held| Arc::ptr_eq(held, stream))
+            {
+                streams.remove(&serving.claim);
+            }
+            stream.stop_workers();
+            return;
+        }
         let streams = &mut self.remote.page_serve.streams;
         if streams.get(&stream.page).is_some_and(|held| Arc::ptr_eq(held, stream)) {
             streams.remove(&stream.page);

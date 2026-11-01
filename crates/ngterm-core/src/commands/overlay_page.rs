@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use super::{Outcome, session_store, with_id};
 use crate::Core;
+use crate::app_actions::{ActionEffect, FrontendAction};
 use crate::error::ControlError;
 use crate::html::bridge::{self, HtmlBridgePage};
 use crate::html::{
@@ -342,6 +343,7 @@ impl Core {
             self.pages.outcomes.dismiss(page);
             self.pages.released.push(page);
             self.replica_page_released(page);
+            self.end_companion_page_serving(page);
         }
     }
 
@@ -397,6 +399,34 @@ impl Core {
     /// session sits in an undoable close.
     pub fn close_html_overlay(&mut self, id: Uuid) -> bool {
         self.library_mut().close_html_overlay(id)
+    }
+
+    /// The strip's Close of page `id` (upstream's `onClose`): a page companion's page is its row, so it takes the session
+    /// close as Close Session does, confirmed first when the setting asks (the frontend's half) and with its undo
+    /// grace; any other page leaves its slot as [`Core::close_html_overlay`] has it. `None` when nothing changed.
+    pub fn close_html_overlay_from_strip(&mut self, id: Uuid) -> Option<ActionEffect> {
+        let row = self.html_overlay_slot(id).filter(|slot| {
+            slot.pane.is_none()
+                && self
+                    .library()
+                    .store(slot.window)
+                    .and_then(|store| store.session(slot.session))
+                    .is_some_and(|session| session.content() == crate::model::SessionContent::Page)
+        });
+        let closed = match row {
+            Some(HtmlPageSlot { window, session, .. }) if self.settings().confirm_close_session == Some(true) => {
+                return Some(ActionEffect::Frontend(FrontendAction::ConfirmCloseSession {
+                    window,
+                    session,
+                }));
+            }
+            Some(slot) => self.sidebar_action(
+                slot.window,
+                crate::sidebar_actions::SidebarAction::CloseSessions(vec![slot.session]),
+            ),
+            None => self.close_html_overlay(id),
+        };
+        closed.then_some(ActionEffect::Done)
     }
 
     /// Hides page `id` from its own strip with the page's scope: its pane's overlay, or every overlay of its session for

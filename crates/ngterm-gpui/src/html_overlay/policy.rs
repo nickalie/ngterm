@@ -441,7 +441,8 @@ pub enum StripItem {
 /// The strip of `overlay` (upstream's `HtmlOverlayView.strip`): `None` for a chromeless page; navigation adds the
 /// history and reload buttons before the identity and the hand-offs after it; the close button always ends it, after
 /// the hide button while `hide_shown` (upstream's `hideShown`): Settings ▸ Interface ▸ Hide overlays puts the title
-/// bar's overlays button on, without which nothing on screen would bring a hidden page back.
+/// bar's overlays button on, without which nothing on screen would bring a hidden page back. A page companion's page
+/// never offers Hide.
 #[must_use]
 pub fn strip_items(overlay: &HtmlOverlay, hide_shown: bool) -> Option<Vec<StripItem>> {
     if overlay.flags.chromeless {
@@ -463,7 +464,8 @@ pub fn strip_items(overlay: &HtmlOverlay, hide_shown: bool) -> Option<Vec<StripI
     {
         items.extend([StripItem::Browser, sharing]);
     }
-    if hide_shown {
+    // a page companion's page is its row, which never hides
+    if hide_shown && !overlay.row {
         items.push(StripItem::Hide);
     }
     items.push(StripItem::Close);
@@ -1050,6 +1052,15 @@ mod tests {
             ..HtmlPageFlags::default()
         };
         assert_eq!(strip_items(&file_page(None, chromeless), false), None);
+    }
+
+    /// A page companion's page is its row: its strip never offers Hide (upstream's `hideShown` with `content == .terminal`).
+    #[test]
+    fn a_page_companions_strip_offers_no_hide() {
+        use StripItem::{Close, Identity};
+        let mut row = file_page(None, HtmlPageFlags::default());
+        row.row = true;
+        assert_eq!(strip_items(&row, true), Some(vec![Identity, Close]));
     }
 
     /// A replica loads from its page's own `ngterm-page` address, and reports the origin's path as what it shows, never

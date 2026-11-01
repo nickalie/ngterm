@@ -327,8 +327,14 @@ impl RowBuilder<'_> {
 
 /// A session row's glyph: the split arrangement while the session has a split (shown or hidden), filled while
 /// flagged in the tree (every flagged-view row is flagged, so the fill would be noise there); a remote session's
-/// cloud marks a split by weight instead, slashed while its presentation stream is not up.
+/// cloud marks a split by weight instead, slashed while its presentation stream is not up; a page companion's page
+/// glyph has no split to mark.
 fn session_icon(session: &Session, tree: bool) -> Glyph {
+    if session.content() == ngterm_core::model::SessionContent::Page {
+        return Glyph::Page {
+            flagged: tree && session.flagged,
+        };
+    }
     let split = session.split.exists.then_some(session.split.axis);
     if session.remote_host().is_some() {
         return Glyph::Remote {
@@ -468,7 +474,8 @@ pub fn badge_text(count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use ngterm_core::model::{AgentIndicator, AgentStatus, NewSession, WindowLibrary};
+    use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
+    use ngterm_core::model::{AgentIndicator, AgentStatus, NewSession, PageCompanionOptions, WindowLibrary};
 
     use super::*;
 
@@ -712,6 +719,36 @@ mod tests {
             Some(AgentStatus::Blocked)
         );
         assert!(row(first).status.is_none() && row(one).status.is_none());
+    }
+
+    /// Upstream's `testAPageCompanionRowShowsThePageIconFilledWhenFlagged`: a page companion nests under its parent
+    /// with the page glyph, filled while flagged in the tree.
+    #[test]
+    fn a_page_companion_row_shows_the_page_glyph_filled_when_flagged() {
+        let (mut store, _, [first, _, _]) = store();
+        let page = HtmlOverlay::new(
+            HtmlSource::File {
+                path: "/tmp/p.html".to_owned(),
+                grant_root: None,
+            },
+            HtmlPageFlags::default(),
+        );
+        let options = PageCompanionOptions {
+            select: false,
+            ..PageCompanionOptions::default()
+        };
+        let id = store.add_page_companion(first, page, options, "/home/u").unwrap();
+        let mut expansion = Expansion::default();
+        let rows = built(&store, &mut expansion, &AppSettings::default());
+        let row = rows.iter().find(|row| row.id == id).unwrap();
+        assert_eq!(row.icon, Glyph::Page { flagged: false });
+        assert_eq!(row.group(), RowGroup::Companion { nested: true });
+        assert_eq!(row.label, "p.html");
+
+        store.session_mut(id).unwrap().flagged = true;
+        let rows = built(&store, &mut expansion, &AppSettings::default());
+        let row = rows.iter().find(|row| row.id == id).unwrap();
+        assert_eq!(row.icon, Glyph::Page { flagged: true });
     }
 
     #[test]

@@ -722,7 +722,9 @@ impl Core {
         let Some(state) = store.session(session) else {
             return false;
         };
-        if state.overlay.hud_active() || state.cover_overlay_visible() {
+        // a page companion's page is the row, so Close Session takes the session close with its confirmation and undo
+        let is_page = state.content() == crate::model::SessionContent::Page;
+        if state.overlay.hud_active() || (state.cover_overlay_visible() && !is_page) {
             return store.close_overlay(session);
         }
         if state.scratch_active {
@@ -804,6 +806,10 @@ fn store_facts(store: &AppStore, layout: FlaggedViewLayout) -> PaletteFacts {
     facts.set(PaletteFacts::HAS_PENDING_CLOSE, store.pending_close_summary().is_some());
     facts.set(PaletteFacts::HAS_ACTIVE_SESSION, active.is_some());
     facts.set(PaletteFacts::HAS_SESSIONS, store.sessions().next().is_some());
+    facts.set(
+        PaletteFacts::ACTIVE_SESSION_IS_PAGE,
+        active.is_some_and(|session| session.content() == crate::model::SessionContent::Page),
+    );
     facts.set(
         PaletteFacts::HAS_CURRENT_WORKSPACE,
         store.current_workspace_id().is_some(),

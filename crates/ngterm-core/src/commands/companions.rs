@@ -5,7 +5,8 @@
 //!
 //! Upstream's `ControlActions` default that refuses companions on an older host has no target here: one dispatcher
 //! serves the app and `ngterm-headless`. A remote parent answers upstream's local-path refusal until remote
-//! companions are ported. The page and duplicate forms are refused by name until their tasks port them.
+//! companions are ported. The page forms are [`super::companion_page`]'s; the duplicate form is refused by name until
+//! its task ports it.
 
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Command, Request};
@@ -27,6 +28,8 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         SessionCmd::CompanionNew => new(core, target, args),
         SessionCmd::Collapse => set_expanded(core, target, args, false),
         SessionCmd::Expand => set_expanded(core, target, args, true),
+        SessionCmd::CompanionPage => super::companion_page::page(core, target, args),
+        SessionCmd::CompanionPageAttach => super::companion_page::attach(core, target, args.window.as_deref()),
         other => Err(ControlError::NotSupported(Command::Session(other))),
     }
 }
@@ -64,7 +67,9 @@ fn new(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
             CompanionRefusal::RemoteParent => {
                 ControlError::rejected("companions of a remote session are not supported yet")
             }
-            CompanionRefusal::NoSuchSession => ControlError::rejected("could not create companion"),
+            CompanionRefusal::NoSuchSession | CompanionRefusal::PageNotOpened(_) => {
+                ControlError::rejected("could not create companion")
+            }
         })?;
     let mut result = with_id(companion);
     result.parent = store

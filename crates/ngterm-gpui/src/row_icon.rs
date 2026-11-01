@@ -50,6 +50,12 @@ const CHEVRON: [(f64, f64); 3] = [(4.5, 5.75), (7.0, 8.0), (4.5, 10.25)];
 /// The terminal's `_` cursor: start and end.
 const CURSOR: [(f64, f64); 2] = [(8.5, 10.25), (11.5, 10.25)];
 
+/// The page glyph's rows: each bullet's and line's y, the bullets' x and radius, and the lines' start and end x.
+const PAGE_ROWS: [f64; 3] = [5.75, 8.0, 10.25];
+const PAGE_BULLET_X: f64 = 4.5;
+const PAGE_BULLET_RADIUS: f64 = 0.9;
+const PAGE_LINE: (f64, f64) = (6.75, 12.0);
+
 /// The cloud's three bumps as `(center x, center y, radius)`: left, top, right; the left and right ones rest on
 /// [`CLOUD_BASE`].
 const CLOUD_BUMPS: [(f64, f64, f64); 3] = [(4.25, 10.0, 2.75), (8.0, 7.25, 4.0), (11.5, 9.75, 3.0)];
@@ -85,6 +91,12 @@ pub enum Glyph {
     Session {
         /// The pane arrangement, `None` while the session has no split (a hidden split still shows its arrangement).
         split: Option<SplitAxis>,
+        /// The session is flagged.
+        flagged: bool,
+    },
+    /// A page companion's row (`list.bullet.rectangle`): the frame with three bulleted lines, filled
+    /// (`list.bullet.rectangle.fill`) while the session is flagged (tree mode only, as [`Glyph::Session`]).
+    Page {
         /// The session is flagged.
         flagged: bool,
     },
@@ -205,6 +217,7 @@ fn trace(ink: &mut Ink, glyph: Glyph) {
             flagged,
         } => split(ink, axis, flagged),
         Glyph::Remote { split, disconnected } => cloud(ink, if split { BOLD } else { REGULAR }, disconnected),
+        Glyph::Page { flagged } => page(ink, flagged),
         Glyph::Flag { filled } => flag(ink, filled),
         Glyph::Disclosure { expanded } => disclosure(ink, expanded),
         Glyph::Plus => plus(ink, (8.0, 8.0), 4.5),
@@ -288,6 +301,25 @@ fn frame(ink: &mut Ink, filled: bool) {
         radius - inset,
     );
     ink_with(ink, trace, (!filled).then_some(REGULAR));
+}
+
+/// `list.bullet.rectangle`: the frame with three bullets and their lines; the `.fill` variant when `filled`, the
+/// bullets and lines knocked out of the solid frame.
+fn page(ink: &mut Ink, filled: bool) {
+    frame(ink, filled);
+    let (mut bullets, mut lines) = (Trace::new(), Trace::new());
+    for y in PAGE_ROWS {
+        bullets.arc((PAGE_BULLET_X, y, PAGE_BULLET_RADIUS), 0.0, 2.0 * PI);
+        bullets.new_sub_path();
+        lines.polyline(&[(PAGE_LINE.0, y), (PAGE_LINE.1, y)]);
+    }
+    if filled {
+        ink.clear_fill(bullets);
+        ink.clear_stroke(lines, REGULAR, None);
+    } else {
+        ink.fill(bullets);
+        ink.stroke(lines, REGULAR);
+    }
 }
 
 /// `cloud` outlined at `stroke`; `icloud.slash` when `slashed`, the slash set off from the outline by a transparent

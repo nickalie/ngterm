@@ -4,6 +4,7 @@
 mod ask_draft;
 mod companion_close;
 mod companion_naming;
+mod companion_pages;
 mod companion_respawn;
 mod companions;
 mod duplicate;

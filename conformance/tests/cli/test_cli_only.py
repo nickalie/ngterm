@@ -1,5 +1,6 @@
 """The `agtermctl` subcommands with no socket command of their own: `clipboard set` and `terminfo install`, which
-never open the socket, and `session wait`, which composes existing reads (`events.read`, `window.list`, `tree`).
+never open the socket, and `session wait`, which composes existing reads (`events.read`, `window.list`, `tree`); and
+the usage errors `session overlay open --companion` gives before any connection.
 
 The first two run through `cli.local`, without `--socket` (they refuse it) and in the instance's env, whose state
 directory variable (`AGTERM_STATE_DIR`, the Rust build's `NGTERM_STATE_DIR`) is under the temp root. `clipboard set`
@@ -403,3 +404,24 @@ def test_session_wait_refuses_bad_arguments(cli, args, code, message):
         _usage(result, message)
     else:
         _failed(result, message, code)
+
+
+# -- session overlay open --companion
+
+COMPANION_FULL_SIZE = "--companion is full size: it takes no --pane, --size-percent, --width or --height"
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("cli:session overlay open")
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        pytest.param(["top"], "--companion requires --html or --url", id="program"),
+        pytest.param(["--html", "/tmp/p.html", "--pane", "right"], COMPANION_FULL_SIZE, id="pane"),
+        pytest.param(["--html", "/tmp/p.html", "--size-percent", "50"], COMPANION_FULL_SIZE, id="size"),
+        pytest.param(["--html", "/tmp/p.html", "--width", "300"], COMPANION_FULL_SIZE, id="width"),
+    ],
+)
+def test_overlay_open_companion_validation(cli, args, message):
+    """The page companion's usage errors come before any connection: it is a page, and full size."""
+    _usage(cli("session", "overlay", "open", *args, "--companion"), message)
