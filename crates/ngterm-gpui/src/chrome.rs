@@ -70,8 +70,9 @@ pub fn colors(config: &TerminalConfig, settings: &AppSettings) -> ChromeColors {
     )
 }
 
-/// The window translucency Settings ▸ Appearance ▸ Window asks for (upstream's `WindowAppearance.Chrome`): the
-/// background opacity, whether to blur behind it, and the sidebar tint's signed wash
+/// The window translucency Settings ▸ Appearance ▸ Window asks for, as the window presents it (upstream's
+/// `WindowAppearance.Chrome`, Reduce Transparency resolved: `crate::reduce_transparency`): the background opacity,
+/// whether to blur behind it, and the sidebar tint's signed wash
 /// ([`ngterm_core::chrome::sidebar_shift_amount`]), which a see-through sidebar paints alone.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Translucency {
@@ -90,12 +91,18 @@ impl Translucency {
         sidebar_shift: 0.0,
     };
 
-    /// What `settings` ask for.
+    /// What `settings` ask for, presented opaque and unblurred while the system's Reduce Transparency
+    /// (`system_reduces`) holds and Ignore Reduce Transparency is off (upstream's `windowReducesTransparency`, which
+    /// `WindowAppearance.sync` gets through its `Chrome`); the saved opacity and blur stay as they are.
     #[must_use]
-    pub fn of(settings: &AppSettings) -> Self {
+    pub fn of(settings: &AppSettings, system_reduces: bool) -> Self {
+        let reduced = ngterm_core::chrome::window_reduces_transparency(
+            system_reduces,
+            settings.ignore_reduce_transparency == Some(true),
+        );
         let opacity = settings
             .background_opacity
-            .filter(|opacity| opacity.is_finite())
+            .filter(|opacity| opacity.is_finite() && !reduced)
             .map_or(1.0, |opacity| opacity.clamp(0.0, 1.0));
         Self {
             opacity,
@@ -161,7 +168,7 @@ pub fn sidebar_fill(colors: &ChromeColors, see_through: bool, shift: f64) -> Hsl
 /// Paints the chrome in the colors the terminals and the settings resolve to now, the library's widgets too
 /// ([`kit::sync`]), and keeps the window translucency the settings ask for; whether the chrome's colors changed.
 pub fn sync(core: &Core, config: &TerminalConfig, cx: &mut App) -> bool {
-    let translucency = Translucency::of(core.settings());
+    let translucency = Translucency::of(core.settings(), crate::reduce_transparency::system(cx));
     if cx.try_global::<Translucency>() != Some(&translucency) {
         cx.set_global(translucency);
         cx.refresh_windows();

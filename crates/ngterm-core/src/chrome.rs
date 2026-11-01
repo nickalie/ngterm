@@ -93,6 +93,15 @@ pub fn sidebar_shift_amount(strength: i64) -> f64 {
     f64::from(steps) * 0.06
 }
 
+/// Whether the window presents opaque and unblurred under the system's Reduce Transparency (upstream's
+/// `AppSettings.windowReducesTransparency`): the system asks for it (`system`) and Settings ▸ Appearance ▸ Window's
+/// Ignore Reduce Transparency is off (`ignoring`). The one rule the window, the inactive-pane wash and the Settings
+/// hint share, so the wash scales by the opacity the window renders at; the saved opacity and blur stay untouched.
+#[must_use]
+pub fn window_reduces_transparency(system: bool, ignoring: bool) -> bool {
+    system && !ignoring
+}
+
 /// The split divider's color (upstream's `GhosttyApp.splitDividerColor`): the config's `split-divider-color`, else the
 /// theme `background` moved a tenth toward its `foreground` per sRGB channel, the opaque form of the
 /// [`ChromeColors::SEPARATOR_ALPHA`] hairline the title bar and the sidebar draw. Opaque, as upstream's is.
@@ -194,6 +203,23 @@ impl ChromeColors {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_reduces_transparency_only_when_the_system_asks_and_it_is_not_ignored() {
+        // upstream's AppSettingsTests.windowReducesTransparencyOnlyWhenSystemIsOnAndNotIgnored
+        for (system, ignoring, expected) in [
+            (false, false, false),
+            (false, true, false),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            assert_eq!(
+                window_reduces_transparency(system, ignoring),
+                expected,
+                "system {system}, ignoring {ignoring}"
+            );
+        }
+    }
 
     #[test]
     fn the_shift_is_signed_and_clamps() {

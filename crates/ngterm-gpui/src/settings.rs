@@ -177,6 +177,8 @@ pub struct Snapshot {
     /// The keyboard layouts the "Lock in terminals" picker offers, or why it cannot work here
     /// (`crate::input_source`).
     pub layouts: crate::input_source::Layouts,
+    /// The system asks for reduced transparency (`crate::reduce_transparency`): the Window section's hint names it.
+    pub reduce_transparency: bool,
 }
 
 impl Snapshot {
@@ -198,7 +200,23 @@ impl Snapshot {
             live_unavailable: core.restore_launch().live_unavailable_reason.clone(),
             session_cwd,
             layouts: crate::input_source::Layouts::default(),
+            reduce_transparency: false,
         }
+    }
+
+    /// The snapshot with the frontend's reads: the keyboard layouts (`crate::input_source::layouts`) and the system's
+    /// Reduce Transparency.
+    #[must_use]
+    pub fn with_frontend(self, cx: &App) -> Self {
+        self.with_layouts(crate::input_source::layouts(cx))
+            .with_reduce_transparency(crate::reduce_transparency::system(cx))
+    }
+
+    /// The snapshot with the system's Reduce Transparency as `on`.
+    #[must_use]
+    pub fn with_reduce_transparency(mut self, on: bool) -> Self {
+        self.reduce_transparency = on;
+        self
     }
 
     /// The snapshot with the keyboard layouts the frontend read (`crate::input_source::layouts`).
@@ -595,7 +613,7 @@ impl Opening {
     #[must_use]
     pub fn of(state: &AppState, cx: &App) -> Self {
         Self {
-            snapshot: Snapshot::of(&state.core, state.applied_dark()).with_layouts(crate::input_source::layouts(cx)),
+            snapshot: Snapshot::of(&state.core, state.applied_dark()).with_frontend(cx),
             themes: state.core.theme_catalog().names().to_vec().into(),
             poster: state.poster().clone(),
         }

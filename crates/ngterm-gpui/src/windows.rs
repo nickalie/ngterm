@@ -250,7 +250,7 @@ impl Windows {
         let Some((_, ui)) = self.settings_ui(cx) else {
             return;
         };
-        let snapshot = Snapshot::of(&state.core, state.applied_dark()).with_layouts(crate::input_source::layouts(cx));
+        let snapshot = Snapshot::of(&state.core, state.applied_dark()).with_frontend(cx);
         if ui
             .handle
             .update(cx, |view, window, cx| view.sync_settings(snapshot, window, cx))

@@ -141,9 +141,21 @@ pub fn theme_options(themes: &[String], builtin: bool, current: Option<&str>) ->
     options
 }
 
+/// The hint under the translucency controls: the system's Reduce Transparency (`system`) while it holds over the
+/// window (upstream's `windowReducesTransparency`), else the blur's precondition.
+#[must_use]
+pub fn translucency_hint(system: bool, ignoring: bool) -> &'static str {
+    if ngterm_core::chrome::window_reduces_transparency(system, ignoring) {
+        "Reduce Transparency is on; saved opacity and blur apply when it is off."
+    } else {
+        "Blur needs opacity below 100%."
+    }
+}
+
 fn window(snapshot: &Snapshot) -> Vec<Item> {
     let settings = &snapshot.settings;
     let translucent = settings.background_opacity.unwrap_or(1.0) < 1.0;
+    let ignoring = settings.ignore_reduce_transparency == Some(true);
     vec![
         picker(
             "settings-toolbar-mode",
@@ -160,7 +172,16 @@ fn window(snapshot: &Snapshot) -> Vec<Item> {
         SliderKey::BackgroundBlur
             .item("Background Blur", settings)
             .enabled(translucent),
-        Item::hint("settings-bg-blur-hint", "Blur needs opacity below 100%."),
+        toggle(
+            "settings-ignore-reduce-transparency",
+            "Ignore Reduce Transparency",
+            ignoring,
+            |on| change(AppearanceChange::IgnoreReduceTransparency(on)),
+        ),
+        Item::hint(
+            "settings-bg-blur-hint",
+            translucency_hint(snapshot.reduce_transparency, ignoring),
+        ),
         SliderKey::SidebarShift.item("Sidebar Tint", settings),
         stepper(
             "settings-sidebar-font-size",

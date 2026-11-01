@@ -255,6 +255,9 @@ pub struct AppSettings {
     pub background_opacity: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_blur: Option<i64>,
+    /// The window's exemption from the system's Reduce Transparency; `None` respects it. GUI-only: no config line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignore_reduce_transparency: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notifications_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -827,6 +830,40 @@ mod tests {
             original.ghostty_config_lines(),
             AppSettings::default().ghostty_config_lines()
         );
+    }
+
+    /// Upstream's `ignoreReduceTransparencyDefaultsNilAndOmitsFromJSON`.
+    #[test]
+    fn ignore_reduce_transparency_defaults_nil_and_omits_from_json() {
+        assert_eq!(AppSettings::default().ignore_reduce_transparency, None);
+        let json = serde_json::to_string(&AppSettings::default()).unwrap();
+        assert!(!json.contains("ignoreReduceTransparency"), "{json}");
+    }
+
+    /// Upstream's `ignoreReduceTransparencyRoundTripsAndIsNotAConfigLine`: on a host that composites the translucency
+    /// itself and on one that leaves it to the renderer.
+    #[test]
+    fn ignore_reduce_transparency_round_trips_and_is_not_a_config_line() {
+        let original = AppSettings {
+            background_opacity: Some(0.63),
+            ignore_reduce_transparency: Some(true),
+            ..AppSettings::default()
+        };
+        let (_dir, store) = store();
+        store.save(&original).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(text.contains(r#""ignoreReduceTransparency" : true"#), "{text}");
+        assert_eq!(store.load().ignore_reduce_transparency, Some(true));
+        let without = AppSettings {
+            background_opacity: Some(0.63),
+            ..AppSettings::default()
+        };
+        for translucent_host in [true, false] {
+            assert_eq!(
+                original.ghostty_config_lines_for(translucent_host),
+                without.ghostty_config_lines_for(translucent_host)
+            );
+        }
     }
 
     /// Upstream's `attentionNavigationAcrossWindowsDefaultsNilAndRoundTrips`.

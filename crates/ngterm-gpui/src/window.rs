@@ -1298,6 +1298,7 @@ pub fn open(
     let env = Rc::clone(env);
     let poster = env.poster.clone();
     crate::status_glyph::watch_motion(cx);
+    crate::reduce_transparency::watch(&poster, cx);
     let opened = cx.open_window(options, move |window, cx| {
         let deck = cx.new(|_| Deck::new(id, env));
         cx.new(|cx| WindowView::new(id, deck, poster, frontmost_takes, window, cx))

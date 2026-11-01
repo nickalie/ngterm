@@ -74,6 +74,7 @@ fn a_controls_default_value_is_stored_as_nil() {
         appearance(AppearanceChange::ToolbarMode(ToolbarMode::Compact)),
         appearance(AppearanceChange::BackgroundOpacity(1.0)),
         appearance(AppearanceChange::BackgroundBlur(0)),
+        appearance(AppearanceChange::IgnoreReduceTransparency(false)),
         appearance(AppearanceChange::SidebarBackgroundShift(5)),
         appearance(AppearanceChange::SidebarFontSize(13.0)),
         appearance(AppearanceChange::InterfaceFontSize(13.0)),
@@ -130,6 +131,16 @@ fn a_non_default_value_is_stored_raw() {
     assert_eq!(settings.auto_follow_stay_on_active, Some(true));
     assert_eq!(settings.attention_includes_active, Some(true));
     assert_eq!(settings.attention_navigation_across_windows, Some(true));
+}
+
+/// Upstream's `setIgnoreReduceTransparency($0 ? true : nil)`: on is stored, off removes the key.
+#[test]
+fn ignore_reduce_transparency_stores_on_and_removes_the_key_when_off() {
+    let on = applied([appearance(AppearanceChange::IgnoreReduceTransparency(true))]);
+    assert_eq!(on.ignore_reduce_transparency, Some(true));
+    let mut off = on;
+    appearance(AppearanceChange::IgnoreReduceTransparency(false)).apply_to(&mut off);
+    assert_eq!(off.ignore_reduce_transparency, None);
 }
 
 #[test]

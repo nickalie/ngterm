@@ -43,6 +43,7 @@ fn snapshot(settings: AppSettings) -> Snapshot {
         live_unavailable: None,
         session_cwd: None,
         layouts: crate::input_source::Layouts::default(),
+        reduce_transparency: false,
     }
 }
 
@@ -405,6 +406,57 @@ fn the_font_and_theme_pickers_keep_a_set_value_the_catalog_lacks() {
         .map(|(label, _)| label)
         .collect();
     assert_eq!(names, ["Nord", "Gone"]);
+}
+
+/// Upstream's `testIgnoreReduceTransparencyTogglePersistsAndAppearanceTabFits` and the hint beside it: the toggle
+/// follows Background Blur, off by default; the hint names Reduce Transparency only while it holds over the window,
+/// whether the system asks for it and the toggle leaves the window to it.
+#[test]
+fn the_ignore_reduce_transparency_toggle_follows_the_blur_and_the_hint_follows_the_rule() {
+    let rows = |settings: AppSettings, system: bool| -> Vec<Item> {
+        let shown = snapshot(settings).with_reduce_transparency(system);
+        Tab::Appearance
+            .sections(&shown, &catalogs())
+            .into_iter()
+            .flat_map(Section::into_rows)
+            .collect()
+    };
+    let hint = |rows: &[Item]| {
+        rows.iter()
+            .find(|item| item.id == "settings-bg-blur-hint")
+            .unwrap()
+            .title
+            .clone()
+    };
+    let toggle = |rows: &[Item]| {
+        shown(
+            rows.iter()
+                .find(|item| item.id == "settings-ignore-reduce-transparency")
+                .unwrap(),
+        )
+    };
+
+    let plain = rows(AppSettings::default(), false);
+    let at = |id: &str| plain.iter().position(|item| item.id == id).unwrap();
+    assert_eq!(at("settings-ignore-reduce-transparency"), at("settings-bg-blur") + 1);
+    assert_eq!(
+        at("settings-bg-blur-hint"),
+        at("settings-ignore-reduce-transparency") + 1
+    );
+    assert_eq!(toggle(&plain), Some(Shown::On(false)));
+    let blur = "Blur needs opacity below 100%.";
+    let reduced = "Reduce Transparency is on; saved opacity and blur apply when it is off.";
+    assert_eq!(hint(&plain), blur);
+    assert_eq!(hint(&rows(AppSettings::default(), true)), reduced);
+    let ignoring = rows(
+        AppSettings {
+            ignore_reduce_transparency: Some(true),
+            ..AppSettings::default()
+        },
+        true,
+    );
+    assert_eq!(toggle(&ignoring), Some(Shown::On(true)));
+    assert_eq!(hint(&ignoring), blur);
 }
 
 #[test]

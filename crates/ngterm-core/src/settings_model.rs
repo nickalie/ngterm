@@ -107,6 +107,7 @@ pub enum AppearanceChange {
     ToolbarMode(ToolbarMode),
     BackgroundOpacity(f64),
     BackgroundBlur(i64),
+    IgnoreReduceTransparency(bool),
     SidebarBackgroundShift(i64),
     SidebarFontSize(f64),
     InterfaceFontSize(f64),
@@ -303,6 +304,7 @@ impl AppearanceChange {
                 let blur = blur.clamp(*BLUR_RANGE.start(), *BLUR_RANGE.end());
                 settings.background_blur = (blur > 0).then_some(blur);
             }
+            Self::IgnoreReduceTransparency(on) => settings.ignore_reduce_transparency = default_off(on),
             Self::SidebarBackgroundShift(shift) => {
                 settings.sidebar_background_shift = unless_default(clamp_strength(shift), DEFAULT_SIDEBAR_SHIFT);
             }

@@ -115,6 +115,7 @@ def test_general_tab(seeded, ui_for):
     "ui:settings-toolbar-mode",
     "ui:settings-bg-opacity",
     "ui:settings-bg-blur",
+    "ui:settings-ignore-reduce-transparency",
     "ui:settings-sidebar-shift",
     "ui:settings-sidebar-font-size",
     "ui:settings-interface-font-size",
@@ -134,6 +135,7 @@ def test_appearance_tab(seeded, ui_for):
             "settings-theme-dark": "popup",
             "settings-toolbar-mode": "popup",
             "settings-bg-opacity": "slider",
+            "settings-ignore-reduce-transparency": "checkbox",
             "settings-sidebar-shift": "slider",
             "settings-sidebar-font-size": None,
             "settings-interface-font-size": None,
@@ -143,6 +145,26 @@ def test_appearance_tab(seeded, ui_for):
     ui.find("settings-follow-appearance", role="checkbox", value=1)
     # Blur needs opacity below 100%, which the seed leaves at its default.
     ui.find("settings-bg-blur", role="slider", enabled=False)
+
+
+def _settings(ctl):
+    return json.loads((ctl.instance.state_dir / "settings.json").read_text())
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("ui:settings-ignore-reduce-transparency")
+def test_ignore_reduce_transparency_toggle_persists(seeded, ui_for):
+    ui = ui_for(seeded)
+    _open(ui, "Appearance")
+    toggle = "settings-ignore-reduce-transparency"
+    ui.click(ui.find(toggle, role="checkbox", value=0))
+    try:
+        wait_until(lambda: _settings(seeded).get("ignoreReduceTransparency") is True)
+    finally:
+        # The module's instance outlives a failed attempt: the toggle goes back off whatever was stored.
+        ui.click(ui.find(toggle, role="checkbox", value=1))
+    # Off removes the key rather than storing false.
+    wait_until(lambda: "ignoreReduceTransparency" not in _settings(seeded))
 
 
 @pytest.mark.covers(

@@ -266,20 +266,26 @@ fn the_library_theme_follows_the_chrome_through_every_flip(cx: &mut TestAppConte
 fn the_translucency_follows_the_settings_and_full_screen_is_opaque() {
     use gpui_kit::WindowBackgroundAppearance as Appearance;
 
-    let opaque = Translucency::of(&AppSettings::default());
+    let opaque = Translucency::of(&AppSettings::default(), false);
     assert_eq!(opaque, Translucency::OPAQUE);
     assert_eq!(opaque.appearance(false), Appearance::Opaque);
-    let blur_alone = Translucency::of(&AppSettings {
-        background_blur: Some(20),
-        ..AppSettings::default()
-    });
+    let blur_alone = Translucency::of(
+        &AppSettings {
+            background_blur: Some(20),
+            ..AppSettings::default()
+        },
+        false,
+    );
     assert!(!blur_alone.blur, "no blur at full opacity");
-    let translucent = Translucency::of(&AppSettings {
-        background_opacity: Some(0.7),
-        background_blur: Some(20),
-        sidebar_background_shift: Some(10),
-        ..AppSettings::default()
-    });
+    let translucent = Translucency::of(
+        &AppSettings {
+            background_opacity: Some(0.7),
+            background_blur: Some(20),
+            sidebar_background_shift: Some(10),
+            ..AppSettings::default()
+        },
+        false,
+    );
     assert!((translucent.opacity - 0.7).abs() < f64::EPSILON);
     assert_eq!(translucent.appearance(false), Appearance::Blurred);
     assert!(
@@ -292,10 +298,13 @@ fn the_translucency_follows_the_settings_and_full_screen_is_opaque() {
         ..translucent
     };
     assert_eq!(unblurred.appearance(false), Appearance::Transparent);
-    let odd = Translucency::of(&AppSettings {
-        background_opacity: Some(f64::NAN),
-        ..AppSettings::default()
-    });
+    let odd = Translucency::of(
+        &AppSettings {
+            background_opacity: Some(f64::NAN),
+            ..AppSettings::default()
+        },
+        false,
+    );
     assert!(
         (odd.opacity - 1.0).abs() < f64::EPSILON,
         "an unusable opacity is opaque"
@@ -322,4 +331,80 @@ fn the_translucency_follows_the_settings_and_full_screen_is_opaque() {
         color(Rgb::BLACK, 0.0),
         "neutral: nothing over the backing"
     );
+}
+
+fn translucent_settings(ignore: Option<bool>) -> AppSettings {
+    AppSettings {
+        background_opacity: Some(0.6),
+        background_blur: Some(10),
+        ignore_reduce_transparency: ignore,
+        sidebar_background_shift: Some(10),
+        ..AppSettings::default()
+    }
+}
+
+/// Upstream's `WindowAppearanceTests` (`testTranslucentWindowKeepsSavedOpacityWithoutReduceTransparency`,
+/// `testReduceTransparencyPresentsTranslucentWindowOpaque`) and the toggle that exempts the window: the system's Reduce
+/// Transparency presents the window opaque and unblurred, so the wash scales by 1, unless it is ignored; the sidebar's
+/// tint and the saved settings stay as they were.
+#[test]
+fn reduce_transparency_presents_the_window_opaque_unless_ignored() {
+    use gpui_kit::WindowBackgroundAppearance as Appearance;
+
+    let kept = Translucency::of(&translucent_settings(None), false);
+    assert!((kept.opacity - 0.6).abs() < f64::EPSILON);
+    assert_eq!(kept.appearance(false), Appearance::Blurred);
+
+    let settings = translucent_settings(None);
+    let reduced = Translucency::of(&settings, true);
+    assert!((reduced.opacity - 1.0).abs() < f64::EPSILON);
+    assert!(!reduced.blur);
+    assert!(
+        (reduced.effective(false) - 1.0).abs() < f64::EPSILON,
+        "the wash scales by 1"
+    );
+    assert_eq!(reduced.appearance(false), Appearance::Opaque);
+    assert!(
+        (reduced.sidebar_shift - kept.sidebar_shift).abs() < f64::EPSILON,
+        "the tint stays"
+    );
+    assert_eq!(
+        settings,
+        translucent_settings(None),
+        "the saved opacity and blur are untouched"
+    );
+
+    let ignored = Translucency::of(&translucent_settings(Some(true)), true);
+    assert_eq!(ignored, kept, "Ignore Reduce Transparency keeps the saved presentation");
+}
+
+/// A flip of the system's preference reaches the window's translucency on the next sync.
+#[gpui_kit::test]
+fn the_sync_follows_the_systems_reduce_transparency(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let core = ngterm_core::Core::new(
+        CoreConfig {
+            app: AppIdentity::from_recorded("1.2.3", None),
+            capabilities: Vec::new(),
+        },
+        CoreState {
+            library: WindowLibrary::seeded("/home/u"),
+            settings: translucent_settings(None),
+            ..CoreState::default()
+        },
+    );
+    let config = config((None, None));
+    cx.update(|cx| {
+        sync(&core, &config, cx);
+        assert!((translucency(cx).opacity - 0.6).abs() < f64::EPSILON);
+        assert!(crate::reduce_transparency::set(true, cx));
+        sync(&core, &config, cx);
+        assert_eq!(
+            translucency(cx).appearance(false),
+            gpui_kit::WindowBackgroundAppearance::Opaque
+        );
+        assert!(crate::reduce_transparency::set(false, cx));
+        sync(&core, &config, cx);
+        assert!(translucency(cx).blur);
+    });
 }

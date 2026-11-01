@@ -1060,16 +1060,16 @@ CI until `ngterm-gpui` joins `cross-platform.yml`".
 **Conformance:** `tests/ui/test_settings.py::test_appearance_tab` gains `settings-ignore-reduce-transparency`; new
 `test_settings.py::test_ignore_reduce_transparency_toggle_persists` (ui layer).
 
-- [ ] while the OS preference is on the window presents opaque and unblurred, the saved opacity and blur untouched;
+- [x] while the OS preference is on the window presents opaque and unblurred, the saved opacity and blur untouched;
       the inactive-pane wash scales by that effective opacity; palettes and the switcher keep following the system
-- [ ] settings.json `ignoreReduceTransparency` (nil by default, true stored, off removes the key, no config line);
+- [x] settings.json `ignoreReduceTransparency` (nil by default, true stored, off removes the key, no config line);
       `window_reduces_transparency(system, ignoring) = system && !ignoring` for the window, the wash and the hint
-- [ ] Appearance ▸ Window toggle "Ignore Reduce Transparency" (`settings-ignore-reduce-transparency`) after
+- [x] Appearance ▸ Window toggle "Ignore Reduce Transparency" (`settings-ignore-reduce-transparency`) after
       Background Blur; the hint "Reduce Transparency is on; saved opacity and blur apply when it is off." while the
       rule holds, else "Blur needs opacity below 100%."; follows the system flag live
-- [ ] write tests: the Swift cases above (core truth table, settings round trip; gpui `Translucency`)
-- [ ] write tests: the ui tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the Swift cases above (core truth table, settings round trip; gpui `Translucency`)
+- [x] write tests: the ui tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 24: UI-only changes
 
