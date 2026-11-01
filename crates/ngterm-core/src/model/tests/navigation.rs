@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::support::{add, add_background};
 use crate::model::{
     AgentIndicator, AgentStatus, AppStore, FocusMode, SaveRequest, Session, SessionNavigation, SidebarMode,
-    WorkspaceNavigation, WorkspaceOptions,
+    WorkspaceNavigation, WorkspaceOptions, stops_attention_navigation,
 };
 
 /// Two workspaces (work: a, b; personal: c, d), so the flattened order is [a, b, c, d].
@@ -268,6 +268,43 @@ fn navigate_attention_skips_active_and_idle() {
     store.select_session(Some(ids[0]));
     store.navigate_session(SessionNavigation::NextAttention);
     assert_eq!(store.selected_session_id(), Some(ids[2]));
+}
+
+/// Upstream's `navigateAttentionStopsOnActiveWhenIncluded`.
+#[test]
+fn navigate_attention_stops_on_active_when_included() {
+    let (mut store, ids) = nav_tree();
+    put_status(&mut store, ids[1], AgentStatus::Active);
+    put_status(&mut store, ids[2], AgentStatus::Blocked);
+    put_status(&mut store, ids[3], AgentStatus::Idle);
+    store.select_session(Some(ids[0]));
+    let mut step = |direction| {
+        store.navigate_session_with(direction, true);
+        store.selected_session_id()
+    };
+    assert_eq!(step(SessionNavigation::NextAttention), Some(ids[1]));
+    assert_eq!(step(SessionNavigation::NextAttention), Some(ids[2]));
+    assert_eq!(step(SessionNavigation::NextAttention), Some(ids[1]));
+    assert_eq!(step(SessionNavigation::PreviousAttention), Some(ids[2]));
+}
+
+/// The shared stop predicate: `active` only under the setting, `idle` never, and `needs_attention` stays narrow.
+#[test]
+fn stops_attention_navigation_adds_active_only_when_included() {
+    let (mut store, ids) = nav_tree();
+    let cases = [
+        (AgentStatus::Blocked, true, true),
+        (AgentStatus::Completed, true, true),
+        (AgentStatus::Active, false, true),
+        (AgentStatus::Idle, false, false),
+    ];
+    for (status, off, on) in cases {
+        put_status(&mut store, ids[0], status);
+        let session = store.session(ids[0]).unwrap();
+        assert_eq!(stops_attention_navigation(session, false), off, "{status:?} off");
+        assert_eq!(stops_attention_navigation(session, true), on, "{status:?} on");
+        assert_eq!(status.needs_attention(), off, "{status:?} needs attention");
+    }
 }
 
 #[test]

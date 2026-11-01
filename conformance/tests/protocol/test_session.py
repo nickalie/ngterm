@@ -303,6 +303,40 @@ def test_go_steps_through_sessions_and_wraps(ctl):
         assert active_session_id(ctl.tree()) == current, direction
 
 
+def _statused_sessions(ctl, statuses):
+    """The instance's only session, then one new session per status, which is set on it; selects the first."""
+    (first,) = session_ids(ctl.tree())
+    ids = []
+    for status in statuses:
+        sid = _new(ctl)
+        assert_ok(ctl.request("session.status", sid, status=status))
+        ids.append(sid)
+    assert_ok(ctl.request("session.select", first))
+    return ids
+
+
+def _attention_steps(ctl, directions):
+    return [assert_ok(ctl.request("session.go", to=to))["id"] for to in directions]
+
+
+@pytest.mark.covers("session.go", "session.status")
+def test_go_attention_steps_skip_idle_and_active(app, ctl):
+    # [first (idle), active, blocked, idle, completed]: only blocked and completed stop the steps, which wrap.
+    _, blocked, _, completed = _statused_sessions(ctl, ["active", "blocked", "idle", "completed"])
+    steps = ["next-attention", "next-attention", "next-attention", "prev-attention"]
+    assert _attention_steps(ctl, steps) == [blocked, completed, blocked, completed]
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.go", "session.status", "field:tree.attentionIncludesActive")
+def test_go_next_attention_stops_on_active_when_included(launch):
+    seeded = launch(settings={"attentionIncludesActive": True})
+    assert seeded.tree()["tree"]["attentionIncludesActive"] is True
+    active, blocked = _statused_sessions(seeded, ["active", "blocked"])
+    steps = ["next-attention", "next-attention", "next-attention", "prev-attention"]
+    assert _attention_steps(seeded, steps) == [active, blocked, active, blocked]
+
+
 @pytest.mark.covers("session.go")
 @pytest.mark.parametrize("to", [None, "sideways"])
 def test_go_requires_a_direction(ctl, to):

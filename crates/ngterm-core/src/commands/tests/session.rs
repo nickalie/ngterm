@@ -533,6 +533,28 @@ fn go_attention_steps_skip_sessions_that_do_not_need_it() {
     assert_eq!(answered_id(&response), Some(ids[2]));
 }
 
+/// `attentionIncludesActive` makes the attention steps stop on an `active` session; off, they skip it.
+#[test]
+fn go_attention_steps_stop_on_active_only_under_the_setting() {
+    for (includes_active, expected) in [(None, 2), (Some(true), 1)] {
+        let settings = AppSettings {
+            attention_includes_active: includes_active,
+            ..AppSettings::default()
+        };
+        let mut fixture = Fixture::with_settings(2, settings);
+        let ids = fixture.sessions.clone();
+        let store = fixture.store_mut().unwrap();
+        store.select_session(Some(ids[0]));
+        for (id, status) in [(ids[1], AgentStatus::Active), (ids[2], AgentStatus::Blocked)] {
+            let mut indicator = store.session(id).unwrap().agent_indicator.clone();
+            indicator.status = status;
+            store.set_agent_indicator(indicator, id);
+        }
+        let response = fixture.session(SessionCmd::Go, None, args(|a| a.to = Some("next-attention".into())));
+        assert_eq!(answered_id(&response), Some(ids[expected]), "{includes_active:?}");
+    }
+}
+
 #[test]
 fn go_requires_a_direction_and_a_session() {
     let mut fixture = Fixture::new(0);

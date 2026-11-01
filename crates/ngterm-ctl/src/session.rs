@@ -392,7 +392,7 @@ pub struct Go {
     #[arg(
         long,
         help = "Direction: next, prev, first, last, next-attention, or prev-attention (attention = \
-                blocked/completed)."
+                blocked/completed, plus active when enabled in Settings)."
     )]
     to: String,
 

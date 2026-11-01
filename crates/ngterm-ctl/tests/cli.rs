@@ -1235,7 +1235,8 @@ fn parse_errors_of_the_new_commands_name_their_usage() -> TestResult {
             &["session", "go"],
             format!(
                 "Error: Missing expected argument '--to <to>'\nHelp:  --to <to>  Direction: next, prev, first, last, \
-                 next-attention, or prev-attention (attention = blocked/completed).\n{go_usage}"
+                 next-attention, or prev-attention (attention = blocked/completed, plus active when enabled in \
+                 Settings).\n{go_usage}"
             ),
         ),
         (
@@ -1435,7 +1436,8 @@ USAGE: ngtermctl session go --to <to> [--socket <socket>] [--json] [--window <wi
 
 OPTIONS:
   --to <to>               Direction: next, prev, first, last, next-attention,
-                          or prev-attention (attention = blocked/completed).
+                          or prev-attention (attention = blocked/completed,
+                          plus active when enabled in Settings).
   --socket <socket>       Override the control socket path.
   --json                  Print the raw JSON response.
   --window <window>       Target window id, unique prefix, or 'active'

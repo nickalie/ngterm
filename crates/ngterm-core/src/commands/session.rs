@@ -228,8 +228,9 @@ fn go(core: &mut Core, args: &Args) -> Outcome {
         .ok_or_else(|| {
             ControlError::rejected("session.go requires --to next|prev|first|last|next-attention|prev-attention")
         })?;
+    let includes_active = core.settings().attention_includes_active.unwrap_or(false);
     in_placement_store(core, args.window.as_deref(), |store| {
-        store.navigate_session(direction);
+        store.navigate_session_with(direction, includes_active);
         store
             .selected_session_id()
             .map(with_id)

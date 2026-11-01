@@ -484,6 +484,7 @@ tests/protocol/test_session.py::test_duplicate_inserts_a_plain_copy_after_the_so
 tests/protocol/test_session.py::test_flag_clear_unflags_every_session
 tests/protocol/test_session.py::test_flag_modes
 tests/protocol/test_session.py::test_flag_rejects_an_unknown_mode
+tests/protocol/test_session.py::test_go_attention_steps_skip_idle_and_active
 tests/protocol/test_session.py::test_go_requires_a_direction[None]
 tests/protocol/test_session.py::test_go_requires_a_direction[sideways]
 tests/protocol/test_session.py::test_go_steps_through_sessions_and_wraps

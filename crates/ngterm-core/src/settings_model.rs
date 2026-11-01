@@ -154,7 +154,10 @@ pub enum AgentStatusChange {
     AutoFollow(AutoFollowAttention),
     /// The forward-reading toggle over `autoFollowStayOnActive`: on (the default) leaves a running session.
     AutoFollowAwayFromRunning(bool),
-    /// Reset to defaults: colors, shapes, the blocked sound and the status reset; not auto-follow.
+    /// Whether attention navigation also stops on `active` sessions (`attentionIncludesActive`, default off).
+    AttentionIncludesActive(bool),
+    /// Reset to defaults: colors, shapes, the blocked sound and the status reset; not auto-follow or
+    /// `attentionIncludesActive`.
     Reset,
 }
 
@@ -389,6 +392,7 @@ impl AgentStatusChange {
                     unless_default(follow, AutoFollowAttention::Off).map(|follow| follow.raw().to_owned());
             }
             Self::AutoFollowAwayFromRunning(away) => settings.auto_follow_stay_on_active = default_off(!away),
+            Self::AttentionIncludesActive(on) => settings.attention_includes_active = default_off(on),
             Self::Reset => {
                 for status in [AgentStatus::Active, AgentStatus::Blocked, AgentStatus::Completed] {
                     if let Some(slot) = status_color_slot(settings, status) {

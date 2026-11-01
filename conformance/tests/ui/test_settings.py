@@ -187,6 +187,7 @@ def test_notifications_tab_reads_the_seeded_toggles(seeded, ui_for):
     "ui:settings-status-shape-{status}",
     "ui:settings-status-blocked-sound",
     "ui:settings-status-clear",
+    "ui:settings-attention-includes-active",
     "ui:settings-auto-follow",
     "ui:settings-auto-follow-stay-active",
     "ui:settings-status-reset",
@@ -206,6 +207,8 @@ def test_agent_status_tab(seeded, ui_for):
             "settings-status-reset": "button",
         },
     )
+    # Off unless settings.json turns it on.
+    ui.find("settings-attention-includes-active", role="checkbox", value=0)
     # Only applies while auto-follow is on, which it is not by default.
     ui.find("settings-auto-follow-stay-active", role="checkbox", enabled=False)
 

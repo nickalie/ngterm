@@ -90,6 +90,7 @@ fn a_controls_default_value_is_stored_as_nil() {
         status(AgentStatusChange::StatusReset(StatusReset::FirstKey)),
         status(AgentStatusChange::AutoFollow(AutoFollowAttention::Off)),
         status(AgentStatusChange::AutoFollowAwayFromRunning(true)),
+        status(AgentStatusChange::AttentionIncludesActive(false)),
     ]);
     assert_eq!(defaults, AppSettings::default());
 }
@@ -111,6 +112,7 @@ fn a_non_default_value_is_stored_raw() {
         SettingsChange::Notifications(NotificationsChange::DockBounce(DockBounce::UntilFocused)),
         status(AgentStatusChange::AutoFollow(AutoFollowAttention::S30)),
         status(AgentStatusChange::AutoFollowAwayFromRunning(false)),
+        status(AgentStatusChange::AttentionIncludesActive(true)),
     ]);
     assert_eq!(settings.right_click_paste, Some(false));
     assert_eq!(settings.link_open_mode.as_deref(), Some("overlay"));
@@ -124,6 +126,7 @@ fn a_non_default_value_is_stored_raw() {
     assert_eq!(settings.dock_bounce.as_deref(), Some("untilFocused"));
     assert_eq!(settings.auto_follow_attention.as_deref(), Some("s30"));
     assert_eq!(settings.auto_follow_stay_on_active, Some(true));
+    assert_eq!(settings.attention_includes_active, Some(true));
 }
 
 #[test]
@@ -369,6 +372,7 @@ fn glyph_colors_and_shapes_validate_and_reset_leaves_auto_follow() {
         status(AgentStatusChange::BlockedSound(Some("Ping".into()))),
         status(AgentStatusChange::StatusReset(StatusReset::Enter)),
         status(AgentStatusChange::AutoFollow(AutoFollowAttention::S5)),
+        status(AgentStatusChange::AttentionIncludesActive(true)),
     ]);
     assert_eq!(settings.status_color_hex(AgentStatus::Active), Some("#102030"));
     assert_eq!(settings.blocked_status_color_hex, None);
@@ -389,6 +393,7 @@ fn glyph_colors_and_shapes_validate_and_reset_leaves_auto_follow() {
         settings,
         AppSettings {
             auto_follow_attention: Some("s5".into()),
+            attention_includes_active: Some(true),
             ..AppSettings::default()
         }
     );

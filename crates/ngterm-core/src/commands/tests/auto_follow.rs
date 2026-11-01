@@ -412,6 +412,23 @@ fn tree_projects_idle_and_auto_follow_ms() {
     assert!(idle(&fixture).is_some_and(|ms| ms >= 0));
 }
 
+/// Upstream's `controlTreeProjectsAttentionIncludesActive`: always present, `false` until the setting is on.
+#[test]
+fn tree_projects_attention_includes_active() {
+    let fixture = Fixture::new(0);
+    let tree = fixture.core.tree(None).unwrap();
+    assert_eq!(tree.attention_includes_active, Some(false));
+    let settings = AppSettings {
+        attention_includes_active: Some(true),
+        ..AppSettings::default()
+    };
+    let fixture = Fixture::with_settings(0, settings);
+    let tree = fixture.core.tree(None).unwrap();
+    assert_eq!(tree.attention_includes_active, Some(true));
+    let json = serde_json::to_value(&tree).unwrap();
+    assert_eq!(json["attentionIncludesActive"], serde_json::Value::Bool(true));
+}
+
 // MARK: - arming: activity, settings, attention changes
 
 /// A fixture parked on an idle session with one blocked session waiting; returns (idle, blocked).

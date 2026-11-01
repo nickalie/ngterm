@@ -93,7 +93,8 @@ impl AgentStatus {
     }
 
     /// The states attention navigation (`session.go next-attention|prev-attention`) steps through: a `blocked`
-    /// prompt or a `completed` run.
+    /// prompt or a `completed` run. `attentionIncludesActive` adds `active` to navigation only, never to this
+    /// predicate (see [`crate::model::stops_attention_navigation`]).
     #[must_use]
     pub fn needs_attention(self) -> bool {
         matches!(self, Self::Blocked | Self::Completed)

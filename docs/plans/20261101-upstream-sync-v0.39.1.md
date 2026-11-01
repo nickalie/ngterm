@@ -271,17 +271,17 @@ extend, keep green). New: `test_session.py::test_tint_set_recolor_place_and_clea
 `test_session.py::test_go_attention_steps_skip_idle_and_active`; `tests/ui/test_settings.py::test_agent_status_tab`
 gains `ui:settings-attention-includes-active`.
 
-- [ ] settings.json `attentionIncludesActive` (nil = off, omitted when nil, no ghostty config line; Reset leaves it)
-- [ ] the attention steps (`session go --to next-attention|prev-attention`, the GUI chord/menu/palette) stop on
+- [x] settings.json `attentionIncludesActive` (nil = off, omitted when nil, no ghostty config line; Reset leaves it)
+- [x] the attention steps (`session go --to next-attention|prev-attention`, the GUI chord/menu/palette) stop on
       active sessions too while on; `needs_attention()` unchanged, so auto-follow, the bell and pane reveal are not
-- [ ] tree top-level `attentionIncludesActive` after `autoFollowMs`, always present from the app
-- [ ] `session go` help: "Direction: next, prev, first, last, next-attention, or prev-attention (attention =
+- [x] tree top-level `attentionIncludesActive` after `autoFollowMs`, always present from the app
+- [x] `session go` help: "Direction: next, prev, first, last, next-attention, or prev-attention (attention =
       blocked/completed, plus active when enabled in Settings)."
-- [ ] Settings ▸ Agent Status: the section "Auto-follow" becomes "Navigation" and starts with the toggle "Attention
+- [x] Settings ▸ Agent Status: the section "Auto-follow" becomes "Navigation" and starts with the toggle "Attention
       navigation includes active sessions" (`settings-attention-includes-active`)
-- [ ] write tests: the Swift cases above (settings, projection, navigation `next → 1, next → 2, next → 1, prev → 2`)
-- [ ] write tests: the conformance tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the Swift cases above (settings, projection, navigation `next → 1, next → 2, next → 1, prev → 2`)
+- [x] write tests: the conformance tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 6: Cross-window attention navigation (#824)
 

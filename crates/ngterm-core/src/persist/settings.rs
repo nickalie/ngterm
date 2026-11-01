@@ -296,6 +296,9 @@ pub struct AppSettings {
     pub auto_follow_attention: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_follow_stay_on_active: Option<bool>,
+    /// Whether attention navigation also stops on `active` sessions, not only blocked and completed ones; nil = off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention_includes_active: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sidebar_font_size: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -767,6 +770,35 @@ mod tests {
         );
         seed(&store, r#"{ "fontSize": 16 }"#);
         assert_eq!(store.load().terminal_input_source, None);
+    }
+
+    /// Upstream's `attentionIncludesActiveDefaultsNilAndOmitsFromJSON`.
+    #[test]
+    fn attention_includes_active_defaults_nil_and_omits_from_json() {
+        assert_eq!(AppSettings::default().attention_includes_active, None);
+        let json = serde_json::to_string(&AppSettings::default()).unwrap();
+        assert!(!json.contains("attentionIncludesActive"), "{json}");
+        let (_dir, store) = store();
+        seed(&store, r#"{"theme":"Nord"}"#);
+        assert_eq!(store.load().attention_includes_active, None);
+    }
+
+    /// Upstream's `attentionIncludesActiveRoundTripsAndIsNotAConfigLine`.
+    #[test]
+    fn attention_includes_active_round_trips_and_is_not_a_config_line() {
+        let original = AppSettings {
+            attention_includes_active: Some(true),
+            ..AppSettings::default()
+        };
+        let (_dir, store) = store();
+        store.save(&original).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        assert!(text.contains(r#""attentionIncludesActive" : true"#), "{text}");
+        assert_eq!(store.load().attention_includes_active, Some(true));
+        assert_eq!(
+            original.ghostty_config_lines(),
+            AppSettings::default().ghostty_config_lines()
+        );
     }
 
     #[test]

@@ -7,12 +7,13 @@ use std::collections::HashSet;
 
 use uuid::Uuid;
 
-use super::session::{AgentIndicator, Session};
+use super::session::{AgentIndicator, AgentStatus, Session};
 use super::store::{AppStore, Location, WorkspaceStep};
 use super::workspace::SidebarMode;
 
 /// A relative step through the visible session list. `Next`/`Previous` step one and wrap, `First`/`Last` jump to an
-/// end, and the attention steps go (wrapping) through the sessions needing attention only.
+/// end, and the attention steps go (wrapping) through the sessions needing attention only (plus `active` ones under
+/// the `attentionIncludesActive` setting, see [`stops_attention_navigation`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionNavigation {
     Next,
@@ -21,6 +22,15 @@ pub enum SessionNavigation {
     Last,
     NextAttention,
     PreviousAttention,
+}
+
+/// Whether an attention step stops on `session`: a status that [`AgentStatus::needs_attention`], or `active` while
+/// `includes_active` (the `attentionIncludesActive` setting). Only navigation reads it: auto-follow, the bell and the
+/// pane reveal keep to `needs_attention`.
+#[must_use]
+pub fn stops_attention_navigation(session: &Session, includes_active: bool) -> bool {
+    let status = session.agent_indicator.status;
+    status.needs_attention() || (includes_active && status == AgentStatus::Active)
 }
 
 impl SessionNavigation {
@@ -135,8 +145,19 @@ impl AppStore {
     /// Steps the selection through [`AppStore::navigable_sessions`] in sidebar order, wrapping within that set and
     /// never leaking across the filter. With no selection in the set, `Next`/`Previous` land on the first session.
     /// A no-op on an empty set, or an attention step with nowhere to go. Returns what
-    /// [`AppStore::select_session`] returns.
+    /// [`AppStore::select_session`] returns. The attention steps stop on blocked and completed sessions only; see
+    /// [`AppStore::navigate_session_with`] for the `attentionIncludesActive` setting.
     pub fn navigate_session(&mut self, direction: SessionNavigation) -> Option<AgentIndicator> {
+        self.navigate_session_with(direction, false)
+    }
+
+    /// [`AppStore::navigate_session`] whose attention steps also stop on `active` sessions when
+    /// `attention_includes_active` is set (upstream's `AppStore.attentionIncludesActive`).
+    pub fn navigate_session_with(
+        &mut self,
+        direction: SessionNavigation,
+        attention_includes_active: bool,
+    ) -> Option<AgentIndicator> {
         let ids = self.navigable_session_ids();
         let (&first, &last) = (ids.first()?, ids.last()?);
         let current = self
@@ -150,7 +171,8 @@ impl AppStore {
                 current.map_or(first, |index| ids[wrapped(index, step, ids.len())])
             }
             SessionNavigation::NextAttention | SessionNavigation::PreviousAttention => {
-                self.attention_target(&ids, current, direction == SessionNavigation::NextAttention)?
+                let forward = direction == SessionNavigation::NextAttention;
+                self.attention_target(&ids, current, forward, attention_includes_active)?
             }
         };
         self.select_session(Some(target))
@@ -158,7 +180,13 @@ impl AppStore {
 
     /// The next or previous session needing attention after `current`, wrapping and excluding the current one; with
     /// no current session the scan starts from the end opposite the direction.
-    fn attention_target(&self, ids: &[Uuid], current: Option<usize>, forward: bool) -> Option<Uuid> {
+    fn attention_target(
+        &self,
+        ids: &[Uuid],
+        current: Option<usize>,
+        forward: bool,
+        includes_active: bool,
+    ) -> Option<Uuid> {
         let count = ids.len().cast_signed();
         let step: isize = if forward { 1 } else { -1 };
         let start = current.map_or(if forward { -1 } else { count }, usize::cast_signed);
@@ -168,7 +196,7 @@ impl AppStore {
             .map(|index| ids[index])
             .find(|&id| {
                 self.session(id)
-                    .is_some_and(|session| session.agent_indicator.status.needs_attention())
+                    .is_some_and(|session| stops_attention_navigation(session, includes_active))
             })
     }
 

@@ -1,5 +1,5 @@
-//! Agent Status: each glyph's color and shape, the blocked sound, which keystroke clears a glyph, auto-follow, and a
-//! reset of the glyph settings (upstream's `AgentStatusSettingsView`).
+//! Agent Status: each glyph's color and shape, the blocked sound, which keystroke clears a glyph, navigation (attention
+//! steps and auto-follow), and a reset of the glyph settings (upstream's `AgentStatusSettingsView`).
 
 use ngterm_core::model::{AgentStatus, StatusReset, StatusShape};
 use ngterm_core::persist::AppSettings;
@@ -43,7 +43,7 @@ pub fn sections(snapshot: &Snapshot) -> Vec<Section> {
             )],
         ),
         Section::new("Typing", vec![status_reset(settings)]),
-        Section::new("Auto-follow", auto_follow(settings)),
+        Section::new("Navigation", navigation(settings)),
         Section::untitled(vec![Item::new(
             "settings-status-reset",
             "",
@@ -110,9 +110,16 @@ fn status_reset(settings: &AppSettings) -> Item {
     )
 }
 
-fn auto_follow(settings: &AppSettings) -> Vec<Item> {
+/// The attention-navigation toggle, then auto-follow.
+fn navigation(settings: &AppSettings) -> Vec<Item> {
     let follow = settings.effective_auto_follow_attention();
     vec![
+        toggle(
+            "settings-attention-includes-active",
+            "Attention navigation includes active sessions",
+            settings.attention_includes_active.unwrap_or(false),
+            |on| change(AgentStatusChange::AttentionIncludesActive(on)),
+        ),
         picker(
             "settings-auto-follow",
             "Auto-follow blocked sessions",
