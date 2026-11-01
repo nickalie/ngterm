@@ -3,7 +3,8 @@
 //! the frontend's web view reports, wherever the page sits now, a session an undoable close holds included.
 //!
 //! A page has no terminal: it never counts as a program (`program_active`), only as a cover (`cover_overlay_active`,
-//! and `cover_overlay_visible` while it is not hidden).
+//! and `cover_overlay_visible` while it is in sight: not hidden, and not held under a pane overlay opened over it,
+//! [`Session::session_slot_shown`]).
 //! Its outcome is the core's ([`crate::html::HtmlPageOutcomes`]): the core registers a page it opens, records a
 //! submit's answer, and settles a page that left every slot as dismissed at the next commit, leaving an answered page
 //! alone; closing a slot records nothing.
@@ -211,6 +212,7 @@ impl AppStore {
                 return Err(HtmlOverlayOpenFailure::PaneNotVisible);
             }
             let generation = session.pane_overlays.next_generation();
+            let holds_cover = session.cover_hold();
             let slot = session.pane_overlays.slot_mut(pane);
             slot.exit_code = None;
             slot.overlay = Some(PaneOverlay {
@@ -222,6 +224,7 @@ impl AppStore {
                 code_file: None,
                 html: Some(overlay),
                 hidden: false,
+                holds_cover,
             });
             session.remote_overlays.clear_failure(Some(pane));
             self.schedule_tree_changed();

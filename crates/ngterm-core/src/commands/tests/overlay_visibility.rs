@@ -357,8 +357,8 @@ fn an_edit_item_refused_by_a_hidden_overlay_rings_the_bell_and_leaves_it_hidden(
     let mut host = super::keymap::Host::new(0);
     let window = host.fixture.window;
     let id = host.fixture.selected().unwrap();
-    store_open(&mut host.fixture, id, None, "less");
     store_open(&mut host.fixture, id, Some(OverlayPane::Left), "htop");
+    store_open(&mut host.fixture, id, None, "less");
     let store = host.fixture.store_mut().unwrap();
     store.set_overlays_hidden(id, None, true).unwrap();
     assert_eq!(
@@ -382,6 +382,30 @@ fn an_edit_item_refused_by_a_hidden_overlay_rings_the_bell_and_leaves_it_hidden(
             .perform_menu_command(window, PaletteCommand::EditHooks),
         ActionEffect::Done
     );
+}
+
+/// Upstream's `beepIfHiddenOverlayRefused` reading `sessionSlotShown` (#831): a session-wide program out of sight under
+/// a pane overlay opened over it refuses the editor with nothing on screen to say why, so the bell rings too.
+#[test]
+fn an_edit_item_refused_by_a_cover_under_a_pane_overlay_rings_the_bell() {
+    let mut host = super::keymap::Host::new(0);
+    let window = host.fixture.window;
+    let id = host.fixture.selected().unwrap();
+    store_open(&mut host.fixture, id, None, "less");
+    store_open(&mut host.fixture, id, Some(OverlayPane::Left), "htop");
+    assert_eq!(
+        host.fixture.store().session(id).unwrap().hidden_overlay_names(),
+        ["session"]
+    );
+    assert_eq!(
+        host.fixture
+            .core
+            .perform_menu_command(window, PaletteCommand::EditKeymap),
+        ActionEffect::Frontend(FrontendAction::AlertBell(window))
+    );
+    let session = host.fixture.store().session(id).unwrap();
+    assert_eq!(session.overlay.command.as_deref(), Some("less"));
+    assert!(!session.overlay.hidden, "the user's own bit is untouched");
 }
 
 #[test]

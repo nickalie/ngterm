@@ -38,6 +38,11 @@ pub struct PaneOverlay {
     /// The overlay keeps running while it covers nothing (upstream's `PaneOverlay.hidden`); a new occupant starts
     /// shown, and the bit moves with the overlay across a swap or a promotion.
     pub hidden: bool,
+    /// The generation of the session-wide program or page this overlay opened over (upstream's
+    /// `PaneOverlay.holdsSessionCover`), which it draws above while shown ([`Session::session_slot_shown`]); `None`
+    /// when the slot held no such cover. A hold names its cover, so it lapses when that cover closes or its slot is
+    /// torn down, and a later cover, opened under a newer generation, is never held by it. It moves with the overlay.
+    pub holds_cover: Option<u64>,
 }
 
 impl PaneOverlay {
@@ -230,7 +235,8 @@ impl Session {
 
 impl AppStore {
     /// Opens an overlay covering `pane` alone (upstream's `openPaneOverlay`): like the session-wide one but always
-    /// full-pane, its `cwd`, `wait` and background its own. Refused for an occupied slot and for a pane the detail
+    /// full-pane, its `cwd`, `wait` and background its own; opened over a session-wide program or page, it holds that
+    /// cover ([`PaneOverlay::holds_cover`]). Refused for an occupied slot and for a pane the detail
     /// pane does not lay out, whose terminal would never come up. `program.size_percent` is ignored.
     ///
     /// # Errors
@@ -250,6 +256,7 @@ impl AppStore {
             return Err(PaneOverlayOpenFailure::PaneNotVisible);
         }
         let generation = session.pane_overlays.next_generation();
+        let holds_cover = session.cover_hold();
         let slot = session.pane_overlays.slot_mut(pane);
         slot.exit_code = None;
         slot.overlay = Some(PaneOverlay {
@@ -261,6 +268,7 @@ impl AppStore {
             code_file: Some(mint_code_file()),
             html: None,
             hidden: false,
+            holds_cover,
         });
         session.remote_overlays.clear_failure(Some(pane));
         self.schedule_tree_changed();

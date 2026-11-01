@@ -230,11 +230,12 @@ impl Core {
             window_args(window, args),
         );
         if !opened {
+            // an overlay out of sight, hidden or under a pane overlay, is the refusal nothing on screen explains
             let hidden = self
                 .library()
                 .store(window)
                 .and_then(|store| store.session(session))
-                .is_some_and(|state| state.overlay_hidden(None));
+                .is_some_and(|state| !state.session_slot_shown());
             return if hidden {
                 frontend(FrontendAction::AlertBell(window))
             } else {

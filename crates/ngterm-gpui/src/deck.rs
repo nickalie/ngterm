@@ -1439,6 +1439,8 @@ fn sync_ask(
         let window = &mut *mount.window;
         cx.new(|cx| AskDialog::new(opening, window, cx))
     };
+    let shaded = session.ask_shades_frame();
+    dialog.update(cx, |dialog, cx| dialog.set_shaded(shaded, cx));
     page.ask = Some(PageAsk {
         dialog,
         scope,

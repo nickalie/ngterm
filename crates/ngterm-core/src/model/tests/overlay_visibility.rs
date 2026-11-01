@@ -23,7 +23,7 @@ const RIGHT: OverlayPane = OverlayPane::Right;
 
 /// A store with one selected session whose split shows, both panes with a terminal and the right one focused
 /// (upstream's `makeFixture`), its outbox drained.
-fn split_store() -> (AppStore, Uuid) {
+pub(super) fn split_store() -> (AppStore, Uuid) {
     let mut store = AppStore::new();
     let ws = store.add_workspace("work");
     let id = add(&mut store, ws, "/tmp");
@@ -35,14 +35,14 @@ fn split_store() -> (AppStore, Uuid) {
     (store, id)
 }
 
-fn program(command: &str) -> OverlayProgram {
+pub(super) fn program(command: &str) -> OverlayProgram {
     OverlayProgram {
         command: command.to_owned(),
         ..OverlayProgram::default()
     }
 }
 
-fn page(path: &str) -> HtmlOverlay {
+pub(super) fn page(path: &str) -> HtmlOverlay {
     HtmlOverlay::new(
         HtmlSource::File {
             path: path.to_owned(),
@@ -52,18 +52,19 @@ fn page(path: &str) -> HtmlOverlay {
     )
 }
 
-/// The session-wide program and both pane overlays (upstream's `openAll`).
+/// Both pane overlays, then the session-wide program, which a pane overlay opened after it would hold (upstream's
+/// `openAll`).
 fn open_all(store: &mut AppStore, id: Uuid) {
-    assert!(store.open_overlay(id, program("less")));
     assert_eq!(store.open_pane_overlay(id, LEFT, program("htop")), Ok(()));
     assert_eq!(store.open_pane_overlay(id, RIGHT, program("top")), Ok(()));
+    assert!(store.open_overlay(id, program("less")));
 }
 
-fn session(store: &AppStore, id: Uuid) -> &Session {
+pub(super) fn session(store: &AppStore, id: Uuid) -> &Session {
     store.session(id).expect("the session exists")
 }
 
-fn names(store: &AppStore, id: Uuid) -> Vec<&'static str> {
+pub(super) fn names(store: &AppStore, id: Uuid) -> Vec<&'static str> {
     session(store, id).hidden_overlay_names()
 }
 
@@ -78,7 +79,7 @@ fn tree_changes(store: &mut AppStore) -> usize {
 }
 
 /// A HUD in the session-wide slot.
-fn open_hud(store: &mut AppStore, id: Uuid, dir: &tempfile::TempDir) {
+pub(super) fn open_hud(store: &mut AppStore, id: Uuid, dir: &tempfile::TempDir) {
     let opening = HudOpening {
         file: dir.path().join("hud"),
         size: HudPanelSize::new(40, 10),
@@ -364,8 +365,8 @@ fn a_pages_own_hide_uses_the_page_scope() {
     let pane_page = page("/tmp/pane.html");
     let page_id = pane_page.id;
     let store = library.store_mut(window).unwrap();
-    assert!(store.open_overlay(id, program("less")));
     assert_eq!(store.open_html_overlay(id, Some(RIGHT), pane_page, None, None), Ok(()));
+    assert!(store.open_overlay(id, program("less")));
     assert!(library.hide_html_overlay(page_id));
     let store = library.store(window).unwrap();
     assert_eq!(names(store, id), ["right"], "a pane page hides its own pane only");
@@ -382,8 +383,8 @@ fn a_session_wide_pages_own_hide_hides_the_session() {
     let shown = page("/tmp/session.html");
     let page_id = shown.id;
     let store = library.store_mut(window).unwrap();
-    assert_eq!(store.open_html_overlay(id, None, shown, None, None), Ok(()));
     assert_eq!(store.open_pane_overlay(id, LEFT, program("htop")), Ok(()));
+    assert_eq!(store.open_html_overlay(id, None, shown, None, None), Ok(()));
     assert!(library.hide_html_overlay(page_id));
     assert_eq!(names(library.store(window).unwrap(), id), ["session", "left"]);
 }
@@ -592,8 +593,8 @@ fn focus_routing_skips_hidden_covers_and_lands_on_the_pane() {
     let (mut store, id) = split_store();
     store.set_split_focus(id, false);
     store.select_session(Some(id));
-    assert!(store.open_overlay(id, program("less")));
     assert_eq!(store.open_pane_overlay(id, LEFT, program("htop")), Ok(()));
+    assert!(store.open_overlay(id, program("less")));
     let active = |store: &AppStore| SurfaceId::active_in(store).map(|surface| surface.surface);
     assert_eq!(active(&store), Some(ZoomSurface::Overlay));
 
@@ -610,11 +611,11 @@ fn focus_routing_skips_hidden_covers_and_lands_on_the_pane() {
 fn a_hidden_page_neither_takes_the_keys_nor_hides_the_terminal_from_font_commands() {
     let (mut store, id) = split_store();
     assert_eq!(
-        store.open_html_overlay(id, None, page("/tmp/p.html"), None, None),
+        store.open_html_overlay(id, Some(RIGHT), page("/tmp/q.html"), None, None),
         Ok(())
     );
     assert_eq!(
-        store.open_html_overlay(id, Some(RIGHT), page("/tmp/q.html"), None, None),
+        store.open_html_overlay(id, None, page("/tmp/p.html"), None, None),
         Ok(())
     );
     let found = session(&store, id);
@@ -647,11 +648,11 @@ fn an_unrealized_hidden_pane_overlay_on_a_rendered_pane_is_kept() {
 #[test]
 fn hidden_overlays_report_hidden_slots_while_occupancy_stays() {
     let (mut store, id) = split_store();
+    assert_eq!(store.open_pane_overlay(id, RIGHT, program("htop")), Ok(()));
     assert_eq!(
         store.open_html_overlay(id, None, page("/tmp/a/p.html"), None, None),
         Ok(())
     );
-    assert_eq!(store.open_pane_overlay(id, RIGHT, program("htop")), Ok(()));
     assert_eq!(
         projection::session_node(session(&store, id), true).hidden_overlays,
         None
@@ -697,8 +698,8 @@ fn a_hidden_overlay_is_neither_the_zoom_target_nor_available() {
     let (mut store, id) = split_store();
     store.select_session(Some(id));
     store.set_split_focus(id, true);
-    assert!(store.open_overlay(id, program("less")));
     assert_eq!(store.open_pane_overlay(id, RIGHT, program("htop")), Ok(()));
+    assert!(store.open_overlay(id, program("less")));
     let target = |surface| SurfaceId { session: id, surface };
     assert_eq!(SurfaceId::active_in(&store), Some(target(ZoomSurface::Overlay)));
 

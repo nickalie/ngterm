@@ -1176,6 +1176,75 @@ fn a_click_on_a_pane_asks_button_answers_without_moving_the_keyboard(cx: &mut Te
     );
 }
 
+/// Whether `session`'s terminal ask dims the region it covers.
+fn ask_shaded(h: &mut Harness<'_>, session: Uuid) -> Option<bool> {
+    h.deck.read_with(h.cx, |deck, cx| {
+        deck.page(session)
+            .and_then(Page::ask)
+            .map(|ask| ask.dialog.read(cx).shaded())
+    })
+}
+
+/// Upstream's 401ff29 on the deck: a pane ask over a shown session-wide program draws no dim wash, which would stop at
+/// the divider, while its pane-sized click layer stays; hiding the program brings the wash back, and a session-wide ask
+/// keeps it throughout.
+#[gpui_kit::test]
+fn a_pane_ask_over_a_shown_session_program_draws_no_wash(cx: &mut TestAppContext) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let session = ids[0];
+    h.dispatch(Command::Session(SessionCmd::Split), session, |_| {});
+    h.until("both panes to start", |h| {
+        h.realized(session, StatusPane::Left) && h.realized(session, StatusPane::Right)
+    });
+    let id = open_terminal_ask_over(&mut h, session, Some("right"));
+    h.turn();
+    assert_eq!(ask_shaded(&mut h, session), Some(true), "no cover: the pane is dimmed");
+
+    h.dispatch(Command::Session(SessionCmd::OverlayOpen), session, |args| {
+        args.command = Some("exec cat".to_owned());
+    });
+    h.turn();
+    assert_eq!(ask_shaded(&mut h, session), Some(false));
+    let scope = h.deck.read_with(h.cx, |deck, _| {
+        deck.page(session).and_then(Page::ask).map(|ask| ask.scope)
+    });
+    assert_eq!(
+        scope,
+        Some(crate::split::AskScope::Pane(Slot::Split)),
+        "the pane-sized click layer stays"
+    );
+    assert!(
+        h.cx.debug_bounds("ask-button-yes").is_some(),
+        "the dialog is still drawn"
+    );
+
+    h.dispatch(Command::Session(SessionCmd::OverlayHide), session, |_| {});
+    h.turn();
+    assert_eq!(
+        ask_shaded(&mut h, session),
+        Some(true),
+        "a hidden program keeps the wash"
+    );
+
+    let cancelled = h.state.core.dispatch(&Request {
+        cmd: Command::Ask(ngterm_proto::command::AskCmd::Cancel),
+        target: Some(id.clone()),
+        args: None,
+    });
+    assert!(cancelled.ok, "{cancelled:?}");
+    h.turn();
+    assert!(ask_result(&mut h, &id).to_lowercase().contains("cancel"));
+    h.dispatch(Command::Session(SessionCmd::OverlayShow), session, |_| {});
+    open_terminal_ask(&mut h, session);
+    h.turn();
+    assert_eq!(
+        ask_shaded(&mut h, session),
+        Some(true),
+        "a session-wide ask keeps the wash"
+    );
+}
+
 #[gpui_kit::test]
 fn a_terminal_ask_on_a_hidden_session_waits_and_shows_once_selected(cx: &mut TestAppContext) {
     let (library, window, ids) = three_sessions();

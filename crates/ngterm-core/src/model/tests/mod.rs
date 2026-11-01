@@ -9,6 +9,7 @@ mod library;
 mod library_attention;
 mod navigation;
 mod organization;
+mod overlay_cover_hold;
 mod overlay_events;
 mod overlay_points;
 mod overlay_visibility;

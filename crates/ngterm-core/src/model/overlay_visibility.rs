@@ -6,9 +6,16 @@
 //! pane overlay's ([`super::PaneOverlay::hidden`]), so a pane's bit follows its overlay across a swap or a promotion.
 //! Closing a slot clears its bit, so a new occupant starts shown. A page shown on the presenting machine has no bit
 //! here: a hide or show asks the presenter, and the page counts by its pending request, else by what the presenter
-//! last reported. Occupancy questions (`overlay`, `paneOverlays`, a
-//! result, the read commands, page lookup, the remote local hold) keep asking the `*_active` predicates; what covers
-//! or owns input asks the `*_visible` ones here.
+//! last reported.
+//!
+//! A pane overlay opened over a session-wide program or page draws above it (upstream's `holdsSessionCover`, #831):
+//! while such a holder is shown on a laid-out pane, the session-wide slot is out of sight
+//! ([`Session::session_slot_shown`]), and the visible predicates, the tree's `hiddenOverlays` and a local page's
+//! `htmlOverlays[].hidden` follow. It is derived, never written into the session-wide bit, which stays the user's, so
+//! a hide/show/toggle round trip keeps the opener on top; a replica page reports its own raw bit to its origin.
+//!
+//! Occupancy questions (`overlay`, `paneOverlays`, a result, the read commands, page lookup, the remote local hold)
+//! keep asking the `*_active` predicates; what covers or owns input asks the `*_visible` ones here.
 
 use uuid::Uuid;
 
@@ -60,35 +67,62 @@ impl OverlayVisibilityFailure {
 }
 
 impl Session {
-    /// [`Session::cover_overlay_active`] minus a hidden occupant: the input-exclusion question (upstream's
+    /// Whether the session-wide occupant is drawn (upstream's `sessionSlotShown`): not hidden by hand, and not under a
+    /// pane overlay opened over it that is shown on a laid-out pane. The session-wide hidden bit stays the user's own.
+    #[must_use]
+    pub fn session_slot_shown(&self) -> bool {
+        !self.overlay.hidden && !self.session_cover_held()
+    }
+
+    /// Whether a pane overlay opened over the session-wide program or page is shown on a laid-out pane, so it draws
+    /// above that cover (upstream's `sessionCoverHeld`). Local presentation only: a replica page reports its own bit.
+    fn session_cover_held(&self) -> bool {
+        let Some(cover) = self.cover_hold() else {
+            return false;
+        };
+        [OverlayPane::Left, OverlayPane::Right].into_iter().any(|pane| {
+            self.pane_overlay(pane)
+                .is_some_and(|overlay| overlay.holds_cover == Some(cover) && !overlay.hidden)
+                && self.renders_overlay_pane(pane)
+        })
+    }
+
+    /// What a pane overlay opened now holds ([`super::PaneOverlay::holds_cover`]): the generation of the session-wide
+    /// program or page, hidden or not; `None` with no such cover (a HUD is none).
+    pub(crate) fn cover_hold(&self) -> Option<u64> {
+        self.cover_overlay_active().then_some(self.overlay.generation)
+    }
+
+    /// [`Session::cover_overlay_active`] minus an occupant out of sight: the input-exclusion question (upstream's
     /// `coverOverlayVisible`).
     #[must_use]
     pub fn cover_overlay_visible(&self) -> bool {
-        self.cover_overlay_active() && !self.overlay.hidden
+        self.cover_overlay_active() && self.session_slot_shown()
     }
 
-    /// [`super::OverlaySlot::program_active`] minus a hidden occupant (upstream's `programOverlayVisible`).
+    /// [`super::OverlaySlot::program_active`] minus an occupant out of sight (upstream's `programOverlayVisible`).
     #[must_use]
     pub fn program_overlay_visible(&self) -> bool {
-        self.overlay.program_active() && !self.overlay.hidden
+        self.overlay.program_active() && self.session_slot_shown()
     }
 
-    /// [`Session::html_overlay_active`] minus a hidden occupant (upstream's `htmlOverlayVisible`).
+    /// [`Session::html_overlay_active`] minus an occupant out of sight (upstream's `htmlOverlayVisible`).
     #[must_use]
     pub fn html_overlay_visible(&self) -> bool {
-        self.html_overlay_active() && !self.overlay.hidden
+        self.html_overlay_active() && self.session_slot_shown()
     }
 
-    /// [`Session::full_overlay_active`] minus a hidden occupant: whether the panes are hidden (upstream's
+    /// [`Session::full_overlay_active`] minus an occupant out of sight: whether the panes are hidden (upstream's
     /// `fullOverlayVisible`).
     #[must_use]
     pub fn full_overlay_visible(&self) -> bool {
-        self.full_overlay_active() && !self.overlay.hidden
+        self.full_overlay_active() && self.session_slot_shown()
     }
 
     /// The cover owning the keyboard now, `None` for the terminal itself (upstream's `visibleCover`). It changes only
     /// when what the user types into changes: a hidden overlay closing or the other pane's overlay toggling leaves it
-    /// alone, and so does a pane overlay under the scratch, which keeps the keyboard.
+    /// alone, unless that overlay keeps the session-wide cover out of sight, and so does a pane overlay under the
+    /// scratch, which keeps the keyboard.
     #[must_use]
     pub fn visible_cover(&self) -> Option<VisibleCover> {
         if self.cover_overlay_visible() {
@@ -106,7 +140,8 @@ impl Session {
         self.pane_overlay(pane).is_some_and(|overlay| !overlay.hidden)
     }
 
-    /// The hidden bit of the slot `pane` addresses, the session-wide one for `None` (upstream's `overlayHidden(_:)`).
+    /// The hidden bit of the slot `pane` addresses, the session-wide one for `None` (upstream's `overlayHidden(_:)`):
+    /// the user's own choice, which a pane overlay holding the session-wide cover leaves alone.
     #[must_use]
     pub fn overlay_hidden(&self, pane: Option<OverlayPane>) -> bool {
         match pane {
@@ -163,14 +198,25 @@ impl Session {
             .collect()
     }
 
-    /// The tree's `hiddenOverlays`: the hidden slots as `session`, `left`, `right`, a page shown on the presenting
+    /// Whether the slot `pane` addresses holds an occupant that is not drawn now (upstream's `overlayOutOfSight`): by
+    /// hand or, for the session-wide slot, under a pane overlay opened over it. What the local read-back reports as
+    /// hidden.
+    #[must_use]
+    pub fn overlay_out_of_sight(&self, pane: Option<OverlayPane>) -> bool {
+        match pane {
+            None => !self.session_slot_shown(),
+            Some(_) => self.overlay_hidden(pane),
+        }
+    }
+
+    /// The tree's `hiddenOverlays`: the slots out of sight as `session`, `left`, `right`, a page shown on the presenting
     /// machine counted as that machine reports it (upstream's `hiddenOverlayNames`).
     #[must_use]
     pub fn hidden_overlay_names(&self) -> Vec<&'static str> {
         let mut hidden: Vec<Option<OverlayPane>> = self
             .hideable_overlay_slots(None)
             .into_iter()
-            .filter(|slot| self.overlay_hidden(*slot))
+            .filter(|slot| self.overlay_out_of_sight(*slot))
             .collect();
         hidden.extend(
             self.remote_page_slots(None)

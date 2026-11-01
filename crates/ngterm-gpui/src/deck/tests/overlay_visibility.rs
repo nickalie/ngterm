@@ -184,6 +184,65 @@ fn a_hidden_pane_overlay_leaves_its_pane_clickable_and_typable(cx: &mut TestAppC
     assert!(!h.shown(session, &right));
 }
 
+/// Upstream's `testAPanePageOverAProgramHidesItAndClosingThePageBringsItBack` (#831), with a program over the pane: the
+/// session-wide program it opened over stays mounted out of sight while the pane overlay shows on top with the
+/// keyboard, a toggle round trip keeps that order, and the close brings the same program back with the keyboard.
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "runs a POSIX sh command line as its overlay program")]
+fn a_pane_overlay_opened_over_a_program_draws_above_it_until_it_closes(cx: &mut TestAppContext) {
+    let (mut h, session, _) = overlay_harness(cx);
+    h.dispatch(Command::Session(SessionCmd::OverlayOpen), session, |args| {
+        args.command = Some("exec cat".to_owned());
+    });
+    h.until("the program to start", |h| program_realized(h, session));
+    let shared = program_shared(&mut h, session);
+    assert_eq!(program(&mut h, session), Some((true, true)));
+
+    open_pane_overlay(&mut h, session, OverlayPane::Left);
+    assert_eq!(hidden(&h, session), ["session"]);
+    assert!(!h.session(session).overlay.hidden, "the user's own bit is untouched");
+    assert_eq!(
+        program(&mut h, session),
+        Some((false, false)),
+        "still mounted, neither shown nor holding the keyboard"
+    );
+    let (placement, frame, _) = program_layout(&mut h, session);
+    assert!(
+        placement.is_none() && frame.is_some(),
+        "laid out at its frame, unplaced"
+    );
+    let overlays = pane_overlays(&mut h, session);
+    let [(generation, true, true)] = overlays[..] else {
+        panic!("the pane overlay shows on top with the keyboard: {overlays:?}");
+    };
+
+    visibility(&mut h, session, SessionCmd::OverlayToggle, None);
+    assert_eq!(hidden(&h, session), ["session", "left"]);
+    visibility(&mut h, session, SessionCmd::OverlayToggle, None);
+    assert_eq!(hidden(&h, session), ["session"]);
+    assert_eq!(program(&mut h, session), Some((false, false)));
+    assert_eq!(
+        pane_overlays(&mut h, session),
+        [(generation, true, true)],
+        "a toggle round trip leaves the pane overlay above the program"
+    );
+
+    h.dispatch(Command::Session(SessionCmd::OverlayClose), session, |args| {
+        args.pane = Some("left".to_owned());
+    });
+    h.turn();
+    assert!(hidden(&h, session).is_empty());
+    assert_eq!(
+        program(&mut h, session),
+        Some((true, true)),
+        "the program comes back with the keyboard"
+    );
+    assert!(
+        Rc::ptr_eq(&shared, &program_shared(&mut h, session)),
+        "the same terminal, never rebuilt"
+    );
+}
+
 #[gpui_kit::test]
 #[cfg_attr(windows, ignore = "runs a POSIX sh command line as its overlay program")]
 fn the_keyboard_moves_only_when_the_visible_cover_changes(cx: &mut TestAppContext) {

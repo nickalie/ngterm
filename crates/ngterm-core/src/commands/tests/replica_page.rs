@@ -578,11 +578,8 @@ fn a_local_page_is_no_replica() {
 
 // MARK: - the origin's commands and the state mirrored back
 
-/// Upstream's `hidingTheReplicaLeavesItsNeighbourAlone` and `testAnOriginCommandIsAppliedAndReportedWithItsSequence`.
-#[test]
-fn hiding_the_replica_leaves_its_neighbour_alone_and_reports_the_sequence() {
-    let mut replica = Replica::new();
-    replica.request(Replica::page(Replica::url("https://example.com/")));
+/// Opens `top` over the right pane of the replica's session, here.
+fn open_local_pane_overlay(replica: &mut Replica) {
     let id = replica.id();
     replica
         .viewer
@@ -598,6 +595,15 @@ fn hiding_the_replica_leaves_its_neighbour_alone_and_reports_the_sequence() {
             },
         )
         .unwrap();
+}
+
+/// Upstream's `hidingTheReplicaLeavesItsNeighbourAlone` and `testAnOriginCommandIsAppliedAndReportedWithItsSequence`:
+/// the pane overlay opens first, so it does not hold the page.
+#[test]
+fn hiding_the_replica_leaves_its_neighbour_alone_and_reports_the_sequence() {
+    let mut replica = Replica::new();
+    open_local_pane_overlay(&mut replica);
+    replica.request(Replica::page(Replica::url("https://example.com/")));
     replica.commit();
 
     let changed = replica.origin_frame("page.command", json!({"page": ORIGIN, "seq": 5, "action": "hide"}));
@@ -610,6 +616,58 @@ fn hiding_the_replica_leaves_its_neighbour_alone_and_reports_the_sequence() {
     assert_eq!(states[0]["hidden"], json!(true));
     assert_eq!(states[0]["appliedSeq"], json!(5));
     assert_eq!(states[0]["page"], json!(ORIGIN));
+}
+
+/// Upstream's `aLocalPaneOpenerOverTheReplicaLeavesItsReportedStateAlone`: a pane overlay opened here over the replica
+/// draws above it, while the origin keeps reading the page's own bit, so nothing is reported.
+#[test]
+fn a_local_pane_opener_over_the_replica_leaves_its_reported_state_alone() {
+    let mut replica = Replica::new();
+    replica.request(Replica::page(Replica::url("https://example.com/")));
+    replica.commit();
+    let local = replica.local();
+
+    open_local_pane_overlay(&mut replica);
+    replica.commit();
+
+    assert!(!replica.session().html_overlay_visible());
+    assert!(replica.states().is_empty(), "no visibility change reaches the origin");
+    // the next report the page makes still carries its own bit
+    let core = &mut replica.viewer.fixture.core;
+    core.set_html_load_state(local, HtmlLoadState::Loaded, None);
+    replica.commit();
+    let states = replica.states();
+    assert_eq!(states.len(), 1, "{states:?}");
+    assert_eq!(states[0]["hidden"], json!(false));
+}
+
+/// Upstream's `anOriginHideOutlivesALocalPaneOpener`.
+#[test]
+fn an_origin_hide_outlives_a_local_pane_opener() {
+    let mut replica = Replica::new();
+    replica.request(Replica::page(Replica::url("https://example.com/")));
+    open_local_pane_overlay(&mut replica);
+    replica.commit();
+
+    replica.origin_frame("page.command", json!({"page": ORIGIN, "seq": 1, "action": "hide"}));
+    let id = replica.id();
+    assert!(
+        replica
+            .viewer
+            .fixture
+            .store_mut()
+            .unwrap()
+            .close_pane_overlay(id, OverlayPane::Right)
+    );
+    replica.commit();
+
+    assert!(!replica.session().html_overlay_visible());
+    let states = replica.states();
+    assert_eq!(
+        states.last().map(|state| state["hidden"].clone()),
+        Some(json!(true)),
+        "{states:?}"
+    );
 }
 
 /// Upstream's `aLocalHideOfTheReplicaIsReported`.

@@ -461,6 +461,7 @@ mod tests {
             code_file: None,
             html: None,
             hidden: false,
+            holds_cover: None,
         }
     }
 

@@ -148,7 +148,7 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
 
 /// The overlay read-back: `overlay` and its size for a caller's program, `hud` for a HUD, never both; `paneOverlays`
 /// names the panes covered by their own overlay, omitted when neither is. Both report occupancy, a hidden overlay
-/// included; `hiddenOverlays` names the hidden slots.
+/// included; `hiddenOverlays` names the slots out of sight, a session-wide one under a pane overlay opened over it too.
 fn apply_overlay(node: &mut ControlSessionNode, session: &Session) {
     let slot = &session.overlay;
     node.overlay = session.cover_overlay_active();
@@ -193,7 +193,7 @@ fn html_overlay_nodes(session: &Session) -> Option<Vec<ControlHtmlOverlayNode>> 
             let name = slot.map(OverlayPane::wire_name);
             if let Some((_, page)) = local.iter().find(|(pane, _)| *pane == slot) {
                 let mut node = html_overlay_node(name, page);
-                node.hidden = session.overlay_hidden(slot).then_some(true);
+                node.hidden = session.overlay_out_of_sight(slot).then_some(true);
                 return Some(node);
             }
             let remote = session.remote_overlays().slot(slot)?.page.as_ref()?;

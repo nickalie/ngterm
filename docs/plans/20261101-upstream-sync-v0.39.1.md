@@ -490,21 +490,21 @@ program/page), `::test_a_session_page_under_a_pane_opener_reads_back_hidden`,
 `::test_a_cover_opened_after_the_pane_overlay_stays_on_top`, `::test_a_hand_hidden_cover_stays_hidden_after_the_pane_closes`,
 `::test_closing_the_holding_split_brings_the_cover_back`.
 
-- [ ] a pane program or page opened while a session-wide program or page is up holds the cover; held means a
+- [x] a pane program or page opened while a session-wide program or page is up holds the cover; held means a
       shown pane overlay with the hold on a laid-out pane; `session_slot_shown() = !hidden && !held`; `overlay.hidden`
       stays the user's bit
-- [ ] the visibility predicates, `hiddenOverlays` ("session" while held) and the session page's `htmlOverlays[].hidden`
+- [x] the visibility predicates, `hiddenOverlays` ("session" while held) and the session page's `htmlOverlays[].hidden`
       follow it; holds drop when the cover closes or its slot is torn down, so a replacement cover is not held by an
       older opener; a hide/show/toggle round trip keeps the opener on top; a replica's reported `hidden` stays the raw
       bit
-- [ ] the GPUI deck keeps a held cover mounted hidden and draws the pane overlay on top
-- [ ] a pane-anchored ask over a shown session program or page draws no dim wash (its pane-sized click layer
+- [x] the GPUI deck keeps a held cover mounted hidden and draws the pane overlay on top
+- [x] a pane-anchored ask over a shown session program or page draws no dim wash (its pane-sized click layer
       stays); a session ask, a hidden or held cover and a HUD keep the wash
-- [ ] scan the other ngterm-core and ngterm-gpui tests that open a cover before a pane overlay and fix their order
-- [ ] write tests: the Swift cases above (13 visibility cases, 2 replica cases, 6 ask shade cases plus a held-cover
+- [x] scan the other ngterm-core and ngterm-gpui tests that open a cover before a pane overlay and fix their order
+- [x] write tests: the Swift cases above (13 visibility cases, 2 replica cases, 6 ask shade cases plus a held-cover
       one, the gpui deck and ask layer)
-- [ ] write tests: the conformance tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] write tests: the conformance tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet
 
 ### Task 11: The page strip's Hide only with the Hide overlays button on (c43bf01); the undo chord on a focused page (00fc83d)
 

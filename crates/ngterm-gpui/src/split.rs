@@ -113,8 +113,9 @@ pub struct OverlayPlan {
     pub hidden: HiddenOverlays,
 }
 
-/// The hidden overlays a page keeps mounted (upstream's hosts at opacity 0): the program's frame, and each laid-out
-/// pane's hidden overlay by generation. They take no keyboard, no pointer and no wash.
+/// The hidden overlays a page keeps mounted (upstream's hosts at opacity 0): the program's frame, hidden by hand or held
+/// under a pane overlay opened over it, and each laid-out pane's hidden overlay by generation. They take no keyboard,
+/// no pointer and no wash.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct HiddenOverlays {
     pub program: Option<ProgramShow>,
@@ -138,7 +139,8 @@ impl OverlayPlan {
     /// the program shows at its size, and each pane laid out, uncovered, shows its own overlay. A covering program
     /// holds the keyboard, else the focused pane's overlay does unless the scratch covers it. A page in the slot is laid
     /// out as a program is. Only the visible layer shows (upstream's `coverOverlayVisible` and `paneOverlayVisible`):
-    /// a hidden program or pane overlay goes to [`OverlayPlan::hidden`], and the terminal under it takes the keyboard.
+    /// a hidden program or pane overlay goes to [`OverlayPlan::hidden`], and the terminal under it takes the keyboard; a
+    /// program held under a pane overlay opened over it goes there too, and that pane overlay shows with the keyboard.
     fn of(session: &Session, zoomed: Option<ZoomSurface>, panes: Panes, scratch_covers: bool) -> Self {
         let slot = &session.overlay;
         let program = session.cover_overlay_visible().then_some(slot.generation);
@@ -219,11 +221,13 @@ impl HiddenOverlays {
         }
     }
 
-    /// The hidden overlays of `session` laid out by `panes`: the program at its `sizing` in the page, and each laid-out
-    /// pane's hidden overlay (a hidden pane overlay under a shown program or the scratch keeps its pane's frame too).
+    /// The hidden overlays of `session` laid out by `panes`: the program at its `sizing` in the page while it is out of
+    /// sight (upstream's `sessionSlotShown`: hidden by hand, or under a pane overlay opened over it, which then shows on
+    /// top), and each laid-out pane's hidden overlay (a hidden pane overlay under a shown program or the scratch keeps its
+    /// pane's frame too).
     fn of(session: &Session, panes: Panes, sizing: Option<PanelSizing>) -> Self {
         let slot = &session.overlay;
-        let program = (session.cover_overlay_active() && slot.hidden).then_some(ProgramShow {
+        let program = (session.cover_overlay_active() && !session.session_slot_shown()).then_some(ProgramShow {
             generation: slot.generation,
             sizing,
         });

@@ -1096,8 +1096,9 @@ def _left(ctl, cmd, sid, text, **args):
 def test_hide_show_and_toggle_keep_the_overlays_running(ctl, lines):
     sid = _split(ctl)
     marker = f"HIDDEN-{uuid.uuid4().hex[:8].upper()}"
-    _open(ctl, sid, lines.then(f"echo {marker}", lines.hold()))
+    # the pane overlay first: one opened over the session's program would draw above it, out of sight
     _open(ctl, sid, lines.hold(), pane="right")
+    _open(ctl, sid, lines.then(f"echo {marker}", lines.hold()))
     _overlay_text(ctl, sid, marker)
 
     _left(ctl, "session.overlay.hide", sid, "hidden")
@@ -1183,6 +1184,104 @@ def test_a_hidden_page_reads_back_hidden(ctl):
     (page,) = _node(ctl, sid)["htmlOverlays"]
     assert page["id"] == page_id
     assert_absent(page, "hidden")
+    _closed(ctl, sid)
+
+
+# -- a pane overlay over a session-wide one
+
+
+def _occupy(ctl, sid, lines, kind, **args):
+    """A program or a static page in the slot `args` address."""
+    if kind == "page":
+        _open_page(ctl, sid, **args)
+    else:
+        _open(ctl, sid, lines.hold(), **args)
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers(
+    "session.overlay.open",
+    "session.overlay.toggle",
+    "session.overlay.close",
+    "field:tree.session.hiddenOverlays",
+    "field:tree.session.overlay",
+    "field:tree.session.paneOverlays",
+)
+@pytest.mark.parametrize("opener", ["program", "page"])
+@pytest.mark.parametrize("cover", ["program", "page"])
+def test_a_pane_overlay_opened_over_a_session_overlay_draws_above_it(ctl, lines, cover, opener):
+    """A pane overlay opened while a session-wide program or page is up draws above it: the session overlay keeps
+    running out of sight, reported in `hiddenOverlays`, until the pane overlay closes; a toggle round trip keeps the
+    pane overlay on top."""
+    sid = _split(ctl)
+    _occupy(ctl, sid, lines, cover)
+    _occupy(ctl, sid, lines, opener, pane="left")
+    node = _node(ctl, sid)
+    assert node["hiddenOverlays"] == ["session"]
+    assert node["overlay"] is True and node["paneOverlays"] == ["left"]
+
+    _left(ctl, "session.overlay.toggle", sid, "hidden")
+    assert _node(ctl, sid)["hiddenOverlays"] == ["session", "left"]
+    _left(ctl, "session.overlay.toggle", sid, "shown")
+    assert _node(ctl, sid)["hiddenOverlays"] == ["session"]
+
+    _closed(ctl, sid, pane="left")
+    assert_absent(_node(ctl, sid), "hiddenOverlays")
+    _closed(ctl, sid)
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.overlay.open", "field:tree.session.htmlOverlays", "field:tree.session.hiddenOverlays")
+def test_a_session_page_under_a_pane_opener_reads_back_hidden(ctl, lines):
+    sid = _split(ctl)
+    _, title, page_id = _open_page(ctl, sid)
+    _loaded(ctl, sid, title)
+    _open(ctl, sid, lines.hold(), pane="right")
+    (page,) = _node(ctl, sid)["htmlOverlays"]
+    assert page["id"] == page_id and page["hidden"] is True
+    _closed(ctl, sid, pane="right")
+    (page,) = _node(ctl, sid)["htmlOverlays"]
+    assert_absent(page, "hidden")
+    _closed(ctl, sid)
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.overlay.open", "field:tree.session.hiddenOverlays")
+def test_a_cover_opened_after_the_pane_overlay_stays_on_top(ctl, lines):
+    sid = _split(ctl)
+    _open(ctl, sid, lines.hold(), pane="left")
+    _open(ctl, sid, lines.hold())
+    node = _node(ctl, sid)
+    assert node["overlay"] is True and node["paneOverlays"] == ["left"]
+    assert_absent(node, "hiddenOverlays")
+    _closed(ctl, sid)
+    _closed(ctl, sid, pane="left")
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.overlay.hide", "session.overlay.close", "field:tree.session.hiddenOverlays")
+def test_a_hand_hidden_cover_stays_hidden_after_the_pane_closes(ctl, lines):
+    sid = _split(ctl)
+    _open(ctl, sid, lines.hold())
+    _left(ctl, "session.overlay.hide", sid, "hidden")
+    _open(ctl, sid, lines.hold(), pane="left")
+    _closed(ctl, sid, pane="left")
+    assert _node(ctl, sid)["hiddenOverlays"] == ["session"]
+    _closed(ctl, sid)
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.split.close", "field:tree.session.hiddenOverlays", "field:tree.session.paneOverlays")
+def test_closing_the_holding_split_brings_the_cover_back(ctl, lines):
+    sid = _split(ctl)
+    _open(ctl, sid, lines.hold())
+    _open(ctl, sid, lines.hold(), pane="right")
+    assert _node(ctl, sid)["hiddenOverlays"] == ["session"]
+    assert assert_ok(ctl.request("session.split.close", sid))["id"] == sid
+    node = _node(ctl, sid)
+    assert node["split"] is False
+    assert_absent(node, "hasSplit", "paneOverlays", "hiddenOverlays")
+    assert node["overlay"] is True
     _closed(ctl, sid)
 
 

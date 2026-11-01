@@ -238,6 +238,14 @@ impl Session {
             .and_then(|ask| ask.pane_identity)
             .and_then(|identity| self.pane_role_for_identity(identity))
     }
+
+    /// Whether the ask shades the frame it covers (upstream's `askShadesFrame`): a pane ask leaves a shown session-wide
+    /// program or page unshaded, as its shade would stop at the divider and split one cover into two tones. A
+    /// session-wide ask, and a pane ask over no cover, a hidden or held one, or a HUD, keep the shade.
+    #[must_use]
+    pub fn ask_shades_frame(&self) -> bool {
+        self.ask.as_ref().and_then(|ask| ask.pane_identity).is_none() || !self.cover_overlay_visible()
+    }
 }
 
 impl AppStore {

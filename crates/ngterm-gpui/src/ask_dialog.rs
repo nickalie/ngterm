@@ -9,18 +9,20 @@
 //!   terminal area or the session or pane it is anchored to, as a native rounded panel with native buttons, while the
 //!   rest of the window takes no clicks.
 //!
-//! Either way a dim layer covers the anchor and the panel is centered in it ([`crate::modal`]): the title, the message,
-//! the form if the ask has one ([`form`]: a text field or editing area, or a radio or checkbox list with an optional
-//! free-form row) and a row of equal-width buttons that falls back to a column when the row does not fit, aligned as
-//! asked. The keyboard follows [`AskNavigation`]: Tab, Right and Down move forward, Shift+Tab, Left and Up back, Return
-//! answers with the highlighted button, a button's hotkey letter answers with it, Escape dismisses (`escaped`); a key
-//! with Ctrl, Alt or Super goes on to the window's key monitor. A choice list's Up and Down move its cursor instead and
-//! Space picks or flips the cursor's row. Content taller than its anchor scrolls, and the highlighted button is kept in
-//! view ([`reveal_offset`]); around a form the title and buttons stay put while the form's region scrolls, unless even
-//! they do not fit, when the whole panel scrolls. Answers go to the core as main-loop tasks, a button answering with
-//! the owner's draft ([`ngterm_core::model::AskDraft`], which the dialog mirrors and edits through the core, so hiding
-//! and remounting keeps it); a stale id is ignored there. Element ids are upstream's accessibility ids: `ask-dialog`,
-//! `ask-title`, `ask-message`, `ask-button-<id>` and the form's.
+//! Either way a dim layer covers the anchor and the panel is centered in it ([`crate::modal`]), except that a pane ask
+//! over a shown session-wide program or page leaves it unshaded, as a pane-sized wash would split that one cover into
+//! two tones at the divider (upstream's `askShadesFrame`, [`AskDialog::set_shaded`]); its pane-sized click layer stays.
+//! Inside it: the title, the message, the form if the ask has one ([`form`]: a text field or editing area, or a radio
+//! or checkbox list with an optional free-form row) and a row of equal-width buttons that falls back to a column when
+//! the row does not fit, aligned as asked. The keyboard follows [`AskNavigation`]: Tab, Right and Down move forward,
+//! Shift+Tab, Left and Up back, Return answers with the highlighted button, a button's hotkey letter answers with it,
+//! Escape dismisses (`escaped`); a key with Ctrl, Alt or Super goes on to the window's key monitor. A choice list's Up
+//! and Down move its cursor instead and Space picks or flips the cursor's row. Content taller than its anchor scrolls,
+//! and the highlighted button is kept in view ([`reveal_offset`]); around a form the title and buttons stay put while
+//! the form's region scrolls, unless even they do not fit, when the whole panel scrolls. Answers go to the core as
+//! main-loop tasks, a button answering with the owner's draft ([`ngterm_core::model::AskDraft`], which the dialog
+//! mirrors and edits through the core, so hiding and remounting keeps it); a stale id is ignored there. Element ids are
+//! upstream's accessibility ids: `ask-dialog`, `ask-title`, `ask-message`, `ask-button-<id>` and the form's.
 //!
 //! The dialog takes the keyboard when it is allowed to (upstream's `wantsFocus`, [`wants_focus`]): a GUI ask as it
 //! opens, a terminal ask while its session is shown and its window holds no picker or GUI ask, the quick terminal is
@@ -406,6 +408,8 @@ pub struct AskDialog {
     fit: Rc<FormFit>,
     /// An answer went out: later keys, edits and clicks do nothing.
     done: bool,
+    /// The layer dims the anchor (upstream's `AskDialogView.shaded`); only a terminal ask ever drops it.
+    shaded: bool,
     poster: Poster,
     _editor_events: Option<[Subscription; 2]>,
 }
@@ -464,6 +468,7 @@ impl AskDialog {
             reveal_row: Rc::new(Cell::new(true)),
             fit: Rc::default(),
             done: false,
+            shaded: true,
             poster,
             _editor_events: editor_events,
         }
@@ -521,6 +526,20 @@ impl AskDialog {
     #[must_use]
     pub fn highlighted(&self) -> Option<usize> {
         self.navigation.highlighted()
+    }
+
+    /// Whether the layer dims the anchor: a terminal ask follows [`ngterm_core::model::Session::ask_shades_frame`].
+    pub fn set_shaded(&mut self, shaded: bool, cx: &mut Context<Self>) {
+        if self.shaded != shaded {
+            self.shaded = shaded;
+            cx.notify();
+        }
+    }
+
+    /// Whether the layer dims the anchor.
+    #[must_use]
+    pub fn shaded(&self) -> bool {
+        self.shaded
     }
 
     /// Takes a new look (the terminal's font or colors changed).
@@ -1146,7 +1165,7 @@ impl Render for AskDialog {
             .size_full()
             .relative()
             .occlude()
-            .bg(modal::dim())
+            .when(self.shaded, |layer| layer.bg(modal::dim()))
             .flex()
             .items_center()
             .justify_center()

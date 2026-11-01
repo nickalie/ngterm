@@ -204,6 +204,7 @@ pub(crate) fn pane_overlay(session: &mut Session, pane: OverlayPane, generation:
         code_file: None,
         html: None,
         hidden: false,
+        holds_cover: None,
     });
 }
 
@@ -271,6 +272,52 @@ fn a_floating_program_leaves_the_panes_lit_but_holds_the_keyboard() {
         Some(3),
         "a pane overlay shows beside it"
     );
+}
+
+/// Upstream's #831 on the deck: a pane overlay opened over a full or floating program shows on top with the keyboard,
+/// the program kept mounted, hidden, at its frame; hiding the pane overlay brings the program back.
+#[test]
+fn a_held_program_stays_mounted_hidden_under_the_pane_overlay_opened_over_it() {
+    for size_percent in [None, Some(40)] {
+        let mut held = session(Some(split(true, false)), false);
+        program(&mut held, size_percent);
+        pane_overlay(&mut held, OverlayPane::Left, 3);
+        let cover = held.overlay.generation;
+        held.pane_overlays
+            .slot_mut(OverlayPane::Left)
+            .overlay
+            .as_mut()
+            .unwrap()
+            .holds_cover = Some(cover);
+        let plan = PanePlan::layout(&held, None);
+        assert_eq!(plan.overlays.program, None, "the program is out of sight");
+        assert!(!plan.overlays.covers && !plan.backdrop(), "no cover and no backdrop");
+        assert_eq!(
+            plan.overlays.hidden.program,
+            Some(ProgramShow {
+                generation: cover,
+                sizing: size_percent.map(PanelSizing::percent)
+            }),
+            "kept mounted at its frame"
+        );
+        assert_eq!(
+            plan.overlays.pane(Slot::Primary),
+            Some(3),
+            "the pane overlay shows on top"
+        );
+        assert_eq!(plan.overlays.focus, Some(OverlayFocus::Pane(Slot::Primary)));
+
+        held.pane_overlays
+            .slot_mut(OverlayPane::Left)
+            .overlay
+            .as_mut()
+            .unwrap()
+            .hidden = true;
+        let plan = PanePlan::layout(&held, None);
+        assert_eq!(plan.overlays.program.map(|program| program.generation), Some(cover));
+        assert_eq!(plan.overlays.hidden.program, None);
+        assert_eq!(plan.overlays.focus, Some(OverlayFocus::Program));
+    }
 }
 
 #[test]
