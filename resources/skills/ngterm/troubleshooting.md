@@ -305,6 +305,27 @@ disconnects the CLI sessions attached to it. A daemon-backed conversation can st
 exits: if `codex --no-daemon resume <id>` shows "This conversation is open in another app", stop the
 shared daemon and press R to retry.
 
+### "Claude Code background sessions have no status"
+
+A session started with `claude --bg` runs under Claude Code's supervisor, which does not pass the
+launching pane's `NGTERM_*` variables, so its status hooks find no `NGTERM_SESSION_ID` and exit quietly.
+`--settings` carries over into a background session and its hooks inherit the `env` block, so pass the
+variables there. With the hooks installed (Help ▸ Install Agent Status Hooks…), launch from the pane that
+should show the status:
+
+```bash
+cbg() {
+  claude --bg --settings "$(jq -cn \
+    --arg s "$NGTERM_SESSION_ID" --arg k "$NGTERM_SOCKET" \
+    --arg p "$NGTERM_PANE" --arg i "$NGTERM_PANE_ID" \
+    '{env:{NGTERM_SESSION_ID:$s,NGTERM_SOCKET:$k,NGTERM_PANE:$p,NGTERM_PANE_ID:$i}}')" "$@"
+}
+cbg "your prompt"
+```
+
+The status stays with the launching pane; `claude attach` from another pane does not move it. Verified
+hook routing with Claude Code 2.1.311.
+
 ### "Claude Code's question/permission prompt is unresponsive after switching apps"
 
 Known upstream Claude Code bug, NOT ngterm. Do not file an ngterm issue for it. While Claude Code shows
@@ -362,7 +383,8 @@ and only inside that program. Ghostty.app behaves the same. It is per-program, n
 that never enables mouse reporting keeps links working. Workaround: hold shift too (⌘⇧-hover, ⌘⇧-click).
 A program can claim shift via `XTSHIFTESCAPE`, so `mouse-shift-capture = never` in
 `~/.config/ngterm/ghostty.conf` makes shift always win; `mouse-reporting = false` there turns reporting
-off for every program, trading in-program mouse support for always-on selection and links.
+off for every program, trading in-program mouse support for always-on selection and links: ngterm finds links itself and follows that
+setting, so ⌘ alone (ctrl on Linux and Windows) opens them again.
 
 ## Reporting: decide bug vs unsupported FIRST
 

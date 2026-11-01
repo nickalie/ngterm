@@ -13,7 +13,7 @@
 //! agents' own configs live where upstream puts them.
 //!
 //! The payloads under the repository's `resources/` are upstream v0.39.1's `agterm/Resources/agent-status` and
-//! v0.38.1's `plugins/agterm/skills/agterm` (MIT, `resources/LICENSE.upstream`), at `resources/agent-status` and
+//! `plugins/agterm/skills/agterm` (MIT, `resources/LICENSE.upstream`), at `resources/agent-status` and
 //! `resources/skills/ngterm` (the skill's directory renamed with the skill), with these deviations:
 //!
 //! - the Codex adapter reads the hook payload (the Stop's `last_assistant_message`, and the null `transcript_path` of
@@ -55,8 +55,11 @@
 //!   translate a fetched recipe's agterm names before installing it: `0004-ngterm-identity.patch`), and its
 //!   `show-image.sh` passes the pane's `NGTERM_SOCKET` through `--socket` (`0006-show-image-socket.patch`), and on
 //!   Windows, whose pseudoconsole drops the kitty graphics escapes, it hands over to a PowerShell form,
-//!   `show-image.ps1`, which shows the image in a page overlay (`0008-show-image-windows.patch`): all are patches over
-//!   upstream's tree (`build/patches/skill-ngterm`).
+//!   `show-image.ps1`, which shows the image in a page overlay (`0008-show-image-windows.patch`), and where v0.39's
+//!   text names macOS behavior this build has otherwise it says what ngterm does (the row tints and the link browser
+//!   chord on Linux and Windows, the companion items in the File menu, no Windows far side for a remote attach, and
+//!   links with `mouse-reporting = false`: `0009-other-platforms.patch`): all are patches over upstream's tree
+//!   (`build/patches/skill-ngterm`).
 
 pub mod cli;
 pub mod files;

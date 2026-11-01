@@ -1,0 +1,55 @@
+Upstream's v0.39.1 skill still says a Live sessions `session new --command` falls back to the persistent shell when the
+command exits and that `--wait` adds no hold prompt. Upstream's own #840 reversed that (CHANGELOG, "Behavior change"):
+the pane's creation command ends the pane, as outside Live, and `--wait` holds its final output; a captured command's
+replay after a clean quit and `session restart --command` still return to the shell. This build does the same
+(`ngterm_core::restore::spawn_plan::resolve_live_seed`, `Creation::EndingPane`; conformance `test_zmx.py`,
+`test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wait`), so the text says so.
+Applied after 0009-other-platforms.patch.
+
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -195,11 +195,12 @@
+   --command "zsh -lc 'claude \"\$(cat ~/brief.md)\"'"   # GUI PATH: wrap a non-default binary
+ ```
+ 
+-In Fresh shells and Re-run commands modes, the session closes when this command exits unless `--wait` holds
+-the final output. In Live sessions mode the command is a create-only live-session payload, which bypasses the 1,024-byte
+-PTY input cap. A surviving daemon ignores the payload; a new daemon runs it, then starts the persistent shell.
+-The shell stays open after it exits and `--wait` adds no hold prompt. After a clean quit, a missing daemon
+-replays the captured running command inside a new persistent shell. The exclusions above start a fresh shell.
++In every mode the session closes when this command exits unless `--wait` holds the final output, so pass
++`--wait` for a finite build or test whose output you mean to read. In Live sessions mode the command is a create-only
++live-session payload, which bypasses the 1,024-byte PTY input cap. A surviving daemon ignores the payload; a new
++daemon runs it, and the pane ends with it. After a clean quit, a missing daemon replays the captured running command
++inside a new persistent shell, which stays open after it exits, as after `session restart --command`. The exclusions
++above start a fresh shell.
+ 
+ `session type` drives an ALREADY-RUNNING program — it is not a launcher. Its keystrokes land in a line
+ buffer you do not own: a newline submits (a multi-line brief becomes N premature Enters), and the user
+--- a/reference.md
++++ b/reference.md
+@@ -471,18 +471,18 @@
+   Wrap in a login shell for both — `--command "zsh -lc 'htop'"` — or give an absolute path
+   (`/opt/homebrew/bin/htop`). All of that describes Fresh shells and Re-run commands. In Live sessions
+   mode the command is instead a create-only live-session payload the persistent shell runs as a login shell, so
+-  the line uses that shell's syntax (zsh, fish, bash or PowerShell), shell operators are interpreted, the `PATH` is that shell's rather than the launchd default, and the
+-  session stays open after the command exits.
++  the line uses that shell's syntax (zsh, fish, bash or PowerShell), shell operators are interpreted, and the `PATH` is that shell's rather than the launchd default; the
++  session still closes when the command exits.
+   `--wait` (only with `--command`, else an error) HOLDS the session open after the command exits —
+   showing libghostty's press-any-key prompt with the final output intact instead of closing immediately —
+   so you can read a build/test/deploy's final output or an early failure that would otherwise flash and
+   vanish. In Re-run commands mode it persists across restart (unlike an overlay's live-only `--wait`),
+   so a restored command session that starts its command again also holds; read it back on `tree`'s
+   `commandWait`. Live sessions mode passes the command as a create-only live-session payload, which bypasses the
+-  1,024-byte PTY input cap. A surviving daemon ignores the payload; a new daemon runs it, then starts the persistent
+-  shell. The shell stays open when it exits, and `--wait` adds no hold prompt. After a clean quit, a missing daemon
+-  is recreated running whatever that pane's foreground command was; if the command had already exited, or the
+-  quit never happened, the pane comes back as a fresh shell.
++  1,024-byte PTY input cap. A surviving daemon ignores the payload; a new daemon runs it, and the pane ends with it,
++  held by `--wait` as in the other modes. After a clean quit, a missing daemon is recreated running whatever that
++  pane's foreground command was, inside a persistent shell that stays open after it exits (as after `session restart
++  --command`); if the command had already exited, or the quit never happened, the pane comes back as a fresh shell.
+   The command is persisted (`SessionSnapshot.initialCommand`) and starts again on restore in Re-run commands
+   mode; a captured foreground takes precedence over it. Fresh shells mode restores a plain shell. `--name`
+   seeds the session's custom name (the sidebar label; blank/omitted leaves the auto basename),

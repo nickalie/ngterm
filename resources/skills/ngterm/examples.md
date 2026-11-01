@@ -279,6 +279,9 @@ ngtermctl session move --after "$anchor" --target "$server" --target "$logs"
 
 # close several sessions with one grace-period undo
 ngtermctl session close --target "$server" --target "$logs"
+
+# close one session with ⌘W's undo grace: undo inside it brings the running shell back
+ngtermctl session close --target "$server" --undoable
 ```
 
 `--after`/`--before` are mutually exclusive with each other, with `--to`, and with a destination
@@ -535,6 +538,7 @@ ngtermctl sidebar mode flagged                            # show only the flagge
 ngtermctl sidebar flagged-layout tree                     # nest them under workspace rows, in every window
 ngtermctl sidebar flagged-layout plain                    # or one flat list of session names, no workspace suffix
 ngtermctl session go --to next                            # in flagged mode, nav steps the flagged set only
+ngtermctl session flag move --target c3d4 --before a1b2   # flat/plain order: put c3d4 right above a1b2
 ngtermctl sidebar mode tree                               # back to the full tree
 ngtermctl session flag clear                              # unflag everything in the window
 ```
@@ -1129,7 +1133,7 @@ file is read once per command; nothing watches it, so push each change with an `
 
 ```bash
 ngtermctl session go --to next            # step selection to the next session
-ngtermctl session go --to next-attention  # jump to the next blocked/completed session
+ngtermctl session go --to next-attention  # jump to the next blocked/completed session (plus active when enabled)
 ngtermctl workspace go --to next          # step a whole workspace, landing on its first session
 ngtermctl workspace go --to prev          # wraps at both ends; no --target, it is relative
 w=$(ngtermctl window new "scratch" --json | jq -r '.result.id')

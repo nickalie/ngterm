@@ -1,0 +1,74 @@
+Where upstream's v0.39 text names a macOS behavior this build has otherwise, it says what ngterm does: the row tints'
+AppKit system colors are the same on Linux and Windows, their dark variant on a dark sidebar
+(`crates/ngterm-gpui/src/sidebar/look.rs`); the browser override chord for a link is ctrl+shift-click on Linux and
+Windows (`ngterm_core::link_policy::wants_browser`); New Companion and Duplicate as Companion sit in the File menu, as
+upstream's own menus have them (`crates/ngterm-gpui/src/app_menu.rs`); a Windows machine cannot be the far side of a
+remote attach or a remote companion, since every remote call is a POSIX `/bin/sh -c` line
+(`crates/ngterm-core/src/remote/tree.rs`, `remote_cli_chain`). Upstream's #821 correction, that links need ⌘⇧ even
+with `mouse-reporting = false`, holds for libghostty's own link detection only: this build finds links itself and
+follows that setting (`crates/ngterm-gpui/src/terminal/mouse.rs`), so the text keeps "always-on selection and links".
+Applied after 0008-show-image-windows.patch.
+
+--- a/reference.md
++++ b/reference.md
+@@ -528,7 +528,7 @@
+   `--command` comes back as a plain shell); a shell that exits within 2 seconds of such a restart closes the group
+   instead, so a broken shell cannot restart forever. A parent without companions closes on exit as before. A row attached
+   from another Mac whose parent respawned there attaches to the new shell instead of stopping at its exit line. The GUI
+-  twin is New Companion in the session row's context menu and the Session menu, an action-palette row, and
++  twin is New Companion in the session row's context menu and the File menu, an action-palette row, and
+   the keyless `new_companion` keymap action. Read back from the tree session node's `parent` field.
+   A page companion shows an HTML page instead of a terminal and never starts a shell; it is created with
+   `session overlay open --html FILE --companion` or `--url URL --companion` (see that entry).
+@@ -550,7 +550,7 @@
+   own session under its own policy, and the copy attaches here as for `session new --parent`.
+   `--no-select` (with `--companion`) creates it without selecting it. A pipeline or shell job is copied as its foreground process only; name, status,
+   flag, overlays, scratch and background are not copied. Wire command `session.companion.duplicate`; returns
+-  `result.id` and `result.parent`. GUI twin: Duplicate as Companion in the row context menu and the Session
++  `result.id` and `result.parent`. GUI twin: Duplicate as Companion in the row context menu and the File
+   menu, a palette row, and the keyless `duplicate_companion` action.
+ - `session duplicate [--target] [--window W]` — create a fresh session in the SAME workspace as the
+   target, inserted directly AFTER it, rooted at the target's focused-pane working directory (the live
+@@ -845,7 +845,8 @@
+   ▸ Interface ▸ Title Bar ▸ "Session context" hides it without clearing it.
+ - `session tint <COLOR|clear> [--on PARTS] [--target] [--window W]` - color the session's sidebar row so it
+   stands out at a glance (red for production, green for dev). COLOR is `red|orange|yellow|green|blue|purple|gray`,
+-  macOS system colors that follow light and dark. `--on` is `icon`, `name` or `icon,name`; omitted, a recolor keeps
++  macOS system colors that follow light and dark (the same colors on Linux and Windows, in their dark variant on a
++  dark sidebar). `--on` is `icon`, `name` or `icon,name`; omitted, a recolor keeps
+   the row's placement and an untinted row starts on the icon. `clear` removes the tint and refuses `--on`; the
+   socket form (`mode` `set|clear`, `tint`, `tintOn` array) refuses a clear carrying either. Returns the session
+   id. Persisted across a relaunch; a duplicated session starts untinted. Local to this Mac: an attached row does
+@@ -1950,7 +1951,7 @@
+ `overlay` opens it in a full session web overlay as `session overlay open --url URL --browse --js
+ --navigation --persistent` would, without selecting the session; `overlay95`, `overlay75` and `overlay50` add
+ `--size-percent 95`, `75` or `50`. The link still goes to the browser when
+-it was ⌘⇧-clicked in a program that does not capture the mouse, when it was clicked in a HUD, a program overlay or the quick terminal, when a HUD is up on the session, when the
++it was ⌘⇧-clicked (ctrl+shift-clicked on Linux and Windows) in a program that does not capture the mouse, when it was clicked in a HUD, a program overlay or the quick terminal, when a HUD is up on the session, when the
+ session's window has a zoomed terminal, when the session-wide overlay slot is taken, when the saved
+ browser store cannot be used, or when the overlay cannot be opened. A plain `http` link uses the overlay
+ only for a host the page could load: an unqualified name such as `localhost`, a `.local` name, or an IP
+@@ -2146,7 +2147,9 @@
+ pane, and be new enough to answer `live tree` at all; an older one is refused by name rather than
+ half-attached. It also needs `ngtermctl` installed by the Help action: the remote call runs it on the ssh `PATH` plus
+ `~/.local/bin` and `/usr/local/bin`. A machine merely running ngterm has no CLI an ssh command can find, and the read
+-fails with exit 127.
++fails with exit 127. A Windows machine cannot be the far side yet: every remote call is a POSIX `/bin/sh -c`
++line, which its sshd does not run, so its sessions cannot be listed or attached elsewhere and no remote companion
++can be created there.
+ 
+ `ngtermctl live attach HOST SESSION [--window W]` opens one of those sessions here, marked remote, in
+ the destination window's current workspace, selected, with the remote session's split when it has one.
+--- a/troubleshooting.md
++++ b/troubleshooting.md
+@@ -383,8 +383,8 @@
+ that never enables mouse reporting keeps links working. Workaround: hold shift too (⌘⇧-hover, ⌘⇧-click).
+ A program can claim shift via `XTSHIFTESCAPE`, so `mouse-shift-capture = never` in
+ `~/.config/ngterm/ghostty.conf` makes shift always win; `mouse-reporting = false` there turns reporting
+-off for every program, trading in-program mouse support for always-on selection. Links still need ⌘⇧
+-there: link detection follows the program's mouse request, not that setting.
++off for every program, trading in-program mouse support for always-on selection and links: ngterm finds links itself and follows that
++setting, so ⌘ alone (ctrl on Linux and Windows) opens them again.
+ 
+ ## Reporting: decide bug vs unsupported FIRST
+ 

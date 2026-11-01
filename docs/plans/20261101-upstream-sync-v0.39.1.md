@@ -989,12 +989,12 @@ correction #821).
 
 **Conformance:** none.
 
-- [ ] rebuild the copy as upstream's v0.39.1 tree plus the refreshed patches, in order (the `live` names, the
+- [x] rebuild the copy as upstream's v0.39.1 tree plus the refreshed patches, in order (the `live` names, the
       `ngterm`/`ngtermctl` names, the attach contract's `NGTERM_LIVE_*`, the rest of the identity); regenerate a
       conflicting patch as `diff -u` of upstream's files and the hand-merged copy; every new `agtermctl zmx`/`agtermctl`
       call becomes `ngtermctl live`/`ngtermctl`
-- [ ] `sync-resources.sh --check v0.39.1 v0.39.1` holds; the skill's installer tests in `ngterm-app` stay green
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] `sync-resources.sh --check v0.39.1 v0.39.1` holds; the skill's installer tests in `ngterm-app` stay green
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the skill has no conformance ids)
 
 ### Task 22: `split-divider-color` and the themed divider (#829); the launch-order and teardown tests (5b5c437, #819)
 
