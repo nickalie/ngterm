@@ -99,6 +99,10 @@ impl RequestCommand for New {
         true
     }
 
+    fn validate(&self) -> Result<(), String> {
+        self.tint.validate()
+    }
+
     fn make_request(&self) -> Request {
         let mut args = Args {
             name: self.name.clone(),

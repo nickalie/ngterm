@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::Core;
 use crate::keymap::Chord;
-use crate::model::AgentIndicator;
+use crate::model::{AgentIndicator, TintColor};
 use crate::palette_catalog::PaletteCommand;
 
 pub use search::{filter_entries, palette_search_keys, pick_custom_row_label};
@@ -76,6 +76,9 @@ pub enum PaletteAction {
     Settings,
     /// Moves the frontmost window's selected session to another workspace.
     MoveSession { session: Uuid, workspace: Uuid },
+    /// Tints the session selected when the row runs (`None` clears), keeping its placement: a selection can move under
+    /// an open palette.
+    TintSession(Option<TintColor>),
     /// Runs the keymap's custom command with this id.
     Custom(Uuid),
     /// Selects a session of the frontmost window.

@@ -652,6 +652,7 @@ fn tree_reports_the_empty_workspace_a_step_landed_on_as_active() {
     let options = WorkspaceOptions {
         collapsed: false,
         reveal: false,
+        tint: None,
     };
     let empty = store.add_workspace_with("empty", options);
     store.select_session(Some(sessions[0]));
@@ -1315,6 +1316,7 @@ fn add_workspace_without_reveal_does_not_widen_the_set() {
     let options = WorkspaceOptions {
         collapsed: false,
         reveal: false,
+        tint: None,
     };
     store.add_workspace_with("background", options);
     assert_eq!(focus_state(&store), (set(&[work]), true));

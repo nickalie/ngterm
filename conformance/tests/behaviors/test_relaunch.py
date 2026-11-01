@@ -46,12 +46,25 @@ def _new(ctl, **args):
 
 def _layout(tree):
     """What a relaunch must keep: the workspace/session model, without the live process state."""
-    kept = ("id", "name", "flagged", "context", "split", "hasSplit", "splitAxis", "restoreCommand", "active")
+    kept = (
+        "id",
+        "name",
+        "flagged",
+        "context",
+        "tint",
+        "tintOn",
+        "split",
+        "hasSplit",
+        "splitAxis",
+        "restoreCommand",
+        "active",
+    )
     return [
         {
             "id": workspace["id"],
             "name": workspace["name"],
             "collapsed": workspace.get("collapsed", False),
+            "tint": (workspace.get("tint"), workspace.get("tintOn")),
             "sessions": [{key: session.get(key) for key in kept} for session in workspace["sessions"]],
         }
         for workspace in workspaces(tree)
@@ -71,6 +84,8 @@ def test_relaunch_keeps_workspaces_sessions_and_their_metadata(launch):
     first = _new(ctl, workspace=alpha, name="first")
     assert_ok(ctl.request("session.flag", first, mode="on"))
     assert_ok(ctl.request("session.context", first, mode="set", text="what it is for"))
+    assert_ok(ctl.request("session.tint", first, mode="set", tint="green", tintOn=["icon", "name"]))
+    assert_ok(ctl.request("workspace.tint", alpha, mode="set", tint="red", tintOn=["name"]))
     assert_ok(ctl.request("session.split", first, mode="on", axis="horizontal"))
     ctl.wait_mounted(first, "right")
     second = _new(ctl, workspace=alpha, name="second")
@@ -84,6 +99,7 @@ def test_relaunch_keeps_workspaces_sessions_and_their_metadata(launch):
     before = ctl.tree()
     assert folded in {node["id"] for node in workspaces(before)}
     assert find_session(before, first)["active"] is True
+    assert find_session(before, first)["tint"] == "green"
 
     ctl = launch.relaunch(ctl)
     after = ctl.wait_tree(lambda tree: find_session(tree, first)["realized"] is True)

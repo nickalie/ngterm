@@ -187,34 +187,36 @@ extend, keep green). New: `test_session.py::test_tint_set_recolor_place_and_clea
 `test_recent.py::test_reopening_into_a_deleted_workspace_rebuilds_its_tint`; `tests/cli/test_cli_output.py::test_tint_commands`,
 `::test_tint_refusals_at_parse_time`; `tests/ui/test_sidebar_rows.py::test_tinted_icon_names_its_tint`.
 
-- [ ] TintColor (red, orange, yellow, green, blue, purple, gray) and TintPart (icon, name); SidebarTint parts never
+- [x] TintColor (red, orange, yellow, green, blue, purple, gray) and TintPart (icon, name); SidebarTint parts never
       empty, ordered icon then name; recolor keeps parts and starts an untinted row on the icon; place leaves an
       untinted row alone; parse_parts trims, lowercases, refuses empty or unknown
-- [ ] `session.tint`/`workspace.tint` (mode set|clear, args `tint`, `tintOn`), checks before the target resolves:
+- [x] `session.tint`/`workspace.tint` (mode set|clear, args `tint`, `tintOn`), checks before the target resolves:
       "<cmd> set requires a color", "invalid tint: <raw> (red|orange|yellow|green|blue|purple|gray)", "invalid tint
       placement: <parts> (icon,name)", "<cmd> clear takes no color or placement", "invalid tint mode: <mode> (set|clear)";
       a set without `tintOn` keeps the row's parts; unchanged value: no save, no `tree.changed`
-- [ ] creation tint on `session.new` (every placement path) and `workspace.new`, parsed before anything is created:
+- [x] creation tint on `session.new` (every placement path) and `workspace.new`, parsed before anything is created:
       "--tint-on requires --tint" and the same invalid strings; a `--create-workspace` workspace does not take the
       session's tint; duplicate starts untinted
-- [ ] tree `tint`/`tintOn` on session and workspace nodes, absent when untinted; snapshot
+- [x] tree `tint`/`tintOn` on session and workspace nodes, absent when untinted; snapshot
       `{"color":"red","on":["icon"]}`, lossy (an unknown color drops only the tint); pending-close and Open Recent
       rebuild a removed workspace with its tint
-- [ ] CLI `session tint <COLOR|clear> [--on PARTS]`, `workspace tint`, `--tint/--tint-on` on both `new`s, with
+- [x] CLI `session tint <COLOR|clear> [--on PARTS]`, `workspace tint`, `--tint/--tint-on` on both `new`s, with
       upstream's help and its errors: "tint must be one of: red|orange|yellow|green|blue|purple|gray, or clear", "--on
       does not apply to clear", "--on must list icon and/or name, comma-separated", "--tint-on requires --tint", "--tint
       must be one of: red|orange|yellow|green|blue|purple|gray", "--tint-on must list icon and/or name, comma-separated"
-- [ ] GPUI: icon and/or label in the tint color (light/dark by the chrome background's darkness; AppKit's system
+- [x] GPUI: icon and/or label in the tint color (light/dark by the chrome background's darkness; AppKit's system
       colors: red #FF3B30/#FF453A, orange #FF9500/#FF9F0A, yellow #FFCC00/#FFD60A, green #28CD41/#32D74B, blue
       #007AFF/#0A84FF, purple #AF52DE/#BF5AF2, gray #8E8E93/#98989D), kept on selected rows; accessibility value
       "<color> tint" on the icon; the row menu's Tint submenu (None, the seven colors with swatches, Show On: Icon,
       Name, Icon and Name; checks only what every target shares; Show On disabled unless every target is tinted) on
       session rows after Flag and on workspace rows after Flag/Unflag All; palette rows "Tint Session: <Color>" and
       "Tint Session: None" reading the selection at run time
-- [ ] ngterm's skill copy mentions are Task 21's
-- [ ] write tests: every Swift case listed above as Rust unit tests (core, ctl, gpui sidebar menu model and render)
-- [ ] write tests: the conformance tests above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] ngterm's skill copy mentions are Task 21's (left for Task 21)
+- [x] write tests: every Swift case listed above as Rust unit tests (core, ctl, gpui sidebar menu model and render)
+- [x] write tests: the conformance tests above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none yet: the new ids are
+      `since("0.39.1")` and skip until Task 25; all 27 tint ids and the four extended ones green on a local run at a
+      temporary 0.39.1 level)
 
 ### Task 4: `session close --undoable` (#804)
 

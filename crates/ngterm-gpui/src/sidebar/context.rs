@@ -109,6 +109,7 @@ fn menu_context(store: &AppStore) -> MenuContext {
                     has_status: session.agent_indicator.status != AgentStatus::Idle,
                     cwd: session.focused_cwd().to_owned(),
                     hidden_overlays: !session.hidden_overlay_names().is_empty(),
+                    tint: session.tint,
                 },
             );
         }
@@ -119,6 +120,7 @@ fn menu_context(store: &AppStore) -> MenuContext {
             focus_member: store.focus().ids().contains(&workspace.id()),
             sole_focus: store.is_sole_focus(workspace.id()),
             all_flagged: store.all_sessions_flagged(workspace.id()),
+            tint: workspace.tint,
         });
     }
     MenuContext {

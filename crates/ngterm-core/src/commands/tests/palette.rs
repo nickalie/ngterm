@@ -10,7 +10,7 @@ use super::keymap::Host;
 use super::{Fixture, args, wire};
 use crate::app_actions::{ActionEffect, ActionOrigin};
 use crate::keymap::BuiltinAction;
-use crate::model::{AgentIndicator, AgentStatus, SidebarMode};
+use crate::model::{AgentIndicator, AgentStatus, SidebarMode, SidebarTint, TintColor, TintParts};
 use crate::palette::{PaletteAction, PaletteEntry, PaletteMode, PaletteShortcut, filter_entries};
 use crate::palette_catalog::PaletteCommand;
 use crate::persist::{AppSettings, LibraryPersistence, SettingsStore};
@@ -495,6 +495,59 @@ fn picking_a_session_selects_it_and_moving_one_moves_it() {
         },
     );
     assert_eq!(fixture.order(ops), [first]);
+}
+
+/// `testTintRowsTintTheSessionSelectedWhenTheyRun`: the rows follow the moves, one per color then None, and each reads
+/// the session selected when it runs, keeping its placement.
+#[test]
+fn the_tint_rows_tint_the_session_selected_when_they_run() {
+    let mut fixture = Fixture::new(1);
+    let window = fixture.window;
+    let [first, second] = [fixture.sessions[0], fixture.sessions[1]];
+    fixture.store_mut().unwrap().select_session(Some(first));
+    let entries = fixture.core.palette_entries(PaletteMode::Actions);
+    let tints: Vec<&str> = titles(&entries)
+        .into_iter()
+        .filter(|title| title.starts_with("Tint Session: "))
+        .collect();
+    assert_eq!(
+        tints,
+        [
+            "Tint Session: Red",
+            "Tint Session: Orange",
+            "Tint Session: Yellow",
+            "Tint Session: Green",
+            "Tint Session: Blue",
+            "Tint Session: Purple",
+            "Tint Session: Gray",
+            "Tint Session: None"
+        ]
+    );
+    let red = entry(&entries, "Tint Session: Red").action.clone();
+    assert_eq!(red, PaletteAction::TintSession(Some(TintColor::Red)));
+    let named = SidebarTint::new(TintColor::Green, TintParts::NAME);
+    let store = fixture.store_mut().unwrap();
+    store.set_session_tint(Some(named), second);
+    store.select_session(Some(second));
+
+    fixture.core.toggle_palette(window, PaletteMode::Actions);
+    assert!(fixture.core.palette_entry_enabled(window, &red));
+    fixture.core.run_palette_entry(window, &red);
+    assert_eq!(fixture.store().session(first).unwrap().tint, None);
+    assert_eq!(
+        fixture.store().session(second).unwrap().tint,
+        Some(SidebarTint::new(TintColor::Red, TintParts::NAME))
+    );
+    fixture.core.toggle_palette(window, PaletteMode::Actions);
+    fixture
+        .core
+        .run_palette_entry(window, &PaletteAction::TintSession(None));
+    assert_eq!(fixture.store().session(second).unwrap().tint, None);
+
+    fixture.store_mut().unwrap().select_session(None);
+    assert!(!fixture.core.palette_entry_enabled(window, &red), "no session to tint");
+    let entries = fixture.core.palette_entries(PaletteMode::Actions);
+    assert!(!titles(&entries).iter().any(|title| title.starts_with("Tint Session")));
 }
 
 #[test]

@@ -98,6 +98,7 @@ fn workspace(name: &str, sessions: Vec<SessionSnapshot>) -> WorkspaceSnapshot {
         name: name.to_owned(),
         sessions,
         collapsed: None,
+        tint: None,
     }
 }
 

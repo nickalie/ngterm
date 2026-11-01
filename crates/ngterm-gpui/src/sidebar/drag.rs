@@ -257,6 +257,7 @@ mod tests {
             icon: Glyph::Workspace { focus_member: false },
             status: None,
             icon_tooltip: None,
+            tint: None,
         }
     }
 
@@ -276,6 +277,7 @@ mod tests {
             },
             status: None,
             icon_tooltip: None,
+            tint: None,
         }
     }
 

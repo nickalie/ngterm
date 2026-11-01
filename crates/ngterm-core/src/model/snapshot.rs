@@ -137,6 +137,7 @@ fn restored_workspaces(snapshot: &Snapshot, launch_restore: bool) -> Vec<Workspa
         let mut workspace = Workspace::with_id(persisted.id, persisted.name.clone());
         workspace.sessions = sessions;
         workspace.is_expanded = !persisted.collapsed.unwrap_or(false);
+        workspace.tint = persisted.tint;
         restored.push(workspace);
     }
     restored
@@ -151,6 +152,7 @@ pub(crate) fn workspace_from_snapshot(snapshot: &WorkspaceSnapshot) -> Workspace
         .map(|session| session_from_snapshot(session, false))
         .collect();
     workspace.is_expanded = !snapshot.collapsed.unwrap_or(false);
+    workspace.tint = snapshot.tint;
     workspace
 }
 
@@ -168,6 +170,7 @@ pub fn workspace_snapshot(workspace: &Workspace) -> WorkspaceSnapshot {
             .map(session_snapshot)
             .collect(),
         collapsed: (!workspace.is_expanded).then_some(true),
+        tint: workspace.tint,
     }
 }
 
@@ -201,6 +204,7 @@ pub fn session_snapshot(session: &Session) -> SessionSnapshot {
         split_restore_command: session.split_restore.command.clone(),
         context: session.context.clone(),
         last_selected_at: session.last_selected_at.map(crate::projection::epoch_seconds),
+        tint: session.tint,
     }
 }
 
@@ -230,6 +234,7 @@ pub fn session_from_snapshot(snapshot: &SessionSnapshot, launch_restore: bool) -
     session.initial_split_cwd.clone_from(&snapshot.split_cwd);
     session.flagged = snapshot.flagged.unwrap_or(false);
     session.context.clone_from(&snapshot.context);
+    session.tint = snapshot.tint;
     session.last_selected_at = snapshot.last_selected_at.and_then(crate::projection::system_time);
     session.launch.command.clone_from(&snapshot.initial_command);
     session.launch.wait = snapshot.command_wait.unwrap_or(false);

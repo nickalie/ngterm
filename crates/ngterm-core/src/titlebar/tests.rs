@@ -547,6 +547,7 @@ fn an_attention_row_reveals_the_pane_in_its_own_window_when_another_holds_the_sa
             name: name.to_owned(),
             sessions: vec![SessionSnapshot::new(session, "/project")],
             collapsed: None,
+            tint: None,
         }],
         ..Snapshot::default()
     };

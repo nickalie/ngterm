@@ -90,8 +90,8 @@ fn workspace_node(
         active: current == Some(id),
         focused: store.focus().ids().contains(&id).then_some(true),
         collapsed: (!workspace.is_expanded).then_some(true),
-        tint: None,
-        tint_on: None,
+        tint: workspace.tint.map(|tint| tint.color().wire_name().to_owned()),
+        tint_on: workspace.tint.map(|tint| tint.parts().wire_names()),
         sessions: workspace
             .sessions
             .iter()
@@ -129,6 +129,8 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
         .flatten();
     node.status_changed_at = session.status_changed_at.map(epoch_seconds);
     node.last_selected_at = session.last_selected_at.map(epoch_seconds);
+    node.tint = session.tint.map(|tint| tint.color().wire_name().to_owned());
+    node.tint_on = session.tint.map(|tint| tint.parts().wire_names());
     node.backed_by_live = Some(all_panes_backed(session));
     node.surfaces = Some(surface_nodes(session));
     node.realized = Some(session.surface.get().is_some_and(ngterm_host::Surface::is_realized));

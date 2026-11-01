@@ -329,6 +329,7 @@ mod tests {
                         ..SessionSnapshot::new(Uuid::new_v4(), "/tmp")
                     }],
                     collapsed: None,
+                    tint: None,
                 },
                 selected_session_id: None,
                 focus_member: None,

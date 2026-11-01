@@ -428,6 +428,10 @@ def test_session_metadata(cli, ctl):
     assert _node(ctl, sid)["context"] == "what it is for"
     _ok(cli("session", "context", "--clear", "--target", sid), "ok\n")
     assert_absent(_node(ctl, sid), "context")
+    _ok(cli("session", "tint", "purple", "--on", "name", "--target", sid), "ok\n")
+    assert (_node(ctl, sid)["tint"], _node(ctl, sid)["tintOn"]) == ("purple", ["name"])
+    _ok(cli("session", "tint", "clear", "--target", sid), "ok\n")
+    assert_absent(_node(ctl, sid), "tint", "tintOn")
     assert_ok(ctl.request("notify", sid, body="seen by cli"))
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("unseen", 0) > 0)
     _ok(cli("session", "seen", "--target", sid), "ok\n")
@@ -435,6 +439,61 @@ def test_session_metadata(cli, ctl):
     assert_ok(ctl.request("session.select", sid))
     _refused(cli("session", "rename", "x", "--target", UNKNOWN), f"no such session: {UNKNOWN}")
     assert_ok(ctl.request("session.close", sid))
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("cli:session tint", "cli:workspace tint", "cli:session new", "cli:workspace new")
+def test_tint_commands(cli, ctl):
+    sid = _new(ctl)
+    _ok(cli("session", "tint", "Red", "--target", sid), "ok\n")
+    assert (_node(ctl, sid)["tint"], _node(ctl, sid)["tintOn"]) == ("red", ["icon"])
+    assert _json(cli("session", "tint", "green", "--on", "icon,name", "--target", sid, "--json")) == {"id": sid}
+    assert (_node(ctl, sid)["tint"], _node(ctl, sid)["tintOn"]) == ("green", ["icon", "name"])
+    _ok(cli("session", "tint", "clear", "--target", sid), "ok\n")
+    assert_absent(_node(ctl, sid), "tint", "tintOn")
+    _refused(cli("session", "tint", "red", "--target", UNKNOWN), f"no such session: {UNKNOWN}")
+    assert_ok(ctl.request("session.close", sid))
+
+    wid = _created(cli("workspace", "new", _name("cli-tint"), "--tint", "Orange", "--tint-on", "name"))
+    created = _created(cli("session", "new", "--workspace", wid, "--tint", "blue", "--no-select"))
+    (node,) = [node for node in workspaces(ctl.tree()) if node["id"] == wid]
+    assert (node["tint"], node["tintOn"]) == ("orange", ["name"])
+    assert (_node(ctl, created)["tint"], _node(ctl, created)["tintOn"]) == ("blue", ["icon"])
+    _ok(cli("workspace", "tint", "gray", "--on", "icon", "--target", wid), "ok\n")
+    (node,) = [node for node in workspaces(ctl.tree()) if node["id"] == wid]
+    assert (node["tint"], node["tintOn"]) == ("gray", ["icon"])
+    _ok(cli("workspace", "tint", "clear", "--target", wid), "ok\n")
+    (node,) = [node for node in workspaces(ctl.tree()) if node["id"] == wid]
+    assert_absent(node, "tint", "tintOn")
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("cli:session tint", "cli:workspace tint", "cli:session new", "cli:workspace new")
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (
+            ("session", "tint", "teal"),
+            "tint must be one of: red|orange|yellow|green|blue|purple|gray, or clear",
+        ),
+        (("session", "tint", "clear", "--on", "icon"), "--on does not apply to clear"),
+        (("session", "tint", "red", "--on", "icon,strip"), "--on must list icon and/or name, comma-separated"),
+        (("workspace", "tint", "red", "--on", ""), "--on must list icon and/or name, comma-separated"),
+        (("session", "new", "--tint-on", "icon"), "--tint-on requires --tint"),
+        (("workspace", "new", "--tint", "teal"), "--tint must be one of: red|orange|yellow|green|blue|purple|gray"),
+        (
+            ("workspace", "new", "--tint", "red", "--tint-on", "both"),
+            "--tint-on must list icon and/or name, comma-separated",
+        ),
+    ],
+)
+def test_tint_refusals_at_parse_time(cli, ctl, argv, message):
+    before = ctl.tree()
+    _usage(cli(*argv), message)
+    after = ctl.tree()
+    assert [node["id"] for node in workspaces(after)] == [node["id"] for node in workspaces(before)]
+    assert [node["id"] for node in sessions(after)] == [node["id"] for node in sessions(before)]
 
 
 @pytest.mark.covers("cli:session status")

@@ -4,6 +4,7 @@
 use uuid::Uuid;
 
 use super::session::Session;
+use super::tint::SidebarTint;
 
 /// A user-named group of sessions (e.g. "work", "personal") with a stable id.
 #[derive(Debug)]
@@ -13,6 +14,8 @@ pub struct Workspace {
     pub sessions: Vec<Session>,
     /// Whether the sidebar row is expanded. A fresh workspace opens; persisted per workspace.
     pub is_expanded: bool,
+    /// The workspace row's own tint (`workspace.tint`); it never colors the sessions inside. Persisted.
+    pub tint: Option<SidebarTint>,
 }
 
 impl Workspace {
@@ -30,6 +33,7 @@ impl Workspace {
             name: name.into(),
             sessions: Vec::new(),
             is_expanded: true,
+            tint: None,
         }
     }
 

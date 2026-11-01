@@ -1,4 +1,5 @@
-//! `session.status`, `session.flag`, `session.context` and `session.seen`: the per-session metadata commands.
+//! `session.status`, `session.flag`, `session.context` and `session.seen`: the per-session metadata commands
+//! (`session.tint`'s is [`super::tint`]).
 //! Validation and its messages follow the `.sessionStatus` arm and `dispatchSessionContext` in upstream's
 //! `ControlDispatcher.swift`; the effects follow `setSessionStatus`, `setSessionFlag`, `setSessionContext` and
 //! `markSessionSeen` in `agterm/Control/ControlServer+SessionActions.swift`.

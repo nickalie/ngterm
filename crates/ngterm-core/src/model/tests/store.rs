@@ -49,6 +49,7 @@ fn add_hidden_workspace(store: &mut AppStore, name: &str) -> Uuid {
         WorkspaceOptions {
             collapsed: false,
             reveal: false,
+            tint: None,
         },
     )
 }

@@ -221,6 +221,8 @@ impl RequestCommand for New {
     }
 
     fn validate(&self) -> Result<(), String> {
+        // the option group checks first, as ArgumentParser validates a decoded `@OptionGroup` before its command
+        self.tint.validate()?;
         let placed = self.after.is_some() || self.before.is_some();
         let addressed = self.workspace.is_some() || self.workspace_name.is_some();
         let message = if self.after.is_some() && self.before.is_some() {

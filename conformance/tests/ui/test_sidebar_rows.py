@@ -86,6 +86,18 @@ def test_agent_status_glyph_reads_the_session_status(ctl, ui):
     wait_until(lambda: "completed" not in _texts(ui, "agent-status"))
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("ui:session-icon", "session.tint")
+def test_tinted_icon_names_its_tint(ctl, ui):
+    sid = _new(ctl, noSelect=True, tint="orange")
+    ui.find("session-icon", role="image", value="orange tint")
+    assert_ok(ctl.request("session.tint", sid, mode="set", tint="green", tintOn=["icon", "name"]))
+    ui.find("session-icon", role="image", value="green tint")
+    assert_ok(ctl.request("session.tint", sid, mode="clear"))
+    wait_until(lambda: not [icon for icon in ui.all("session-icon") if icon.value == "green tint"])
+    assert_ok(ctl.request("session.close", sid))
+
+
 @pytest.mark.covers("ui:flagged-view-toggle")
 def test_flagged_view_toggle_switches_the_sidebar_mode(ctl, ui):
     assert ctl.tree()["tree"]["sidebarMode"] == "tree"

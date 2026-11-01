@@ -6,6 +6,7 @@
 
 use gpui_kit::Hsla;
 use ngterm_core::chrome::{ChromeColors, Rgb};
+use ngterm_core::model::{SidebarTint, TintColor, TintPart};
 use ngterm_core::persist::AppSettings;
 
 pub use crate::chrome::color;
@@ -115,6 +116,48 @@ impl Look {
     pub fn pill(&self, key_window: bool) -> Hsla {
         crate::chrome::selected_row(&self.colors, key_window).0
     }
+
+    /// Whether the chrome reads dark, the side a tint's color is taken from (the gpui-kit theme's side).
+    #[must_use]
+    pub fn dark(&self) -> bool {
+        crate::chrome::kit::mode(&self.colors).is_dark()
+    }
+
+    /// A row's name and icon colors, selected or not: a `tint` overrides the parts it colors, at full strength and
+    /// whatever the selection (upstream's `SidebarCellView.setColors`).
+    #[must_use]
+    pub fn row_inks(&self, tint: Option<SidebarTint>, selected: bool) -> (Hsla, Hsla) {
+        let tinted = |part| {
+            tint.filter(|tint| tint.shows(part))
+                .map(|tint| self::tint(tint.color(), self.dark()))
+        };
+        (
+            tinted(TintPart::Name).unwrap_or_else(|| self.text(selected)),
+            tinted(TintPart::Icon).unwrap_or_else(|| self.icon(selected)),
+        )
+    }
+}
+
+/// A tint color: the macOS system color of the same name (`NSColor.systemRed` and kin), its dark-appearance variant
+/// on a dark chrome, as `AppKit`'s dynamic colors follow the appearance.
+#[must_use]
+pub fn tint_rgb(tint: TintColor, dark: bool) -> Rgb {
+    let (light, dark_variant) = match tint {
+        TintColor::Red => (Rgb::new(0xFF, 0x3B, 0x30), Rgb::new(0xFF, 0x45, 0x3A)),
+        TintColor::Orange => (Rgb::new(0xFF, 0x95, 0x00), Rgb::new(0xFF, 0x9F, 0x0A)),
+        TintColor::Yellow => (Rgb::new(0xFF, 0xCC, 0x00), Rgb::new(0xFF, 0xD6, 0x0A)),
+        TintColor::Green => (Rgb::new(0x28, 0xCD, 0x41), Rgb::new(0x32, 0xD7, 0x4B)),
+        TintColor::Blue => (Rgb::new(0x00, 0x7A, 0xFF), Rgb::new(0x0A, 0x84, 0xFF)),
+        TintColor::Purple => (Rgb::new(0xAF, 0x52, 0xDE), Rgb::new(0xBF, 0x5A, 0xF2)),
+        TintColor::Gray => (Rgb::new(0x8E, 0x8E, 0x93), Rgb::new(0x98, 0x98, 0x9D)),
+    };
+    if dark { dark_variant } else { light }
+}
+
+/// [`tint_rgb`] as a fill.
+#[must_use]
+pub fn tint(tint: TintColor, dark: bool) -> Hsla {
+    color(tint_rgb(tint, dark), 1.0)
 }
 
 /// The rows' text size from the `sidebarFontSize` setting, clamped to 9...20; 13 when unset.

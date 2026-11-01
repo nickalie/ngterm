@@ -1,11 +1,11 @@
-//! `workspace.*`: `new`, `select`, `go`, `rename`, `delete`, `move`, `focus`, `filter`, `flag`, `collapse` and
-//! `expand`.
+//! `workspace.*`: `new`, `select`, `go`, `rename`, `delete`, `move`, `focus`, `filter`, `flag`, `collapse`, `expand`
+//! and `tint` ([`super::tint`]).
 //! Validation and its messages follow `dispatchWorkspaceCommand` in upstream's `ControlDispatcher.swift`; the effects
 //! follow `agterm/Control/ControlServer+WorkspaceCommands.swift` over the store's `AppStore.swift` and
 //! `AppStore+Focus.swift` mutators, and `flag` over `AppStore+SessionState.swift`'s `applyWorkspaceFlag`.
 
 use ngterm_proto::command::WorkspaceCmd;
-use ngterm_proto::{Args, Command, ControlResult, Request};
+use ngterm_proto::{Args, ControlResult, Request};
 
 use super::{ToggleMode, args_of, in_placement_store, with_id, workspace_store};
 use crate::Core;
@@ -33,7 +33,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: WorkspaceCmd, request: &Request) ->
         WorkspaceCmd::Collapse => WorkspaceAction::Expand(false),
         WorkspaceCmd::Expand => WorkspaceAction::Expand(true),
         WorkspaceCmd::Flag => WorkspaceAction::flag(args)?,
-        WorkspaceCmd::Tint => return Err(ControlError::NotSupported(Command::Workspace(cmd))),
+        WorkspaceCmd::Tint => return super::tint::workspace(core, request.target.as_deref(), args).map(Some),
     };
     apply(core, action, request.target.as_deref(), args.window.as_deref()).map(Some)
 }
@@ -126,6 +126,7 @@ fn apply(
 /// workspace nor widens the marked set, so a script can fill it with `session.new --no-select` unseen.
 fn new(core: &mut Core, args: &Args) -> Result<ControlResult, ControlError> {
     let collapsed = args.collapsed == Some(true);
+    let tint = super::tint::creation_tint(args)?;
     in_placement_store(core, args.window.as_deref(), |store| {
         let name = args
             .name
@@ -137,6 +138,7 @@ fn new(core: &mut Core, args: &Args) -> Result<ControlResult, ControlError> {
             WorkspaceOptions {
                 collapsed,
                 reveal: !collapsed,
+                tint,
             },
         );
         Ok(with_id(id))

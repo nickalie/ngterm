@@ -290,16 +290,19 @@ impl AppStore {
     /// a pending close of that workspace, else its Open Recent entry, else `name`, the caller's older copy.
     pub(crate) fn rebuilt_workspace_shell(&self, id: Uuid, name: &str) -> Workspace {
         let pending = self.pending.records.iter().rev().find_map(|(_, record)| match record {
-            PendingCloseRecord::Workspace(close) if close.workspace.id() == id => {
-                Some((close.workspace.name.clone(), close.workspace.is_expanded))
-            }
+            PendingCloseRecord::Workspace(close) if close.workspace.id() == id => Some((
+                close.workspace.name.clone(),
+                close.workspace.is_expanded,
+                close.workspace.tint,
+            )),
             _ => None,
         });
-        let (name, expanded) = pending
+        let (name, expanded, tint) = pending
             .or_else(|| self.recent_closed.workspace_shell(id))
-            .unwrap_or_else(|| (name.to_owned(), true));
+            .unwrap_or_else(|| (name.to_owned(), true, None));
         let mut shell = Workspace::with_id(id, name);
         shell.is_expanded = expanded;
+        shell.tint = tint;
         shell
     }
 

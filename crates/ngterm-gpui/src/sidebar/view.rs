@@ -203,7 +203,9 @@ impl Sidebar {
     /// A row's content, leading to trailing.
     fn row_content(&self, row: &SidebarRow, selected: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let look = self.look;
+        // the disclosure and the hover "+" keep the theme's ink; a tint colors only the glyph and the name
         let icon_color = look.icon(selected);
+        let (name_ink, glyph_ink) = look.row_inks(row.tint, selected);
         let workspace = row.is_workspace();
         let shows_add = workspace && self.hovered == Some(row.id) && self.context.row_add_session;
         let status = row.status.as_ref();
@@ -223,9 +225,9 @@ impl Sidebar {
             RowKind::Session { nested: false, .. } => content,
         };
         content
-            .child(leading_icon(row, icon_color))
+            .child(leading_icon(row, glyph_ink))
             .child(div().flex_none().w(px(GAP)))
-            .child(self.name(row, available, window, cx))
+            .child(self.name(row, name_ink, available, window, cx))
             .child(div().flex_none().w(px(GAP)))
             .when(shows_add, |content| {
                 content.child(Self::add_button(row.id, icon_color, cx))
@@ -239,7 +241,14 @@ impl Sidebar {
 
     /// The name, or the rename field while this row is renamed; the full name shows on hover only while the row is too
     /// narrow for it (upstream's `updateNameTooltip`).
-    fn name(&self, row: &SidebarRow, available: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn name(
+        &self,
+        row: &SidebarRow,
+        ink: Hsla,
+        available: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         if let Some(editing) = self.editing.as_ref().filter(|editing| editing.id == row.id) {
             return div()
                 .flex_1()
@@ -277,6 +286,7 @@ impl Sidebar {
             .whitespace_nowrap()
             .text_ellipsis()
             .font_weight(weight)
+            .text_color(ink)
             .child(label.clone())
             .when(truncated, |name| {
                 name.tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
@@ -546,7 +556,8 @@ fn pill(fill: Hsla) -> impl IntoElement {
         .bg(fill)
 }
 
-/// A row's leading glyph, with a remote row's stream notice as its hover text.
+/// A row's leading glyph, with a remote row's stream notice as its hover text and its tint as its accessibility value
+/// (`<color> tint`, upstream's `SidebarCellView.tint`).
 fn leading_icon(row: &SidebarRow, color: Hsla) -> impl IntoElement {
     let tooltip = row.icon_tooltip.clone().map(SharedString::from);
     let (id, name) = if row.is_workspace() {
@@ -559,6 +570,14 @@ fn leading_icon(row: &SidebarRow, color: Hsla) -> impl IntoElement {
         .accessibility_id(id)
         .role(gpui_kit::Role::Image)
         .aria_label(tooltip.clone().unwrap_or(SharedString::from(name)))
+        .when_some(row.tint, |icon, tint| {
+            let value = format!("{} tint", tint.color().wire_name());
+            icon.debug_selector({
+                let value = value.clone();
+                move || format!("{id}:{value}")
+            })
+            .aria_value(value)
+        })
         .flex_none()
         .size(px(SLOT))
         .child(row_icon::icon(row.icon, color))

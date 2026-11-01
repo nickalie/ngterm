@@ -427,6 +427,36 @@ def test_collapse_and_expand(ctl):
             assert_absent(node, "collapsed")
 
 
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("workspace.tint", "workspace.new", "field:tree.workspace.tint", "field:tree.workspace.tintOn")
+def test_workspace_tint_colors_only_its_row(ctl):
+    wid, (sid,) = _new_workspace(ctl, sessions=1, tint="red", tintOn=["name"])
+    node = _node(ctl.tree(), wid)
+    assert (node["tint"], node["tintOn"]) == ("red", ["name"])
+    assert_absent(node["sessions"][0], "tint", "tintOn")
+
+    # A set without a placement recolors and keeps it; one with a placement moves it.
+    assert assert_ok(ctl.request("workspace.tint", wid, mode="set", tint="Purple"))["id"] == wid
+    node = _node(ctl.tree(), wid)
+    assert (node["tint"], node["tintOn"]) == ("purple", ["name"])
+    assert_ok(ctl.request("workspace.tint", wid, mode="set", tint="gray", tintOn=["icon", "name"]))
+    node = _node(ctl.tree(), wid)
+    assert (node["tint"], node["tintOn"]) == ("gray", ["icon", "name"])
+    assert [session["id"] for session in node["sessions"]] == [sid]
+    assert_absent(node["sessions"][0], "tint", "tintOn")
+
+    assert_error(
+        ctl.request("workspace.tint", wid, mode="clear", tintOn=["icon"]),
+        "workspace.tint clear takes no color or placement",
+    )
+    assert_error(ctl.request("workspace.tint", wid, mode="set"), "workspace.tint set requires a color")
+    assert _node(ctl.tree(), wid)["tint"] == "gray"
+    assert_ok(ctl.request("workspace.tint", wid, mode="clear"))
+    assert_absent(_node(ctl.tree(), wid), "tint", "tintOn")
+    assert_error(ctl.request("workspace.tint", UNKNOWN, mode="clear"), f"no such workspace: {UNKNOWN}")
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
 @pytest.mark.covers(
     "workspace.select",
     "workspace.rename",

@@ -17,6 +17,7 @@ use super::pane::{PaneLaunch, PaneRestore, SplitLayout, StatusPane, SurfaceSlot}
 use super::pane_overlay::PaneOverlays;
 use super::search::SearchState;
 use super::status::{StatusKeystroke, StatusReset, StatusShape};
+use super::tint::SidebarTint;
 use crate::hud::HudPaneFrames;
 
 /// A session's agent status, set over the control channel (`session.status`); the sidebar row's glyph reacts.
@@ -220,6 +221,8 @@ pub struct Session {
     remote_host: Option<String>,
     /// Membership of the flagged working set, the sidebar's cross-workspace flagged view. Persisted.
     pub flagged: bool,
+    /// The sidebar row's tint (`session.tint`). Persisted for a local session, never copied by a duplicate.
+    pub tint: Option<SidebarTint>,
     /// What the session is FOR, shown in the title bar. Persisted for a local session.
     pub context: Option<String>,
     /// The context mirrored from a remote origin; a local one wins over it. Ephemeral.
@@ -319,6 +322,7 @@ impl Session {
             auto_follow: FollowMark::Fresh,
             remote_host: seed.remote_host,
             flagged: false,
+            tint: None,
             context: None,
             mirrored_context: None,
             split: SplitLayout::default(),

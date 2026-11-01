@@ -32,6 +32,7 @@ pub(crate) mod sidebar;
 pub(crate) mod surface;
 pub(crate) mod surface_target;
 pub(crate) mod theme;
+pub(crate) mod tint;
 pub(crate) mod typing;
 pub(crate) mod window;
 pub(crate) mod workspace;

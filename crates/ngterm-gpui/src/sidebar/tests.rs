@@ -195,6 +195,7 @@ fn session_row(id: Uuid, selected: bool) -> SidebarRow {
         },
         status: None,
         icon_tooltip: None,
+        tint: None,
     }
 }
 
@@ -272,6 +273,7 @@ fn confirmations_use_upstreams_words() {
             has_status: false,
             cwd: "/".into(),
             hidden_overlays: false,
+            tint: None,
         },
     );
     assert_eq!(
@@ -848,4 +850,104 @@ fn the_row_menu_and_the_footers_add_session_menu_run_their_items(cx: &mut TestAp
         before + 1,
         "New Session in the current workspace"
     );
+}
+
+/// The tint palette: `AppKit`'s system colors, the dark variant on a dark chrome.
+#[test]
+fn a_tint_takes_the_system_color_of_the_chromes_side() {
+    use ngterm_core::chrome::Rgb;
+    use ngterm_core::model::TintColor;
+    assert_eq!(look::tint_rgb(TintColor::Red, false), Rgb::new(0xFF, 0x3B, 0x30));
+    assert_eq!(look::tint_rgb(TintColor::Red, true), Rgb::new(0xFF, 0x45, 0x3A));
+    assert_eq!(look::tint_rgb(TintColor::Gray, true), Rgb::new(0x98, 0x98, 0x9D));
+    let mut colors = crate::chrome::default_colors();
+    colors.sidebar = Rgb::new(0x10, 0x10, 0x10);
+    assert!(
+        Look {
+            colors,
+            ..Look::default()
+        }
+        .dark()
+    );
+    colors.sidebar = Rgb::WHITE;
+    assert!(
+        !Look {
+            colors,
+            ..Look::default()
+        }
+        .dark()
+    );
+}
+
+/// `testTintColorsTheIconOrNameAndSurvivesSelection`: the row's glyph or name takes the tint, selected or not, its
+/// glyph names the tint, and a clear gives the theme's colors back; the row menu's choices land in the model.
+#[gpui_kit::test]
+fn a_tint_colors_the_icon_or_the_name_and_survives_selection(cx: &mut TestAppContext) {
+    use ngterm_core::model::{SidebarTint, TintChoice, TintColor, TintParts};
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let srv = h.id_of("srv", cx);
+    let look = h.view.read_with(cx, |sidebar, _| sidebar.look);
+    let red = look::tint(TintColor::Red, look.dark());
+    let plain = look.row_inks(None, true);
+
+    h.store_mut()
+        .set_session_tint(Some(SidebarTint::on_icon(TintColor::Red)), srv);
+    h.settle(cx);
+    let row = h.view.read_with(cx, |sidebar, _| sidebar.rows()[2].clone());
+    assert_eq!(row.tint, Some(SidebarTint::on_icon(TintColor::Red)));
+    assert!(
+        cx.debug_bounds("session-icon:red tint").is_some(),
+        "the glyph names its tint"
+    );
+    for selected in [true, false] {
+        let (name, glyph) = look.row_inks(row.tint, selected);
+        assert_eq!(glyph, red, "selected {selected}");
+        assert_eq!(name, look.text(selected), "the name keeps the theme's ink");
+    }
+
+    let green = SidebarTint::new(TintColor::Green, TintParts::NAME);
+    h.store_mut().set_session_tint(Some(green), srv);
+    h.settle(cx);
+    let row = h.view.read_with(cx, |sidebar, _| sidebar.rows()[2].clone());
+    let (name, glyph) = look.row_inks(row.tint, true);
+    assert_eq!(name, look::tint(TintColor::Green, look.dark()));
+    assert_eq!(glyph, plain.1);
+
+    h.store_mut().set_session_tint(None, srv);
+    h.settle(cx);
+    assert!(cx.debug_bounds("session-icon:red tint").is_none());
+    assert!(cx.debug_bounds("session-icon:green tint").is_none());
+
+    // the row menu's choices
+    let one = h.store().workspaces()[0].id();
+    let perform = |h: &mut Harness, cx: &mut VisualTestContext, action: menu::MenuAction| {
+        cx.update(|window, cx| h.view.update(cx, |sidebar, cx| sidebar.perform(action, window, cx)));
+        h.settle(cx);
+    };
+    perform(
+        &mut h,
+        cx,
+        menu::MenuAction::Tint {
+            sessions: vec![srv],
+            choice: TintChoice::Color(Some(TintColor::Blue)),
+        },
+    );
+    assert_eq!(
+        h.store().session(srv).unwrap().tint,
+        Some(SidebarTint::on_icon(TintColor::Blue))
+    );
+    perform(
+        &mut h,
+        cx,
+        menu::MenuAction::TintWorkspace {
+            workspace: one,
+            choice: TintChoice::Color(Some(TintColor::Purple)),
+        },
+    );
+    assert_eq!(
+        h.store().workspace(one).unwrap().tint,
+        Some(SidebarTint::on_icon(TintColor::Purple))
+    );
+    assert!(cx.debug_bounds("workspace-icon:purple tint").is_some());
 }

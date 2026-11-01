@@ -161,6 +161,7 @@ def test_duplicate_inserts_a_plain_copy_after_the_source(ctl):
     assert_ok(ctl.request("session.rename", source, name="original"))
     assert_ok(ctl.request("session.flag", source, mode="on"))
     assert_ok(ctl.request("session.context", source, mode="set", text="what it is for"))
+    assert_ok(ctl.request("session.tint", source, mode="set", tint="red"))
 
     copy = assert_ok(ctl.request("session.duplicate", source))["id"]
     tree = ctl.tree()
@@ -169,7 +170,7 @@ def test_duplicate_inserts_a_plain_copy_after_the_source(ctl):
     assert node["cwd"] == find_session(tree, source)["cwd"]
     assert node["name"] != "original"
     assert node["flagged"] is False
-    assert_absent(node, "context", "status", "restoreCommand", "background")
+    assert_absent(node, "context", "status", "restoreCommand", "background", "tint", "tintOn")
     assert_ok(ctl.request("session.flag", source, mode="off"))
 
 
@@ -457,6 +458,122 @@ def test_context_rejects_and_keeps_the_previous_value(ctl, args, error):
     assert_ok(ctl.request("session.context", sid, mode="set", text="kept"))
     assert_error(ctl.request("session.context", sid, **args), error)
     assert _node(ctl, sid)["context"] == "kept"
+
+
+# -- tint
+
+
+def _tint(node):
+    return node.get("tint"), node.get("tintOn")
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers(
+    "session.tint", "field:tree.session.tint", "field:tree.session.tintOn", "event:tree.changed"
+)
+def test_tint_set_recolor_place_and_clear(ctl):
+    cursor = ctl.events_baseline()
+    sid = _new(ctl)
+    cursor = _settled_baseline(ctl, cursor)
+
+    assert assert_ok(ctl.request("session.tint", sid, mode="set", tint="Red"))["id"] == sid
+    assert _tint(_node(ctl, sid)) == ("red", ["icon"])
+    ctl.wait_event(cursor, "tree.changed", {"window": _window(ctl)})
+    # A placement moves the color; a set without one recolors and keeps it.
+    assert_ok(ctl.request("session.tint", sid, mode="set", tint="green", tintOn=["name", "icon"]))
+    assert _tint(_node(ctl, sid)) == ("green", ["icon", "name"])
+    assert_ok(ctl.request("session.tint", sid, mode="set", tint="blue"))
+    assert _tint(_node(ctl, sid)) == ("blue", ["icon", "name"])
+    assert_ok(ctl.request("session.tint", sid, mode="set", tint="blue", tintOn=[" Name "]))
+    assert _tint(_node(ctl, sid)) == ("blue", ["name"])
+
+    assert_ok(ctl.request("session.tint", sid, mode="clear"))
+    assert_absent(_node(ctl, sid), "tint", "tintOn")
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.tint")
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        pytest.param({}, "invalid tint mode:  (set|clear)", id="no-mode"),
+        pytest.param({"tint": "red"}, "invalid tint mode:  (set|clear)", id="color-without-mode"),
+        pytest.param({"mode": "set"}, "session.tint set requires a color", id="set-without-color"),
+        pytest.param(
+            {"mode": "set", "tint": "teal"},
+            "invalid tint: teal (red|orange|yellow|green|blue|purple|gray)",
+            id="unknown-color",
+        ),
+        pytest.param(
+            {"mode": "set", "tint": "red", "tintOn": ["strip"]},
+            "invalid tint placement: strip (icon,name)",
+            id="unknown-part",
+        ),
+        pytest.param(
+            {"mode": "set", "tint": "red", "tintOn": []}, "invalid tint placement:  (icon,name)", id="no-part"
+        ),
+        pytest.param(
+            {"mode": "clear", "tint": "red"}, "session.tint clear takes no color or placement", id="clear-with-color"
+        ),
+        pytest.param(
+            {"mode": "clear", "tintOn": ["icon"]},
+            "session.tint clear takes no color or placement",
+            id="clear-with-placement",
+        ),
+    ],
+)
+def test_tint_rejects_and_keeps_the_previous_tint(ctl, args, error):
+    sid = _new(ctl)
+    assert_ok(ctl.request("session.tint", sid, mode="set", tint="orange", tintOn=["name"]))
+    assert_error(ctl.request("session.tint", sid, **args), error)
+    assert _tint(_node(ctl, sid)) == ("orange", ["name"])
+    # Checked before the target resolves.
+    assert_error(ctl.request("session.tint", UNKNOWN, **args), error)
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.new", "session.duplicate", "field:tree.session.tint", "field:tree.session.tintOn")
+def test_new_carries_a_creation_tint(ctl):
+    wid, (anchor,) = _new_workspace(ctl, sessions=1)
+    by_id = _new(ctl, workspace=wid, tint="Orange")
+    after = _new(ctl, after=anchor, tint="gray", tintOn=["name"])
+    name = f"tint-created-{wid[:8]}"
+    by_name = _new(ctl, workspaceName=name, createWorkspace=True, tint="blue", tintOn=["icon", "name"])
+
+    tree = ctl.tree()
+    assert _tint(find_session(tree, by_id)) == ("orange", ["icon"])
+    assert _tint(find_session(tree, after)) == ("gray", ["name"])
+    assert _tint(find_session(tree, by_name)) == ("blue", ["icon", "name"])
+    (created,) = [node for node in workspaces(tree) if node["name"] == name]
+    assert_absent(created, "tint", "tintOn")
+    # A duplicate starts untinted.
+    copy = assert_ok(ctl.request("session.duplicate", by_id))["id"]
+    assert_absent(_node(ctl, copy), "tint", "tintOn")
+    assert_ok(ctl.request("workspace.delete", created["id"]))
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("session.new", "workspace.new")
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        pytest.param({"tintOn": ["icon"]}, "--tint-on requires --tint", id="placement-without-color"),
+        pytest.param(
+            {"tint": "teal"}, "invalid tint: teal (red|orange|yellow|green|blue|purple|gray)", id="unknown-color"
+        ),
+        pytest.param(
+            {"tint": "red", "tintOn": ["both"]}, "invalid tint placement: both (icon,name)", id="unknown-part"
+        ),
+    ],
+)
+def test_new_refuses_a_bad_creation_tint_before_creating(ctl, args, error):
+    before = ctl.tree()
+    name = "tint-refused"
+    assert_error(ctl.request("session.new", workspaceName=name, createWorkspace=True, **args), error)
+    assert_error(ctl.request("workspace.new", name=name, **args), error)
+    after = ctl.tree()
+    assert sorted(session_ids(after)) == sorted(session_ids(before))
+    assert workspace_ids(after) == workspace_ids(before)
 
 
 # -- status

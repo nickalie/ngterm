@@ -68,6 +68,7 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
         | SessionCmd::Focus
         | SessionCmd::Resize => super::panes::dispatch(core, cmd, request),
         SessionCmd::Background => super::background::dispatch(core, request),
+        SessionCmd::Tint => super::tint::session(core, target, args),
         SessionCmd::Restore => super::restore::dispatch(core, request),
         other => Err(ControlError::NotSupported(Command::Session(other))),
     }
@@ -101,12 +102,14 @@ fn validate_new(args: &Args) -> Result<(), ControlError> {
 /// defaults to the home directory and is otherwise taken as given.
 fn new(core: &mut Core, args: &Args) -> Outcome {
     validate_new(args)?;
+    let tint = super::tint::creation_tint(args)?;
     let no_select = args.no_select == Some(true);
     let spec = NewSession {
         command: args.command.clone(),
         name: args.name.clone(),
         wait: args.wait.unwrap_or(false),
         select: !no_select,
+        tint,
         ..NewSession::at_cwd(args.cwd.clone().unwrap_or_else(|| core.library().home().to_owned()))
     };
     in_placement_store(core, args.window.as_deref(), |store| {

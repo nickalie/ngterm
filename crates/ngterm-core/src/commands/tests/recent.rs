@@ -140,6 +140,7 @@ impl Entries {
                     name: "project".to_owned(),
                     sessions: vec![self.first.clone(), self.second.clone()],
                     collapsed: None,
+                    tint: None,
                 },
                 selected_session_id: Some(self.second.id),
                 focus_member: None,

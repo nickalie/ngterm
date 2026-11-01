@@ -1,17 +1,45 @@
 //! `ngtermctl session tint` and `workspace tint` (`agtermctlKit/TintCommands.swift`), and the creation tint
 //! (`TintCreateOptions`) `session new` and `workspace new` share. The CLI spelling's one argument is a color or
-//! `clear`; on the wire that is `mode` `set` with `tint`/`tintOn`, or `mode` `clear`. These parse and send what
-//! upstream sends; the server checks the color and the parts.
+//! `clear`; on the wire that is `mode` `set` with `tint`/`tintOn`, or `mode` `clear`. A bad color or placement is
+//! refused before anything is sent, in upstream's words; the server checks them again for a raw socket client.
 
+use ngterm_core::model::{TintColor, TintParts};
 use ngterm_proto::command::{SessionCmd, WorkspaceCmd};
 use ngterm_proto::{Args, Command, Request};
 
 use crate::{BasicOptions, ClientOptions, RequestCommand, TargetOptions};
 
-/// `--on`'s parts as the wire's list: split on every comma, empty parts kept for the server to refuse, as upstream's
-/// `TintRequest.parts`.
+/// `--on`'s parts as the wire's list: split on every comma, empty parts kept so `validate_parts` refuses them, as
+/// upstream's `TintRequest.parts`.
 fn parts(on: Option<&str>) -> Option<Vec<String>> {
     on.map(|on| on.split(',').map(str::to_owned).collect())
+}
+
+/// Checks `<COLOR|clear> [--on PARTS]` (upstream's `TintRequest.validate`).
+fn validate(value: &str, on: Option<&str>) -> Result<(), String> {
+    if value == "clear" {
+        return match on {
+            Some(_) => Err("--on does not apply to clear".to_owned()),
+            None => Ok(()),
+        };
+    }
+    if TintColor::from_wire(&value.to_lowercase()).is_none() {
+        return Err(format!(
+            "tint must be one of: {}, or clear",
+            TintColor::valid_names_list()
+        ));
+    }
+    validate_parts(on, "--on")
+}
+
+/// Checks a placement list: `icon` and/or `name`, comma-separated (upstream's `TintRequest.validateParts`).
+fn validate_parts(on: Option<&str>, flag: &str) -> Result<(), String> {
+    match parts(on) {
+        Some(parts) if TintParts::parse(&parts).is_none() => {
+            Err(format!("{flag} must list icon and/or name, comma-separated"))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The wire form of `<COLOR|clear> [--on PARTS]` (upstream's `TintRequest.args`): the color lower-cased.
@@ -45,6 +73,20 @@ pub struct TintCreateOptions {
 }
 
 impl TintCreateOptions {
+    /// Checks the creation tint (upstream's `TintCreateOptions.validate`): a placement needs a color.
+    pub fn validate(&self) -> Result<(), String> {
+        let Some(tint) = &self.tint else {
+            return match self.tint_on {
+                Some(_) => Err("--tint-on requires --tint".to_owned()),
+                None => Ok(()),
+            };
+        };
+        if TintColor::from_wire(&tint.to_lowercase()).is_none() {
+            return Err(format!("--tint must be one of: {}", TintColor::valid_names_list()));
+        }
+        validate_parts(self.tint_on.as_deref(), "--tint-on")
+    }
+
     /// Copies the creation tint into a `session.new`/`workspace.new` argument bag, the color lower-cased.
     pub fn apply(&self, args: &mut Args) {
         args.tint = self.tint.as_ref().map(|tint| tint.to_lowercase());
@@ -84,6 +126,10 @@ impl RequestCommand for SessionTint {
         &self.options.basic
     }
 
+    fn validate(&self) -> Result<(), String> {
+        validate(&self.value, self.on.as_deref())
+    }
+
     fn make_request(&self) -> Request {
         Request {
             cmd: Command::Session(SessionCmd::Tint),
@@ -121,6 +167,10 @@ impl RequestCommand for WorkspaceTint {
         &self.options.basic
     }
 
+    fn validate(&self) -> Result<(), String> {
+        validate(&self.value, self.on.as_deref())
+    }
+
     fn make_request(&self) -> Request {
         Request {
             cmd: Command::Workspace(WorkspaceCmd::Tint),
@@ -139,15 +189,75 @@ mod tests {
 
     use crate::Ngtermctl;
 
-    /// The request `ngtermctl <argv>` sends, as JSON.
-    fn request(argv: &[&str]) -> Value {
+    /// The request `ngtermctl <argv>` sends, as JSON, or the refusal its validation answers.
+    fn outcome(argv: &[&str]) -> Result<Value, String> {
         let command_line = std::iter::once("ngtermctl").chain(argv.iter().copied());
-        let command = match Ngtermctl::try_parse_from(command_line).unwrap().command {
+        let command = Ngtermctl::try_parse_from(command_line).unwrap().command;
+        command.validate()?;
+        let request = match command {
             crate::Command::Session(group) => serde_json::to_value(group.command().make_request()),
             crate::Command::Workspace(group) => serde_json::to_value(group.command().make_request()),
             other => panic!("not a session or workspace command: {other:?}"),
         };
-        command.unwrap()
+        Ok(request.unwrap())
+    }
+
+    fn request(argv: &[&str]) -> Value {
+        outcome(argv).unwrap()
+    }
+
+    /// `tintRejectsBadInputAtParseTime`.
+    #[test]
+    fn a_bad_tint_is_refused_before_anything_is_sent() {
+        for (argv, error) in [
+            (
+                &["session", "tint", "teal"][..],
+                "tint must be one of: red|orange|yellow|green|blue|purple|gray, or clear",
+            ),
+            (
+                &["session", "tint", "clear", "--on", "icon"],
+                "--on does not apply to clear",
+            ),
+            (
+                &["session", "tint", "red", "--on", "icon,strip"],
+                "--on must list icon and/or name, comma-separated",
+            ),
+            (
+                &["workspace", "tint", "red", "--on", ""],
+                "--on must list icon and/or name, comma-separated",
+            ),
+        ] {
+            assert_eq!(outcome(argv), Err(error.to_owned()), "{argv:?}");
+        }
+    }
+
+    /// `creationTintRejectsBadInputAtParseTime`, ahead of `session new`'s own checks.
+    #[test]
+    fn a_bad_creation_tint_is_refused_before_anything_is_sent() {
+        for (argv, error) in [
+            (
+                &["session", "new", "--tint-on", "icon"][..],
+                "--tint-on requires --tint",
+            ),
+            (
+                &["workspace", "new", "--tint", "teal"],
+                "--tint must be one of: red|orange|yellow|green|blue|purple|gray",
+            ),
+            (
+                &["workspace", "new", "--tint", "red", "--tint-on", "both"],
+                "--tint-on must list icon and/or name, comma-separated",
+            ),
+            (
+                &["session", "new", "--wait", "--tint", "teal"],
+                "--tint must be one of: red|orange|yellow|green|blue|purple|gray",
+            ),
+        ] {
+            assert_eq!(outcome(argv), Err(error.to_owned()), "{argv:?}");
+        }
+        assert_eq!(
+            request(&["workspace", "new", "prod", "--tint", "red"]),
+            json!({"cmd": "workspace.new", "args": {"name": "prod", "tint": "red"}})
+        );
     }
 
     #[test]
@@ -185,8 +295,8 @@ mod tests {
     #[test]
     fn the_creation_tint_rides_on_both_news() {
         assert_eq!(
-            request(&["session", "new", "--tint", "Green", "--tint-on", "name,"]),
-            json!({"cmd": "session.new", "args": {"tint": "green", "tintOn": ["name", ""]}})
+            request(&["session", "new", "--tint", "Green", "--tint-on", "icon,name"]),
+            json!({"cmd": "session.new", "args": {"tint": "green", "tintOn": ["icon", "name"]}})
         );
         assert_eq!(
             request(&["workspace", "new", "w", "--tint", "gray"]),

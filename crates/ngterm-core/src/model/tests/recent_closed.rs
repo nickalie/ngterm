@@ -654,6 +654,7 @@ fn one_workspace(id: Uuid, name: &str, sessions: Vec<SessionSnapshot>) -> Snapsh
             name: name.to_owned(),
             sessions,
             collapsed: None,
+            tint: None,
         }],
         ..Snapshot::default()
     }
@@ -685,6 +686,7 @@ fn reopen_split_workspace(shell: bool, external_pending: bool) {
         name: "original".to_owned(),
         sessions: vec![x.clone(), y.clone(), z.clone()],
         collapsed: None,
+        tint: None,
     };
     let item = workspace_item(snapshot, Some(z.id));
     library.set_recent_closed_items(vec![item.clone()]);

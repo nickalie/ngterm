@@ -19,6 +19,7 @@ use super::pending_close::PendingCloses;
 use super::recency::RecencyStack;
 use super::recent_closed::{ClosedSessionPlace, RecentClosedList};
 use super::session::{AgentIndicator, AgentStatus, Session, SessionSeed};
+use super::tint::SidebarTint;
 use super::workspace::{ReorderDirection, SidebarMode, Workspace};
 use crate::commands::ToggleMode;
 use crate::pane_env::uuid_string;
@@ -98,6 +99,8 @@ pub struct WorkspaceOptions {
     /// A foreground create: joins an enabled focus filter so it is visible, and becomes the current workspace until
     /// the selection moves. A background create leaves both alone, so a script cannot steer the GUI's next add.
     pub reveal: bool,
+    /// The creation tint (`workspace.new --tint`).
+    pub tint: Option<SidebarTint>,
 }
 
 impl Default for WorkspaceOptions {
@@ -105,6 +108,7 @@ impl Default for WorkspaceOptions {
         Self {
             collapsed: false,
             reveal: true,
+            tint: None,
         }
     }
 }
@@ -125,6 +129,8 @@ pub struct NewSession {
     pub select: bool,
     /// The host of a session attached from another machine.
     pub remote_host: Option<String>,
+    /// The creation tint (`session.new --tint`), set before the first save.
+    pub tint: Option<SidebarTint>,
 }
 
 impl NewSession {
@@ -139,6 +145,7 @@ impl NewSession {
             at: None,
             select: true,
             remote_host: None,
+            tint: None,
         }
     }
 }
@@ -698,6 +705,7 @@ impl AppStore {
     pub fn add_workspace_with(&mut self, name: &str, options: WorkspaceOptions) -> Uuid {
         let mut workspace = Workspace::new(sanitized(name));
         workspace.is_expanded = !options.collapsed;
+        workspace.tint = options.tint;
         let id = workspace.id();
         self.workspaces.push(workspace);
         if options.reveal {
@@ -719,8 +727,8 @@ impl AppStore {
         Some(self.add_workspace_with(
             &needle,
             WorkspaceOptions {
-                collapsed: false,
                 reveal,
+                ..WorkspaceOptions::default()
             },
         ))
     }
@@ -917,6 +925,7 @@ impl AppStore {
         });
         session.launch.command = spec.command;
         session.launch.wait = spec.wait;
+        session.tint = spec.tint;
         let id = session.id();
         let sessions = &mut self.workspaces[index].sessions;
         match spec.at {

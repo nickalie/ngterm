@@ -11,20 +11,29 @@ use uuid::Uuid;
 use super::{PaletteAction, PaletteMode, feeds::window_holds};
 use crate::Core;
 use crate::app_actions::{ActionEffect, ActionOrigin, FrontendAction};
-use crate::model::AppStore;
+use crate::model::{AppStore, TintChoice};
 use crate::palette_catalog::PaletteCommand;
 use crate::pane_env::uuid_string;
 use crate::windows::WindowRequest;
 
 impl Core {
     /// Whether `action`, a row of the palette window `window` draws, can run now. The static rows read the menu's
-    /// predicate; an attention row asks its own window's modal gate (upstream's `canSelectAttention`); the rest are
-    /// gated when they run.
+    /// predicate; an attention row asks its own window's modal gate (upstream's `canSelectAttention`); a Tint Session
+    /// row needs that gate and a selected session (the `isEnabled` of upstream's `tintItems`); the rest are gated when
+    /// they run.
     #[must_use]
     pub fn palette_entry_enabled(&self, window: Uuid, action: &PaletteAction) -> bool {
         match action {
             PaletteAction::Command(command) => command.is_enabled(&self.palette_context(window)),
             PaletteAction::Attention { window, session } => self.can_select_attention(*window, *session),
+            PaletteAction::TintSession(_) => {
+                self.ui_actions_enabled(window)
+                    && self
+                        .library()
+                        .store(window)
+                        .and_then(AppStore::selected_session_id)
+                        .is_some()
+            }
             _ => true,
         }
     }
@@ -101,6 +110,13 @@ impl Core {
                 }
             }
             PaletteAction::Custom(id) => self.run_palette_custom_command(window, *id),
+            PaletteAction::TintSession(color) => {
+                if let Some(store) = self.library_mut().store_mut(window)
+                    && let Some(session) = store.selected_session_id()
+                {
+                    store.apply_session_tints(TintChoice::Color(*color), &[session]);
+                }
+            }
             PaletteAction::SelectSession(session) if window_holds(self.library(), window, *session) => {
                 self.pick_session(window, *session);
             }

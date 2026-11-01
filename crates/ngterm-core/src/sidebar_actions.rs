@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::Core;
 use crate::commands::ToggleMode;
-use crate::model::{AgentIndicator, AppStore, NewSession, NewSessionPlacement, SidebarMode};
+use crate::model::{AgentIndicator, AppStore, NewSession, NewSessionPlacement, SidebarMode, TintChoice};
 use crate::persist::settings::NewSessionPlacementSetting;
 
 /// One sidebar gesture, already resolved to ids.
@@ -48,6 +48,17 @@ pub enum SidebarAction {
     },
     /// Row menu: Flag/Unflag (one value for the batch: flag all unless all are flagged).
     ToggleFlags(Vec<Uuid>),
+    /// Row menu: a Tint submenu choice for the session targets, each tinted row keeping its own color or parts
+    /// (upstream's `setTintColor`/`setTintParts`).
+    TintSessions {
+        sessions: Vec<Uuid>,
+        choice: TintChoice,
+    },
+    /// Workspace row menu: a Tint submenu choice for the workspace row's own tint.
+    TintWorkspace {
+        workspace: Uuid,
+        choice: TintChoice,
+    },
     /// Row menu: Clear Status/Clear Statuses.
     ClearStatus(Vec<Uuid>),
     /// Row menu: Mark for Attention, a plain `completed` on the idle targets, the rest left alone.
@@ -243,6 +254,11 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool) -> boo
                 return false;
             }
             store.apply_workspace_flag(ToggleMode::Toggle, id);
+        }
+        SidebarAction::TintSessions { sessions, choice } => return store.apply_session_tints(choice, &sessions),
+        SidebarAction::TintWorkspace { workspace, choice } => {
+            let current = store.workspace(workspace).and_then(|workspace| workspace.tint);
+            return store.set_workspace_tint(choice.applied(current), workspace);
         }
         SidebarAction::ClearStatus(ids) => {
             for id in ids {
@@ -455,6 +471,55 @@ mod tests {
         assert_eq!(flags(&f), [false, false, false]);
         assert!(!f.act(SidebarAction::ToggleWorkspaceFlags(two)));
         assert!(!f.act(SidebarAction::ToggleWorkspaceFlags(Uuid::new_v4())));
+    }
+
+    /// `WorkspaceSidebarTintMenuTests`: a color tints every target keeping each row's placement, Show On moves each
+    /// tinted row's own color and skips an untinted one, None clears; a workspace row's choice tints that row alone.
+    #[test]
+    fn the_tint_submenu_tints_its_targets_and_the_workspace_row_alone() {
+        use crate::model::{SidebarTint, TintColor, TintParts};
+        let mut f = fixture(AppSettings::default());
+        let [one, _] = f.workspaces;
+        let [first, second, third] = f.sessions;
+        let named = SidebarTint::new(TintColor::Red, TintParts::NAME);
+        f.store_mut().set_session_tint(Some(named), first);
+        let tints = |f: &Fixture| f.sessions.map(|id| f.store().session(id).unwrap().tint);
+        assert!(f.act(SidebarAction::TintSessions {
+            sessions: vec![first, second],
+            choice: TintChoice::Color(Some(TintColor::Blue)),
+        }));
+        let blue_named = SidebarTint::new(TintColor::Blue, TintParts::NAME);
+        let blue = SidebarTint::on_icon(TintColor::Blue);
+        assert_eq!(tints(&f), [Some(blue_named), Some(blue), None]);
+        assert!(f.act(SidebarAction::TintSessions {
+            sessions: vec![second, third],
+            choice: TintChoice::Parts(TintParts::BOTH),
+        }));
+        let both = SidebarTint::new(TintColor::Blue, TintParts::BOTH);
+        assert_eq!(
+            tints(&f),
+            [Some(blue_named), Some(both), None],
+            "an untinted row stays so"
+        );
+        assert!(f.act(SidebarAction::TintSessions {
+            sessions: vec![first],
+            choice: TintChoice::Color(None),
+        }));
+        assert_eq!(tints(&f)[0], None);
+
+        assert!(f.act(SidebarAction::TintWorkspace {
+            workspace: one,
+            choice: TintChoice::Color(Some(TintColor::Purple)),
+        }));
+        assert_eq!(
+            f.store().workspace(one).unwrap().tint,
+            Some(SidebarTint::on_icon(TintColor::Purple))
+        );
+        assert_eq!(tints(&f), [None, Some(both), None], "its sessions keep their own");
+        assert!(!f.act(SidebarAction::TintWorkspace {
+            workspace: one,
+            choice: TintChoice::Color(Some(TintColor::Purple)),
+        }));
     }
 
     #[test]

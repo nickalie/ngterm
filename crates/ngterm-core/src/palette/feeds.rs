@@ -7,7 +7,7 @@ use uuid::Uuid;
 use super::{PaletteAction, PaletteEntry, PaletteMode, PaletteShortcut};
 use crate::Core;
 use crate::keymap::{BuiltinAction, CustomCommand};
-use crate::model::{AppStore, WindowLibrary};
+use crate::model::{AppStore, TintColor, WindowLibrary};
 use crate::palette_catalog::PaletteCommand;
 use crate::pane_env::uuid_string;
 use crate::theme::ThemeCatalog;
@@ -37,7 +37,8 @@ impl Core {
     }
 
     /// The action palette: the visible static rows, the window rows, Settings… (the build's own), a Move Session row
-    /// per other workspace, then the custom commands badged `custom` (upstream's `paletteActions`).
+    /// per other workspace, the Tint Session rows, then the custom commands badged `custom` (upstream's
+    /// `paletteActions`).
     fn palette_actions(&self) -> Vec<PaletteEntry> {
         let Some(window) = self.library().active_window_id() else {
             return Vec::new();
@@ -93,6 +94,7 @@ impl Core {
         );
         if let Some(store) = library.store(window) {
             entries.extend(move_session_entries(store));
+            entries.extend(tint_entries(store));
         }
         entries.extend(self.custom_command_entries(Some("custom")));
         entries
@@ -210,6 +212,25 @@ fn move_session_entries(store: &AppStore) -> Vec<PaletteEntry> {
                     session,
                     workspace: workspace.id(),
                 },
+            )
+        })
+        .collect()
+}
+
+/// "Tint Session: <Color>" per color, then "Tint Session: None", while a session is selected (upstream's `tintItems`).
+fn tint_entries(store: &AppStore) -> Vec<PaletteEntry> {
+    if store.selected_session_id().is_none() {
+        return Vec::new();
+    }
+    TintColor::ALL
+        .into_iter()
+        .map(Some)
+        .chain([None])
+        .map(|color| {
+            plain_entry(
+                format!("tint-{}", color.map_or("none", TintColor::wire_name)),
+                format!("Tint Session: {}", color.map_or("None", TintColor::title)),
+                PaletteAction::TintSession(color),
             )
         })
         .collect()

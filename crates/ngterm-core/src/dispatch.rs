@@ -1044,14 +1044,12 @@ mod tests {
     #[test]
     fn the_v0_39_commands_are_refused_as_not_supported() {
         for cmd in [
-            Command::Session(SessionCmd::Tint),
             Command::Session(SessionCmd::Collapse),
             Command::Session(SessionCmd::Expand),
             Command::Session(SessionCmd::CompanionNew),
             Command::Session(SessionCmd::CompanionPage),
             Command::Session(SessionCmd::CompanionDuplicate),
             Command::Session(SessionCmd::CompanionPageAttach),
-            Command::Workspace(WorkspaceCmd::Tint),
         ] {
             let line = format!(r#"{{"cmd":"{cmd}","target":"active"}}"#);
             assert_eq!(

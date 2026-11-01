@@ -527,6 +527,10 @@ impl Sidebar {
             }
             MenuAction::ToggleWorkspaceFlags(id) => self.act(SidebarAction::ToggleWorkspaceFlags(id)),
             MenuAction::DeleteWorkspace(id) => self.delete_workspace(id, window, cx),
+            MenuAction::Tint { sessions, choice } => self.act(SidebarAction::TintSessions { sessions, choice }),
+            MenuAction::TintWorkspace { workspace, choice } => {
+                self.act(SidebarAction::TintWorkspace { workspace, choice });
+            }
         }
     }
 

@@ -18,7 +18,7 @@ use serde_json::value::RawValue;
 use uuid::Uuid;
 
 use super::{decode_raw, json, lossy, upper};
-use crate::model::{BackgroundWatermark, PaneBackgrounds, SidebarMode, SplitAxis, validate_context};
+use crate::model::{BackgroundWatermark, PaneBackgrounds, SidebarMode, SidebarTint, SplitAxis, validate_context};
 
 /// The per-window file shape's version; a mismatch makes the loader start fresh.
 pub const SNAPSHOT_VERSION: i64 = 1;
@@ -160,6 +160,9 @@ pub struct WorkspaceSnapshot {
     /// The inverse of expanded, so only a collapsed workspace writes it.
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
     pub collapsed: Option<bool>,
+    /// The workspace row's tint; absent when untinted, so an untinted tree writes what it did before tints.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub tint: Option<SidebarTint>,
 }
 
 /// One persisted session (field docs on upstream's `SessionSnapshot`).
@@ -217,6 +220,9 @@ pub struct SessionSnapshot {
     /// `Session::last_selected_at` as epoch seconds; `None` when no selection timestamp has been recorded.
     #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
     pub last_selected_at: Option<f64>,
+    /// The sidebar row's tint (`session.tint`); an unknown color drops the tint alone.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub tint: Option<SidebarTint>,
 }
 
 impl SessionSnapshot {
@@ -635,12 +641,14 @@ mod tests {
                         SessionSnapshot::new(Uuid::new_v4(), "/tmp"),
                     ],
                     collapsed: None,
+                    tint: None,
                 },
                 WorkspaceSnapshot {
                     id: Uuid::new_v4(),
                     name: "personal".to_owned(),
                     sessions: Vec::new(),
                     collapsed: Some(true),
+                    tint: None,
                 },
             ],
             ..Snapshot::default()

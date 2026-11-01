@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use ngterm_core::model::{AppStore, Session, SidebarMode, Workspace};
+use ngterm_core::model::{AppStore, Session, SidebarMode, SidebarTint, Workspace};
 use ngterm_core::persist::AppSettings;
 use ngterm_core::persist::settings::FlaggedViewLayout;
 use uuid::Uuid;
@@ -32,6 +32,8 @@ pub struct SidebarRow {
     pub status: Option<GlyphLook>,
     /// The leading glyph's tooltip: what a remote row's presentation stream is missing, `None` otherwise.
     pub icon_tooltip: Option<String>,
+    /// The row's own tint, coloring its icon and/or name.
+    pub tint: Option<SidebarTint>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +178,7 @@ impl RowBuilder<'_> {
             },
             status: None,
             icon_tooltip: None,
+            tint: workspace.tint,
         }
     }
 
@@ -201,6 +204,7 @@ impl RowBuilder<'_> {
             icon: session_icon(session, self.store.sidebar().mode == SidebarMode::Tree),
             status: status_glyph::resolve(&session.agent_indicator, self.settings.settings),
             icon_tooltip: session.presentation_notice(),
+            tint: session.tint,
         }
     }
 }

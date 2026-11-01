@@ -17,6 +17,7 @@ use super::outbox::RecentClosedChange;
 use super::session::Session;
 use super::snapshot::{session_from_snapshot, session_snapshot, workspace_from_snapshot, workspace_snapshot};
 use super::store::AppStore;
+use super::tint::SidebarTint;
 use super::workspace::Workspace;
 use crate::persist::recent_closed::{record_recent_closed, reference_date};
 use crate::persist::{
@@ -63,8 +64,8 @@ impl RecentClosedList {
         self.0.borrow_mut().clear();
     }
 
-    /// The name and expansion the newest workspace entry with snapshot `id` records.
-    pub(crate) fn workspace_shell(&self, id: Uuid) -> Option<(String, bool)> {
+    /// The name, expansion and tint the newest workspace entry with snapshot `id` records.
+    pub(crate) fn workspace_shell(&self, id: Uuid) -> Option<(String, bool, Option<SidebarTint>)> {
         self.0
             .borrow()
             .iter()
@@ -74,6 +75,7 @@ impl RecentClosedList {
                 (
                     workspace.snapshot.name.clone(),
                     !workspace.snapshot.collapsed.unwrap_or(false),
+                    workspace.snapshot.tint,
                 )
             })
     }

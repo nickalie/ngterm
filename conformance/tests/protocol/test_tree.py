@@ -135,6 +135,8 @@ def test_fresh_session_node(ctl):
         "statusColor",
         "statusShape",
         "statusChangedAt",
+        "tint",
+        "tintOn",
         "background",
         "paneBackgrounds",
         "unseen",

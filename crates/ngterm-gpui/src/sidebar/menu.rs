@@ -1,12 +1,16 @@
-//! The row context menus (upstream's `WorkspaceSidebar+ContextMenu.swift` `menu(forRow:)`), as a pure model over a
-//! snapshot of the window the sidebar took on its last sync (ported unchanged from the GTK build's `sidebar/menu.rs`),
-//! and the gpui-kit popup menu drawn from it ([`build`]).
+//! The row context menus (upstream's `WorkspaceSidebar+ContextMenu.swift` `menu(forRow:)` and
+//! `WorkspaceSidebar+TintMenu.swift`), as a pure model over a snapshot of the window the sidebar took on its last sync
+//! (ported from the GTK build's `sidebar/menu.rs`), and the gpui-kit popup menu drawn from it ([`build`]).
 
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
-use gpui_kit::{Context, Window};
+use gpui_kit::{
+    Context, ElementId, IntoElement as _, ParentElement as _, SharedString, Styled as _, Text, Window, div, px,
+};
+use ngterm_core::model::{SidebarTint, TintChoice, TintColor, TintParts};
 use uuid::Uuid;
 
 /// What a session row's menu reads of its session.
@@ -21,6 +25,8 @@ pub struct SessionFacts {
     pub cwd: String,
     /// A hidden overlay goes with the session, which its close confirmation names.
     pub hidden_overlays: bool,
+    /// The row's tint, what the Tint submenu checks.
+    pub tint: Option<SidebarTint>,
 }
 
 /// What a workspace row's menu reads of its workspace.
@@ -34,6 +40,8 @@ pub struct WorkspaceFacts {
     pub sole_focus: bool,
     /// Every session is flagged, the ones the flagged view hides included (upstream's `allSessionsFlagged`).
     pub all_flagged: bool,
+    /// The row's own tint.
+    pub tint: Option<SidebarTint>,
 }
 
 /// The window as the menus and the sidebar's other handlers see it, taken on each refresh.
@@ -92,6 +100,16 @@ pub enum MenuAction {
     /// Flag All Sessions / Unflag All Sessions.
     ToggleWorkspaceFlags(Uuid),
     DeleteWorkspace(Uuid),
+    /// A Tint submenu choice for the session targets.
+    Tint {
+        sessions: Vec<Uuid>,
+        choice: TintChoice,
+    },
+    /// A Tint submenu choice for a workspace row's own tint.
+    TintWorkspace {
+        workspace: Uuid,
+        choice: TintChoice,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +117,10 @@ pub struct MenuItem {
     pub label: String,
     pub action: MenuAction,
     pub enabled: bool,
+    /// Drawn with a check mark.
+    pub checked: bool,
+    /// A tint color's swatch drawn before the label.
+    pub swatch: Option<TintColor>,
 }
 
 impl MenuItem {
@@ -107,6 +129,8 @@ impl MenuItem {
             label: label.into(),
             action,
             enabled: true,
+            checked: false,
+            swatch: None,
         }
     }
 }
@@ -114,7 +138,12 @@ impl MenuItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuEntry {
     Item(MenuItem),
-    Submenu { label: String, items: Vec<MenuItem> },
+    Submenu {
+        label: String,
+        items: Vec<MenuEntry>,
+    },
+    /// A section title, not clickable.
+    Header(String),
     Separator,
 }
 
@@ -155,18 +184,18 @@ pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl F
             MenuAction::Duplicate(clicked),
         )));
     }
-    let destinations: Vec<MenuItem> = context
+    let destinations: Vec<MenuEntry> = context
         .workspaces
         .iter()
         .filter(|workspace| facts.iter().any(|facts| facts.workspace != workspace.id))
         .map(|workspace| {
-            MenuItem::new(
+            MenuEntry::Item(MenuItem::new(
                 workspace.name.clone(),
                 MenuAction::MoveTo {
                     sessions: targets.clone(),
                     workspace: workspace.id,
                 },
-            )
+            ))
         })
         .collect();
     if !destinations.is_empty() {
@@ -186,6 +215,7 @@ pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl F
         flag,
         MenuAction::ToggleFlags(targets.clone()),
     )));
+    menu.push(session_tint_submenu(context, &targets));
     if single && let Some(facts) = context.sessions.get(&clicked) {
         menu.push(MenuEntry::Item(MenuItem {
             enabled: reveal_enabled(&facts.cwd),
@@ -243,12 +273,64 @@ pub fn workspace_menu(context: &MenuContext, id: Uuid) -> Vec<MenuEntry> {
                 MenuAction::ToggleWorkspaceFlags(id),
             )
         }),
+        tint_submenu(&[facts.and_then(|facts| facts.tint)], |choice| {
+            MenuAction::TintWorkspace { workspace: id, choice }
+        }),
         MenuEntry::Separator,
         MenuEntry::Item(MenuItem {
             enabled: context.can_remove_workspace,
             ..MenuItem::new("Delete Workspace", MenuAction::DeleteWorkspace(id))
         }),
     ]
+}
+
+/// The session targets' Tint submenu.
+fn session_tint_submenu(context: &MenuContext, targets: &[Uuid]) -> MenuEntry {
+    let tints: Vec<Option<SidebarTint>> = targets
+        .iter()
+        .map(|id| context.sessions.get(id).and_then(|facts| facts.tint))
+        .collect();
+    tint_submenu(&tints, |choice| MenuAction::Tint {
+        sessions: targets.to_vec(),
+        choice,
+    })
+}
+
+/// The Tint submenu (upstream's `tintMenuItem`): None and the seven colors with their swatches, then Show On's
+/// placements, enabled only while every target is tinted. An entry is checked only when every target shares it.
+fn tint_submenu(current: &[Option<SidebarTint>], action: impl Fn(TintChoice) -> MenuAction) -> MenuEntry {
+    let colors: Vec<Option<TintColor>> = current.iter().map(|tint| tint.map(SidebarTint::color)).collect();
+    let shared = |color: Option<TintColor>| !colors.is_empty() && colors.iter().all(|each| *each == color);
+    let mut items = vec![MenuEntry::Item(MenuItem {
+        checked: shared(None),
+        ..MenuItem::new("None", action(TintChoice::Color(None)))
+    })];
+    items.extend(TintColor::ALL.into_iter().map(|color| {
+        MenuEntry::Item(MenuItem {
+            checked: shared(Some(color)),
+            swatch: Some(color),
+            ..MenuItem::new(color.title(), action(TintChoice::Color(Some(color))))
+        })
+    }));
+    items.push(MenuEntry::Separator);
+    items.push(MenuEntry::Header("Show On".to_owned()));
+    let all_tinted = current.iter().all(Option::is_some);
+    let placed = |parts| !current.is_empty() && current.iter().all(|tint| tint.map(SidebarTint::parts) == Some(parts));
+    for (title, parts) in [
+        ("Icon", TintParts::ICON),
+        ("Name", TintParts::NAME),
+        ("Icon and Name", TintParts::BOTH),
+    ] {
+        items.push(MenuEntry::Item(MenuItem {
+            enabled: all_tinted,
+            checked: placed(parts),
+            ..MenuItem::new(title, action(TintChoice::Parts(parts)))
+        }));
+    }
+    MenuEntry::Submenu {
+        label: "Tint".to_owned(),
+        items,
+    }
 }
 
 /// What a menu item runs its action with.
@@ -265,14 +347,12 @@ pub fn build(
     for entry in entries {
         menu = match entry {
             MenuEntry::Separator => menu.separator(),
+            MenuEntry::Header(label) => menu.label(label),
             MenuEntry::Item(item) => menu.item(item_of(item, perform)),
             MenuEntry::Submenu { label, items } => {
                 let perform = Rc::clone(perform);
-                menu.submenu(label, window, cx, move |mut submenu, _, _| {
-                    for item in items.clone() {
-                        submenu = submenu.item(item_of(item, &perform));
-                    }
-                    submenu
+                menu.submenu(label, window, cx, move |submenu, window, cx| {
+                    build(submenu, items.clone(), &perform, window, cx)
                 })
             }
         };
@@ -283,10 +363,33 @@ pub fn build(
 fn item_of(item: MenuItem, perform: &Perform) -> PopupMenuItem {
     let perform = Rc::clone(perform);
     let action = item.action;
-    PopupMenuItem::new(item.label)
+    let entry = match item.swatch {
+        // drawn as it shows, so the swatch follows the menu's light or dark side as the row it colors does; the label
+        // is a Text with an id, so the item keeps its name for a screen reader (an element item carries none itself)
+        Some(color) => {
+            let label = SharedString::from(item.label);
+            PopupMenuItem::element(move |_, cx| {
+                let ink = super::look::tint(color, cx.theme().mode.is_dark());
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(SWATCH_GAP))
+                    .child(div().size(px(SWATCH)).rounded_full().bg(ink))
+                    .child(Text::new(ElementId::from("tint-swatch-label"), label.clone()))
+                    .into_any_element()
+            })
+        }
+        None => PopupMenuItem::new(item.label),
+    };
+    entry
+        .checked(item.checked)
         .disabled(!item.enabled)
         .on_click(move |_, window, cx| perform(action.clone(), window, cx))
 }
+
+/// A tint swatch's diameter and its gap before the label (upstream's 12-point image inset by 1).
+const SWATCH: f32 = 10.0;
+const SWATCH_GAP: f32 = 6.0;
 
 #[cfg(test)]
 mod tests {
@@ -299,6 +402,7 @@ mod tests {
                 MenuEntry::Item(item) if item.enabled => item.label.clone(),
                 MenuEntry::Item(item) => format!("({})", item.label),
                 MenuEntry::Submenu { label, items } => format!("{label} [{}]", items.len()),
+                MenuEntry::Header(label) => format!("# {label}"),
                 MenuEntry::Separator => "-".to_owned(),
             })
             .collect()
@@ -315,6 +419,7 @@ mod tests {
             has_status: false,
             cwd: "/tmp".to_owned(),
             hidden_overlays: false,
+            tint: None,
         };
         let workspace = |id, name: &str, count| WorkspaceFacts {
             id,
@@ -323,6 +428,7 @@ mod tests {
             focus_member: false,
             sole_focus: false,
             all_flagged: false,
+            tint: None,
         };
         let context = MenuContext {
             selection: Vec::new(),
@@ -347,21 +453,22 @@ mod tests {
                 "Duplicate Session",
                 "Move to [1]",
                 "Flag",
+                "Tint [13]",
                 "Reveal in Files",
                 "Close Session"
             ]
         );
         assert!(menu.contains(&MenuEntry::Submenu {
             label: "Move to".into(),
-            items: vec![MenuItem::new(
+            items: vec![MenuEntry::Item(MenuItem::new(
                 "two",
                 MenuAction::MoveTo {
                     sessions: vec![a],
                     workspace: two
                 }
-            )],
+            ))],
         }));
-        assert_eq!(labels(&session_menu(&context, a, |_| false))[7], "(Reveal in Files)");
+        assert_eq!(labels(&session_menu(&context, a, |_| false))[8], "(Reveal in Files)");
     }
 
     #[test]
@@ -379,6 +486,7 @@ mod tests {
                 "-",
                 "Move to [2]",
                 "Flag Sessions",
+                "Tint [13]",
                 "Close 2 Sessions"
             ]
         );
@@ -443,6 +551,7 @@ mod tests {
                 "Add to Focus",
                 "-",
                 "Flag All Sessions",
+                "Tint [13]",
                 "-",
                 "Delete Workspace"
             ]
@@ -459,6 +568,7 @@ mod tests {
                 "Remove from Focus",
                 "-",
                 "Flag All Sessions",
+                "Tint [13]",
                 "-",
                 "(Delete Workspace)"
             ]
@@ -490,5 +600,145 @@ mod tests {
         context.workspaces[1].session_count = 0;
         let item = flag_item(&context, two);
         assert_eq!((item.label.as_str(), item.enabled), ("Flag All Sessions", false));
+    }
+
+    /// The Tint submenu of a menu: its entries, `*` marking a checked one and `~` one with a swatch.
+    fn tint_entries(menu: &[MenuEntry]) -> Vec<MenuEntry> {
+        menu.iter()
+            .find_map(|entry| match entry {
+                MenuEntry::Submenu { label, items } if label == "Tint" => Some(items.clone()),
+                _ => None,
+            })
+            .expect("a Tint submenu")
+    }
+
+    fn tint_labels(entries: &[MenuEntry]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|entry| match entry {
+                MenuEntry::Item(item) => {
+                    let check = if item.checked { "*" } else { "" };
+                    let swatch = if item.swatch.is_some() { "~" } else { "" };
+                    let label = if item.enabled {
+                        item.label.clone()
+                    } else {
+                        format!("({})", item.label)
+                    };
+                    format!("{swatch}{label}{check}")
+                }
+                MenuEntry::Header(label) => format!("# {label}"),
+                MenuEntry::Separator => "-".to_owned(),
+                MenuEntry::Submenu { label, .. } => label.clone(),
+            })
+            .collect()
+    }
+
+    fn tint_action(entries: &[MenuEntry], label: &str) -> MenuAction {
+        entries
+            .iter()
+            .find_map(|entry| match entry {
+                MenuEntry::Item(item) if item.label == label => Some(item.action.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {label}"))
+    }
+
+    /// `testPickingAColorTintsTheClickedSession`, `testNoneClearsTheTint`: an untinted row checks None and disables
+    /// Show On; a tinted one checks its color and placement; each entry acts on the clicked row.
+    #[test]
+    fn the_tint_submenu_checks_the_rows_tint_and_acts_on_it() {
+        let (mut context, _, [a, ..]) = context();
+        let entries = tint_entries(&session_menu(&context, a, |_| true));
+        assert_eq!(
+            tint_labels(&entries),
+            [
+                "None*",
+                "~Red",
+                "~Orange",
+                "~Yellow",
+                "~Green",
+                "~Blue",
+                "~Purple",
+                "~Gray",
+                "-",
+                "# Show On",
+                "(Icon)",
+                "(Name)",
+                "(Icon and Name)"
+            ]
+        );
+        assert_eq!(
+            tint_action(&entries, "Red"),
+            MenuAction::Tint {
+                sessions: vec![a],
+                choice: TintChoice::Color(Some(TintColor::Red)),
+            }
+        );
+
+        context.sessions.get_mut(&a).unwrap().tint = Some(SidebarTint::on_icon(TintColor::Red));
+        let entries = tint_entries(&session_menu(&context, a, |_| true));
+        let labels = tint_labels(&entries);
+        assert_eq!((labels[0].as_str(), labels[1].as_str()), ("None", "~Red*"));
+        assert_eq!(labels[10..], ["Icon*", "Name", "Icon and Name"]);
+        assert_eq!(
+            tint_action(&entries, "None"),
+            MenuAction::Tint {
+                sessions: vec![a],
+                choice: TintChoice::Color(None),
+            }
+        );
+    }
+
+    /// `testABatchChecksOnlyWhatEveryTargetShares`, `testShowOnIsDisabledUnlessEveryTargetIsTinted`,
+    /// `testShowOnMovesEachRowsOwnColor`.
+    #[test]
+    fn a_batch_checks_only_what_every_target_shares() {
+        let (mut context, _, [a, b, _]) = context();
+        context.selection = vec![a, b];
+        context.sessions.get_mut(&a).unwrap().tint = Some(SidebarTint::new(TintColor::Red, TintParts::NAME));
+        context.sessions.get_mut(&b).unwrap().tint = Some(SidebarTint::on_icon(TintColor::Green));
+        let entries = tint_entries(&session_menu(&context, a, |_| true));
+        assert!(
+            tint_labels(&entries).iter().all(|label| !label.ends_with('*')),
+            "mixed colors and placements check nothing"
+        );
+        assert_eq!(
+            tint_action(&entries, "Icon and Name"),
+            MenuAction::Tint {
+                sessions: vec![a, b],
+                choice: TintChoice::Parts(TintParts::BOTH),
+            }
+        );
+
+        context.sessions.get_mut(&a).unwrap().tint = Some(SidebarTint::on_icon(TintColor::Blue));
+        context.sessions.get_mut(&b).unwrap().tint = Some(SidebarTint::on_icon(TintColor::Blue));
+        let labels = tint_labels(&tint_entries(&session_menu(&context, a, |_| true)));
+        assert!(labels.contains(&"~Blue*".to_owned()) && labels.contains(&"Icon*".to_owned()));
+
+        context.sessions.get_mut(&b).unwrap().tint = None;
+        let labels = tint_labels(&tint_entries(&session_menu(&context, a, |_| true)));
+        assert_eq!(
+            labels[10..],
+            ["(Icon)", "(Name)", "(Icon and Name)"],
+            "one untinted target"
+        );
+    }
+
+    /// `testWorkspaceMenuTintsTheWorkspaceRowAlone`.
+    #[test]
+    fn the_workspace_tint_submenu_acts_on_the_workspace_row() {
+        let (mut context, [one, _], _) = context();
+        context.workspaces[0].tint = Some(SidebarTint::new(TintColor::Purple, TintParts::BOTH));
+        let entries = tint_entries(&workspace_menu(&context, one));
+        let labels = tint_labels(&entries);
+        assert_eq!(labels[6], "~Purple*");
+        assert_eq!(labels[12], "Icon and Name*");
+        assert_eq!(
+            tint_action(&entries, "Gray"),
+            MenuAction::TintWorkspace {
+                workspace: one,
+                choice: TintChoice::Color(Some(TintColor::Gray)),
+            }
+        );
     }
 }

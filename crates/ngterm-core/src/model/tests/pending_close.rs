@@ -356,6 +356,7 @@ fn a_batch_close_shifts_the_reselection_by_the_earlier_members_removed() {
                     .map(|(index, id)| SessionSnapshot::new(*id, format!("/{index}")))
                     .collect(),
                 collapsed: None,
+                tint: None,
             }],
             ..Snapshot::default()
         },

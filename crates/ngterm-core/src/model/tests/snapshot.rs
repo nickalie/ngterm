@@ -30,6 +30,7 @@ fn one_workspace(sessions: Vec<SessionSnapshot>) -> Snapshot {
             name: "work".to_owned(),
             sessions,
             collapsed: None,
+            tint: None,
         }],
         ..Snapshot::default()
     }
@@ -76,12 +77,14 @@ fn restore_rebuilds_names_and_cwds_and_leaves_terminals_lazy() {
                     SessionSnapshot::new(Uuid::new_v4(), "/var/log"),
                 ],
                 collapsed: None,
+                tint: None,
             },
             WorkspaceSnapshot {
                 id: Uuid::new_v4(),
                 name: "personal".to_owned(),
                 sessions: vec![SessionSnapshot::new(Uuid::new_v4(), "/")],
                 collapsed: None,
+                tint: None,
             },
         ],
         ..Snapshot::default()
@@ -147,6 +150,7 @@ fn restore_folds_duplicate_workspaces_and_keeps_a_repeated_session_once() {
         name: "work".to_owned(),
         sessions,
         collapsed: None,
+        tint: None,
     };
     let snapshot = Snapshot {
         workspaces: vec![
@@ -415,6 +419,7 @@ fn a_restore_that_repairs_a_hidden_selection_keeps_both_stamps() {
         name: name.to_owned(),
         sessions: vec![session],
         collapsed: None,
+        tint: None,
     };
     let snapshot = Snapshot {
         workspaces: vec![
@@ -514,12 +519,14 @@ fn a_selection_the_focus_filter_hides_moves_into_view_and_is_written() {
                 name: "elsewhere".to_owned(),
                 sessions: vec![SessionSnapshot::new(hidden, "/a")],
                 collapsed: None,
+                tint: None,
             },
             WorkspaceSnapshot {
                 id: focused,
                 name: "focused".to_owned(),
                 sessions: vec![SessionSnapshot::new(shown, "/b")],
                 collapsed: None,
+                tint: None,
             },
         ],
         ..Snapshot::default()

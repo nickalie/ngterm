@@ -18,3 +18,4 @@ mod snapshot;
 mod status;
 mod store;
 mod support;
+mod tint;

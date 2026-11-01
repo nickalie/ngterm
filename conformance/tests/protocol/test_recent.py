@@ -13,6 +13,7 @@ from agterm_conformance.match import (
     session_ids,
     window_ids,
     workspace_ids,
+    workspaces,
 )
 
 UNKNOWN = "zzz"
@@ -148,6 +149,24 @@ def test_reopened_session_keeps_its_id_split_flag_context_and_pin(ctl, workspace
         node, {"hasSplit": True, "flagged": True, "context": "probe context", "restoreCommand": "echo pinned"}
     )
     assert entry["id"] not in [listed["id"] for listed in _listed(ctl)]
+
+
+@pytest.mark.since("0.39.1")
+@pytest.mark.covers("recent.open", "field:tree.workspace.tint", "field:tree.workspace.tintOn")
+def test_reopening_into_a_deleted_workspace_rebuilds_its_tint(ctl, workspaces_made):
+    wid, name = _workspace(ctl, workspaces_made)
+    assert_ok(ctl.request("workspace.tint", wid, mode="set", tint="blue", tintOn=["name"]))
+    closed, _ = _closed(ctl, wid)
+    _session(ctl, wid)
+    assert_ok(ctl.request("workspace.delete", wid))
+    assert wid not in workspace_ids(ctl.tree())
+
+    (entry,) = [entry for entry in _listed(ctl) if entry["sessionIDs"] == [closed]]
+    assert_ok(ctl.request("recent.open", entry["id"]))
+
+    (node,) = [node for node in workspaces(ctl.tree()) if node["id"] == wid]
+    assert (node["name"], node.get("tint"), node.get("tintOn")) == (name, "blue", ["name"])
+    assert session_ids(ctl.tree(), wid) == [closed]
 
 
 @pytest.fixture
