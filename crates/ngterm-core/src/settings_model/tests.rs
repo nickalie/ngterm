@@ -338,6 +338,48 @@ fn chrome_elements_split_between_title_bar_and_sidebar() {
     );
 }
 
+/// Upstream's `everyControlElementHasADistinctSymbolAndTextElementsHaveNone`, its core half: which elements are text
+/// only. That every other element's glyph is distinct is `ngterm-gpui`'s `interface_glyph` test.
+#[test]
+fn every_control_element_has_a_glyph_and_text_elements_have_none() {
+    let text_only = [
+        InterfaceElement::WorkspaceName,
+        InterfaceElement::SessionName,
+        InterfaceElement::WindowName,
+        InterfaceElement::SessionContext,
+    ];
+    for element in InterfaceElement::ALL {
+        assert_eq!(element.text_only(), text_only.contains(element), "{element:?}");
+    }
+}
+
+/// Upstream's `settingsOrderListsTextOnlyElementsFirst`.
+#[test]
+fn settings_order_lists_text_only_elements_first() {
+    let title_bar = InterfaceElement::settings_order(true);
+    assert_eq!(
+        title_bar[..4],
+        [
+            InterfaceElement::WorkspaceName,
+            InterfaceElement::SessionName,
+            InterfaceElement::WindowName,
+            InterfaceElement::SessionContext
+        ]
+    );
+    let with_glyphs: Vec<_> = InterfaceElement::ALL
+        .iter()
+        .copied()
+        .filter(|element| element.in_title_bar() && !element.text_only())
+        .collect();
+    assert_eq!(title_bar[4..], with_glyphs[..]);
+    let sidebar: Vec<_> = InterfaceElement::ALL
+        .iter()
+        .copied()
+        .filter(|element| !element.in_title_bar())
+        .collect();
+    assert_eq!(InterfaceElement::settings_order(false), sidebar);
+}
+
 /// Upstream's `overlayToggleIsAHiddenByDefaultTitleBarElement`.
 #[test]
 fn the_overlay_toggle_is_a_hidden_by_default_title_bar_element() {

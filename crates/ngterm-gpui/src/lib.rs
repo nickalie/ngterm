@@ -22,6 +22,7 @@ pub mod hud;
 pub mod input_source;
 pub mod instance;
 pub mod integrations;
+pub mod interface_glyph;
 pub mod keymap_actions;
 pub mod keymap_dispatch;
 pub mod live_runtime;

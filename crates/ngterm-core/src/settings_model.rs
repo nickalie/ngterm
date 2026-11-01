@@ -612,6 +612,33 @@ impl InterfaceElement {
         )
     }
 
+    /// Whether the element is text only, so its control has no glyph and its Settings toggle an empty glyph slot
+    /// (upstream's `symbolName == nil`, #810): the workspace, session and window names and the session context. The
+    /// glyphs themselves are the frontend's (`ngterm-gpui`'s `interface_glyph`).
+    #[must_use]
+    pub fn text_only(self) -> bool {
+        matches!(
+            self,
+            Self::WorkspaceName | Self::SessionName | Self::WindowName | Self::SessionContext
+        )
+    }
+
+    /// The title bar's (`title_bar`) or the sidebar's elements as Settings ▸ Interface lists them (upstream's
+    /// `InterfaceElement.settingsOrder(in:)`): the text-only ones first, so the rows with a glyph stay together, each
+    /// part in declaration order.
+    #[must_use]
+    pub fn settings_order(title_bar: bool) -> Vec<Self> {
+        let section = Self::ALL
+            .iter()
+            .copied()
+            .filter(move |element| element.in_title_bar() == title_bar);
+        section
+            .clone()
+            .filter(|element| element.text_only())
+            .chain(section.filter(|element| !element.text_only()))
+            .collect()
+    }
+
     /// The toggle's label (upstream's `InterfaceElement.displayName`).
     #[must_use]
     pub fn display_name(self) -> &'static str {

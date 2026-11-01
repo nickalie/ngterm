@@ -41,6 +41,7 @@ use super::{
     DividerDrag, EMPTY_FLAGGED, EMPTY_FLAGGED_ADD, FooterAction, RowDrag, RowGroup, RowKind, Sidebar, SidebarRow,
     context,
 };
+use crate::interface_glyph;
 use crate::row_icon::{self, Glyph, SLOT};
 use crate::status_glyph;
 
@@ -344,7 +345,7 @@ impl Sidebar {
             .debug_selector(move || format!("workspace-add-session:{id}"))
             .flex_none()
             .size(px(SLOT))
-            .child(row_icon::icon(Glyph::Plus, color))
+            .child(row_icon::icon(interface_glyph::WORKSPACE_ADD_SESSION, color))
             .tooltip(|window, cx| Tooltip::new("New Session").build(window, cx))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -416,7 +417,7 @@ impl Sidebar {
             .py(px(FOOTER_PADDING.1))
             .when(state.new_workspace, |footer| {
                 footer.child(
-                    footer_button("new-workspace", Glyph::NewWorkspace, ink, "New Workspace")
+                    footer_button("new-workspace", interface_glyph::NEW_WORKSPACE, ink, "New Workspace")
                         .accessibility_label("New Workspace")
                         .on_click(run(FooterAction::NewWorkspace, cx)),
                 )
@@ -429,8 +430,10 @@ impl Sidebar {
                 footer.child(
                     footer_button(
                         "focus-filter-toggle",
-                        Glyph::Grid {
-                            filled: state.filter_on,
+                        if state.filter_on {
+                            Glyph::Grid { filled: true }
+                        } else {
+                            interface_glyph::FOCUS_FILTER
                         },
                         ink,
                         focus_tip,
@@ -448,8 +451,10 @@ impl Sidebar {
                 footer.child(
                     footer_button(
                         "flagged-view-toggle",
-                        Glyph::Flag {
-                            filled: state.flagged_mode,
+                        if state.flagged_mode {
+                            Glyph::Flag { filled: true }
+                        } else {
+                            interface_glyph::FLAGGED_VIEW
                         },
                         ink,
                         flagged_tip,
@@ -466,7 +471,7 @@ impl Sidebar {
     /// The footer's add-session menu: New Session and Open Directory…, opening upward.
     fn add_session_menu(ink: Hsla, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = cx.entity().downgrade();
-        footer_button("add-session", Glyph::AddSession, ink, "New Session")
+        footer_button("add-session", interface_glyph::NEW_SESSION, ink, "New Session")
             .accessibility_label("Add session")
             .dropdown_menu_with_anchor(gpui_kit::Anchor::BottomLeft, move |popup: PopupMenu, _, _| {
                 popup

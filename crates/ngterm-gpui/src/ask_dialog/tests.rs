@@ -445,3 +445,75 @@ fn a_new_ask_draws_its_panel_on_the_next_frame(cx: &mut gpui_kit::TestAppContext
         "the panel is drawn on the frame after the ask opens"
     );
 }
+
+/// Upstream's `testAGuiLineFieldEditsInsetAndCenteredInsideItsBox` (#842): the GUI one-line field is its own box, one
+/// line plus 12 high, its text inset 6 from the box's edge and centered on it, and a click anywhere in it, its padding
+/// included, lands on the field.
+#[gpui_kit::test]
+fn a_gui_line_field_edits_inset_and_centered_inside_its_box(cx: &mut gpui_kit::TestAppContext) {
+    cx.update(gpui_kit::init);
+    let mut pending = ask(AskStyle::Gui);
+    let mut input = ngterm_core::model::AskInputForm::new(ngterm_core::model::AskInputMode::Line);
+    input.placeholder = Some("empty: parent's name, renamed later".to_owned());
+    pending.form = Some(ngterm_core::model::AskForm::Input(input));
+    let look = Look {
+        family: None,
+        size: 13.0,
+        foreground: Rgb::WHITE,
+        background: Rgb::BLACK,
+    };
+    let owner = AskOwner::Session(Uuid::new_v4());
+    let (dialog, cx) = cx.add_window_view(|window, cx| AskDialog::new(opening(&pending, owner, look), window, cx));
+    cx.simulate_resize(gpui_kit::size(px(600.), px(300.)));
+    cx.run_until_parked();
+    cx.update(gpui_kit::Window::simulate_next_frame);
+    cx.run_until_parked();
+
+    let field = cx.debug_bounds("ask-input").expect("the field is laid out");
+    let line = dialog.read_with(cx, |dialog, _| dialog.line_height());
+    assert!(
+        (f64::from(f32::from(field.size.height)) - (line + form::GUI_LINE_EXTRA)).abs() < 0.5,
+        "{field:?}, line {line}"
+    );
+    let text = dialog
+        .read_with(cx, |dialog, cx| {
+            dialog.editor.as_ref().and_then(|editor| editor.text_bounds(cx))
+        })
+        .expect("the text is laid out");
+    assert!(
+        (f32::from(text.left() - field.left()) - form::LINE_BOX_INSET).abs() < 0.5,
+        "{text:?} in {field:?}"
+    );
+    assert!(
+        (f32::from(text.center().y - field.center().y)).abs() < 1.0,
+        "{text:?} in {field:?}"
+    );
+    assert!(
+        field.size.height > text.size.height + px(6.),
+        "the box leaves room around the text"
+    );
+
+    // a click in the box's corner, outside the text, focuses the field
+    cx.update(|window, cx| {
+        let focus = dialog.read(cx).focus_handle().clone();
+        window.focus(&focus, cx);
+    });
+    cx.run_until_parked();
+    let editor_focus = dialog.read_with(cx, |dialog, cx| {
+        dialog.editor.as_ref().map(|editor| editor.focus_handle(cx))
+    });
+    let editor_focus = editor_focus.expect("an input ask has an editor");
+    assert!(
+        !cx.update(|window, _| editor_focus.is_focused(window)),
+        "the dialog holds the focus"
+    );
+    cx.simulate_click(
+        field.origin + gpui_kit::point(px(2.), px(2.)),
+        gpui_kit::Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert!(
+        cx.update(|window, _| editor_focus.is_focused(window)),
+        "the box's padding takes the click"
+    );
+}

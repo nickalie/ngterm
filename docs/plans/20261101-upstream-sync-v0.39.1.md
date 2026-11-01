@@ -1073,20 +1073,21 @@ CI until `ngterm-gpui` joins `cross-platform.yml`".
 
 ### Task 24: UI-only changes
 
-- [ ] Settings ▸ Interface: each toggle beside its control's resting glyph, text-only elements (workspace, session and
+- [x] Settings ▸ Interface: each toggle beside its control's resting glyph, text-only elements (workspace, session and
       window name, session context) first in the Title Bar section (#810): `InterfaceElement::settings_order` in
       `ngterm-core` (tests `everyControlElementHasADistinctSymbolAndTextElementsHaveNone`,
       `settingsOrderListsTextOnlyElementsFirst`); one element→glyph map in `ngterm-gpui` that the titlebar, sidebar
       footer and Settings rows share, an 18px leading slot (empty for text-only); a test that every glyph resolves
       (`testEveryInterfaceElementSymbolResolves`); check Dashboard and Focus Filter glyphs read as distinct
-- [ ] the GUI `ask` one-line field (#842): a light rounded box (radius 6, fill panel ink at 0.06, a 1px border at ink
+- [x] the GUI `ask` one-line field (#842): a light rounded box (radius 6, fill panel ink at 0.06, a 1px border at ink
       0.1), text, caret and placeholder inset 6 and centered vertically, height line + 12, the whole box a click
       target, no gpui-kit focus ring; the terminal style unchanged (`crates/ngterm-gpui/src/ask_dialog/form.rs`, tests
       after `testAGuiLineFieldEditsInsetAndCenteredInsideItsBox`, `testALineFieldDrawsNoAppKitFrameAndOnlyTheGuiOneInsetsItsText`);
-      decide whether `form_min_height` follows the +12/+4 split
-- [ ] no counterpart on any OS: the AppKit tooltip workaround (#816, Context); no macOS form yet for the items above
-      beyond the GPUI macOS frontend's open work
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+      decide whether `form_min_height` follows the +12/+4 split (it does: GUI line + 12, terminal line + 4)
+- [x] no counterpart on any OS: the AppKit tooltip workaround (#816, Context); no macOS form yet for the items above
+      beyond the GPUI macOS frontend's open work (nothing to build: both items are toolkit-neutral GPUI code)
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the ui layer is not in the Rust
+      ratchet)
 
 ### Task 25: Claim v0.39.1 parity and update the docs
 

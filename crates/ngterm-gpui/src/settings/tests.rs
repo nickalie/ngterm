@@ -284,6 +284,50 @@ fn the_interface_tab_offers_the_overlays_button_off_and_ends_the_sidebar_with_mu
     assert!(matches!(toggle.control, Control::Toggle { on: true, .. }));
 }
 
+/// #810: each Interface toggle leads with its control's glyph, the text-only title-bar elements first with an empty
+/// slot; no other row has a slot.
+#[test]
+fn interface_toggles_lead_with_their_controls_glyph_text_only_first() {
+    use ngterm_core::persist::settings::InterfaceElement;
+
+    use super::form::GlyphSlot;
+    let shown = snapshot(AppSettings::default());
+    let sections = Tab::Interface.sections(&shown, &catalogs());
+    let title_bar: Vec<&Item> = sections[0].rows().collect();
+    let ids: Vec<&str> = title_bar[..4].iter().map(|item| item.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "settings-interface-workspaceName",
+            "settings-interface-sessionName",
+            "settings-interface-windowName",
+            "settings-interface-sessionContext"
+        ]
+    );
+    for section in &sections[..2] {
+        for item in &section.items {
+            let element = InterfaceElement::ALL
+                .iter()
+                .copied()
+                .find(|element| item.id == format!("settings-interface-{}", element.raw()))
+                .unwrap();
+            assert_eq!(
+                item.leading,
+                Some(GlyphSlot(crate::interface_glyph::of(element))),
+                "{}",
+                item.id
+            );
+        }
+    }
+    assert_eq!(title_bar[0].leading, Some(GlyphSlot(None)), "a text-only slot is empty");
+    let others = every_item(&shown)
+        .into_iter()
+        .filter(|(_, item)| !item.id.starts_with("settings-interface-"));
+    for (tab, item) in others {
+        assert!(item.leading.is_none(), "{tab:?} {}", item.id);
+    }
+}
+
 #[test]
 fn rows_appear_with_the_settings_that_need_them() {
     let plain = snapshot(AppSettings::default());

@@ -23,6 +23,12 @@
 //!   marked range, which every platform's input handler feeds: text-input-v3 and XIM on Linux, `NSTextInputClient` on
 //!   macOS, IMM32/TSF on Windows) every key stays the editor's and the close chord is kept without closing. Letters
 //!   typed in an editor never fire a hotkey.
+//! - The GUI style's one-line field (an input ask's and the free-form row's) is its own light rounded box (upstream's
+//!   #842 `guiLine`): [`LINE_BOX_RADIUS`], filled in the panel's ink at [`LINE_BOX_FILL`] with a 1px border at
+//!   [`LINE_BOX_BORDER`], one line plus [`GUI_LINE_EXTRA`] high, its text, caret and placeholder [`LINE_BOX_INSET`] in
+//!   from the box's edge and centered on it. The box is the editor itself, so a click anywhere in it lands on the
+//!   field; it draws no gpui-kit focus ring, as upstream's draws no `AppKit` one. The terminal style's field is
+//!   unchanged: the editor bare inside the cell-padded frame.
 //! - Element ids are upstream's accessibility ids: `ask-input` (the editor), `ask-choice-<id>` (a caller row) and
 //!   `ask-other` (the free-form row; its identity carries no caller prefix, so a caller id cannot collide with it).
 
@@ -64,6 +70,16 @@ pub const SHORT_LINES: f64 = 2.0;
 pub const LIST_LINES: f64 = 3.0;
 /// A text line's height per pixel of font size, as the dialog counts the form's least heights.
 pub const LINE_FACTOR: f64 = 1.4;
+/// What a one-line field adds to its line: the GUI style's box (upstream's `lineHeight + 12`) and the terminal
+/// style's field (`+ 4`).
+pub const GUI_LINE_EXTRA: f64 = 12.0;
+pub const TERMINAL_LINE_EXTRA: f64 = 4.0;
+/// The GUI one-line box's corner radius, its fill's and its border's ink alpha, and its text inset from the box's
+/// edge (upstream's `RoundedRectangle(cornerRadius: 6)`, `.primary.opacity(0.06)`, `.opacity(0.1)`, `textInset = 6`).
+pub const LINE_BOX_RADIUS: f32 = 6.0;
+pub const LINE_BOX_FILL: f32 = 0.06;
+pub const LINE_BOX_BORDER: f32 = 0.1;
+pub const LINE_BOX_INSET: f32 = 6.0;
 /// The free-form row's field is at least this many cells wide.
 pub const OTHER_FIELD_CELLS: f64 = 24.0;
 
@@ -237,6 +253,8 @@ pub struct FieldLook {
     /// The terminal style's frame: its padding and its border's color.
     pub inset: Pixels,
     pub border: Hsla,
+    /// One text line's height, which the GUI style's one-line box is [`GUI_LINE_EXTRA`] taller than.
+    pub line: Pixels,
 }
 
 /// The form's text editor: an input ask's field or editing area, or a choice list's free-form row.
@@ -360,14 +378,22 @@ impl Editor {
                 .is_some_and(|paste| !change_allowed(&editor.text(cx), editor.selection(cx), &paste, mode))
         };
         let field = match self {
+            Self::Line(state) if look.gui => line_box(
+                Input::new(state)
+                    .id("ask-input")
+                    .accessibility_id("ask-input")
+                    .on_paste(guard),
+                look,
+            )
+            .into_any_element(),
             Self::Line(state) => Input::new(state)
                 .id("ask-input")
                 .accessibility_id("ask-input")
-                .appearance(look.gui)
+                .appearance(false)
                 .on_paste(guard)
                 .text_size(look.size)
                 .text_color(look.ink)
-                .when_some(look.family.clone().filter(|_| !look.gui), gpui_kit::Styled::font_family)
+                .when_some(look.family.clone(), gpui_kit::Styled::font_family)
                 .into_any_element(),
             Self::Lines(state) => Textarea::new(state)
                 .accessibility_id("ask-input")
@@ -411,7 +437,7 @@ impl Editor {
     }
 
     /// Where the editor laid its text out on the last frame.
-    fn text_bounds(&self, cx: &App) -> Option<Bounds<Pixels>> {
+    pub(super) fn text_bounds(&self, cx: &App) -> Option<Bounds<Pixels>> {
         match self {
             Self::Line(state) => state.read(cx).text_bounds(),
             Self::Lines(state) => state.read(cx).text_bounds(),
@@ -419,15 +445,40 @@ impl Editor {
     }
 }
 
+/// The GUI style's one-line field drawn as its own box (upstream's #842 `guiLine`): gpui-kit's bezel and focus ring
+/// off, the box's fill and border on the editor itself so all of it takes a click, one line plus [`GUI_LINE_EXTRA`]
+/// high with the text centered, inset [`LINE_BOX_INSET`] from the box's edge (the 1px border counts toward it).
+fn line_box(input: Input, look: &FieldLook) -> Input {
+    let border = px(1.);
+    let inset = px(LINE_BOX_INSET) - border;
+    let height = look.line + modal::logical(GUI_LINE_EXTRA);
+    let input = input
+        .appearance(false)
+        .text_size(look.size)
+        .text_color(look.ink)
+        .line_height(look.line)
+        .px(inset)
+        .py(px(0.))
+        .rounded(px(LINE_BOX_RADIUS))
+        .bg(look.ink.opacity(LINE_BOX_FILL))
+        .border_1()
+        .border_color(look.ink.opacity(LINE_BOX_BORDER));
+    // `Input::h` sizes only the multiline editor; the style's height sizes the one-line field
+    gpui_kit::Styled::h(input, height)
+}
+
 // MARK: - the layout around a form
 
 /// The least height the form's region keeps when the anchor is short (upstream's `content(fill: true)`): a one-line
-/// field's own height, two lines of the multiline editor in its frame (`frame`, its padding and border), three of a
-/// list; `line` is one text line's height.
+/// field's own height (the GUI style's box, `gui`, or the terminal style's field: upstream's `lineFieldHeight`), two
+/// lines of the multiline editor in its frame (`frame`, its padding and border), three of a list; `line` is one text
+/// line's height.
 #[must_use]
-pub fn form_min_height(form: &AskForm, line: f64, frame: f64) -> f64 {
+pub fn form_min_height(form: &AskForm, line: f64, frame: f64, gui: bool) -> f64 {
     match form {
-        AskForm::Input(input) if input.mode == AskInputMode::Line => line + 8.0,
+        AskForm::Input(input) if input.mode == AskInputMode::Line => {
+            line + if gui { GUI_LINE_EXTRA } else { TERMINAL_LINE_EXTRA }
+        }
         AskForm::Input(_) => SHORT_LINES * line + frame,
         AskForm::Choices(_) => LIST_LINES * line,
     }

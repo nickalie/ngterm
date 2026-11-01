@@ -167,13 +167,15 @@ fn draft_edits_apply_as_the_core_applies_them() {
 fn the_form_keeps_its_least_height_and_the_panel_scrolls_when_even_that_does_not_fit() {
     let line = 20.0;
     let input = |mode| AskForm::Input(AskInputForm::new(mode));
-    assert!((form_min_height(&input(AskInputMode::Line), line, 10.0) - 28.0).abs() < 1e-9);
+    // a one-line field's own height: the GUI box, line + 12, and the terminal field, line + 4 (upstream's #842)
+    assert!((form_min_height(&input(AskInputMode::Line), line, 10.0, true) - 32.0).abs() < 1e-9);
+    assert!((form_min_height(&input(AskInputMode::Line), line, 10.0, false) - 24.0).abs() < 1e-9);
     assert!(
-        (form_min_height(&input(AskInputMode::Multiline), line, 10.0) - 50.0).abs() < 1e-9,
+        (form_min_height(&input(AskInputMode::Multiline), line, 10.0, true) - 50.0).abs() < 1e-9,
         "two lines in the editor's frame"
     );
     let list = AskForm::Choices(AskChoiceForm::new(choices(&["a"])));
-    assert!((form_min_height(&list, line, 10.0) - 60.0).abs() < 1e-9);
+    assert!((form_min_height(&list, line, 10.0, true) - 60.0).abs() < 1e-9);
     assert!(
         !scrolls_whole(200.0, 60.0, 300.0),
         "the region shrinks between the pinned parts"

@@ -23,7 +23,8 @@
 //! Every button posts a [`TitlebarAction`] the core runs ([`ngterm_core::Core::titlebar_action`]); the
 //! recent-sessions, attention and custom-commands buttons emit [`TitlebarEvent::Popover`] for the window's popovers
 //! ([`crate::popovers`]) to open under the button. The glyphs are Lucide's (gpui-kit's catalog, [`Icons`]), the split and scratch glyphs traced, as
-//! the GTK build's are, with their halves filled for the panes on screen.
+//! the GTK build's are, with their halves filled for the panes on screen; each button's glyph at rest is its Settings
+//! ▸ Interface element's ([`crate::interface_glyph`]).
 
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -49,6 +50,7 @@ use uuid::Uuid;
 
 use crate::app_menu::AppMenu;
 use crate::chrome::{self, DIM_ALPHA, DIVIDER_ALPHA};
+use crate::interface_glyph;
 use crate::state::{AppState, Poster, post};
 
 /// The row's height in the normal mode (title and subtitle) and the compact one (upstream's `titlebarHeight`); the
@@ -79,7 +81,7 @@ pub const GLYPHS: [IconName; 16] = [
     IconName::PanelLeft,
     IconName::RotateCcwClock,
     IconName::Bell,
-    IconName::LayoutGrid,
+    IconName::Grid2x2,
     IconName::SquareTerminal,
     IconName::CircleEllipsis,
     IconName::Minimize2,
@@ -100,7 +102,7 @@ gpui_kit::assets::icon_assets!(
         PanelLeft,
         RotateCcwClock,
         Bell,
-        LayoutGrid,
+        Grid2x2,
         SquareTerminal,
         CircleEllipsis,
         Minimize2,
@@ -423,7 +425,7 @@ pub fn glyph_strokes(glyph: PaneGlyph) -> Vec<Stroke> {
 }
 
 /// `glyph` drawn in `ink` at `size`.
-fn pane_glyph(glyph: PaneGlyph, ink: Hsla, size: Pixels) -> Div {
+pub(crate) fn pane_glyph(glyph: PaneGlyph, ink: Hsla, size: Pixels) -> Div {
     let scale = f32::from(size) / 16.0;
     let strokes = glyph_strokes(glyph).into_iter().map(move |stroke| {
         let part = div()
@@ -442,7 +444,7 @@ fn pane_glyph(glyph: PaneGlyph, ink: Hsla, size: Pixels) -> Div {
 }
 
 /// A Lucide glyph in `ink` at `size`.
-fn icon(name: IconName, ink: Hsla, size: Pixels) -> AnyElement {
+pub(crate) fn icon(name: IconName, ink: Hsla, size: Pixels) -> AnyElement {
     svg()
         .path(name.path())
         .size(size)
@@ -678,7 +680,7 @@ impl Titlebar {
         let toggle = (uncovered && bar.model.sidebar_toggle).then(|| {
             let spec = Button {
                 id: "sidebar-toggle-button",
-                glyph: icon(IconName::PanelLeft, ink, glyph),
+                glyph: icon(interface_glyph::SIDEBAR_TOGGLE, ink, glyph),
                 enabled: true,
                 hint: bar.hints.sidebar.clone(),
             };
@@ -733,7 +735,7 @@ impl Titlebar {
                 .when(!composition.title.is_empty(), |host| host.pl(px(6.)))
                 .max_w(HOST_CEILING)
                 .text_color(dim)
-                .child(icon(IconName::Cloud, dim, glyph - px(2.)))
+                .child(icon(interface_glyph::REMOTE_HOST, dim, glyph - px(2.)))
                 .child(
                     div()
                         .whitespace_nowrap()
@@ -821,7 +823,7 @@ impl Titlebar {
         if let Some(recent) = model.recent {
             let spec = Button {
                 id: "recent-sessions-button",
-                glyph: icon(IconName::RotateCcwClock, ink, glyph),
+                glyph: icon(interface_glyph::RECENT_SESSIONS, ink, glyph),
                 enabled: recent.enabled,
                 hint: hints.recent.clone(),
             };
@@ -865,7 +867,16 @@ impl Titlebar {
         if let Some(scratch) = model.scratch {
             let spec = Button {
                 id: "scratch-toggle",
-                glyph: pane_glyph(PaneGlyph::Scratch(scratch.active), ink, glyph).into_any_element(),
+                glyph: pane_glyph(
+                    if scratch.active {
+                        PaneGlyph::Scratch(true)
+                    } else {
+                        interface_glyph::SCRATCH
+                    },
+                    ink,
+                    glyph,
+                )
+                .into_any_element(),
                 enabled: scratch.enabled,
                 hint: hints.scratch.clone(),
             };
@@ -879,7 +890,16 @@ impl Titlebar {
         if let Some(split) = model.split {
             let spec = Button {
                 id: "split-toggle",
-                glyph: pane_glyph(PaneGlyph::Split(split.glyph), ink, glyph).into_any_element(),
+                glyph: pane_glyph(
+                    if split.glyph == SplitGlyph::None {
+                        interface_glyph::SPLIT
+                    } else {
+                        PaneGlyph::Split(split.glyph)
+                    },
+                    ink,
+                    glyph,
+                )
+                .into_any_element(),
                 enabled: split.enabled,
                 hint: hints.split.clone(),
             };
@@ -896,7 +916,7 @@ impl Titlebar {
             let name = if toggle.any_hidden {
                 IconName::CopySlash
             } else {
-                IconName::Copy
+                interface_glyph::OVERLAY_TOGGLE
             };
             let spec = Button {
                 id: "overlay-toggle",
@@ -917,21 +937,21 @@ impl Titlebar {
         let plain = [
             (
                 "dashboard-toggle-button",
-                IconName::LayoutGrid,
+                interface_glyph::DASHBOARD,
                 model.dashboard,
                 hints.dashboard.clone(),
                 Some(TitlebarAction::Dashboard),
             ),
             (
                 "quick-terminal-toggle",
-                IconName::SquareTerminal,
+                interface_glyph::QUICK_TERMINAL,
                 model.quick_terminal,
                 hints.quick.clone(),
                 Some(TitlebarAction::QuickTerminal),
             ),
             (
                 "custom-commands-button",
-                IconName::CircleEllipsis,
+                interface_glyph::CUSTOM_COMMANDS,
                 model.custom_commands,
                 hints.custom.clone(),
                 None,

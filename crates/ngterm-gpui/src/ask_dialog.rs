@@ -1018,6 +1018,7 @@ impl AskDialog {
                 form,
                 self.fit.editor_line().unwrap_or_else(|| self.line_height()),
                 self.fit.editor_frame(),
+                self.gui(),
             ),
             available: frame.available,
         };
@@ -1078,6 +1079,7 @@ impl AskDialog {
             family: self.look.family.clone(),
             inset: modal::logical(cell * 0.5),
             border: crate::chrome::color(self.look.foreground, 0.2),
+            line: modal::logical(self.line_height()),
         };
         // the multiline editor of an input ask gives way to its region's room; the free-form row is one line
         let fit = matches!(form, AskForm::Input(_)).then(|| Rc::clone(&self.fit));

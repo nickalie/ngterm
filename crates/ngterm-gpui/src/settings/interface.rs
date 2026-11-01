@@ -1,6 +1,7 @@
 //! Interface: which title-bar and sidebar chrome elements show, two toggles per row as upstream lays them out, the
 //! sidebar in inactive windows as the Sidebar section's last row, and the quick terminal's size (upstream's
-//! `InterfaceSettingsView`).
+//! `InterfaceSettingsView`). Each element's toggle leads with its control's glyph at rest ([`crate::interface_glyph`]),
+//! the text-only elements' slot left empty and listed first ([`InterfaceElement::settings_order`], #810).
 
 use ngterm_core::persist::settings::InterfaceElement;
 use ngterm_core::quick_metrics::SIZE_PERCENT_CHOICES;
@@ -36,10 +37,8 @@ pub fn sections(snapshot: &Snapshot) -> Vec<Section> {
 /// One toggle per element of the title bar (or the sidebar): on is shown, so hiding a default-shown element is the edit
 /// that writes.
 fn elements(snapshot: &Snapshot, title_bar: bool) -> Vec<Item> {
-    InterfaceElement::ALL
-        .iter()
-        .copied()
-        .filter(|element| element.in_title_bar() == title_bar)
+    InterfaceElement::settings_order(title_bar)
+        .into_iter()
         .map(|element| {
             toggle(
                 &format!("settings-interface-{}", element.raw()),
@@ -47,6 +46,7 @@ fn elements(snapshot: &Snapshot, title_bar: bool) -> Vec<Item> {
                 !snapshot.settings.is_interface_element_hidden(element),
                 move |visible| change(InterfaceChange::ElementVisible { element, visible }),
             )
+            .leading(crate::interface_glyph::of(element))
         })
         .collect()
 }

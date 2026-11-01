@@ -15,6 +15,7 @@ use ngterm_core::settings_model::{
 };
 
 use crate::folder_chooser::FolderRequest;
+use crate::interface_glyph::ElementGlyph;
 
 /// An edit made from a control's new value.
 pub type Setter<T> = Rc<dyn Fn(T) -> SettingsChange>;
@@ -85,7 +86,14 @@ pub struct Item {
     pub control: Control,
     /// Whether it takes input (upstream's `.disabled(…)`).
     pub enabled: bool,
+    /// A glyph slot before the label, empty or holding its control's glyph (upstream's Interface toggles, #810).
+    pub leading: Option<GlyphSlot>,
 }
+
+/// A row's leading glyph slot ([`crate::interface_glyph::SLOT`] wide): `None` keeps it empty, so a text-only element's
+/// label lines up with the glyph rows'.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GlyphSlot(pub Option<ElementGlyph>);
 
 impl Item {
     #[must_use]
@@ -95,7 +103,15 @@ impl Item {
             title: title.into(),
             control,
             enabled: true,
+            leading: None,
         }
+    }
+
+    /// Leads the label with a glyph slot holding `glyph`, or empty.
+    #[must_use]
+    pub fn leading(mut self, glyph: Option<ElementGlyph>) -> Self {
+        self.leading = Some(GlyphSlot(glyph));
+        self
     }
 
     /// Takes input only while `enabled` holds.

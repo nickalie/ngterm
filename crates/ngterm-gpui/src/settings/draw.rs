@@ -20,10 +20,13 @@ use gpui_kit::{
 use ngterm_core::chrome::Rgb;
 use ngterm_core::model::StatusShape;
 
-use super::form::{Action, Control, Item, Picker, Section, SliderKey};
+use super::form::{Action, Control, GlyphSlot, Item, Picker, Section, SliderKey};
 use super::{Edits, SettingsView, TITLE, Tab};
+use crate::interface_glyph;
 use crate::modal::{self, ButtonLook};
 
+/// A leading glyph's size in its slot (a sidebar mask keeps its own 16).
+const GLYPH: f32 = 16.;
 /// The row text size (upstream's system font in a grouped form).
 const TEXT: f32 = 13.;
 /// A caption's size (upstream's `SettingHint`, `.system(size: 11)`).
@@ -300,11 +303,20 @@ fn row(item: Item, view: &SettingsView, look: &Look) -> AnyElement {
         title,
         control,
         enabled,
+        leading,
     } = item;
     let label = div()
         .flex_1()
         .min_w(px(0.))
         .when(!enabled, |label| label.text_color(look.ink(DIM)))
+        .when_some(leading, |label, slot| {
+            label
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.))
+                .child(glyph_slot(slot, look))
+        })
         .child(title.clone());
     let control = match control {
         Control::Hint => return hint(id, title, look),
@@ -331,6 +343,18 @@ fn row(item: Item, view: &SettingsView, look: &Look) -> AnyElement {
             .child(label)
             .child(control),
     )
+}
+
+/// A label's leading glyph slot, in the secondary ink (upstream's `.foregroundStyle(.secondary)`), hidden from
+/// accessibility as upstream's: the row's toggle carries the label.
+fn glyph_slot(slot: GlyphSlot, look: &Look) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .w(px(interface_glyph::SLOT))
+        .children(slot.0.map(|glyph| glyph.draw(look.ink(DIM), px(GLYPH))))
 }
 
 /// A row's padding and least height.
