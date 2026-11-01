@@ -218,7 +218,9 @@ fn promoting_the_split_invalidates_the_tree_only_for_a_page_that_changes_pane() 
             open_page(&mut store, id, OverlayPane::Right);
         }
         assert_eq!(
-            tree_changes(&mut store, |s| s.close_primary_pane(id)),
+            tree_changes(&mut store, |s| {
+                s.close_primary_pane(id);
+            }),
             usize::from(with_page),
             "with a page: {with_page}"
         );
@@ -349,7 +351,12 @@ fn promoting_the_split_invalidates_the_tree_for_a_reservation_that_changes_pane(
     store.toggle_split(id, None);
     install(&mut store, id, StatusPane::Right);
     assert!(store.reserve_remote_overlay(id, slot("j", Some(OverlayPane::Right), false)));
-    assert_eq!(tree_changes(&mut store, |s| s.close_primary_pane(id)), 1);
+    assert_eq!(
+        tree_changes(&mut store, |s| {
+            s.close_primary_pane(id);
+        }),
+        1
+    );
     assert!(
         store
             .session(id)

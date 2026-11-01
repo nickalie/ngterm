@@ -304,14 +304,9 @@ impl Core {
         if !backed {
             return;
         }
-        let Some(store) = self.library_mut().store_for_session_mut(session) else {
-            return;
-        };
-        match role {
-            StatusPane::Left => store.close_primary_pane(session),
-            _ => store.close_split_pane(session),
-        }
+        // marked first: a parent that respawns under this identity drops the mark again
         self.note_already_finalized(identity);
+        self.close_exited_pane(session, role, std::time::Instant::now());
     }
 }
 

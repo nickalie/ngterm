@@ -1,12 +1,16 @@
 //! The split and scratch panes' mutations (upstream's `AppStore+Panes.swift`): showing, hiding, resizing, swapping
-//! and closing the split, promoting a split survivor when the primary pane's shell exits, and the scratch terminal.
+//! and closing the split, promoting a split survivor when the primary pane's shell exits (or respawning a parent's, see
+//! `companions.rs`), and the scratch terminal.
 //!
 //! A pane's status tag and search owner are roles here, not surface identities as upstream keeps them, so the paths
 //! that move a terminal to another role (swap, promotion) re-tag them along with it.
 
+use std::time::Instant;
+
 use ngterm_proto::EventKind;
 use uuid::Uuid;
 
+use super::companions::PrimaryPaneExit;
 use super::outbox::EventPayload;
 use super::overlay::OverlayPane;
 use super::pane::{PaneLaunch, PaneRestore, SplitAxis, SplitLayout, StatusPane, clamp_split_ratio};
@@ -141,11 +145,24 @@ impl AppStore {
     /// Closes the split pane: hides it and tears its terminal down, dropping everything it owned, so a later split
     /// starts a fresh shell at an even ratio (upstream's `closeSplit`).
     pub fn close_split(&mut self, id: Uuid) {
+        let Some(was_shown) = self.discard_split_pane(id) else {
+            return;
+        };
+        if was_shown {
+            self.emit_pane_visibility(EventKind::PaneSplit, id, false);
+        }
+        self.save();
+    }
+
+    /// Drops session `id`'s split pane with everything it owned: its terminal, overlay, HUD, ask, status, layout and
+    /// restore state, its local live-session daemon finalized. Whether the split was shown; `None` for an unknown
+    /// session. Neither emits nor saves.
+    fn discard_split_pane(&mut self, id: Uuid) -> Option<bool> {
         let split_identity = self.session(id).and_then(|session| session.split_pane_identity);
         self.close_hud_owned_by(id, split_identity);
         self.cancel_ask_owned_by(id, split_identity);
         self.drop_remote_overlay(id, OverlayPane::Right);
-        let Some(session) = self.session_mut(id) else { return };
+        let session = self.session_mut(id)?;
         let was_shown = session.split.shown;
         // the split pane is gone for good, and its live-session daemon with it; a remote split's daemon is another
         // machine's
@@ -171,22 +188,28 @@ impl AppStore {
         if drops_overlay {
             self.schedule_tree_changed();
         }
-        if was_shown {
-            self.emit_pane_visibility(EventKind::PaneSplit, id, false);
-        }
-        self.save();
+        Some(was_shown)
     }
 
-    /// The primary pane's shell exited: a split survivor moves into the primary slot with its cwd, title, creation
-    /// command and restore state, and the session lives on as one pane; without one the session closes (upstream's
-    /// `closePrimaryPane`).
-    pub fn close_primary_pane(&mut self, id: Uuid) {
+    /// The primary pane's shell exited, now: a split survivor moves into the primary slot with its cwd, title, creation
+    /// command and restore state, and the session lives on as one pane; without one a parent with companions respawns
+    /// ([`AppStore::respawns_on_last_pane_exit`]) and any other session closes (upstream's `closePrimaryPane`).
+    pub fn close_primary_pane(&mut self, id: Uuid) -> PrimaryPaneExit {
+        self.close_primary_pane_at(id, Instant::now())
+    }
+
+    /// [`AppStore::close_primary_pane`] at `now`.
+    pub fn close_primary_pane_at(&mut self, id: Uuid, now: Instant) -> PrimaryPaneExit {
         let has_survivor = self
             .session(id)
             .is_some_and(|session| session.split_surface.is_present());
         if !has_survivor {
+            if self.respawns_on_last_pane_exit(id, now) {
+                self.respawn_primary_pane(id, now);
+                return PrimaryPaneExit::Respawned;
+            }
             self.close_session(id);
-            return;
+            return PrimaryPaneExit::Closed;
         }
         let primary_identity = self.session(id).map(|session| session.pane_identity);
         self.close_hud_owned_by(id, primary_identity);
@@ -194,7 +217,9 @@ impl AppStore {
         // a torn-down left overlay and a right one changing role both move the tree's pane slots
         let moves_overlay = self.session(id).is_some_and(holds_pane_overlay);
         self.drop_remote_overlay(id, OverlayPane::Left);
-        let Some(session) = self.session_mut(id) else { return };
+        let Some(session) = self.session_mut(id) else {
+            return PrimaryPaneExit::Closed;
+        };
         let was_shown = session.split.shown;
         // the exiting primary's override goes with it; the survivor's moves left, its file named by the same identity
         let removal = session.pane_text_removal(StatusPane::Left);
@@ -209,6 +234,7 @@ impl AppStore {
             self.emit_pane_visibility(EventKind::PaneSplit, id, false);
         }
         self.save();
+        PrimaryPaneExit::Promoted
     }
 
     /// Closes session `id`'s HUD when it is scoped to the pane `identity` names, before that identity goes or moves
@@ -224,18 +250,59 @@ impl AppStore {
         }
     }
 
-    /// The split pane's shell exited: a live two-pane split collapses to the primary; otherwise this was the
-    /// session's last pane (a split pane whose primary slot is empty) and the session closes (upstream's
-    /// `closeSplitPane`).
+    /// The split pane's shell exited, now: a live two-pane split collapses to the primary; otherwise this was the
+    /// session's last pane (a split pane whose primary slot is empty) and the session respawns or closes as
+    /// [`AppStore::close_primary_pane`] says (upstream's `closeSplitPane`).
     pub fn close_split_pane(&mut self, id: Uuid) {
+        self.close_split_pane_at(id, Instant::now());
+    }
+
+    /// [`AppStore::close_split_pane`] at `now`.
+    pub fn close_split_pane_at(&mut self, id: Uuid, now: Instant) {
         let two_panes = self
             .session(id)
             .is_some_and(|session| session.surface.is_present() && session.split_surface.is_present());
         if two_panes {
             self.close_split(id);
+        } else if self.respawns_on_last_pane_exit(id, now) {
+            self.respawn_primary_pane(id, now);
         } else {
             self.close_session(id);
         }
+    }
+
+    /// Restarts session `id`'s primary pane as a plain login shell in its last cwd (upstream's `respawnPrimaryPane`):
+    /// the exited terminals go, a split with them, and the pane's creation command, hold, captured foreground, armed
+    /// restore overrides, title, left overlay and the HUD and ask on it are cleared, so an exited `--command` parent
+    /// never reruns its command. The pane keeps its identity; the moved [`Session::primary_respawns`] tells the
+    /// frontend to mount a fresh terminal in the empty primary slot.
+    fn respawn_primary_pane(&mut self, id: Uuid, now: Instant) {
+        let identity = self.session(id).map(|session| session.pane_identity);
+        self.close_hud_owned_by(id, identity);
+        self.cancel_ask_owned_by(id, identity);
+        let has_split = self
+            .session(id)
+            .is_some_and(|session| session.split.exists || session.split_pane_identity.is_some());
+        if has_split {
+            let _ = self.discard_split_pane(id);
+        }
+        self.drop_remote_overlay(id, OverlayPane::Left);
+        let Some(session) = self.session_mut(id) else { return };
+        session.respawn.last_at = Some(now);
+        session.surface.teardown();
+        session.pane_overlays.teardown(OverlayPane::Left);
+        if session.search.owner != Some(StatusPane::Scratch) {
+            session.search.clear();
+        }
+        session.restart_from_current_cwd();
+        session.launch = PaneLaunch::default();
+        session.restore.foreground = None;
+        session.clear_pending_restore_overrides();
+        session.osc_title = None;
+        session.respawn.count = session.respawn.count.wrapping_add(1);
+        self.clear_indicator_owned_by(StatusPane::Left, id);
+        self.schedule_tree_changed();
+        self.save();
     }
 
     /// Shows or hides the scratch terminal; its terminal stays alive while hidden. `emit` false is for a respawn whose

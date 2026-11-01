@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use uuid::Uuid;
 
 use super::background::{BackgroundWatermark, PaneBackgrounds};
-use super::companions::{CompanionState, SessionContent};
+use super::companions::{CompanionState, RespawnState, SessionContent};
 use super::naming::{self, last_path_component, sanitized, trimmed_or_none};
 use super::overlay::OverlaySlot;
 use super::pane::{PaneLaunch, PaneRestore, SplitLayout, StatusPane, SurfaceSlot};
@@ -227,6 +227,8 @@ pub struct Session {
     pub tint: Option<SidebarTint>,
     /// The companion group fields.
     pub companion: CompanionState,
+    /// The primary pane's restarts while it has companions.
+    pub(crate) respawn: RespawnState,
     content: SessionContent,
     /// What the session is FOR, shown in the title bar. Persisted for a local session.
     pub context: Option<String>,
@@ -336,6 +338,7 @@ impl Session {
                 parent: seed.parent_id,
                 expanded: true,
             },
+            respawn: RespawnState::default(),
             content: seed.content,
             context: None,
             mirrored_context: None,
@@ -384,10 +387,24 @@ impl Session {
         self.id
     }
 
-    /// Where the session started; immutable.
+    /// Where the primary shell starts: where the session started, or the last cwd of a parent whose shell respawned.
     #[must_use]
     pub fn initial_cwd(&self) -> &str {
         &self.initial_cwd
+    }
+
+    /// Moves the primary shell's start to its last reported cwd, for a respawn.
+    pub(crate) fn restart_from_current_cwd(&mut self) {
+        if let Some(cwd) = &self.current_cwd {
+            self.initial_cwd.clone_from(cwd);
+        }
+    }
+
+    /// How many times the primary pane respawned a shell (upstream's `primaryRespawns`): a frontend mounts a fresh
+    /// terminal in the emptied primary slot when it moves. Ephemeral.
+    #[must_use]
+    pub fn primary_respawns(&self) -> u64 {
+        self.respawn.count
     }
 
     /// The host this session is attached from, `None` for a local one. Set at construction and immutable, so no

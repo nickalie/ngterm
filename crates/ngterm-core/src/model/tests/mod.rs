@@ -3,6 +3,7 @@
 
 mod ask_draft;
 mod companion_close;
+mod companion_respawn;
 mod companions;
 mod duplicate;
 mod flagged_order;

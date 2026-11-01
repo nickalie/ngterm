@@ -49,8 +49,13 @@ impl PaneSpec {
     #[must_use]
     pub fn primary(window: Uuid, store: &AppStore, session: Uuid) -> Option<Self> {
         let workspace = store.workspace_for_session(session)?.id();
-        let session = store.session(session)?;
-        Some(Self {
+        Some(Self::left(window, workspace, store.session(session)?))
+    }
+
+    /// The primary pane of `session` in `workspace`: its cwd and creation command.
+    #[must_use]
+    pub fn left(window: Uuid, workspace: Uuid, session: &Session) -> Self {
+        Self {
             window,
             workspace,
             session: session.id(),
@@ -60,7 +65,7 @@ impl PaneSpec {
             command: session.launch.command.clone(),
             wait: session.launch.wait,
             font_size: session.font_size,
-        })
+        }
     }
 
     /// The split pane of `session`: its own cwd and creation command; `None` without a split identity.

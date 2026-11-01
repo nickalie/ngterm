@@ -16,7 +16,7 @@ use super::{Fixture, UNKNOWN, args, failure, wire};
 use crate::dispatch::Dispatched;
 use crate::live::daemon_name;
 use crate::live::support::Inputs;
-use crate::model::StatusPane;
+use crate::model::{CompanionOptions, StatusPane};
 use crate::pane_env::uuid_string;
 use crate::persist::RestoreMode;
 use crate::restore::mode::RestoreLaunchDecision;
@@ -326,6 +326,41 @@ fn a_confirmed_kill_closes_the_split_and_is_not_finalized_twice() {
     assert!(!session.split.exists && session.split_pane_identity.is_none());
     // the forced kill only: the split's removal does not ask the host to kill a name that is gone
     assert_eq!(live.host.kills(), [(daemon, true)]);
+}
+
+#[test]
+fn a_killed_parent_respawns_and_its_new_daemon_ends_with_the_session() {
+    let mut live = live();
+    let parent = live.session;
+    let options = CompanionOptions {
+        select: false,
+        ..CompanionOptions::default()
+    };
+    let companion = live
+        .fixture
+        .store_mut()
+        .unwrap()
+        .add_companion(parent, options, "/home/u")
+        .unwrap();
+    let daemon = daemon_name(live.left);
+    live.host.set_record(&daemon, Some(1), Some(20), None);
+    let sid = wire(parent);
+    let response = live.send(LiveCmd::Kill, Some(&sid), |a| {
+        (a.pane, a.force) = (Some("left".to_owned()), Some(true));
+    });
+    assert!(response.ok, "{response:?}");
+    let _ = live.core().commit();
+    let session = live.fixture.store().session(parent).unwrap();
+    assert_eq!((session.primary_respawns(), session.pane_identity), (1, live.left));
+    assert!(!session.surface.is_present(), "the frontend mounts the fresh terminal");
+    assert_eq!(live.host.kills(), [(daemon.clone(), true)]);
+
+    // the respawned shell runs a new daemon under the same name, which the parent's close ends like any other
+    let companion = live.fixture.store().session(companion).unwrap().pane_identity;
+    live.fixture.store_mut().unwrap().close_session(parent);
+    let _ = live.core().commit();
+    let names: Vec<String> = live.host.kills().into_iter().map(|(name, _)| name).collect();
+    assert_eq!(names, [daemon.clone(), daemon_name(companion), daemon]);
 }
 
 #[test]

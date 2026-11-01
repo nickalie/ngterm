@@ -9,8 +9,9 @@
 //! size and follow it: a runtime session's shells run (the conformance harness's `wait_mounted` waits for a `noSelect`
 //! session's `realized` too), while a dormant restored session's terminals wait for their seed until it wakes.
 //! Sessions a soft close holds out of the tree keep their pages, hidden, until the close is final. A page goes once
-//! its session is gone; closing the session already tore its terminals down. Inside a page the session's panes follow
-//! [`crate::split`].
+//! its session is gone; closing the session already tore its terminals down. A parent whose exited shell respawned
+//! (`ngterm_core::model::companions`) gets a fresh primary terminal under the same token, which takes the keyboard
+//! back when it held it. Inside a page the session's panes follow [`crate::split`].
 //!
 //! The model moves keyboard focus only by what it says should hold it: the deck focuses the shown page's focused pane
 //! whenever that pane (or the shown page) differs from what it last focused, which is how selecting a session,
@@ -288,12 +289,15 @@ pub struct Page {
     hud: HudLayer,
     overlays: OverlayLayer,
     ask: Option<PageAsk>,
+    /// The session's primary respawns this page has a terminal for ([`Session::primary_respawns`]).
+    primary_respawns: u64,
 }
 
 impl Page {
     fn new(session: Uuid) -> Self {
         Self {
             session,
+            primary_respawns: 0,
             panes: Vec::new(),
             plan: None,
             covers: Vec::new(),
@@ -789,6 +793,7 @@ impl Deck {
             .store_mut(spec.window)
             .and_then(|store| store.session_mut(spec.session));
         if let Some(session) = session {
+            page.primary_respawns = session.primary_respawns();
             install(session, spec, Box::new(surface));
         }
         self.pages.insert(spec.session, page);
@@ -828,6 +833,7 @@ impl Deck {
             return;
         };
         page.retain(|token| session.pane_role_for_token(token).is_some());
+        let respawned = remount_respawned_primary(&self.env, page, session, (sync.window, workspace), window, cx);
         let needs = split::needs(session, sync.zoom);
         if needs.split
             && let Some(spec) = PaneSpec::split(sync.window, workspace, session)
@@ -866,6 +872,10 @@ impl Deck {
         let opacity = crate::chrome::translucency(cx).opacity;
         sync_watermarks(&self.env, page, session, opacity, cx);
         sync_ask(page, session, sync, ask_shown, &mut mount, cx);
+        // the fresh terminal carries the exited one's token: the keyboard goes to it on the next show
+        if respawned && self.focused.as_ref().is_some_and(|(focused, _)| *focused == id) {
+            self.set_focused(None);
+        }
     }
 
     /// The app's config changed (a reload): every terminal takes it, over its own overlay; with `keep_zoom` (an
@@ -1446,6 +1456,30 @@ fn sync_ask(
         scope,
         wants_focus: ask_dialog::wants_focus(session, sync.focus_blocked),
     });
+}
+
+/// Mounts a fresh primary terminal on `page` when `session`'s primary respawned since the page last mounted one (a
+/// parent's exited shell restarting while it has companions): the respawn emptied the primary slot, and nothing else
+/// fills it. The pane keeps its token, so the gated terminal asks the core for its seed as a first mount does. `place`
+/// is the window and workspace. Whether it mounted one.
+fn remount_respawned_primary(
+    env: &Rc<DeckEnv>,
+    page: &mut Page,
+    session: &mut Session,
+    place: (Uuid, Uuid),
+    window: &mut Window,
+    cx: &mut Context<Deck>,
+) -> bool {
+    if page.primary_respawns == session.primary_respawns() {
+        return false;
+    }
+    page.primary_respawns = session.primary_respawns();
+    if session.surface.is_present() {
+        return false;
+    }
+    let spec = PaneSpec::left(place.0, place.1, session);
+    mount_into(env, page, session, &spec, window, cx);
+    true
 }
 
 /// Mounts `spec`'s terminal in `page` and installs it in `session`'s slot.

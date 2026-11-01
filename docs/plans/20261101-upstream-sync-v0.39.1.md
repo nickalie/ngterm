@@ -701,15 +701,16 @@ cwd. No new OS-specific code.
 **Conformance:** `test_split.py`, `test_restore.py` pane-exit ids (listed) stay green. New:
 `test_companions.py::test_a_parent_whose_shell_exits_restarts_it`, under plain PTY and Live.
 
-- [ ] a live split survivor promotes first; with none, a local session with companions whose last restart is none or
+- [x] a live split survivor promotes first; with none, a local session with companions whose last restart is none or
       ≥ 2 s ago restarts in its current cwd as a plain login shell (creation command, wait, foreground, title and the
       left pane overlay cleared; HUD/ask on that pane ended; the pane identity kept); otherwise the group closes
       (Task 14)
-- [ ] the same rule through the split slot; a remote row never restarts here (Task 19)
-- [ ] the GPUI deck remounts the primary on a respawn
-- [ ] write tests: the six Swift cases with an injected clock
-- [ ] write tests: the conformance test above
-- [ ] checks sized to the change pass; newly green ids added to the ratchet
+- [x] the same rule through the split slot; a remote row never restarts here (Task 19)
+- [x] the GPUI deck remounts the primary on a respawn
+- [x] write tests: the six Swift cases with an injected clock
+- [x] write tests: the conformance test above
+- [x] checks sized to the change pass; newly green ids added to the ratchet (none: the new ids are since(0.39.1);
+      green at a temporary 0.39.1 level, they go in at Task 25)
 
 ### Task 16: Companion sessions, part 4: sidebar nesting and folding, New Companion, `parent › child` in flat lists (#840, #841)
 

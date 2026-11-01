@@ -306,13 +306,11 @@ fn close_ended_pane(core: &mut Core, job: &Job) {
     core.live.claimed_exits.remove(&job.token);
     core.note_already_finalized(job.identity);
     if let Some(store) = core.library_mut().store_for_session_mut(job.session) {
-        match store
+        let role = store
             .session(job.session)
-            .and_then(|session| session.pane_role_for_token(&job.token))
-        {
-            Some(StatusPane::Left) => store.close_primary_pane(job.session),
-            Some(StatusPane::Right) => store.close_split_pane(job.session),
-            _ => {}
+            .and_then(|session| session.pane_role_for_token(&job.token));
+        if let Some(role @ (StatusPane::Left | StatusPane::Right)) = role {
+            core.close_exited_pane(job.session, role, Instant::now());
         }
         return;
     }

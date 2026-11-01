@@ -1,5 +1,8 @@
 """Companion sessions: a session created under a parent, nested after it in the parent's workspace, folded with it and
-moved with it. The module shares one instance, so every test builds the group it needs in a workspace of its own."""
+moved with it. The module shares one instance, so every test builds the group it needs in a workspace of its own; the
+parent's respawn also runs on an instance of its own under Live sessions."""
+
+import itertools
 
 import pytest
 from agterm_conformance.match import (
@@ -10,10 +13,17 @@ from agterm_conformance.match import (
     find_session,
     session_ids,
 )
+from agterm_conformance.plugin import Ctl
+from agterm_conformance.wait import wait_until
 
 UNKNOWN = "zzz"
 PLACEMENT = "a companion takes no workspace or placement: it lands under its parent"
 MOVE_REFUSED = "a companion moves only among its siblings"
+
+LIVE = pytest.mark.requires(
+    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
+)
+_markers = itertools.count(1)
 
 pytestmark = pytest.mark.since("0.39.1")
 
@@ -152,4 +162,66 @@ def test_closing_a_parent_closes_its_group(ctl):
     batch = assert_ok(ctl.request("session.close", targets=[after, first, other]))
     assert (batch["affected"], batch["closed"]) == (4, [after, first, second, other])
     assert session_ids(ctl.tree(), wid) == []
+    assert_ok(ctl.request("workspace.delete", wid))
+
+
+@pytest.fixture
+def shells(request, ctl, adapter):
+    """The module's instance for `plain`; for `live`, an instance of its own with Live sessions on."""
+    if request.param == "plain":
+        yield ctl
+        return
+    instance = adapter.launch(settings={"restoreMode": "live"})
+    try:
+        live = Ctl(instance)
+        assert assert_ok(live.request("restore.mode"))["restore"]["active"] == "live"
+        yield live
+    finally:
+        adapter.stop(instance)
+
+
+def _left_pane_id(ctl, sid):
+    return next(s for s in find_session(ctl.tree(), sid)["surfaces"] if s["kind"] == "left")["paneID"]
+
+
+def _prints(ctl, sid):
+    """Types a marker line into `sid` until its shell prints it: between an exit and the fresh shell the pane has no
+    terminal to type into, and a line typed into the exiting one is lost with it."""
+    marker = f"CMARK{next(_markers)}"
+
+    def printed():
+        typed = ctl.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:5]} {marker[5:]}\n")
+        if not typed.ok:
+            return False
+        try:
+            return ctl.wait_text(sid, rf"(?m)^{marker}$", timeout=1)
+        except AssertionError:
+            return False
+
+    wait_until(printed)
+
+
+@pytest.mark.parametrize("shells", ["plain", pytest.param("live", marks=LIVE)], indirect=True)
+@pytest.mark.covers("session.companion.new")
+def test_a_parent_whose_shell_exits_restarts_it(shells):
+    """A parent whose last pane exits while it has companions restarts a plain login shell in place, keeping its
+    pane; a command parent restarts as a shell, not its command (#840)."""
+    ctl = shells
+    wid, (parent,) = _workspace(ctl)
+    _companion(ctl, parent)
+    ctl.wait_mounted(parent, "left")
+    pane = _left_pane_id(ctl, parent)
+    _prints(ctl, parent)
+    assert_ok(ctl.request("session.type", parent, text="exit\n"))
+    _prints(ctl, parent)
+    assert parent in session_ids(ctl.tree(), wid)
+    assert _left_pane_id(ctl, parent) == pane
+
+    command = assert_ok(ctl.request("session.new", workspace=wid, cwd="/tmp", command="sleep 600", noSelect=True))["id"]
+    _companion(ctl, command)
+    ctl.wait_tree(lambda tree: (find_session(tree, command).get("foreground") or [])[:1] == ["sleep"])
+    assert_ok(ctl.request("session.type", command, text="\x03"))
+    _prints(ctl, command)
+    node = find_session(ctl.tree(), command)
+    assert (node.get("foreground") or [])[:1] != ["sleep"], node
     assert_ok(ctl.request("workspace.delete", wid))

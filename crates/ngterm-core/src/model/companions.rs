@@ -7,8 +7,14 @@
 //! The tree stays flat: a group is a top-level session followed by the run of companions naming it, so every
 //! placement rule here keeps a companion inside its parent's run and a top-level session outside any run. Companions
 //! have no companions of their own: a companion target means its parent.
+//!
+//! A local parent whose last pane exits while it has companions restarts a plain login shell in its last cwd instead
+//! of closing ([`AppStore::close_primary_pane_at`], `panes.rs`), unless its previous restart is under
+//! [`RESPAWN_MINIMUM_UPTIME`] old. The pane keeps its identity, and [`Session::primary_respawns`] counts the restarts
+//! so a frontend mounts a fresh terminal in the emptied primary slot.
 
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
@@ -32,6 +38,30 @@ pub struct CompanionState {
     pub(crate) parent: Option<Uuid>,
     /// Whether a parent row shows its companions in the sidebar tree. Persisted only when folded.
     pub expanded: bool,
+}
+
+/// How long a respawned shell must run before its exit respawns it again (upstream's `respawnMinimumUptime`): one
+/// exiting sooner (a broken shell or profile, a failing live attach) would otherwise respawn forever.
+pub const RESPAWN_MINIMUM_UPTIME: Duration = Duration::from_secs(2);
+
+/// A parent's primary-pane restarts (upstream's `primaryRespawns` and `lastRespawnAt`). Ephemeral.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct RespawnState {
+    /// How many times the primary pane restarted; a frontend mounts a fresh terminal when it moves.
+    pub(crate) count: u64,
+    /// When the latest restart happened, on the monotonic clock.
+    pub(crate) last_at: Option<Instant>,
+}
+
+/// What a primary pane's exit did to its session (upstream's `PrimaryPaneExit`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimaryPaneExit {
+    /// The session closed (with its companions, for a parent).
+    Closed,
+    /// A split survivor moved into the primary slot.
+    Promoted,
+    /// The pane restarts a plain login shell under the same identity.
+    Respawned,
 }
 
 /// How a new companion starts (upstream's `CompanionOptions`); a `None` cwd opens it in the parent's focused cwd.
@@ -96,6 +126,23 @@ impl AppStore {
     #[must_use]
     pub fn has_companions(&self, parent: Uuid) -> bool {
         !self.companions(parent).is_empty()
+    }
+
+    /// Whether session `id`'s last pane exiting restarts its primary shell rather than closing it: a local session with
+    /// companions whose previous restart (if any) is at least [`RESPAWN_MINIMUM_UPTIME`] before `now`. A remote row is
+    /// restarted by its owner on the other machine, never here.
+    #[must_use]
+    pub fn respawns_on_last_pane_exit(&self, id: Uuid, now: Instant) -> bool {
+        let Some(session) = self.session(id) else {
+            return false;
+        };
+        if session.remote_host().is_some() || !self.has_companions(id) {
+            return false;
+        }
+        session
+            .respawn
+            .last_at
+            .is_none_or(|last| now.saturating_duration_since(last) >= RESPAWN_MINIMUM_UPTIME)
     }
 
     /// The parent of `session`; `None` for a top-level session.

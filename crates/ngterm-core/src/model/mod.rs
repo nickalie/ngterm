@@ -46,7 +46,9 @@ pub use ask_form::{AskChoiceForm, AskDraft, AskForm, AskInputForm, AskInputMode,
 pub use background::{
     BackdropWashRegion, BackgroundWatermark, PaneBackgrounds, WatermarkFit, WatermarkKind, WatermarkPosition,
 };
-pub use companions::{CompanionOptions, CompanionRefusal, CompanionState, SessionContent};
+pub use companions::{
+    CompanionOptions, CompanionRefusal, CompanionState, PrimaryPaneExit, RESPAWN_MINIMUM_UPTIME, SessionContent,
+};
 pub use flagged_order::FlaggedOrderPlacement;
 pub use focus::FocusMode;
 pub use html_overlay::{HtmlOverlayCommandFailure, HtmlOverlayOpenFailure, HtmlPageSlot};

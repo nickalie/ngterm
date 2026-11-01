@@ -230,6 +230,14 @@ impl Core {
         }
     }
 
+    /// Pane `pane`'s shell respawned under the same identity (a parent's, `crate::model::companions`): the exited
+    /// daemon's lead state and finalize mark go, so the new one attaches afresh and is ended when its pane is.
+    pub(crate) fn primary_respawned(&mut self, pane: Uuid) {
+        self.live.leads.forget(pane);
+        self.live.already_finalized.remove(&pane);
+        self.live.leaders.borrow_mut().note_lifecycle_change();
+    }
+
     /// Marks `pane` as finalized by the caller, which destroyed its daemon already.
     pub(crate) fn note_already_finalized(&mut self, pane: Uuid) {
         self.live.already_finalized.insert(pane);

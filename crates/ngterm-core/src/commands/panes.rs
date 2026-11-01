@@ -10,6 +10,8 @@
 //! The frontend reports every focus it sees or gives through [`Core::pane_focused`], which withdraws the session's
 //! delivered banners; a successful `session.swap` withdraws them too, without touching the badge.
 
+use std::time::Instant;
+
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Command, ControlResult, Request, Response};
 use uuid::Uuid;
@@ -20,7 +22,7 @@ use super::{Outcome, ToggleMode, args_of, not_found, parse_surface_pane, session
 use crate::Core;
 use crate::dispatch::Dispatched;
 use crate::error::{ControlError, Noun};
-use crate::model::{SplitAxis, StatusPane, SwapRefusal};
+use crate::model::{Session, SplitAxis, StatusPane, SwapRefusal};
 use crate::resolve::ACTIVE;
 
 /// A terminal's report bound for its session's pane fields.
@@ -34,10 +36,16 @@ pub enum PaneReport {
 
 impl Core {
     /// The shell of the pane carrying `token` exited (upstream's per-pane `onExit`): the primary's promotes a split
-    /// survivor or closes the session, the split pane's collapses the split or closes the session it was the last pane
-    /// of, the scratch's closes the scratch. A token no pane of the session carries any more (the terminal was replaced
-    /// or torn down meanwhile) changes nothing. Whether it changed anything; commit afterwards when it did.
+    /// survivor, the split pane's collapses the split, and the last pane's respawns a parent with companions or closes
+    /// the session (`Core::close_exited_pane`); the scratch's closes the scratch. A token no pane of the session
+    /// carries any more (the terminal was replaced or torn down meanwhile) changes nothing. Whether it changed
+    /// anything; commit afterwards when it did.
     pub fn pane_exited(&mut self, session: Uuid, token: &str) -> bool {
+        self.pane_exited_at(session, token, Instant::now())
+    }
+
+    /// [`Core::pane_exited`] at `now`, the clock a parent's respawn is timed by.
+    pub fn pane_exited_at(&mut self, session: Uuid, token: &str, now: Instant) -> bool {
         // a restart ended this shell on purpose and rebuilds the pane
         if self.live.claimed_exits.contains(token) {
             return false;
@@ -49,12 +57,36 @@ impl Core {
             .session(session)
             .and_then(|found| found.pane_role_for_token(token))
         {
-            Some(StatusPane::Left) => store.close_primary_pane(session),
-            Some(StatusPane::Right) => store.close_split_pane(session),
+            Some(role @ (StatusPane::Left | StatusPane::Right)) => self.close_exited_pane(session, role, now),
             Some(StatusPane::Scratch) => return store.close_scratch(session, true),
             None => return false,
         }
         true
+    }
+
+    /// Runs the exit of session `session`'s pane `role` (left or right) at `now`: [`AppStore::close_primary_pane_at`]
+    /// or [`AppStore::close_split_pane_at`]. A respawned primary keeps its identity but runs a new shell (a new
+    /// live-session daemon under the same name), so the old one's lead state and finalize mark are dropped.
+    ///
+    /// [`AppStore::close_primary_pane_at`]: crate::model::AppStore::close_primary_pane_at
+    /// [`AppStore::close_split_pane_at`]: crate::model::AppStore::close_split_pane_at
+    pub(crate) fn close_exited_pane(&mut self, session: Uuid, role: StatusPane, now: Instant) {
+        let Some(store) = self.library_mut().store_for_session_mut(session) else {
+            return;
+        };
+        let before = store.session(session).map(Session::primary_respawns);
+        if role == StatusPane::Left {
+            let _ = store.close_primary_pane_at(session, now);
+        } else {
+            store.close_split_pane_at(session, now);
+        }
+        let respawned = store
+            .session(session)
+            .filter(|found| Some(found.primary_respawns()) != before)
+            .map(|found| found.pane_identity);
+        if let Some(identity) = respawned {
+            self.primary_respawned(identity);
+        }
     }
 
     /// Keyboard focus moved into the pane carrying `token`: the user clicked it, or the frontend gave it focus

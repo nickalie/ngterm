@@ -9,8 +9,9 @@
 //!   core grants it ([`Core::take_spawn_grants`]): a live pane attaches to its daemon in process. Its client leads the
 //!   pty size only while no viewer does: a viewer's attach claims the lead (`ngterm_core::live::lead`), and the grid
 //!   here is whatever the last lead left until then.
-//! - A pane the model dropped is torn down; a replacement the core asks for (a live restart, a lead takeover) is a
-//!   fresh terminal in the same slot ([`Core::take_pane_replacements`]).
+//! - A pane the model dropped is torn down, and one whose terminal the model tore down under the same token (a
+//!   parent's respawned primary) gets a fresh one; a replacement the core asks for (a live restart, a lead takeover)
+//!   is a fresh terminal in the same slot ([`Core::take_pane_replacements`]).
 //! - The terminal's events reach the core as the deck's reports do: title, working directory, notification, exit.
 //!   The rest (bell, clipboard, colors, progress, search) has nothing to show it here.
 //!
@@ -301,6 +302,15 @@ pub fn layout(core: &Core) -> Vec<PaneSpec> {
         .collect()
 }
 
+/// Whether a terminal in `spec`'s session carries its token: false once the model tore it down (a respawned parent's
+/// primary, `ngterm_core::model::AppStore::close_primary_pane`) or before the first mount.
+fn carries(core: &Core, spec: &PaneSpec) -> bool {
+    core.library()
+        .store(spec.window)
+        .and_then(|store| store.session(spec.session))
+        .is_some_and(|session| session.pane_role_for_token(&spec.token).is_some())
+}
+
 /// The registry of the terminals (module docs).
 pub struct Panes {
     environment: PaneEnvironment,
@@ -344,7 +354,10 @@ impl Panes {
             .filter_map(|window| core.library().store(window))
             .flat_map(AppStore::pending_held_session_ids)
             .collect();
-        self.retain(&wanted, &held);
+        // a respawned primary keeps its token while the model tore its terminal down: the cell goes and a fresh one
+        // mounts below
+        let carried: Vec<PaneSpec> = wanted.iter().filter(|spec| carries(core, spec)).cloned().collect();
+        self.retain(&carried, &held);
         let mut fresh = Vec::new();
         for spec in wanted {
             core.wake_session(spec.session);

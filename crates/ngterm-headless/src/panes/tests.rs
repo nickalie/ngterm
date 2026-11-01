@@ -165,3 +165,25 @@ fn a_promoted_split_survivor_is_the_primary() {
     );
     assert_eq!(role(&core, session, &primary), None);
 }
+
+#[test]
+fn a_respawned_primary_keeps_its_token_but_needs_a_fresh_terminal() {
+    let (mut core, session, primary, split) = split_core();
+    let window = core.library().active_window_id().unwrap();
+    let store = core.library_mut().store_mut(window).unwrap();
+    store
+        .add_companion(session, ngterm_core::model::CompanionOptions::default(), "/home/u")
+        .unwrap();
+    store.close_split_pane(session);
+    let spec = PaneSpec::of_token(&core, session, &primary).unwrap();
+    assert!(carries(&core, &spec), "the terminal still runs");
+    let store = core.library_mut().store_mut(window).unwrap();
+    assert_eq!(
+        store.close_primary_pane(session),
+        ngterm_core::model::PrimaryPaneExit::Respawned
+    );
+    let spec = PaneSpec::of_token(&core, session, &primary).expect("the pane is still laid out");
+    assert_eq!(spec.pane, StatusPane::Left);
+    assert!(!carries(&core, &spec), "the respawn tore its terminal down");
+    assert_eq!(role(&core, session, &split), None);
+}
