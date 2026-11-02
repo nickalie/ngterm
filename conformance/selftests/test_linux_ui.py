@@ -51,9 +51,11 @@ def test_x11_env_allows_only_owned_display_and_bus(ui_run, tmp_path):
     assert 'WAYLAND_DISPLAY' not in env
     assert env['GDK_BACKEND'] == 'x11'
     assert env['GSETTINGS_BACKEND'] == 'memory'
-    for key, value in [('DISPLAY', ':0'), ('AT_SPI_BUS_ADDRESS', 'unix:path=/foreign'), ('GDK_BACKEND', 'wayland')]:
+    for key, value in [('DISPLAY', ':0'), ('AT_SPI_BUS_ADDRESS', 'unix:path=/foreign'), ('GDK_BACKEND', 'wayland'), ('WAYLAND_DISPLAY', 'other'), ('XAUTHORITY', '/foreign')]:
         with pytest.raises(base.LaunchRefused):
             base.check_launch_env({**env, key: value}, root, True, True, True, base.RUST_PREFIX, ui=context)
+    with pytest.raises(base.LaunchRefused, match='root'):
+        context.check(env, tmp_path / 'foreign')
     ui_run.active = False
     with pytest.raises(base.LaunchRefused):
         context.apply(env)
@@ -134,6 +136,7 @@ def test_xvfb_failure_reaps_bus_and_root(ui_run, fake_bin, roots, monkeypatch):
     with pytest.raises(base.LaunchError, match='Xvfb'):
         RustAdapter(fake_bin).launch(ui=ui_run)
     assert all(not root.exists() for root in roots)
+    assert all(not base.find_headless_leftovers(str(root / base.RUNTIME_DIR_NAME)) for root in roots)
 
 
 def test_missing_typelib_names_setup_step(monkeypatch):
@@ -177,6 +180,7 @@ def test_owned_run_starts_and_reaps_launcher_bus_and_registry(tmp_path, monkeypa
     monkeypatch.setattr(linux_ui, 'program', lambda name: name)
     monkeypatch.setattr(base, '_spawn', spawn)
     monkeypatch.setattr(base, 'start_session_bus', lambda root, env, timeout: spawn(['bus'], env, root / 'bus.log', 'wb'))
+    children = []
     def call(env, address, dest, path, method, *args):
         if fail and method.endswith('GetNameOwner'):
             raise base.LaunchError('registry failed')
@@ -186,6 +190,7 @@ def test_owned_run_starts_and_reaps_launcher_bus_and_registry(tmp_path, monkeypa
                 assert Path(env['XDG_RUNTIME_DIR'], 'child.pid').exists()
                 return True
             wait_until(child_ready, timeout=5)
+            children.append(int(Path(env["XDG_RUNTIME_DIR"], "child.pid").read_text()))
             return repr(('unix:path=' + env['XDG_RUNTIME_DIR'] + '/a11y',))
         return "(':1.0',)"
     monkeypatch.setattr(linux_ui, '_call', call)
@@ -196,6 +201,7 @@ def test_owned_run_starts_and_reaps_launcher_bus_and_registry(tmp_path, monkeypa
         assert all(p.poll() is not None for p in processes)
         assert not run.root.exists()
         assert linux_ui._active_run is None
+        assert children and all(not Path(f"/proc/{pid}").exists() for pid in children)
         return
     run.start()
     child_pid = int((run.root / 'run/child.pid').read_text())
@@ -210,13 +216,19 @@ def test_owned_run_starts_and_reaps_launcher_bus_and_registry(tmp_path, monkeypa
 
 
 def test_collection_setup_failure_is_exit_two(pytester, fake_bin, monkeypatch):
-    monkeypatch.setattr(linux_ui.A11yRun, 'start', lambda self: (_ for _ in ()).throw(base.LaunchError('missing Xvfb')))
+    def fail(self):
+        error = base.LaunchError('missing Xvfb')
+        error.add_note('launcher diagnostic')
+        raise error
+    monkeypatch.setattr(linux_ui.A11yRun, 'start', fail)
     directory = pytester.path / 'tests/ui'
     directory.mkdir(parents=True)
     (directory / 'test_setup.py').write_text('def test_ui(impl_options): pass\n')
-    result = pytester.runpytest('tests/ui', '--impl', 'rust', '--bin', str(fake_bin))
+    result = pytester.runpytest('tests/ui', '--impl', 'rust', '--bin', str(fake_bin), '--nodeid-report', 'records.jsonl')
     assert result.ret == 2
     assert 'missing Xvfb' in result.stdout.str() + result.stderr.str()
+    assert 'launcher diagnostic' in result.stdout.str() + result.stderr.str()
+    assert not (pytester.path / 'records.jsonl').exists()
 
 
 def test_module_and_function_launches_follow_ui_layer(pytester, fake_bin, fake_xvfb, ui_run, monkeypatch):
@@ -228,13 +240,20 @@ def test_module_and_function_launches_follow_ui_layer(pytester, fake_bin, fake_x
     directory.mkdir(parents=True)
     (directory / 'test_launch.py').write_text('''
 import pytest
+from agterm_conformance.plugin import launch_options
 @pytest.fixture(scope='module')
-def seeded(shared_app):
-    assert shared_app.ui is not None
-    return shared_app
+def seeded(adapter, request):
+    instance = adapter.launch(**launch_options(request))
+    try:
+        assert instance.ui is not None
+        context = instance.ui
+        instance = adapter.relaunch(instance)
+        assert instance.ui is context
+        yield instance
+    finally:
+        adapter.stop(instance)
 
-def test_module(seeded, ctl):
-    assert ctl.instance is seeded
+def test_module(seeded):
     assert seeded.env['GDK_BACKEND'] == 'x11'
 
 def test_extra(launch):
@@ -247,3 +266,90 @@ def test_function(app):
     assert app.ui is not None
 ''')
     pytester.runpytest('tests/ui', '--impl', 'rust', '--bin', str(fake_bin)).assert_outcomes(passed=3)
+
+
+@pytest.mark.parametrize('reason', ['address', 'initialized', 'active'])
+def test_run_refuses_foreign_state_before_creating_root(reason, monkeypatch):
+    monkeypatch.delenv('AT_SPI_BUS_ADDRESS', raising=False)
+    monkeypatch.setattr(linux_ui, '_active_run', None)
+    monkeypatch.setattr(linux_ui, 'check_setup', lambda: None)
+    atspi = FakeAtspi()
+    monkeypatch.setattr(linux_ui, 'atspi_bindings', lambda: atspi)
+    monkeypatch.setattr(base, 'make_root', lambda: pytest.fail('root created'))
+    if reason == 'address':
+        monkeypatch.setenv('AT_SPI_BUS_ADDRESS', 'unix:path=/foreign')
+    elif reason == 'initialized':
+        atspi.initialized = True
+    else:
+        monkeypatch.setattr(linux_ui, '_active_run', object())
+    with pytest.raises(base.LaunchRefused):
+        linux_ui.A11yRun().start()
+
+
+def test_status_start_failure_reaps_xvfb_and_bus(ui_run, fake_xvfb, fake_bin, roots, monkeypatch):
+    def fail(*args):
+        raise base.LaunchError('status failed')
+    monkeypatch.setattr(linux_ui, 'start_status', fail)
+    with pytest.raises(base.LaunchError, match='status failed'):
+        RustAdapter(fake_bin).launch(ui=ui_run)
+    assert roots and all(not root.exists() for root in roots)
+    assert all(not base.find_headless_leftovers(str(root / base.RUNTIME_DIR_NAME)) for root in roots)
+
+
+@pytest.mark.parametrize('helper', ['status', 'xvfb'])
+def test_dead_ui_helper_refuses_launch_guard_and_reports_stop(ui_run, fake_xvfb, fake_bin, helper):
+    adapter = RustAdapter(fake_bin)
+    instance = adapter.launch(ui=ui_run)
+    process = instance.ui.status if helper == 'status' else instance.compositor
+    process.terminate()
+    process.wait(timeout=5)
+    try:
+        with pytest.raises(base.LaunchError, match='status|Xvfb'):
+            instance.ui.check(instance.env, instance.root)
+    finally:
+        with pytest.raises(base.StopError, match='status|Xvfb'):
+            adapter.stop(instance)
+
+
+def test_status_start_reports_log_and_reaps_process(tmp_path, monkeypatch):
+    processes = []
+    original_spawn = base._spawn
+    def spawn(command, env, log, mode):
+        process = original_spawn([sys.executable, '-c', 'import signal; signal.pause()'], env, log, mode)
+        processes.append(process)
+        return process
+    def fail(*args):
+        (tmp_path / 'a11y-status.log').write_text('status diagnostic')
+        raise base.LaunchError('status failed')
+    monkeypatch.setattr(base, '_spawn', spawn)
+    monkeypatch.setattr(linux_ui, '_wait_call', fail)
+    with pytest.raises(base.LaunchError) as error:
+        linux_ui.start_status(tmp_path, {'HOME': str(tmp_path), 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/owned'}, 1)
+    assert 'status diagnostic' in error.value.__notes__
+    assert all(p.poll() is not None for p in processes)
+
+
+def test_run_close_reports_dead_helper_and_still_cleans_root(ui_run, tmp_path):
+    process = base._spawn([sys.executable, '-c', 'raise SystemExit(7)'],
+                          {'HOME': str(tmp_path)}, tmp_path / 'a11y-registry.log', 'wb')
+    process.wait(timeout=5)
+    ui_run.registry = process
+    with pytest.raises(base.StopError, match='registry had already exited with 7'):
+        ui_run.close()
+    assert not tmp_path.exists()
+    assert linux_ui._active_run is None
+    ui_run.close()
+
+
+@pytest.mark.parametrize('helper', ['status', 'xvfb'])
+def test_dead_helper_relaunch_reaps_remaining_resources(ui_run, fake_xvfb, fake_bin, roots, helper):
+    adapter = RustAdapter(fake_bin)
+    instance = adapter.launch(ui=ui_run)
+    process = instance.ui.status if helper == 'status' else instance.compositor
+    process.terminate()
+    process.wait(timeout=5)
+    with pytest.raises(base.LaunchError, match='status|Xvfb'):
+        adapter.relaunch(instance)
+    assert all(p.poll() is not None for p in
+               (instance.process, instance.compositor, instance.session_bus, instance.ui.status))
+    assert not base.find_headless_leftovers(str(instance.root / base.RUNTIME_DIR_NAME))

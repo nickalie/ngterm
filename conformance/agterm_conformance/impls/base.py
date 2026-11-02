@@ -1,7 +1,8 @@
 """Implementation adapter contract: isolated launch, socket wait, own-pid stop, leftover-process check.
 
-Safety is an allowlist: every path the instance is told about lives under a fresh `mkdtemp` root, and the
-guards refuse a launch env that points anywhere else before anything is spawned.
+Safety is an allowlist: instance paths live under a fresh `mkdtemp` root. Guards run before spawning
+and again after helper startup. Linux UI instances additionally use a run-owned accessibility bus
+and their own Xvfb display, pinned by X11Context.check.
 
 On Windows (the Rust build only) the control socket's path names a named pipe (`agterm_conformance.transport`), the
 instance's local and roaming application data move under the root with its home, its panes run a POSIX `sh`
@@ -143,8 +144,9 @@ WESTON_SIZE = (1920, 1080)
 # No idle lock, no panel, and no `weston-keyboard` input-method client: the desktop shell's own helper is its only one.
 WESTON_CONFIG = "[core]\nidle-time=0\n\n[shell]\npanel-position=none\nlocking=false\n\n[input-method]\npath=\n"
 DBUS_SOCKET = "bus"
-# No service directories: nothing is activated, so a notification, Show in Files or the AT-SPI bus lookup finds no
-# owner instead of starting a desktop service. The instance's single-instance server still owns its app id here.
+# No service directories: nothing is activated. Weston instances have no AT-SPI bus owner; UI instances
+# explicitly serve discovery through the harness-owned linux_ui.start_status helper.
+# The instance's single-instance server still owns its app id here.
 DBUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
@@ -204,7 +206,7 @@ class LaunchError(Exception):
 
 
 class LaunchRefused(LaunchError):
-    """A guard rejected the launch env before anything was spawned."""
+    """A guard rejected the launch env, either before spawning or after owned helper startup."""
 
 
 class StopError(Exception):
@@ -638,6 +640,7 @@ class Adapter:
         ui: Any = None,
     ) -> Instance:
         """`settings` seeds `<state>/settings.json`, which every implementation reads at launch (`restoreMode`, ...).
+        `ui` is the run-wide A11yRun selecting private Xvfb (headless only); Instance.ui keeps its X11Context.
         `pane_shell` names the shell the panes run by its full path (`ghostty_config`), kept by relaunches.
 
         `first_run` leaves out the prior-state marker and asks for the welcome dialog an isolated launch suppresses.
@@ -1064,11 +1067,10 @@ def wait_for_unix_socket(
 def stop_headless(
     compositor: subprocess.Popen[bytes] | None, session_bus: subprocess.Popen[bytes] | None, root: Path, ui: Any = None
 ) -> str | None:
-    """SIGTERM the compositor's and the bus's own pids, then wait for their clients to follow; returns what went wrong."""
-    if ui is not None:
-        ui.close()
+    """Stop the a11y status helper, compositor and bus, wait for clients, and return any cleanup problems."""
+    ui_problem = ui.close() if ui is not None else None
     if compositor is None and session_bus is None:
-        return None
+        return ui_problem
     problems = [
         problem
         for process, label, log in (
@@ -1077,6 +1079,8 @@ def stop_headless(
         )
         if process is not None and (problem := _stop_helper(process, label, log))
     ]
+    if ui_problem:
+        problems.insert(0, ui_problem)
     # Weston's desktop-shell helper exits on its own once the socket closes.
     runtime_dir = os.fspath(root / RUNTIME_DIR_NAME)
     deadline = time.monotonic() + STOP_TIMEOUT
@@ -1108,7 +1112,7 @@ def _note_headless_stop(
 
 
 def find_headless_leftovers(runtime_dir: str) -> list[tuple[int, str, str]]:
-    """(pid, name, command) of weston, its clients and dbus-daemon carrying this instance's runtime dir."""
+    """(pid, name, command) of weston, its clients, Xvfb and dbus-daemon carrying this instance's runtime dir."""
     marker = f"XDG_RUNTIME_DIR={runtime_dir}"
     return [
         (pid, name, command)

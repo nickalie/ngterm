@@ -286,6 +286,7 @@ class NodeidReport:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.partial = False
+        self.withheld = False  # setup failed before any test could be judged
         # set by `--ratchet-only` when nothing else narrowed the collection (selection.RatchetOnly)
         self.mode: str | None = None
         self.merged: dict[str, dict[str, Any]] = {}
@@ -325,8 +326,8 @@ class NodeidReport:
     @pytest.hookimpl(trylast=True)
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
         # trylast: MustPass's tryfirst sessionfinish has set its problems by now.
-        if session.exitstatus in (pytest.ExitCode.USAGE_ERROR, pytest.ExitCode.INTERNAL_ERROR):
-            # pytest refused its arguments (a path or node id that matches nothing) or broke: nothing was judged,
+        if self.withheld or session.exitstatus in (pytest.ExitCode.USAGE_ERROR, pytest.ExitCode.INTERNAL_ERROR):
+            # Setup failed, pytest refused its arguments, or it broke internally: nothing was judged,
             # and a header-only report would read as an empty run that holds the ratchet. No file instead, so
             # check_ratchet.py exits 2.
             return
@@ -381,7 +382,10 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
                     raise LaunchError("Linux UI instances require headless display mode")
                 run = linux_ui.A11yRun().start()
             except LaunchError as error:
-                pytest.exit(str(error), returncode=2)
+                report = config.pluginmanager.get_plugin("agterm-nodeid-report")
+                if report is not None:
+                    report.withheld = True
+                pytest.exit("\n".join([str(error), *getattr(error, "__notes__", [])]), returncode=2)
             config.stash[_A11Y_KEY] = run
             config.add_cleanup(run.close)
 
