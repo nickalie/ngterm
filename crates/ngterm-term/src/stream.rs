@@ -11,12 +11,15 @@
 //!   terminal's replies and the pane's own bytes, in the order they were made, and the grid after a resize, for the
 //!   channel's window change. Replies are never refused, only dropped past [`REPLY_CAP`] queued bytes (a program that
 //!   floods queries and reads no input loses replies, as on a PTY); input is refused past the pane's write limit
-//!   ([`crate::PaneError::Backpressure`]).
+//!   ([`crate::PaneError::Backpressure`]) while anything is queued, and an empty queue takes a piece of any size.
 //! - **Replies**: the pane's terminal answers the program's queries, as a PTY pane's does: an attach client filters
 //!   out the queries its server answers, so whatever reaches the pane is its to answer. Clipboard reads stop the
 //!   output for the frontend's answer ([`crate::PaneEvent::ClipboardRead`]), as on a PTY.
 //! - **End**: [`StreamFeed::end_of_output`] once the channel's output ended; [`StreamFeed::exited`] reports the
-//!   program's end (the channel's exit status) under the pane's [`crate::ExitPolicy`]. Dropping the pane closes
+//!   program's end (the channel's exit status) under the pane's [`crate::ExitPolicy`]. Call `end_of_output` first,
+//!   even when the exit status arrives before the channel's EOF (as OpenSSH sends it): `exited` waits for the output
+//!   to drain, and only the end of output ends that wait early, so without it `exited` blocks for a full second and
+//!   output fed after it lands below the exit message. Dropping the pane closes
 //!   [`StreamOut`] and makes [`StreamFeed::deliver`] refuse, so the embedder's threads end.
 //! - **Kitty graphics**: images load from the escape sequence alone: a remote program's files, temporary files and
 //!   shared memory are not this machine's.
@@ -100,7 +103,7 @@ impl Outbound {
         self.changed.notify_all();
     }
 
-    /// Queue the program's input, within the write limit.
+    /// Queue the program's input, within the write limit while anything is queued.
     pub(crate) fn input(&self, bytes: &[u8]) -> Result<(), PaneError> {
         let mut queue = lock(&self.queue);
         if queue.closed {
@@ -109,7 +112,8 @@ impl Outbound {
         if bytes.is_empty() {
             return Ok(());
         }
-        if queue.bytes + bytes.len() > self.write_limit {
+        // an empty queue takes a piece of any size (a whole paste), as the PTY actor's and a live pane's do
+        if queue.bytes > 0 && queue.bytes + bytes.len() > self.write_limit {
             return Err(PaneError::Backpressure);
         }
         Self::push(&mut queue, bytes);
@@ -263,14 +267,19 @@ impl StreamFeed {
         self.shared.mailbox().end_of_output();
     }
 
-    /// The program ended with `code` (`None`: unknown, as a channel closed with no exit status) and `signal`: a
-    /// clipboard read waiting is denied, the output fed so far reaches the screen (waiting up to a second for it), the
-    /// exit policy's message is written, and [`crate::PaneEvent::Exited`] is reported. Runs on the caller's thread;
-    /// only the first call counts.
+    /// The program ended with `code` (`None`: unknown, as a channel closed with no exit status; 1 when `signal` ended
+    /// it) and `signal`: a clipboard read waiting is denied, the output fed so far reaches the screen, the exit
+    /// policy's message is written, and [`crate::PaneEvent::Exited`] is reported. Runs on the caller's thread; only
+    /// the first call counts.
+    ///
+    /// Call [`Self::end_of_output`] first: the output drains up to its end, and without one this waits the whole
+    /// second it gives the output before reporting the exit (see the module docs).
     pub fn exited(&self, code: Option<u32>, signal: Option<String>) {
         if self.exited.swap(true, Ordering::AcqRel) {
             return;
         }
+        // a signal's end is code 1, as a local child's is
+        let code = code.or(signal.as_ref().map(|_| 1));
         if let Some(code) = code {
             crate::pane::record_status(&self.shared, code);
         }

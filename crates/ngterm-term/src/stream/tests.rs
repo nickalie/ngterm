@@ -1,7 +1,7 @@
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use crate::{ClipboardAnswer, ExitStatus, Pane, PaneConfig, PaneEvent, TextRegion};
+use crate::{ClipboardAnswer, ExitPolicy, ExitStatus, Pane, PaneConfig, PaneEvent, TextRegion};
 
 use super::*;
 
@@ -108,6 +108,20 @@ fn input_past_the_write_limit_is_refused_and_replies_are_not() {
 }
 
 #[test]
+fn an_empty_queue_takes_input_past_the_write_limit() {
+    // a paste larger than the limit goes out whole, as on a PTY or live pane
+    let fixture = stream(PaneConfig {
+        write_limit: 4,
+        ..PaneConfig::new(SIZE)
+    });
+    fixture.pane.write(b"abcde").unwrap();
+    assert_eq!(fixture.pane.queued_input(), 5);
+    assert_eq!(fixture.pane.write(b"f"), Err(PaneError::Backpressure));
+    assert_eq!(fixture.out.next(None), Ok(Some(Outgoing::Bytes(b"abcde".to_vec()))));
+    fixture.pane.write(b"f").unwrap();
+}
+
+#[test]
 fn a_clipboard_read_waits_for_the_frontends_answer() {
     let fixture = stream(PaneConfig::new(SIZE));
     fixture.feed.deliver(b"\x1b]52;c;?\x07after");
@@ -194,12 +208,21 @@ fn the_reply_cap_is_the_pty_actors() {
 
 #[test]
 fn exited_while_output_is_still_queued_shows_that_output_first() {
-    let fixture = stream(PaneConfig::new(SIZE));
+    let fixture = stream(PaneConfig {
+        exit: ExitPolicy::Launched {
+            argv: "sh".to_owned(),
+            command: true,
+            wait_after_command: true,
+            abnormal_runtime: Duration::ZERO,
+        },
+        ..PaneConfig::new(SIZE)
+    });
     // an unanswered clipboard read holds the output after it in the mailbox
     fixture.feed.deliver(b"\x1b]52;c;?\x07tail");
     fixture.event(|event| matches!(event, PaneEvent::ClipboardRead(_)));
     assert!(!fixture.pane.read_text(TextRegion::Viewport).unwrap().contains("tail"));
-    // the program's end denies the read and feeds what was queued before it reports the exit
+    // the program's end denies the read and feeds what was queued before the exit message and the report
+    fixture.feed.end_of_output();
     fixture.feed.exited(Some(0), None);
     let exited = fixture.event(|event| matches!(event, PaneEvent::Exited(_)));
     assert_eq!(
@@ -207,10 +230,32 @@ fn exited_while_output_is_still_queued_shows_that_output_first() {
         PaneEvent::Exited(ExitStatus {
             code: 0,
             signal: None,
+            held: true
+        })
+    );
+    let screen = fixture.pane.read_text(TextRegion::Viewport).unwrap();
+    let tail = screen.find("tail").expect("the queued output reached the screen");
+    let message = screen.find("Process exited").expect("the exit message is on screen");
+    assert!(
+        tail < message,
+        "the exit message came before the queued output: {screen:?}"
+    );
+}
+
+#[test]
+fn a_signal_exit_reports_code_one() {
+    let fixture = stream(PaneConfig::new(SIZE));
+    fixture.feed.end_of_output();
+    fixture.feed.exited(None, Some("TERM".to_owned()));
+    let exited = fixture.event(|event| matches!(event, PaneEvent::Exited(_)));
+    assert_eq!(
+        exited,
+        PaneEvent::Exited(ExitStatus {
+            code: 1,
+            signal: Some("TERM".to_owned()),
             held: false
         })
     );
-    assert!(fixture.pane.read_text(TextRegion::Viewport).unwrap().contains("tail"));
 }
 
 #[test]
