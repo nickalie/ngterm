@@ -17,7 +17,8 @@
 //!   ([`page_channel`]);
 //! - a remote row's companions, which its origin creates and this machine attaches under the row ([`companions`]), a
 //!   parent's respawn on the origin carried to its viewers' held panes ([`respawn`]), and the sessions this machine asks
-//!   an origin to create or end ([`origin_sessions`]).
+//!   an origin to create or end ([`origin_sessions`]); what an origin answers to those lines, read with no `Core`
+//!   ([`origin_replies`]).
 //!
 //! The streams are the frontend's: it hands the core each adopted connection as a [`LineChannel`] and reports
 //! the lines read from it and its close, arms the hello deadline and the heartbeat, and the core does the rest (upstream's
@@ -32,6 +33,7 @@ pub mod frames;
 mod handoff;
 pub mod hub;
 mod layout;
+pub mod origin_replies;
 pub(crate) mod origin_sessions;
 mod page;
 pub mod page_channel;
@@ -251,9 +253,9 @@ fn poll_tree(answer: viewer::Answer, host: String) -> Dispatched {
     }
 }
 
-/// The answer of a finished remote read ([`attach::read_remote_tree`]).
+/// The answer of a finished remote read ([`origin_replies::read_remote_tree`]).
 fn remote_tree_answer(result: &RemoteCommandResult, host: &str) -> Response {
-    match attach::read_remote_tree(result, host) {
+    match origin_replies::read_remote_tree(result, host) {
         Ok(remote) => {
             let result = ControlResult {
                 remote: Some(remote),

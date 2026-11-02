@@ -394,16 +394,16 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - Create: `crates/ngterm-core/src/remote/origin_replies.rs`
 - Modify: `crates/ngterm-core/src/remote/{origin_sessions.rs,companions.rs,attach.rs,mod.rs}`
 
-- [ ] write tests first, ported from those that cover these helpers today and extended:
+- [x] write tests first, ported from those that cover these helpers today and extended:
   - `not_live`, `too_old`, `end_failure`, `no_answer`;
   - `origin_created`, `unattached`, `reply_of`, `NOT_ATTACHABLE`;
   - tree parsing (`read_remote_tree`'s core);
   - the picker filter (`content.is_none()`, parents first)
-- [ ] move them into the public `origin_replies` module with `PAUSE` and `READY_BUDGET`; the `Core` flows call it, with
+- [x] move them into the public `origin_replies` module with `PAUSE` and `READY_BUDGET`; the `Core` flows call it, with
       behavior and strings unchanged
-- [ ] add one pure function per create stage (restore-mode check, `session new` reply, poll until listed), so mobile
+- [x] add one pure function per create stage (restore-mode check, `session new` reply, poll until listed), so mobile
       and `Core` share the decisions
-- [ ] run `cargo test -p ngterm-core remote` and clippy; both must pass before Task 6
+- [x] run `cargo test -p ngterm-core remote` and clippy; both must pass before Task 6
 
 ### Task 6: ngterm-mobile scaffold: crate, facade, transport traits and fake
 

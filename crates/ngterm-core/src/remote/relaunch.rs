@@ -15,8 +15,9 @@ use std::time::Instant;
 use ngterm_proto::ControlRemoteTree;
 use uuid::Uuid;
 
-use super::attach::{Placement, read_remote_tree};
+use super::attach::Placement;
 use super::frames;
+use super::origin_replies::read_remote_tree;
 use super::reconnect::retry_delay;
 use super::tree;
 use super::viewer::{Answer, run_off_thread, take_answer};

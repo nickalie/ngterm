@@ -10,17 +10,17 @@
 //!   window, its programs and companions with it, then the row closes here. Closing a remote row any other way only
 //!   detaches.
 
-use std::time::Instant;
-
-use ngterm_proto::{ControlRemoteSession, ControlRemoteTree, ControlResult, Response};
+use ngterm_proto::{ControlRemoteSession, ControlRemoteTree};
 use uuid::Uuid;
 
-use super::attach::{ActionPanel, AttachFlow, PROGRESS_SECONDS, Placement, Step, read_remote_tree};
-use super::companions::{
-    COMPANION_DEADLINE, NOT_ATTACHABLE, PAUSE, READY_BUDGET, origin_created, reply_of, unattached,
+use super::attach::{ActionPanel, AttachFlow, PROGRESS_SECONDS, Placement, Step};
+use super::companions::COMPANION_DEADLINE;
+use super::origin_replies::{
+    ListingWait, NEW_SESSION_ARGUMENTS, RESTORE_MODE_ARGUMENTS, WaitStep, check_restore_mode, end_failure,
+    end_session_arguments, session_created,
 };
 use super::ssh::control_command;
-use super::tree::{RemoteCommandResult, TREE_DEADLINE};
+use super::tree::RemoteCommandResult;
 use super::viewer::{Answer, run_off_thread, take_answer};
 use crate::Core;
 
@@ -29,10 +29,6 @@ pub(super) const NEW_SESSION_ID: &str = "new-session";
 /// The label of that row, and what the panels of a create are headed by.
 pub(super) const NEW_SESSION: &str = "New Session";
 const END_SESSION: &str = "End Session";
-/// What a created session is called in the messages about it.
-const SESSION_NOUN: &str = "session";
-/// The restore mode `restore.mode` reports while each pane runs in a live session.
-const LIVE_MODE: &str = "live";
 
 /// One session the origin is creating for this machine.
 #[derive(Debug)]
@@ -52,15 +48,10 @@ enum CreateStage {
     Waiting(Waiting),
 }
 
-/// The origin is listed until the created session is attachable: every pane's daemon must run first.
+/// The origin is listed until the created session is attachable, and the listing running, if one is.
 #[derive(Debug)]
 struct Waiting {
-    created: String,
-    deadline: Instant,
-    /// When the next listing starts.
-    due: Instant,
-    /// Why it is not attached yet, for the failure if it never is.
-    reason: String,
+    wait: ListingWait,
     read: Option<Answer>,
 }
 
@@ -71,62 +62,6 @@ pub(crate) struct EndRun {
     host: String,
     owned_hud: Option<u64>,
     answer: Answer,
-}
-
-/// The text after "gave no answer": what ssh said, if anything.
-fn no_answer(result: &RemoteCommandResult, host: &str, rest: &str) -> String {
-    let stderr = result.stderr.trim();
-    if stderr.is_empty() {
-        format!("{host} gave no answer; {rest}")
-    } else {
-        format!("{host} gave no answer ({stderr}); {rest}")
-    }
-}
-
-/// The far CLI refused its command line, before sending anything.
-fn too_old(host: &str) -> String {
-    format!("the ngterm on {host} is too old for this; nothing was created")
-}
-
-/// Why `host`'s answer to `restore.mode` rules a new session out; `None` when it runs live sessions.
-fn not_live(result: &RemoteCommandResult, host: &str) -> Option<String> {
-    if result.refused_arguments() {
-        return Some(too_old(host));
-    }
-    let Some(reply): Option<Response<ControlResult>> = reply_of(result) else {
-        return Some(no_answer(result, host, "nothing was created"));
-    };
-    if !reply.ok {
-        let reason = reply
-            .error
-            .unwrap_or_else(|| format!("the remote command failed on {host}"));
-        return Some(format!("{reason}; nothing was created"));
-    }
-    let active = reply
-        .result
-        .and_then(|result| result.restore)
-        .map(|restore| restore.active);
-    match active.as_deref() {
-        Some(LIVE_MODE) => None,
-        Some(mode) => Some(format!(
-            "{host} does not run live sessions (restore mode {mode}), so a session made there could not attach; \
-             nothing was created"
-        )),
-        None => Some(format!("{host} did not name its restore mode; nothing was created")),
-    }
-}
-
-/// What the origin's close said: `None` when the session ended there, else why it did not. A full receipt counts
-/// whatever the transport did afterwards, since it names work the origin did.
-fn end_failure(result: &RemoteCommandResult, host: &str) -> Option<String> {
-    let Some(reply): Option<Response<ControlResult>> = reply_of(result) else {
-        return Some(no_answer(result, host, "whether the session ended there is unknown"));
-    };
-    (!reply.ok).then(|| {
-        reply
-            .error
-            .unwrap_or_else(|| format!("the remote command failed on {host}"))
-    })
 }
 
 impl Core {
@@ -163,7 +98,7 @@ impl Core {
     ) -> Option<AttachFlow> {
         flow.action = NEW_SESSION;
         self.attach_progress(&mut flow, &format!("creating a session on {host}…"));
-        let Some(answer) = self.ask_origin(&host, &["restore", "mode"]) else {
+        let Some(answer) = self.ask_origin(&host, &RESTORE_MODE_ARGUMENTS) else {
             self.attach_failed(&mut flow, &format!("the remote command failed on {host}"));
             return None;
         };
@@ -191,12 +126,11 @@ impl Core {
         let Some(result) = take_answer(&answer) else {
             return Some(CreateStage::Checking(answer));
         };
-        if let Some(reason) = not_live(&result, host) {
+        if let Err(reason) = check_restore_mode(&result, host) {
             self.attach_failed(flow, &reason);
             return None;
         }
-        // the origin keeps its own selection, as the session is wanted here, not there
-        let Some(answer) = self.ask_origin(host, &["session", "new", "--no-select"]) else {
+        let Some(answer) = self.ask_origin(host, &NEW_SESSION_ARGUMENTS) else {
             self.attach_failed(flow, &format!("the remote command failed on {host}"));
             return None;
         };
@@ -207,12 +141,7 @@ impl Core {
         let Some(result) = take_answer(&answer) else {
             return Some(CreateStage::Creating(answer));
         };
-        let created = if result.refused_arguments() {
-            Err(too_old(host))
-        } else {
-            origin_created(&result, host, SESSION_NOUN)
-        };
-        let created = match created {
+        let created = match session_created(&result, host) {
             Ok(created) => created,
             Err(reason) => {
                 self.attach_failed(flow, &reason);
@@ -220,12 +149,8 @@ impl Core {
             }
         };
         self.attach_progress(flow, "attaching the session…");
-        let now = self.remote_now();
         Some(CreateStage::Waiting(Waiting {
-            created,
-            deadline: now + READY_BUDGET,
-            due: now,
-            reason: NOT_ATTACHABLE.to_owned(),
+            wait: ListingWait::new(created, self.remote_now()),
             read: None,
         }))
     }
@@ -237,39 +162,37 @@ impl Core {
         workspace: Option<Uuid>,
         mut waiting: Waiting,
     ) -> Option<CreateStage> {
-        let tree = match self.next_listing(host, &mut waiting) {
-            Ok(Some(tree)) => tree,
+        let (remote, tree) = match self.next_listing(host, &mut waiting) {
+            Ok(Some(listed)) => listed,
             Ok(None) => return Some(CreateStage::Waiting(waiting)),
             Err(reason) => {
-                self.attach_failed(flow, &unattached(SESSION_NOUN, &waiting.created, host, &reason));
+                self.attach_failed(flow, &waiting.wait.unattached(host, &reason));
                 return None;
             }
         };
-        let Some(remote) = tree.sessions.iter().find(|session| session.id == waiting.created) else {
-            waiting.due = self.remote_now() + PAUSE;
-            return Some(CreateStage::Waiting(waiting));
-        };
-        match self.attach_created_session(flow.window, workspace, host, remote, &tree) {
+        match self.attach_created_session(flow.window, workspace, host, &remote, &tree) {
             Ok(()) => self.attach_close_hud(flow),
-            Err(reason) => self.attach_failed(flow, &unattached(SESSION_NOUN, &waiting.created, host, &reason)),
+            Err(reason) => self.attach_failed(flow, &waiting.wait.unattached(host, &reason)),
         }
         None
     }
 
-    /// One step of listing the origin: a listing once one arrived, `None` while waiting, the reason once the wait is
-    /// over.
-    fn next_listing(&mut self, host: &str, waiting: &mut Waiting) -> Result<Option<ControlRemoteTree>, String> {
+    /// One step of listing the origin: the created session and the listing once it is there, `None` while waiting,
+    /// the reason once the wait is over.
+    fn next_listing(
+        &mut self,
+        host: &str,
+        waiting: &mut Waiting,
+    ) -> Result<Option<(ControlRemoteSession, ControlRemoteTree)>, String> {
         let now = self.remote_now();
         let Some(answer) = waiting.read.take() else {
-            if now < waiting.due {
-                return Ok(None);
-            }
-            let remaining = waiting.deadline.saturating_duration_since(now);
-            if remaining.is_zero() {
-                return Err(waiting.reason.clone());
-            }
-            let answer = super::attach::start_tree_read_within(self, host, remaining.min(TREE_DEADLINE))
-                .map_err(|error| error.to_string())?;
+            let within = match waiting.wait.next(now) {
+                WaitStep::Wait => return Ok(None),
+                WaitStep::GiveUp(reason) => return Err(reason),
+                WaitStep::List(within) => within,
+            };
+            let answer =
+                super::attach::start_tree_read_within(self, host, within).map_err(|error| error.to_string())?;
             waiting.read = Some(answer);
             return Ok(None);
         };
@@ -277,14 +200,7 @@ impl Core {
             waiting.read = Some(answer);
             return Ok(None);
         };
-        match read_remote_tree(&result, host) {
-            Ok(tree) => Ok(Some(tree)),
-            Err(error) => {
-                waiting.reason = error;
-                waiting.due = now + PAUSE;
-                Ok(None)
-            }
-        }
+        Ok(waiting.wait.listed(&result, host, now))
     }
 
     fn attach_created_session(
@@ -336,7 +252,7 @@ impl Core {
             window,
             session,
         };
-        let answer = self.ask_origin(&host, &["session", "close", "--target", &origin]);
+        let answer = self.ask_origin(&host, &end_session_arguments(&origin));
         let Some(answer) = answer else {
             let reason = format!("the remote command failed on {host}");
             self.action_failed(END_SESSION, window, Some(session), &reason);

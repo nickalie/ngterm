@@ -16,11 +16,14 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use ngterm_proto::command::SessionCmd;
-use ngterm_proto::{Command, ControlRemoteSession, ControlRemoteTree, ControlResult, Response};
+use ngterm_proto::{Command, ControlRemoteSession, ControlRemoteTree, ControlResult};
 use uuid::Uuid;
 
-use super::attach::{ActionPanel, AttachRequest, ERROR_SECONDS, PROGRESS_SECONDS, Placement, read_remote_tree};
+use super::attach::{ActionPanel, AttachRequest, ERROR_SECONDS, PROGRESS_SECONDS, Placement};
 use super::frames::{self, PresentationPage, PresentationPageSource};
+use super::origin_replies::{
+    NOT_ATTACHABLE, PAUSE, READY_BUDGET, origin_created, read_remote_tree, reply_of, unattached,
+};
 use super::ssh::{control_command, page_serve_command};
 use super::tree::{RemoteCommandResult, TREE_DEADLINE};
 use super::viewer::{Answer, run_off_thread, take_answer};
@@ -34,11 +37,6 @@ use crate::resolve::Resolver;
 
 /// How long the origin's create may take (upstream's `remoteCompanionDeadline`).
 pub const COMPANION_DEADLINE: Duration = Duration::from_secs(30);
-/// How long a created session may take to become attachable: every pane's daemon must run first (upstream's
-/// `remoteCompanionReadyBudget`).
-pub const READY_BUDGET: Duration = Duration::from_secs(20);
-/// The pause between two listings while waiting for it (upstream's `remoteCompanionPause`).
-pub(super) const PAUSE: Duration = Duration::from_secs(1);
 /// What a created companion is called in the messages about it.
 const COMPANION_NOUN: &str = "companion";
 /// How often a running ssh call is checked for its answer.
@@ -46,7 +44,6 @@ const POLL: Duration = Duration::from_millis(50);
 const NOT_ATTACHED: &str = "the remote session is not attached";
 const INVALID_HOST: &str = "invalid host";
 const PARENT_CLOSED: &str = "its parent row here was closed";
-pub(super) const NOT_ATTACHABLE: &str = "it did not become attachable";
 
 /// A page companion the origin is asked to open: the page `session.companion.page` validated.
 #[derive(Debug, Clone)]
@@ -262,20 +259,6 @@ pub(crate) fn begin_page_row_attach(
     }
 }
 
-/// The receipt the origin's `ngtermctl --json` printed.
-pub(super) fn reply_of(result: &RemoteCommandResult) -> Option<Response<ControlResult>> {
-    serde_json::from_str(result.stdout.trim()).ok()
-}
-
-/// The id a reply names, only when it is a well-formed one: it reaches an error message.
-fn created_id(reply: &Response<ControlResult>) -> Option<String> {
-    reply
-        .result
-        .as_ref()
-        .and_then(|result| result.id.clone())
-        .filter(|id| frames::parse_uuid(id).is_some())
-}
-
 /// What the origin's create said: the created session's id, or why there is none.
 fn created(result: &RemoteCommandResult, host: &str, command: Command) -> Result<String, String> {
     let refused = reply_of(result).is_some_and(|reply| reply.refuses_unknown(command));
@@ -283,45 +266,6 @@ fn created(result: &RemoteCommandResult, host: &str, command: Command) -> Result
         return Err(format!("the ngterm on {host} is too old for companions"));
     }
     origin_created(result, host, COMPANION_NOUN)
-}
-
-/// What an origin's create of a `noun` said: the created session's id, or why there is none.
-pub(super) fn origin_created(result: &RemoteCommandResult, host: &str, noun: &str) -> Result<String, String> {
-    let Some(reply) = reply_of(result) else {
-        let stderr = result.stderr.trim();
-        let detail = if stderr.is_empty() {
-            String::new()
-        } else {
-            format!(" ({stderr})")
-        };
-        return Err(format!(
-            "{host} gave no answer{detail}; whether the {noun} was created there is unknown"
-        ));
-    };
-    // a full receipt with a failed transport still names work the origin did, so it is reported, never redone
-    if result.status != 0
-        && reply.ok
-        && let Some(id) = created_id(&reply)
-    {
-        return Err(format!(
-            "created {noun} {id} on {host} but the connection failed before attaching it; `ngtermctl live attach \
-             {host} {id}` attaches it"
-        ));
-    }
-    if result.status != 0 || !reply.ok {
-        return Err(reply
-            .error
-            .unwrap_or_else(|| format!("the remote command failed on {host}")));
-    }
-    created_id(&reply).ok_or_else(|| format!("{host} created a {noun} but did not name it"))
-}
-
-/// The failure of a `noun` created on `host` but not attached here.
-pub(super) fn unattached(noun: &str, created: &str, host: &str, reason: &str) -> String {
-    format!(
-        "created {noun} {created} on {host} but could not attach it: {reason}; `ngtermctl live attach {host} \
-         {created}` attaches it"
-    )
 }
 
 /// What the origin handed over for one attachment of its page companion.

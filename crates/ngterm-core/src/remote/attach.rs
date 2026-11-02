@@ -18,6 +18,7 @@ use ngterm_proto::{
 use uuid::Uuid;
 
 use super::frames;
+use super::origin_replies::{is_pickable, pickable_sessions, read_remote_tree};
 use super::origin_sessions::{CreateRun, NEW_SESSION, NEW_SESSION_ID};
 use super::remotes::{RemoteEntry, diagnostics_banner_body};
 use super::ssh::{PaneLabel, attach_pane_command};
@@ -43,24 +44,6 @@ pub(super) const PROGRESS_SECONDS: f64 = 30.0;
 const ATTACH_ALL_ID: &str = "attach-all";
 /// What the panels of an attach are headed by.
 const ATTACH_REMOTE: &str = "Attach Remote";
-
-/// What a finished remote read says: the far side's own refusal from stdout first, since its ngtermctl prints it there
-/// and exits nonzero; ssh's failures reach stderr. An ok-looking payload from a nonzero process is never accepted
-/// (upstream's `remoteTree(host:)` remote form).
-///
-/// # Errors
-///
-/// The refusal or failure as the caller reads it.
-pub(crate) fn read_remote_tree(result: &RemoteCommandResult, host: &str) -> Result<ControlRemoteTree, String> {
-    if result.status != 0 {
-        let stderr = result.stderr.trim();
-        let detail = tree::remote_error(&result.stdout).or_else(|| (!stderr.is_empty()).then(|| stderr.to_owned()));
-        return Err(detail.unwrap_or_else(|| format!("the remote command failed on {host}")));
-    }
-    tree::decode(&result.stdout)
-        .map(|remote| remote.stamped(host))
-        .map_err(|error| error.message())
-}
 
 /// Starts reading `host`'s attachable sessions off the main thread.
 ///
@@ -388,13 +371,10 @@ struct AttachAllReport {
 /// `tree` offers that `rows` does not show yet. A page companion attaches only under a parent the picker cannot name,
 /// so it stays out, as it stays out of the picker's rows.
 fn attach_all_sessions<'a>(tree: &'a ControlRemoteTree, rows: &HashMap<String, Uuid>) -> Vec<&'a ControlRemoteSession> {
-    let mut sessions: Vec<&ControlRemoteSession> = tree
-        .sessions
-        .iter()
-        .filter(|session| session.content.is_none() && !rows.contains_key(&session.id))
-        .collect();
-    sessions.sort_by_key(|session| session.parent.is_some());
-    sessions
+    pickable_sessions(tree)
+        .into_iter()
+        .filter(|session| !rows.contains_key(&session.id))
+        .collect()
 }
 
 /// One remote session as a picker row: its name, then where it lives, its context, its cwd and what runs in it, and
@@ -604,11 +584,7 @@ impl Core {
         // a page companion attaches only under its parent's row, which the picker has no place for
         let (endpoint, sessions) = match read_remote_tree(result, host) {
             Ok(remote) => {
-                let sessions: Vec<ControlRemoteSession> = remote
-                    .sessions
-                    .into_iter()
-                    .filter(|session| session.content.is_none())
-                    .collect();
+                let sessions: Vec<ControlRemoteSession> = remote.sessions.into_iter().filter(is_pickable).collect();
                 (remote.endpoint, sessions)
             }
             Err(error) => {
