@@ -1,0 +1,1734 @@
+diff --git a/.github/workflows/cross-platform.yml b/.github/workflows/cross-platform.yml
+index a68262d2..f1c5bfd3 100644
+--- a/.github/workflows/cross-platform.yml
++++ b/.github/workflows/cross-platform.yml
+@@ -96,6 +96,12 @@ jobs:
+         run: |
+           if [[ "$(uname -s)" == Darwin ]]; then ulimit -n 8192; fi
+           cargo test --locked $PACKAGES --all-features
++      # ngterm-term without `local` (stream panes only, a remote-only frontend's): its own invocation, as
++      # --all-features turns the feature back on
++      - name: ngterm-term without local panes
++        run: |
++          cargo clippy --locked -p ngterm-term --no-default-features --all-targets -- -D warnings
++          cargo test --locked -p ngterm-term --no-default-features --lib
+       # vendor/portable-pty is a [patch] provider, not a member: its own tests of the Windows patches (malformed
+       # environments, directories on PATH, the raw command tail) run in a copy made a workspace of its own, as herdr verifies them
+       - name: vendored portable-pty's Windows patch tests
+diff --git a/.github/workflows/linux.yml b/.github/workflows/linux.yml
+index 65f09dfa..f127ac05 100644
+--- a/.github/workflows/linux.yml
++++ b/.github/workflows/linux.yml
+@@ -96,6 +96,7 @@ jobs:
+           source scripts/lib/native.sh
+           cargo clippy "${WORKSPACE_WITHOUT_WPE[@]}" --all-targets --all-features -- -D warnings
+           cargo clippy "${GPUI_WITHOUT_HTML[@]}" --all-targets -- -D warnings
++          cargo clippy -p ngterm-term --no-default-features --all-targets -- -D warnings
+       - name: lint report
+         shell: bash
+         run: scripts/lint-report.sh | tee -a "$GITHUB_STEP_SUMMARY"
+@@ -127,6 +128,7 @@ jobs:
+           source scripts/lib/native.sh
+           cargo test "${WORKSPACE_WITHOUT_WPE[@]}"
+           cargo test "${GPUI_WITHOUT_HTML[@]}"
++          cargo test -p ngterm-term --no-default-features --lib
+ 
+   # The WPE WebKit -sys crates (gir bindings of the app's HTML engine) against the distro package they are generated
+   # from: Arch's wpewebkit at WPE_VERSION (build/pins.env), installed from a date-pinned Arch Linux Archive snapshot in
+diff --git a/crates/ngterm-pty/src/actor.rs b/crates/ngterm-pty/src/actor.rs
+index 3a1b7733..7a1f594a 100644
+--- a/crates/ngterm-pty/src/actor.rs
++++ b/crates/ngterm-pty/src/actor.rs
+@@ -92,6 +92,13 @@ impl ReadPause {
+     }
+ }
+ 
++impl From<Arc<AtomicBool>> for ReadPause {
++    /// A switch over `flag`, shared with whoever else holds it (a consumer that keeps its own handle on the switch).
++    fn from(flag: Arc<AtomicBool>) -> Self {
++        Self(flag)
++    }
++}
++
+ /// What a released actor leaves behind for the process that took the PTY over.
+ #[derive(Debug, Default, PartialEq, Eq)]
+ pub struct Released {
+diff --git a/crates/ngterm-term/Cargo.toml b/crates/ngterm-term/Cargo.toml
+index c6d52d9a..35e336e1 100644
+--- a/crates/ngterm-term/Cargo.toml
++++ b/crates/ngterm-term/Cargo.toml
+@@ -7,15 +7,23 @@ rust-version.workspace = true
+ publish.workspace = true
+ license.workspace = true
+ 
++[features]
++default = ["local"]
++# Panes whose program runs on this machine: a PTY and its child, a live pane's in-process attach to its session, a
++# launch, a HUD's painter. Without it the crate holds the pane fed by its embedder's byte stream alone
++# (`Pane::stream`), with no PTY, session server or process table in its graph: a remote-only frontend's (Android,
++# where ngterm-session does not build).
++local = ["dep:ngterm-host", "dep:ngterm-pty", "dep:ngterm-session"]
++
+ [dependencies]
+ ngterm-core.workspace = true
+ ngterm-ghostty-vt.workspace = true
+ # the shell a command line runs through (`command_line`), shared with the hooks, custom commands and overlay job
+-ngterm-host.workspace = true
++ngterm-host = { workspace = true, optional = true }
+ # a pane's PTY and child (openpty, Windows' pseudoconsole) and the actor that moves its bytes
+-ngterm-pty.workspace = true
++ngterm-pty = { workspace = true, optional = true }
+ # the live-launch inputs a live pane's host starts from, and the client library a live pane attaches through
+-ngterm-session.workspace = true
++ngterm-session = { workspace = true, optional = true }
+ # the OSC 5522 classifier decodes metadata and MIME lists as Ghostty does (strict, padded)
+ base64.workspace = true
+ bitflags.workspace = true
+diff --git a/crates/ngterm-term/src/actions.rs b/crates/ngterm-term/src/actions.rs
+index 876ca5b0..c75a833a 100644
+--- a/crates/ngterm-term/src/actions.rs
++++ b/crates/ngterm-term/src/actions.rs
+@@ -195,6 +195,7 @@ pub(crate) fn apply_clear(shared: &Shared, vt: &mut Vt) {
+ 
+ // the programs are POSIX shell scripts (Windows' forms of a pane are tested in tests/platform.rs)
+ #[cfg(test)]
++#[cfg(feature = "local")]
+ #[cfg(unix)]
+ mod tests {
+     use std::time::{Duration, Instant};
+diff --git a/crates/ngterm-term/src/bench.rs b/crates/ngterm-term/src/bench.rs
+index d71d1797..3565302f 100644
+--- a/crates/ngterm-term/src/bench.rs
++++ b/crates/ngterm-term/src/bench.rs
+@@ -22,8 +22,8 @@ use std::sync::Arc;
+ use std::sync::atomic::{AtomicBool, Ordering};
+ use std::time::{Duration, Instant};
+ 
+-use super::pane::{Pane, PaneConfig, lock};
+-use super::pty::{GridSize, PaneCommand};
++use super::pane::{GridSize, Pane, PaneConfig, lock};
++use super::pty::PaneCommand;
+ 
+ const SIZE: GridSize = GridSize {
+     cols: 141,
+diff --git a/crates/ngterm-term/src/effects.rs b/crates/ngterm-term/src/effects.rs
+index f7c01f13..c5427c36 100644
+--- a/crates/ngterm-term/src/effects.rs
++++ b/crates/ngterm-term/src/effects.rs
+@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex, PoisonError};
+ use ngterm_ghostty_vt as vt;
+ use vt::ReadScope;
+ 
+-use crate::pty::ReplyOutlet;
++use crate::outlet::ReplyOutlet;
+ use crate::render::{Capture, Rgb, rgb};
+ 
+ /// A clipboard a program reads or writes.
+diff --git a/crates/ngterm-term/src/input.rs b/crates/ngterm-term/src/input.rs
+index 6d0c27b9..f5a5c8cd 100644
+--- a/crates/ngterm-term/src/input.rs
++++ b/crates/ngterm-term/src/input.rs
+@@ -16,8 +16,8 @@ use ngterm_ghostty_vt as vt;
+ 
+ use crate::PaneError;
+ use crate::effects::ClipboardLocation;
++use crate::pane::GridSize;
+ use crate::pane::{Pane, Vt, lock};
+-use crate::pty::GridSize;
+ 
+ bitflags! {
+     /// Which held modifiers are the right-hand key (meaningful only with the modifier itself held).
+diff --git a/crates/ngterm-term/src/lib.rs b/crates/ngterm-term/src/lib.rs
+index 73c1bc1c..9427e638 100644
+--- a/crates/ngterm-term/src/lib.rs
++++ b/crates/ngterm-term/src/lib.rs
+@@ -23,6 +23,12 @@
+ //! - Threads and locks: Technical Details > Threads of the GPUI plan; the details are in [`pane`]'s and
+ //!   [`effects`]'s docs. The IO thread holds the VT lock for one bounded slice of `vt_write` at a time; painting only
+ //!   ever `try_lock`s it.
++//! - Stream panes: [`Pane::stream`] makes a pane whose program runs elsewhere, fed by its embedder's channel (a
++//!   remote-only frontend's ssh channel running `ngterm-session attach`): the embedder hands the program's output to
++//!   a [`StreamFeed`] and sends what a [`StreamOut`] gives it ([`Outgoing`]) to the channel. It is the one kind of
++//!   pane without the `local` feature (on by default), which brings the PTY (`ngterm-pty`), the live pane's
++//!   in-process attach (`ngterm-session`), [`Launch`] and the HUD's painter; everything else (frames, input,
++//!   selection, gestures, search, effects, Kitty graphics) is the same for every kind of pane.
+ //! - The engine boundary: no libghostty-vt type appears in this crate's public API, so the VT engine can be swapped
+ //!   without touching the frontend.
+ //!
+@@ -31,24 +37,31 @@
+ 
+ mod actions;
+ #[cfg(test)]
++#[cfg(feature = "local")]
+ mod bench;
+ mod effects;
+ mod exit;
+ mod gesture;
+ mod input;
+ mod kitty;
++#[cfg(feature = "local")]
+ mod launch;
+ mod mailbox;
++mod outlet;
++#[cfg(feature = "local")]
+ mod painted;
+ mod pane;
+ mod placeholder;
+ mod png;
++#[cfg(feature = "local")]
+ mod pty;
+ pub mod pwd;
+ mod render;
+ mod search;
+ mod selection;
++#[cfg(feature = "local")]
+ mod session_io;
++mod stream;
+ mod text;
+ mod wheel;
+ 
+@@ -66,16 +79,21 @@ pub use kitty::{
+     KittyFormat, KittyImage, KittyImageKey, KittyLayer, KittyPlacement, KittyView, PlacementKey, PlacementNamespace,
+     PlacementRect, SourceRect, VirtualRooted,
+ };
++#[cfg(feature = "local")]
+ pub use launch::{COMMAND_SHELL, FALLBACK_TERM, Host, Launch, Prepared, resolve_resources, resource_candidates};
+-pub use pane::{DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, Pane, PaneConfig, PaneStats, Wake};
++pub use pane::{
++    DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, GridSize, Pane, PaneConfig, PaneStats, Wake,
++};
+ pub use placeholder::{KittyPlaceholder, PLACEHOLDER, VirtualPlacement, virtual_placements};
+-pub use pty::{GridSize, PaneCommand};
++#[cfg(feature = "local")]
++pub use pty::PaneCommand;
+ pub use render::{
+     Cell, CellFlags, CellWidth, Colors, Cursor, CursorDefaults, CursorPosition, CursorStyle, Frame, MouseShape, Rgb,
+     Row, ThemeColors, Underline,
+ };
+ pub use search::{Highlight, SearchState, SearchStep};
+ pub use selection::{GridPoint, PointSpace, SelectionRange, SelectionText};
++pub use stream::{Outgoing, StreamFeed, StreamOut};
+ pub use text::TextRegion;
+ pub use vt::ReadScope;
+ pub use wheel::{Wheel, WheelInput};
+diff --git a/crates/ngterm-term/src/mailbox.rs b/crates/ngterm-term/src/mailbox.rs
+index 72446d5d..84aca69d 100644
+--- a/crates/ngterm-term/src/mailbox.rs
++++ b/crates/ngterm-term/src/mailbox.rs
+@@ -6,27 +6,56 @@
+ //! - The read callback ([`Mailbox::deliver`]) only copies the output in and never waits, so nothing that holds the
+ //!   VT lock can wait on a callback that waits on the VT.
+ //! - Flow control is the producer's: once the output not yet fed to the VT (queued, and the chunk the worker holds)
+-//!   reaches [`HIGH_WATER`], the callback pauses the actor's reads ([`ngterm_pty::ReadPause`]) before it returns, so
++//!   reaches [`HIGH_WATER`], the callback pauses the actor's reads ([`ReadPause`]) before it returns, so
+ //!   at most one more read lands; the worker resumes them once it is down to [`LOW_WATER`]. Both decisions are made
+ //!   under the mailbox's lock, so a stale resume never overrides a newer pause. While reads are paused the actor still
+ //!   writes the program's input — a worker waiting on a clipboard answer holds the program's output back, not its
+ //!   input.
+ //! - The child's exit and the shutdown are flags that pass queued output, so a clipboard wait never hides them.
+ //! - A live pane's reader queues the attach stream's events that must follow the output before them
+-//!   ([`crate::session_io::LiveMail`]) in order with it ([`Mailbox::deliver_live`]); they count no bytes.
++//!   (`crate::session_io::LiveMail`) in order with it (`Mailbox::deliver_live`); they count no bytes.
+ //!
+ //! Lock rule: the mailbox's lock is a leaf. Nothing calls into the VT, the actor or the frontend's wake while holding
+ //! it.
+ 
+ use std::collections::VecDeque;
+-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+ use std::time::Instant;
+ 
+-use ngterm_pty::ReadPause;
+-
+ use crate::effects::ClipboardAnswer;
++#[cfg(feature = "local")]
+ use crate::session_io::LiveMail;
+ 
++/// The switch the mailbox holds its producer's reads back with: the PTY actor's (the same flag:
++/// [`ReadPause::actor`]), a live pane's reader's, a stream pane's embedder's ([`crate::stream`]). Clones share it.
++#[derive(Debug, Clone, Default)]
++pub(crate) struct ReadPause(Arc<AtomicBool>);
++
++impl ReadPause {
++    pub(crate) fn new() -> Self {
++        Self::default()
++    }
++
++    pub(crate) fn pause(&self) {
++        self.0.store(true, Ordering::Release);
++    }
++
++    pub(crate) fn resume(&self) {
++        self.0.store(false, Ordering::Release);
++    }
++
++    pub(crate) fn is_paused(&self) -> bool {
++        self.0.load(Ordering::Acquire)
++    }
++
++    /// The PTY actor's switch over the same flag.
++    #[cfg(feature = "local")]
++    pub(crate) fn actor(&self) -> ngterm_pty::ReadPause {
++        ngterm_pty::ReadPause::from(Arc::clone(&self.0))
++    }
++}
++
+ /// The output bytes waiting for the VT at which the actor's reads pause.
+ pub(crate) const HIGH_WATER: usize = 1024 * 1024;
+ /// The output bytes waiting for the VT at which paused reads resume.
+@@ -38,6 +67,7 @@ pub(crate) enum Mail {
+     /// A read of the program's output.
+     Output(Vec<u8>),
+     /// A live pane's event, after the output before it.
++    #[cfg(feature = "local")]
+     Live(LiveMail),
+     /// The deadline passed with nothing to take.
+     Idle,
+@@ -60,6 +90,7 @@ pub(crate) enum Answer {
+ #[derive(Debug)]
+ enum Item {
+     Output(Vec<u8>),
++    #[cfg(feature = "local")]
+     Live(LiveMail),
+ }
+ 
+@@ -116,6 +147,7 @@ impl Mailbox {
+     }
+ 
+     /// A live pane's reader: queue `mail` after the output delivered so far.
++    #[cfg(feature = "local")]
+     pub(crate) fn deliver_live(&self, mail: LiveMail) {
+         self.post(|state| state.output.push_back(Item::Live(mail)));
+     }
+@@ -167,6 +199,7 @@ impl Mailbox {
+             }
+             match state.output.pop_front() {
+                 Some(Item::Output(output)) => return Mail::Output(output),
++                #[cfg(feature = "local")]
+                 Some(Item::Live(mail)) => return Mail::Live(mail),
+                 None => {}
+             }
+diff --git a/crates/ngterm-term/src/outlet.rs b/crates/ngterm-term/src/outlet.rs
+new file mode 100644
+index 00000000..6ca3d285
+--- /dev/null
++++ b/crates/ngterm-term/src/outlet.rs
+@@ -0,0 +1,182 @@
++//! Where the terminal's replies to the program leave the pane: the PTY actor's outbox, a live pane's session, or a
++//! stream pane's outbound queue ([`crate::stream`]).
++
++use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
++
++#[cfg(feature = "local")]
++use ngterm_pty::ActorHandle;
++
++#[cfg(feature = "local")]
++use crate::session_io::{self, Live};
++use crate::stream::Outbound;
++
++fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
++    mutex.lock().unwrap_or_else(PoisonError::into_inner)
++}
++
++/// Where the terminal's replies to the program go: the PTY actor's outbox, in the order they are made (never
++/// refused; the actor drops them past its hard cap, `ngterm_pty::REPLY_CAP`). Replies made before the actor runs
++/// (a terminal driven without a PTY) wait here, and none are taken once the pane closed it. A live pane's terminal
++/// answers the program nothing but Kitty graphics commands, the server answering the rest
++/// (`crate::session_io`): those answers are kept for the server's next barrier. A stream pane's replies join its
++/// outbound queue, in order with the program's input.
++///
++/// A reply is queued with `ActorHandle::write_reply`, which waits for a read callback in progress. That is safe
++/// under the VT lock because the pane's read callback only copies into the pane's mailbox ([`crate::mailbox`]) and
++/// never takes the VT lock.
++#[derive(Debug, Default)]
++pub(crate) struct ReplyOutlet {
++    state: Mutex<Outlet>,
++}
++
++#[derive(Debug)]
++enum Outlet {
++    /// No actor yet: the replies so far, and their bytes.
++    Buffered(Vec<Vec<u8>>, usize),
++    #[cfg(feature = "local")]
++    Actor(ActorHandle),
++    /// A live pane's: its Kitty graphics answers since the last barrier, and the attach the pane's own input goes to.
++    #[cfg(feature = "local")]
++    Live(Vec<u8>, Arc<Live>),
++    /// A stream pane's outbound queue.
++    Stream(Arc<Outbound>),
++    Closed,
++}
++
++impl Default for Outlet {
++    fn default() -> Self {
++        Self::Buffered(Vec::new(), 0)
++    }
++}
++
++impl ReplyOutlet {
++    /// Queue a reply for the program.
++    pub(crate) fn push_reply(&self, data: &[u8]) {
++        let mut state = lock(&self.state);
++        match &mut *state {
++            Outlet::Buffered(replies, bytes) => {
++                replies.push(data.to_vec());
++                *bytes += data.len();
++            }
++            #[cfg(feature = "local")]
++            Outlet::Actor(actor) => {
++                let actor = actor.clone();
++                drop(state);
++                actor.write_reply(data);
++            }
++            #[cfg(feature = "local")]
++            Outlet::Live(answers, _) => session_io::keep_kitty_answer(answers, data),
++            Outlet::Stream(outbound) => outbound.push_reply(data),
++            Outlet::Closed => {}
++        }
++    }
++
++    /// Queue bytes the pane itself sends the program (a clear's form feed): a reply on a PTY or a stream, a live
++    /// pane's input.
++    pub(crate) fn push_input(&self, data: &[u8]) {
++        #[cfg(feature = "local")]
++        {
++            let state = lock(&self.state);
++            if let Outlet::Live(_, live) = &*state {
++                let live = Arc::clone(live);
++                drop(state);
++                live.program_input(data);
++                return;
++            }
++        }
++        self.push_reply(data);
++    }
++
++    /// Answer as a live pane's terminal from now on (before it parses anything).
++    #[cfg(feature = "local")]
++    pub(crate) fn go_live(&self, live: Arc<Live>) {
++        *lock(&self.state) = Outlet::Live(Vec::new(), live);
++    }
++
++    /// A live pane's Kitty graphics answers since the last call.
++    #[cfg(feature = "local")]
++    pub(crate) fn take_kitty_answers(&self) -> Vec<u8> {
++        match &mut *lock(&self.state) {
++            Outlet::Live(answers, _) => std::mem::take(answers),
++            _ => Vec::new(),
++        }
++    }
++
++    /// Send replies to `actor` from now on, the ones made so far first.
++    #[cfg(feature = "local")]
++    pub(crate) fn attach(&self, actor: &ActorHandle) {
++        let mut state = lock(&self.state);
++        if matches!(*state, Outlet::Closed) {
++            return;
++        }
++        if let Outlet::Buffered(replies, _) = std::mem::replace(&mut *state, Outlet::Actor(actor.clone())) {
++            for reply in &replies {
++                actor.write_reply(reply);
++            }
++        }
++    }
++
++    /// Send replies to a stream pane's `outbound` queue from now on, the ones made so far first.
++    pub(crate) fn attach_stream(&self, outbound: &Arc<Outbound>) {
++        let mut state = lock(&self.state);
++        if matches!(*state, Outlet::Closed) {
++            return;
++        }
++        if let Outlet::Buffered(replies, _) = std::mem::replace(&mut *state, Outlet::Stream(Arc::clone(outbound))) {
++            for reply in &replies {
++                outbound.push_reply(reply);
++            }
++        }
++    }
++
++    /// Take no more replies, and let go of the actor.
++    pub(crate) fn close(&self) {
++        *lock(&self.state) = Outlet::Closed;
++    }
++
++    /// The reply bytes waiting for the actor, or queued in it with the program's input.
++    #[cfg(test)]
++    pub(crate) fn queued(&self) -> usize {
++        let state = lock(&self.state);
++        match &*state {
++            Outlet::Buffered(_, bytes) => *bytes,
++            #[cfg(feature = "local")]
++            Outlet::Actor(actor) => actor.queued(),
++            #[cfg(feature = "local")]
++            Outlet::Live(answers, _) => answers.len(),
++            Outlet::Stream(outbound) => outbound.queued(),
++            Outlet::Closed => 0,
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn replies_wait_for_the_actor_and_none_are_taken_once_closed() {
++        let outlet = ReplyOutlet::default();
++        assert_eq!(outlet.queued(), 0);
++        outlet.push_reply(b"\x1b[0n");
++        outlet.push_reply(b"\x1b[1;1R");
++        assert_eq!(outlet.queued(), 10);
++        outlet.close();
++        outlet.push_reply(b"late");
++        assert_eq!(outlet.queued(), 0);
++    }
++
++    #[test]
++    fn a_stream_takes_the_replies_made_before_it_first() {
++        let outlet = ReplyOutlet::default();
++        outlet.push_reply(b"\x1b[0n");
++        let outbound = Arc::new(Outbound::new(16));
++        outlet.attach_stream(&outbound);
++        outlet.push_input(b"\x0c");
++        assert_eq!(outlet.queued(), 5);
++        assert_eq!(
++            outbound.next(None),
++            Ok(Some(crate::Outgoing::Bytes(b"\x1b[0n\x0c".to_vec())))
++        );
++    }
++}
+diff --git a/crates/ngterm-term/src/pane.rs b/crates/ngterm-term/src/pane.rs
+index f84efbc4..1ff676b2 100644
+--- a/crates/ngterm-term/src/pane.rs
++++ b/crates/ngterm-term/src/pane.rs
+@@ -1,10 +1,11 @@
+ //! [`Pane`]: one terminal — a libghostty-vt terminal behind a mutex, a PTY child, and its threads: the PTY actor's
+-//! (`ngterm-pty`: reads the PTY into the pane's [`Mailbox`] and writes the input and the terminal's replies to it; one
++//! (`ngterm-pty`, feature `local`: reads the PTY into the pane's [`Mailbox`] and writes the input and the terminal's replies to it; one
+ //! polling thread on Unix, a reader and a writer on Windows), the IO worker (feeds the mailbox's output to the VT,
+ //! stopping at clipboard reads for their answers), and the waiter (reports the child's exit). A live pane has no PTY
+-//! and no child: its session's attach stream, read and written by threads of [`crate::session_io`], takes the
++//! and no child: its session's attach stream, read and written by threads of `crate::session_io`, takes the
+ //! actor's and the waiter's places, and the same IO worker feeds its output to the VT. A HUD's painted pane has neither
+-//! either: the painter's thread ([`crate::painted`]) takes their places.
++//! either: the painter's thread (`crate::painted`) takes their places. A stream pane has none of them either: its
++//! embedder's channel ([`crate::stream`]) takes the actor's place, and the embedder reports its end.
+ //!
+ //! Locks (Technical Details > Threads): `vt` → `capture` → leaves (`armed`, `published`, `divert`), and `vt` →
+ //! `search`, never the reverse. The IO thread holds `vt` for one bounded slice of `vt_write` at a time; input
+@@ -29,7 +30,9 @@ use std::time::{Duration, Instant};
+ 
+ use ngterm_core::overlay_capture;
+ use ngterm_ghostty_vt::{self as vt, ReadCandidate, Scanner};
+-use ngterm_pty::{Actor, ActorConfig, ActorHandle, Child, Killer, Master, ReadPause, Spawned};
++#[cfg(feature = "local")]
++use ngterm_pty::{Actor, ActorConfig, ActorHandle, Child, Killer, Master, Spawned};
++#[cfg(feature = "local")]
+ use ngterm_session::cli::{Outcome, Prepared};
+ 
+ use crate::effects::{
+@@ -38,12 +41,17 @@ use crate::effects::{
+ };
+ use crate::exit::{ExitPolicy, Layout};
+ use crate::input::InputState;
+-use crate::mailbox::{Answer, Mail, Mailbox};
++use crate::mailbox::{Answer, Mail, Mailbox, ReadPause};
++use crate::outlet::ReplyOutlet;
++#[cfg(feature = "local")]
+ use crate::painted::Painted;
+-use crate::pty::{GridSize, PaneCommand, ReplyOutlet, Tty};
++#[cfg(feature = "local")]
++use crate::pty::{PaneCommand, Tty};
+ use crate::render::{Capture, CursorDefaults, Frame, MouseShape, ThemeColors};
+ use crate::search::SearchSlot;
++#[cfg(feature = "local")]
+ use crate::session_io::{self, Live};
++use crate::stream::{Gate, Outbound, Stream, StreamFeed, StreamOut};
+ use crate::{PaneError, ScrollbackLimits};
+ 
+ /// The most bytes fed to `vt_write` under one hold of the VT lock.
+@@ -55,6 +63,15 @@ pub const DEFAULT_WRITE_LIMIT: usize = 1024 * 1024;
+ /// Ghostty's default Kitty image storage per screen (`image-storage-limit = 320000000`).
+ pub const DEFAULT_KITTY_IMAGE_LIMIT: u64 = 320_000_000;
+ 
++/// A pane's grid: cells and the pixel size of one cell.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub struct GridSize {
++    pub cols: u16,
++    pub rows: u16,
++    pub cell_width: u32,
++    pub cell_height: u32,
++}
++
+ /// Called from the pane's threads when it has news (a frame to draw or events to drain); coalesced until the frontend
+ /// calls [`Pane::frame`] or [`Pane::take_events`].
+ pub type Wake = Arc<dyn Fn() + Send + Sync>;
+@@ -281,6 +298,7 @@ impl Shared {
+     }
+ 
+     /// A live pane's Kitty graphics answers since the last call.
++    #[cfg(feature = "local")]
+     pub(crate) fn take_kitty_answers(&self) -> Vec<u8> {
+         self.replies.take_kitty_answers()
+     }
+@@ -295,7 +313,7 @@ impl Shared {
+     }
+ 
+     /// The frame last published by a paint (the bench's, which runs on Linux).
+-    #[cfg(all(test, target_os = "linux"))]
++    #[cfg(all(test, target_os = "linux", feature = "local"))]
+     pub(crate) fn published_frame(&self) -> Arc<Frame> {
+         Arc::clone(&lock(&self.published))
+     }
+@@ -326,6 +344,7 @@ pub struct Pane {
+ 
+ /// What a pane's input, grid and end go through.
+ enum Io {
++    #[cfg(feature = "local")]
+     Pty {
+         /// The PTY's actor: the input queue, the resizes, the end of the PTY.
+         actor: ActorHandle,
+@@ -333,9 +352,13 @@ enum Io {
+         killer: Killer,
+     },
+     /// A live pane's attach to its session.
++    #[cfg(feature = "local")]
+     Live(Arc<Live>),
+     /// A HUD's painter.
++    #[cfg(feature = "local")]
+     Painted(Arc<Painted>),
++    /// The embedder's channel.
++    Stream(Stream),
+ }
+ 
+ impl std::fmt::Debug for Pane {
+@@ -352,6 +375,7 @@ impl Pane {
+     /// [`PaneError::Spawn`] when no PTY can be opened or the program cannot be started (not found, not executable);
+     /// [`PaneError::Pty`] when a thread of the pane cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
+     /// the size or cannot allocate.
++    #[cfg(feature = "local")]
+     pub fn spawn(command: &PaneCommand, config: &PaneConfig) -> Result<Self, PaneError> {
+         let Spawned { master, mut child } =
+             ngterm_pty::spawn(command, config.size.pty()).map_err(|err| PaneError::Spawn(err.to_string()))?;
+@@ -390,6 +414,7 @@ impl Pane {
+     ///
+     /// [`PaneError::Pty`] when a thread of the pane cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
+     /// the size or cannot allocate.
++    #[cfg(feature = "local")]
+     pub(crate) fn attach_live(session: Result<Prepared, Outcome>, config: &PaneConfig) -> Result<Self, PaneError> {
+         let (events_tx, events) = mpsc::channel();
+         let read_pause = ReadPause::new();
+@@ -446,6 +471,7 @@ impl Pane {
+     ///
+     /// [`PaneError::Pty`] when a thread of the pane cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
+     /// the size or cannot allocate.
++    #[cfg(feature = "local")]
+     pub(crate) fn paint(file: PathBuf, config: &PaneConfig) -> Result<Self, PaneError> {
+         let (events_tx, events) = mpsc::channel();
+         let mailbox = Arc::new(Mailbox::new(ReadPause::new()));
+@@ -479,6 +505,53 @@ impl Pane {
+         })
+     }
+ 
++    /// A pane of `config.size` fed by its embedder's byte stream ([`crate::stream`]): no PTY, no child and no thread
++    /// of the channel's. The embedder reads its channel into the [`StreamFeed`] and writes what the [`StreamOut`]
++    /// gives it to the channel; the pane runs its IO worker, so this returns at once.
++    ///
++    /// # Errors
++    ///
++    /// [`PaneError::Pty`] when the pane's IO thread cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
++    /// the size or cannot allocate.
++    pub fn stream(config: &PaneConfig) -> Result<(Self, StreamFeed, StreamOut), PaneError> {
++        let (events_tx, events) = mpsc::channel();
++        let read_pause = ReadPause::new();
++        let mailbox = Arc::new(Mailbox::new(read_pause.clone()));
++        let shared = Arc::new(shared(config, events_tx, mailbox)?);
++        // a remote program's files, temporary files and shared memory are not this machine's
++        lock(&shared.vt)
++            .terminal
++            .set_kitty_image_media(false, None, false)
++            .map_err(PaneError::terminal)?;
++        let outbound = Arc::new(Outbound::new(shared.write_limit));
++        shared.replies.attach_stream(&outbound);
++        let gate = Arc::new(Gate::new(read_pause));
++        let worker = Worker {
++            shared: Arc::clone(&shared),
++            reads: Reads::Stream(Arc::clone(&gate)),
++            scanner: Scanner::default(),
++            next_read: 0,
++            child_exited: false,
++        };
++        let worker = spawn_thread("pane-io", move || worker.run())?;
++        let feed = StreamFeed {
++            shared: Arc::clone(&shared),
++            gate: Arc::clone(&gate),
++            exited: AtomicBool::new(false),
++        };
++        let out = StreamOut {
++            outbound: Arc::clone(&outbound),
++        };
++        let pane = Self {
++            shared,
++            io: Io::Stream(Stream { outbound, gate }),
++            events: Mutex::new(events),
++            pid: None,
++            worker: Some(worker),
++        };
++        Ok((pane, feed, out))
++    }
++
+     pub(crate) fn shared(&self) -> &Arc<Shared> {
+         &self.shared
+     }
+@@ -496,8 +569,11 @@ impl Pane {
+     #[must_use]
+     pub fn foreground_pid(&self) -> Option<u32> {
+         match &self.io {
++            #[cfg(feature = "local")]
+             Io::Pty { tty, .. } => tty.foreground_pid(),
++            #[cfg(feature = "local")]
+             Io::Live(_) | Io::Painted(_) => None,
++            Io::Stream(_) => None,
+         }
+     }
+ 
+@@ -509,8 +585,11 @@ impl Pane {
+     #[must_use]
+     pub fn password_input(&self) -> bool {
+         match &self.io {
++            #[cfg(feature = "local")]
+             Io::Pty { tty, .. } => tty.password_input(),
++            #[cfg(feature = "local")]
+             Io::Live(_) | Io::Painted(_) => false,
++            Io::Stream(_) => false,
+         }
+     }
+ 
+@@ -522,9 +601,13 @@ impl Pane {
+     /// PTY ended or refused a write (the child side is gone).
+     pub fn write(&self, bytes: &[u8]) -> Result<(), PaneError> {
+         match &self.io {
++            #[cfg(feature = "local")]
+             Io::Pty { actor, .. } => actor.write_input(bytes).map_err(PaneError::from),
++            #[cfg(feature = "local")]
+             Io::Live(live) => live.input(bytes),
++            #[cfg(feature = "local")]
+             Io::Painted(_) => Ok(()),
++            Io::Stream(stream) => stream.outbound.input(bytes),
+         }
+     }
+ 
+@@ -543,18 +626,23 @@ impl Pane {
+         vt.size = size;
+         drop(vt);
+         match &self.io {
++            #[cfg(feature = "local")]
+             Io::Pty { actor, .. } => actor.resize(size.pty()),
++            #[cfg(feature = "local")]
+             Io::Live(live) => {
+                 live.resize(size);
+                 self.update_metadata();
+             }
++            #[cfg(feature = "local")]
+             Io::Painted(painted) => painted.resized(),
++            Io::Stream(stream) => stream.outbound.resize(size),
+         }
+         self.shared.wake();
+         Ok(())
+     }
+ 
+     /// A live pane's facts for the server's replies, sent when they changed.
++    #[cfg(feature = "local")]
+     fn update_metadata(&self) {
+         if let Io::Live(live) = &self.io {
+             live.update_metadata(live.metadata_of(&self.shared, self.color_scheme()));
+@@ -584,6 +672,7 @@ impl Pane {
+             .terminal
+             .set_kitty_image_storage_limit(limit)
+             .map_err(PaneError::terminal)?;
++        #[cfg(feature = "local")]
+         if let Io::Live(live) = &self.io {
+             live.set_kitty_graphics(limit > 0);
+             self.update_metadata();
+@@ -603,6 +692,7 @@ impl Pane {
+             // the config's change is no program's: the next batch reports only what the program changes from here
+             vt.colors = vt.terminal.colors();
+         }
++        #[cfg(feature = "local")]
+         self.update_metadata();
+         self.shared.wake();
+         Ok(())
+@@ -617,6 +707,7 @@ impl Pane {
+         if self.shared.scheme.swap(dark, Ordering::AcqRel) == dark {
+             return;
+         }
++        #[cfg(feature = "local")]
+         if matches!(self.io, Io::Live(_)) {
+             self.update_metadata();
+             return;
+@@ -662,8 +753,11 @@ impl Pane {
+     /// Answer the clipboard read `id` ([`PaneEvent::ClipboardRead`]); an answer for any other id is ignored.
+     pub fn answer_clipboard_read(&self, id: u64, answer: ClipboardAnswer) {
+         match &self.io {
++            #[cfg(feature = "local")]
+             Io::Pty { .. } | Io::Painted(_) => self.shared.mailbox.answer(id, answer),
++            #[cfg(feature = "local")]
+             Io::Live(live) => live.answer(id, answer),
++            Io::Stream(_) => self.shared.mailbox.answer(id, answer),
+         }
+     }
+ 
+@@ -671,9 +765,13 @@ impl Pane {
+     #[must_use]
+     pub fn queued_input(&self) -> usize {
+         match &self.io {
++            #[cfg(feature = "local")]
+             Io::Pty { actor, .. } => actor.queued(),
++            #[cfg(feature = "local")]
+             Io::Live(live) => live.queued(),
++            #[cfg(feature = "local")]
+             Io::Painted(_) => 0,
++            Io::Stream(stream) => stream.outbound.queued(),
+         }
+     }
+ 
+@@ -698,14 +796,18 @@ impl Drop for Pane {
+         self.shared.mailbox.shutdown();
+         lock(&self.shared.status_file).take();
+         match &self.io {
++            #[cfg(feature = "local")]
+             Io::Pty { actor, killer, .. } => {
+                 if let Err(err) = killer.hang_up() {
+                     tracing::debug!(%err, "hanging up the pane's child failed");
+                 }
+                 actor.shutdown();
+             }
++            #[cfg(feature = "local")]
+             Io::Live(live) => live.leave(),
++            #[cfg(feature = "local")]
+             Io::Painted(painted) => painted.stop(),
++            Io::Stream(stream) => stream.close(),
+         }
+         self.shared.replies.close();
+         if let Some(worker) = self.worker.take() {
+@@ -799,7 +901,7 @@ fn kitty_graphics(terminal: &mut vt::Terminal, limit: u64) -> Result<(), vt::Err
+ }
+ 
+ fn spawn_thread(name: &str, body: impl FnOnce() + Send + 'static) -> Result<JoinHandle<()>, PaneError> {
+-    #[cfg(test)]
++    #[cfg(all(test, feature = "local"))]
+     if tests::FAIL_THREAD.with(std::cell::Cell::get) == Some(name) {
+         return Err(PaneError::Pty(format!("cannot start the {name} thread: injected")));
+     }
+@@ -874,6 +976,7 @@ fn end_expired_hold(vt: &mut Vt, capture: &mut Capture) -> bool {
+ 
+ /// Kill the child's tree and reap the child, for a pane that never finished starting (the kill comes first: on Unix
+ /// the tree is never signalled once the child is reaped).
++#[cfg(feature = "local")]
+ fn stop_child(killer: &Killer, child: &mut Child) {
+     if let Err(err) = killer.kill_tree() {
+         tracing::debug!(%err, "killing a pane's child that never finished starting failed");
+@@ -882,6 +985,7 @@ fn stop_child(killer: &Killer, child: &mut Child) {
+ }
+ 
+ /// What a pane needs before its threads start.
++#[cfg(feature = "local")]
+ struct Parts {
+     shared: Arc<Shared>,
+     tty: Tty,
+@@ -889,6 +993,7 @@ struct Parts {
+     events: Receiver<PaneEvent>,
+ }
+ 
++#[cfg(feature = "local")]
+ impl Parts {
+     fn new(master: &Master, child: &Child, config: &PaneConfig) -> Result<Self, PaneError> {
+         let tty = Tty::of(master, child)?;
+@@ -924,7 +1029,7 @@ impl Parts {
+             stop_child(killer, child);
+             err
+         };
+-        let actor = match start_actor(&shared, master, read_pause) {
++        let actor = match start_actor(&shared, master, &read_pause) {
+             Ok(actor) => actor,
+             Err(err) => return Err(stop(err, None, None, &mut child)),
+         };
+@@ -969,7 +1074,8 @@ impl Parts {
+ 
+ /// The PTY's actor over `master`: every read goes to the pane's mailbox (the callback never waits), the actor's end
+ /// ends the mailbox's output, and the input queue holds at most the pane's write limit.
+-fn start_actor(shared: &Shared, master: Master, read_pause: ReadPause) -> Result<ActorHandle, PaneError> {
++#[cfg(feature = "local")]
++fn start_actor(shared: &Shared, master: Master, read_pause: &ReadPause) -> Result<ActorHandle, PaneError> {
+     #[cfg(test)]
+     if tests::FAIL_THREAD.with(std::cell::Cell::get) == Some("pane-pty") {
+         return Err(PaneError::Pty("cannot start the pane-pty thread: injected".to_owned()));
+@@ -984,7 +1090,7 @@ fn start_actor(shared: &Shared, master: Master, read_pause: ReadPause) -> Result
+         }),
+     );
+     config.input_limit = shared.write_limit;
+-    config.read_pause = read_pause;
++    config.read_pause = read_pause.actor();
+     config.on_exit = Some(Box::new(move |reason| {
+         tracing::debug!(?reason, "the pane's PTY ended");
+         ends.end_of_output();
+@@ -993,6 +1099,7 @@ fn start_actor(shared: &Shared, master: Master, read_pause: ReadPause) -> Result
+ }
+ 
+ /// A pane's running parts.
++#[cfg(feature = "local")]
+ struct Started {
+     shared: Arc<Shared>,
+     actor: ActorHandle,
+@@ -1004,6 +1111,7 @@ struct Started {
+ /// The waiter thread: reap the child, release a clipboard read the IO worker may wait on, end the PTY (Windows'
+ /// pseudoconsole never ends by itself), give the worker a moment to feed the last output, put the exit message on
+ /// screen ([`ExitPolicy`]), report the exit.
++#[cfg(feature = "local")]
+ fn wait_child(mut child: Child, shared: &Shared, actor: &ActorHandle) {
+     let (code, signal) = match child.wait() {
+         Ok(status) => (status.exit_code(), status.signal().map(str::to_owned)),
+@@ -1019,7 +1127,7 @@ fn wait_child(mut child: Child, shared: &Shared, actor: &ActorHandle) {
+ }
+ 
+ /// Writes the child's exit `code` to the pane's status file, unless the pane's drop took it first.
+-fn record_status(shared: &Shared, code: u32) {
++pub(crate) fn record_status(shared: &Shared, code: u32) {
+     let Some(file) = lock(&shared.status_file).take() else {
+         return;
+     };
+@@ -1072,17 +1180,26 @@ fn dispatch(shared: &Shared, byte: u8, read: ReadCandidate, answer: ClipboardAns
+ /// Whose reads the mailbox pauses and resumes: the PTY's actor, or a live pane's reader; a painter's few bytes a tick
+ /// need no pause.
+ enum Reads {
++    #[cfg(feature = "local")]
+     Actor(ActorHandle),
++    #[cfg(feature = "local")]
+     Live(Arc<Live>),
++    #[cfg(feature = "local")]
+     Painted,
++    /// A stream pane's embedder, waiting in [`StreamFeed::deliver`].
++    Stream(Arc<Gate>),
+ }
+ 
+ impl Reads {
+     fn wake(&self) {
+         match self {
++            #[cfg(feature = "local")]
+             Self::Actor(actor) => actor.wake_reader(),
++            #[cfg(feature = "local")]
+             Self::Live(live) => live.wake_reader(),
++            #[cfg(feature = "local")]
+             Self::Painted => {}
++            Self::Stream(gate) => gate.wake(),
+         }
+     }
+ }
+@@ -1112,6 +1229,7 @@ impl Worker {
+                     }
+                     self.after_batch(output.len());
+                 }
++                #[cfg(feature = "local")]
+                 Mail::Live(mail) => {
+                     if let Reads::Live(live) = &self.reads {
+                         session_io::handle(live, &self.shared, mail);
+@@ -1144,6 +1262,7 @@ impl Worker {
+     /// Feed `bytes` to the VT, stopping at each clipboard read for its answer. `false` when the pane shut down. A live
+     /// pane's reads are the server's to delegate: it does not stop at them.
+     fn feed(&mut self, bytes: &[u8]) -> bool {
++        #[cfg(feature = "local")]
+         if matches!(self.reads, Reads::Live(_)) {
+             self.write_vt(bytes);
+             return true;
+@@ -1231,6 +1350,7 @@ impl Worker {
+ }
+ 
+ #[cfg(test)]
++#[cfg(feature = "local")]
+ mod tests {
+     use super::*;
+     use ngterm_ghostty_vt::ReadScope;
+diff --git a/crates/ngterm-term/src/pty.rs b/crates/ngterm-term/src/pty.rs
+index c6866aa1..124e5646 100644
+--- a/crates/ngterm-term/src/pty.rs
++++ b/crates/ngterm-term/src/pty.rs
+@@ -1,26 +1,14 @@
+ //! The PTY side of a pane over `ngterm-pty` (openpty on Unix, `ConPTY` on Windows, herdr's PTY actor moving the
+-//! bytes): what a pane runs, its grid as the PTY's size, the outlet the terminal's replies leave through, and what the
+-//! pane reads of the PTY itself (its foreground process group and its input modes).
++//! bytes): what a pane runs, its grid as the PTY's size, and what the pane reads of the PTY itself (its foreground
++//! process group and its input modes). The outlet the terminal's replies leave through is [`crate::outlet`]'s.
+ 
+-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
++use ngterm_pty::WriteError;
+ 
+-use ngterm_pty::{ActorHandle, WriteError};
+-
+-use crate::PaneError;
+-use crate::session_io::{self, Live};
++use crate::{GridSize, PaneError};
+ 
+ /// What a pane runs, and how: `ngterm-pty`'s command (its program, arguments, working directory and environment).
+ pub use ngterm_pty::Command as PaneCommand;
+ 
+-/// A pane's grid: cells and the pixel size of one cell.
+-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+-pub struct GridSize {
+-    pub cols: u16,
+-    pub rows: u16,
+-    pub cell_width: u32,
+-    pub cell_height: u32,
+-}
+-
+ impl GridSize {
+     pub(crate) fn pty(self) -> ngterm_pty::Size {
+         ngterm_pty::Size {
+@@ -41,116 +29,6 @@ impl From<WriteError> for PaneError {
+     }
+ }
+ 
+-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+-}
+-
+-/// Where the terminal's replies to the program go: the PTY actor's outbox, in the order they are made (never
+-/// refused; the actor drops them past its hard cap, `ngterm_pty::REPLY_CAP`). Replies made before the actor runs
+-/// (a terminal driven without a PTY) wait here, and none are taken once the pane closed it. A live pane's terminal
+-/// answers the program nothing but Kitty graphics commands, the server answering the rest
+-/// ([`crate::session_io`]): those answers are kept for the server's next barrier.
+-///
+-/// A reply is queued with [`ActorHandle::write_reply`], which waits for a read callback in progress. That is safe
+-/// under the VT lock because the pane's read callback only copies into the pane's mailbox ([`crate::mailbox`]) and
+-/// never takes the VT lock.
+-#[derive(Debug, Default)]
+-pub(crate) struct ReplyOutlet {
+-    state: Mutex<Outlet>,
+-}
+-
+-#[derive(Debug)]
+-enum Outlet {
+-    /// No actor yet: the replies so far, and their bytes.
+-    Buffered(Vec<Vec<u8>>, usize),
+-    Actor(ActorHandle),
+-    /// A live pane's: its Kitty graphics answers since the last barrier, and the attach the pane's own input goes to.
+-    Live(Vec<u8>, Arc<Live>),
+-    Closed,
+-}
+-
+-impl Default for Outlet {
+-    fn default() -> Self {
+-        Self::Buffered(Vec::new(), 0)
+-    }
+-}
+-
+-impl ReplyOutlet {
+-    /// Queue a reply for the program.
+-    pub(crate) fn push_reply(&self, data: &[u8]) {
+-        let mut state = lock(&self.state);
+-        match &mut *state {
+-            Outlet::Buffered(replies, bytes) => {
+-                replies.push(data.to_vec());
+-                *bytes += data.len();
+-            }
+-            Outlet::Actor(actor) => {
+-                let actor = actor.clone();
+-                drop(state);
+-                actor.write_reply(data);
+-            }
+-            Outlet::Live(answers, _) => session_io::keep_kitty_answer(answers, data),
+-            Outlet::Closed => {}
+-        }
+-    }
+-
+-    /// Queue bytes the pane itself sends the program (a clear's form feed): a reply on a PTY, a live pane's input.
+-    pub(crate) fn push_input(&self, data: &[u8]) {
+-        let state = lock(&self.state);
+-        if let Outlet::Live(_, live) = &*state {
+-            let live = Arc::clone(live);
+-            drop(state);
+-            live.program_input(data);
+-        } else {
+-            drop(state);
+-            self.push_reply(data);
+-        }
+-    }
+-
+-    /// Answer as a live pane's terminal from now on (before it parses anything).
+-    pub(crate) fn go_live(&self, live: Arc<Live>) {
+-        *lock(&self.state) = Outlet::Live(Vec::new(), live);
+-    }
+-
+-    /// A live pane's Kitty graphics answers since the last call.
+-    pub(crate) fn take_kitty_answers(&self) -> Vec<u8> {
+-        match &mut *lock(&self.state) {
+-            Outlet::Live(answers, _) => std::mem::take(answers),
+-            _ => Vec::new(),
+-        }
+-    }
+-
+-    /// Send replies to `actor` from now on, the ones made so far first.
+-    pub(crate) fn attach(&self, actor: &ActorHandle) {
+-        let mut state = lock(&self.state);
+-        if matches!(*state, Outlet::Closed) {
+-            return;
+-        }
+-        if let Outlet::Buffered(replies, _) = std::mem::replace(&mut *state, Outlet::Actor(actor.clone())) {
+-            for reply in &replies {
+-                actor.write_reply(reply);
+-            }
+-        }
+-    }
+-
+-    /// Take no more replies, and let go of the actor.
+-    pub(crate) fn close(&self) {
+-        *lock(&self.state) = Outlet::Closed;
+-    }
+-
+-    /// The reply bytes waiting for the actor, or queued in it with the program's input.
+-    #[cfg(test)]
+-    pub(crate) fn queued(&self) -> usize {
+-        let state = lock(&self.state);
+-        match &*state {
+-            Outlet::Buffered(_, bytes) => *bytes,
+-            Outlet::Actor(actor) => actor.queued(),
+-            Outlet::Live(answers, _) => answers.len(),
+-            Outlet::Closed => 0,
+-        }
+-    }
+-}
+-
+ /// What the pane reads of its PTY on its own thread, without asking the actor (which would wait on its thread): a
+ /// close-on-exec duplicate of the master on Unix, for `tcgetpgrp` and `tcgetattr`. Windows' pseudoconsole has
+ /// neither: the parent holds only its pipes and its handle, not the console's input buffer whose mode says whether
+@@ -258,18 +136,6 @@ mod tests {
+         assert_eq!((size.pty().rows, size.pty().cols), (24, 80));
+     }
+ 
+-    #[test]
+-    fn replies_wait_for_the_actor_and_none_are_taken_once_closed() {
+-        let outlet = ReplyOutlet::default();
+-        assert_eq!(outlet.queued(), 0);
+-        outlet.push_reply(b"\x1b[0n");
+-        outlet.push_reply(b"\x1b[1;1R");
+-        assert_eq!(outlet.queued(), 10);
+-        outlet.close();
+-        outlet.push_reply(b"late");
+-        assert_eq!(outlet.queued(), 0);
+-    }
+-
+     #[test]
+     fn write_errors_map_to_the_panes() {
+         assert_eq!(PaneError::from(WriteError::Backpressure), PaneError::Backpressure);
+diff --git a/crates/ngterm-term/src/session_io.rs b/crates/ngterm-term/src/session_io.rs
+index e064afd5..afa03682 100644
+--- a/crates/ngterm-term/src/session_io.rs
++++ b/crates/ngterm-term/src/session_io.rs
+@@ -16,7 +16,7 @@
+ //!   its sessions to a new build) is attached again as the CLI attaches ([`attach_again`]), under the lead the pane
+ //!   held, its terminal reset first ([`snapshot::RESYNC_RESET`]).
+ //! - **Replies**: the server answers the program's queries; the pane's terminal answers none but Kitty graphics
+-//!   commands, whose answers complete the server's barriers ([`crate::pty::ReplyOutlet`]). The pane is the reply owner
++//!   commands, whose answers complete the server's barriers ([`crate::outlet::ReplyOutlet`]). The pane is the reply owner
+ //!   when the server makes it one: it sends its facts (theme colours, cell size, colour scheme, Kitty graphics) with
+ //!   the attach and on every change, and the frontend answers a delegated clipboard read as any of the pane's own
+ //!   ([`crate::PaneEvent::ClipboardRead`]). The clipboard reads in the output are the server's to delegate, so the
+@@ -39,7 +39,6 @@ use std::sync::{Arc, Condvar, Mutex};
+ use std::time::Duration;
+ 
+ use ngterm_core::live::support::LiveAttach;
+-use ngterm_pty::ReadPause;
+ use ngterm_session::cli::{
+     Contract, Origin, Outcome, Prepared, attach_again, prepare, process_environment, same_variable, variable,
+ };
+@@ -54,6 +53,7 @@ use ngterm_session::server::spawn::StartOptions;
+ use ngterm_session::server::{lead, snapshot};
+ 
+ use crate::effects::{ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ColorScheme, PaneEvent};
++use crate::mailbox::ReadPause;
+ use crate::pane::{Shared, lock};
+ use crate::{GridSize, PaneCommand, PaneError, ReadScope};
+ 
+diff --git a/crates/ngterm-term/src/stream.rs b/crates/ngterm-term/src/stream.rs
+new file mode 100644
+index 00000000..cccf957c
+--- /dev/null
++++ b/crates/ngterm-term/src/stream.rs
+@@ -0,0 +1,297 @@
++//! A stream pane's IO: a pane whose program runs elsewhere and whose bytes travel over a channel its embedder owns (a
++//! remote-only frontend's ssh channel running `ngterm-session attach`), in place of a PTY and a child. The pane holds
++//! no thread of the channel's: the embedder reads the channel into [`StreamFeed`] and writes what [`StreamOut`] gives
++//! it to the channel.
++//!
++//! - **Output in** ([`StreamFeed::deliver`]): the program's output joins the pane's mailbox ([`crate::mailbox`]) and
++//!   the same IO worker feeds it to the VT in slices. Past the mailbox's high mark the call waits until the worker is
++//!   down to its low mark, so a pane that cannot keep up holds the channel back (ssh's window then holds the remote
++//!   end back), and a worker waiting on a clipboard answer holds the program's output, not its input.
++//! - **Out** ([`StreamOut::next`]): the program's input ([`crate::Pane::write`] and every input path), the
++//!   terminal's replies and the pane's own bytes, in the order they were made, and the grid after a resize, for the
++//!   channel's window change. Replies are never refused; input is, past the pane's write limit
++//!   ([`crate::PaneError::Backpressure`]).
++//! - **Replies**: the pane's terminal answers the program's queries, as a PTY pane's does: an attach client filters
++//!   out the queries its server answers, so whatever reaches the pane is its to answer. Clipboard reads stop the
++//!   output for the frontend's answer ([`crate::PaneEvent::ClipboardRead`]), as on a PTY.
++//! - **End**: [`StreamFeed::end_of_output`] once the channel's output ended; [`StreamFeed::exited`] reports the
++//!   program's end (the channel's exit status) under the pane's [`crate::ExitPolicy`]. Dropping the pane closes
++//!   [`StreamOut`] and makes [`StreamFeed::deliver`] refuse, so the embedder's threads end.
++//! - **Kitty graphics**: images load from the escape sequence alone: a remote program's files, temporary files and
++//!   shared memory are not this machine's.
++
++use std::collections::VecDeque;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
++use std::time::{Duration, Instant};
++
++use crate::mailbox::ReadPause;
++use crate::pane::Shared;
++use crate::{GridSize, PaneError};
++
++fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
++    mutex.lock().unwrap_or_else(PoisonError::into_inner)
++}
++
++/// What a stream pane sends its channel.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum Outgoing {
++    /// Bytes for the program: its input and the terminal's replies, in order.
++    Bytes(Vec<u8>),
++    /// The pane's grid changed: the channel's window change (cells and pixels).
++    Resize(GridSize),
++}
++
++#[derive(Debug, Default)]
++struct Queue {
++    items: VecDeque<Outgoing>,
++    /// Bytes queued.
++    bytes: usize,
++    closed: bool,
++}
++
++/// A stream pane's outbound queue: input, replies and resizes, in order.
++#[derive(Debug)]
++pub(crate) struct Outbound {
++    queue: Mutex<Queue>,
++    changed: Condvar,
++    /// The most bytes queued before input is refused.
++    write_limit: usize,
++}
++
++impl Outbound {
++    pub(crate) fn new(write_limit: usize) -> Self {
++        Self {
++            queue: Mutex::new(Queue::default()),
++            changed: Condvar::new(),
++            write_limit,
++        }
++    }
++
++    /// Queue `bytes`, at the end of the bytes queued last when nothing came between.
++    fn push(queue: &mut Queue, bytes: &[u8]) {
++        queue.bytes += bytes.len();
++        if let Some(Outgoing::Bytes(last)) = queue.items.back_mut() {
++            last.extend_from_slice(bytes);
++        } else {
++            queue.items.push_back(Outgoing::Bytes(bytes.to_vec()));
++        }
++    }
++
++    /// Queue a reply of the terminal (never refused).
++    pub(crate) fn push_reply(&self, bytes: &[u8]) {
++        let mut queue = lock(&self.queue);
++        if queue.closed || bytes.is_empty() {
++            return;
++        }
++        Self::push(&mut queue, bytes);
++        drop(queue);
++        self.changed.notify_all();
++    }
++
++    /// Queue the program's input, within the write limit.
++    pub(crate) fn input(&self, bytes: &[u8]) -> Result<(), PaneError> {
++        let mut queue = lock(&self.queue);
++        if queue.closed {
++            return Err(PaneError::Closed);
++        }
++        if bytes.is_empty() {
++            return Ok(());
++        }
++        if queue.bytes + bytes.len() > self.write_limit {
++            return Err(PaneError::Backpressure);
++        }
++        Self::push(&mut queue, bytes);
++        drop(queue);
++        self.changed.notify_all();
++        Ok(())
++    }
++
++    /// Queue a resize; one queued and not taken yet is replaced.
++    pub(crate) fn resize(&self, size: GridSize) {
++        let mut queue = lock(&self.queue);
++        if queue.closed {
++            return;
++        }
++        if let Some(Outgoing::Resize(last)) = queue.items.back_mut() {
++            *last = size;
++        } else {
++            queue.items.push_back(Outgoing::Resize(size));
++        }
++        drop(queue);
++        self.changed.notify_all();
++    }
++
++    /// Bytes queued and not taken yet.
++    pub(crate) fn queued(&self) -> usize {
++        lock(&self.queue).bytes
++    }
++
++    pub(crate) fn close(&self) {
++        let mut queue = lock(&self.queue);
++        queue.closed = true;
++        queue.items.clear();
++        queue.bytes = 0;
++        drop(queue);
++        self.changed.notify_all();
++    }
++
++    /// The next item, waiting up to `timeout` (forever without one): `Ok(None)` when it passed with nothing queued.
++    pub(crate) fn next(&self, timeout: Option<Duration>) -> Result<Option<Outgoing>, PaneError> {
++        let deadline = timeout.map(|timeout| Instant::now() + timeout);
++        let mut queue = lock(&self.queue);
++        loop {
++            if let Some(item) = queue.items.pop_front() {
++                if let Outgoing::Bytes(bytes) = &item {
++                    queue.bytes -= bytes.len();
++                }
++                return Ok(Some(item));
++            }
++            if queue.closed {
++                return Err(PaneError::Closed);
++            }
++            queue = match deadline {
++                None => self.changed.wait(queue).unwrap_or_else(PoisonError::into_inner),
++                Some(deadline) => {
++                    let left = deadline.saturating_duration_since(Instant::now());
++                    if left.is_zero() {
++                        return Ok(None);
++                    }
++                    self.changed
++                        .wait_timeout(queue, left)
++                        .unwrap_or_else(PoisonError::into_inner)
++                        .0
++                }
++            };
++        }
++    }
++}
++
++/// The embedder's reader waits here while the mailbox holds its reads back.
++#[derive(Debug)]
++pub(crate) struct Gate {
++    pause: ReadPause,
++    closed: Mutex<bool>,
++    changed: Condvar,
++}
++
++impl Gate {
++    pub(crate) fn new(pause: ReadPause) -> Self {
++        Self {
++            pause,
++            closed: Mutex::new(false),
++            changed: Condvar::new(),
++        }
++    }
++
++    /// The mailbox resumed the reads (or the pane closed): look again.
++    pub(crate) fn wake(&self) {
++        let _closed = lock(&self.closed);
++        self.changed.notify_all();
++    }
++
++    pub(crate) fn close(&self) {
++        *lock(&self.closed) = true;
++        self.changed.notify_all();
++    }
++
++    /// Wait while the reads are paused; whether the pane still takes output.
++    fn wait_resumed(&self) -> bool {
++        let mut closed = lock(&self.closed);
++        while !*closed && self.pause.is_paused() {
++            closed = self.changed.wait(closed).unwrap_or_else(PoisonError::into_inner);
++        }
++        !*closed
++    }
++
++    fn is_closed(&self) -> bool {
++        *lock(&self.closed)
++    }
++}
++
++/// A stream pane's IO, held by the pane.
++pub(crate) struct Stream {
++    pub(crate) outbound: Arc<Outbound>,
++    pub(crate) gate: Arc<Gate>,
++}
++
++impl Stream {
++    pub(crate) fn close(&self) {
++        self.outbound.close();
++        self.gate.close();
++    }
++}
++
++/// The input side of a stream pane's channel: the embedder's reader hands the program's output in here. `Send` and
++/// `Sync`; it outlives the pane harmlessly (every call then refuses or does nothing).
++pub struct StreamFeed {
++    pub(crate) shared: Arc<Shared>,
++    pub(crate) gate: Arc<Gate>,
++    pub(crate) exited: AtomicBool,
++}
++
++impl std::fmt::Debug for StreamFeed {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("StreamFeed").finish_non_exhaustive()
++    }
++}
++
++impl StreamFeed {
++    /// Queue the program's output for the terminal; waits while the pane is past its high mark (see the module docs).
++    /// `false` once the pane is gone: the embedder stops reading.
++    pub fn deliver(&self, bytes: &[u8]) -> bool {
++        if self.gate.is_closed() {
++            return false;
++        }
++        self.shared.mailbox().deliver(bytes);
++        self.gate.wait_resumed()
++    }
++
++    /// The channel's output ended: the terminal is fed what came, and the pane's output is over.
++    pub fn end_of_output(&self) {
++        self.shared.mailbox().end_of_output();
++    }
++
++    /// The program ended with `code` (`None`: unknown, as a channel closed with no exit status) and `signal`: a
++    /// clipboard read waiting is denied, the output fed so far reaches the screen (waiting up to a second for it), the
++    /// exit policy's message is written, and [`crate::PaneEvent::Exited`] is reported. Runs on the caller's thread;
++    /// only the first call counts.
++    pub fn exited(&self, code: Option<u32>, signal: Option<String>) {
++        if self.exited.swap(true, Ordering::AcqRel) {
++            return;
++        }
++        if let Some(code) = code {
++            crate::pane::record_status(&self.shared, code);
++        }
++        self.shared.mailbox().child_exited();
++        crate::pane::report_exit(&self.shared, code, signal);
++    }
++}
++
++/// The output side of a stream pane's channel: the embedder's writer takes what goes to the program here. `Send` and
++/// `Sync`.
++#[derive(Debug)]
++pub struct StreamOut {
++    pub(crate) outbound: Arc<Outbound>,
++}
++
++impl StreamOut {
++    /// The next thing to send, waiting up to `timeout` (forever without one); `Ok(None)` when it passed with nothing
++    /// to send. Consecutive bytes come as one [`Outgoing::Bytes`].
++    ///
++    /// # Errors
++    ///
++    /// [`PaneError::Closed`] once the pane is gone (what it had queued is dropped with it).
++    pub fn next(&self, timeout: Option<Duration>) -> Result<Option<Outgoing>, PaneError> {
++        self.outbound.next(timeout)
++    }
++
++    /// Bytes queued and not taken yet.
++    #[must_use]
++    pub fn queued(&self) -> usize {
++        self.outbound.queued()
++    }
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/crates/ngterm-term/src/stream/tests.rs b/crates/ngterm-term/src/stream/tests.rs
+new file mode 100644
+index 00000000..be33b6a7
+--- /dev/null
++++ b/crates/ngterm-term/src/stream/tests.rs
+@@ -0,0 +1,167 @@
++use std::sync::mpsc::{self, Receiver};
++use std::time::{Duration, Instant};
++
++use crate::{ClipboardAnswer, ExitStatus, Pane, PaneConfig, PaneEvent, TextRegion};
++
++use super::*;
++
++const SIZE: GridSize = GridSize {
++    cols: 20,
++    rows: 4,
++    cell_width: 8,
++    cell_height: 16,
++};
++const DEADLINE: Duration = Duration::from_secs(10);
++
++struct Fixture {
++    pane: Pane,
++    feed: StreamFeed,
++    out: StreamOut,
++    woken: Receiver<()>,
++}
++
++fn stream(config: PaneConfig) -> Fixture {
++    let (wake, woken) = mpsc::channel();
++    let wake = Mutex::new(wake);
++    let config = PaneConfig {
++        wake: Some(Arc::new(move || {
++            let _ = lock(&wake).send(());
++        })),
++        ..config
++    };
++    let (pane, feed, out) = Pane::stream(&config).unwrap();
++    Fixture { pane, feed, out, woken }
++}
++
++impl Fixture {
++    /// Bytes sent to the channel until they hold `want`.
++    fn sent_until(&self, want: &[u8]) -> Vec<u8> {
++        let deadline = Instant::now() + DEADLINE;
++        let mut sent = Vec::new();
++        while !sent.windows(want.len()).any(|window| window == want) {
++            let left = deadline.saturating_duration_since(Instant::now());
++            assert!(!left.is_zero(), "never sent {want:?}: {sent:?}");
++            if let Ok(Some(Outgoing::Bytes(bytes))) = self.out.next(Some(left)) {
++                sent.extend(bytes);
++            }
++        }
++        sent
++    }
++
++    fn event(&self, matches: impl Fn(&PaneEvent) -> bool) -> PaneEvent {
++        let deadline = Instant::now() + DEADLINE;
++        loop {
++            if let Some(event) = self.pane.take_events().into_iter().find(&matches) {
++                return event;
++            }
++            let left = deadline.saturating_duration_since(Instant::now());
++            assert!(!left.is_zero(), "no such event");
++            let _ = self.woken.recv_timeout(left);
++        }
++    }
++
++    fn screen_until(&self, want: &str) {
++        let deadline = Instant::now() + DEADLINE;
++        while !self.pane.read_text(TextRegion::Viewport).unwrap().contains(want) {
++            assert!(Instant::now() < deadline, "never showed {want:?}");
++            let _ = self.woken.recv_timeout(Duration::from_millis(50));
++        }
++    }
++}
++
++#[test]
++fn output_reaches_the_screen_and_the_terminal_answers_through_the_channel() {
++    let fixture = stream(PaneConfig::new(SIZE));
++    assert!(fixture.feed.deliver(b"hello\x1b[6n"));
++    fixture.screen_until("hello");
++    // the cursor position report, after "hello" on the first row
++    fixture.sent_until(b"\x1b[1;6R");
++    let frame = fixture.pane.frame().frame;
++    assert_eq!(frame.rows.len(), usize::from(SIZE.rows));
++}
++
++#[test]
++fn input_and_resizes_go_out_in_order() {
++    let fixture = stream(PaneConfig::new(SIZE));
++    fixture.pane.write(b"ls\r").unwrap();
++    let bigger = GridSize { cols: 40, ..SIZE };
++    fixture.pane.resize(bigger).unwrap();
++    fixture.pane.write(b"x").unwrap();
++    assert_eq!(fixture.out.next(None), Ok(Some(Outgoing::Bytes(b"ls\r".to_vec()))));
++    assert_eq!(fixture.out.next(None), Ok(Some(Outgoing::Resize(bigger))));
++    assert_eq!(fixture.out.next(None), Ok(Some(Outgoing::Bytes(b"x".to_vec()))));
++    assert_eq!(fixture.out.next(Some(Duration::from_millis(10))), Ok(None));
++}
++
++#[test]
++fn input_past_the_write_limit_is_refused_and_replies_are_not() {
++    let fixture = stream(PaneConfig {
++        write_limit: 4,
++        ..PaneConfig::new(SIZE)
++    });
++    fixture.pane.write(b"abcd").unwrap();
++    assert_eq!(fixture.pane.write(b"e"), Err(PaneError::Backpressure));
++    assert_eq!(fixture.pane.queued_input(), 4);
++    fixture.feed.deliver(b"\x1b[5n");
++    fixture.sent_until(b"abcd\x1b[0n");
++    fixture.pane.write(b"e").unwrap();
++}
++
++#[test]
++fn a_clipboard_read_waits_for_the_frontends_answer() {
++    let fixture = stream(PaneConfig::new(SIZE));
++    fixture.feed.deliver(b"\x1b]52;c;?\x07after");
++    let PaneEvent::ClipboardRead(request) = fixture.event(|event| matches!(event, PaneEvent::ClipboardRead(_))) else {
++        unreachable!()
++    };
++    // the output after the read waits for its answer
++    assert!(!fixture.pane.read_text(TextRegion::Viewport).unwrap().contains("after"));
++    fixture
++        .pane
++        .answer_clipboard_read(request.id, ClipboardAnswer::Text(Some("hi".to_owned())));
++    fixture.sent_until(b"\x1b]52;c;aGk=");
++    fixture.screen_until("after");
++}
++
++#[test]
++fn the_programs_end_is_reported_once_and_the_pane_drop_ends_both_sides() {
++    let fixture = stream(PaneConfig::new(SIZE));
++    fixture.feed.deliver(b"bye");
++    fixture.feed.end_of_output();
++    fixture.feed.exited(Some(3), None);
++    fixture.feed.exited(Some(4), None);
++    let exited = fixture.event(|event| matches!(event, PaneEvent::Exited(_)));
++    assert_eq!(
++        exited,
++        PaneEvent::Exited(ExitStatus {
++            code: 3,
++            signal: None,
++            held: false
++        })
++    );
++    let Fixture { pane, feed, out, .. } = fixture;
++    drop(pane);
++    assert_eq!(out.next(None), Err(PaneError::Closed));
++    assert!(!feed.deliver(b"late"));
++}
++
++#[test]
++fn a_reader_past_the_high_mark_waits_until_the_pane_catches_up() {
++    let fixture = stream(PaneConfig::new(SIZE));
++    // an unanswered clipboard read holds the output back, so the mailbox fills
++    fixture.feed.deliver(b"\x1b]52;c;?\x07");
++    let PaneEvent::ClipboardRead(request) = fixture.event(|event| matches!(event, PaneEvent::ClipboardRead(_))) else {
++        unreachable!()
++    };
++    let Fixture { pane, feed, out, .. } = fixture;
++    let feed = Arc::new(feed);
++    let reader = {
++        let feed = Arc::clone(&feed);
++        std::thread::spawn(move || feed.deliver(&vec![b'x'; crate::mailbox::HIGH_WATER]))
++    };
++    std::thread::sleep(Duration::from_millis(100));
++    assert!(!reader.is_finished(), "the reader went on past the high mark");
++    pane.answer_clipboard_read(request.id, ClipboardAnswer::Denied);
++    assert!(reader.join().unwrap());
++    drop(out);
++}
+diff --git a/crates/ngterm-term/tests/actions.rs b/crates/ngterm-term/tests/actions.rs
+index 28d8dded..5212259a 100644
+--- a/crates/ngterm-term/tests/actions.rs
++++ b/crates/ngterm-term/tests/actions.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! The terminal-scoped binding actions over a real PTY: `clear_screen` (off and at a prompt, the alternate screen),
+ //! `reset`, `adjust_selection`, `scroll_to_selection`, `scroll_to_row` and the formatter's regions and formats.
+ //!
+diff --git a/crates/ngterm-term/tests/graphemes.rs b/crates/ngterm-term/tests/graphemes.rs
+index 7ab2c3f7..de0868d4 100644
+--- a/crates/ngterm-term/tests/graphemes.rs
++++ b/crates/ngterm-term/tests/graphemes.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! Wide and multi-codepoint text through a real PTY: an emoji ZWJ sequence, a combining mark and an emoji variation
+ //! selector each take the cells of their grapheme cluster (Ghostty's `grapheme-width-method = unicode`, mode 2027 on
+ //! as the terminal's default, a reset keeping it), the cursor moves past them by those cells, and read-back and
+diff --git a/crates/ngterm-term/tests/input.rs b/crates/ngterm-term/tests/input.rs
+index e73d42f0..756962d5 100644
+--- a/crates/ngterm-term/tests/input.rs
++++ b/crates/ngterm-term/tests/input.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! Input through a real PTY: keys encoded for the modes the program set (legacy, application cursor keys, the Kitty
+ //! keyboard protocol), mouse reports, focus reports and pastes reach the child as the bytes it asked for.
+ //!
+diff --git a/crates/ngterm-term/tests/kitty.rs b/crates/ngterm-term/tests/kitty.rs
+index bd0272f8..ea259e9b 100644
+--- a/crates/ngterm-term/tests/kitty.rs
++++ b/crates/ngterm-term/tests/kitty.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! Kitty graphics through a real PTY: a chunked APC transmission (raw pixels, and PNG as `show-image.sh` sends it)
+ //! becomes an image and a placement in the frame's view; deleting it reports it removed.
+ //!
+diff --git a/crates/ngterm-term/tests/launch.rs b/crates/ngterm-term/tests/launch.rs
+index a7735add..b8aacc58 100644
+--- a/crates/ngterm-term/tests/launch.rs
++++ b/crates/ngterm-term/tests/launch.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! Launching panes as libghostty launched a surface's program, through a real PTY: the terminal identity reaching the
+ //! shell, a plain pane's command, typed input, exit hold, working directory, environment and shell integration, and
+ //! the foreground process group. Live panes, which attach in process, are `live.rs`'s.
+diff --git a/crates/ngterm-term/tests/live.rs b/crates/ngterm-term/tests/live.rs
+index 55773a9c..924fa33b 100644
+--- a/crates/ngterm-term/tests/live.rs
++++ b/crates/ngterm-term/tests/live.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! Live panes attached in process to the cargo-built session server (`crate::session_io`), on every OS: a fresh
+ //! session's prompt, typing and a resize reaching it, its environment and directory, the pane dropped leaving the
+ //! session running and a reattach painting its snapshot, a pane looping on titles dropped in time, the role a managed pane is told, the session's end and an
+diff --git a/crates/ngterm-term/tests/pane.rs b/crates/ngterm-term/tests/pane.rs
+index d9a8124f..62a54731 100644
+--- a/crates/ngterm-term/tests/pane.rs
++++ b/crates/ngterm-term/tests/pane.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! The pane against real PTYs and real children: output reaches the screen, effects become events in stream order,
+ //! clipboard reads are answered through the PTY, the exit status and resizes reach their ends, and the error paths
+ //! (spawn failure, a closed PTY, a full input queue) report instead of hanging; a password prompt shows in the PTY's
+diff --git a/crates/ngterm-term/tests/platform.rs b/crates/ngterm-term/tests/platform.rs
+index 79cd669a..e7fdbf75 100644
+--- a/crates/ngterm-term/tests/platform.rs
++++ b/crates/ngterm-term/tests/platform.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! A pane on a real PTY on every OS (openpty on Unix, the pseudoconsole on Windows), launched as a pane's command
+ //! line is (`/bin/sh -c`, or `cmd.exe /D /S /C "<line>"`): its output on screen, an echo round trip, a resize reaching
+ //! the child, exit codes, selection and search over what the child printed, the password-input detection, and a pane
+diff --git a/crates/ngterm-term/tests/pointer.rs b/crates/ngterm-term/tests/pointer.rs
+index b66d7ff6..f8bd0913 100644
+--- a/crates/ngterm-term/tests/pointer.rs
++++ b/crates/ngterm-term/tests/pointer.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! The pointer over a pane fed by a real PTY: Ghostty's selection gesture (click counts, word and line clicks, drags,
+ //! autoscroll past the bottom), the cell under a position, OSC 8 hyperlinks and soft-wrapped rows.
+ //!
+diff --git a/crates/ngterm-term/tests/render.rs b/crates/ngterm-term/tests/render.rs
+index d4feada5..c46035a5 100644
+--- a/crates/ngterm-term/tests/render.rs
++++ b/crates/ngterm-term/tests/render.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! Frames from real PTY output: dirty rows after partial updates, one frame shared by two views, a synchronized-output
+ //! hold publishing the held frame (and timing out), styles and wide cells.
+ //!
+diff --git a/crates/ngterm-term/tests/replay.rs b/crates/ngterm-term/tests/replay.rs
+index e4123f71..d81cbd32 100644
+--- a/crates/ngterm-term/tests/replay.rs
++++ b/crates/ngterm-term/tests/replay.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! A rerun restore's replay typed into a real shell on a real PTY, as a restored pane types it
+ //! ([`ngterm_core::command_restore::PaneInput::Replay`], quoted by `ngterm_core::shell_dialect` for the shell the
+ //! launch runs): the program it starts receives exactly the captured argv. On Windows the shells a pane runs there:
+diff --git a/crates/ngterm-term/tests/selection.rs b/crates/ngterm-term/tests/selection.rs
+index 40054348..2af707a8 100644
+--- a/crates/ngterm-term/tests/selection.rs
++++ b/crates/ngterm-term/tests/selection.rs
+@@ -1,3 +1,4 @@
++#![cfg(feature = "local")]
+ //! Selection, read-back and search on a pane fed by a real PTY: the selected text and the frame's selected columns,
+ //! the screen and scrollback read back as `ghostty_surface_read_text` returned them (wide characters, wrapped lines),
+ //! the cursor column, and the search's counts, navigation and reports.
