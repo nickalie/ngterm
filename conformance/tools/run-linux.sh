@@ -107,6 +107,15 @@ if [[ -n "$ratchet_only" ]]; then
     for expression in "${also_k[@]}"; do selection+=(--also-k "$expression"); done
 fi
 
+# UI selections need real accessibility bindings even before the AT-SPI driver is enabled.
+for layer in "${layers[@]}"; do
+    if [[ "$layer" == "$tests/ui" || "$layer" == "$tests/ui/"* ]]; then
+        [[ "$display" == headless ]] || { echo "Linux UI instances require headless display mode" >&2; exit 2; }
+        "$python" -m agterm_conformance.linux_ui || exit 2
+        break
+    fi
+done
+
 [[ -z "$stage" || -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
 
 # The build renders through Vulkan: on lavapipe and nothing else (the harness points VK_DRIVER_FILES at it), never on

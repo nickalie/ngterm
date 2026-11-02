@@ -270,19 +270,34 @@ authored identifier without changing the semantic assertions or adding aliases t
 - Modify: `conformance/selftests/test_impls.py`, `test_isolation.py`, `test_run_linux.py`, `test_plugin_options.py`
 - Create: `conformance/selftests/fake_xvfb.py`, `fake_a11y_bus.py` (if the fakes need them)
 
-- [ ] write self-tests first: an instance launched from a `tests/ui` module (module fixture, `launch()`, `relaunch`) is an
+- [x] write self-tests first: an instance launched from a `tests/ui` module (module fixture, `launch()`, `relaunch`) is an
       X11 instance with its own Xvfb display and session bus and the run's a11y address; one launched elsewhere is a
       weston instance; the env carries exactly the harness-set `DISPLAY`/`AT_SPI_BUS_ADDRESS`/`GDK_BACKEND`/
       `GSETTINGS_BACKEND`, with every inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` gone
-- [ ] write self-tests for the refusals: an inherited `DISPLAY` or a11y address, a ui run in a non-headless display
+- [x] write self-tests for the refusals: an inherited `DISPLAY` or a11y address, a ui run in a non-headless display
       mode, an `Atspi.init()` before the run's bus is set; and for missing setup (Xvfb, launcher in its libexec paths,
       registryd, typelib) exiting 2 naming the step
-- [ ] write self-tests for the reap: Xvfb, the instance bus, and at session end the launcher, its dbus-daemon and
+- [x] write self-tests for the reap: Xvfb, the instance bus, and at session end the launcher, its dbus-daemon and
       registryd; nothing left in the instance root
-- [ ] implement the run-wide bus, the launch mode, the env guard change and the fixture wiring
-- [ ] check on the dev box (headless, lavapipe) that an instance comes up on its Xvfb and its AccessKit tree appears on
+- [x] implement the run-wide bus, the launch mode, the env guard change and the fixture wiring
+- [x] check on the dev box (headless, lavapipe) that an instance comes up on its Xvfb and its AccessKit tree appears on
       the run's a11y bus; settle whether input focus needs a window manager and record the answer here
-- [ ] run the self-tests and a partial suite run over one protocol id (weston path unchanged)
+- [x] run the self-tests and a partial suite run over one protocol id (weston path unchanged)
+
+**Decision:** AccessKit checks `org.a11y.Status.IsEnabled` on each app's session bus before reading
+`AT_SPI_BUS_ADDRESS`. A small owned Gio discovery/status helper therefore serves `org.a11y.Bus.GetAddress`
+and the status properties on each instance bus. It points to the run's real accessibility bus; it exposes
+no app controls. It is retained through relaunch and reaped with the instance. Codex independently agreed.
+
+**Focus:** no window manager is needed. On bare Xvfb, explicit X input focus plus XTest keyboard input
+successfully toggled the sidebar with protocol read-back. Future AT-SPI driver input must focus its own window.
+
+**Validation:** 926 harness self-tests passed (19 skips, including the opt-in real probe); subsequent focused
+lifecycle checks include partial startup failure cleanup. The opt-in `test_linux_ui_integration.py` passed
+against the existing Linux debug build: two separate displays and session buses, both app PIDs and tree
+descendants on the shared AT-SPI desktop, a relaunched PID, real input, and complete helper/root cleanup.
+`tests/protocol/test_version.py::test_version_reports_the_app_version` passed on the unchanged Weston path.
+The real probe uses a system-Python venv with PyGObject and python-xlib; ordinary self-tests import neither.
 
 ### Task 3: Failure traces
 

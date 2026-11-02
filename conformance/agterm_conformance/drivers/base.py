@@ -448,6 +448,10 @@ def driver_class(impl: str, platform: str = sys.platform) -> type[Driver]:
 
 
 def make_driver(
-    impl: str, pid: int, ui_ids: UiIds | None = None, platform: str = sys.platform, **kwargs: Any
+    impl: str, instance: Any, ui_ids: UiIds | None = None, platform: str = sys.platform, **kwargs: Any
 ) -> Driver:
-    return driver_class(impl, platform)(pid, ui_ids, **kwargs)
+    if isinstance(instance, int):
+        return driver_class(impl, platform)(instance, ui_ids, **kwargs)
+    if driver_name(impl, platform) == "atspi":
+        kwargs["instance"] = instance
+    return driver_class(impl, platform)(instance.pid, ui_ids, **kwargs)
