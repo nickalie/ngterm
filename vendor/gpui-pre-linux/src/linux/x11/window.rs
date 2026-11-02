@@ -1319,8 +1319,8 @@ impl X11WindowStatePtr {
         let outer = accesskit::Rect {
             x0: x as f64,
             y0: y as f64,
-            x1: (x + width * scale) as f64,
-            y1: (y + height * scale) as f64,
+            x1: (x + (width * scale).round()) as f64,
+            y1: (y + (height * scale).round()) as f64,
         };
 
         // GPUI nodes use the whole client surface, including client-drawn shadow insets.

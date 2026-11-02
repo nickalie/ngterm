@@ -177,5 +177,10 @@ name = "macos_webview"
 harness = false
 required-features = ["html"]
 
+# Test-only real GPUI surface with nonzero decoration insets, driven by the private AT-SPI probe.
+[[example]]
+name = "a11y_inset_probe"
+path = "tests/support/a11y_inset_probe.rs"
+
 [lints]
 workspace = true

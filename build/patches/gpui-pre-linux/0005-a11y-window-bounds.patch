@@ -2,7 +2,7 @@ Publish window bounds to AccessKit when the adapter starts and when geometry cha
 
 X11 translates the real client origin to root coordinates (ConfigureNotify can be
 parent-relative or stale during a resize), refreshes on ReparentNotify even without
-a subsequent configure event, scales dimensions once, and uses the
+a subsequent configure event, rounds reconstructed device-pixel dimensions, and uses the
 full client surface as the node origin (client-drawn shadow insets are already
 included in GPUI node coordinates). Wayland exposes only scaled surface-relative bounds
 at zero origin, including on scale changes; it cannot report a global position.
@@ -110,8 +110,8 @@ diff -ruN a/src/linux/x11/window.rs b/src/linux/x11/window.rs
 +        let outer = accesskit::Rect {
 +            x0: x as f64,
 +            y0: y as f64,
-+            x1: (x + width * scale) as f64,
-+            y1: (y + height * scale) as f64,
++            x1: (x + (width * scale).round()) as f64,
++            y1: (y + (height * scale).round()) as f64,
 +        };
 +
 +        // GPUI nodes use the whole client surface, including client-drawn shadow insets.

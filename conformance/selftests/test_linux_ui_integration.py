@@ -1,9 +1,12 @@
 """Opt-in real probe: CONFORMANCE_UI_PROBE_BIN and CONFORMANCE_UI_PROBE_ICD.
 
 Uses only harness-owned displays, buses and state. Never selects the user's X display.
+Build `cargo build -p ngterm-gpui --example a11y_inset_probe` and set
+CONFORMANCE_UI_INSET_PROBE_BIN to that example for nonzero client-inset cases.
 """
 import os
-from contextlib import closing, ExitStack
+import subprocess
+from contextlib import closing, ExitStack, suppress
 from pathlib import Path
 
 import pytest
@@ -95,32 +98,71 @@ def test_two_real_trees_relaunch_focus_and_cleanup(monkeypatch, real_compositor,
     assert all(not root.exists() for root in roots)
 
 
-@pytest.mark.parametrize('scale', [1, 2])
-def test_accessibility_screen_bounds_follow_x11_window(monkeypatch, real_compositor, a11y_run, scale):
-    """AccessKit root bounds track real initial, moved and resized X11 geometry, including HiDPI."""
-    from Xlib import X, display
+@pytest.mark.parametrize('scale,decorated', [(1, False), (2, False), (1.1, False), (1, True), (2, True)])
+def test_accessibility_screen_bounds_follow_x11_window(monkeypatch, real_compositor, a11y_run, scale, decorated):
+    """Real bounds track moves/resizes, fractional scaling and nonzero client decorations."""
+    from Xlib import X, Xatom, display, error
     monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, os.environ['CONFORMANCE_UI_PROBE_ICD'])
     monkeypatch.setenv('GPUI_X11_SCALE_FACTOR', str(scale))
+    if decorated and not os.environ.get('CONFORMANCE_UI_INSET_PROBE_BIN'):
+        pytest.skip('build a11y_inset_probe example and set CONFORMANCE_UI_INSET_PROBE_BIN')
     with ExitStack() as cleanup:
         run = a11y_run
         adapter = RustAdapter(Path(os.environ['CONFORMANCE_UI_PROBE_BIN']))
+        if decorated:
+            start_status = linux_ui.start_status
+            def advertise_decorations(root_path, env, timeout):
+                # This is the new instance's private display, before GPUI connects. No WM needed:
+                # advertise only the two capabilities GPUI checks to enable its own decorations.
+                connection = display.Display(env['DISPLAY'])
+                def close_connection():
+                    with suppress(error.ConnectionClosedError):
+                        connection.close()
+                cleanup.callback(close_connection)
+                root = connection.screen().root
+                root.change_property(connection.intern_atom('_NET_WM_CM_OWNER'), Xatom.WINDOW, 32, [root.id])
+                root.change_property(connection.intern_atom('_NET_SUPPORTED'), Xatom.ATOM, 32,
+                                     [connection.intern_atom('_GTK_FRAME_EXTENTS')])
+                connection.sync()
+                return start_status(root_path, env, timeout)
+            monkeypatch.setattr(linux_ui, 'start_status', advertise_decorations)
         app = adapter.launch(ui=run)
         cleanup.callback(adapter.stop, app)
         connection = cleanup.enter_context(closing(display.Display(app.ui.display)))
 
+        pid = app.pid
+        if decorated:
+            # ngterm itself never sets a nonzero client inset. A test-only GPUI surface exercises
+            # that backend contract on this same owned display/bus, without an application hook.
+            log = cleanup.enter_context(open(app.root / 'inset-probe.log', 'wb'))
+            probe = subprocess.Popen([os.environ['CONFORMANCE_UI_INSET_PROBE_BIN']],
+                                     env={**app.env, 'CONFORMANCE_A11Y_INSET_PROBE': '1'},
+                                     stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+            cleanup.callback(base._terminate, probe)
+            pid = probe.pid
+
         def mapped():
             windows = [w for w in connection.screen().root.query_tree().children
-                       if w.get_attributes().map_state == X.IsViewable]
+                       if w.get_attributes().map_state == X.IsViewable
+                       and (prop := w.get_full_property(connection.intern_atom('_NET_WM_PID'), Xatom.CARDINAL))
+                       and prop.value[0] == pid]
             assert len(windows) == 1
             return windows[0]
 
         window = wait_until(mapped, timeout=10)
+        if decorated:
+            def has_insets():
+                extents = window.get_full_property(connection.intern_atom('_GTK_FRAME_EXTENTS'), Xatom.CARDINAL)
+                assert extents is not None and len(extents.value) == 4
+                assert all(inset > 0 for inset in extents.value), extents.value
+                return True
+            wait_until(has_insets, timeout=10)
 
         def accessible_window():
             desktop = run.atspi.get_desktop(0)
             for i in range(desktop.get_child_count()):
                 node = desktop.get_child_at_index(i)
-                if node.get_process_id() == app.pid and node.get_child_count():
+                if node.get_process_id() == pid and node.get_child_count():
                     return node.get_child_at_index(0)
             raise AssertionError('application accessibility window not registered')
 
@@ -148,7 +190,7 @@ def test_accessibility_screen_bounds_follow_x11_window(monkeypatch, real_composi
             return True
 
         wait_until(matches_geometry, timeout=10)
-        for change in ({'x': 137, 'y': 89}, {'x': 211, 'y': 123, 'width': 760, 'height': 500},
+        for change in ({'x': 137, 'y': 89, 'width': 709, 'height': 501}, {'x': 211, 'y': 123, 'width': 760, 'height': 500},
                        {'width': 810, 'height': 540}):
             window.configure(**change)
             connection.sync()
