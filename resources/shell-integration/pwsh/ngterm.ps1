@@ -12,7 +12,8 @@
 #   leading one (`/C:/Users/me`);
 # - with `title` in GHOSTTY_SHELL_FEATURES: the directory as the title at the prompt, the command line while it runs;
 # - with `cursor` there: a blinking bar cursor at the prompt (a steady one with `cursor:steady`), the default shape
-#   back while a command runs.
+#   back while a command runs;
+# - in an ngterm pane, a `codex` function that gives each Codex TUI its own process (see it, at the end).
 #
 # Loading it twice changes nothing. It uses only language syntax, .NET calls and module-qualified cmdlets, so it runs
 # under Windows PowerShell 5.1 as well and no alias or function of the user's takes it over. A profile's
@@ -37,6 +38,8 @@ $global:__NgtermIntegration = & {
         ReadLine = if ($readLine) { $readLine.ScriptBlock } else { $null }
         # whether a C mark waits for its D
         Running  = $false
+        # whether the codex function's program failed, which its caller's $? cannot show
+        CodexFailed = $false
         Title    = $features -contains 'title'
         Cursor   = $cursor
         # the host name the terminal compares with its own: Windows' computer name, gethostname elsewhere
@@ -53,6 +56,10 @@ function global:prompt {
     $esc = [char]27
     $bel = [char]7
     $marks = ''
+    if ($state.CodexFailed) {
+        $succeeded = $false
+        $state.CodexFailed = $false
+    }
     if ($state.Running) {
         $status = if ($succeeded) { 0 } elseif ($exitCode -is [int] -and $exitCode -ne 0) { $exitCode } else { 1 }
         $marks += "$esc]133;D;$status$bel"
@@ -103,5 +110,47 @@ if ($global:__NgtermIntegration.ReadLine) {
         }
         [System.Console]::Write($marks)
         $line
+    }
+}
+
+# Codex's TUI normally attaches to one background daemon shared by every pane, and the daemon starts hooks with the
+# environment of the pane that started it, so every Codex's status lands on that pane. Run each TUI in its own process
+# instead, which costs control of that session from the Codex apps. Calling the program by its path or a non-empty
+# NGTERM_CODEX_KEEP_DAEMON keeps the daemon, and a codex function of the user's is left alone.
+#
+# Being a function costs what a function costs in PowerShell. A bare `--` is dropped before it sees it, so it needs
+# quotes, and the caller's $? and && do not see the program fail, only $LASTEXITCODE and the prompt's D mark do.
+if ($env:NGTERM_SESSION_ID -and
+    -not (Microsoft.PowerShell.Management\Test-Path -LiteralPath Function:\codex)) {
+    function global:codex {
+        $codex = Microsoft.PowerShell.Core\Get-Command -Name codex -CommandType Application, ExternalScript `
+            -ErrorAction Stop | Microsoft.PowerShell.Utility\Select-Object -First 1
+        # PowerShell hands an unquoted a,b over as an array, which @args would split into two arguments
+        $forwarded = @(foreach ($argument in $args) {
+                if ($argument -is [array]) { $argument -join ',' } else { $argument }
+            })
+        # a TUI opens with no subcommand, or with `resume` or `fork`; a single lowercase word is taken for a
+        # subcommand, so a one-word prompt stays on the daemon. The daemon's own subcommands keep it wherever they sit,
+        # as a global option can come first and Codex refuses the flag on them.
+        $first = if ($forwarded.Count) { [string]$forwarded[0] } else { '' }
+        $own = -not $env:NGTERM_CODEX_KEEP_DAEMON -and
+            ($first -ceq 'resume' -or $first -ceq 'fork' -or $first -cnotmatch '^[a-z][a-z-]*$')
+        foreach ($argument in $forwarded) {
+            # only a quoted one gets here
+            if ($argument -ceq '--') { break }
+            if ($argument -cin '--no-daemon', '--remote', 'agents', 'queue', 'remote-control', 'app-server' -or
+                $argument -clike '--remote=*') {
+                $own = $false
+            }
+        }
+        # an older Codex lacks the flag
+        if ($own) {
+            $own = & $codex --help 2>$null |
+                Microsoft.PowerShell.Utility\Select-String -Pattern '--no-daemon' -SimpleMatch -Quiet
+        }
+        if ($own) { $forwarded = @('--no-daemon') + $forwarded }
+        # a function's pipeline input does not reach a program on its own
+        if ($MyInvocation.ExpectingInput) { $input | & $codex @forwarded } else { & $codex @forwarded }
+        $global:__NgtermIntegration.CodexFailed = $LASTEXITCODE -ne 0
     }
 }

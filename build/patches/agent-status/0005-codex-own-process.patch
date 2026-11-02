@@ -1,0 +1,97 @@
+The shell integration wraps `codex` so that each TUI runs with `--no-daemon`, an ngterm extension: Codex's shared daemon
+starts hooks with the environment of the pane that started it, so every pane's status lands on that one, which upstream
+documents as a limitation (umputun/agterm#711). Applied after 0004-windows-forms.patch.
+
+diff --git a/shell/integration.fish b/shell/integration.fish
+index 41e2cf61..b062e1a6 100644
+--- a/shell/integration.fish
++++ b/shell/integration.fish
+@@ -34,6 +34,43 @@ else
+     set -gx NGTERM_AGENT_RE '^(gemini|cursor-agent|aider|crush|goose)([[:space:]]|$)'
+ end
+ 
++# Codex's TUI normally attaches to one background daemon shared by every pane, and the daemon starts hooks with the
++# environment of the pane that started it, so every Codex's status lands on that pane. Run each TUI in its own process
++# instead, which costs control of that session from the Codex apps. `command codex` or a non-empty
++# NGTERM_CODEX_KEEP_DAEMON keeps the daemon, and a codex function of the user's is left alone.
++#
++# Whether this codex line opens a TUI: no subcommand, or `resume` or `fork`. A single lowercase word is taken for a
++# subcommand, so a one-word prompt stays on the daemon. The daemon's own subcommands keep it wherever they sit, as a
++# global option can come first and Codex refuses the flag on them. An older Codex lacks the flag, hence the --help check.
++function _ags_codex_own_process
++    test -z "$NGTERM_CODEX_KEEP_DAEMON"; or return 1
++    for arg in $argv
++        switch $arg
++            case --
++                break
++            case --no-daemon --remote '--remote=*' agents queue remote-control app-server
++                return 1
++        end
++    end
++    if test (count $argv) -gt 0
++        and not contains -- $argv[1] resume fork
++        and string match -rq '^[a-z-]+$' -- $argv[1]
++        and not string match -q -- '-*' $argv[1]
++        return 1
++    end
++    command codex --help 2>/dev/null | string match -q -- '*--no-daemon*'
++end
++
++if not functions -q codex
++    function codex --wraps=codex
++        if _ags_codex_own_process $argv
++            command codex --no-daemon $argv
++        else
++            command codex $argv
++        end
++    end
++end
++
+ function _ags_preexec --on-event fish_preexec
+     if string match -r -q $NGTERM_AGENT_RE $argv[1]
+         $NGTERM_AGENT_BIN active --blink
+diff --git a/shell/integration.sh b/shell/integration.sh
+index a977435d..f5876daf 100755
+--- a/shell/integration.sh
++++ b/shell/integration.sh
+@@ -28,6 +28,40 @@ fi
+ : "${NGTERM_AGENT_BIN:=$_ags_dir/ngterm-agent-status.sh}"
+ : "${NGTERM_AGENT_RE:=^(gemini|cursor-agent|aider|crush|goose)([[:space:]]|$)}"
+ 
++# Codex's TUI normally attaches to one background daemon shared by every pane, and the daemon starts hooks with the
++# environment of the pane that started it, so every Codex's status lands on that pane. Run each TUI in its own process
++# instead, which costs control of that session from the Codex apps. `command codex` or a non-empty
++# NGTERM_CODEX_KEEP_DAEMON keeps the daemon, and a codex function of the user's is left alone.
++#
++# Whether this codex line opens a TUI: no subcommand, or `resume` or `fork`. A single lowercase word is taken for a
++# subcommand, so a one-word prompt stays on the daemon. The daemon's own subcommands keep it wherever they sit, as a
++# global option can come first and Codex refuses the flag on them. An older Codex lacks the flag, hence the --help check.
++_ags_codex_own_process() {
++  local arg
++  [ -z "${NGTERM_CODEX_KEEP_DAEMON:-}" ] || return 1
++  for arg in "$@"; do
++    case "$arg" in
++      --) break ;;
++      --no-daemon|--remote|--remote=*|agents|queue|remote-control|app-server) return 1 ;;
++    esac
++  done
++  case "${1:-}" in
++    resume|fork|''|-*|*[!a-z-]*) ;;
++    *) return 1 ;;
++  esac
++  command codex --help 2>/dev/null | command grep -q -e --no-daemon
++}
++
++if ! typeset -f codex >/dev/null 2>&1; then
++  function codex {
++    if _ags_codex_own_process "$@"; then
++      command codex --no-daemon "$@"
++    else
++      command codex "$@"
++    fi
++  }
++fi
++
+ if [ -n "${ZSH_VERSION:-}" ]; then
+   autoload -Uz add-zsh-hook
+   # the redirect stays on the match, not the whole hook: an override valid as the PCRE fish and

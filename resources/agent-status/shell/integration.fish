@@ -34,6 +34,43 @@ else
     set -gx NGTERM_AGENT_RE '^(gemini|cursor-agent|aider|crush|goose)([[:space:]]|$)'
 end
 
+# Codex's TUI normally attaches to one background daemon shared by every pane, and the daemon starts hooks with the
+# environment of the pane that started it, so every Codex's status lands on that pane. Run each TUI in its own process
+# instead, which costs control of that session from the Codex apps. `command codex` or a non-empty
+# NGTERM_CODEX_KEEP_DAEMON keeps the daemon, and a codex function of the user's is left alone.
+#
+# Whether this codex line opens a TUI: no subcommand, or `resume` or `fork`. A single lowercase word is taken for a
+# subcommand, so a one-word prompt stays on the daemon. The daemon's own subcommands keep it wherever they sit, as a
+# global option can come first and Codex refuses the flag on them. An older Codex lacks the flag, hence the --help check.
+function _ags_codex_own_process
+    test -z "$NGTERM_CODEX_KEEP_DAEMON"; or return 1
+    for arg in $argv
+        switch $arg
+            case --
+                break
+            case --no-daemon --remote '--remote=*' agents queue remote-control app-server
+                return 1
+        end
+    end
+    if test (count $argv) -gt 0
+        and not contains -- $argv[1] resume fork
+        and string match -rq '^[a-z-]+$' -- $argv[1]
+        and not string match -q -- '-*' $argv[1]
+        return 1
+    end
+    command codex --help 2>/dev/null | string match -q -- '*--no-daemon*'
+end
+
+if not functions -q codex
+    function codex --wraps=codex
+        if _ags_codex_own_process $argv
+            command codex --no-daemon $argv
+        else
+            command codex $argv
+        end
+    end
+end
+
 function _ags_preexec --on-event fish_preexec
     if string match -r -q $NGTERM_AGENT_RE $argv[1]
         $NGTERM_AGENT_BIN active --blink

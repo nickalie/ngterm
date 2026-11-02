@@ -298,6 +298,13 @@ when the server started outside ngterm or that session has closed. Diagnose: run
 ngterm has no automatic mapping from the hook payload's Codex session id to the pane displaying it.
 Fix: run `codex --no-daemon`, which keeps the session and its hooks in its own process; that running
 session is unavailable for control through the shared server from the Codex desktop or mobile app.
+The shell integration does this for you: in a pane whose shell loads it, `codex`, `codex resume` and
+`codex fork` run with `--no-daemon`, while other subcommands, `--remote` and a single-word prompt (taken
+for a subcommand) stay as typed. A `codex` started any other way, `session new --command codex` included,
+stays on the daemon. To keep the daemon, set a non-empty `NGTERM_CODEX_KEEP_DAEMON` or run `command codex`
+(in PowerShell, the program by its path). A daemon already running keeps serving the Codex sessions
+attached to it until they exit. In PowerShell the wrapper is a function, so quote a separator as `'--'`, and
+read a failure from `$LASTEXITCODE`: `$?` and `&&` after `codex` do not see it.
 To make that the default for plain `codex`, run `codex features disable daemon_auto_start` once, then
 `codex app-server daemon stop`; later plain launches start no shared daemon and report to their own
 session. Disabling auto-start alone still joins a daemon that is already running, and stopping it

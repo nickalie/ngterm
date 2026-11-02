@@ -46,6 +46,10 @@
 //!   POSIX one runs `ps`; the restore pin is `claude --resume <id>; if (-not $?) { claude }`, as 5.1 has no `||`), and
 //!   on Windows the Pi extension and both `OpenCode` plugins start the PowerShell wrapper through `powershell.exe`
 //!   instead of spawning the POSIX one (`build/patches/agent-status/0004-windows-forms.patch`);
+//! - the shell integration wraps `codex` so that each TUI runs with `--no-daemon`, its hooks then getting their own
+//!   pane's `NGTERM_*` rather than those of the pane that started Codex's shared daemon, which upstream documents as a
+//!   limitation (umputun/agterm#711): `build/patches/agent-status/0005-codex-own-process.patch`, with the PowerShell
+//!   form in this build's own `resources/shell-integration/pwsh/ngterm.ps1`;
 //! - the skill speaks of the `live` group and the attach contract's `NGTERM_LIVE_*` variables where upstream's names
 //!   `zmx`, and it is named `ngterm` (frontmatter `name`, a description that also triggers on ngterm and `ngtermctl`),
 //!   its text, examples and `show-image.sh` running `ngtermctl` wherever upstream runs `agtermctl`, the far side of a

@@ -28,6 +28,40 @@ fi
 : "${NGTERM_AGENT_BIN:=$_ags_dir/ngterm-agent-status.sh}"
 : "${NGTERM_AGENT_RE:=^(gemini|cursor-agent|aider|crush|goose)([[:space:]]|$)}"
 
+# Codex's TUI normally attaches to one background daemon shared by every pane, and the daemon starts hooks with the
+# environment of the pane that started it, so every Codex's status lands on that pane. Run each TUI in its own process
+# instead, which costs control of that session from the Codex apps. `command codex` or a non-empty
+# NGTERM_CODEX_KEEP_DAEMON keeps the daemon, and a codex function of the user's is left alone.
+#
+# Whether this codex line opens a TUI: no subcommand, or `resume` or `fork`. A single lowercase word is taken for a
+# subcommand, so a one-word prompt stays on the daemon. The daemon's own subcommands keep it wherever they sit, as a
+# global option can come first and Codex refuses the flag on them. An older Codex lacks the flag, hence the --help check.
+_ags_codex_own_process() {
+  local arg
+  [ -z "${NGTERM_CODEX_KEEP_DAEMON:-}" ] || return 1
+  for arg in "$@"; do
+    case "$arg" in
+      --) break ;;
+      --no-daemon|--remote|--remote=*|agents|queue|remote-control|app-server) return 1 ;;
+    esac
+  done
+  case "${1:-}" in
+    resume|fork|''|-*|*[!a-z-]*) ;;
+    *) return 1 ;;
+  esac
+  command codex --help 2>/dev/null | command grep -q -e --no-daemon
+}
+
+if ! typeset -f codex >/dev/null 2>&1; then
+  function codex {
+    if _ags_codex_own_process "$@"; then
+      command codex --no-daemon "$@"
+    else
+      command codex "$@"
+    fi
+  }
+fi
+
 if [ -n "${ZSH_VERSION:-}" ]; then
   autoload -Uz add-zsh-hook
   # the redirect stays on the match, not the whole hook: an override valid as the PCRE fish and
