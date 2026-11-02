@@ -37,6 +37,9 @@ Linux build unless it names another OS.
   was in last, through /clear, /resume and forks; a deliberate exit clears the pin, an ngterm quit keeps it. It skips
   `claude -p`, SDK runs and subagents. Upstream ships the idea only as its `claude-session-resume` cookbook recipe;
   the script's header holds the details.
+- Another extension beyond upstream: a viewer makes and ends another machine's sessions, where upstream's only attaches
+  and detaches. Attach Remote's picker ends with New Session, also offered when the machine has nothing to attach, and
+  an attached row's menu has New Session on HOST and End Session on HOST… (`crates/ngterm-core/src/remote/origin_sessions.rs`).
 - No bundled theme of its own: upstream ships its `agterm` theme and starts a fresh install on it; this build ships
   Ghostty's theme catalog only, so a fresh install starts on Ghostty's built-in colors (the "default ghostty" row),
   and a settings file that still names `agterm` (a build from before the rename seeded it) loads on them too.
@@ -466,7 +469,7 @@ nohup ngterm-headless [--grid 120x40] </dev/null >/dev/null 2>&1 &   # one per s
 # ignored at its start stays ignored, so under nohup it outlives the ssh session that started it
 ngtermctl session new --name build      # sessions to attach; they outlive ngterm-headless, the next start re-attaches
 # on the desktop: the server in remotes.conf (one `destination [label]` per line), key-based ssh to it, then
-# File ▸ Attach Remote (its last row, Attach All, takes every session not attached here yet), or
+# File ▸ Attach Remote (Attach All takes every session not attached here yet, New Session creates one there), or
 ngtermctl live tree SERVER && ngtermctl live attach SERVER SESSION-ID
 ```
 

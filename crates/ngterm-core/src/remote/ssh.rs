@@ -212,7 +212,7 @@ pub fn probe_command(host: &str) -> Result<Vec<String>, InvocationError> {
 
 /// One ssh invocation running the far side's `ngtermctl` with `arguments` plus `--json`, so the reply is the server's
 /// own response line (upstream's `RemoteSession.controlCommand`). The arguments carry user text, so the outer layer is
-/// quoted for any login shell ([`account_shell_quoted`]); only the companion control lines use it. A Windows origin
+/// quoted for any login shell ([`account_shell_quoted`]); only the origin control lines use it. A Windows origin
 /// needs its own remote form, as the other remote lines do.
 ///
 /// # Errors

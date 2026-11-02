@@ -544,6 +544,8 @@ impl Sidebar {
             MenuAction::Duplicate(id) => self.act(SidebarAction::Duplicate(id)),
             MenuAction::NewCompanion(id) => self.act(SidebarAction::NewCompanion(id)),
             MenuAction::DuplicateAsCompanion(id) => self.act(SidebarAction::DuplicateAsCompanion(id)),
+            MenuAction::NewRemoteSession(id) => self.act(SidebarAction::NewRemoteSession(id)),
+            MenuAction::EndRemoteSession(id) => self.end_remote_session(id, window, cx),
             MenuAction::MoveTo { sessions, workspace } => self.act(SidebarAction::MoveSessions { sessions, workspace }),
             MenuAction::ToggleFlags(ids) => self.act(SidebarAction::ToggleFlags(ids)),
             MenuAction::Reveal(cwd) => cx.reveal_path(Path::new(&cwd)),
@@ -609,6 +611,19 @@ impl Sidebar {
         self.confirm(
             (&heading, &body, "Delete"),
             SidebarAction::DeleteWorkspace(id),
+            window,
+            cx,
+        );
+    }
+
+    /// End Session on remote row `id`, always confirmed: nothing brings the programs it ends back.
+    fn end_remote_session(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((heading, body)) = end_confirmation(&self.context, id) else {
+            return;
+        };
+        self.confirm(
+            (&heading, &body, "End Session"),
+            SidebarAction::EndRemoteSession(id),
             window,
             cx,
         );
@@ -915,6 +930,26 @@ fn close_confirmation(context: &SidebarContext, ids: &[Uuid]) -> (String, String
         return (format!("Close “{name}”?"), body);
     }
     (format!("Close {} Sessions?", ids.len()), body)
+}
+
+/// End Session's heading and body: what ends on the row's machine. Its companions there end too, whether or not they
+/// are rows here, so the ones known here are named and the warning stands without them.
+fn end_confirmation(context: &SidebarContext, id: Uuid) -> Option<(String, String)> {
+    let facts = context.menu.sessions.get(&id)?;
+    let host = facts.remote_host.as_deref()?;
+    let names: Vec<&str> = facts
+        .companions
+        .iter()
+        .filter_map(|companion| context.menu.sessions.get(companion))
+        .map(|companion| companion.name.as_str())
+        .collect();
+    let known = if names.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", names.join(", "))
+    };
+    let body = format!("Every program running in it stops on {host}, and so do any companions it has there{known}.");
+    Some((format!("End “{}” on {host}?", facts.name), body))
 }
 
 /// The delete confirmation's body (upstream's `confirmDelete`).

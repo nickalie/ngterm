@@ -38,13 +38,15 @@ pub const COMPANION_DEADLINE: Duration = Duration::from_secs(30);
 /// `remoteCompanionReadyBudget`).
 pub const READY_BUDGET: Duration = Duration::from_secs(20);
 /// The pause between two listings while waiting for it (upstream's `remoteCompanionPause`).
-const PAUSE: Duration = Duration::from_secs(1);
+pub(super) const PAUSE: Duration = Duration::from_secs(1);
+/// What a created companion is called in the messages about it.
+const COMPANION_NOUN: &str = "companion";
 /// How often a running ssh call is checked for its answer.
 const POLL: Duration = Duration::from_millis(50);
 const NOT_ATTACHED: &str = "the remote session is not attached";
 const INVALID_HOST: &str = "invalid host";
 const PARENT_CLOSED: &str = "its parent row here was closed";
-const NOT_ATTACHABLE: &str = "it did not become attachable";
+pub(super) const NOT_ATTACHABLE: &str = "it did not become attachable";
 
 /// A page companion the origin is asked to open: the page `session.companion.page` validated.
 #[derive(Debug, Clone)]
@@ -261,7 +263,7 @@ pub(crate) fn begin_page_row_attach(
 }
 
 /// The receipt the origin's `ngtermctl --json` printed.
-fn reply_of(result: &RemoteCommandResult) -> Option<Response<ControlResult>> {
+pub(super) fn reply_of(result: &RemoteCommandResult) -> Option<Response<ControlResult>> {
     serde_json::from_str(result.stdout.trim()).ok()
 }
 
@@ -276,10 +278,15 @@ fn created_id(reply: &Response<ControlResult>) -> Option<String> {
 
 /// What the origin's create said: the created session's id, or why there is none.
 fn created(result: &RemoteCommandResult, host: &str, command: Command) -> Result<String, String> {
-    let too_old = || format!("the ngterm on {host} is too old for companions");
-    if result.refused_arguments() {
-        return Err(too_old());
+    let refused = reply_of(result).is_some_and(|reply| reply.refuses_unknown(command));
+    if result.refused_arguments() || refused {
+        return Err(format!("the ngterm on {host} is too old for companions"));
     }
+    origin_created(result, host, COMPANION_NOUN)
+}
+
+/// What an origin's create of a `noun` said: the created session's id, or why there is none.
+pub(super) fn origin_created(result: &RemoteCommandResult, host: &str, noun: &str) -> Result<String, String> {
     let Some(reply) = reply_of(result) else {
         let stderr = result.stderr.trim();
         let detail = if stderr.is_empty() {
@@ -288,7 +295,7 @@ fn created(result: &RemoteCommandResult, host: &str, command: Command) -> Result
             format!(" ({stderr})")
         };
         return Err(format!(
-            "{host} gave no answer{detail}; whether the companion was created there is unknown"
+            "{host} gave no answer{detail}; whether the {noun} was created there is unknown"
         ));
     };
     // a full receipt with a failed transport still names work the origin did, so it is reported, never redone
@@ -297,25 +304,22 @@ fn created(result: &RemoteCommandResult, host: &str, command: Command) -> Result
         && let Some(id) = created_id(&reply)
     {
         return Err(format!(
-            "created companion {id} on {host} but the connection failed before attaching it; `ngtermctl live attach \
+            "created {noun} {id} on {host} but the connection failed before attaching it; `ngtermctl live attach \
              {host} {id}` attaches it"
         ));
     }
     if result.status != 0 || !reply.ok {
-        if reply.refuses_unknown(command) {
-            return Err(too_old());
-        }
         return Err(reply
             .error
             .unwrap_or_else(|| format!("the remote command failed on {host}")));
     }
-    created_id(&reply).ok_or_else(|| format!("{host} created a companion but did not name it"))
+    created_id(&reply).ok_or_else(|| format!("{host} created a {noun} but did not name it"))
 }
 
-/// The failure of a companion created on `host` but not attached here.
-fn unattached(created: &str, host: &str, reason: &str) -> String {
+/// The failure of a `noun` created on `host` but not attached here.
+pub(super) fn unattached(noun: &str, created: &str, host: &str, reason: &str) -> String {
     format!(
-        "created companion {created} on {host} but could not attach it: {reason}; `ngtermctl live attach {host} \
+        "created {noun} {created} on {host} but could not attach it: {reason}; `ngtermctl live attach {host} \
          {created}` attaches it"
     )
 }
@@ -354,7 +358,7 @@ fn handed_page(result: &RemoteCommandResult, host: &str) -> Result<PresentationP
 
 impl Core {
     /// The clock the remote companion waits are timed by (tests advance it).
-    fn remote_now(&self) -> Instant {
+    pub(super) fn remote_now(&self) -> Instant {
         (self.remote.clock)()
     }
 
@@ -424,7 +428,9 @@ impl Core {
                     flow.stage = Stage::Page { created, attach };
                     Step::Pending(flow, after)
                 }
-                Step::Done(done) => Step::done((*done).map_err(|reason| unattached(&created, &flow.host, &reason))),
+                Step::Done(done) => {
+                    Step::done((*done).map_err(|reason| unattached(COMPANION_NOUN, &created, &flow.host, &reason)))
+                }
             },
         }
     }
@@ -469,7 +475,7 @@ impl Core {
                     flow.stage = Stage::Page { created, attach };
                     Step::Pending(flow, POLL)
                 }
-                Err(reason) => Step::done(Err(unattached(&created, &host, &reason))),
+                Err(reason) => Step::done(Err(unattached(COMPANION_NOUN, &created, &host, &reason))),
             };
         }
         flow.stage = Stage::Waiting {
@@ -493,7 +499,7 @@ impl Core {
         read: Option<Answer>,
     ) -> Step<CompanionFlow> {
         let host = flow.host.clone();
-        let fail = |reason: &str| Step::done(Err(unattached(&created, &host, reason)));
+        let fail = |reason: &str| Step::done(Err(unattached(COMPANION_NOUN, &created, &host, reason)));
         let Some(answer) = read else {
             let remaining = deadline.saturating_duration_since(self.remote_now());
             if remaining.is_zero() {
@@ -539,7 +545,7 @@ impl Core {
         };
         Step::done(
             self.attach_created(&flow, remote, tree)
-                .map_err(|reason| unattached(&created, &host, &reason)),
+                .map_err(|reason| unattached(COMPANION_NOUN, &created, &host, &reason)),
         )
     }
 

@@ -113,6 +113,7 @@ fn menu_context(store: &AppStore) -> MenuContext {
                     companions: store.companions(session.id()).into_iter().map(Session::id).collect(),
                     tint: session.tint,
                     content: session.content(),
+                    remote_host: session.remote_host().map(str::to_owned),
                 },
             );
         }

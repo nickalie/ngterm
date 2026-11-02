@@ -278,6 +278,7 @@ fn confirmations_use_upstreams_words() {
             companions: Vec::new(),
             tint: None,
             content: ngterm_core::model::SessionContent::Terminal,
+            remote_host: None,
         },
     );
     assert_eq!(
@@ -334,6 +335,7 @@ fn a_parents_close_confirmation_names_the_companions_not_chosen_with_it() {
         companions,
         tint: None,
         content: ngterm_core::model::SessionContent::Terminal,
+        remote_host: None,
     };
     context.menu.sessions.insert(parent, facts("api", vec![logs, tests]));
     context.menu.sessions.insert(logs, facts("logs", Vec::new()));
@@ -1108,6 +1110,45 @@ fn a_parents_disclosure_folds_its_companions_and_its_marker_names_the_ones_needi
     assert_eq!(h.names(cx).len(), 6);
     assert!(h.store().session(srv).unwrap().companion.expanded);
     assert!(cx.debug_bounds(marker).is_none());
+}
+
+#[test]
+fn ending_a_remote_session_says_what_stops_where() {
+    let mut context = SidebarContext::default();
+    let [parent, logs, local] = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+    let facts = |name: &str, host: Option<&str>, companions: Vec<Uuid>| menu::SessionFacts {
+        name: name.into(),
+        workspace: Uuid::nil(),
+        flagged: false,
+        has_status: false,
+        cwd: "/".into(),
+        hidden_overlays: false,
+        companions,
+        tint: None,
+        content: ngterm_core::model::SessionContent::Terminal,
+        remote_host: host.map(str::to_owned),
+    };
+    context
+        .menu
+        .sessions
+        .insert(parent, facts("api", Some("studio"), vec![logs]));
+    context
+        .menu
+        .sessions
+        .insert(logs, facts("logs", Some("studio"), Vec::new()));
+    context.menu.sessions.insert(local, facts("here", None, Vec::new()));
+    assert_eq!(
+        end_confirmation(&context, parent).unwrap(),
+        (
+            "End “api” on studio?".to_owned(),
+            "Every program running in it stops on studio, and so do any companions it has there (logs).".to_owned()
+        )
+    );
+    assert_eq!(
+        end_confirmation(&context, logs).unwrap().1,
+        "Every program running in it stops on studio, and so do any companions it has there."
+    );
+    assert_eq!(end_confirmation(&context, local), None);
 }
 
 /// Upstream's `testRowMenuNewCompanionAddsASiblingUnderTheParent`.

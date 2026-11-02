@@ -15,8 +15,9 @@
 //!   presenter's helper claims ([`page_serve`]);
 //! - on the presenter, the pages an origin handed over ([`replica_page`]) and their end of that channel
 //!   ([`page_channel`]);
-//! - a remote row's companions, which its origin creates and this machine attaches under the row ([`companions`]), and
-//!   a parent's respawn on the origin carried to its viewers' held panes ([`respawn`]).
+//! - a remote row's companions, which its origin creates and this machine attaches under the row ([`companions`]), a
+//!   parent's respawn on the origin carried to its viewers' held panes ([`respawn`]), and the sessions this machine asks
+//!   an origin to create or end ([`origin_sessions`]).
 //!
 //! The streams are the frontend's: it hands the core each adopted connection as a [`LineChannel`] and reports
 //! the lines read from it and its close, arms the hello deadline and the heartbeat, and the core does the rest (upstream's
@@ -31,6 +32,7 @@ pub mod frames;
 mod handoff;
 pub mod hub;
 mod layout;
+pub(crate) mod origin_sessions;
 mod page;
 pub mod page_channel;
 pub mod page_serve;

@@ -51,6 +51,10 @@ pub enum SidebarAction {
     /// Row menu and Duplicate as Companion: a companion copying the row's session, each pane's program started
     /// again (upstream's `duplicateAsCompanion`).
     DuplicateAsCompanion(Uuid),
+    /// A remote row's menu: a new session on the machine the row came from, attached here in the row's workspace.
+    NewRemoteSession(Uuid),
+    /// A remote row's menu, confirmed by the frontend: its session ended on the machine it came from.
+    EndRemoteSession(Uuid),
     /// A user open or fold of a parent row's companions, persisted (the outline's expand and collapse callbacks on
     /// a session row).
     SetSessionExpanded {
@@ -174,6 +178,8 @@ impl Core {
             }
             SidebarAction::NewCompanion(session) => self.new_companion(window, session),
             SidebarAction::DuplicateAsCompanion(session) => self.duplicate_as_companion(window, session),
+            SidebarAction::NewRemoteSession(session) => self.begin_new_remote_session(window, session),
+            SidebarAction::EndRemoteSession(session) => self.begin_end_remote_session(window, session),
             other => {
                 let grace = self.settings().close_grace_undo_enabled.unwrap_or(true);
                 self.library_mut()
@@ -356,6 +362,8 @@ fn store_action(store: &mut AppStore, action: SidebarAction, grace: bool) -> boo
         | SidebarAction::Duplicate(_)
         | SidebarAction::NewCompanion(_)
         | SidebarAction::DuplicateAsCompanion(_)
+        | SidebarAction::NewRemoteSession(_)
+        | SidebarAction::EndRemoteSession(_)
         | SidebarAction::FocusActiveTerminal => return false,
     }
     true

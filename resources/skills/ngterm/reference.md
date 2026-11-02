@@ -2170,10 +2170,19 @@ pane's ssh joins an existing `ControlMaster` connection, that master's settings 
 File ▸ Attach Remote… is the same flow in the GUI and has no command of its own: it offers the machines in
 `<config dir>/remotes.conf` (one `destination [label]` per line, `#` comments), asks which in the picker
 when there are several, then lists that machine's sessions and attaches the picked one. With two or more
-sessions not attached here yet, an Attach All row ends the list: it lists the machine again and attaches
+sessions not attached here yet, an Attach All row follows them: it lists the machine again and attaches
 each of those, companions under their parents' rows and the rest in the current workspace, skipping page
-companions. It is the `attach_remote` keymap action, on Cmd-Shift-R unless `keymap.conf` maps another chord. A script composes
-`live tree`, `pick` and `live attach` instead.
+companions. A New Session row ends the list, and is its only row when the machine has nothing to attach: that machine
+creates a session (its own selection stays put), and once it is attachable it attaches here, selected. The machine must
+be running in `live` mode; otherwise New Session says so and creates nothing. It is the
+`attach_remote` keymap action, on Cmd-Shift-R unless `keymap.conf` maps another chord. A script composes
+`live tree`, `pick` and `live attach` instead, and `ssh HOST ngtermctl session new` for a new one.
+
+An attached row's context menu also offers New Session on HOST, which does the same into that row's workspace, and End
+Session on HOST…, for one row at a time: after a confirmation that machine closes the session with no undo window, its
+running programs and every companion it has there with it, attached here or not, then the row closes here. A failure
+shows in a timed HUD over the row, and each is asked of the machine once, never retried. A script runs
+`ssh HOST ngtermctl session close --target ID`.
 
 A program in an attached session runs on the origin and talks to the origin's ngterm, so what it asks
 ngterm to draw would show there only. Every attach therefore also opens a presentation stream, and this
@@ -2249,8 +2258,8 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
 bridges it to stdio as newline-delimited JSON. ngterm runs it over ssh on the origin; it is not meant to
 be typed.
 
-Closing a remote session here ends only this side's connection: the far-side processes keep running and
-nothing ngterm does from this end can kill them. It is never written to disk, so it does not come back
+Closing a remote session here ends only this side's connection: the far-side processes keep running, and only End
+Session on HOST… in the row's menu ends them from this end. It is never written to disk, so it does not come back
 after a relaunch whatever the restore mode is.
 
 The pane reports the far side's working directory, and the local launches that would inherit it pick

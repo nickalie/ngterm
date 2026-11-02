@@ -17,6 +17,7 @@ use ngterm_proto::{
 use uuid::Uuid;
 
 use super::frames;
+use super::origin_sessions::{CreateRun, NEW_SESSION, NEW_SESSION_ID};
 use super::remotes::{RemoteEntry, diagnostics_banner_body};
 use super::ssh::{PaneLabel, attach_pane_command};
 use super::tree::{self, RemoteCommandResult};
@@ -39,6 +40,8 @@ pub(super) const ERROR_SECONDS: f64 = 5.0;
 pub(super) const PROGRESS_SECONDS: f64 = 30.0;
 /// The id of the session picker's Attach All row, which a far session's upper-case UUID never equals.
 const ATTACH_ALL_ID: &str = "attach-all";
+/// What the panels of an attach are headed by.
+const ATTACH_REMOTE: &str = "Attach Remote";
 
 /// What a finished remote read says: the far side's own refusal from stdout first, since its ngtermctl prints it there
 /// and exits nonzero; ssh's failures reach stderr. An ok-looking payload from a nonzero process is never accepted
@@ -321,7 +324,7 @@ fn install_panes(
 
 /// Where one Attach Remote is.
 #[derive(Debug)]
-enum Step {
+pub(super) enum Step {
     /// The window's picker asks which configured machine to attach from.
     ChoosingHost { pick: String },
     /// The machine's sessions are being listed.
@@ -332,6 +335,8 @@ enum Step {
     Attaching { request: AttachRequest, answer: Answer },
     /// The machine is being listed again for Attach All, so what attaches is what it offers now.
     AttachingAll { host: String, answer: Answer },
+    /// The machine creates a session, which attaches here once it is attachable ([`super::origin_sessions`]).
+    CreatingSession(CreateRun),
 }
 
 /// Where an action's HUD goes: over `session` in `window`, its message headed by `action`.
@@ -341,15 +346,32 @@ pub(super) struct ActionPanel<'a> {
     pub(super) session: Uuid,
 }
 
-/// One File ▸ Attach Remote in progress (upstream's `attachRemote` task with its `RemoteAttachHud`).
+/// One File ▸ Attach Remote (upstream's `attachRemote` task with its `RemoteAttachHud`) or a remote row's New Session in
+/// progress.
 #[derive(Debug)]
 pub(crate) struct AttachFlow {
-    window: Uuid,
-    /// The session the progress and error panels go over, the window's selection when the flow started.
+    pub(super) window: Uuid,
+    /// What its panels are headed by.
+    pub(super) action: &'static str,
+    /// The session the progress and error panels go over: the window's selection when File ▸ Attach Remote started, the
+    /// clicked row for a row's New Session.
     hud_session: Option<Uuid>,
     /// The slot generation of the panel this flow opened; one another caller posted meanwhile is not its to close.
     owned_hud: Option<u64>,
-    step: Step,
+    pub(super) step: Step,
+}
+
+impl AttachFlow {
+    /// A flow in `window` with its panels over `hud_session`, its first step yet to be set.
+    pub(super) fn new(window: Uuid, hud_session: Option<Uuid>) -> Self {
+        Self {
+            window,
+            action: ATTACH_REMOTE,
+            hud_session,
+            owned_hud: None,
+            step: Step::ChoosingHost { pick: String::new() },
+        }
+    }
 }
 
 /// What an Attach All did: the rows it made, and why the others were not made.
@@ -478,12 +500,9 @@ impl Core {
         let Some(pick) = self.open_internal_pick(window, items, "Attach from which Mac?") else {
             return;
         };
-        self.remote.viewer.attach_flows.push(AttachFlow {
-            window,
-            hud_session,
-            owned_hud: None,
-            step: Step::ChoosingHost { pick },
-        });
+        let mut flow = AttachFlow::new(window, hud_session);
+        flow.step = Step::ChoosingHost { pick };
+        self.remote.viewer.attach_flows.push(flow);
     }
 
     fn open_internal_pick(&mut self, window: Uuid, items: Vec<PickItem>, prompt: &str) -> Option<String> {
@@ -502,12 +521,7 @@ impl Core {
     }
 
     fn begin_listing(&mut self, window: Uuid, hud_session: Option<Uuid>, host: String) {
-        let mut flow = AttachFlow {
-            window,
-            hud_session,
-            owned_hud: None,
-            step: Step::ChoosingHost { pick: String::new() },
-        };
+        let mut flow = AttachFlow::new(window, hud_session);
         self.attach_progress(&mut flow, &format!("listing sessions on {host}…"));
         match start_tree_read(self, &host) {
             Ok(answer) => {
@@ -555,6 +569,7 @@ impl Core {
                     Some(flow)
                 }
                 Picked::Chosen(session, _) if session == ATTACH_ALL_ID => self.start_attach_all(flow, host),
+                Picked::Chosen(session, _) if session == NEW_SESSION_ID => self.start_origin_session(flow, host, None),
                 Picked::Chosen(session, label) => self.start_attach(flow, host, session, &label),
                 Picked::Ended => None,
             },
@@ -577,6 +592,7 @@ impl Core {
                 self.finish_attach_all(&mut flow, &host, &result);
                 None
             }
+            Step::CreatingSession(run) => self.advance_origin_session(flow, run),
         }
     }
 
@@ -597,13 +613,8 @@ impl Core {
                 return None;
             }
         };
-        if sessions.is_empty() || sessions.len() > MAX_PICK_ITEMS {
-            let reason = if sessions.is_empty() {
-                format!("nothing to attach on {host}")
-            } else {
-                format!("{host} offers too many sessions")
-            };
-            self.attach_failed(&mut flow, &reason);
+        if sessions.len() > MAX_PICK_ITEMS {
+            self.attach_failed(&mut flow, &format!("{host} offers too many sessions"));
             return None;
         }
         self.attach_close_hud(&mut flow);
@@ -620,8 +631,9 @@ impl Core {
         Some(flow)
     }
 
-    /// The session picker's rows: each listed session, then an Attach All row when it would attach more than one. Last,
-    /// as the picker's selection goes to the first row on opening and on every filter edit, and Enter takes it.
+    /// The session picker's rows: each listed session, then an Attach All row when it would attach more than one and a
+    /// New Session row while the picker has room. Last, as the picker's selection goes to the first row on opening and on
+    /// every filter edit, and Enter takes it; with nothing to attach, New Session is the only row.
     fn session_items(
         &self,
         sessions: &[ControlRemoteSession],
@@ -634,11 +646,19 @@ impl Core {
             .filter(|session| !rows.contains_key(&session.id))
             .count();
         let mut items: Vec<PickItem> = sessions.iter().map(pick_item).collect();
-        if missing > 1 && sessions.len() < MAX_PICK_ITEMS {
+        if missing > 1 && items.len() < MAX_PICK_ITEMS {
             items.push(PickItem {
                 id: ATTACH_ALL_ID.to_owned(),
                 label: "Attach All".to_owned(),
                 subtitle: Some(format!("{missing} sessions not attached here")),
+                ..PickItem::default()
+            });
+        }
+        if items.len() < MAX_PICK_ITEMS {
+            items.push(PickItem {
+                id: NEW_SESSION_ID.to_owned(),
+                label: NEW_SESSION.to_owned(),
+                subtitle: Some(format!("create a session on {host} and attach it")),
                 ..PickItem::default()
             });
         }
@@ -707,7 +727,7 @@ impl Core {
             .library()
             .store(flow.window)
             .and_then(AppStore::selected_session_id);
-        self.action_failed("Attach Remote", flow.window, selected, &text);
+        self.action_failed(flow.action, flow.window, selected, &text);
     }
 
     /// Attaches every session `tree` offers that no row here shows: each companion under its parent's row wherever
@@ -738,7 +758,7 @@ impl Core {
     }
 
     /// A row of its own in `window`'s current workspace; `None` once the window has none.
-    fn workspace_placement(&self, window: Uuid, select: bool) -> Option<Placement> {
+    pub(super) fn workspace_placement(&self, window: Uuid, select: bool) -> Option<Placement> {
         let workspace = self.library().store(window)?.current_workspace_id()?;
         Some(Placement {
             window,
@@ -798,7 +818,7 @@ impl Core {
             return false;
         };
         let panel = ActionPanel {
-            action: "Attach Remote",
+            action: flow.action,
             window: flow.window,
             session,
         };
@@ -857,12 +877,12 @@ impl Core {
         }
     }
 
-    fn attach_progress(&mut self, flow: &mut AttachFlow, text: &str) {
+    pub(super) fn attach_progress(&mut self, flow: &mut AttachFlow, text: &str) {
         self.attach_open_hud(flow, text, PROGRESS_SECONDS, true);
     }
 
     /// Closes the panel this flow opened, never one another caller posted meanwhile.
-    fn attach_close_hud(&mut self, flow: &mut AttachFlow) {
+    pub(super) fn attach_close_hud(&mut self, flow: &mut AttachFlow) {
         if let (Some(session), Some(owned)) = (flow.hud_session, flow.owned_hud.take()) {
             self.close_owned_hud(session, owned);
         }
@@ -884,13 +904,13 @@ impl Core {
     }
 
     /// The attach failed: an error panel over its session, else a banner (upstream's `RemoteAttachHud.fail`).
-    fn attach_failed(&mut self, flow: &mut AttachFlow, text: &str) {
+    pub(super) fn attach_failed(&mut self, flow: &mut AttachFlow, text: &str) {
         tracing::info!(reason = text, "attach remote failed");
         if self.attach_open_hud(flow, text, ERROR_SECONDS, false) {
             return;
         }
         self.attach_close_hud(flow);
-        self.action_failed("Attach Remote", flow.window, None, text);
+        self.action_failed(flow.action, flow.window, None, text);
     }
 }
 

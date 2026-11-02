@@ -100,6 +100,8 @@ pub(crate) struct ViewerRuntime {
     pub(crate) respawns: super::respawn::RemoteRespawnBook,
     /// The GUI's remote companions being created ([`super::companions`]).
     pub(crate) companion_flows: Vec<super::companions::GuiCompanion>,
+    /// The End Sessions waiting for their origin ([`super::origin_sessions`]).
+    pub(crate) end_flows: Vec<super::origin_sessions::EndRun>,
     /// Page companions whose page ended on their origin, waiting for its outcome before their rows close.
     pub(crate) page_endings: Vec<super::companions::PageEnding>,
     /// The id of the last client made, so a row's recreated client never reuses an earlier one's link keys.
@@ -198,6 +200,7 @@ impl Core {
         self.tick_reconnects(now);
         self.advance_attach_flows();
         self.advance_companion_flows(now);
+        self.advance_end_flows();
         self.settle_page_endings();
     }
 
@@ -208,6 +211,7 @@ impl Core {
         if !viewer.probes.is_empty()
             || !viewer.attach_flows.is_empty()
             || !viewer.companion_flows.is_empty()
+            || !viewer.end_flows.is_empty()
             || !viewer.page_endings.is_empty()
             || self.remote.respawns.waiting()
         {

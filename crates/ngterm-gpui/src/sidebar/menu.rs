@@ -31,6 +31,8 @@ pub struct SessionFacts {
     pub tint: Option<SidebarTint>,
     /// What the row shows: a page companion has no terminal to duplicate.
     pub content: SessionContent,
+    /// The machine a remote row was attached from.
+    pub remote_host: Option<String>,
 }
 
 /// What a workspace row's menu reads of its workspace.
@@ -93,6 +95,10 @@ pub enum MenuAction {
     NewCompanion(Uuid),
     /// Duplicate as Companion of a row's session.
     DuplicateAsCompanion(Uuid),
+    /// A new session on the machine a remote row came from.
+    NewRemoteSession(Uuid),
+    /// End a remote row's session on the machine it came from, confirmed first.
+    EndRemoteSession(Uuid),
     MoveTo {
         sessions: Vec<Uuid>,
         workspace: Uuid,
@@ -161,7 +167,7 @@ pub enum MenuEntry {
 /// A session row's menu: Clear Status first while a target has a status and Mark for Attention while one is idle,
 /// Rename and Copy Name and Duplicate Session and New Companion for one target, Move to the workspaces the targets are
 /// not all in and can move to (none for a companion, which moves only among its siblings), Flag or Unflag, Reveal for
-/// one target, Close.
+/// one target, Close. A remote row also offers a new session on its machine, and ending its session there.
 #[must_use]
 pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl Fn(&str) -> bool) -> Vec<MenuEntry> {
     let targets = context.targets(clicked);
@@ -189,25 +195,7 @@ pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl F
         menu.push(MenuEntry::Item(MenuItem::new("Rename", MenuAction::Rename(clicked))));
     }
     if single {
-        let name = context.sessions.get(&clicked).map(|facts| facts.name.clone());
-        menu.push(MenuEntry::Item(MenuItem::new("Copy Name", MenuAction::CopyName(name))));
-        menu.push(MenuEntry::Item(MenuItem::new(
-            "Duplicate Session",
-            MenuAction::Duplicate(clicked),
-        )));
-        menu.push(MenuEntry::Item(MenuItem::new(
-            "New Companion",
-            MenuAction::NewCompanion(clicked),
-        )));
-        if facts
-            .first()
-            .is_some_and(|facts| facts.content == SessionContent::Terminal)
-        {
-            menu.push(MenuEntry::Item(MenuItem::new(
-                "Duplicate as Companion",
-                MenuAction::DuplicateAsCompanion(clicked),
-            )));
-        }
+        menu.extend(single_target_items(context, &facts, clicked));
     }
     menu.extend(move_to_submenu(context, &facts, &targets));
     let all_flagged = !facts.is_empty() && facts.iter().all(|facts| facts.flagged);
@@ -228,6 +216,14 @@ pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl F
             ..MenuItem::new("Reveal in Files", MenuAction::Reveal(facts.cwd.clone()))
         }));
     }
+    if single {
+        menu.extend(remote_host(&facts).map(|host| {
+            MenuEntry::Item(MenuItem::new(
+                format!("End Session on {host}…"),
+                MenuAction::EndRemoteSession(clicked),
+            ))
+        }));
+    }
     let close = if single {
         "Close Session".to_owned()
     } else {
@@ -235,6 +231,35 @@ pub fn session_menu(context: &MenuContext, clicked: Uuid, reveal_enabled: impl F
     };
     menu.push(MenuEntry::Item(MenuItem::new(close, MenuAction::Close(targets))));
     menu
+}
+
+/// What only one target offers: Copy Name and the session creators, the remote row's among them.
+fn single_target_items(context: &MenuContext, facts: &[&SessionFacts], clicked: Uuid) -> Vec<MenuEntry> {
+    let name = context.sessions.get(&clicked).map(|facts| facts.name.clone());
+    let mut items = vec![
+        MenuItem::new("Copy Name", MenuAction::CopyName(name)),
+        MenuItem::new("Duplicate Session", MenuAction::Duplicate(clicked)),
+        MenuItem::new("New Companion", MenuAction::NewCompanion(clicked)),
+    ];
+    if facts
+        .first()
+        .is_some_and(|facts| facts.content == SessionContent::Terminal)
+    {
+        items.push(MenuItem::new(
+            "Duplicate as Companion",
+            MenuAction::DuplicateAsCompanion(clicked),
+        ));
+    }
+    items.extend(
+        remote_host(facts)
+            .map(|host| MenuItem::new(format!("New Session on {host}"), MenuAction::NewRemoteSession(clicked))),
+    );
+    items.into_iter().map(MenuEntry::Item).collect()
+}
+
+/// The machine the only target's row came from.
+fn remote_host<'a>(facts: &[&'a SessionFacts]) -> Option<&'a str> {
+    facts.first().and_then(|facts| facts.remote_host.as_deref())
 }
 
 /// Move to: the workspaces the targets are not all in and the store moves them to (upstream's `canMoveSessions`);
@@ -454,6 +479,7 @@ mod tests {
             companions: Vec::new(),
             tint: None,
             content: SessionContent::Terminal,
+            remote_host: None,
         };
         let workspace = |id, name: &str, count| WorkspaceFacts {
             id,
@@ -485,6 +511,49 @@ mod tests {
         assert!(
             !labels.iter().any(|label| label == "Duplicate as Companion"),
             "{labels:?}"
+        );
+    }
+
+    #[test]
+    fn a_remote_rows_menu_offers_a_new_session_and_ending_its_session_on_its_machine() {
+        let (mut context, _, [a, b, ..]) = context();
+        context.sessions.get_mut(&a).unwrap().remote_host = Some("studio".to_owned());
+        let menu = session_menu(&context, a, |_| true);
+        assert!(menu.contains(&MenuEntry::Item(MenuItem::new(
+            "New Session on studio",
+            MenuAction::NewRemoteSession(a)
+        ))));
+        assert!(menu.contains(&MenuEntry::Item(MenuItem::new(
+            "End Session on studio…",
+            MenuAction::EndRemoteSession(a)
+        ))));
+        let labels = labels(&menu);
+        let close = labels.iter().position(|label| label == "Close Session").unwrap();
+        assert_eq!(
+            labels[close - 1],
+            "End Session on studio…",
+            "beside the close that only detaches"
+        );
+        assert!(
+            !super::session_menu(&context, b, |_| true).iter().any(|entry| matches!(
+                entry,
+                MenuEntry::Item(MenuItem {
+                    action: MenuAction::NewRemoteSession(_) | MenuAction::EndRemoteSession(_),
+                    ..
+                })
+            )),
+            "a local row offers neither"
+        );
+        context.selection = vec![a, b];
+        assert!(
+            !super::session_menu(&context, a, |_| true).iter().any(|entry| matches!(
+                entry,
+                MenuEntry::Item(MenuItem {
+                    action: MenuAction::EndRemoteSession(_),
+                    ..
+                })
+            )),
+            "ending takes one row at a time"
         );
     }
 
