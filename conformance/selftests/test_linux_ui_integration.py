@@ -213,3 +213,130 @@ def test_accessibility_screen_bounds_follow_x11_window(monkeypatch, real_composi
             window.reparent(root, 211, 123)
             frame.destroy()
             connection.sync()
+
+
+def test_atspi_driver_pointer_chords_and_unicode(monkeypatch, real_compositor, a11y_run):
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    from agterm_conformance.match import session_ids
+    from agterm_conformance.plugin import Ctl
+    from agterm_conformance.wait import wait_text
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, os.environ['CONFORMANCE_UI_PROBE_ICD'])
+    adapter = RustAdapter(Path(os.environ['CONFORMANCE_UI_PROBE_BIN']))
+    app = adapter.launch(ui=a11y_run)
+    try:
+        ctl = Ctl(app)
+        ui = AtspiDriver(app.pid, instance=app)
+        before = ctl.tree()['tree']['sidebarVisible']
+        ui.mouse_click('sidebar-toggle-button')
+        wait_until(lambda: ctl.tree()['tree']['sidebarVisible'] is not before)
+        ui.press('cmd+shift+s')
+        wait_until(lambda: ctl.tree()['tree']['sidebarVisible'] is before)
+        # Terminal carries no authored id; the OS tree still exposes its text-field role/name.
+        terminal = ui._wait(lambda: next((el for el in ui._all_elements()
+            if el.role == 'text-field' and el.name == 'Terminal'), None), 'terminal', None)
+        ui.mouse_click(terminal)
+        ui.type_text("echo 'Ab! é界'")
+        ui.press('return')
+        sid, = session_ids(ctl.tree())
+        wait_text(ctl, sid, r'(?m)^Ab! é界\r?$')
+    finally:
+        adapter.stop(app)
+
+
+def test_atspi_keyboard_preserves_second_window(monkeypatch, real_compositor, a11y_run):
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    from agterm_conformance.match import session_ids
+    from agterm_conformance.plugin import Ctl
+    from agterm_conformance.wait import wait_text
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, os.environ['CONFORMANCE_UI_PROBE_ICD'])
+    adapter = RustAdapter(Path(os.environ['CONFORMANCE_UI_PROBE_BIN']))
+    app = adapter.launch(ui=a11y_run)
+    try:
+        ctl = Ctl(app)
+        ui = AtspiDriver(app.pid, instance=app)
+        first = assert_ok(ctl.request('window.list'))['windows'][0]['id']
+        first_xwindow = ui._window()
+        second = assert_ok(ctl.request('window.new', name='File'))['id']
+        assert_ok(ctl.request('window.select', second))
+        wait_until(lambda: any(w['id'] == second and w['active']
+                              for w in assert_ok(ctl.request('window.list'))['windows']))
+        second_sid, = session_ids(assert_ok(ctl.request('tree', window=second)))
+        wait_text(ctl, second_sid, r'[$#] ')
+        # Bare Xvfb has no WM to honor window.select's activation request. Set OS focus
+        # explicitly, then prove driver keyboard activation preserves the second window.
+        def second_xwindow():
+            atom = ui.connection.intern_atom('_NET_WM_PID')
+            for window in ui.connection.screen().root.query_tree().children:
+                prop = window.get_full_property(atom, ui.Xatom.CARDINAL)
+                if (window != first_xwindow and prop is not None and prop.value[0] == app.pid
+                        and window.get_attributes().map_state == ui.X.IsViewable):
+                    return window
+            return None
+        window = wait_until(second_xwindow)
+        window.set_input_focus(ui.X.RevertToParent, ui.X.CurrentTime)
+        ui.connection.sync()
+        ui.type_text("echo 'second-window-only'")
+        ui.press('return')
+        wait_text(ctl, second_sid, r'(?m)^second-window-only\r?$')
+        first_sid, = session_ids(assert_ok(ctl.request('tree', window=first)))
+        assert 'second-window-only' not in assert_ok(ctl.request('session.text', first_sid))['text']
+
+    finally:
+        adapter.stop(app)
+
+
+def test_atspi_menu_finds_deferred_submenu(monkeypatch, real_compositor, a11y_run):
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, os.environ['CONFORMANCE_UI_PROBE_ICD'])
+    adapter = RustAdapter(Path(os.environ['CONFORMANCE_UI_PROBE_BIN']))
+    app = adapter.launch(ui=a11y_run)
+    try:
+        ui = AtspiDriver(app.pid, instance=app)
+        # Custom command rows do not publish names yet (Task 6), but the nested
+        # Open Window submenu has a real label. Resolve it through File's deferred
+        # popup, proving the driver does not assume submenu ancestry.
+        item = ui._wait(lambda: ui._menu_command(('File', 'Open Window')),
+                        'File > Open Window submenu', None)
+        assert item.name == 'Open Window'
+        menu = item.handle.get_parent()
+        assert menu.get_role_name() == 'menu'
+        assert menu.get_parent().get_role_name() == 'frame'
+        assert menu == ui._menu_scope
+
+    finally:
+        adapter.stop(app)
+
+
+def test_atspi_menu_uses_second_overlapping_window(monkeypatch, real_compositor, a11y_run):
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, os.environ['CONFORMANCE_UI_PROBE_ICD'])
+    adapter = RustAdapter(Path(os.environ['CONFORMANCE_UI_PROBE_BIN']))
+    app = adapter.launch(ui=a11y_run)
+    try:
+        ui = AtspiDriver(app.pid, instance=app)
+        first = ui._window()
+        assert_ok(app.request('window.new', name='Second menu window'))
+        def second_window():
+            atom = ui.connection.intern_atom('_NET_WM_PID')
+            for window in ui.connection.screen().root.query_tree().children:
+                prop = window.get_full_property(atom, ui.Xatom.CARDINAL)
+                if (window != first and prop is not None and prop.value[0] == app.pid
+                        and window.get_attributes().map_state == ui.X.IsViewable):
+                    return window
+        second = wait_until(second_window)
+        geometry = first.get_geometry()
+        origin = ui.connection.screen().root.translate_coords(first, 0, 0)
+        second.configure(x=origin.x, y=origin.y, width=geometry.width, height=geometry.height,
+                         stack_mode=ui.X.Above)
+        second.set_input_focus(ui.X.RevertToParent, ui.X.CurrentTime)
+        ui.connection.sync()
+        assert ui.connection.get_input_focus().focus == second
+        item = ui._wait(lambda: ui._menu_command(('File', 'Open Window')),
+                        'second window File > Open Window', None)
+        assert item.name == 'Open Window'
+        assert ui._window(item) == second
+        assert ui._containing_frame(item) == ui._menu_window
+        assert ui.connection.get_input_focus().focus == second
+        assert ui._menu_window.get_name() == ui._window_title(second)
+    finally:
+        adapter.stop(app)

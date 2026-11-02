@@ -438,7 +438,6 @@ def test_driver_name_refuses_an_unknown_platform() -> None:
 @pytest.mark.parametrize(
     ("impl", "platform", "message"),
     [
-        ("rust", "linux", "atspi ui driver is not written yet"),
         ("rust", "win32", "uia ui driver is not written yet"),
         ("swift-macos", "linux", "needs darwin, this host is linux"),
     ],
@@ -494,8 +493,9 @@ def run_ui_suite(pytester: pytest.Pytester, fake_bin: Path, *args: str) -> pytes
 
 
 def test_ui_fixture_skips_as_unsupported_before_anything_launches(
-    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(drivers, "IMPLEMENTED", {"ax": "agterm_conformance.drivers.ax:AxDriver"})
     pytester.makepyfile(
         """
         def test_ui(ui):
@@ -536,8 +536,9 @@ def test_ui_fixture_drives_the_ctl_instance(
 
 
 def test_ui_for_skips_as_unsupported_before_anything_launches(
-    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(drivers, "IMPLEMENTED", {"ax": "agterm_conformance.drivers.ax:AxDriver"})
     pytester.makepyfile(
         """
         def test_ui_for(launch, ui_for):

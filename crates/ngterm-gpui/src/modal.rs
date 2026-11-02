@@ -668,7 +668,7 @@ impl Alert {
         }
     }
 
-    fn render_check(&self, index: usize, colors: ChromeColors, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_check(&self, index: usize, colors: ChromeColors, cx: &mut Context<Self>) -> impl gpui_kit::Element {
         let spec = &self.spec.checks[index];
         let checked = self.checked.get(index).copied().unwrap_or(false);
         let ink = crate::chrome::color(colors.foreground, 1.0);
@@ -686,6 +686,11 @@ impl Alert {
             .id(id)
             .when_some(spec.id.clone(), gpui_kit::StatefulInteractiveElement::accessibility_id)
             .role(gpui_kit::Role::CheckBox)
+            .aria_toggled(if checked {
+                gpui_kit::Toggled::True
+            } else {
+                gpui_kit::Toggled::False
+            })
             .aria_label(SharedString::from(spec.label.clone()))
             .flex()
             .items_center()

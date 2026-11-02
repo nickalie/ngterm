@@ -254,3 +254,23 @@ fn a_click_answers_and_observers_hear_every_open_and_close(cx: &mut TestAppConte
         "none left"
     );
 }
+
+#[gpui_kit::test]
+fn welcome_checks_publish_their_toggled_state(cx: &mut TestAppContext) {
+    use gpui_kit::{Element as _, Role, Toggled, accesskit::Node};
+    let cx = host(cx);
+    let alert = open(cx, crate::welcome::alert(), &Answers::default());
+    for expected in [Toggled::True, Toggled::False] {
+        alert.update(cx, |alert, cx| {
+            for index in 0..2 {
+                let element = alert.render_check(index, crate::chrome::default_colors(), cx);
+                assert_eq!(element.a11y_role(), Some(Role::CheckBox));
+                let mut node = Node::new(Role::CheckBox);
+                element.write_a11y_info(&mut node);
+                assert_eq!(node.label(), Some(alert.spec.checks[index].label.as_str()));
+                assert_eq!(node.toggled(), Some(expected));
+                alert.toggle(index);
+            }
+        });
+    }
+}

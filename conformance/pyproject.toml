@@ -17,6 +17,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Native Linux UI bindings; host-free harness installations need neither.
+linux-ui = ["PyGObject; sys_platform == 'linux'", "python-xlib; sys_platform == 'linux'"]
 # The macOS ui driver (agterm_conformance.drivers.ax).
 ax = [
     "pyobjc-framework-ApplicationServices; sys_platform == 'darwin'",
