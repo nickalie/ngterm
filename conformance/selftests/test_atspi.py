@@ -129,6 +129,9 @@ def test_menu_open_and_hover_are_not_retried_before_readback():
     driver._elements = lambda key: [button]
     driver.app = object()
     driver._containing_frame = lambda el: driver.app
+    driver._window = lambda: object()
+    driver._menu_button = lambda window: (button, driver.app)
+    driver._activate_menu_window = lambda: None
     driver._menus = lambda scope: list(menus)
     driver._scoped_menu_item = lambda scope, title: items.get(title)
     driver.mouse_click = lambda el: actions.append(('click',el))
@@ -200,6 +203,9 @@ def test_menu_path_keeps_deferred_popup_scope_with_duplicate_names():
     driver._menu_path = None
     driver._elements = lambda key: [Element(key, 'button')]
     driver._containing_frame = lambda el: frame
+    driver._window = lambda: object()
+    driver._menu_button = lambda window: (Element('app-menu-button', 'button'), frame)
+    driver._activate_menu_window = lambda: None
     driver.mouse_click = lambda el: frame.children.append(root_menu)
     driver.snapshot = lambda h: Element(None, 'menu-item', h.name, handle=h)
     hovered = []
@@ -228,6 +234,7 @@ def window_driver():
         def query_tree(self): return NS(children=self.children, parent=self.parent)
         def translate_coords(self, window, *args): return NS(x=window.x, y=0)
         def get_geometry(self): return NS(width=100, height=100)
+        def get_full_text_property(self, *args): return self.get_wm_name()
         def set_input_focus(self, *args): connection.focus = self
     root, first, second, child, foreign = Window(), Window(42), Window(42, 200), Window(), Window(99)
     root.children = [first, second, foreign]
@@ -242,7 +249,7 @@ def window_driver():
     driver.instance = NS(ui=NS(check=lambda *args:None), env={}, root=None)
     driver.X = NS(IsViewable=2, RevertToParent=2, CurrentTime=0)
     driver.Xatom = NS(CARDINAL=1)
-    driver.atspi = NS(CoordType=NS(SCREEN=0))
+    driver.atspi = NS(CoordType=NS(SCREEN=0), StateType=NS(ACTIVE='active'))
     driver._native_error = OSError
     driver._wait = lambda fn, *args: fn()
     return driver, first, second, child, foreign
@@ -281,8 +288,72 @@ def test_element_focus_disambiguates_overlapping_windows_by_title():
     first.get_wm_name = lambda:'First'
     second.get_wm_name = lambda:'Second'
     frame = NS(get_role_name=lambda:'frame', get_name=lambda:'Second',
+               get_state_set=lambda:NS(contains=lambda state:False),
                get_extents=lambda kind:NS(x=0,y=0,width=100,height=100))
     assert driver._window(Element(None,'window',handle=frame)) is second
     # Identical geometry and title is ambiguous, so refuse instead of focusing the wrong window.
     first.get_wm_name = lambda:'Second'
     assert driver._window(Element(None,'window',handle=frame)) is None
+    frame.get_state_set = lambda:NS(contains=lambda state:True)
+    assert driver._window(Element(None,'window',handle=frame)) is second
+
+
+@pytest.mark.parametrize('same_title', [False, True])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_menu_uses_focused_window_independent_of_accessibility_order(reverse, same_title):
+    from types import SimpleNamespace as NS
+    from agterm_conformance.drivers.base import Element
+    driver, first, second, _, _ = window_driver()
+    second.x = first.x
+    first.get_wm_name = lambda: 'Same' if same_title else 'First'
+    second.get_wm_name = lambda: 'Same' if same_title else 'Second'
+    def frame(title):
+        return NS(get_role_name=lambda:'frame', get_name=lambda:'Same' if same_title else title,
+                  get_state_set=lambda:NS(contains=lambda state:title == 'Second'),
+                  get_extents=lambda kind:NS(x=0,y=0,width=100,height=100))
+    first_frame, second_frame = frame('First'), frame('Second')
+    buttons = [Element('app-menu-button', 'button', handle=NS(get_parent=lambda:first_frame)),
+               Element('app-menu-button', 'button', handle=NS(get_parent=lambda:second_frame))]
+    driver._containing_frame = lambda el: el.handle.get_parent()
+    driver._elements = lambda key: list(reversed(buttons)) if reverse else buttons
+    driver._menu_path = None
+    menus, actions = [], []
+    popup = object()
+    target = Element(None, 'menu-item', 'File', handle=object())
+    driver._menus = lambda scope: list(menus) if scope is second_frame else []
+    driver._scoped_menu_item = lambda scope, name: target if scope is popup else None
+    second.configure = lambda **kw: actions.append(('raise', kw))
+    driver.X.Above = 0
+    driver.mouse_click = lambda el: (actions.append(('click',el)), menus.append(popup))
+    assert driver._menu_command(('File',)) is target
+    assert driver._menu_window is second_frame
+    assert actions == [('raise', {'stack_mode':0}), ('click', buttons[1])]
+    assert driver.connection.focus is second
+
+
+def test_menu_button_refuses_ambiguous_overlapping_frames():
+    from types import SimpleNamespace as NS
+    from agterm_conformance.drivers.base import Element
+    driver, _, second, _, _ = window_driver()
+    second.get_wm_name = lambda: 'Same'
+    frame = NS(get_name=lambda:'Same', get_state_set=lambda:NS(contains=lambda state:False),
+               get_extents=lambda kind:NS(x=200,y=0,width=100,height=100))
+    driver._elements = lambda key: [Element(key,'button'), Element(key,'button')]
+    driver._containing_frame = lambda el: frame
+    assert driver._menu_button(second) is None
+
+
+def test_menu_waits_for_active_frame_and_reads_utf8_window_title():
+    from types import SimpleNamespace as NS
+    from agterm_conformance.drivers.base import Element
+    driver, first, _, _, _ = window_driver()
+    frame = NS(get_state_set=lambda:NS(contains=lambda state:False),
+               get_extents=lambda kind:NS(x=0,y=0,width=100,height=100))
+    driver._elements = lambda key: [Element(key,'button')]
+    driver._containing_frame = lambda el:frame
+    assert driver._menu_button(first) is None
+    first.get_full_text_property = lambda *args:'home — Second'
+    first.get_wm_name = lambda:'wrong legacy decoding'
+    assert driver._window_title(first) == 'home — Second'
+    first.get_full_text_property = lambda *args:None
+    assert driver._window_title(first) == 'wrong legacy decoding'

@@ -194,17 +194,50 @@ class AtspiDriver(Driver):
             return handle
         return self._read(frame)
 
+    def _window_title(self, window):
+        title = window.get_full_text_property(self.connection.intern_atom('_NET_WM_NAME'),
+                                              self.connection.intern_atom('UTF8_STRING'))
+        return title if title is not None else window.get_wm_name()
+
+    def _menu_button(self, window):
+        # Accessibility traversal order is independent of X focus/stacking. Match
+        # the frame before clicking, so input and deferred popup discovery agree.
+        root = self.connection.screen().root
+        origin, geometry = root.translate_coords(window, 0, 0), window.get_geometry()
+        expected = (origin.x, origin.y, geometry.width, geometry.height)
+        matches = []
+        for button in self._elements('app-menu-button'):
+            frame = self._containing_frame(button)
+            bounds = self._read(lambda: frame.get_extents(self.atspi.CoordType.SCREEN))
+            if ((bounds.x, bounds.y, bounds.width, bounds.height) == expected
+                    and self._read(frame.get_state_set).contains(self.atspi.StateType.ACTIVE)):
+                matches.append((button, frame))
+        if len(matches) > 1:
+            title = self._window_title(window)
+            matches = [(button, frame) for button, frame in matches
+                       if self._read(frame.get_name) == title]
+        return matches[0] if len(matches) == 1 else None
+
+    def _activate_menu_window(self):
+        self._menu_xwindow.configure(stack_mode=self.X.Above)
+        self._menu_xwindow.set_input_focus(self.X.RevertToParent, self.X.CurrentTime)
+        self.connection.sync()
+
     def _menu_command(self, path):
         # GPUI defers popups: each new Menu is a sibling under the window, not
         # necessarily a descendant of its trigger. Observe the new popup after each
         # input exactly once, then scope name lookup to that popup's immediate items.
         if self._menu_path != path:
-            buttons = self._elements('app-menu-button')
-            if not buttons:
+            window = self._window()
+            self._menu_xwindow = window
+            self._activate_menu_window()
+            match = self._menu_button(window)
+            if match is None:
                 return None
-            self._menu_window = self._containing_frame(buttons[0])
+            button, self._menu_window = match
+            self._menu_xwindow = window
             self._menu_pending = self._menus(self._menu_window)
-            self.mouse_click(buttons[0])
+            self.mouse_click(button)
             self._menu_path, self._menu_depth = path, 0
         while True:
             if self._menu_pending is not None:
@@ -223,6 +256,7 @@ class AtspiDriver(Driver):
             if item is None:
                 return None
             before = self._menus(self._menu_window)
+            self._activate_menu_window()
             self._hover(item)
             self._menu_pending = before
             self._menu_depth += 1
@@ -281,7 +315,13 @@ class AtspiDriver(Driver):
                         matches.append(window)
                 if len(matches) > 1:
                     title = self._read(handle.get_name)
-                    matches = [window for window in matches if window.get_wm_name() == title]
+                    matches = [window for window in matches if self._window_title(window) == title]
+                if len(matches) > 1 and self._read(handle.get_state_set).contains(self.atspi.StateType.ACTIVE):
+                    focused = self.connection.get_input_focus().focus
+                    while hasattr(focused, 'query_tree') and focused != root:
+                        if focused in matches:
+                            return focused
+                        focused = focused.query_tree().parent
                 if len(matches) == 1:
                     return matches[0]
                 # Never silently focus another window when an element cannot be located.
