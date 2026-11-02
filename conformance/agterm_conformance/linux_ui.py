@@ -137,7 +137,10 @@ class A11yRun:
         except BaseException as error:
             for log in self.root.glob("*.log"):
                 error.add_note(f"{log.name}: {base._tail(log)}")
-            self.close()
+            try:
+                self.close()
+            except base.StopError as cleanup_error:
+                error.add_note(str(cleanup_error))
             raise
 
     def check(self) -> None:
@@ -170,17 +173,27 @@ class A11yRun:
             if os.environ.get('AT_SPI_BUS_ADDRESS') == self.address:
                 os.environ.pop('AT_SPI_BUS_ADDRESS', None)
         self.active = False
-        for process in (self.registry, self.launcher, self.session_bus):
+        problems = []
+        for process, label, log_name in ((self.registry, 'registry', 'a11y-registry.log'),
+                                        (self.launcher, 'launcher', 'a11y-launcher.log'),
+                                        (self.session_bus, 'session bus', 'dbus.log')):
             if process is not None:
+                code = process.poll()
+                if code is not None:
+                    log = base._tail(self.root / log_name) if self.root is not None else ''
+                    problems.append(f'Linux UI {label} had already exited with {code}: {log}')
                 # The launcher starts its a11y dbus-daemon in the same private process group.
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGTERM)
-                base._terminate(process)
+                if base._terminate(process):
+                    problems.append(f'Linux UI {label} ignored SIGTERM and was killed')
                 with contextlib.suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
         self.registry = self.launcher = self.session_bus = None
         if self.root is not None:
             shutil.rmtree(self.root, ignore_errors=True)
+        if problems:
+            raise base.StopError('; '.join(problems))
 
 
 @dataclass(frozen=True)
@@ -189,10 +202,12 @@ class X11Context:
     display: str
     root: Path
     status: Any = None
+    xvfb: Any = None
 
-    def close(self) -> None:
+    def close(self) -> str | None:
         if self.status is not None:
-            base._terminate(self.status)
+            return base._stop_helper(self.status, "a11y status helper", self.root / "a11y-status.log")
+        return None
 
     def apply(self, env: dict[str, str]) -> None:
         self.run.check()
@@ -205,6 +220,8 @@ class X11Context:
         self.run.check()
         if self.status is not None and self.status.poll() is not None:
             raise base.LaunchError(f'Linux UI status helper exited: {base._tail(self.root / "a11y-status.log")}')
+        if self.xvfb is not None and self.xvfb.poll() is not None:
+            raise base.LaunchError(f'Linux UI Xvfb exited: {base._tail(self.root / "xvfb.log")}')
         if Path(root) != self.root:
             raise base.LaunchRefused('Xvfb does not belong to the instance root')
         for key, value in {'DISPLAY': self.display, 'AT_SPI_BUS_ADDRESS': self.run.address,
@@ -253,7 +270,7 @@ def start_xvfb(root: Path, env: dict[str, str], run: A11yRun, timeout: float):
         context = X11Context(run, ':' + value, root)
         context.apply(env)
         status = start_status(root, env, timeout)
-        return process, X11Context(run, context.display, root, status)
+        return process, X11Context(run, context.display, root, status, process)
     except BaseException:
         if process is not None:
             base._terminate(process)

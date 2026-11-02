@@ -4,7 +4,7 @@ takes the lead back."""
 import pytest
 from agterm_conformance.drivers.base import ElementNotFound
 from agterm_conformance.match import assert_ok, find_session
-from agterm_conformance.plugin import Ctl
+from agterm_conformance.plugin import Ctl, launch_options
 
 LIVE = pytest.mark.requires(
     "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
@@ -12,8 +12,8 @@ LIVE = pytest.mark.requires(
 
 
 @pytest.fixture(scope="module")
-def live(adapter):
-    instance = adapter.launch(settings={"restoreMode": "live"})
+def live(adapter, request):
+    instance = adapter.launch(settings={"restoreMode": "live"}, **launch_options(request))
     try:
         ctl = Ctl(instance)
         assert assert_ok(ctl.request("restore.mode"))["restore"]["active"] == "live"

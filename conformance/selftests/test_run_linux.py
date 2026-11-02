@@ -600,3 +600,53 @@ def test_ui_selection_refuses_session_display_before_starting(tmp_path, stage, l
     assert completed.returncode == 2
     assert 'Linux UI instances require headless' in completed.stderr
     assert not report
+
+
+def test_ui_setup_failure_withholds_runner_report(tmp_path, stage, layers):
+    ui = layers / 'ui'
+    ui.mkdir()
+    (ui / 'test_ui.py').write_text('def test_ui(impl_options): pass\n')
+    # Extra pytest paths bypass the runner's early layer preflight: exercise plugin failure propagation.
+    (layers.parent / 'conftest.py').write_text("""
+from agterm_conformance import linux_ui
+from agterm_conformance.impls.base import LaunchError
+
+def pytest_configure(config):
+    def fail(self):
+        error = LaunchError('owned launcher failed')
+        error.add_note('launcher log diagnostic')
+        raise error
+    linux_ui.A11yRun.start = fail
+""")
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID),
+                            '--', str(ui), '-k', 'test_ui')
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert 'owned launcher failed' in completed.stdout + completed.stderr
+    assert 'launcher log diagnostic' in completed.stdout + completed.stderr
+    assert not (tmp_path / 'report/nodeids.jsonl').exists()
+    assert 'ratchet holds' not in report
+
+
+def test_ui_preflight_without_xvfb_names_component(tmp_path, stage, layers, weston_on_path, monkeypatch):
+    ui = layers / 'ui'
+    ui.mkdir()
+    (ui / 'test_ui.py').write_text('def test_ui(impl_options): pass\n')
+    bare = tmp_path / 'bare-bin'
+    bare.mkdir()
+    for tool in ('bash', 'dirname', 'readlink', 'cat', 'git', 'grep', 'mktemp', 'rmdir', 'rm', 'mkdir', 'env', 'sed'):
+        if found := shutil.which(tool):
+            (bare / tool).symlink_to(found)
+    for helper in ('weston', 'dbus-daemon'):
+        (bare / helper).symlink_to(weston_on_path / helper)
+    # Xvfb can also be discovered under libexec; isolate discovery in the child interpreter.
+    (tmp_path / 'sitecustomize.py').write_text("""
+from agterm_conformance import linux_ui
+linux_ui.LIBEXEC_DIRS = ()
+""")
+    monkeypatch.setenv('PATH', str(bare))
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID),
+                            '--ratchet-only', '--also', 'tests/ui', PYTHONPATH=str(tmp_path))
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert 'missing Xvfb' in completed.stderr
+    assert not report
+    assert not (tmp_path / 'report/nodeids.jsonl').exists()

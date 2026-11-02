@@ -526,6 +526,7 @@ def test_ui_fixture_drives_the_ctl_instance(
         """
         def test_ui(ctl, ui):
             assert ui.pid == ctl.instance.pid
+            assert ui.instance is ctl.instance
             assert ui.ui_ids.keys == {"next-to-the-catalog"}
         """
     )
