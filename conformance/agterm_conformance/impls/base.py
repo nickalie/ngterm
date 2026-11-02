@@ -457,6 +457,8 @@ class Instance:
         return self.process.pid
 
     def client(self, timeout: float | None = None) -> Client:
+        from agterm_conformance.drivers.trace import remember
+        remember(self)
         if timeout is None:
             return Client(self.socket, self.root)
         return Client(self.socket, self.root, timeout=timeout)
@@ -845,6 +847,8 @@ class Adapter:
 
         The compositor and session bus go last, once the app is gone, and must leave no process of their own.
         """
+        from agterm_conformance.drivers.trace import before_stop
+        before_stop(instance)
         headless_problem: str | None = None
         try:
             steps: list[str] = []

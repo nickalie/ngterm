@@ -23,6 +23,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from contextvars import copy_context
 from pathlib import Path
 
 import pytest
@@ -284,7 +285,7 @@ class _Relay:
         self._lock = threading.Lock()
         # an AF_UNIX socket, or on Windows the named pipe its path names
         self._server = transport.Listener(path)
-        threading.Thread(target=self._accept, daemon=True).start()
+        threading.Thread(target=copy_context().run, args=(self._accept,), daemon=True).start()
 
     def _accept(self):
         while True:
@@ -292,7 +293,7 @@ class _Relay:
                 connection = self._server.accept()
             except OSError:
                 return  # closed
-            threading.Thread(target=self._relay, args=(connection,), daemon=True).start()
+            threading.Thread(target=copy_context().run, args=(self._relay, connection), daemon=True).start()
 
     def _relay(self, connection):
         with connection:

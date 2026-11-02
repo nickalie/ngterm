@@ -188,6 +188,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: rust-windows-conformance
+          # Includes per-test traces/ alongside the nodeid report.
           path: conformance/reports/rust-windows/
           if-no-files-found: warn
       # the staged tree the suite ran, for a run on a Windows VM against the same build (run-windows.sh --stage)

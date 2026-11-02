@@ -367,5 +367,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.out }}-conformance
+          # Includes per-test traces/ alongside the nodeid report.
           path: conformance/reports/${{ matrix.out }}/
           if-no-files-found: warn
