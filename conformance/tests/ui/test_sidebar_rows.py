@@ -146,7 +146,7 @@ def test_flagged_view_toggle_switches_the_sidebar_mode(ctl, ui):
 
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("ui:flagged-empty-add", "ui:palette-item-{item}")
-def test_the_empty_flagged_view_link_opens_the_session_editor(ctl, ui):
+def test_the_empty_flagged_view_link_opens_the_session_editor(ctl, ui, palette_hint):
     """The empty flagged view's Add Sessions… link opens Edit Flagged Sessions, whose Return flags the highlighted
     (first) row and keeps the editor open."""
     sid = _new(ctl)
@@ -154,12 +154,12 @@ def test_the_empty_flagged_view_link_opens_the_session_editor(ctl, ui):
     assert_ok(ctl.request("sidebar.mode", mode="flagged"))
     try:
         ui.click(ui.find("flagged-empty-add"))
-        ui.find("palette-editor-hint")
+        palette_hint()
         ui.find(ui.ui_ids.expand("palette-item-{item}", item=sid))
         ui.press("return")
         tree = ctl.wait_tree(lambda tree: [s for s in sessions(tree) if s.get("flagged")])
         assert [s["id"] for s in sessions(tree) if s.get("flagged")] == session_ids(tree)[:1]
-        ui.find("palette-editor-hint")
+        palette_hint()
         ui.press("escape")
         ui.absent("command-palette")
     finally:

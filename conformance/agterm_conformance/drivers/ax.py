@@ -93,6 +93,8 @@ class AxDriver(Driver):
         self.ax, self.quartz = _bindings()
         if not self.ax.AXIsProcessTrusted():
             raise DriverError("accessibility is not granted to the process responsible for this run")
+        self._pointer_position = (0.0, 0.0)
+        self._held_button = None
         self.post = post
         self.app = self.ax.AXUIElementCreateApplication(pid)
         # AXPress on a menu button returns only once its menu closes; a short timeout keeps the run going.
@@ -148,6 +150,9 @@ class AxDriver(Driver):
 
     def _elements(self, ui_id: str) -> list[Element]:
         return [self.snapshot(handle) for handle in self.walk() if self.attribute(handle, "AXIdentifier") == ui_id]
+
+    def _all_elements(self) -> list[Element]:
+        return [self.snapshot(handle) for handle in self.walk()]
 
     def _identified(self) -> list[Element]:
         return [self.snapshot(handle) for handle in self.walk() if self.attribute(handle, "AXIdentifier")]
@@ -210,6 +215,60 @@ class AxDriver(Driver):
         q = self.quartz
         for point in ((center[0] - 2, center[1]), center):
             q.CGEventPost(q.kCGHIDEventTap, q.CGEventCreateMouseEvent(None, q.kCGEventMouseMoved, point, 0))
+
+    def _bounds(self, element: Element) -> tuple[float, float, float, float]:
+        origin = self._geometry(element, "AXPosition", self.ax.kAXValueCGPointType)
+        size = self._geometry(element, "AXSize", self.ax.kAXValueCGSizeType)
+        return origin.x, origin.y, size.width, size.height
+
+    def _pointer_move(self, x: float, y: float) -> None:
+        self.activate()
+        q = self.quartz
+        kind = {"left": q.kCGEventLeftMouseDragged, "right": q.kCGEventRightMouseDragged}.get(
+            self._held_button, q.kCGEventMouseMoved
+        )
+        button = q.kCGMouseButtonRight if self._held_button == "right" else q.kCGMouseButtonLeft
+        q.CGEventPost(q.kCGHIDEventTap, q.CGEventCreateMouseEvent(None, kind, (x, y), button))
+        self._pointer_position = (x, y)
+
+    def _mouse_button(self, button: str, down: bool, clicks: int) -> None:
+        q = self.quartz
+        if button == "left":
+            kind = q.kCGEventLeftMouseDown if down else q.kCGEventLeftMouseUp
+            number = q.kCGMouseButtonLeft
+        else:
+            kind = q.kCGEventRightMouseDown if down else q.kCGEventRightMouseUp
+            number = q.kCGMouseButtonRight
+        event = q.CGEventCreateMouseEvent(None, kind, self._pointer_position, number)
+        q.CGEventSetIntegerValueField(event, q.kCGMouseEventClickState, clicks)
+        q.CGEventPost(q.kCGHIDEventTap, event)
+        self._held_button = button if down else None
+
+    def _pointer_button(self, button: str, down: bool) -> None:
+        self._mouse_button(button, down, 1)
+
+    def _double_click(self, button: str) -> None:
+        for clicks in (1, 2):
+            self._mouse_button(button, True, clicks)
+            self._mouse_button(button, False, clicks)
+
+    def _wheel(self, dx: int, dy: int) -> None:
+        q = self.quartz
+        event = q.CGEventCreateScrollWheelEvent(None, q.kCGScrollEventUnitLine, 2, -dy, -dx)
+        q.CGEventPost(q.kCGHIDEventTap, event)
+
+    def _type_text(self, text: str) -> None:
+        q = self.quartz
+        # One Unicode scalar per pair avoids CGEvent's fixed-size string limit, including surrogate pairs.
+        for char in text:
+            length = len(char.encode("utf-16-le")) // 2
+            for down in (True, False):
+                event = q.CGEventCreateKeyboardEvent(None, 0, down)
+                q.CGEventKeyboardSetUnicodeString(event, length, char)
+                if self.post == "pid":
+                    q.CGEventPostToPid(self.pid, event)
+                else:
+                    q.CGEventPost(q.kCGHIDEventTap, event)
 
     def _geometry(self, element: Element, name: str, kind: int) -> Any:
         value = self.attribute(element.handle, name)
