@@ -38,6 +38,15 @@ pub struct RemoteBinding {
 }
 
 impl RemoteBinding {
+    /// Binds a newly attached viewer pane to an origin daemon.
+    pub(crate) fn insert_pane(&mut self, local: Uuid, daemon: String) {
+        self.local_by_remote.retain(|_, mapped| *mapped != local);
+        if let Some(remote) = crate::live::pane_identity(&daemon) {
+            self.local_by_remote.insert(remote, local);
+        }
+        self.daemons_by_local.insert(local, daemon);
+    }
+
     /// `daemons_by_local` is what an attach knows: the daemon each local pane runs `ngterm-session attach` against. A
     /// daemon name encodes the origin's pane identity, so the mapping is decoded once, here.
     #[must_use]

@@ -106,6 +106,12 @@ pub(crate) struct ViewerRuntime {
     pub(crate) page_endings: Vec<super::companions::PageEnding>,
     /// The machines whose saved rows wait to attach again after a launch ([`super::relaunch`]).
     pub(crate) relaunch_reads: Vec<super::relaunch::RelaunchRead>,
+    /// New viewer panes waiting for an origin split and its live daemon.
+    pub(super) split_flows: Vec<super::split::SplitRun>,
+    /// Pane spawn requests held behind an earlier origin split in the same row (pane → session).
+    pub(super) queued_split_panes: HashMap<Uuid, Uuid>,
+    /// Newly bound panes whose cached layouts must be reconsidered after realization (pane → session).
+    pub(super) split_layouts: HashMap<Uuid, Uuid>,
     /// The id of the last client made, so a row's recreated client never reuses an earlier one's link keys.
     last_client: u64,
 }
@@ -204,6 +210,7 @@ impl Core {
         self.tick_relaunch(now);
         self.advance_companion_flows(now);
         self.advance_end_flows();
+        self.advance_remote_splits();
         self.settle_page_endings();
     }
 
@@ -215,6 +222,9 @@ impl Core {
             || !viewer.attach_flows.is_empty()
             || !viewer.companion_flows.is_empty()
             || !viewer.end_flows.is_empty()
+            || !viewer.split_flows.is_empty()
+            || !viewer.queued_split_panes.is_empty()
+            || !viewer.split_layouts.is_empty()
             || !viewer.page_endings.is_empty()
             || self.remote.respawns.waiting()
             || self.relaunch_pending() == Some(true)

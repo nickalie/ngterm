@@ -158,6 +158,28 @@ fn the_split_pane_runs_in_its_own_cwd_with_its_identity_and_command() {
 }
 
 #[test]
+fn remote_pane_launches_use_a_local_directory_after_remote_pwd_reports() {
+    let mut session = Session::new(ngterm_core::model::SessionSeed {
+        initial_cwd: "/local/home".to_owned(),
+        remote_host: Some("buildbox".to_owned()),
+        split_pane_identity: Some(Uuid::new_v4()),
+        ..ngterm_core::model::SessionSeed::default()
+    });
+    session.report_pwd(false, "/only/on/remote/left");
+    session.report_pwd(true, "/only/on/remote/right");
+    let (window, workspace) = (Uuid::new_v4(), Uuid::new_v4());
+    for spec in [
+        PaneSpec::left(window, workspace, &session),
+        PaneSpec::split(window, workspace, &session).unwrap(),
+    ] {
+        assert_eq!(
+            spec.launch(&context()).working_directory,
+            Some(PathBuf::from("/local/home"))
+        );
+    }
+}
+
+#[test]
 fn each_scratch_terminal_gets_a_fresh_token_and_runs_its_command_once() {
     let (mut library, window, ids) = three_sessions();
     let store = library.store_mut(window).unwrap();

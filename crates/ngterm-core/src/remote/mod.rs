@@ -16,6 +16,7 @@
 //! - on the presenter, the pages an origin handed over ([`replica_page`]) and their end of that channel
 //!   ([`page_channel`]);
 //! - a remote row's companions, which its origin creates and this machine attaches under the row ([`companions`]), a
+//!   viewer's new split created on the origin and attached here ([`split`]), a
 //!   parent's respawn on the origin carried to its viewers' held panes ([`respawn`]), and the sessions this machine asks
 //!   an origin to create or end ([`origin_sessions`]).
 //!
@@ -42,6 +43,7 @@ pub(crate) mod relaunch;
 pub mod remotes;
 pub mod replica_page;
 pub mod respawn;
+mod split;
 pub mod ssh;
 pub mod tree;
 mod viewer;
