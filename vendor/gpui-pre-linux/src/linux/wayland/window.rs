@@ -1163,6 +1163,7 @@ impl WaylandWindowStatePtr {
 
             let initial_configure = self.frame_loop.get() == FrameLoop::Unconfigured;
             drop(state);
+            self.a11y_update_window_bounds();
             if initial_configure {
                 self.frame(None, FrameRequestSource::NativeCallback);
             } else {
@@ -1504,6 +1505,21 @@ impl WaylandWindowStatePtr {
         bounds
     }
 
+    fn a11y_update_window_bounds(&self) {
+        let mut state = self.state.borrow_mut();
+        // Wayland has no global window origin. Match the scaled, surface-relative
+        // coordinates of GPUI's accessibility nodes without inventing a screen position.
+        let bounds = accesskit::Rect {
+            x0: 0.0,
+            y0: 0.0,
+            x1: (f32::from(state.bounds.size.width) * state.scale) as f64,
+            y1: (f32::from(state.bounds.size.height) * state.scale) as f64,
+        };
+        if let Some(adapter) = state.accesskit_adapter.as_mut() {
+            adapter.set_root_window_bounds(bounds, bounds);
+        }
+    }
+
     pub fn set_size_and_scale(&self, size: Option<Size<Pixels>>, scale: Option<f32>) {
         let (size, scale) = {
             let mut state = self.state.borrow_mut();
@@ -1525,6 +1541,7 @@ impl WaylandWindowStatePtr {
             (state.bounds.size, state.scale)
         };
 
+        self.a11y_update_window_bounds();
         let callback = self.callbacks.borrow_mut().resize.take();
         if let Some(mut fun) = callback {
             fun(size, scale);
@@ -2248,6 +2265,7 @@ impl PlatformWindow for WaylandWindow {
             accesskit_unix::Adapter::new(activation_handler, action_handler, deactivation_handler);
 
         self.borrow_mut().accesskit_adapter = Some(adapter);
+        self.a11y_update_window_bounds();
     }
 
     fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
@@ -2258,7 +2276,7 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn a11y_update_window_bounds(&self) {
-        // Wayland doesn't expose window position, so this is a no-op
+        self.0.a11y_update_window_bounds();
     }
 }
 

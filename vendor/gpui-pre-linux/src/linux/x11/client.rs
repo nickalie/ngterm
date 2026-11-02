@@ -1041,6 +1041,10 @@ impl X11Client {
                     self.0.borrow_mut().xdnd_state.retrieved = true;
                 }
             }
+            Event::ReparentNotify(event) => {
+                let window = self.get_window(event.window)?;
+                window.a11y_update_window_bounds();
+            }
             Event::ConfigureNotify(event) => {
                 let bounds = Bounds {
                     origin: Point {

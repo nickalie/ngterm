@@ -1,0 +1,177 @@
+Publish window bounds to AccessKit when the adapter starts and when geometry changes.
+
+X11 translates the real client origin to root coordinates (ConfigureNotify can be
+parent-relative or stale during a resize), refreshes on ReparentNotify even without
+a subsequent configure event, rounds reconstructed device-pixel dimensions, and uses the
+full client surface as the node origin (client-drawn shadow insets are already
+included in GPUI node coordinates). Wayland exposes only scaled surface-relative bounds
+at zero origin, including on scale changes; it cannot report a global position.
+Without these updates AT-SPI root extents are unknown and pointer clients cannot
+locate controls on screen. Covered by the private-Xvfb/AT-SPI integration probe.
+
+diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
+--- a/src/linux/wayland/window.rs
++++ b/src/linux/wayland/window.rs
+@@ -1163,6 +1163,7 @@
+ 
+             let initial_configure = self.frame_loop.get() == FrameLoop::Unconfigured;
+             drop(state);
++            self.a11y_update_window_bounds();
+             if initial_configure {
+                 self.frame(None, FrameRequestSource::NativeCallback);
+             } else {
+@@ -1504,6 +1505,21 @@
+         bounds
+     }
+ 
++    fn a11y_update_window_bounds(&self) {
++        let mut state = self.state.borrow_mut();
++        // Wayland has no global window origin. Match the scaled, surface-relative
++        // coordinates of GPUI's accessibility nodes without inventing a screen position.
++        let bounds = accesskit::Rect {
++            x0: 0.0,
++            y0: 0.0,
++            x1: (f32::from(state.bounds.size.width) * state.scale) as f64,
++            y1: (f32::from(state.bounds.size.height) * state.scale) as f64,
++        };
++        if let Some(adapter) = state.accesskit_adapter.as_mut() {
++            adapter.set_root_window_bounds(bounds, bounds);
++        }
++    }
++
+     pub fn set_size_and_scale(&self, size: Option<Size<Pixels>>, scale: Option<f32>) {
+         let (size, scale) = {
+             let mut state = self.state.borrow_mut();
+@@ -1525,6 +1541,7 @@
+             (state.bounds.size, state.scale)
+         };
+ 
++        self.a11y_update_window_bounds();
+         let callback = self.callbacks.borrow_mut().resize.take();
+         if let Some(mut fun) = callback {
+             fun(size, scale);
+@@ -2248,6 +2265,7 @@
+             accesskit_unix::Adapter::new(activation_handler, action_handler, deactivation_handler);
+ 
+         self.borrow_mut().accesskit_adapter = Some(adapter);
++        self.a11y_update_window_bounds();
+     }
+ 
+     fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
+@@ -2258,7 +2276,7 @@
+     }
+ 
+     fn a11y_update_window_bounds(&self) {
+-        // Wayland doesn't expose window position, so this is a no-op
++        self.0.a11y_update_window_bounds();
+     }
+ }
+ 
+diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
+--- a/src/linux/x11/client.rs
++++ b/src/linux/x11/client.rs
+@@ -1041,6 +1041,10 @@
+                     self.0.borrow_mut().xdnd_state.retrieved = true;
+                 }
+             }
++            Event::ReparentNotify(event) => {
++                let window = self.get_window(event.window)?;
++                window.a11y_update_window_bounds();
++            }
+             Event::ConfigureNotify(event) => {
+                 let bounds = Bounds {
+                     origin: Point {
+diff -ruN a/src/linux/x11/window.rs b/src/linux/x11/window.rs
+--- a/src/linux/x11/window.rs
++++ b/src/linux/x11/window.rs
+@@ -1297,6 +1297,39 @@
+         bounds.map(|b| b.scale(scale_factor))
+     }
+ 
++    pub(crate) fn a11y_update_window_bounds(&self) {
++        let mut state = self.state.borrow_mut();
++        let scale = state.scale_factor;
++        let bounds = state.bounds;
++
++        // ConfigureNotify can be parent-relative, and resize events may carry stale origins.
++        // Translate the actual client origin to the root; it is already in device pixels.
++        let Some(origin) = get_reply(
++            || "X11 accessibility TranslateCoordinates failed.",
++            self.xcb.translate_coordinates(self.x_window, state.x_root_window, 0, 0),
++        )
++        .log_err() else {
++            return;
++        };
++        let x = f32::from(origin.dst_x);
++        let y = f32::from(origin.dst_y);
++        let width = f32::from(bounds.size.width);
++        let height = f32::from(bounds.size.height);
++
++        let outer = accesskit::Rect {
++            x0: x as f64,
++            y0: y as f64,
++            x1: (x + (width * scale).round()) as f64,
++            y1: (y + (height * scale).round()) as f64,
++        };
++
++        // GPUI nodes use the whole client surface, including client-drawn shadow insets.
++        // Adding those insets here would shift every descendant a second time.
++        if let Some(adapter) = state.accesskit_adapter.as_mut() {
++            adapter.set_root_window_bounds(outer, outer);
++        }
++    }
++
+     pub fn set_bounds(&self, bounds: Bounds<i32>) -> anyhow::Result<()> {
+         let (is_resize, content_size, scale_factor) = {
+             let mut state = self.state.borrow_mut();
+@@ -1327,6 +1360,7 @@
+             result
+         };
+ 
++        self.a11y_update_window_bounds();
+         let mut callbacks = self.callbacks.borrow_mut();
+         if let Some(ref mut fun) = callbacks.resize {
+             fun(content_size, scale_factor)
+@@ -2021,6 +2055,7 @@
+             accesskit_unix::Adapter::new(activation_handler, action_handler, deactivation_handler);
+ 
+         self.0.state.borrow_mut().accesskit_adapter = Some(adapter);
++        self.a11y_update_window_bounds();
+     }
+ 
+     fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
+@@ -2031,33 +2066,7 @@
+     }
+ 
+     fn a11y_update_window_bounds(&self) {
+-        let mut state = self.0.state.borrow_mut();
+-        let scale = state.scale_factor;
+-        let bounds = state.bounds;
+-        let [left, right, top, bottom] = state.last_insets;
+-
+-        let x = f32::from(bounds.origin.x);
+-        let y = f32::from(bounds.origin.y);
+-        let width = f32::from(bounds.size.width);
+-        let height = f32::from(bounds.size.height);
+-
+-        let outer = accesskit::Rect {
+-            x0: (x * scale) as f64,
+-            y0: (y * scale) as f64,
+-            x1: ((x + width) * scale) as f64,
+-            y1: ((y + height) * scale) as f64,
+-        };
+-
+-        let inner = accesskit::Rect {
+-            x0: (x * scale) as f64 + left as f64,
+-            y0: (y * scale) as f64 + top as f64,
+-            x1: ((x + width) * scale) as f64 - right as f64,
+-            y1: ((y + height) * scale) as f64 - bottom as f64,
+-        };
+-
+-        if let Some(adapter) = state.accesskit_adapter.as_mut() {
+-            adapter.set_root_window_bounds(outer, inner);
+-        }
++        self.0.a11y_update_window_bounds();
+     }
+ }
+ 
