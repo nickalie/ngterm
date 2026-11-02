@@ -413,17 +413,22 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - Modify: `Cargo.toml` (workspace dependencies `uniffi`, `russh` with `default-features = false` and features
   `ring`/`flate2`/`rsa`, `tokio`, `zeroize`)
 
-- [ ] write tests first: the actor answers a command and delivers an event through a test `EventSink` off the caller's
+- [x] write tests first: the actor answers a command and delivers an event through a test `EventSink` off the caller's
       thread; dropping `MobileCore` joins the actor
-- [ ] create the crate with `ngterm-term` using `default-features = false`. Its dependencies must build on Linux, macOS
+- [x] create the crate with `ngterm-term` using `default-features = false`. Its dependencies must build on Linux, macOS
       and Windows hosts (it is an `any` crate) and for Android.
-- [ ] write the UniFFI facade in `api.rs` (proc-macro form): `MobileCore`, `Machine`, `Pane`, the event enum, and the
+- [x] write the UniFFI facade in `api.rs` (proc-macro form): `MobileCore`, `Machine`, `Pane`, the event enum, and the
       callback interfaces `KeyVault`, `HostKeyStore` and `EventSink`, with item-level `#[expect]`s for the
       FFI-shaped signatures
-- [ ] write the actor (current-thread runtime + `LocalSet`), the `Transport` and `Channel` traits, and the scripted
+- [x] write the actor (current-thread runtime + `LocalSet`), the `Transport` and `Channel` traits, and the scripted
       fake transport
-- [ ] run `cargo test -p ngterm-mobile`, clippy, and `cargo ndk -t x86_64 -P 26 build -p ngterm-mobile`; all must pass
+- [x] run `cargo test -p ngterm-mobile`, clippy, and `cargo ndk -t x86_64 -P 26 build -p ngterm-mobile`; all must pass
       before Task 7
+  - Notes: `Channel` is one concrete pair of queues (`ChannelReader`, `ChannelWriter`, the transport's `ChannelPeer`)
+    rather than a trait; `Transport::connect` gives a per-machine `Connection` whose `exec` opens it. `MobileCore` has
+    only the Rust `with_transport` constructor until Task 7 adds the UniFFI one over russh. `MobileEvent` holds the
+    machine-level variants; later tasks add theirs. `uniffi-bindgen` needs the crate's `bindgen` feature, and the fake
+    is behind `fakes`. `ngterm-term` is a path dependency (a member can't drop the workspace entry's defaults).
 
 ### Task 7: russh transport, keys and host-key pinning
 

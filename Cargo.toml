@@ -182,6 +182,18 @@ notify = "8.2"
 netlink-sys = { version = "0.9", default-features = false }
 netlink-packet-core = "0.9"
 netlink-packet-route = "0.33"
+# ngterm-mobile (the Android app's Rust core): its Kotlin bindings through UniFFI's proc macros, and the in-crate
+# `uniffi-bindgen` binary (`cli`, behind ngterm-mobile's `bindgen` feature) that writes them from the built library.
+uniffi = "0.32"
+# ngterm-mobile's ssh: one connection per machine, exec channels for the tree, the presentation and each pane. `ring`
+# in place of the default aws-lc-rs (no C build system to cross-compile for Android, lighter on Windows CI); `flate2`
+# and `rsa` as the defaults carry them.
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
+# ngterm-mobile's actor: a current-thread runtime and a `LocalSet` per core (russh's runtime), its command and channel
+# queues. The version the lock already carries.
+tokio = "1.53"
+# ngterm-mobile wipes a private key's bytes once a connection has used them.
+zeroize = "1.9"
 
 # Inherited by every crate (`[lints] workspace = true`) except the generated -sys crates: `ngterm-ghostty-vt-sys`
 # (bindgen), `ngterm-wpe-sys`, `ngterm-wpe-platform-sys` and `ngterm-wpe-javascriptcore-sys`
