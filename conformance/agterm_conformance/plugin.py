@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Self
 import pytest
 
 from agterm_conformance import coverage, selection, wait
+from agterm_conformance.drivers import trace
 from agterm_conformance.client import Response, SocketOutsideRoot, Stream, check_under_root
 from agterm_conformance.match import assert_ok
 
@@ -99,6 +100,8 @@ def require_implementation(options: ImplOptions) -> None:
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("agterm-conformance")
+    group.addoption("--trace-mode", choices=("off", "on-failure", "always"), default="on-failure")
+    group.addoption("--trace-dir", type=Path, default=None, help="trace directory (default: beside the report)")
     group.addoption("--impl", choices=IMPLS, default=None, help="implementation under test")
     group.addoption("--bin", type=Path, default=None, help="app binary or bundle to launch")
     group.addoption(
@@ -613,6 +616,7 @@ class Ctl:
 
     def __init__(self, instance: Instance) -> None:
         self.instance = instance
+        trace.remember(instance)
 
     @property
     def vocabulary(self) -> Vocabulary:
@@ -690,6 +694,7 @@ class Cli:
         check_under_root(instance.socket, instance.root)
         self.ctl_path = ctl_path
         self.instance = instance
+        trace.remember(instance)
         self.program = program
 
     def argv(self, *args: str) -> list[str]:
@@ -739,19 +744,21 @@ class Cli:
         """A command that keeps running (`events`, a blocking `pick`/`ask`/`--block`); read it as it goes.
 
         `input` is written and stdin closed; `interactive` keeps stdin open for `send` (a stream bridge)."""
+        trace.remember(self.instance)
         return CliProcess(self.argv(*args), self.instance.env, self.instance.home, input, interactive, self.program)
 
     def _run(self, argv: list[str], env: Mapping[str, str], input: str | None, timeout: float) -> CliResult:
-        completed = subprocess.run(
-            argv,
-            env=env,
-            cwd=self.instance.home,
-            input=input,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        trace.remember(self.instance)
+        try:
+            completed = subprocess.run(
+                argv, env=env, cwd=self.instance.home, input=input, capture_output=True,
+                text=True, timeout=timeout, check=False,
+            )
+        except Exception as error:
+            trace.event("cli", argv=argv, error=f"{type(error).__name__}: {error}")
+            raise
+        trace.event("cli", argv=argv, returncode=completed.returncode,
+                    stdout=completed.stdout, stderr=completed.stderr)
         return CliResult(argv, completed.returncode, completed.stdout, completed.stderr, self.program)
 
 
@@ -769,6 +776,11 @@ class CliProcess:
     ) -> None:
         self.argv = argv
         self.program = program
+        self._trace = trace.ACTIVE.get()
+        self._transcript = []
+        self._trace_entry = None
+        if self._trace is not None:
+            self._trace.cli_processes.append(self)
         self.process = subprocess.Popen(
             argv,
             env=dict(env),
@@ -791,6 +803,7 @@ class CliProcess:
     def _read(self) -> None:
         assert self.process.stdout is not None
         for line in self.process.stdout:
+            self._transcript.append(line)
             self._lines.put(line.rstrip("\n"))
         self._lines.put(None)
 
@@ -819,6 +832,7 @@ class CliProcess:
             lines.append(line)
         self._lines.put(None)
         stdout = "".join(f"{line}\n" for line in lines)
+        self._record_trace()
         return CliResult(self.argv, returncode, stdout, self.stderr(), self.program)
 
     def stderr(self) -> str:
@@ -838,12 +852,22 @@ class CliProcess:
                 self.process.wait()
         self._reader.join(STOP_GRACE)
         self.stderr()
+        self._record_trace()
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             if stream is not None:
                 try:
                     stream.close()
                 except BrokenPipeError:
                     pass  # stdin's unflushed bytes had no reader left
+
+    def _record_trace(self) -> None:
+        if self._trace is not None:
+            entry = dict(argv=self.argv, returncode=self.process.poll(),
+                         stdout="".join(self._transcript), stderr=self.stderr())
+            if self._trace_entry is None:
+                self._trace_entry = self._trace.record("cli", entry)
+            elif self._trace_entry is not None:
+                self._trace_entry.update(entry)
 
     def __enter__(self) -> Self:
         return self
@@ -968,7 +992,10 @@ def ui_for(request: pytest.FixtureRequest, adapter: Adapter, impl_options: ImplO
 
     def driver(target: Ctl | Instance) -> Driver:
         instance = target.instance if isinstance(target, Ctl) else target
-        return make_driver(adapter.name, instance, ui_ids)
+        driver = make_driver(adapter.name, instance, ui_ids)
+        driver.instance = instance
+        trace.remember(instance, driver)
+        return driver
 
     return driver
 
@@ -977,3 +1004,68 @@ def ui_for(request: pytest.FixtureRequest, adapter: Adapter, impl_options: ImplO
 def ui(request: pytest.FixtureRequest, ui_for: Callable[[Any], Driver]) -> Driver:
     """The ui driver for the instance `ctl` drives."""
     return ui_for(_target_instance(request))
+
+
+_TRACE_KEY = pytest.StashKey[trace.Trace]()
+_TRACE_FAILED = pytest.StashKey[bool]()
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_protocol(item, nextitem):
+    directory = item.config.getoption("trace_dir")
+    if directory is None:
+        report = item.config.getoption("nodeid_report") or item.config.getoption("xmlpath", default=None)
+        directory = Path(report).parent / "traces" if report else Path(__file__).resolve().parents[1] / "reports/traces"
+    directory = item.config.invocation_params.dir / directory
+    record = trace.Trace(item.nodeid, directory, item.config.getoption("trace_mode"))
+    item.stash[_TRACE_KEY] = record
+    item.stash[_TRACE_FAILED] = False
+    token = trace.ACTIVE.set(record)
+    try:
+        yield
+    finally:
+        trace.ACTIVE.reset(token)
+        record.finish(item.stash[_TRACE_FAILED] and not record.rerun_pending)
+        record.release()
+        del item.stash[_TRACE_KEY]
+        del item.stash[_TRACE_FAILED]
+
+
+@pytest.hookimpl(hookwrapper=True, trylast=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    record = item.stash.get(_TRACE_KEY, None)
+    if record is not None and report.when == "setup":
+        from agterm_conformance.impls.base import Instance
+        for value in getattr(item, "funcargs", {}).values():
+            if isinstance(value, Instance):
+                record.remember(value)
+            elif isinstance(value, (Ctl, Cli)):
+                record.remember(value.instance)
+    if record is not None and report.when == "setup":
+        record.rerun_pending = False
+        if record.reset_outcome:
+            item.stash[_TRACE_FAILED] = False
+            record.reset_outcome = False
+    if record is not None and report.failed:
+        item.stash[_TRACE_FAILED] = True
+        if report.when != "teardown":
+            record.capture()
+            record.frozen = True
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item, nextitem):
+    # Preserve live evidence before fixture finalizers remove roots, even if teardown is what fails.
+    record = item.stash.get(_TRACE_KEY, None)
+    if record is not None:
+        record.capture()
+    yield
+
+
+def pytest_runtest_logreport(report):
+    # pytest-rerunfailures marks a retry after makereport. Evidence belongs to the final attempt.
+    record = trace.ACTIVE.get()
+    if record is not None and report.outcome == "rerun":
+        record.reset()

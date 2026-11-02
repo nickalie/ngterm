@@ -100,6 +100,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: reference-macos-${{ steps.tag.outputs.tag }}
+          # report/traces/ holds per-test evidence beside the JUnit reports.
           # A failed launch keeps its /tmp/agt-* root; its app log is the diagnosis.
           path: |
             report/

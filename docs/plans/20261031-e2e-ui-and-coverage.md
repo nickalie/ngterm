@@ -198,7 +198,7 @@ run-linux.sh / run-windows.sh --coverage
 **Traces** (`reports/<run>/traces/<nodeid-slug>/`): `screenshot.png` (Pillow `ImageGrab`, `xdisplay=` the instance's
 Xvfb on Linux; on macOS it needs the Screen Recording grant, else it lands in `trace-errors.txt`), `a11y-tree.txt`,
 `actions.jsonl`, `socket.jsonl`, `cli.jsonl` (each `ngtermctl` argv, exit code, output), `panes/<sid>.txt`, `app.log`,
-`trace-errors.txt` when collecting failed. `--trace=off|on-failure|always`, default `on-failure`. Logs are kept in
+`trace-errors.txt` when collecting failed. `--trace-mode=off|on-failure|always`, default `on-failure`. Logs are kept in
 memory per test and dropped on pass. Every layer gets socket, cli, panes and log; screenshot and tree only where a
 driver exists.
 
@@ -303,19 +303,31 @@ The real probe uses a system-Python venv with PyGObject and python-xlib; ordinar
 
 **Files:**
 - Create: `conformance/agterm_conformance/drivers/trace.py`
-- Modify: `conformance/agterm_conformance/client.py` (socket transcript), `plugin.py` (`--trace`,
+- Modify: `conformance/agterm_conformance/client.py` (socket transcript), `plugin.py` (`--trace-mode`,
   `runtest_makereport`, `CliProcess` transcript), `drivers/base.py` (action log, tree dump, screenshot)
 - Create: `conformance/selftests/test_trace.py`
 - Modify: `.github/workflows/linux.yml`, `cross-platform.yml`, `reference-macos.yml` (upload `traces/`)
 - Modify: `conformance/pyproject.toml` (Pillow)
 
-- [ ] write self-tests first: a failing test writes the directory with each file; a passing test writes nothing under
+- [x] write self-tests first: a failing test writes the directory with each file; a passing test writes nothing under
       `on-failure`; `always` writes for a pass; `off` writes nothing; a protocol-layer failure gets socket, cli, panes
       and log but no screenshot or tree; a trace step that raises goes to `trace-errors.txt` and the test's own failure
       is what pytest reports
-- [ ] implement the per-test logs, the transcripts, the collector and the screenshot
-- [ ] add the option and the hook; upload `traces/` in the three workflows
-- [ ] run the self-tests and one deliberately failing local test (then drop it): the trace is complete
+- [x] implement the per-test logs, the transcripts, the collector and the screenshot
+- [x] add the option and the hook; upload `traces/` in the three workflows
+- [x] run the self-tests and one deliberately failing local test (then drop it): the trace is complete
+
+**Decision:** the artifact option is `--trace-mode=off|on-failure|always`, default `on-failure`.
+Pytest already reserves `--trace` for its interactive debugger. Codex agreed to preserve that flag and use
+an independent option/destination. `--trace-dir` overrides the default directory beside the nodeid or JUnit
+report (otherwise `conformance/reports/traces`). Existing CI artifact directories already include this location.
+
+**Validation:** 959 harness self-tests passed (19 platform/opt-in skips); final driver/client/trace checks
+passed 160 tests after adding explicit per-test memory release. A temporary deliberately failing real Linux
+probe produced a 1920×1080 private-Xvfb screenshot, real AT-SPI app tree, action/socket/CLI transcripts,
+app log and two session text files while preserving its original assertion. The probe and its processes were
+removed afterward; both VMs stayed stopped. Native Windows/macOS screenshot calls are covered by the shared
+API; this task did not run those platforms. Successful reference reruns discard failed-attempt evidence.
 
 ### Task 4: GPUI publishes screen bounds to AccessKit on Linux
 
@@ -467,7 +479,7 @@ The real probe uses a system-Python venv with PyGObject and python-xlib; ordinar
 
 ### Task 13: [Final] Update documentation
 
-- [ ] `conformance/README.md`: the ui layer on the Rust build, the drivers, the pointer API, `--trace`, `--coverage`,
+- [ ] `conformance/README.md`: the ui layer on the Rust build, the drivers, the pointer API, `--trace-mode`, `--coverage`,
       the floors; the reruns rule per side
 - [ ] `conformance/docs/rust-build.md`: the Linux ui launch contract (own Xvfb, the run's a11y bus, the env), the
       coverage build and flush

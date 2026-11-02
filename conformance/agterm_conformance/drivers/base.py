@@ -6,6 +6,8 @@ attribute vocabulary (`role`, `name`, `value`, `enabled`), never the platform's 
 
 from __future__ import annotations
 
+from agterm_conformance.drivers.trace import action
+
 import importlib
 import math
 import re
@@ -169,6 +171,7 @@ class Driver(ABC):
         self.ui_ids = ui_ids if ui_ids is not None else UiIds.load()
         self.timeout = timeout
 
+    @action
     def find(self, ui_id: str, timeout: float | None = None, **attrs: Any) -> Element:
         """Wait for the first element carrying `ui_id` whose attributes equal `attrs`.
 
@@ -186,11 +189,13 @@ class Driver(ABC):
 
         return self._wait(check, wanted, timeout)
 
+    @action
     def all(self, ui_id: str) -> list[Element]:
         """Every element carrying `ui_id` now, unwaited: for counts and for picking one by its text."""
         self.ui_ids.key_for(ui_id)
         return self._elements(ui_id)
 
+    @action
     def count(self, ui_id: str, n: int, timeout: float | None = None) -> list[Element]:
         """Wait for exactly n matches, including zero, and return their snapshots."""
         self.ui_ids.key_for(ui_id)
@@ -207,6 +212,7 @@ class Driver(ABC):
         self._wait(check, f"count {n} of {ui_id}", timeout)
         return found
 
+    @action
     def absent(self, ui_id: str, timeout: float | None = None) -> None:
         """Wait until no element carries `ui_id`."""
         self.ui_ids.key_for(ui_id)
@@ -215,10 +221,12 @@ class Driver(ABC):
         except WaitTimeout as error:
             raise WaitTimeout(f"{self.name}: {ui_id} still present in pid {self.pid}: {error}") from None
 
+    @action
     def menu_item(self, name: str, timeout: float | None = None) -> Element:
         """An item of the open menu by title: system menus carry no identifiers."""
         return self._wait(lambda: self._menu_item(name), f"menu item {name!r}", timeout)
 
+    @action
     def menu(self, *path: str, timeout: float | None = None) -> None:
         """Run a main-menu command by its titles, top level first (`"View", "Find…"`)."""
         if not path:
@@ -226,28 +234,35 @@ class Driver(ABC):
         item = self._wait(lambda: self._menu_command(path), f"menu command {' > '.join(path)!r}", timeout)
         self._press_element(item)
 
+    @action
     def tab(self, name: str, timeout: float | None = None) -> Element:
         """A tab of a tabbed window, such as Settings, by its title."""
         return self._wait(lambda: self._tab(name), f"tab {name!r}", timeout)
 
+    @action
     def click(self, target: str | Element) -> None:
         self._press_element(self._resolve(target))
 
+    @action
     def text(self, target: str | Element) -> str:
         return self._text(self._resolve(target))
 
+    @action
     def set_text(self, target: str | Element, text: str) -> None:
         """Replace a text field's contents through the accessibility API, independent of keyboard focus."""
         self._set_text(self._resolve(target), text)
 
+    @action
     def focus(self, target: str | Element) -> None:
         """Give the element keyboard focus, so `press` types into it."""
         self._focus(self._resolve(target))
 
+    @action
     def hover(self, target: str | Element) -> None:
         """Move the pointer over the element, for controls that appear only under it."""
         self._hover(self._resolve(target))
 
+    @action
     def press(self, *chords: str) -> None:
         """Post each chord as a synthesized key down and up, to the app process."""
         parsed = [parse_chord(chord) for chord in chords]
@@ -284,6 +299,7 @@ class Driver(ABC):
         wanted = target if isinstance(target, str) else _describe(target)
         return self._wait(lambda: self._point_now(target, offset), f"enabled pointer target {wanted}", None)
 
+    @action
     def move(self, target: str | Element, offset=(0.5, 0.5)) -> None:
         self._pointer_move(*self._point(target, offset))
 
@@ -292,6 +308,7 @@ class Driver(ABC):
         if button not in ("left", "right"):
             raise ValueError("button must be left or right")
 
+    @action
     def mouse_click(self, target: str | Element, button="left", offset=(0.5, 0.5)) -> None:
         """A physical pointer click; click() remains the accessibility press."""
         self._check_button(button)
@@ -299,6 +316,7 @@ class Driver(ABC):
         self._pointer_button(button, True)
         self._pointer_button(button, False)
 
+    @action
     def mouse_double_click(self, target: str | Element, button="left", offset=(0.5, 0.5)) -> None:
         self._check_button(button)
         self.move(target, offset)
@@ -318,6 +336,7 @@ class Driver(ABC):
         finally:
             self._pointer_button("left", False)
 
+    @action
     def drag(self, src: str | Element, dst: str | Element, src_offset=(0.5, 0.5),
              dst_offset=(0.5, 0.5), steps=10) -> None:
         self._check_steps(steps)
@@ -328,6 +347,7 @@ class Driver(ABC):
         )
         self._drag_points(start, end, steps)
 
+    @action
     def drag_by(self, target: str | Element, dx: float, dy: float, offset=(0.5, 0.5), steps=10) -> None:
         self._check_steps(steps)
         if not all(math.isfinite(v) for v in (dx, dy)):
@@ -335,6 +355,7 @@ class Driver(ABC):
         start = self._point(target, offset)
         self._drag_points(start, (start[0] + dx, start[1] + dy), steps)
 
+    @action
     def scroll(self, target: str | Element, dy: int, dx: int = 0) -> None:
         """Scroll wheel ticks: positive down/right, negative up/left."""
         if not all(isinstance(v, int) for v in (dx, dy)):
@@ -342,6 +363,7 @@ class Driver(ABC):
         self.move(target)
         self._wheel(dx, dy)
 
+    @action
     def type_text(self, text: str) -> None:
         """Type printable Unicode into the focused control; use press for control keys."""
         if not isinstance(text, str) or any(not char.isprintable() for char in text):
@@ -373,6 +395,29 @@ class Driver(ABC):
 
     @abstractmethod
     def _type_text(self, text: str) -> None: ...
+
+    def tree_dump(self) -> str:
+        return "\n".join(_describe(element) for element in self._all_elements()) + "\n"
+
+    def screenshot(self) -> bytes:
+        from io import BytesIO
+        from PIL import ImageGrab
+        import sys
+        options = {}
+        if sys.platform.startswith("linux"):
+            instance = getattr(self, "instance", None)
+            if instance is None or instance.ui is None:
+                raise DriverError("screenshot requires the instance's private Xvfb display")
+            instance.ui.check(instance.env, instance.root)
+            options["xdisplay"] = instance.ui.display
+        elif sys.platform == "darwin":
+            from Quartz import CGPreflightScreenCaptureAccess
+            if not CGPreflightScreenCaptureAccess():
+                raise DriverError("screenshot requires the Screen Recording grant")
+        image = ImageGrab.grab(**options)
+        output = BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue()
 
     def _resolve(self, target: str | Element) -> Element:
         return target if isinstance(target, Element) else self.find(target)
