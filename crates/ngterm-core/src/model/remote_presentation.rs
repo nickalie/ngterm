@@ -119,6 +119,9 @@ impl RemoteConnection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePresentationState {
     pub binding: RemoteBinding,
+    /// A local rename or clear owns the row's name, even when it equals the origin's current name.
+    /// Saved as `RemoteSessionSnapshot::local_name` and restored through `AppStore::rename_session`.
+    pub(crate) name_overridden: bool,
     pub connection: RemoteConnection,
     pub mode: PresentationMode,
     /// The origin's last layout.
@@ -146,6 +149,7 @@ impl RemotePresentationState {
         };
         Self {
             binding,
+            name_overridden: false,
             connection,
             mode: PresentationMode::Mirror,
             layout: None,

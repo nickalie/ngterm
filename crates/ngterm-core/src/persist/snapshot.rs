@@ -184,6 +184,10 @@ pub struct RemoteSessionSnapshot {
     pub session_id: String,
     /// The origin's name for the session when it was saved, which a failed reattach reports.
     pub name: String,
+    /// An explicit local rename; an empty string keeps automatic naming after a clear.
+    /// Absent in older snapshots and while the row inherits its name from the origin.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub local_name: Option<String>,
     #[serde(rename = "workspaceID", serialize_with = "upper::uuid")]
     pub workspace_id: Uuid,
     /// The nearest local row before it in its workspace, which a restore brings back under this id; absent when none
@@ -494,7 +498,7 @@ mod tests {
     fn a_saved_remote_row_that_does_not_decode_drops_alone() {
         let good = format!(
             r#"{{ "host": "studio", "sessionID": "B1", "name": "build", "workspaceID": "{WS}", "order": 2,
-                "afterSessionID": "{SESSION}", "parentSessionID": 7, "waitingSince": "soon" }}"#
+                "afterSessionID": "{SESSION}", "parentSessionID": 7, "waitingSince": "soon", "localName": 7 }}"#
         );
         let missing_host = format!(r#"{{ "sessionID": "B2", "name": "x", "workspaceID": "{WS}", "order": 0 }}"#);
         let negative =
@@ -509,6 +513,7 @@ mod tests {
                 host: "studio".to_owned(),
                 session_id: "B1".to_owned(),
                 name: "build".to_owned(),
+                local_name: None,
                 workspace_id: ws(),
                 after_session_id: Some(session()),
                 order: 2,

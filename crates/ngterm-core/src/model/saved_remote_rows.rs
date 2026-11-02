@@ -150,6 +150,10 @@ impl AppStore {
                 host: origin.host.clone(),
                 session_id: session.to_owned(),
                 name: origin.session_name.clone(),
+                local_name: row
+                    .remote_presentation()
+                    .filter(|state| state.name_overridden)
+                    .map(|_| row.custom_name.clone().unwrap_or_default()),
                 workspace_id: workspace.id(),
                 after_session_id: after,
                 order,
@@ -192,6 +196,7 @@ mod tests {
             host: "studio".to_owned(),
             session_id: session.to_owned(),
             name: session.to_lowercase(),
+            local_name: None,
             workspace_id: workspace,
             after_session_id: after,
             order,

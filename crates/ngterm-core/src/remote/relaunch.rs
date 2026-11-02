@@ -257,20 +257,22 @@ impl Core {
         let Some(remote) = remote else {
             return Reattached::Gone(row.name);
         };
-        match self.attach_remote_session(remote, tree, &row.host, placement) {
-            Ok(result) => {
-                if let Some(id) = result.id.as_deref().and_then(frames::parse_uuid) {
-                    if placement.parent.is_none()
-                        && let Some(store) = self.library_mut().store_mut(placement.window)
-                    {
-                        store.record_reattached_place(id, (row.after_session_id, row.order));
-                    }
-                    rows.insert(row.session_id, id);
+        let result = match self.attach_remote_session(remote, tree, &row.host, placement) {
+            Ok(result) => result,
+            Err(error) => return Reattached::Failed(format!("{}: {error}", row.name)),
+        };
+        if let Some(id) = result.id.as_deref().and_then(frames::parse_uuid) {
+            if let Some(store) = self.library_mut().store_mut(placement.window) {
+                if let Some(name) = row.local_name.as_deref() {
+                    store.rename_session(id, name);
                 }
-                Reattached::Attached
+                if placement.parent.is_none() {
+                    store.record_reattached_place(id, (row.after_session_id, row.order));
+                }
             }
-            Err(error) => Reattached::Failed(format!("{}: {error}", row.name)),
+            rows.insert(row.session_id, id);
         }
+        Reattached::Attached
     }
 
     /// Where saved `row` of `window` goes: `None` once its workspace is closed, else under its parent's row when that
