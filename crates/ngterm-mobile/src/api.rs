@@ -145,7 +145,8 @@ impl MobileCore {
 #[uniffi::export]
 impl MobileCore {
     /// Connects `machine`, answered once it is connected (at once when it already is; a connect of the same machine in
-    /// flight is joined, not repeated). The state also arrives as a
+    /// flight is joined, not repeated). A connect of the machine as edited (another host, user, key or pin) closes its
+    /// connection and connects anew. The state also arrives as a
     /// [`MobileEvent::MachineState`].
     ///
     /// # Errors

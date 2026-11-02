@@ -117,6 +117,33 @@ fn connecting_a_connected_machine_again_reuses_its_connection() {
 }
 
 #[test]
+fn connecting_a_connected_machine_as_edited_replaces_its_connection() {
+    let transport = FakeTransport::new();
+    let (sink, events) = recorder();
+    let core = core(&transport, &sink);
+    transport.refuse("new", "connection refused");
+
+    assert_eq!(block_on(core.connect(machine("m1", "old"))), Ok(()));
+    let answer = block_on(core.connect(machine("m1", "new")));
+
+    assert!(matches!(answer, Err(MobileError::Unreachable { .. })), "{answer:?}");
+    assert_eq!(transport.closed(), ["m1"], "the old host's connection is closed");
+    assert_eq!(transport.connects(), ["m1", "m1"]);
+    assert_eq!(events.recv_timeout(WAIT).expect("connected").2, connected("m1"));
+    let unreachable = events.recv_timeout(WAIT).expect("unreachable").2;
+    assert!(
+        matches!(
+            unreachable,
+            MobileEvent::MachineState {
+                state: MachineState::Unreachable { .. },
+                ..
+            }
+        ),
+        "{unreachable:?}"
+    );
+}
+
+#[test]
 fn a_disconnect_closes_the_connection_and_a_later_connect_opens_a_new_one() {
     let transport = FakeTransport::new();
     let (sink, _events) = recorder();

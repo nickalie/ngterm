@@ -4,7 +4,7 @@
 //! oneshot the facade awaits, and the actor reports what it learns on its own through the [`EventSink`].
 //!
 //! Commands are handled in the order posted. A connect settles on the loop what it can at once (already connected,
-//! joining a connect in flight) and only waits on the network in a local task, so the queue keeps moving behind it
+//! joining a connect in flight, closing the connection of a machine since edited) and only waits on the network in a local task, so the queue keeps moving behind it
 //! and a later disconnect cancels that task.
 
 #[cfg(test)]
@@ -88,12 +88,19 @@ impl Drop for Actor {
 struct State<T: Transport> {
     transport: T,
     sink: Arc<dyn EventSink>,
-    connections: RefCell<HashMap<String, T::Connection>>,
+    /// The live connections, each with the machine record it was made from.
+    connections: RefCell<HashMap<String, Link<T::Connection>>>,
     /// The connects in flight, one per machine: a later connect of the same machine joins it, a disconnect or a
     /// connect of the machine as edited cancels it.
     attempts: RefCell<HashMap<String, Attempt>>,
     /// The last attempt's number: an attempt that finishes no longer current was overtaken and changes nothing.
     generation: Cell<u64>,
+}
+
+/// A live connection and the machine record it was made from: a connect of the machine as edited replaces it.
+struct Link<C> {
+    machine: Machine,
+    connection: C,
 }
 
 /// One connect in flight.
@@ -132,17 +139,27 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
         attempt.task.abort();
     }
     let connections = std::mem::take(&mut *state.connections.borrow_mut());
-    for connection in connections.values() {
-        connection.close();
+    for link in connections.values() {
+        link.connection.close();
     }
 }
 
 /// Settles what a connect can at once, on the loop, so a command posted after it sees its effect; only the network
 /// part runs as a local task.
 fn connect<T: Transport>(state: &Rc<State<T>>, machine: Machine, reply: Reply) {
-    if state.connections.borrow().contains_key(&machine.id) {
-        let _ = reply.send(Ok(()));
-        return;
+    let connected = state
+        .connections
+        .borrow()
+        .get(&machine.id)
+        .map(|link| link.machine == machine);
+    match connected {
+        Some(true) => {
+            let _ = reply.send(Ok(()));
+            return;
+        }
+        // A connect of the machine as edited replaces its connection: the new one reports its own state.
+        Some(false) => close(state, &machine.id),
+        None => {}
     }
     if let Some(attempt) = state.attempts.borrow_mut().get_mut(&machine.id)
         && attempt.machine == machine
@@ -186,7 +203,11 @@ async fn reach<T: Transport>(state: Rc<State<T>>, machine: Machine, generation: 
     };
     let answer = match result {
         Ok(connection) => {
-            state.connections.borrow_mut().insert(machine.id.clone(), connection);
+            let link = Link {
+                machine: machine.clone(),
+                connection,
+            };
+            state.connections.borrow_mut().insert(machine.id.clone(), link);
             state.emit(MobileEvent::MachineState {
                 machine_id: machine.id.clone(),
                 state: MachineState::Connected,
@@ -222,8 +243,13 @@ fn cancel<T: Transport>(state: &State<T>, machine_id: &str) {
 
 fn disconnect<T: Transport>(state: &State<T>, machine_id: &str) {
     cancel(state, machine_id);
-    let connection = state.connections.borrow_mut().remove(machine_id);
-    if let Some(connection) = connection {
-        connection.close();
+    close(state, machine_id);
+}
+
+/// Closes `machine_id`'s connection, if any.
+fn close<T: Transport>(state: &State<T>, machine_id: &str) {
+    let link = state.connections.borrow_mut().remove(machine_id);
+    if let Some(link) = link {
+        link.connection.close();
     }
 }
