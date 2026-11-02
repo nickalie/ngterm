@@ -372,6 +372,15 @@ render node (dmabufs).
 Cargo does not notice the provider changing: after installing or removing either, run
 `cargo clean -p ngterm-wpe -p ngterm-wpe-sys -p ngterm-wpe-platform-sys -p ngterm-wpe-javascriptcore-sys`.
 
+### Android toolchain
+
+The Android app needs JDK 21, the Android SDK and NDK, the Rust Android targets and cargo-ndk, at the `ANDROID_*` and
+`CARGO_NDK_VERSION` pins of `build/pins.env`. `scripts/setup-android.sh` (Linux and macOS) installs them into
+`ANDROID_HOME` (else `~/Android/Sdk`): the command-line tools, platform, build-tools, NDK, platform-tools, emulator,
+an x86_64 system image with a phone and a tablet AVD, `rustup target add` and `cargo install cargo-ndk`. It only
+advises on JDK 21 and `sshd` (the mobile e2e test), which are system packages. It is idempotent, reports what it did
+and could not do, and prints the `JAVA_HOME`, `ANDROID_HOME` and `ANDROID_NDK_HOME` lines to export.
+
 ## Build and run
 
 ```sh

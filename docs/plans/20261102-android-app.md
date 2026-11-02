@@ -312,7 +312,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
   `ANDROID_EMULATOR_IMAGE`, `CARGO_NDK_VERSION`; no `LIBGHOSTTY_VT_` prefix, so the vt prefix key doesn't move)
 - Modify: `README.md` (a short "Android toolchain" pointer)
 
-- [ ] write `scripts/setup-android.sh`, idempotent, that reports what it did and what it couldn't do:
+- [x] write `scripts/setup-android.sh`, idempotent, that reports what it did and what it couldn't do:
   - check for JDK 21 (`JAVA_HOME` or PATH) and print install advice if it's missing;
   - find or create an SDK root (`ANDROID_HOME`, else `~/Android/Sdk`); fetch the command-line tools if absent; accept
     the licenses;
@@ -322,10 +322,15 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
   - `cargo install --locked cargo-ndk --version $CARGO_NDK_VERSION` when the pinned version is missing;
   - check for `sshd` (for the e2e test) and print the package name when it's missing;
   - print the `ANDROID_HOME` and `ANDROID_NDK_HOME` lines to export
-- [ ] pin NDK 27.1.12297006 (the version the investigation verified), platform 36, build-tools 36.0.0, an x86_64
+- [x] pin NDK 27.1.12297006 (the version the investigation verified), platform 36, build-tools 36.0.0, an x86_64
       google_apis system image for API 36, and cargo-ndk 4.1.2
-- [ ] check it with shellcheck, run it twice on the machine (the second run must change nothing), and record the
+- [x] check it with shellcheck, run it twice on the machine (the second run must change nothing), and record the
       result here
+  - result (2026-11-03, CachyOS x86_64): shellcheck clean; the first run (cmdline-tools 16111833, build-tools 36.0.0
+    and platform 36 already present from an interrupted earlier run) installed the NDK, platform-tools, emulator and
+    system image, created the `ngterm-phone` and `ngterm-tablet` AVDs, added both Rust targets and installed cargo-ndk
+    4.1.2; the second run reported "nothing to do" and exited 0. JDK 21 (`jdk21-openjdk`) was already installed; sshd
+    is present. sdkmanager prints a deprecation notice (Android CLI) on stderr: harmless, it still installs
 
 ### Task 2: ngterm-term's stream backend and the `local` feature
 
