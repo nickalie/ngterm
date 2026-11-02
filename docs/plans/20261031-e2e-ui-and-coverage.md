@@ -366,18 +366,36 @@ No VMs were used. The Wayland fallback was compiled and smoke-tested, not read b
 **Files:**
 - Create: `conformance/agterm_conformance/drivers/atspi.py`
 - Modify: `conformance/agterm_conformance/drivers/base.py` (`IMPLEMENTED`)
-- Modify: `conformance/pyproject.toml` (PyGObject, python-xlib, Linux only)
+- Modify: `conformance/pyproject.toml` (PyGObject, python-xlib, Linux-only `linux-ui` extra)
 - Modify: `.github/workflows/linux.yml` (conformance job packages: Xvfb, at-spi2-core, gobject-introspection, the
   typelib, PyGObject's build deps)
 
-- [ ] write host-free self-tests first: role mapping to `ROLES`, key names and text to keysyms with shift, chord
+- [x] write host-free self-tests first: role mapping to `ROLES`, key names and text to keysyms with shift, chord
       modifiers, the lazy import (the self-tests run without `gi`)
-- [ ] implement `atspi.py`: the app by pid, ui ids from `get_accessible_id`, the portable attributes, the press through
+- [x] implement `atspi.py`: the app by pid, ui ids from `get_accessible_id`, the portable attributes, the press through
       the Action interface, text through Text/EditableText and Value, focus, the in-window app menu (`_menu_command`
       through the title-bar menu button's popup), `_menu_item`, Settings tabs (`_tab`), keys, text and pointer through
       XTest on the instance's display, bounds from `get_extents(SCREEN)`
-- [ ] run `tests/ui/test_welcome.py` (the smallest file) on Linux green, fixing what the driver gets wrong
-- [ ] run the self-tests and that file's partial suite run
+- [x] run `tests/ui/test_welcome.py` (the smallest file) on Linux green, fixing what the driver gets wrong
+- [x] run the self-tests and that file's partial suite run
+
+**Implementation notes:** native bindings remain lazy, and the `linux-ui` extra follows the existing
+`ax` extra so host-free installations do not need GI build dependencies. Linux conformance CI installs
+that extra and the native AT-SPI/introspection packages. The driver accepts only a matching instance's
+owned Xvfb context. XTest focuses that app's mapped window explicitly; portable `cmd` becomes Control.
+Text uses US shifted symbols and, when needed, empty keycodes on the disposable private X server for
+Unicode; exhaustion fails explicitly instead of replacing an existing mapping.
+
+**App fix:** the welcome checkboxes had the correct label/role but no accessibility toggled state.
+A Rust regression reproduced `None` instead of `Some(True)`; the modal now publishes both checked and
+unchecked states. A disappearing child during AT-SPI traversal is retryable, not an empty-tree result.
+
+**Validation:** the welcome UI file passed on Linux without skips. 987 host-free self-tests passed
+(24 platform/opt-in skips); the retained real AT-SPI input probe passed pointer clicks, modifier chords,
+and mixed ASCII/Latin/CJK typing with protocol read-back. All 10 modal Rust tests, native build and strict
+GPUI all-target clippy passed. Two existing Task 3 self-test mismatches were corrected: the socket isolation
+allowlist follows the renamed `_open_stream` helper, and the launch-options unit test stubs unrelated trace
+registration. Other UI files and their accessibility gaps remain Task 6. No VMs were needed.
 
 ### Task 6: The Linux ui layer green and in the runner
 

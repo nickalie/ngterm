@@ -213,3 +213,31 @@ def test_accessibility_screen_bounds_follow_x11_window(monkeypatch, real_composi
             window.reparent(root, 211, 123)
             frame.destroy()
             connection.sync()
+
+
+def test_atspi_driver_pointer_chords_and_unicode(monkeypatch, real_compositor, a11y_run):
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    from agterm_conformance.match import session_ids
+    from agterm_conformance.plugin import Ctl
+    from agterm_conformance.wait import wait_text
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, os.environ['CONFORMANCE_UI_PROBE_ICD'])
+    adapter = RustAdapter(Path(os.environ['CONFORMANCE_UI_PROBE_BIN']))
+    app = adapter.launch(ui=a11y_run)
+    try:
+        ctl = Ctl(app)
+        ui = AtspiDriver(app.pid, instance=app)
+        before = ctl.tree()['tree']['sidebarVisible']
+        ui.mouse_click('sidebar-toggle-button')
+        wait_until(lambda: ctl.tree()['tree']['sidebarVisible'] is not before)
+        ui.press('cmd+shift+s')
+        wait_until(lambda: ctl.tree()['tree']['sidebarVisible'] is before)
+        # Terminal carries no authored id; the OS tree still exposes its text-field role/name.
+        terminal = ui._wait(lambda: next((el for el in ui._all_elements()
+            if el.role == 'text-field' and el.name == 'Terminal'), None), 'terminal', None)
+        ui.mouse_click(terminal)
+        ui.type_text("echo 'Ab! é界'")
+        ui.press('return')
+        sid, = session_ids(ctl.tree())
+        wait_text(ctl, sid, 'Ab! é界')
+    finally:
+        adapter.stop(app)

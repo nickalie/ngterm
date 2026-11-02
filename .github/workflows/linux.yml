@@ -283,7 +283,7 @@ jobs:
             curl xz patch ncurses fontconfig ttf-dejavu procps-ng \
             weston dbus xorg-server-xvfb mesa vulkan-swrast \
             pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 \
-            python zsh fish
+            python zsh fish at-spi2-core gobject-introspection cairo pkgconf gcc
       - uses: actions/checkout@v7
       # the runner owns the workspace, the container runs as root: without this git refuses the checkout, and
       # run-linux.sh reads the build's commit from it
@@ -330,7 +330,7 @@ jobs:
       - name: install the suite
         run: |
           python -m venv /opt/suite
-          /opt/suite/bin/pip install -e conformance
+          /opt/suite/bin/pip install -e "conformance[linux-ui]"
       # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
       - name: full suite under a ${{ matrix.shell }} login shell (protocol, cli, behaviors)
         env:

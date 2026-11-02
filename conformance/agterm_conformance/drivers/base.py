@@ -27,7 +27,8 @@ DEFAULT_UI_IDS = Path(__file__).resolve().parents[2] / "ui-ids.yaml"
 # The accessibility API per platform; a Rust build on Linux exposes AT-SPI, on Windows UIA.
 PLATFORM_DRIVERS: Mapping[str, str] = {"darwin": "ax", "linux": "atspi", "win32": "uia"}
 IMPL_PLATFORMS: Mapping[str, str] = {"swift-macos": "darwin"}
-IMPLEMENTED: Mapping[str, str] = {"ax": "agterm_conformance.drivers.ax:AxDriver"}
+IMPLEMENTED: Mapping[str, str] = {"ax": "agterm_conformance.drivers.ax:AxDriver",
+                                  "atspi": "agterm_conformance.drivers.atspi:AtspiDriver"}
 ATTRIBUTES = frozenset({"role", "name", "value", "enabled"})
 ROLES = frozenset({
     "button", "menu-button", "menu-item", "checkbox", "radio", "popup", "text-field", "text", "slider", "row",
