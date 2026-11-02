@@ -2,9 +2,12 @@
 //! `RemoteSession.swift`; `live tree`'s own argv lives in [`super::tree`]). Pure and host-free: callers run what these
 //! return.
 //!
-//! The remote command each line ends with, the string ssh hands the far account's shell, is built on its own by a
-//! `*_tail` function ([`tree_tail`], [`present_tail`], [`attach_tail`], [`control_tail`]), so a client with its own ssh
-//! transport runs exactly what desktop runs; desktop's argv is [`ssh_arguments`] plus that tail.
+//! The remote commands of the tree, present, attach and control lines, the strings ssh hands the far account's shell,
+//! are built on their own by `*_tail` functions ([`tree_tail`], [`present_tail`], [`attach_tail`], [`control_tail`]),
+//! so a client with its own ssh transport runs exactly what desktop runs. Desktop's argv for those lines is
+//! [`ssh_arguments`] plus the tail, except that attach also puts `-o LogLevel=ERROR` before the host (see
+//! [`attach_command`]); a client attaching over its own transport should keep ssh's banners off the pane likewise. The
+//! job, page-serve, tunnel and probe lines build their remote commands inline and have no tail builder.
 
 use ngterm_proto::ControlLiveEndpoint;
 
