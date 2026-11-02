@@ -178,7 +178,7 @@ run-linux.sh / run-windows.sh --coverage
   `_pointer_button(button, down)`, `_wheel(dx, dy)`, `_type_text(text)`. The base class composes them (drag = move,
   down, stepped moves, up). `ax.py` implements them in the task that adds them, so the reference keeps instantiating.
 - Waits added beside the existing ones: `count(ui_id, n)` in the driver, a regex `name=` for `find`, `wait_cursor(ctl,
-  sid, row, col)` in `wait.py` over `surface.cursor`.
+  target, column)` in `wait.py` over `surface.cursor`.
 
 **Linux ui launch**:
 
@@ -235,15 +235,19 @@ least one passed test.
 - Modify: `conformance/agterm_conformance/wait.py`
 - Modify: `conformance/selftests/test_drivers.py`
 
-- [ ] write self-tests first on the extended `FakeDriver`: `move`, `mouse_click` (both buttons), `mouse_double_click`,
+- [x] write self-tests first on the extended `FakeDriver`: `move`, `mouse_click` (both buttons), `mouse_double_click`,
       `drag`, `drag_by`, `scroll`, `type_text`, offsets, bounds re-read at action time; a disabled element waits and
       then fails without sending input
-- [ ] write self-tests for the stale path: found again by id and name (a shared id like `session-row` picks the row with
+- [x] write self-tests for the stale path: found again by id and name (a shared id like `session-row` picks the row with
       the snapshot's name), by role and name without an id, else `ElementNotFound`
-- [ ] write self-tests for `count`, the regex `name=`, `wait_cursor` (pass, and timeout with the last value)
-- [ ] add the API and the primitives to `base.py`, the waits to `base.py`/`wait.py`
-- [ ] implement the primitives in `ax.py` (CGEvent mouse down/up/drag/scroll, unicode text events)
+- [x] write self-tests for `count`, the regex `name=`, `wait_cursor` (pass, and timeout with the last value)
+- [x] add the API and the primitives to `base.py`, the waits to `base.py`/`wait.py`
+- [x] implement the primitives in `ax.py` (CGEvent mouse down/up/drag/scroll, unicode text events)
 - [ ] run the self-tests; a `reference-macos.yml` run of the existing ui layer stays green
+
+**Decision:** `surface.cursor` exposes only a zero-based column, so `wait_cursor` accepts
+`(client, target, column, timeout=..., **args)` and returns the complete result. It preserves
+`paneID` and other target arguments unchanged; no row is inferred or added to the protocol.
 
 ### Task 2: Linux ui instances on their own Xvfb, on the run's a11y bus
 

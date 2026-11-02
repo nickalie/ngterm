@@ -7,6 +7,7 @@ attribute vocabulary (`role`, `name`, `value`, `enabled`), never the platform's 
 from __future__ import annotations
 
 import importlib
+import math
 import re
 import string
 import sys
@@ -81,7 +82,10 @@ class Element:
     handle: Any = field(default=None, compare=False, repr=False)
 
     def matches(self, attrs: Mapping[str, Any]) -> bool:
-        return all(getattr(self, key) == wanted for key, wanted in attrs.items())
+        return all(
+            bool(wanted.search(self.name or "")) if key == "name" and isinstance(wanted, re.Pattern)
+            else getattr(self, key) == wanted for key, wanted in attrs.items()
+        )
 
 
 class UiIds:
@@ -183,6 +187,22 @@ class Driver(ABC):
         self.ui_ids.key_for(ui_id)
         return self._elements(ui_id)
 
+    def count(self, ui_id: str, n: int, timeout: float | None = None) -> list[Element]:
+        """Wait for exactly n matches, including zero, and return their snapshots."""
+        self.ui_ids.key_for(ui_id)
+        if not isinstance(n, int) or n < 0:
+            raise ValueError("count must be a nonnegative integer")
+        found = []
+
+        def check():
+            nonlocal found
+            found = self._elements(ui_id)
+            assert len(found) == n, f"last count: {len(found)}"
+            return True
+
+        self._wait(check, f"count {n} of {ui_id}", timeout)
+        return found
+
     def absent(self, ui_id: str, timeout: float | None = None) -> None:
         """Wait until no element carries `ui_id`."""
         self.ui_ids.key_for(ui_id)
@@ -229,6 +249,113 @@ class Driver(ABC):
         parsed = [parse_chord(chord) for chord in chords]
         for chord in parsed:
             self._post_chord(chord)
+
+    def _point(self, target: str | Element, offset: tuple[float, float]) -> tuple[float, float]:
+        if len(offset) != 2 or any(not math.isfinite(v) or not 0 <= v <= 1 for v in offset):
+            raise ValueError("offset must contain two finite fractions in [0, 1]")
+        snapshot = self._resolve(target)
+
+        def ready():
+            candidates = self._elements(snapshot.ui_id) if snapshot.ui_id else self._all_elements()
+            matches = [el for el in candidates if el.name == snapshot.name and
+                       (snapshot.ui_id is not None or el.role == snapshot.role)]
+            current = next((el for el in matches if el.handle == snapshot.handle), None)
+            if current is None and len(matches) == 1:
+                current = matches[0]
+            assert current is not None, "snapshot missing or ambiguous"
+            assert current.enabled is not False, "element not enabled"
+            x, y, width, height = self._bounds(current)
+            assert all(math.isfinite(v) for v in (x, y, width, height)), "nonfinite bounds"
+            assert width > 0 and height > 0, "empty bounds"
+            return (x + width * offset[0], y + height * offset[1])
+
+        return self._wait(ready, f"enabled pointer target {_describe(snapshot)}", None)
+
+    def move(self, target: str | Element, offset=(0.5, 0.5)) -> None:
+        self._pointer_move(*self._point(target, offset))
+
+    @staticmethod
+    def _check_button(button: str) -> None:
+        if button not in ("left", "right"):
+            raise ValueError("button must be left or right")
+
+    def mouse_click(self, target: str | Element, button="left", offset=(0.5, 0.5)) -> None:
+        """A physical pointer click; click() remains the accessibility press."""
+        self._check_button(button)
+        self.move(target, offset)
+        self._pointer_button(button, True)
+        self._pointer_button(button, False)
+
+    def mouse_double_click(self, target: str | Element, button="left", offset=(0.5, 0.5)) -> None:
+        self._check_button(button)
+        self.move(target, offset)
+        self._double_click(button)
+
+    @staticmethod
+    def _check_steps(steps: int) -> None:
+        if not isinstance(steps, int) or steps < 1:
+            raise ValueError("steps must be a positive integer")
+
+    def _drag_points(self, start, end, steps: int) -> None:
+        self._pointer_move(*start)
+        self._pointer_button("left", True)
+        try:
+            for step in range(1, steps + 1):
+                self._pointer_move(*(a + (b - a) * step / steps for a, b in zip(start, end)))
+        finally:
+            self._pointer_button("left", False)
+
+    def drag(self, src: str | Element, dst: str | Element, src_offset=(0.5, 0.5),
+             dst_offset=(0.5, 0.5), steps=10) -> None:
+        self._check_steps(steps)
+        start, end = self._point(src, src_offset), self._point(dst, dst_offset)
+        self._drag_points(start, end, steps)
+
+    def drag_by(self, target: str | Element, dx: float, dy: float, offset=(0.5, 0.5), steps=10) -> None:
+        self._check_steps(steps)
+        if not all(math.isfinite(v) for v in (dx, dy)):
+            raise ValueError("drag distances must be finite")
+        start = self._point(target, offset)
+        self._drag_points(start, (start[0] + dx, start[1] + dy), steps)
+
+    def scroll(self, target: str | Element, dy: int, dx: int = 0) -> None:
+        """Scroll wheel ticks: positive down/right, negative up/left."""
+        if not all(isinstance(v, int) for v in (dx, dy)):
+            raise ValueError("scroll distances must be integer wheel ticks")
+        self.move(target)
+        self._wheel(dx, dy)
+
+    def type_text(self, text: str) -> None:
+        """Type printable Unicode into the focused control; use press for control keys."""
+        if not isinstance(text, str) or any(not char.isprintable() for char in text):
+            raise ValueError("type_text needs printable text")
+        self._type_text(text)
+
+    def _double_click(self, button: str) -> None:
+        # Platforms with explicit click counts override this (CGEvent on macOS).
+        for _ in range(2):
+            self._pointer_button(button, True)
+            self._pointer_button(button, False)
+
+    @abstractmethod
+    def _all_elements(self) -> list[Element]:
+        """All elements, including controls without an author id."""
+
+    @abstractmethod
+    def _bounds(self, element: Element) -> tuple[float, float, float, float]:
+        """Fresh screen coordinates (x, y, width, height)."""
+
+    @abstractmethod
+    def _pointer_move(self, x: float, y: float) -> None: ...
+
+    @abstractmethod
+    def _pointer_button(self, button: str, down: bool) -> None: ...
+
+    @abstractmethod
+    def _wheel(self, dx: int, dy: int) -> None: ...
+
+    @abstractmethod
+    def _type_text(self, text: str) -> None: ...
 
     def _resolve(self, target: str | Element) -> Element:
         return target if isinstance(target, Element) else self.find(target)
