@@ -333,14 +333,33 @@ API; this task did not run those platforms. Successful reference reruns discard 
 
 **Files:**
 - Create: `build/patches/gpui-pre-linux/0005-a11y-window-bounds.patch`, through `scripts/vendor-gpui.sh`
-- Modify: `crates/ngterm-gpui/tests/x11_window.rs` (or a sibling test)
+- Modify: `conformance/selftests/test_linux_ui_integration.py` (real AT-SPI regression using the existing private-bus lifecycle)
 
-- [ ] write the test first: an X11 window at a known origin on a private Xvfb; the bounds AccessKit receives (read back
+- [x] write the test first: an X11 window at a known origin on a private Xvfb; the bounds AccessKit receives (read back
       through AT-SPI `get_extents(SCREEN)` on a private a11y bus, or the adapter's root bounds) include that origin
-- [ ] write the patch: call `a11y_update_window_bounds` on configure in both Linux backends (X11 and Wayland, where it
+- [x] write the patch: call `a11y_update_window_bounds` on configure in both Linux backends (X11 and Wayland, where it
       gives window-relative bounds at least)
-- [ ] regenerate `vendor/` through the vendor script; its `--check` holds
-- [ ] run clippy and tests on `ngterm-gpui`
+- [x] regenerate `vendor/` through the vendor script; its `--check` holds
+- [x] run clippy and tests on `ngterm-gpui`
+
+**Decision:** use the existing Python integration harness to observe real AT-SPI extents instead of
+reimplementing its private accessibility bus/status service in the Rust window harness. Codex agreed.
+The test failed before the patch with `(-1, -1, -1, -1)` versus the real X geometry `(512, 240, 900, 600)`.
+The probe shares one module-owned bus because libatspi retains process-global connection state.
+
+**Bounds:** initialize when the adapter is installed and update on configure. X11 translates the real
+client origin to root coordinates, so combined resize/move and reparenting cannot leave a stale origin;
+node coordinates include the whole client surface, so client-drawn shadow insets are not added twice.
+Wayland reports scaled surface-relative bounds at zero origin and refreshes on scale changes; it does
+not claim a global screen position. External window-manager frame decorations are outside the reported
+client surface. The patch header records these coordinate assumptions.
+
+**Validation:** vendor regeneration/check passed; `cargo clippy -p ngterm-gpui --all-targets -- -D warnings`
+passed; all 5 native `x11_window` tests passed. All 3 real private-Xvfb/AT-SPI cases passed, covering initial,
+moved, resized, combined move/resize, and reparented geometry at scale 1 and 2, plus descendant screen
+coordinates and existing lifecycle/input checks. Host-free lifecycle checks passed 29 tests (3 real probes
+skipped when not opted in); the Weston protocol-version smoke test passed against the patched build.
+No VMs were used. The Wayland fallback was compiled and smoke-tested, not read back through AT-SPI.
 
 ### Task 5: The AT-SPI driver on one ui file
 
