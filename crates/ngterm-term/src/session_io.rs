@@ -16,7 +16,7 @@
 //!   its sessions to a new build) is attached again as the CLI attaches ([`attach_again`]), under the lead the pane
 //!   held, its terminal reset first ([`snapshot::RESYNC_RESET`]).
 //! - **Replies**: the server answers the program's queries; the pane's terminal answers none but Kitty graphics
-//!   commands, whose answers complete the server's barriers ([`crate::pty::ReplyOutlet`]). The pane is the reply owner
+//!   commands, whose answers complete the server's barriers ([`crate::outlet::ReplyOutlet`]). The pane is the reply owner
 //!   when the server makes it one: it sends its facts (theme colours, cell size, colour scheme, Kitty graphics) with
 //!   the attach and on every change, and the frontend answers a delegated clipboard read as any of the pane's own
 //!   ([`crate::PaneEvent::ClipboardRead`]). The clipboard reads in the output are the server's to delegate, so the
@@ -39,7 +39,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use ngterm_core::live::support::LiveAttach;
-use ngterm_pty::ReadPause;
 use ngterm_session::cli::{
     Contract, Origin, Outcome, Prepared, attach_again, prepare, process_environment, same_variable, variable,
 };
@@ -54,6 +53,7 @@ use ngterm_session::server::spawn::StartOptions;
 use ngterm_session::server::{lead, snapshot};
 
 use crate::effects::{ClipboardAnswer, ClipboardLocation, ClipboardReadRequest, ColorScheme, PaneEvent};
+use crate::mailbox::ReadPause;
 use crate::pane::{Shared, lock};
 use crate::{GridSize, PaneCommand, PaneError, ReadScope};
 

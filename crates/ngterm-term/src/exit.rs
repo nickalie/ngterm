@@ -3,7 +3,7 @@
 //!
 //! - A command that should not be waited for closes its pane, failed or not (the GTK build suppressed libghostty's
 //!   message for it).
-//! - An abnormal exit — nonzero within [`ExitPolicy::abnormal_runtime`] (`abnormal-command-exit-runtime`, 250 ms) —
+//! - An abnormal exit — nonzero within `ExitPolicy::Launched`'s `abnormal_runtime` (`abnormal-command-exit-runtime`, 250 ms) —
 //!   holds the pane on libghostty's failure report, a plain shell's included.
 //! - A command run with `wait_after_command` holds the pane on "Process exited. Press any key to close the terminal."
 //! - Anything else closes.
@@ -26,10 +26,10 @@ pub const ABNORMAL_EXIT_RUNTIME: Duration = Duration::from_millis(250);
 /// How a pane's program ending is handled.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ExitPolicy {
-    /// Only report the exit (a pane spawned from a bare [`crate::PaneCommand`]).
+    /// Only report the exit (a pane spawned from a bare `PaneCommand`).
     #[default]
     Report,
-    /// A launched pane ([`crate::Launch`]), handled as libghostty and the GTK build handled a surface's child.
+    /// A launched pane (`Launch`, feature `local`), handled as libghostty and the GTK build handled a surface's child.
     Launched {
         /// The program line the failure report names (`/bin/sh -c <command>`).
         argv: String,

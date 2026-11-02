@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! Live panes attached in process to the cargo-built session server (`crate::session_io`), on every OS: a fresh
 //! session's prompt, typing and a resize reaching it, its environment and directory, the pane dropped leaving the
 //! session running and a reattach painting its snapshot, a pane looping on titles dropped in time, the role a managed pane is told, the session's end and an

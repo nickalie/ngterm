@@ -1,10 +1,27 @@
-//! The terminal pane core, toolkit-neutral, the same on Linux, macOS and Windows: a libghostty-vt terminal fed from a
-//! PTY (`ngterm-pty`: openpty, or Windows' pseudoconsole), or a live pane's session on the session server attached in
-//! process, by an IO thread per pane, its effects as [`PaneEvent`]s for the frontend's main thread, and its screen as
+//! The terminal pane core, toolkit-neutral, the same on Linux, macOS, Windows and Android: a libghostty-vt terminal
+//! fed by an IO thread per pane, its effects as [`PaneEvent`]s for the frontend's main thread, and its screen as
 //! [`Frame`]s in this crate's own types.
 //!
-//! - [`Pane::spawn`] starts a [`PaneCommand`] on a PTY; [`Pane::write`] queues input, [`Pane::resize`] resizes the VT
-//!   and the PTY, [`Pane::frame`] captures the screen for painting, [`Pane::take_events`] drains the effects.
+//! A [`Pane`] has one of four backends, which differ only in where the program's bytes come from and go to:
+//!
+//! - **PTY**: `Pane::spawn` starts a `PaneCommand` on a PTY (`ngterm-pty`: openpty, or Windows' pseudoconsole), whose
+//!   actor moves the bytes; `Pane::launch` runs a plain pane's command or login shell this way.
+//! - **Live**: `Pane::launch` attaches a live pane to its session on the session server in process (`ngterm-session`),
+//!   with no PTY.
+//! - **Painted**: `Pane::launch` runs a HUD's painter in process, whose thread writes the terminal.
+//! - **Stream**: [`Pane::stream`] makes a pane whose program runs elsewhere, fed by its embedder's channel (a
+//!   remote-only frontend's ssh channel running `ngterm-session attach`): the embedder hands the program's output to a
+//!   [`StreamFeed`] and sends what a [`StreamOut`] gives it ([`Outgoing`]) to the channel.
+//!
+//! The `local` feature (on by default) brings the first three: the PTY (`ngterm-pty`), the live pane's in-process
+//! attach (`ngterm-session`), the launch (`Launch`, `Host`, `PaneCommand`, with `ngterm-host`'s shell) and the HUD's
+//! painter. Without it the crate holds stream panes alone, with no PTY, session server or process table in its graph:
+//! a remote-only frontend's (Android, where `ngterm-session` does not build). Everything else is the same for every
+//! kind of pane:
+//!
+//! - Writing and sizing: [`Pane::write`] queues input, [`Pane::resize`] resizes the VT and the program's end (the
+//!   PTY, the session or the channel), [`Pane::frame`] captures the screen for painting, [`Pane::take_events`] drains
+//!   the effects.
 //! - Input: [`Pane::key`] (a toolkit-neutral [`KeyInput`], encoded for the terminal's keyboard modes),
 //!   [`Pane::send`] (a binding's text), [`Pane::mouse`], [`Pane::wheel`] (routed as Ghostty routes the wheel),
 //!   [`Pane::focus`], [`Pane::paste`], [`Pane::scroll`].
@@ -16,39 +33,45 @@
 //! - Search: [`Pane::search`], [`Pane::navigate_search`], [`Pane::search_state`], with
 //!   [`PaneEvent::SearchTotal`] and [`PaneEvent::SearchSelected`] as libghostty reported them.
 //! - Kitty graphics: every [`Frame`] carries a [`KittyView`] of its images and placements.
-//! - Launch: [`Pane::launch`] runs a [`Launch`] (a session pane's seed: a live pane's attach to its session, made in
-//!   process with no PTY, a plain pane's command or login shell; or a HUD's painter, in process too) under a [`Host`] (the terminal identity and shell integration libghostty gave a
-//!   surface), with the [`ExitPolicy`] of a launched pane; [`Pane::foreground_pid`] is the terminal's foreground
-//!   process group (on Windows the process that stands in for it, from the program's job).
-//! - Threads and locks: Technical Details > Threads of the GPUI plan; the details are in [`pane`]'s and
-//!   [`effects`]'s docs. The IO thread holds the VT lock for one bounded slice of `vt_write` at a time; painting only
-//!   ever `try_lock`s it.
+//! - A launched pane runs under a `Host` (the terminal identity and shell integration libghostty gave a surface), with
+//!   the [`ExitPolicy`] of a launched pane; [`Pane::foreground_pid`] is the terminal's foreground process group (on
+//!   Windows the process that stands in for it, from the program's job).
+//! - Threads and locks: Technical Details > Threads of the GPUI plan; the details are in the `pane` and `effects`
+//!   modules' docs. The IO thread holds the VT lock for one bounded slice of `vt_write` at a time; painting only ever
+//!   `try_lock`s it.
 //! - The engine boundary: no libghostty-vt type appears in this crate's public API, so the VT engine can be swapped
 //!   without touching the frontend.
 //!
 //! [`init`] installs libghostty-vt's process-global hooks (the PNG decoder for Kitty graphics, the log sink into
-//! `tracing`); [`Pane::spawn`] calls it, so a frontend need not.
+//! `tracing`); every pane's constructor calls it, so a frontend need not.
 
 mod actions;
 #[cfg(test)]
+#[cfg(feature = "local")]
 mod bench;
 mod effects;
 mod exit;
 mod gesture;
 mod input;
 mod kitty;
+#[cfg(feature = "local")]
 mod launch;
 mod mailbox;
+mod outlet;
+#[cfg(feature = "local")]
 mod painted;
 mod pane;
 mod placeholder;
 mod png;
+#[cfg(feature = "local")]
 mod pty;
 pub mod pwd;
 mod render;
 mod search;
 mod selection;
+#[cfg(feature = "local")]
 mod session_io;
+mod stream;
 mod text;
 mod wheel;
 
@@ -66,16 +89,21 @@ pub use kitty::{
     KittyFormat, KittyImage, KittyImageKey, KittyLayer, KittyPlacement, KittyView, PlacementKey, PlacementNamespace,
     PlacementRect, SourceRect, VirtualRooted,
 };
+#[cfg(feature = "local")]
 pub use launch::{COMMAND_SHELL, FALLBACK_TERM, Host, Launch, Prepared, resolve_resources, resource_candidates};
-pub use pane::{DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, Pane, PaneConfig, PaneStats, Wake};
+pub use pane::{
+    DEFAULT_KITTY_IMAGE_LIMIT, DEFAULT_WRITE_LIMIT, FrameSnapshot, GridSize, Pane, PaneConfig, PaneStats, Wake,
+};
 pub use placeholder::{KittyPlaceholder, PLACEHOLDER, VirtualPlacement, virtual_placements};
-pub use pty::{GridSize, PaneCommand};
+#[cfg(feature = "local")]
+pub use pty::PaneCommand;
 pub use render::{
     Cell, CellFlags, CellWidth, Colors, Cursor, CursorDefaults, CursorPosition, CursorStyle, Frame, MouseShape, Rgb,
     Row, ThemeColors, Underline,
 };
 pub use search::{Highlight, SearchState, SearchStep};
 pub use selection::{GridPoint, PointSpace, SelectionRange, SelectionText};
+pub use stream::{Outgoing, StreamFeed, StreamOut};
 pub use text::TextRegion;
 pub use vt::ReadScope;
 pub use wheel::{Wheel, WheelInput};

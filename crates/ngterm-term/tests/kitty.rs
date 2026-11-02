@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! Kitty graphics through a real PTY: a chunked APC transmission (raw pixels, and PNG as `show-image.sh` sends it)
 //! becomes an image and a placement in the frame's view; deleting it reports it removed.
 //!

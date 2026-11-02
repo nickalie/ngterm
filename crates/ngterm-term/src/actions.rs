@@ -195,6 +195,7 @@ pub(crate) fn apply_clear(shared: &Shared, vt: &mut Vt) {
 
 // the programs are POSIX shell scripts (Windows' forms of a pane are tested in tests/platform.rs)
 #[cfg(test)]
+#[cfg(feature = "local")]
 #[cfg(unix)]
 mod tests {
     use std::time::{Duration, Instant};

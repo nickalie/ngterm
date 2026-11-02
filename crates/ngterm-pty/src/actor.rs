@@ -92,6 +92,13 @@ impl ReadPause {
     }
 }
 
+impl From<Arc<AtomicBool>> for ReadPause {
+    /// A switch over `flag`, shared with whoever else holds it (a consumer that keeps its own handle on the switch).
+    fn from(flag: Arc<AtomicBool>) -> Self {
+        Self(flag)
+    }
+}
+
 /// What a released actor leaves behind for the process that took the PTY over.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Released {

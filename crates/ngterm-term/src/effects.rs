@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use ngterm_ghostty_vt as vt;
 use vt::ReadScope;
 
-use crate::pty::ReplyOutlet;
+use crate::outlet::ReplyOutlet;
 use crate::render::{Capture, Rgb, rgb};
 
 /// A clipboard a program reads or writes.

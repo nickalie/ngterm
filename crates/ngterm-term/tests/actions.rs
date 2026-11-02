@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! The terminal-scoped binding actions over a real PTY: `clear_screen` (off and at a prompt, the alternate screen),
 //! `reset`, `adjust_selection`, `scroll_to_selection`, `scroll_to_row` and the formatter's regions and formats.
 //!

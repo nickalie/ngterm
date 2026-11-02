@@ -1,10 +1,11 @@
 //! [`Pane`]: one terminal — a libghostty-vt terminal behind a mutex, a PTY child, and its threads: the PTY actor's
-//! (`ngterm-pty`: reads the PTY into the pane's [`Mailbox`] and writes the input and the terminal's replies to it; one
-//! polling thread on Unix, a reader and a writer on Windows), the IO worker (feeds the mailbox's output to the VT,
-//! stopping at clipboard reads for their answers), and the waiter (reports the child's exit). A live pane has no PTY
-//! and no child: its session's attach stream, read and written by threads of [`crate::session_io`], takes the
-//! actor's and the waiter's places, and the same IO worker feeds its output to the VT. A HUD's painted pane has neither
-//! either: the painter's thread ([`crate::painted`]) takes their places.
+//! (`ngterm-pty`, feature `local`: reads the PTY into the pane's [`Mailbox`] and writes the input and the terminal's
+//! replies to it; one polling thread on Unix, a reader and a writer on Windows), the IO worker (feeds the mailbox's
+//! output to the VT, stopping at clipboard reads for their answers), and the waiter (reports the child's exit). A live
+//! pane has no PTY and no child: its session's attach stream, read and written by threads of `crate::session_io`,
+//! takes the actor's and the waiter's places, and the same IO worker feeds its output to the VT. A HUD's painted pane
+//! has neither either: the painter's thread (`crate::painted`) takes their places. A stream pane has none of them
+//! either: its embedder's channel ([`crate::stream`]) takes the actor's place, and the embedder reports its end.
 //!
 //! Locks (Technical Details > Threads): `vt` → `capture` → leaves (`armed`, `published`, `divert`), and `vt` →
 //! `search`, never the reverse. The IO thread holds `vt` for one bounded slice of `vt_write` at a time; input
@@ -29,7 +30,9 @@ use std::time::{Duration, Instant};
 
 use ngterm_core::overlay_capture;
 use ngterm_ghostty_vt::{self as vt, ReadCandidate, Scanner};
-use ngterm_pty::{Actor, ActorConfig, ActorHandle, Child, Killer, Master, ReadPause, Spawned};
+#[cfg(feature = "local")]
+use ngterm_pty::{Actor, ActorConfig, ActorHandle, Child, Killer, Master, Spawned};
+#[cfg(feature = "local")]
 use ngterm_session::cli::{Outcome, Prepared};
 
 use crate::effects::{
@@ -38,12 +41,17 @@ use crate::effects::{
 };
 use crate::exit::{ExitPolicy, Layout};
 use crate::input::InputState;
-use crate::mailbox::{Answer, Mail, Mailbox};
+use crate::mailbox::{Answer, Mail, Mailbox, ReadPause};
+use crate::outlet::ReplyOutlet;
+#[cfg(feature = "local")]
 use crate::painted::Painted;
-use crate::pty::{GridSize, PaneCommand, ReplyOutlet, Tty};
+#[cfg(feature = "local")]
+use crate::pty::{PaneCommand, Tty};
 use crate::render::{Capture, CursorDefaults, Frame, MouseShape, ThemeColors};
 use crate::search::SearchSlot;
+#[cfg(feature = "local")]
 use crate::session_io::{self, Live};
+use crate::stream::{Gate, Outbound, Stream, StreamFeed, StreamOut};
 use crate::{PaneError, ScrollbackLimits};
 
 /// The most bytes fed to `vt_write` under one hold of the VT lock.
@@ -54,6 +62,15 @@ const EXIT_GRACE: Duration = Duration::from_secs(1);
 pub const DEFAULT_WRITE_LIMIT: usize = 1024 * 1024;
 /// Ghostty's default Kitty image storage per screen (`image-storage-limit = 320000000`).
 pub const DEFAULT_KITTY_IMAGE_LIMIT: u64 = 320_000_000;
+
+/// A pane's grid: cells and the pixel size of one cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GridSize {
+    pub cols: u16,
+    pub rows: u16,
+    pub cell_width: u32,
+    pub cell_height: u32,
+}
 
 /// Called from the pane's threads when it has news (a frame to draw or events to drain); coalesced until the frontend
 /// calls [`Pane::frame`] or [`Pane::take_events`].
@@ -281,6 +298,7 @@ impl Shared {
     }
 
     /// A live pane's Kitty graphics answers since the last call.
+    #[cfg(feature = "local")]
     pub(crate) fn take_kitty_answers(&self) -> Vec<u8> {
         self.replies.take_kitty_answers()
     }
@@ -295,7 +313,8 @@ impl Shared {
     }
 
     /// The frame last published by a paint (the bench's, which runs on Linux).
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
+    #[cfg(all(target_os = "linux", feature = "local"))]
     pub(crate) fn published_frame(&self) -> Arc<Frame> {
         Arc::clone(&lock(&self.published))
     }
@@ -326,6 +345,7 @@ pub struct Pane {
 
 /// What a pane's input, grid and end go through.
 enum Io {
+    #[cfg(feature = "local")]
     Pty {
         /// The PTY's actor: the input queue, the resizes, the end of the PTY.
         actor: ActorHandle,
@@ -333,9 +353,13 @@ enum Io {
         killer: Killer,
     },
     /// A live pane's attach to its session.
+    #[cfg(feature = "local")]
     Live(Arc<Live>),
     /// A HUD's painter.
+    #[cfg(feature = "local")]
     Painted(Arc<Painted>),
+    /// The embedder's channel.
+    Stream(Stream),
 }
 
 impl std::fmt::Debug for Pane {
@@ -352,6 +376,7 @@ impl Pane {
     /// [`PaneError::Spawn`] when no PTY can be opened or the program cannot be started (not found, not executable);
     /// [`PaneError::Pty`] when a thread of the pane cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
     /// the size or cannot allocate.
+    #[cfg(feature = "local")]
     pub fn spawn(command: &PaneCommand, config: &PaneConfig) -> Result<Self, PaneError> {
         let Spawned { master, mut child } =
             ngterm_pty::spawn(command, config.size.pty()).map_err(|err| PaneError::Spawn(err.to_string()))?;
@@ -390,6 +415,7 @@ impl Pane {
     ///
     /// [`PaneError::Pty`] when a thread of the pane cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
     /// the size or cannot allocate.
+    #[cfg(feature = "local")]
     pub(crate) fn attach_live(session: Result<Prepared, Outcome>, config: &PaneConfig) -> Result<Self, PaneError> {
         let (events_tx, events) = mpsc::channel();
         let read_pause = ReadPause::new();
@@ -446,6 +472,7 @@ impl Pane {
     ///
     /// [`PaneError::Pty`] when a thread of the pane cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
     /// the size or cannot allocate.
+    #[cfg(feature = "local")]
     pub(crate) fn paint(file: PathBuf, config: &PaneConfig) -> Result<Self, PaneError> {
         let (events_tx, events) = mpsc::channel();
         let mailbox = Arc::new(Mailbox::new(ReadPause::new()));
@@ -479,6 +506,53 @@ impl Pane {
         })
     }
 
+    /// A pane of `config.size` fed by its embedder's byte stream (`crate::stream`): no PTY, no child and no thread
+    /// of the channel's. The embedder reads its channel into the [`StreamFeed`] and writes what the [`StreamOut`]
+    /// gives it to the channel; the pane runs its IO worker, so this returns at once.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneError::Pty`] when the pane's IO thread cannot start; [`PaneError::Terminal`] when libghostty-vt refuses
+    /// the size or cannot allocate.
+    pub fn stream(config: &PaneConfig) -> Result<(Self, StreamFeed, StreamOut), PaneError> {
+        let (events_tx, events) = mpsc::channel();
+        let read_pause = ReadPause::new();
+        let mailbox = Arc::new(Mailbox::new(read_pause.clone()));
+        let shared = Arc::new(shared(config, events_tx, mailbox)?);
+        // a remote program's files, temporary files and shared memory are not this machine's
+        lock(&shared.vt)
+            .terminal
+            .set_kitty_image_media(false, None, false)
+            .map_err(PaneError::terminal)?;
+        let outbound = Arc::new(Outbound::new(shared.write_limit));
+        shared.replies.attach_stream(&outbound);
+        let gate = Arc::new(Gate::new(read_pause));
+        let worker = Worker {
+            shared: Arc::clone(&shared),
+            reads: Reads::Stream(Arc::clone(&gate)),
+            scanner: Scanner::default(),
+            next_read: 0,
+            child_exited: false,
+        };
+        let worker = spawn_thread("pane-io", move || worker.run())?;
+        let feed = StreamFeed {
+            shared: Arc::clone(&shared),
+            gate: Arc::clone(&gate),
+            exited: AtomicBool::new(false),
+        };
+        let out = StreamOut {
+            outbound: Arc::clone(&outbound),
+        };
+        let pane = Self {
+            shared,
+            io: Io::Stream(Stream { outbound, gate }),
+            events: Mutex::new(events),
+            pid: None,
+            worker: Some(worker),
+        };
+        Ok((pane, feed, out))
+    }
+
     pub(crate) fn shared(&self) -> &Arc<Shared> {
         &self.shared
     }
@@ -496,8 +570,11 @@ impl Pane {
     #[must_use]
     pub fn foreground_pid(&self) -> Option<u32> {
         match &self.io {
+            #[cfg(feature = "local")]
             Io::Pty { tty, .. } => tty.foreground_pid(),
+            #[cfg(feature = "local")]
             Io::Live(_) | Io::Painted(_) => None,
+            Io::Stream(_) => None,
         }
     }
 
@@ -509,8 +586,11 @@ impl Pane {
     #[must_use]
     pub fn password_input(&self) -> bool {
         match &self.io {
+            #[cfg(feature = "local")]
             Io::Pty { tty, .. } => tty.password_input(),
+            #[cfg(feature = "local")]
             Io::Live(_) | Io::Painted(_) => false,
+            Io::Stream(_) => false,
         }
     }
 
@@ -522,9 +602,13 @@ impl Pane {
     /// PTY ended or refused a write (the child side is gone).
     pub fn write(&self, bytes: &[u8]) -> Result<(), PaneError> {
         match &self.io {
+            #[cfg(feature = "local")]
             Io::Pty { actor, .. } => actor.write_input(bytes).map_err(PaneError::from),
+            #[cfg(feature = "local")]
             Io::Live(live) => live.input(bytes),
+            #[cfg(feature = "local")]
             Io::Painted(_) => Ok(()),
+            Io::Stream(stream) => stream.outbound.input(bytes),
         }
     }
 
@@ -543,18 +627,23 @@ impl Pane {
         vt.size = size;
         drop(vt);
         match &self.io {
+            #[cfg(feature = "local")]
             Io::Pty { actor, .. } => actor.resize(size.pty()),
+            #[cfg(feature = "local")]
             Io::Live(live) => {
                 live.resize(size);
                 self.update_metadata();
             }
+            #[cfg(feature = "local")]
             Io::Painted(painted) => painted.resized(),
+            Io::Stream(stream) => stream.outbound.resize(size),
         }
         self.shared.wake();
         Ok(())
     }
 
     /// A live pane's facts for the server's replies, sent when they changed.
+    #[cfg(feature = "local")]
     fn update_metadata(&self) {
         if let Io::Live(live) = &self.io {
             live.update_metadata(live.metadata_of(&self.shared, self.color_scheme()));
@@ -584,6 +673,7 @@ impl Pane {
             .terminal
             .set_kitty_image_storage_limit(limit)
             .map_err(PaneError::terminal)?;
+        #[cfg(feature = "local")]
         if let Io::Live(live) = &self.io {
             live.set_kitty_graphics(limit > 0);
             self.update_metadata();
@@ -603,6 +693,7 @@ impl Pane {
             // the config's change is no program's: the next batch reports only what the program changes from here
             vt.colors = vt.terminal.colors();
         }
+        #[cfg(feature = "local")]
         self.update_metadata();
         self.shared.wake();
         Ok(())
@@ -617,6 +708,7 @@ impl Pane {
         if self.shared.scheme.swap(dark, Ordering::AcqRel) == dark {
             return;
         }
+        #[cfg(feature = "local")]
         if matches!(self.io, Io::Live(_)) {
             self.update_metadata();
             return;
@@ -662,8 +754,11 @@ impl Pane {
     /// Answer the clipboard read `id` ([`PaneEvent::ClipboardRead`]); an answer for any other id is ignored.
     pub fn answer_clipboard_read(&self, id: u64, answer: ClipboardAnswer) {
         match &self.io {
+            #[cfg(feature = "local")]
             Io::Pty { .. } | Io::Painted(_) => self.shared.mailbox.answer(id, answer),
+            #[cfg(feature = "local")]
             Io::Live(live) => live.answer(id, answer),
+            Io::Stream(_) => self.shared.mailbox.answer(id, answer),
         }
     }
 
@@ -671,9 +766,13 @@ impl Pane {
     #[must_use]
     pub fn queued_input(&self) -> usize {
         match &self.io {
+            #[cfg(feature = "local")]
             Io::Pty { actor, .. } => actor.queued(),
+            #[cfg(feature = "local")]
             Io::Live(live) => live.queued(),
+            #[cfg(feature = "local")]
             Io::Painted(_) => 0,
+            Io::Stream(stream) => stream.outbound.queued(),
         }
     }
 
@@ -698,14 +797,18 @@ impl Drop for Pane {
         self.shared.mailbox.shutdown();
         lock(&self.shared.status_file).take();
         match &self.io {
+            #[cfg(feature = "local")]
             Io::Pty { actor, killer, .. } => {
                 if let Err(err) = killer.hang_up() {
                     tracing::debug!(%err, "hanging up the pane's child failed");
                 }
                 actor.shutdown();
             }
+            #[cfg(feature = "local")]
             Io::Live(live) => live.leave(),
+            #[cfg(feature = "local")]
             Io::Painted(painted) => painted.stop(),
+            Io::Stream(stream) => stream.close(),
         }
         self.shared.replies.close();
         if let Some(worker) = self.worker.take() {
@@ -800,6 +903,7 @@ fn kitty_graphics(terminal: &mut vt::Terminal, limit: u64) -> Result<(), vt::Err
 
 fn spawn_thread(name: &str, body: impl FnOnce() + Send + 'static) -> Result<JoinHandle<()>, PaneError> {
     #[cfg(test)]
+    #[cfg(feature = "local")]
     if tests::FAIL_THREAD.with(std::cell::Cell::get) == Some(name) {
         return Err(PaneError::Pty(format!("cannot start the {name} thread: injected")));
     }
@@ -874,6 +978,7 @@ fn end_expired_hold(vt: &mut Vt, capture: &mut Capture) -> bool {
 
 /// Kill the child's tree and reap the child, for a pane that never finished starting (the kill comes first: on Unix
 /// the tree is never signalled once the child is reaped).
+#[cfg(feature = "local")]
 fn stop_child(killer: &Killer, child: &mut Child) {
     if let Err(err) = killer.kill_tree() {
         tracing::debug!(%err, "killing a pane's child that never finished starting failed");
@@ -882,6 +987,7 @@ fn stop_child(killer: &Killer, child: &mut Child) {
 }
 
 /// What a pane needs before its threads start.
+#[cfg(feature = "local")]
 struct Parts {
     shared: Arc<Shared>,
     tty: Tty,
@@ -889,6 +995,7 @@ struct Parts {
     events: Receiver<PaneEvent>,
 }
 
+#[cfg(feature = "local")]
 impl Parts {
     fn new(master: &Master, child: &Child, config: &PaneConfig) -> Result<Self, PaneError> {
         let tty = Tty::of(master, child)?;
@@ -924,7 +1031,7 @@ impl Parts {
             stop_child(killer, child);
             err
         };
-        let actor = match start_actor(&shared, master, read_pause) {
+        let actor = match start_actor(&shared, master, &read_pause) {
             Ok(actor) => actor,
             Err(err) => return Err(stop(err, None, None, &mut child)),
         };
@@ -969,7 +1076,8 @@ impl Parts {
 
 /// The PTY's actor over `master`: every read goes to the pane's mailbox (the callback never waits), the actor's end
 /// ends the mailbox's output, and the input queue holds at most the pane's write limit.
-fn start_actor(shared: &Shared, master: Master, read_pause: ReadPause) -> Result<ActorHandle, PaneError> {
+#[cfg(feature = "local")]
+fn start_actor(shared: &Shared, master: Master, read_pause: &ReadPause) -> Result<ActorHandle, PaneError> {
     #[cfg(test)]
     if tests::FAIL_THREAD.with(std::cell::Cell::get) == Some("pane-pty") {
         return Err(PaneError::Pty("cannot start the pane-pty thread: injected".to_owned()));
@@ -984,7 +1092,7 @@ fn start_actor(shared: &Shared, master: Master, read_pause: ReadPause) -> Result
         }),
     );
     config.input_limit = shared.write_limit;
-    config.read_pause = read_pause;
+    config.read_pause = read_pause.actor();
     config.on_exit = Some(Box::new(move |reason| {
         tracing::debug!(?reason, "the pane's PTY ended");
         ends.end_of_output();
@@ -993,6 +1101,7 @@ fn start_actor(shared: &Shared, master: Master, read_pause: ReadPause) -> Result
 }
 
 /// A pane's running parts.
+#[cfg(feature = "local")]
 struct Started {
     shared: Arc<Shared>,
     actor: ActorHandle,
@@ -1004,6 +1113,7 @@ struct Started {
 /// The waiter thread: reap the child, release a clipboard read the IO worker may wait on, end the PTY (Windows'
 /// pseudoconsole never ends by itself), give the worker a moment to feed the last output, put the exit message on
 /// screen ([`ExitPolicy`]), report the exit.
+#[cfg(feature = "local")]
 fn wait_child(mut child: Child, shared: &Shared, actor: &ActorHandle) {
     let (code, signal) = match child.wait() {
         Ok(status) => (status.exit_code(), status.signal().map(str::to_owned)),
@@ -1019,7 +1129,7 @@ fn wait_child(mut child: Child, shared: &Shared, actor: &ActorHandle) {
 }
 
 /// Writes the child's exit `code` to the pane's status file, unless the pane's drop took it first.
-fn record_status(shared: &Shared, code: u32) {
+pub(crate) fn record_status(shared: &Shared, code: u32) {
     let Some(file) = lock(&shared.status_file).take() else {
         return;
     };
@@ -1072,17 +1182,26 @@ fn dispatch(shared: &Shared, byte: u8, read: ReadCandidate, answer: ClipboardAns
 /// Whose reads the mailbox pauses and resumes: the PTY's actor, or a live pane's reader; a painter's few bytes a tick
 /// need no pause.
 enum Reads {
+    #[cfg(feature = "local")]
     Actor(ActorHandle),
+    #[cfg(feature = "local")]
     Live(Arc<Live>),
+    #[cfg(feature = "local")]
     Painted,
+    /// A stream pane's embedder, waiting in [`StreamFeed::deliver`].
+    Stream(Arc<Gate>),
 }
 
 impl Reads {
     fn wake(&self) {
         match self {
+            #[cfg(feature = "local")]
             Self::Actor(actor) => actor.wake_reader(),
+            #[cfg(feature = "local")]
             Self::Live(live) => live.wake_reader(),
+            #[cfg(feature = "local")]
             Self::Painted => {}
+            Self::Stream(gate) => gate.wake(),
         }
     }
 }
@@ -1112,6 +1231,7 @@ impl Worker {
                     }
                     self.after_batch(output.len());
                 }
+                #[cfg(feature = "local")]
                 Mail::Live(mail) => {
                     if let Reads::Live(live) = &self.reads {
                         session_io::handle(live, &self.shared, mail);
@@ -1144,6 +1264,7 @@ impl Worker {
     /// Feed `bytes` to the VT, stopping at each clipboard read for its answer. `false` when the pane shut down. A live
     /// pane's reads are the server's to delegate: it does not stop at them.
     fn feed(&mut self, bytes: &[u8]) -> bool {
+        #[cfg(feature = "local")]
         if matches!(self.reads, Reads::Live(_)) {
             self.write_vt(bytes);
             return true;
@@ -1231,6 +1352,7 @@ impl Worker {
 }
 
 #[cfg(test)]
+#[cfg(feature = "local")]
 mod tests {
     use super::*;
     use ngterm_ghostty_vt::ReadScope;

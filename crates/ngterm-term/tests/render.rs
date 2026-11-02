@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! Frames from real PTY output: dirty rows after partial updates, one frame shared by two views, a synchronized-output
 //! hold publishing the held frame (and timing out), styles and wide cells.
 //!

@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! The pane against real PTYs and real children: output reaches the screen, effects become events in stream order,
 //! clipboard reads are answered through the PTY, the exit status and resizes reach their ends, and the error paths
 //! (spawn failure, a closed PTY, a full input queue) report instead of hanging; a password prompt shows in the PTY's

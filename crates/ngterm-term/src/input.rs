@@ -16,8 +16,8 @@ use ngterm_ghostty_vt as vt;
 
 use crate::PaneError;
 use crate::effects::ClipboardLocation;
+use crate::pane::GridSize;
 use crate::pane::{Pane, Vt, lock};
-use crate::pty::GridSize;
 
 bitflags! {
     /// Which held modifiers are the right-hand key (meaningful only with the modifier itself held).

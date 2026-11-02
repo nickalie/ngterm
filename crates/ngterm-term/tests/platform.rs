@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! A pane on a real PTY on every OS (openpty on Unix, the pseudoconsole on Windows), launched as a pane's command
 //! line is (`/bin/sh -c`, or `cmd.exe /D /S /C "<line>"`): its output on screen, an echo round trip, a resize reaching
 //! the child, exit codes, selection and search over what the child printed, the password-input detection, and a pane

@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! A rerun restore's replay typed into a real shell on a real PTY, as a restored pane types it
 //! ([`ngterm_core::command_restore::PaneInput::Replay`], quoted by `ngterm_core::shell_dialect` for the shell the
 //! launch runs): the program it starts receives exactly the captured argv. On Windows the shells a pane runs there:

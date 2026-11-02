@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! Wide and multi-codepoint text through a real PTY: an emoji ZWJ sequence, a combining mark and an emoji variation
 //! selector each take the cells of their grapheme cluster (Ghostty's `grapheme-width-method = unicode`, mode 2027 on
 //! as the terminal's default, a reset keeping it), the cursor moves past them by those cells, and read-back and

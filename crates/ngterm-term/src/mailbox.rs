@@ -6,26 +6,54 @@
 //! - The read callback ([`Mailbox::deliver`]) only copies the output in and never waits, so nothing that holds the
 //!   VT lock can wait on a callback that waits on the VT.
 //! - Flow control is the producer's: once the output not yet fed to the VT (queued, and the chunk the worker holds)
-//!   reaches [`HIGH_WATER`], the callback pauses the actor's reads ([`ngterm_pty::ReadPause`]) before it returns, so
+//!   reaches [`HIGH_WATER`], the callback pauses the actor's reads ([`ReadPause`]) before it returns, so
 //!   at most one more read lands; the worker resumes them once it is down to [`LOW_WATER`]. Both decisions are made
 //!   under the mailbox's lock, so a stale resume never overrides a newer pause. While reads are paused the actor still
 //!   writes the program's input — a worker waiting on a clipboard answer holds the program's output back, not its
 //!   input.
 //! - The child's exit and the shutdown are flags that pass queued output, so a clipboard wait never hides them.
 //! - A live pane's reader queues the attach stream's events that must follow the output before them
-//!   ([`crate::session_io::LiveMail`]) in order with it ([`Mailbox::deliver_live`]); they count no bytes.
+//!   (`crate::session_io::LiveMail`) in order with it (`Mailbox::deliver_live`); they count no bytes.
 //!
 //! Lock rule: the mailbox's lock is a leaf. Nothing calls into the VT, the actor or the frontend's wake while holding
 //! it.
 
 use std::collections::VecDeque;
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
-use ngterm_pty::ReadPause;
-
 use crate::effects::ClipboardAnswer;
+#[cfg(feature = "local")]
 use crate::session_io::LiveMail;
+
+/// The switch the mailbox holds its producer's reads back with: the PTY actor's (the same flag: `ReadPause::actor`), a live pane's reader's, a stream pane's embedder's ([`crate::stream`]). Clones share it.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ReadPause(Arc<AtomicBool>);
+
+impl ReadPause {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn pause(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn resume(&self) {
+        self.0.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn is_paused(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+
+    /// The PTY actor's switch over the same flag.
+    #[cfg(feature = "local")]
+    pub(crate) fn actor(&self) -> ngterm_pty::ReadPause {
+        ngterm_pty::ReadPause::from(Arc::clone(&self.0))
+    }
+}
 
 /// The output bytes waiting for the VT at which the actor's reads pause.
 pub(crate) const HIGH_WATER: usize = 1024 * 1024;
@@ -38,6 +66,7 @@ pub(crate) enum Mail {
     /// A read of the program's output.
     Output(Vec<u8>),
     /// A live pane's event, after the output before it.
+    #[cfg(feature = "local")]
     Live(LiveMail),
     /// The deadline passed with nothing to take.
     Idle,
@@ -60,6 +89,7 @@ pub(crate) enum Answer {
 #[derive(Debug)]
 enum Item {
     Output(Vec<u8>),
+    #[cfg(feature = "local")]
     Live(LiveMail),
 }
 
@@ -116,6 +146,7 @@ impl Mailbox {
     }
 
     /// A live pane's reader: queue `mail` after the output delivered so far.
+    #[cfg(feature = "local")]
     pub(crate) fn deliver_live(&self, mail: LiveMail) {
         self.post(|state| state.output.push_back(Item::Live(mail)));
     }
@@ -167,6 +198,7 @@ impl Mailbox {
             }
             match state.output.pop_front() {
                 Some(Item::Output(output)) => return Mail::Output(output),
+                #[cfg(feature = "local")]
                 Some(Item::Live(mail)) => return Mail::Live(mail),
                 None => {}
             }

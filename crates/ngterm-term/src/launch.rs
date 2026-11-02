@@ -541,7 +541,7 @@ pub struct Launch {
     /// A live pane's attach to its session, run in process in place of `command`, its shell line (which the exit
     /// report then names).
     pub live: Option<LiveAttach>,
-    /// A HUD's body file, painted in process ([`crate::painted`]) in place of any program: the panel runs no shell on
+    /// A HUD's body file, painted in process (`crate::painted`) in place of any program: the panel runs no shell on
     /// any OS. Wins over `live` and `command`.
     pub painter: Option<PathBuf>,
     /// Where the program's exit status is written when it ends by itself ([`PaneConfig::status_file`]).
@@ -618,7 +618,7 @@ impl Pane {
     /// Start `launch` under `host` on a new PTY of `config`'s size, with the exit handling of a launched pane; the
     /// launch's input is queued for the program at once. A live launch attaches to its session in process instead
     /// (module docs); an attach that fails ends the pane with the CLI's status, reported through
-    /// [`crate::PaneEvent::Exited`]. A painter launch paints its HUD body in process ([`crate::painted`]).
+    /// [`crate::PaneEvent::Exited`]. A painter launch paints its HUD body in process (`crate::painted`).
     ///
     /// # Errors
     ///

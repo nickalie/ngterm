@@ -22,8 +22,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use super::pane::{Pane, PaneConfig, lock};
-use super::pty::{GridSize, PaneCommand};
+use super::pane::{GridSize, Pane, PaneConfig, lock};
+use super::pty::PaneCommand;
 
 const SIZE: GridSize = GridSize {
     cols: 141,

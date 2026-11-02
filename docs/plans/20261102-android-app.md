@@ -341,15 +341,15 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
   `.github/workflows/{cross-platform.yml,linux.yml}`
 - Create (by the patch): `crates/ngterm-term/src/{outlet.rs,stream.rs,stream/tests.rs}`
 
-- [ ] apply the patch with `git apply --3way`, and resolve any drift against main
-- [ ] read the stream tests and add the missing ones first:
+- [x] apply the patch with `git apply --3way`, and resolve any drift against main
+- [x] read the stream tests and add the missing ones first:
   - a reply flood is capped as the actor's `REPLY_CAP` caps it, and the cap is implemented;
   - `exited` while output is still queued;
   - deliver after drop returns `false`
-- [ ] fix the rustdoc links that break without `local` (cfg-gate them or reword), and keep the
+- [x] fix the rustdoc links that break without `local` (cfg-gate them or reword), and keep the
       `#[cfg(test)]` and `#[cfg(feature = "local")]` attributes separate (the clippy `allow-unwrap-in-tests` caveat)
-- [ ] update `ngterm-term`'s root docs: the four backends and the `local` feature
-- [ ] run `cargo test -p ngterm-term`, `cargo test -p ngterm-term --no-default-features --lib`, clippy in both feature
+- [x] update `ngterm-term`'s root docs: the four backends and the `local` feature
+- [x] run `cargo test -p ngterm-term`, `cargo test -p ngterm-term --no-default-features --lib`, clippy in both feature
       sets, and `cargo check -p ngterm-gpui -p ngterm-headless`; all must pass before Task 3
 
 ### Task 3: libghostty-vt for Android

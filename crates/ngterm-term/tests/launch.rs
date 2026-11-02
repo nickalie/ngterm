@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! Launching panes as libghostty launched a surface's program, through a real PTY: the terminal identity reaching the
 //! shell, a plain pane's command, typed input, exit hold, working directory, environment and shell integration, and
 //! the foreground process group. Live panes, which attach in process, are `live.rs`'s.

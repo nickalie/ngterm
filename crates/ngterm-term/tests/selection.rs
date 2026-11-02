@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! Selection, read-back and search on a pane fed by a real PTY: the selected text and the frame's selected columns,
 //! the screen and scrollback read back as `ghostty_surface_read_text` returned them (wide characters, wrapped lines),
 //! the cursor column, and the search's counts, navigation and reports.

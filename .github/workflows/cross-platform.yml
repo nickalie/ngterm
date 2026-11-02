@@ -96,6 +96,12 @@ jobs:
         run: |
           if [[ "$(uname -s)" == Darwin ]]; then ulimit -n 8192; fi
           cargo test --locked $PACKAGES --all-features
+      # ngterm-term without `local` (stream panes only, a remote-only frontend's): its own invocation, as
+      # --all-features turns the feature back on
+      - name: ngterm-term without local panes
+        run: |
+          cargo clippy --locked -p ngterm-term --no-default-features --all-targets -- -D warnings
+          cargo test --locked -p ngterm-term --no-default-features --lib
       # vendor/portable-pty is a [patch] provider, not a member: its own tests of the Windows patches (malformed
       # environments, directories on PATH, the raw command tail) run in a copy made a workspace of its own, as herdr verifies them
       - name: vendored portable-pty's Windows patch tests

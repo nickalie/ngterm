@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! The pointer over a pane fed by a real PTY: Ghostty's selection gesture (click counts, word and line clicks, drags,
 //! autoscroll past the bottom), the cell under a position, OSC 8 hyperlinks and soft-wrapped rows.
 //!

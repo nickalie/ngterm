@@ -1,3 +1,4 @@
+#![cfg(feature = "local")]
 //! Input through a real PTY: keys encoded for the modes the program set (legacy, application cursor keys, the Kitty
 //! keyboard protocol), mouse reports, focus reports and pastes reach the child as the bytes it asked for.
 //!
