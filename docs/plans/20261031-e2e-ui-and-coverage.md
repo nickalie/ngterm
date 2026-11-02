@@ -177,6 +177,8 @@ run-linux.sh / run-windows.sh --coverage
 - Per-OS primitives: `_bounds(element) -> (x, y, w, h)` in screen coordinates, `_pointer_move(x, y)`,
   `_pointer_button(button, down)`, `_wheel(dx, dy)`, `_type_text(text)`. The base class composes them (drag = move,
   down, stepped moves, up). `ax.py` implements them in the task that adds them, so the reference keeps instantiating.
+- `_all_elements()` supplies snapshots including controls without ids for role/name relocation.
+  `_double_click(button)` defaults to two down/up pairs; AX overrides it with explicit CGEvent click counts.
 - Waits added beside the existing ones: `count(ui_id, n)` in the driver, a regex `name=` for `find`, `wait_cursor(ctl,
   target, column)` in `wait.py` over `surface.cursor`.
 
@@ -243,11 +245,20 @@ least one passed test.
 - [x] write self-tests for `count`, the regex `name=`, `wait_cursor` (pass, and timeout with the last value)
 - [x] add the API and the primitives to `base.py`, the waits to `base.py`/`wait.py`
 - [x] implement the primitives in `ax.py` (CGEvent mouse down/up/drag/scroll, unicode text events)
-- [ ] run the self-tests; a `reference-macos.yml` run of the existing ui layer stays green
+- [x] run the self-tests; a `reference-macos.yml` run of the existing ui layer stays green
 
 **Decision:** `surface.cursor` exposes only a zero-based column, so `wait_cursor` accepts
 `(client, target, column, timeout=..., **args)` and returns the complete result. It preserves
 `paneID` and other target arguments unchanged; no row is inferred or added to the protocol.
+
+**Validation:** 894 harness self-tests passed (18 platform-specific skips), catalog coverage gate passed,
+and [reference UI run 41478357613](https://github.com/nickalie/ngterm/actions/runs/41478357613) passed
+all 44 tests with no skips or reruns. The CI-only branch `ci/mac-task1-input` removes the unrelated
+protocol/CLI/behavior step from the reference workflow; the task code and UI command are identical.
+The original full reference run was canceled before UI after spending over 16 minutes in the other layers.
+The first scoped UI run exposed two pre-existing selectors that expected `palette-editor-hint`, while
+SwiftUI exposes the same hint as `command-palette` text. A shared test-only selector now recognizes either
+authored identifier without changing the semantic assertions or adding aliases to the AX driver.
 
 ### Task 2: Linux ui instances on their own Xvfb, on the run's a11y bus
 
