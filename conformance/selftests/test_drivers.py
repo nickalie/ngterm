@@ -517,8 +517,9 @@ def test_ui_fixture_drives_the_ctl_instance(
     pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class Recording:
-        def __init__(self, pid: int, ui_ids: UiIds | None) -> None:
+        def __init__(self, pid: int, ui_ids: UiIds | None, instance=None) -> None:
             self.pid, self.ui_ids = pid, ui_ids
+            self.instance = instance
 
     monkeypatch.setattr(drivers, "driver_class", lambda impl, platform=sys.platform: Recording)
     pytester.makepyfile(
@@ -552,7 +553,7 @@ def test_ui_for_drives_the_instance_it_is_given(
     pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class Recording:
-        def __init__(self, pid: int, ui_ids: UiIds | None) -> None:
+        def __init__(self, pid: int, ui_ids: UiIds | None, instance=None) -> None:
             self.pid = pid
 
     monkeypatch.setattr(drivers, "driver_class", lambda impl, platform=sys.platform: Recording)

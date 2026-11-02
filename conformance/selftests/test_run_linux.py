@@ -313,8 +313,8 @@ def test_a_ratchet_only_run_breaks_on_a_red_listed_id(tmp_path: Path, stage: Pat
 
 def test_a_ratchet_only_run_adds_the_tasks_extras(tmp_path: Path, stage: Path, layers: Path) -> None:
     (layers / "protocol" / "test_other.py").write_text(OTHER_TEST)
-    (layers / "ui").mkdir()
-    (layers / "ui" / "test_extra.py").write_text("def test_extra(ctl):\n    pass\n")
+    (layers / "extra").mkdir()
+    (layers / "extra" / "test_extra.py").write_text("def test_extra(ctl):\n    pass\n")
     (layers / "protocol" / "test_skipped.py").write_text("def test_never(ctl):\n    assert False\n")
     completed, report = run(
         tmp_path,
@@ -323,15 +323,15 @@ def test_a_ratchet_only_run_adds_the_tasks_extras(tmp_path: Path, stage: Path, l
         ratchet(tmp_path, PROBE_ID),
         "--ratchet-only",
         "--also",
-        "tests/ui/test_extra.py",
+        "tests/extra/test_extra.py",
         "--also-k",
         "test_other",
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "--also tests/ui/test_extra.py + --also-k test_other" in report
+    assert "--also tests/extra/test_extra.py + --also-k test_other" in report
     assert "rust: 3 pass, 0 fail" in report
     assert re.search(rf"^{re.escape(OTHER_ID)}$", completed.stdout, re.MULTILINE)
-    assert re.search(r"^tests/ui/test_extra.py::test_extra$", completed.stdout, re.MULTILINE)
+    assert re.search(r"^tests/extra/test_extra.py::test_extra$", completed.stdout, re.MULTILINE)
 
 
 @pytest.mark.parametrize(
@@ -589,3 +589,14 @@ def test_the_default_lock_is_the_users_runtime_dir(
             fcntl.flock(held, fcntl.LOCK_UN)
             output, _ = process.communicate(timeout=120)
     assert process.returncode == 0, output
+
+
+def test_ui_selection_refuses_session_display_before_starting(tmp_path, stage, layers):
+    ui = layers / 'ui'
+    ui.mkdir()
+    (ui / 'test_ui.py').write_text('def test_ui(impl_options): pass\n')
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID),
+                            '--ratchet-only', '--also', 'tests/ui', CONFORMANCE_LINUX_DISPLAY='session')
+    assert completed.returncode == 2
+    assert 'Linux UI instances require headless' in completed.stderr
+    assert not report

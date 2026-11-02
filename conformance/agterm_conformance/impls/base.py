@@ -117,9 +117,8 @@ NOOP_MIME_TYPES = (
     "text/plain",
     "application/octet-stream",
 )
-# Every Linux instance draws into a headless weston of its own inside its private runtime dir and talks to a session
-# bus of its own there, so no window or notification reaches the user's desktop; `session` uses the user's display and
-# bus instead, for debugging only.
+# Linux instances use a private headless weston, or Xvfb for the UI layer, plus their own session bus.
+# No window or notification reaches the user's desktop; `session` remains available outside UI tests only.
 DISPLAY_MODE_VARIABLE = "CONFORMANCE_LINUX_DISPLAY"
 DISPLAY_MODES = ("headless", "session")
 WESTON_SOCKET = "wayland-0"
@@ -159,7 +158,7 @@ DBUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Confi
   </policy>
 </busconfig>
 """
-HEADLESS_HELPERS = ("weston", "dbus-daemon")
+HEADLESS_HELPERS = ("weston", "dbus-daemon", "Xvfb")
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
 # How long the processes of a Windows app's tree get to end by themselves once it quit (its panes' ConPTYs closed)
@@ -381,6 +380,7 @@ def check_launch_env(
     needs_runtime_dir: bool = False,
     headless: bool = False,
     prefix: str = UPSTREAM_PREFIX,
+    ui: Any = None,
 ) -> None:
     """`prefix` is the implementation's (`Adapter.env_prefix`): its harness-owned variables are the only ones under a
     scrubbed prefix the launch may carry, another implementation's included."""
@@ -392,11 +392,14 @@ def check_launch_env(
     rooted += ["XDG_RUNTIME_DIR"] if needs_runtime_dir else []
     rooted += list(WINDOWS_APP_DATA) if WINDOWS else []
     if headless:
-        if "DISPLAY" in env:
+        if ui is not None:
+            ui.check(env, root)
+        if ui is None and "DISPLAY" in env:
             raise LaunchRefused("DISPLAY is set: a headless instance would reach the user's X server")
-        if "AT_SPI_BUS_ADDRESS" in env:
+        if ui is None and "AT_SPI_BUS_ADDRESS" in env:
             raise LaunchRefused("AT_SPI_BUS_ADDRESS is set: a headless instance would reach the user's a11y bus")
-        rooted.append("WAYLAND_DISPLAY")
+        if ui is None:
+            rooted.append("WAYLAND_DISPLAY")
         address = env.get("DBUS_SESSION_BUS_ADDRESS", "")
         if not address.startswith("unix:path=") or "," in address or ";" in address:
             raise LaunchRefused(f"DBUS_SESSION_BUS_ADDRESS {address!r} is not the instance's own unix:path= bus")
@@ -435,9 +438,10 @@ class Instance:
     vocabulary: Vocabulary = UPSTREAM
     # The prefix of the implementation's own variables (`Adapter.env_prefix`).
     env_prefix: str = UPSTREAM_PREFIX
-    # The instance's own headless weston and session bus; a relaunch keeps both.
+    # The instance's own headless compositor (weston or Xvfb) and session bus; relaunch keeps both.
     compositor: subprocess.Popen[bytes] | None = None
     session_bus: subprocess.Popen[bytes] | None = None
+    ui: Any = None  # X11Context, retained through relaunch
     # Windows: the class of the top-level window the quit is asked of (`Adapter.quit_window_class`).
     quit_window_class: str | None = None
     # Windows: every app process launched on this root (relaunches too), with its creation time, kept open so no pid
@@ -631,6 +635,7 @@ class Adapter:
         first_run: bool = False,
         private_install: bool = False,
         pane_shell: str | None = None,
+        ui: Any = None,
     ) -> Instance:
         """`settings` seeds `<state>/settings.json`, which every implementation reads at launch (`restoreMode`, ...).
         `pane_shell` names the shell the panes run by its full path (`ghostty_config`), kept by relaunches.
@@ -641,7 +646,10 @@ class Adapter:
         """
         self.executable()  # refuses before anything exists
         headless = self.headless
+        if ui is not None and not headless:
+            raise LaunchRefused("Linux UI instances require headless display mode")
         root = make_root()
+        ui_context = None
         compositor: subprocess.Popen[bytes] | None = None
         session_bus: subprocess.Popen[bytes] | None = None
         try:
@@ -659,11 +667,16 @@ class Adapter:
                 write_noop_launchers(Path(env["XDG_CONFIG_HOME"]), Path(env["XDG_DATA_HOME"]))
             if headless:
                 session_bus = start_session_bus(root, env, timeout)
-                compositor = start_compositor(root, env, timeout, self.weston_args())
+                if ui is not None:
+                    from agterm_conformance.linux_ui import start_xvfb
+                    compositor, ui_context = start_xvfb(root, env, ui, timeout)
+                else:
+                    compositor = start_compositor(root, env, timeout, self.weston_args())
+                check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir, headless, self.env_prefix, ui=ui_context)
             if app_id is not None:
                 _claim_app_id(app_id)
         except BaseException as error:
-            _note_headless_stop(error, compositor, session_bus, root)
+            _note_headless_stop(error, compositor, session_bus, root, ui_context)
             shutil.rmtree(root, ignore_errors=True)
             raise
         log = root / "app.log"
@@ -671,7 +684,7 @@ class Adapter:
             process = _spawn(command, env, log, "wb")
         except BaseException as error:
             _release_app_id(app_id)
-            _note_headless_stop(error, compositor, session_bus, root)
+            _note_headless_stop(error, compositor, session_bus, root, ui_context)
             shutil.rmtree(root, ignore_errors=True)
             raise
         launched = [(process, winproc.creation_time(process.pid) if WINDOWS else None)]
@@ -690,6 +703,7 @@ class Adapter:
             env_prefix=self.env_prefix,
             compositor=compositor,
             session_bus=session_bus,
+            ui=ui_context,
             quit_window_class=self.quit_window_class,
             launched=launched,
             job=job,
@@ -720,6 +734,7 @@ class Adapter:
                 self.needs_runtime_dir,
                 instance.compositor is not None,
                 instance.env_prefix,
+                ui=instance.ui,
             )
             if instance.app_id is not None:
                 _claim_app_id(instance.app_id)
@@ -731,7 +746,7 @@ class Adapter:
             if instance.job is not None:
                 _assign(instance.job, process)
         except BaseException as error:
-            _note_headless_stop(error, instance.compositor, instance.session_bus, instance.root)
+            _note_headless_stop(error, instance.compositor, instance.session_bus, instance.root, instance.ui)
             if (leftovers := _leftovers_error(instance.live_dir, vocabulary=instance.vocabulary)) is not None:
                 raise leftovers from error
             raise
@@ -749,6 +764,7 @@ class Adapter:
             env_prefix=instance.env_prefix,
             compositor=instance.compositor,
             session_bus=instance.session_bus,
+            ui=instance.ui,
             quit_window_class=instance.quit_window_class,
             launched=[*instance.launched, (process, winproc.creation_time(process.pid) if WINDOWS else None)],
             job=instance.job,
@@ -774,6 +790,7 @@ class Adapter:
             self.needs_runtime_dir,
             instance.compositor is not None,
             instance.env_prefix,
+            ui=instance.ui,
         )
         process = subprocess.Popen(
             self.instance_executable(instance.root),
@@ -843,7 +860,7 @@ class Adapter:
             reap_process_tree(instance)
         finally:
             _release_app_id(instance.app_id)
-            headless_problem = stop_headless(instance.compositor, instance.session_bus, instance.root)
+            headless_problem = stop_headless(instance.compositor, instance.session_bus, instance.root, instance.ui)
             keep_logs(instance)
         if leftovers is not None:
             raise leftovers
@@ -1045,15 +1062,17 @@ def wait_for_unix_socket(
 
 
 def stop_headless(
-    compositor: subprocess.Popen[bytes] | None, session_bus: subprocess.Popen[bytes] | None, root: Path
+    compositor: subprocess.Popen[bytes] | None, session_bus: subprocess.Popen[bytes] | None, root: Path, ui: Any = None
 ) -> str | None:
     """SIGTERM the compositor's and the bus's own pids, then wait for their clients to follow; returns what went wrong."""
+    if ui is not None:
+        ui.close()
     if compositor is None and session_bus is None:
         return None
     problems = [
         problem
         for process, label, log in (
-            (compositor, "weston", root / "weston.log"),
+            (compositor, "Xvfb" if ui is not None else "weston", root / ("xvfb.log" if ui is not None else "weston.log")),
             (session_bus, "dbus-daemon", root / "dbus.log"),
         )
         if process is not None and (problem := _stop_helper(process, label, log))
@@ -1082,8 +1101,9 @@ def _note_headless_stop(
     compositor: subprocess.Popen[bytes] | None,
     session_bus: subprocess.Popen[bytes] | None,
     root: Path,
+    ui: Any = None,
 ) -> None:
-    if (problem := stop_headless(compositor, session_bus, root)) is not None:
+    if (problem := stop_headless(compositor, session_bus, root, ui)) is not None:
         error.add_note(problem)
 
 

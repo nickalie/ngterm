@@ -7,6 +7,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
@@ -371,6 +372,18 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
     if exercised:
         require_implementation(options)
         config.stash[_SUMMARY_KEY] = exercised
+        if (sys.platform.startswith("linux") and options.impl == "rust" and options.bin is not None
+                and not config.option.collectonly and any(is_ui_path(Path(item.path)) for item in items)):
+            from agterm_conformance import linux_ui
+            from agterm_conformance.impls.base import LaunchError, display_mode
+            try:
+                if display_mode() != "headless":
+                    raise LaunchError("Linux UI instances require headless display mode")
+                run = linux_ui.A11yRun().start()
+            except LaunchError as error:
+                pytest.exit(str(error), returncode=2)
+            config.stash[_A11Y_KEY] = run
+            config.add_cleanup(run.close)
 
 
 def _uses_impl(item: pytest.Item) -> bool:
@@ -840,8 +853,23 @@ def adapter(pytestconfig: pytest.Config, impl_options: ImplOptions) -> Adapter:
     return get_adapter(pytestconfig)
 
 
-def _launched(adapter: Adapter) -> Iterator[Instance]:
-    instance = adapter.launch()
+def is_ui_path(path: Path) -> bool:
+    return any(a == "tests" and b == "ui" for a, b in zip(path.parts, path.parts[1:]))
+
+
+_A11Y_KEY = pytest.StashKey[Any]()
+
+
+def launch_options(request: pytest.FixtureRequest) -> dict[str, Any]:
+    if sys.platform.startswith("linux") and is_ui_path(Path(request.node.path)):
+        run = request.config.stash.get(_A11Y_KEY, None)
+        if run is not None:
+            return {"ui": run}
+    return {}
+
+
+def _launched(adapter: Adapter, **kwargs: Any) -> Iterator[Instance]:
+    instance = adapter.launch(**kwargs)
     try:
         yield instance
     finally:
@@ -849,15 +877,15 @@ def _launched(adapter: Adapter) -> Iterator[Instance]:
 
 
 @pytest.fixture
-def app(adapter: Adapter) -> Iterator[Instance]:
+def app(adapter: Adapter, request: pytest.FixtureRequest) -> Iterator[Instance]:
     """A pristine instance for this test alone."""
-    yield from _launched(adapter)
+    yield from _launched(adapter, **launch_options(request))
 
 
 @pytest.fixture(scope="module")
-def shared_app(adapter: Adapter) -> Iterator[Instance]:
+def shared_app(adapter: Adapter, request: pytest.FixtureRequest) -> Iterator[Instance]:
     """One instance for the module; the default target of `ctl` and `cli`."""
-    yield from _launched(adapter)
+    yield from _launched(adapter, **launch_options(request))
 
 
 class Launcher:
@@ -865,12 +893,13 @@ class Launcher:
     the same state directory; `launch.serving(ctl)` waits for a `first_run` launch's socket. Every instance still
     running is stopped at teardown."""
 
-    def __init__(self, adapter: Adapter) -> None:
+    def __init__(self, adapter: Adapter, **options: Any) -> None:
         self.adapter = adapter
+        self.options = options
         self.launched: list[Instance] = []
 
     def __call__(self, **kwargs: Any) -> Ctl:
-        instance = self.adapter.launch(**kwargs)
+        instance = self.adapter.launch(**{**kwargs, **self.options})
         self.launched.append(instance)
         return Ctl(instance)
 
@@ -900,9 +929,9 @@ class Launcher:
 
 
 @pytest.fixture
-def launch(adapter: Adapter) -> Iterator[Launcher]:
+def launch(adapter: Adapter, request: pytest.FixtureRequest) -> Iterator[Launcher]:
     """Start further instances, such as one with seeded settings (`launch(settings={...})`); stopped at teardown."""
-    launcher = Launcher(adapter)
+    launcher = Launcher(adapter, **launch_options(request))
     yield launcher
     launcher.stop_all()
 
@@ -935,7 +964,7 @@ def ui_for(request: pytest.FixtureRequest, adapter: Adapter, impl_options: ImplO
 
     def driver(target: Ctl | Instance) -> Driver:
         instance = target.instance if isinstance(target, Ctl) else target
-        return make_driver(adapter.name, instance.pid, ui_ids)
+        return make_driver(adapter.name, instance, ui_ids)
 
     return driver
 

@@ -118,8 +118,9 @@ class RustAdapter(Adapter):
         first_run: bool = False,
         private_install: bool = False,
         pane_shell: str | None = None,
+        ui: Any = None,
     ) -> Instance:
-        instance = super().launch(timeout, app_id, settings, first_run, private_install, pane_shell)
+        instance = super().launch(timeout, app_id, settings, first_run, private_install, pane_shell, ui=ui)
         return instance if first_run else self._profiled(instance)
 
     def serving(self, instance: Instance, timeout: float = LAUNCH_TIMEOUT) -> Instance:
