@@ -3,21 +3,22 @@
 //! none of them needs to be `Send` or locked. The facade posts `Command`s to it; a command with an answer carries a
 //! oneshot the facade awaits, and the actor reports what it learns on its own through the [`EventSink`].
 //!
-//! Commands are handled in the order posted. One that waits on the network (a connect) runs as a local task, so the
-//! queue keeps moving behind it.
+//! Commands are handled in the order posted. A connect settles on the loop what it can at once (already connected,
+//! joining a connect in flight) and only waits on the network in a local task, so the queue keeps moving behind it
+//! and a later disconnect cancels that task.
 
 #[cfg(test)]
 mod tests;
 
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle, ThreadId};
 
 use tokio::runtime::Builder;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::LocalSet;
+use tokio::task::{AbortHandle, LocalSet};
 
 use crate::api::{EventSink, Machine, MachineState, MobileError, MobileEvent};
 use crate::transport::{Connection, Transport};
@@ -27,13 +28,8 @@ pub const THREAD_NAME: &str = "ngterm-mobile";
 
 /// What the facade asks of the actor.
 pub(crate) enum Command {
-    Connect {
-        machine: Machine,
-        reply: oneshot::Sender<Result<(), MobileError>>,
-    },
-    Disconnect {
-        machine_id: String,
-    },
+    Connect { machine: Machine, reply: Reply },
+    Disconnect { machine_id: String },
 }
 
 /// The facade's handle on the actor thread: dropping it stops the thread and joins it.
@@ -93,10 +89,23 @@ struct State<T: Transport> {
     transport: T,
     sink: Arc<dyn EventSink>,
     connections: RefCell<HashMap<String, T::Connection>>,
-    /// The machines a connect was asked for and no disconnect came after: a connect that completes for a machine no
-    /// longer here is closed again.
-    wanted: RefCell<HashSet<String>>,
+    /// The connects in flight, one per machine: a later connect of the same machine joins it, a disconnect or a
+    /// connect of the machine as edited cancels it.
+    attempts: RefCell<HashMap<String, Attempt>>,
+    /// The last attempt's number: an attempt that finishes no longer current was overtaken and changes nothing.
+    generation: Cell<u64>,
 }
+
+/// One connect in flight.
+struct Attempt {
+    generation: u64,
+    machine: Machine,
+    /// The callers waiting on it.
+    waiters: Vec<Reply>,
+    task: AbortHandle,
+}
+
+type Reply = oneshot::Sender<Result<(), MobileError>>;
 
 impl<T: Transport> State<T> {
     fn emit(&self, event: MobileEvent) {
@@ -109,15 +118,18 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
         transport,
         sink,
         connections: RefCell::new(HashMap::new()),
-        wanted: RefCell::new(HashSet::new()),
+        attempts: RefCell::new(HashMap::new()),
+        generation: Cell::new(0),
     });
     while let Some(command) = queue.recv().await {
         match command {
-            Command::Connect { machine, reply } => {
-                tokio::task::spawn_local(connect(Rc::clone(&state), machine, reply));
-            }
+            Command::Connect { machine, reply } => connect(&state, machine, reply),
             Command::Disconnect { machine_id } => disconnect(&state, &machine_id),
         }
+    }
+    // Waiters dropped unanswered read as `Stopped`.
+    for (_, attempt) in state.attempts.borrow_mut().drain() {
+        attempt.task.abort();
     }
     let connections = std::mem::take(&mut *state.connections.borrow_mut());
     for connection in connections.values() {
@@ -125,15 +137,62 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
     }
 }
 
-async fn connect<T: Transport>(state: Rc<State<T>>, machine: Machine, reply: oneshot::Sender<Result<(), MobileError>>) {
-    state.wanted.borrow_mut().insert(machine.id.clone());
+/// Settles what a connect can at once, on the loop, so a command posted after it sees its effect; only the network
+/// part runs as a local task.
+fn connect<T: Transport>(state: &Rc<State<T>>, machine: Machine, reply: Reply) {
     if state.connections.borrow().contains_key(&machine.id) {
         let _ = reply.send(Ok(()));
         return;
     }
+    if let Some(attempt) = state.attempts.borrow_mut().get_mut(&machine.id)
+        && attempt.machine == machine
+    {
+        attempt.waiters.push(reply);
+        return;
+    }
+    // A connect of the machine as edited replaces the one in flight.
+    cancel(state, &machine.id);
+    let generation = state.generation.get() + 1;
+    state.generation.set(generation);
+    let task = tokio::task::spawn_local(reach(Rc::clone(state), machine.clone(), generation)).abort_handle();
+    let id = machine.id.clone();
+    let attempt = Attempt {
+        generation,
+        machine,
+        waiters: vec![reply],
+        task,
+    };
+    state.attempts.borrow_mut().insert(id, attempt);
+}
+
+/// The network part of a connect: aborted when the attempt is cancelled.
+async fn reach<T: Transport>(state: Rc<State<T>>, machine: Machine, generation: u64) {
     let result = state.transport.connect(&machine).await;
+    let current = state
+        .attempts
+        .borrow()
+        .get(&machine.id)
+        .map(|attempt| attempt.generation)
+        == Some(generation);
+    if !current {
+        // Overtaken: its callers were answered when it was.
+        if let Ok(connection) = result {
+            connection.close();
+        }
+        return;
+    }
+    let Some(attempt) = state.attempts.borrow_mut().remove(&machine.id) else {
+        return;
+    };
     let answer = match result {
-        Ok(connection) => adopt(&state, &machine.id, connection),
+        Ok(connection) => {
+            state.connections.borrow_mut().insert(machine.id.clone(), connection);
+            state.emit(MobileEvent::MachineState {
+                machine_id: machine.id.clone(),
+                state: MachineState::Connected,
+            });
+            Ok(())
+        }
         Err(error) => {
             let reason = error.to_string();
             state.emit(MobileEvent::MachineState {
@@ -143,30 +202,26 @@ async fn connect<T: Transport>(state: Rc<State<T>>, machine: Machine, reply: one
             Err(MobileError::Unreachable { reason })
         }
     };
-    // A caller that stopped waiting has nothing to be told.
-    let _ = reply.send(answer);
+    for waiter in attempt.waiters {
+        // A caller that stopped waiting has nothing to be told.
+        let _ = waiter.send(answer.clone());
+    }
 }
 
-/// Keeps a fresh `connection` unless a disconnect overtook it or another connect won the race.
-fn adopt<T: Transport>(state: &State<T>, machine_id: &str, connection: T::Connection) -> Result<(), MobileError> {
-    if !state.wanted.borrow().contains(machine_id) {
-        connection.close();
-        return Err(MobileError::Cancelled);
+/// Cancels `machine_id`'s connect in flight, if any: its network work stops and its callers are answered
+/// [`MobileError::Cancelled`].
+fn cancel<T: Transport>(state: &State<T>, machine_id: &str) {
+    let attempt = state.attempts.borrow_mut().remove(machine_id);
+    if let Some(attempt) = attempt {
+        attempt.task.abort();
+        for waiter in attempt.waiters {
+            let _ = waiter.send(Err(MobileError::Cancelled));
+        }
     }
-    if state.connections.borrow().contains_key(machine_id) {
-        connection.close();
-        return Ok(());
-    }
-    state.connections.borrow_mut().insert(machine_id.to_owned(), connection);
-    state.emit(MobileEvent::MachineState {
-        machine_id: machine_id.to_owned(),
-        state: MachineState::Connected,
-    });
-    Ok(())
 }
 
 fn disconnect<T: Transport>(state: &State<T>, machine_id: &str) {
-    state.wanted.borrow_mut().remove(machine_id);
+    cancel(state, machine_id);
     let connection = state.connections.borrow_mut().remove(machine_id);
     if let Some(connection) = connection {
         connection.close();

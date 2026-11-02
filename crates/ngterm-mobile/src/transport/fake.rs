@@ -1,16 +1,18 @@
-//! The scripted in-memory transport: a machine is refused or connects, a command with a script answers it and ends,
-//! and any other command's channel is handed to the test ([`FakeTransport::take_opened`]) to drive by hand.
+//! The scripted in-memory transport: a machine is refused or connects, at once or once the test releases it
+//! ([`FakeTransport::hold`]), a command with a script answers it and ends, and any other command's channel is handed to
+//! the test ([`FakeTransport::take_opened`]) to drive by hand.
 //!
 //! The state is shared behind a mutex, so a test keeps a clone of the [`FakeTransport`] it moved onto the actor and
 //! inspects what the core did through it.
 
-use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ngterm_term::GridSize;
+use tokio::sync::{mpsc, oneshot};
 
-use super::{Channel, ChannelEnd, ChannelPeer, Connection, Transport, TransportError};
+use super::{Channel, ChannelEnd, ChannelOutput, ChannelPeer, Connection, Transport, TransportError};
 use crate::api::Machine;
 
 /// A command's scripted answer: its output, then its end.
@@ -69,6 +71,9 @@ pub struct Exec {
 #[derive(Debug, Default)]
 struct State {
     refusals: HashMap<String, String>,
+    held: HashSet<String>,
+    /// The connects waiting on a held host, by host.
+    gates: Vec<(String, oneshot::Sender<()>)>,
     scripts: HashMap<String, Script>,
     connects: Vec<String>,
     closed: Vec<String>,
@@ -98,12 +103,32 @@ impl FakeTransport {
         self.lock().refusals.remove(host);
     }
 
+    /// Keeps connects to `host` pending until [`FakeTransport::release`].
+    pub fn hold(&self, host: &str) {
+        self.lock().held.insert(host.to_owned());
+    }
+
+    /// Lets the connects to `host` held so far finish, and later ones finish at once.
+    pub fn release(&self, host: &str) {
+        let mut state = self.lock();
+        state.held.remove(host);
+        let (released, held) = std::mem::take(&mut state.gates)
+            .into_iter()
+            .partition(|(gate, _)| gate == host);
+        state.gates = held;
+        drop(state);
+        for (_, gate) in released {
+            // A connect dropped while held has nothing to finish.
+            let _ = gate.send(());
+        }
+    }
+
     /// Answers every exec of exactly `command` with `script`.
     pub fn script(&self, command: &str, script: Script) {
         self.lock().scripts.insert(command.to_owned(), script);
     }
 
-    /// The machine ids connected so far, in order, refused ones included.
+    /// The machine ids connected so far, in order, refused and held ones included.
     #[must_use]
     pub fn connects(&self) -> Vec<String> {
         self.lock().connects.clone()
@@ -148,9 +173,20 @@ impl Transport for FakeTransport {
                 machine_id: machine.id.clone(),
                 state: Arc::clone(&self.state),
                 closed: Cell::new(false),
+                channels: RefCell::new(Vec::new()),
             }),
         };
-        std::future::ready(connected)
+        let gate = state.held.contains(&machine.host).then(|| {
+            let (open, gate) = oneshot::channel();
+            state.gates.push((machine.host.clone(), open));
+            gate
+        });
+        async move {
+            if let Some(gate) = gate {
+                let _ = gate.await;
+            }
+            connected
+        }
     }
 }
 
@@ -160,6 +196,8 @@ pub struct FakeConnection {
     machine_id: String,
     state: Arc<Mutex<State>>,
     closed: Cell<bool>,
+    /// The channels opened with no script, held weakly so a peer the test drops still reads as gone.
+    channels: RefCell<Vec<mpsc::WeakSender<ChannelOutput>>>,
 }
 
 impl Connection for FakeConnection {
@@ -177,30 +215,36 @@ impl Connection for FakeConnection {
             state.scripts.get(command).cloned()
         };
         let (channel, peer) = Channel::pair();
-        match script {
-            // A script is three chunks at most, within the channel's depth: delivered before the reader exists.
-            Some(script) => {
-                if !script.stdout.is_empty() {
-                    peer.data(script.stdout).await;
-                }
-                if !script.stderr.is_empty() {
-                    peer.stderr(script.stderr).await;
-                }
-                peer.end(script.end).await;
-            }
-            None => lock(&self.state).opened.push_back(Opened {
+        let Some(script) = script else {
+            self.channels.borrow_mut().push(peer.output.downgrade());
+            lock(&self.state).opened.push_back(Opened {
                 machine_id: self.machine_id.clone(),
                 command: command.to_owned(),
                 pty,
                 peer,
-            }),
+            });
+            return Ok(channel);
+        };
+        // A script is three chunks at most, within the channel's depth: delivered before the reader exists.
+        if !script.stdout.is_empty() {
+            peer.data(script.stdout).await;
         }
+        if !script.stderr.is_empty() {
+            peer.stderr(script.stderr).await;
+        }
+        peer.end(script.end).await;
         Ok(channel)
     }
 
     fn close(&self) {
         if !self.closed.replace(true) {
             lock(&self.state).closed.push(self.machine_id.clone());
+        }
+        // `close` can't wait: a channel whose reader is a full queue behind keeps its place and misses the end.
+        for channel in self.channels.take() {
+            if let Some(output) = channel.upgrade() {
+                let _ = output.try_send(ChannelOutput::End(ChannelEnd::Lost(TransportError::Closed.to_string())));
+            }
         }
     }
 }

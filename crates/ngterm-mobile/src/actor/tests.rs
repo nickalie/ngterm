@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
 
-use futures_lite::future::block_on;
+use futures_lite::future::{block_on, poll_once};
 
 use super::THREAD_NAME;
 use crate::api::{EventSink, Machine, MachineState, MobileCore, MobileError, MobileEvent};
@@ -144,6 +144,137 @@ fn dropping_the_core_joins_the_actor_and_closes_its_connections() {
     // Joined: the actor's state, its sink clone with it, is gone by the time drop returns.
     assert_eq!(Arc::strong_count(&sink), 1);
     assert_eq!(transport.closed(), ["m1"]);
+}
+
+fn connected(id: &str) -> MobileEvent {
+    MobileEvent::MachineState {
+        machine_id: id.to_owned(),
+        state: MachineState::Connected,
+    }
+}
+
+/// Starts `connect`: its first poll posts the command, then it waits on the actor's answer.
+fn post<F: Future + Unpin>(connect: &mut F) {
+    assert!(block_on(poll_once(connect)).is_none(), "the connect is held");
+}
+
+#[test]
+fn a_disconnect_posted_behind_a_connect_cancels_it() {
+    let transport = FakeTransport::new();
+    transport.hold("box");
+    let (sink, events) = recorder();
+    let core = core(&transport, &sink);
+
+    let mut connect = Box::pin(core.connect(machine("m1", "box")));
+    post(&mut connect);
+    assert_eq!(core.disconnect("m1".to_owned()), Ok(()));
+    transport.release("box");
+
+    assert_eq!(block_on(connect), Err(MobileError::Cancelled));
+    // In order: the reconnect's answer means the cancelled connect is settled, and it kept nothing.
+    assert_eq!(block_on(core.connect(machine("m1", "box"))), Ok(()));
+    assert_eq!(
+        events.recv_timeout(WAIT).expect("the reconnect's event").2,
+        connected("m1")
+    );
+    assert!(events.try_recv().is_err(), "the cancelled connect reports nothing");
+}
+
+#[test]
+fn a_connect_of_an_edited_machine_after_a_disconnect_wins_over_the_old_one_in_flight() {
+    let transport = FakeTransport::new();
+    transport.hold("old");
+    let (sink, events) = recorder();
+    let core = core(&transport, &sink);
+
+    let mut old = Box::pin(core.connect(machine("m1", "old")));
+    post(&mut old);
+    assert_eq!(core.disconnect("m1".to_owned()), Ok(()));
+    // The old host is still held: the answer comes from the new one.
+    assert_eq!(block_on(core.connect(machine("m1", "new"))), Ok(()));
+    assert_eq!(block_on(old), Err(MobileError::Cancelled));
+    transport.release("old");
+
+    // Still on the new host's connection: connecting again reuses it.
+    assert_eq!(block_on(core.connect(machine("m1", "new"))), Ok(()));
+    assert!(transport.closed().is_empty());
+    assert_eq!(events.recv_timeout(WAIT).expect("an event").2, connected("m1"));
+    assert!(events.try_recv().is_err(), "one connection, one event");
+}
+
+#[test]
+fn a_connect_of_an_edited_machine_replaces_the_one_in_flight() {
+    let transport = FakeTransport::new();
+    transport.hold("old");
+    let (sink, _events) = recorder();
+    let core = core(&transport, &sink);
+
+    let mut old = Box::pin(core.connect(machine("m1", "old")));
+    post(&mut old);
+
+    assert_eq!(block_on(core.connect(machine("m1", "new"))), Ok(()));
+    assert_eq!(block_on(old), Err(MobileError::Cancelled));
+}
+
+#[test]
+fn a_failed_connect_overtaken_by_a_disconnect_is_cancelled_and_reports_nothing() {
+    let transport = FakeTransport::new();
+    transport.refuse("box", "connection refused");
+    transport.hold("box");
+    let (sink, events) = recorder();
+    let core = core(&transport, &sink);
+
+    let mut connect = Box::pin(core.connect(machine("m1", "box")));
+    post(&mut connect);
+    assert_eq!(core.disconnect("m1".to_owned()), Ok(()));
+    transport.release("box");
+
+    assert_eq!(block_on(connect), Err(MobileError::Cancelled));
+    // In order: once this answers, the cancelled connect can't report any more.
+    assert!(block_on(core.connect(machine("m2", "other"))).is_ok());
+    assert_eq!(events.recv_timeout(WAIT).expect("m2's event").2, connected("m2"));
+    assert!(events.try_recv().is_err(), "no Unreachable for a machine disconnected");
+}
+
+#[test]
+fn connects_of_a_machine_in_flight_share_one_transport_connect() {
+    let transport = FakeTransport::new();
+    transport.hold("box");
+    let (sink, events) = recorder();
+    let core = core(&transport, &sink);
+
+    let mut first = Box::pin(core.connect(machine("m1", "box")));
+    post(&mut first);
+    let mut second = Box::pin(core.connect(machine("m1", "box")));
+    post(&mut second);
+    transport.release("box");
+
+    assert_eq!(block_on(first), Ok(()));
+    assert_eq!(block_on(second), Ok(()));
+    assert_eq!(transport.connects(), ["m1"]);
+    assert_eq!(events.recv_timeout(WAIT).expect("an event").2, connected("m1"));
+    assert!(events.try_recv().is_err(), "one connect, one event");
+}
+
+#[test]
+fn a_failed_connect_answers_every_caller_waiting_on_it() {
+    let transport = FakeTransport::new();
+    transport.refuse("box", "connection refused");
+    transport.hold("box");
+    let (sink, _events) = recorder();
+    let core = core(&transport, &sink);
+
+    let mut first = Box::pin(core.connect(machine("m1", "box")));
+    post(&mut first);
+    let mut second = Box::pin(core.connect(machine("m1", "box")));
+    post(&mut second);
+    transport.release("box");
+
+    let refused = Err(MobileError::Unreachable {
+        reason: "connection refused".to_owned(),
+    });
+    assert_eq!(block_on(first), refused);
+    assert_eq!(block_on(second), refused);
 }
 
 /// Drops the core it holds from its first event, on the actor's own thread.

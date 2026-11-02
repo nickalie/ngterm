@@ -65,7 +65,7 @@ pub enum MobileError {
     /// The machine could not be reached.
     #[error("{reason}")]
     Unreachable { reason: String },
-    /// The call was overtaken by a later one (a disconnect while connecting).
+    /// The call was overtaken by a later one (a disconnect, or a connect of the machine as edited, while connecting).
     #[error("cancelled")]
     Cancelled,
     /// The core's actor has stopped (its runtime failed to start, or the core is shutting down).
@@ -144,13 +144,14 @@ impl MobileCore {
 
 #[uniffi::export]
 impl MobileCore {
-    /// Connects `machine`, answered once it is connected (at once when it already is). The state also arrives as a
+    /// Connects `machine`, answered once it is connected (at once when it already is; a connect of the same machine in
+    /// flight is joined, not repeated). The state also arrives as a
     /// [`MobileEvent::MachineState`].
     ///
     /// # Errors
     ///
     /// [`MobileError::Unreachable`] when the machine can't be reached, [`MobileError::Cancelled`] when a disconnect
-    /// overtook the connect, [`MobileError::Stopped`] when the core has stopped.
+    /// or a connect of the machine as edited (another host, user, key or pin) overtook the connect, [`MobileError::Stopped`] when the core has stopped.
     pub async fn connect(&self, machine: Machine) -> Result<(), MobileError> {
         let (reply, answer) = oneshot::channel();
         self.actor.post(Command::Connect { machine, reply })?;

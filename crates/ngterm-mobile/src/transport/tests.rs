@@ -179,3 +179,33 @@ fn a_closed_connection_refuses_execs() {
     );
     assert_eq!(transport.closed(), ["m1"], "closed once");
 }
+
+#[test]
+fn closing_a_connection_ends_its_open_channels_as_lost() {
+    let transport = FakeTransport::new();
+    let connection = block_on(transport.connect(&machine("box"))).expect("connects");
+    let mut channel = block_on(connection.exec("ngterm-session attach", None)).expect("opens");
+    let opened = transport.take_opened();
+
+    connection.close();
+
+    assert_eq!(
+        channel.reader.blocking_read(),
+        ChannelOutput::End(ChannelEnd::Lost(TransportError::Closed.to_string()))
+    );
+    assert!(opened[0].peer.is_closed(), "the reader is done with it");
+}
+
+#[test]
+fn a_held_connect_finishes_once_released() {
+    let transport = FakeTransport::new();
+    transport.hold("box");
+    let held = machine("box");
+    let mut connect = Box::pin(transport.connect(&held));
+
+    assert!(block_on(futures_lite::future::poll_once(&mut connect)).is_none());
+    transport.release("box");
+
+    assert!(block_on(connect).is_ok());
+    assert_eq!(transport.connects(), ["m1"]);
+}
