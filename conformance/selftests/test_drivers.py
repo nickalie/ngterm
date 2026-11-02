@@ -649,6 +649,35 @@ def test_drag_scroll_and_typing():
     assert driver.events[-3:] == [("move", 60, 40), ("wheel", 2, -3), ("text", "Hello, Я! 😀")]
 
 
+@pytest.mark.parametrize(("action", "handle"), [
+    (lambda d: d.move("add-session"), "add"),
+    (lambda d: d.mouse_click("add-session", button="right"), "add"),
+    (lambda d: d.mouse_double_click("add-session"), "add"),
+    (lambda d: d.scroll("add-session", 2), "add"),
+    (lambda d: d.drag_by("add-session", 5, 5, steps=1), "add"),
+    (lambda d: d.drag("add-session", "settings-status-reset", steps=1), "add"),
+    (lambda d: d.drag("settings-status-reset", "add-session", steps=1), "reset"),
+])
+def test_pointer_actions_target_the_live_element_before_the_first_move(action, handle):
+    """Positional input reaches the window on top: every pointer action names its target first."""
+    driver = FakeDriver([Element("add-session", "button", handle="add"),
+                         Element("settings-status-reset", "button", handle="reset")])
+    driver._pointer_target = lambda element: driver.events.append(("target", element.handle))
+    action(driver)
+    assert driver.events[0] == ("target", handle)
+    assert [event for event in driver.events if event[0] == "target"] == [driver.events[0]]
+
+
+def test_pointer_target_is_not_raised_for_bad_arguments_or_missing_targets():
+    driver = FakeDriver([Element("add-session", "button", enabled=False)])
+    driver._pointer_target = lambda element: driver.events.append(("target", element.handle))
+    with pytest.raises(ValueError):
+        driver.move("add-session", offset=(2, 0))
+    with pytest.raises(ElementNotFound):
+        driver.mouse_click("add-session")
+    assert driver.events == []
+
+
 def test_drag_releases_button_on_failure_without_retry():
     driver = FakeDriver([Element("add-session", "button")])
     def move(x, y):

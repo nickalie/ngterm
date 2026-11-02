@@ -184,15 +184,21 @@ class AtspiDriver(Driver):
             return menus
         return self._read(collect)
 
+    @staticmethod
+    def _top_level(handle):
+        # In-window overlays (GPUI's deferred popups, modals) publish their own dialog nodes;
+        # only the outermost window-role ancestor, the application's child, is an X11 window.
+        frame = None
+        while handle is not None and handle.get_role_name() != 'application':
+            if ROLE_NAMES.get(handle.get_role_name()) == 'window':
+                frame = handle
+            handle = handle.get_parent()
+        if frame is None:
+            raise ReadFailed('element has no containing accessibility window')
+        return frame
+
     def _containing_frame(self, element):
-        def frame():
-            handle = element.handle
-            while handle is not None and ROLE_NAMES.get(handle.get_role_name()) != 'window':
-                handle = handle.get_parent()
-            if handle is None:
-                raise ReadFailed('element has no containing accessibility window')
-            return handle
-        return self._read(frame)
+        return self._read(lambda: self._top_level(element.handle))
 
     def _window_title(self, window):
         title = window.get_full_text_property(self.connection.intern_atom('_NET_WM_NAME'),
@@ -218,10 +224,13 @@ class AtspiDriver(Driver):
                        if self._read(frame.get_name) == title]
         return matches[0] if len(matches) == 1 else None
 
-    def _activate_menu_window(self):
-        self._menu_xwindow.configure(stack_mode=self.X.Above)
-        self._menu_xwindow.set_input_focus(self.X.RevertToParent, self.X.CurrentTime)
+    def _raise(self, window):
+        window.configure(stack_mode=self.X.Above)
+        window.set_input_focus(self.X.RevertToParent, self.X.CurrentTime)
         self.connection.sync()
+
+    def _activate_menu_window(self):
+        self._raise(self._menu_xwindow)
 
     def _menu_command(self, path):
         # GPUI defers popups: each new Menu is a sibling under the window, not
@@ -301,11 +310,7 @@ class AtspiDriver(Driver):
                     windows.append(window)
                 queue.extend(window.query_tree().children)
             if element is not None:
-                handle = element.handle
-                while handle is not None and ROLE_NAMES.get(self._read(handle.get_role_name)) != 'window':
-                    handle = self._read(handle.get_parent)
-                if handle is None:
-                    raise ReadFailed('element has no containing accessibility window')
+                handle = self._containing_frame(element)
                 bounds = self._read(lambda: handle.get_extents(self.atspi.CoordType.SCREEN))
                 matches = []
                 for window in windows:
@@ -352,8 +357,13 @@ class AtspiDriver(Driver):
         bounds = self._read(lambda: element.handle.get_extents(self.atspi.CoordType.SCREEN))
         return bounds.x, bounds.y, bounds.width, bounds.height
 
+    def _pointer_target(self, element):
+        # XTest input hits the topmost window at the point, and another window of this app
+        # may cover the target's. Raise and focus the target's own window; never guess.
+        self._raise(self._window(element))
+
     def _pointer_move(self, x, y):
-        self._activate()
+        self.instance.ui.check(self.instance.env, self.instance.root)
         self.xtest.fake_input(self.connection, self.X.MotionNotify, x=round(x), y=round(y))
         self.connection.sync()
 

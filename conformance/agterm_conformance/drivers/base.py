@@ -287,18 +287,24 @@ class Driver(ABC):
         assert current.enabled is not False, "element not enabled"
         return current
 
-    def _point_now(self, target: str | Element, offset: tuple[float, float]) -> tuple[float, float]:
+    def _point_now(
+        self, target: str | Element, offset: tuple[float, float]
+    ) -> tuple[Element, tuple[float, float]]:
+        """The live element behind `target` and the screen point at `offset` within it."""
         if len(offset) != 2 or any(not math.isfinite(v) or not 0 <= v <= 1 for v in offset):
             raise ValueError("offset must contain two finite fractions in [0, 1]")
         current = self._pointer_element(target)
         x, y, width, height = self._bounds(current)
         assert all(math.isfinite(v) for v in (x, y, width, height)), "nonfinite bounds"
         assert width > 0 and height > 0, "empty bounds"
-        return (x + width * offset[0], y + height * offset[1])
+        return current, (x + width * offset[0], y + height * offset[1])
 
     def _point(self, target: str | Element, offset: tuple[float, float]) -> tuple[float, float]:
+        """Wait for the target, bring it to the front for pointer input, and return its point."""
         wanted = target if isinstance(target, str) else _describe(target)
-        return self._wait(lambda: self._point_now(target, offset), f"enabled pointer target {wanted}", None)
+        current, point = self._wait(lambda: self._point_now(target, offset), f"enabled pointer target {wanted}", None)
+        self._pointer_target(current)
+        return point
 
     @action
     def move(self, target: str | Element, offset=(0.5, 0.5)) -> None:
@@ -342,10 +348,12 @@ class Driver(ABC):
              dst_offset=(0.5, 0.5), steps=10) -> None:
         self._check_steps(steps)
         # Neither endpoint may retain coordinates across the other endpoint's readiness wait.
-        start, end = self._wait(
+        (source, start), (_, end) = self._wait(
             lambda: (self._point_now(src, src_offset), self._point_now(dst, dst_offset)),
             f"enabled drag endpoints {src!r} -> {dst!r}", None,
         )
+        # The press lands on the source, so the source's window must be the one on top.
+        self._pointer_target(source)
         self._drag_points(start, end, steps)
 
     @action
@@ -384,6 +392,14 @@ class Driver(ABC):
     @abstractmethod
     def _bounds(self, element: Element) -> tuple[float, float, float, float]:
         """Fresh screen coordinates (x, y, width, height)."""
+
+    def _pointer_target(self, element: Element) -> None:
+        """Before pointer input at `element`'s point, make its window the one that receives it.
+
+        Screen coordinates hit whatever window is on top there, so a driver whose input is
+        positional raises and focuses the target's own window here. Called once per action,
+        after the target resolves and before the first move.
+        """
 
     @abstractmethod
     def _pointer_move(self, x: float, y: float) -> None: ...

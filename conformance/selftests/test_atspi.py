@@ -272,12 +272,56 @@ def test_element_focus_activates_containing_window():
     from agterm_conformance.drivers.base import Element
     driver, first, second, _, _ = window_driver()
     driver.connection.focus = first
-    frame = NS(get_role_name=lambda:'frame', get_extents=lambda kind:NS(x=200,y=0,width=100,height=100))
+    frame = NS(get_role_name=lambda:'frame', get_parent=lambda:None, get_extents=lambda kind:NS(x=200,y=0,width=100,height=100))
     seen = []
     handle = NS(get_role_name=lambda:'entry', get_parent=lambda:frame,
                 grab_focus=lambda:seen.append(driver.connection.focus) or True)
     driver._focus(Element('entry','text-field',handle=handle))
     assert seen == [second]
+
+
+def test_pointer_raises_and_focuses_the_target_window_not_the_focused_one():
+    from types import SimpleNamespace as NS
+    from agterm_conformance.drivers.base import Element
+    driver, first, second, _, _ = window_driver()
+    # The second window covers the first and holds focus; the target lives in the first.
+    second.x = first.x
+    first.get_wm_name = lambda:'First'
+    second.get_wm_name = lambda:'Second'
+    raised = []
+    for window in (first, second):
+        window.configure = lambda window=window, **kw: raised.append((window, kw))
+    driver.X.Above = 0
+    frame = NS(get_role_name=lambda:'frame', get_parent=lambda:None, get_name=lambda:'First',
+               get_state_set=lambda:NS(contains=lambda state:False),
+               get_extents=lambda kind:NS(x=0,y=0,width=100,height=100))
+    handle = NS(get_role_name=lambda:'push button', get_parent=lambda:frame)
+    driver._pointer_target(Element('sidebar-toggle-button', 'button', handle=handle))
+    assert raised == [(first, {'stack_mode':0})]
+    assert driver.connection.focus is first
+
+
+def test_overlay_elements_resolve_to_their_top_level_frame():
+    """GPUI popups and modals are dialog nodes inside the frame, not X11 windows of their own."""
+    from types import SimpleNamespace as NS
+    from agterm_conformance.drivers.base import Element
+    driver, _, second, _, _ = window_driver()
+    app = NS(get_role_name=lambda:'application', get_parent=lambda:None)
+    frame = NS(get_role_name=lambda:'frame', get_parent=lambda:app,
+               get_extents=lambda kind:NS(x=200,y=0,width=100,height=100))
+    dialog = NS(get_role_name=lambda:'dialog', get_parent=lambda:frame,
+                get_extents=lambda kind:NS(x=250,y=30,width=40,height=60))
+    menu = NS(get_role_name=lambda:'menu', get_parent=lambda:dialog)
+    item = Element(None, 'menu-item', 'File', handle=NS(get_role_name=lambda:'menu item', get_parent=lambda:menu))
+    assert driver._containing_frame(item) is frame
+    assert driver._window(item) is second
+
+
+def test_pointer_move_does_not_refocus_another_window():
+    driver, events = input_driver()
+    driver._activate = lambda *args: pytest.fail('a move must not activate the focused window')
+    driver._pointer_move(1, 2)
+    assert events == [((6,), {'x':1, 'y':2})]
 
 
 def test_element_focus_disambiguates_overlapping_windows_by_title():
@@ -287,7 +331,7 @@ def test_element_focus_disambiguates_overlapping_windows_by_title():
     second.x = first.x
     first.get_wm_name = lambda:'First'
     second.get_wm_name = lambda:'Second'
-    frame = NS(get_role_name=lambda:'frame', get_name=lambda:'Second',
+    frame = NS(get_role_name=lambda:'frame', get_parent=lambda:None, get_name=lambda:'Second',
                get_state_set=lambda:NS(contains=lambda state:False),
                get_extents=lambda kind:NS(x=0,y=0,width=100,height=100))
     assert driver._window(Element(None,'window',handle=frame)) is second
@@ -308,7 +352,7 @@ def test_menu_uses_focused_window_independent_of_accessibility_order(reverse, sa
     first.get_wm_name = lambda: 'Same' if same_title else 'First'
     second.get_wm_name = lambda: 'Same' if same_title else 'Second'
     def frame(title):
-        return NS(get_role_name=lambda:'frame', get_name=lambda:'Same' if same_title else title,
+        return NS(get_role_name=lambda:'frame', get_parent=lambda:None, get_name=lambda:'Same' if same_title else title,
                   get_state_set=lambda:NS(contains=lambda state:title == 'Second'),
                   get_extents=lambda kind:NS(x=0,y=0,width=100,height=100))
     first_frame, second_frame = frame('First'), frame('Second')

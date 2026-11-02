@@ -378,8 +378,8 @@ No VMs were used. The Wayland fallback was compiled and smoke-tested, not read b
       XTest on the instance's display, bounds from `get_extents(SCREEN)`
 - [x] run `tests/ui/test_welcome.py` (the smallest file) on Linux green, fixing what the driver gets wrong
 - [x] run the self-tests and that file's partial suite run
-- [ ] ⚠️ resolve the blocking final review finding: general pointer actions can hit an overlapping
-      window instead of the saved target; see [backlog item](../backlog/pointer-actions-can-hit-an-overlapping-window.md)
+- [x] ⚠️ resolve the blocking final review finding: general pointer actions can hit an overlapping
+      window instead of the saved target (fixed; the backlog item is closed)
 
 **Implementation notes:** native bindings remain lazy, and the `linux-ui` extra follows the existing
 `ax` extra so host-free installations do not need GI build dependencies. Linux conformance CI installs
@@ -399,17 +399,12 @@ GPUI all-target clippy passed. Two existing Task 3 self-test mismatches were cor
 allowlist follows the renamed `_open_stream` helper, and the launch-options unit test stubs unrelated trace
 registration. Other UI files and their accessibility gaps remain Task 6. No VMs were needed.
 
-**Review status — stopped:** the full initial review and successive focused reviews fixed keyboard
-focus preservation, duplicate-title submenu lookup, deferred-popup discovery, and menu/window identity.
-The final guided fix (`7e6aa48`) passed 130 driver tests and four real input/menu probes; the new
-raised/focused overlapping-window menu regression failed before the fix and passed afterward. These
-checks do not cover general pointer activation of an obscured saved element.
-
-The authorized final round `04-after-decision` reported one major pointer-target defect, with its
-single correctness/implementation reviewer complete and no degradation. Task 5 is not complete and
-Task 6 has not started. The review-cap decision requires stopping before dependent tasks, rather than
-waiving this defect or extending the loop again. The plan remains here for resumption after the
-[recorded defect](../backlog/pointer-actions-can-hit-an-overlapping-window.md) is fixed and reviewed.
+**Review status:** the review rounds fixed keyboard focus preservation, duplicate-title submenu lookup,
+deferred-popup discovery and menu/window identity. The last round's blocker, general pointer actions
+hitting an overlapping window, is fixed: every pointer action (move, hover, clicks, scroll, both drags)
+now raises and focuses the resolved target's top-level X11 window before input, through the base
+`_pointer_target` hook. In-window dialog overlays resolve to their frame. A private-Xvfb regression with
+overlapping windows failed before the fix and passes after it.
 
 **Notes for Task 6:** two observations remain to investigate when execution resumes. After
 `Ctrl+Shift+S` toggles the sidebar in window 1, typing a command beginning with `s` in window 2 dropped

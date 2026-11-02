@@ -340,3 +340,44 @@ def test_atspi_menu_uses_second_overlapping_window(monkeypatch, real_compositor,
         assert ui._menu_window.get_name() == ui._window_title(second)
     finally:
         adapter.stop(app)
+
+
+def test_atspi_pointer_raises_saved_target_over_overlapping_window(monkeypatch, real_compositor, a11y_run):
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, os.environ['CONFORMANCE_UI_PROBE_ICD'])
+    adapter = RustAdapter(Path(os.environ['CONFORMANCE_UI_PROBE_BIN']))
+    app = adapter.launch(ui=a11y_run)
+    try:
+        ui = AtspiDriver(app.pid, instance=app)
+        first_id = assert_ok(app.request('window.list'))['windows'][0]['id']
+        first = ui._window()
+        saved = ui._wait(lambda: next(iter(ui._elements('sidebar-toggle-button')), None),
+                         'first window sidebar toggle', None)
+        second_id = assert_ok(app.request('window.new', name='Second pointer window'))['id']
+        def second_window():
+            atom = ui.connection.intern_atom('_NET_WM_PID')
+            for window in ui.connection.screen().root.query_tree().children:
+                prop = window.get_full_property(atom, ui.Xatom.CARDINAL)
+                if (window != first and prop is not None and prop.value[0] == app.pid
+                        and window.get_attributes().map_state == ui.X.IsViewable):
+                    return window
+        second = wait_until(second_window)
+        def sidebars():
+            return tuple(assert_ok(app.request('tree', window=wid))['tree']['sidebarVisible']
+                         for wid in (first_id, second_id))
+        # Cover the first window exactly with the raised, focused second one (no WM on Xvfb).
+        geometry = first.get_geometry()
+        origin = ui.connection.screen().root.translate_coords(first, 0, 0)
+        second.configure(x=origin.x, y=origin.y, width=geometry.width, height=geometry.height,
+                         stack_mode=ui.X.Above)
+        second.set_input_focus(ui.X.RevertToParent, ui.X.CurrentTime)
+        ui.connection.sync()
+        assert ui.connection.get_input_focus().focus == second
+        wait_until(lambda: ui._window(saved) == first)
+        before = sidebars()
+        ui.mouse_click(saved)
+        wait_until(lambda: sidebars()[0] is not before[0])
+        assert sidebars()[1] is before[1]
+        assert ui.connection.get_input_focus().focus == first
+    finally:
+        adapter.stop(app)
