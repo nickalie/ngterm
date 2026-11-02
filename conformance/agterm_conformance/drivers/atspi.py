@@ -74,6 +74,7 @@ class AtspiDriver(Driver):
         self._mapped_symbols: dict[int, int] = {}
         self._menu_path = None
         self._menu_depth = 0
+        self._menu_scope = None
         try:
             if not self.connection.has_extension('XTEST'):
                 raise DriverError('private Xvfb does not provide XTEST')
@@ -152,6 +153,23 @@ class AtspiDriver(Driver):
     def _menu_item(self, name):
         return next((el for el in self._all_elements() if el.role == 'menu-item' and el.name == name), None)
 
+    def _scoped_menu_item(self, scope, name):
+        def find():
+            self.app.clear_cache()
+            queue = deque(scope.get_child_at_index(i) for i in range(scope.get_child_count()))
+            while queue:
+                handle = queue.popleft()
+                if handle is None:
+                    raise ReadFailed('menu changed during traversal')
+                if ROLE_NAMES.get(handle.get_role_name()) == 'menu-item':
+                    if handle.get_name() == name:
+                        return self.snapshot(handle)
+                    # A nested submenu belongs to this item, not the current menu.
+                    continue
+                queue.extend(handle.get_child_at_index(i) for i in range(handle.get_child_count()))
+            return None
+        return self._read(find)
+
     def _menu_command(self, path):
         # Opening/hovering is sent once per level, never retried after input. The base wait
         # polls the accessibility read-back while GPUI builds each popup asynchronously.
@@ -161,15 +179,17 @@ class AtspiDriver(Driver):
                 return None
             self.mouse_click(buttons[0])
             self._menu_path, self._menu_depth = path, 0
+            self._menu_scope = self.app
         while self._menu_depth < len(path) - 1:
             title = path[self._menu_depth]
             if title not in ('ngterm', 'agterm'):
-                item = self._menu_item(title)
+                item = self._scoped_menu_item(self._menu_scope, title)
                 if item is None:
                     return None
                 self._hover(item)
+                self._menu_scope = item.handle
             self._menu_depth += 1
-        return self._menu_item(path[-1])
+        return self._scoped_menu_item(self._menu_scope, path[-1])
 
     def _tab(self, name):
         return next((el for el in self._all_elements()
@@ -197,26 +217,55 @@ class AtspiDriver(Driver):
                 raise DriverError(f'atspi cannot set text on {element}')
         self._read(replace)
 
-    def _window(self):
+    def _window(self, element=None):
         self.instance.ui.check(self.instance.env, self.instance.root)
         atom = self.connection.intern_atom('_NET_WM_PID')
+        root = self.connection.screen().root
         def find():
-            queue = deque([self.connection.screen().root])
+            windows = []
+            queue = deque([root])
             while queue:
                 window = queue.popleft()
                 prop = window.get_full_property(atom, self.Xatom.CARDINAL)
                 if prop is not None and prop.value[0] == self.pid and window.get_attributes().map_state == self.X.IsViewable:
-                    return window
+                    windows.append(window)
                 queue.extend(window.query_tree().children)
-            return None
+            if element is not None:
+                handle = element.handle
+                while handle is not None and ROLE_NAMES.get(self._read(handle.get_role_name)) != 'window':
+                    handle = self._read(handle.get_parent)
+                if handle is None:
+                    raise ReadFailed('element has no containing accessibility window')
+                bounds = self._read(lambda: handle.get_extents(self.atspi.CoordType.SCREEN))
+                matches = []
+                for window in windows:
+                    origin = root.translate_coords(window, 0, 0)
+                    geometry = window.get_geometry()
+                    if (origin.x, origin.y, geometry.width, geometry.height) == (bounds.x, bounds.y, bounds.width, bounds.height):
+                        matches.append(window)
+                if len(matches) > 1:
+                    title = self._read(handle.get_name)
+                    matches = [window for window in matches if window.get_wm_name() == title]
+                if len(matches) == 1:
+                    return matches[0]
+                # Never silently focus another window when an element cannot be located.
+                return None
+            focused = self.connection.get_input_focus().focus
+            while hasattr(focused, 'query_tree'):
+                if focused in windows:
+                    return focused
+                if focused == root:
+                    break
+                focused = focused.query_tree().parent
+            return windows[0] if windows else None
         return self._wait(find, 'mapped private X11 window', None)
 
-    def _activate(self):
-        self._window().set_input_focus(self.X.RevertToParent, self.X.CurrentTime)
+    def _activate(self, element=None):
+        self._window(element).set_input_focus(self.X.RevertToParent, self.X.CurrentTime)
         self.connection.sync()
 
     def _focus(self, element):
-        self._activate()
+        self._activate(element)
         if not self._read(element.handle.grab_focus):
             raise DriverError(f'atspi cannot focus {element}')
 

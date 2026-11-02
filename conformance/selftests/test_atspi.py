@@ -127,7 +127,8 @@ def test_menu_open_and_hover_are_not_retried_before_readback():
     final = Element(None, 'menu-item', 'Find…')
     items, actions = {}, []
     driver._elements = lambda key: [button]
-    driver._menu_item = lambda title: items.get(title)
+    driver.app = object()
+    driver._scoped_menu_item = lambda scope, title: items.get(title)
     driver.mouse_click = lambda el: actions.append(('click',el))
     driver._hover = lambda el: actions.append(('hover',el))
     path = ('View','Find…')
@@ -169,3 +170,106 @@ def test_unicode_mapping_uses_only_empty_private_keycodes():
     assert changes == [(9, [(0x100754c, 0x100754c)])]
     with pytest.raises(DriverError, match='no unused keycode'):
         driver._keycode(0x100754d)
+
+
+def test_menu_path_keeps_submenu_scope_with_duplicate_names():
+    from types import SimpleNamespace as NS
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    from agterm_conformance.drivers.base import Element
+    class Node:
+        def __init__(self, name, role='menu item', children=()):
+            self.name, self.role, self.children = name, role, list(children)
+        def get_name(self): return self.name
+        def get_role_name(self): return self.role
+        def get_child_count(self): return len(self.children)
+        def get_child_at_index(self, i): return self.children[i]
+        def clear_cache(self): pass
+    target = Node('File')
+    open_window = Node('Open Window')
+    top = Node('File', children=[Node('', 'menu', [open_window])])
+    driver = object.__new__(AtspiDriver)
+    driver.app = Node('', 'application', [Node('', 'menu', [top])])
+    driver._native_error = OSError
+    driver._menu_path = None
+    driver._elements = lambda key: [Element(key, 'button')]
+    driver.mouse_click = lambda el: None
+    driver.snapshot = lambda h: Element(None, 'menu-item', h.name, handle=h)
+    hovered = []
+    driver._hover = lambda el: hovered.append(el.handle)
+    path = ('File', 'Open Window', 'File')
+    assert driver._menu_command(path) is None
+    assert driver._menu_command(path) is None
+    assert hovered == [top, open_window]
+    open_window.children = [Node('', 'menu', [target])]
+    assert driver._menu_command(path).handle is target
+
+
+def window_driver():
+    from types import SimpleNamespace as NS
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    class Window:
+        def __init__(self, pid=None, x=0):
+            self.pid, self.x, self.children, self.parent = pid, x, [], None
+        def get_full_property(self, *args): return NS(value=[self.pid]) if self.pid else None
+        def get_attributes(self): return NS(map_state=2)
+        def query_tree(self): return NS(children=self.children, parent=self.parent)
+        def translate_coords(self, window, *args): return NS(x=window.x, y=0)
+        def get_geometry(self): return NS(width=100, height=100)
+        def set_input_focus(self, *args): connection.focus = self
+    root, first, second, child, foreign = Window(), Window(42), Window(42, 200), Window(), Window(99)
+    root.children = [first, second, foreign]
+    for w in root.children: w.parent = root
+    second.children = [child]
+    child.parent = second
+    connection = NS(focus=second, intern_atom=lambda name:1, screen=lambda:NS(root=root),
+                    sync=lambda:None, close=lambda:None)
+    connection.get_input_focus = lambda: NS(focus=connection.focus)
+    driver = object.__new__(AtspiDriver)
+    driver.pid, driver.connection = 42, connection
+    driver.instance = NS(ui=NS(check=lambda *args:None), env={}, root=None)
+    driver.X = NS(IsViewable=2, RevertToParent=2, CurrentTime=0)
+    driver.Xatom = NS(CARDINAL=1)
+    driver.atspi = NS(CoordType=NS(SCREEN=0))
+    driver._native_error = OSError
+    driver._wait = lambda fn, *args: fn()
+    return driver, first, second, child, foreign
+
+
+def test_keyboard_preserves_owned_focus_including_descendant():
+    driver, first, second, child, foreign = window_driver()
+    for focused in (second, child):
+        driver.connection.focus = focused
+        driver._activate()
+        assert driver.connection.focus is second
+    for focused in (foreign, 1):
+        driver.connection.focus = focused
+        driver._activate()
+        assert driver.connection.focus is first
+
+
+def test_element_focus_activates_containing_window():
+    from types import SimpleNamespace as NS
+    from agterm_conformance.drivers.base import Element
+    driver, first, second, _, _ = window_driver()
+    driver.connection.focus = first
+    frame = NS(get_role_name=lambda:'frame', get_extents=lambda kind:NS(x=200,y=0,width=100,height=100))
+    seen = []
+    handle = NS(get_role_name=lambda:'entry', get_parent=lambda:frame,
+                grab_focus=lambda:seen.append(driver.connection.focus) or True)
+    driver._focus(Element('entry','text-field',handle=handle))
+    assert seen == [second]
+
+
+def test_element_focus_disambiguates_overlapping_windows_by_title():
+    from types import SimpleNamespace as NS
+    from agterm_conformance.drivers.base import Element
+    driver, first, second, _, _ = window_driver()
+    second.x = first.x
+    first.get_wm_name = lambda:'First'
+    second.get_wm_name = lambda:'Second'
+    frame = NS(get_role_name=lambda:'frame', get_name=lambda:'Second',
+               get_extents=lambda kind:NS(x=0,y=0,width=100,height=100))
+    assert driver._window(Element(None,'window',handle=frame)) is second
+    # Identical geometry and title is ambiguous, so refuse instead of focusing the wrong window.
+    first.get_wm_name = lambda:'Second'
+    assert driver._window(Element(None,'window',handle=frame)) is None
