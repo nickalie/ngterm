@@ -145,7 +145,8 @@ def test_missing_typelib_names_setup_step(monkeypatch):
         linux_ui.atspi_bindings()
 
 
-def test_launch_fixture_options_cannot_be_overridden():
+def test_launch_fixture_options_cannot_be_overridden(monkeypatch):
+    monkeypatch.setattr(plugin.trace, "remember", lambda instance: None)
     calls = []
     adapter = SimpleNamespace(launch=lambda **kw: calls.append(kw) or SimpleNamespace())
     launcher = plugin.Launcher(adapter, ui='owned')
