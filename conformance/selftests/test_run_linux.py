@@ -165,6 +165,9 @@ def test_a_holding_run_writes_the_report(tmp_path: Path, stage: Path, layers: Pa
     (tmp_path / "report").mkdir()
     (tmp_path / "report" / "keep.txt").write_text("mine")
     (tmp_path / "report" / "report.md").write_text("stale")
+    stale_trace = tmp_path / "report/traces/removed-test"
+    stale_trace.mkdir(parents=True)
+    (stale_trace / "screenshot.png").write_bytes(b"stale")
     completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), AGTERM_SOCKET="/nowhere")
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert f"ngterm: `{stage}/bin/ngterm`" in report
@@ -180,6 +183,7 @@ def test_a_holding_run_writes_the_report(tmp_path: Path, stage: Path, layers: Pa
     assert {"kind": "test", "nodeid": PROBE_ID, "outcome": "passed"}.items() <= records[1].items()
     assert "scrubbed from env" not in (out / "pytest.log").read_text()
     assert (out / "keep.txt").read_text() == "mine"
+    assert not stale_trace.exists()
 
 
 def test_a_run_launches_its_binary_on_lavapipe_with_a_seat(

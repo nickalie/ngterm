@@ -108,6 +108,7 @@ fi
 while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(NGTERM_|AGTERM_|ZMX_)' || true)
 
 mkdir -p "$out"
+rm -rf "$out/traces"
 rm -f "$out/report.md" "$out/junit.xml" "$out/pytest.log" "$out/nodeids.jsonl"
 # A per-run parent under %TEMP%, so a concurrent run's roots are neither blamed on this one nor listed for removal.
 parent="$(mktemp -d "$(cygpath -u "${TEMP:-/tmp}")/agt-run-XXXXXX")"

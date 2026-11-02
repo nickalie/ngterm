@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import time
 from contextvars import ContextVar
 from functools import wraps
@@ -34,7 +35,9 @@ def remember(instance: Any, driver: Any = None) -> None:
 def before_stop(instance: Any) -> None:
     if record := ACTIVE.get():
         record.remember(instance)
-        record.capture_one(str(instance.root))
+        key = str(instance.root)
+        record.capture_one(key)
+        record.stopped.add(key)
 
 
 def action(method):
@@ -66,12 +69,15 @@ class Trace:
         self.errors: list[str] = []
         self.collecting = False
         self.frozen = False
+        self.stopped: set[str] = set()
         self.cli_processes = []
         self.rerun_pending = False
         self.reset_outcome = False
+        self.released = False
 
     def release(self) -> None:
         """Do not retain successful-test evidence through pytest's session-long item list."""
+        self.released = True
         for process in self.cli_processes:
             process._trace = None
         self.logs = {name: [] for name in self.logs}
@@ -79,20 +85,24 @@ class Trace:
         self.files.clear()
         self.errors.clear()
         self.cli_processes.clear()
+        self.stopped.clear()
 
     def record(self, channel: str, entry: dict) -> dict | None:
-        if self.mode != 'off' and not self.collecting:
+        if self.mode != 'off' and not self.collecting and not self.released:
             stored = dict(time=time.time(), **entry)
             self.logs[channel].append(stored)
             return stored
         return None
 
     def reset(self) -> None:
+        for process in self.cli_processes:
+            process._trace = None
         self.logs = {name: [] for name in self.logs}
         self.files.clear()
         self.errors.clear()
         self.instances.clear()
         self.cli_processes.clear()
+        self.stopped.clear()
         self.frozen = False
         self.rerun_pending = True
         self.reset_outcome = True
@@ -101,6 +111,11 @@ class Trace:
         if self.mode != 'off':
             key = str(instance.root)
             previous = self.instances.get(key)
+            if previous and getattr(previous[0], 'pid', None) == getattr(instance, 'pid', None):
+                # A relay endpoint must not replace the app's diagnostic socket.
+                instance = previous[0]
+            else:
+                self.stopped.discard(key)
             self.instances[key] = (instance, driver or (previous[1] if previous else None))
 
     def _save(self, name: str, collect) -> None:
@@ -111,7 +126,7 @@ class Trace:
             self.errors.append(f'{name}: {type(error).__name__}: {error}')
 
     def capture_one(self, key: str) -> None:
-        if self.mode == 'off' or self.collecting or self.frozen:
+        if self.mode == 'off' or self.collecting or self.frozen or key in self.stopped:
             return
         self.collecting = True
         try:
@@ -137,12 +152,17 @@ class Trace:
             for session in workspace.get('sessions', []):
                 sid = session['id']
                 name = re.sub(r'[^a-zA-Z0-9_.-]', '_', str(sid))
-                def text(sid=sid):
-                    response = client.request('session.text', sid)
+                def text(pane=None, sid=sid):
+                    response = client.request('session.text', sid, all=True, **({'pane': pane} if pane else {}))
                     if not response.ok:
                         raise RuntimeError(response.error)
                     return (response.result or {}).get('text', '')
                 self._save(prefix + f'panes/{name}.txt', text)
+                # The tree includes a hidden scratch while its terminal is alive.
+                for surface in session.get('surfaces', []):
+                    kind = surface.get('kind')
+                    if kind in ('left', 'right', 'scratch'):
+                        self._save(prefix + f'panes/{name}-{kind}.txt', lambda kind=kind: text(kind))
         return json.dumps(tree, ensure_ascii=False, indent=2)
 
     def capture(self) -> None:
@@ -154,20 +174,48 @@ class Trace:
         for key in list(self.instances):
             self.capture_one(key)
 
+    def refresh_logs(self) -> None:
+        """Keep shutdown diagnostics, without replacing a frozen failure snapshot."""
+        for key, (instance, _) in self.instances.items():
+            if instance.log.exists():
+                prefix = '' if key == next(iter(self.instances)) else f'instances/{slug(key)}/'
+                name = 'app.teardown.log' if self.frozen else 'app.log'
+                self._save(prefix + name, instance.log.read_bytes)
+
     def finish(self, failed: bool) -> None:
-        if self.mode == 'off' or (self.mode == 'on-failure' and not failed):
+        if self.mode == 'off':
             return
         try:
+            if self.path.exists():
+                shutil.rmtree(self.path)
+            if self.mode == 'on-failure' and not failed:
+                return
             self.path.mkdir(parents=True, exist_ok=True)
-            for channel, entries in self.logs.items():
-                (self.path / f'{channel}.jsonl').write_text(''.join(json.dumps(e, ensure_ascii=False) + '\n' for e in entries))
-            for name, data in self.files.items():
-                path = self.path / name
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(data)
-            if self.errors:
-                (self.path / 'trace-errors.txt').write_text('\n'.join(self.errors) + '\n')
         except Exception as error:
-            # A broken artifact directory must not turn a test failure into an INTERNALERROR.
-            import sys
-            print(f'could not write trace {self.path}: {error}', file=sys.stderr)
+            self._write_error(error)
+            return
+        for channel, entries in self.logs.items():
+            self._write(channel + '.jsonl', lambda path, entries=entries: path.write_text(
+                ''.join(json.dumps(e, ensure_ascii=False) + '\n' for e in entries),
+                encoding='utf-8', errors='backslashreplace'))
+        for name, data in self.files.items():
+            self._write(name, lambda path, data=data: path.write_bytes(data))
+        if self.errors:
+            try:
+                (self.path / 'trace-errors.txt').write_text('\n'.join(self.errors) + '\n',
+                                                         encoding='utf-8', errors='backslashreplace')
+            except Exception as error:
+                self._write_error(error)
+
+    def _write(self, name, write) -> None:
+        try:
+            path = self.path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write(path)
+        except Exception as error:
+            self.errors.append(f'{name}: {type(error).__name__}: {error}')
+
+    def _write_error(self, error) -> None:
+        # A broken artifact directory must not turn a test failure into an INTERNALERROR.
+        import sys
+        print(f'could not write trace {self.path}: {error}', file=sys.stderr)

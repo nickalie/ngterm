@@ -100,7 +100,10 @@ def require_implementation(options: ImplOptions) -> None:
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("agterm-conformance")
-    group.addoption("--trace-mode", choices=("off", "on-failure", "always"), default="on-failure")
+    group.addoption(
+        "--trace-mode", choices=("off", "on-failure", "always"), default="on-failure",
+        help="per-test artifact capture: off, on-failure (default), or always; see --trace-dir",
+    )
     group.addoption("--trace-dir", type=Path, default=None, help="trace directory (default: beside the report)")
     group.addoption("--impl", choices=IMPLS, default=None, help="implementation under test")
     group.addoption("--bin", type=Path, default=None, help="app binary or bundle to launch")
@@ -754,6 +757,12 @@ class Cli:
                 argv, env=env, cwd=self.instance.home, input=input, capture_output=True,
                 text=True, timeout=timeout, check=False,
             )
+        except subprocess.TimeoutExpired as error:
+            def text(value):
+                return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+            trace.event("cli", argv=argv, error=f"{type(error).__name__}: {error}",
+                        stdout=text(error.stdout), stderr=text(error.stderr))
+            raise
         except Exception as error:
             trace.event("cli", argv=argv, error=f"{type(error).__name__}: {error}")
             raise
@@ -779,26 +788,31 @@ class CliProcess:
         self._trace = trace.ACTIVE.get()
         self._transcript = []
         self._trace_entry = None
-        if self._trace is not None:
-            self._trace.cli_processes.append(self)
-        self.process = subprocess.Popen(
-            argv,
-            env=dict(env),
-            cwd=cwd,
-            stdin=subprocess.PIPE if input is not None or interactive else subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        if input is not None:
-            self.send(input)
-            if not interactive:
-                assert self.process.stdin is not None
-                self.process.stdin.close()
         self._lines: queue.Queue[str | None] = queue.Queue()
         self._stderr: str | None = None
+        try:
+            self.process = subprocess.Popen(
+                argv, env=dict(env), cwd=cwd,
+                stdin=subprocess.PIPE if input is not None or interactive else subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+        except Exception as error:
+            trace.event("cli", argv=argv, error=f"{type(error).__name__}: {error}")
+            raise
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
+        if self._trace is not None:
+            self._trace.cli_processes.append(self)
+        if input is not None:
+            try:
+                self.send(input)
+                if not interactive:
+                    assert self.process.stdin is not None
+                    self.process.stdin.close()
+            except Exception as error:
+                trace.event("cli", argv=argv, error=f"{type(error).__name__}: {error}")
+                self.close()
+                raise
 
     def _read(self) -> None:
         assert self.process.stdout is not None
@@ -1015,7 +1029,7 @@ def pytest_runtest_protocol(item, nextitem):
     directory = item.config.getoption("trace_dir")
     if directory is None:
         report = item.config.getoption("nodeid_report") or item.config.getoption("xmlpath", default=None)
-        directory = Path(report).parent / "traces" if report else Path(__file__).resolve().parents[1] / "reports/traces"
+        directory = Path(report).parent / "traces" if report else item.config.rootpath / "reports/traces"
     directory = item.config.invocation_params.dir / directory
     record = trace.Trace(item.nodeid, directory, item.config.getoption("trace_mode"))
     item.stash[_TRACE_KEY] = record
@@ -1048,20 +1062,15 @@ def pytest_runtest_makereport(item, call):
         if record.reset_outcome:
             item.stash[_TRACE_FAILED] = False
             record.reset_outcome = False
-    if record is not None and report.failed:
-        item.stash[_TRACE_FAILED] = True
-        if report.when != "teardown":
-            record.capture()
-            record.frozen = True
-
-
-@pytest.hookimpl(hookwrapper=True, tryfirst=True)
-def pytest_runtest_teardown(item, nextitem):
-    # Preserve live evidence before fixture finalizers remove roots, even if teardown is what fails.
-    record = item.stash.get(_TRACE_KEY, None)
     if record is not None:
-        record.capture()
-    yield
+        if report.failed:
+            item.stash[_TRACE_FAILED] = True
+        if report.failed or (report.when == "teardown" and record.mode == "always"):
+            record.capture()
+            if report.when == "teardown":
+                record.refresh_logs()
+            else:
+                record.frozen = True
 
 
 def pytest_runtest_logreport(report):

@@ -104,7 +104,12 @@ class Stream:
         self._max_line_bytes = max_line_bytes
 
     def send(self, frame: Mapping[str, Any]) -> None:
-        self.sock.sendall(json.dumps(frame, separators=(",", ":"), ensure_ascii=False).encode() + b"\n")
+        try:
+            self.sock.sendall(json.dumps(frame, separators=(",", ":"), ensure_ascii=False).encode() + b"\n")
+        except Exception as error:
+            trace.event("socket", socket=str(self.path), direction="stream-send", frame=dict(frame),
+                        error=f"{type(error).__name__}: {error}")
+            raise
         trace.event("socket", socket=str(self.path), direction="stream-send", frame=dict(frame))
 
     def read(self, timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
@@ -119,6 +124,14 @@ class Stream:
         return frame
 
     def read_line(self, timeout: float = DEFAULT_TIMEOUT) -> bytes:
+        try:
+            return self._read_line(timeout)
+        except Exception as error:
+            trace.event("socket", socket=str(self.path), direction="stream-receive",
+                        error=f"{type(error).__name__}: {error}")
+            raise
+
+    def _read_line(self, timeout: float) -> bytes:
         deadline = time.monotonic() + timeout
         while (newline := self._pending.find(b"\n")) < 0:
             if len(self._pending) > self._max_line_bytes:
@@ -190,6 +203,14 @@ class Client:
             payload["target"] = target
         if args:
             payload["args"] = args
+        try:
+            return self._open_stream(payload)
+        except Exception as error:
+            trace.event("socket", socket=str(self.socket_path), direction="stream-open", request=payload,
+                        error=f"{type(error).__name__}: {error}")
+            raise
+
+    def _open_stream(self, payload: dict[str, Any]) -> Stream:
         line = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
         if len(line) > MAX_REQUEST_LINE_BYTES:
             raise RequestTooLarge(f"request too large ({len(line)} bytes, cap {MAX_REQUEST_LINE_BYTES})")
