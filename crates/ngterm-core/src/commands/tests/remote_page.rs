@@ -269,14 +269,35 @@ fn a_session_wide_page_with_mixed_roles_stays_here() {
     origin.opened(FILE, |a| a.pane = Some("left".to_owned()));
 }
 
+/// The kinds of a presenter that shows pages but does not forward a loopback page: upstream's, or an older build.
+fn without_tunnel() -> Vec<&'static str> {
+    SUPPORTED_KINDS
+        .into_iter()
+        .filter(|kind| *kind != crate::remote::page_tunnel::TUNNEL_KIND)
+        .collect()
+}
+
 #[test]
 fn a_loopback_url_is_refused_only_when_the_page_would_go_to_the_presenter() {
-    let mut origin = Origin::pages();
+    let mut origin = Origin::new(false, &without_tunnel());
     assert_eq!(origin.open("http://127.0.0.1:8080/", |_| {}), failure(LOOPBACK));
     assert_eq!(origin.open("http://localhost:5173/", |_| {}), failure(LOOPBACK));
     let left = origin.live.left;
     set_lead(&mut origin.live.fixture.core, left, "leader");
     assert!(origin.open("http://127.0.0.1:8080/", |_| {}).ok);
+}
+
+#[test]
+fn a_loopback_url_goes_to_a_presenter_that_forwards_it_as_written() {
+    let mut origin = Origin::pages();
+    let page = origin.opened("http://localhost:5173/board", |_| {});
+    let request = origin.presenter.last("page.request").unwrap();
+    assert_eq!(request["page"]["page"], json!(page));
+    assert_eq!(
+        request["page"]["source"],
+        json!({"url": {"_0": "http://localhost:5173/board"}}),
+        "the presenter gets the origin's own address and forwards it itself"
+    );
 }
 
 /// Upstream's `pointSizesAreRefusedOnlyWhenThePageWouldGoToThePresenter`: the presentation wire carries only a percent,
@@ -763,5 +784,5 @@ fn a_local_page_omits_the_remote_fields_and_a_replica_reports_its_origin_path() 
 
 #[test]
 fn the_page_kinds_close_upstreams_list() {
-    assert_eq!(&SUPPORTED_KINDS[8..], crate::remote::hub::PAGE_KINDS);
+    assert_eq!(&SUPPORTED_KINDS[9..], crate::remote::hub::PAGE_KINDS);
 }

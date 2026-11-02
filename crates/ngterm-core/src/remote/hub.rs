@@ -125,7 +125,7 @@ impl PresenterGrant {
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's.
-pub const SUPPORTED_KINDS: [&str; 14] = [
+pub const SUPPORTED_KINDS: [&str; 15] = [
     "status",
     "hud",
     "notify",
@@ -134,6 +134,7 @@ pub const SUPPORTED_KINDS: [&str; 14] = [
     "sound",
     ASK_FORM_KIND,
     ASK_OTHER_KIND,
+    super::page_tunnel::TUNNEL_KIND,
     PAGE_KINDS[0],
     PAGE_KINDS[1],
     PAGE_KINDS[2],
@@ -822,6 +823,7 @@ mod tests {
 
     #[test]
     fn the_kinds_follow_upstreams_order() {
+        // upstream's, with this build's loopback forward before the page kinds, which close the list
         assert_eq!(
             SUPPORTED_KINDS,
             [
@@ -833,6 +835,7 @@ mod tests {
                 "sound",
                 "ask.form",
                 "ask.other",
+                "page.tunnel",
                 "page.request",
                 "page.rejected",
                 "page.close",

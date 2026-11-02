@@ -79,6 +79,50 @@ pub fn page_serve_command(host: &str, token: &str) -> Result<Vec<String>, Invoca
     Ok(argv)
 }
 
+/// One ssh invocation forwarding `plan`'s port of this machine's loopback to the page server on the origin's, for as
+/// long as the page is shown ([`super::page_tunnel`]): the forward listens on 127.0.0.1 only, a forward that cannot
+/// bind ends ssh at once (`ExitOnForwardFailure`), keepalives notice a dead link, and the remote command prints the
+/// ready line, then holds the session open until this machine closes ssh's stdin. Connection sharing is off: a forward
+/// joined to a shared master (`ControlMaster`, `ControlPersist`) is the master's and outlives this process, so the
+/// page's close would leave it listening. Quoted for any login shell, as the origin control lines are.
+///
+/// # Errors
+///
+/// A host ssh may not take, or a target host that is not one plain token.
+pub fn tunnel_command(host: &str, plan: &super::page_tunnel::TunnelPlan) -> Result<Vec<String>, InvocationError> {
+    validate(host)?;
+    if !is_plain(&plan.target_host) {
+        return Err(InvocationError::InvalidSession);
+    }
+    let mut argv = ssh_arguments(host, 5, false);
+    let destination = argv.pop().unwrap_or_default();
+    let forward = format!(
+        "127.0.0.1:{}:{}:{}",
+        plan.local_port, plan.target_host, plan.target_port
+    );
+    argv.extend(
+        [
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
+            "-L",
+            &forward,
+        ]
+        .map(str::to_owned),
+    );
+    argv.push(destination);
+    let script = format!("printf '%s\\n' {}; exec cat >/dev/null", super::page_tunnel::READY_LINE);
+    argv.push(["/bin/sh", "-c", script.as_str()].map(account_shell_quoted).join(" "));
+    Ok(argv)
+}
+
 /// The create-only guard after the attach: an existing daemon ignores it, a vanished one runs it and fails, so the
 /// attach never hands back a fresh shell wearing the old session's name.
 const GONE_GUARD: &str = "printf '%s\\n' 'ngterm: remote session is gone'; exit 1";
@@ -212,7 +256,7 @@ pub fn probe_command(host: &str) -> Result<Vec<String>, InvocationError> {
 
 /// One ssh invocation running the far side's `ngtermctl` with `arguments` plus `--json`, so the reply is the server's
 /// own response line (upstream's `RemoteSession.controlCommand`). The arguments carry user text, so the outer layer is
-/// quoted for any login shell ([`account_shell_quoted`]); only the origin control lines use it. A Windows origin
+/// quoted for any login shell ([`account_shell_quoted`]), as the page forward's remote script is. A Windows origin
 /// needs its own remote form, as the other remote lines do.
 ///
 /// # Errors
@@ -304,6 +348,31 @@ mod tests {
         assert!(argv.last().unwrap().contains("exec ngtermctl session overlay run-job "));
         assert!(argv.last().unwrap().contains("$HOME/.local/bin"));
         assert_eq!(run_job_command("buildbox", "j 1"), Err(InvocationError::InvalidSession));
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "runs the far side's /bin/sh, which Windows has not")]
+    fn a_tunnel_forwards_a_loopback_port_and_holds_until_its_stdin_closes() {
+        let plan = crate::remote::page_tunnel::TunnelPlan::new("http://localhost:5173/", 50123).unwrap();
+        let argv = tunnel_command("buildbox", &plan).unwrap();
+        let at = argv.iter().position(|word| word == "-L").unwrap();
+        assert_eq!(argv[at + 1], "127.0.0.1:50123:localhost:5173");
+        for option in ["ExitOnForwardFailure=yes", "ControlMaster=no", "ControlPath=none"] {
+            assert!(argv.windows(2).any(|pair| pair == ["-o", option]), "{option}");
+        }
+        assert_eq!(argv[argv.len() - 2], "buildbox", "the destination follows every option");
+        let script = argv.last().unwrap();
+        let ran = Command::new("/bin/sh")
+            .args(["-c", script])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&ran.stdout), "ngterm-tunnel-ready\n");
+        assert!(ran.status.success());
+        assert_eq!(
+            tunnel_command("-oProxyCommand=x", &plan),
+            Err(InvocationError::InvalidHost)
+        );
     }
 
     /// Upstream's `pageServeUsesPlainStdioAndReachesTheInstalledCli`, `pageServeRefusesATokenThatIsNotAPlainToken` and

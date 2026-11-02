@@ -2,7 +2,8 @@
 //! `ControlServer+RemotePage.swift`): a page the origin's placement rule sent here is shown in the mapped pane or the
 //! session-wide slot under a page id of this machine's own, with `replica_of` naming the origin's.
 //!
-//! - A URL page loads directly, on this machine's browser store. A file page loads from
+//! - A URL page loads directly, on this machine's browser store; one on the origin's loopback loads through a forward
+//!   of this machine's own ([`super::page_tunnel`]), placed once the forward is up. A file page loads from
 //!   `ngterm-page://<local id>/<origin path>` ([`crate::html::REPLICA_SCHEME`]): the frontend's scheme handler asks
 //!   [`Core::replica_fetch`] for each file, and the page's bridge relays through [`Core::replica_bridge`], both over the
 //!   page's channel ([`super::page_channel`]) to the origin, carried by a helper (`ssh … ngtermctl session overlay
@@ -33,6 +34,7 @@ use super::frames::{
     PresentationPageSource, PresentationPageState,
 };
 use super::page_channel::{ChannelEvent, ChannelLink, Permits, Pull, ReplicaChannel, RequestId};
+use super::page_tunnel::{READY_LINE, TunnelPlan, free_local_port};
 use crate::Core;
 use crate::html::{HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlReloadTarget, HtmlSource, errors};
 use crate::model::{HtmlPageSlot, OverlayPane};
@@ -46,6 +48,8 @@ const NO_SESSION: &str = "no such session";
 const INVALID_PAGE: &str = "invalid page id";
 const INVALID_URL: &str = "invalid url";
 const NO_HELPER: &str = "no page helper";
+/// A loopback page whose row here left before its forward was up.
+const ROW_LEFT: &str = "the session's row on the presenting machine closed";
 /// The MIME type of an answer that named none.
 const OCTET_STREAM: &str = "application/octet-stream";
 
@@ -106,6 +110,30 @@ struct PageLink {
     bridges: HashMap<RequestId, BridgeAnswer>,
 }
 
+/// The forward a loopback page loads through, and the helper holding it open.
+struct Tunnel {
+    key: HelperKey,
+    link: Box<dyn ChannelLink>,
+    permits: Arc<Permits>,
+    plan: TunnelPlan,
+}
+
+impl Tunnel {
+    fn stop(&self) {
+        self.link.stop();
+        self.permits.close();
+    }
+}
+
+/// A loopback page waiting for its forward before it is placed, and the origin's commands for it meanwhile.
+struct PendingTunnel {
+    tunnel: Tunnel,
+    page: PresentationPage,
+    session: Uuid,
+    host: String,
+    commands: Vec<PresentationPageCommand>,
+}
+
 /// A page shown here for an origin (upstream's `ReplicaPageRecord`).
 struct ReplicaRecord {
     session: Uuid,
@@ -118,12 +146,16 @@ struct ReplicaRecord {
     /// The origin's host when the page is a page companion's row here: the page ending there reads its outcome from
     /// that host before the row closes ([`super::companions`]).
     companion: Option<String>,
+    /// The forward a loopback page loads through.
+    tunnel: Option<Tunnel>,
 }
 
 /// The pages shown here for origins, by local page id, and how their helpers start.
 #[derive(Default)]
 pub(crate) struct ReplicaPages {
     records: HashMap<Uuid, ReplicaRecord>,
+    /// Loopback pages whose forward is not up yet, by the forward's own id.
+    pending: HashMap<Uuid, PendingTunnel>,
     launcher: Option<Rc<dyn PageHelperLauncher>>,
     launches: u64,
 }
@@ -132,6 +164,7 @@ impl fmt::Debug for ReplicaPages {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ReplicaPages")
             .field("records", &self.records.keys().collect::<Vec<_>>())
+            .field("pending", &self.pending.keys().collect::<Vec<_>>())
             .field("launcher", &self.launcher.is_some())
             .finish_non_exhaustive()
     }
@@ -244,7 +277,12 @@ impl Core {
                     .and_then(|host| super::ssh::page_serve_command(host, &page.token).ok())
                     .ok_or(ORIGIN_UNREACHABLE)?,
             ),
-            PresentationPageSource::Url { .. } => {
+            PresentationPageSource::Url { address } => {
+                // a forwarded page loads in a store of its own, so the persistent store is never asked for
+                if crate::html::is_loopback(address) {
+                    let origin_host = found.remote_host().ok_or(ORIGIN_UNREACHABLE)?.to_owned();
+                    return self.start_tunnel(page, session, origin_host, address);
+                }
                 if page.persistent
                     && let Some(failure) = host.persistent_store_failure()
                 {
@@ -253,16 +291,22 @@ impl Core {
                 None
             }
         };
+        let local = self.place_replica_page(page, session)?;
+        if let Some(argv) = argv {
+            self.start_page_helper(local, &argv);
+        }
+        Ok(())
+    }
+
+    /// Places `page` and follows it; its local id.
+    fn place_replica_page(&mut self, page: &PresentationPage, session: Uuid) -> Result<Uuid, String> {
         let local = self.present_replica_page(page, session)?;
         let origin = self
             .replica_page_slot(local)
             .and_then(|(_, overlay)| overlay.replica_of)
             .ok_or(NOT_SHOWN)?;
         self.follow_replica(local, session, origin, None);
-        if let Some(argv) = argv {
-            self.start_page_helper(local, &argv);
-        }
-        Ok(())
+        Ok(local)
     }
 
     /// Follows page `local`, which session `session` shows for page `origin`; `companion` is the origin's host for a
@@ -278,6 +322,7 @@ impl Core {
                 applied_seq: 0,
                 reported: None,
                 companion,
+                tunnel: None,
             },
         );
         // the state the page starts in is what the origin assumed: only a change is reported
@@ -345,6 +390,166 @@ impl Core {
         Ok(local)
     }
 
+    /// Starts the forward loopback page `page` loads through; the page is placed once the forward is up
+    /// ([`Core::tunnel_ready`]).
+    fn start_tunnel(
+        &mut self,
+        page: &PresentationPage,
+        session: Uuid,
+        host: String,
+        address: &str,
+    ) -> Result<(), String> {
+        let port = free_local_port().map_err(|error| format!("no port for the page's forward: {error}"))?;
+        let plan = TunnelPlan::new(address, port).ok_or(INVALID_URL)?;
+        let argv = super::ssh::tunnel_command(&host, &plan).map_err(|_| ORIGIN_UNREACHABLE.to_owned())?;
+        let pages = &mut self.remote.viewer.pages;
+        let launcher = pages.launcher.clone().ok_or(NO_HELPER)?;
+        pages.launches += 1;
+        let key = HelperKey {
+            page: Uuid::new_v4(),
+            launch: pages.launches,
+        };
+        let permits = ReplicaChannel::permits();
+        let link = launcher.launch(&argv, key, Arc::clone(&permits))?;
+        let tunnel = Tunnel {
+            key,
+            link,
+            permits,
+            plan,
+        };
+        self.remote.viewer.pages.pending.insert(
+            key.page,
+            PendingTunnel {
+                tunnel,
+                page: page.clone(),
+                session,
+                host,
+                commands: Vec::new(),
+            },
+        );
+        Ok(())
+    }
+
+    /// A line from a forward's helper: the ready line places its page. Whether `key` names a forward.
+    fn tunnel_line(&mut self, key: HelperKey, line: &[u8]) -> bool {
+        let pages = &mut self.remote.viewer.pages;
+        let permits = match pages.pending.get(&key.page) {
+            Some(pending) if pending.tunnel.key == key => Arc::clone(&pending.tunnel.permits),
+            _ => match pages
+                .records
+                .values()
+                .filter_map(|record| record.tunnel.as_ref())
+                .find(|tunnel| tunnel.key == key)
+            {
+                Some(tunnel) => Arc::clone(&tunnel.permits),
+                None => return false,
+            },
+        };
+        permits.give();
+        if line.trim_ascii() == READY_LINE.as_bytes()
+            && let Some(pending) = self.remote.viewer.pages.pending.remove(&key.page)
+        {
+            self.tunnel_ready(pending);
+        }
+        true
+    }
+
+    /// The forward is up: the page is placed at its forwarded address, in a store of its own (the saved store keys
+    /// cookies by host alone, and every forwarded page's host is 127.0.0.1), and the origin's commands that arrived
+    /// meanwhile apply in order; or the page is refused to the origin.
+    fn tunnel_ready(&mut self, pending: PendingTunnel) {
+        let PendingTunnel {
+            tunnel,
+            page,
+            session,
+            commands,
+            ..
+        } = pending;
+        let forwarded = PresentationPage {
+            source: PresentationPageSource::Url {
+                address: tunnel.plan.local_url.as_str().to_owned(),
+            },
+            persistent: false,
+            ..page.clone()
+        };
+        match self.place_replica_page(&forwarded, session) {
+            Ok(local) => {
+                if let Some(record) = self.remote.viewer.pages.records.get_mut(&local) {
+                    record.tunnel = Some(tunnel);
+                }
+                for command in &commands {
+                    self.apply_replica_page_command(command, session);
+                }
+            }
+            Err(reason) => {
+                tunnel.stop();
+                self.reject_page(session, page.page, reason);
+            }
+        }
+    }
+
+    /// A forward's helper ended: a page waiting for it is refused, a page loading through it closes. Whether `key`
+    /// names a forward.
+    fn tunnel_closed(&mut self, key: HelperKey, reason: &str) -> bool {
+        let pages = &mut self.remote.viewer.pages;
+        if pages
+            .pending
+            .get(&key.page)
+            .is_some_and(|pending| pending.tunnel.key == key)
+        {
+            if let Some(pending) = pages.pending.remove(&key.page) {
+                pending.tunnel.stop();
+                let reason = format!("the forward to {} ended: {reason}", pending.host);
+                self.reject_page(pending.session, pending.page.page, reason);
+            }
+            return true;
+        }
+        let local = pages
+            .records
+            .iter()
+            .find(|(_, record)| record.tunnel.as_ref().is_some_and(|tunnel| tunnel.key == key))
+            .map(|(local, _)| *local);
+        let Some(local) = local else {
+            return false;
+        };
+        tracing::info!(%reason, "a page's forward ended; closing the page");
+        self.library_mut().close_html_overlay(local);
+        true
+    }
+
+    fn reject_page(&mut self, session: Uuid, page: String, reason: String) {
+        self.answer_origin(
+            session,
+            Body::PageRejected(PresentationPageChange {
+                page,
+                reason: Some(reason),
+            }),
+        );
+    }
+
+    /// Drops the forwards waiting for `session`'s pages, or for its page `origin` alone. With `refusal`, the origin
+    /// hears each page refused for it, as it would a page placed here and then closed; without, the origin ended them.
+    fn cancel_pending_tunnels(&mut self, session: Option<Uuid>, origin: Option<&str>, refusal: Option<&str>) {
+        let pages = &mut self.remote.viewer.pages;
+        let cancelled: Vec<Uuid> = pages
+            .pending
+            .iter()
+            .filter(|(_, pending)| session.is_none_or(|session| pending.session == session))
+            .filter(|(_, pending)| origin.is_none_or(|origin| pending.page.page == origin))
+            .map(|(id, _)| *id)
+            .collect();
+        let stopped: Vec<PendingTunnel> = cancelled
+            .into_iter()
+            .filter_map(|id| pages.pending.remove(&id))
+            .collect();
+        for pending in stopped {
+            pending.tunnel.stop();
+            if let Some(refusal) = refusal {
+                self.reject_page(pending.session, pending.page.page, refusal.to_owned());
+            }
+        }
+    }
+
     /// Starts the helper of file page `local`; one that cannot start closes the page at once.
     fn start_page_helper(&mut self, local: Uuid, argv: &[String]) {
         let pages = &mut self.remote.viewer.pages;
@@ -404,6 +609,7 @@ impl Core {
     /// Takes down the page shown for `origin`, once its origin closed it (upstream's `closeReplicaPage`); the origin
     /// still hears `page.closed`, as for every way a replica leaves.
     pub(crate) fn close_replica_page(&mut self, origin: &str, session: Uuid) {
+        self.cancel_pending_tunnels(Some(session), Some(origin), None);
         let Some((pane, _)) = self.replica_local(origin, session) else {
             return;
         };
@@ -418,6 +624,7 @@ impl Core {
     /// Takes down every page `session` shows for its origin (upstream's `closeReplicaPages`): with the stream gone the
     /// origin has ended them, and nothing could reach it from them. A session an undoable close holds included.
     pub(crate) fn close_replica_pages(&mut self, session: Uuid) {
+        self.cancel_pending_tunnels(Some(session), None, Some(ROW_LEFT));
         let Some(found) = self.library_mut().held_session_mut(session) else {
             return;
         };
@@ -449,6 +656,17 @@ impl Core {
     /// and the next state report carries the request's sequence number.
     pub(crate) fn apply_replica_page_command(&mut self, command: &PresentationPageCommand, session: Uuid) {
         let Some((pane, local)) = self.replica_local(&command.page, session) else {
+            // a loopback page still waiting for its forward takes the command once it is placed
+            if let Some(pending) = self
+                .remote
+                .viewer
+                .pages
+                .pending
+                .values_mut()
+                .find(|pending| pending.session == session && pending.page.page == command.page)
+            {
+                pending.commands.push(command.clone());
+            }
             return;
         };
         let refusal = match command.action {
@@ -527,9 +745,19 @@ impl Core {
             .session(slot.session)?
             .overlay_hidden(slot.pane);
         let current = page.current.as_ref();
+        let tunnel = self
+            .remote
+            .viewer
+            .pages
+            .records
+            .get(&local)
+            .and_then(|record| record.tunnel.as_ref());
         let shown = PageShown {
             title: current.and_then(|current| current.title.clone()),
-            address: current.map(|current| current.page.clone()),
+            address: current.map(|current| match tunnel {
+                Some(tunnel) => tunnel.plan.origin_address(&current.page),
+                None => current.page.clone(),
+            }),
             load: page.load_state,
             error: page.load_error.clone(),
             can_go_back: current.is_some_and(|current| current.can_go_back),
@@ -553,6 +781,9 @@ impl Core {
             record.session,
             Body::PageClosed(PresentationPageChange::page(uuid_string(record.origin))),
         );
+        if let Some(tunnel) = &record.tunnel {
+            tunnel.stop();
+        }
         if let Some(mut link) = record.link {
             let events = link.channel.close("page closed");
             let mut settled = Settled::default();
@@ -596,6 +827,12 @@ impl Core {
 
     /// Closes every replica's channel and stops its helper (the quit path); what still waits on one fails.
     pub(crate) fn shutdown_replica_channels(&mut self) {
+        self.cancel_pending_tunnels(None, None, None);
+        for record in self.remote.viewer.pages.records.values_mut() {
+            if let Some(tunnel) = record.tunnel.take() {
+                tunnel.stop();
+            }
+        }
         let locals: Vec<Uuid> = self.remote.viewer.pages.records.keys().copied().collect();
         for local in locals {
             let Some(mut link) = self
@@ -672,6 +909,9 @@ impl Core {
 
     /// One line the helper `key` read, holding the permit its reader took; commit afterwards.
     pub fn page_helper_line(&mut self, key: HelperKey, line: &[u8]) {
+        if self.tunnel_line(key, line) {
+            return;
+        }
         let Some(helper) = self.page_link(key.page).filter(|helper| helper.key == key) else {
             return;
         };
@@ -681,6 +921,9 @@ impl Core {
 
     /// The helper `key` ended with `reason`: the channel closes, and the page with it; commit afterwards.
     pub fn page_helper_closed(&mut self, key: HelperKey, reason: &str) {
+        if self.tunnel_closed(key, reason) {
+            return;
+        }
         let Some(link) = self.page_link(key.page).filter(|link| link.key == key) else {
             return;
         };

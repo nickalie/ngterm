@@ -31,13 +31,15 @@ pub const STALE_AFTER: Duration = Duration::from_secs(30);
 pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 
 /// The kinds this viewer's hello lists: every kind the build speaks, the page kinds only when it can show a handed-over
-/// page (`pages`: the web views are built in and can run). Upstream's hello lists them all; an origin a viewer leaves
-/// them out for hands it no page and keeps its own refusal, rather than handing over a page that is refused at once.
+/// page (`pages`: the web views are built in and can run), and with them the loopback forward
+/// ([`super::page_tunnel::TUNNEL_KIND`]), an extension of this build. Upstream's hello lists them all; an origin a viewer
+/// leaves them out for hands it no page and keeps its own refusal, rather than handing over a page that is refused at
+/// once.
 #[must_use]
 pub fn viewer_kinds(pages: bool) -> Vec<String> {
     SUPPORTED_KINDS
         .iter()
-        .filter(|kind| pages || !PAGE_KINDS.contains(kind))
+        .filter(|kind| pages || !(PAGE_KINDS.contains(kind) || **kind == super::page_tunnel::TUNNEL_KIND))
         .map(|kind| (*kind).to_owned())
         .collect()
 }

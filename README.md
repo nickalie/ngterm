@@ -76,7 +76,9 @@ and how this build does it where the OS matters:
 - A second instance on a state dir another one owns exits 1 before touching it ([Build and run](#build-and-run)).
 - Remote presenters: an HTML page opened in a session shown on another machine opens there, its files and bridge
   calls served back from the origin over a page-serve channel (`ngtermctl session overlay page-serve`, which the
-  presenter runs over ssh) and loaded under the `ngterm-page` scheme; `ask` forms show and status sounds play on the
+  presenter runs over ssh) and loaded under the `ngterm-page` scheme; a page on the origin's loopback (a dev server,
+  a status page) loads through an ssh port forward the presenter opens, where upstream refuses it
+  (`crates/ngterm-core/src/remote/page_tunnel.rs`); `ask` forms show and status sounds play on the
   presenting machine too. A status sound on Linux, which has none of macOS's named sounds, rings the display's bell
   (Wayland's `xdg_system_bell_v1`, X11's core bell).
 - Settings ▸ Key Mapping ▸ "Lock in terminals" selects a keyboard layout while a terminal has the keyboard and

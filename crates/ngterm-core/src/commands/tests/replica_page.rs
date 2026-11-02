@@ -309,6 +309,238 @@ fn a_url_page_loads_its_full_address_here_without_a_helper() {
     assert!(!replica.viewer.fixture.core.linked_replica(shown.id));
 }
 
+// MARK: - a page on the origin's loopback
+
+impl Replica {
+    /// The forward of the loopback page requested last: its helper's index, after a request of `address`.
+    fn request_loopback(&mut self, address: &str) -> usize {
+        self.request(Replica::page(Replica::url(address)));
+        assert!(self.rejections().is_empty(), "{:?}", self.rejections());
+        self.launcher.launches.borrow().len() - 1
+    }
+
+    /// Hands forward `index` a raw line from its ssh, as the reader does, holding a permit.
+    fn tunnel_line(&mut self, index: usize, line: &str) {
+        let (key, permits) = {
+            let launch = self.launch(index);
+            (launch.key, Arc::clone(&launch.permits))
+        };
+        assert!(permits.try_take());
+        self.viewer.fixture.core.page_helper_line(key, line.as_bytes());
+        self.commit();
+        assert_eq!(
+            permits.free(),
+            crate::remote::page_channel::INBOUND_LIMIT,
+            "the line gave its permit back"
+        );
+    }
+
+    fn tunnel_closed(&mut self, index: usize, reason: &str) {
+        let key = self.launch(index).key;
+        self.viewer.fixture.core.page_helper_closed(key, reason);
+        self.commit();
+    }
+}
+
+#[test]
+fn a_loopback_page_is_placed_once_its_forward_is_up_at_the_forwarded_address() {
+    let mut replica = Replica::new();
+    let index = replica.request_loopback("http://127.0.0.1:47231/board?run=3");
+    assert!(
+        replica.session().overlay.page().is_none(),
+        "nothing loads before the forward answers"
+    );
+    let argv = replica.launch(index).argv.clone();
+    let forward = argv[argv.iter().position(|word| word == "-L").unwrap() + 1].clone();
+    let (local, target) = forward.split_once(':').unwrap();
+    assert_eq!(local, "127.0.0.1");
+    let (port, target) = target.split_once(':').unwrap();
+    assert_eq!(target, "127.0.0.1:47231");
+    assert!(argv.iter().any(|word| word == "origin"), "{argv:?}");
+
+    replica.tunnel_line(index, "Welcome to the server\n");
+    assert!(
+        replica.session().overlay.page().is_none(),
+        "only the ready line places the page"
+    );
+    replica.tunnel_line(index, "ngterm-tunnel-ready");
+
+    let shown = replica.session().overlay.page().unwrap();
+    assert_eq!(
+        shown.source,
+        HtmlSource::Url(format!("http://127.0.0.1:{port}/board?run=3").parse().unwrap())
+    );
+    assert_eq!(shown.replica_of.map(wire).as_deref(), Some(ORIGIN));
+    assert!(replica.rejections().is_empty());
+}
+
+#[test]
+fn the_origin_reads_its_own_address_back_from_a_forwarded_page() {
+    let mut replica = Replica::new();
+    let index = replica.request_loopback("http://localhost:5173/");
+    replica.tunnel_line(index, "ngterm-tunnel-ready");
+    let local = replica.local();
+    let HtmlSource::Url(url) = replica.session().overlay.page().unwrap().source.clone() else {
+        panic!("a url page");
+    };
+    let core = &mut replica.viewer.fixture.core;
+    core.set_html_load_state(local, HtmlLoadState::Loaded, None);
+    core.set_html_page(
+        local,
+        Some(HtmlPageInfo {
+            page: format!("http://127.0.0.1:{}/runs/2", url.port().unwrap()),
+            title: Some("Runs".to_owned()),
+            can_go_back: true,
+            can_go_forward: false,
+        }),
+    );
+    replica.commit();
+
+    let states = replica.states();
+    assert_eq!(states.last().unwrap()["address"], json!("http://localhost:5173/runs/2"));
+}
+
+#[test]
+fn a_forward_that_ends_before_it_is_up_refuses_the_page_with_why() {
+    let mut replica = Replica::new();
+    let index = replica.request_loopback("http://127.0.0.1:47231/");
+
+    replica.tunnel_closed(index, "exit status 255");
+
+    assert!(replica.session().overlay.page().is_none());
+    assert_eq!(
+        replica.rejections(),
+        [json!({"page": ORIGIN, "reason": "the forward to origin ended: exit status 255"})]
+    );
+    assert!(replica.launch(index).helper.0.borrow().stopped);
+}
+
+#[test]
+fn a_forward_that_ends_later_closes_its_page_and_tells_the_origin() {
+    let mut replica = Replica::new();
+    let index = replica.request_loopback("http://127.0.0.1:47231/");
+    replica.tunnel_line(index, "ngterm-tunnel-ready");
+
+    replica.tunnel_closed(index, "connection lost");
+
+    assert!(replica.session().overlay.page().is_none());
+    assert_eq!(replica.payloads("page.closed"), [json!({"page": ORIGIN})]);
+    assert!(replica.rejections().is_empty());
+}
+
+#[test]
+fn closing_a_forwarded_page_here_ends_its_forward() {
+    let mut replica = Replica::new();
+    let index = replica.request_loopback("http://127.0.0.1:47231/");
+    replica.tunnel_line(index, "ngterm-tunnel-ready");
+    let id = replica.id();
+
+    replica.viewer.fixture.store_mut().unwrap().close_overlay(id);
+    replica.commit();
+
+    assert!(replica.launch(index).helper.0.borrow().stopped);
+    assert_eq!(replica.payloads("page.closed"), [json!({"page": ORIGIN})]);
+    replica.tunnel_closed(index, "stopped");
+    assert_eq!(
+        replica.closed_notices(),
+        1,
+        "the forward's end after the close says nothing more"
+    );
+}
+
+#[test]
+fn the_origin_closing_a_page_still_waiting_for_its_forward_drops_the_forward() {
+    let mut replica = Replica::new();
+    let index = replica.request_loopback("http://127.0.0.1:47231/");
+
+    replica.origin_frame("page.close", json!({"page": ORIGIN}));
+    assert!(replica.launch(index).helper.0.borrow().stopped);
+    let (key, permits) = {
+        let launch = replica.launch(index);
+        (launch.key, Arc::clone(&launch.permits))
+    };
+    assert!(
+        !permits.try_take(),
+        "the reader gets no permit for a line after the stop"
+    );
+    // a ready line already on its way still lands
+    replica
+        .viewer
+        .fixture
+        .core
+        .page_helper_line(key, b"ngterm-tunnel-ready");
+    replica.commit();
+
+    assert!(
+        replica.session().overlay.page().is_none(),
+        "a page its origin closed is never placed"
+    );
+}
+
+#[test]
+fn the_row_leaving_before_the_forward_is_up_ends_it_and_refuses_the_page() {
+    let mut replica = Replica::new();
+    let index = replica.request_loopback("http://127.0.0.1:47231/");
+    let id = replica.id();
+
+    replica.viewer.fixture.store_mut().unwrap().close_session(id);
+    replica.commit();
+
+    assert!(replica.launch(index).helper.0.borrow().stopped);
+    assert_eq!(
+        replica.rejections(),
+        [json!({"page": ORIGIN, "reason": "the session's row on the presenting machine closed"})]
+    );
+}
+
+#[test]
+fn origin_commands_sent_before_the_forward_is_up_apply_once_the_page_is_placed() {
+    let mut replica = Replica::new();
+    let index = replica.request_loopback("http://127.0.0.1:47231/");
+
+    replica.origin_frame("page.command", json!({"page": ORIGIN, "seq": 1, "action": "hide"}));
+    replica.origin_frame(
+        "page.command",
+        json!({"page": ORIGIN, "seq": 2, "action": "resize", "sizePercent": 60}),
+    );
+    replica.tunnel_line(index, "ngterm-tunnel-ready");
+
+    assert!(replica.session().overlay_hidden(None));
+    assert_eq!(replica.session().overlay.size_percent, Some(60));
+    let states = replica.states();
+    assert_eq!(states.last().unwrap()["appliedSeq"], json!(2), "{states:?}");
+    assert_eq!(states.last().unwrap()["hidden"], json!(true));
+}
+
+#[test]
+fn a_forwarded_page_loads_in_a_store_of_its_own_whatever_the_origin_asked() {
+    let mut replica = Replica::new();
+    replica.host.0.borrow_mut().persistent_failure = Some("no saved store".to_owned());
+    let mut page = Replica::page(Replica::url("http://127.0.0.1:47231/"));
+    page["persistent"] = json!(true);
+    replica.request(page);
+    assert!(replica.rejections().is_empty(), "{:?}", replica.rejections());
+    let index = replica.launcher.launches.borrow().len() - 1;
+
+    replica.tunnel_line(index, "ngterm-tunnel-ready");
+
+    assert!(!replica.session().overlay.page().unwrap().flags.persistent);
+}
+
+#[test]
+fn a_forward_that_cannot_start_refuses_the_page() {
+    let mut replica = Replica::new();
+    *replica.launcher.refuse.borrow_mut() = true;
+
+    replica.request(Replica::page(Replica::url("http://127.0.0.1:47231/")));
+
+    assert_eq!(
+        replica.rejections(),
+        [json!({"page": ORIGIN, "reason": "ssh: not found"})]
+    );
+    assert!(replica.session().overlay.page().is_none());
+}
+
 /// Upstream's `aPagePresentedForTheOriginsSplitTakesTheMappedPane`.
 #[test]
 fn a_page_presented_for_the_origins_split_takes_the_mapped_pane() {
@@ -486,7 +718,8 @@ fn losing_the_stream_closes_the_pages_and_their_helpers() {
 #[test]
 fn a_socket_submit_on_a_replica_is_refused_and_leaves_it_open() {
     let mut replica = Replica::new();
-    replica.request(Replica::page(Replica::url("http://127.0.0.1:9/a")));
+    // upstream's address is a loopback one, which this build forwards before placing the page: any URL page will do
+    replica.request(Replica::page(Replica::url("https://example.com/a")));
     let target = wire(replica.id());
 
     let response = replica.viewer.fixture.session(

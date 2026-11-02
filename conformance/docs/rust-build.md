@@ -242,7 +242,7 @@ contract's `AGTERM_LIVE_*`, then the rest of this build's identity, `NGTERM_*` a
 text, then `show-image.sh`'s Windows form, `show-image.ps1`, which shows the image in a page overlay, then what this
 build does where upstream's v0.39 text names macOS behavior, then the Live `--command` text matching #840's change,
 which upstream's skill still predates, then the Codex wrapper's own-process text, then the viewer's Attach All, New
-Session and End Session):
+Session and End Session, then the loopback page forward):
 `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh` rebuilds it as the new upstream tree plus those
 patches on every sync, and `sync-resources.sh --check TAG TAG` with the pinned tag verifies the copy still equals it.
 

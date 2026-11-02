@@ -1,0 +1,27 @@
+A loopback --url page on a presented session loads on the presenting machine through an ssh port forward, where
+upstream's presenter refuses it. Applied after 0012-remote-new-end-session.patch.
+
+diff --git a/reference.md b/reference.md
+index fd67961..91803ce 100644
+--- a/reference.md
++++ b/reference.md
+@@ -2238,9 +2238,16 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
+   keeps its own `--persistent` storage. A file page's files and its `data-ngterm`/`ngterm.request` commands
+   go back to the origin over a channel the presenting Mac opens (`ngtermctl session overlay page-serve`,
+   plumbing not meant to be typed), so commands act on the origin's session and `overlay submit` answers the
+-  caller there; `result --page` and `--html --block` work unchanged on the origin. A loopback `--url` is
+-  refused (it names a server on the origin), as is any page for a presenting Mac too old for pages
+-  and an open request too large for a presentation frame (`page too large to show on another Mac`).
++  caller there; `result --page` and `--html --block` work unchanged on the origin. A loopback `--url`
++  (127.0.0.1, ::1 or localhost: a server on the origin) loads on the presenting machine through an ssh port
++  forward it opens to the origin, at `127.0.0.1:<port>` there: the page shows once the forward is up, in a
++  browser store of its own (`--persistent` keeps nothing), `tree` on the origin reads its own address back, and
++  the page closes when the forward ends. Only the page's own origin goes through the forward: any other absolute
++  loopback link or redirect, the page's own written address included, reaches the presenting machine's own
++  loopback. The origin refuses the open when the presenting machine cannot forward it (an older build, upstream
++  agterm): `a loopback url names this Mac, so the Mac presenting the session cannot load it`. It refuses any page
++  for a presenting Mac too old for pages, and an open request too large for a presentation frame (`page too large
++  to show on another Mac`).
+   On the origin `close` ends the page there and frees the slot at once; `resize`, `reload`,
+   `navigate back|forward` and `hide|show|toggle` are requests sent to the presenting Mac; `navigate browser` reaches it for a URL page, while `finder` and `browser` on a file
+   page answer `page is shown on another Mac`; bare `result` answers the page's no-result error and

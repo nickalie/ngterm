@@ -163,10 +163,7 @@ pub(crate) fn open_remote_page(
     {
         return RemotePageOpen::Unsupported;
     }
-    // the address the presenter would load, as the URL standard spells it, so a loopback alias is refused too
-    if let HtmlSource::Url(url) = &overlay.source
-        && html::is_loopback(url.as_str())
-    {
+    if unreachable_loopback(core, session, &overlay.source) {
         return RemotePageOpen::Loopback;
     }
     let token = uuid_string(Uuid::new_v4());
@@ -214,6 +211,17 @@ pub(crate) fn open_remote_page(
             .push(PAGE_CLAIM_WINDOW + CLAIM_EXPIRY_SLACK);
     }
     RemotePageOpen::Opened
+}
+
+/// Whether `source` is a URL on this machine's loopback that `session`'s presenter cannot reach: the address it would
+/// load, as the URL standard spells it, so a loopback alias counts too, unless the presenter forwards this machine's
+/// loopback to its own ([`super::page_tunnel`]).
+fn unreachable_loopback(core: &Core, session: Uuid, source: &HtmlSource) -> bool {
+    matches!(source, HtmlSource::Url(url) if html::is_loopback(url.as_str()))
+        && !core
+            .remote
+            .hub
+            .presenter_supports(super::page_tunnel::TUNNEL_KIND, session)
 }
 
 /// Where a page handed to the presenter is reserved now (upstream's `remotePagePlace`).
