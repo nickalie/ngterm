@@ -12,10 +12,10 @@ import re
 import string
 import sys
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 import yaml
 
@@ -42,6 +42,7 @@ NAMED_KEYS = frozenset({
 PRINTABLE_KEYS = frozenset(string.ascii_lowercase + string.digits + "`-=[]\\;',./")
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 INVENTORY_LIMIT = 120
+T = TypeVar("T")
 
 
 class NoDriver(Exception):
@@ -169,7 +170,10 @@ class Driver(ABC):
         self.timeout = timeout
 
     def find(self, ui_id: str, timeout: float | None = None, **attrs: Any) -> Element:
-        """The first element carrying `ui_id` whose attributes equal `attrs`, waited for."""
+        """Wait for the first element carrying `ui_id` whose attributes equal `attrs`.
+
+        A compiled `name` pattern uses regex search; a missing name is read as an empty string.
+        """
         self.ui_ids.key_for(ui_id)
         if unknown := sorted(attrs.keys() - ATTRIBUTES):
             raise ValueError(f"unknown attribute {', '.join(unknown)} (known: {', '.join(sorted(ATTRIBUTES))})")
@@ -250,26 +254,35 @@ class Driver(ABC):
         for chord in parsed:
             self._post_chord(chord)
 
-    def _point(self, target: str | Element, offset: tuple[float, float]) -> tuple[float, float]:
+    def _pointer_element(self, target: str | Element) -> Element:
+        if isinstance(target, str):
+            self.ui_ids.key_for(target)
+            # An id denotes the current control, not the label of its first snapshot.
+            current = next(iter(self._elements(target)), None)
+        else:
+            candidates = self._elements(target.ui_id) if target.ui_id else self._all_elements()
+            current = next((el for el in candidates if target.handle is not None and
+                            el.handle == target.handle), None)
+            if current is None:
+                matches = [el for el in candidates if el.name == target.name and
+                           (target.ui_id is not None or el.role == target.role)]
+                current = matches[0] if len(matches) == 1 else None
+        assert current is not None, "pointer target missing or ambiguous"
+        assert current.enabled is not False, "element not enabled"
+        return current
+
+    def _point_now(self, target: str | Element, offset: tuple[float, float]) -> tuple[float, float]:
         if len(offset) != 2 or any(not math.isfinite(v) or not 0 <= v <= 1 for v in offset):
             raise ValueError("offset must contain two finite fractions in [0, 1]")
-        snapshot = self._resolve(target)
+        current = self._pointer_element(target)
+        x, y, width, height = self._bounds(current)
+        assert all(math.isfinite(v) for v in (x, y, width, height)), "nonfinite bounds"
+        assert width > 0 and height > 0, "empty bounds"
+        return (x + width * offset[0], y + height * offset[1])
 
-        def ready():
-            candidates = self._elements(snapshot.ui_id) if snapshot.ui_id else self._all_elements()
-            matches = [el for el in candidates if el.name == snapshot.name and
-                       (snapshot.ui_id is not None or el.role == snapshot.role)]
-            current = next((el for el in matches if el.handle == snapshot.handle), None)
-            if current is None and len(matches) == 1:
-                current = matches[0]
-            assert current is not None, "snapshot missing or ambiguous"
-            assert current.enabled is not False, "element not enabled"
-            x, y, width, height = self._bounds(current)
-            assert all(math.isfinite(v) for v in (x, y, width, height)), "nonfinite bounds"
-            assert width > 0 and height > 0, "empty bounds"
-            return (x + width * offset[0], y + height * offset[1])
-
-        return self._wait(ready, f"enabled pointer target {_describe(snapshot)}", None)
+    def _point(self, target: str | Element, offset: tuple[float, float]) -> tuple[float, float]:
+        wanted = target if isinstance(target, str) else _describe(target)
+        return self._wait(lambda: self._point_now(target, offset), f"enabled pointer target {wanted}", None)
 
     def move(self, target: str | Element, offset=(0.5, 0.5)) -> None:
         self._pointer_move(*self._point(target, offset))
@@ -308,7 +321,11 @@ class Driver(ABC):
     def drag(self, src: str | Element, dst: str | Element, src_offset=(0.5, 0.5),
              dst_offset=(0.5, 0.5), steps=10) -> None:
         self._check_steps(steps)
-        start, end = self._point(src, src_offset), self._point(dst, dst_offset)
+        # Neither endpoint may retain coordinates across the other endpoint's readiness wait.
+        start, end = self._wait(
+            lambda: (self._point_now(src, src_offset), self._point_now(dst, dst_offset)),
+            f"enabled drag endpoints {src!r} -> {dst!r}", None,
+        )
         self._drag_points(start, end, steps)
 
     def drag_by(self, target: str | Element, dx: float, dy: float, offset=(0.5, 0.5), steps=10) -> None:
@@ -360,7 +377,7 @@ class Driver(ABC):
     def _resolve(self, target: str | Element) -> Element:
         return target if isinstance(target, Element) else self.find(target)
 
-    def _wait(self, check: Any, wanted: str, timeout: float | None) -> Element:
+    def _wait(self, check: Callable[[], T], wanted: str, timeout: float | None) -> T:
         try:
             return wait_until(check, self.timeout if timeout is None else timeout)
         except WaitTimeout as error:
