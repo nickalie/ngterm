@@ -98,7 +98,7 @@ pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec
 }
 
 /// One ssh invocation running the far side's own bare `live tree`, which answers across every open window in one
-/// document (upstream's `RemoteSession.treeCommand`), through [`remote_cli_chain`].
+/// document (upstream's `RemoteSession.treeCommand`): [`ssh_arguments`] plus [`super::ssh::tree_tail`].
 ///
 /// # Errors
 ///
@@ -106,7 +106,7 @@ pub fn ssh_arguments(host: &str, connect_timeout: u32, interactive: bool) -> Vec
 pub fn tree_command(host: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
     let mut argv = ssh_arguments(host, 5, false);
-    argv.push(remote_cli_chain(&format!("{REMOTE_CLI} live tree --json")));
+    argv.push(super::ssh::tree_tail());
     Ok(argv)
 }
 

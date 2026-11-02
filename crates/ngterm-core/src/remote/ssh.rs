@@ -1,6 +1,10 @@
 //! The ssh command lines a viewer runs against another machine's ngterm (the attach half of upstream's
-//! `RemoteSession.swift`; `live tree`'s own line lives in [`super::tree`]). Pure and host-free: callers run what these
+//! `RemoteSession.swift`; `live tree`'s own argv lives in [`super::tree`]). Pure and host-free: callers run what these
 //! return.
+//!
+//! The remote command each line ends with, the string ssh hands the far account's shell, is built on its own by a
+//! `*_tail` function ([`tree_tail`], [`present_tail`], [`attach_tail`], [`control_tail`]), so a client with its own ssh
+//! transport runs exactly what desktop runs; desktop's argv is [`ssh_arguments`] plus that tail.
 
 use ngterm_proto::ControlLiveEndpoint;
 
@@ -27,13 +31,31 @@ fn is_path(value: &str) -> bool {
 /// A host ssh may not take, or a session id that is not one plain token.
 pub fn present_command(host: &str, session: &str) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
+    let tail = present_tail(session)?;
+    let mut argv = ssh_arguments(host, 5, false);
+    argv.push(tail);
+    Ok(argv)
+}
+
+/// The remote command of [`present_command`]: `ngtermctl live present SESSION` through [`remote_cli_chain`], run with
+/// `exec`.
+///
+/// # Errors
+///
+/// A session id that is not one plain token.
+pub fn present_tail(session: &str) -> Result<String, InvocationError> {
     if !is_plain(session) {
         return Err(InvocationError::InvalidSession);
     }
-    let tail = format!("exec {REMOTE_CLI} live present {}", shell_quoted_line(&[session]));
-    let mut argv = ssh_arguments(host, 5, false);
-    argv.push(remote_cli_chain(&tail));
-    Ok(argv)
+    let invocation = format!("exec {REMOTE_CLI} live present {}", shell_quoted_line(&[session]));
+    Ok(remote_cli_chain(&invocation))
+}
+
+/// The remote command of [`super::tree::tree_command`]: the far side's bare `ngtermctl live tree --json` through
+/// [`remote_cli_chain`].
+#[must_use]
+pub fn tree_tail() -> String {
+    remote_cli_chain(&format!("{REMOTE_CLI} live tree --json"))
 }
 
 /// One ssh invocation running the helper of `job`, an overlay the origin handed to this machine, for as long as the
@@ -144,6 +166,25 @@ pub fn attach_command(
     lead: Option<&LeadAttachment>,
 ) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
+    let tail = attach_tail(endpoint, daemon, lead)?;
+    let mut argv = ssh_arguments(host, 5, true);
+    argv.push(tail);
+    let at = argv.len() - 2;
+    argv.splice(at..at, ["-o".to_owned(), "LogLevel=ERROR".to_owned()]);
+    Ok(argv)
+}
+
+/// The remote command of [`attach_command`]: `ngterm-session attach DAEMON` under `/usr/bin/env` with the attach
+/// contract's variables cleared, `lead`'s words ahead of the executable, and the create-only gone guard after it.
+///
+/// # Errors
+///
+/// A name that is not an ngterm daemon's, or an endpoint path with control characters.
+pub fn attach_tail(
+    endpoint: &ControlLiveEndpoint,
+    daemon: &str,
+    lead: Option<&LeadAttachment>,
+) -> Result<String, InvocationError> {
     if !is_daemon_name(daemon) {
         return Err(InvocationError::InvalidSession);
     }
@@ -170,11 +211,7 @@ pub fn attach_command(
         .into_iter()
         .map(str::to_owned),
     );
-    let mut argv = ssh_arguments(host, 5, true);
-    argv.push(shell_quoted_line(&words));
-    let at = argv.len() - 2;
-    argv.splice(at..at, ["-o".to_owned(), "LogLevel=ERROR".to_owned()]);
-    Ok(argv)
+    Ok(shell_quoted_line(&words))
 }
 
 /// What a remote pane's command needs to name it in its last line.
@@ -264,6 +301,15 @@ pub fn probe_command(host: &str) -> Result<Vec<String>, InvocationError> {
 /// A host ssh may not take.
 pub fn control_command<S: AsRef<str>>(host: &str, arguments: &[S]) -> Result<Vec<String>, InvocationError> {
     validate(host)?;
+    let mut argv = ssh_arguments(host, 5, false);
+    argv.push(control_tail(arguments));
+    Ok(argv)
+}
+
+/// The remote command of [`control_command`]: the widened `PATH`, then `ngtermctl ARGUMENTS --json`, under `/bin/sh
+/// -c` quoted for any login shell.
+#[must_use]
+pub fn control_tail<S: AsRef<str>>(arguments: &[S]) -> String {
     let mut words: Vec<&str> = arguments.iter().map(AsRef::as_ref).collect();
     words.push("--json");
     let chain = format!(
@@ -271,10 +317,7 @@ pub fn control_command<S: AsRef<str>>(host: &str, arguments: &[S]) -> Result<Vec
         super::tree::cli_path_prefix(),
         shell_quoted_line(&words)
     );
-    let remote = ["/bin/sh", "-c", chain.as_str()].map(account_shell_quoted).join(" ");
-    let mut argv = ssh_arguments(host, 5, false);
-    argv.push(remote);
-    Ok(argv)
+    ["/bin/sh", "-c", chain.as_str()].map(account_shell_quoted).join(" ")
 }
 
 /// `value` quoted as one word that sh, zsh, tcsh and fish all read alike (upstream's `accountShellQuoted`): an
@@ -321,6 +364,132 @@ mod tests {
         session: "build",
         pane: "left",
     };
+
+    /// The destination and options every non-interactive desktop line opens with.
+    fn plain_prefix() -> Vec<String> {
+        ssh_arguments("me@box", 5, false)
+    }
+
+    /// `prefix` followed by `tail`, the whole argv desktop runs.
+    fn joined(mut prefix: Vec<String>, tail: &str) -> Vec<String> {
+        prefix.push(tail.to_owned());
+        prefix
+    }
+
+    const PATH_CHAIN: &str = r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && "#;
+
+    /// Snapshots of the lines desktop ran before the tails were split out: each argv is `ssh_arguments` plus its tail,
+    /// byte for byte.
+    #[test]
+    fn the_tree_and_present_lines_are_the_ssh_options_plus_their_tails() {
+        let tree = r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl live tree --json'"#;
+        assert_eq!(tree_tail(), tree);
+        assert_eq!(
+            super::super::tree::tree_command("me@box").unwrap(),
+            joined(plain_prefix(), tree)
+        );
+        let present = r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && exec ngtermctl live present '\''S'\''\'\'''\''1'\'''"#;
+        assert!(present.starts_with(PATH_CHAIN));
+        assert_eq!(present_tail("S'1").unwrap(), present);
+        assert_eq!(
+            present_command("me@box", "S'1").unwrap(),
+            joined(plain_prefix(), present)
+        );
+        for bad in ["", "s 1", "s1\u{1b}[31m"] {
+            assert_eq!(present_tail(bad), Err(InvocationError::InvalidSession), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_attach_line_is_the_ssh_options_plus_its_tail_with_and_without_a_lead() {
+        let endpoint = ControlLiveEndpoint {
+            executable: "/opt/My Apps/ngterm-session".to_owned(),
+            socket_directory: "/tmp/ngterm-live-abc".to_owned(),
+        };
+        let daemon = daemon_name(Uuid::from_u128(0x42));
+        let cleared = "'/usr/bin/env' 'NGTERM_LIVE_SESSION=' 'NGTERM_LIVE_SESSION_PREFIX=' \
+                       'NGTERM_LIVE_NO_DETACH_KEY=1' 'NGTERM_LIVE_DIR=/tmp/ngterm-live-abc' ";
+        let rest = r"'/opt/My Apps/ngterm-session' 'attach' 'ngterm-00000000000000000000000000000042' '/bin/sh' '-c' 'printf '\''%s\n'\'' '\''ngterm: remote session is gone'\''; exit 1'";
+        let mut prefix = ssh_arguments("me@box", 5, true);
+        prefix.splice(6..6, ["-o".to_owned(), "LogLevel=ERROR".to_owned()]);
+        let cases = [
+            (None, format!("{cleared}{rest}")),
+            (
+                Some(lead("n1", true)),
+                format!("{cleared}'NGTERM_LIVE_MANAGED=n1' 'NGTERM_LIVE_MANAGED_CLAIM=1' {rest}"),
+            ),
+            (
+                Some(lead("n2", false)),
+                format!("{cleared}'NGTERM_LIVE_MANAGED=n2' {rest}"),
+            ),
+        ];
+        for (lead, want) in cases {
+            assert_eq!(attach_tail(&endpoint, &daemon, lead.as_ref()).unwrap(), want);
+            assert_eq!(
+                attach_command("me@box", &endpoint, &daemon, lead.as_ref()).unwrap(),
+                joined(prefix.clone(), &want)
+            );
+        }
+        assert_eq!(
+            attach_tail(&endpoint, "notes", None),
+            Err(InvocationError::InvalidSession)
+        );
+        let hostile = ControlLiveEndpoint {
+            executable: "/opt/ngterm-session".to_owned(),
+            socket_directory: "/tmp/x\n".to_owned(),
+        };
+        assert_eq!(
+            attach_tail(&hostile, &daemon, None),
+            Err(InvocationError::InvalidEndpoint)
+        );
+    }
+
+    #[test]
+    fn the_control_lines_are_the_ssh_options_plus_their_tails() {
+        let cases: [(&[&str], &str); 3] = [
+            (
+                &["restore", "mode"],
+                r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl '\''restore'\'' '\''mode'\'' '\''--json'\'''"#,
+            ),
+            (
+                &["session", "new", "--no-select"],
+                r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl '\''session'\'' '\''new'\'' '\''--no-select'\'' '\''--json'\'''"#,
+            ),
+            (
+                &["session", "close", "--target", "it's"],
+                r#"'/bin/sh' '-c' 'PATH="$PATH:$HOME/.local/bin:/usr/local/bin" && ngtermctl '\''session'\'' '\''close'\'' '\''--target'\'' '\''it'\'''\\''\'''\''s'\'' '\''--json'\'''"#,
+            ),
+        ];
+        for (arguments, want) in cases {
+            assert!(want.starts_with(PATH_CHAIN));
+            assert_eq!(control_tail(arguments), want);
+            assert_eq!(
+                control_command("me@box", arguments).unwrap(),
+                joined(plain_prefix(), want)
+            );
+        }
+    }
+
+    /// The present tail hands the far CLI the session as one word, whatever it holds. Unix only: the far side's shell
+    /// is `/bin/sh`.
+    #[cfg(unix)]
+    #[test]
+    fn the_present_tail_reaches_the_installed_cli_with_the_session_intact() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = "#!/bin/sh\nfor word in \"$@\"; do printf '[%s]' \"$word\"; done\n";
+        ngterm_host::fakes::write_executable(&bin.join("ngtermctl"), script).unwrap();
+        let ran = Command::new("/bin/sh")
+            .args(["-c", &present_tail("S'1;rm").unwrap()])
+            .env_clear()
+            .env("HOME", home.path())
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        assert_eq!(ran.status.code(), Some(0), "{ran:?}");
+        assert_eq!(String::from_utf8_lossy(&ran.stdout), "[live][present][S'1;rm]");
+    }
 
     #[test]
     fn present_is_non_interactive_and_runs_the_bridge_for_exactly_that_session() {

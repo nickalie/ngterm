@@ -380,13 +380,13 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Modify: `crates/ngterm-core/src/remote/ssh.rs`, `crates/ngterm-core/src/remote/tree.rs`
 
-- [ ] write tests first: `remote_tail` for tree, present, attach with and without a `LeadAttachment`, and control
+- [x] write tests first: `remote_tail` for tree, present, attach with and without a `LeadAttachment`, and control
       (`restore mode`, `session new --no-select`, `session close --target ID`). They cover quoting, the PATH chain and
       the attach contract's cleared variables. Each desktop argv must equal `ssh_arguments` + its tail,
       byte-identical to today's (a snapshot taken before the change).
-- [ ] add the public tail builders and rebuild `present_command`, `attach_command`, `control_command` and the tree line
+- [x] add the public tail builders and rebuild `present_command`, `attach_command`, `control_command` and the tree line
       on them; leave `run_job_command`, `page_serve_command` and `tunnel_command` unchanged
-- [ ] run `cargo test -p ngterm-core remote` and clippy; both must pass before Task 5
+- [x] run `cargo test -p ngterm-core remote` and clippy; both must pass before Task 5
 
 ### Task 5: Core-free origin replies
 
