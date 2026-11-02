@@ -161,6 +161,9 @@ def test_accessibility_screen_bounds_follow_x11_window(monkeypatch, real_composi
             frame.map()
             window.reparent(frame, 23, 31)
             window.map()
+            connection.sync()
+            # ReparentNotify alone must refresh the origin before a ConfigureNotify arrives.
+            wait_until(matches_geometry, timeout=10)
             window.configure(x=37, y=43, width=780, height=510)
             connection.sync()
             wait_until(matches_geometry, timeout=10)

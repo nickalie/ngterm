@@ -1297,7 +1297,7 @@ impl X11WindowStatePtr {
         bounds.map(|b| b.scale(scale_factor))
     }
 
-    fn a11y_update_window_bounds(&self) {
+    pub(crate) fn a11y_update_window_bounds(&self) {
         let mut state = self.state.borrow_mut();
         let scale = state.scale_factor;
         let bounds = state.bounds;

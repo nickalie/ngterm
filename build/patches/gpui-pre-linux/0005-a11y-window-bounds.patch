@@ -1,7 +1,8 @@
 Publish window bounds to AccessKit when the adapter starts and when geometry changes.
 
 X11 translates the real client origin to root coordinates (ConfigureNotify can be
-parent-relative or stale during a resize), scales dimensions once, and uses the
+parent-relative or stale during a resize), refreshes on ReparentNotify even without
+a subsequent configure event, scales dimensions once, and uses the
 full client surface as the node origin (client-drawn shadow insets are already
 included in GPUI node coordinates). Wayland exposes only scaled surface-relative bounds
 at zero origin, including on scale changes; it cannot report a global position.
@@ -66,6 +67,20 @@ diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
      }
  }
  
+diff -ruN a/src/linux/x11/client.rs b/src/linux/x11/client.rs
+--- a/src/linux/x11/client.rs
++++ b/src/linux/x11/client.rs
+@@ -1041,6 +1041,10 @@
+                     self.0.borrow_mut().xdnd_state.retrieved = true;
+                 }
+             }
++            Event::ReparentNotify(event) => {
++                let window = self.get_window(event.window)?;
++                window.a11y_update_window_bounds();
++            }
+             Event::ConfigureNotify(event) => {
+                 let bounds = Bounds {
+                     origin: Point {
 diff -ruN a/src/linux/x11/window.rs b/src/linux/x11/window.rs
 --- a/src/linux/x11/window.rs
 +++ b/src/linux/x11/window.rs
@@ -73,7 +88,7 @@ diff -ruN a/src/linux/x11/window.rs b/src/linux/x11/window.rs
          bounds.map(|b| b.scale(scale_factor))
      }
  
-+    fn a11y_update_window_bounds(&self) {
++    pub(crate) fn a11y_update_window_bounds(&self) {
 +        let mut state = self.state.borrow_mut();
 +        let scale = state.scale_factor;
 +        let bounds = state.bounds;
