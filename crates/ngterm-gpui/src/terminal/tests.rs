@@ -37,6 +37,14 @@ use super::metrics::{self, CellMetrics, FaceMetrics, Geometry, Padding};
 use super::row_cache::{Cluster, Line, RowCache, RowMarks, Span, layout_row, search_marks};
 use super::{Spawn, Terminal, TerminalConfig, TerminalEvent, TerminalSpec, TerminalSurface, TerminalView, ViewRole};
 
+// Stable fake geometry across OSes; Ghostty defaults to 13pt on macOS and 12pt elsewhere.
+fn test_config() -> TerminalConfig {
+    let mut config = TerminalConfig::default();
+    config.font.size = 12.0;
+    config.copy_on_select = CopyOnSelect::Primary;
+    config
+}
+
 const DEADLINE: Duration = Duration::from_secs(20);
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -209,7 +217,7 @@ fn real_fonts() -> TestAppContext {
 
 #[test]
 #[cfg_attr(
-    windows,
+    any(windows, target_os = "macos"),
     ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
 )]
 fn a_known_font_measures_as_ghostty_measures_it() {
@@ -681,7 +689,7 @@ fn terminal(cx: &mut TestAppContext, script: &str, dir: &Path) -> Entity<Termina
     // the pane's threads wake the pump from outside the test scheduler
     cx.executor().allow_parking();
     let spawn = spawn_script(script, dir);
-    cx.new(|cx| Terminal::new(spec(), TerminalConfig::default(), spawn, cx))
+    cx.new(|cx| Terminal::new(spec(), test_config(), spawn, cx))
 }
 
 /// Runs the app until `done` holds (the pane's threads run meanwhile), or fails.
@@ -796,7 +804,7 @@ fn the_grapheme_width_method_reaches_a_new_terminal(cx: &mut TestAppContext) {
         TerminalConfig::from_ghostty(&loader.finish().finalize(false, &[]).config)
     };
     assert_eq!(
-        TerminalConfig::default().grapheme_width_method,
+        test_config().grapheme_width_method,
         GraphemeWidthMethod::Unicode,
         "Ghostty's default"
     );
@@ -806,7 +814,7 @@ fn the_grapheme_width_method_reaches_a_new_terminal(cx: &mut TestAppContext) {
     // the family and `x`: the cursor after one two-cell cluster, or after three wide emoji
     cx.executor().allow_parking();
     let script = "printf '\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}x'; exec sleep 5";
-    for (config, column) in [(TerminalConfig::default(), 3), (config, 7)] {
+    for (config, column) in [(test_config(), 3), (config, 7)] {
         let dir = tempfile::tempdir().unwrap();
         let spawn = spawn_script(script, dir.path());
         let terminal = cx.new(|cx| Terminal::new(spec(), config, spawn, cx));
@@ -829,7 +837,7 @@ fn the_image_storage_limit_reaches_the_pane_at_its_start_and_on_a_reload(cx: &mu
                   printf '\\033_Ga=T,f=32,s=2,v=1,i=%d,q=2;AQIDBAUGBwg=\\033\\\\sent%d ' $n $n; read _; done";
     let off = TerminalConfig {
         kitty_image_limit: 0,
-        ..TerminalConfig::default()
+        ..test_config()
     };
     let terminal = cx.new(|cx| Terminal::new(spec(), off.clone(), spawn_script(script, dir.path()), cx));
     let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(&terminal, ViewRole::Owner, cx));
@@ -853,7 +861,7 @@ fn the_image_storage_limit_reaches_the_pane_at_its_start_and_on_a_reload(cx: &mu
         "a pane started at 0 stores no image"
     );
 
-    terminal.update(cx, |terminal, cx| terminal.reload_config(TerminalConfig::default(), cx));
+    terminal.update(cx, |terminal, cx| terminal.reload_config(test_config(), cx));
     send(&terminal, cx);
     wait_painted(&view, cx, "sent2");
     assert_eq!(
@@ -1056,7 +1064,7 @@ fn unstarted(cx: &mut TestAppContext, family: &str) -> (Entity<Terminal>, Events
 
 /// [`unstarted`] starting at `font_size` (a restored session's, or the size a replacement carries over).
 fn unstarted_at(cx: &mut TestAppContext, family: &str, font_size: Option<f32>) -> (Entity<Terminal>, Events) {
-    let mut config = TerminalConfig::default();
+    let mut config = test_config();
     config.font.family = vec![family.to_owned()];
     let spawn: Spawn = Box::new(|_| Err(ngterm_term::PaneError::Spawn("never started".into())));
     let spec = TerminalSpec { font_size, ..spec() };
@@ -1074,7 +1082,7 @@ fn unstarted_at(cx: &mut TestAppContext, family: &str, font_size: Option<f32>) -
 
 #[test]
 #[cfg_attr(
-    windows,
+    any(windows, target_os = "macos"),
     ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
 )]
 fn a_config_whose_fonts_change_the_cell_reports_it() {
@@ -1084,7 +1092,7 @@ fn a_config_whose_fonts_change_the_cell_reports_it() {
     let mono = shared.cell_size();
     assert_eq!(mono, (10.0, 19.0));
     // the proportional face's widest ASCII advance makes a wider cell
-    let mut config = TerminalConfig::default();
+    let mut config = test_config();
     config.font.family = vec!["DejaVu Sans".into()];
     terminal.update(&mut cx, |terminal, cx| terminal.set_config(config.clone(), cx));
     cx.run_until_parked();
@@ -1099,7 +1107,7 @@ fn a_config_whose_fonts_change_the_cell_reports_it() {
 
 /// `unstarted`'s config at `points`.
 fn sized(points: f32) -> TerminalConfig {
-    let mut config = TerminalConfig::default();
+    let mut config = test_config();
     config.font.family = vec!["DejaVu Sans Mono".into()];
     config.font.size = points;
     config
@@ -1111,7 +1119,7 @@ fn assert_points(actual: f32, expected: f32) {
 
 #[test]
 #[cfg_attr(
-    windows,
+    any(windows, target_os = "macos"),
     ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
 )]
 fn a_config_reload_resizes_a_terminal_whose_size_the_user_kept() {
@@ -1134,7 +1142,7 @@ fn a_config_reload_resizes_a_terminal_whose_size_the_user_kept() {
 
 #[test]
 #[cfg_attr(
-    windows,
+    any(windows, target_os = "macos"),
     ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
 )]
 fn a_config_reload_keeps_the_size_the_user_zoomed_to() {
@@ -1154,7 +1162,7 @@ fn a_config_reload_keeps_the_size_the_user_zoomed_to() {
 
 #[test]
 #[cfg_attr(
-    windows,
+    any(windows, target_os = "macos"),
     ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
 )]
 fn a_watermark_change_keeps_a_restored_or_replacement_size() {
@@ -1177,7 +1185,7 @@ fn a_watermark_change_keeps_a_restored_or_replacement_size() {
 
 #[test]
 #[cfg_attr(
-    windows,
+    any(windows, target_os = "macos"),
     ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
 )]
 fn a_config_reload_resizes_a_restored_size_the_user_did_not_step() {
@@ -1193,7 +1201,7 @@ fn a_config_reload_resizes_a_restored_size_the_user_did_not_step() {
 
 #[test]
 #[cfg_attr(
-    windows,
+    any(windows, target_os = "macos"),
     ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
 )]
 fn an_appearance_flip_keeps_a_restored_or_replacement_size() {
@@ -1214,7 +1222,7 @@ fn an_appearance_flip_keeps_a_restored_or_replacement_size() {
 
 #[test]
 #[cfg_attr(
-    windows,
+    any(windows, target_os = "macos"),
     ignore = "measures DejaVu Sans Mono, which it finds through fontconfig (fc-match)"
 )]
 fn an_appearance_flip_and_a_reload_keep_the_size_the_user_zoomed_to() {
@@ -1464,7 +1472,7 @@ fn select_all_copies(
     let config = TerminalConfig {
         copy_on_select,
         copy_trim: trim,
-        ..TerminalConfig::default()
+        ..test_config()
     };
     terminal.update(cx, |terminal, cx| terminal.set_config(config, cx));
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("standard".into()));
@@ -1594,7 +1602,7 @@ fn screen_files_are_opened_and_pasted(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     assert!(perform(&terminal, cx, "write_screen_file:paste"));
     wait_painted(&view, cx, "screen.txt");
-    let painted = painted_text(&view, cx);
+    let painted = painted_text(&view, cx).replace('\n', "");
     // typed right after the program's "ready"
     let word = painted
         .split_whitespace()

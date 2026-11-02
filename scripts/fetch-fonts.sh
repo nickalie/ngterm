@@ -38,7 +38,7 @@ if fonts_prefix_is_complete "$PREFIX"; then
   exit 0
 fi
 
-for command in curl tar sha256sum; do
+for command in curl tar; do
   command -v "$command" >/dev/null || die "$command is required to fetch the terminal fonts"
 done
 mkdir -p "$VENDOR_ROOT"
@@ -53,10 +53,14 @@ fetch() {
   local name="$1" url="$2" sha="$3"
   echo "fetching $url..." >&2
   curl -fsSL -A ngterm-dev -o "$WORK/$name.tar.gz" "$url"
-  echo "$sha  $WORK/$name.tar.gz" | sha256sum --check --quiet >&2 || die "$url: sha256 mismatch"
+  sha256_matches "$sha" "$WORK/$name.tar.gz" || die "$url: sha256 mismatch"
   mkdir "$WORK/$name"
   # the archives carry macOS extended attributes GNU tar warns about
-  tar -xzf "$WORK/$name.tar.gz" -C "$WORK/$name" --warning=no-unknown-keyword
+  local tar_flags=(-xzf "$WORK/$name.tar.gz")
+  if tar --version 2>/dev/null | head -n1 | grep -q "GNU tar"; then
+    tar_flags+=(--warning=no-unknown-keyword)
+  fi
+  tar "${tar_flags[@]}" -C "$WORK/$name"
 }
 
 fetch jetbrains "$FONTS_JETBRAINS_MONO_URL" "$FONTS_JETBRAINS_MONO_SHA256"

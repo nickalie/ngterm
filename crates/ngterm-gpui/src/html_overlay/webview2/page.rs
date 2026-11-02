@@ -25,6 +25,7 @@ use ngterm_core::html::{
 };
 use url::Url;
 use uuid::Uuid;
+#[cfg(windows)]
 use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED;
 
 use super::super::panel::{PanelColors, TerminalColors};
@@ -36,7 +37,11 @@ use crate::modal::{Alert, AlertButton, AlertSpec};
 use crate::state::{AppState, Poster, post};
 
 /// `WebView2`'s error status of a navigation another one superseded.
+#[cfg(windows)]
 const OPERATION_CANCELED: i32 = COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED.0;
+
+#[cfg(target_os = "macos")]
+const OPERATION_CANCELED: i32 = -999;
 
 /// The browser store a page is built on, or why it has none and loads nothing (upstream's `Storage`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -507,6 +512,14 @@ impl Page {
     /// One of the web view's reports.
     pub fn report(&self, report: Report, cx: &mut App) {
         match report {
+            #[cfg(target_os = "macos")]
+            Report::Started => {
+                self.load_event(&LoadEvent::Started);
+            }
+            #[cfg(target_os = "macos")]
+            Report::Failed { id, reason } => self.platform_failure(id, &LoadEvent::Failed(reason)),
+            #[cfg(target_os = "macos")]
+            Report::Interrupted { id, reason } => self.platform_failure(id, &LoadEvent::Interrupted(reason)),
             Report::Navigation { navigation, allowed } => self.navigation(&navigation, allowed, cx),
             Report::Committed => self.committed(),
             Report::Source(uri) => self.engine_page(|shown| shown.uri = Some(uri)),
@@ -622,6 +635,19 @@ impl Page {
             LoadEvent::Failed(error_text(status))
         };
         self.load_event(&event);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn platform_failure(&self, id: u64, event: &LoadEvent) {
+        if self
+            .state
+            .borrow_mut()
+            .refused
+            .take_if(|refused| *refused == id)
+            .is_none()
+        {
+            self.load_event(event);
+        }
     }
 
     /// What the app's protocol refused for the document the web view shows, when it did.

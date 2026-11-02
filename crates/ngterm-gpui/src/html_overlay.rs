@@ -14,8 +14,8 @@
 //! the core's [`ngterm_core::html::HtmlHost`] ([`install`]).
 //!
 //! While a page holds the keyboard ([`page_holds_keyboard`]) the `undo_close` chord is the page's own undo, not the
-//! pending close's (`crate::keymap_dispatch`, upstream's 00fc83d). On macOS, which has no page host yet, upstream's
-//! form is the responder check in `UndoCloseShortcut.yieldsChord`.
+//! pending close's (`crate::keymap_dispatch`, upstream's 00fc83d). On macOS the native page responder also
+//! consumes Escape, preserving fullscreen.
 //!
 //! What a page may not do is refused as in the GTK build: new windows, script dialogs (answered silently), file
 //! choosers, permissions, full screen, notifications and downloads (the engine's), a context menu's window and
@@ -32,7 +32,8 @@
 //! handler.
 //!
 //! On Windows the pages are `WebView2` child windows of the GPUI window instead (`webview2`, on wry), sharing the
-//! panel and the policy here; the engine, its frames, input, popups and sandbox are WPE's alone.
+//! panel and the policy here. macOS uses `WKWebView` child views through wry (`wkwebview`) and the same native
+//! lifecycle and page policy. The engine, its frames, input, popups and sandbox in this module are WPE's alone.
 //!
 //! Without the `html` cargo feature no host is installed, so the core refuses every page and nothing here mounts.
 
@@ -44,9 +45,9 @@ mod input;
 mod menus;
 #[cfg(all(feature = "html", target_os = "linux"))]
 mod page;
-#[cfg(all(feature = "html", any(target_os = "linux", windows)))]
+#[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
 mod panel;
-#[cfg(all(feature = "html", any(target_os = "linux", windows)))]
+#[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
 mod policy;
 #[cfg(all(feature = "html", target_os = "linux"))]
 mod registry;
@@ -59,7 +60,7 @@ mod view;
 #[cfg(all(feature = "html", windows))]
 mod webview2;
 
-#[cfg(all(feature = "html", any(target_os = "linux", windows)))]
+#[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
 pub use panel::{TerminalColors, sync_hide_shown as sync_strip_hide};
 #[cfg(all(feature = "html", target_os = "linux"))]
 pub use registry::{
@@ -78,8 +79,18 @@ pub use webview2::{
 #[cfg(all(feature = "html", windows))]
 use webview2::{copy_link, navigate};
 
+#[cfg(all(feature = "html", target_os = "macos"))]
+mod wkwebview;
+#[cfg(all(feature = "html", target_os = "macos"))]
+pub use wkwebview::{
+    PageView, answer, apply, hide, init, install, key_down, mount, page_holds_keyboard, refresh_themes, reject,
+    set_covered, settle, shutdown,
+};
+#[cfg(all(feature = "html", target_os = "macos"))]
+use wkwebview::{copy_link, navigate};
+
 /// The terminal's colors of `config`, which the pages are drawn in.
-#[cfg(all(feature = "html", any(target_os = "linux", windows)))]
+#[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
 #[must_use]
 pub fn colors_of(config: &crate::terminal::TerminalConfig) -> TerminalColors {
     TerminalColors::of(&config.theme)
@@ -101,12 +112,12 @@ pub fn hide(element: &gpui_kit::Entity<PageView>, cx: &mut gpui_kit::App) {
 }
 
 /// Whether a layer the app draws over `window`'s content (a dialog, the palette, a popover, an alert) is up: native
-/// pages are hidden under it on Windows, where they sit above everything the window draws. Nothing to do where the
+/// pages are hidden under it on macOS and Windows, where they sit above everything the window draws. Nothing to do where the
 /// app draws the pages itself.
-#[cfg(not(all(feature = "html", windows)))]
+#[cfg(not(all(feature = "html", any(windows, target_os = "macos"))))]
 pub fn set_covered(_: &gpui_kit::Window, _: bool, _: &mut gpui_kit::App) {}
 
-#[cfg(not(all(feature = "html", any(target_os = "linux", windows))))]
+#[cfg(not(all(feature = "html", any(target_os = "linux", target_os = "macos", windows))))]
 mod unavailable {
     //! The build without WPE `WebKit`: no host is installed, so no page ever reaches these.
 
@@ -187,7 +198,7 @@ mod unavailable {
     }
 }
 
-#[cfg(not(all(feature = "html", any(target_os = "linux", windows))))]
+#[cfg(not(all(feature = "html", any(target_os = "linux", target_os = "macos", windows))))]
 pub use unavailable::{
     PageView, TerminalColors, answer, apply, colors_of, hide, init, install, key_down, mount, page_holds_keyboard,
     refresh_themes, reject, settle, shutdown, sync_strip_hide,

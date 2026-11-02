@@ -5,8 +5,8 @@
 //! - Windows: Settings ▸ Personalization ▸ Colors ▸ "Transparency effects" (`UISettings::AdvancedEffectsEnabled`, its
 //!   registry mirror `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\EnableTransparency`), off
 //!   meaning reduce, read at launch and again on every `WM_SETTINGCHANGE` the app's hidden window sees.
-//! - macOS: `accessibilityDisplayShouldReduceTransparency`, followed through
-//!   `NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification`: open work, with the GPUI macOS frontend.
+//! - macOS: `accessibilityDisplayShouldReduceTransparency`, read on the main thread alongside
+//!   Reduce Motion once a second (`macos::watch`).
 //! - Linux: no counterpart (the settings portal's `org.freedesktop.appearance` carries the color scheme, the accent
 //!   color, the contrast and reduced motion only; GNOME's a11y schema has no transparency key), so the system input
 //!   reads off there. Settings ▸ Appearance ▸ Window's Ignore Reduce Transparency still shows and round-trips, for
@@ -17,7 +17,7 @@
 //! that presented opacity, and the Settings hint names it. The palettes and the session switcher draw opaque whatever
 //! the setting, so the system's preference, which upstream keeps them on, never has anything to take from them here.
 //!
-//! The per-OS reads are not built on macOS or Windows by CI until `ngterm-gpui` joins `cross-platform.yml`.
+//! CI builds both frontend configurations on macOS and Windows.
 
 use gpui_kit::{App, Global};
 
@@ -44,6 +44,8 @@ pub fn watch(poster: &Poster, cx: &mut App) {
         return;
     }
     cx.set_global(ReduceTransparency::default());
+    #[cfg(target_os = "macos")]
+    crate::macos::watch(poster.clone(), cx);
     #[cfg(windows)]
     watch_transparency_effects(poster.clone(), cx);
     #[cfg(not(windows))]

@@ -43,6 +43,7 @@ pub const SHORTCUT_DESCRIPTION: &str = "Show or hide the quick terminal";
 #[must_use]
 pub fn keycode(key: &str) -> Option<u32> {
     let named = match key {
+        "escape" => Some("Escape"),
         "return" => Some("Enter"),
         "tab" => Some("Tab"),
         "space" => Some("Space"),
@@ -125,6 +126,7 @@ pub struct GlobalHotkey {
     #[cfg(windows)]
     windows: Option<self::windows::Registrar>,
     /// The display has no global hotkey of its own (headless, another platform): said once.
+    #[cfg(any(target_os = "linux", windows))]
     unsupported_logged: bool,
 }
 
@@ -136,17 +138,22 @@ impl GlobalHotkey {
         }
         self.synced = true;
         self.registered = chord.cloned();
+        #[cfg(target_os = "macos")]
+        {
+            let _ = cx;
+            crate::macos::hotkey(chord, poster);
+        }
         #[cfg(windows)]
         {
             let _ = cx;
             self.register(chord, poster);
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         self.sync_display(chord, poster, cx);
     }
 
     /// Registers `chord` by the display server GPUI runs on, or says once that it has no global hotkey.
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     fn sync_display(&mut self, chord: Option<&Chord>, poster: &Poster, cx: &mut App) {
         #[cfg(not(target_os = "linux"))]
         let _ = poster;

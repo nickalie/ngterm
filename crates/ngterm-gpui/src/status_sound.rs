@@ -19,8 +19,8 @@
 //!   exists, on a serial queue of its own, off the main thread. Upstream's names are macOS's sounds, which Windows has
 //!   no alias of, so each of them sounds the alert there.
 //!
-//! The Windows form is built and tested on the Windows runner (`cross-platform.yml`); the macOS form is not built on
-//! macOS by CI yet.
+//! The Windows form is built and tested on the Windows runner (`cross-platform.yml`); the macOS form is built and tested
+//! on the macOS runner.
 //!
 //! The alert sound for a refusal with nothing on screen to explain it ([`alert`], upstream's `NSSound.beep()`): the
 //! display's alert bell on Linux, `NSBeep` on macOS and `MessageBeep(MB_OK)` on Windows.

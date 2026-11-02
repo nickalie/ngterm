@@ -164,9 +164,9 @@ pub fn menu_action(stroke: &KeyStroke) -> Option<BuiltinAction> {
 }
 
 /// Whether the keymap or the window's own keys would take `stroke` now, changing nothing: a key pressed in an HTML
-/// page's native web view (Windows, `html_overlay::webview2::keys`) goes to the window only then, every other key
+/// page's native web view (macOS and Windows, `html_overlay::webview2::keys`) goes to the window only then, every other key
 /// staying the page's. The window's own keys there are Ctrl+Tab's switcher.
-#[cfg(all(feature = "html", windows))]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 #[must_use]
 pub fn takes(stroke: &KeyStroke) -> bool {
     let Some(chord) = input::chord(stroke) else {
@@ -195,7 +195,7 @@ fn page_keeps(action: BuiltinAction) -> bool {
 
 /// Lets go of `keystroke`, a press dispatched for an HTML page's native web view (`takes`), whose release the window
 /// never sees.
-#[cfg(all(feature = "html", windows))]
+#[cfg(all(feature = "html", any(windows, target_os = "macos")))]
 pub fn release_dispatched(keystroke: &gpui_kit::Keystroke) {
     let stroke = KeyStroke::new(keystroke, &input::Source::Keystroke, true);
     ROUTER.with_borrow_mut(|router| {

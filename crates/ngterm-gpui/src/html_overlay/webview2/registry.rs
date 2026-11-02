@@ -15,6 +15,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[cfg(target_os = "macos")]
+use super::native::Environment;
 use gpui_kit::{AnyWindowHandle, App, AppContext as _, AsyncApp, ClipboardItem, Entity, Window};
 use ngterm_core::Core;
 use ngterm_core::html::bridge;
@@ -24,7 +26,8 @@ use ngterm_core::remote::replica_page::PageResource;
 use ngterm_proto::Response;
 use raw_window_handle::RawWindowHandle;
 use uuid::Uuid;
-use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment;
+#[cfg(windows)]
+use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment as Environment;
 use wry::RequestAsyncResponder;
 
 use super::super::panel::{PanelColors, TerminalColors};
@@ -70,7 +73,7 @@ struct Registry {
     /// Why no page can run: no runtime, or `WebView2`'s browser process ended.
     failure: Option<String>,
     /// The environment every page shares once the first web view made one.
-    environment: Option<ICoreWebView2Environment>,
+    environment: Option<Environment>,
     /// The profile folders closed pages left behind in an earlier run were removed.
     swept: bool,
     /// The page zoom every page shows at; `None` before the first settle (actual size).
@@ -257,6 +260,9 @@ pub fn engine_ended() {
 /// The native handle of GPUI window `window`.
 fn native_window(window: &Window) -> Option<isize> {
     match raw_window_handle::HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        #[cfg(target_os = "macos")]
+        RawWindowHandle::AppKit(handle) => Some(handle.ns_view.as_ptr() as isize),
+        #[cfg(windows)]
         RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
         _ => None,
     }

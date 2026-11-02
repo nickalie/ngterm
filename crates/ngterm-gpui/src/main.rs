@@ -50,6 +50,8 @@ fn main() -> ExitCode {
     {
         return if launched { ExitCode::SUCCESS } else { ExitCode::FAILURE };
     }
+    #[cfg(target_os = "macos")]
+    ngterm_session::limits::raise_open_files();
     let activation = Activation::from_env(&ProcessEnv);
     // GDK unsets it once read, so no child (a hook, a custom command, a shell) claims this launch's sequence
     // SAFETY: first thing in main, while the process has one thread.
@@ -82,6 +84,13 @@ fn main() -> ExitCode {
     // the toasts' app id, before any window opens (`notifications/windows.rs`)
     #[cfg(windows)]
     ngterm_gpui::notifications::register_app_id(&app_id, &paths::state_dir(&ProcessEnv));
+    #[cfg(target_os = "macos")]
+    if !ngterm_gpui::macos::graphics_available() {
+        let message = "ngterm requires a Metal-capable GPU; this macOS display exposes no Metal device";
+        tracing::error!(message);
+        eprintln!("{message}");
+        return ExitCode::FAILURE;
+    }
     let status = app::run(Launch {
         app_id,
         requests: received,

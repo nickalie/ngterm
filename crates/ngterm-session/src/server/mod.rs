@@ -149,6 +149,8 @@ impl ServerConfig {
 /// The endpoint could not be bound ([`io::ErrorKind::AddrInUse`] when another server holds it; see
 /// [`Endpoint::bind`]), or a thread could not be started.
 pub fn run(directory: &Path, config: &ServerConfig) -> io::Result<StopReason> {
+    #[cfg(target_os = "macos")]
+    crate::limits::raise_open_files();
     let endpoint = Endpoint::new(directory);
     let listener = endpoint.bind()?;
     let shared = Shared::new(&endpoint, config);
@@ -164,6 +166,8 @@ pub fn run(directory: &Path, config: &ServerConfig) -> io::Result<StopReason> {
 /// The handoff failed before its commit (nothing was taken: the old server keeps serving), or a thread could not be
 /// started.
 pub fn run_import(directory: &Path, channel: &Path, token: &str, config: &ServerConfig) -> io::Result<StopReason> {
+    #[cfg(target_os = "macos")]
+    crate::limits::raise_open_files();
     let endpoint = Endpoint::new(directory);
     let shared = Shared::new(&endpoint, config);
     let imported = handoff::receive(&config.build, &endpoint, channel, token, config.limits())?;

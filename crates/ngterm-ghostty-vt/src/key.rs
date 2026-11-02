@@ -149,9 +149,33 @@ impl KeyEncoder {
     ///
     /// The library's result when encoding fails.
     pub fn encode(&mut self, terminal: &mut Terminal, event: &KeyEvent<'_>) -> Result<Vec<u8>, Error> {
+        self.encode_with_option_as_alt(terminal, event, false)
+    }
+
+    /// Encode with the frontend's Option-as-Alt choice, applied after the terminal modes are refreshed.
+    ///
+    /// # Errors
+    /// The library's result when encoding fails.
+    pub fn encode_with_option_as_alt(
+        &mut self,
+        terminal: &mut Terminal,
+        event: &KeyEvent<'_>,
+        enabled: bool,
+    ) -> Result<Vec<u8>, Error> {
         // SAFETY: both handles are live and `&mut` borrows serialize the call with the terminal's other users; the
         // call reads the terminal's modes into the encoder.
         unsafe { ffi::ghostty_key_encoder_setopt_from_terminal(self.encoder.ptr(), terminal.as_raw()) };
+        if enabled {
+            let mode = ffi::GHOSTTY_OPTION_AS_ALT_TRUE;
+            // SAFETY: the option takes GhosttyOptionAsAlt, borrowed for this setter call on a live encoder.
+            unsafe {
+                ffi::ghostty_key_encoder_setopt(
+                    self.encoder.ptr(),
+                    ffi::GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
+                    (&raw const mode).cast(),
+                );
+            };
+        }
         self.fill(event);
         let text = encodable_text(event.text);
         // SAFETY: the event is live; the text is borrowed for this call only and reset below, before it can dangle.
@@ -284,6 +308,19 @@ mod tests {
         };
         assert_eq!(encode(&mut terminal, &ctrl_c), b"\x1b[99;5u");
         assert!(!terminal.mode(Mode::dec(1)));
+    }
+
+    #[test]
+    fn option_as_alt_survives_mode_refresh_and_resets_for_the_next_key() {
+        let mut terminal = Terminal::new(80, 24).unwrap();
+        let mut encoder = KeyEncoder::new().unwrap();
+        let event = press(Key::A, KeyMods::ALT, "a");
+        assert_eq!(
+            encoder.encode_with_option_as_alt(&mut terminal, &event, true).unwrap(),
+            b"\x1ba"
+        );
+        let ordinary: &[u8] = if cfg!(target_os = "macos") { b"a" } else { b"\x1ba" };
+        assert_eq!(encoder.encode(&mut terminal, &event).unwrap(), ordinary);
     }
 
     #[test]

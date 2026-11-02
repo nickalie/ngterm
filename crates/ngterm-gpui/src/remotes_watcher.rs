@@ -118,6 +118,18 @@ impl Watch {
         }
         let mut interest = vec![path.clone()];
         interest.extend(symlink_targets(&path));
+        #[cfg(target_os = "macos")]
+        {
+            // FSEvents spells /var and /tmp through /private, including for a deleted file.
+            let canonical = interest
+                .iter()
+                .filter_map(|path| {
+                    let directory = nearest_existing_directory(path);
+                    Some(directory.canonicalize().ok()?.join(path.strip_prefix(&directory).ok()?))
+                })
+                .collect::<Vec<_>>();
+            interest.extend(canonical);
+        }
         self.interest = interest;
     }
 

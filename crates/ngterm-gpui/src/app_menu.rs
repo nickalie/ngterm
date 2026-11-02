@@ -692,3 +692,6 @@ impl AppState {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(target_os = "macos")]
+pub mod macos;

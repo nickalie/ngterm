@@ -44,6 +44,11 @@ mod windows;
 #[cfg(windows)]
 pub use self::windows::{register_app_id, run};
 
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::run;
+
 /// The application name banners carry (the server's grouping; GTK's `g_get_application_name`).
 pub const APP_NAME: &str = "ngterm";
 

@@ -244,6 +244,8 @@ fn launch_core(decision: RestoreLaunchDecision, resources: Option<&Path>, poster
 /// Runs until the system asks it to end; the exit status.
 #[must_use]
 pub fn run(options: &Options) -> i32 {
+    #[cfg(target_os = "macos")]
+    ngterm_session::limits::raise_open_files();
     let env = &ProcessEnv;
     let decision = match live_decision(env) {
         Ok(decision) => decision,

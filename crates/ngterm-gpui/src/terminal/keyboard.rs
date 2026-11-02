@@ -220,6 +220,8 @@ fn send(shared: &Shared, pane: &Pane, keys: impl IntoIterator<Item = KeyStroke>)
 impl TerminalView {
     /// A key press the interceptor handed this view (module docs); whether the terminal took it.
     pub(super) fn key_down(&mut self, stroke: &KeyStroke, _window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let stroke = stroke.with_option_as_alt(self.shared.config().macos_option_as_alt);
+        let stroke = stroke.as_ref();
         if stroke.composing {
             return false;
         }
@@ -289,6 +291,7 @@ impl TerminalView {
         };
         let stroke = KeyStroke::new(&event.keystroke, &super::input::current_source(&event.keystroke), true);
         let config = self.shared.config();
+        let stroke = stroke.with_option_as_alt(config.macos_option_as_alt);
         let surface = TerminalSurface::new(Rc::clone(&self.shared));
         let KeyState { keyboard, queued, .. } = &mut self.keys;
         let mut performer = KeyPerformer {
@@ -299,7 +302,7 @@ impl TerminalView {
         };
         let result = keyboard.handle(&config.keybinds, &stroke.input().binds_event(), &mut performer);
         if result.effect == KeyEffect::Encode {
-            send(&self.shared, &pane, [stroke]);
+            send(&self.shared, &pane, [stroke.into_owned()]);
         }
     }
 

@@ -1,5 +1,6 @@
 """The Rust build: it reports its own parity level and capabilities on `version`; its GPUI frontend renders through
-Vulkan, on lavapipe only, and needs a seat on its compositor. On Windows it renders through DirectX on the machine's
+Vulkan, on lavapipe only, and needs a seat on its compositor. On macOS it renders through Metal and requires a graphical
+desktop. On Windows it renders through DirectX on the machine's
 adapter (a runner's or a VM's, WARP without one), serves its control socket on a named pipe and quits on the session's
 end sent to its hidden window (base.py's module docs)."""
 
@@ -69,8 +70,8 @@ class RustAdapter(Adapter):
     # `live.*`, `ngtermctl live`, `result.live`, `backedByLive`: upstream's `zmx` group renamed
     # (conformance/docs/rust-build.md > The `live` group).
     vocabulary = LIVE
-    # Windows names its single instance by the app id and the state dir: a unique id keeps it off the user's too.
-    needs_app_id = sys.platform.startswith("linux") or sys.platform == "win32"
+    # macOS and Windows name their single instance by the app id and the state dir: a unique id keeps it off the user's too.
+    needs_app_id = sys.platform.startswith("linux") or sys.platform in ("darwin", "win32")
     needs_runtime_dir = sys.platform.startswith("linux")
     # crates/ngterm-gpui/src/system_window.rs
     quit_window_class = "ngterm-system-window"

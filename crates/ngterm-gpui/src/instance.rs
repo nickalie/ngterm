@@ -31,6 +31,11 @@ pub mod windows;
 #[cfg(windows)]
 pub use self::windows::{Primary, Remote, register};
 
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::{Primary, Remote, register};
+
 /// The application id this build registers.
 pub const DEFAULT_APP_ID: &str = "com.nickalie.ngterm";
 /// The variable that gives a dev or test instance an id of its own (`scripts/run-gpui-dev.sh`, the conformance

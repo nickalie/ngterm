@@ -24,7 +24,7 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 | `ngterm-app` | frontend-neutral app services | any |
 | `ngterm-headless` | the core, control socket and live sessions with no window (an Attach Remote origin) | any |
 | `ngterm-wpe-sys` and kin, `ngterm-wpe` | WPE WebKit bindings and the HTML overlays' host | Linux |
-| `ngterm-gpui` → `ngterm` | the GPUI frontend | Linux, Windows |
+| `ngterm-gpui` → `ngterm` | the GPUI frontend | Linux, macOS, Windows |
 
 - `any` means CI builds and tests the crate on all three OSes, so its dependencies must build there too.
 - A crate's root docs and module list describe what it holds.
@@ -69,7 +69,8 @@ Upstream syncs and pin bumps: use the `agterm-upstream-sync` skill.
 There is no fixed gate: you decide which checks a change needs and how far to take them. Don't overrun the gate:
 size it to what the change can break and stop there. A small change gets a small, fast check, not a long build or
 suite run; a check the change can't affect is skipped, and so is waiting on CI unless its result decides your next
-step. Reviews (revmux and similar) scale the same way. README > Test has the commands and how to scope them.
+step. Reviews (revmux and similar) scale the same way. Fix every verified revmux finding before finishing.
+README > Test has the commands and how to scope them.
 
 ## What CI enforces
 
@@ -90,4 +91,4 @@ Agents usually run inside a pane of the user's live ngterm. Keep every dev run o
 - Strip `NGTERM_*` from the environment of anything you launch.
 - Give every `ngtermctl` call an explicit `--socket`.
 - Use a private state dir; reap sessions through that dir's own server, never by process name.
-- Run the GUI headless only (README > Test). A Windows GUI run goes on a CI runner or a throwaway VM.
+- Run the GUI headless only (README > Test). A macOS or Windows GUI run goes on a CI runner or a throwaway VM.

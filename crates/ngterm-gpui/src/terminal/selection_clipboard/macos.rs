@@ -29,3 +29,13 @@ pub fn write(name: &str, text: &str) {
         tracing::warn!(target: "ngterm::surface", pasteboard = name, "the selection pasteboard refused the text");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_private_pasteboard_round_trips_text() {
+        let name = format!("com.nickalie.ngterm.test.{}", uuid::Uuid::new_v4());
+        super::write(&name, "selection text");
+        assert_eq!(super::read(&name).as_deref(), Some("selection text"));
+    }
+}

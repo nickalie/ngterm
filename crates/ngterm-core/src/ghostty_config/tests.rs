@@ -1611,3 +1611,19 @@ fn selection_word_chars_decode_as_ghostty_parses_them() {
     assert_eq!(validate::decode_codepoints("a\\nb"), Some(vec!['a', '\n', 'b']));
     assert_eq!(validate::decode_codepoints("\\x4"), None);
 }
+
+#[test]
+fn option_as_alt_modes_are_loaded_and_choose_their_side() {
+    for (value, mode, left, right) in [
+        ("false", MacosOptionAsAlt::Off, false, false),
+        ("true", MacosOptionAsAlt::Both, true, true),
+        ("left", MacosOptionAsAlt::Left, true, false),
+        ("right", MacosOptionAsAlt::Right, false, true),
+    ] {
+        let loaded = load(&format!("macos-option-as-alt = {value}\n"));
+        assert!(loaded.diagnostics.is_empty());
+        assert_eq!(loaded.config.macos_option_as_alt, mode);
+        assert_eq!(mode.applies(false), left);
+        assert_eq!(mode.applies(true), right);
+    }
+}

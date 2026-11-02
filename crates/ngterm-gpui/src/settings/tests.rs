@@ -1331,7 +1331,11 @@ fn the_paths_and_diagnostics_are_selectable_text(cx: &mut TestAppContext) {
         "No issues. is plain text"
     );
     click(cx, "settings-keymap-directory");
-    cx.simulate_keystrokes("ctrl-a ctrl-c");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a cmd-c"
+    } else {
+        "ctrl-a ctrl-c"
+    });
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
         Some(directory.as_str()),

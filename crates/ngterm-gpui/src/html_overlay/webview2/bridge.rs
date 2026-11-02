@@ -2,12 +2,13 @@
 //! handler with a reply (`WebKit`'s `messageHandlers`), so ngterm's scripts run in the page's own world from one
 //! closure that holds what the page must not reach:
 //!
-//! - a nonce, made per page, that every message ngterm's script posts carries, built by string concatenation so no
-//!   page code (a `toJSON` on `Object.prototype`, a replaced `JSON.stringify`) ever sees it, and the web view's own
-//!   `postMessage` and `addEventListener` taken before the page's scripts run. A message without the nonce, from the
-//!   page itself or from a frame, is dropped (upstream refuses frames' requests; a frame never runs this script).
+//! - separate random credentials for posts and replies. Page-world replies may be observable by page code on
+//!   `WebView2`, so a reply never discloses the credential used for input reports. This is defence in depth in the
+//!   page's JavaScript realm, not an isolated-world boundary. Native navigation and grants enforce access policy.
+//! - on macOS, requests use `WebKit`'s reply-capable main-frame message handler; replies settle its native promise
+//!   directly instead of passing through page-visible window events or wry's script queue.
 //! - the bridge's handler (upstream's `messageHandlers.ngterm`), whose `postMessage` returns a promise the host's
-//!   reply settles: the reply comes back as a web message (`PostWebMessageAsJson`) carrying the nonce too, so a reply
+//!   reply settles: the reply comes back as a web message (`PostWebMessageAsJson`) carrying a separate reply credential, so a reply
 //!   the page forged (a `message` event it dispatched itself, which `WebView2`'s own does not tell apart by
 //!   `isTrusted`) settles nothing. Core's adapter and `--js` relay run over it unchanged but for the name they reach it
 //!   by.
@@ -38,22 +39,22 @@ const WEBKIT_HANDLER: &str = "window.webkit.messageHandlers.ngterm";
 const HANDLER: &str = "ngtermHandler";
 
 /// The script that reports the user's input and, on a themed page, carries the bridge (module docs), for the top
-/// frame only; `nonce` is the page's.
+/// frame only; `nonce` holds the page's independent post and reply credentials.
 #[must_use]
 pub fn page_script(nonce: &str, themed: bool, javascript: bool) -> String {
+    let (request_nonce, response_nonce) = credentials(nonce);
     let mut script = format!(
         r#"(() => {{
-  if (window.top !== window || !window.chrome || !window.chrome.webview) return;
-  const webview = window.chrome.webview;
-  const post = webview.postMessage.bind(webview);
-  const listen = webview.addEventListener.bind(webview);
+  {transport}
   const stringify = JSON.stringify;
-  const nonce = '{nonce}';
-  const send = (kind, rest) => post('{{"n":"' + nonce + '","k":"' + kind + '"' + rest + '}}');
+  const nonce = '{request_nonce}';
+  const responseNonce = '{response_nonce}';
+  const send = (kind, rest) => post('{{"n":"' + nonce + '","k":"' + kind + '"' + rest + '}}', kind);
   const report = (click) => (event) => {{ if (event.isTrusted) send('input', ',"click":' + click); }};
   window.addEventListener('pointerdown', report(true), true);
   window.addEventListener('keydown', report(false), true);
-"#
+"#,
+        transport = transport(),
     );
     if themed {
         let _ = write!(
@@ -62,7 +63,7 @@ pub fn page_script(nonce: &str, themed: bool, javascript: bool) -> String {
   let next = 0;
   listen('message', (event) => {{
     const data = event.data;
-    if (!data || data.ngterm !== 'reply' || data.n !== nonce || !waiting.has(data.id)) return;
+    if (!data || data.ngterm !== 'reply' || data.n !== responseNonce || !waiting.has(data.id)) return;
     const {{resolve, reject}} = waiting.get(data.id);
     waiting.delete(data.id);
     if (typeof data.error === 'string') reject(new Error(data.error)); else resolve(data.result);
@@ -86,6 +87,40 @@ pub fn page_script(nonce: &str, themed: bool, javascript: bool) -> String {
     }
     script.push_str("})();");
     script
+}
+
+/// Host-specific transports are selected explicitly, so edits to the Windows setup cannot disable macOS.
+fn transport() -> &'static str {
+    #[cfg(not(target_os = "macos"))]
+    {
+        r"if (window.top !== window || !window.chrome || !window.chrome.webview) return;
+  const webview = window.chrome.webview;
+  const nativePost = webview.postMessage.bind(webview);
+  const post = (body, kind) => nativePost(body);
+  const listen = webview.addEventListener.bind(webview);"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        r"if (window.top !== window || !window.ipc || !window.webkit.messageHandlers.ngtermBridge) return;
+  const inputPost = window.ipc.postMessage.bind(window.ipc);
+  const handler = window.webkit.messageHandlers.ngtermBridge;
+  const bridgePost = handler.postMessage.bind(handler);
+  const then = Function.call.bind(Promise.prototype.then);
+  const parse = JSON.parse;
+  let receive = () => {};
+  const listen = (kind, callback) => { receive = callback; };
+  const post = (body, kind) => {
+    if (kind !== 'bridge') { inputPost(body); return; }
+    const id = parse(body).id;
+    then(bridgePost(body), data => receive({data}), error => receive({data: {
+      ngterm: 'reply', n: responseNonce, id, error: String(error)
+    }}));
+  };"
+    }
+}
+
+fn credentials(nonce: &str) -> (&str, &str) {
+    nonce.split_once(':').unwrap_or((nonce, nonce))
 }
 
 /// A `--js` file page's `ngterm.request` (core's helper), in the top frame.
@@ -120,7 +155,7 @@ pub enum Message {
 #[must_use]
 pub fn parse(raw: &str, nonce: &str) -> Option<Message> {
     let value: Value = serde_json::from_str(raw).ok()?;
-    if value.get("n")?.as_str()? != nonce {
+    if value.get("n")?.as_str()? != credentials(nonce).0 {
         return None;
     }
     match value.get("k")?.as_str()? {
@@ -139,6 +174,7 @@ pub fn parse(raw: &str, nonce: &str) -> Option<Message> {
 /// its rejection's text.
 #[must_use]
 pub fn reply(id: u64, nonce: &str, answer: Result<Value, String>) -> String {
+    let nonce = credentials(nonce).1;
     let message = match answer {
         Ok(result) => serde_json::json!({"ngterm": "reply", "n": nonce, "id": id, "result": result}),
         Err(error) => serde_json::json!({"ngterm": "reply", "n": nonce, "id": id, "error": error}),
@@ -158,10 +194,10 @@ pub fn theme_script(script: &str) -> String {
     )
 }
 
-/// A fresh nonce for a page: 128 random bits, as hex.
+/// Independent random 128-bit credentials for a page's posts and replies.
 #[must_use]
 pub fn nonce() -> String {
-    uuid::Uuid::new_v4().simple().to_string()
+    format!("{}:{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
 }
 
 #[cfg(test)]
@@ -170,10 +206,11 @@ mod tests {
 
     #[test]
     fn a_message_counts_only_with_the_page_nonce() {
-        let nonce = nonce();
+        let credential = nonce();
+        let nonce = credentials(&credential).0;
         let bridge =
             format!(r#"{{"n":"{nonce}","k":"bridge","id":3,"body":{{"cmd":"notify","args":{{"text":"hi"}}}}}}"#);
-        let Some(Message::Bridge { id, body }) = parse(&bridge, &nonce) else {
+        let Some(Message::Bridge { id, body }) = parse(&bridge, &credential) else {
             panic!("a bridge request");
         };
         assert_eq!(id, 3);
@@ -182,11 +219,28 @@ mod tests {
             serde_json::json!({"cmd": "notify", "args": {"text": "hi"}})
         );
         let input = format!(r#"{{"n":"{nonce}","k":"input","click":true}}"#);
-        assert_eq!(parse(&input, &nonce), Some(Message::Input { click: true }));
+        assert_eq!(parse(&input, &credential), Some(Message::Input { click: true }));
         assert_eq!(parse(&input, "other"), None, "another page's or a forged nonce");
-        assert_eq!(parse(r#"{"k":"input","click":true}"#, &nonce), None, "no nonce");
-        assert_eq!(parse("not json", &nonce), None);
-        assert_eq!(parse(&format!(r#"{{"n":"{nonce}","k":"other"}}"#), &nonce), None);
+        assert_eq!(parse(r#"{"k":"input","click":true}"#, nonce), None, "no nonce");
+        assert_eq!(parse("not json", nonce), None);
+        assert_eq!(parse(&format!(r#"{{"n":"{nonce}","k":"other"}}"#), nonce), None);
+    }
+
+    #[test]
+    fn a_reply_does_not_authorize_forged_input() {
+        let nonce = nonce();
+        let reply: Value = serde_json::from_str(&reply(1, &nonce, Ok(Value::Null))).unwrap();
+        let forged = serde_json::json!({"n": reply["n"], "k": "input", "click": true});
+        assert!(parse(&forged.to_string(), &nonce).is_none());
+        assert_ne!(credentials(&nonce).0, credentials(&nonce).1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_uses_a_native_reply_transport() {
+        let script = page_script(&nonce(), true, true);
+        assert!(script.contains("window.ipc") && script.contains("ngtermBridge"));
+        assert!(!script.contains("window.chrome") && !script.contains("window.dispatchEvent"));
     }
 
     #[test]
@@ -212,19 +266,20 @@ mod tests {
 
     #[test]
     fn the_page_script_holds_the_bridge_only_on_a_themed_page() {
-        let nonce = nonce();
-        let url_page = page_script(&nonce, false, true);
-        assert!(url_page.contains(&nonce) && url_page.contains("'input'"));
+        let credential = nonce();
+        let nonce = credentials(&credential).0;
+        let url_page = page_script(&credential, false, true);
+        assert!(url_page.contains(nonce) && url_page.contains("'input'"));
         assert!(!url_page.contains(HANDLER), "a URL page gets no bridge");
-        let file_page = page_script(&nonce, true, false);
+        let file_page = page_script(&credential, true, false);
         assert!(file_page.contains("data-ngterm") && file_page.contains(HANDLER));
         assert!(
-            !file_page.contains("window.webkit"),
+            !file_page.contains(&format!("{WEBKIT_HANDLER};")),
             "core's scripts reach the closure's handler"
         );
         assert!(!file_page.contains("'request'"), "no relay without --js");
         assert!(
-            page_script(&nonce, true, true).contains("data.ngterm !== 'request'"),
+            page_script(&credential, true, true).contains("data.ngterm !== 'request'"),
             "the --js relay"
         );
         assert!(helper_script().starts_with("if (window.top === window)"));

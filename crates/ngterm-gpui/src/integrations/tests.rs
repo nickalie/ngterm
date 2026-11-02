@@ -149,7 +149,11 @@ impl Home {
     /// Makes this home what the window's installs read.
     fn serve(&self, cx: &mut VisualTestContext) {
         let env = Arc::clone(&self.env);
-        cx.update(|_, cx| Source::new(move || Some(env.lock().unwrap().clone())).install(cx));
+        cx.update(|_, cx| {
+            Source::new(move || Some(env.lock().unwrap().clone()))
+                .with_probe_timeout(std::time::Duration::from_secs(120))
+                .install(cx);
+        });
     }
 
     /// The skill planner's read-back: what a next install would do at each target.
@@ -715,7 +719,12 @@ fn child_installs_into_the_process_home(cx: &mut TestAppContext) {
     let home = PathBuf::from(home);
     let xdg = PathBuf::from(std::env::var_os("XDG_CONFIG_HOME").unwrap());
     let cx = host(cx);
-    // no Source installed: the app's own, the process environment
+    // Keep the app's process environment lookup, with a fixture deadline independent of the production probe.
+    cx.update(|_, cx| {
+        Source::process()
+            .with_probe_timeout(std::time::Duration::from_secs(120))
+            .install(cx);
+    });
     cx.update(|window, cx| run_picked(window.window_handle(), true, true, cx));
     cx.run_until_parked();
     let skill = shown(cx);

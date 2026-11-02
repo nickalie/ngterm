@@ -54,8 +54,8 @@ pub use launching::{
 pub use model::{
     BackgroundImage, BackgroundImageFit, BackgroundImagePosition, Clipboard, ClipboardAccess, Colors, CopyOnSelect,
     Cursor, CursorStyle, DEFAULT_IMAGE_STORAGE_LIMIT, DEFAULT_TERM, Font, GhosttyConfig, GraphemeWidthMethod, Link,
-    MiddleClickAction, Mouse, MouseShiftCapture, PaddingBalance, PaddingColor, RightClickAction, Scrollback, Selection,
-    ShellIntegrationFeatures, WindowPadding,
+    MacosOptionAsAlt, MiddleClickAction, Mouse, MouseShiftCapture, PaddingBalance, PaddingColor, RightClickAction,
+    Scrollback, Selection, ShellIntegrationFeatures, WindowPadding,
 };
 pub use parse::{Diagnostic, Loader, Location, Setting, Step, lines};
 pub use validate::{ConfigPath, KeySpec, Padding, TerminalColor, ThemeName};

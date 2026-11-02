@@ -12,8 +12,7 @@
 //!   `p` write reaches the embedder, and macOS has no primary of its own); on Windows it shares the selection buffer,
 //!   as it shares PRIMARY with Selection on Linux.
 //!
-//! The Windows form is built and tested on the Windows runner (`cross-platform.yml`); the macOS form is not built on
-//! macOS by CI yet.
+//! Both native forms are built and tested in `cross-platform.yml`.
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -80,24 +79,18 @@ pub(super) fn selection_pasteboard_name() -> String {
         .clone()
 }
 
-/// The pasteboard the selection store uses: [`selection_pasteboard_name`]'s, and in tests one of the test thread's
-/// own, so no test touches the app's selection pasteboard or another test's.
-#[cfg(target_os = "macos")]
+/// The native selection store; tests use an App-scoped buffer like GPUI's fake system clipboard.
+#[cfg(all(target_os = "macos", not(test)))]
 fn store_pasteboard() -> String {
-    let name = selection_pasteboard_name();
-    if cfg!(test) {
-        format!("{name}.test-{}-{:?}", std::process::id(), std::thread::current().id())
-    } else {
-        name
-    }
+    selection_pasteboard_name()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 fn read_selection(_: &App) -> Option<ClipboardItem> {
     macos::read(&store_pasteboard()).map(ClipboardItem::new_string)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(test)))]
 fn write_selection(item: &ClipboardItem, _: &mut App) {
     // text only, as the terminal's other copies (GPUI's clipboard item carries the text a selection formats to)
     if let Some(text) = item.text() {
@@ -106,19 +99,19 @@ fn write_selection(item: &ClipboardItem, _: &mut App) {
 }
 
 /// The selection buffer of an OS with no selection clipboard (Windows): one per app, shared by every terminal.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(any(all(test, target_os = "macos"), not(any(target_os = "linux", target_os = "macos"))))]
 #[derive(Default)]
 struct SelectionBuffer(Option<ClipboardItem>);
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(any(all(test, target_os = "macos"), not(any(target_os = "linux", target_os = "macos"))))]
 impl gpui_kit::Global for SelectionBuffer {}
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(any(all(test, target_os = "macos"), not(any(target_os = "linux", target_os = "macos"))))]
 fn read_selection(cx: &App) -> Option<ClipboardItem> {
     cx.try_global::<SelectionBuffer>().and_then(|buffer| buffer.0.clone())
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(any(all(test, target_os = "macos"), not(any(target_os = "linux", target_os = "macos"))))]
 fn write_selection(item: &ClipboardItem, cx: &mut App) {
     cx.default_global::<SelectionBuffer>().0 = Some(item.clone());
 }

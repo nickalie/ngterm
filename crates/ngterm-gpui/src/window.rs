@@ -179,7 +179,16 @@ pub fn read_minimized(window: &Window) -> Option<bool> {
         // SAFETY: GPUI's live window handle, a plain query.
         Some(unsafe { IsIconic(hwnd(window)?) } != 0)
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(target_os = "macos")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let RawWindowHandle::AppKit(handle) = HasWindowHandle::window_handle(window).ok()?.as_raw() else {
+            return None;
+        };
+        // SAFETY: the live GPUI NSView, queried on its main thread.
+        Some(unsafe { crate::macos::ngterm_minimized(handle.ns_view.as_ptr()) })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = window;
         None
@@ -1236,7 +1245,16 @@ fn read_maximized(window: &Window) -> Option<bool> {
         (unsafe { GetWindowPlacement(hwnd, &raw mut placement) } != 0)
             .then_some(placement.flags & WPF_RESTORETOMAXIMIZED != 0)
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(target_os = "macos")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let RawWindowHandle::AppKit(handle) = HasWindowHandle::window_handle(window).ok()?.as_raw() else {
+            return None;
+        };
+        // SAFETY: the live GPUI NSView, queried on its main thread.
+        Some(unsafe { crate::macos::ngterm_maximized(handle.ns_view.as_ptr()) })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = window;
         None

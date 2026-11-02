@@ -124,7 +124,8 @@ this build, not to Linux.
 
 These keys are gated to macOS in libghostty or read only by Ghostty's macOS app. The GTK build could not honor them;
 upstream macOS agterm gets the libghostty-gated ones (`macos-option-as-alt`, `font-thicken*`, `window-colorspace`,
-`window-vsync`, `background-blur`) from libghostty.
+`window-vsync`, `background-blur`) from libghostty. The GPUI macOS frontend implements `macos-option-as-alt`
+through its native key translation and the libghostty-vt encoder, including separate left/right Option choices.
 
 | key | Ghostty meaning | evidence |
 |---|---|---|

@@ -80,6 +80,7 @@ pub use surface::TerminalSurface;
 /// What a terminal draws and starts with, from the ghostty config.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TerminalConfig {
+    pub macos_option_as_alt: ghostty_config::MacosOptionAsAlt,
     pub font: ghostty_config::Font,
     pub padding: ghostty_config::WindowPadding,
     pub palette: Arc<Palette>,
@@ -137,6 +138,7 @@ impl TerminalConfig {
     #[must_use]
     pub fn from_ghostty(config: &GhosttyConfig) -> Self {
         Self {
+            macos_option_as_alt: config.macos_option_as_alt,
             font: config.font.clone(),
             padding: config.window_padding,
             palette: Arc::new(Palette::from_config(config)),
@@ -999,7 +1001,28 @@ fn copy_html(text: Option<String>, html: String, cx: &mut App) {
         let offer = gpui_linux::ClipboardHtml { html, with_text };
         gpui_linux::with_clipboard_html(offer, || cx.write_to_clipboard(item));
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        unsafe extern "C" {
+            fn ngterm_clipboard_html(text: *const std::ffi::c_char, html: *const std::ffi::c_char);
+        }
+        let text = item.text().and_then(|text| std::ffi::CString::new(text).ok());
+        if let Ok(html) = std::ffi::CString::new(html) {
+            // SAFETY: main-thread pasteboard operation, strings copied during this call.
+            unsafe {
+                ngterm_clipboard_html(
+                    if with_text {
+                        text.as_ref().map_or(std::ptr::null(), |text| text.as_ptr())
+                    } else {
+                        std::ptr::null()
+                    },
+                    html.as_ptr(),
+                );
+            };
+        }
+        let _ = cx;
+    }
+    #[cfg(any(all(test, target_os = "macos"), not(any(target_os = "linux", target_os = "macos"))))]
     {
         let _ = (html, with_text);
         cx.write_to_clipboard(item);

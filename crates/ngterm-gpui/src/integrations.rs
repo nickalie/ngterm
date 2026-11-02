@@ -39,7 +39,7 @@ pub const OPEN_DOCS: &str = "Open Docs";
 /// Where the installers find the home, the bundle and the variables: called off the main thread at each install, so
 /// a change of `$HOME` or the bundle between installs is seen. `None`: no home to install into.
 #[derive(Clone)]
-pub struct Source(Arc<dyn Fn() -> Option<Environment> + Send + Sync>);
+pub struct Source(Arc<dyn Fn() -> Option<Environment> + Send + Sync>, std::time::Duration);
 
 impl Global for Source {}
 
@@ -47,12 +47,19 @@ impl Source {
     /// The process's own environment, the app's.
     #[must_use]
     pub fn process() -> Self {
-        Self(Arc::new(Environment::process))
+        Self(Arc::new(Environment::process), std::time::Duration::from_secs(3))
     }
 
     /// An environment of the caller's (a test's temp home).
     pub fn new(environment: impl Fn() -> Option<Environment> + Send + Sync + 'static) -> Self {
-        Self(Arc::new(environment))
+        Self(Arc::new(environment), std::time::Duration::from_secs(3))
+    }
+
+    /// Override the probe deadline for a controlled fixture shell.
+    #[must_use]
+    pub fn with_probe_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.1 = timeout;
+        self
     }
 
     /// Makes `self` what every later install reads.
@@ -183,10 +190,13 @@ async fn install_hooks(window: AnyWindowHandle, cx: &mut AsyncApp) {
 async fn hooks_outcome(window: AnyWindowHandle, cx: &mut AsyncApp) -> Result<hooks::HooksOutcome, InstallError> {
     let env = install_off_main(cx, Ok).await?;
     let probing = env.clone();
+    let timeout = Source::of(cx).1;
     // a probe that panicked found nothing, as one whose shell did not run
-    let probe = off_main(cx, move || opencode::detect(&probing.vars, &probing.home_str()))
-        .await
-        .flatten();
+    let probe = off_main(cx, move || {
+        opencode::detect_with_timeout(&probing.vars, &probing.home_str(), timeout)
+    })
+    .await
+    .flatten();
     let start = match hooks::opencode_start(&env.home, probe.as_ref()) {
         OpenCodeStart::Ask => match choose_opencode_version(window, cx).await {
             Some(version) => OpenCodeStart::Install(version),

@@ -351,7 +351,7 @@ fn a_refused_edit_keeps_the_selection_and_the_editing_history(cx: &mut TestAppCo
         );
     }
     select(&mut h, session, end + 2..end + 2);
-    h.cx.simulate_keystrokes("ctrl-z");
+    h.cx.simulate_keystrokes(if cfg!(target_os = "macos") { "cmd-z" } else { "ctrl-z" });
     h.turn();
     assert_eq!(draft(&h, session).text(), nearly, "the typing before is still undone");
 }
@@ -455,7 +455,7 @@ fn a_paste_with_a_forbidden_control_is_refused_whole(cx: &mut TestAppContext) {
         open(&mut h, session, input(mode, Some("kept")));
         select(&mut h, session, 4..4);
         h.cx.write_to_clipboard(ClipboardItem::new_string(paste.to_owned()));
-        h.cx.simulate_keystrokes("ctrl-v");
+        h.cx.simulate_keystrokes(if cfg!(target_os = "macos") { "cmd-v" } else { "ctrl-v" });
         h.turn();
         assert_eq!(editor_text(&mut h, session), expected, "{mode} {paste:?}");
         assert_eq!(draft(&h, session).text(), expected, "{mode} {paste:?}");

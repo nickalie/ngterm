@@ -38,6 +38,8 @@ pub struct KeyInput<'a> {
     pub key: PhysicalKey,
     pub mods: Mods,
     pub sides: ModSides,
+    /// Override the macOS encoder default for this event, after reading the terminal modes.
+    pub macos_option_as_alt: bool,
     /// The modifiers the layout used up producing `text` (shift for `A`).
     pub consumed: Mods,
     /// Part of an input-method composition (a dead key, a preedit).
@@ -59,6 +61,7 @@ impl<'a> KeyInput<'a> {
             key,
             mods,
             sides: ModSides::empty(),
+            macos_option_as_alt: false,
             consumed: Mods::empty(),
             composing: false,
             text,
@@ -91,7 +94,7 @@ impl<'a> KeyInput<'a> {
             },
             key: engine_key(self.key),
             mods: engine_mods(self.mods, self.sides),
-            consumed_mods: engine_mods(self.consumed, ModSides::empty()),
+            consumed_mods: engine_mods(self.consumed, self.sides),
             composing: self.composing,
             text: self.text,
             unshifted: self.unshifted,
@@ -369,7 +372,7 @@ impl Pane {
         } = &mut *vt;
         let bytes = state
             .keys
-            .encode(terminal, &input.engine())
+            .encode_with_option_as_alt(terminal, &input.engine(), input.macos_option_as_alt)
             .map_err(PaneError::terminal)?;
         let sent = self.queue(&bytes)?;
         self.after_typing(vt, sent && !input.key.is_modifier(), input.key.name() == "escape");

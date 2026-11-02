@@ -193,17 +193,27 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// not run or printed nothing past its startup noise (upstream's `OpenCodeEnvironmentProbe.detect`).
 #[must_use]
 pub fn detect<H: BuildHasher>(environment: &HashMap<String, String, H>, fallback_home: &str) -> Option<Probe> {
+    detect_with_timeout(environment, fallback_home, PROBE_TIMEOUT)
+}
+
+/// Runs the probe with a caller's deadline (for controlled shells and test fixtures).
+#[must_use]
+pub fn detect_with_timeout<H: BuildHasher>(
+    environment: &HashMap<String, String, H>,
+    fallback_home: &str,
+    timeout: Duration,
+) -> Option<Probe> {
     let environment: HashMap<String, String> = environment
         .iter()
         .filter(|(key, _)| key.as_str() != "NGTERM_SESSION_ID")
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    probe(&environment, fallback_home)
+    probe(&environment, fallback_home, timeout)
 }
 
 /// The probe through the login shell.
 #[cfg(not(windows))]
-fn probe(environment: &HashMap<String, String>, fallback_home: &str) -> Option<Probe> {
+fn probe(environment: &HashMap<String, String>, fallback_home: &str, timeout: Duration) -> Option<Probe> {
     let shell = environment
         .get("SHELL")
         .filter(|shell| !shell.is_empty())
@@ -217,21 +227,22 @@ fn probe(environment: &HashMap<String, String>, fallback_home: &str) -> Option<P
          exec /usr/bin/env opencode --version"
     );
     let hop = format!("exec /bin/sh -c {}", super::hooks_config::shell_quote(&command));
-    let (stdout, succeeded) = run_with_timeout(&shell, &["-ilc", &hop], environment)?;
+    let (stdout, succeeded) = run_with_timeout(&shell, &["-ilc", &hop], environment, timeout)?;
     parse_probe(&stdout, &marker, succeeded, fallback_home)
 }
 
 /// The probe on Windows: `opencode --version` through `cmd.exe`, the directories from `environment` itself (its names
 /// matched without case, as Windows does), relative ones against this process's working directory.
 #[cfg(windows)]
-fn probe(environment: &HashMap<String, String>, fallback_home: &str) -> Option<Probe> {
+fn probe(environment: &HashMap<String, String>, fallback_home: &str, timeout: Duration) -> Option<Probe> {
     let var = |name: &str| {
         environment
             .iter()
             .find(|(key, _)| key.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
     };
-    let (stdout, succeeded) = run_with_timeout("cmd.exe", &["/D", "/C", "opencode", "--version"], environment)?;
+    let (stdout, succeeded) =
+        run_with_timeout("cmd.exe", &["/D", "/C", "opencode", "--version"], environment, timeout)?;
     let home = var("USERPROFILE")
         .filter(|home| !home.is_empty())
         .unwrap_or(fallback_home);
@@ -270,9 +281,14 @@ fn parse_probe(stdout: &str, marker: &str, succeeded: bool, fallback_home: &str)
     })
 }
 
-/// Runs `program args` with `environment`, stdin closed, stderr dropped, killing it past [`PROBE_TIMEOUT`]: its
+/// Runs `program args` with `environment`, stdin closed, stderr dropped, killing it past `timeout`: its
 /// stdout and whether it exited 0 in time; `None` when it could not start.
-fn run_with_timeout(program: &str, args: &[&str], environment: &HashMap<String, String>) -> Option<(String, bool)> {
+fn run_with_timeout(
+    program: &str,
+    args: &[&str],
+    environment: &HashMap<String, String>,
+    timeout: Duration,
+) -> Option<(String, bool)> {
     let mut command = Command::new(program);
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(
@@ -294,7 +310,7 @@ fn run_with_timeout(program: &str, args: &[&str], environment: &HashMap<String, 
         let _ = stdout.read_to_end(&mut bytes);
         bytes
     });
-    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
@@ -332,6 +348,10 @@ mod tests {
     use ngterm_host::fakes::write_executable;
 
     use super::*;
+
+    fn detect_fixture(environment: &HashMap<String, String>, home: &str) -> Option<Probe> {
+        detect_with_timeout(environment, home, crate::test_shell::CHILD_DEADLINE)
+    }
 
     #[test]
     fn versioned_paths_and_markers() {
@@ -471,16 +491,16 @@ mod tests {
             "@echo off\r\nif defined NGTERM_SESSION_ID exit /b 9\r\necho opencode v2.0.12\r\n",
         );
         env.insert("XDG_CONFIG_HOME".to_owned(), r"C:\xdg".to_owned());
-        let probe = detect(&env, r"C:\fallback").unwrap();
+        let probe = detect_fixture(&env, r"C:\fallback").unwrap();
         assert_eq!(probe.version, Some(Version::V2));
         assert_eq!(probe.v2_configuration_directory.as_deref(), Some(r"C:\xdg\opencode"));
 
         env.insert("OPENCODE_CONFIG_DIR".to_owned(), r"D:\chosen".to_owned());
-        let probe = detect(&env, r"C:\fallback").unwrap();
+        let probe = detect_fixture(&env, r"C:\fallback").unwrap();
         assert_eq!(probe.v2_configuration_directory.as_deref(), Some(r"D:\chosen"));
 
         let env = windows_environment(dir.path(), "@echo 2.0.1\r\n@exit /b 1\r\n");
-        let probe = detect(&env, r"C:\fallback").unwrap();
+        let probe = detect_fixture(&env, r"C:\fallback").unwrap();
         assert_eq!(probe.version, None, "a failing run is no version");
         let expected = dir.path().join("home").join(".config").join("opencode");
         assert_eq!(probe.v2_configuration_directory, Some(expected.display().to_string()));
@@ -510,12 +530,12 @@ mod tests {
             "#!/bin/sh\n[ -z \"$NGTERM_SESSION_ID\" ] || exit 9\nprintf 'opencode v2.0.12\\n'\n",
         );
         env.insert("XDG_CONFIG_HOME".to_owned(), "/xdg".to_owned());
-        let probe = detect(&env, "/fallback").unwrap();
+        let probe = detect_fixture(&env, "/fallback").unwrap();
         assert_eq!(probe.version, Some(Version::V2));
         assert_eq!(probe.v2_configuration_directory.as_deref(), Some("/xdg/opencode"));
 
         env.insert("OPENCODE_CONFIG_DIR".to_owned(), "/chosen".to_owned());
-        let probe = detect(&env, "/fallback").unwrap();
+        let probe = detect_fixture(&env, "/fallback").unwrap();
         assert_eq!(probe.v2_configuration_directory.as_deref(), Some("/chosen"));
     }
 
@@ -524,7 +544,7 @@ mod tests {
     fn an_unknown_or_failing_version_still_reports_the_directory() {
         let dir = tempfile::tempdir().unwrap();
         let env = fake_environment(dir.path(), "#!/bin/sh\nprintf 'unknown-version\\n'\n");
-        let probe = detect(&env, "/fallback").unwrap();
+        let probe = detect_fixture(&env, "/fallback").unwrap();
         assert_eq!(probe.version, None);
         let home = dir.path().join("home").display().to_string();
         assert_eq!(
@@ -534,7 +554,7 @@ mod tests {
 
         let env = fake_environment(dir.path(), "#!/bin/sh\nprintf '2.0.1\\n'\nexit 1\n");
         assert_eq!(
-            detect(&env, "/fallback").unwrap().version,
+            detect_fixture(&env, "/fallback").unwrap().version,
             None,
             "a failing run is no version"
         );
@@ -544,6 +564,6 @@ mod tests {
     #[test]
     fn a_shell_that_cannot_run_probes_nothing() {
         let env = HashMap::from([("SHELL".to_owned(), "/no/such/ngterm-test-shell".to_owned())]);
-        assert_eq!(detect(&env, "/fallback"), None);
+        assert_eq!(detect_fixture(&env, "/fallback"), None);
     }
 }

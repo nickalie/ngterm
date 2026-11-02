@@ -77,6 +77,7 @@ xkbcommon.workspace = true
 # the keyboard-layout lock (`input_source/`): Text Input Source Services on macOS, the keyboard layout calls on Windows;
 # the selection clipboard's private pasteboard on macOS (`terminal/selection_clipboard/macos.rs`)
 [target.'cfg(target_os = "macos")'.dependencies]
+wry = { workspace = true, optional = true }
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = ["NSSound", "NSGraphics", "NSPasteboard"] }
 objc2-foundation = { workspace = true, features = ["NSString"] }
@@ -169,6 +170,11 @@ required-features = ["html"]
 [[test]]
 name = "quit"
 path = "tests/quit.rs"
+required-features = ["html"]
+
+[[test]]
+name = "macos_webview"
+harness = false
 required-features = ["html"]
 
 [lints]

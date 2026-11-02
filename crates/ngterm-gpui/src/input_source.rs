@@ -28,8 +28,8 @@
 //! - Windows ([`windows`]): the installed layouts (`GetKeyboardLayoutList`), the stored id the KLID,
 //!   `ActivateKeyboardLayout` for the process on the UI thread.
 //!
-//! The Windows form is built and tested on the Windows runner (`cross-platform.yml`); the macOS form is not built on
-//! macOS by CI yet.
+//! The Windows form is built and tested on the Windows runner (`cross-platform.yml`); the macOS form is built and tested
+//! on the macOS runner.
 
 #[cfg(target_os = "linux")]
 pub mod linux;

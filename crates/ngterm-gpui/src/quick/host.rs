@@ -187,7 +187,7 @@ fn window_host_options(base: WindowOptions, fit: Fit, display: Option<&Target>) 
         |display| Bounds::centered_at(display.bounds.center(), extent),
     );
     WindowOptions {
-        kind: if cfg!(windows) {
+        kind: if cfg!(any(windows, target_os = "macos")) {
             WindowKind::PopUp
         } else {
             WindowKind::Normal

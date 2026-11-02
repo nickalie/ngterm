@@ -80,6 +80,29 @@ pub enum PaddingColor {
     ExtendAlways,
 }
 
+/// Which Option key acts as the terminal's Alt/Meta modifier on macOS.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, EnumString)]
+pub enum MacosOptionAsAlt {
+    #[default]
+    #[strum(serialize = "false")]
+    Off,
+    #[strum(serialize = "true")]
+    Both,
+    #[strum(serialize = "left")]
+    Left,
+    #[strum(serialize = "right")]
+    Right,
+}
+impl MacosOptionAsAlt {
+    #[must_use]
+    pub fn applies(self, right: bool) -> bool {
+        matches!(
+            (self, right),
+            (Self::Both, _) | (Self::Left, false) | (Self::Right, true)
+        )
+    }
+}
+
 /// `copy-on-select`: where a selection made with the mouse or `select_all` is copied (Ghostty 1.4's values; the old
 /// `true` and `false` are taken by its compatibility handler, [`CopyOnSelect::from_compat`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, EnumString, IntoStaticStr)]
@@ -458,6 +481,7 @@ impl Default for Link {
 /// The terminal's config, as far as ngterm draws and drives the terminal itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GhosttyConfig {
+    pub macos_option_as_alt: MacosOptionAsAlt,
     pub font: Font,
     /// `theme`, both sides.
     pub theme: Option<ThemeName>,
@@ -498,6 +522,7 @@ pub const DEFAULT_TERM: &str = "xterm-ghostty";
 impl Default for GhosttyConfig {
     fn default() -> Self {
         Self {
+            macos_option_as_alt: MacosOptionAsAlt::default(),
             font: Font::default(),
             theme: None,
             colors: Colors::default(),
@@ -661,6 +686,7 @@ impl GhosttyConfig {
             "scrollback-limit-lines" => self.scrollback.limit_lines = limit_or(value, None),
             "shell-integration-features" => self.shell_integration_features = shell_features(value),
             "term" => value.unwrap_or(DEFAULT_TERM).clone_into(&mut self.term),
+            "macos-option-as-alt" => self.macos_option_as_alt = enum_or(value, MacosOptionAsAlt::default()),
             "copy-on-select" => self.copy_on_select = enum_or(value, CopyOnSelect::default()),
             "grapheme-width-method" => self.grapheme_width_method = enum_or(value, GraphemeWidthMethod::default()),
             "image-storage-limit" => {

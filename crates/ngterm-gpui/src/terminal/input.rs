@@ -19,8 +19,7 @@
 //! through a layout's Command table, which can differ from its plain one (Dvorak - QWERTY ⌘ types QWERTY there,
 //! Lithuanian's number row digits), so without it a `cmd+` chord would fire on another key than the menu's.
 //!
-//! The macOS keyboard form, built with GPUI's native key record on macOS (none exists yet, so `current_source` gives
-//! no record off Linux), fills [`NativeKey::command`] for a press holding Command with `UCKeyTranslate` under `cmdKey`
+//! The macOS keyboard form reads `AppKit`'s current event during dispatch and fills [`NativeKey::command`] for a press holding Command with `charactersByApplyingModifiers:` under Command
 //! alone (upstream's `characters(byApplyingModifiers: modifierFlags ∩ .command)`): Shift, Option and Control stay
 //! out, as Shift would break `shift+<base>`, Option types `∂` for D and Control types control characters. Its manual
 //! check, as upstream's keymap rules list it: `cmd+d` and `cmd+1` on Dvorak - QWERTY ⌘ and on Lithuanian fire on the
@@ -59,6 +58,8 @@ pub struct NativeKey {
     /// What the key types with only Command applied, from the layout's Command table (macOS, module docs); `None`
     /// where layouts keep no such table (Linux, Windows) or Command is not held.
     pub command: Option<char>,
+    pub sides: ngterm_term::ModSides,
+    pub without_option: Option<String>,
 }
 
 /// Where a key event came from.
@@ -94,6 +95,8 @@ pub fn current_source(keystroke: &Keystroke) -> Source {
             },
             // XKB keeps no Command table (module docs)
             command: None,
+            sides: ngterm_term::ModSides::empty(),
+            without_option: None,
         }),
         Some(gpui_linux::NativeInput::Text) => Source::Text,
         _ => Source::Keystroke,
@@ -124,16 +127,89 @@ pub fn current_source(keystroke: &Keystroke) -> Source {
             },
             // `ToUnicodeEx` has no Command table (module docs)
             command: None,
+            sides: ngterm_term::ModSides::empty(),
+            without_option: None,
         }),
         _ => Source::Keystroke,
     }
 }
 
-/// The native input behind the key event being dispatched (none where GPUI keeps no record yet: macOS).
-#[cfg(not(any(target_os = "linux", windows)))]
+/// The native input behind the key event being dispatched (none where the platform keeps no record).
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 #[must_use]
 pub fn current_source(_keystroke: &Keystroke) -> Source {
     Source::Keystroke
+}
+
+/// `AppKit`'s current hardware event, including the layout's separate Command table.
+#[cfg(target_os = "macos")]
+#[must_use]
+pub fn current_source(_keystroke: &Keystroke) -> Source {
+    let (mut flags, mut plain, mut command) = (0, 0, 0);
+    let mut text = [0i8; 128];
+    let mut without_option = [0i8; 128];
+    // SAFETY: writable output buffers; called during main-thread input dispatch.
+    let code = unsafe {
+        crate::macos::ngterm_key(
+            &raw mut flags,
+            &raw mut plain,
+            &raw mut command,
+            text.as_mut_ptr(),
+            without_option.as_mut_ptr(),
+            128,
+        )
+    };
+    let Some(keycode) = u32::try_from(code).ok().and_then(|code| {
+        crate::macos::KEYCODES
+            .iter()
+            .find(|(mac, _)| *mac == code)
+            .map(|(_, xkb)| *xkb)
+    }) else {
+        return Source::Keystroke;
+    };
+    let modifiers = GpuiModifiers {
+        shift: flags & (1 << 17) != 0,
+        control: flags & (1 << 18) != 0,
+        alt: flags & (1 << 19) != 0,
+        platform: flags & (1 << 20) != 0,
+        function: flags & (1 << 23) != 0,
+    };
+    // SAFETY: the adapter always NUL-terminates the buffer.
+    let text = unsafe { std::ffi::CStr::from_ptr(text.as_ptr()) }
+        .to_string_lossy()
+        .into_owned();
+    let mut locks = Mods::empty();
+    locks.set(Mods::CAPS_LOCK, flags & (1 << 16) != 0);
+    Source::Native(NativeKey {
+        keycode,
+        modifiers,
+        consumed: GpuiModifiers {
+            alt: modifiers.alt,
+            shift: modifiers.shift,
+            ..GpuiModifiers::default()
+        },
+        unshifted: char::from_u32(plain).filter(|ch| *ch != '\0'),
+        ascii_layout: flags & 2 != 0,
+        text,
+        composing: flags & 4 != 0,
+        repeat: flags & 1 != 0,
+        locks,
+        command: modifiers.platform.then(|| char::from_u32(command)).flatten(),
+        sides: {
+            let mut sides = ngterm_term::ModSides::empty();
+            sides.set(ngterm_term::ModSides::ALT, flags & 8 != 0);
+            sides.set(ngterm_term::ModSides::SHIFT, flags & 16 != 0);
+            sides.set(ngterm_term::ModSides::CTRL, flags & 32 != 0);
+            sides.set(ngterm_term::ModSides::SUPER, flags & 64 != 0);
+            sides
+        },
+        // SAFETY: the adapter always NUL-terminates this output buffer too.
+        without_option: Some(
+            unsafe { std::ffi::CStr::from_ptr(without_option.as_ptr()) }
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    })
 }
 
 /// The scan code the current layout puts virtual key `virtual_key` on (`MapVirtualKeyW`, `MAPVK_VK_TO_VSC_EX`),
@@ -196,12 +272,15 @@ pub struct KeyStroke {
     pub unshifted: Option<char>,
     /// What the key types with only Command applied, which a chord holding Command resolves from ([`NativeKey::command`]).
     pub command: Option<char>,
+    pub sides: ngterm_term::ModSides,
+    pub without_option: Option<String>,
     /// The XKB keycode; 0 when unknown.
     pub keycode: u32,
     /// Whether the layout types ASCII letters (assumed without a native record).
     pub ascii_layout: bool,
     /// What identifies the physical key between its press and its release: the keycode, or GPUI's key name hashed.
     pub identity: u32,
+    pub option_as_alt: bool,
 }
 
 impl KeyStroke {
@@ -212,11 +291,34 @@ impl KeyStroke {
             action: self.action,
             key: self.key,
             mods: self.mods,
-            sides: ngterm_term::ModSides::empty(),
+            sides: self.sides,
+            macos_option_as_alt: self.option_as_alt,
             consumed: self.consumed,
             composing: self.composing,
             text: &self.text,
             unshifted: self.unshifted,
+        }
+    }
+
+    /// Apply terminal Option-as-Alt after the application keymap has had its own layout-aware chord.
+    #[must_use]
+    pub fn with_option_as_alt(
+        &self,
+        mode: ngterm_core::ghostty_config::MacosOptionAsAlt,
+    ) -> std::borrow::Cow<'_, Self> {
+        if cfg!(target_os = "macos")
+            && self.mods.contains(Mods::ALT)
+            && mode.applies(self.sides.contains(ngterm_term::ModSides::ALT))
+            && let Some(text) = &self.without_option
+        {
+            let mut stroke = self.clone();
+            stroke.text.clone_from(text);
+            stroke.consumed.remove(Mods::ALT);
+            stroke.composing = false;
+            stroke.option_as_alt = true;
+            std::borrow::Cow::Owned(stroke)
+        } else {
+            std::borrow::Cow::Borrowed(self)
         }
     }
 
@@ -325,6 +427,9 @@ fn from_native(keystroke: &Keystroke, native: &NativeKey) -> KeyStroke {
         text: native.text.clone(),
         unshifted: native.unshifted,
         command: native.command,
+        sides: native.sides,
+        without_option: native.without_option.clone(),
+        option_as_alt: false,
         keycode: native.keycode,
         ascii_layout: native.ascii_layout,
         identity: if native.keycode == 0 {
@@ -345,6 +450,9 @@ fn from_text(keystroke: &Keystroke) -> KeyStroke {
         text: keystroke.key_char.clone().unwrap_or_else(|| keystroke.key.clone()),
         unshifted: None,
         command: None,
+        sides: ngterm_term::ModSides::empty(),
+        without_option: None,
+        option_as_alt: false,
         keycode: 0,
         ascii_layout: true,
         identity: identity(&keystroke.key),
@@ -392,6 +500,9 @@ fn from_keystroke(keystroke: &Keystroke) -> KeyStroke {
         text,
         unshifted: base,
         command: None,
+        sides: ngterm_term::ModSides::empty(),
+        without_option: None,
+        option_as_alt: false,
         keycode: 0,
         ascii_layout: true,
         identity: identity(&keystroke.key),

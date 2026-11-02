@@ -256,7 +256,7 @@ fn the_window_host_is_undecorated_centered_and_maximized_for_the_zoom() {
         },
     };
     let options = window_options(QuickHost::Window, fit(false), Some(&monitor), false, "io.test").unwrap();
-    let kind = if cfg!(windows) {
+    let kind = if cfg!(any(windows, target_os = "macos")) {
         WindowKind::PopUp
     } else {
         WindowKind::Normal

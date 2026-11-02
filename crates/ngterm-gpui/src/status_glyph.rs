@@ -276,7 +276,7 @@ fn client_area_animation() -> bool {
     read == 0 || on != 0
 }
 
-fn set_motion(cx: &mut gpui_kit::AsyncApp, animations: bool) {
+pub(crate) fn set_motion(cx: &mut gpui_kit::AsyncApp, animations: bool) {
     cx.update(|cx| {
         if animations_enabled(cx) != animations {
             tracing::debug!(animations, "the desktop's animation switch changed");

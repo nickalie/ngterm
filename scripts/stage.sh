@@ -98,7 +98,8 @@ fi
 verify_ghostty_resources "$DEST/share" >&2
 # ngterm's own PowerShell integration (Ghostty has none) in ngterm's own resources, not Ghostty's, which an inherited
 # GHOSTTY_RESOURCES_DIR replaces: a live PowerShell pane's wrap finds it there (crates/ngterm-session/src/launch.rs)
-install -Dm644 "$NATIVE_ROOT/resources/shell-integration/pwsh/ngterm.ps1" \
+mkdir -p "$DEST/share/ngterm/shell-integration/pwsh"
+install -m644 "$NATIVE_ROOT/resources/shell-integration/pwsh/ngterm.ps1" \
   "$DEST/share/ngterm/shell-integration/pwsh/ngterm.ps1"
 # the agent integrations' payloads (upstream's agent-status package and agent skill, see resources/): the Help menu
 # installers copy them from share/ngterm

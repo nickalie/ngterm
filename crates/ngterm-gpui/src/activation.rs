@@ -9,6 +9,7 @@
 //!   stealing may refuse, so this sends it with the startup id's `_TIME`, sets `_NET_WM_USER_TIME` and ends the
 //!   startup sequence (`remove: ID=…`), on a connection of its own to the same display (GPUI patch 3 later).
 //! - Without a token or a startup id, GPUI's own `activate_window`; headless, nothing.
+//! - macOS: GPUI activates `AppKit` and brings the window forward.
 //! - Windows: GPUI's own `activate_window` (restore, `SetForegroundWindow`), which Windows lets through because the
 //!   forwarding launch allowed this process to take the foreground (`AllowSetForegroundWindow`, `instance/windows.rs`);
 //!   a launch carries no token there and its own first window needs no startup sequence ended.
@@ -27,16 +28,18 @@ use crate::instance::Activation;
 #[cfg(target_os = "linux")]
 type Failure = Box<dyn Error + Send + Sync>;
 
-/// Raises `window` for `activation`: GPUI's own request on Windows (see the module docs).
-#[cfg(windows)]
+/// Raises `window` for `activation`: GPUI's own request on macOS and Windows (see the module docs).
+#[cfg(any(windows, target_os = "macos"))]
 pub fn activate(window: &mut Window, cx: &App, activation: &Activation) {
     let _ = (cx, activation);
+    #[cfg(target_os = "macos")]
+    cx.activate(true);
     window.activate_window();
     tracing::info!("activation: window raised");
 }
 
 /// This process's own launch opened `window`, its first: nothing to end on Windows (see the module docs).
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub fn launched(window: &mut Window, cx: &App, activation: &Activation) {
     let _ = (window, cx, activation);
 }

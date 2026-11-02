@@ -14,6 +14,7 @@
 //! - **Linux** ([`dbus`]): `NetworkManager` on the system bus, else the desktop portal's network monitor on the session
 //!   bus, else the kernel's default routes over rtnetlink ([`routes`], gio's netlink monitor), else none, and the
 //!   network reads as always reachable (logged): the links then retry on their backoff alone. The resume is logind's `PrepareForSleep(false)`; without logind there is none (logged).
+//! - **macOS** ([`macos`]): every `NWPathMonitor` path update and the workspace wake notification.
 //! - **Windows** ([`windows`]): the IP helper's connectivity hint, its first report the state at start; the resume
 //!   from sleep, and the console display's wake (modern standby's), from the app's hidden window.
 //! - **Elsewhere**: no source yet; the network reads as always reachable and no resume is reported (logged).
@@ -26,6 +27,8 @@ use crate::state::{AppState, Poster, post};
 
 #[cfg(target_os = "linux")]
 pub mod dbus;
+#[cfg(target_os = "macos")]
+pub mod macos;
 #[cfg(target_os = "linux")]
 pub mod routes;
 #[cfg(windows)]
@@ -90,7 +93,12 @@ fn start_sources(report: &Report) {
     self::windows::start(report);
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(target_os = "macos")]
+fn start_sources(report: &Report) {
+    macos::start(report);
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn start_sources(_report: &Report) {
     tracing::info!(
         "remote links: no network or resume source on this platform; the network reads as always reachable and the \

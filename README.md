@@ -3,11 +3,10 @@
 <p align="center"><img src="resources/icons/ngterm-logo.png" alt="ngterm" width="240"></p>
 
 ngterm: [agterm](https://github.com/umputun/agterm) in Rust, a GPUI terminal over Ghostty's libghostty-vt, driven by
-`ngtermctl` over a control socket. macOS, Linux and Windows are equal targets. Today the app is built and tested on
-Linux and Windows ([Windows](#windows)); everything under it (libghostty-vt, `ngterm-pty`, `ngterm-term`,
-`ngterm-session`, the control server, `ngtermctl`, the app services and the other crates [CI](#ci) lists) builds and
-tests on all three, and the app's macOS form is open work ([macOS and Windows](#macos-and-windows)). Everything else
-below is the Linux build unless it names another OS.
+`ngtermctl` over a control socket. Linux, Windows and macOS have native frontends; see [Windows](#windows) and
+[macOS](docs/macos.md) for their build and test instructions. The macOS frontend requires a Metal-capable Mac;
+the Tahoe VM can test native services and nonvisual behavior but has no Metal GPU. Everything below describes the
+Linux build unless it names another OS.
 
 - The Linux build's application id is `com.nickalie.ngterm`, its state dir `$XDG_DATA_HOME/ngterm` (else
   `~/.local/share/ngterm`) with the control socket at `<state dir>/ngterm.sock`, and its config dir `~/.config/ngterm`
@@ -95,7 +94,7 @@ and how this build does it where the OS matters:
   comes back with it from close undo and Open Recent, and a parent whose shell exits restarts it while it has
   companions; New Companion and Duplicate as Companion sit on the row menu, in the File menu and in the palette, and
   flat lists label a companion `parent › child`. `session overlay open --companion` opens a page as a companion row
-  (WPE WebKit on Linux, WebView2 on Windows). `session duplicate --companion` re-runs the source pane's foreground
+  (WPE WebKit on Linux, WKWebView on macOS, WebView2 on Windows). `session duplicate --companion` re-runs the source pane's foreground
   program, read from the process table: `/proc/<pid>/exe` and `environ` on Linux, `proc_pidpath` and `KERN_PROCARGS2`
   on macOS, `QueryFullProcessImageNameW` and the process's environment block on Windows. A companion of a session
   attached from another machine is made on that machine over ssh (a Windows machine is never that far side).
@@ -109,8 +108,8 @@ and how this build does it where the OS matters:
 - New settings: `attentionIncludesActive` (the attention steps stop on active sessions too),
   `attentionNavigationAcrossWindows` (they reach the other windows, raised through GPUI's window activation),
   `ignoreReduceTransparency` (Appearance ▸ Window: the window stays translucent when the system asks for less
-  transparency, which on Windows is the transparency effects switch, `UISettings.AdvancedEffectsEnabled`; Linux has no
-  such rule, and macOS's waits on the macOS frontend), the `linkOpenMode` values `overlay95`, `overlay75` and
+  transparency: macOS reads the Reduce Transparency accessibility preference; Windows reads the transparency
+  effects switch, `UISettings.AdvancedEffectsEnabled`; Linux has no such rule), the `linkOpenMode` values `overlay95`, `overlay75` and
   `overlay50` (a link in an overlay of that size, Ctrl+Shift-click sending one to the browser instead where upstream
   has ⌘⇧-click), and the Ghostty config key `split-divider-color` for the split divider.
 - Selecting text stays off the system clipboard ([The selection clipboard](#the-selection-clipboard)).
@@ -279,14 +278,10 @@ the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`).
 
 ### macOS and Windows
 
-What builds there today is the crates the `cross-platform.yml` workflow runs ([CI](#ci)): libghostty-vt and its
-wrapper, `ngterm-pty`, `ngterm-term`, `ngterm-session`, `ngterm-proto`, `ngterm-host`, `ngterm-core`,
-`ngterm-server`, `ngterm-ctl`, `ngterm-app` and `ngterm-headless`; on Windows the app too (`ngterm-gpui`, with and
-without its HTML overlays; [Windows](#windows) has its build, install and test). The app is not built on macOS: its
-macOS forms (its single instance, quit, keyboard and the rest GPUI's macOS platform leaves to it, the HTML overlays'
-host, a bundle) are not written yet. The order is Linux's: the pinned Zig (fetched by the script when none is found),
-the script, then cargo:
-
+The `cross-platform.yml` workflow builds and tests the terminal/session libraries and services on all three OSes,
+and the native frontend with and without HTML overlays on macOS and Windows. [macOS](docs/macos.md) covers the app
+bundle and native services; [Windows](#windows) covers its installer and tests. Prepare the pinned Zig source and
+then run Cargo:
 ```sh
 scripts/build-ghostty-vt.sh    # stock bash 3.2 on macOS, Git Bash on Windows
 cargo test -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys \
@@ -654,7 +649,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   `ngterm-ctl`, `ngterm-app` and `ngterm-headless` so far), on Ubuntu, macOS and Windows runners: the libghostty-vt
   prefix with each runner's pinned Zig (cached with Zig's global cache), format,
   clippy and `cargo test` (`crates`, a matrix), then the sys crate cross-built for the Zig targets no runner runs
-  natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). The Windows leg also runs the
+  natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). The macOS leg also checks the frontend with and without WKWebView HTML overlays. The Windows leg also runs the
   vendored portable-pty's Windows patch tests and builds the app: `ngterm-gpui`'s clippy and tests without and with
   its HTML overlays (WebView2, which the runner image carries). Beside it, `windows`: the harness's Windows
   self-tests and the suite against the staged release build (`conformance/tools/run-windows.sh`, with `--must-pass

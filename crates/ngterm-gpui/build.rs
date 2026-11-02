@@ -27,6 +27,10 @@ const FONT_FILES: [&str; 5] = [
 ];
 
 fn main() -> ExitCode {
+    if let Err(error) = macos_services() {
+        println!("cargo::error={error}");
+        return ExitCode::FAILURE;
+    }
     wpe_rpath();
     match fonts() {
         Ok(fonts) => {
@@ -76,4 +80,53 @@ fn fonts() -> Result<PathBuf, String> {
             fonts.display()
         ))
     }
+}
+
+/// Compile the small `AppKit` adapter with the target SDK and architecture.
+fn macos_services() -> Result<(), String> {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return Ok(());
+    }
+    println!("cargo::rerun-if-changed=src/macos.m");
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("OUT_DIR missing")?);
+    let target = std::env::var("TARGET").map_err(|error| error.to_string())?;
+    let arch = if target.starts_with("aarch64") {
+        "arm64"
+    } else {
+        "x86_64"
+    };
+    let object = out.join("macos.o");
+    let status = std::process::Command::new("xcrun")
+        .args([
+            "clang",
+            "-fobjc-arc",
+            "-fblocks",
+            "-arch",
+            arch,
+            "-mmacosx-version-min=13.0",
+            "-c",
+            "src/macos.m",
+            "-o",
+        ])
+        .arg(&object)
+        .status()
+        .map_err(|error| error.to_string())?;
+    if !status.success() {
+        return Err("compiling macOS services failed".into());
+    }
+    let status = std::process::Command::new("ar")
+        .arg("crs")
+        .arg(out.join("libngterm_macos.a"))
+        .arg(object)
+        .status()
+        .map_err(|error| error.to_string())?;
+    if !status.success() {
+        return Err("archiving macOS services failed".into());
+    }
+    println!("cargo::rustc-link-search=native={}", out.display());
+    println!("cargo::rustc-link-lib=static=ngterm_macos");
+    for framework in ["Cocoa", "Carbon", "UserNotifications", "Network", "WebKit", "Metal"] {
+        println!("cargo::rustc-link-lib=framework={framework}");
+    }
+    Ok(())
 }

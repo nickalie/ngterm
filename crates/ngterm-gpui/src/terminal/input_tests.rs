@@ -327,7 +327,7 @@ fn config(extra: &str) -> TerminalConfig {
     loader.load_text("ghostty-defaults.conf", DEFAULTS);
     loader.load_text(
         "test.conf",
-        &format!("window-padding-x = 2\nwindow-padding-y = 2\n{extra}"),
+        &format!("font-size = 12\ncopy-on-select = primary\nwindow-padding-x = 2\nwindow-padding-y = 2\n{extra}"),
     );
     TerminalConfig::from_ghostty(&loader.finish().finalize(false, &[]).config)
 }
@@ -1604,4 +1604,72 @@ fn the_pointer_asks_for_focus_under_focus_follows_mouse(cx: &mut TestAppContext)
     f.click(1, 1, Modifiers::default());
     f.click(1, 1, Modifiers::default());
     assert_eq!(f.selection().as_deref(), Some("one;two"));
+}
+
+#[test]
+fn physical_return_and_caps_lock_keep_the_native_record() {
+    let native = NativeKey {
+        keycode: 36,
+        text: "\r".into(),
+        ascii_layout: true,
+        ..NativeKey::default()
+    };
+    let stroke = KeyStroke::new(&keystroke("enter"), &Source::Native(native), false);
+    assert_eq!(stroke.key.name(), "enter");
+    assert_eq!(stroke.text, "\r");
+    let caps = NativeKey {
+        keycode: 38,
+        text: "A".into(),
+        locks: ngterm_core::ghostty_config::binds::Mods::CAPS_LOCK,
+        unshifted: Some('a'),
+        ..NativeKey::default()
+    };
+    let stroke = KeyStroke::new(&keystroke("a"), &Source::Native(caps), false);
+    assert_eq!(stroke.text, "A");
+    assert!(
+        stroke
+            .mods
+            .contains(ngterm_core::ghostty_config::binds::Mods::CAPS_LOCK)
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn option_as_alt_selects_the_configured_side_and_unmodified_text() {
+    use ngterm_core::ghostty_config::MacosOptionAsAlt as Mode;
+    for right in [false, true] {
+        let native = NativeKey {
+            keycode: 26, // E
+            text: "´".into(),
+            without_option: Some("e".into()),
+            modifiers: Modifiers {
+                alt: true,
+                ..Modifiers::default()
+            },
+            consumed: Modifiers {
+                alt: true,
+                ..Modifiers::default()
+            },
+            composing: true,
+            sides: if right {
+                ngterm_term::ModSides::ALT
+            } else {
+                ngterm_term::ModSides::empty()
+            },
+            ..NativeKey::default()
+        };
+        let stroke = KeyStroke::new(&keystroke("alt-e"), &Source::Native(native), false);
+        for mode in [Mode::Off, Mode::Both, Mode::Left, Mode::Right] {
+            let normalized = stroke.with_option_as_alt(mode);
+            assert_eq!(normalized.option_as_alt, mode.applies(right));
+            assert_eq!(normalized.composing, !mode.applies(right));
+            assert_eq!(normalized.text, if mode.applies(right) { "e" } else { "´" });
+            assert_eq!(
+                normalized
+                    .consumed
+                    .contains(ngterm_core::ghostty_config::binds::Mods::ALT),
+                !mode.applies(right)
+            );
+        }
+    }
 }

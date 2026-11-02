@@ -43,13 +43,13 @@ fn seed_selection(value: &str, cx: &mut App) {
 }
 
 #[cfg(target_os = "macos")]
-fn selection(_: &App) -> Option<String> {
-    super::macos::read(&super::store_pasteboard())
+fn selection(cx: &App) -> Option<String> {
+    text(super::read_selection(cx))
 }
 
 #[cfg(target_os = "macos")]
-fn seed_selection(value: &str, _: &mut App) {
-    super::macos::write(&super::store_pasteboard(), value);
+fn seed_selection(value: &str, cx: &mut App) {
+    super::write_selection(&ClipboardItem::new_string(value.to_owned()), cx);
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]

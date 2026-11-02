@@ -172,6 +172,15 @@ pub fn run(launch: Launch) -> i32 {
         .with_assets(crate::titlebar::Icons);
     let main_loop = Arc::new(GpuiMainLoop::<AppState>::new(app.background_executor()));
     let posting: Arc<dyn MainLoop<AppState>> = Arc::clone(&main_loop) as _;
+    #[cfg(target_os = "macos")]
+    {
+        let poster = Arc::downgrade(&posting);
+        app.on_reopen(move |_| {
+            post(&poster, |state: &mut AppState| {
+                state.activation_requested(Activation::default());
+            });
+        });
+    }
     // SIGTERM (the console's Ctrl events and the session's end on Windows) is this process's from here: it is the
     // primary
     if let Err(error) = crate::signals::quit_on_termination(Arc::downgrade(&posting)) {
@@ -286,6 +295,8 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
 
 /// The frontend's app-wide parts: gpui-kit, the key monitor, the embedded fonts, the keyboard-layout lock.
 fn init_frontend(poster: &Poster, cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    crate::app_menu::macos::init(poster, cx);
     gpui_kit::init(cx);
     crate::keymap_dispatch::init(cx);
     crate::terminal::register_embedded_fonts(cx.text_system());
@@ -367,6 +378,8 @@ fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
         }
         shell.windows.borrow_mut().sync(state, cx)
     });
+    #[cfg(target_os = "macos")]
+    crate::app_menu::macos::sync(&state.read(cx).core);
     // the setting as the core holds it now: applied at once when it changed (the launch's load, a Settings edit)
     let locked = state.read(cx).core.settings().terminal_input_source.clone();
     crate::input_source::set_target(locked, cx);

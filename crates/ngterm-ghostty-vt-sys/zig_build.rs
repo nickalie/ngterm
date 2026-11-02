@@ -241,6 +241,8 @@ pub fn plan(inputs: &Inputs<'_>) -> Result<Build, String> {
     args.extend(
         [
             "-Demit-lib-vt=true".to_owned(),
+            // Rust links the archive directly; an XCFramework would require full Xcode.
+            "-Demit-xcframework=false".to_owned(),
             "-Doptimize=ReleaseFast".to_owned(),
             "-Dsimd=true".to_owned(),
             "-Dcpu=baseline".to_owned(),

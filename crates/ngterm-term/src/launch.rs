@@ -315,6 +315,14 @@ impl Host {
             vars.remove("TERMINFO");
             vars.set("TERM", FALLBACK_TERM.to_owned());
         }
+        #[cfg(target_os = "macos")]
+        if ["LANG", "LC_ALL", "LC_CTYPE"]
+            .iter()
+            .all(|key| env.var(key).is_none_or(|value| value.is_empty()))
+        {
+            // Finder and ssh can supply no locale; readline would interpret UTF-8 bytes as Meta editing keys.
+            vars.set("LANG", "en_US.UTF-8".to_owned());
+        }
         vars.set("COLORTERM", "truecolor".to_owned());
         if let Some(bin) = &self.bin_dir {
             let bin = bin.to_string_lossy().into_owned();

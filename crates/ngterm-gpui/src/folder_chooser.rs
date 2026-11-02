@@ -87,7 +87,7 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod platform {
     use std::path::PathBuf;
 
@@ -115,5 +115,53 @@ mod platform {
                 None
             }
         })
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod platform {
+    use super::{AnyWindowHandle, App, FolderRequest, PathBuf, Task};
+    use std::ffi::{CStr, CString, c_char, c_void};
+    type Reply = async_channel::Sender<Option<PathBuf>>;
+    unsafe extern "C" {
+        fn ngterm_choose_folder(
+            title: *const c_char,
+            accept: *const c_char,
+            directory: *const c_char,
+            context: *mut c_void,
+            reply: extern "C" fn(*mut c_void, *const c_char),
+        );
+    }
+    extern "C" fn chosen(context: *mut c_void, path: *const c_char) {
+        // SAFETY: completion is called once, consuming the sender allocated in choose.
+        let reply = unsafe { Box::from_raw(context.cast::<Reply>()) };
+        let path = if path.is_null() {
+            None
+        } else {
+            // SAFETY: the open panel's UTF-8 path lives for this callback.
+            Some(PathBuf::from(
+                unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned(),
+            ))
+        };
+        let _ = reply.try_send(path);
+    }
+    pub fn choose(_: AnyWindowHandle, request: FolderRequest, cx: &mut App) -> Task<Option<PathBuf>> {
+        let title = CString::new(request.title).unwrap_or_default();
+        let accept = CString::new(request.accept).unwrap_or_default();
+        let directory = request
+            .start
+            .and_then(|path| CString::new(path.to_string_lossy().as_bytes()).ok());
+        let (reply, result) = async_channel::bounded(1);
+        // SAFETY: main-thread adapter copies strings and transfers the sender to its asynchronous completion.
+        unsafe {
+            ngterm_choose_folder(
+                title.as_ptr(),
+                accept.as_ptr(),
+                directory.as_ref().map_or(std::ptr::null(), |path| path.as_ptr()),
+                Box::into_raw(Box::new(reply)).cast(),
+                chosen,
+            );
+        };
+        cx.spawn(async move |_| result.recv().await.ok().flatten())
     }
 }

@@ -110,6 +110,7 @@ fn a_build_installs_and_caches_under_its_own_out_dir() {
             "--cache-dir".to_owned(),
             "--global-cache-dir".to_owned(),
             "-Demit-lib-vt=true".to_owned(),
+            "-Demit-xcframework=false".to_owned(),
             "-Doptimize=ReleaseFast".to_owned(),
             "-Dsimd=true".to_owned(),
             "-Dcpu=baseline".to_owned(),

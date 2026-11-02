@@ -47,3 +47,6 @@ pub mod process_table;
 pub mod procfs;
 pub mod protocol;
 pub mod server;
+
+#[cfg(target_os = "macos")]
+pub mod limits;
