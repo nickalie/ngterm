@@ -342,7 +342,43 @@ def test_atspi_menu_uses_second_overlapping_window(monkeypatch, real_compositor,
         adapter.stop(app)
 
 
-def test_atspi_pointer_raises_saved_target_over_overlapping_window(monkeypatch, real_compositor, a11y_run):
+def _cover_with_second_window(ui, app, second_name):
+    """A second window raised and focused exactly over the first (no WM on Xvfb)."""
+    first = ui._window()
+    second_id = assert_ok(app.request('window.new', **({'name': second_name} if second_name else {})))['id']
+    def second_window():
+        atom = ui.connection.intern_atom('_NET_WM_PID')
+        for window in ui.connection.screen().root.query_tree().children:
+            prop = window.get_full_property(atom, ui.Xatom.CARDINAL)
+            if (window != first and prop is not None and prop.value[0] == app.pid
+                    and window.get_attributes().map_state == ui.X.IsViewable):
+                return window
+    second = wait_until(second_window)
+    geometry = first.get_geometry()
+    origin = ui.connection.screen().root.translate_coords(first, 0, 0)
+    second.configure(x=origin.x, y=origin.y, width=geometry.width, height=geometry.height,
+                     stack_mode=ui.X.Above)
+    second.set_input_focus(ui.X.RevertToParent, ui.X.CurrentTime)
+    ui.connection.sync()
+    assert ui.connection.get_input_focus().focus == second
+    shared = (origin.x, origin.y, geometry.width, geometry.height)
+    def frames():
+        # Both frames publish the shared bounds.
+        ui.app.clear_cache()
+        found = [ui.app.get_child_at_index(i) for i in range(ui.app.get_child_count())]
+        extents = [frame.get_extents(ui.atspi.CoordType.SCREEN) for frame in found]
+        return found if [(e.x, e.y, e.width, e.height) for e in extents].count(shared) == 2 else None
+    return first, second, second_id, shared, wait_until(frames)
+
+
+@pytest.mark.parametrize('rapid', [False, True], ids=['settled', 'rapid-focus-switch'])
+@pytest.mark.parametrize('second_name', ['Second pointer window', None], ids=['named', 'unnamed'])
+def test_atspi_pointer_raises_saved_target_over_overlapping_window(monkeypatch, real_compositor, a11y_run,
+                                                                   second_name, rapid):
+    """Unnamed windows share the session-derived title, so geometry and title cannot tell them apart.
+
+    The rapid case clicks right after an X focus switch GPUI has not processed yet, so no
+    accessibility ACTIVE state can tell the twins apart either."""
     from agterm_conformance.drivers.atspi import AtspiDriver
     monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, os.environ['CONFORMANCE_UI_PROBE_ICD'])
     adapter = RustAdapter(Path(os.environ['CONFORMANCE_UI_PROBE_BIN']))
@@ -350,34 +386,59 @@ def test_atspi_pointer_raises_saved_target_over_overlapping_window(monkeypatch, 
     try:
         ui = AtspiDriver(app.pid, instance=app)
         first_id = assert_ok(app.request('window.list'))['windows'][0]['id']
-        first = ui._window()
         saved = ui._wait(lambda: next(iter(ui._elements('sidebar-toggle-button')), None),
                          'first window sidebar toggle', None)
-        second_id = assert_ok(app.request('window.new', name='Second pointer window'))['id']
-        def second_window():
-            atom = ui.connection.intern_atom('_NET_WM_PID')
-            for window in ui.connection.screen().root.query_tree().children:
-                prop = window.get_full_property(atom, ui.Xatom.CARDINAL)
-                if (window != first and prop is not None and prop.value[0] == app.pid
-                        and window.get_attributes().map_state == ui.X.IsViewable):
-                    return window
-        second = wait_until(second_window)
+        first, second, second_id, _, _ = _cover_with_second_window(ui, app, second_name)
         def sidebars():
             return tuple(assert_ok(app.request('tree', window=wid))['tree']['sidebarVisible']
                          for wid in (first_id, second_id))
-        # Cover the first window exactly with the raised, focused second one (no WM on Xvfb).
-        geometry = first.get_geometry()
-        origin = ui.connection.screen().root.translate_coords(first, 0, 0)
-        second.configure(x=origin.x, y=origin.y, width=geometry.width, height=geometry.height,
-                         stack_mode=ui.X.Above)
-        second.set_input_focus(ui.X.RevertToParent, ui.X.CurrentTime)
-        ui.connection.sync()
-        assert ui.connection.get_input_focus().focus == second
-        wait_until(lambda: ui._window(saved) == first)
+        frame = ui._containing_frame(saved)
+        if second_name is None:
+            assert ui._window_title(second) == ui._window_title(first) == frame.get_name()
         before = sidebars()
+        if rapid:
+            first.set_input_focus(ui.X.RevertToParent, ui.X.CurrentTime)
+            second.set_input_focus(ui.X.RevertToParent, ui.X.CurrentTime)
+            first.set_input_focus(ui.X.RevertToParent, ui.X.CurrentTime)
+            ui.connection.sync()
+        else:
+            # The target's frame is the inactive one.
+            wait_until(lambda: not frame.get_state_set().contains(ui.atspi.StateType.ACTIVE))
+            assert ui.connection.get_input_focus().focus == second
         ui.mouse_click(saved)
         wait_until(lambda: sidebars()[0] is not before[0])
         assert sidebars()[1] is before[1]
         assert ui.connection.get_input_focus().focus == first
+    finally:
+        adapter.stop(app)
+
+
+@pytest.mark.parametrize('second_name', ['Second probe window', None], ids=['named', 'unnamed'])
+def test_atspi_twin_probe_moves_only_position_and_restores(monkeypatch, real_compositor, a11y_run, second_name):
+    """Each twin X window is paired with its own frame by a pure move and put back unchanged."""
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, os.environ['CONFORMANCE_UI_PROBE_ICD'])
+    adapter = RustAdapter(Path(os.environ['CONFORMANCE_UI_PROBE_BIN']))
+    app = adapter.launch(ui=a11y_run)
+    try:
+        ui = AtspiDriver(app.pid, instance=app)
+        saved = ui._wait(lambda: next(iter(ui._elements('sidebar-toggle-button')), None),
+                         'first window sidebar toggle', None)
+        first, second, _, shared, frames = _cover_with_second_window(ui, app, second_name)
+        root = ui.connection.screen().root
+        def native(window):
+            origin, geometry = root.translate_coords(window, 0, 0), window.get_geometry()
+            return origin.x, origin.y, geometry.width, geometry.height
+        assert native(first) == native(second) == shared
+        paired = [ui._probe_frame(window, frames) for window in (first, second)]
+        assert None not in paired and paired[0] != paired[1]
+        assert paired[0] == ui._containing_frame(saved)
+        assert ui._probe_next == 3, 'one fresh position per probe'
+        assert native(first) == native(second) == shared
+        assert [ui._extents(frame) for frame in frames] == [shared, shared]
+        assert ui.connection.get_input_focus().focus == second
+        assert ui._window(saved) == first
+        assert native(first) == native(second) == shared
+        assert ui.connection.get_input_focus().focus == second
     finally:
         adapter.stop(app)

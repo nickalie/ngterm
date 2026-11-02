@@ -28,6 +28,11 @@ KEY_SYMBOLS = {
 }
 SHIFTED = dict(zip('~!@#$%^&*()_+{}|:"<>?', '`1234567890-=[]\\;\',./'))
 MOD_SYMBOLS = {'shift': 0xffe1, 'ctrl': 0xffe3, 'cmd': 0xffe3, 'alt': 0xffe9}
+INT16_MAX = 0x7fff
+
+
+class ProbeRestoreFailed(DriverError):
+    """A window moved to identify its frame is not confirmed back; nothing may retry on it."""
 
 
 def key_symbol(key: str) -> int:
@@ -206,23 +211,25 @@ class AtspiDriver(Driver):
         return title if title is not None else window.get_wm_name()
 
     def _menu_button(self, window):
-        # Accessibility traversal order is independent of X focus/stacking. Match
-        # the frame before clicking, so input and deferred popup discovery agree.
+        # Accessibility traversal order is independent of X focus/stacking, and a frame's
+        # ACTIVE state and extents lag the X server. Same-titled frames are told apart only by
+        # moving the window (see _probe_frame), so input and deferred popup discovery agree.
         root = self.connection.screen().root
         origin, geometry = root.translate_coords(window, 0, 0), window.get_geometry()
         expected = (origin.x, origin.y, geometry.width, geometry.height)
-        matches = []
-        for button in self._elements('app-menu-button'):
-            frame = self._containing_frame(button)
-            bounds = self._read(lambda: frame.get_extents(self.atspi.CoordType.SCREEN))
-            if ((bounds.x, bounds.y, bounds.width, bounds.height) == expected
-                    and self._read(frame.get_state_set).contains(self.atspi.StateType.ACTIVE)):
-                matches.append((button, frame))
+        title = self._window_title(window)
+        matches = [(button, frame) for button in self._elements('app-menu-button')
+                   for frame in [self._containing_frame(button)] if self._read(frame.get_name) == title]
         if len(matches) > 1:
-            title = self._window_title(window)
-            matches = [(button, frame) for button, frame in matches
-                       if self._read(frame.get_name) == title]
+            found = self._probe_frame(window, [frame for _, frame in matches])
+            matches = [(button, frame) for button, frame in matches if found is not None and frame == found]
+        else:
+            matches = [(button, frame) for button, frame in matches if self._extents(frame) == expected]
         return matches[0] if len(matches) == 1 else None
+
+    def _extents(self, handle):
+        bounds = self._read(lambda: handle.get_extents(self.atspi.CoordType.SCREEN))
+        return bounds.x, bounds.y, bounds.width, bounds.height
 
     def _raise(self, window):
         window.configure(stack_mode=self.X.Above)
@@ -311,22 +318,20 @@ class AtspiDriver(Driver):
                 queue.extend(window.query_tree().children)
             if element is not None:
                 handle = self._containing_frame(element)
-                bounds = self._read(lambda: handle.get_extents(self.atspi.CoordType.SCREEN))
+                bounds = self._extents(handle)
                 matches = []
                 for window in windows:
                     origin = root.translate_coords(window, 0, 0)
                     geometry = window.get_geometry()
-                    if (origin.x, origin.y, geometry.width, geometry.height) == (bounds.x, bounds.y, bounds.width, bounds.height):
+                    if (origin.x, origin.y, geometry.width, geometry.height) == bounds:
                         matches.append(window)
                 if len(matches) > 1:
                     title = self._read(handle.get_name)
                     matches = [window for window in matches if self._window_title(window) == title]
-                if len(matches) > 1 and self._read(handle.get_state_set).contains(self.atspi.StateType.ACTIVE):
-                    focused = self.connection.get_input_focus().focus
-                    while hasattr(focused, 'query_tree') and focused != root:
-                        if focused in matches:
-                            return focused
-                        focused = focused.query_tree().parent
+                # Never pair the frame's ACTIVE state with an X focus read: GPUI updates ACTIVE only
+                # when it processes FocusIn/FocusOut, so neither identifies a window. Twins are probed.
+                if len(matches) > 1:
+                    return self._identify(handle, matches)
                 if len(matches) == 1:
                     return matches[0]
                 # Never silently focus another window when an element cannot be located.
@@ -341,6 +346,103 @@ class AtspiDriver(Driver):
             return windows[0] if windows else None
         return self._wait(find, 'mapped private X11 window', None)
 
+    def _identify(self, frame, windows):
+        # Overlapping windows can share bounds and title (unnamed windows of one session), and
+        # the accessibility frame carries no X11 window id. Freeze the twin frames before moving
+        # anything (a moved twin no longer matches), then probe one candidate window at a time.
+        extents, title = self._extents(frame), self._read(frame.get_name)
+        def twins():
+            self.app.clear_cache()
+            found = []
+            for i in range(self.app.get_child_count()):
+                handle = self.app.get_child_at_index(i)
+                if handle is None:
+                    raise ReadFailed('atspi application changed during window identification')
+                if (ROLE_NAMES.get(handle.get_role_name()) == 'window' and handle.get_name() == title
+                        and self._extents(handle) == extents):
+                    found.append(handle)
+            return found
+        frozen = self._read(twins)
+        if frame not in frozen:
+            frozen.append(frame)
+        for window in windows:
+            found = self._probe_frame(window, frozen)
+            if found is None:
+                return None
+            if found == frame:
+                return window
+        return None
+
+    def _probe_frame(self, window, frames):
+        """The one frame of `frames` that publishes `window`'s position, or None.
+
+        GPUI publishes each frame's extents from its own X11 window's live root origin, so a
+        position no window held before can only be reported by the moved window's frame; no
+        queued focus or geometry event of another window can produce it. Moves keep the size and
+        never touch focus. The window goes back in every case; an unconfirmed restore raises a
+        non-retryable ProbeRestoreFailed, so no wait retries or input proceeds on moved geometry.
+        """
+        root = self.connection.screen().root
+        geometry, origin = window.get_geometry(), root.translate_coords(window, 0, 0)
+        home, size = (origin.x, origin.y), (geometry.width, geometry.height)
+        # configure takes parent-relative coordinates; probe positions are root coordinates.
+        parent = (origin.x - geometry.x, origin.y - geometry.y)
+        probe = self._probe_origin(self._occupied(root), parent)
+        if probe is None:
+            return None
+        found = None
+        try:
+            window.configure(x=probe[0] - parent[0], y=probe[1] - parent[1])
+            self.connection.sync()
+            def landed():
+                return [frame for frame in frames if self._extents(frame) == (*probe, *size)]
+            here = self._wait(landed, 'accessibility frame at the probe position', None)
+            found = here[0] if len(here) == 1 else None
+        finally:
+            self._restore(window, (geometry.x, geometry.y), home, size, frames, probe, found)
+        return found
+
+    def _restore(self, window, position, home, size, frames, probe, found):
+        root = self.connection.screen().root
+        try:
+            window.configure(x=position[0], y=position[1])
+            self.connection.sync()
+            def restored():
+                origin, geometry = root.translate_coords(window, 0, 0), window.get_geometry()
+                if (origin.x, origin.y, geometry.width, geometry.height) != (*home, *size):
+                    return False
+                if found is not None:
+                    return self._extents(found) == (*home, *size)
+                return all(self._extents(frame)[:2] != probe for frame in frames)
+            self._wait(restored, 'probe window restored to its position', None)
+        except Exception as error:
+            raise ProbeRestoreFailed(f'atspi: window {window} not confirmed back at {home}: {error}') from error
+
+    def _occupied(self, root):
+        taken = set()
+        for window in root.query_tree().children:
+            origin = root.translate_coords(window, 0, 0)
+            taken.add((origin.x, origin.y))
+        def frames():
+            self.app.clear_cache()
+            return [self.app.get_child_at_index(i) for i in range(self.app.get_child_count())]
+        for frame in self._read(frames):
+            if frame is None:
+                raise ReadFailed('atspi application changed during window identification')
+            taken.add(self._extents(frame)[:2])
+        return taken
+
+    def _probe_origin(self, taken, parent):
+        # Monotonic and never reused by this driver: a late publication of an earlier probe
+        # can never satisfy a later one. Root and parent-relative coordinates stay in INT16.
+        while (step := getattr(self, '_probe_next', 1)) <= INT16_MAX:
+            self._probe_next = step + 1
+            point = (step, step)
+            relative = (point[0] - parent[0], point[1] - parent[1])
+            if point not in taken and all(-INT16_MAX - 1 <= value <= INT16_MAX for value in relative):
+                return point
+        return None
+
     def _activate(self, element=None):
         self._window(element).set_input_focus(self.X.RevertToParent, self.X.CurrentTime)
         self.connection.sync()
@@ -354,8 +456,7 @@ class AtspiDriver(Driver):
         self.move(element)
 
     def _bounds(self, element):
-        bounds = self._read(lambda: element.handle.get_extents(self.atspi.CoordType.SCREEN))
-        return bounds.x, bounds.y, bounds.width, bounds.height
+        return self._extents(element.handle)
 
     def _pointer_target(self, element):
         # XTest input hits the topmost window at the point, and another window of this app
