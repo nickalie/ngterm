@@ -647,3 +647,207 @@ fn a_window_switch_while_choosing_the_mac_keeps_the_attach_in_the_starting_windo
     let attached = attach.fixture.store().sessions().last().unwrap();
     assert_eq!(attached.remote_host(), Some("studio"));
 }
+
+// MARK: - Attach All
+
+/// One pane session named `name`, its id and daemon from `number`, with the far side's `parent` when it has one.
+fn numbered_session(name: &str, number: u128, parent: Option<u128>) -> serde_json::Value {
+    let id = Uuid::from_u128(number).to_string().to_uppercase();
+    let daemon = crate::live::daemon_name(Uuid::from_u128(0x1000 + number));
+    let mut session = json!({
+        "id": id, "name": name, "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
+        "workspaceName": "work", "cwd": "/repo", "panes": [{"pane": "left", "daemon": daemon}],
+    });
+    if let Some(parent) = parent {
+        session["parent"] = json!(Uuid::from_u128(parent).to_string().to_uppercase());
+    }
+    session
+}
+
+/// A far page companion, which has no panes.
+fn page_session(number: u128, parent: u128) -> serde_json::Value {
+    json!({
+        "id": Uuid::from_u128(number).to_string().to_uppercase(), "name": "page", "windowID": "w1",
+        "windowName": "main", "workspaceID": "ws1", "workspaceName": "work", "cwd": "/repo", "panes": [],
+        "parent": Uuid::from_u128(parent).to_string().to_uppercase(), "content": "page",
+    })
+}
+
+impl Attach {
+    /// Opens the session picker on `sessions`, answering the `call`th remote command.
+    fn open_session_picker(&mut self, call: usize, sessions: &[serde_json::Value]) -> PendingPick {
+        let window = self.fixture.window;
+        self.core().attach_remote(window);
+        self.wait_for_runs(call + 1);
+        self.runner.answer(call, listing(sessions));
+        self.drive("the session picker opens", |attach| attach.pending().is_some());
+        self.pending().unwrap()
+    }
+
+    /// Picks the picker's Attach All row, then answers the listing it asks for.
+    fn attach_all(&mut self, call: usize, picker: &PendingPick, sessions: &[serde_json::Value]) {
+        let last = picker.items.len() - 1;
+        assert_eq!(picker.items[last].label, "Attach All");
+        self.resolve(picker, picker.picked(last).unwrap());
+        self.wait_for_runs(call + 1);
+        assert_eq!(self.hud(), Some(progress("attaching all sessions…")));
+        self.runner.answer(call, listing(sessions));
+        self.drive("the attach ends", |attach| {
+            attach.hud() != Some(progress("attaching all sessions…"))
+        });
+    }
+
+    fn remote_rows(&self) -> Vec<String> {
+        self.fixture
+            .store()
+            .sessions()
+            .filter(|row| row.remote_host().is_some())
+            .map(crate::model::Session::display_name)
+            .collect()
+    }
+}
+
+#[test]
+fn a_single_session_offers_no_attach_all() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let picker = attach.open_session_picker(0, &[build_session()]);
+    assert_eq!(picker.items.len(), 1);
+    assert_eq!(picker.selection, None);
+}
+
+#[test]
+fn attach_all_ends_the_picker_so_enter_on_its_first_row_still_attaches_one() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let sessions = [numbered_session("one", 1, None), numbered_session("two", 2, None)];
+    let picker = attach.open_session_picker(0, &sessions);
+    assert_eq!(picker.items[0].label, "one");
+    assert_eq!(picker.selection, None);
+    let all = picker.items.last().unwrap();
+    assert_eq!(all.id, "attach-all");
+    assert_eq!(all.label, "Attach All");
+    assert_eq!(all.subtitle.as_deref(), Some("2 sessions not attached here"));
+}
+
+#[test]
+fn attach_all_attaches_each_session_once_with_companions_under_their_parents() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let listed = [
+        // the companion comes first, as nothing orders the far side's list
+        numbered_session("logs", 3, Some(1)),
+        numbered_session("one", 1, None),
+        numbered_session("two", 2, None),
+        page_session(4, 1),
+    ];
+    let picker = attach.open_session_picker(0, &listed);
+    assert_eq!(
+        picker.items.len(),
+        4,
+        "the page stays out of the picker: {:?}",
+        picker.items
+    );
+    attach.attach_all(1, &picker, &listed);
+    assert_eq!(attach.hud(), None, "the panel closes");
+    assert_eq!(attach.remote_rows(), ["one", "logs", "two"]);
+    let store = attach.fixture.store();
+    let row = |name: &str| store.sessions().find(|row| row.display_name() == name).unwrap();
+    assert_eq!(row("logs").parent_id(), Some(row("one").id()));
+    assert_eq!(
+        store.selected_session_id(),
+        Some(row("one").id()),
+        "the first row is selected"
+    );
+}
+
+#[test]
+fn attach_all_skips_what_is_already_attached_and_attaches_what_appeared_since_the_list() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let first = [numbered_session("one", 1, None), numbered_session("two", 2, None)];
+    let picker = attach.open_session_picker(0, &first);
+    attach.resolve(&picker, picker.picked(0).unwrap());
+    attach.wait_for_runs(2);
+    attach.runner.answer(1, listing(&first));
+    attach.drive("the first session attaches", |attach| attach.remote_rows().len() == 1);
+    // the attach selected its row, which the next flow's panel goes over
+    attach.session = attach.fixture.store().selected_session_id().unwrap();
+
+    let second = [
+        numbered_session("one", 1, None),
+        numbered_session("two", 2, None),
+        numbered_session("three", 3, None),
+    ];
+    let picker = attach.open_session_picker(2, &second);
+    assert_eq!(
+        picker.items.last().unwrap().subtitle.as_deref(),
+        Some("2 sessions not attached here")
+    );
+    let fresh = [
+        numbered_session("one", 1, None),
+        numbered_session("three", 3, None),
+        numbered_session("four", 4, None),
+    ];
+    attach.attach_all(3, &picker, &fresh);
+    assert_eq!(
+        attach.remote_rows(),
+        ["one", "three", "four"],
+        "two went since the list"
+    );
+
+    let picker = attach.open_session_picker(
+        4,
+        &[numbered_session("one", 1, None), numbered_session("five", 5, None)],
+    );
+    assert_eq!(picker.items.len(), 2, "one session left to attach offers no Attach All");
+}
+
+#[test]
+fn attach_all_with_sessions_it_cannot_address_attaches_the_rest_and_says_so_over_the_selected_row() {
+    let settings = AppSettings {
+        notifications_enabled: Some(false),
+        ..AppSettings::default()
+    };
+    let mut attach = Attach::with(Some("studio\n"), settings);
+    let broken = |name: &str, number: u128| {
+        let mut session = numbered_session(name, number, None);
+        session["panes"] = json!([]);
+        session
+    };
+    let listed = [numbered_session("one", 1, None), broken("bad", 2), broken("worse", 3)];
+    let picker = attach.open_session_picker(0, &listed);
+    attach.attach_all(1, &picker, &listed);
+    assert_eq!(attach.remote_rows(), ["one"]);
+    assert_eq!(attach.hud(), None, "the progress panel closes");
+    attach.session = attach.fixture.store().selected_session_id().unwrap();
+    let reason = "studio reported panes ngterm cannot address";
+    assert_eq!(
+        attach.hud(),
+        Some(failure(&format!(
+            "attached 1 of 3 from studio; bad: {reason}; worse: {reason}"
+        ))),
+        "the row in view says so, whatever the banners setting holds"
+    );
+}
+
+#[test]
+fn attach_all_attaching_nothing_says_why_over_the_starting_session() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let mut broken = numbered_session("broken", 2, None);
+    broken["panes"] = json!([]);
+    let picker = attach.open_session_picker(0, &[numbered_session("one", 1, None), broken.clone()]);
+    attach.attach_all(1, &picker, &[broken]);
+    assert_eq!(attach.remote_rows(), Vec::<String>::new());
+    assert_eq!(
+        attach.hud(),
+        Some(failure(
+            "attached 0 of 1 from studio; broken: studio reported panes ngterm cannot address"
+        ))
+    );
+}
+
+#[test]
+fn attach_all_finding_nothing_left_says_so() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let picker = attach.open_session_picker(0, &[numbered_session("one", 1, None), numbered_session("two", 2, None)]);
+    attach.attach_all(1, &picker, &[]);
+    assert_eq!(attach.remote_rows(), Vec::<String>::new());
+    assert_eq!(attach.hud(), Some(failure("nothing to attach on studio")));
+}

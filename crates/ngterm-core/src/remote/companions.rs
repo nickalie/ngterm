@@ -549,22 +549,7 @@ impl Core {
         remote: &ControlRemoteSession,
         tree: &ControlRemoteTree,
     ) -> Result<ControlResult, String> {
-        let library = self.library();
-        let window = library
-            .store_for_session(flow.parent)
-            .and_then(|_| library.window_holding_session(flow.parent))
-            .ok_or(PARENT_CLOSED)?;
-        let place = library
-            .store(window)
-            .and_then(|store| store.remote_companion_place(flow.parent))
-            .ok_or(PARENT_CLOSED)?;
-        let placement = Placement {
-            window,
-            workspace: place.workspace,
-            at: Some(place.index),
-            parent: Some(flow.parent),
-            select: flow.select,
-        };
+        let placement = Placement::under(self.library(), flow.parent, flow.select).ok_or(PARENT_CLOSED)?;
         let attached = self
             .attach_remote_session(remote, tree, &flow.host, placement)
             .map_err(|error| error.to_string())?;

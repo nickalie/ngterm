@@ -466,7 +466,7 @@ nohup ngterm-headless [--grid 120x40] </dev/null >/dev/null 2>&1 &   # one per s
 # ignored at its start stays ignored, so under nohup it outlives the ssh session that started it
 ngtermctl session new --name build      # sessions to attach; they outlive ngterm-headless, the next start re-attaches
 # on the desktop: the server in remotes.conf (one `destination [label]` per line), key-based ssh to it, then
-# File ▸ Attach Remote, or
+# File ▸ Attach Remote (its last row, Attach All, takes every session not attached here yet), or
 ngtermctl live tree SERVER && ngtermctl live attach SERVER SESSION-ID
 ```
 

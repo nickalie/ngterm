@@ -2169,8 +2169,10 @@ pane's ssh joins an existing `ControlMaster` connection, that master's settings 
 
 File ▸ Attach Remote… is the same flow in the GUI and has no command of its own: it offers the machines in
 `<config dir>/remotes.conf` (one `destination [label]` per line, `#` comments), asks which in the picker
-when there are several, then lists that machine's sessions and attaches the picked one. It is the
-`attach_remote` keymap action, on Cmd-Shift-R unless `keymap.conf` maps another chord. A script composes
+when there are several, then lists that machine's sessions and attaches the picked one. With two or more
+sessions not attached here yet, an Attach All row ends the list: it lists the machine again and attaches
+each of those, companions under their parents' rows and the rest in the current workspace, skipping page
+companions. It is the `attach_remote` keymap action, on Cmd-Shift-R unless `keymap.conf` maps another chord. A script composes
 `live tree`, `pick` and `live attach` instead.
 
 A program in an attached session runs on the origin and talks to the origin's ngterm, so what it asks

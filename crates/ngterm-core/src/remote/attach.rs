@@ -11,11 +11,12 @@ use std::time::Duration;
 
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{
-    Args, Command, ControlPickOutcome, ControlRemoteSession, ControlRemoteTree, ControlResult, PickItem, Request,
-    Response,
+    Args, Command, ControlLiveEndpoint, ControlPickOutcome, ControlRemoteSession, ControlRemoteTree, ControlResult,
+    PickItem, Request, Response,
 };
 use uuid::Uuid;
 
+use super::frames;
 use super::remotes::{RemoteEntry, diagnostics_banner_body};
 use super::ssh::{PaneLabel, attach_pane_command};
 use super::tree::{self, RemoteCommandResult};
@@ -26,7 +27,7 @@ use crate::dispatch::Dispatched;
 use crate::error::ControlError;
 use crate::live::lead::LeadAttachment;
 use crate::modal::{MAX_PICK_ITEMS, PendingPick};
-use crate::model::{AppStore, NewSession, RemoteBinding, RemoteOrigin, SplitAxis};
+use crate::model::{AppStore, NewSession, RemoteBinding, RemoteOrigin, SplitAxis, WindowLibrary};
 use crate::pane_env::uuid_string;
 use crate::resolve::{Resolver, trimmed};
 
@@ -36,6 +37,8 @@ const ATTACH_POLL: Duration = Duration::from_millis(50);
 pub(super) const ERROR_SECONDS: f64 = 5.0;
 /// A progress panel is timed, so a soft-closed session drops it (upstream's `remoteAttachProgressSeconds`).
 pub(super) const PROGRESS_SECONDS: f64 = 30.0;
+/// The id of the session picker's Attach All row, which a far session's upper-case UUID never equals.
+const ATTACH_ALL_ID: &str = "attach-all";
 
 /// What a finished remote read says: the far side's own refusal from stdout first, since its ngtermctl prints it there
 /// and exits nonzero; ssh's failures reach stderr. An ok-looking payload from a nonzero process is never accepted
@@ -122,6 +125,21 @@ pub(crate) struct Placement {
     pub(crate) at: Option<usize>,
     pub(crate) parent: Option<Uuid>,
     pub(crate) select: bool,
+}
+
+impl Placement {
+    /// At the end of `parent`'s group, in whichever window holds it; `None` when no row can take a companion there.
+    pub(crate) fn under(library: &WindowLibrary, parent: Uuid, select: bool) -> Option<Self> {
+        let window = library.window_holding_session(parent)?;
+        let place = library.store(window)?.remote_companion_place(parent)?;
+        Some(Self {
+            window,
+            workspace: place.workspace,
+            at: Some(place.index),
+            parent: Some(parent),
+            select,
+        })
+    }
 }
 
 impl Core {
@@ -312,6 +330,8 @@ enum Step {
     ChoosingSession { host: String, pick: String },
     /// The chosen session is being attached; its label names it in the progress panel.
     Attaching { request: AttachRequest, answer: Answer },
+    /// The machine is being listed again for Attach All, so what attaches is what it offers now.
+    AttachingAll { host: String, answer: Answer },
 }
 
 /// Where an action's HUD goes: over `session` in `window`, its message headed by `action`.
@@ -330,6 +350,26 @@ pub(crate) struct AttachFlow {
     /// The slot generation of the panel this flow opened; one another caller posted meanwhile is not its to close.
     owned_hud: Option<u64>,
     step: Step,
+}
+
+/// What an Attach All did: the rows it made, and why the others were not made.
+#[derive(Debug, Default)]
+struct AttachAllReport {
+    attached: usize,
+    failures: Vec<String>,
+}
+
+/// The sessions Attach All attaches, parents before their companions so each companion finds its parent's row: what
+/// `tree` offers that `rows` does not show yet. A page companion attaches only under a parent the picker cannot name,
+/// so it stays out, as it stays out of the picker's rows.
+fn attach_all_sessions<'a>(tree: &'a ControlRemoteTree, rows: &HashMap<String, Uuid>) -> Vec<&'a ControlRemoteSession> {
+    let mut sessions: Vec<&ControlRemoteSession> = tree
+        .sessions
+        .iter()
+        .filter(|session| session.content.is_none() && !rows.contains_key(&session.id))
+        .collect();
+    sessions.sort_by_key(|session| session.parent.is_some());
+    sessions
 }
 
 /// One remote session as a picker row: its name, then where it lives, its context, its cwd and what runs in it, and
@@ -514,6 +554,7 @@ impl Core {
                     flow.step = Step::ChoosingSession { host, pick };
                     Some(flow)
                 }
+                Picked::Chosen(session, _) if session == ATTACH_ALL_ID => self.start_attach_all(flow, host),
                 Picked::Chosen(session, label) => self.start_attach(flow, host, session, &label),
                 Picked::Ended => None,
             },
@@ -528,18 +569,29 @@ impl Core {
                 }
                 None
             }
+            Step::AttachingAll { host, answer } => {
+                let Some(result) = take_answer(&answer) else {
+                    flow.step = Step::AttachingAll { host, answer };
+                    return Some(flow);
+                };
+                self.finish_attach_all(&mut flow, &host, &result);
+                None
+            }
         }
     }
 
     /// The listing arrived: the window's picker asks which session to attach.
     fn listed(&mut self, mut flow: AttachFlow, host: &str, result: &RemoteCommandResult) -> Option<AttachFlow> {
         // a page companion attaches only under its parent's row, which the picker has no place for
-        let sessions: Vec<ControlRemoteSession> = match read_remote_tree(result, host) {
-            Ok(remote) => remote
-                .sessions
-                .into_iter()
-                .filter(|session| session.content.is_none())
-                .collect(),
+        let (endpoint, sessions) = match read_remote_tree(result, host) {
+            Ok(remote) => {
+                let sessions: Vec<ControlRemoteSession> = remote
+                    .sessions
+                    .into_iter()
+                    .filter(|session| session.content.is_none())
+                    .collect();
+                (remote.endpoint, sessions)
+            }
             Err(error) => {
                 self.attach_failed(&mut flow, &format!("{host}: {error}"));
                 return None;
@@ -559,13 +611,142 @@ impl Core {
         if !self.library().is_open(flow.window) {
             return None;
         }
-        let items = sessions.iter().map(pick_item).collect();
+        let items = self.session_items(&sessions, host, &endpoint);
         let pick = self.open_internal_pick(flow.window, items, &format!("Attach from {host}"))?;
         flow.step = Step::ChoosingSession {
             host: host.to_owned(),
             pick,
         };
         Some(flow)
+    }
+
+    /// The session picker's rows: each listed session, then an Attach All row when it would attach more than one. Last,
+    /// as the picker's selection goes to the first row on opening and on every filter edit, and Enter takes it.
+    fn session_items(
+        &self,
+        sessions: &[ControlRemoteSession],
+        host: &str,
+        endpoint: &ControlLiveEndpoint,
+    ) -> Vec<PickItem> {
+        let rows = self.rows_attached_from(host, endpoint);
+        let missing = sessions
+            .iter()
+            .filter(|session| !rows.contains_key(&session.id))
+            .count();
+        let mut items: Vec<PickItem> = sessions.iter().map(pick_item).collect();
+        if missing > 1 && sessions.len() < MAX_PICK_ITEMS {
+            items.push(PickItem {
+                id: ATTACH_ALL_ID.to_owned(),
+                label: "Attach All".to_owned(),
+                subtitle: Some(format!("{missing} sessions not attached here")),
+                ..PickItem::default()
+            });
+        }
+        items
+    }
+
+    /// The rows of every open window attached from `host`'s ngterm at `endpoint`, by the origin's session id.
+    fn rows_attached_from(&self, host: &str, endpoint: &ControlLiveEndpoint) -> HashMap<String, Uuid> {
+        let library = self.library();
+        library
+            .open_ids()
+            .into_iter()
+            .filter_map(|window| library.store(window))
+            .flat_map(AppStore::sessions)
+            .filter(|row| row.remote_host() == Some(host))
+            .filter_map(|row| {
+                let binding = &row.remote_presentation()?.binding;
+                let origin = binding.origin.as_ref()?;
+                (origin.endpoint == *endpoint).then(|| (binding.remote_session_id.clone(), row.id()))
+            })
+            .collect()
+    }
+
+    fn start_attach_all(&mut self, mut flow: AttachFlow, host: String) -> Option<AttachFlow> {
+        self.attach_progress(&mut flow, "attaching all sessions…");
+        match start_tree_read(self, &host) {
+            Ok(answer) => {
+                flow.step = Step::AttachingAll { host, answer };
+                Some(flow)
+            }
+            Err(error) => {
+                self.attach_failed(&mut flow, &error.to_string());
+                None
+            }
+        }
+    }
+
+    /// The new listing arrived: reports what Attach All left unattached. A partial failure's panel goes over the row
+    /// the attach selected, since the one the progress panel went over is out of view by then.
+    fn finish_attach_all(&mut self, flow: &mut AttachFlow, host: &str, result: &RemoteCommandResult) {
+        let report = match read_remote_tree(result, host) {
+            Ok(tree) => self.attach_all(&tree, host, flow.window),
+            Err(error) => {
+                self.attach_failed(flow, &format!("{host}: {error}"));
+                return;
+            }
+        };
+        if report.failures.is_empty() {
+            if report.attached == 0 {
+                self.attach_failed(flow, &format!("nothing to attach on {host}"));
+            } else {
+                self.attach_close_hud(flow);
+            }
+            return;
+        }
+        let total = report.attached + report.failures.len();
+        let reasons = report.failures.join("; ");
+        let text = format!("attached {} of {total} from {host}; {reasons}", report.attached);
+        if report.attached == 0 {
+            self.attach_failed(flow, &text);
+            return;
+        }
+        tracing::info!(reason = text, "attach all partly failed");
+        self.attach_close_hud(flow);
+        let selected = self
+            .library()
+            .store(flow.window)
+            .and_then(AppStore::selected_session_id);
+        self.action_failed("Attach Remote", flow.window, selected, &text);
+    }
+
+    /// Attaches every session `tree` offers that no row here shows: each companion under its parent's row wherever
+    /// that row is, the rest in `window`'s current workspace, the first of those selected.
+    fn attach_all(&mut self, tree: &ControlRemoteTree, host: &str, window: Uuid) -> AttachAllReport {
+        let mut report = AttachAllReport::default();
+        let mut rows = self.rows_attached_from(host, &tree.endpoint);
+        let mut selected = false;
+        for remote in attach_all_sessions(tree, &rows) {
+            let parent = remote.parent.as_ref().and_then(|parent| rows.get(parent).copied());
+            let under = parent.and_then(|parent| Placement::under(self.library(), parent, false));
+            let placement = under.or_else(|| self.workspace_placement(window, !selected));
+            let attached = placement
+                .ok_or(ControlError::NoOpenWindow)
+                .and_then(|placement| self.attach_remote_session(remote, tree, host, placement));
+            match attached {
+                Ok(result) => {
+                    selected |= under.is_none();
+                    report.attached += 1;
+                    if let Some(row) = result.id.as_deref().and_then(frames::parse_uuid) {
+                        rows.insert(remote.id.clone(), row);
+                    }
+                }
+                Err(error) => report.failures.push(format!("{}: {error}", remote.name)),
+            }
+        }
+        report
+    }
+
+    /// A row of its own in `window`'s current workspace; `None` once the window has none.
+    fn workspace_placement(&self, window: Uuid, select: bool) -> Option<Placement> {
+        let workspace = self.library().store(window)?.current_workspace_id()?;
+        Some(Placement {
+            window,
+            workspace,
+            at: None,
+            parent: None,
+            select,
+        })
     }
 
     fn start_attach(&mut self, mut flow: AttachFlow, host: String, session: String, label: &str) -> Option<AttachFlow> {
