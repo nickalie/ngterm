@@ -125,9 +125,11 @@ def test_menu_open_and_hover_are_not_retried_before_readback():
     button = Element('app-menu-button', 'button')
     submenu = Element(None, 'menu-item', 'View')
     final = Element(None, 'menu-item', 'Find…')
-    items, actions = {}, []
+    items, actions, menus = {}, [], []
     driver._elements = lambda key: [button]
     driver.app = object()
+    driver._containing_frame = lambda el: driver.app
+    driver._menus = lambda scope: list(menus)
     driver._scoped_menu_item = lambda scope, title: items.get(title)
     driver.mouse_click = lambda el: actions.append(('click',el))
     driver._hover = lambda el: actions.append(('hover',el))
@@ -135,10 +137,12 @@ def test_menu_open_and_hover_are_not_retried_before_readback():
     assert driver._menu_command(path) is None
     assert driver._menu_command(path) is None
     assert actions == [('click',button)]
+    menus.append(object())
     items['View'] = submenu
     assert driver._menu_command(path) is None
     assert driver._menu_command(path) is None
     assert actions == [('click',button),('hover',submenu)]
+    menus.append(object())
     items['Find…'] = final
     assert driver._menu_command(path) is final
 
@@ -172,8 +176,7 @@ def test_unicode_mapping_uses_only_empty_private_keycodes():
         driver._keycode(0x100754d)
 
 
-def test_menu_path_keeps_submenu_scope_with_duplicate_names():
-    from types import SimpleNamespace as NS
+def test_menu_path_keeps_deferred_popup_scope_with_duplicate_names():
     from agterm_conformance.drivers.atspi import AtspiDriver
     from agterm_conformance.drivers.base import Element
     class Node:
@@ -184,23 +187,33 @@ def test_menu_path_keeps_submenu_scope_with_duplicate_names():
         def get_child_count(self): return len(self.children)
         def get_child_at_index(self, i): return self.children[i]
         def clear_cache(self): pass
-    target = Node('File')
-    open_window = Node('Open Window')
-    top = Node('File', children=[Node('', 'menu', [open_window])])
+    target, open_window, top = Node('File'), Node('Open Window'), Node('File')
+    root_menu = Node('', 'menu', [top])
+    first_popup = Node('', 'menu', [open_window])
+    last_popup = Node('', 'menu', [target])
+    frame = Node('', 'frame')
+    # A popup in another window must never become the current popup.
+    foreign = Node('', 'frame', [Node('', 'menu', [Node('File')])])
     driver = object.__new__(AtspiDriver)
-    driver.app = Node('', 'application', [Node('', 'menu', [top])])
+    driver.app = Node('', 'application', [frame, foreign])
     driver._native_error = OSError
     driver._menu_path = None
     driver._elements = lambda key: [Element(key, 'button')]
-    driver.mouse_click = lambda el: None
+    driver._containing_frame = lambda el: frame
+    driver.mouse_click = lambda el: frame.children.append(root_menu)
     driver.snapshot = lambda h: Element(None, 'menu-item', h.name, handle=h)
     hovered = []
     driver._hover = lambda el: hovered.append(el.handle)
     path = ('File', 'Open Window', 'File')
     assert driver._menu_command(path) is None
     assert driver._menu_command(path) is None
+    assert hovered == [top]
+    frame.children.append(first_popup)
+    assert driver._menu_command(path) is None
+    assert driver._menu_command(path) is None
     assert hovered == [top, open_window]
-    open_window.children = [Node('', 'menu', [target])]
+    # The ancestor File item remains visible, but cannot satisfy the final segment.
+    frame.children.append(last_popup)
     assert driver._menu_command(path).handle is target
 
 

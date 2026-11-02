@@ -283,3 +283,25 @@ def test_atspi_keyboard_preserves_second_window(monkeypatch, real_compositor, a1
 
     finally:
         adapter.stop(app)
+
+
+def test_atspi_menu_finds_deferred_submenu(monkeypatch, real_compositor, a11y_run):
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    monkeypatch.setenv(base.LAVAPIPE_ICD_VARIABLE, os.environ['CONFORMANCE_UI_PROBE_ICD'])
+    adapter = RustAdapter(Path(os.environ['CONFORMANCE_UI_PROBE_BIN']))
+    app = adapter.launch(ui=a11y_run)
+    try:
+        ui = AtspiDriver(app.pid, instance=app)
+        # Custom command rows do not publish names yet (Task 6), but the nested
+        # Open Window submenu has a real label. Resolve it through File's deferred
+        # popup, proving the driver does not assume submenu ancestry.
+        item = ui._wait(lambda: ui._menu_command(('File', 'Open Window')),
+                        'File > Open Window submenu', None)
+        assert item.name == 'Open Window'
+        menu = item.handle.get_parent()
+        assert menu.get_role_name() == 'menu'
+        assert menu.get_parent().get_role_name() == 'frame'
+        assert menu == ui._menu_scope
+
+    finally:
+        adapter.stop(app)

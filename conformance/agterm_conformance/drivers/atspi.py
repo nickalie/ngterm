@@ -170,26 +170,62 @@ class AtspiDriver(Driver):
             return None
         return self._read(find)
 
+    def _menus(self, scope):
+        def collect():
+            self.app.clear_cache()
+            menus, queue = [], deque([scope])
+            while queue:
+                handle = queue.popleft()
+                if handle is None:
+                    raise ReadFailed('menu changed during traversal')
+                if handle.get_role_name() == 'menu':
+                    menus.append(handle)
+                queue.extend(handle.get_child_at_index(i) for i in range(handle.get_child_count()))
+            return menus
+        return self._read(collect)
+
+    def _containing_frame(self, element):
+        def frame():
+            handle = element.handle
+            while handle is not None and ROLE_NAMES.get(handle.get_role_name()) != 'window':
+                handle = handle.get_parent()
+            if handle is None:
+                raise ReadFailed('element has no containing accessibility window')
+            return handle
+        return self._read(frame)
+
     def _menu_command(self, path):
-        # Opening/hovering is sent once per level, never retried after input. The base wait
-        # polls the accessibility read-back while GPUI builds each popup asynchronously.
+        # GPUI defers popups: each new Menu is a sibling under the window, not
+        # necessarily a descendant of its trigger. Observe the new popup after each
+        # input exactly once, then scope name lookup to that popup's immediate items.
         if self._menu_path != path:
             buttons = self._elements('app-menu-button')
             if not buttons:
                 return None
+            self._menu_window = self._containing_frame(buttons[0])
+            self._menu_pending = self._menus(self._menu_window)
             self.mouse_click(buttons[0])
             self._menu_path, self._menu_depth = path, 0
-            self._menu_scope = self.app
-        while self._menu_depth < len(path) - 1:
-            title = path[self._menu_depth]
-            if title not in ('ngterm', 'agterm'):
-                item = self._scoped_menu_item(self._menu_scope, title)
-                if item is None:
+        while True:
+            if self._menu_pending is not None:
+                opened = [menu for menu in self._menus(self._menu_window)
+                          if menu not in self._menu_pending]
+                if len(opened) != 1:
                     return None
-                self._hover(item)
-                self._menu_scope = item.handle
+                self._menu_scope, self._menu_pending = opened[0], None
+            if self._menu_depth == len(path) - 1:
+                return self._scoped_menu_item(self._menu_scope, path[-1])
+            title = path[self._menu_depth]
+            if title in ('ngterm', 'agterm'):
+                self._menu_depth += 1
+                continue
+            item = self._scoped_menu_item(self._menu_scope, title)
+            if item is None:
+                return None
+            before = self._menus(self._menu_window)
+            self._hover(item)
+            self._menu_pending = before
             self._menu_depth += 1
-        return self._scoped_menu_item(self._menu_scope, path[-1])
 
     def _tab(self, name):
         return next((el for el in self._all_elements()
