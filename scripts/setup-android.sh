@@ -199,11 +199,13 @@ ensure_rust_targets() {
     could_not "Rust Android targets: rustup is missing"
     return 0
   fi
+  # rustup picks the toolchain from the working directory: run it in the checkout, so the targets go to the
+  # rust-toolchain.toml pin whatever directory the script is called from.
   local installed target
-  installed="$(rustup target list --installed)"
+  installed="$(cd "$NATIVE_ROOT" && rustup target list --installed)"
   for target in aarch64-linux-android x86_64-linux-android; do
     if ! grep -qx "$target" <<<"$installed"; then
-      if rustup target add "$target" >/dev/null 2>&1; then
+      if (cd "$NATIVE_ROOT" && rustup target add "$target") >/dev/null 2>&1; then
         did "rustup target add $target"
       else
         could_not "rustup target add $target"
