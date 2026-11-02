@@ -16,13 +16,13 @@
 # The `wix` tool is installed once into the vendor root (dotnet tool install, which needs a .NET SDK); NGTERM_WIX names
 # a `wix` of the pinned version to use instead (not WIX, which WiX 3 sets to its own folder).
 #
-# Usage: scripts/build-msi.sh OUTPUT.msi [--staged DIR] [--version X.Y.Z]
+# Usage: scripts/build-msi.sh OUTPUT.msi [--staged DIR] [--version X.Y.Z] [--archive OUTPUT.zip]
 set -euo pipefail
 
 # shellcheck source=lib/native.sh
 source "$(dirname "$0")/lib/native.sh"
 
-usage() { die "usage: scripts/build-msi.sh OUTPUT.msi [--staged DIR] [--version X.Y.Z]"; }
+usage() { die "usage: scripts/build-msi.sh OUTPUT.msi [--staged DIR] [--version X.Y.Z] [--archive OUTPUT.zip]"; }
 
 [[ "$(host_os)" == windows ]] || die "scripts/build-msi.sh runs on Windows (Git Bash): WiX writes MSIs through Windows Installer"
 (($# >= 1)) || usage
@@ -30,11 +30,13 @@ OUTPUT="$1"
 shift
 STAGED=""
 VERSION=""
+ARCHIVE=""
 while (($#)); do
   (($# >= 2)) || usage
   case "$1" in
     --staged) STAGED="$2" ;;
     --version) VERSION="$2" ;;
+    --archive) ARCHIVE="$2" ;;
     *) usage ;;
   esac
   shift 2
@@ -147,6 +149,25 @@ cp "$NATIVE_ROOT/NOTICE" "$ROOT/share/doc/ngterm/NOTICE.txt"
 cp "$NATIVE_ROOT/resources/LICENSE.upstream" "$ROOT/share/doc/ngterm/LICENSE.upstream.txt"
 cp "$FONTS/share/doc/fonts/"* "$ROOT/share/doc/fonts/"
 bundle_vc_runtime "$ROOT/bin"
+rm -f "$ROOT/share/ngterm/session-BUILD"
+
+# The portable ZIP includes the MSI's app-local VC++ runtime and resources,
+# plus the headless binary when it was built. Python preserves relative paths.
+if [[ -n "$ARCHIVE" ]]; then
+  [[ "$ARCHIVE" == *.zip ]] || die "the archive is a .zip: $ARCHIVE"
+  mkdir -p "$(dirname "$ARCHIVE")"
+  python - "$ROOT" "$ARCHIVE" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+root = pathlib.Path(sys.argv[1])
+with zipfile.ZipFile(sys.argv[2], "w", zipfile.ZIP_DEFLATED) as archive:
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            archive.write(path, pathlib.Path("ngterm") / path.relative_to(root))
+PY
+fi
 
 WIX_TOOL="$(wix_tool)"
 mkdir -p "$(dirname "$OUTPUT")"

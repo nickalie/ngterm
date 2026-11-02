@@ -1,0 +1,62 @@
+--- a/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
++++ b/Source/WebKit/Shared/glib/ProcessExecutablePathGLib.cpp
+@@ -30,0 +31 @@
++#include <dlfcn.h>
+@@ -46,0 +48,10 @@
++    // Resolve helpers beside the loaded release library, without developer mode.
++    Dl_info libraryInfo;
++    if (dladdr(reinterpret_cast<void*>(findWebKitProcess), &libraryInfo) && libraryInfo.dli_fname) {
++        auto libraryDirectory = FileSystem::parentPath(FileSystem::stringFromFileSystemRepresentation(libraryInfo.dli_fname));
++        auto helperDirectory = FileSystem::pathByAppendingComponent(libraryDirectory, "wpe-webkit-2.0"_s);
++        auto processPath = FileSystem::pathByAppendingComponent(helperDirectory, processName);
++        if (FileSystem::fileExists(processPath))
++            return processPath;
++    }
++
+--- a/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
++++ b/Source/WebKit/UIProcess/Launcher/glib/BubblewrapLauncher.cpp
+@@ -977,0 +978,9 @@
++    // The release library and helpers may be in /opt, a tarball or an AppImage.
++    // Expose their prefix read-only; all other WebKit sandbox rules stay enabled.
++    if (launchOptions.processType != ProcessLauncher::ProcessType::DBusProxy) {
++        auto helperDirectory = FileSystem::parentPath(FileSystem::stringFromFileSystemRepresentation(argv[0]));
++        auto libraryDirectory = FileSystem::parentPath(helperDirectory);
++        auto prefix = FileSystem::parentPath(libraryDirectory);
++        bindIfExists(sandboxArgs, prefix.utf8().data());
++    }
++
+--- a/Source/WebKit/NetworkProcess/soup/NetworkProcessMainSoup.cpp
++++ b/Source/WebKit/NetworkProcess/soup/NetworkProcessMainSoup.cpp
+@@ -33,0 +34 @@
++#include <gio/gio.h>
+@@ -39,0 +41,28 @@
++
++// Ubuntu's bundled GnuTLS has a Debian-specific default CA path. Use the
++// host distro's trust anchors when that file is absent, retaining verification.
++static void configureReleaseSystemTrust()
++{
++    if (g_file_test("/etc/ssl/certs/ca-certificates.crt", G_FILE_TEST_IS_REGULAR))
++        return;
++    const char* const candidates[] = {
++        "/etc/pki/tls/certs/ca-bundle.crt",
++        "/etc/ssl/ca-bundle.pem",
++        "/etc/ssl/cert.pem",
++        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
++        "/var/lib/ca-certificates/ca-bundle.pem",
++    };
++    for (const char* file : candidates) {
++        if (!g_file_test(file, G_FILE_TEST_IS_REGULAR))
++            continue;
++        GError* error = nullptr;
++        GTlsDatabase* database = g_tls_file_database_new(file, &error);
++        if (!database) {
++            g_clear_error(&error);
++            continue;
++        }
++        g_tls_backend_set_default_database(g_tls_backend_get_default(), database);
++        g_object_unref(database);
++        return;
++    }
++}
+@@ -47,0 +77 @@
++        configureReleaseSystemTrust();

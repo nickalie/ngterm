@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=ngterm
+Comment=Terminal with persistent sessions and agent integrations
+Exec=ngterm
+Icon=com.nickalie.ngterm
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupWMClass=com.nickalie.ngterm

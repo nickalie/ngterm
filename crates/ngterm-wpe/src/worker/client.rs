@@ -413,6 +413,9 @@ fn worker_command(image: i32) -> Command {
             command
         }
     };
+    if let Ok(executable) = std::env::current_exe() {
+        launcher::bundle_environment(&mut command, &executable);
+    }
     command.env(PULSE_PROP, web_audio_props(std::env::var_os(PULSE_PROP).as_deref()));
     command
 }

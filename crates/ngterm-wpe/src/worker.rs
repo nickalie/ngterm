@@ -14,6 +14,8 @@
 //! `WebKit`'s web process inherits: its Web Audio stream otherwise stalls on a Bluetooth A2DP sink (`client.rs` has the
 //! measurements). Only the worker carries it, so an engine in the consumer's own process ([`crate::Host::start`] with
 //! the system's package) plays without it, and nothing else the consumer starts sees it.
+//! A marked release bundle also gives only the worker its bundled GIO, `GStreamer` and injected-bundle paths;
+//! these module settings never enter the app's terminal or session-server environment.
 //!
 //! - Every program that may start an engine calls [`serve_if_asked`] first thing in its `main`: in the worker it serves
 //!   the engine and ends the process; anywhere else it returns at once.

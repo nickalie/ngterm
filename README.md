@@ -59,6 +59,55 @@ Linux build unless it names another OS.
   the build has none.
 - Behavior is checked by the black-box suite in [conformance/](conformance/README.md), held by a ratchet.
 
+## Downloads and releases
+
+[GitHub Releases](https://github.com/nickalie/ngterm/releases) receive these assets when a `vMAJOR.MINOR.PATCH`
+tag matching the workspace version in `Cargo.toml` is pushed:
+
+| Platform | Architectures | Downloads |
+|---|---|---|
+| Linux | x86_64, aarch64 | `.deb`, `.rpm`, Arch `.pkg.tar.zst`, `.AppImage`, portable `.tar.gz` |
+| Windows | x86_64 | per-user `.msi` installer, portable `.zip` |
+| macOS 14+ | Intel x86_64, Apple Silicon arm64 | `.pkg` installer, drag-to-Applications `.dmg`, `.app.zip`, binary `.tar.gz` |
+
+The archives include `ngterm`, `ngtermctl`, `ngterm-session`, `ngterm-headless`, themes, terminfo, shell and agent
+integrations, and license notices. Extract the entire archive together. Linux archives start through `ngterm/AppRun`;
+Windows binaries are under `ngterm/bin`; the macOS binary archive has `bin` and `share`. Native Linux packages install
+under `/opt/ngterm` and put all four commands on `PATH`. The macOS PKG installs `ngterm.app` into `/Applications`;
+the app's Help menu can install the CLI. Windows ZIPs include the same app-local VC++ runtime as the MSI.
+
+Linux packages target glibc 2.39+ and libstdc++ 13+ (Ubuntu 24.04 or newer and current Debian, Fedora, Arch, and
+openSUSE releases).
+WPE WebKit is built from source on Ubuntu 24.04 and bundled with its libraries and media plugins, keeping HTML
+overlays available without installing Arch's WPE package. A Vulkan-capable graphics driver, `bubblewrap`, and
+`xdg-dbus-proxy` are required on the host, along with the standard desktop libraries excluded by linuxdeploy;
+the native packages declare all of these dependencies in `packaging/linux/nfpm.yaml`. Alpine/musl and older glibc
+releases need a source build. AppImage users also need FUSE, or can use `--appimage-extract-and-run`. On hosts with
+restricted AppArmor user namespaces, native packages load a profile for their fixed install path; a portable install
+needs a profile for its extracted `usr/bin/ngterm`; see [WebKit sandbox on Ubuntu](#webkit-sandbox-on-ubuntu-apparmor).
+An AppImage on such a host must first be extracted to a permanent directory (`./ngterm-*.AppImage --appimage-extract`),
+because its ordinary mount path changes on every launch. For an extracted AppImage, install the bundled profile with:
+
+```sh
+binary="$(realpath squashfs-root/usr/bin/ngterm)"
+sed "s|@NGTERM_BIN@|$binary|" squashfs-root/usr/share/doc/ngterm/apparmor.profile.in | sudo tee /etc/apparmor.d/ngterm >/dev/null
+sudo apparmor_parser -r /etc/apparmor.d/ngterm
+./squashfs-root/AppRun
+```
+
+For a tarball, use the same commands with its extracted `ngterm` directory in place of `squashfs-root`.
+
+macOS bundles are ad-hoc signed; the PKG and DMG are not Developer ID signed or notarized. Public downloads can
+require a manual Gatekeeper approval until release signing credentials are configured. Windows installers are
+currently unsigned as well.
+
+To release, update the workspace version and lockfile, commit, then push the matching tag (for example `v0.1.0`).
+The `release` workflow builds all five platform/architecture combinations before uploading assets and `SHA256SUMS`
+to a GitHub Release. New releases stay drafts until uploads finish. It can also be run manually against an existing
+tag: leave **publish** disabled to inspect workflow artifacts, or enable it to publish/re-upload that tag's assets.
+Tag/version mismatches fail before any builds. Packaging tool versions, checksums, and the WPE source checksum live
+in `packaging/release/pins.env`; update the WPE source checksum and relocation patch when changing `WPE_VERSION`.
+
 ## Parity
 
 The build claims the behavior of the upstream release `version` reports as `conformance.parityLevel`
@@ -646,6 +695,8 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 
 ## CI
 
+- `release.yml`: tag-triggered and manual release packaging, with Linux x86_64/aarch64, Windows x86_64, and macOS
+  Intel/Apple Silicon builds; see [Downloads and releases](#downloads-and-releases).
 - `linux.yml`: `linux` (format, clippy, the lint report into the job summary, `cargo test` with node for the
   OpenCode plugin's tests, all on the workspace without the WPE crates and the app without its HTML overlays), `wpe`
   (clippy, tests and the bindings' regeneration check of the WPE crates on Arch's `wpewebkit`, then the app with its

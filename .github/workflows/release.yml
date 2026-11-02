@@ -1,0 +1,238 @@
+name: release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag (vMAJOR.MINOR.PATCH, matching Cargo.toml)"
+        required: true
+        type: string
+      publish:
+        description: "Publish to GitHub Releases (otherwise keep workflow artifacts only)"
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - name: Validate tag and workspace version
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import tomllib
+
+          tag = os.environ["RELEASE_TAG"]
+          with open("Cargo.toml", "rb") as source:
+              version = tomllib.load(source)["workspace"]["package"]["version"]
+          if not re.fullmatch(r"\d+\.\d+\.\d+", version) or tag != f"v{version}":
+              raise SystemExit(f"tag {tag!r} must match Cargo.toml: v{version} (MAJOR.MINOR.PATCH)")
+          commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          tagged = subprocess.check_output(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"], text=True).strip()
+          if tagged != commit:
+              raise SystemExit("checkout does not match the release tag")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\ntag={tag}\ncommit={commit}\n")
+          PY
+
+  linux:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    # A cold WPE source build dominates this job. Its installed prefix is cached.
+    timeout-minutes: 350
+    env:
+      NGTERM_RELEASE_WPE: /home/runner/.cache/ngterm/release-wpe
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+      - name: Build and packaging dependencies
+        run: |
+          # WPE and the Rust release build both need disk space on hosted runners.
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang-18 lld-18 cmake ninja-build pkg-config ruby perl python3 gperf \
+            curl xz-utils patch zstd file patchelf desktop-file-utils \
+            bubblewrap xdg-dbus-proxy apparmor dbus-daemon libseccomp-dev libfontconfig-dev libfreetype-dev libwayland-dev \
+            wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
+            libglib2.0-dev libharfbuzz-dev libharfbuzz-icu0 libicu-dev libjpeg-dev \
+            libepoxy-dev libgcrypt20-dev libsoup-3.0-dev libtasn1-6-dev libxml2-dev \
+            libpng-dev libsqlite3-dev libwebp-dev zlib1g-dev libavif-dev liblcms2-dev \
+            libjxl-dev libwoff-dev libxslt1-dev libinput-dev libudev-dev libdrm-dev \
+            libgbm-dev libegl-dev libgles-dev libatk1.0-dev libatk-bridge2.0-dev \
+            libhyphen-dev libenchant-2-dev flite1-dev libmanette-0.2-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-libav glib-networking libvulkan1 mesa-vulkan-drivers
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.os }}
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: release-vendor-${{ matrix.os }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - name: WPE cache identity
+        id: wpe-cache
+        run: |
+          key="$(scripts/build-release-wpe.sh --print-key)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/release-wpe
+          key: release-wpe-${{ matrix.os }}-${{ steps.wpe-cache.outputs.key }}
+      - name: Portable WPE WebKit
+        run: scripts/build-release-wpe.sh
+      - name: libghostty-vt and embedded fonts
+        run: |
+          scripts/build-ghostty-vt.sh
+          scripts/fetch-fonts.sh
+      - name: Release binaries with HTML overlays
+        env:
+          PKG_CONFIG_PATH: ${{ env.NGTERM_RELEASE_WPE }}/lib/pkgconfig
+          LD_LIBRARY_PATH: ${{ env.NGTERM_RELEASE_WPE }}/lib
+        run: |
+          cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
+          scripts/stage.sh "$RUNNER_TEMP/stage" --profile release
+          cargo test --locked --release -p ngterm-wpe --test headless --no-run --message-format=json > "$RUNNER_TEMP/wpe-test.json"
+          python3 - "$RUNNER_TEMP/wpe-test.json" >> "$GITHUB_ENV" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1]) as source:
+              artifacts = [json.loads(line) for line in source]
+          binaries = [a["executable"] for a in artifacts if a.get("reason") == "compiler-artifact"
+                      and a["target"]["name"] == "headless" and a.get("executable")]
+          if len(binaries) != 1:
+              raise SystemExit("expected one WPE headless test executable")
+          print(f"NGTERM_WPE_SMOKE_BINARY={binaries[0]}")
+          PY
+      - name: Linux archive, native packages and AppImage
+        run: scripts/package-release.sh "$RUNNER_TEMP/stage" "${{ needs.version.outputs.version }}" dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  desktop:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            platform: windows-x86_64
+          - os: macos-15-intel
+            platform: macos-x86_64
+          - os: macos-15
+            platform: macos-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.os }}
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: release-vendor-${{ matrix.os }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - name: libghostty-vt and embedded fonts
+        run: |
+          scripts/build-ghostty-vt.sh
+          scripts/fetch-fonts.sh
+      - name: Release binaries with HTML overlays
+        run: cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
+      - name: Stage and package
+        run: |
+          scripts/stage.sh "$RUNNER_TEMP/stage" --profile release
+          scripts/package-release.sh "$RUNNER_TEMP/stage" "${{ needs.version.outputs.version }}" dist
+      - name: Validate Windows install, upgrade and uninstall
+        if: runner.os == 'Windows'
+        run: |
+          IFS=. read -r major minor patch <<<"${{ needs.version.outputs.version }}"
+          scripts/build-msi.sh "$RUNNER_TEMP/upgrade.msi" --staged "$RUNNER_TEMP/stage" --version "$major.$minor.$((patch + 1))"
+      - name: Windows installer smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem dist\*.msi).FullName
+          scripts\check-msi.ps1 -Msi $msi -UpgradeMsi "$env:RUNNER_TEMP\upgrade.msi" -Log "$env:RUNNER_TEMP\msi"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [version, linux, desktop]
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          # Upload into a draft first: failed uploads never expose a partial new release.
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "ngterm $RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" --clobber -- *
+          gh release edit "$RELEASE_TAG" --draft=false
