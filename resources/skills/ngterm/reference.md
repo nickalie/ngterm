@@ -166,7 +166,7 @@ dead responsible process, and `unknown` an unavailable reading or an unrelated l
 omitted for non-Live and remote panes; the split field includes hidden splits and is omitted without a
 split; these describe attribution, not permission grants),
 `remoteHost` (the machine an attached session came from — the read side of `live attach`; omitted for a
-local session, and never present after a relaunch because a remote session is never written to disk),
+local session; after a relaunch the row comes back under a new session id once that machine answers),
 `presentation` (on an attached session only: `state` is `connecting`, `connected`, `unsupported` for an
 origin too old to stream, or `failed` with the reason in `error`, and `mode` is `presenter` when this
 row's stream holds the presenter role (see Remote sessions) or `mirror` when it does not; it says whether the stream is up,
@@ -2266,8 +2266,14 @@ bridges it to stdio as newline-delimited JSON. ngterm runs it over ssh on the or
 be typed.
 
 Closing a remote session here ends only this side's connection: the far-side processes keep running, and only End
-Session on HOST… in the row's menu ends them from this end. It is never written to disk, so it does not come back
-after a relaunch whatever the restore mode is.
+Session on HOST… in the row's menu ends them from this end. Its terminal is never written to disk, but each window's
+file lists its attached rows whatever the restore mode is, and the next launch attaches them again: it lists each
+machine once and attaches every row that machine still offers where it stood (after the same local row), a companion
+under its parent's row, the selection left alone, each under a new session id. A machine that does not answer
+(asleep, offline, ssh refused) is listed again on the reconnect schedule and its rows stay listed for the launch
+after, until it has failed for a week in a row, an hour of it in the current run. A session gone there, or one that
+cannot be attached, is dropped and named in a banner, and a row whose workspace was closed meanwhile is dropped.
+Attaching the session by hand meanwhile takes the saved row over; closing the row is what forgets it.
 
 The pane reports the far side's working directory, and the local launches that would inherit it pick
 their start directory by one rule: the reported path when it exists here as a directory, else local

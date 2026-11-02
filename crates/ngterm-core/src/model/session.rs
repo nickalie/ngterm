@@ -426,8 +426,8 @@ impl Session {
         self.content
     }
 
-    /// Whether the session may be written to disk at all: a remote one never is, nor a page, which lives only as long
-    /// as the app showing it.
+    /// Whether the session is written into the snapshot's tree: a remote one never is (the snapshot lists it apart, for
+    /// the next launch to attach again), nor a page, which lives only as long as the app showing it.
     #[must_use]
     pub fn is_persistable(&self) -> bool {
         self.remote_host.is_none() && self.content == SessionContent::Terminal

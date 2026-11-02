@@ -398,6 +398,8 @@ impl Core {
             }
             None => self.library.open_window(id, self.library.blank_store()),
         }
+        // the rows it held that were attached from other machines
+        self.reattach_saved_remotes();
     }
 
     /// Closes window `id`, its snapshot written first (upstream's window `willClose` save, then `closeWindow`); its

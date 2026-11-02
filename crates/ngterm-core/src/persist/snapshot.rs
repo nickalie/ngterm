@@ -88,6 +88,9 @@ pub struct Snapshot {
     /// The flagged view's saved order; `None` restores in tree order.
     #[serde(serialize_with = "upper::option_vec", skip_serializing_if = "Option::is_none")]
     pub flagged_order: Option<Vec<Uuid>>,
+    /// The rows attached from other machines, which the next launch attaches again; `None` is none. A Rust-only key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_sessions: Option<Vec<RemoteSessionSnapshot>>,
 }
 
 impl Default for Snapshot {
@@ -103,6 +106,7 @@ impl Default for Snapshot {
             focus_enabled: None,
             session_recency: None,
             flagged_order: None,
+            remote_sessions: None,
         }
     }
 }
@@ -133,6 +137,8 @@ struct RawSnapshot {
     session_recency: Option<Vec<Uuid>>,
     #[serde(default, deserialize_with = "lossy")]
     flagged_order: Option<Vec<Uuid>>,
+    #[serde(default, deserialize_with = "lossy_entries")]
+    remote_sessions: Option<Vec<RemoteSessionSnapshot>>,
 }
 
 impl From<RawSnapshot> for Snapshot {
@@ -153,8 +159,47 @@ impl From<RawSnapshot> for Snapshot {
             focus_enabled,
             session_recency: raw.session_recency,
             flagged_order: raw.flagged_order,
+            remote_sessions: raw.remote_sessions,
         }
     }
+}
+
+/// A list decoded entry by entry: an entry that does not decode drops alone, and a value that is not a list reads as
+/// `None`.
+fn lossy_entries<'de, D: Deserializer<'de>, T: DeserializeOwned>(deserializer: D) -> Result<Option<Vec<T>>, D::Error> {
+    let entries: Option<Vec<Box<RawValue>>> = lossy(deserializer)?;
+    Ok(entries.map(|entries| entries.iter().filter_map(|entry| decode_raw(entry)).collect()))
+}
+
+/// A row attached from another machine, written so the next launch attaches it again (an extension beyond upstream,
+/// which never writes one): the machine and its session, and where the row stood, by the local row it followed. An
+/// entry missing any of its required keys is dropped on its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSessionSnapshot {
+    /// The ssh destination it was attached from.
+    pub host: String,
+    /// The origin's session id, which `live tree` prints and `live attach` takes.
+    #[serde(rename = "sessionID")]
+    pub session_id: String,
+    /// The origin's name for the session when it was saved, which a failed reattach reports.
+    pub name: String,
+    #[serde(rename = "workspaceID", serialize_with = "upper::uuid")]
+    pub workspace_id: Uuid,
+    /// The nearest local row before it in its workspace, which a restore brings back under this id; absent when none
+    /// is.
+    #[serde(default, deserialize_with = "lossy", serialize_with = "upper::option")]
+    #[serde(rename = "afterSessionID", skip_serializing_if = "Option::is_none")]
+    pub after_session_id: Option<Uuid>,
+    /// Its order among the remote rows after that local row, from zero.
+    pub order: usize,
+    /// For a companion, the origin's id of its parent, whose row it attaches under; absent for a top-level row.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "parentSessionID")]
+    pub parent_session_id: Option<String>,
+    /// When its machine first failed to answer in a row of failures, as epoch seconds; absent while it has not.
+    #[serde(default, deserialize_with = "lossy", skip_serializing_if = "Option::is_none")]
+    pub waiting_since: Option<f64>,
 }
 
 /// One persisted workspace.
@@ -443,6 +488,58 @@ mod tests {
         for bad in [r#""focusedWorkspaceIDs": ["x"],"#, r#""focusedWorkspaceIDs": 42,"#] {
             assert_eq!(decode(&with_snapshot_key(bad)).focused_workspace_ids, None, "{bad}");
         }
+    }
+
+    #[test]
+    fn a_saved_remote_row_that_does_not_decode_drops_alone() {
+        let good = format!(
+            r#"{{ "host": "studio", "sessionID": "B1", "name": "build", "workspaceID": "{WS}", "order": 2,
+                "afterSessionID": "{SESSION}", "parentSessionID": 7, "waitingSince": "soon" }}"#
+        );
+        let missing_host = format!(r#"{{ "sessionID": "B2", "name": "x", "workspaceID": "{WS}", "order": 0 }}"#);
+        let negative =
+            format!(r#"{{ "host": "h", "sessionID": "B3", "name": "x", "workspaceID": "{WS}", "order": -1 }}"#);
+        let text = with_snapshot_key(&format!(
+            r#""remoteSessions": [ {good}, {missing_host}, {negative}, 42 ],"#
+        ));
+        let rows = decode(&text).remote_sessions.unwrap();
+        assert_eq!(
+            rows,
+            [RemoteSessionSnapshot {
+                host: "studio".to_owned(),
+                session_id: "B1".to_owned(),
+                name: "build".to_owned(),
+                workspace_id: ws(),
+                after_session_id: Some(session()),
+                order: 2,
+                parent_session_id: None,
+                waiting_since: None,
+            }]
+        );
+        assert_eq!(
+            decode(&with_snapshot_key(r#""remoteSessions": "none","#)).remote_sessions,
+            None
+        );
+        assert_eq!(decode(&with_snapshot_key("")).remote_sessions, None);
+
+        let written = serde_json::to_value(Snapshot {
+            remote_sessions: Some(rows),
+            ..Snapshot::default()
+        })
+        .unwrap();
+        assert_eq!(
+            written["remoteSessions"],
+            serde_json::json!([{
+                "host": "studio", "sessionID": "B1", "name": "build", "workspaceID": WS, "afterSessionID": SESSION,
+                "order": 2,
+            }])
+        );
+        assert!(
+            serde_json::to_value(Snapshot::default())
+                .unwrap()
+                .get("remoteSessions")
+                .is_none()
+        );
     }
 
     #[test]

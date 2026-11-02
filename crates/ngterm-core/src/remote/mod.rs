@@ -7,7 +7,7 @@
 //! - [`remotes`]: `remotes.conf`, the hosts offered for an attach;
 //! - the viewer side: `live.attach` and File ▸ Attach Remote ([`attach`]), the ssh lines it runs ([`ssh`]), each
 //!   attached row's presentation client ([`client`]) and what its frames put on the row ([`viewer`], [`layout`]), and
-//!   the panes whose ssh lost the connection ([`reconnect`]);
+//!   the panes whose ssh lost the connection ([`reconnect`]), and the rows a launch attaches again ([`relaunch`]);
 //! - the presenter's work (upstream's `AppStore+RemoteAsk.swift`, `AppStore+RemoteOverlay.swift` and the server's
 //!   `presentAskRemotely`/`takeBackRemoteAsk`/`receivePresenterFrame`): an ask, a program overlay or a page
 //!   (`page`, upstream's `AppStore+RemotePage.swift`) opened on a session whose panes follow a remote lead goes to its
@@ -38,6 +38,7 @@ pub mod page_channel;
 pub mod page_serve;
 pub mod page_tunnel;
 pub mod reconnect;
+pub(crate) mod relaunch;
 pub mod remotes;
 pub mod replica_page;
 pub mod respawn;

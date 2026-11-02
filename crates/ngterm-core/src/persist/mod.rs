@@ -25,7 +25,9 @@ pub use recent_closed::{
     RecentClosedState, RecentClosedStore, RecentClosedWorkspace,
 };
 pub use settings::{AppSettings, RestoreMode, SettingsStore};
-pub use snapshot::{PersistenceStore, SessionSnapshot, Snapshot, WindowEntry, WindowsIndex, WorkspaceSnapshot};
+pub use snapshot::{
+    PersistenceStore, RemoteSessionSnapshot, SessionSnapshot, Snapshot, WindowEntry, WindowsIndex, WorkspaceSnapshot,
+};
 
 /// Decodes an optional field LOSSILY, as upstream's `(try? c.decodeIfPresent(...)) ?? nil`: a present value that does
 /// not decode as `T` (a wrong type, a malformed id, an unknown enum name) reads as `None` instead of failing the

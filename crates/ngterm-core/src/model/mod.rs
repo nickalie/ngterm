@@ -29,6 +29,7 @@ mod remote_companions;
 mod remote_overlay;
 mod remote_presentation;
 mod restore;
+mod saved_remote_rows;
 mod search;
 mod session;
 mod session_moves;

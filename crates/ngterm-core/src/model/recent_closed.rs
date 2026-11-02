@@ -130,7 +130,7 @@ impl AppStore {
     // MARK: - Recording
 
     /// Records a closed session as entry `id`, with the `companions` that closed with it (the persistable ones); a
-    /// remote one is never written to disk, so it records nothing.
+    /// remote one is never written into the tree, so it records nothing.
     pub(crate) fn record_recent_closed_session(
         &mut self,
         session: &Session,

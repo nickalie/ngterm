@@ -20,7 +20,8 @@ use super::workspace::{SidebarMode, Workspace};
 use crate::persist::{SessionSnapshot, Snapshot, WorkspaceSnapshot};
 
 impl AppStore {
-    /// The window's tree as persisted: remote sessions are left out, the focus set in tree order (both focus keys
+    /// The window's tree as persisted: remote sessions are left out of the tree and listed apart for the next launch
+    /// to attach again ([`super::saved_remote_rows`]), the focus set in tree order (both focus keys
     /// omitted while nothing is marked), the recency list and the flagged order (omitted while nothing is flagged)
     /// without the sessions left out.
     #[must_use]
@@ -58,12 +59,13 @@ impl AppStore {
             focus_enabled: self.focus.enabled.then_some(true),
             session_recency: Some(recency),
             flagged_order: (!flagged_order.is_empty()).then_some(flagged_order),
+            remote_sessions: self.remote_sessions_snapshot(),
             ..Snapshot::default()
         }
     }
 
-    /// The selection to write. A remote session is not in the snapshot, so naming it would restore an empty window
-    /// beside local rows: fall back to the most recent persisted session, then the first.
+    /// The selection to write. A remote session is not in the snapshot's tree, so naming it would restore an empty
+    /// window beside local rows: fall back to the most recent persisted session, then the first.
     fn persisted_selection(&self, persistable: &HashSet<Uuid>, recency: &[Uuid]) -> Option<Uuid> {
         let selected = self.selected_session_id?;
         if persistable.contains(&selected) {
@@ -94,6 +96,7 @@ impl AppStore {
             session.teardown_surfaces();
         }
         self.workspaces = restored_workspaces(snapshot, launch_restore);
+        self.restore_saved_remote_rows(snapshot.remote_sessions.as_deref());
         self.sidebar.width = clamp_sidebar_width(snapshot.sidebar_width.unwrap_or(SIDEBAR_WIDTH_DEFAULT));
         self.sidebar.visible = snapshot.sidebar_visible.unwrap_or(true);
         self.sidebar.mode = snapshot.sidebar_mode.unwrap_or(SidebarMode::Tree);

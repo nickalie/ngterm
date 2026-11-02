@@ -40,6 +40,10 @@ Linux build unless it names another OS.
 - Another extension beyond upstream: a viewer makes and ends another machine's sessions, where upstream's only attaches
   and detaches. Attach Remote's picker ends with New Session, also offered when the machine has nothing to attach, and
   an attached row's menu has New Session on HOST and End Session on HOST… (`crates/ngterm-core/src/remote/origin_sessions.rs`).
+- Another extension beyond upstream: attached rows come back after a relaunch. Each window's file lists them, and the
+  next launch lists each machine once and attaches every row it still offers where it stood; a machine that does not
+  answer is listed again on the reconnect schedule for up to a week, and a session gone there is named in a banner
+  (`crates/ngterm-core/src/remote/relaunch.rs`).
 - No bundled theme of its own: upstream ships its `agterm` theme and starts a fresh install on it; this build ships
   Ghostty's theme catalog only, so a fresh install starts on Ghostty's built-in colors (the "default ghostty" row),
   and a settings file that still names `agterm` (a build from before the rename seeded it) loads on them too.

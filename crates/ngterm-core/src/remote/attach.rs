@@ -1,6 +1,7 @@
 //! `live.attach` and File ▸ Attach Remote (upstream's `attachRemoteSession` in `ControlServer+Zmx.swift` and
 //! `AppActions+RemoteAttach.swift`): a local session attached to one of another machine's live sessions, each pane an
-//! ssh into the origin's live session, marked remote, never persisted.
+//! ssh into the origin's live session, marked remote. It stays out of the snapshot's tree; the snapshot lists it apart,
+//! so the next launch attaches it again ([`super::relaunch`]).
 //!
 //! The remote is resolved again before anything is created, so a session gone since the list was taken fails rather
 //! than handing back a fresh shell wearing its name; everything that can fail is checked before the model is touched.
@@ -266,6 +267,8 @@ impl Core {
         }
         // the row's created event fired before the binding existed
         self.start_remote_presentation(created);
+        // a session attached by any path takes over the row a relaunch saved for it, so closing it forgets it
+        self.forget_saved_remote_session(host, &remote.id);
         if placement.select {
             self.request_pane_focus(created);
         }
@@ -666,7 +669,7 @@ impl Core {
     }
 
     /// The rows of every open window attached from `host`'s ngterm at `endpoint`, by the origin's session id.
-    fn rows_attached_from(&self, host: &str, endpoint: &ControlLiveEndpoint) -> HashMap<String, Uuid> {
+    pub(super) fn rows_attached_from(&self, host: &str, endpoint: &ControlLiveEndpoint) -> HashMap<String, Uuid> {
         let library = self.library();
         library
             .open_ids()

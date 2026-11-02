@@ -272,7 +272,7 @@ entries in `surfaces` report their own Boolean, while scratch and overlays omit 
 `liveAttribution` and `splitLiveAttribution` (local Live pane attribution, including hidden splits;
 [values and omission rules](reference.md#tree)),
 `remoteHost` (the machine an attached session came from, the read side of `live attach`; omitted for a local
-session, and never present after a relaunch because a remote session is not persisted),
+session; after a relaunch the row comes back under a new id once that machine answers),
 `presentation` (attached session only: the mirroring stream's `state` - `connecting`, `connected`,
 `unsupported`, or `failed` with `error` - not the ssh connection's - plus `mode`, `presenter` while its stream holds that role, else `mirror`),
 `presenters` (origin session: `mirrors`, the streams mirroring it without presenting, and `presenter: true`
@@ -742,8 +742,9 @@ HOST SESSION [--window W]` - open one of them here, marked remote and carrying i
 chosen open local window's current workspace (default: frontmost after discovery). A background target
 keeps the frontmost window unchanged; an invalid or closed target fails. Takes the ID from that
 listing, not the name, and resolves the remote again first, so a session that has gone fails instead of
-handing back a fresh shell wearing its name. Closing it here ends only this side's connection and it is
-never restored after a relaunch. The attached row mirrors the origin session's status, context, `notify`
+handing back a fresh shell wearing its name. Closing it here ends only this side's connection and forgets the
+row; a row still open at quit is attached again on the next launch, where it stood, once that machine answers.
+The attached row mirrors the origin session's status, context, `notify`
 notifications, HUD and the layout of attached panes over a stream that reconnects by itself
 ([details](reference.md#restore)); read
 `presentation.state` in `tree`, and expect mirrored status, context and HUD to clear while it is down. One

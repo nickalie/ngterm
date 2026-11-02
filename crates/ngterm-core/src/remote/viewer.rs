@@ -104,6 +104,8 @@ pub(crate) struct ViewerRuntime {
     pub(crate) end_flows: Vec<super::origin_sessions::EndRun>,
     /// Page companions whose page ended on their origin, waiting for its outcome before their rows close.
     pub(crate) page_endings: Vec<super::companions::PageEnding>,
+    /// The machines whose saved rows wait to attach again after a launch ([`super::relaunch`]).
+    pub(crate) relaunch_reads: Vec<super::relaunch::RelaunchRead>,
     /// The id of the last client made, so a row's recreated client never reuses an earlier one's link keys.
     last_client: u64,
 }
@@ -199,6 +201,7 @@ impl Core {
         self.tick_respawn_watches();
         self.tick_reconnects(now);
         self.advance_attach_flows();
+        self.tick_relaunch(now);
         self.advance_companion_flows(now);
         self.advance_end_flows();
         self.settle_page_endings();
@@ -214,16 +217,20 @@ impl Core {
             || !viewer.end_flows.is_empty()
             || !viewer.page_endings.is_empty()
             || self.remote.respawns.waiting()
+            || self.relaunch_pending() == Some(true)
         {
             return Some(POLL);
         }
         // respawn entries keep it alive so the last row's own prune still runs after that row is gone
-        (!viewer.clients.is_empty() || !viewer.reconnects.is_empty() || !viewer.respawns.is_empty()).then_some(TICK)
+        let waiting = self.relaunch_pending().is_some();
+        (waiting || !viewer.clients.is_empty() || !viewer.reconnects.is_empty() || !viewer.respawns.is_empty())
+            .then_some(TICK)
     }
 
     /// Every waiting pane and dropped stream retries now, not on its backoff (upstream's `retryRemoteLinksNow`).
     pub fn retry_remote_links_now(&mut self, now: Instant) {
         self.remote.viewer.reconnects.retry_all_now(now);
+        self.retry_relaunch_now(now);
         for client in self.remote.viewer.clients.values_mut() {
             client.retry_now(now);
         }

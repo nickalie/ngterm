@@ -1272,3 +1272,490 @@ fn a_row_soft_closed_while_its_end_runs_cannot_be_undone_once_the_session_ended(
     assert!(!store.undo_pending_close(None), "nothing is left to undo");
     assert!(store.session(row).is_none());
 }
+
+// MARK: - attached again after a relaunch
+
+impl Attach {
+    /// Every row's name in the window's tree order.
+    fn row_names(&self) -> Vec<String> {
+        self.fixture
+            .store()
+            .sessions()
+            .map(crate::model::Session::display_name)
+            .collect()
+    }
+
+    /// Ends this run as a quit does, with its window written: a new run with the window restored from what it wrote.
+    fn relaunch(&mut self) -> Self {
+        let snapshot = self.fixture.store().snapshot();
+        let mut next = Self::new(Some("studio\n"));
+        next.fixture.store_mut().unwrap().restore(&snapshot, true);
+        next
+    }
+}
+
+/// A window with a local row, three rows attached from studio (`logs` a companion of `one`) and a local row after them.
+fn attached_between_local_rows() -> Attach {
+    let mut attach = Attach::new(Some("studio\n"));
+    let listed = [
+        numbered_session("one", 1, None),
+        numbered_session("logs", 3, Some(1)),
+        numbered_session("two", 2, None),
+    ];
+    let picker = attach.open_session_picker(0, &listed);
+    attach.attach_all(1, &picker, &listed);
+    let workspace = attach.fixture.workspace;
+    attach.fixture.add_session(workspace);
+    attach
+}
+
+/// A saved row as a test reads it: host, name, the local row it follows, its order there and its parent.
+type SavedPlaceRow<'a> = (&'a str, &'a str, Option<Uuid>, usize, Option<String>);
+
+#[test]
+fn a_snapshot_lists_the_attached_rows_where_they_stand_and_restores_none_of_them() {
+    let attach = attached_between_local_rows();
+    let snapshot = attach.fixture.store().snapshot();
+    let saved = snapshot.remote_sessions.clone().unwrap();
+    let id = |number: u128| Uuid::from_u128(number).to_string().to_uppercase();
+    let first = attach.fixture.sessions[0];
+    let listed: Vec<SavedPlaceRow<'_>> = saved
+        .iter()
+        .map(|row| {
+            (
+                row.host.as_str(),
+                row.name.as_str(),
+                row.after_session_id,
+                row.order,
+                row.parent_session_id.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("studio", "one", Some(first), 0, None),
+            ("studio", "logs", Some(first), 1, Some(id(1))),
+            ("studio", "two", Some(first), 2, None)
+        ]
+    );
+    assert_eq!(saved[0].session_id, id(1));
+    assert!(saved.iter().all(|row| row.workspace_id == attach.fixture.workspace));
+    let local: usize = snapshot
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.sessions.len())
+        .sum();
+    assert_eq!(local, 2, "the tree itself holds the local rows only");
+
+    let mut restored = crate::model::AppStore::new();
+    restored.restore(&snapshot, true);
+    assert_eq!(restored.sessions().count(), 2);
+    assert_eq!(restored.saved_remote_rows(), saved.as_slice());
+    assert_eq!(
+        restored.snapshot().remote_sessions,
+        Some(saved),
+        "written again while they wait"
+    );
+}
+
+#[test]
+fn a_relaunch_lists_the_machine_once_and_attaches_each_row_where_it_stood() {
+    let mut first = attached_between_local_rows();
+    let before = first.row_names();
+    let mut attach = first.relaunch();
+    assert_eq!(attach.remote_rows(), Vec::<String>::new());
+    let selected = attach.fixture.selected();
+
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    attach.runner.answer(
+        0,
+        listing(&[
+            numbered_session("two", 2, None),
+            numbered_session("logs", 3, Some(1)),
+            numbered_session("one", 1, None),
+            numbered_session("other", 4, None),
+        ]),
+    );
+    attach.drive("the rows attach", |attach| attach.remote_rows().len() == 3);
+    assert_eq!(
+        attach.row_names(),
+        before,
+        "every row where it stood, nothing else attached"
+    );
+    assert_eq!(attach.runner.hosts(), ["studio"], "one listing for the machine");
+    let store = attach.fixture.store();
+    let row = |name: &str| store.sessions().find(|row| row.display_name() == name).unwrap();
+    assert_eq!(row("logs").parent_id(), Some(row("one").id()));
+    assert_eq!(attach.fixture.selected(), selected, "the selection stays put");
+    assert!(store.saved_remote_rows().is_empty());
+    assert_eq!(store.snapshot().remote_sessions.map(|rows| rows.len()), Some(3));
+    assert!(attach.banners().is_empty());
+}
+
+#[test]
+fn a_session_gone_from_its_machine_is_dropped_and_named_in_a_banner() {
+    let mut attach = attached_between_local_rows().relaunch();
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    attach.runner.answer(0, listing(&[numbered_session("one", 1, None)]));
+    attach.drive("the saved rows settle", |attach| {
+        attach.fixture.store().saved_remote_rows().is_empty()
+    });
+    assert_eq!(attach.remote_rows(), ["one"]);
+    assert_eq!(
+        attach.banners(),
+        ["remote-relaunch-gone-studio|Attach Remote|2 sessions from studio not attached again (gone there): two, logs"]
+    );
+    assert_eq!(
+        attach.fixture.store().snapshot().remote_sessions.map(|rows| rows.len()),
+        Some(1)
+    );
+}
+
+#[test]
+fn a_machine_that_cannot_be_listed_keeps_its_rows_saved_and_is_listed_again() {
+    let mut attach = attached_between_local_rows().relaunch();
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    attach.runner.answer(
+        0,
+        refused("ssh: connect to host studio port 22: Network is unreachable"),
+    );
+    attach.idle();
+    assert_eq!(attach.remote_rows(), Vec::<String>::new());
+    assert_eq!(attach.fixture.store().saved_remote_rows().len(), 3);
+    assert_eq!(
+        attach.fixture.store().snapshot().remote_sessions.map(|rows| rows.len()),
+        Some(3),
+        "a quit now keeps them for the next launch"
+    );
+    assert!(attach.core().remote_wake().is_some(), "the retry is ticked");
+    assert!(attach.banners().is_empty());
+
+    attach.core().retry_remote_links_now(Instant::now());
+    attach.wait_for_runs(2);
+    attach.runner.answer(
+        1,
+        listing(&[
+            numbered_session("one", 1, None),
+            numbered_session("logs", 3, Some(1)),
+            numbered_session("two", 2, None),
+        ]),
+    );
+    attach.drive("the rows attach", |attach| attach.remote_rows().len() == 3);
+    assert!(attach.fixture.store().saved_remote_rows().is_empty());
+}
+
+#[test]
+fn a_saved_row_already_attached_by_hand_is_not_attached_twice() {
+    let mut attach = attached_between_local_rows().relaunch();
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    let listed = [
+        numbered_session("one", 1, None),
+        numbered_session("logs", 3, Some(1)),
+        numbered_session("two", 2, None),
+    ];
+    // the user attaches one through File > Attach Remote while the launch's listing is still out
+    let picker = attach.open_session_picker(1, &listed);
+    let two = picker.items.iter().position(|item| item.label == "two").unwrap();
+    attach.resolve(&picker, picker.picked(two).unwrap());
+    attach.wait_for_runs(3);
+    attach.runner.answer(2, listing(&listed));
+    attach.drive("two attaches", |attach| attach.remote_rows().len() == 1);
+
+    attach.runner.answer(0, listing(&listed));
+    attach.drive("the saved rows settle", |attach| {
+        attach.fixture.store().saved_remote_rows().is_empty()
+    });
+    let mut names = attach.remote_rows();
+    names.sort();
+    assert_eq!(names, ["logs", "one", "two"], "each session once");
+}
+
+/// A saved top-level row of `host`'s session `number`, named `name`, after local row `after`.
+fn saved_row(
+    host: &str,
+    name: &str,
+    number: u128,
+    workspace: Uuid,
+    after: Option<Uuid>,
+    order: usize,
+) -> crate::persist::RemoteSessionSnapshot {
+    crate::persist::RemoteSessionSnapshot {
+        host: host.to_owned(),
+        session_id: Uuid::from_u128(number).to_string().to_uppercase(),
+        name: name.to_owned(),
+        workspace_id: workspace,
+        after_session_id: after,
+        order,
+        parent_session_id: None,
+        waiting_since: None,
+    }
+}
+
+impl Attach {
+    /// Local rows `L1` and `L2` after the starting one, `L0`, and `rows` saved as a restore would leave them.
+    fn with_saved(rows: impl FnOnce(Uuid, &[Uuid]) -> Vec<crate::persist::RemoteSessionSnapshot>) -> Self {
+        let mut attach = Self::new(Some("studio\nother\n"));
+        let workspace = attach.fixture.workspace;
+        attach.fixture.add_session(workspace);
+        attach.fixture.add_session(workspace);
+        let locals = attach.fixture.order(workspace);
+        let saved = rows(workspace, &locals);
+        attach
+            .fixture
+            .store_mut()
+            .unwrap()
+            .restore_saved_remote_rows(Some(&saved));
+        attach
+    }
+
+    /// The window's rows, a local one as its index among the starting locals (`L0`…), a remote one by name.
+    fn layout(&self, locals: &[Uuid]) -> Vec<String> {
+        self.fixture
+            .store()
+            .sessions()
+            .map(|row| match locals.iter().position(|local| *local == row.id()) {
+                Some(index) => format!("L{index}"),
+                None => row.display_name(),
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn a_row_goes_back_after_its_local_row_even_when_a_row_before_it_is_gone() {
+    let mut attach = Attach::with_saved(|workspace, locals| {
+        vec![
+            saved_row("studio", "a", 1, workspace, Some(locals[0]), 0),
+            saved_row("studio", "b", 2, workspace, Some(locals[1]), 0),
+        ]
+    });
+    let locals = attach.fixture.order(attach.fixture.workspace);
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    attach.runner.answer(0, listing(&[numbered_session("b", 2, None)]));
+    attach.drive("the saved rows settle", |attach| {
+        attach.fixture.store().saved_remote_rows().is_empty()
+    });
+    assert_eq!(attach.layout(&locals), ["L0", "L1", "b", "L2"]);
+}
+
+#[test]
+fn rows_of_a_machine_that_answers_only_on_a_later_launch_keep_their_places() {
+    // [L0, w (other), L1, a (studio), L2]: other is offline on the first launch, both answer on the second
+    let mut attach = Attach::with_saved(|workspace, locals| {
+        vec![
+            saved_row("other", "w", 1, workspace, Some(locals[0]), 0),
+            saved_row("studio", "a", 2, workspace, Some(locals[1]), 0),
+        ]
+    });
+    let locals = attach.fixture.order(attach.fixture.workspace);
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(2);
+    let hosts = attach.runner.hosts();
+    let call = |host: &str| hosts.iter().position(|candidate| candidate == host).unwrap();
+    attach.runner.answer(
+        call("other"),
+        refused("ssh: connect to host other port 22: No route to host"),
+    );
+    attach
+        .runner
+        .answer(call("studio"), listing(&[numbered_session("a", 2, None)]));
+    attach.drive("a attaches", |attach| attach.remote_rows().len() == 1);
+    attach.idle();
+    assert_eq!(attach.layout(&locals), ["L0", "L1", "a", "L2"]);
+
+    let mut next = attach.relaunch();
+    next.core().reattach_saved_remotes();
+    next.wait_for_runs(2);
+    let hosts = next.runner.hosts();
+    let call = |host: &str| hosts.iter().position(|candidate| candidate == host).unwrap();
+    // the later saved row answers first
+    next.runner
+        .answer(call("studio"), listing(&[numbered_session("a", 2, None)]));
+    next.drive("a attaches", |attach| attach.remote_rows().len() == 1);
+    next.runner
+        .answer(call("other"), listing(&[numbered_session("w", 1, None)]));
+    next.drive("w attaches", |attach| attach.remote_rows().len() == 2);
+    assert_eq!(next.layout(&locals), ["L0", "w", "L1", "a", "L2"]);
+}
+
+#[test]
+fn rows_saved_after_one_local_row_keep_their_order_whichever_machine_answers_first() {
+    let mut attach = Attach::with_saved(|workspace, locals| {
+        vec![
+            saved_row("other", "w", 1, workspace, Some(locals[0]), 0),
+            saved_row("studio", "a", 2, workspace, Some(locals[0]), 1),
+        ]
+    });
+    let locals = attach.fixture.order(attach.fixture.workspace);
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(2);
+    let hosts = attach.runner.hosts();
+    let call = |host: &str| hosts.iter().position(|candidate| candidate == host).unwrap();
+    attach
+        .runner
+        .answer(call("studio"), listing(&[numbered_session("a", 2, None)]));
+    attach.drive("a attaches", |attach| attach.remote_rows().len() == 1);
+    attach
+        .runner
+        .answer(call("other"), listing(&[numbered_session("w", 1, None)]));
+    attach.drive("w attaches", |attach| attach.remote_rows().len() == 2);
+    assert_eq!(attach.layout(&locals), ["L0", "w", "a", "L1", "L2"]);
+    let saved = attach.fixture.store().snapshot().remote_sessions.unwrap();
+    let orders: Vec<(&str, usize)> = saved.iter().map(|row| (row.name.as_str(), row.order)).collect();
+    assert_eq!(orders, [("w", 0), ("a", 1)]);
+}
+
+#[test]
+fn a_waiting_session_attached_by_hand_and_closed_does_not_come_back() {
+    let mut attach =
+        Attach::with_saved(|workspace, locals| vec![saved_row("studio", "one", 1, workspace, Some(locals[0]), 0)]);
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    attach.runner.answer(
+        0,
+        refused("ssh: connect to host studio port 22: Network is unreachable"),
+    );
+    attach.idle();
+    assert_eq!(attach.fixture.store().saved_remote_rows().len(), 1);
+
+    let listed = [numbered_session("one", 1, None)];
+    let picker = attach.open_session_picker(1, &listed);
+    attach.resolve(&picker, picker.picked(0).unwrap());
+    attach.wait_for_runs(3);
+    attach.runner.answer(2, listing(&listed));
+    attach.drive("one attaches", |attach| attach.remote_rows().len() == 1);
+    assert!(
+        attach.fixture.store().saved_remote_rows().is_empty(),
+        "the attached row took it over"
+    );
+
+    let row = attach
+        .fixture
+        .store()
+        .sessions()
+        .find(|row| row.remote_host().is_some())
+        .unwrap()
+        .id();
+    attach.fixture.store_mut().unwrap().close_session(row);
+    assert_eq!(attach.fixture.store().snapshot().remote_sessions, None);
+    attach.core().retry_remote_links_now(Instant::now());
+    attach.idle();
+    assert_eq!(attach.runner.hosts().len(), 3, "nothing is left to list again");
+    assert!(attach.remote_rows().is_empty());
+}
+
+#[test]
+fn a_waiting_row_whose_workspace_closed_is_dropped_not_attached_elsewhere() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let (closing, _) = attach.fixture.add_workspace("closing", 1);
+    let saved = vec![saved_row("studio", "one", 1, closing, None, 0)];
+    attach
+        .fixture
+        .store_mut()
+        .unwrap()
+        .restore_saved_remote_rows(Some(&saved));
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    attach.fixture.store_mut().unwrap().remove_workspace(closing);
+    assert_eq!(
+        attach.fixture.store().snapshot().remote_sessions,
+        None,
+        "a quit now forgets it"
+    );
+    attach.runner.answer(0, listing(&[numbered_session("one", 1, None)]));
+    attach.drive("the saved rows settle", |attach| {
+        attach.fixture.store().saved_remote_rows().is_empty()
+    });
+    assert!(attach.remote_rows().is_empty());
+    assert!(attach.banners().is_empty());
+}
+
+impl Attach {
+    /// Ticks the flows at `now` until `done` holds.
+    fn drive_at(&mut self, now: Instant, what: &str, done: impl Fn(&Self) -> bool) {
+        for _ in 0..400 {
+            self.fixture.core.remote_tick(now);
+            if done(self) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("{what}");
+    }
+}
+
+#[test]
+fn a_machine_that_failed_for_a_week_drops_its_rows_only_once_this_run_kept_failing_too() {
+    let mut attach = Attach::with_saved(|workspace, locals| {
+        let mut row = saved_row("studio", "one", 1, workspace, Some(locals[0]), 0);
+        let week = crate::remote::relaunch::GIVE_UP_AFTER.as_secs_f64();
+        row.waiting_since = Some(crate::projection::epoch_seconds(std::time::SystemTime::now()) - week - 60.0);
+        vec![row]
+    });
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    // the launch's first listing fails before the network is up: the days ngterm was not running drop nothing yet
+    attach.runner.answer(
+        0,
+        refused("ssh: connect to host studio port 22: Network is unreachable"),
+    );
+    attach.idle();
+    assert_eq!(attach.fixture.store().saved_remote_rows().len(), 1);
+    assert!(attach.banners().is_empty());
+
+    let later = Instant::now() + crate::remote::relaunch::GIVE_UP_IN_RUN + Duration::from_secs(60);
+    let runner = Arc::clone(&attach.runner);
+    attach.drive_at(later, "the retry lists it", |_| runner.hosts().len() == 2);
+    attach
+        .runner
+        .answer(1, refused("ssh: Could not resolve hostname studio"));
+    attach.drive_at(later, "the saved rows settle", |attach| {
+        attach.fixture.store().saved_remote_rows().is_empty()
+    });
+    assert_eq!(
+        attach.banners(),
+        [
+            "remote-relaunch-expired-studio|Attach Remote|1 session from studio not attached again (no answer for a week): one"
+        ]
+    );
+    attach.core().retry_remote_links_now(later);
+    attach.idle();
+    assert_eq!(attach.runner.hosts().len(), 2, "it is not listed again");
+}
+
+#[test]
+fn a_waiting_companion_whose_workspace_closed_stays_away_from_its_parent_attached_elsewhere() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let (closing, _) = attach.fixture.add_workspace("closing", 1);
+    let mut logs = saved_row("studio", "logs", 3, closing, None, 1);
+    logs.parent_session_id = Some(Uuid::from_u128(1).to_string().to_uppercase());
+    let saved = vec![saved_row("studio", "one", 1, closing, None, 0), logs];
+    attach
+        .fixture
+        .store_mut()
+        .unwrap()
+        .restore_saved_remote_rows(Some(&saved));
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    attach.fixture.store_mut().unwrap().remove_workspace(closing);
+
+    let listed = [numbered_session("one", 1, None), numbered_session("logs", 3, Some(1))];
+    let picker = attach.open_session_picker(1, &listed);
+    let one = picker.items.iter().position(|item| item.label == "one").unwrap();
+    attach.resolve(&picker, picker.picked(one).unwrap());
+    attach.wait_for_runs(3);
+    attach.runner.answer(2, listing(&listed));
+    attach.drive("one attaches", |attach| attach.remote_rows().len() == 1);
+
+    attach.runner.answer(0, listing(&listed));
+    attach.drive("the saved rows settle", |attach| {
+        attach.fixture.store().saved_remote_rows().is_empty()
+    });
+    assert_eq!(attach.remote_rows(), ["one"]);
+}

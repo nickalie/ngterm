@@ -189,9 +189,9 @@ pub enum CaptureKind {
 }
 
 /// Captures the foreground program of every pane of `sessions` into its persisted slot for the next save (upstream's
-/// `captureForegroundCommands`): the primary, and the split while it is shown. Remote sessions, which are never
-/// saved, are skipped. `time_remaining` bounds an exit capture; once it answers false, the rest read nothing. How many
-/// slots a read actually filled, which is what `restore.capture` reports.
+/// `captureForegroundCommands`): the primary, and the split while it is shown. Remote sessions, whose terminals are
+/// never saved, are skipped. `time_remaining` bounds an exit capture; once it answers false, the rest read nothing.
+/// How many slots a read actually filled, which is what `restore.capture` reports.
 pub fn capture_foreground_commands<'s>(
     sessions: impl IntoIterator<Item = &'s mut Session>,
     reader: &ForegroundReader<'_>,

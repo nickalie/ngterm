@@ -238,6 +238,7 @@ fn launch_core(decision: RestoreLaunchDecision, resources: Option<&Path>, poster
     core.load_keymap_at_launch();
     core.load_hooks_at_launch();
     core.load_remotes_at_launch();
+    core.reattach_saved_remotes();
     core
 }
 

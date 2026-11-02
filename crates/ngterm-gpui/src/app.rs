@@ -150,6 +150,8 @@ fn install_launch_hosts(core: &mut Core, poster: &Poster, socket: String) {
     core.load_keymap_at_launch();
     core.load_hooks_at_launch();
     core.load_remotes_at_launch();
+    // the rows attached from other machines when it last ran, each machine listed off the main thread
+    core.reattach_saved_remotes();
 }
 
 /// What a primary launch runs with.

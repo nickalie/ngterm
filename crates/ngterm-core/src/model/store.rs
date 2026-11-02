@@ -204,6 +204,11 @@ pub struct AppStore {
     pub(crate) remote_overlay_changes: Vec<super::remote_overlay::RemoteOverlayChange>,
     /// The selected pane identities `pane.focused` diffs ([`AppStore::emit_pane_focus_changes`]).
     pub(crate) pane_focus: super::pane_focus::PaneFocusTracking,
+    /// The rows attached from other machines that the snapshot this window was restored from listed and that have not
+    /// attached again yet ([`super::saved_remote_rows`]). Persisted.
+    pub(crate) saved_remote_rows: Vec<crate::persist::RemoteSessionSnapshot>,
+    /// Where each row attached again from a saved one was saved, by its id here. Not persisted.
+    pub(crate) reattached_places: HashMap<Uuid, super::saved_remote_rows::SavedPlace>,
 }
 
 impl AppStore {
