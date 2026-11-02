@@ -11,7 +11,9 @@
 //! (`libghostty-vt-static.pc` lists no `Libs.private` at `LIBGHOSTTY_VT_REV`) and on Windows MSVC, where
 //! `ghostty-vt-static.lib` links alone (the link test, on the `windows-2025` runner and in the Win11 VM). On Apple
 //! the archive is linked from a directory of its own, built for the deployment target rustc links for (the link
-//! test reads each member's `LC_BUILD_VERSION`).
+//! test reads each member's `LC_BUILD_VERSION`). On Android (built through cargo-ndk) the archive is built for
+//! cargo-ndk's API level, at least 24, against the NDK cargo-ndk links with: Ghostty's build writes Zig's libc file
+//! for that NDK's bionic sysroot.
 
 mod script;
 mod zig_build;
@@ -57,18 +59,26 @@ fn build() -> Result<(), String> {
     let target = std::env::var("TARGET").map_err(|err| format!("TARGET: {err}"))?;
     let macos_deployment_target = std::env::var("MACOSX_DEPLOYMENT_TARGET").ok();
     let jobs = std::env::var("NUM_JOBS").ok();
+    let android_platform = std::env::var("ANDROID_PLATFORM").ok();
+    let android_ndk = zig_build::android_ndk(
+        std::env::var("ANDROID_NDK_HOME").ok().as_deref(),
+        std::env::var("CARGO_NDK_SYSROOT_PATH").ok().as_deref(),
+    );
     let build = zig_build::plan(&zig_build::Inputs {
         prefix: &prefix,
         stamp: &stamp,
         out_dir: &out_dir,
         target: &target,
         macos_deployment_target: macos_deployment_target.as_deref(),
+        android_platform: android_platform.as_deref(),
+        android_ndk: android_ndk.as_deref(),
         jobs: jobs.as_deref(),
     })?;
 
     let status = Command::new(&build.zig)
         .args(&build.args)
         .current_dir(&build.source)
+        .envs(build.env.iter().map(|(name, value)| (name, value)))
         // an install never goes below a staging root a packaging environment may have exported
         .env_remove("DESTDIR")
         // the workspace's pkg-config wrapper (`.cargo/config.toml`, a shell script for WPE WebKit) is not for Zig,

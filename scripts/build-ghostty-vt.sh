@@ -51,7 +51,7 @@ PATCHES="$NATIVE_ROOT/build/patches/ghostty-vt"
 # The Zig triples of ngterm-ghostty-vt-sys's target map (crates/ngterm-ghostty-vt-sys/zig_build.rs ZIG_TARGETS, which a
 # test keeps equal to this list), without their OS version suffixes: the packages each one's build needs are fetched.
 ZIG_TARGETS=(x86_64-linux-gnu aarch64-linux-gnu x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos
-  x86_64-windows-msvc aarch64-windows-msvc)
+  x86_64-windows-msvc aarch64-windows-msvc aarch64-linux-android x86_64-linux-android)
 
 case "${1:-}" in
   --print-prefix)
@@ -128,11 +128,15 @@ find "$TREE" -name '*.orig' -type f -exec rm -f {} +
 # The packages: Zig fetches a lazy dependency only when a build's configure step asks for it, so each mapped target's
 # libghostty-vt configuration is run once (listing its steps builds nothing), which fetches what that target's build
 # needs into the tree's zig-pkg/. The local cache is scratch: the tree is left as the build script will read it.
+# An Android configuration needs an NDK to exist (Ghostty's pkg/android-ndk looks one up), though it only joins paths
+# into it: an empty directory stands in, so the prefix is prepared the same with or without an NDK installed.
 echo "fetching libghostty-vt's Zig packages with zig $LIBGHOSTTY_VT_ZIG_VERSION..." >&2
+mkdir "$BUILD_DIR/android-ndk"
 for target in "${ZIG_TARGETS[@]}"; do
   (
     cd "$TREE"
-    "$ZIG_EXE" build --list-steps --cache-dir "$BUILD_DIR/zig-cache" --global-cache-dir "$ZIG_CACHE" \
+    ANDROID_NDK_HOME="$(native_path "$BUILD_DIR/android-ndk")" \
+      "$ZIG_EXE" build --list-steps --cache-dir "$BUILD_DIR/zig-cache" --global-cache-dir "$ZIG_CACHE" \
       -Demit-lib-vt=true -Dtarget="$target" >/dev/null
   ) || die "cannot fetch the Zig packages of libghostty-vt for $target"
 done

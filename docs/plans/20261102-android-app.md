@@ -359,17 +359,21 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - Modify (by the patch): `crates/ngterm-ghostty-vt-sys/{zig_build.rs,build.rs,tests/zig_build.rs}`,
   `scripts/build-ghostty-vt.sh`
 
-- [ ] apply the patch with `git apply --3way`, and resolve any drift
-- [ ] finish what the investigation left:
+- [x] apply the patch with `git apply --3way`, and resolve any drift
+- [x] finish what the investigation left:
   - wrap `build-ghostty-vt.sh`'s over-long line;
   - update the doc comment above `RERUN_ENV` and the module docs, which still say the map has no Android;
   - run the script end to end on a fresh prefix directory, to prove the configure step with the empty
     `ANDROID_NDK_HOME`
-- [ ] tests (the patch has them, so run and extend): `cargo test -p ngterm-ghostty-vt-sys --test zig_build`, which
+- [x] tests (the patch has them, so run and extend): `cargo test -p ngterm-ghostty-vt-sys --test zig_build`, which
       includes the API-floor refusal and the NDK derivation from `CARGO_NDK_SYSROOT_PATH`
-- [ ] run `cargo ndk -t arm64-v8a -t x86_64 -P 26 build -p ngterm-ghostty-vt --tests` and
+- [x] run `cargo ndk -t arm64-v8a -t x86_64 -P 26 build -p ngterm-ghostty-vt --tests` and
       `cargo ndk -t x86_64 -P 26 check -p ngterm-term --no-default-features`, then clippy on the sys crate; all must
       pass before Task 4
+  - result (2026-11-03): the patch applied cleanly; the script prepared a fresh prefix under a private `NGTERM_VENDOR`
+    (key `7fb8d1040daf5f9b`, unchanged); the 14 `zig_build` tests passed against it; both cargo-ndk builds passed, the
+    `ngterm-term` check with `ANDROID_NDK_HOME` unset (the NDK derived from `CARGO_NDK_SYSROOT_PATH`); clippy and
+    shellcheck clean
 
 ### Task 4: Remote command tails in core
 

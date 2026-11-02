@@ -6,8 +6,9 @@
 //! SIMD, `-Dtarget`, `-Dversion-string`), the Apple link directory and the MSVC archive name. Changed: herdr builds a
 //! source tree vendored in its repository with the zig on `PATH`; here the tree, its Zig packages and the pinned zig
 //! come from the prefix `scripts/build-ghostty-vt.sh` prepared (its stamp names the zig and the Zig global cache), the
-//! local cache goes under `OUT_DIR` too, the map drops iOS and adds Linux's glibc floor and the macOS deployment
-//! target, the CPU is `baseline` (never the build host's), and the optimize mode and SIMD are fixed.
+//! local cache goes under `OUT_DIR` too, the map drops iOS and adds Linux's glibc floor, the macOS deployment target
+//! and Android's API level with the NDK cargo-ndk links with, the CPU is `baseline` (never the build host's), and the
+//! optimize mode and SIMD are fixed.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -19,8 +20,8 @@ pub const STAMP: &str = "share/ngterm/ghostty-vt-STAMP";
 pub const SOURCE: &str = "src";
 
 /// The cargo targets libghostty-vt builds for, each with its Zig triple without the OS version (herdr's map without
-/// iOS). `scripts/build-ghostty-vt.sh` fetches the Zig packages of each (its `ZIG_TARGETS`, kept equal by a test).
-pub const ZIG_TARGETS: [(&str, &str); 8] = [
+/// iOS, with Android). `scripts/build-ghostty-vt.sh` fetches the Zig packages of each (its `ZIG_TARGETS`, kept equal by a test).
+pub const ZIG_TARGETS: [(&str, &str); 10] = [
     ("x86_64-unknown-linux-gnu", "x86_64-linux-gnu"),
     ("aarch64-unknown-linux-gnu", "aarch64-linux-gnu"),
     ("x86_64-unknown-linux-musl", "x86_64-linux-musl"),
@@ -29,6 +30,8 @@ pub const ZIG_TARGETS: [(&str, &str); 8] = [
     ("aarch64-apple-darwin", "aarch64-macos"),
     ("x86_64-pc-windows-msvc", "x86_64-windows-msvc"),
     ("aarch64-pc-windows-msvc", "aarch64-windows-msvc"),
+    ("aarch64-linux-android", "aarch64-linux-android"),
+    ("x86_64-linux-android", "x86_64-linux-android"),
 ];
 
 /// The glibc a Linux gnu build targets, the libghostty build's floor: one archive serves every supported distribution.
@@ -48,12 +51,19 @@ pub const RERUN_FILES: [&str; 7] = [
 ];
 
 /// The environment whose change reruns the build script: the prefix override (`NGTERM_GHOSTTY_VT_PREFIX`,
-/// `script.rs`), the vendor root (`NGTERM_VENDOR`, else under `HOME`) and the macOS deployment target.
-pub const RERUN_ENV: [&str; 4] = [
+/// `script.rs`), the vendor root (`NGTERM_VENDOR`, else under `HOME`), the macOS deployment target, Android's API level
+/// (`ANDROID_PLATFORM`) and what picks the NDK: `ANDROID_NDK_HOME`, cargo-ndk's sysroot ([`android_ndk`]) and the SDK
+/// roots Ghostty's build searches when neither is set.
+pub const RERUN_ENV: [&str; 9] = [
     "NGTERM_GHOSTTY_VT_PREFIX",
     "NGTERM_VENDOR",
     "HOME",
     "MACOSX_DEPLOYMENT_TARGET",
+    "ANDROID_PLATFORM",
+    "ANDROID_NDK_HOME",
+    "CARGO_NDK_SYSROOT_PATH",
+    "ANDROID_HOME",
+    "ANDROID_SDK_ROOT",
 ];
 
 /// What the prefix's stamp records for the build.
@@ -146,6 +156,26 @@ pub fn prepared(prefix: &Path) -> Result<Stamp, String> {
 /// newer macOS than the binaries that link it.
 pub const MACOS_FLOOR: &str = "13.0";
 
+/// The oldest Android API level libghostty-vt builds for (Android 7.0): Zig's standard library calls `preadv64`
+/// whatever the level, which bionic has from API 24 on, so an archive for an older level would not link. The archive is
+/// built for the level cargo-ndk links for (`ANDROID_PLATFORM`, its `--platform`, whose default 21 is refused), never a
+/// newer one, so it calls nothing the NDK's libc stubs of that level lack.
+pub const ANDROID_API_FLOOR: u32 = 24;
+
+/// The NDK an Android build compiles against: `ANDROID_NDK_HOME`, else the NDK of the sysroot cargo-ndk links with
+/// (`CARGO_NDK_SYSROOT_PATH`, `<ndk>/toolchains/llvm/prebuilt/<host>/sysroot`), else `None`, which leaves the choice to
+/// Ghostty's build (the newest NDK under `ANDROID_HOME`, `ANDROID_SDK_ROOT` or the default SDK location).
+pub fn android_ndk(ndk_home: Option<&str>, cargo_ndk_sysroot: Option<&str>) -> Option<PathBuf> {
+    let set = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    set(ndk_home)
+        .or_else(|| set(cargo_ndk_sysroot).and_then(|sysroot| sysroot.ancestors().nth(5).map(Path::to_path_buf)))
+}
+
 /// A `major[.minor[.patch]]` version as numbers padded to three with zeros (as rustc reads a deployment target, so
 /// `13` is `13.0`), for comparing; `None` when it is not one.
 fn version(text: &str) -> Option<Vec<u32>> {
@@ -155,13 +185,19 @@ fn version(text: &str) -> Option<Vec<u32>> {
 }
 
 /// The `-Dtarget` of a cargo target: Linux gnu at the glibc floor, macOS at `MACOSX_DEPLOYMENT_TARGET` or else at
-/// [`MACOS_FLOOR`], the others as mapped.
+/// [`MACOS_FLOOR`], Android at `ANDROID_PLATFORM` (cargo-ndk's API level) or else at [`ANDROID_API_FLOOR`], the others
+/// as mapped.
 ///
 /// # Errors
 ///
-/// A target outside the map, or a macOS deployment target that is not a version or is older than [`MACOS_FLOOR`]
-/// (Ghostty's build would build for the floor anyway on a macOS host, newer than what the binaries claim).
-pub fn zig_target(target: &str, macos_deployment_target: Option<&str>) -> Result<String, String> {
+/// A target outside the map, a macOS deployment target that is not a version or is older than [`MACOS_FLOOR`]
+/// (Ghostty's build would build for the floor anyway on a macOS host, newer than what the binaries claim), or an
+/// Android API level that is not a number or is older than [`ANDROID_API_FLOOR`].
+pub fn zig_target(
+    target: &str,
+    macos_deployment_target: Option<&str>,
+    android_platform: Option<&str>,
+) -> Result<String, String> {
     let (_, triple) = ZIG_TARGETS
         .iter()
         .find(|(cargo, _)| *cargo == target)
@@ -184,6 +220,22 @@ pub fn zig_target(target: &str, macos_deployment_target: Option<&str>) -> Result
         }
         return Ok(format!("{triple}.{requested}"));
     }
+    if triple.ends_with("-android") {
+        let requested = android_platform.map(str::trim).filter(|level| !level.is_empty());
+        let level = match requested {
+            None => ANDROID_API_FLOOR,
+            Some(text) => text
+                .parse::<u32>()
+                .ok()
+                .filter(|level| *level >= ANDROID_API_FLOOR)
+                .ok_or_else(|| {
+                    format!(
+                        "ANDROID_PLATFORM={text}: libghostty-vt builds for Android API {ANDROID_API_FLOOR} or newer"
+                    )
+                })?,
+        };
+        return Ok(format!("{triple}.{level}"));
+    }
     Ok((*triple).to_owned())
 }
 
@@ -200,6 +252,10 @@ pub struct Inputs<'a> {
     pub target: &'a str,
     /// `MACOSX_DEPLOYMENT_TARGET`, when set.
     pub macos_deployment_target: Option<&'a str>,
+    /// `ANDROID_PLATFORM` (the API level cargo-ndk links for), when set.
+    pub android_platform: Option<&'a str>,
+    /// The NDK an Android build compiles against ([`android_ndk`]), when known.
+    pub android_ndk: Option<&'a Path>,
     /// Cargo's `NUM_JOBS`, when set.
     pub jobs: Option<&'a str>,
 }
@@ -223,6 +279,9 @@ pub struct Build {
     pub link_name: &'static str,
     /// The `-Dtarget` it builds for.
     pub zig_target: String,
+    /// The environment it sets: `ANDROID_NDK_HOME` for an Android build whose NDK is known (Ghostty's build reads it
+    /// for bionic's headers and libc).
+    pub env: Vec<(OsString, OsString)>,
 }
 
 /// The build of `inputs`: `zig build -Demit-lib-vt` over the prefix's tree, installing into and caching under
@@ -233,7 +292,7 @@ pub struct Build {
 ///
 /// A target outside the map, or a macOS deployment target [`zig_target`] refuses.
 pub fn plan(inputs: &Inputs<'_>) -> Result<Build, String> {
-    let target = zig_target(inputs.target, inputs.macos_deployment_target)?;
+    let target = zig_target(inputs.target, inputs.macos_deployment_target, inputs.android_platform)?;
     let install = inputs.out_dir.join("zig-out");
     let mut args: Vec<OsString> = vec!["build".into(), "--prefix".into(), install.clone().into()];
     args.extend(["--cache-dir".into(), inputs.out_dir.join("zig-cache").into()]);
@@ -272,6 +331,12 @@ pub fn plan(inputs: &Inputs<'_>) -> Result<Build, String> {
         archive,
         link_dir,
         link_name: if msvc { "ghostty-vt-static" } else { "ghostty-vt" },
+        env: inputs
+            .android_ndk
+            .filter(|_| inputs.target.ends_with("-android"))
+            .map(|ndk| ("ANDROID_NDK_HOME".into(), ndk.as_os_str().to_owned()))
+            .into_iter()
+            .collect(),
         zig_target: target,
     })
 }

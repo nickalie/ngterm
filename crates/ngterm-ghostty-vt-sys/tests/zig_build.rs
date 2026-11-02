@@ -37,6 +37,8 @@ fn plan(out_dir: &Path, target: &str, macos: Option<&str>) -> Build {
         out_dir,
         target,
         macos_deployment_target: macos,
+        android_platform: None,
+        android_ndk: None,
         jobs: Some("10"),
     })
     .unwrap()
@@ -50,7 +52,7 @@ fn after<'a>(args: &'a [OsString], flag: &str) -> &'a Path {
 
 #[test]
 fn the_map_targets_linux_at_the_glibc_floor_and_macos_at_its_deployment_target() {
-    let target = |cargo, macos| zig_build::zig_target(cargo, macos).unwrap();
+    let target = |cargo, macos| zig_build::zig_target(cargo, macos, None).unwrap();
     assert_eq!(target("x86_64-unknown-linux-gnu", None), "x86_64-linux-gnu.2.39");
     assert_eq!(target("aarch64-unknown-linux-gnu", None), "aarch64-linux-gnu.2.39");
     assert_eq!(target("x86_64-unknown-linux-musl", None), "x86_64-linux-musl");
@@ -64,7 +66,7 @@ fn the_map_targets_linux_at_the_glibc_floor_and_macos_at_its_deployment_target()
     assert_eq!(target("aarch64-apple-darwin", Some("13.0.0")), "aarch64-macos.13.0.0");
     assert_eq!(target("aarch64-apple-darwin", Some(" ")), "aarch64-macos.13.0");
     for refused in ["11.0", "12.7.6", "13.x"] {
-        let error = zig_build::zig_target("aarch64-apple-darwin", Some(refused)).unwrap_err();
+        let error = zig_build::zig_target("aarch64-apple-darwin", Some(refused), None).unwrap_err();
         assert!(
             error.contains(&format!("MACOSX_DEPLOYMENT_TARGET={refused}")),
             "{error}"
@@ -73,8 +75,60 @@ fn the_map_targets_linux_at_the_glibc_floor_and_macos_at_its_deployment_target()
     }
     assert_eq!(target("x86_64-pc-windows-msvc", None), "x86_64-windows-msvc");
     assert_eq!(target("aarch64-pc-windows-msvc", None), "aarch64-windows-msvc");
-    let unmapped = zig_build::zig_target("riscv64gc-unknown-linux-gnu", None).unwrap_err();
+    let unmapped = zig_build::zig_target("riscv64gc-unknown-linux-gnu", None, None).unwrap_err();
     assert!(unmapped.contains("riscv64gc-unknown-linux-gnu"), "{unmapped}");
+}
+
+#[test]
+fn android_builds_for_cargo_ndks_api_level_and_its_ndk() {
+    let target = |cargo, level| zig_build::zig_target(cargo, None, level).unwrap();
+    assert_eq!(target("aarch64-linux-android", None), "aarch64-linux-android.24");
+    assert_eq!(target("x86_64-linux-android", Some("26")), "x86_64-linux-android.26");
+    assert_eq!(target("aarch64-linux-android", Some(" ")), "aarch64-linux-android.24");
+    // cargo-ndk's default --platform among them: Zig's std calls preadv64, which bionic has from API 24 on
+    for refused in ["21", "23", "x"] {
+        let error = zig_build::zig_target("aarch64-linux-android", None, Some(refused)).unwrap_err();
+        assert!(error.contains(&format!("ANDROID_PLATFORM={refused}")), "{error}");
+    }
+    let sysroot = "/sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/sysroot";
+    assert_eq!(
+        zig_build::android_ndk(None, Some(sysroot)),
+        Some(PathBuf::from("/sdk/ndk/27.1.12297006"))
+    );
+    assert_eq!(
+        zig_build::android_ndk(Some("/ndk"), Some(sysroot)),
+        Some(PathBuf::from("/ndk"))
+    );
+    assert_eq!(zig_build::android_ndk(Some(""), None), None);
+    let stamp = stamp();
+    let ndk = Path::new("/sdk/ndk/27.1.12297006");
+    let inputs = |target| Inputs {
+        prefix: Path::new("/vendor/ghostty-vt-0123456789abcdef"),
+        stamp: &stamp,
+        out_dir: Path::new("/out"),
+        target,
+        macos_deployment_target: None,
+        android_platform: Some("24"),
+        android_ndk: Some(ndk),
+        jobs: None,
+    };
+    let android = zig_build::plan(&inputs("aarch64-linux-android")).unwrap();
+    assert!(
+        android
+            .args
+            .contains(&OsString::from("-Dtarget=aarch64-linux-android.24"))
+    );
+    assert_eq!(
+        android.env,
+        [(OsString::from("ANDROID_NDK_HOME"), ndk.as_os_str().to_owned())]
+    );
+    assert_eq!(android.archive, Path::new("/out/zig-out/lib/libghostty-vt.a"));
+    assert!(
+        zig_build::plan(&inputs("x86_64-unknown-linux-gnu"))
+            .unwrap()
+            .env
+            .is_empty()
+    );
 }
 
 #[test]
@@ -229,7 +283,15 @@ fn a_pin_or_patch_change_reruns_the_build_script() {
     for input in zig_build::RERUN_FILES {
         assert!(repo_root().join(input).exists(), "{input}");
     }
-    for name in [script::PREFIX_ENV, "NGTERM_VENDOR", "HOME", "MACOSX_DEPLOYMENT_TARGET"] {
+    for name in [
+        script::PREFIX_ENV,
+        "NGTERM_VENDOR",
+        "HOME",
+        "MACOSX_DEPLOYMENT_TARGET",
+        "ANDROID_PLATFORM",
+        "ANDROID_NDK_HOME",
+        "CARGO_NDK_SYSROOT_PATH",
+    ] {
         assert!(zig_build::RERUN_ENV.contains(&name), "{name}");
     }
 }
@@ -369,8 +431,10 @@ fn the_prepared_prefix_configures_every_target_with_networking_off() {
     let before = entries(&packages);
     let scratch = tempfile::tempdir().unwrap();
     for (cargo, _) in zig_build::ZIG_TARGETS {
-        let target = zig_build::zig_target(cargo, None).unwrap();
+        let target = zig_build::zig_target(cargo, None, None).unwrap();
         let mut command = Command::new(&stamp.zig);
+        // an Android configuration only joins paths into the NDK, which must exist (build-ghostty-vt.sh)
+        command.env("ANDROID_NDK_HOME", scratch.path());
         command
             .args(["build", "--list-steps", "-Demit-lib-vt=true"])
             .arg(format!("-Dtarget={target}"))
