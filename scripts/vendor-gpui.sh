@@ -26,6 +26,8 @@
 #                  DirectComposition target beneath the window's child windows, so the HTML overlays' WebView2 pages
 #                  show over GPUI (Task 6, 0002); `zoom` restoring a maximized window, as GPUI's other platforms toggle
 #                  it (Task 8, 0003)
+#   gpui-pre-macos the platform lock released for a menu item whose tag names no action, which deadlocked the main
+#                  thread on ngterm's own AppKit menu bar (0001)
 #
 # Each source is the crates.io archive of GPUI_VERSION, verified against SHA256 below: the release's crates.io
 # checksum (the `cksum` of its version's line in the crates.io index, https://index.crates.io/gp/ui/<crate>, also what
@@ -35,8 +37,8 @@
 # Bump GPUI_VERSION and the sums together with gpui-kit's `gpui-pre` pin, run this, and check that the patches still
 # apply.
 #
-# Usage: scripts/vendor-gpui.sh           (re)create vendor/gpui-pre, vendor/gpui-pre-wgpu, vendor/gpui-pre-linux and
-#                                         vendor/gpui-pre-windows
+# Usage: scripts/vendor-gpui.sh           (re)create vendor/gpui-pre, vendor/gpui-pre-wgpu, vendor/gpui-pre-linux,
+#                                         vendor/gpui-pre-windows and vendor/gpui-pre-macos
 #        scripts/vendor-gpui.sh --check   rebuild into a scratch dir and fail if a vendored crate differs
 #        scripts/vendor-gpui.sh --diff    regenerate the last patch of each crate, build/patches/<crate>/NNNN-*.patch,
 #                                         as the vendored tree against the crate with the earlier patches applied
@@ -52,8 +54,9 @@ declare -A SHA256=(
   [gpui-pre-wgpu]="5b1cdb26c1503bf9662ee8fbc5ab0b44b2deeee4b5c12dc67491ba6fb5fc544b"
   [gpui-pre-linux]="e28213c3fde6f13e91ba0b74b90cbaadec9373e36a031eda98561d31059870f3"
   [gpui-pre-windows]="513d4f0fc7d596d3bdef2a73a524ffb83dabc95bf484f2855a698e7f431290a9"
+  [gpui-pre-macos]="c7c988b7e49775cc8542dbe48d5a10e073d8e898a023ef3ff3d24f33363e9863"
 )
-CRATES=(gpui-pre gpui-pre-wgpu gpui-pre-linux gpui-pre-windows)
+CRATES=(gpui-pre gpui-pre-wgpu gpui-pre-linux gpui-pre-windows gpui-pre-macos)
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -67,7 +70,7 @@ case "${1:-}" in
   "") ;;
   --check) mode=check ;;
   --diff) mode=diff ;;
-  -h | --help) sed -n '2,42s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  -h | --help) sed -n '2,47s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
   *) die "unknown argument: $1 (see --help)" ;;
 esac
 

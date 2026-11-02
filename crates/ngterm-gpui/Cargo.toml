@@ -177,5 +177,10 @@ name = "macos_webview"
 harness = false
 required-features = ["html"]
 
+# The calls AppKit makes when the system pleases, made at once against the real menu bar (tests/macos_appkit_sweep.rs).
+[[test]]
+name = "macos_appkit_sweep"
+harness = false
+
 [lints]
 workspace = true

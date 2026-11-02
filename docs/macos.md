@@ -53,6 +53,12 @@ cargo test -p ngterm-gpui --no-default-features
 scripts/smoke-macos-services.sh
 ```
 
+`cargo test -p ngterm-gpui --test macos_appkit_sweep` makes the calls `AppKit` otherwise makes when the system pleases
+(a menu opening, a click on an Edit item, the system's scan of every menu) at once, against the real menu bar on GPUI's
+real app delegate. A main thread stuck in one of them fails the run with its stack and the step it was on. It opens no
+window, so it needs neither Metal nor an Accessibility grant. A hang that a system callback causes belongs there as a
+new step, shown failing on the unfixed code first.
+
 The services smoke check uses the real AppKit and WebKit frameworks. It exercises accessibility settings, Carbon
 registration/unregistration, HTML clipboard contents, and a WKWebView load, title, theme injection, reparenting and
 navigation refusal, fragment/subframe loads, download interruption, native bridge replies, editing menus, dead

@@ -1,0 +1,35 @@
+A menu item without an action no longer deadlocks: GPUI's `handle_menu_item` and `validate_menu_item` released the
+platform lock only when the item's tag named an action, then took the lock again to put the callback back, so any other
+tag hung the main thread on its own non-reentrant mutex. ngterm builds its AppKit menu bar itself (`macos.m`), so
+`menu_actions` stays empty, and Edit's items, sent down the responder chain for WebKit, end at GPUI's app delegate
+whenever a terminal has the focus. The lock is now released on both paths: the item validates as disabled and a click
+does nothing. scripts/vendor-gpui.sh applies this to the verified crates.io archive.
+
+--- a/src/platform.rs
++++ b/src/platform.rs
+@@ -1504,9 +1504,9 @@
+         if let Some(mut callback) = lock.menu_command.take() {
+             let tag: NSInteger = msg_send![item, tag];
+             let index = tag as usize;
+-            if let Some(action) = lock.menu_actions.get(index) {
+-                let action = action.boxed_clone();
+-                drop(lock);
++            let action = lock.menu_actions.get(index).map(|action| action.boxed_clone());
++            drop(lock);
++            if let Some(action) = action {
+                 callback(&*action);
+             }
+             platform.0.lock().menu_command.get_or_insert(callback);
+@@ -1522,9 +1522,9 @@
+         if let Some(mut callback) = lock.validate_menu_command.take() {
+             let tag: NSInteger = msg_send![item, tag];
+             let index = tag as usize;
+-            if let Some(action) = lock.menu_actions.get(index) {
+-                let action = action.boxed_clone();
+-                drop(lock);
++            let action = lock.menu_actions.get(index).map(|action| action.boxed_clone());
++            drop(lock);
++            if let Some(action) = action {
+                 result = callback(action.as_ref());
+             }
+             platform
