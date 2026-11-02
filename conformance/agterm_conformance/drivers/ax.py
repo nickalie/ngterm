@@ -1,4 +1,6 @@
-"""The macOS driver: the app's AX tree through pyobjc, AXPress for clicks, CGEvent keystrokes posted to the pid.
+"""The macOS driver: AX tree through pyobjc, AXPress for clicks, CGEvent keys/text posted to the pid by default.
+
+Pointer events always use the HID tap, even with post="pid": they move the real cursor and make the app frontmost.
 
 Needs the `ax` extra (pyobjc) and the accessibility grant for the process TCC holds responsible for the run
 (conformance/docs/spike-macos.md, spike B).
@@ -122,7 +124,7 @@ class AxDriver(Driver):
         return int(self.ax.AXUIElementPerformAction(element.handle, action))
 
     def activate(self) -> None:
-        """Make the app frontmost, for keystrokes posted through the HID tap."""
+        """Make the app frontmost for HID input (pointer events always use the HID tap)."""
         self.ax.AXUIElementSetAttributeValue(self.app, "AXFrontmost", True)
 
     def walk(self) -> Iterator[Any]:
@@ -217,8 +219,8 @@ class AxDriver(Driver):
             q.CGEventPost(q.kCGHIDEventTap, q.CGEventCreateMouseEvent(None, q.kCGEventMouseMoved, point, 0))
 
     def _bounds(self, element: Element) -> tuple[float, float, float, float]:
-        origin = self._geometry(element, "AXPosition", self.ax.kAXValueCGPointType)
-        size = self._geometry(element, "AXSize", self.ax.kAXValueCGSizeType)
+        origin = self._geometry(element, "AXPosition", self.ax.kAXValueCGPointType, ReadFailed)
+        size = self._geometry(element, "AXSize", self.ax.kAXValueCGSizeType, ReadFailed)
         return origin.x, origin.y, size.width, size.height
 
     def _pointer_move(self, x: float, y: float) -> None:
@@ -270,11 +272,11 @@ class AxDriver(Driver):
                 else:
                     q.CGEventPost(q.kCGHIDEventTap, event)
 
-    def _geometry(self, element: Element, name: str, kind: int) -> Any:
+    def _geometry(self, element: Element, name: str, kind: int, error_type: type[Exception] = DriverError) -> Any:
         value = self.attribute(element.handle, name)
         ok, unpacked = (False, None) if value is None else self.ax.AXValueGetValue(value, kind, None)
         if not ok:
-            raise DriverError(f"{element} has no {name}")
+            raise error_type(f"{element} has no {name}")
         return unpacked
 
     def _post_chord(self, chord: Chord) -> None:
