@@ -424,17 +424,25 @@ cli:session overlay run-job.
 new `tests/protocol/test_live_sessions.py::test_a_wait_command_keeps_scrollback_after_attached_exit`,
 covering session.new and session.text.
 
-- [ ] CLI currently writes RESTORE including RIS unconditionally (`attach.rs:60,69`). Managed attach must preserve
+- [x] CLI currently writes RESTORE including RIS unconditionally (`attach.rs:60,69`). Managed attach must preserve
   screen/scrollback while resetting SGR; mouse 9/1000/1002/1003/1006; focus 1004; paste 2004; color-scheme 2031;
   in-band resize 2048; OSC 110/111/112. Unmanaged clients retain RIS. Test valid managed nonce, invalid/absent
   nonce, detach and process exit, retained text and disabled input-report modes.
-- [ ] Add real PTY/ConPTY regression with an attached marker and file gate, then 300 lines including first/last
+- [x] Add real PTY/ConPTY regression with an attached marker and file gate, then 300 lines including first/last
   markers, exit, held prompt and full-buffer text assertions. Synchronize attachment before releasing the command;
   do not assert raw Unix byte timing on Windows. Port both short and past-one-screen Swift cases.
-- [ ] Keep ngterm's single create+attach design. It has no upstream ensure-then-second-attach race, so do not add
+- [x] Keep ngterm's single create+attach design. It has no upstream ensure-then-second-attach race, so do not add
   --ends-pane trampoline or copy upstream supervisor architecture. Verify no-create reconnect and returning
   restore/restart replay semantics; document the already-covered behavior. No native pin changes.
-- [ ] Run scoped session/term tests and add newly green eligible IDs to ratchet.
+  Existing `a_connection_that_ends_without_the_exit_is_attached_again_from_a_reset` verifies reconnect has no create
+  payload; the gone-reattach CLI test refuses an ended session. Core `live::support` tests verify returning creation,
+  captured replay, refused replay and bare shell attachment; all 21 passed unchanged. The new real-pane cases verify
+  the created command ends without leaving a replacement shell. Attach module docs explain the single-request design.
+- [x] Run scoped session/term tests and add newly green eligible IDs to ratchet.
+  Linux: 22 scoped session CLI unit tests, 16 CLI integration tests and all 14 term live tests passed; scoped
+  session/term all-target clippy, Rust formatting and conformance collection passed. The new 0.40.0 conformance case
+  stays gated until Task 11, so there are no newly green eligible IDs and the ratchet is unchanged. macOS/Windows
+  runtime and reference UI checks skipped (external platform checks); cross-platform cases are added but unverified there.
 
 ### Task 9: Refresh bundled skill patches and provenance
 

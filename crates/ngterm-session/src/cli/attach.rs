@@ -10,8 +10,10 @@
 //! A connection that ends without the session's exit (the server stopped, or handed its sessions to a new build and
 //! disconnected its clients) is attached again, without creating the session, for up to [`REATTACH_WAIT`]: the outer
 //! terminal is reset (`server::snapshot::RESYNC_RESET`) and the new snapshot written, under the lead the client held.
-//! The first attach clears the outer terminal first, as zmx's did; leaving it, the client resets it (RIS and the
-//! default colours, zmx's `restore_seq`).
+//! The first attach clears the outer terminal first, as zmx's did. Leaving a managed terminal preserves its screen
+//! and scrollback while resetting input reports, SGR and colours; an unmanaged terminal gets RIS as well.
+//! Creation and attachment are one request: there is no ensure/second-attach gap in which an ended command could
+//! be replaced with a shell. Reconnects explicitly carry no creation payload (`Loop::reattach`).
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -59,14 +61,22 @@ const CLEAR: &[u8] = b"\x1b[2J\x1b[H";
 /// What leaving writes (zmx's `restore_seq`): RIS and the default foreground, background and cursor colours.
 const RESTORE: &[u8] = b"\x1bc\x1b]110\x1b\\\x1b]111\x1b\\\x1b]112\x1b\\";
 
+/// Upstream zmx patch 0004: leave a managed terminal's output intact, without leaving the program's input reports on.
+const MANAGED_RESTORE: &[u8] = b"\x1b[0m\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b[?2031l\x1b[?2048l\x1b]110\x1b\\\x1b]111\x1b\\\x1b]112\x1b\\";
+
+fn restore(managed: Option<&Managed>) -> &'static [u8] {
+    if managed.is_some() { MANAGED_RESTORE } else { RESTORE }
+}
+
 /// `ngterm-session attach <name> [argv]` under `contract`: its exit status.
 pub(super) fn run(contract: &Contract, name: &str, argv: Vec<String>) -> u8 {
     let outcome = Origin::current().and_then(|origin| prepare(contract, name, argv, origin));
     let outcome = outcome.map(|session| {
+        let restore = restore(session.managed.as_ref());
         let tty = Tty::open();
         let outcome = Loop::new(&tty, session).run();
         if tty.is_terminal() {
-            let _ = write_out(RESTORE);
+            let _ = write_out(restore);
         }
         outcome
         // the terminal's mode is restored here, before the message

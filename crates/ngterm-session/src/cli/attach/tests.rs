@@ -5,6 +5,78 @@ use crate::protocol::{DelegatedReply, DelegatedRequest, GridSize};
 use crate::server::replies::DELEGATION_WAIT;
 
 #[test]
+fn only_a_valid_managed_nonce_preserves_output_on_leaving() {
+    for (nonce, managed) in [
+        (None, false),
+        (Some(""), false),
+        (Some("bad;nonce"), false),
+        (Some("pane-1"), true),
+    ] {
+        let contract = Contract::from_env(|name| {
+            (name == super::super::MANAGED_VARIABLE)
+                .then(|| nonce.map(std::ffi::OsString::from))
+                .flatten()
+        });
+        assert_eq!(
+            restore(contract.managed.as_ref()),
+            if managed { MANAGED_RESTORE } else { RESTORE }
+        );
+    }
+}
+
+#[test]
+fn managed_cleanup_keeps_the_buffer_and_resets_reports_style_and_colours() {
+    use ngterm_ghostty_vt::{FormatOptions, Mode, Region, Terminal};
+
+    let mut terminal = Terminal::new(80, 4).unwrap();
+    let defaults = terminal.colors();
+    terminal.vt_write(b"first-marker\r\nline-2\r\nline-3\r\nline-4\r\nlast-marker");
+    let before = terminal.format(Region::Screen, FormatOptions::default()).unwrap();
+    // Mouse tracking modes replace one another: check every tracking mode separately, as well as all other reports.
+    for number in [9, 1000, 1002, 1003, 1006, 1004, 2004, 2031, 2048] {
+        let mode = Mode::dec(number);
+        terminal.vt_write(format!("\x1b[?{number}h").as_bytes());
+        assert!(terminal.mode(mode), "mode {number} was enabled");
+        terminal.vt_write(MANAGED_RESTORE);
+        assert!(!terminal.mode(mode), "mode {number} was left on");
+    }
+    terminal.vt_write(b"\x1b[1;31m\x1b]10;#123456\x1b\\\x1b]11;#654321\x1b\\\x1b]12;#abcdef\x1b\\");
+    assert_ne!(terminal.colors(), defaults);
+    terminal.vt_write(MANAGED_RESTORE);
+    assert_eq!(terminal.colors(), defaults);
+    assert_eq!(
+        terminal.format(Region::Screen, FormatOptions::default()).unwrap(),
+        before
+    );
+    terminal.vt_write(RESTORE);
+    let cleared = terminal
+        .format(Region::Screen, FormatOptions::default())
+        .unwrap()
+        .unwrap();
+    assert!(
+        !String::from_utf8_lossy(&cleared).contains("marker"),
+        "unmanaged RIS clears output"
+    );
+}
+
+#[test]
+fn managed_cleanup_leaves_new_text_in_the_default_style() {
+    use ngterm_ghostty_vt::{RenderState, Style, Terminal};
+
+    let mut terminal = Terminal::new(80, 4).unwrap();
+    terminal.vt_write(b"\x1b[1;31m");
+    terminal.vt_write(MANAGED_RESTORE);
+    terminal.vt_write(b"X");
+    let mut render = RenderState::new().unwrap();
+    render.update(&mut terminal).unwrap();
+    let mut rows = render.rows().unwrap();
+    let mut row = rows.next_row().unwrap();
+    let mut cells = row.cells().unwrap();
+    let cell = cells.next_cell().unwrap().unwrap();
+    assert_eq!(cell.style(), Style::default());
+}
+
+#[test]
 fn the_exit_status_is_the_programs_and_unknown_is_success() {
     let exited = |code| ExitStatus::Exited { code, signal: None };
     assert_eq!(exit_code(&exited(0)), 0);

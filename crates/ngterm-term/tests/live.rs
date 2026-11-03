@@ -24,13 +24,13 @@ use std::time::{Duration, Instant};
 
 use ngterm_core::ghostty_config::GhosttyConfig;
 use ngterm_core::live::lead::LeadAttachment;
-use ngterm_core::live::support::{Configuration, LiveAttach, attach_line, live_attach, settled};
+use ngterm_core::live::support::{Configuration, Creation, LiveAttach, attach_line, live_attach, settled};
 use ngterm_core::paths::MapEnv;
 use ngterm_core::restore::mode::LiveRejection;
 use ngterm_core::restore::spawn_plan::LaunchSeed;
 use ngterm_host::{KillOutcome, SessionHost};
 use ngterm_session::host::ServerHost;
-use ngterm_term::{ExitStatus, Frame, GridSize, Host, Launch, Pane, PaneConfig, PaneEvent};
+use ngterm_term::{ExitStatus, Frame, GridSize, Host, Launch, Pane, PaneConfig, PaneEvent, TextRegion};
 use support::{SIZE, TestResult};
 use uuid::Uuid;
 
@@ -477,6 +477,93 @@ fn a_managed_live_pane_reports_its_role_as_its_title() -> TestResult {
     };
     assert_eq!(report.nonce, "n1");
     Ok(())
+}
+
+/// Upstream #859: hold a command that has definitely reached its attached pane before it can print and exit.
+/// The command runs on the session server's real PTY/ConPTY; assertions read the pane's terminal, so Windows is
+/// tested against the pseudoconsole's rendered output rather than Unix byte boundaries.
+fn waiting_command_keeps_output(rows: usize) -> TestResult {
+    let live = Live::new()?;
+    let configuration = live.configuration_with(Some(LeadAttachment {
+        nonce: "held-command".to_owned(),
+        claim: true,
+    }))?;
+    let command = if cfg!(windows) {
+        format!(
+            "Write-Output pane-attached-marker; while (!(Test-Path -LiteralPath release-scrollback)) {{ \
+             Start-Sleep -Milliseconds 20 }}; Write-Output first-held-line; \
+             1..{rows} | ForEach-Object {{ Write-Output ('held-row-' + $_) }}; \
+             [Console]::Write([char]27 + '[?1000h' + [char]27 + '[?1006h' + [char]27 + '[?2004h'); \
+             Write-Output last-held-line"
+        )
+    } else {
+        format!(
+            "printf 'pane-attached-marker\\n'; while [ ! -e release-scrollback ]; do sleep 0.02; done; \
+             printf 'first-held-line\\n'; n=1; while [ $n -le {rows} ]; do printf 'held-row-%s\\n' $n; \
+             n=$((n+1)); done; printf '\\033[?1000h\\033[?1006h\\033[?2004h'; printf 'last-held-line\\n'"
+        )
+    };
+    let attach = live_attach(
+        &configuration,
+        None,
+        Some(Creation::EndingPane(&command)),
+        &[] as &[&str],
+    );
+    let mut launch = live.launch(&configuration);
+    launch.command = Some(settled(&attach_line(&configuration, &attach)));
+    launch.live = configuration.in_process(attach);
+    launch.wait_after_command = true;
+    let pane = Pane::launch(&launch, &live.host, &PaneConfig::new(SIZE))?;
+    // Seeing the marker in this terminal proves attachment, unlike a fixed delay or a session-side file alone.
+    wait_text(&pane, "pane-attached-marker");
+    std::fs::write(live.home.path().join("release-scrollback"), "")?;
+    let status = exit_of(&pane);
+    assert_eq!((status.code, status.held), (0, true), "{status:?}");
+    let text = pane.read_text(TextRegion::All)?;
+    for marker in ["pane-attached-marker", "first-held-line", "last-held-line"] {
+        assert!(
+            text.lines().any(|line| line == marker),
+            "{marker} missing from:\n{text}"
+        );
+    }
+    for row in 1..=rows {
+        let marker = format!("held-row-{row}");
+        assert!(
+            text.lines().any(|line| line == marker),
+            "{marker} missing from:\n{text}"
+        );
+    }
+    assert!(
+        text.contains("Process exited. Press any key to close the terminal."),
+        "{text}"
+    );
+    assert!(!pane.frame().frame.cursor.visible, "the held prompt hides its cursor");
+    if rows > usize::from(SIZE.rows) {
+        let viewport = pane.read_text(TextRegion::Viewport)?;
+        assert!(
+            !viewport.contains("first-held-line"),
+            "the first marker must be in scrollback"
+        );
+        assert!(viewport.contains("last-held-line"), "{viewport}");
+    }
+    assert!(
+        live.session_host()
+            .list()?
+            .iter()
+            .all(|record| record.name != configuration.daemon_name),
+        "the ended command must leave no replacement shell"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_wait_command_keeps_short_output_after_attached_exit() -> TestResult {
+    waiting_command_keeps_output(3)
+}
+
+#[test]
+fn a_wait_command_keeps_scrollback_after_attached_exit() -> TestResult {
+    waiting_command_keeps_output(300)
 }
 
 #[test]

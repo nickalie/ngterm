@@ -162,6 +162,80 @@ fn attach_round_trips_resizes_detaches_and_reattaches_to_its_snapshot() -> TestR
     Ok(())
 }
 
+/// Both ways of leaving use the same cleanup; only a validated managed nonce keeps the terminal's output.
+#[test]
+fn managed_cleanup_preserves_output_on_detach_and_program_exit() -> TestResult {
+    for nonce in [None, Some(""), Some("invalid;nonce"), Some("pane-1")] {
+        for detach in [false, true] {
+            check_attach_cleanup(nonce, detach)?;
+        }
+    }
+    Ok(())
+}
+
+fn check_attach_cleanup(nonce: Option<&str>, detach: bool) -> TestResult {
+    let namespace = Namespace::new()?;
+    let extra: Vec<_> = nonce.map(|nonce| ("NGTERM_LIVE_MANAGED", nonce)).into_iter().collect();
+    let mut client = namespace.attach(&with_shell("cleanup"), &extra, &Answers::basic())?;
+    client.type_line(&tagged("attached"))?;
+    client.expect("got:attached");
+    let printed = namespace.run(
+        &[
+            "print",
+            "cleanup",
+            "\x1b[1;31m\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h\x1b[?2031h\x1b[?2048hcleanup-marker",
+        ],
+        b"",
+        &[],
+    )?;
+    assert!(printed.status.success(), "{}", stderr(&printed));
+    client.expect("cleanup-marker");
+    if detach {
+        client.write(b"\x1c")?;
+    } else {
+        client.type_line("exit")?;
+        if cfg!(unix) {
+            client.write(b"\x04")?;
+        }
+    }
+    assert_eq!(client.wait()?, 0);
+    assert_eq!(namespace.session_names().is_empty(), !detach);
+    #[cfg(unix)]
+    {
+        // ConPTY repaints output instead of preserving the client's literal writes: only Unix asserts bytes.
+        let managed = nonce == Some("pane-1");
+        let cleanup = if managed {
+            b"\x1b[0m".as_slice()
+        } else {
+            b"\x1bc".as_slice()
+        };
+        let mut expected = cleanup.to_vec();
+        if managed {
+            expected.extend_from_slice(
+                b"\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b[?2031l\x1b[?2048l",
+            );
+        }
+        expected.extend_from_slice(b"\x1b]110\x1b\\\x1b]111\x1b\\\x1b]112\x1b\\");
+        client.expect_bytes(&expected);
+        let mut terminal = ngterm_ghostty_vt::Terminal::new(COLS, ROWS)?;
+        terminal.vt_write(&client.output());
+        let text = terminal
+            .format(
+                ngterm_ghostty_vt::Region::Screen,
+                ngterm_ghostty_vt::FormatOptions::default(),
+            )?
+            .unwrap_or_default();
+        assert_eq!(String::from_utf8_lossy(&text).contains("cleanup-marker"), managed);
+        for number in [9, 1000, 1002, 1003, 1006, 1004, 2004, 2031, 2048] {
+            assert!(
+                !terminal.mode(ngterm_ghostty_vt::Mode::dec(number)),
+                "mode {number} stayed enabled"
+            );
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn the_detach_key_goes_to_the_program_when_turned_off() -> TestResult {
     let namespace = Namespace::new()?;

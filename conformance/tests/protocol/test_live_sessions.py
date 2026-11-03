@@ -18,6 +18,7 @@ import contextlib
 import itertools
 import json
 import os
+import shlex
 
 import pytest
 from agterm_conformance.client import NoResponse
@@ -448,6 +449,34 @@ def test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wai
     assert holding in session_ids(live.tree())
     live.wait_text(holding, r"(?m)^held-output$")
     assert_ok(live.request("session.close", holding))
+
+
+@LIVE
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("session.new", "session.text", "field:result.text")
+def test_a_wait_command_keeps_scrollback_after_attached_exit(live, tmp_path):
+    """An attached Live client keeps both scrollback and the final screen when its command exits (#859)."""
+    release = tmp_path / "release-scrollback"
+    script = (
+        "printf 'pane-attached-marker\\n'; "
+        f"while [ ! -e {shlex.quote(str(release))} ]; do sleep 0.05; done; "
+        "printf 'first-held-line\\n'; seq 1 300; "
+        "printf '\\033[?1000h\\033[?1006h\\033[?2004h'; printf 'last-held-line\\n'"
+    )
+    sid = assert_ok(live.request("session.new", command=f"sh -c {shlex.quote(script)}", wait=True))["id"]
+    try:
+        live.wait_mounted(sid, "left")
+        # Seeing the marker through session.text proves the pane's client has attached before the exit payload runs.
+        live.wait_text(sid, r"(?m)^pane-attached-marker$")
+        release.touch()
+        live.wait_text(sid, HELD_PROMPT)
+        text = assert_ok(live.request("session.text", sid, all=True))["text"]
+        expected = "\n".join(["first-held-line", *map(str, range(1, 301)), "last-held-line"])
+        assert expected in text, text
+        assert "pane-attached-marker" in text, text
+        assert sid in session_ids(live.tree())
+    finally:
+        assert_ok(live.request("session.close", sid))
 
 
 @LIVE
