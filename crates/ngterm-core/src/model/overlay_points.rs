@@ -168,7 +168,8 @@ impl Session {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayPointResizeFailure {
     NoOverlay,
-    /// This machine shows another machine's overlay.
+    /// An origin slot is handed to a presenter, or this machine shows another machine's overlay.
+    /// Origin slots must be resized through `Core::resize_remote_overlay`.
     Remote,
     /// A HUD measures its own height.
     Hud,
@@ -200,8 +201,8 @@ impl OverlayPointResizeFailure {
 impl AppStore {
     /// Resizes the session-wide occupant with point sizes (upstream's `resizeOverlayInPoints`): with a percent, the
     /// panel re-sizes from it keeping exactly `points`; without one, only the given axes of a panel already floating
-    /// change. A remote origin reservation is handled by the core first; a replica refuses (a program replica is the core's to
-    /// know, and it refuses before asking), and for a HUD.
+    /// change. This method refuses remote origin reservations, replicas and HUDs. The core handles origin reservations
+    /// through `Core::resize_remote_overlay` first and refuses program replicas before calling this method.
     ///
     /// # Errors
     ///

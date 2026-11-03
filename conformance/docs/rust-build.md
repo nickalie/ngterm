@@ -218,6 +218,9 @@ Mac and this build can therefore no longer view each other's sessions (`live.tre
 the far side, an attached row's stream `ngtermctl live present`), and neither can this build and a Rust build from
 before the rename.
 
+Remote overlays and pages retain origin-requested point axes and send them to presenters advertising
+`overlay.points`; older presenters receive percent-only sizes. Replica-local point resizing remains refused.
+
 | upstream | Rust build |
 |---|---|
 | `zmx.list`, `zmx.prune`, `zmx.kill`, `zmx.reset`, `zmx.tree`, `zmx.attach`, `zmx.present`, `zmx.screen` | `live.list`, `live.prune`, `live.kill`, `live.reset`, `live.tree`, `live.attach`, `live.present`, `live.screen` |
@@ -325,6 +328,10 @@ binaries (GPUI build below), into `conformance/reports/rust-windows/`, and holds
 `conformance/rust-passing-windows.txt`, with the same checker and rules (`check_ratchet.py --list`). The `windows`
 job of `.github/workflows/cross-platform.yml` runs it on every PR, push to main and push to a `ci/**` branch.
 
+The historical ratchet ID `test_points_are_refused_for_an_overlay_a_presenter_shows` now checks the older-presenter
+downgrade rather than an obsolete origin refusal. Replica-local refusal is checked by core presenter tests;
+creating that state in conformance requires successful SSH, outside its network-free seams.
+
 ## GPUI build
 
 The Rust build is the GPUI one since the switch (the GPUI plan's Task 34), which removed the GTK frontend: the binary
@@ -389,9 +396,3 @@ of itself, in `ngterm-headless`'s relaunch before its `exec`, and in `ngterm-wpe
 HTML worker's too); nothing in a build without `cfg(coverage)`. A `process::exit` or a return from `main` needs nothing.
 After the suite `cargo llvm-cov report` merges the profiles against the staged binaries, which must be the build's own
 byte for byte (`agterm_conformance/code_coverage.py`).
-
-Remote overlays and pages retain origin-requested point axes and send them to presenters advertising
-`overlay.points`; older presenters receive percent-only sizes. Replica-local point resizing remains refused.
-The historical ratchet ID `test_points_are_refused_for_an_overlay_a_presenter_shows` now checks the older-presenter
-downgrade rather than an obsolete origin refusal. Replica-local refusal is checked by core presenter tests;
-creating that state in conformance requires successful SSH, outside its network-free seams.
