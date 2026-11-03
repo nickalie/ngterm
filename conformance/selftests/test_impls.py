@@ -38,7 +38,6 @@ from agterm_conformance.impls.base import (
     check_app_id,
     check_launch_env,
     find_leftovers,
-    hosts_zmx_dir,
     isolated_runtime_env,
     process_identity,
     remove_live_dir,
@@ -46,10 +45,15 @@ from agterm_conformance.impls.base import (
 )
 from agterm_conformance.impls.rust import ProfileError, RustAdapter, profile_from_version
 from upstream_adapter import UpstreamVocabularyAdapter
-from agterm_conformance.impls.swift_macos import SwiftMacosAdapter
+from agterm_conformance.impls.swift_macos import (
+    UPSTREAM,
+    SwiftMacosAdapter,
+    hosts_session_directory,
+    upstream_socket_directory,
+)
 from agterm_conformance import llvm_profiles
 from agterm_conformance.plugin import Cli, ImplOptions
-from agterm_conformance.vocabulary import LIVE, UPSTREAM, Vocabulary, fnv1a64, upstream_socket_directory
+from agterm_conformance.vocabulary import LIVE, Vocabulary, fnv1a64
 
 
 @pytest.fixture
@@ -1040,7 +1044,7 @@ def test_stop_reaps_claimed_daemons_over_the_protocol(
     instance = adapter.launch()
     pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
     assert instance.request("fake.adopt", pid=pid).ok
-    assert find_leftovers(instance.live_dir) != []
+    assert find_leftovers(instance.live_dir, UPSTREAM) != []
     adapter.stop(instance, cleanup=False)
     requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
     assert {"cmd": "zmx.kill", "target": f"s{pid}", "args": {"pane": "left", "force": True, "window": "w1"}} in requests
@@ -1055,12 +1059,12 @@ def test_stop_reaps_a_split_whose_survivor_is_promoted_by_the_first_kill(
         pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
         assert instance.request("fake.adopt", pid=pid, session="s1", pane=pane, daemon=name).ok
     adapter.stop(instance)
-    assert find_leftovers(instance.live_dir) == []
+    assert find_leftovers(instance.live_dir, UPSTREAM) == []
 
 
 def test_a_refused_kill_is_not_retried(roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left"}
-    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    monkeypatch.setenv("FAKE_LIVE_LIST", json.dumps({"zmx": {"entries": [row]}}))
     adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     base.reap_live_sessions(instance)
@@ -1118,7 +1122,7 @@ def test_malformed_zmx_list_still_terminates_the_app(
     monkeypatch: pytest.MonkeyPatch,
     listing: str,
 ) -> None:
-    monkeypatch.setenv("FAKE_ZMX_LIST", listing)
+    monkeypatch.setenv("FAKE_LIVE_LIST", listing)
     adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
@@ -1144,7 +1148,7 @@ def test_leftover_check_matches_name_and_zmx_dir(tmp_path: Path, daemons: list[s
     zmx = spawn_daemon(tmp_path, "zmx", mine, daemons)
     spawn_daemon(tmp_path, "zmx", other, daemons)
     spawn_daemon(tmp_path, "unrelated", mine, daemons)
-    assert [pid for pid, *_ in find_leftovers(mine)] == [zmx]
+    assert [pid for pid, *_ in find_leftovers(mine, UPSTREAM)] == [zmx]
 
 
 def test_leftover_check_names_an_executable_whose_path_has_a_space(
@@ -1152,7 +1156,7 @@ def test_leftover_check_names_an_executable_whose_path_has_a_space(
 ) -> None:
     live_dir = "/tmp/agterm-zmx-spaced"
     pid = spawn_daemon(tmp_path, "zmx", live_dir, daemons, directory="Test Install")
-    assert [found for found, *_ in find_leftovers(live_dir)] == [pid]
+    assert [found for found, *_ in find_leftovers(live_dir, UPSTREAM)] == [pid]
 
 
 def test_leftover_check_under_a_session_server_finds_its_server_and_every_process_of_its_namespace(
@@ -1198,9 +1202,9 @@ def test_leftover_check_finds_a_session_host_by_its_host_argv(monkeypatch: pytes
         (3, "agterm-session-host", "c", ["/x/agterm-session-host", "client", mine]),
     ]
     monkeypatch.setattr(base, "_processes", lambda: iter(rows))
-    assert [pid for pid, *_ in find_leftovers(mine)] == [1]
-    assert hosts_zmx_dir(["/a b/agterm-session-host", "host", mine], mine)
-    assert not hosts_zmx_dir(["/x/agterm-session-host", "host"], mine)
+    assert [pid for pid, *_ in find_leftovers(mine, UPSTREAM)] == [1]
+    assert hosts_session_directory(["/a b/agterm-session-host", "host", mine], mine)
+    assert not hosts_session_directory(["/x/agterm-session-host", "host"], mine)
 
 
 def test_process_identity_reads_the_image_argv_and_environment(
@@ -1264,6 +1268,7 @@ def mac_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SwiftMaco
         log=root / "app.log",
         app_id=None,
         live_dir=upstream_socket_directory(state),
+        vocabulary=UPSTREAM,
     )
     adapter = SwiftMacosAdapter(bundle)
     adapter.session_host_timeout = 0.2
@@ -1636,7 +1641,7 @@ def test_swift_macos_launch_env(tmp_path: Path, mode: str, zmx: bool) -> None:
     assert "AGTERM_APP_ID" not in env
     assert ("AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE" in env) is (mode == "uitest")
     assert ("AGTERM_UITEST_ENABLE_ZMX" in env) is zmx
-    check_launch_env(env, tmp_path, needs_app_id=False)
+    check_launch_env(env, tmp_path, needs_app_id=False, vocabulary=UPSTREAM)
 
 
 @pytest.mark.parametrize(("mode", "welcome"), [("uitest", True), ("plain", False)])
@@ -1673,7 +1678,7 @@ def test_reaping_waits_for_a_daemon_zmx_does_not_list_yet_and_reports_refusals(
     roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left", "observation": "absent"}
-    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    monkeypatch.setenv("FAKE_LIVE_LIST", json.dumps({"zmx": {"entries": [row]}}))
     adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     try:
@@ -1694,7 +1699,7 @@ def test_reaping_waits_out_a_closed_session_daemon(
     roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     row = {"daemon": "d1", "state": "pendingClose", "sessionID": "s1", "pane": "left", "observation": "running"}
-    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    monkeypatch.setenv("FAKE_LIVE_LIST", json.dumps({"zmx": {"entries": [row]}}))
     adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     try:
@@ -1714,7 +1719,7 @@ def test_stop_reaps_a_listed_daemon_that_has_no_process_yet(
     roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left", "observation": "running"}
-    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    monkeypatch.setenv("FAKE_LIVE_LIST", json.dumps({"zmx": {"entries": [row]}}))
     adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     requests_file = instance.state_dir / "fake-requests.jsonl"

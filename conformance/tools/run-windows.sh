@@ -4,7 +4,7 @@
 # share\ghostty and share\terminfo), run the protocol, cli, behaviors and ui layers against the stage, then hold the
 # Windows ratchet: every id in conformance/rust-passing-windows.txt must still pass. Every instance comes from the
 # harness (a fresh root under this run's own %TEMP%\agt-run-* parent holding its home, application data, state dir and
-# control socket, whose named pipe its path names; NGTERM_*, AGTERM_* and ZMX_* stripped; its process tree reaped by
+# control socket, whose named pipe its path names; NGTERM_* and AGTERM_* stripped; its process tree reaped by
 # pid at the stop). Its window opens on this desktop: run it on a CI runner or a throwaway VM only, never beside a
 # live ngterm.
 #
@@ -130,7 +130,7 @@ if [[ -x "$stage/bin/$app" ]]; then
 fi
 
 # A shell inside a live ngterm or agterm session exports its socket and session; the plugin scrubs these too.
-while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(NGTERM_|AGTERM_|ZMX_)' || true)
+while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(NGTERM_|AGTERM_)' || true)
 
 mkdir -p "$out"
 rm -rf "$out/traces"

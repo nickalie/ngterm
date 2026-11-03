@@ -91,7 +91,7 @@ def decode_response(line: bytes) -> Response:
 
 
 class Stream:
-    """A connection the server keeps after its reply: `zmx.present` presentation frames, `session.overlay.job.run`
+    """A connection the server keeps after its reply: `live.present` presentation frames, `session.overlay.job.run`
     job frames. One JSON object per line in both directions; close it (or use it as a context manager) when done.
     """
 

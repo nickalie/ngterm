@@ -276,7 +276,7 @@ authored identifier without changing the semantic assertions or adding aliases t
 - [x] write self-tests first: an instance launched from a `tests/ui` module (module fixture, `launch()`, `relaunch`) is an
       X11 instance with its own Xvfb display and session bus and the run's a11y address; one launched elsewhere is a
       weston instance; the env carries exactly the harness-set `DISPLAY`/`AT_SPI_BUS_ADDRESS`/`GDK_BACKEND`/
-      `GSETTINGS_BACKEND`, with every inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` gone
+      `GSETTINGS_BACKEND`, with every inherited `NGTERM_*`/`AGTERM_*` gone
 - [x] write self-tests for the refusals: an inherited `DISPLAY` or a11y address, a ui run in a non-headless display
       mode, an `Atspi.init()` before the run's bus is set; and for missing setup (Xvfb, launcher in its libexec paths,
       registryd, typelib) exiting 2 naming the step
@@ -660,7 +660,7 @@ ratchets. Self-tests pass except the two known host-dependent `test_impls` noop-
       conformance-gate on `ci/verify-task12` 41596232288 broke on test_ui_setup_failure_withholds_runner_report (it
       needed at-spi2-core on the host since ui became a default layer) ➕ fixed, gate green on `ci/gate-task12`
       41596782313; the ui ids ran in full on CI above; reference-macos protocol reds are on `main` too, run 41603323048,
-      docs/backlog/reference-macos-zmx-restart-and-hold-tests-time-out.md)
+      docs/backlog/reference-macos-live-session-restart-and-hold-tests-time-out.md)
 
 ### Task 13: [Final] Update documentation
 

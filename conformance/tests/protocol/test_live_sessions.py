@@ -1,16 +1,16 @@
-"""The `zmx` group, `session.lead`/`session.restart` and the Live-sessions read-back.
+"""The `live` group, `session.lead`/`session.restart` and the Live-sessions read-back.
 
 Every group command, result key, tree key and error text goes through the instance's vocabulary
-(`agterm_conformance.vocabulary`): the Rust build answers this group as `live`.
+(`agterm_conformance.vocabulary`): the Swift reference answers this group by upstream's names.
 
 The module's shared instance runs without Live, so its daemons are only claimed, never observed: the inventory,
-prune, the hostless `zmx.tree` and every refusal are checked there. The Live tests share one instance launched with
-`restoreMode: live` seeded; a pane in it runs the account's zsh or fish inside a live session (a zmx daemon upstream,
-a session of the Rust build's server), so a line typed there only prints a marker. Each test ends the sessions it
-opens, which ends their daemons; the harness's stop then finds no process left in the instance's namespace (under the
+prune, the hostless `live.tree` and every refusal are checked there. The Live tests share one instance launched with
+`restoreMode: live` seeded; a pane in it runs the account's zsh or fish inside a live session (a session of the Rust
+build's server, a daemon of its own upstream), so a line typed there only prints a marker. Each test ends the sessions
+it opens, which ends their daemons; the harness's stop then finds no process left in the instance's namespace (under the
 vocabulary's directory variable, or the session server of the namespace).
 
-`zmx.reset` is refused here without `--force` only: a confirmed reset quits the app and relaunches it outside the
+`live.reset` is refused here without `--force` only: a confirmed reset quits the app and relaunches it outside the
 harness (see the catalog exemption)."""
 
 import base64
@@ -27,7 +27,7 @@ from agterm_conformance.wait import wait_frame, wait_until
 
 UNKNOWN = "zzz"
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
+    "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
 )
 ATTRIBUTIONS = ("supervisor", "app", "orphaned", "unknown")
 PRESENTATION_VERSION = 1
@@ -37,13 +37,13 @@ _markers = itertools.count(1)
 
 
 def _rows(ctl, response, sid):
-    """This session's `zmx.list` rows by pane."""
+    """This session's `live.list` rows by pane."""
     rows = assert_ok(response)[ctl.vocabulary.result_key]["entries"]
     return {row["pane"]: row for row in rows if row.get("sessionID") == sid}
 
 
 def _entries(ctl, sid):
-    return _rows(ctl, ctl.request(ctl.vocabulary.command("zmx.list")), sid)
+    return _rows(ctl, ctl.request(ctl.vocabulary.command("live.list")), sid)
 
 
 def _initial_session(ctl):
@@ -55,10 +55,10 @@ def _initial_session(ctl):
 # -- without Live
 
 
-@pytest.mark.covers("zmx.list", "field:result.zmx")
+@pytest.mark.covers("live.list", "field:result.live")
 def test_list_joins_each_pane_claim(ctl):
     sid = _initial_session(ctl)
-    inventory = assert_ok(ctl.request(ctl.vocabulary.command("zmx.list")))[ctl.vocabulary.result_key]
+    inventory = assert_ok(ctl.request(ctl.vocabulary.command("live.list")))[ctl.vocabulary.result_key]
     assert_subset(
         inventory,
         {
@@ -75,31 +75,31 @@ def test_list_joins_each_pane_claim(ctl):
     assert_absent(row, "clients", "leaderPID")
 
 
-@pytest.mark.covers("zmx.prune", "field:result.text", "field:result.affected")
+@pytest.mark.covers("live.prune", "field:result.text", "field:result.affected")
 def test_prune_finds_no_orphans(ctl):
-    assert assert_ok(ctl.request(ctl.vocabulary.command("zmx.prune"))) == {"text": "no orphan daemons", "affected": 0}
+    assert assert_ok(ctl.request(ctl.vocabulary.command("live.prune"))) == {"text": "no orphan daemons", "affected": 0}
 
 
-@pytest.mark.covers("zmx.tree", "field:result.remote")
+@pytest.mark.covers("live.tree", "field:result.remote")
 def test_tree_without_a_host_lists_no_attachable_session_outside_live(ctl):
-    remote = assert_ok(ctl.request(ctl.vocabulary.command("zmx.tree")))["remote"]
+    remote = assert_ok(ctl.request(ctl.vocabulary.command("live.tree")))["remote"]
     assert remote["sessions"] == []
     assert remote["presentation"] >= PRESENTATION_VERSION
     assert remote["endpoint"]["socketDirectory"] == ctl.instance.live_dir
 
 
-@pytest.mark.covers("zmx.kill")
+@pytest.mark.covers("live.kill")
 @pytest.mark.parametrize(
     ("target", "args", "error"),
     [
-        pytest.param(None, {"pane": "left", "force": True}, "zmx.kill requires an explicit --target", id="no-target"),
-        pytest.param("SID", {"force": True}, "zmx.kill requires --pane left|right", id="no-pane"),
-        pytest.param("SID", {"pane": "scratch", "force": True}, "zmx.kill requires --pane left|right", id="scratch"),
-        pytest.param("SID", {"pane": "left"}, "zmx.kill requires --force", id="no-force"),
+        pytest.param(None, {"pane": "left", "force": True}, "live.kill requires an explicit --target", id="no-target"),
+        pytest.param("SID", {"force": True}, "live.kill requires --pane left|right", id="no-pane"),
+        pytest.param("SID", {"pane": "scratch", "force": True}, "live.kill requires --pane left|right", id="scratch"),
+        pytest.param("SID", {"pane": "left"}, "live.kill requires --force", id="no-force"),
         pytest.param(
             "active",
             {"pane": "left", "force": True},
-            "zmx.kill needs a session id; 'active' is not accepted",
+            "live.kill needs a session id; 'active' is not accepted",
             id="active",
         ),
         pytest.param(
@@ -112,36 +112,36 @@ def test_kill_rejects(ctl, target, args, error):
     sid = _initial_session(ctl)
     target = sid if target == "SID" else target
     error = ctl.vocabulary.text(error).replace("SID", sid)
-    assert_error(ctl.request(ctl.vocabulary.command("zmx.kill"), target, **args), error)
+    assert_error(ctl.request(ctl.vocabulary.command("live.kill"), target, **args), error)
 
 
-@pytest.mark.covers("zmx.kill")
+@pytest.mark.covers("live.kill")
 def test_kill_refuses_a_daemon_that_is_not_running(ctl):
     sid = _initial_session(ctl)
     daemon = _entries(ctl, sid)["left"]["daemon"]
-    kill = ctl.vocabulary.command("zmx.kill")
+    kill = ctl.vocabulary.command("live.kill")
     assert_error(ctl.request(kill, sid, pane="left", force=True), f"{daemon} is not running")
     assert find_session(ctl.tree(), sid)["realized"] is True
 
 
-@pytest.mark.covers("zmx.screen")
+@pytest.mark.covers("live.screen")
 @pytest.mark.parametrize(
     ("args", "error"),
     [
-        pytest.param({}, "zmx.screen requires a daemon name", id="no-name"),
-        pytest.param({"name": "two words"}, "zmx.screen requires a daemon name", id="not-plain"),
+        pytest.param({}, "live.screen requires a daemon name", id="no-name"),
+        pytest.param({"name": "two words"}, "live.screen requires a daemon name", id="not-plain"),
         pytest.param({"name": "agterm-x", "all": True, "lines": 3}, "use either --all or --lines, not both", id="both"),
         pytest.param({"name": "agterm-x", "lines": 0}, "--lines must be greater than 0", id="zero-lines"),
-        pytest.param({"name": "agterm-x"}, "could not read the zmx screen of {name}", id="no-daemon"),
+        pytest.param({"name": "agterm-x"}, "could not read the live session screen of {name}", id="no-daemon"),
     ],
 )
 def test_screen_rejects(ctl, args, error):
-    assert_error(ctl.request(ctl.vocabulary.command("zmx.screen"), **args), ctl.vocabulary.text(error, **args))
+    assert_error(ctl.request(ctl.vocabulary.command("live.screen"), **args), ctl.vocabulary.text(error, **args))
 
 
-@pytest.mark.covers("zmx.reset")
+@pytest.mark.covers("live.reset")
 def test_reset_requires_force(ctl):
-    assert_error(ctl.request(ctl.vocabulary.command("zmx.reset")), ctl.vocabulary.text("zmx.reset requires --force"))
+    assert_error(ctl.request(ctl.vocabulary.command("live.reset")), ctl.vocabulary.text("live.reset requires --force"))
     assert_absent(ctl.tree()["tree"], "liveReset")
 
 
@@ -182,18 +182,18 @@ def test_restart_rejects(ctl, args, error):
     assert_error(ctl.request("session.restart", _initial_session(ctl), **args), error)
 
 
-@pytest.mark.covers("zmx.present")
+@pytest.mark.covers("live.present")
 def test_present_refuses_without_a_session(ctl):
-    with ctl.stream(ctl.vocabulary.command("zmx.present")) as stream:
-        assert_error(stream.reply, ctl.vocabulary.text("zmx.present requires a session"))
+    with ctl.stream(ctl.vocabulary.command("live.present")) as stream:
+        assert_error(stream.reply, ctl.vocabulary.text("live.present requires a session"))
 
 
-@pytest.mark.covers("zmx.present", "session.overlay.job.run", "session.overlay.page.serve")
+@pytest.mark.covers("live.present", "session.overlay.job.run", "session.overlay.page.serve")
 @pytest.mark.parametrize(
     ("cmd", "target", "error"),
     [
         pytest.param(
-            "zmx.present", "SID", "session is not live-backed, so nothing can be attached to it", id="present-not-live"
+            "live.present", "SID", "session is not live-backed, so nothing can be attached to it", id="present-not-live"
         ),
         pytest.param("session.overlay.job.run", None, "session.overlay.job.run requires a job id", id="job-no-id"),
         pytest.param("session.overlay.job.run", UNKNOWN, "invalid job id", id="job-invalid"),
@@ -214,7 +214,7 @@ def test_present_refuses_without_a_session(ctl):
 )
 def test_stream_commands_refuse_before_streaming(ctl, cmd, target, error):
     target = _initial_session(ctl) if target == "SID" else target
-    cmd = ctl.vocabulary.command(cmd) if cmd.startswith("zmx.") else cmd
+    cmd = ctl.vocabulary.command(cmd) if cmd.startswith("live.") else cmd
     with ctl.stream(cmd, target) as stream:
         assert_error(stream.reply, error)
 
@@ -255,7 +255,7 @@ def _live_session(live, split=False, **args):
         assert all(rows.get(pane, {}).get("observation") == "running" for pane in panes), rows
         return True
 
-    live.wait_response(live.vocabulary.command("zmx.list"), None, running)
+    live.wait_response(live.vocabulary.command("live.list"), None, running)
     return sid
 
 
@@ -263,14 +263,14 @@ def _gone(live, daemon):
     def gone(response):
         return all(row["daemon"] != daemon for row in assert_ok(response)[live.vocabulary.result_key]["entries"])
 
-    live.wait_response(live.vocabulary.command("zmx.list"), None, gone)
+    live.wait_response(live.vocabulary.command("live.list"), None, gone)
 
 
 @LIVE
 @pytest.mark.covers(
-    "zmx.list",
-    "field:result.zmx",
-    "field:tree.session.backedByZmx",
+    "live.list",
+    "field:result.live",
+    "field:tree.session.backedByLive",
     "field:tree.session.liveAttribution",
     "field:tree.session.splitLiveAttribution",
 )
@@ -281,7 +281,7 @@ def test_live_panes_run_in_claimed_daemons(live):
     assert node["liveAttribution"] in ATTRIBUTIONS and node["splitLiveAttribution"] in ATTRIBUTIONS
     # One reply with both clients attached: upstream's count drops to 0 for a moment while a pane's client attaches.
     attached = live.wait_response(
-        live.vocabulary.command("zmx.list"),
+        live.vocabulary.command("live.list"),
         None,
         lambda r: all(_rows(live, r, sid).get(p, {}).get("clients", 0) >= 1 for p in ("left", "right")),
     )
@@ -296,7 +296,7 @@ def test_live_panes_run_in_claimed_daemons(live):
 
 
 @LIVE
-@pytest.mark.covers("zmx.screen", "field:result.text")
+@pytest.mark.covers("live.screen", "field:result.text")
 def test_screen_reads_the_daemon_grid(live):
     sid = _live_session(live)
     marker = f"ZMARK{next(_markers)}"
@@ -304,7 +304,7 @@ def test_screen_reads_the_daemon_grid(live):
     assert_ok(live.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:5]} {marker[5:]}\n"))
     live.wait_text(sid, rf"(?m)^{marker}$")
     daemon = _entries(live, sid)["left"]["daemon"]
-    screen = assert_ok(live.request(live.vocabulary.command("zmx.screen"), name=daemon))
+    screen = assert_ok(live.request(live.vocabulary.command("live.screen"), name=daemon))
     assert f"\n{marker}\n" in f"\n{screen['text']}\n"
     assert_ok(live.request("session.close", sid))
     _gone(live, daemon)
@@ -336,7 +336,7 @@ def test_restart_replaces_the_pane_shell(live):
     assert result["text"].startswith(f"restarted left pane: shell {before['leaderPID']} -> {new_pid}")
     # The daemon keeps its name: the pane identity it is derived from survives the restart.
     live.wait_response(
-        live.vocabulary.command("zmx.list"),
+        live.vocabulary.command("live.list"),
         None,
         lambda response: _rows(live, response, sid)["left"]["leaderPID"] == new_pid,
     )
@@ -393,7 +393,7 @@ def test_restart_replay_refuses_a_shell_at_its_prompt(live):
 
 def _ctrl_c_leaves_a_prompt(live, sid, daemon):
     """Ctrl+C on the pane's `sleep 600` ends it, and the pane's daemon goes on in its login shell: the session and its
-    pane stay, `zmx.list` lists the same daemon, and a marker typed afterwards prints (#773)."""
+    pane stay, `live.list` lists the same daemon, and a marker typed afterwards prints (#773)."""
 
     def sleeping(tree):
         foreground = find_session(tree, sid).get("foreground") or []
@@ -442,7 +442,7 @@ def test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wai
         assert row.get("observation") != "running", row
         return True
 
-    live.wait_response(live.vocabulary.command("zmx.list"), None, ended)
+    live.wait_response(live.vocabulary.command("live.list"), None, ended)
     # only the exit prompt proves the hold: the pane closes a moment after its daemon reads as ended
     live.wait_text(holding, HELD_PROMPT)
     assert holding in session_ids(live.tree())
@@ -451,11 +451,11 @@ def test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wai
 
 
 @LIVE
-@pytest.mark.covers("zmx.kill", "field:result.pane")
+@pytest.mark.covers("live.kill", "field:result.pane")
 def test_kill_ends_the_daemon_and_closes_its_pane(live):
     sid = _live_session(live, split=True)
     daemon = _entries(live, sid)["right"]["daemon"]
-    result = assert_ok(live.request(live.vocabulary.command("zmx.kill"), sid, pane="right", force=True))
+    result = assert_ok(live.request(live.vocabulary.command("live.kill"), sid, pane="right", force=True))
     assert result == {"id": sid, "text": f"killed {daemon}", "pane": "right"}
     live.wait_tree(lambda tree: "hasSplit" not in find_session(tree, sid))
     _gone(live, daemon)
@@ -480,7 +480,7 @@ def _hello(mode, kinds=OLDER_KINDS):
 
 
 def _subscribed(live, sid, mode, kinds=OLDER_KINDS):
-    stream = live.stream(live.vocabulary.command("zmx.present"), sid)
+    stream = live.stream(live.vocabulary.command("live.present"), sid)
     assert stream.reply.ok, stream.reply.raw
     assert stream.reply.result == {"id": sid}
     stream.send(_hello(mode, kinds))
@@ -517,7 +517,7 @@ def _presenters(live, sid, expected):
 
 
 @LIVE
-@pytest.mark.covers("zmx.present", "field:tree.session.presenters", streams=("zmx.present",))
+@pytest.mark.covers("live.present", "field:tree.session.presenters", streams=("live.present",))
 def test_present_mirrors_a_live_session(live):
     sid = _live_session(live)
     stream, _ = _subscribed(live, sid, "mirror")
@@ -538,7 +538,7 @@ def test_present_mirrors_a_live_session(live):
 )
 def test_job_run_serves_an_overlay_a_presenter_shows(live):
     sid = _live_session(live)
-    endpoint = assert_ok(live.request(live.vocabulary.command("zmx.tree")))["remote"]["endpoint"]
+    endpoint = assert_ok(live.request(live.vocabulary.command("live.tree")))["remote"]["endpoint"]
     # Upstream hands an overlay to the presenter only while the pane's own client follows, and open it
     # locally otherwise; a viewer's client claiming the lead makes it follow.
     daemon = _entries(live, sid)["left"]["daemon"]
@@ -576,7 +576,7 @@ POINTS_REMOTE = "--width/--height are not supported for an overlay shown on anot
 def test_points_are_refused_for_an_overlay_a_presenter_shows(live):
     """The presentation wire carries only a percent, so point sizes are refused before a reservation or a send."""
     sid = _live_session(live)
-    endpoint = assert_ok(live.request(live.vocabulary.command("zmx.tree")))["remote"]["endpoint"]
+    endpoint = assert_ok(live.request(live.vocabulary.command("live.tree")))["remote"]["endpoint"]
     daemon = _entries(live, sid)["left"]["daemon"]
     with live.vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
         live.wait_tree(lambda tree: _follows(tree, sid, viewer))
@@ -627,10 +627,10 @@ def _sounds_before_fence(live, sid, stream, fence):
 
 
 @LIVE
-@pytest.mark.covers("session.status", "zmx.present", "field:tree.session.presenters", streams=("zmx.present",))
+@pytest.mark.covers("session.status", "live.present", "field:tree.session.presenters", streams=("live.present",))
 def test_status_sound_goes_to_a_following_presenter(live):
     sid = _live_session(live)
-    endpoint = assert_ok(live.request(live.vocabulary.command("zmx.tree")))["remote"]["endpoint"]
+    endpoint = assert_ok(live.request(live.vocabulary.command("live.tree")))["remote"]["endpoint"]
     # A status sound goes to the presenter only while the status pane's own client follows.
     daemon = _entries(live, sid)["left"]["daemon"]
     with live.vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
@@ -660,10 +660,10 @@ def test_status_sound_goes_to_a_following_presenter(live):
 
 
 @LIVE
-@pytest.mark.covers("zmx.tree", "field:result.remote", "session.status")
+@pytest.mark.covers("live.tree", "field:result.remote", "session.status")
 def test_tree_rows_carry_the_session_status(live):
     sid = _live_session(live)
-    tree_cmd = live.vocabulary.command("zmx.tree")
+    tree_cmd = live.vocabulary.command("live.tree")
 
     def row(response):
         return next((session for session in assert_ok(response)["remote"]["sessions"] if session["id"] == sid), None)
@@ -679,7 +679,7 @@ def test_tree_rows_carry_the_session_status(live):
 
 @LIVE
 @pytest.mark.since("0.39.1")
-@pytest.mark.covers("zmx.tree", "field:result.remote", "session.companion.page", "session.companion.new")
+@pytest.mark.covers("live.tree", "field:result.remote", "session.companion.page", "session.companion.new")
 def test_tree_lists_a_page_companion_without_panes_under_its_listed_parent(live, tmp_path):
     """A page companion owns no daemon, so the hostless tree lists it with no panes, naming its parent, beside that
     listed parent; a terminal companion is listed as any session, with its parent (#840)."""
@@ -688,7 +688,7 @@ def test_tree_lists_a_page_companion_without_panes_under_its_listed_parent(live,
     page_path.write_text("<!doctype html><title>report</title><p>companion page</p>")
     page = assert_ok(live.request("session.companion.page", sid, html=str(page_path)))["id"]
     companion = assert_ok(live.request("session.companion.new", sid, noSelect=True))["id"]
-    tree_cmd = live.vocabulary.command("zmx.tree")
+    tree_cmd = live.vocabulary.command("live.tree")
 
     def rows(response):
         return {session["id"]: session for session in assert_ok(response)["remote"]["sessions"]}
@@ -706,7 +706,7 @@ def test_tree_lists_a_page_companion_without_panes_under_its_listed_parent(live,
 
 @LIVE
 @pytest.mark.since("0.39.1")
-@pytest.mark.covers("zmx.present", "session.companion.new", streams=("zmx.present",))
+@pytest.mark.covers("live.present", "session.companion.new", streams=("live.present",))
 def test_a_respawned_live_parent_publishes_its_respawn_to_a_presenter(live):
     """A parent whose shell exits while it has companions restarts it under the same daemon name; once a new leader
     runs under that name the origin publishes `pane.respawn` with the pane's count, under the epoch every snapshot
@@ -714,7 +714,7 @@ def test_a_respawned_live_parent_publishes_its_respawn_to_a_presenter(live):
     sid = _live_session(live)
     companion = assert_ok(live.request("session.companion.new", sid, noSelect=True))["id"]
     daemon = _entries(live, sid)["left"]["daemon"]
-    stream = live.stream(live.vocabulary.command("zmx.present"), sid)
+    stream = live.stream(live.vocabulary.command("live.present"), sid)
     assert stream.reply.ok, stream.reply.raw
     with stream:
         stream.send(_hello("mirror"))
@@ -731,9 +731,9 @@ def test_a_respawned_live_parent_publishes_its_respawn_to_a_presenter(live):
         assert row.get("observation") == "running", row
         return True
 
-    live.wait_response(live.vocabulary.command("zmx.list"), None, running)
+    live.wait_response(live.vocabulary.command("live.list"), None, running)
     # a later viewer's snapshot carries every count under the same epoch
-    later = live.stream(live.vocabulary.command("zmx.present"), sid)
+    later = live.stream(live.vocabulary.command("live.present"), sid)
     with later:
         later.send(_hello("mirror"))
         wait_frame(later.read, "hello", later.send)
@@ -758,7 +758,7 @@ def _page_presenter(live, kinds=PAGE_PRESENTER_KINDS):
     """A Live session whose left pane follows a viewer's client, and a presenter of it whose hello lists `kinds`:
     `(sid, presenter stream, its generation)`. Upstream hands a page over only while the pane's own client follows."""
     sid = _live_session(live)
-    endpoint = assert_ok(live.request(live.vocabulary.command("zmx.tree")))["remote"]["endpoint"]
+    endpoint = assert_ok(live.request(live.vocabulary.command("live.tree")))["remote"]["endpoint"]
     daemon = _entries(live, sid)["left"]["daemon"]
     with live.vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
         live.wait_tree(lambda tree: _follows(tree, sid, viewer))

@@ -24,7 +24,7 @@ PLACEMENT = "a companion takes no workspace or placement: it lands under its par
 MOVE_REFUSED = "a companion moves only among its siblings"
 
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
+    "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
 )
 _markers = itertools.count(1)
 

@@ -562,7 +562,7 @@ def test_a_second_run_waits_for_the_lock(tmp_path: Path, stage: Path, layers: Pa
 
 
 def test_the_run_does_not_inherit_the_lock(tmp_path: Path, stage: Path, layers: Path, lock: Path) -> None:
-    """zmx daemons outlive a run by design: started holding the lock's descriptor, they would hold it forever."""
+    """Live sessions' servers outlive a run by design: started holding the lock's descriptor, they would hold it forever."""
     (layers / "protocol" / "test_probe.py").write_text(PROBE_FDS_TEST)
     probe = tmp_path / "fds.json"
     completed, _ = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), FD_PROBE=str(probe))

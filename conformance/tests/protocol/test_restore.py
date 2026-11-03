@@ -78,7 +78,7 @@ def test_mode_rejects_an_unknown_mode(ctl):
     assert _status(ctl) == STATUS
 
 
-@pytest.mark.covers("restore.mode", "field:result.restore", "field:tree.session.backedByZmx")
+@pytest.mark.covers("restore.mode", "field:result.restore", "field:tree.session.backedByLive")
 def test_seeded_live_mode_is_requested_at_launch(launch, adapter):
     live = launch(settings={"restoreMode": "live"})
     status = _status(live)
@@ -98,8 +98,8 @@ def test_seeded_live_mode_is_requested_at_launch(launch, adapter):
         assert _node_when(live, session["id"], **{backed: False})["surfaces"][0][backed] is False
 
 
-@pytest.mark.covers("field:tree.session.backedByZmx")
-def test_panes_are_not_zmx_backed_outside_live_mode(ctl):
+@pytest.mark.covers("field:tree.session.backedByLive")
+def test_panes_are_not_live_backed_outside_live_mode(ctl):
     sid = _new(ctl)
     backed = ctl.vocabulary.backed_key
     node = _node_when(ctl, sid, **{backed: False})

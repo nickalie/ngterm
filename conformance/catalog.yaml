@@ -3,6 +3,7 @@
 # are hand-maintained, but the generator re-adds its own entries (AUTO_BEHAVIORS / AUTO_EXEMPTIONS) when
 # missing, so removing one means removing it from that table. Statuses: uncovered, covered, removed-upstream.
 # A cli item's `variants` maps a flag to the command the subcommand sends instead of `wire` when given it.
+# Names are ngterm's: the generator renames upstream's live-session group to `live` (UPSTREAM_GROUP).
 upstream: v0.39.1
 commands:
   tree: {status: uncovered}
@@ -117,14 +118,14 @@ commands:
   version: {status: uncovered}
   restore.capture: {status: uncovered}
   restore.mode: {status: uncovered}
-  zmx.list: {status: uncovered}
-  zmx.prune: {status: uncovered}
-  zmx.kill: {status: uncovered}
-  zmx.reset: {status: uncovered}
-  zmx.tree: {status: uncovered}
-  zmx.attach: {status: uncovered}
-  zmx.present: {status: uncovered, mode: presentation-stream}
-  zmx.screen: {status: uncovered}
+  live.list: {status: uncovered}
+  live.prune: {status: uncovered}
+  live.kill: {status: uncovered}
+  live.reset: {status: uncovered}
+  live.tree: {status: uncovered}
+  live.attach: {status: uncovered}
+  live.present: {status: uncovered, mode: presentation-stream}
+  live.screen: {status: uncovered}
   recent.list: {status: uncovered}
   recent.open: {status: uncovered}
   recent.clear: {status: uncovered}
@@ -158,7 +159,7 @@ fields:
   result.app: {status: uncovered}
   result.installed: {status: uncovered}
   result.restore: {status: uncovered}
-  result.zmx: {status: uncovered}
+  result.live: {status: uncovered}
   result.remote: {status: uncovered}
   result.liveReset: {status: uncovered}
   result.pageID: {status: uncovered}
@@ -209,7 +210,7 @@ fields:
   tree.session.active: {status: uncovered}
   tree.session.split: {status: uncovered}
   tree.session.hasSplit: {status: uncovered}
-  tree.session.backedByZmx: {status: uncovered}
+  tree.session.backedByLive: {status: uncovered}
   tree.session.liveAttribution: {status: uncovered}
   tree.session.splitLiveAttribution: {status: uncovered}
   tree.session.splitAxis: {status: uncovered}
@@ -397,14 +398,14 @@ cli:
   recent list: {status: uncovered, wire: recent.list}
   recent open: {status: uncovered, wire: recent.open}
   recent clear: {status: uncovered, wire: recent.clear}
-  zmx list: {status: uncovered, wire: zmx.list}
-  zmx screen: {status: uncovered, wire: zmx.screen}
-  zmx prune: {status: uncovered, wire: zmx.prune}
-  zmx kill: {status: uncovered, wire: zmx.kill}
-  zmx reset: {status: uncovered, wire: zmx.reset}
-  zmx tree: {status: uncovered, wire: zmx.tree}
-  zmx attach: {status: uncovered, wire: zmx.attach}
-  zmx present: {status: uncovered, wire: zmx.present}
+  live list: {status: uncovered, wire: live.list}
+  live screen: {status: uncovered, wire: live.screen}
+  live prune: {status: uncovered, wire: live.prune}
+  live kill: {status: uncovered, wire: live.kill}
+  live reset: {status: uncovered, wire: live.reset}
+  live tree: {status: uncovered, wire: live.tree}
+  live attach: {status: uncovered, wire: live.attach}
+  live present: {status: uncovered, wire: live.present}
   session overlay run-job: {status: uncovered, wire: session.overlay.job.run}
   session overlay page-serve: {status: uncovered, wire: session.overlay.page.serve}
   session overlay page-attach: {status: uncovered, wire: session.companion.page.attach}
@@ -412,10 +413,10 @@ cli:
   terminfo install: {status: uncovered}
   version: {status: uncovered, wire: version}
 behaviors:
-  zmx.tree.remote-host: {status: uncovered}
+  live.tree.remote-host: {status: uncovered}
   companion.remote-create: {status: uncovered}
   companion.remote-page: {status: uncovered}
-  zmx.present.respawn-reattach: {status: uncovered}
+  live.present.respawn-reattach: {status: uncovered}
   protocol.target-resolution: {status: uncovered}
   protocol.malformed-request: {status: uncovered}
   cli.socket-resolution: {status: uncovered}
@@ -438,41 +439,41 @@ behaviors:
   pane.typing: {status: uncovered}
 exemptions:
   debug.appearance: refused outside UI-test mode; a UI-test-only hook with no CLI subcommand
-  zmx.attach: a successful attach re-discovers the remote over ssh before creating anything, which the suite's no-network,
+  live.attach: a successful attach re-discovers the remote over ssh before creating anything, which the suite's no-network,
     no-remote-host constraints exclude; its refusals are still tested
-  behavior:zmx.tree.remote-host: remote discovery runs ssh, excluded by the suite's no-network constraints
+  behavior:live.tree.remote-host: remote discovery runs ssh, excluded by the suite's no-network constraints
   behavior:companion.remote-create: a companion of a row attached from another machine is created on that machine over ssh
-    and attached here, which needs zmx.attach over ssh, excluded by the suite's no-network constraints; the origin side is
-    tested through the companion commands and zmx.tree
-  behavior:companion.remote-page: the viewer side of a remote page companion (session.companion.page.attach over ssh and
-    its page channel) needs zmx.attach over ssh, excluded by the suite's no-network constraints; the origin's listing of
-    the page row is tested through zmx.tree
-  behavior:zmx.present.respawn-reattach: the viewer's reattach of a held pane its origin respawned needs zmx.attach over
-    ssh, excluded by the suite's no-network constraints; the origin's pane.respawn is tested through zmx.present
+    and attached here, which needs live.attach over ssh, excluded by the suite's no-network constraints; the origin side is
+    tested through the companion commands and live.tree
+  behavior:companion.remote-page: the viewer side of a remote page companion (session.companion.page.attach over ssh and its
+    page channel) needs live.attach over ssh, excluded by the suite's no-network constraints; the origin's listing of the
+    page row is tested through live.tree
+  behavior:live.present.respawn-reattach: the viewer's reattach of a held pane its origin respawned needs live.attach over
+    ssh, excluded by the suite's no-network constraints; the origin's pane.respawn is tested through live.present
   session.paste: a successful paste reads the desktop's own clipboard, which an isolated GUI instance shares with the user's
     session and which no test may seed without overwriting the user's; its refusals are still tested
   session.overlay.copy: no protocol command makes a selection inside an overlay terminal (session.selectall acts on the panes
     underneath); its refusals are still tested
-  zmx.reset: a confirmed reset quits the app and relaunches it through `open -n` outside the harness (LiveResetRelauncher),
+  live.reset: a confirmed reset quits the app and relaunches it through `open -n` outside the harness (LiveResetRelauncher),
     a process the harness may neither start nor stop. Its --force refusal is still tested
-  field:result.liveReset: written only by a confirmed zmx.reset, exempted above
-  field:tree.liveReset: reports a reset zmx.reset armed or a launch consumed, exempted above
-  field:tree.session.remoteHost: set only on a session attached from another machine, which needs zmx.attach over ssh, excluded
+  field:result.liveReset: written only by a confirmed live.reset, exempted above
+  field:tree.liveReset: reports a reset live.reset armed or a launch consumed, exempted above
+  field:tree.session.remoteHost: set only on a session attached from another machine, which needs live.attach over ssh, excluded
     by the suite's no-network constraints
-  field:tree.session.presentation: the viewer side of an attached session's presentation stream, which needs zmx.attach over
-    ssh; the origin side is tested through zmx.present
-  event:remote.opened: emitted when a session attached over ssh opens, excluded with zmx.attach
-  event:remote.closed: emitted when a session attached over ssh closes, excluded with zmx.attach
+  field:tree.session.presentation: the viewer side of an attached session's presentation stream, which needs live.attach over
+    ssh; the origin side is tested through live.present
+  event:remote.opened: emitted when a session attached over ssh opens, excluded with live.attach
+  event:remote.closed: emitted when a session attached over ssh closes, excluded with live.attach
   cli:session paste: a successful paste reads the desktop clipboard, exempted with session.paste; its refusals are still tested
   cli:session overlay copy: no command makes a selection inside an overlay terminal, exempted with session.overlay.copy; its
     refusals are still tested
-  cli:zmx reset: a confirmed reset quits the app and relaunches it outside the harness, exempted with zmx.reset; its --force
+  cli:live reset: a confirmed reset quits the app and relaunches it outside the harness, exempted with live.reset; its --force
     refusal is still tested
-  cli:zmx attach: a successful attach runs ssh, exempted with zmx.attach; its refusals are still tested
+  cli:live attach: a successful attach runs ssh, exempted with live.attach; its refusals are still tested
   ui:palette-subtitle: never exposed by the reference, since its row's `palette-item-{item}` identifier overrides those of
     the row's texts; the pick test accepts the subtitle under either id, but no reference exercises this one
   ui:palette-badge: never exposed by the reference, for the reason given for ui:palette-subtitle
   ui:palette-mark: never exposed by the reference, for the reason given for ui:palette-subtitle (a membership editor row's
     flag or focus mark); the ui test of the session editor reads its toggle back from the tree instead
   ui:remote-reconnect-note-{pane}: shows what ssh said when probing the remote host of an attached session failed, which needs
-    zmx.attach over ssh, excluded by the suite's no-network constraints
+    live.attach over ssh, excluded by the suite's no-network constraints

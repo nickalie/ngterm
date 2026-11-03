@@ -24,7 +24,7 @@ from agterm_conformance.match import (
     workspaces,
 )
 from agterm_conformance.plugin import Cli, Ctl
-from agterm_conformance.vocabulary import UPSTREAM
+from agterm_conformance.vocabulary import LIVE as LIVE_VOCABULARY
 from agterm_conformance.wait import WaitTimeout, wait_frame, wait_until
 
 UNKNOWN = "zzz"
@@ -77,8 +77,8 @@ def _usage(result, message=None):
         assert result.stderr.startswith(f"Error: {message}\n"), result.stderr
 
 
-def _rendered(result, response_result, echo_id=False, vocabulary=UPSTREAM):
-    """The human form of `response_result`, one line per `print`; a `zmx.list` result and the texts naming the app are
+def _rendered(result, response_result, echo_id=False, vocabulary=LIVE_VOCABULARY):
+    """The human form of `response_result`, one line per `print`; a `live.list` result and the texts naming the app are
     read under `vocabulary`."""
     return _ok(result, cli_format.human(response_result, echo_id, vocabulary) + "\n")
 
@@ -724,7 +724,7 @@ def test_session_commands_refused_outside_their_state(cli, ctl):
         cli("session", "restart", "--pane", "left", "--target", sid),
         "session.restart needs Live sessions mode; this pane has no live shell to replace",
     )
-    present = cli(*cli.vocabulary.cli("zmx", "present", sid))
+    present = cli(*cli.vocabulary.cli("live", "present", sid))
     message = "session is not live-backed, so nothing can be attached to it"
     assert (present.returncode, present.stdout, present.stderr) == (1, "", f"Error: {message}\n")
     assert_ok(ctl.request("session.close", sid))
@@ -1375,7 +1375,7 @@ def test_recent_list_counts_companions_and_close_prints_the_group(cli, ctl):
         assert_ok(ctl.request("recent.clear"))
 
 
-# -- restore and the zmx group
+# -- restore and the live group
 
 
 @pytest.mark.covers("cli:restore mode", "cli:restore capture", "cli:restore clear")
@@ -1400,22 +1400,22 @@ def test_restore(cli, ctl):
         )
 
 
-@pytest.mark.covers("cli:zmx list", "cli:zmx prune", "cli:zmx tree", "cli:zmx screen", "cli:zmx kill")
-def test_zmx_reads_outside_live(cli, ctl):
+@pytest.mark.covers("cli:live list", "cli:live prune", "cli:live tree", "cli:live screen", "cli:live kill")
+def test_live_group_reads_outside_live_mode(cli, ctl):
     vocabulary = cli.vocabulary
 
     def group(*args):
-        return cli(*vocabulary.cli("zmx", *args))
+        return cli(*vocabulary.cli("live", *args))
 
     inventory = _json(group("list", "--json"))
-    _rendered(group("list"), assert_ok(ctl.request(vocabulary.command("zmx.list"))), vocabulary=vocabulary)
+    _rendered(group("list"), assert_ok(ctl.request(vocabulary.command("live.list"))), vocabulary=vocabulary)
     assert inventory[vocabulary.result_key]["restore"] == assert_ok(ctl.request("restore.mode"))["restore"]
     prune = _json(group("prune", "--json"))
     _rendered(group("prune"), prune)
     remote = _json(group("tree", "--json"))
     assert remote["remote"]["sessions"] == []
     _ok(group("tree"), "no attachable sessions\n")
-    _refused(group("screen", "nope"), vocabulary.text("could not read the zmx screen of {name}", name="nope"))
+    _refused(group("screen", "nope"), vocabulary.text("could not read the live session screen of {name}", name="nope"))
     _usage(group("kill", "--pane", "left", "--target", UNKNOWN), "--force is required to destroy a running process")
     _refused(
         group("kill", "--pane", "left", "--force", "--target", UNKNOWN),
@@ -1423,14 +1423,14 @@ def test_zmx_reads_outside_live(cli, ctl):
     )
 
 
-@pytest.mark.covers("cli:zmx reset", "cli:zmx attach", "cli:zmx present", "cli:session overlay run-job")
-def test_zmx_commands_refused_before_acting(cli, ctl):
+@pytest.mark.covers("cli:live reset", "cli:live attach", "cli:live present", "cli:session overlay run-job")
+def test_live_group_commands_refused_before_acting(cli, ctl):
     vocabulary = cli.vocabulary
     _usage(
-        cli(*vocabulary.cli("zmx", "reset")), "--force is required to end the processes in the affected live sessions"
+        cli(*vocabulary.cli("live", "reset")), "--force is required to end the processes in the affected live sessions"
     )
-    _refused(cli(*vocabulary.cli("zmx", "attach", "bad host", UNKNOWN)), "invalid host")
-    present = cli(*vocabulary.cli("zmx", "present", UNKNOWN))
+    _refused(cli(*vocabulary.cli("live", "attach", "bad host", UNKNOWN)), "invalid host")
+    present = cli(*vocabulary.cli("live", "present", UNKNOWN))
     assert (present.returncode, present.stdout, present.stderr) == (1, "", f"Error: no such session: {UNKNOWN}\n")
     _refused(cli("session", "overlay", "run-job", UNKNOWN), "invalid job id")
 
@@ -1444,7 +1444,7 @@ def test_page_serve_refused_claim_exits_1(cli, ctl):
 # -- Live sessions
 
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
+    "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
 )
 PRESENTATION_HELLO = {
     "kind": "hello",
@@ -1471,14 +1471,14 @@ def _rows(ctl, response, sid):
 
 
 def _live_rows(ctl, sid):
-    return _rows(ctl, ctl.request(ctl.vocabulary.command("zmx.list")), sid)
+    return _rows(ctl, ctl.request(ctl.vocabulary.command("live.list")), sid)
 
 
 def _live_session(ctl):
     sid = _new(ctl)
     ctl.wait_tree(lambda tree: find_session(tree, sid).get(ctl.vocabulary.backed_key) is True)
     ctl.wait_response(
-        ctl.vocabulary.command("zmx.list"),
+        ctl.vocabulary.command("live.list"),
         None,
         lambda r: _rows(ctl, r, sid).get("left", {}).get("observation") == "running",
     )
@@ -1486,55 +1486,55 @@ def _live_session(ctl):
 
 
 @LIVE
-@pytest.mark.covers("cli:zmx list", "cli:zmx screen", "cli:session lead", "cli:session restart", "cli:zmx kill")
+@pytest.mark.covers("cli:live list", "cli:live screen", "cli:session lead", "cli:session restart", "cli:live kill")
 def test_live_pane_commands(cli, live):
     cli = cli.on(live.instance)
     vocabulary = live.vocabulary
     sid = _live_session(live)
     # Upstream's count drops to 0 for a moment while a pane's client attaches: render a settled list.
     live.wait_response(
-        vocabulary.command("zmx.list"),
+        vocabulary.command("live.list"),
         None,
         lambda r: all(row.get("clients", 0) >= 1 for row in assert_ok(r)[vocabulary.result_key]["entries"]),
     )
-    listing = assert_ok(live.request(vocabulary.command("zmx.list")))
-    _rendered(cli(*vocabulary.cli("zmx", "list")), listing, vocabulary=vocabulary)
+    listing = assert_ok(live.request(vocabulary.command("live.list")))
+    _rendered(cli(*vocabulary.cli("live", "list")), listing, vocabulary=vocabulary)
     daemon = _live_rows(live, sid)["left"]["daemon"]
     marker = f"LIVE{uuid.uuid4().hex[:8].upper()}"
     assert_ok(live.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:4]} {marker[4:]}\n"))
     live.wait_text(sid, rf"(?m)^{marker}$")
-    screen = _json(cli(*vocabulary.cli("zmx", "screen", daemon, "--json")))
+    screen = _json(cli(*vocabulary.cli("live", "screen", daemon, "--json")))
     assert f"\n{marker}\n" in f"\n{screen['text']}\n"
     # The CLI renders the screen a read gives; a prompt the shell is still drawing after the output (fish's comes a
     # moment later, over several lines) changes the screen between the read and the CLI's own, so compare once settled.
     live.wait_response(
-        vocabulary.command("zmx.screen"),
+        vocabulary.command("live.screen"),
         None,
-        lambda response: _rendered(cli(*vocabulary.cli("zmx", "screen", daemon)), assert_ok(response)) is not None,
+        lambda response: _rendered(cli(*vocabulary.cli("live", "screen", daemon)), assert_ok(response)) is not None,
         name=daemon,
     )
 
-    # Once the pane's zmx has reported its role: before that there is no lead to take.
+    # Once the pane's live session has reported its role: before that there is no lead to take.
     live.wait_tree(
         lambda tree: next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left").get("lead") == "leader"
     )
     _ok(cli("session", "lead", "--target", sid), "ok\n")
     restarted = _json(cli("session", "restart", "--pane", "left", "--command", "cat", "--target", sid, "--json"))
     assert restarted["restart"]["newPid"] != restarted["restart"]["oldPid"]
-    _ok(cli(*vocabulary.cli("zmx", "kill", "--pane", "left", "--force", "--target", sid)), f"killed {daemon}\n")
+    _ok(cli(*vocabulary.cli("live", "kill", "--pane", "left", "--force", "--target", sid)), f"killed {daemon}\n")
     live.wait_response(
-        vocabulary.command("zmx.list"),
+        vocabulary.command("live.list"),
         None,
         lambda r: all(row["daemon"] != daemon for row in assert_ok(r)[vocabulary.result_key]["entries"]),
     )
 
 
 @LIVE
-@pytest.mark.covers("cli:zmx present")
+@pytest.mark.covers("cli:live present")
 def test_live_present_bridges_the_stream(cli, live):
     cli = cli.on(live.instance)
     sid = _live_session(live)
-    with cli.spawn(*cli.vocabulary.cli("zmx", "present", sid), interactive=True) as bridge:
+    with cli.spawn(*cli.vocabulary.cli("live", "present", sid), interactive=True) as bridge:
 
         def read(seconds):
             return json.loads(bridge.line(seconds))
@@ -1557,14 +1557,14 @@ def test_live_present_bridges_the_stream(cli, live):
 def test_live_run_job_runs_the_handed_over_program(cli, live):
     cli = cli.on(live.instance)
     sid = _live_session(live)
-    endpoint = assert_ok(live.request(live.vocabulary.command("zmx.tree")))["remote"]["endpoint"]
+    endpoint = assert_ok(live.request(live.vocabulary.command("live.tree")))["remote"]["endpoint"]
     with live.vocabulary.leading_client(live.instance, endpoint, _live_rows(live, sid)["left"]["daemon"]):
         live.wait_tree(
             lambda tree: (
                 next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left").get("lead") == "follower"
             )
         )
-        with live.stream(live.vocabulary.command("zmx.present"), sid) as presenter:
+        with live.stream(live.vocabulary.command("live.present"), sid) as presenter:
             presenter.send({**PRESENTATION_HELLO, "hello": {**PRESENTATION_HELLO["hello"], "mode": "presenter"}})
             gen = wait_frame(presenter.read, "hello", presenter.send)["gen"]
             presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})

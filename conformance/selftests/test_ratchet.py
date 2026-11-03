@@ -139,7 +139,7 @@ def test_teardown_error_after_a_passing_call_breaks(
     "reason",
     [
         "unsupported: rust lacks live-sessions",
-        "unsupported: rust lacks live-sessions on this host: zmx is not installed",
+        "unsupported: rust lacks live-sessions on this host: ngterm-session is not staged",
         "unsupported: rust lacks live-any-shell (restores any shell)",
     ],
 )
@@ -166,12 +166,12 @@ def test_host_dependent_capability_needs_the_unsupported_category() -> None:
 
 def test_collection_error_breaks(files: tuple[Path, Path], capsys: pytest.CaptureFixture[str]) -> None:
     report, ratchet = files
-    message = "Traceback ...\n  line 1\nE   ImportError: no module named zmx\n"
+    message = "Traceback ...\n  line 1\nE   ImportError: no module named pwd\n"
     write_report(report, rec(A), {"kind": "collection-error", "nodeid": "tests/test_d.py", "message": message})
     write_list(ratchet, A)
     code, out, _ = check(capsys, report, ratchet)
     assert code == 1
-    assert out[0] == "BROKEN collection error: tests/test_d.py: E   ImportError: no module named zmx"
+    assert out[0] == "BROKEN collection error: tests/test_d.py: E   ImportError: no module named pwd"
 
 
 def test_must_pass_problem_breaks(files: tuple[Path, Path], capsys: pytest.CaptureFixture[str]) -> None:

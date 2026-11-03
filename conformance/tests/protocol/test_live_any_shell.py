@@ -1,6 +1,6 @@
 """Live sessions in the host's own login shell: a Rust-only extension (capability `live-any-shell`).
 
-Upstream wraps a pane in zmx only for a zsh or fish login shell; the Rust build also wraps bash (and PowerShell),
+Upstream wraps a pane in a live session only for a zsh or fish login shell; the Rust build also wraps bash (and PowerShell),
 starting each with its shell integration. The reference skips these tests as unsupported; the Rust CI runs them
 under zsh, bash and fish login shells, and its Windows job under PowerShell, with `--must-pass live-any-shell`.
 
@@ -16,7 +16,7 @@ from agterm_conformance.match import assert_ok, find_session, session_ids
 
 LIVE_ANY_SHELL = pytest.mark.requires(
     "live-any-shell",
-    reason="a Rust-only extension: upstream wraps a pane in zmx only for a zsh or fish login shell",
+    reason="a Rust-only extension: upstream wraps a pane in a live session only for a zsh or fish login shell",
 )
 
 
@@ -53,7 +53,7 @@ def _runs(foreground, program):
 
 
 def _daemon_row(ctl, sid, response=None):
-    response = response or ctl.request(ctl.vocabulary.command("zmx.list"))
+    response = response or ctl.request(ctl.vocabulary.command("live.list"))
     rows = assert_ok(response)[ctl.vocabulary.result_key]["entries"]
     (row,) = [row for row in rows if row.get("sessionID") == sid and row["pane"] == "left"]
     return row
@@ -67,7 +67,7 @@ def _wait_observation(ctl, sid, running):
         assert (row["observation"] == "running") == running, row
         return True
 
-    ctl.wait_response(ctl.vocabulary.command("zmx.list"), None, observed)
+    ctl.wait_response(ctl.vocabulary.command("live.list"), None, observed)
 
 
 @LIVE_ANY_SHELL
@@ -97,7 +97,7 @@ def test_a_live_pane_in_the_login_shell_reports_its_cwd_and_survives_the_relaunc
         assert (row["daemon"], row["observation"]) == (before["daemon"], "running"), row
         return row
 
-    ctl.wait_response(ctl.vocabulary.command("zmx.list"), None, same_daemon)
+    ctl.wait_response(ctl.vocabulary.command("live.list"), None, same_daemon)
     # The same shell, still in its directory: its leader pid, its screen and its cwd came through the quit.
     assert _daemon_row(ctl, sid)["leaderPID"] == before["leaderPID"]
     ctl.wait_text(sid, rf"(?m)^{marker}$", all=True)
@@ -200,7 +200,7 @@ def test_a_live_pane_keeps_the_configs_xdg_data_dirs(launch):
         ), row
         return row
 
-    ctl.wait_response(ctl.vocabulary.command("zmx.list"), None, same_shell)
+    ctl.wait_response(ctl.vocabulary.command("live.list"), None, same_shell)
     _assert_the_configs_data_dirs(ctl, sid)
 
 

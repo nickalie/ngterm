@@ -88,12 +88,13 @@ On Windows (`tools/run-windows.sh`) the launch differs where the OS does:
 SIGTERM must quit without a prompt within 10 seconds.
 Live sessions keep their sockets in a namespace directory named by the FNV-1a 64 hash (`%016x`, lowercase hex) over
 the UTF-8 bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists:
-upstream's zmx sockets in `/tmp/agterm-zmx-<hash>` (`upstream_socket_directory` in
-`agterm_conformance/vocabulary.py`), the Rust build's session server in `/tmp/ngterm-live-<hash>`
-(`live_socket_directory`); the adapter's vocabulary names it, prefixed with the adapter's `app_dir_name` (the
-instance's `live_dir`). Every zmx or session-host process of the reference carries `ZMX_DIR=<that dir>`; the Rust
-build's one server per instance runs as `ngterm-session server <that dir>`, and its sessions' programs and their
-attach clients carry `NGTERM_LIVE_DIR=<that dir>`. One left running after the stop fails it (the server gets its idle
+the Rust build's session server in `/tmp/ngterm-live-<hash>` (`live_socket_directory` in
+`agterm_conformance/vocabulary.py`), the Swift reference's daemons in upstream's own directory
+(`upstream_socket_directory` in `agterm_conformance/impls/swift_macos.py`); the adapter's vocabulary names it, prefixed
+with the adapter's `app_dir_name` (the instance's `live_dir`). The Rust build's one server per instance runs as
+`ngterm-session server <that dir>`, and its sessions' programs and their attach clients carry
+`NGTERM_LIVE_DIR=<that dir>`; every daemon or session-host process of the reference carries its vocabulary's directory
+variable. One left running after the stop fails it (the server gets its idle
 grace to stop by itself once its sessions are reaped).
 The CLI (`agtermctl` for the Swift build, `ngtermctl` for the Rust one: `Adapter.ctl_name`) is taken from `--ctl`,
 else from beside `--bin`.
@@ -110,7 +111,7 @@ share is asserted directly, with no capability.
 | capability | swift-macos | meaning |
 |---|---|---|
 | `posix-shell` | yes | panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic |
-| `live-sessions` | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the Rust build's one session server per instance, ngterm-session) |
+| `live-sessions` | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's per-session daemons; the Rust build's one session server per instance, ngterm-session) |
 | `live-any-shell` |  | Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and ngterm-session is staged |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
@@ -252,14 +253,15 @@ path and a terminal outside the app run the attach line. `clipboard set` prints 
 above with the print's own complaint after `the live-session print exited N: ` (the session gone, or no server:
 `ngterm-session print: no live session named NAME`) where upstream shows zmx's.
 
-The suite's tests, `catalog.yaml` and their `covers(...)` markers keep upstream's names, since the Swift reference
-answers to them; no test id changes, so the ratchet keeps its ids. Each adapter carries a vocabulary object
+The suite's tests, `catalog.yaml` (its generator renames upstream's group at that boundary, `tools/gen_catalog.py`),
+their `covers(...)` markers and the ratchet speak this build's names. Each adapter carries a vocabulary object
 (`agterm_conformance/vocabulary.py`) for every value that depends on it: command names, the result and tree keys, the
-CLI argv, the error-text templates, the environment names, the socket directory and the leading client. The Swift
-adapter's is upstream's own (`UPSTREAM`), the Rust adapter's renames the group (`LIVE`); `base.py`, `cli_format.py`
-and the shared tests read every such value through `ctl.vocabulary`, `cli.vocabulary` or the instance's. `LIVE`
-refuses an upstream text that names zmx and that it does not list, and `selftests/test_vocabulary.py` checks each
-listed text against the Rust sources.
+CLI argv, the error-text templates, the environment names, the socket directory and the leading client. The Rust
+adapter's is this build's own (`LIVE`); the Swift adapter's (`UPSTREAM`, `agterm_conformance/impls/swift_macos.py`)
+maps each to upstream's, the one place the suite speaks upstream's group. `base.py`, `cli_format.py` and the shared
+tests read every such value through `ctl.vocabulary`, `cli.vocabulary` or the instance's. `UPSTREAM` refuses a text
+that names the `live` group and that it does not list, and `selftests/test_vocabulary.py` checks each listed text
+against the Rust sources.
 
 The bundled agent skill (`resources/skills/ngterm`) is upstream's with
 `build/patches/skill-ngterm/` applied (the `live` names, this build's `ngterm` and `ngtermctl`, then the attach

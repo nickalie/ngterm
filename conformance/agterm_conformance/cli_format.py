@@ -12,7 +12,7 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from agterm_conformance.vocabulary import UPSTREAM, Vocabulary
+from agterm_conformance.vocabulary import LIVE, Vocabulary
 
 UUID = re.compile(r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
 
@@ -38,9 +38,9 @@ def _affected(count: int) -> str:
     return "1 session" if count == 1 else f"{count} sessions"
 
 
-def human(result: Mapping[str, Any] | None, echo_id: bool = False, vocabulary: Vocabulary = UPSTREAM) -> str:
+def human(result: Mapping[str, Any] | None, echo_id: bool = False, vocabulary: Vocabulary = LIVE) -> str:
     """`formatResponse` for an ok response, without the trailing newline `print` adds; `vocabulary` names the key the
-    implementation answers `zmx.list` under."""
+    implementation answers `live.list` under."""
     result = result or {}
     if "tree" in result:
         return tree(result["tree"])
@@ -57,7 +57,7 @@ def human(result: Mapping[str, Any] | None, echo_id: bool = False, vocabulary: V
     if "remote" in result:
         return remote_tree(result["remote"])
     if vocabulary.result_key in result:
-        return zmx(result[vocabulary.result_key], vocabulary)
+        return live_inventory(result[vocabulary.result_key], vocabulary)
     if "restore" in result:
         return restore_status(result["restore"], vocabulary)
     if "recent" in result:
@@ -107,13 +107,13 @@ def _identity_key(app: Mapping[str, Any]) -> tuple[Any, Any]:
     return app.get("version"), app.get("commit")
 
 
-def restore_status(status: Mapping[str, Any], vocabulary: Vocabulary = UPSTREAM) -> str:
+def restore_status(status: Mapping[str, Any], vocabulary: Vocabulary = LIVE) -> str:
     lines = [
         f"configured: {status['configured']} (next launch)",
         f"this launch: requested {status['requestedAtLaunch']}, active {status['active']}",
     ]
     if status.get("restartRequired"):
-        lines.append(vocabulary.text("restart agterm to apply the configured mode"))
+        lines.append(vocabulary.text("restart ngterm to apply the configured mode"))
     if status.get("unavailableReason") is not None:
         lines.append(f"live unavailable: {status['unavailableReason']}")
     return "\n".join(lines)
@@ -156,16 +156,16 @@ def remote_tree(remote: Mapping[str, Any]) -> str:
     return "\n".join(rows)
 
 
-def zmx(inventory: Mapping[str, Any], vocabulary: Vocabulary = UPSTREAM) -> str:
+def live_inventory(inventory: Mapping[str, Any], vocabulary: Vocabulary = LIVE) -> str:
     lines = [restore_status(inventory["restore"], vocabulary)]
     if not inventory["inventoryComplete"]:
         lines.append("inventory incomplete: some pane is unaccounted for, so nothing can be pruned")
     if not inventory["entries"]:
         return "\n".join([*lines, "no daemons"])
-    return "\n".join([*lines, "", *(_zmx_row(entry) for entry in inventory["entries"])])
+    return "\n".join([*lines, "", *(_live_row(entry) for entry in inventory["entries"])])
 
 
-def _zmx_row(entry: Mapping[str, Any]) -> str:
+def _live_row(entry: Mapping[str, Any]) -> str:
     clients = entry.get("clients")
     count = "-" if clients is None else f"{clients} client{'' if clients == 1 else 's'}"
     owner = "-"

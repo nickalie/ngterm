@@ -1,9 +1,9 @@
 """A second client of one of the Rust build's live sessions: the local stand-in for a viewer attached over ssh.
 
-The Rust build's counterpart of `zmx_client.leading_client`: its sessions run in one session server per instance
-(`ngterm-session`), so the viewer is `ngterm-session attach`, started as `ngterm_core::remote::ssh::attach_command`
-starts the viewer's on the origin, minus ssh: the attach contract's variables (`NGTERM_LIVE_*`, empty meaning unset),
-explicit leadership claimed, and the create-only guard after the session's name.
+The sessions run in one session server per instance (`ngterm-session`), so the viewer is `ngterm-session attach`,
+started as `ngterm_core::remote::ssh::attach_command` starts the viewer's on the origin, minus ssh: the attach
+contract's variables (`NGTERM_LIVE_*`, empty meaning unset), explicit leadership claimed, and the create-only guard
+after the session's name.
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ from typing import Any
 
 from agterm_conformance import llvm_profiles
 from agterm_conformance.impls.base import MINIMAL_PATH
-from agterm_conformance.zmx_client import PtyProcess, ZmxInstance
+from agterm_conformance.pty_process import LiveInstance, PtyProcess
 
 # `ngterm_core::remote::ssh`'s `GONE_GUARD`: the viewer's program when the session is gone, in the Rust build's name.
 GONE_GUARD = "printf '%s\\n' 'ngterm: remote session is gone'; exit 1"
 
 
-def leading_client(instance: ZmxInstance, endpoint: Mapping[str, Any], session: str) -> PtyProcess:
+def leading_client(instance: LiveInstance, endpoint: Mapping[str, Any], session: str) -> PtyProcess:
     """`ngterm-session attach <session>` claiming the lead, so the pane's own client in `instance` follows.
 
     `endpoint` is the `live.tree` read-back; one naming another instance's namespace is refused.

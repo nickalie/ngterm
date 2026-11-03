@@ -50,7 +50,7 @@ conformance/tools/run-windows.sh [--stage DIR] [--coverage] [-- PYTEST_ARGS...]
 .venv/bin/python conformance/tools/chrome_probe.py [--bin PATH] [--keep DIR]
 ```
 
-`--macos-launch-mode plain` replaces the default `uitest` launch (XCUITest sentinel with zmx on).
+`--macos-launch-mode plain` replaces the default `uitest` launch (XCUITest sentinel with live sessions on).
 The Rust build renders on lavapipe only (see Rust runner and ratchet): its probes and the harness take the ICD manifest
 from `$CONFORMANCE_LAVAPIPE_ICD`, the probes else from `scripts/fetch-lavapipe.sh --print-icd`.
 The Rust build's side of the contract (the `version` extension, the launch environment, the capability
@@ -277,12 +277,12 @@ removed one dropped. Raise the floors from CI runs of the same commit.
 These runs share a machine with a live terminal (an installed ngterm, or an agterm), so the harness refuses a launch
 that could reach it:
 
-- `NGTERM_*`, `AGTERM_*` and `ZMX_*` are scrubbed from the environment at plugin import, and the launch env may carry
-  only the harness's own.
+- `NGTERM_*`, `AGTERM_*` and upstream's `ZMX_*` (which the Swift reference's CLI reads) are scrubbed from the
+  environment at plugin import, and the launch env may carry only the harness's own.
 - Each instance gets a fresh root (`/tmp/agt-*`, or under `CONFORMANCE_TMP`) holding its `HOME`, XDG homes, state
   dir and socket; the guards refuse any of them outside it.
-  Its live-session socket directory (upstream's zmx one, the Rust build's session server namespace) derives
-  from that state dir.
+  Its live-session socket directory (the Rust build's session server namespace, the reference's daemon directory)
+  derives from that state dir.
 - Linux instances get a unique app id (`NGTERM_APP_ID`), never the installed one, and a private `XDG_RUNTIME_DIR`.
 - Linux instances draw into their own headless weston with their own dbus-daemon, so no window, notification or
   a11y object reaches the desktop.
@@ -297,11 +297,10 @@ that could reach it:
 - URI and file launches go to a no-op handler through the isolated `mimeapps.list` and `BROWSER=true`.
   The ghostty config turns off copy-on-select and clipboard writes.
 - `cli` gives every `agtermctl` call the instance's `--socket`; a call without one must resolve under the root.
-- Stopping reaps Live daemons over the protocol (in the adapter's vocabulary: `zmx.kill` upstream, `live.kill` in the
-  Rust build, [docs/rust-build.md](docs/rust-build.md)), SIGTERMs only the launched pid, and fails on any zmx or
-  session-host process left with the instance's `ZMX_DIR`, or in the Rust build on its session server
-  (`ngterm-session server <its namespace>`) or a process left with its `NGTERM_LIVE_DIR`, once the server's idle grace
-  has passed.
+- Stopping reaps Live daemons over the protocol (`live.kill`, in the adapter's vocabulary,
+  [docs/rust-build.md](docs/rust-build.md)), SIGTERMs only the launched pid, and fails on the Rust build's session
+  server (`ngterm-session server <its namespace>`) or a process left with its `NGTERM_LIVE_DIR`, once the server's idle
+  grace has passed, or on any of the reference's daemon or session-host processes left with its directory variable.
   The macOS session host outlives the app by design: the harness ends only the one started from the instance's own
   bundle copy, by exact pid, re-checking ownership before each signal.
 - A macOS instance runs from its own copy of the bundle, because a second launch of the same bundle path binds no

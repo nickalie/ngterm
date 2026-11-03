@@ -32,7 +32,10 @@ BIN_REQUIRED = frozenset({"swift-macos"})
 # The prefixes of the implementations' own variables: upstream's and the Rust build's (ngterm).
 UPSTREAM_PREFIX = "AGTERM_"
 RUST_PREFIX = "NGTERM_"
-# Every variable a live terminal hands its shells: either app's own, and zmx's.
+# Every variable a live terminal hands its shells: either app's own, and those of upstream's live-session daemons
+# (zmx's), which the Swift reference's CLI reads: its `clipboard set` prints into an inherited `ZMX_SESSION` under
+# `ZMX_DIR` (upstream's TerminalClipboard.swift), so a reference run started inside an upstream agterm pane would
+# reach the user's own session.
 SCRUB_PREFIXES = (UPSTREAM_PREFIX, RUST_PREFIX, "ZMX_")
 IMPL_FIXTURE = "impl_options"
 UI_FIXTURES = frozenset({"ui", "ui_for"})
@@ -64,7 +67,7 @@ def scrub_environ(environ: MutableMapping[str, str]) -> list[str]:
 
 
 # At import, before any hook runs: a run started inside a live ngterm or agterm shell must not hand its
-# NGTERM_SOCKET / AGTERM_SESSION_ID / ZMX_DIR to anything this process spawns.
+# NGTERM_SOCKET / AGTERM_SESSION_ID / upstream's ZMX_DIR to anything this process spawns.
 SCRUBBED = scrub_environ(os.environ)
 
 
@@ -114,7 +117,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--macos-launch-mode",
         choices=("uitest", "plain"),
         default="uitest",
-        help="swift-macos: XCUITest sentinel with zmx (default) or a bare exec",
+        help="swift-macos: XCUITest sentinel with live sessions (default) or a bare exec",
     )
     group.addoption(
         "--coverage-gate", action="store_true", default=False, help="check catalog coverage without launching anything"
@@ -658,7 +661,7 @@ class Ctl:
 
     @property
     def vocabulary(self) -> Vocabulary:
-        """The instance's names for upstream's `zmx` group, which a test translates every such name through."""
+        """The instance's names for the `live` group, which a test translates every such name through."""
         return self.instance.vocabulary
 
     def request(self, cmd: str, target: str | None = None, **args: Any) -> Response:
@@ -668,7 +671,7 @@ class Ctl:
         return assert_ok(self.request("tree"))
 
     def stream(self, cmd: str, target: str | None = None, **args: Any) -> Stream:
-        """A stream-mode command (`zmx.present`, `session.overlay.job.run`): its reply, then its frames."""
+        """A stream-mode command (`live.present`, `session.overlay.job.run`): its reply, then its frames."""
         return self.instance.client().open_stream(cmd, target, **args)
 
     def wait_tree(
@@ -747,7 +750,7 @@ class Cli:
 
     @property
     def vocabulary(self) -> Vocabulary:
-        """The instance's names for upstream's `agtermctl zmx` group and its texts."""
+        """The instance's names for the `ngtermctl live` group and its texts."""
         return self.instance.vocabulary
 
     def __call__(self, *args: str, input: str | None = None, timeout: float = CLI_TIMEOUT) -> CliResult:

@@ -42,11 +42,7 @@ from agterm_conformance.client import (
     check_under_root,
 )
 from agterm_conformance.plugin import RUST_PREFIX, SCRUB_PREFIXES, UPSTREAM_PREFIX
-from agterm_conformance.vocabulary import (
-    LIVE,
-    UPSTREAM,
-    Vocabulary,
-)
+from agterm_conformance.vocabulary import LIVE, Vocabulary
 
 if sys.platform != "win32":
     import pwd
@@ -82,10 +78,8 @@ WINDOWS_APP_DATA = {"LOCALAPPDATA": "AppData/Local", "APPDATA": "AppData/Roaming
 # HISTFILE), which would point the pane at the user's real startup and history files.
 SHELL_STARTUP_VARIABLES = ("ZDOTDIR", "GHOSTTY_ZSH_ZDOTDIR", "ENV", "BASH_ENV", "GHOSTTY_BASH_ENV", "HISTFILE")
 DEFAULT_APP_ID = "com.nickalie.ngterm"
+# Upstream's macOS session host, which the Swift reference's vocabulary counts among its leftovers.
 SESSION_HOST = "agterm-session-host"
-# The reference's live-session processes: upstream's zmx daemons and the macOS session host. A vocabulary with a
-# session server (the Rust build's) names its own leftovers instead (`find_leftovers`).
-LEFTOVER_NAMES = frozenset({"zmx", SESSION_HOST})
 # What a session server leaves in its namespace directory once it stopped: the lock file it held (kept on purpose,
 # crates/ngterm-session/src/endpoint/unix.rs) and, should it have stopped unclean, its socket.
 SERVER_NAMESPACE_FILES = frozenset({"server.lock", "server.sock"})
@@ -179,8 +173,8 @@ POLL_INTERVAL = 0.05
 # test marker, or beside the branch a test takes on `has`.
 CAPABILITIES: Mapping[str, str] = {
     "posix-shell": "panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic",
-    "live-sessions": "restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the "
-    "Rust build's one session server per instance, ngterm-session)",
+    "live-sessions": "restoreMode live keeps panes in live sessions that outlive the app (upstream's per-session daemons; "
+    "the Rust build's one session server per instance, ngterm-session)",
     "live-any-shell": "Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, "
     "each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the "
     "password-database login shell is one of them and ngterm-session is staged",
@@ -250,7 +244,7 @@ def version_tuple(version: str) -> tuple[int, ...]:
 
 
 def login_shell_blocker() -> str | None:
-    """Why Live sessions cannot run for this account, or None: upstream wraps a pane in zmx only when
+    """Why Live sessions cannot run for this account, or None: upstream wraps a pane in a live session only when
     the password-database login shell is zsh or fish (`ZmxSupport.configuration`), and the pane then execs it."""
     if WINDOWS:
         return "Windows has no password-database login shell"
@@ -330,10 +324,10 @@ OWN_VARIABLE_NAMES = (
 )
 
 
-def own_variables(prefix: str) -> frozenset[str]:
-    """The harness-owned variables of an implementation whose variables start with `prefix`, with each vocabulary's
+def own_variables(prefix: str, vocabulary: Vocabulary = LIVE) -> frozenset[str]:
+    """The harness-owned variables of an implementation whose variables start with `prefix`, with its vocabulary's
     UI-test opt-in (set only for the reference, which reads one, swift_macos.py)."""
-    return frozenset({*(prefix + name for name in OWN_VARIABLE_NAMES), UPSTREAM.ui_test_opt_in, LIVE.ui_test_opt_in})
+    return frozenset({*(prefix + name for name in OWN_VARIABLE_NAMES), vocabulary.ui_test_opt_in})
 
 
 # Every implementation's harness-owned variables.
@@ -387,10 +381,12 @@ def check_launch_env(
     headless: bool = False,
     prefix: str = UPSTREAM_PREFIX,
     ui: Any = None,
+    vocabulary: Vocabulary = LIVE,
 ) -> None:
-    """`prefix` is the implementation's (`Adapter.env_prefix`): its harness-owned variables are the only ones under a
-    scrubbed prefix the launch may carry, another implementation's included."""
-    own = own_variables(prefix)
+    """`prefix` and `vocabulary` are the implementation's (`Adapter.env_prefix`, `Adapter.vocabulary`): its
+    harness-owned variables are the only ones under a scrubbed prefix the launch may carry, another implementation's
+    included."""
+    own = own_variables(prefix, vocabulary)
     for name in sorted(env):
         if name.startswith(SCRUB_PREFIXES) and name not in own:
             raise LaunchRefused(f"{name} would leak into the instance: only harness-set {prefix}* are allowed")
@@ -441,7 +437,7 @@ class Instance:
     live_dir: str
     version: dict[str, Any] = field(default_factory=dict)
     # What the implementation calls the live-session group (agterm_conformance.vocabulary).
-    vocabulary: Vocabulary = UPSTREAM
+    vocabulary: Vocabulary = LIVE
     # The prefix of the implementation's own variables (`Adapter.env_prefix`).
     env_prefix: str = UPSTREAM_PREFIX
     # The instance's own headless compositor (weston or Xvfb) and session bus; relaunch keeps both.
@@ -494,8 +490,7 @@ class Adapter:
 
     name: ClassVar[str] = ""
     # The name the implementation gives its state directory under the platform's application support directory, its
-    # control socket (`<name>.sock`) and its live-session socket directories (`/tmp/<name>-zmx-*` for upstream,
-    # `/tmp/<name>-live-*` for the Rust build: the vocabulary's).
+    # control socket (`<name>.sock`) and its live-session socket directories (the vocabulary's: `/tmp/<name>-live-*` for the Rust build).
     app_dir_name: ClassVar[str] = "agterm"
     # The implementation's CLI: the executable beside its binary and the name its usage lines and help print.
     ctl_name: ClassVar[str] = "agtermctl"
@@ -509,7 +504,7 @@ class Adapter:
     # lets weston-screenshooter read the output); `weston_args` adds an adapter's own.
     compositor_args: ClassVar[tuple[str, ...]] = ()
     # The names the implementation answers the shared tests' live-session group by (agterm_conformance.vocabulary).
-    vocabulary: ClassVar[Vocabulary] = UPSTREAM
+    vocabulary: ClassVar[Vocabulary] = LIVE
     # Windows: the class of the app's top-level window that takes the session's end, the polite quit (the Rust
     # build's hidden window, crates/ngterm-gpui/src/system_window.rs); None: the stop kills the app.
     quit_window_class: ClassVar[str | None] = None
@@ -667,7 +662,9 @@ class Adapter:
             env = self.build_env(root, app_id)
             if first_run:
                 self.first_run_env(env)
-            check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir, headless, self.env_prefix)
+            check_launch_env(
+                env, root, self.needs_app_id, self.needs_runtime_dir, headless, self.env_prefix, vocabulary=self.vocabulary
+            )
             app_id = env.get(self.variable("APP_ID"))
             state_dir = env[self.variable("STATE_DIR")]
             config = self.ghostty_config(pane_shell)
@@ -683,7 +680,10 @@ class Adapter:
                     compositor, ui_context = start_xvfb(root, env, ui, timeout)
                 else:
                     compositor = start_compositor(root, env, timeout, self.weston_args())
-                check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir, headless, self.env_prefix, ui=ui_context)
+                check_launch_env(
+                    env, root, self.needs_app_id, self.needs_runtime_dir, headless, self.env_prefix, ui=ui_context,
+                    vocabulary=self.vocabulary,
+                )
             if app_id is not None:
                 _claim_app_id(app_id)
         except BaseException as error:
@@ -746,6 +746,7 @@ class Adapter:
                 instance.compositor is not None,
                 instance.env_prefix,
                 ui=instance.ui,
+                vocabulary=instance.vocabulary,
             )
             if instance.app_id is not None:
                 _claim_app_id(instance.app_id)
@@ -802,6 +803,7 @@ class Adapter:
             instance.compositor is not None,
             instance.env_prefix,
             ui=instance.ui,
+            vocabulary=instance.vocabulary,
         )
         process = subprocess.Popen(
             self.instance_executable(instance.root),
@@ -1140,9 +1142,9 @@ def _tail(log: Path, lines: int = 20) -> str:
 
 
 def _leftovers_error(
-    live_dir: str, steps: Iterable[str] = (), vocabulary: Vocabulary = UPSTREAM
+    live_dir: str, steps: Iterable[str] = (), vocabulary: Vocabulary = LIVE
 ) -> LeftoverProcesses | None:
-    # A killed zmx daemon is confirmed gone by its socket and still exits for a moment after; a session server stops
+    # A killed per-session daemon (the reference's) is confirmed gone by its socket and still exits for a moment after; a session server stops
     # by itself once its last session and client are gone, after its idle grace.
     deadline = time.monotonic() + LEFTOVER_GRACE + vocabulary.server_idle
     while (leftovers := find_leftovers(live_dir, vocabulary)) and time.monotonic() < deadline:
@@ -1296,7 +1298,7 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
     """Best effort over the protocol; returns what it did, for the leftover check to report with what survived.
 
     Re-lists after every kill: killing a left pane promotes its split survivor into the left slot, so a
-    selector read before the kill no longer names that survivor. A claimed daemon zmx does not list yet
+    selector read before the kill no longer names that survivor. A claimed daemon the host does not list yet
     (`observation: absent`, as right after it starts) refuses a kill as not running, and a `pendingClose` one
     refuses it outright, so both are waited for until `settle` runs out.
     """
@@ -1316,10 +1318,10 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
             args: dict[str, Any] = {"pane": entry["pane"], "force": True}
             if entry.get("windowID"):
                 args["window"] = entry["windowID"]
-            kill = instance.vocabulary.command("zmx.kill")
+            kill = instance.vocabulary.command("live.kill")
             response = instance.request(kill, entry["sessionID"], **args)
             steps.append(f"{kill} {_daemon_key(entry)}: {'ok' if response.ok else response.error}")
-        prune_command = instance.vocabulary.command("zmx.prune")
+        prune_command = instance.vocabulary.command("live.prune")
         prune = instance.request(prune_command)
         if not prune.ok:
             steps.append(f"{prune_command}: {prune.error}")
@@ -1330,7 +1332,7 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
 
 
 def _listed(instance: Instance) -> str:
-    listing = instance.request(instance.vocabulary.command("zmx.list"))
+    listing = instance.request(instance.vocabulary.command("live.list"))
     inventory = _inventory(listing, instance.vocabulary)
     entries = inventory.get("entries") if isinstance(inventory, dict) else None
     if not isinstance(entries, list):
@@ -1340,13 +1342,13 @@ def _listed(instance: Instance) -> str:
 
 
 def _inventory(listing: Response, vocabulary: Vocabulary) -> Any:
-    """The `zmx.list` inventory a reply carries under the vocabulary's result key; None for a refusal."""
+    """The `live.list` inventory a reply carries under the vocabulary's result key; None for a refusal."""
     return (listing.result or {}).get(vocabulary.result_key) if listing.ok else None
 
 
 def _lists_daemons(instance: Instance) -> bool:
     try:
-        listing = instance.request(instance.vocabulary.command("zmx.list"))
+        listing = instance.request(instance.vocabulary.command("live.list"))
     except ClientError:
         return False
     inventory = _inventory(listing, instance.vocabulary)
@@ -1355,7 +1357,7 @@ def _lists_daemons(instance: Instance) -> bool:
 
 def _next_claimed(instance: Instance, tried: set[str], wait_absent: bool) -> tuple[dict[str, Any] | None, bool]:
     """The next claimed daemon to kill, and whether one not yet killable is still worth waiting for."""
-    inventory = _inventory(instance.request(instance.vocabulary.command("zmx.list")), instance.vocabulary)
+    inventory = _inventory(instance.request(instance.vocabulary.command("live.list")), instance.vocabulary)
     entries = inventory.get("entries") if isinstance(inventory, dict) else None
     waiting = False
     for entry in entries if isinstance(entries, list) else []:
@@ -1560,11 +1562,11 @@ def _core_hint(pid: int) -> str:
     return f"coredumpctl info {pid}"
 
 
-def find_leftovers(live_dir: str, vocabulary: Vocabulary = UPSTREAM) -> list[tuple[int, str, str]]:
+def find_leftovers(live_dir: str, vocabulary: Vocabulary = LIVE) -> list[tuple[int, str, str]]:
     """(pid, name, command) of this instance's live-session processes: under a vocabulary with a session server, that
     server (`<server> server <live_dir>`) and every process carrying the socket directory in the directory variable
-    (`NGTERM_LIVE_DIR`: its sessions' programs and their attach clients); else zmx / agterm-session-host processes
-    carrying it (`ZMX_DIR`)."""
+    (`NGTERM_LIVE_DIR`: its sessions' programs and their attach clients); else the vocabulary's daemon processes
+    (`daemon_names`) carrying it or hosting it (`hosts`)."""
     marker = f"{vocabulary.directory_variable}={live_dir}"
     if WINDOWS:
         return _windows_leftovers(live_dir, vocabulary)
@@ -1577,7 +1579,8 @@ def find_leftovers(live_dir: str, vocabulary: Vocabulary = UPSTREAM) -> list[tup
     return [
         (pid, name, command)
         for pid, name, command, words in _processes()
-        if name in LEFTOVER_NAMES and (marker in words or hosts_zmx_dir(words, live_dir))
+        if name in vocabulary.daemon_names
+        and (marker in words or (vocabulary.hosts is not None and vocabulary.hosts(words, live_dir)))
     ]
 
 
@@ -1615,15 +1618,6 @@ def serves_namespace(words: Iterable[str], live_dir: str, server: str) -> bool:
     if WINDOWS:
         return os.path.normcase(words[2]) == os.path.normcase(live_dir)
     return words[2] == live_dir
-
-
-def hosts_zmx_dir(words: Iterable[str], zmx_dir: str) -> bool:
-    """`agterm-session-host host <zmx_dir>`, the argv `ClientConnector.startHost` spawns the macOS host with."""
-    words = list(words)
-    return any(
-        os.path.basename(word) == SESSION_HOST and words[index + 1 : index + 3] == ["host", zmx_dir]
-        for index, word in enumerate(words)
-    )
 
 
 @dataclass(frozen=True)
@@ -1718,8 +1712,8 @@ def _ps_processes() -> Iterable[tuple[int, str, str, list[str]]]:
 
 
 def remove_live_dir(path: str) -> None:
-    """The instance's live-session socket directory, outside its root, once nothing runs there: zmx's own
-    `logs/*.log` and a stopped session server's lock file go with it; anything else keeps the directory for
+    """The instance's live-session socket directory, outside its root, once nothing runs there: the reference's daemons'
+    own `logs/*.log` and a stopped session server's lock file go with it; anything else keeps the directory for
     diagnosis."""
     logs = os.path.join(path, "logs")
     try:

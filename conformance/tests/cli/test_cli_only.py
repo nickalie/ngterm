@@ -35,7 +35,7 @@ from agterm_conformance.wait import wait_until
 # `TerminalClipboard.maxEncodedBytes`: under the 8 MiB above which libghostty drops an OSC whole.
 MAX_ENCODED = 8 * 1024 * 1024 - 64
 ENTRY = "xterm-ghostty"
-NOT_LIVE = "this pane has no zmx daemon; run it in a main or split pane started under Live sessions"
+NOT_LIVE = "this pane has no live session; run it in a main or split pane started under Live sessions"
 
 
 def _failed(result, message, code=1):
@@ -86,7 +86,7 @@ def test_clipboard_set_checks_the_text_before_the_pane(cli):
 
 
 @pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
+    "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
 )
 @pytest.mark.covers("cli:clipboard set")
 def test_clipboard_set_reaches_every_terminal_attached_to_the_pane(cli, launch):
@@ -101,13 +101,13 @@ def test_clipboard_set_reaches_every_terminal_attached_to_the_pane(cli, launch):
         # Running first: a viewer attaching to a daemon not up yet would start one under that name.
         return [row for row in rows if row["pane"] == "left" and row.get("observation") == "running"]
 
-    (row,) = left_row(ctl.wait_response(vocabulary.command("zmx.list"), None, left_row))
+    (row,) = left_row(ctl.wait_response(vocabulary.command("live.list"), None, left_row))
     daemon = row["daemon"]
-    endpoint = assert_ok(ctl.request(vocabulary.command("zmx.tree")))["remote"]["endpoint"]
+    endpoint = assert_ok(ctl.request(vocabulary.command("live.tree")))["remote"]["endpoint"]
     text = f"clip-{uuid.uuid4().hex[:8]}"
     sequence = f"\x1b]52;c;{base64.b64encode(text.encode()).decode()}\x07"
     with vocabulary.leading_client(ctl.instance, endpoint, daemon) as viewer:
-        # Attached once the pane follows: a print into a session still taking the viewer finds it busy (zmx).
+        # Attached once the pane follows: a print into a session still taking the viewer finds it busy.
         ctl.wait_tree(
             lambda tree: (
                 next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left").get("lead") == "follower"

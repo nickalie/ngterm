@@ -107,7 +107,7 @@ def test_ui_instances_have_distinct_displays_and_keep_them_on_relaunch(ui_run, f
     monkeypatch.setenv('AT_SPI_BUS_ADDRESS', 'unix:path=/desktop')
     monkeypatch.setenv('NGTERM_SOCKET', '/desktop/socket')
     monkeypatch.setenv('AGTERM_SESSION_ID', 'user')
-    monkeypatch.setenv('ZMX_DIR', '/desktop/zmx')
+    monkeypatch.setenv('NGTERM_LIVE_DIR', '/desktop/live')
     adapter = RustAdapter(fake_bin)
     first = adapter.launch(ui=ui_run)
     second = None
@@ -116,7 +116,7 @@ def test_ui_instances_have_distinct_displays_and_keep_them_on_relaunch(ui_run, f
         assert first.ui.display != second.ui.display
         assert first.env['AT_SPI_BUS_ADDRESS'] == second.env['AT_SPI_BUS_ADDRESS'] == ui_run.address
         assert first.env['DBUS_SESSION_BUS_ADDRESS'] != second.env['DBUS_SESSION_BUS_ADDRESS']
-        assert not {'NGTERM_SOCKET', 'AGTERM_SESSION_ID', 'ZMX_DIR', 'WAYLAND_DISPLAY'} & first.env.keys()
+        assert not {'NGTERM_SOCKET', 'AGTERM_SESSION_ID', 'NGTERM_LIVE_DIR', 'WAYLAND_DISPLAY'} & first.env.keys()
         process, bus, context = first.compositor, first.session_bus, first.ui
         first = adapter.relaunch(first)
         assert first.compositor is process and first.session_bus is bus and first.ui is context

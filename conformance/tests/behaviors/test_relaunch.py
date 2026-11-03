@@ -34,7 +34,7 @@ PROGRAM_ARGUMENTS = (
     "(paren)",
 )
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
+    "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
 )
 
 
@@ -325,7 +325,7 @@ def test_live_session_survives_the_relaunch(launch):
     marker = _marker()
     assert_ok(ctl.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:4]} {marker[4:]}\n"))
     ctl.wait_text(sid, rf"(?m)^{marker}$")
-    rows = assert_ok(ctl.request(vocabulary.command("zmx.list")))[vocabulary.result_key]["entries"]
+    rows = assert_ok(ctl.request(vocabulary.command("live.list")))[vocabulary.result_key]["entries"]
     (before,) = [row for row in rows if row.get("sessionID") == sid and row["pane"] == "left"]
 
     ctl = launch.relaunch(ctl)
@@ -338,7 +338,7 @@ def test_live_session_survives_the_relaunch(launch):
         assert (row["daemon"], row["observation"]) == (before["daemon"], "running"), row
         return row
 
-    after = ctl.wait_response(vocabulary.command("zmx.list"), None, same_daemon)
+    after = ctl.wait_response(vocabulary.command("live.list"), None, same_daemon)
     (row,) = [row for row in after.result[vocabulary.result_key]["entries"] if row.get("sessionID") == sid]
     # The same shell, not a new one: its leader pid and its screen came through the quit.
     assert row["leaderPID"] == before["leaderPID"]
@@ -346,7 +346,7 @@ def test_live_session_survives_the_relaunch(launch):
 
 
 @LIVE
-@pytest.mark.covers("behavior:restore.live-session-survives-relaunch", "zmx.tree", "field:result.remote")
+@pytest.mark.covers("behavior:restore.live-session-survives-relaunch", "live.tree", "field:result.remote")
 def test_a_live_session_with_a_hidden_split_stays_attachable_across_the_relaunch(launch):
     """A split hidden across the relaunch builds no terminal until shown, yet its daemon runs on claimed: the session
     still reads as backed, pane and all, and stays on offer to another machine (upstream #762)."""
@@ -361,7 +361,7 @@ def test_a_live_session_with_a_hidden_split_stays_attachable_across_the_relaunch
         observed = {row["pane"]: row["observation"] for row in rows if row.get("sessionID") == sid}
         return observed == {"left": "running", "right": "running"}
 
-    ctl.wait_response(vocabulary.command("zmx.list"), None, both_running)
+    ctl.wait_response(vocabulary.command("live.list"), None, both_running)
     assert_ok(ctl.request("session.split", sid, mode="off"))
     ctl.wait_tree(lambda tree: find_session(tree, sid)["split"] is False)
 
@@ -380,7 +380,7 @@ def test_a_live_session_with_a_hidden_split_stays_attachable_across_the_relaunch
         sessions = assert_ok(response)["remote"]["sessions"]
         return next((session for session in sessions if session["id"] == sid), None)
 
-    offered = row(ctl.wait_response(vocabulary.command("zmx.tree"), None, lambda response: row(response) is not None))
+    offered = row(ctl.wait_response(vocabulary.command("live.tree"), None, lambda response: row(response) is not None))
     assert [pane["pane"] for pane in offered["panes"]] == ["left", "right"]
-    ctl.wait_response(vocabulary.command("zmx.list"), None, both_running)
+    ctl.wait_response(vocabulary.command("live.list"), None, both_running)
     assert_ok(ctl.request("session.close", sid))

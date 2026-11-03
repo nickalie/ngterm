@@ -219,7 +219,7 @@ if [[ -x "$stage/bin/$app" ]]; then
 fi
 
 # A shell inside a live ngterm or agterm session exports its socket and session; the plugin scrubs these too.
-while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(NGTERM_|AGTERM_|ZMX_)' || true)
+while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(NGTERM_|AGTERM_)' || true)
 
 mkdir -p "$out"
 rm -rf "$out/traces"

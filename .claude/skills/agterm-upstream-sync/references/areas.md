@@ -32,8 +32,10 @@ live sessions (the table of renamed strings: `conformance/docs/rust-build.md` > 
 to `ControlDispatcher+Zmx.swift`, `ControlServer+Zmx.swift` or `ZmxCommands.swift` ports onto
 `ngterm-core/src/commands/live*`, `ngterm-core/src/remote/` and `ngterm-ctl/src/live.rs` under those names: a new
 command `zmx.foo` becomes `live.foo`, a new string naming zmx gets the live-session wording and a row in that table,
-and a test the suite adds keeps upstream's names, read through the adapter's vocabulary
-(`conformance/agterm_conformance/vocabulary.py`, with a `LIVE_TEXTS` entry for a new text that names zmx). What
+and a test the suite ports speaks ngterm's (`live.foo`, the live-session wording), read through the adapter's
+vocabulary: the Swift reference's maps it back to upstream's (`UPSTREAM` in
+`conformance/agterm_conformance/impls/swift_macos.py`, with a `ZMX_TEXTS` entry for a new text that names zmx
+upstream), and `tools/gen_catalog.py` renames the group in the catalog. What
 upstream's zmx binary speaks (`zmx attach`, `ZMX_*`, `list`/`screen` output, the patched `zmx-role;` title) is
 `ngterm-session`'s here, under its own names (`ngterm-session attach`, `NGTERM_LIVE_*`, `ngterm-live-role;`; the same
 table): this build runs no zmx, so an upstream change to zmx or to its patches (`pins-delta.sh` reports both) is

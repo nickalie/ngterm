@@ -2,10 +2,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from agterm_conformance.live_client import leading_client
+from agterm_conformance.live_client import GONE_GUARD, leading_client
 from agterm_conformance.wait import wait_until
-from agterm_conformance.live_client import GONE_GUARD
-from agterm_conformance.zmx_client import PtyProcess
+from agterm_conformance.pty_process import PtyProcess
 
 
 def _script(tmp_path: Path, body: str) -> Path:
@@ -33,14 +32,14 @@ def test_leading_client_attaches_under_the_attach_contract_claiming_the_lead(
         'printf "%s|" "$@"; echo\n'
         'echo "env $NGTERM_LIVE_DIR $NGTERM_LIVE_MANAGED_CLAIM $NGTERM_LIVE_NO_DETACH_KEY '
         '[${NGTERM_LIVE_SESSION-unset}] [${NGTERM_LIVE_SESSION_PREFIX-unset}]"\n'
-        'echo "nonce ${#NGTERM_LIVE_MANAGED} home $HOME zmx ${ZMX_DIR-unset}"\n'
+        'echo "nonce ${#NGTERM_LIVE_MANAGED} home $HOME"\n'
         "exec cat\n",
     )
     endpoint = {"executable": str(fake), "socketDirectory": instance.live_dir}
     with leading_client(instance, endpoint, "ngterm-abc") as client:
         _printed(client, f"attach|ngterm-abc|/bin/sh|-c|{GONE_GUARD}|")
         _printed(client, f"env {instance.live_dir} 1 1 [] []")
-        _printed(client, f"nonce 32 home {instance.home} zmx unset")
+        _printed(client, f"nonce 32 home {instance.home}")
 
 
 def test_leading_client_refuses_another_instances_namespace(instance: SimpleNamespace) -> None:

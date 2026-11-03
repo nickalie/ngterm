@@ -16,7 +16,7 @@ unresolved (one OSC 52 answer carries no request of its own, so one read at most
 
 Options: keep it (bounded to one stall per attach); or make the server's clipboard path asynchronous, so the
 program's output goes on while a read waits and the answer is formatted and delivered on its own when it comes,
-as zmx effectively did (the outer terminal's late answer arrived as input). Codex's position: the asynchronous path
+as upstream's zmx effectively does (the outer terminal's late answer arrived as input). Codex's position: the asynchronous path
 is the full fix, at the price of the synchronous read callback and the armed-answer path Task 19 built
 (`replies.rs` `Outlet::answer`), and of strict reply ordering. Claude's: out of scope for a client review fix, and
 the stall is bounded.

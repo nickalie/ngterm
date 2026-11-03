@@ -7,7 +7,7 @@ from agterm_conformance.match import assert_ok, find_session
 from agterm_conformance.plugin import Ctl, launch_options
 
 LIVE = pytest.mark.requires(
-    "live-sessions", reason="needs panes in zmx daemons, which upstream creates only for a zsh or fish login shell"
+    "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
 )
 
 
@@ -38,8 +38,8 @@ def test_a_pane_another_client_leads_is_covered(live, ui_for):
         lambda tree: find_session(tree, sid).get(vocabulary.backed_key) is True and _lead(tree, sid) == "leader"
     )
     ui.absent(cover)
-    endpoint = assert_ok(live.request(vocabulary.command("zmx.tree")))["remote"]["endpoint"]
-    rows = assert_ok(live.request(vocabulary.command("zmx.list")))[vocabulary.result_key]["entries"]
+    endpoint = assert_ok(live.request(vocabulary.command("live.tree")))["remote"]["endpoint"]
+    rows = assert_ok(live.request(vocabulary.command("live.list")))[vocabulary.result_key]["entries"]
     (daemon,) = [row["daemon"] for row in rows if row.get("sessionID") == sid and row["pane"] == "left"]
     with vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
         live.wait_tree(lambda tree: _lead(tree, sid) == "follower", timeout=15)
