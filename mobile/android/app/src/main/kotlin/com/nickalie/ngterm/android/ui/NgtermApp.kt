@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -18,11 +21,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.OpenTarget
 import com.nickalie.ngterm.android.data.SessionKey
+import com.nickalie.ngterm.android.ui.asks.AskPrompt
+import com.nickalie.ngterm.android.ui.asks.NotificationPermissionPrompt
 import com.nickalie.ngterm.android.ui.machines.HostKeySheet
 import com.nickalie.ngterm.android.ui.machines.MachinesRoute
 import com.nickalie.ngterm.android.ui.machines.MachinesViewModel
@@ -33,6 +41,7 @@ import com.nickalie.ngterm.android.ui.onboarding.OnboardingStep
 import com.nickalie.ngterm.android.ui.onboarding.OnboardingViewModel
 import com.nickalie.ngterm.android.ui.session.AttachedActions
 import com.nickalie.ngterm.android.ui.session.AttachedUiState
+import com.nickalie.ngterm.android.ui.session.OpenSession
 import com.nickalie.ngterm.android.ui.session.RailSessions
 import com.nickalie.ngterm.android.ui.session.SessionViewModel
 import com.nickalie.ngterm.android.ui.session.SessionsDestination
@@ -67,10 +76,11 @@ private class SessionsUi(
 
 /**
  * The app over [graph]: the first run until it has a key, then [AdaptiveScaffold] over the top-level destinations,
- * with the host-key question and a program's clipboard read as sheets over whichever is shown. Sessions holds the
- * attached sessions and the session view, and the rail and the sidebar list the attached sessions on every
- * destination; Settings shows the loaded core's [coreVersion]. The selected destination survives a configuration
- * change.
+ * with the host-key question, a program's clipboard read, the session on screen's ask and the notification permission
+ * as sheets over whichever is shown. Sessions holds the attached sessions and the session view, and the rail and the
+ * sidebar list the attached sessions on every destination; Settings shows the loaded core's [coreVersion]. The
+ * selected destination survives a configuration change. A notification's tap ([AppGraph.opens]) opens its session and
+ * pane through the session view model, or the app's first destination.
  */
 @Composable
 fun NgtermApp(
@@ -95,6 +105,14 @@ fun NgtermApp(
             val failures by sessions.paneFailures.collectAsStateWithLifecycle()
             val notice by sessions.notice.collectAsStateWithLifecycle()
             val actions = remember(sessions) { AttachedActions.of(sessions, onOpenMachines = { selected = MACHINES }) }
+            val target by graph.opens.pending.collectAsStateWithLifecycle()
+            LaunchedEffect(target) {
+                target?.let { opened ->
+                    selected = goTo(opened, sessions)
+                    graph.opens.consume(opened)
+                }
+            }
+            OnScreen(graph, if (selected == SESSIONS) attached.open else null)
             Frame(
                 graph = graph,
                 coreVersion = coreVersion,
@@ -117,6 +135,8 @@ fun NgtermApp(
                 }
             }
             ClipboardReadPrompt(graph)
+            AskPrompt(graph)
+            NotificationPermissionPrompt(graph)
         }
 
         else -> {
@@ -124,6 +144,32 @@ fun NgtermApp(
             OnboardingFlow(step, actions, modifier)
         }
     }
+}
+
+// opens a notification's target: its session (and pane) under Sessions, or the first destination for a machine's
+private fun goTo(
+    target: OpenTarget,
+    sessions: SessionViewModel,
+): String {
+    val session = target.sessionId ?: return MACHINES
+    val key = SessionKey(target.machineId, session)
+    sessions.open(key)
+    target.paneId?.let { sessions.focus(key, it) }
+    return SESSIONS
+}
+
+// tells the asks which session is on screen: the open one while Sessions shows it and the app is in the foreground
+@Composable
+private fun OnScreen(
+    graph: AppGraph,
+    open: OpenSession?,
+) {
+    // collected whatever the state: collecting only while started would never see the app leave
+    val state by LocalLifecycleOwner.current.lifecycle.currentStateFlow
+        .collectAsState()
+    val shown = (open as? OpenSession.Live)?.key?.takeIf { state.isAtLeast(Lifecycle.State.STARTED) }
+    LaunchedEffect(shown) { graph.asks.showing(shown) }
+    DisposableEffect(graph) { onDispose { graph.asks.showing(null) } }
 }
 
 @Composable

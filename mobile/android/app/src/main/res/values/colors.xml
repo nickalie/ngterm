@@ -3,4 +3,6 @@
   <color name="ic_launcher_background">#FF101418</color>
   <!-- the window's background before Compose draws: ui/theme/Color.kt's light background -->
   <color name="window_background">#FFF2F4F5</color>
+  <!-- the notifications' accent: the mark's copper (resources/icons/ngterm.svg) -->
+  <color name="brand_copper">#FFCF6E31</color>
 </resources>

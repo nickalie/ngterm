@@ -5,18 +5,25 @@ import android.os.Build
 import android.os.SystemClock
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.preferencesDataStoreFile
+import com.nickalie.ngterm.android.data.Alerts
 import com.nickalie.ngterm.android.data.AppKeys
+import com.nickalie.ngterm.android.data.Asks
 import com.nickalie.ngterm.android.data.ClipboardReads
 import com.nickalie.ngterm.android.data.ClipboardTrust
 import com.nickalie.ngterm.android.data.Connections
 import com.nickalie.ngterm.android.data.LiveSessions
 import com.nickalie.ngterm.android.data.MachineStore
 import com.nickalie.ngterm.android.data.NativeKeyMaker
+import com.nickalie.ngterm.android.data.NotificationPrefs
+import com.nickalie.ngterm.android.data.OpenRequests
 import com.nickalie.ngterm.android.platform.AndroidClipboard
 import com.nickalie.ngterm.android.platform.AndroidKeystoreWrapper
 import com.nickalie.ngterm.android.platform.KeystoreKeyVault
 import com.nickalie.ngterm.android.platform.NetworkMonitor
+import com.nickalie.ngterm.android.platform.Notifications
 import com.nickalie.ngterm.android.platform.PinnedHostKeys
+import com.nickalie.ngterm.android.service.LinkKeeper
+import com.nickalie.ngterm.android.service.LinkService
 import com.nickalie.ngterm.android.ui.session.SessionPanes
 import com.nickalie.ngterm.core.ffi.MobileCore
 import kotlinx.coroutines.CoroutineScope
@@ -26,10 +33,13 @@ import java.io.File
 
 /**
  * The app's process: it makes the [AppGraph] on first use (not in `onCreate`, so the JVM tests, which run this class
- * without the native library, never load the core).
+ * without the native library, never load the core), with what works beside the screens: the network's nudges, the
+ * notifications ([Alerts]) and the foreground service while sessions are attached ([LinkKeeper]).
  */
-class NgtermApplication : Application() {
-    val graph: AppGraph by lazy { makeGraph() }
+class NgtermApplication :
+    Application(),
+    GraphOwner {
+    override val graph: AppGraph by lazy { makeGraph() }
 
     private fun makeGraph(): AppGraph {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -40,8 +50,13 @@ class NgtermApplication : Application() {
         val network = NetworkMonitor(this, connections::networkChanged).also { it.start() }
         val clipboard = AndroidClipboard(this)
         val live = LiveSessions(scope, connections, clipboard)
+        val machines = MachineStore(PreferenceDataStoreFactory.create { file("machines") })
+        val asks = Asks(scope, connections)
+        val prefs = NotificationPrefs(PreferenceDataStoreFactory.create { file("notifications") })
+        Alerts(scope, connections, asks, machines.machines, prefs.enabled, Notifications(this))
+        LinkKeeper(scope, connections.attached) { LinkService.start(this) }
         return AppGraph(
-            machines = MachineStore(PreferenceDataStoreFactory.create { file("machines") }),
+            machines = machines,
             keys =
                 AppKeys(
                     store = PreferenceDataStoreFactory.create { file("keys") },
@@ -59,6 +74,9 @@ class NgtermApplication : Application() {
                     clipboard = clipboard,
                 ),
             panes = SessionPanes(scope, connections, live),
+            asks = asks,
+            notificationPrefs = prefs,
+            opens = OpenRequests(),
             online = network.online,
         )
     }

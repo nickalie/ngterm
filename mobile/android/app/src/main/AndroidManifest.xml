@@ -5,6 +5,11 @@
   <!-- ssh to the machines, and knowing when the network comes back to reconnect at once -->
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <!-- keeping the attached sessions' ssh connections while the app is in the background (service/LinkService.kt) -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <!-- the agents' questions, notifications and status, and the attached sessions' summary (Android 13+ asks) -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
   <!-- enableOnBackInvokedCallback opts Android 13-15 into predictive back (16 has it by default at target SDK 36);
        older versions ignore it and keep the classic back, hence targetApi 33 for lint's UnusedAttribute -->
@@ -19,14 +24,31 @@
       android:supportsRtl="true"
       android:theme="@style/Theme.Ngterm"
       tools:targetApi="33">
+    <!-- singleTop: a notification's tap reaches the running activity (onNewIntent) rather than stacking another -->
     <activity
         android:name=".MainActivity"
-        android:exported="true">
+        android:exported="true"
+        android:launchMode="singleTop">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
     </activity>
+
+    <!-- specialUse: no other type fits a terminal's long-lived ssh link, and dataSync is time-limited on Android 15 -->
+    <service
+        android:name=".service.LinkService"
+        android:exported="false"
+        android:foregroundServiceType="specialUse">
+      <property
+          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+          android:value="Keeps the ssh sessions of attached remote terminals connected, so their programs' questions and output reach the user while the app is in the background." />
+    </service>
+
+    <!-- an ask's notification actions and inline replies -->
+    <receiver
+        android:name=".platform.AskActionReceiver"
+        android:exported="false" />
   </application>
 
 </manifest>

@@ -959,17 +959,48 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Create: `service/LinkService.kt`, `platform/Notifications.kt`, `ui/asks/`
 
-- [ ] `LinkService`: a `specialUse` foreground service with its subtype property, holding the core while any session
+- [x] `LinkService`: a `specialUse` foreground service with its subtype property, holding the core while any session
       is attached; its notification shows the attached count and Detach All; the `POST_NOTIFICATIONS` request
       explains why it's needed
-- [ ] a `ConnectivityManager` callback calls `network_changed`
-- [ ] server notifications and agent-status changes (waiting, done, error, each toggleable) go to a channel per
+- [x] a `ConnectivityManager` callback calls `network_changed`
+- [x] server notifications and agent-status changes (waiting, done, error, each toggleable) go to a channel per
       machine, and a tap opens the session and pane
-- [ ] invoke `frontend-design` for the ask dialogs: button, input and choice asks, the free-form row and `cancel_id`
+- [x] invoke `frontend-design` for the ask dialogs: button, input and choice asks, the free-form row and `cancel_id`
       for choice asks; in the background, notification actions, inline reply, or opening the app, per the ask rule
-- [ ] write unit tests mapping events to notifications, screenshots of the ask dialogs, and a UI test answering an ask
+- [x] write unit tests mapping events to notifications, screenshots of the ask dialogs, and a UI test answering an ask
       in-app and from a notification (fake core)
-- [ ] run `./gradlew check` and the tests; all must pass before Task 20
+- [x] run `./gradlew check` and the tests; all must pass before Task 20
+  - result (2026-11-03): `data/Asks.kt` keeps the open asks (any attached session's, the ask rule) until answered
+    here (once, `MobileCore.answer_ask`), taken down by the core (`AskDismiss`) or their session detached, and the
+    session on screen (`onScreen`: the open session while Sessions shows it and the activity is started). `ui/asks/`
+    holds `AskDraft` (ngterm-core's `AskDraft` and `PendingAsk::answer` in Kotlin: a radio list's first pick, the
+    free-form row taking and giving back the pick, the cancel button as Escape, the field's control-character rule
+    and 64 KiB cap), `AskSheet`/`AskQuestion` and `AskForm` (a sheet like the clipboard read's: the attention
+    diamond, title, message, the text field or the choice list with its free-form row, the origin's buttons stacked:
+    default filled, destructive in the error color, cancel quiet; Back or a swipe is Escape) and
+    `NotificationPermission` (Android 13's permission asked once, with its reason, as the first session is attached).
+    `data/Alerts.kt` maps the core's events and the open asks to notifications: agents' notices, waiting
+    (`blocked`) and done (`completed`) out of sight, a machine lost for good while sessions are attached
+    (unreachable, or its host key changed), and every ask out of sight, answered as `deliveryOf` says (actions,
+    inline reply, or open the app); `data/NotificationPrefs.kt` holds the per-kind switches Task 20 shows and whether
+    the permission was asked. `platform/Notifications.kt` posts them on a channel per machine, a tap opening the
+    session and pane through `OpenRequests` → `SessionViewModel.open`/`focus` (`MainActivity` is `singleTop` and
+    hands it `onNewIntent`); `platform/AskActionReceiver.kt` answers an ask's action or inline reply.
+    `service/LinkService.kt` is the `specialUse` foreground service (subtype property, FOREGROUND_SERVICE_SPECIAL_USE,
+    `START_NOT_STICKY`) with the count, the names and Detach all, started by `LinkKeeper` as the first session is
+    attached and stopping itself when none is. The `ConnectivityManager` item was already met by Task 13's
+    `NetworkMonitor` (a new or regained default network calls `network_changed`), reused as it is. The app's
+    graph is reached from the receiver and the service through `GraphOwner`. DESIGN.md gained the ask sheet,
+    notifications and the service. Tests: `AskDraftTest`, `AlertsTest` (the mapping, on/off switches, on screen,
+    lost and host key, the ask rule, answer once, detach), `NotificationsTest` (channel, words, actions, inline
+    reply, open-the-app, the tap's target, no permission, the service's notification), `LinkServiceTest`,
+    `AskFlowTest` (in the app on the fake core: a choice ask with the free-form row, an input ask and its cancel
+    button, a dismissal, an inline reply from the notification through the receiver, a notification's tap opening the
+    session and pane) and 16 goldens in `screenshots/asks` (the button ask and the permission sheet at the six
+    windows; the choice and input asks light and dark in Robolectric's default window, since a text field in a
+    dialog never settles under phone qualifiers). `./gradlew check` is green; the instrumented tests compile and
+    were not rerun on the emulator (Robolectric drives every flow here)
+  - ➕ Left for Task 20: Settings shows `NotificationPrefs`' switches (and turns the permission on after Not now)
 
 ### Task 20: Settings
 

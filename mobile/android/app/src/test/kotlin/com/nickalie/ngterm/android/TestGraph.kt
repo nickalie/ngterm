@@ -5,12 +5,15 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import com.nickalie.ngterm.android.data.AppKey
 import com.nickalie.ngterm.android.data.AppKeys
+import com.nickalie.ngterm.android.data.Asks
 import com.nickalie.ngterm.android.data.ClipboardReads
 import com.nickalie.ngterm.android.data.ClipboardTrust
 import com.nickalie.ngterm.android.data.Connections
 import com.nickalie.ngterm.android.data.KeyMaker
 import com.nickalie.ngterm.android.data.LiveSessions
 import com.nickalie.ngterm.android.data.MachineStore
+import com.nickalie.ngterm.android.data.NotificationPrefs
+import com.nickalie.ngterm.android.data.OpenRequests
 import com.nickalie.ngterm.android.data.StoredMachine
 import com.nickalie.ngterm.android.platform.KeyWrapper
 import com.nickalie.ngterm.android.platform.KeystoreKeyVault
@@ -112,6 +115,7 @@ fun testStore(
 class TestGraph(
     dir: File,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+    permissionAsked: Boolean = true,
 ) {
     val online = MutableStateFlow(true)
     var now = 1_000_000L
@@ -133,6 +137,14 @@ class TestGraph(
 
     // the panes' frames are read on the main thread, where the UI tests' clock drives them
     val panes = SessionPanes(scope, connections, live, EmptyCoroutineContext)
+    val asks = Asks(scope, connections)
+
+    // the notification permission counts as asked unless the test is about its question
+    val notificationPrefs =
+        NotificationPrefs(testStore(dir, "notifications")).also {
+            if (permissionAsked) runBlocking { it.markPermissionAsked() }
+        }
+    val opens = OpenRequests()
     val graph =
         AppGraph(
             machines = MachineStore(testStore(dir, "machines")),
@@ -141,6 +153,9 @@ class TestGraph(
             connections = connections,
             clipboardReads = clipboardReads,
             panes = panes,
+            asks = asks,
+            notificationPrefs = notificationPrefs,
+            opens = opens,
             online = online,
         )
 

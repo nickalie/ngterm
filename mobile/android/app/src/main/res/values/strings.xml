@@ -240,4 +240,31 @@
   <string name="session_exited_signal">Stopped by %1$s. The last screen stays as it was.</string>
   <string name="session_exited_unknown">The last screen stays as it was.</string>
   <string name="session_pane_failed_title">Can\'t show this pane</string>
+  <!-- an origin's ask, as a sheet over its session (ui/asks/) -->
+  <string name="ask_answer_hint">Your answer</string>
+  <string name="ask_other_choice">Something else</string>
+
+  <!-- the notification permission, asked once with a reason (ui/asks/NotificationPermission.kt) -->
+  <string name="notifications_ask_title">Get told when an agent needs you</string>
+  <string name="notifications_ask_body">While ngterm is in the background, a notification brings you back when an agent asks you something, waits for you or finishes. You can answer a question from the notification itself.</string>
+  <string name="notifications_ask_quiet">The sessions you attach also show as one quiet notification, which keeps them connected.</string>
+  <string name="notifications_ask_allow">Turn on notifications</string>
+  <string name="notifications_ask_later">Not now</string>
+
+  <!-- notifications (platform/Notifications.kt) and the foreground service (service/LinkService.kt) -->
+  <string name="channel_links">Attached sessions</string>
+  <string name="channel_links_body">Keeps the attached sessions connected while ngterm is in the background.</string>
+  <string name="channel_machine_body">Questions, notifications and agent status from %1$s</string>
+  <plurals name="link_title">
+    <item quantity="one">%1$d session attached</item>
+    <item quantity="other">%1$d sessions attached</item>
+  </plurals>
+  <string name="link_detach_all">Detach all</string>
+  <string name="notify_session_on">%1$s on %2$s</string>
+  <string name="notify_waiting_title">%1$s is waiting for you</string>
+  <string name="notify_done_title">%1$s finished</string>
+  <string name="notify_on_machine">On %1$s</string>
+  <string name="notify_lost_title">Lost %1$s</string>
+  <string name="notify_host_key_changed">%1$s\'s host key changed, so ngterm stopped connecting. Open the machine to review it.</string>
+  <string name="notify_ask_open">Tap to answer in ngterm.</string>
 </resources>

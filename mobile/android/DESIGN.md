@@ -149,7 +149,8 @@ above headings.
 Line icons drawn for the app in `res/drawable/ic_*.xml`: 24dp, 2dp strokes, round ends, tinted by `Icon`. Machines
 (two racked servers), Sessions (a terminal window), Settings (sliders), Menu and Menu open, Add, Retry, Alert, Offline
 (a struck signal), Close, Lock, Back (mirrored right to left), More (an item's menu) and the extra keys' arrow
-(`ic_key_arrow`, turned for each direction). The status glyphs are 16dp filled or stroked shapes (`ic_status_*`). The mark
+(`ic_key_arrow`, turned for each direction). The status bar's small icon (`ic_notification`) is the mark's `>_` alone,
+white on nothing, as Android masks it. The status glyphs are 16dp filled or stroked shapes (`ic_status_*`). The mark
 (`ic_ngterm_mark`) is the launcher's `>_` cut out of a copper tile. No icon font or icon library.
 
 ## Components
@@ -533,6 +534,86 @@ compact                            medium (rail open)               expanded
   its lead.
 - **Clipboard:** a program's OSC 52 write sets the device's clipboard (Android shows its own notice); a write to the
   selection or primary clipboard, which Android lacks, is dropped.
+
+### An agent asks (`ui/asks/`)
+
+An origin hands this app an ask (`ngtermctl ask`) for any attached session: the agent has stopped and waits for an
+answer. The ask rule says where it shows: a **sheet over the session** while that session is on screen (its view
+open under Sessions and the app in the foreground), and a **notification** otherwise, including while the app is in
+the background, which is as good a place to answer as any.
+
+The plan, reviewed against the brief:
+
+| First pass | Why it was generic | Revised to |
+|---|---|---|
+| A centered alert dialog, the buttons in a row at its foot | covers the terminal the question is about, and a row of three caller-written labels truncates on a phone | a sheet from the bottom edge, the shape the clipboard and host-key questions already have; the terminal stays readable above it |
+| Every button filled alike | flattens what the origin marked: a default, a destructive choice, a cancel | the default filled copper, the destructive outlined in the error color (filled in it when it is also the default), the cancel button a quiet text button, the rest outlined; in the origin's order, one per line, full width |
+| A "Question from docs-site" eyebrow over the title | a template label; the session is the one on screen | the attention diamond (the status "Needs you") over the title, nothing else |
+| Choices as list items between dividers | the card-and-divider kit | 56dp rows on the sheet's tone, the marker at the start in a 48dp cell, the label (bodyLarge) over its subtitle (bodySmall); the marker alone carries the pick |
+| The free-form answer as a separate field under the list | detached from the list it belongs to | the list's last row: its marker, then the field in place of a label |
+
+```
++--------------------------------------+
+|                ----                  |
+|  <>                                  |
+|  Which branch should the fix go on?  |
+|  (o) main                            |
+|      The release line                |
+|  (*) develop                         |
+|      Has the new installer           |
+|  ( ) [ Another branch            ]   |
+|  [        Use this branch         ]  |
+|               Cancel                 |
++--------------------------------------+
+```
+
+- **Content:** the diamond; the ask's title (headlineSmall, a heading); its message (bodyMedium, `onSurfaceVariant`);
+  its form; its buttons. The sheet scrolls when it doesn't fit.
+- **A text field** starts from the origin's text with its placeholder (or "Your answer"); one line, or an editing area
+  of three to eight lines. An edit that would add a character the field can't hold (a control character; a line break
+  in a one-line field) is refused whole, as on desktop, and the text stops at 64 KiB. Enter in a one-line field
+  presses the default button (or the one answering button).
+- **A choice list** is radio buttons or checkboxes, as the origin asks, starting on its checked ids (a radio list on
+  its first item when none is). The free-form row's marker takes a tap only while the row holds text: typing selects
+  it, and in a radio list takes the pick over; clearing it gives the pick back. Blank text never answers.
+- **Answers** follow desktop's: a button answers with the field's text, or the checked ids and the free-form row's
+  text; the cancel button, Back or swiping the sheet away answer as Escape. An ask the origin takes back (answered
+  elsewhere, ended there, its stream gone) closes its sheet; one answered here goes once.
+- **Not here:** the origin's style (terminal or GUI), button alignment, width and hotkeys are desktop's; the sheet is
+  the app's one look, and its buttons stack at every width.
+
+### Notifications (`platform/Notifications.kt`, `data/Alerts.kt`)
+
+Each machine has its own channel, named after it ("Questions, notifications and agent status from build-01"), so
+the system's settings can quiet one machine. Notifications use the small `>_` and the brand copper as accent; a tap
+opens the session and the pane it is about (through the session view's selection, never the keyboard's focus).
+
+| What | Title / text | Lasts |
+|---|---|---|
+| An agent's notification (`ngtermctl notify`) | its title (or the session's name) / its body; the session as the header's subtext | each its own |
+| Waiting (status `blocked`) | "docs-site is waiting for you" / the session's context, or "On build-01" | one per session: the next status replaces it, any other takes it down, and so does opening the session or detaching it |
+| Done (status `completed`) | "docs-site finished" / as above | as above |
+| A machine lost for good while sessions are attached | "Lost build-01" / the core's reason, or that its host key changed | until it connects again; the tap opens the app |
+| An ask out of sight | its title / its message; "docs-site on build-01" as the subtext | until answered, taken back, or shown as the sheet |
+
+- **Asks in a notification:** a button ask gets an action per button; an input ask an inline reply per answering
+  button (its placeholder as the hint; a one-line field's line breaks become spaces) and its cancel button as a plain
+  action; a choice ask, or one with more than three buttons, says "Tap to answer in ngterm." and opens the session,
+  where the ask is then its sheet. An ask says it once (`onlyAlertOnce`) and isn't cleared by a tap.
+- Waiting, Done, agents' notifications and lost machines can each be turned off (Settings); asks can't, since they
+  wait for an answer. A status change of the session on screen posts nothing: the user is looking at it.
+
+### Keeping sessions connected (`service/LinkService.kt`)
+
+While any session is attached, a foreground service keeps the process, and with it the ssh connections, alive: one
+quiet notification on its own low channel ("Attached sessions"), "2 sessions attached" over their names, with
+**Detach all**; tapping it opens the app. It stops itself when the last session is detached. Its type is
+`specialUse` (a terminal's long ssh link fits no other type, and `dataSync` is time-limited on Android 15).
+
+**The permission** (Android 13+) is asked once, when it starts to matter: the first time a session is attached. A
+sheet says why first ("Get told when an agent needs you": what reaches you in the background, that a question can be
+answered from the notification, and the one quiet notification), then **Turn on notifications** raises the system's
+question and **Not now** (or swiping the sheet away) leaves it for Settings. Either way it isn't asked again.
 
 ## Copy
 
