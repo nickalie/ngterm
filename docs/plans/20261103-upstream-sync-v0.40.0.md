@@ -218,26 +218,26 @@ all `agtermTests/ControlServerSessionInfoTests.swift` timer cases and remote pre
 CLI info cases in `tests/cli/test_cli_output.py`; cover session.info, all three tree info fields, cli:session info,
 event:tree.changed. Existing ratcheted context tests assert another field and are not info coverage.
 
-- [ ] Implement source/markdown/hideAfter and toolkit-neutral spans. Plain text stays literal; inline markup
+- [x] Implement source/markdown/hideAfter and toolkit-neutral spans. Plain text stays literal; inline markup
   supports bold/italic/code, color/dim attributes and combined traits; links keep labels only, unknown attributes
   become unstyled. Colors red/orange/yellow/green/blue/purple/gray match case-insensitively.
-- [ ] Enforce 512 UTF-8 source bytes and decoded nonblank, single-line, control-free visible text, including
+- [x] Enforce 512 UTF-8 source bytes and decoded nonblank, single-line, control-free visible text, including
   LF/CR/U+2028/U+2029/U+0085 handling. Exact `session.info: ` errors: `info text is over 512 bytes`,
   `--hide-after must be 0...86400 seconds`, `info text is empty`, `info text must be one line`,
   `info text contains a control character`, `unknown info color: pink (red|orange|yellow|green|blue|purple|gray)`,
   `invalid info markdown; quote attribute values: ^[text](color: "green")`.
-- [ ] Set requires text (`session.info set requires text`); clear refuses text or even explicit false/zero flags
+- [x] Set requires text (`session.info set requires text`); clear refuses text or even explicit false/zero flags
   (`session.info clear takes no text, markdown or hide-after`). Bad/missing mode:
   `invalid info mode: X (set|clear)`. Validate before resolving target or mutating old value/deadline.
-- [ ] Each set replaces the whole value; defaults plain/untimed. Finite fractional seconds 0...86400 are valid.
+- [x] Each set replaces the whole value; defaults plain/untimed. Finite fractional seconds 0...86400 are valid.
   Identical timed writes restart expiry; zero/omitted timeout cancels it. Superseded callbacks do nothing. Session,
   workspace/window teardown cancels timers; HUD/overlay close does not. Expiry runs in GUI and headless.
-- [ ] Keep local/mirrored runtime slots, local wins. Omit all three tree fields when absent; otherwise expose
+- [x] Keep local/mirrored runtime slots, local wins. Omit all three tree fields when absent; otherwise expose
   configured hideAfter, not countdown. Emit tree.changed only on effective value changes. Do not snapshot,
   relaunch or duplicate info. Soft close drops timed info, while untimed info survives undo.
-- [ ] Add backward-compatible snapshot info and info frames. Invalid mirrored markup becomes absent; disconnect
+- [x] Add backward-compatible snapshot info and info frames. Invalid mirrored markup becomes absent; disconnect
   drops mirror only. Origin expiry sends clear; viewer never starts a mirror expiry timer.
-- [ ] Finish CLI TEXT/clear/defaults/markdown/hide-after/target/window and parser errors
+- [x] Finish CLI TEXT/clear/defaults/markdown/hide-after/target/window and parser errors
   `provide exactly one of a TEXT or --clear`, `--clear takes no --markdown or --hide-after`,
   `hide-after must be 0...86400 seconds`. Port all named Swift cases, add conformance assertions and scoped checks.
 

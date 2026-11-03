@@ -529,6 +529,7 @@ impl AppState {
         // the window requests and pane focus requests wait for the windows' sync after the task (`windows.rs`)
         self.arm_auto_follow();
         self.arm_hud_timers();
+        self.arm_info_timers();
         self.arm_job_expiries();
         self.arm_page_claim_expiries();
         self.arm_remote_tick();
@@ -593,6 +594,23 @@ impl AppState {
     }
 
     /// Arms the HUD auto-hides the core asked for since the last arm; each lands in [`Core::fire_hud_hide`].
+    fn arm_info_timers(&mut self) {
+        let timers = self.core.take_info_timers();
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        for timer in timers {
+            let task = Box::new(move |state: &mut Self| {
+                if !state.quitting && state.core.fire_info_hide(timer) {
+                    state.settle();
+                }
+            });
+            if main_loop.post_after(timer.delay, task).is_err() {
+                tracing::debug!("info auto-hide dropped: the loop is closed");
+            }
+        }
+    }
+
     fn arm_hud_timers(&mut self) {
         let timers = self.core.take_hud_timers();
         let Some(main_loop) = self.poster.upgrade() else {

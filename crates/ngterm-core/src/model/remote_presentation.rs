@@ -266,6 +266,22 @@ impl AppStore {
         }
     }
 
+    /// Keeps validated mirror info underneath a local override. The origin owns the only expiry timer.
+    pub fn apply_remote_info(&mut self, info: Option<&crate::remote::frames::PresentationInfo>, id: Uuid) {
+        let Some(session) = self
+            .session_mut(id)
+            .filter(|session| session.remote_presentation.is_some())
+        else {
+            return;
+        };
+        let previous = session.effective_info().cloned();
+        session.mirrored_info = info
+            .and_then(|info| crate::session_info::SessionInfo::make(&info.source, info.markdown, info.hide_after).ok());
+        if previous.as_ref() != session.effective_info() {
+            self.schedule_tree_changed();
+        }
+    }
+
     /// Takes the origin's context, `None` or an invalid one clearing it (upstream's `applyRemoteContext`); a local
     /// context keeps winning over it, and the mirrored one is kept underneath. Never saved.
     pub fn apply_remote_context(&mut self, context: Option<&str>, id: Uuid) {
@@ -378,6 +394,7 @@ impl AppStore {
             return false;
         }
         self.apply_remote_context(None, id);
+        self.apply_remote_info(None, id);
         let bridged = self
             .session(id)
             .and_then(Session::remote_presentation)
@@ -547,6 +564,61 @@ mod tests {
         // and an idle row takes the snapshot's
         store.apply_remote_snapshot_status(Some(&mirrored), id);
         assert_eq!(store.session(id).unwrap().agent_indicator.status, AgentStatus::Blocked);
+    }
+
+    #[test]
+    fn mirrored_info_is_validated_and_local_overrides_survive_disconnect() {
+        use crate::remote::frames::PresentationInfo;
+        use crate::session_info::SessionInfo;
+        let (mut store, id, _) = attached();
+        store.set_remote_connection(RemoteConnection::Connected, id);
+        let origin = PresentationInfo {
+            source: "**3** agents".to_owned(),
+            markdown: true,
+            hide_after: 30.0,
+        };
+        store.apply_remote_info(Some(&origin), id);
+        let session = store.session(id).unwrap();
+        assert!(session.info.is_none());
+        assert!(session.info_revision.is_none(), "mirror never arms a timer");
+        assert!(session.effective_info().unwrap().spans[0].bold);
+        assert!((session.effective_info().unwrap().hide_after - 30.0).abs() < f64::EPSILON);
+        store.set_info(Some(SessionInfo::make("local", false, 0.0).unwrap()), id);
+        let second = PresentationInfo {
+            source: "second".to_owned(),
+            ..origin.clone()
+        };
+        store.apply_remote_info(Some(&second), id);
+        assert_eq!(store.session(id).unwrap().effective_info().unwrap().source, "local");
+        store.set_info(None, id);
+        assert_eq!(store.session(id).unwrap().effective_info().unwrap().source, "second");
+        let invalid = PresentationInfo {
+            source: "^[x](color: \"pink\")".to_owned(),
+            ..origin.clone()
+        };
+        store.apply_remote_info(Some(&invalid), id);
+        assert!(store.session(id).unwrap().mirrored_info.is_none());
+        store.apply_remote_info(Some(&origin), id);
+        store.set_info(Some(SessionInfo::make("local", false, 0.0).unwrap()), id);
+        store.set_remote_connection(RemoteConnection::Failed("gone".into()), id);
+        assert!(store.session(id).unwrap().mirrored_info.is_none());
+        assert_eq!(store.session(id).unwrap().effective_info().unwrap().source, "local");
+    }
+
+    #[test]
+    fn mirror_info_is_ignored_on_local_sessions() {
+        let mut store = AppStore::new();
+        let workspace = store.add_workspace("local");
+        let id = store.add_session(workspace, NewSession::at_cwd("/tmp")).unwrap();
+        store.apply_remote_info(
+            Some(&crate::remote::frames::PresentationInfo {
+                source: "origin".to_owned(),
+                markdown: false,
+                hide_after: 1.0,
+            }),
+            id,
+        );
+        assert!(store.session(id).unwrap().effective_info().is_none());
     }
 
     #[test]

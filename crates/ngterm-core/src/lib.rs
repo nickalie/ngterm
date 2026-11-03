@@ -54,6 +54,7 @@ pub mod remote;
 pub mod resolve;
 pub mod restart_replay;
 pub mod restore;
+pub mod session_info;
 pub mod settings_model;
 pub mod shell_dialect;
 pub mod sidebar_actions;

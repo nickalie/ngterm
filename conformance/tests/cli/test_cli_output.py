@@ -1604,8 +1604,13 @@ def test_session_info_sets_and_clears(cli, ctl):
     try:
         _ok(cli("session", "info", source, "--markdown", "--hide-after", "600", "--target", sid), "ok\n")
         assert_subset(_node(ctl, sid), {"info": source, "infoMarkdown": True, "infoHideAfter": 600})
+        _ok(cli("session", "info", "plain **stars**", "--target", sid), "ok\n")
+        assert_subset(_node(ctl, sid), {"info": "plain **stars**", "infoMarkdown": False, "infoHideAfter": 0})
         _ok(cli("session", "info", "--clear", "--target", sid), "ok\n")
         assert_absent(_node(ctl, sid), "info", "infoMarkdown", "infoHideAfter")
         _usage(cli("session", "info", "--clear", "--markdown"), "--clear takes no --markdown or --hide-after")
+        _usage(cli("session", "info", "--clear", "--hide-after", "0"), "--clear takes no --markdown or --hide-after")
+        _usage(cli("session", "info"), "provide exactly one of a TEXT or --clear")
+        _usage(cli("session", "info", "x", "--hide-after", "-1"), "hide-after must be 0...86400 seconds")
     finally:
         assert_ok(ctl.request("session.close", sid))

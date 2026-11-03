@@ -398,6 +398,27 @@ fn the_snapshot_and_deltas_land_on_the_row_and_losing_the_stream_withdraws_them(
     assert_eq!(viewer.transport.0.borrow().len(), 2);
 }
 
+#[test]
+fn info_snapshot_and_deltas_project_without_viewer_timers_and_clear_on_disconnect() {
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({"info":{"source":"**3** agents","markdown":true,"hideAfter":30}}));
+    assert_eq!(viewer.node()["info"], "**3** agents");
+    assert_eq!(viewer.node()["infoMarkdown"], true);
+    assert_eq!(viewer.node()["infoHideAfter"], 30.0);
+    assert!(viewer.fixture.core.take_info_timers().is_empty());
+    viewer.frame(json!({"kind":"info","info":{"source":"next","markdown":false,"hideAfter":0}}));
+    assert_eq!(viewer.node()["info"], "next");
+    viewer.frame(json!({"kind":"info","info":{"source":"^[a](color: \"pink\")","markdown":true,"hideAfter":0}}));
+    for field in ["info", "infoMarkdown", "infoHideAfter"] {
+        assert!(viewer.node().get(field).is_none());
+    }
+    viewer.frame(json!({"kind":"info","info":{"source":"last","markdown":false,"hideAfter":0}}));
+    let key = viewer.link().0.borrow().key.unwrap();
+    viewer.fixture.core.viewer_closed(key, "gone");
+    viewer.fixture.core.commit();
+    assert!(viewer.node().get("info").is_none());
+}
+
 // MARK: - status sounds
 
 /// Upstream's `testAHandedOverSoundPlaysHere`, `testTheBlockedMarkerPlaysThisMacsOwnBlockedSound`,

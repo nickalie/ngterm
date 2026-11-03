@@ -805,6 +805,25 @@ pub struct PresentationRespawns {
     pub generations: std::collections::BTreeMap<String, i64>,
 }
 
+/// The origin's local info; viewers parse it but run no expiry timer (upstream `PresentationInfo`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentationInfo {
+    pub source: String,
+    pub markdown: bool,
+    pub hide_after: f64,
+}
+
+impl From<&crate::session_info::SessionInfo> for PresentationInfo {
+    fn from(info: &crate::session_info::SessionInfo) -> Self {
+        Self {
+            source: info.source.clone(),
+            markdown: info.markdown,
+            hide_after: info.hide_after,
+        }
+    }
+}
+
 /// The replaceable state a subscriber starts from.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct PresentationSnapshot {
@@ -814,6 +833,8 @@ pub struct PresentationSnapshot {
     pub hud: Option<PresentationHud>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info: Option<PresentationInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<PresentationLayout>,
     /// The session's name as the origin shows it; `None` from an origin that predates [`Body::Name`].
@@ -833,6 +854,7 @@ pub enum Body {
     Snapshot(PresentationSnapshot),
     Status(Option<PresentationStatus>),
     Context(Option<String>),
+    Info(Option<PresentationInfo>),
     /// The session's name as the origin now shows it. This build's addition, not upstream's: a viewer that predates it
     /// reads it as [`Body::Unknown`] and keeps the name it attached with.
     Name(String),
@@ -883,6 +905,7 @@ impl Body {
             Self::Snapshot(_) => "snapshot",
             Self::Status(_) => "status",
             Self::Context(_) => "context",
+            Self::Info(_) => "info",
             Self::Name(_) => "name",
             Self::Layout(_) => "layout",
             Self::Hud(_) => "hud",
@@ -919,6 +942,7 @@ impl Body {
             Self::Snapshot(snapshot) => entry("snapshot", serde_json::to_value(snapshot)),
             Self::Status(Some(status)) => entry("status", serde_json::to_value(status)),
             Self::Context(Some(context)) => entry("context", serde_json::to_value(context)),
+            Self::Info(Some(info)) => entry("info", serde_json::to_value(info)),
             Self::Name(name) => entry("name", serde_json::to_value(name)),
             Self::Layout(layout) => entry("layout", serde_json::to_value(layout)),
             Self::Hud(Some(hud)) => entry("hud", serde_json::to_value(hud)),
@@ -941,6 +965,7 @@ impl Body {
             Self::Respawn(respawns) => entry("respawn", serde_json::to_value(respawns)),
             Self::Status(None)
             | Self::Context(None)
+            | Self::Info(None)
             | Self::Hud(None)
             | Self::Ping
             | Self::Ack
@@ -1061,6 +1086,7 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "snapshot" => Body::Snapshot(required(object, "snapshot")?),
         "status" => Body::Status(optional(object, "status")?),
         "context" => Body::Context(optional(object, "context")?),
+        "info" => Body::Info(optional(object, "info")?),
         "name" => Body::Name(required(object, "name")?),
         "layout" => Body::Layout(
             object
@@ -1803,6 +1829,32 @@ mod tests {
                 body: Body::Unknown("future.kind".to_owned())
             }
         );
+    }
+
+    #[test]
+    fn info_snapshot_and_delta_are_backward_compatible() {
+        let old = decode(br#"{"kind":"snapshot","gen":1,"rev":1,"snapshot":{}}"#).unwrap();
+        assert_eq!(old.body, Body::Snapshot(PresentationSnapshot::default()));
+        let info = PresentationInfo {
+            source: "**3** agents".to_owned(),
+            markdown: true,
+            hide_after: 1.5,
+        };
+        for body in [
+            Body::Info(Some(info.clone())),
+            Body::Info(None),
+            Body::Snapshot(PresentationSnapshot {
+                info: Some(info),
+                ..PresentationSnapshot::default()
+            }),
+        ] {
+            let frame = PresentationFrame {
+                generation: 1,
+                rev: 2,
+                body,
+            };
+            assert_eq!(decode(&encode(&frame).unwrap()).unwrap(), frame);
+        }
     }
 
     #[test]

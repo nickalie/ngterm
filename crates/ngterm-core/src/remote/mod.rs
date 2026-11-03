@@ -141,6 +141,7 @@ struct Stream {
 struct Published {
     status: Option<PresentationStatus>,
     context: Option<String>,
+    info: Option<frames::PresentationInfo>,
     name: Option<String>,
 }
 
@@ -411,6 +412,7 @@ impl Core {
             status: presentation_status(found),
             hud: self.remote.hud(found, Instant::now()),
             context: found.context.clone(),
+            info: found.info.as_ref().map(frames::PresentationInfo::from),
             layout: presentation_layout(found),
             name: Some(presentation_name(found)),
             respawns,
@@ -502,6 +504,7 @@ impl Core {
         self.remote.published.entry(session).or_insert_with(|| Published {
             status: snapshot.status.clone(),
             context: snapshot.context.clone(),
+            info: snapshot.info.clone(),
             name: snapshot.name.clone(),
         });
         let sink = Box::new(ChannelSink(Rc::clone(&channel)));
@@ -701,24 +704,30 @@ impl Core {
         let Some(found) = self.presented_session(session) else {
             return;
         };
-        let (status, context, name, layout) = (
+        let (status, context, info, name, layout) = (
             presentation_status(found),
             found.context.clone(),
+            found.info.as_ref().map(frames::PresentationInfo::from),
             presentation_name(found),
             presentation_layout(found),
         );
         let published = self.remote.published.entry(session).or_default();
         let status_changed = published.status != status;
         let context_changed = published.context != context;
+        let info_changed = published.info != info;
         let name_changed = published.name.as_ref() != Some(&name);
         published.status.clone_from(&status);
         published.context.clone_from(&context);
+        published.info.clone_from(&info);
         published.name = Some(name.clone());
         if status_changed {
             self.remote.hub.publish(&Body::Status(status), session);
         }
         if context_changed {
             self.remote.hub.publish(&Body::Context(context), session);
+        }
+        if info_changed {
+            self.remote.hub.publish(&Body::Info(info), session);
         }
         if name_changed {
             self.remote.hub.publish(&Body::Name(name), session);

@@ -221,6 +221,39 @@ fn a_viewer_gets_hello_then_the_snapshot_then_each_change() {
     assert!(node(&mut live.fixture, session).get("presenters").is_none());
 }
 
+#[test]
+fn info_snapshot_refresh_and_origin_expiry_publish_the_configured_value_then_clear() {
+    let mut live = live();
+    let id = live.session;
+    let set = |fixture: &mut Fixture| {
+        fixture.session(
+            SessionCmd::Info,
+            Some(&wire(id)),
+            args(|a| {
+                a.mode = Some("set".to_owned());
+                a.text = Some("**3**".to_owned());
+                a.markdown = Some(true);
+                a.hide_after = Some(30.0);
+            }),
+        )
+    };
+    assert!(set(&mut live.fixture).ok);
+    let first = live.fixture.core.take_info_timers()[0];
+    let (_, viewer) = subscribe(&mut live.fixture.core, id, "mirror");
+    assert_eq!(
+        viewer.last("snapshot").unwrap()["snapshot"]["info"],
+        json!({"source":"**3**","markdown":true,"hideAfter":30.0})
+    );
+    assert!(set(&mut live.fixture).ok);
+    let timer = live.fixture.core.take_info_timers()[0];
+    assert!(viewer.frames("info").is_empty(), "refresh publishes no changed value");
+    assert!(!live.fixture.core.fire_info_hide(first));
+    assert!(live.fixture.core.fire_info_hide(timer));
+    live.fixture.core.commit();
+    let clear = viewer.last("info").unwrap();
+    assert!(clear.get("info").is_none(), "origin expiry sends clear");
+}
+
 /// A status, a context and a notification, each checked as it reaches `viewer`.
 fn publish_changes(live: &mut Live, viewer: &Viewer) {
     let sid = wire(live.session);

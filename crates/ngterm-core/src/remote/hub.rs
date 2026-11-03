@@ -125,11 +125,12 @@ impl PresenterGrant {
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's.
-pub const SUPPORTED_KINDS: [&str; 15] = [
+pub const SUPPORTED_KINDS: [&str; 16] = [
     "status",
     "hud",
     "notify",
     "context",
+    "info",
     "layout",
     "sound",
     ASK_FORM_KIND,
@@ -831,6 +832,7 @@ mod tests {
                 "hud",
                 "notify",
                 "context",
+                "info",
                 "layout",
                 "sound",
                 "ask.form",

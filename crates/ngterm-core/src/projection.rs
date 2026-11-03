@@ -140,6 +140,11 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
     node.scratch = session.scratch_active;
     node.flagged = session.flagged;
     node.context = session.effective_context().map(str::to_owned);
+    if let Some(info) = session.effective_info() {
+        node.info = Some(info.source.clone());
+        node.info_markdown = Some(info.markdown);
+        node.info_hide_after = Some(info.hide_after);
+    }
     node.remote_host = session.remote_host().map(str::to_owned);
     node.presentation = session.remote_presentation().map(RemotePresentationState::node);
     node.unseen = (session.unseen_count > 0).then(|| i64::try_from(session.unseen_count).unwrap_or(i64::MAX));

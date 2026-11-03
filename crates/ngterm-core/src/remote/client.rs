@@ -80,6 +80,7 @@ pub enum ClientEffect {
     Sound(PresentationSound),
     Connection(RemoteConnection),
     Context(Option<String>),
+    Info(Option<super::frames::PresentationInfo>),
     /// The origin's name for the session, which the row takes unless it was renamed here.
     Name(String),
     Layout(PresentationLayout),
@@ -291,6 +292,7 @@ impl PresentationClient {
                 effects.push(ClientEffect::SnapshotStatus(snapshot.status));
                 effects.push(ClientEffect::Hud(snapshot.hud));
                 effects.push(ClientEffect::Context(snapshot.context));
+                effects.push(ClientEffect::Info(snapshot.info));
                 if let Some(name) = snapshot.name {
                     effects.push(ClientEffect::Name(name));
                 }
@@ -300,6 +302,7 @@ impl PresentationClient {
             }
             Body::Status(status) => effects.push(ClientEffect::Status(status)),
             Body::Context(context) => effects.push(ClientEffect::Context(context)),
+            Body::Info(info) => effects.push(ClientEffect::Info(info)),
             Body::Name(name) => effects.push(ClientEffect::Name(name)),
             Body::Layout(layout) => apply_layout(layout, effects),
             Body::Hud(hud) => effects.push(ClientEffect::Hud(hud)),
@@ -807,6 +810,38 @@ mod tests {
         let sent = harness.transport.link(0).0.borrow().sent.len();
         harness.client.answer(answer);
         assert_eq!(harness.transport.link(0).0.borrow().sent.len(), sent);
+    }
+
+    #[test]
+    fn info_is_forwarded_from_snapshots_deltas_and_clears() {
+        let mut harness = Harness::started();
+        let info = super::super::frames::PresentationInfo {
+            source: "**3**".to_owned(),
+            markdown: true,
+            hide_after: 30.0,
+        };
+        harness.connect(
+            PresentationSnapshot {
+                info: Some(info.clone()),
+                ..PresentationSnapshot::default()
+            },
+            7,
+            PresentationMode::Mirror,
+        );
+        harness.deliver(&line(Body::Info(None), 7, 2));
+        harness.deliver(&line(Body::Info(Some(info.clone())), 7, 3));
+        let infos: Vec<_> = harness
+            .effects
+            .iter()
+            .filter_map(|effect| {
+                if let ClientEffect::Info(info) = effect {
+                    Some(info.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(infos, vec![Some(info.clone()), None, Some(info)]);
     }
 
     #[test]

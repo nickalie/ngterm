@@ -415,6 +415,11 @@ impl Core {
                     store.apply_remote_snapshot_status(status.as_ref(), session);
                 }
             }
+            ClientEffect::Info(info) => {
+                if let Some(store) = self.library_mut().store_for_session_mut(session) {
+                    store.apply_remote_info(info.as_ref(), session);
+                }
+            }
             ClientEffect::Context(context) => {
                 if let Some(store) = self.library_mut().store_for_session_mut(session) {
                     store.apply_remote_context(context.as_deref(), session);

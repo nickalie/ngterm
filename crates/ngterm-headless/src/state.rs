@@ -219,6 +219,7 @@ impl HeadlessState {
         self.take_alerts();
         self.arm_auto_follow();
         self.arm_hud_timers();
+        self.arm_info_timers();
         self.arm_job_expiries();
         self.arm_page_claim_expiries();
         self.arm_remote_tick();
@@ -444,6 +445,16 @@ impl HeadlessState {
             self.after(delay, "overlay job expiry", |state| {
                 if !state.quitting() {
                     state.core.expire_overlay_jobs();
+                    state.settle();
+                }
+            });
+        }
+    }
+
+    fn arm_info_timers(&mut self) {
+        for timer in self.core.take_info_timers() {
+            self.after(timer.delay, "info auto-hide", move |state| {
+                if !state.quitting() && state.core.fire_info_hide(timer) {
                     state.settle();
                 }
             });

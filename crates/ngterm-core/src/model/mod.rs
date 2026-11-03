@@ -33,6 +33,7 @@ mod restore;
 mod saved_remote_rows;
 mod search;
 mod session;
+mod session_info;
 mod session_moves;
 mod snapshot;
 mod status;

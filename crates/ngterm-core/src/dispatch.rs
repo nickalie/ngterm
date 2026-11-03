@@ -150,6 +150,8 @@ pub struct Core {
     pub(crate) auto_follow: crate::auto_follow::AutoFollow,
     /// The HUD commands' inputs and armed auto-hides ([`commands::hud`]).
     pub(crate) hud: commands::hud::HudRuntime,
+    /// Queued independent sidebar info expiries.
+    pub(crate) info_timers: Vec<crate::session_info::InfoHideTimer>,
     /// The desktop notifications commands and terminals asked for, in order, until the frontend takes them
     /// ([`commands::notify`]).
     pub(crate) notifications: Vec<commands::notify::NotificationEffect>,
@@ -243,6 +245,7 @@ impl Core {
             dashboards: commands::dashboard::Dashboards::default(),
             auto_follow: crate::auto_follow::AutoFollow::default(),
             hud: commands::hud::HudRuntime::default(),
+            info_timers: Vec::new(),
             notifications: Vec::new(),
             modals: crate::modal::Modals::default(),
             jobs: commands::overlay::JobRuntime::default(),
@@ -809,7 +812,11 @@ impl Core {
     fn route(&mut self, request: &Request) -> Result<Response, ControlError> {
         match request.cmd {
             Command::Session(
-                cmd @ (SessionCmd::Status | SessionCmd::Flag | SessionCmd::Context | SessionCmd::Seen),
+                cmd @ (SessionCmd::Status
+                | SessionCmd::Flag
+                | SessionCmd::Context
+                | SessionCmd::Info
+                | SessionCmd::Seen),
             ) => match commands::metadata::dispatch(self, cmd, request)? {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
@@ -1062,7 +1069,8 @@ mod tests {
 
     #[test]
     fn registered_v040_commands_refuse_until_their_feature_handlers_land() {
-        for name in ["session.info", "live.attach.group"] {
+        {
+            let name = "live.attach.group";
             let cmd = name.parse().unwrap();
             let response = core().dispatch(&Request::new(cmd));
             assert!(!response.ok);

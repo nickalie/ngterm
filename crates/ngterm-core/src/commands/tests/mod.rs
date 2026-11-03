@@ -46,6 +46,7 @@ mod respawn;
 mod restart;
 mod restore;
 mod session;
+mod session_info;
 mod sidebar;
 mod surface;
 mod theme;
