@@ -10,6 +10,7 @@ import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.MobileException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -132,7 +133,7 @@ class SessionsViewModelTest {
     }
 
     @Test
-    fun aFailedCreateStaysInTheDialogAndAClosedOneGoesToTheSnackbar() {
+    fun aFailedCreateStaysInTheDialogItBeganIn() {
         connected()
         val model = model()
         model.openNewSession()
@@ -146,6 +147,40 @@ class SessionsViewModelTest {
         assertNull(model.notice.value)
         model.closeNewSession()
         assertNull(model.creating.value)
+    }
+
+    @Test
+    fun aCreateWhoseDialogClosedFailsToTheSnackbarAndLeavesANewDialogAlone() {
+        connected()
+        val model = model()
+        model.openNewSession()
+        test.core.failNext("createSession", MobileException.Remote("build-01 does not run live sessions"))
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["createSession"] = it }
+        model.create("api")
+        eventually { test.core.calls.any { it.method == "createSession" } }
+        model.closeNewSession()
+        model.openNewSession()
+        gate.complete(Unit)
+        eventually { model.notice.value != null }
+        assertEquals("build-01 does not run live sessions", model.notice.value)
+        // the dialog opened since is not the failed create's
+        assertEquals(NewSessionState(), model.creating.value)
+    }
+
+    @Test
+    fun aCreateWhoseDialogClosedLeavesANewDialogOpenWhenItLands() {
+        connected()
+        val model = model()
+        model.openNewSession()
+        val gate = CompletableDeferred<Unit>().also { test.core.holds["createSession"] = it }
+        model.create("api")
+        eventually { test.core.calls.any { it.method == "createSession" } }
+        model.closeNewSession()
+        model.openNewSession()
+        gate.complete(Unit)
+        eventually { model.ready().sessions?.map { it.name } == listOf("api") }
+        assertEquals(NewSessionState(), model.creating.value)
+        assertNull(model.notice.value)
     }
 
     @Test

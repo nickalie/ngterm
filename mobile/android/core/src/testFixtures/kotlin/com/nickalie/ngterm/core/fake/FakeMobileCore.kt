@@ -24,7 +24,8 @@ data class FakeCall(
 /**
  * A [MobileCoreInterface] with no native library behind it, for the app's JVM and UI tests. It records every call in
  * [calls], keeps each machine's sessions in [sessions], hands [sink] the events a test [emit]s, and throws the
- * failure a test queued with [failNext] from that method's next call.
+ * failure a test queued with [failNext] from that method's next call. A suspending method's next call can be held open
+ * with [holds]: it is recorded and takes its queued failure at once, then waits for the gate before going on.
  *
  * It follows the real core's rules (crates/ngterm-mobile, api.rs and actor.rs) where the app sees them:
  * - [connect] reports [MachineState.Connected] as a [MobileEvent.MachineState] when the machine was not connected
@@ -67,6 +68,12 @@ class FakeMobileCore(
     /** The machines whose connect waits for [answerHostKey], by id, with the key on offer. */
     val waitingForHostKey: Map<String, String> get() = questions.mapValues { it.value.offered }
     private val failures = mutableMapOf<String, MobileException>()
+
+    /**
+     * Gates that hold the next call of a suspending method (its Kotlin name) open until they complete: the call is
+     * recorded and takes the failure [failNext] queued for it before it waits, so a later call goes on unheld.
+     */
+    val holds: MutableMap<String, CompletableDeferred<Unit>> = mutableMapOf()
     private var created = 0
 
     /** The calls made so far, oldest first. */
@@ -107,6 +114,17 @@ class FakeMobileCore(
         failures.remove(method)?.let { throw it }
     }
 
+    // [record] for a suspending method, held open while a test's gate in [holds] is
+    private suspend fun recordHeld(
+        method: String,
+        vararg args: Any?,
+    ) {
+        synchronized(recorded) { recorded += FakeCall(method, args.toList()) }
+        val failure = failures.remove(method)
+        holds.remove(method)?.await()
+        failure?.let { throw it }
+    }
+
     private fun sessionsOf(machineId: String): MutableList<RemoteSession> {
         if (machineId !in connected) throw MobileException.NotConnected(machineId)
         return sessions.getOrPut(machineId) { mutableListOf() }
@@ -130,7 +148,7 @@ class FakeMobileCore(
 
     override suspend fun connect(machine: Machine) {
         try {
-            record("connect", machine)
+            recordHeld("connect", machine)
         } catch (error: MobileException.Unreachable) {
             unreachable(machine.id, error.reason)
         }
@@ -194,7 +212,7 @@ class FakeMobileCore(
     }
 
     override suspend fun listSessions(machineId: String): List<RemoteSession> {
-        record("listSessions", machineId)
+        recordHeld("listSessions", machineId)
         return keepListing(machineId)
     }
 
@@ -202,7 +220,7 @@ class FakeMobileCore(
         machineId: String,
         name: String?,
     ): RemoteSession {
-        record("createSession", machineId, name)
+        recordHeld("createSession", machineId, name)
         created += 1
         val session = fakeSession(id = "fake-$created", name = name?.takeIf { it.isNotBlank() } ?: "session $created")
         sessionsOf(machineId) += session
@@ -214,7 +232,7 @@ class FakeMobileCore(
         machineId: String,
         sessionId: String,
     ) {
-        record("endSession", machineId, sessionId)
+        recordHeld("endSession", machineId, sessionId)
         val list = sessionsOf(machineId)
         if (!list.removeAll { it.id == sessionId }) throw MobileException.Remote("no session $sessionId")
         val listing = listings[machineId] ?: return
@@ -225,7 +243,7 @@ class FakeMobileCore(
         machineId: String,
         sessionId: String,
     ) {
-        record("attachSession", machineId, sessionId)
+        recordHeld("attachSession", machineId, sessionId)
         listed(machineId, sessionId)
     }
 
@@ -240,7 +258,7 @@ class FakeMobileCore(
         paneId: String,
         size: PaneSize,
     ): Pane {
-        record("showPane", machineId, sessionId, paneId, size)
+        recordHeld("showPane", machineId, sessionId, paneId, size)
         listed(machineId, sessionId)
         return paneFactory(machineId, sessionId, paneId, size)
     }

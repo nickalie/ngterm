@@ -9,6 +9,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -20,7 +21,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.R
@@ -78,6 +83,32 @@ private sealed interface MachinesPage {
 }
 
 /**
+ * Each stacked page's own view models, by route: they live while the page is on the stack (through a configuration
+ * change) and are cleared when it is popped, or pushed afresh after the stack was lost.
+ */
+class PageViewModels : ViewModel() {
+    private val stores = mutableMapOf<String, ViewModelStore>()
+
+    /** The owner of [route]'s view models, made when it has none. */
+    fun owner(route: String): ViewModelStoreOwner {
+        val store = stores.getOrPut(route) { ViewModelStore() }
+        return object : ViewModelStoreOwner {
+            override val viewModelStore = store
+        }
+    }
+
+    /** Clears [route]'s view models. */
+    fun clear(route: String) {
+        stores.remove(route)?.clear()
+    }
+
+    override fun onCleared() {
+        stores.values.forEach(ViewModelStore::clear)
+        stores.clear()
+    }
+}
+
+/**
  * The Machines destination: the home and the screens it opens (a machine's sessions, Add and Edit machine, a key's
  * public half, a changed host key), stacked, with back returning down the stack, and the removal's Undo. The stack
  * and each screen's fields survive a configuration change and a trip up the stack and back.
@@ -87,6 +118,7 @@ fun MachinesRoute(
     graph: AppGraph,
     modifier: Modifier = Modifier,
     viewModel: MachinesViewModel = viewModel { MachinesViewModel(graph) },
+    pages: PageViewModels = viewModel { PageViewModels() },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val keys by viewModel.keys.collectAsStateWithLifecycle()
@@ -96,9 +128,12 @@ fun MachinesRoute(
     var stack by rememberSaveable { mutableStateOf("") }
     val routes = stack.split('|').filter(String::isNotEmpty)
     val holder = rememberSaveableStateHolder()
-    val push = { page: MachinesPage -> stack = (routes + page.route).joinToString("|") }
+    val push = { page: MachinesPage ->
+        pages.clear(page.route)
+        stack = (routes + page.route).joinToString("|")
+    }
     val pop = {
-        routes.lastOrNull()?.let(holder::removeState)
+        routes.lastOrNull()?.also(holder::removeState)?.let(pages::clear)
         stack = routes.dropLast(1).joinToString("|")
     }
     BackHandler(enabled = routes.isNotEmpty(), onBack = pop)
@@ -114,36 +149,66 @@ fun MachinesRoute(
             onRetryRead = viewModel::retry,
         )
     val snackbar = remember { SnackbarHostState() }
-    val removedText = removed?.let { stringResource(R.string.machines_removed, it.machine.title) }
-    val undo = stringResource(R.string.action_undo)
-    LaunchedEffect(removed) {
-        if (removedText == null) return@LaunchedEffect
-        val result = snackbar.showSnackbar(removedText, actionLabel = undo, duration = SnackbarDuration.Long)
-        if (result == SnackbarResult.ActionPerformed) viewModel.undoRemove() else viewModel.forgetRemoval()
-    }
+    RemovalUndo(removed, snackbar, viewModel::undoRemove, viewModel::forgetRemoval)
     Box(modifier = modifier.fillMaxSize()) {
         val top = routes.lastOrNull()
         holder.SaveableStateProvider(top ?: "home") {
-            Page(
-                graph = graph,
-                page = top?.let(MachinesPage::of),
-                state = state,
-                actions = actions,
-                keys = keys,
-                pins = pins,
-                onSave = { draft, editing ->
-                    viewModel.save(draft, editing)
-                    pop()
-                },
-                onRemovePin = { id ->
-                    viewModel.removePin(id)
-                    pop()
-                },
-                onShowKey = { push(MachinesPage.PublicKey(it)) },
-                onPop = pop,
-            )
+            PageScope(top, pages::owner) {
+                Page(
+                    graph = graph,
+                    page = top?.let(MachinesPage::of),
+                    state = state,
+                    actions = actions,
+                    keys = keys,
+                    pins = pins,
+                    onSave = { draft, editing ->
+                        viewModel.save(draft, editing)
+                        pop()
+                    },
+                    onRemovePin = { id ->
+                        viewModel.removePin(id)
+                        pop()
+                    },
+                    onShowKey = { push(MachinesPage.PublicKey(it)) },
+                    onPop = pop,
+                )
+            }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
+    }
+}
+
+// the snackbar that offers to undo the removal of [removed]
+@Composable
+private fun RemovalUndo(
+    removed: Removal?,
+    snackbar: SnackbarHostState,
+    onUndo: () -> Unit,
+    onForget: () -> Unit,
+) {
+    val removedText = removed?.let { stringResource(R.string.machines_removed, it.machine.title) }
+    val undo = stringResource(R.string.action_undo)
+    val undone by rememberUpdatedState(onUndo)
+    val forgotten by rememberUpdatedState(onForget)
+    LaunchedEffect(removed) {
+        if (removedText == null) return@LaunchedEffect
+        val result = snackbar.showSnackbar(removedText, actionLabel = undo, duration = SnackbarDuration.Long)
+        if (result == SnackbarResult.ActionPerformed) undone() else forgotten()
+    }
+}
+
+// [content] with the view models of the stacked page [route] (the destination's own for the home)
+@Composable
+private fun PageScope(
+    route: String?,
+    owner: (String) -> ViewModelStoreOwner,
+    content: @Composable () -> Unit,
+) {
+    if (route == null) {
+        content()
+    } else {
+        val pageOwner = remember(route) { owner(route) }
+        CompositionLocalProvider(LocalViewModelStoreOwner provides pageOwner, content)
     }
 }
 

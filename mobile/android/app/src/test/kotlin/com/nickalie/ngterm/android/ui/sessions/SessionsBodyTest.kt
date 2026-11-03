@@ -65,6 +65,29 @@ class SessionsBodyTest {
     }
 
     @Test
+    fun companionsSitUnderTheirParentInTheCoresOrderAndGoWithTheirFamily() {
+        // the core lists every companion after all the parents
+        val listed =
+            listOf(
+                fakeSession("a", name = "api"),
+                fakeSession("b", name = "build"),
+                fakeSession("a2", name = "api review", parent = "a"),
+            )
+
+        fun body(attached: Set<String>) = sessions(listed = listed, attached = attached).body() as SessionsBody.Sessions
+        val none = body(emptySet())
+        assertEquals(listOf("a", "a2", "b"), none.others.map { it.session.id })
+        assertEquals(listOf(null, "api", null), none.others.map { it.companionOf })
+        // attaching the parent, or only its companion, takes the whole family to the Attached group
+        for (attached in listOf(setOf("a"), setOf("a2"))) {
+            val body = body(attached)
+            assertEquals(listOf("a", "a2"), body.attached.map { it.session.id })
+            assertEquals(listOf("a", "a2").map { it in attached }, body.attached.map { it.attached })
+            assertEquals(listOf("b"), body.others.map { it.session.id })
+        }
+    }
+
+    @Test
     fun aMissingNgtermctlIsTheShellsWordsForIt() {
         assertTrue(isMissingCli("/bin/sh: 1: ngtermctl: not found"))
         assertTrue(isMissingCli("bash: line 1: ngtermctl: command not found"))

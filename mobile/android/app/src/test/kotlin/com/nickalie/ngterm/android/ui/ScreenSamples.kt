@@ -118,13 +118,14 @@ val SampleSessions =
                     name = "api-refactor",
                     context = "Split the billing service into its own crate",
                 ),
-                fakeSession("s2", name = "api-refactor review", parent = "s1"),
                 status("s3", "Waiting for input", "#f0904f", "diamond").copy(
                     name = "docs-site",
                     context = "Rewrite the install guide",
                 ),
                 fakeSession("s4", name = "shell").copy(cwd = "/home/nick/src/ngterm"),
                 fakeSession("s5", name = "old-experiment").copy(cwd = "/tmp/scratch"),
+                // the core lists companions after every parent; the screen puts it under its own
+                fakeSession("s2", name = "api-refactor review", parent = "s1"),
             ),
         failure = null,
         attached = setOf("s3"),

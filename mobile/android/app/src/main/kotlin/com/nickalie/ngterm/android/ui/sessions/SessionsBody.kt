@@ -68,8 +68,9 @@ sealed interface SessionsBody {
     ) : SessionsBody
 
     /**
-     * The sessions: those this app has [attached], then the [others], each in the machine's order (parents before
-     * their companions). [failure] is why the last refresh failed, if it did (the list is the one before).
+     * The sessions, by family (a parent, then its companions right under it), in the machine's order of parents: the
+     * families with a session this app has [attached], then the [others]. [failure] is why the last refresh failed, if
+     * it did (the list is the one before).
      */
     data class Sessions(
         val attached: List<SessionLine>,
@@ -102,17 +103,35 @@ private fun MachineSessions.listingBody(): SessionsBody {
 
 private fun MachineSessions.lines(listed: List<RemoteSession>): SessionsBody.Sessions {
     val names = listed.associate { it.id to it.name }
-    val lines =
-        listed.map { session ->
-            SessionLine(
-                session = session,
-                companionOf = session.parent?.let { names[it] ?: it },
-                attached = session.id in attached,
-                ending = session.id in ending,
-            )
-        }
-    val (mine, others) = lines.partition { it.attached }
-    return SessionsBody.Sessions(mine, others, failure)
+    val line = { session: RemoteSession ->
+        SessionLine(
+            session = session,
+            companionOf = session.parent?.let { names[it] ?: it },
+            attached = session.id in attached,
+            ending = session.id in ending,
+        )
+    }
+    val families = families(listed).map { family -> family.map(line) }
+    val (mine, others) = families.partition { family -> family.any { it.attached } }
+    return SessionsBody.Sessions(mine.flatten(), others.flatten(), failure)
+}
+
+/**
+ * [listed] by family: each session whose parent isn't listed (the core lists parents first, companions after them
+ * all) heads one, in the listing's order, followed by its companions and theirs.
+ */
+private fun families(listed: List<RemoteSession>): List<List<RemoteSession>> {
+    val ids = listed.mapTo(mutableSetOf()) { it.id }
+    val companions = listed.filter { it.parent in ids }.groupBy { it.parent }
+    val placed = mutableSetOf<String>()
+
+    fun family(head: RemoteSession): List<RemoteSession> =
+        if (placed.add(head.id)) listOf(head) + companions[head.id].orEmpty().flatMap(::family) else emptyList()
+
+    val heads = listed.filter { it.parent !in ids }.map(::family)
+    // a loop of parents has no head: its sessions stand alone, so none goes missing
+    val strays = listed.filter { it.id !in placed }.map { listOf(it) }
+    return heads + strays
 }
 
 /** What a machine's sessions screen does, as [SessionsViewModel] and the route do it. */

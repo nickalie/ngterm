@@ -8,9 +8,12 @@ import com.nickalie.ngterm.core.ffi.Machine
 import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -154,6 +157,46 @@ class ConnectionsTest {
             connections.attach("m1", "s3")
             connections.disconnect("m1")
             assertEquals(null, connections.attached.value["m1"])
+        }
+
+    @Test
+    fun aFailedListingOvertakenByANewerOneIsDropped() =
+        runTest {
+            val connections = connections()
+            connections.connect(machine)
+            advanceUntilIdle()
+            // the older listing fails only after a newer one has landed
+            core.failNext("listSessions", MobileException.Remote("build-01 gave no answer"))
+            val gate = CompletableDeferred<Unit>().also { core.holds["listSessions"] = it }
+            launch { connections.listSessions("m1") }
+            runCurrent()
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            connections.listSessions("m1")
+            gate.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(null, connections.treeFailures.value["m1"])
+            assertEquals(listOf(fakeSession("s1")), connections.trees.value["m1"])
+        }
+
+    @Test
+    fun anEditedMachineLetsGoOfItsAttachedSessions() =
+        runTest {
+            val connections = connections()
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"), fakeSession("s2"))
+            connections.connect(machine)
+            advanceUntilIdle()
+            connections.attach("m1", "s1")
+            // connected again as it is: the attachment stays
+            connections.connect(machine)
+            advanceUntilIdle()
+            assertEquals(setOf("s1"), connections.attached.value["m1"])
+            // edited: the core replaces the connection and ends the streams; the new listing still has s1
+            connections.connect(machine.copy(label = "build-01 (lab)"))
+            advanceUntilIdle()
+            assertEquals(Link.Connected, connections.links.value["m1"])
+            assertEquals(listOf("s1", "s2"), connections.trees.value["m1"]?.map { it.id })
+            assertEquals(null, connections.attached.value["m1"])
+            assertEquals(listOf("s1"), core.calls.filter { it.method == "detachSession" }.map { it.args[1] })
         }
 
     @Test

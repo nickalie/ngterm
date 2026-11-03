@@ -51,7 +51,8 @@ sealed interface Link {
  * core's events and its connect answers into each machine's [Link] in [links], keeps each machine's last listing in
  * [trees] (and why the last one failed in [treeFailures]), and the sessions this app has attached in [attached].
  * Events arrive on the core's thread; the state flows take them from any thread. Calls are made from the main thread
- * and the suspending ones run in [scope] or the caller's.
+ * and the suspending ones run in [scope] or the caller's, except [detach], which a listing event also makes on the
+ * core's thread (it only posts to the core, so it must never block on it).
  */
 @Suppress("TooManyFunctions") // the app's one wrapper of the core: a function per core call and per event it keeps
 class Connections(
@@ -63,6 +64,15 @@ class Connections(
     private val treeState = MutableStateFlow<Map<String, List<RemoteSession>>>(emptyMap())
     private val treeFailureState = MutableStateFlow<Map<String, String>>(emptyMap())
     private val attachedState = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
+
+    // the record each machine was last connected with (main thread): a connect with another replaces the connection
+    private val records = mutableMapOf<String, Machine>()
+
+    // each machine's listing generation, bumped by every listing that lands and every connection that goes: a listing
+    // failure counts only while no newer listing or connection has overtaken the call that failed. The lock keeps the
+    // bump and the failure's check-and-set from interleaving across the core's thread and the callers'.
+    private val listingLock = Any()
+    private val generations = mutableMapOf<String, Long>()
 
     // the machines whose unknown host key the user declined: the failure their connect reports is no failure to them
     private val declined = MutableStateFlow<Set<String>>(emptySet())
@@ -98,11 +108,19 @@ class Connections(
         machineId: String,
         sessions: List<RemoteSession>,
     ) {
-        treeState.update { it + (machineId to sessions) }
-        treeFailureState.update { it - machineId }
+        synchronized(listingLock) {
+            bump(machineId)
+            treeState.update { it + (machineId to sessions) }
+            treeFailureState.update { it - machineId }
+        }
         val ids = sessions.mapTo(mutableSetOf()) { it.id }
         val gone = attachedState.value[machineId].orEmpty() - ids
         gone.forEach { detach(machineId, it) }
+    }
+
+    // callers hold listingLock
+    private fun bump(machineId: String) {
+        generations[machineId] = generations.getOrDefault(machineId, 0L) + 1
     }
 
     private fun machineState(
@@ -138,10 +156,13 @@ class Connections(
 
     /**
      * Connects [machine] (or retries it at once), then lists its sessions for [trees]. A machine already connected as
-     * it is stays connected; one connected as it was before an edit connects anew.
+     * it is stays connected; one connected as it was before an edit connects anew, and lets go of its attached sessions
+     * (the core ends their streams with the old connection).
      */
     fun connect(machine: Machine) {
         val id = machine.id
+        val before = records.put(id, machine)
+        if (before != null && before != machine) replaced(id)
         declined.update { it - id }
         linkState.update { links ->
             when (links[id]) {
@@ -167,11 +188,19 @@ class Connections(
         }
     }
 
+    // the machine's connection is replaced by one with another record: its attached sessions' streams went with the old
+    // one, and a listing call on it no longer counts
+    private fun replaced(machineId: String) {
+        synchronized(listingLock) { bump(machineId) }
+        attachedState.value[machineId].orEmpty().forEach { detach(machineId, it) }
+    }
+
     /**
      * Lists [machineId]'s sessions again: the listing arrives in [trees], or why it failed in [treeFailures]. A listing
-     * overtaken by a disconnect fails nothing.
+     * overtaken by a disconnect, or by a newer listing or connection, fails nothing.
      */
     suspend fun listSessions(machineId: String) {
+        val generation = synchronized(listingLock) { generations.getOrDefault(machineId, 0L) }
         try {
             core.listSessions(machineId)
         } catch (_: MobileException.Cancelled) {
@@ -179,8 +208,11 @@ class Connections(
         } catch (_: MobileException.Stopped) {
             linkState.update { emptyMap() }
         } catch (error: MobileException) {
-            if (linkState.value[machineId] == Link.Connected) {
-                treeFailureState.update { it + (machineId to error.reason()) }
+            synchronized(listingLock) {
+                val current = generations.getOrDefault(machineId, 0L) == generation
+                if (current && linkState.value[machineId] == Link.Connected) {
+                    treeFailureState.update { it + (machineId to error.reason()) }
+                }
             }
         }
     }
@@ -255,9 +287,13 @@ class Connections(
      */
     fun disconnect(machineId: String) {
         guarded { core.disconnect(machineId) }
+        records -= machineId
         linkState.update { it - machineId }
-        treeState.update { it - machineId }
-        treeFailureState.update { it - machineId }
+        synchronized(listingLock) {
+            bump(machineId)
+            treeState.update { it - machineId }
+            treeFailureState.update { it - machineId }
+        }
         attachedState.update { it - machineId }
     }
 

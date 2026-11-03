@@ -69,6 +69,9 @@ class SessionsViewModel(
     private val ending = MutableStateFlow<Set<String>>(emptySet())
     private val newSession = MutableStateFlow<NewSessionState?>(null)
     private val notices = MutableStateFlow<String?>(null)
+
+    // which opening of the New session dialog is showing (main thread): a create answers only the dialog it began in
+    private var dialog = 0
     private val connections = graph.connections
 
     private val machine =
@@ -150,27 +153,37 @@ class SessionsViewModel(
 
     /** Opens the New session dialog. */
     fun openNewSession() {
-        if (newSession.value == null) newSession.value = NewSessionState()
+        if (newSession.value != null) return
+        dialog += 1
+        newSession.value = NewSessionState()
     }
 
-    /** Closes the New session dialog; a create under way goes on, and its session shows in the list. */
+    /**
+     * Closes the New session dialog; a create under way goes on, its session shows in the list and its failure in the
+     * snackbar, and a dialog opened after it is not its.
+     */
     fun closeNewSession() {
+        dialog += 1
         newSession.value = null
     }
 
     /** Creates a session named [name] (blank: the machine names it); the dialog closes once it is listed. */
     fun create(name: String) {
         if (newSession.value?.running == true) return
+        val mine = dialog
         newSession.value = NewSessionState(running = true)
         viewModelScope.launch {
             try {
                 connections.createSession(machineId, name)
-                newSession.update { null }
+                if (dialog == mine) newSession.value = null
             } catch (error: MobileException) {
                 // a dialog closed meanwhile has no one to tell: the failure goes to the snackbar
                 val reason = error.reason()
-                if (newSession.value == null) notices.value = reason
-                newSession.update { it?.copy(running = false, failed = reason) }
+                if (dialog == mine) {
+                    newSession.update { it?.copy(running = false, failed = reason) }
+                } else {
+                    notices.value = reason
+                }
             }
         }
     }
