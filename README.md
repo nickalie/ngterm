@@ -642,6 +642,9 @@ differs is where things are kept and how they are reached:
 - Toasts go out under the AppUserModelID, which is the application id: every launch sets it on the process and
   registers it (`HKCU\Software\Classes\AppUserModelId\<app id>`, the name and icon the toasts show), and the
   installer's Start-menu shortcut carries it.
+- The window hides the system title bar: ngterm's own bar carries minimize, maximize and close, moves the window and
+  opens its system menu, as on a client-decorated Linux window (`crates/ngterm-gpui/src/titlebar.rs`). `ngterm.exe`
+  embeds the app icon (`resources/icons/ngterm.ico`), which the windows, the taskbar and Alt+Tab show.
 - The live-session namespace is `%LOCALAPPDATA%\ngterm\live\<hash>` ([Live sessions](#live-sessions)).
 - Install Command Line Tool… links nothing: it puts the bundled `ngtermctl.exe`'s folder on the user's `PATH`
   (`HKCU\Environment`) unless it is there already (the installer's is). Install Agent Skill… installs into the home's

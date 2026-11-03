@@ -1302,6 +1302,8 @@ pub fn open(
     let options = gpui_kit::WindowOptions {
         titlebar: Some(gpui_kit::TitlebarOptions {
             title: Some(UNTITLED.into()),
+            // Windows hides its own title bar for the app's (`titlebar.rs`), which draws the window controls there
+            appears_transparent: cfg!(windows),
             ..gpui_kit::TitlebarOptions::default()
         }),
         window_bounds: Some(initial_bounds(frame, cx)),

@@ -135,6 +135,10 @@ wry = { workspace = true, optional = true }
 webview2-com = { workspace = true, optional = true }
 windows-core = { workspace = true, optional = true }
 
+[build-dependencies]
+# ngterm.exe's icon resource on Windows (`windows_resources` in build.rs); a no-op for other targets
+embed-resource.workspace = true
+
 [dev-dependencies]
 ngterm-host = { workspace = true, features = ["fakes"] }
 gpui-kit = { workspace = true, features = ["test-support"] }

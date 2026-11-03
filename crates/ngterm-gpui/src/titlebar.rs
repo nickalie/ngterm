@@ -14,11 +14,13 @@
 //! window, a double click maximizes or restores it, a secondary click opens the window manager's menu.
 //!
 //! Window decorations are the client's where the compositor lets the window draw them (GPUI's client-side
-//! decorations, Wayland and X11): the bar then carries the window controls the window manager supports, on the sides
-//! the desktop's button layout puts them. Under server-side decorations the window manager draws its own title bar
-//! above this one, as with a GTK header bar. The hidden toolbar mode, upstream a bare drag strip under the macOS menu
-//! bar, keeps a minimal bar here, as the GTK build does: the drag surface and the app menu's button, with the window
-//! controls while the client decorates, and no title, toggle or trailing cluster.
+//! decorations, Wayland and X11) and on Windows, whose system title bar the app's windows hide ([`draws_controls`]):
+//! the bar then carries the window controls the window manager supports, on the sides the desktop's button layout
+//! puts them (Windows': minimize, maximize and close on the right, the maximize button the system's own to hover, so
+//! Windows 11 offers its snap layouts there). Under server-side decorations on Linux the window manager draws its own
+//! title bar above this one, as with a GTK header bar. The hidden toolbar mode, upstream a bare drag strip under the
+//! macOS menu bar, keeps a minimal bar here, as the GTK build does: the drag surface and the app menu's button, with
+//! the window controls while the app draws them, and no title, toggle or trailing cluster.
 //!
 //! Every button posts a [`TitlebarAction`] the core runs ([`ngterm_core::Core::titlebar_action`]); the
 //! recent-sessions, attention and custom-commands buttons emit [`TitlebarEvent::Popover`] for the window's popovers
@@ -36,7 +38,7 @@ use gpui_kit::{
     AnyElement, AssetSource, Context, Decorations, Div, EntityId, EventEmitter, FontWeight, Hsla,
     InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, Pixels,
     Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowButton, WindowButtonLayout,
-    WindowControls, div, prelude::FluentBuilder as _, px, svg,
+    WindowControlArea, WindowControls, div, prelude::FluentBuilder as _, px, svg,
 };
 use ngterm_core::Core;
 use ngterm_core::app_actions::ActionEffect;
@@ -327,16 +329,20 @@ fn button_layout(left: &[WindowButton], right: &[WindowButton]) -> WindowButtonL
     }
 }
 
-/// The window controls the bar draws on its `left` or right side: none under the window manager's decorations, else
-/// the desktop's `layout` for that side, without the ones the window manager does not support.
+/// Whether the bar draws the window controls and acts as the window's title bar under `decorations`: on Windows
+/// always (the app's windows hide the system's title bar, `window::open`), elsewhere where the window decorates
+/// itself (GPUI's client-side decorations); never under a window manager's own title bar.
 #[must_use]
-pub fn controls(
-    decorations: Decorations,
-    supported: WindowControls,
-    layout: WindowButtonLayout,
-    left: bool,
-) -> Vec<WindowButton> {
-    if !matches!(decorations, Decorations::Client { .. }) {
+pub fn draws_controls(decorations: Decorations) -> bool {
+    cfg!(windows) || matches!(decorations, Decorations::Client { .. })
+}
+
+/// The window controls the bar draws on its `left` or right side: none unless it draws them (`drawn`,
+/// [`draws_controls`]), else the desktop's `layout` for that side, without the ones the window manager does not
+/// support.
+#[must_use]
+pub fn controls(drawn: bool, supported: WindowControls, layout: WindowButtonLayout, left: bool) -> Vec<WindowButton> {
+    if !drawn {
         return Vec::new();
     }
     let side = if left { layout.left } else { layout.right };
@@ -599,7 +605,7 @@ impl Titlebar {
                 window.zoom_window();
             }
             MouseButton::Left => self.pressed = true,
-            MouseButton::Right if matches!(window.window_decorations(), Decorations::Client { .. }) => {
+            MouseButton::Right if draws_controls(window.window_decorations()) => {
                 window.show_window_menu(event.position);
             }
             _ => {}
@@ -1026,12 +1032,20 @@ impl Titlebar {
                 WindowButton::Close => IconName::WindowClose,
             };
             let poster = poster.clone();
+            // Windows hit-tests the control as its own (the maximize button's hover opens Windows 11's snap layouts);
+            // the press and the click stay the bar's, which handles them as on Linux
+            let area = match button {
+                WindowButton::Minimize => WindowControlArea::Min,
+                WindowButton::Maximize => WindowControlArea::Max,
+                WindowButton::Close => WindowControlArea::Close,
+            };
             ChromeButton::new(format!("window-{}", button.id()))
                 .flex_shrink_0()
                 .w(CONTROL)
                 .h_full()
                 .wash(ink)
                 .keeps_keyboard()
+                .when(cfg!(windows), |control| control.window_control_area(area))
                 .on_click(move |_, window, _| match button {
                     WindowButton::Minimize => window.minimize_window(),
                     WindowButton::Maximize => window.zoom_window(),
@@ -1068,8 +1082,9 @@ impl Render for Titlebar {
             },
             _ => bar.model.label.clone(),
         };
-        let leading = self.window_controls(controls(decorations, supported, layout, true), colors, window);
-        let trailing = self.window_controls(controls(decorations, supported, layout, false), colors, window);
+        let drawn = draws_controls(decorations);
+        let leading = self.window_controls(controls(drawn, supported, layout, true), colors, window);
+        let trailing = self.window_controls(controls(drawn, supported, layout, false), colors, window);
         let uncovered = bar.cover == Cover::None;
         // a translucent window's backing shows through the bar (upstream's chrome paints nothing below full opacity)
         let see_through = chrome::see_through(window, cx);

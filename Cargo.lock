@@ -5356,6 +5356,7 @@ dependencies = [
  "ashpd",
  "async-channel",
  "cosmic-text",
+ "embed-resource",
  "fancy-regex",
  "futures-lite",
  "futures-util",

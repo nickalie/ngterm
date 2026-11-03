@@ -56,18 +56,15 @@ fn the_row_follows_the_mode() {
 
 #[test]
 fn the_window_controls_follow_the_layout_and_what_the_window_manager_supports() {
-    let client = Decorations::Client {
-        tiling: Tiling::default(),
-    };
     let all = WindowControls::default();
     let standard = default_button_layout();
     assert_eq!(
-        controls(client, all, standard, false),
+        controls(true, all, standard, false),
         [WindowButton::Minimize, WindowButton::Maximize, WindowButton::Close]
     );
-    assert!(controls(client, all, standard, true).is_empty());
+    assert!(controls(true, all, standard, true).is_empty());
     assert!(
-        controls(Decorations::Server, all, standard, false).is_empty(),
+        controls(false, all, standard, false).is_empty(),
         "the window manager draws them"
     );
     let tiling_wm = WindowControls {
@@ -75,13 +72,29 @@ fn the_window_controls_follow_the_layout_and_what_the_window_manager_supports() 
         maximize: false,
         ..WindowControls::default()
     };
-    assert_eq!(controls(client, tiling_wm, standard, false), [WindowButton::Close]);
+    assert_eq!(controls(true, tiling_wm, standard, false), [WindowButton::Close]);
     let left = button_layout(&[WindowButton::Close, WindowButton::Minimize], &[]);
     assert_eq!(
-        controls(client, all, left, true),
+        controls(true, all, left, true),
         [WindowButton::Close, WindowButton::Minimize]
     );
-    assert!(controls(client, all, left, false).is_empty());
+    assert!(controls(true, all, left, false).is_empty());
+}
+
+#[test]
+fn the_bar_draws_the_controls_where_no_system_title_bar_does() {
+    let client = Decorations::Client {
+        tiling: Tiling::default(),
+    };
+    assert!(
+        draws_controls(client),
+        "a client-decorated window has no other title bar"
+    );
+    assert_eq!(
+        draws_controls(Decorations::Server),
+        cfg!(windows),
+        "Windows hides its title bar for the app's; a window manager's title bar carries its own controls"
+    );
 }
 
 /// The filled area of `glyph` left and right of the slot's middle, inside the frame.

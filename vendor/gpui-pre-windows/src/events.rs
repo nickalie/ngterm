@@ -29,6 +29,8 @@ pub(crate) const WM_GPUI_KEYBOARD_LAYOUT_CHANGED: u32 = WM_USER + 6;
 pub(crate) const WM_GPUI_GPU_DEVICE_LOST: u32 = WM_USER + 7;
 pub(crate) const WM_GPUI_KEYDOWN: u32 = WM_USER + 8;
 pub(crate) const WM_GPUI_DISPLAYS_CHANGED: u32 = WM_USER + 10;
+// The window menu a title bar the app draws asks for, at the screen point its LPARAM packs.
+pub(crate) const WM_GPUI_SHOW_WINDOW_MENU: u32 = WM_USER + 11;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
 
@@ -160,6 +162,7 @@ impl WindowsWindowInner {
             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
+            WM_GPUI_SHOW_WINDOW_MENU => self.handle_show_window_menu(handle, lparam),
             DM_POINTERHITTEST => self.handle_dm_pointer_hit_test(wparam),
             WM_GETOBJECT => self.handle_wm_getobject(wparam, lparam),
             _ => None,
@@ -1055,6 +1058,11 @@ impl WindowsWindowInner {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> Option<isize> {
+        // A press on a sizing border is the system's: with the title bar hidden the top border overlaps the client
+        // area, and an element there taking the press would keep the window from resizing.
+        if (HTLEFT..=HTBOTTOMRIGHT).contains(&(wparam.0 as u32)) {
+            return None;
+        }
         if let Some(mut func) = self.state.callbacks.input.take() {
             let scale_factor = self.state.scale_factor.get();
             let mut cursor_point = POINT {
@@ -1076,6 +1084,9 @@ impl WindowsWindowInner {
             self.state.callbacks.input.set(Some(func));
 
             if handled {
+                // the release comes back as a client message wherever it lands, as a client press's does
+                // (`handle_mouse_down_msg`), so an element that took the press sees it end
+                unsafe { SetCapture(handle) };
                 return Some(0);
             }
         } else {
@@ -1296,6 +1307,49 @@ impl WindowsWindowInner {
                 }
             })
             .detach();
+    }
+
+    /// The system menu at the screen point `lparam` packs, its items enabled for the window's state as a caption's
+    /// own menu has them; the command picked runs as the menu's own would (`WM_SYSCOMMAND`).
+    fn handle_show_window_menu(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
+        let x = lparam.signed_loword() as i32;
+        let y = lparam.signed_hiword() as i32;
+        unsafe {
+            let menu = GetSystemMenu(handle, false);
+            if menu.is_invalid() {
+                return Some(0);
+            }
+            let maximized = IsZoomed(handle).as_bool();
+            let enable = |command: u32, enabled: bool| {
+                let state = if enabled { MF_ENABLED } else { MF_GRAYED | MF_DISABLED };
+                EnableMenuItem(menu, command, MF_BYCOMMAND | state);
+            };
+            enable(SC_RESTORE, maximized);
+            enable(SC_MOVE, !maximized);
+            enable(SC_SIZE, !maximized && self.is_resizable);
+            enable(SC_MINIMIZE, self.is_minimizable);
+            enable(SC_MAXIMIZE, !maximized && self.is_resizable);
+            SetMenuDefaultItem(menu, SC_CLOSE, 0).log_err();
+            let command = TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+                x,
+                y,
+                None,
+                handle,
+                None,
+            );
+            if command.0 != 0 {
+                PostMessageW(
+                    Some(handle),
+                    WM_SYSCOMMAND,
+                    WPARAM(command.0 as usize),
+                    LPARAM(0),
+                )
+                .log_err();
+            }
+        }
+        Some(0)
     }
 
     fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {

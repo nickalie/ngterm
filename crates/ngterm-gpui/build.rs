@@ -1,6 +1,6 @@
 //! Points the terminal's embedded fonts (`terminal::font`) at the vendored fonts prefix: `NGTERM_GPUI_FONTS` is its
 //! `share/fonts`, which `include_bytes!` reads; with the `html` feature, gives the binaries an rpath to the WPE
-//! `WebKit` they link (`wpe_rpath`).
+//! `WebKit` they link (`wpe_rpath`); on Windows, links ngterm.exe's icon resource (`windows_resources`).
 //!
 //! The prefix path comes from `scripts/fetch-fonts.sh --print-prefix`, the one place that knows how it is keyed; this
 //! script never fetches. A missing or incomplete prefix fails the build with a pointer to the script. The script runs
@@ -27,7 +27,7 @@ const FONT_FILES: [&str; 5] = [
 ];
 
 fn main() -> ExitCode {
-    if let Err(error) = macos_services() {
+    if let Err(error) = macos_services().and_then(|()| windows_resources()) {
         println!("cargo::error={error}");
         return ExitCode::FAILURE;
     }
@@ -80,6 +80,24 @@ fn fonts() -> Result<PathBuf, String> {
             fonts.display()
         ))
     }
+}
+
+/// On Windows, `windows/ngterm.rc` (the app icon, `resources/icons/ngterm.ico`) compiled and linked into the `ngterm`
+/// binary: GPUI gives every window the executable's icon resource 1, and without one the title bar, the taskbar and
+/// Alt+Tab show Windows' blank application icon.
+fn windows_resources() -> Result<(), String> {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return Ok(());
+    }
+    let manifest = std::env::var_os("CARGO_MANIFEST_DIR").ok_or("CARGO_MANIFEST_DIR is not set")?;
+    let manifest = Path::new(&manifest);
+    let icons = manifest.join("../../resources/icons");
+    let rc = manifest.join("windows/ngterm.rc");
+    println!("cargo::rerun-if-changed={}", rc.display());
+    println!("cargo::rerun-if-changed={}", icons.join("ngterm.ico").display());
+    embed_resource::compile_for(&rc, ["ngterm"], embed_resource::ParamsIncludeDirs([&icons]))
+        .manifest_required()
+        .map_err(|error| format!("{error} (the Windows SDK's rc.exe compiles ngterm.exe's icon)"))
 }
 
 /// Compile the small `AppKit` adapter with the target SDK and architecture.

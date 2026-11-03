@@ -28,7 +28,8 @@
 #                  Kitty keyboard protocol (Task 4 of docs/plans/20261029-windows-support.md, 0001); the
 #                  DirectComposition target beneath the window's child windows, so the HTML overlays' WebView2 pages
 #                  show over GPUI (Task 6, 0002); `zoom` restoring a maximized window, as GPUI's other platforms toggle
-#                  it (Task 8, 0003)
+#                  it (Task 8, 0003); `start_window_move` and `show_window_menu` for the app's own title bar over the
+#                  hidden system one (0004)
 #   gpui-pre-macos the platform lock released for a menu item whose tag names no action, which deadlocked the main
 #                  thread on ngterm's own AppKit menu bar (0001)
 #

@@ -1,0 +1,4 @@
+// ngterm.exe's resources (build.rs `windows_resources`). The icon is resource 1, the one GPUI loads as every window's
+// class icon (title bar, taskbar, Alt+Tab) and Explorer shows for the file. ngterm.ico is found through the include
+// directory build.rs passes, resources/icons.
+1 ICON "ngterm.ico"

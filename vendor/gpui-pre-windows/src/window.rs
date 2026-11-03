@@ -944,6 +944,48 @@ impl PlatformWindow for WindowsWindow {
         unsafe { ShowWindowAsync(self.0.hwnd, SW_MINIMIZE).ok().log_err() };
     }
 
+    // A title bar the app draws moves the window: the system's drag move (`SC_MOVE | HTCAPTION`), posted so its modal
+    // loop runs after the event that asked for it, outside GPUI's borrows; it snaps and restores a maximized window as
+    // a caption drag does.
+    fn start_window_move(&self) {
+        // a fullscreen window keeps its place, as it has no caption to drag
+        if self.0.state.is_fullscreen() {
+            return;
+        }
+        unsafe {
+            ReleaseCapture().log_err();
+            PostMessageW(
+                Some(self.0.hwnd),
+                WM_SYSCOMMAND,
+                WPARAM((SC_MOVE | HTCAPTION) as usize),
+                LPARAM(0),
+            )
+            .log_err();
+        }
+    }
+
+    // The window menu at `position` (the system menu a caption's secondary click opens), posted for the same reason.
+    fn show_window_menu(&self, position: Point<Pixels>) {
+        let scale_factor = self.0.state.scale_factor.get();
+        let mut point = POINT {
+            x: (position.x.as_f32() * scale_factor).round() as i32,
+            y: (position.y.as_f32() * scale_factor).round() as i32,
+        };
+        unsafe {
+            if !ClientToScreen(self.0.hwnd, &mut point).as_bool() {
+                return;
+            }
+            let packed = (point.x as u16 as u32) | ((point.y as u16 as u32) << 16);
+            PostMessageW(
+                Some(self.0.hwnd),
+                WM_GPUI_SHOW_WINDOW_MENU,
+                WPARAM(0),
+                LPARAM(packed as isize),
+            )
+            .log_err();
+        }
+    }
+
     fn zoom(&self) {
         unsafe {
             if IsWindowVisible(self.0.hwnd).as_bool() {
