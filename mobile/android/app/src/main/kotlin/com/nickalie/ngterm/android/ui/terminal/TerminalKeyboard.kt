@@ -419,7 +419,7 @@ private fun TerminalShortcuts.action(
     when (shortcut) {
         TerminalShortcut.Bigger -> target?.let { { it.stepTextSize(1) } }
         TerminalShortcut.Smaller -> target?.let { { it.stepTextSize(-1) } }
-        TerminalShortcut.ResetSize -> target?.let { { it.textSize = TerminalTextSize } }
+        TerminalShortcut.ResetSize -> target?.let { { it.textSize = it.defaultTextSize } }
         TerminalShortcut.NextPane -> nextPane
         TerminalShortcut.PreviousPane -> previousPane
         TerminalShortcut.NextSession -> nextSession

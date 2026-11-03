@@ -8,7 +8,6 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -20,7 +19,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -28,6 +26,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.AppSettings
 import com.nickalie.ngterm.android.data.OpenTarget
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.ui.asks.AskPrompt
@@ -42,15 +41,18 @@ import com.nickalie.ngterm.android.ui.onboarding.OnboardingStep
 import com.nickalie.ngterm.android.ui.onboarding.OnboardingViewModel
 import com.nickalie.ngterm.android.ui.session.AttachedActions
 import com.nickalie.ngterm.android.ui.session.AttachedUiState
+import com.nickalie.ngterm.android.ui.session.KeepScreenOn
 import com.nickalie.ngterm.android.ui.session.OpenSession
 import com.nickalie.ngterm.android.ui.session.RailSessions
 import com.nickalie.ngterm.android.ui.session.SessionViewModel
 import com.nickalie.ngterm.android.ui.session.SessionsDestination
 import com.nickalie.ngterm.android.ui.session.SidebarSessions
+import com.nickalie.ngterm.android.ui.settings.SettingsRoute
 import com.nickalie.ngterm.android.ui.terminal.ClipboardReadPrompt
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.ffi.PaneRef
+import kotlinx.coroutines.flow.catch
 
 private const val MACHINES = "machines"
 private const val SESSIONS = "sessions"
@@ -79,7 +81,8 @@ private class SessionsUi(
  * The app over [graph]: the first run until it has a key, then [AdaptiveScaffold] over the top-level destinations,
  * with the host-key question, a program's clipboard read, the session on screen's ask and the notification permission
  * as sheets over whichever is shown. Sessions holds the attached sessions and the session view, and the rail and the
- * sidebar list the attached sessions on every destination; Settings shows the loaded core's [coreVersion]. The
+ * sidebar list the attached sessions on every destination; Settings sets them up and shows the loaded core's
+ * [coreVersion], and an open session keeps the screen on when Settings asks for it. The
  * selected destination survives a configuration change. A notification's tap ([AppGraph.opens]) opens its session and
  * pane through the session view model, or the app's first destination.
  */
@@ -191,6 +194,9 @@ private fun Frame(
     modifier: Modifier = Modifier,
 ) {
     val open = sessions.state.open
+    val settingsFlow = remember(graph) { graph.settings.settings.catch { emit(AppSettings()) } }
+    val settings by settingsFlow.collectAsStateWithLifecycle(AppSettings())
+    if (selected == SESSIONS && open is OpenSession.Live && settings.keepScreenOn) KeepScreenOn()
     val openSession = { key: SessionKey ->
         actions.onOpen(key)
         onSelect(SESSIONS)
@@ -231,13 +237,12 @@ private fun Frame(
                         compact = layout == NavLayout.Bar,
                         notice = sessions.notice,
                         actions = actions,
+                        extraKeys = settings.extraKeys,
                     )
                 }
 
                 else -> {
-                    Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.Center) {
-                        CoreStatus(coreVersion)
-                    }
+                    SettingsRoute(graph, coreVersion)
                 }
             }
         }

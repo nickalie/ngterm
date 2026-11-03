@@ -10,6 +10,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -54,6 +56,9 @@ class AdaptiveScaffoldTest {
         compose.awaitText("Machines")
     }
 
+    // the Settings destination's tab (the Settings screen's title says Settings too)
+    private fun settingsTab() = compose.onNode(hasText("Settings") and isSelectable())
+
     private fun back() = compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
 
     @Test
@@ -61,7 +66,7 @@ class AdaptiveScaffoldTest {
         app(NavLayout.Bar)
         compose.awaitText("No machines yet")
         compose.onNodeWithText("Settings").performClick()
-        compose.onNodeWithText("Settings").assertIsSelected()
+        settingsTab().assertIsSelected()
         compose.onNodeWithText("core 1.2.3").assertExists()
         back()
         compose.onNodeWithText("Machines").assertIsSelected()
@@ -84,7 +89,7 @@ class AdaptiveScaffoldTest {
         compose.onNodeWithContentDescription("Hide navigation labels").assertExists()
         back()
         compose.onNodeWithContentDescription("Show navigation labels").assertExists()
-        compose.onNodeWithText("Settings").assertIsSelected()
+        settingsTab().assertIsSelected()
         back()
         compose.onNodeWithText("Machines").assertIsSelected()
     }

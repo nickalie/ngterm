@@ -82,6 +82,11 @@ class MachineStore(
         }
     }
 
+    /** Points every machine at the key [keyId] (a rotated or imported key, once it is on the machines). */
+    suspend fun useKey(keyId: String) {
+        store.edit { prefs -> prefs[MACHINES] = encode(decode(prefs[MACHINES]).map { it.copy(keyId = keyId) }) }
+    }
+
     /** Removes the machine [id]; nothing happens when there is none. */
     suspend fun delete(id: String) {
         store.edit { prefs -> prefs[MACHINES] = encode(decode(prefs[MACHINES]).filter { it.id != id }) }

@@ -144,15 +144,16 @@ class OnboardingViewModel(
     }
 }
 
-private fun KeyException.toProblem(): ImportProblem =
+/** Why the core refused a key, as the import screen says it. */
+internal fun KeyException.toProblem(): ImportProblem =
     when (this) {
         is KeyException.PassphraseRequired -> ImportProblem.NeedsPassphrase
         is KeyException.WrongPassphrase -> ImportProblem.WrongPassphrase
         is KeyException.Invalid -> ImportProblem.NotAKey(reason)
     }
 
-// UniFFI's messages are its fields (`reason=...`): the reason is the words
-private fun Exception.describe(): String =
+/** What went wrong, in words: UniFFI's messages are its fields (`reason=...`), so the reason is the words. */
+internal fun Exception.describe(): String =
     when (this) {
         is KeyException.Invalid -> reason
         else -> message?.takeIf { it.isNotBlank() } ?: javaClass.simpleName

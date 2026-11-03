@@ -29,7 +29,7 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 /**
  * A key's public half and how to put it on a machine: the three steps, the `authorized_keys` line with Copy and Share,
  * its fingerprint, and the one command that appends it. The first run ends here with [onDone]; from the machine form
- * it is a screen with an [exit] back.
+ * and Settings it is a screen with an [exit] back, and Settings adds what comes next ([footer]).
  */
 @Composable
 fun PublicKeyScreen(
@@ -37,6 +37,7 @@ fun PublicKeyScreen(
     modifier: Modifier = Modifier,
     exit: ScreenExit? = null,
     onDone: (() -> Unit)? = null,
+    footer: (@Composable () -> Unit)? = null,
 ) {
     val spacing = NgtermTheme.spacing
     val share = shareText(stringResource(R.string.key_share_title), key.authorizedKey)
@@ -80,6 +81,7 @@ fun PublicKeyScreen(
                 Text(stringResource(R.string.key_done))
             }
         }
+        footer?.invoke()
     }
 }
 

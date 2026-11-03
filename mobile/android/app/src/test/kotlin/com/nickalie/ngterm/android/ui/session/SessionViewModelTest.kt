@@ -1,12 +1,14 @@
 package com.nickalie.ngterm.android.ui.session
 
 import android.os.Looper
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestGraph
+import com.nickalie.ngterm.android.data.FontChoice
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.testMachine
@@ -23,6 +25,7 @@ import com.nickalie.ngterm.core.ffi.RemoteStatus
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -174,6 +177,28 @@ class SessionViewModelTest {
         model.detach(key)
         eventually { model.state.value.open == null && model.panes.value.isEmpty() }
         assertTrue(test.core.shownPanes.isEmpty())
+    }
+
+    @Test
+    fun theSettingsTextSizeAndFontReachEveryShownPaneOverAPinch() {
+        runBlocking { test.settings.update { it.copy(textSize = 15) } }
+        attached("s1")
+        val model = model()
+        layout("P1")
+        val p1 = PaneRef("m1", "s1", "P1")
+        eventually { runBlocking { test.settings.settings.first() }.textSize == 15 }
+        model.show(p1, size)
+        eventually { p1 in model.panes.value }
+        val state = model.panes.value.getValue(p1)
+        eventually { state.textSize == 15.sp }
+        // a pinch sizes this pane alone, until Settings sets a size again
+        state.textSize = 20.sp
+        runBlocking { test.settings.update { it.copy(font = FontChoice.SystemMono) } }
+        eventually { state.face == FontChoice.SystemMono }
+        assertEquals(20.sp, state.textSize)
+        runBlocking { test.settings.update { it.copy(textSize = 18) } }
+        eventually { state.textSize == 18.sp }
+        assertEquals(18.sp, state.defaultTextSize)
     }
 
     @Test

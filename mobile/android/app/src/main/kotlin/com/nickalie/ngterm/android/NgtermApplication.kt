@@ -16,6 +16,7 @@ import com.nickalie.ngterm.android.data.MachineStore
 import com.nickalie.ngterm.android.data.NativeKeyMaker
 import com.nickalie.ngterm.android.data.NotificationPrefs
 import com.nickalie.ngterm.android.data.OpenRequests
+import com.nickalie.ngterm.android.data.SettingsStore
 import com.nickalie.ngterm.android.platform.AndroidClipboard
 import com.nickalie.ngterm.android.platform.AndroidKeystoreWrapper
 import com.nickalie.ngterm.android.platform.KeystoreKeyVault
@@ -50,6 +51,7 @@ class NgtermApplication :
         val network = NetworkMonitor(this, connections::networkChanged).also { it.start() }
         val clipboard = AndroidClipboard(this)
         val live = LiveSessions(scope, connections, clipboard)
+        val settings = SettingsStore(PreferenceDataStoreFactory.create { file("settings") })
         val machines = MachineStore(PreferenceDataStoreFactory.create { file("machines") })
         val asks = Asks(scope, connections)
         val prefs = NotificationPrefs(PreferenceDataStoreFactory.create { file("notifications") })
@@ -73,9 +75,10 @@ class NgtermApplication :
                     trust = ClipboardTrust(PreferenceDataStoreFactory.create { file("clipboard") }),
                     clipboard = clipboard,
                 ),
-            panes = SessionPanes(scope, connections, live),
+            panes = SessionPanes(scope, connections, live, settings = settings.settings),
             asks = asks,
             notificationPrefs = prefs,
+            settings = settings,
             opens = OpenRequests(),
             online = network.online,
         )

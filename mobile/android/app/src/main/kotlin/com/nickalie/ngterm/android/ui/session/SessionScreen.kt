@@ -40,6 +40,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.ExtraKeysChoice
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.ui.components.ErrorState
 import com.nickalie.ngterm.android.ui.components.PanelAction
@@ -59,7 +60,7 @@ import com.nickalie.ngterm.core.ffi.StreamState
  * origin's HUD, its panes, and the extra keys over the soft keyboard. A phone ([compact]) shows the [focused] pane
  * alone and a swipe across it moves to the next or previous one; wider windows show the origin's split. The shown
  * panes' states are [panes] (by pane), and why one could not be shown [failures]. One [keyboard] serves every pane
- * and the extra keys; its chords move between the panes and the sessions.
+ * and the extra keys, laid out as Settings' [extraKeys] says; its chords move between the panes and the sessions.
  *
  * The [focused] pane is the selected one, the only one anything typed reaches: a tab, a swipe, a chord and a touch
  * on a pane ask [SessionViewActions.onFocus] to select it, and the keyboard's target and the input focus follow the
@@ -75,6 +76,7 @@ fun SessionScreen(
     actions: SessionViewActions,
     modifier: Modifier = Modifier,
     keyboard: TerminalKeyboard = rememberTerminalKeyboard(),
+    extraKeys: ExtraKeysChoice = ExtraKeysChoice.Fit,
 ) {
     val key = session.key
     val live = session.live
@@ -116,7 +118,7 @@ fun SessionScreen(
                 }
             Panes(session, spots, focused, compact, paneActions, move)
         }
-        ExtraKeysRow(keyboard)
+        ExtraKeysRow(keyboard, layout = extraKeys)
     }
 }
 

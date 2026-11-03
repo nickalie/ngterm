@@ -1,6 +1,10 @@
 package com.nickalie.ngterm.android.ui.session
 
+import androidx.compose.ui.unit.sp
+import com.nickalie.ngterm.android.data.AppSettings
 import com.nickalie.ngterm.android.data.Connections
+import com.nickalie.ngterm.android.data.DEFAULT_TEXT_SIZE
+import com.nickalie.ngterm.android.data.FontChoice
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.LiveSession
 import com.nickalie.ngterm.android.data.LiveSessions
@@ -14,10 +18,15 @@ import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.coroutines.CoroutineContext
@@ -30,7 +39,8 @@ import kotlin.coroutines.CoroutineContext
  * ([Link.Connected]) after it was lost, when its slot tries again; a show that fails on the lost link after it came
  * back is tried again at once. The core finds a pane through its machine's last listing, so a pane added since (a
  * split) is shown after a fresh listing, and [retry] always lists first. Its frames reach its state through [live],
- * the attached sessions' live state.
+ * the attached sessions' live state. Every state draws in the font and starts at the text size of the latest
+ * [settings]; a new size there resizes every shown pane to it, pinched or not.
  * Used on the main thread; [frameContext] is where the states read their frames.
  */
 class SessionPanes(
@@ -38,7 +48,10 @@ class SessionPanes(
     private val connections: Connections,
     val live: LiveSessions,
     private val frameContext: CoroutineContext = Dispatchers.Default,
+    settings: Flow<AppSettings> = emptyFlow(),
 ) {
+    private var look = TerminalLook(DEFAULT_TEXT_SIZE, FontChoice.JetBrainsMono)
+
     private val shownState = MutableStateFlow<Map<PaneRef, TerminalState>>(emptyMap())
     private val failureState = MutableStateFlow<Map<PaneRef, String>>(emptyMap())
     private val showing = mutableSetOf<PaneRef>()
@@ -59,6 +72,17 @@ class SessionPanes(
                 .collect { (attached, sessions) -> prune(attached, sessions) }
         }
         scope.launch { connections.links.collect(::linked) }
+        scope.launch {
+            settings
+                .map { TerminalLook(it.textSize, it.font) }
+                .distinctUntilChanged()
+                .catch { /* unreadable settings: the defaults stay */ }
+                .collect { now ->
+                    val resized = now.textSize != look.textSize
+                    look = now
+                    for (state in shownState.value.values) now.applyTo(state, resized)
+                }
+        }
     }
 
     /** Shows [pane] at [size] unless it is shown or on its way; its state lands in [shown]. */
@@ -85,7 +109,7 @@ class SessionPanes(
             var again = false
             try {
                 val handle = open(pane, size, listFirst)
-                val state = TerminalState(handle, frameContext)
+                val state = TerminalState(handle, frameContext, look.textSize.sp, look.font)
                 live.route(pane, state)
                 shownState.update { it + (pane to state) }
                 // detached while it was on its way: the core opened it for a session it no longer streams, so it is
@@ -176,6 +200,21 @@ class SessionPanes(
                 layout != null && pane.paneId !in layout.panes -> hide(pane)
             }
         }
+    }
+}
+
+// the settings a pane's terminal takes: its text size (whole sp) and its font
+private data class TerminalLook(
+    val textSize: Int,
+    val font: FontChoice,
+) {
+    fun applyTo(
+        state: TerminalState,
+        resized: Boolean,
+    ) {
+        state.face = font
+        state.defaultTextSize = textSize.sp
+        if (resized) state.textSize = textSize.sp
     }
 }
 

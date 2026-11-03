@@ -27,12 +27,14 @@ private val LocalNgtermTokens = staticCompositionLocalOf { NgtermTokens(DarkStat
 /**
  * ngterm's theme: Material 3 with the app's palette, type and shapes, light or dark with the system. [dynamicColor]
  * takes the wallpaper's colors instead (Android 12 and later) for Material's roles; the status colors, the type and the
- * terminal palette stay the app's.
+ * terminal palette stay the app's. The terminal's palette is [terminal] when Settings pins one, else Copper or
+ * Drafting with the light or dark side.
  */
 @Composable
 fun NgtermTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = false,
+    terminal: TerminalPalette? = null,
     content: @Composable () -> Unit,
 ) {
     val scheme =
@@ -54,7 +56,7 @@ fun NgtermTheme(
         NgtermTokens(
             status = if (darkTheme) DarkStatus else LightStatus,
             mono = NgtermMono,
-            terminal = if (darkTheme) CopperTerminal else DraftingTerminal,
+            terminal = terminal ?: if (darkTheme) CopperTerminal else DraftingTerminal,
         )
     CompositionLocalProvider(LocalNgtermTokens provides tokens) {
         MaterialTheme(
@@ -78,7 +80,7 @@ object NgtermTheme {
         @Composable @ReadOnlyComposable
         get() = LocalNgtermTokens.current.mono
 
-    /** The default terminal palette for the theme's light or dark side. */
+    /** The terminal's palette: the one Settings pinned, or the default for the theme's light or dark side. */
     val terminal: TerminalPalette
         @Composable @ReadOnlyComposable
         get() = LocalNgtermTokens.current.terminal

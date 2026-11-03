@@ -55,7 +55,7 @@ class LaunchSmokeTest {
         compose.onNodeWithText("Done").performScrollTo().performClick()
         awaitText("Settings")
         compose.onNodeWithText("Settings").performClick()
-        compose.onNodeWithText("core $version").assertIsDisplayed()
+        compose.onNodeWithText("core $version").performScrollTo().assertIsDisplayed()
     }
 
     private companion object {

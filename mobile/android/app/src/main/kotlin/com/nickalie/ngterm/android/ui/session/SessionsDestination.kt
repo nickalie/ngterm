@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.ExtraKeysChoice
 import com.nickalie.ngterm.android.ui.components.EmptyState
 import com.nickalie.ngterm.android.ui.components.PanelAction
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
@@ -30,7 +31,7 @@ import com.nickalie.ngterm.core.ffi.PaneSize
  * The Sessions destination: the open session's view ([SessionScreen]), the gone state of one that ended while open,
  * or with none open the attached sessions by machine ([AttachedList]), or the empty state pointing to Machines. Back
  * closes an open session. [compact] (a phone) shows one pane at a time and a Back of its own; [notice] is a failure
- * to show once in a snackbar.
+ * to show once in a snackbar; [extraKeys] lays out the open session's extra keys.
  */
 @Composable
 fun SessionsDestination(
@@ -41,6 +42,7 @@ fun SessionsDestination(
     notice: String?,
     actions: AttachedActions,
     modifier: Modifier = Modifier,
+    extraKeys: ExtraKeysChoice = ExtraKeysChoice.Fit,
 ) {
     val open = state.open
     BackHandler(enabled = open != null) { actions.onClose() }
@@ -55,7 +57,7 @@ fun SessionsDestination(
     Box(modifier.fillMaxSize()) {
         when (open) {
             is OpenSession.Live -> {
-                LiveSession(state, open, panes, failures, compact, actions)
+                LiveSession(state, open, panes, failures, compact, actions, extraKeys)
             }
 
             is OpenSession.Gone -> {
@@ -96,6 +98,7 @@ private fun LiveSession(
     failures: Map<PaneRef, String>,
     compact: Boolean,
     actions: AttachedActions,
+    extraKeys: ExtraKeysChoice,
 ) {
     val sessions by rememberUpdatedState(state.sessions.map { it.key })
     val key = open.key
@@ -113,7 +116,7 @@ private fun LiveSession(
                 onPreviousSession = { sessions.cyclicNeighbor(key, forward = false)?.let(actions.onOpen) },
             )
         }
-    SessionScreen(open.session, open.focused, panes, failures, compact, view)
+    SessionScreen(open.session, open.focused, panes, failures, compact, view, extraKeys = extraKeys)
 }
 
 @Composable

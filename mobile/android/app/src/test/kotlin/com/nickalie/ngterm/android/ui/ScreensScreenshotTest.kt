@@ -43,7 +43,7 @@ data class Window(
 }
 
 /** Sets the window before the compose rule starts its activity. */
-private class WindowRule(
+internal class WindowRule(
     private val window: Window,
 ) : TestRule {
     override fun apply(

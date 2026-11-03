@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.ExtraKeysChoice
 
 /** What an extra key does. */
 internal sealed interface ExtraKeyAction {
@@ -189,14 +190,16 @@ fun hardwareKeyboardAttached(): Boolean {
  * and PgDn, and `/`, `|`, `~` and `-`, going to [keyboard]'s terminal. Two lines of eight on a phone held upright, one
  * line of sixteen once the width gives each 48dp. A key acts as it goes down, with a tick; the arrows and the page
  * keys repeat while held. Ctrl and Alt hold for the next key (outlined in copper), lock on a second tap (filled), and
- * let go on a third. While a hardware keyboard is attached the row is not shown.
+ * let go on a third. While a hardware keyboard is attached the row is not shown. Settings' [layout] keeps two lines
+ * at every width ([ExtraKeysChoice.TwoLines]) or hides the row ([ExtraKeysChoice.Hidden]).
  */
 @Composable
 fun ExtraKeysRow(
     keyboard: TerminalKeyboard,
     modifier: Modifier = Modifier,
+    layout: ExtraKeysChoice = ExtraKeysChoice.Fit,
 ) {
-    if (hardwareKeyboardAttached()) return
+    if (layout == ExtraKeysChoice.Hidden || hardwareKeyboardAttached()) return
     val description = stringResource(R.string.extra_keys_description)
     val measurer = rememberTextMeasurer()
     val wordStyle = MaterialTheme.typography.titleSmall
@@ -208,7 +211,7 @@ fun ExtraKeysRow(
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .semantics { paneTitle = description },
     ) {
-        val rows = if (maxWidth >= OneRowWidth) listOf(OneRow) else TwoRows
+        val rows = if (layout == ExtraKeysChoice.Fit && maxWidth >= OneRowWidth) listOf(OneRow) else TwoRows
         // every word at one size: the widest legend's, shrunk only as far as its key needs (a large font scale)
         val room = with(density) { (maxWidth / rows[0].size - (KeyInset + LegendPadding) * 2).toPx() }
         val widest =

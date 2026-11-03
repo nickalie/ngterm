@@ -7,7 +7,7 @@ or a desktop instance. From a phone or tablet you add a machine, list its sessio
 You get its panes, split layout, agent status, context, HUD and notifications; asks show as native dialogs or as
 notification actions. The app runs no local sessions.
 
-It is a new viewer of the protocol desktop's File ▸ Attach Remote already speaks: `ngtermctl live tree`, `ngtermctl
+It is a new viewer of the protocol desktop's File â¸ Attach Remote already speaks: `ngtermctl live tree`, `ngtermctl
 live present SESSION`, `ngterm-session attach` per pane, and the `control_command` create/end lines, all over ssh. Like
 desktop's New Session/End Session on HOST, it is an extension beyond upstream, which has no mobile app, so it claims no
 conformance ids.
@@ -48,7 +48,7 @@ Two investigations ran on the dev box. Their working diffs are saved next to thi
 - **russh 0.65** builds and links a cdylib under `cargo ndk -t arm64-v8a -P 24`, with either crypto backend. The plan
   uses `ring` (`default-features = false`): it has no C build-system dependency and is lighter on Windows CI.
 - A plan review checked the plan against the code, and its verified findings are folded in below: e2e isolation,
-  leadership, the `PresentationClient` threading model, Core-bound helpers, the companion filter, 1–2 pane layouts,
+  leadership, the `PresentationClient` threading model, Core-bound helpers, the companion filter, 1â2 pane layouts,
   and CI feature unification.
 
 The patches are inputs for Tasks 2 and 3, not finished work. Apply one, review it against the task, finish what the
@@ -67,10 +67,10 @@ task adds, and run its checks.
     - a `SnapshotStatus` is no change on the origin, so it doesn't notify;
     - requests it can't show get `AskRejected`, `OverlayRejected` or `PageRejected(PAGES_UNSUPPORTED)`;
     - answers echo `owner`;
-    - an ask whose target isn't shown is refused (lines 599–606).
-  - `layout.rs` is Core-bound and not reusable; `PresentationLayout::is_valid` allows 1–2 panes, plus a hidden split.
+    - an ask whose target isn't shown is refused (lines 599â606).
+  - `layout.rs` is Core-bound and not reusable; `PresentationLayout::is_valid` allows 1â2 panes, plus a hidden split.
   - `tree.rs`: `RemoteCommandRunner`, `ssh_arguments`, `remote_cli_chain`, `REMOTE_CLI`, `validate`, `is_plain`.
-  - `ssh.rs`: `present_command`, `attach_command(…, lead)`, `control_command(host, args)`, and the unused-here
+  - `ssh.rs`: `present_command`, `attach_command(â¦, lead)`, `control_command(host, args)`, and the unused-here
     `run_job_command`, `page_serve_command` and `tunnel_command`.
   - The create/end helpers are private or crate-bound, and mobile needs them public:
     - `not_live`, `too_old`, `end_failure`, `no_answer` (private, `origin_sessions.rs`);
@@ -97,7 +97,7 @@ task adds, and run its checks.
 - `scripts/stage.sh DEST [--profile]`: stages `bin/{ngterm-headless,ngtermctl,ngterm-session}` plus Ghostty's
   resources.
 - The workspace lints deny `clippy::pedantic` and `allow_attributes`, so the escape hatch is an item-level
-  `#[expect(…, reason)]`. `members = ["crates/*"]`, so workspace-wide `cargo test` includes new crates.
+  `#[expect(â¦, reason)]`. `members = ["crates/*"]`, so workspace-wide `cargo test` includes new crates.
 
 ## Development Approach
 
@@ -158,14 +158,14 @@ The tools are the standard ones. There are no baseline files, and no suppression
 - **Dependencies:** every version lives in `gradle/libs.versions.toml`, with no dynamic versions.
 - **Rust:** the workspace's strict clippy with the `clippy.toml` limits, plus `cargo fmt`. UniFFI's owned-argument
   exports trigger `needless_pass_by_value`, so they stay in one thin `api` facade that uses item-level
-  `#[expect(…, reason)]`.
+  `#[expect(â¦, reason)]`.
 
 ## Testing Strategy
 
 - **Rust unit tests** (`cargo test -p ngterm-mobile`, run on Linux, macOS and Windows hosts in CI):
   - the remote-command builders;
   - transport over an in-process fake (scripted `live tree`, present output and pane channels);
-  - one test per `ClientEffect` variant for the effect → event mapping;
+  - one test per `ClientEffect` variant for the effect â event mapping;
   - reconnect on a fake clock, and suspend/resume;
   - the never-claim-pages rule;
   - leadership;
@@ -174,7 +174,7 @@ The tools are the standard ones. There are no baseline files, and no suppression
   - the packed row buffer.
 - **Rust e2e** (Linux; `#[ignore]`, so plain workspace runs skip it, run by `scripts/test-mobile-e2e.sh` and by CI): a
   staged `ngterm-headless` behind an unprivileged `sshd` whose `ForceCommand` forces the private environment. It covers
-  isolation first, then create → attach → read → leadership with two attaches → drop → reattach → end. On CI a missing
+  isolation first, then create â attach â read â leadership with two attaches â drop â reattach â end. On CI a missing
   `sshd` fails the run instead of skipping.
 - **Android:**
   - JVM unit tests for the view models;
@@ -187,20 +187,20 @@ The tools are the standard ones. There are no baseline files, and no suppression
 ## Progress Tracking
 
 - Mark completed items `[x]` immediately.
-- Add newly found tasks with ➕, and blockers with ⚠️.
+- Add newly found tasks with â, and blockers with â ï¸.
 - Keep the plan in sync with the work done.
 
 ## Solution Overview
 
 ```
 Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)              server
-┌───────────────────────────────┐   calls/   ┌──────────────────────────────┐ russh ┌───────────────────┐
-│ UI: machines, sessions,       │   events   │ actor thread (tokio, LocalSet)│──────▶│ ngtermctl live    │
-│ adaptive layout, TerminalView │◀──────────▶│  ├ Machine: one ssh conn     │ exec  │  tree / present   │
-│ LinkService (foreground)      │            │  ├ PresentationClient/session│ chans │ ngterm-session    │
-│ Notifications, Keystore       │            │  └ Pane: Pane::stream + feed/│       │  attach (per pane)│
-│ Keyboard + extra-keys row     │            │      out threads, row buffer │       │ ngterm-headless   │
-└───────────────────────────────┘            └──────────────────────────────┘       └───────────────────┘
+âââââââââââââââââââââââââââââââââ   calls/   ââââââââââââââââââââââââââââââââ russh âââââââââââââââââââââ
+â UI: machines, sessions,       â   events   â actor thread (tokio, LocalSet)ââââââââ¶â ngtermctl live    â
+â adaptive layout, TerminalView âââââââââââââ¶â  â Machine: one ssh conn     â exec  â  tree / present   â
+â LinkService (foreground)      â            â  â PresentationClient/sessionâ chans â ngterm-session    â
+â Notifications, Keystore       â            â  â Pane: Pane::stream + feed/â       â  attach (per pane)â
+â Keyboard + extra-keys row     â            â      out threads, row buffer â       â ngterm-headless   â
+âââââââââââââââââââââââââââââââââ            ââââââââââââââââââââââââââââââââ       âââââââââââââââââââââ
 ```
 
 - **One russh connection per machine**, with exec channels:
@@ -212,8 +212,8 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
   - One actor thread per `MobileCore` runs a current-thread tokio runtime and a `LocalSet`. It owns the russh
     connections, the `!Send` `PresentationClient`s and a 1 s tick.
   - UniFFI objects are thin `Send + Sync` handles that post commands to the actor.
-  - Each pane has a feeder thread (channel bytes → `StreamFeed::deliver`, which may block for backpressure) and a
-    writer thread (`StreamOut::next` → the channel, including resizes).
+  - Each pane has a feeder thread (channel bytes â `StreamFeed::deliver`, which may block for backpressure) and a
+    writer thread (`StreamOut::next` â the channel, including resizes).
   - Events go to Kotlin through the `EventSink` callback, off the UI thread.
 - **Reuse:**
   - Core builders produce the remote command strings (Task 4), and core's reply parsers and error strings become public
@@ -255,7 +255,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
     fingerprints shown.
 - **Platform seams** (UniFFI callback interfaces): only `KeyVault`, `HostKeyStore` and `EventSink`. Notifications,
   asks and clipboard are events Kotlin acts on; clipboard answers and ask answers go back through the API.
-- **Android floor:** `minSdk 26`, `targetSdk 36`, `compileSdk 37` (the current AndroidX libraries need 37 to compile against; Task 11), and cargo-ndk `-P 26`, which is ≥ the libghostty-vt
+- **Android floor:** `minSdk 26`, `targetSdk 36`, `compileSdk 37` (the current AndroidX libraries need 37 to compile against; Task 11), and cargo-ndk `-P 26`, which is â¥ the libghostty-vt
   floor of 24.
 - **Foreground service:** type `specialUse`, with a `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` explanation ("keeps the ssh
   sessions of attached remote terminals connected"). `dataSync` is time-limited on Android 15.
@@ -265,7 +265,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - **Remote commands** (Task 4):
   - `remote::ssh` gains `remote_tail(...) -> Result<String, InvocationError>` for tree, present, attach and control:
     the exact string desktop places last in its argv.
-  - Desktop's argv functions become `ssh_arguments(host, …)` + that tail, byte-identical to today.
+  - Desktop's argv functions become `ssh_arguments(host, â¦)` + that tail, byte-identical to today.
   - `run_job_command`, `page_serve_command` and `tunnel_command` are untouched.
 - **Public origin replies** (Task 5): a new Core-free `remote::origin_replies` module holds the create/end/tree reply
   parsing, the error strings and the create stages' constants (`PAUSE`, `READY_BUDGET`). The `Core` flows call it.
@@ -337,7 +337,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Apply: `docs/plans/20261102-android-app/task2-ngterm-term-stream-backend.patch`
 - Modify (by the patch): `crates/ngterm-term/{Cargo.toml,src/lib.rs,src/pane.rs,src/mailbox.rs,src/effects.rs,
-  src/input.rs,src/pty.rs,tests/*.rs}`, `crates/ngterm-pty/src/…` (`From<Arc<AtomicBool>> for ReadPause`),
+  src/input.rs,src/pty.rs,tests/*.rs}`, `crates/ngterm-pty/src/â¦` (`From<Arc<AtomicBool>> for ReadPause`),
   `.github/workflows/{cross-platform.yml,linux.yml}`
 - Create (by the patch): `crates/ngterm-term/src/{outlet.rs,stream.rs,stream/tests.rs}`
 
@@ -474,7 +474,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
       phone wording in the event, and record the choice here
 - [x] implement them over Task 4's tails and Task 5's replies
 - [x] run the tests; they must pass before Task 9
-  - Notes: the CLI-advice choice: only two reused strings carry it, both "…; `ngtermctl live attach HOST ID` attaches
+  - Notes: the CLI-advice choice: only two reused strings carry it, both "â¦; `ngtermctl live attach HOST ID` attaches
     it" (`origin_created`'s failed-after-receipt and `unattached`, i.e. created but never attachable in time).
     `sessions::phone_wording` replaces that advice with "attach it from the session list once it shows there"
     (`ATTACH_FROM_LIST`); every other reused string names no CLI and keeps desktop's words. Messages name the machine by
@@ -561,8 +561,8 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
   - resize reaches the channel;
   - the `LeadAttachment` words are in the attach tail; reserved titles become `PaneLead` and never `PaneTitle`;
     `take_lead` reattaches with claim;
-  - each channel end: lost → covered → reattached into a fresh pane after reconnect; exited → `PaneEnded(exit)`;
-    respawn → reattach attach-only; gone → final;
+  - each channel end: lost â covered â reattached into a fresh pane after reconnect; exited â `PaneEnded(exit)`;
+    respawn â reattach attach-only; gone â final;
   - a clipboard read raises `ClipboardReadRequest`, and both Allow and Deny unfreeze the output; detach denies any read
     still open;
   - `kitty_image_limit` is 0
@@ -571,7 +571,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - [x] run the tests; they must pass before Task 9d
   - Notes: `MobileCore::show_pane(machine_id, session_id, pane_id, PaneSize) -> Pane` (the pane's identity as the
     layout names it; needs the connection and a kept listing whose session lists the pane's daemon, not an attached
-    stream), `hide_pane`, `take_lead` and `answer_clipboard_read(…, read_id, ClipboardReply)`; `detach_session` and
+    stream), `hide_pane`, `take_lead` and `answer_clipboard_read(â¦, read_id, ClipboardReply)`; `detach_session` and
     `disconnect` hide the session's or machine's panes. The first attach and every automatic one claim nothing
     (`LeadAttachment::new(false)`); only Take control claims. The `Pane` handle (`api::pane`) calls the terminal
     directly on the caller's thread (key, type, mouse, wheel, paste, focus, resize, select*, selection text) over
@@ -611,7 +611,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 
 **Files:**
 - Create: `crates/ngterm-mobile/tests/headless_e2e.rs`, `crates/ngterm-mobile/tests/support/sshd.rs`,
-  `scripts/test-mobile-e2e.sh` (➕ `tests/support/{machine,phone,steps}.rs`)
+  `scripts/test-mobile-e2e.sh` (â `tests/support/{machine,phone,steps}.rs`)
 
 - [x] write `scripts/test-mobile-e2e.sh`:
   - build `ngterm-headless`, `ngtermctl` and `ngterm-session`;
@@ -730,8 +730,8 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - [x] first connect: a fingerprint confirmation sheet; a changed host key gives a hard-stop screen explaining the risk,
       with Remove pinned key as a deliberate action
 - [x] implement `KeyVault` (Keystore AES-GCM wrap) and `HostKeyStore` over DataStore
-- [x] write view-model unit tests, screenshots of each screen and state, and a UI test of add machine → confirm
-      fingerprint → connected (fake core)
+- [x] write view-model unit tests, screenshots of each screen and state, and a UI test of add machine â confirm
+      fingerprint â connected (fake core)
 - [x] run `./gradlew check` and the tests; all must pass before Task 14
   - result (2026-11-03): `data/` holds `MachineStore` (DataStore, JSON), `AppKeys` (the keys' public halves in
     DataStore; `KeyMaker` wraps the core's `generate_key`/`import_key`) and `Connections` (the core's `EventSink`: each
@@ -748,7 +748,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
     truncates beside a long label: the badge wraps under it (`rows_medium_font2` re-recorded). DESIGN.md gained the
     screens, `KeyPlate`/`CopyButton`/`ScreenFrame` and the Back and More icons. `./gradlew check assembleDebug` is
     green (50 new goldens in `screenshots/screens`, at phone light/dark/2.0, medium light and expanded light/dark;
-    the empty, offline, error and loading states at phone light and dark); the add → confirm fingerprint → connected
+    the empty, offline, error and loading states at phone light and dark); the add â confirm fingerprint â connected
     flow, a declined key, the changed-key stop, Undo and Edit run as Robolectric UI tests on the fake core, as Task
     12's did. On the headless `ngterm-phone` AVD the smoke test now walks the first run with the real core (key made,
     sealed by the Keystore) and a Keystore vault test passes
@@ -764,7 +764,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
       New Session with an optional name; End Session confirms
 - [x] states: loading, empty (with New Session as the main action), unreachable with retry, and `ngtermctl` missing on
       the server with a pointer to the README
-- [x] write view-model tests, screenshots, and a UI test of create → appears → end → disappears (fake core)
+- [x] write view-model tests, screenshots, and a UI test of create â appears â end â disappears (fake core)
 - [x] run `./gradlew check` and the tests; all must pass before Task 15
   - result (2026-11-03): `ui/sessions/` holds `SessionsRoute` (stacked on the Machines destination: tapping a machine
     card opens it, Edit moved to the card's More menu), `SessionsScreen`, `SessionEntry`, `NewSessionDialog`,
@@ -778,7 +778,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
     menu has Attach/Detach and End session. The Sessions destination stays the cross-machine view of what is
     attached, filled in with the session view (Task 18); a machine's own list lives under Machines. DESIGN.md gained
     the screen, `SessionRow`'s menu slot and `MessagePanel`'s secondary action. Tests: `SessionsBodyTest`,
-    `SessionsViewModelTest`, three new `ConnectionsTest` cases, `SessionsFlowTest` (create → appears → end → gone,
+    `SessionsViewModelTest`, three new `ConnectionsTest` cases, `SessionsFlowTest` (create â appears â end â gone,
     the empty state and Back, the missing CLI and Retry, attach and detach) and 16 goldens (the list at the six
     windows, nine states on a phone, the New session dialog). Robolectric never settles a text field in a dialog
     under the phone qualifiers (a layout loop in its window transforms), so the flow test and the dialog's golden use
@@ -795,15 +795,15 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
       cache of shaped runs per row
 - [x] draw the cursor shapes and the selection; measure cells and report the grid size, which sends a pty resize
 - [x] keep frames within budget: profile a full-screen `cat` of a large file and record the frame times here
-  - measured (2026-11-03), app side on the headless x86_64 `ngterm-phone` AVD (API 36, 1080 × 2400, SwiftShader:
+  - measured (2026-11-03), app side on the headless x86_64 `ngterm-phone` AVD (API 36, 1080 Ã 2400, SwiftShader:
     the emulator has no host GPU), debug build, `TerminalFrameTimeTest`: a fake pane whose every frame scrolls the
-    whole 54 × 52 grid by 7 lines of a long file, read as fast as the display takes them. 596 frames in 10 s (60 fps,
+    whole 54 Ã 52 grid by 7 lines of a long file, read as fast as the display takes them. 596 frames in 10 s (60 fps,
     one pane frame read per display frame), none with over 16.7 ms of app work. UI thread (measure, layout, draw):
     p50 3.1 ms, p90 4.6 ms, p99 7.8 ms; render thread (sync, issue): p50 2.8 ms, p90 4.5 ms, p99 5.8 ms; GPU
     (SwiftShader, the CPU): p50 8.9 ms, p99 24.3 ms; total pipeline latency p50 16.8 ms, p99 33.5 ms, the GPU's.
     Core side on the dev box (x86_64, release), `rows/tests.rs`'s ignored `packing_a_full_screen_cat`: 2 MiB of
-    text in 64 KiB reads into 52 × 50, every row changed: `frame()` p50 148 µs, p99 192 µs; `pack()` p50 36 µs, p99
-    47 µs, 3.6 KB per frame. A real core on the emulator was not profiled: a pane needs an ssh attach, and the
+    text in 64 KiB reads into 52 Ã 50, every row changed: `frame()` p50 148 Âµs, p99 192 Âµs; `pack()` p50 36 Âµs, p99
+    47 Âµs, 3.6 KB per frame. A real core on the emulator was not profiled: a pane needs an ssh attach, and the
     emulator test has no server to reach; the two halves meet only at the packed buffer, measured on both sides
 - [x] write screenshots of known buffers (colors, attributes, wide characters, cursor shapes, selection), and a UI test
       of resizing through rotation
@@ -816,7 +816,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
     from the header drawn) and `TerminalView` with `TerminalState` (one frame read per display frame on
     `Dispatchers.Default`, since the held seq, 0 after `attached()`; stale frames asked again; a closed pane keeps
     the last screen; the grid that fits goes to `Pane.resize`). The font is JetBrains Mono 2.304's four static faces,
-    the release Ghostty and desktop embed (OFL, `licenses/`, NOTICE). ➕ The palette reaches the terminal: the core
+    the release Ghostty and desktop embed (OFL, `licenses/`, NOTICE). â The palette reaches the terminal: the core
     gained `Pane.set_colors(PaneColors)` (kept in the pane's slot and applied to every terminal a reattach installs;
     Rust test in `pane/tests.rs`), which `TerminalView` calls with the theme's palette. The cursor never blinks and
     the selection is the palette's tonal fill (DESIGN.md > The terminal). `core` test fixtures gained `FakePane` and
@@ -864,7 +864,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
     `paste_unsafe_*` and `screens/clipboard_read_sheet_*`. `./gradlew check` is green (spotless, detekt, lint, unit
     and screenshot tests); the instrumented tests compile, and were not rerun on the emulator: Robolectric drives
     every gesture here
-  - ➕ A program's clipboard write (`ClipboardWrite`, OSC 52) is not applied yet: added to Task 18, which routes the
+  - â A program's clipboard write (`ClipboardWrite`, OSC 52) is not applied yet: added to Task 18, which routes the
     shown panes' events
 
 ### Task 17: Keyboard input
@@ -884,7 +884,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
   - result (2026-11-03): `ui/terminal/` gained `KeyMapping` (a key code as Ghostty's physical key name, the meta
     state as the pane's bits, the text before Ctrl/Alt/Meta, the unshifted character, press/repeat/release, dead keys
     as composing; a character as the US key that types it, for sticky modifiers; the app's chords),
-    `TerminalKeyboard` (the sticky Ctrl and Alt, off → once → locked → off; hardware and IME keys, commits with line
+    `TerminalKeyboard` (the sticky Ctrl and Alt, off â once â locked â off; hardware and IME keys, commits with line
     breaks as Enter, compositions; chords: Ctrl+=/Ctrl++/Ctrl+- step the text size, Ctrl+0 resets it,
     Ctrl+Shift+arrows run `TerminalShortcuts`' pane and session callbacks, and a chord with no callback is the
     program's),
@@ -900,7 +900,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
     composition, extra keys, sticky Ctrl once and Alt locked, a held arrow repeating, hardware typing and chords, the
     row standing aside), goldens `terminal/keys_typing_dark|light`, `keys_font2`, `keys_landscape`. `./gradlew check`
     is green; the instrumented tests compile and were not rerun on the emulator (Robolectric drives every input here)
-  - ➕ Left for Task 18: the session view passes its `TerminalKeyboard` (one for all panes) to every `TerminalView`
+  - â Left for Task 18: the session view passes its `TerminalKeyboard` (one for all panes) to every `TerminalView`
     and the `ExtraKeysRow`, sets `TerminalShortcuts` (next/previous pane and session), places the row over the IME
     (`imePadding`), and makes the terminal's text readable by TalkBack
 
@@ -918,9 +918,9 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
       (1 or 2 panes on either axis, or a hidden split), where a tap focuses a pane
 - [x] the follower cover with **Take control**; a reconnecting cover that keeps the last screen visible; "session
       ended" and "session gone" states; Detach and End in the session's menu
-- [x] ➕ route the shown panes' events to their views (`PaneDirty`, `PaneAttached` to `TerminalState`), and apply a
+- [x] â route the shown panes' events to their views (`PaneDirty`, `PaneAttached` to `TerminalState`), and apply a
       program's clipboard write (`ClipboardWrite`, OSC 52) to the device's clipboard
-- [x] ➕ the keyboard (from Task 17): one `TerminalKeyboard` for every pane's `TerminalView` and the `ExtraKeysRow`
+- [x] â the keyboard (from Task 17): one `TerminalKeyboard` for every pane's `TerminalView` and the `ExtraKeysRow`
       (over the IME), its `TerminalShortcuts` moving between panes and sessions, and the terminal's text read by
       TalkBack
 - [x] write screenshots at three widths for one pane, two panes on each axis, a hidden split, a follower and a
@@ -984,7 +984,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
     (unreachable, or its host key changed), and every ask out of sight, answered as `deliveryOf` says (actions,
     inline reply, or open the app); `data/NotificationPrefs.kt` holds the per-kind switches Task 20 shows and whether
     the permission was asked. `platform/Notifications.kt` posts them on a channel per machine, a tap opening the
-    session and pane through `OpenRequests` → `SessionViewModel.open`/`focus` (`MainActivity` is `singleTop` and
+    session and pane through `OpenRequests` â `SessionViewModel.open`/`focus` (`MainActivity` is `singleTop` and
     hands it `onNewIntent`); `platform/AskActionReceiver.kt` answers an ask's action or inline reply.
     `service/LinkService.kt` is the `specialUse` foreground service (subtype property, FOREGROUND_SERVICE_SPECIAL_USE,
     `START_NOT_STICKY`) with the count, the names and Detach all, started by `LinkKeeper` as the first session is
@@ -1000,15 +1000,15 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
     windows; the choice and input asks light and dark in Robolectric's default window, since a text field in a
     dialog never settles under phone qualifiers). `./gradlew check` is green; the instrumented tests compile and
     were not rerun on the emulator (Robolectric drives every flow here)
-  - ➕ Left for Task 20: Settings shows `NotificationPrefs`' switches (and turns the permission on after Not now)
+  - â Left for Task 20: Settings shows `NotificationPrefs`' switches (and turns the permission on after Not now)
 
 ### Task 20: Settings
 
 **Files:**
 - Create: `ui/settings/`, `data/SettingsStore.kt`
 
-- [ ] invoke `frontend-design` for Settings
-- [ ] the settings:
+- [x] invoke `frontend-design` for Settings
+- [x] the settings:
   - font and size;
   - the built-in terminal palette, with a live preview;
   - follow the system's light/dark;
@@ -1017,8 +1017,8 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
   - keep the screen on while attached;
   - clipboard-read permissions per machine;
   - key management (show, copy, rotate, import)
-- [ ] write view-model tests, and screenshots at three widths
-- [ ] run `./gradlew check` and the tests; all must pass before Task 21
+- [x] write view-model tests, and screenshots at three widths
+- [x] run `./gradlew check` and the tests; all must pass before Task 21
 
 ### Task 21: CI
 
@@ -1073,7 +1073,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - Real devices: a phone, a tablet, and a foldable if one is available.
 - Run the arm64 build on a real device; only x86_64 test binaries ran on an emulator during preparation.
 - Check a hardware keyboard and a trackpad, and IME for a non-Latin language.
-- Check battery with the foreground service on for an hour, and screen-off reconnect across Wi-Fi ↔ mobile data
+- Check battery with the foreground service on for an hour, and screen-off reconnect across Wi-Fi â mobile data
   switches.
 - Attach a desktop ngterm and the phone to the same session, and check the presenter and leadership rules.
 

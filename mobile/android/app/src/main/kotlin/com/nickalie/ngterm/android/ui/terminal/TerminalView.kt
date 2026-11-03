@@ -1,6 +1,7 @@
 package com.nickalie.ngterm.android.ui.terminal
 
 import android.content.Context
+import android.graphics.Typeface
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.FontChoice
 import com.nickalie.ngterm.android.data.PaneFrames
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.TerminalPalette
@@ -68,16 +70,24 @@ val TerminalTextSize = 13.sp
  * the last screen on view.
  *
  * @param frameContext where `Pane.frame` and its decoding run, off the main thread.
- * @param textSize the text size to start at.
+ * @param textSize the text size to start at, and the one Ctrl+0 returns to ([defaultTextSize]).
+ * @param face the font to draw in.
  */
 @Stable
 class TerminalState(
     internal val pane: PaneInterface,
     private val frameContext: CoroutineContext = Dispatchers.Default,
     textSize: TextUnit = TerminalTextSize,
+    face: FontChoice = FontChoice.JetBrainsMono,
 ) : PaneFrames {
     /** The text size the view draws at: a pinch changes it, in whole sp within [TerminalTextSizes]. */
     var textSize by mutableStateOf(textSize)
+
+    /** The text size Settings sets, which Ctrl+0 puts the view back to. */
+    var defaultTextSize: TextUnit = textSize
+
+    /** The font the view draws in, as Settings picks it. */
+    var face by mutableStateOf(face)
 
     /** The input method's composition, drawn at the cursor until it commits; empty for none. */
     var composing by mutableStateOf("")
@@ -213,7 +223,7 @@ fun TerminalView(
     onSwipe: ((forward: Boolean) -> Unit)? = null,
 ) {
     val density = LocalDensity.current
-    val font = rememberTerminalFont(state.textSize)
+    val font = rememberTerminalFont(state.textSize, state.face)
     val painter = remember(font) { TerminalPainter(font, GlyphCache(font)) }
     val scope = rememberCoroutineScope()
     val input = remember(state) { TerminalInput(state, scope) }
@@ -283,11 +293,17 @@ private fun Modifier.terminalSemantics(
         if (spoken != null) text = AnnotatedString(spoken)
     }
 
-/** The terminal's font at [textSize]: the bundled JetBrains Mono faces at that size in this density. */
+/**
+ * The terminal's font at [textSize] in this density: the bundled JetBrains Mono faces, or the device's monospace in
+ * its four styles ([face]).
+ */
 @Composable
-fun rememberTerminalFont(textSize: TextUnit): TerminalFont {
+fun rememberTerminalFont(
+    textSize: TextUnit,
+    face: FontChoice = FontChoice.JetBrainsMono,
+): TerminalFont {
     val context = LocalContext.current
-    val typefaces = remember(context) { terminalTypefaces(context) }
+    val typefaces = remember(context, face) { terminalTypefaces(context, face) }
     val pixels = with(LocalDensity.current) { textSize.toPx() }
     return remember(typefaces, pixels) { TerminalFont(typefaces, pixels) }
 }
@@ -348,7 +364,20 @@ private val CompositionUnderline = 2.dp
 /** The most columns or rows a grid has (the pane's sizes are 16-bit). */
 private const val MAX_CELLS = 0xFFFF
 
-private fun terminalTypefaces(context: Context): TerminalTypefaces {
+private fun terminalTypefaces(
+    context: Context,
+    choice: FontChoice,
+): TerminalTypefaces {
+    if (choice == FontChoice.SystemMono) {
+        fun system(style: Int) = Typeface.create(Typeface.MONOSPACE, style)
+        return TerminalTypefaces(
+            regular = Typeface.MONOSPACE,
+            bold = system(Typeface.BOLD),
+            italic = system(Typeface.ITALIC),
+            boldItalic = system(Typeface.BOLD_ITALIC),
+        )
+    }
+
     fun face(id: Int) = requireNotNull(ResourcesCompat.getFont(context, id)) { "the terminal font is missing" }
     return TerminalTypefaces(
         regular = face(R.font.jetbrains_mono_regular),

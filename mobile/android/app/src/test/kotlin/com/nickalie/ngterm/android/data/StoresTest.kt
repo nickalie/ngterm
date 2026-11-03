@@ -1,5 +1,8 @@
 package com.nickalie.ngterm.android.data
 
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.FakeKeyMaker
 import com.nickalie.ngterm.android.PLAIN_FAKE_KEY
@@ -45,6 +48,57 @@ class StoresTest {
             assertEquals(listOf(a, b, c), store.machines.first())
             assertEquals(c, store.get("c"))
             assertNull(store.get("nope"))
+        }
+
+    @Test
+    fun settingsStartAtTheirDefaultsAndKeepWhatIsSet() =
+        runBlocking {
+            val store = SettingsStore(testStore(dir.root, "settings"))
+            assertEquals(AppSettings(), store.settings.first())
+            store.update {
+                it.copy(
+                    textSize = 40,
+                    font = FontChoice.SystemMono,
+                    palette = PaletteChoice.Ghostty,
+                    theme = ThemeChoice.Dark,
+                    wallpaperColors = true,
+                    extraKeys = ExtraKeysChoice.Hidden,
+                    keepScreenOn = true,
+                )
+            }
+            val again = store.settings.first()
+            // a size past the terminal's range is kept at its edge
+            assertEquals(32, again.textSize)
+            assertEquals(FontChoice.SystemMono, again.font)
+            assertEquals(PaletteChoice.Ghostty, again.palette)
+            assertEquals(ThemeChoice.Dark, again.theme)
+            assertTrue(again.wallpaperColors)
+            assertEquals(ExtraKeysChoice.Hidden, again.extraKeys)
+            assertTrue(again.keepScreenOn)
+        }
+
+    @Test
+    fun aSettingTheAppNoLongerKnowsReadsAsItsDefault() =
+        runBlocking {
+            val prefs = testStore(dir.root, "settings")
+            prefs.edit {
+                it[stringPreferencesKey("palette")] = "Solarized"
+                it[intPreferencesKey("text_size")] = 2
+            }
+            val read = SettingsStore(prefs).settings.first()
+            assertEquals(PaletteChoice.Theme, read.palette)
+            assertEquals(8, read.textSize)
+        }
+
+    @Test
+    fun everyMachineCanBePointedAtOneKey() =
+        runBlocking {
+            val store = MachineStore(testStore(dir.root, "machines"))
+            store.save(testMachine(id = "a", keyId = "old"))
+            store.save(testMachine(id = "b", keyId = "other"))
+            store.useKey("new")
+            assertEquals(listOf("new", "new"), store.machines.first().map { it.keyId })
+            assertEquals(listOf("a", "b"), store.machines.first().map { it.id })
         }
 
     @Test

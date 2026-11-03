@@ -28,6 +28,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.nickalie.ngterm.android.data.FontChoice
 import com.nickalie.ngterm.android.data.PaneLive
 import com.nickalie.ngterm.android.ui.components.BusBar
 import com.nickalie.ngterm.android.ui.components.underCover
@@ -87,7 +88,8 @@ fun PaneSlot(
     onHoldsFocus: (Boolean) -> Unit = {},
 ) {
     var size by remember { mutableStateOf(IntSize.Zero) }
-    val font = rememberTerminalFont(spot.state?.textSize ?: TerminalTextSize)
+    val font =
+        rememberTerminalFont(spot.state?.textSize ?: TerminalTextSize, spot.state?.face ?: FontChoice.JetBrainsMono)
     val grid = gridFor(size, font)
     val show by rememberUpdatedState(actions.onShow)
     val waiting = spot.state == null && spot.failure == null

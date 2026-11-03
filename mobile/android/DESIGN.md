@@ -57,7 +57,7 @@ Defined in `ui/theme/Color.kt`. `ContrastTest` checks every promise below, light
 
 - Every text role is at least 4.5:1 on its container, and on every surface up to `surfaceContainerHigh`; primary,
   secondary and error are used as text and meet that too. Outlines are at least 3:1.
-- **Dynamic color** is optional (`NgtermTheme(dynamicColor = true)`, Android 12+, a later Settings switch). It
+- **Dynamic color** is optional (`NgtermTheme(dynamicColor = true)`, Android 12+, Settings' Wallpaper colors). It
   replaces only Material's roles; the status colors, the type and the terminal palette stay the app's.
 
 ### Status
@@ -90,10 +90,10 @@ Defined in `ui/theme/Color.kt`. `ContrastTest` checks every promise below, light
 - **Ghostty**: desktop ngterm's starting point, Ghostty's `#282c34` ground with white text and libghostty-vt's
   built-in 16 colors.
 
-The theme picks Copper or Drafting with the light or dark side; Settings may pin one later. Every palette's text is
-4.5:1 on its ground and on its selection, and its cursor 3:1. `TerminalView` hands the palette to the pane
-(`Pane.set_colors`), so the terminal resolves ANSI colors with it and every reattach starts from it; colors a program
-sets (OSC 4/10/11/12) win, as on desktop.
+The theme picks Copper or Drafting with the light or dark side, unless Settings pins one (`NgtermTheme(terminal =)`).
+Every palette's text is 4.5:1 on its ground and on its selection, and its cursor 3:1. `TerminalView` hands the palette
+to the pane (`Pane.set_colors`), so the terminal resolves ANSI colors with it and every reattach starts from it; colors
+a program sets (OSC 4/10/11/12) win, as on desktop.
 
 ## Type
 
@@ -317,9 +317,11 @@ terminal's ground, which is the chrome's ground in Copper and Drafting, so the t
   box drawing, blocks and the common symbols on the grid, and keeps its programming ligatures (`=>`, `!=`), as Ghostty
   does by default; they take the columns of the characters they join. CJK and emoji fall back to the platform's fonts,
   centered in their two cells or squeezed into them. No Nerd Font symbols in v1: the symbols font is 2.5 MB.
-- **Size:** 13 sp by default (`TerminalTextSize`): about 50 columns on a phone held upright, 110 in landscape. It
-  follows the system font scale like any text (at 2.0, about 25 columns); a pinch changes it in whole sp steps
-  between 8 and 32 (`TerminalTextSizes`), so the machine's pty is resized once per step, not per frame.
+- **Size:** 13 sp by default (`TerminalTextSize`), or what Settings sets: about 50 columns on a phone held upright,
+  110 in landscape. It follows the system font scale like any text (at 2.0, about 25 columns); a pinch changes one
+  pane's in whole sp steps between 8 and 32 (`TerminalTextSizes`), so the machine's pty is resized once per step, not
+  per frame. A size set in Settings resizes every shown pane, pinched or not. Settings can swap the font for the
+  device's monospace (`FontChoice`), which keeps the cell rules below.
 - **Cell:** the font's advance wide, unrounded, so runs of the font's own glyphs sit on the grid; ascent to descent
   tall, rounded up to whole pixels. The pane's grid is what fits, and it goes to the pane as its size on every
   change (rotation, multi-window, folding).
@@ -414,11 +416,11 @@ sideways or wider (48dp a key or more): one line of sixteen
   as a key. What the keyboard commits goes to the program at once; a composition (a CJK input method's, a dead key's,
   a swiped word) waits at the cursor in the terminal's font, on its ground, underlined 2dp in the cursor's copper,
   and goes when it commits. Backspace with nothing composed is the program's.
-- **The row** sits under the terminal, over the keyboard, whenever no hardware keyboard is attached (it shows with
-  the keyboard closed too: the arrows and Esc work a pager or a menu without it). Two lines of eight on a phone held
-  upright: Ctrl and Alt by Tab under the thumb, the arrows an inverted T with Home and End over Left and Right, the
-  page keys at the end. One line of sixteen once each key gets 48dp. A key is its whole cell (no gaps between keys,
-  45dp at the narrowest 360dp phone), 48dp tall.
+- **The row** sits under the terminal, over the keyboard, whenever no hardware keyboard is attached and Settings hasn't
+  hidden it (it shows with the keyboard closed too: the arrows and Esc work a pager or a menu without it). Two lines of
+  eight on a phone held upright: Ctrl and Alt by Tab under the thumb, the arrows an inverted T with Home and End over
+  Left and Right, the page keys at the end. One line of sixteen once each key gets 48dp, unless Settings keeps two lines
+  at every width. A key is its whole cell (no gaps between keys, 45dp at the narrowest 360dp phone), 48dp tall.
 - **Legends:** words in Atkinson Hyperlegible Next semibold, all at one size, the widest's ("Home") fitted to its key
   (so a large font scale grows them only as far as they fit); symbols in JetBrains Mono 18 sp; arrows the line icon.
   `onSurface` on `surfaceContainer`.
@@ -432,10 +434,10 @@ sideways or wider (48dp a key or more): one line of sixteen
   layout types: AltGr's characters (German AltGr+Q is `@`) are text, not Alt chords, and a dead key's accent waits at
   the cursor like a composition until the next key takes it (`´` then `e` is `é`; a space, the same accent again, or a
   key it doesn't go on types the accent itself first). Its chords are desktop's Linux ones, by the character the
-  layout types: Ctrl+= (or Ctrl++) and Ctrl+- step the text size a whole sp (8-32), Ctrl+0 puts it back to 13 sp (on
-  Dvorak, Ctrl+[ and Ctrl+] stay the program's); Ctrl+Shift+Left and Right go to the previous and next pane,
-  Ctrl+Shift+Up and Down to the previous and next session (the session view's to wire; a chord with nowhere to go is
-  the program's).
+  layout types: Ctrl+= (or Ctrl++) and Ctrl+- step the text size a whole sp (8-32), Ctrl+0 puts it back to the size
+  Settings sets (on Dvorak, Ctrl+[ and Ctrl+] stay the program's); Ctrl+Shift+Left and Right go to the previous and
+  next pane, Ctrl+Shift+Up and Down to the previous and next session (the session view's to wire; a chord with nowhere
+  to go is the program's).
 - **Order:** a key from the row or a hardware key while the soft keyboard is composing commits the composition first,
   so the program gets the text before the key. A mouse click gives the terminal the focus without opening the soft
   keyboard; a tap opens it.
@@ -615,6 +617,70 @@ quiet notification on its own low channel ("Attached sessions"), "2 sessions att
 sheet says why first ("Get told when an agent needs you": what reaches you in the background, that a question can be
 answered from the notification, and the one quiet notification), then **Turn on notifications** raises the system's
 question and **Not now** (or swiping the sheet away) leaves it for Settings. Either way it isn't asked again.
+
+### Settings (`ui/settings/`, `data/SettingsStore.kt`)
+
+A `ScreenFrame` titled Settings: one column, 640dp at most, of groups under quiet headings (titleSmall,
+`onSurfaceVariant`). Rows are 56dp on the ground; the whole row toggles or picks, a Switch or a radio at its end or
+start shows which, its label (bodyLarge) over a note (bodySmall). The memorable thing is the terminal itself: a live
+sample at the group's top.
+
+The plan, reviewed against the brief:
+
+| First pass | Why it was generic | Revised to |
+|---|---|---|
+| A list of rows that open a dialog each ("Text size", "Theme"...) | the stock preference screen; the user can't see what a choice does until it is made | every choice in place, and the terminal sample over them redrawn as they change |
+| Segmented buttons for the theme and the extra keys | a kit control, and three labels in a row truncate at font scale 2.0 | radio rows with notes, which wrap |
+| Palette chips as colored circles | color alone, and a circle says nothing about a terminal | radio rows named for the palette, each with a strip of its ground and its eight normal colors |
+| Copper section headings | a second loud element beside the bus bar | `onSurfaceVariant` headings; copper stays for the selected destination and the actions |
+| A slider with a tick per sp in the theme's secondary | 23 dots of noise, and verdigris means healthy | a plain track (`surfaceContainerHighest`), the value in mono beside the label |
+| Key rotation as one destructive button | it would cut every machine off until the new key is on them | Rotate key makes a new key and shows its public half; the machines switch to it only on "Use for every machine", under a note that the old key comes off the machines last |
+
+```
++--------------------------------------+
+| Settings                             |
+| Terminal                             |
+| +----------------------------------+ |
+| | nick@build-01 ~/docs-site (main) | |
+| | $ ls                             | |
+| | site/  README.md  build.sh       | |
+| |  M site/install.md               | |
+| | $ #                              | |
+| +----------------------------------+ |
+| Text size                     14 sp  |
+| ===========o-----------------------  |
+| Font   (o) JetBrains Mono            |
+| Colors (o) Match the theme  [######] |
+| Keep the screen on              [on] |
+| Appearance  Extra keys  Notifications|
+| Clipboard  Keys  About               |
++--------------------------------------+
+```
+
+- **Terminal:** the sample (`TerminalPreview`: a prompt, a listing, `git status` with a line selected, the cursor)
+  in the chosen palette, font and size, cut at the plate's edge as a terminal's lines are; TalkBack reads "A sample of
+  the terminal in Copper at 14 sp". Text size is a slider of whole sp (8-32) that sets every pane. Font: JetBrains
+  Mono or the device's monospace. Colors: Match the theme (Copper when dark, Drafting when light), Copper, Drafting
+  or Ghostty, each with its strip (`PaletteSwatch`). Keep the screen on, while an attached session is open
+  (`KeepScreenOn`, off by default).
+- **Appearance:** Match the system, Light or Dark; Wallpaper colors on Android 12 and later. The system bars' icons
+  follow the side picked.
+- **Extra keys:** Fit to the width (as Keyboard above), Always two lines, or Hidden (only the soft keyboard; a
+  hardware keyboard hides the row whatever is picked).
+- **Notifications:** a switch per kind (Waiting for you, Finished, Agent notifications, Lost machines), and the line
+  that questions always notify. While the system lets the app post none (the permission refused, Not now, or turned
+  off), a `Banner` with the attention diamond says so, and Turn on opens the system's notification settings for the
+  app; it is read again when the app resumes.
+- **Clipboard:** the machines whose programs read the clipboard unasked (Always allow), each with its mono address
+  and Ask again; or that every machine asks.
+- **Keys:** a plate per key (`surfaceContainerLow`): Made on this device or Imported, the mono fingerprint, the
+  machines that use it, Show public key and Copy public key. Under them the rotation note, Rotate key (outlined; a
+  spinner and "Making a key" while it works, the core's words under it when it fails) and Import a key (the first
+  run's import screen, secure window and all). A key made or brought opens its public half (the first run's screen
+  with Back) and under it "Then switch your machines": what to do first, and **Use for every machine**, after which it
+  says every machine signs in with this key. A private key is never shown or logged.
+- **About:** the app's name and the core's version in mono.
+- **States:** a spinner while the stores are read; the reason and Retry when they can't be.
 
 ## Copy
 

@@ -132,6 +132,16 @@ class ClipboardReads(
         for (each in (listOf(read) + answered).distinct()) reply(each, ClipboardReply.Allow(text))
     }
 
+    /** The machines whose programs read the clipboard unasked, as stored: what Settings lists. */
+    val alwaysAllowed: Flow<Set<String>> get() = trust.machines
+
+    /** Asks again before [machineId]'s programs read the clipboard (Settings' Ask again). */
+    suspend fun revoke(machineId: String) {
+        unsaved.update { it - machineId }
+        trustedState.update { it - machineId }
+        trust.revoke(machineId)
+    }
+
     /** Refuses [read]: its program reads an empty clipboard. */
     fun deny(read: ClipboardRead) = answer(read, ClipboardReply.Deny)
 

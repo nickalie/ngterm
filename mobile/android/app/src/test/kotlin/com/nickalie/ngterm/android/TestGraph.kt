@@ -14,6 +14,7 @@ import com.nickalie.ngterm.android.data.LiveSessions
 import com.nickalie.ngterm.android.data.MachineStore
 import com.nickalie.ngterm.android.data.NotificationPrefs
 import com.nickalie.ngterm.android.data.OpenRequests
+import com.nickalie.ngterm.android.data.SettingsStore
 import com.nickalie.ngterm.android.data.StoredMachine
 import com.nickalie.ngterm.android.platform.KeyWrapper
 import com.nickalie.ngterm.android.platform.KeystoreKeyVault
@@ -136,7 +137,8 @@ class TestGraph(
     val live = LiveSessions(scope, connections) { clipboardWrites += it }
 
     // the panes' frames are read on the main thread, where the UI tests' clock drives them
-    val panes = SessionPanes(scope, connections, live, EmptyCoroutineContext)
+    val settings = SettingsStore(testStore(dir, "settings"))
+    val panes = SessionPanes(scope, connections, live, EmptyCoroutineContext, settings.settings)
     val asks = Asks(scope, connections)
 
     // the notification permission counts as asked unless the test is about its question
@@ -155,6 +157,7 @@ class TestGraph(
             panes = panes,
             asks = asks,
             notificationPrefs = notificationPrefs,
+            settings = settings,
             opens = opens,
             online = online,
         )
