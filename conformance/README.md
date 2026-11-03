@@ -8,9 +8,13 @@ The same tests run against the released macOS app and the Rust build, over the c
 
 ```sh
 python -m venv .venv && .venv/bin/pip install -e conformance          # Linux, CI gate
+python -m venv .venv && .venv/bin/pip install -e "conformance[linux-ui]"  # Linux ui layer: PyGObject, python-xlib
 python -m venv .venv && .venv/bin/pip install -e "conformance[ax]"    # macOS: adds the ax ui driver's pyobjc
-python -m venv .venv && .venv/Scripts/python.exe -m pip install -e conformance   # Windows, from Git Bash
+python -m venv .venv && .venv/Scripts/python.exe -m pip install -e conformance   # Windows (Git Bash)
 ```
+
+The Linux ui layer also needs Xvfb, at-spi2-core (`at-spi-bus-launcher`, `at-spi2-registryd`) and the distribution's
+`Atspi-2.0` typelib (README > Prerequisites); pip builds PyGObject against gobject-introspection and cairo.
 
 ## Running
 
@@ -25,12 +29,12 @@ bundle=$(.venv/bin/python conformance/tools/fetch_reference.py --tag v0.39.1 | s
 # the Rust build; without --bin every test skips and parity reads 0%
 .venv/bin/python -m pytest conformance/tests --impl rust --bin <rust-binary>
 
-# the Rust build of this checkout: build, stage, protocol, cli and behaviors, then the ratchet;
-# report in conformance/reports/rust-linux/
-conformance/tools/run-linux.sh [--stage DIR] [-- PYTEST_ARGS...]
+# the Rust build of this checkout: build, stage, protocol, cli, behaviors and ui, then the ratchet;
+# report in conformance/reports/rust-linux/; --coverage: the instrumented build and its code coverage (Code coverage)
+conformance/tools/run-linux.sh [--stage DIR] [--coverage] [-- PYTEST_ARGS...]
 
 # the same on Windows, from Git Bash (Windows runner and ratchet below); report in conformance/reports/rust-windows/
-conformance/tools/run-windows.sh [--stage DIR] [-- PYTEST_ARGS...]
+conformance/tools/run-windows.sh [--stage DIR] [--coverage] [-- PYTEST_ARGS...]
 
 # whether the staged Rust build's WPE WebKit loads a page under the same headless isolation (a diagnosis of the web
 # process's bubblewrap sandbox; the report carries the frame mode from the app's log)
@@ -46,7 +50,7 @@ conformance/tools/run-windows.sh [--stage DIR] [-- PYTEST_ARGS...]
 .venv/bin/python conformance/tools/chrome_probe.py [--bin PATH] [--keep DIR]
 ```
 
-`--macos-launch-mode plain` replaces the default `uitest` launch (XCUITest sentinel with zmx on).
+`--macos-launch-mode plain` replaces the default `uitest` launch (XCUITest sentinel with live sessions on).
 The Rust build renders on lavapipe only (see Rust runner and ratchet): its probes and the harness take the ICD manifest
 from `$CONFORMANCE_LAVAPIPE_ICD`, the probes else from `scripts/fetch-lavapipe.sh --print-icd`.
 The Rust build's side of the contract (the `version` extension, the launch environment, the capability
@@ -57,8 +61,7 @@ vocabulary) is in [docs/rust-build.md](docs/rust-build.md).
 - `tests/protocol`: one JSON line per request over the socket, through `ctl`.
 - `tests/cli`: `agtermctl` output, exit codes and socket resolution, through `cli`.
 - `tests/behaviors`: relaunch, keymap and hooks, across instances started by `launch`.
-- `tests/ui`: accessibility ids from `ui-ids.yaml`, through `ui`.
-  Only the macOS `ax` driver exists; elsewhere the layer skips as unsupported.
+- `tests/ui`: accessibility ids from `ui-ids.yaml`, through `ui` (UI layer below).
 - `selftests`: the harness itself, host-free; they run without `--impl`.
 
 ## Markers
@@ -80,6 +83,50 @@ not-yet-at-level, so an unsupported capability is a recorded divergence, not a g
   A run pytest refuses (a usage error, a path or node id that matches nothing) or that breaks internally writes none.
 - `--reruns N` (pytest-rerunfailures) is for the ui layer only, where accessibility reads race the app.
   Protocol, cli and behaviors tests wait on read-back and never rerun.
+
+## UI layer
+
+`ui` is a driver over the OS's accessibility tree of the instance under test, picked by host
+(`drivers/base.py`, `PLATFORM_DRIVERS`); each imports its bindings lazily, so the host-free self-tests need none:
+
+- `ax` (macOS): the AX tree, AXPress, CGEvent keys and pointer (`conformance[ax]`; the run needs the Accessibility
+  grant, a screenshot the Screen Recording one);
+- `atspi` (Linux): the AT-SPI tree of the app found by pid on the run's private a11y bus (libatspi through PyGObject),
+  XTest input on the instance's own Xvfb (python-xlib);
+- `uia` (Windows): UI Automation over `UIAutomationCore` (comtypes), `SendInput` for keys, text and the pointer.
+
+An element's ui id is the app's accessibility author id (AccessKit's, read as AT-SPI's `AccessibleId` and UIA's
+`AutomationId`). Tests find elements by id (`find`, `all`, `count`, `absent`; only `find` filters, by `role=`, `value=`,
+`enabled=` and `name=`, a string or a compiled regex; the waits dump the inventory on timeout) and act on snapshots:
+
+- `click` is the accessibility press; `press` posts key chords, `type_text` any printable text through the OS's text
+  input; `text`, `set_text`, `focus`, `hover`, `menu`, `menu_item` and `tab` read, write and open what they name;
+- pointer input has its own names: `move`, `mouse_click` (`button="left"|"right"`), `mouse_double_click`, `drag`,
+  `drag_by`, `scroll`; all but `scroll` (which acts at the element's center) take an `offset` within the element,
+  `drag` one per end (`src_offset`, `dst_offset`); `frame` reads an element's screen rectangle and
+  `window` the app's first window, a target for points the protocol locates (a split divider);
+- a pointer action reads the element's bounds at action time and finds a stale element again once, by id and name
+  (role and name without an id), else fails with `ElementNotFound`; nothing retries after input went out.
+- `wait.wait_cursor` waits on a pane's cursor, `wait.wait_text` on its text.
+
+On Linux every instance a `tests/ui` module launches (its module fixtures, `launch()`, `relaunch`) runs on X11 on an
+Xvfb of its own, all of them on one a11y bus the run starts (docs/rust-build.md > Launch contract); the other layers
+stay on weston. A missing piece of that setup (Xvfb, `at-spi-bus-launcher`, `at-spi2-registryd`, the typelib) fails
+the run with exit 2 naming it, never a skip.
+
+Reruns: the Rust ui runs do not rerun; they wait on read-back like the other layers. reference-macos keeps
+`--reruns 1` on its ui layer for the AX races of upstream's release.
+
+### Failure traces
+
+Each test keeps a trace in memory, written to `traces/<nodeid-slug>/` beside the nodeid report (else the JUnit report,
+else `<rootdir>/reports/traces/`; `--trace-dir DIR` overrides) as `--trace-mode` says: `on-failure` (the default) keeps
+only a failed test's, `always` every test's, `off` none, and a rerun that passes drops its failed attempt's. A trace
+holds `actions.jsonl` (driver actions), `socket.jsonl` (control socket requests and replies), `cli.jsonl` (each
+`ngtermctl` argv, exit code and output), the instance's `app.log` and `panes/` (each pane's text), and, where a driver
+exists, `a11y-tree.txt` and `screenshot.png` (Pillow's `ImageGrab`, on Linux from the instance's Xvfb). A second
+instance's files go under `instances/<slug>/`; whatever could not be collected is named in `trace-errors.txt`. The CI
+jobs upload them with their reports.
 
 ## Reference discipline
 
@@ -116,14 +163,16 @@ path), so the tests compare it by the program's name (`match.program_argv`).
 The rest of this section describes the Linux runner.
 
 `tools/run-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` into
-`target/conformance-stage` (or runs an existing stage given with `--stage DIR`) and runs the protocol, cli and
-behaviors layers with `--impl rust`, each instance on its own headless weston and session bus (Safety guards).
+`target/conformance-stage` (or runs an existing stage given with `--stage DIR`) and runs the protocol, cli,
+behaviors and ui layers with `--impl rust`, each instance on its own headless weston and session bus, a ui instance on
+its own Xvfb and the run's a11y bus instead of weston (Safety guards).
 It runs pytest with `$PYTHON`, else `.venv/bin/python`, else `python3`, with this checkout's harness first on
 `PYTHONPATH`.
-Into `--out DIR` (default `reports/rust-linux/`) it writes `report.md`, `junit.xml`, `pytest.log` and `nodeids.jsonl`,
-the `--nodeid-report`.
+Into `--out DIR` (default `reports/rust-linux/`) it writes `report.md`, `junit.xml`, `pytest.log`, `nodeids.jsonl`
+(the `--nodeid-report`) and `traces/`; `report.md` ends with the ui ids a passing test exercised
+(`python -m agterm_conformance.coverage nodeids.jsonl`).
 It exits with the ratchet's status, not pytest's, since red tests are expected until parity: 0 holds, 1 broken (or an
-instance root left behind), 2 no usable report.
+instance root left behind), 2 no usable report (or, under `--coverage`, no code coverage report).
 One suite run at a time per user: concurrent runs, from any checkout, queue on `$CONFORMANCE_LOCK` (default
 `$XDG_RUNTIME_DIR/agterm-conformance.lock`, else `/tmp/agterm-conformance-<uid>/`), and a waiting run says so; the
 deadlines assume one suite's load, and the lock does not hold back a stand-alone `cargo build` or `cargo test`.
@@ -192,31 +241,66 @@ It fails on any active item that no `covers` names and no exemption with a reaso
 unknown or removed item.
 `covered`/`uncovered` statuses are informational.
 
+## Code coverage
+
+`run-linux.sh --coverage` (and `run-windows.sh --coverage`) measures the Rust code a suite run exercises, with
+cargo-llvm-cov and the toolchain's `llvm-tools` component:
+
+- build: `cargo llvm-cov clean --workspace`, then the release build under `cargo llvm-cov show-env` into
+  `target/llvm-cov-target`, staged into `target/conformance-stage-cov` (a `--stage` that is not such a build exits 2);
+- run: every process the harness starts from the build (the app, `ngtermctl`, `ngterm-session attach`, and what they
+  start) writes a profile pooled per binary into `target/llvm-cov-target` (`agterm_conformance/llvm_profiles.py`); one
+  the harness had to end past its exit (a kill, a SIGTERM without a quit, the Windows job's close) writes none and is
+  listed in `DIR/lost-profiles.txt`, so a drop can be told from lost data;
+- report: `cargo llvm-cov report` into `DIR/coverage/` (`lcov.info`, `html/`, `summary.md`: line, region and function %
+  per workspace crate and the total, `vendor/` and the `-sys` crates left out; `agterm_conformance/code_coverage.py`),
+  its table in `report.md`. A run that left no profile, or a stage that is not the instrumented build's, exits 2.
+
+The runners still judge a coverage run's ratchet and exit with that verdict; the CI coverage jobs ignore its exit 1
+(instrumentation slows the app; the ids stay the normal run's) and judge the floors separately:
+`conformance/coverage-floor-linux.txt` and `coverage-floor-windows.txt` hold one `crate line%` per line, and
+
+```sh
+.venv/bin/python conformance/tools/check_coverage.py --summary DIR/coverage/summary.md \
+  --floor conformance/coverage-floor-linux.txt          # 0 holds, 1 a crate > 0.5 pt below its floor, 2 bad input
+.venv/bin/python conformance/tools/check_coverage.py --floor conformance/coverage-floor-linux.txt --add \
+  --summary A/coverage/summary.md --summary B/coverage/summary.md   # raise the floors from a batch of runs
+```
+
+names each crate more than 0.5 pt below its floor with both numbers. `--summary` repeats, and each crate is judged by
+its lowest value; `--add` takes at least two summaries of one build (one run's line % varies by more than the
+tolerance) and raises each floor to the batch's lowest, never lowering one; a crate new to the workspace is added, a
+removed one dropped. Raise the floors from CI runs of the same commit.
+
 ## Safety guards
 
 These runs share a machine with a live terminal (an installed ngterm, or an agterm), so the harness refuses a launch
 that could reach it:
 
-- `NGTERM_*`, `AGTERM_*` and `ZMX_*` are scrubbed from the environment at plugin import, and the launch env may carry
-  only the harness's own.
+- `NGTERM_*`, `AGTERM_*` and upstream's `ZMX_*` (which the Swift reference's CLI reads) are scrubbed from the
+  environment at plugin import, and the launch env may carry only the harness's own.
 - Each instance gets a fresh root (`/tmp/agt-*`, or under `CONFORMANCE_TMP`) holding its `HOME`, XDG homes, state
   dir and socket; the guards refuse any of them outside it.
-  Its live-session socket directory (upstream's zmx one, the Rust build's session server namespace) derives
-  from that state dir.
+  Its live-session socket directory (the Rust build's session server namespace, the reference's daemon directory)
+  derives from that state dir.
 - Linux instances get a unique app id (`NGTERM_APP_ID`), never the installed one, and a private `XDG_RUNTIME_DIR`.
 - Linux instances draw into their own headless weston with their own dbus-daemon, so no window, notification or
   a11y object reaches the desktop.
   The harness requires both programs.
+- A Linux ui instance draws into its own Xvfb (`-displayfd`, no TCP) with its own dbus-daemon, and publishes its
+  accessibility tree on an a11y bus the run started (a private session bus with `at-spi-bus-launcher` and
+  `at-spi2-registryd`) with `GSETTINGS_BACKEND=memory`. The harness refuses an inherited `AT_SPI_BUS_ADDRESS`, an
+  `Atspi.init()` before the run's bus is set, a `DISPLAY` that is not the instance's own Xvfb and a ui run outside
+  the headless display mode.
   `CONFORMANCE_LINUX_DISPLAY=session` uses the desktop's display and bus instead, for debugging only.
 - A GPUI instance renders on lavapipe only, in either display mode: never on the machine's GPU driver.
 - URI and file launches go to a no-op handler through the isolated `mimeapps.list` and `BROWSER=true`.
   The ghostty config turns off copy-on-select and clipboard writes.
 - `cli` gives every `agtermctl` call the instance's `--socket`; a call without one must resolve under the root.
-- Stopping reaps Live daemons over the protocol (in the adapter's vocabulary: `zmx.kill` upstream, `live.kill` in the
-  Rust build, [docs/rust-build.md](docs/rust-build.md)), SIGTERMs only the launched pid, and fails on any zmx or
-  session-host process left with the instance's `ZMX_DIR`, or in the Rust build on its session server
-  (`ngterm-session server <its namespace>`) or a process left with its `NGTERM_LIVE_DIR`, once the server's idle grace
-  has passed.
+- Stopping reaps Live daemons over the protocol (`live.kill`, in the adapter's vocabulary,
+  [docs/rust-build.md](docs/rust-build.md)), SIGTERMs only the launched pid, and fails on the Rust build's session
+  server (`ngterm-session server <its namespace>`) or a process left with its `NGTERM_LIVE_DIR`, once the server's idle
+  grace has passed, or on any of the reference's daemon or session-host processes left with its directory variable.
   The macOS session host outlives the app by design: the harness ends only the one started from the instance's own
   bundle copy, by exact pid, re-checking ownership before each signal.
 - A macOS instance runs from its own copy of the bundle, because a second launch of the same bundle path binds no
@@ -242,13 +326,20 @@ that could reach it:
 - `conformance-gate` (ubuntu): self-tests and the coverage gate on every PR and on `main`, unless only Markdown
   outside `conformance/docs/` changed.
 - `reference-macos` (`macos-26`): protocol, cli and behaviors with `--must-pass live-sessions`, then the ui layer
-  with `--reruns 1`, against the release named by the catalog's `upstream`.
+  with `--reruns 1`, against the release named by the catalog's `upstream`; failure traces are kept with the report.
 - `linux` (`ubuntu-26.04`): the Rust workspace's format check, strict clippy, lint report (in the job summary)
   and `cargo test`, over the vendored libghostty-vt prefix, without what links WPE WebKit; `wpe` (an Arch container):
   the WPE crates and the app with its HTML overlays; then the staged build under the suite in the same Arch container,
-  on the distribution's lavapipe, held by the ratchet, once per login shell (`conformance`, a matrix), each with
-  `--must-pass live-any-shell`: bash, fish and zsh (the last two with `--must-pass live-sessions` too).
+  on the distribution's lavapipe, held by the ratchet, once per login shell (`conformance`, a matrix, every layer, the
+  ui layer through `atspi`), each with `--must-pass live-any-shell`: bash, fish and zsh (the last two with
+  `--must-pass live-sessions` too); the matrix's `coverage` entry runs the bash leg's suite on the instrumented build
+  (`--coverage`) and judges `coverage-floor-linux.txt` only, its report and `coverage/` uploaded as
+  `rust-linux-coverage-conformance`.
 - `cross-platform`'s `windows` job (`windows-2025`): the harness's Windows self-tests (the pipe transport, the client,
-  the launch and stop), then `tools/run-windows.sh` with `--must-pass live-any-shell` (the login shell is Windows
-  PowerShell): protocol, cli and behaviors against the staged Windows build, held by `rust-passing-windows.txt`. The
+  the launch and stop, the UIA driver's mappings), then `tools/run-windows.sh` with `--must-pass live-any-shell` (the
+  login shell is Windows PowerShell): protocol, cli, behaviors and ui (UI Automation and `SendInput`,
+  `drivers/uia.py`, its windows on the runner's desktop) against the staged Windows build, held by
+  `rust-passing-windows.txt`. The
   staged tree is kept as an artifact, for a run on a Windows VM against the same build (`--stage DIR`).
+  `coverage-windows` runs the same suite on the instrumented build (`run-windows.sh --coverage`) and judges
+  `coverage-floor-windows.txt` only, its report uploaded as `rust-windows-coverage-conformance`.

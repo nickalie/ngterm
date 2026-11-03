@@ -16,6 +16,7 @@ from types import TracebackType
 from typing import Any, Self
 
 from agterm_conformance import transport
+from agterm_conformance.drivers import trace
 
 # ControlWire.maxRequestLineBytes, newline excluded: over it the server stops reading and closes
 # (macOS first replies ok:false "request too large or read failed"; Linux sends nothing).
@@ -90,7 +91,7 @@ def decode_response(line: bytes) -> Response:
 
 
 class Stream:
-    """A connection the server keeps after its reply: `zmx.present` presentation frames, `session.overlay.job.run`
+    """A connection the server keeps after its reply: `live.present` presentation frames, `session.overlay.job.run`
     job frames. One JSON object per line in both directions; close it (or use it as a context manager) when done.
     """
 
@@ -103,7 +104,13 @@ class Stream:
         self._max_line_bytes = max_line_bytes
 
     def send(self, frame: Mapping[str, Any]) -> None:
-        self.sock.sendall(json.dumps(frame, separators=(",", ":"), ensure_ascii=False).encode() + b"\n")
+        try:
+            self.sock.sendall(json.dumps(frame, separators=(",", ":"), ensure_ascii=False).encode() + b"\n")
+        except Exception as error:
+            trace.event("socket", socket=str(self.path), direction="stream-send", frame=dict(frame),
+                        error=f"{type(error).__name__}: {error}")
+            raise
+        trace.event("socket", socket=str(self.path), direction="stream-send", frame=dict(frame))
 
     def read(self, timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
         """The next frame; `NoResponse` once the server closed the stream, `ClientTimeout` when none came in time."""
@@ -117,6 +124,14 @@ class Stream:
         return frame
 
     def read_line(self, timeout: float = DEFAULT_TIMEOUT) -> bytes:
+        try:
+            return self._read_line(timeout)
+        except Exception as error:
+            trace.event("socket", socket=str(self.path), direction="stream-receive",
+                        error=f"{type(error).__name__}: {error}")
+            raise
+
+    def _read_line(self, timeout: float) -> bytes:
         deadline = time.monotonic() + timeout
         while (newline := self._pending.find(b"\n")) < 0:
             if len(self._pending) > self._max_line_bytes:
@@ -135,6 +150,7 @@ class Stream:
             raise ResponseTooLarge(f"stream line exceeds {self._max_line_bytes} bytes")
         line = bytes(self._pending[:newline])
         del self._pending[: newline + 1]
+        trace.event("socket", socket=str(self.path), direction="stream-receive", line=line.decode("utf-8", errors="replace"))
         return line
 
     def close(self) -> None:
@@ -187,6 +203,14 @@ class Client:
             payload["target"] = target
         if args:
             payload["args"] = args
+        try:
+            return self._open_stream(payload)
+        except Exception as error:
+            trace.event("socket", socket=str(self.socket_path), direction="stream-open", request=payload,
+                        error=f"{type(error).__name__}: {error}")
+            raise
+
+    def _open_stream(self, payload: dict[str, Any]) -> Stream:
         line = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
         if len(line) > MAX_REQUEST_LINE_BYTES:
             raise RequestTooLarge(f"request too large ({len(line)} bytes, cap {MAX_REQUEST_LINE_BYTES})")
@@ -198,6 +222,7 @@ class Client:
         except OSError as error:
             raise ConnectFailed(f"cannot connect to {self.socket_path}: {error}") from error
         try:
+            trace.event("socket", socket=str(self.socket_path), direction="stream-open", request=payload)
             sock.sendall(line + b"\n")
             stream = Stream(sock, self.socket_path, Response(False, None, None, {}), self.max_response_bytes)
             stream.reply = decode_response(stream.read_line(self.timeout))
@@ -210,7 +235,14 @@ class Client:
         """Write `line` plus a newline verbatim; `check_cap=False` lets a test probe the server's own cap."""
         if check_cap and len(line) > MAX_REQUEST_LINE_BYTES:
             raise RequestTooLarge(f"request too large ({len(line)} bytes, cap {MAX_REQUEST_LINE_BYTES})")
-        return decode_response(self._exchange(line + b"\n", self.timeout if timeout is None else timeout))
+        entry = dict(socket=str(self.socket_path), request=line.decode("utf-8", errors="replace"))
+        try:
+            response = decode_response(self._exchange(line + b"\n", self.timeout if timeout is None else timeout))
+        except Exception as error:
+            trace.event("socket", **entry, error=f"{type(error).__name__}: {error}")
+            raise
+        trace.event("socket", **entry, response=response.raw)
+        return response
 
     def _exchange(self, data: bytes, timeout: float) -> bytes:
         # Re-checked per connection: the socket file can appear (or be swapped for a link) after init.

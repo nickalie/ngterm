@@ -349,13 +349,16 @@ impl Core {
     /// Places `page` in the mapped pane or the session-wide slot under a new id (upstream's `presentReplicaPage`): no
     /// outcome is registered, since the origin's ledger alone takes the page's answer. The page's local id.
     fn present_replica_page(&mut self, request: &PresentationPage, session: Uuid) -> Result<Uuid, String> {
+        let origin = frames::parse_uuid(&request.page).ok_or(INVALID_PAGE)?;
+        let source = replica_source(&request.source).ok_or(INVALID_URL)?;
+        if let Some(pane) = &request.pane {
+            self.ensure_replica_page_pane(session, pane)?;
+        }
         let store = self.library_mut().store_for_session_mut(session).ok_or(NO_SESSION)?;
         let found = store
             .session(session)
             .filter(|found| found.remote_presentation().is_some())
             .ok_or(NO_SESSION)?;
-        let origin = frames::parse_uuid(&request.page).ok_or(INVALID_PAGE)?;
-        let source = replica_source(&request.source).ok_or(INVALID_URL)?;
         let pane = match &request.pane {
             None => None,
             Some(remote) => Some(

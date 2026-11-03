@@ -58,6 +58,10 @@ pub(crate) struct TestWindowState {
     appearance: WindowAppearance,
     external_drag_files: Vec<(PathBuf, bool)>,
     start_external_drag_result: bool,
+    /// The callbacks GPUI connected assistive technology through, and the tree update it sent last (ngterm patch
+    /// 0006: the test window's accessibility, which `VisualTestContext::activate_a11y` turns on).
+    pub(crate) a11y_callbacks: Option<crate::A11yCallbacks>,
+    pub(crate) a11y_tree_update: Option<accesskit::TreeUpdate>,
 }
 
 #[derive(Clone)]
@@ -133,6 +137,8 @@ impl TestWindow {
             appearance: WindowAppearance::Light,
             external_drag_files: Vec::new(),
             start_external_drag_result: false,
+            a11y_callbacks: None,
+            a11y_tree_update: None,
         })))
     }
     pub fn simulate_scheduled_frame(&self) -> bool {
@@ -570,6 +576,14 @@ impl PlatformWindow for TestWindow {
         } else {
             anyhow::bail!("render_to_image not available: no HeadlessRenderer configured")
         }
+    }
+
+    fn a11y_init(&self, callbacks: crate::A11yCallbacks) {
+        self.0.lock().a11y_callbacks = Some(callbacks);
+    }
+
+    fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
+        self.0.lock().a11y_tree_update = Some(tree_update);
     }
 
     fn as_test(&mut self) -> Option<&mut TestWindow> {

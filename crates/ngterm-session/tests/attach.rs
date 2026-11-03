@@ -4,7 +4,7 @@
 //! The server runs in the test process (`server::run`) on a private namespace, and stops by itself once its session
 //! ended and its clients left.
 //!
-//! Every session gets the test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables.
+//! Every session gets the test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables.
 
 #[expect(
     dead_code,

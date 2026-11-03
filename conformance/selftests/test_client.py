@@ -299,19 +299,19 @@ def test_stream_keeps_the_connection_after_an_ok_reply(stream_server, root: Path
             conn.sendall(json.dumps({"kind": "echo", "of": frame}).encode() + b"\n")
 
     server = stream_server(echo)
-    with Client(server.path, root).open_stream("zmx.present", "s1") as stream:
+    with Client(server.path, root).open_stream("live.present", "s1") as stream:
         assert (stream.reply.ok, stream.reply.result) == (True, {"id": "s1"})
         assert stream.read() == {"kind": "hello", "gen": 1}
         stream.send({"kind": "ping", "gen": 1, "rev": 0})
         assert stream.read() == {"kind": "echo", "of": {"kind": "ping", "gen": 1, "rev": 0}}
     server.thread.join(timeout=5)
-    assert json.loads(server.request) == {"cmd": "zmx.present", "target": "s1"}
+    assert json.loads(server.request) == {"cmd": "live.present", "target": "s1"}
     assert received == [{"kind": "ping", "gen": 1, "rev": 0}]
 
 
 def test_stream_refused_reply_then_closed(stream_server, root: Path) -> None:
     server = stream_server(lambda conn, _line: conn.sendall(b'{"ok":false,"error":"session is not live-backed"}\n'))
-    with Client(server.path, root).open_stream("zmx.present", "s1") as stream:
+    with Client(server.path, root).open_stream("live.present", "s1") as stream:
         assert (stream.reply.ok, stream.reply.error) == (False, "session is not live-backed")
         with pytest.raises(NoResponse, match="closed"):
             stream.read()
@@ -337,7 +337,7 @@ def test_stream_read_times_out(stream_server, root: Path) -> None:
 
 def test_stream_frame_must_be_a_json_object(stream_server, root: Path) -> None:
     server = stream_server(lambda conn, _line: conn.sendall(b'{"ok":true}\n[1]\nnope\n'))
-    with Client(server.path, root).open_stream("zmx.present", "s1") as stream:
+    with Client(server.path, root).open_stream("live.present", "s1") as stream:
         with pytest.raises(BadResponse, match="not an object"):
             stream.read()
         with pytest.raises(BadResponse, match="not JSON"):
@@ -349,20 +349,20 @@ def test_stream_symlink_out_of_root_refused(live_server: FakeServer, root: Path)
     client = Client(link, root)
     symlink(link, live_server.path)
     with pytest.raises(SocketOutsideRoot):
-        client.open_stream("zmx.present", "s1")
+        client.open_stream("live.present", "s1")
     assert live_server.lines == []
 
 
 def test_stream_reply_over_the_cap_is_refused_even_when_it_arrives_whole(stream_server, root: Path) -> None:
     server = stream_server(lambda conn, _line: conn.sendall(b'{"ok":true,"result":{"id":"s1-and-padding"}}\n'))
     with pytest.raises(ResponseTooLarge, match="exceeds 32 bytes"):
-        Client(server.path, root, max_response_bytes=32).open_stream("zmx.present", "s1")
+        Client(server.path, root, max_response_bytes=32).open_stream("live.present", "s1")
 
 
 def test_stream_frame_over_the_cap_is_refused_even_when_it_arrives_whole(stream_server, root: Path) -> None:
     long_frame = b'{"kind":"' + b"x" * 64 + b'"}\n'
     server = stream_server(lambda conn, _line: conn.sendall(b'{"ok":true}\n{"kind":"hello","gen":1}\n' + long_frame))
-    with Client(server.path, root, max_response_bytes=32).open_stream("zmx.present", "s1") as stream:
+    with Client(server.path, root, max_response_bytes=32).open_stream("live.present", "s1") as stream:
         assert stream.read() == {"kind": "hello", "gen": 1}
         with pytest.raises(ResponseTooLarge, match="exceeds 32 bytes"):
             stream.read()

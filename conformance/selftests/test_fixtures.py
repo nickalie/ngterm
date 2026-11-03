@@ -200,7 +200,7 @@ def test_skip_reason_says_why_this_host_lacks_a_capability(pytester: pytest.Pyte
         """
         import pytest
 
-        @pytest.mark.requires("live-sessions", reason="needs zmx")
+        @pytest.mark.requires("live-sessions", reason="needs live sessions")
         def test_live():
             pass
         """,
@@ -210,7 +210,7 @@ def test_skip_reason_says_why_this_host_lacks_a_capability(pytester: pytest.Pyte
     adapter = SimpleNamespace(
         available=True, name="upstream", profile=Profile("0.36.0", frozenset(), {"live-sessions": why})
     )
-    assert skip_reason(item, adapter) == f"unsupported: upstream lacks live-sessions on this host: {why} (needs zmx)"
+    assert skip_reason(item, adapter) == f"unsupported: upstream lacks live-sessions on this host: {why} (needs live sessions)"
 
 
 def test_level_is_checked_before_capabilities(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:

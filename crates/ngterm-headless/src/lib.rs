@@ -5,6 +5,7 @@
 //! exactly as it attaches a desktop instance's: `ngtermctl live tree` over ssh lists them, each pane an ssh into its
 //! live session, the presentation (status, layout, HUD, notifications) streamed over `ngtermctl live present`, and
 //! asks, program overlays and pages shown on the viewer.
+//! Pages always use the presenter, including a new split whose terminal still leads on this headless origin.
 //!
 //! - Live sessions always: every launch runs in restore mode `live` whatever the settings hold, which keep the user's
 //!   own mode for an app on the same state dir ([`Core::force_restore_mode`]), and refuses to start when the live
@@ -212,6 +213,7 @@ fn launch_core(decision: RestoreLaunchDecision, resources: Option<&Path>, poster
         },
         load_state(env),
     );
+    core.set_page_presenter_only();
     core.set_theme_paths(
         resources.map(|dir| dir.join("themes")),
         Some(paths::ghostty_settings_config_path(env)),

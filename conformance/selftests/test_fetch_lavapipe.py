@@ -37,7 +37,7 @@ def icd_dirs(tmp_path: Path) -> Path:
 
 
 def fetch(checkout: Path, icd_dirs: Path, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
-    base = {name: value for name, value in os.environ.items() if not name.startswith(("NGTERM_", "AGTERM_", "ZMX_"))}
+    base = {name: value for name, value in os.environ.items() if not name.startswith(("NGTERM_", "AGTERM_"))}
     base.update(NGTERM_VENDOR=str(checkout.parent / "vendor"), NGTERM_VULKAN_ICD_DIRS=str(icd_dirs), **env)
     return subprocess.run(
         ["bash", str(checkout / SCRIPT), *args], env=base, capture_output=True, text=True, timeout=60, check=False

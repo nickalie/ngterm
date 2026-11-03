@@ -42,6 +42,8 @@ pub struct PaneSpec {
     pub wait: bool,
     /// The point size the terminal starts at: the session's persisted size, `None` for the configured one.
     pub font_size: Option<f64>,
+    /// The SSH destination of an attached remote pane.
+    pub remote_host: Option<String>,
 }
 
 impl PaneSpec {
@@ -61,10 +63,11 @@ impl PaneSpec {
             session: session.id(),
             pane: StatusPane::Left,
             token: pane_env::uuid_string(session.pane_identity),
-            cwd: session.effective_cwd().to_owned(),
+            cwd: launch_cwd(session, StatusPane::Left),
             command: session.launch.command.clone(),
             wait: session.launch.wait,
             font_size: session.font_size,
+            remote_host: session.remote_host().map(str::to_owned),
         }
     }
 
@@ -77,10 +80,11 @@ impl PaneSpec {
             session: session.id(),
             pane: StatusPane::Right,
             token: pane_env::uuid_string(session.split_pane_identity?),
-            cwd: session.cwd_for(StatusPane::Right).to_owned(),
+            cwd: launch_cwd(session, StatusPane::Right),
             command: session.split_launch.command.clone(),
             wait: session.split_launch.wait,
             font_size: session.font_size,
+            remote_host: session.remote_host().map(str::to_owned),
         })
     }
 
@@ -98,6 +102,7 @@ impl PaneSpec {
             command: session.scratch_command.take(),
             wait: false,
             font_size: session.font_size,
+            remote_host: None,
         }
     }
 
@@ -143,6 +148,7 @@ impl PaneSpec {
             token: self.token.clone(),
             live: false,
             font_size,
+            remote_host: self.remote_host.clone(),
         }
     }
 
@@ -168,6 +174,15 @@ impl PaneSpec {
     pub fn seeded(&self, seed: &LaunchSeed, context: &PaneContext) -> Launch {
         let env: Vec<(String, String)> = self.env(context).into_iter().collect();
         Launch::from_seed(seed, Some(PathBuf::from(&self.cwd)), &env)
+    }
+}
+
+/// SSH starts in a directory on this machine; an OSC 7 report from the origin names a directory on another one.
+fn launch_cwd(session: &Session, pane: StatusPane) -> String {
+    if session.remote_host().is_some() {
+        session.initial_cwd().to_owned()
+    } else {
+        session.cwd_for(pane).to_owned()
     }
 }
 

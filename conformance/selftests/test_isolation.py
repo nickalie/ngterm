@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from agterm_conformance.impls import ADAPTERS
 from agterm_conformance.impls.base import XDG_HOMES, check_launch_env
-from agterm_conformance.vocabulary import upstream_socket_directory
 
 CONFORMANCE = Path(__file__).parents[1]
 PACKAGE = CONFORMANCE / "agterm_conformance"
@@ -14,7 +13,7 @@ PACKAGE = CONFORMANCE / "agterm_conformance"
 # each connect, through the transport's `connect` (an AF_UNIX socket, or the named pipe the path names on Windows),
 # which nothing else calls; `wait_for_unix_socket` probes the compositor and bus sockets its callers checked.
 CONNECT_SITES = {
-    ("client.py", "open_stream"),
+    ("client.py", "_open_stream"),
     ("client.py", "_exchange"),
     ("transport.py", "connect"),
     ("impls/base.py", "wait_for_unix_socket"),
@@ -84,7 +83,9 @@ def test_every_location_a_launch_env_names_is_under_the_root(
         "AGTERM_STATE_DIR": "/home/user/.local/share/agterm",
         "NGTERM_SOCKET": "/home/user/.local/share/ngterm/ngterm.sock",
         "NGTERM_STATE_DIR": "/home/user/.local/share/ngterm",
-        "ZMX_DIR": "/tmp/agterm-zmx-live",
+        "NGTERM_LIVE_DIR": "/tmp/ngterm-live-0000000000000000",
+        # upstream's attach contract, which the Swift reference's CLI reads (plugin.SCRUB_PREFIXES)
+        "ZMX_DIR": "/tmp/agterm-zmx-0000000000000000",
         **{xdg: f"/home/user/{xdg.lower()}" for xdg in XDG_HOMES},
     }.items():
         monkeypatch.setenv(variable, value)
@@ -92,7 +93,9 @@ def test_every_location_a_launch_env_names_is_under_the_root(
     root = tmp_path / "root"
     env = adapter.build_env(root)
     linux = adapter.needs_runtime_dir
-    check_launch_env(env, root, adapter.needs_app_id, linux, headless=linux, prefix=adapter.env_prefix)
+    check_launch_env(
+        env, root, adapter.needs_app_id, linux, headless=linux, prefix=adapter.env_prefix, vocabulary=adapter.vocabulary
+    )
 
     state = adapter.variable("STATE_DIR")
     located = [state, adapter.variable("CONTROL_SOCKET"), "HOME", *XDG_HOMES, "CFFIXED_USER_HOME"]
@@ -103,7 +106,10 @@ def test_every_location_a_launch_env_names_is_under_the_root(
     if linux:
         assert Path(env["DBUS_SESSION_BUS_ADDRESS"].removeprefix("unix:path=")).is_relative_to(root)
         assert not {"DISPLAY", "AT_SPI_BUS_ADDRESS"} & env.keys()
-    assert not {"AGTERM_SOCKET", "NGTERM_SOCKET", "ZMX_DIR"} & env.keys()
+    assert not {"AGTERM_SOCKET", "NGTERM_SOCKET", "NGTERM_LIVE_DIR", "ZMX_DIR"} & env.keys()
     assert env[state] == str(root / "state")
     # The app derives its live-session socket directory from the state dir: per root, never the live one.
-    assert upstream_socket_directory(env[state]) != upstream_socket_directory("/home/user/.local/share/agterm")
+    namespace = adapter.vocabulary.socket_directory
+    assert namespace(env[state], adapter.app_dir_name, env) != namespace(
+        f"/home/user/.local/share/{adapter.app_dir_name}", adapter.app_dir_name, env
+    )

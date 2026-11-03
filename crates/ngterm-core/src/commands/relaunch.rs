@@ -173,9 +173,9 @@ impl Core {
     }
 
     /// The terminal of `session`'s pane carrying `token` is ready to spawn: its seed when it may spawn now, consuming
-    /// the slots the launch armed for it; `None` while its session is dormant or a pending close holds it, which
-    /// [`Core::take_spawn_grants`] later hands back once it wakes or the close is undone. One no session holds any more
-    /// spawns a plain shell.
+    /// the slots the launch armed for it; `None` while its session is dormant, a pending close holds it, or a new
+    /// remote pane waits for its origin split. [`Core::take_spawn_grants`] later hands it back on a wake, an undo,
+    /// or a remote tick completing the attach or its error receipt. One no session holds any more spawns a plain shell.
     pub fn request_pane_spawn(&mut self, session: Uuid, token: &str) -> Option<LaunchSeed> {
         let policy = self.seed_policy();
         let Some((role, key, disposed, dormant)) = self.find_session(session).and_then(|session| {
@@ -193,6 +193,9 @@ impl Core {
         };
         if dormant {
             self.restore.parked.insert(key);
+            return None;
+        }
+        if self.prepare_remote_pane(session, key) {
             return None;
         }
         let window = self.library.window_holding_session(session)?;
@@ -317,7 +320,8 @@ impl Core {
     }
 
     /// The panes granted since the last call, with their seeds; a granted pane whose session or slot is gone is
-    /// dropped.
+    /// dropped. An unconfigured remote pane instead starts waiting for its origin split; a remote tick grants it
+    /// again with the attachment or its error receipt.
     pub fn take_spawn_grants(&mut self) -> Vec<PaneSpawn> {
         let policy = self.seed_policy();
         let keys = std::mem::take(&mut self.restore.grants);
@@ -333,6 +337,9 @@ impl Core {
             let Some(local) = self.find_session(id).map(|session| session.remote_host().is_none()) else {
                 continue;
             };
+            if self.prepare_remote_pane(id, key) {
+                continue;
+            }
             let disposed = self.pane_disposition(Some(key), local);
             let Some(window) = self.library.window_holding_session(id) else {
                 continue;
@@ -359,6 +366,11 @@ impl Core {
             });
         }
         spawns
+    }
+
+    /// A remote pane's origin is ready; deliver its seed through the ordinary spawn queue.
+    pub(crate) fn grant_remote_pane_spawn(&mut self, key: Uuid) {
+        self.restore.grants.push(key);
     }
 
     /// Brings the waiting panes in line with the model (upstream's `launchPaneDrop`, which keeps a paced queue from

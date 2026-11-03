@@ -4,10 +4,11 @@ adapter, `NGTERM_CONTROL_SOCKET`: whichever prefix the adapter set).
 FAKE_APP_MODE: serve (default), exit (exit 3 before binding), silent (never binds), refuse (`version` fails), no-window
 (Windows: serve without the quit window),
 ignore-term (serve, ignoring SIGTERM and SIGABRT, each recorded in `fake-signals`; FAKE_ABORT=exit makes SIGABRT
-exit 134 instead, without a core). FAKE_VERSION: JSON for the `version` result. FAKE_ZMX_LIST: JSON
-replacing the `zmx.list` result. FAKE_LIVE_GROUP: the live-session group's name, `zmx` (upstream's) by default; the
-fake answers `<group>.list` under the result key `<group>`, as the Rust build answers `live.list` under `live`.
-`fake.adopt {pid, session?, pane?, daemon?}` makes that pid a claimed zmx daemon which `zmx.kill` terminates;
+exit 134 instead, without a core). FAKE_TERM=quit: SIGTERM exits 0, as the app's orderly quit does. FAKE_VERSION:
+JSON for the `version` result. FAKE_LIVE_LIST: JSON replacing the `<group>.list` result. FAKE_LIVE_GROUP: the live-session
+group's name, by default the one of the implementation whose prefix the adapter set (the Rust build's `live`, the
+Swift reference's own under `AGTERM_`); the fake answers `<group>.list` under the result key `<group>`.
+`fake.adopt {pid, session?, pane?, daemon?}` makes that pid a claimed daemon which `<group>.kill` terminates;
 killing a left pane promotes the session's right pane into the left slot, as upstream does.
 `tree` serves a settable tree (`fake.set_tree {tree?, error?, delay?}`); `events.read` serves a ring with
 upstream's cursor semantics, appended to by `fake.emit {kind, session?, payload?, delay?}`. A delay applies the
@@ -139,6 +140,10 @@ if mode == "ignore-term" and not WINDOWS:
     # Handled, never the default action: no test may leave a real core behind.
     signal.signal(signal.SIGABRT, record)
 
+if os.environ.get("FAKE_TERM") == "quit" and not WINDOWS:
+    # the app's quit on SIGTERM: an orderly exit with a status, as `exit_now` ends it (writing its coverage profile)
+    signal.signal(signal.SIGTERM, lambda signum, frame: os._exit(0))
+
 daemons: list[dict] = []
 lock = threading.Lock()
 tree = {"workspaces": [{"id": "w1", "active": True, "sessions": [{"id": "s1", "name": "one", "active": True}]}]}
@@ -225,10 +230,11 @@ def handle(request: dict) -> dict:
             }
         )
         return {"ok": True}
-    group = os.environ.get("FAKE_LIVE_GROUP", "zmx")
+    # the Swift reference's group is upstream's, named after its zmx daemons (impls/swift_macos.py)
+    group = os.environ.get("FAKE_LIVE_GROUP") or ("live" if PREFIX == "NGTERM_" else "zmx")
     if cmd == f"{group}.list":
-        if "FAKE_ZMX_LIST" in os.environ:
-            return {"ok": True, "result": json.loads(os.environ["FAKE_ZMX_LIST"])}
+        if "FAKE_LIVE_LIST" in os.environ:
+            return {"ok": True, "result": json.loads(os.environ["FAKE_LIVE_LIST"])}
         entries = [
             {
                 "daemon": d["daemon"],

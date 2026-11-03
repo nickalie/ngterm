@@ -242,6 +242,9 @@ pub enum SliderKey {
 }
 
 impl SliderKey {
+    /// How far one step moves a slider: whole steps, the opacity in whole percent.
+    pub const STEP: f64 = 1.0;
+
     pub const ALL: [Self; 5] = [
         Self::ScrollSpeed,
         Self::BackgroundOpacity,

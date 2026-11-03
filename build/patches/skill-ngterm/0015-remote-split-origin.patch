@@ -1,0 +1,43 @@
+Viewer splits are created on their origin and attached here, rather than opening a local shell.
+Applied after 0014-remote-rows-relaunch.patch.
+
+diff --git a/reference.md b/reference.md
+index cb564c79..3d306a01 100644
+--- a/reference.md
++++ b/reference.md
+@@ -2195,12 +2195,13 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
+   so the origin's latest context shows again. It cannot blank the origin's. An origin running an ngterm
+   that predates context mirroring still connects and mirrors status and HUD, with no context.
+
+-- Two existing remote panes follow the origin's split axis, hide/show and swaps. Local panes, divider
+-  ratio and focus stay local. A layout never opens a pane: an origin split opened later requires closing
+-  and attaching the row again, and a replica closed here stays closed. Older origins leave layout alone.
++- Two existing remote panes follow the origin's split axis, hide/show and swaps. Divider ratio and focus stay local.
++  Opening a split on an attached remote row creates the split on the origin and attaches its daemon over ssh;
++  commands sent to that pane run on the origin. This also attaches an origin split opened after the row was attached,
++  or reattaches a replica closed here. A layout alone never opens a pane. Older origins leave layout alone.
+ - Confirmed origin removal closes its replica without acknowledgement, even if ssh already exited and
+-  left a hold prompt. The last replica waits for its ssh exit and may then close the row. A pending local
+-  split prevents automatic primary removal; an ordinary disconnect still shows the disconnect line, held
++  left a hold prompt. The last replica waits for its ssh exit and may then close the row. A pending viewer
++  split prevents automatic primary removal until its origin binding is ready; an ordinary disconnect still shows the disconnect line, held
+   or reconnecting per the attach section above.
+ - `presentation.state` in `tree` reports the stream. `connected` means mirroring works; it is not a claim
+   about the panes' ssh connections. An origin too old for it reads `unsupported` and the attach still works.
+@@ -2279,11 +2280,14 @@ The pane reports the far side's working directory, and the local launches that w
+ their start directory by one rule: the reported path when it exists here as a directory, else local
+ HOME. Those launches are a custom command (its `$AGT_SESSION_PWD` keeps the reported path and
+ `$AGT_SESSION_HOST` names the destination), the scratch terminal, an overlay opened without `--cwd`,
+-the quick terminal, a local split (the first one on a remote session that arrived without a split, or
+-one opened after the attach-time split is closed), Duplicate Session, and New Session when it is set
++the quick terminal, Duplicate Session, and New Session when it is set
+ to open in the current session's directory. An explicit overlay `--cwd` is used as given. Quote both
+ variables; an existing local path is not checked to be the same repository as the remote one.
+
++A split opened on a remote row runs on the origin, including one opened after the original replica was closed.
++Its ssh process starts in the row's original local directory, regardless of remote working-directory reports.
++If creation or attachment fails, the pane shows an error and never starts a local interactive shell.
++
+ Each pane has ONE leading Mac, whose window size the program inside sees. `live attach` takes the lead in
+ every pane at once; the same panes on the Mac the session runs on are covered ("in use from another Mac").
+ Each pane's `lead` in `tree` reads `leader`, `follower` or `unowned`. It is absent when the pane has no

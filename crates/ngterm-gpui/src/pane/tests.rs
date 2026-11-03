@@ -21,12 +21,12 @@ pub(crate) fn idle_program() -> ngterm_term::PaneCommand {
 /// What ends [`idle_program`]'s input when typed: Ctrl+D, and on Windows Ctrl+Z and Enter.
 pub(crate) const IDLE_EOF: &[u8] = if cfg!(windows) { b"\x1a\r" } else { b"\x04" };
 
-/// [`idle_program`] with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed.
+/// [`idle_program`] with the inherited `NGTERM_*`/`AGTERM_*` variables removed.
 pub(crate) fn idle_command() -> ngterm_term::PaneCommand {
     let mut command = idle_program();
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") {
             command = command.env_remove(key);
         }
     }
@@ -38,6 +38,30 @@ fn context() -> PaneContext {
         socket: "/tmp/a.sock".to_owned(),
         program_version: "1.2.3".to_owned(),
     }
+}
+
+#[test]
+fn remote_clipboard_destination_follows_both_session_panes() {
+    let mut session = Session::new(ngterm_core::model::SessionSeed {
+        initial_cwd: "/srv".to_owned(),
+        remote_host: Some("user@remote".to_owned()),
+        split_pane_identity: Some(Uuid::new_v4()),
+        ..ngterm_core::model::SessionSeed::default()
+    });
+    let (window, workspace) = (Uuid::new_v4(), Uuid::new_v4());
+    for spec in [
+        PaneSpec::left(window, workspace, &session),
+        PaneSpec::split(window, workspace, &session).unwrap(),
+    ] {
+        assert_eq!(spec.terminal_spec().remote_host.as_deref(), Some("user@remote"));
+    }
+    // Scratch panes run a local shell even when the session was attached from another machine.
+    assert_eq!(
+        PaneSpec::scratch(window, workspace, &mut session)
+            .terminal_spec()
+            .remote_host,
+        None
+    );
 }
 
 /// A window of one workspace holding three sessions, the first selected.
@@ -155,6 +179,28 @@ fn the_split_pane_runs_in_its_own_cwd_with_its_identity_and_command() {
         Some(spec),
         "a replacement inherits the pane's own spec"
     );
+}
+
+#[test]
+fn remote_pane_launches_use_a_local_directory_after_remote_pwd_reports() {
+    let mut session = Session::new(ngterm_core::model::SessionSeed {
+        initial_cwd: "/local/home".to_owned(),
+        remote_host: Some("buildbox".to_owned()),
+        split_pane_identity: Some(Uuid::new_v4()),
+        ..ngterm_core::model::SessionSeed::default()
+    });
+    session.report_pwd(false, "/only/on/remote/left");
+    session.report_pwd(true, "/only/on/remote/right");
+    let (window, workspace) = (Uuid::new_v4(), Uuid::new_v4());
+    for spec in [
+        PaneSpec::left(window, workspace, &session),
+        PaneSpec::split(window, workspace, &session).unwrap(),
+    ] {
+        assert_eq!(
+            spec.launch(&context()).working_directory,
+            Some(PathBuf::from("/local/home"))
+        );
+    }
 }
 
 #[test]

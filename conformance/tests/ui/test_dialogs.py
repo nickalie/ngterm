@@ -111,19 +111,19 @@ def test_command_palette_opens_from_the_menu_and_escape_closes_it(launch, ui_for
 
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("ui:palette-editor-hint", "ui:command-palette")
-def test_the_view_menu_opens_each_membership_editor_with_its_hint(ctl, ui):
+def test_the_view_menu_opens_each_membership_editor_with_its_hint(ctl, ui, palette_hint):
     """Only the focus editor's hint states the focus filter, which marking never turns on."""
     (sid, *_) = session_ids(ctl.tree())
     ctl.wait_mounted(sid, "left")
     ui.menu("View", "Edit Flagged Sessions…")
     ui.find("command-palette", role="text-field")
-    hint = ui.text(ui.find("palette-editor-hint"))
+    hint = palette_hint()
     assert hint.startswith("Return toggles · Esc closes · Changes apply immediately"), hint
     assert "Filter" not in hint, hint
     ui.press("escape")
     ui.absent("command-palette")
     ui.menu("View", "Edit Focused Workspaces…")
-    hint = ui.text(ui.find("palette-editor-hint"))
+    hint = palette_hint()
     assert hint.startswith("Return toggles"), hint
     assert ("Filter on" if ctl.tree()["tree"]["workspaceFilter"] else "Filter off") in hint, hint
     ui.press("escape")
@@ -132,6 +132,11 @@ def test_the_view_menu_opens_each_membership_editor_with_its_hint(ctl, ui):
 
 @pytest.mark.covers("ui:session-switcher")
 def test_ctrl_tab_opens_the_session_switcher_and_escape_keeps_the_session(app, ctl, ui):
+    if ui.name in ("atspi", "uia"):
+        # XTest and SendInput press and release Control around the chord as a keyboard does, and the release commits
+        # the walk (upstream's), so the switcher never stays up for Escape; AX posts the chord's flags with no Control
+        # key.
+        pytest.skip(f"{ui.name}: a posted chord releases Control, which ends the Ctrl-Tab walk at once")
     (first,) = session_ids(ctl.tree())
     ctl.wait_mounted(first, "left")
     second = _new(ctl)

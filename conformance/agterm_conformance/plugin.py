@@ -7,6 +7,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
@@ -15,7 +16,8 @@ from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 
-from agterm_conformance import coverage, selection, wait
+from agterm_conformance import coverage, llvm_profiles, selection, wait
+from agterm_conformance.drivers import trace
 from agterm_conformance.client import Response, SocketOutsideRoot, Stream, check_under_root
 from agterm_conformance.match import assert_ok
 
@@ -30,7 +32,10 @@ BIN_REQUIRED = frozenset({"swift-macos"})
 # The prefixes of the implementations' own variables: upstream's and the Rust build's (ngterm).
 UPSTREAM_PREFIX = "AGTERM_"
 RUST_PREFIX = "NGTERM_"
-# Every variable a live terminal hands its shells: either app's own, and zmx's.
+# Every variable a live terminal hands its shells: either app's own, and those of upstream's live-session daemons
+# (zmx's), which the Swift reference's CLI reads: its `clipboard set` prints into an inherited `ZMX_SESSION` under
+# `ZMX_DIR` (upstream's TerminalClipboard.swift), so a reference run started inside an upstream agterm pane would
+# reach the user's own session.
 SCRUB_PREFIXES = (UPSTREAM_PREFIX, RUST_PREFIX, "ZMX_")
 IMPL_FIXTURE = "impl_options"
 UI_FIXTURES = frozenset({"ui", "ui_for"})
@@ -62,7 +67,7 @@ def scrub_environ(environ: MutableMapping[str, str]) -> list[str]:
 
 
 # At import, before any hook runs: a run started inside a live ngterm or agterm shell must not hand its
-# NGTERM_SOCKET / AGTERM_SESSION_ID / ZMX_DIR to anything this process spawns.
+# NGTERM_SOCKET / AGTERM_SESSION_ID / upstream's ZMX_DIR to anything this process spawns.
 SCRUBBED = scrub_environ(os.environ)
 
 
@@ -98,6 +103,11 @@ def require_implementation(options: ImplOptions) -> None:
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("agterm-conformance")
+    group.addoption(
+        "--trace-mode", choices=("off", "on-failure", "always"), default="on-failure",
+        help="per-test artifact capture: off, on-failure (default), or always; see --trace-dir",
+    )
+    group.addoption("--trace-dir", type=Path, default=None, help="trace directory (default: beside the report)")
     group.addoption("--impl", choices=IMPLS, default=None, help="implementation under test")
     group.addoption("--bin", type=Path, default=None, help="app binary or bundle to launch")
     group.addoption(
@@ -107,7 +117,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--macos-launch-mode",
         choices=("uitest", "plain"),
         default="uitest",
-        help="swift-macos: XCUITest sentinel with zmx (default) or a bare exec",
+        help="swift-macos: XCUITest sentinel with live sessions (default) or a bare exec",
     )
     group.addoption(
         "--coverage-gate", action="store_true", default=False, help="check catalog coverage without launching anything"
@@ -178,6 +188,8 @@ def pytest_configure(config: pytest.Config) -> None:
     for flag, path in (("--bin", options.bin), ("--ctl", options.ctl)):
         if path is not None and not path.exists():
             raise pytest.UsageError(f"{flag} {path} does not exist")
+    if not options.coverage_gate:
+        check_coverage_stage(options)
     config.stash[_OPTIONS_KEY] = options
     if (nodeid_report := config.getoption("nodeid_report")) is not None:
         if options.coverage_gate:
@@ -203,10 +215,31 @@ def pytest_configure(config: pytest.Config) -> None:
         config.pluginmanager.register(MustPass(frozenset(must_pass)), "agterm-must-pass")
 
 
+def check_coverage_stage(options: ImplOptions) -> None:
+    """Under the runner's `--coverage` (`llvm_profiles.COVERAGE_DIR_VARIABLE`), refuses a `--bin` whose stage is not
+    instrumented: the build's programs beside it and `--ctl` must carry the profile runtime, or the run writes no
+    profile."""
+    if llvm_profiles.profile_dir() is None:
+        return
+    if options.bin is None or not options.bin.is_file():
+        raise pytest.UsageError(f"{llvm_profiles.COVERAGE_DIR_VARIABLE}: coverage needs --bin, a staged binary")
+    binaries = {options.bin, *llvm_profiles.stage_binaries(options.bin.parent)}
+    if options.ctl is not None:
+        binaries.add(options.ctl)
+    try:
+        llvm_profiles.check_instrumented(sorted(binaries))
+    except (llvm_profiles.NotInstrumented, OSError) as error:
+        raise pytest.UsageError(f"{llvm_profiles.COVERAGE_DIR_VARIABLE}: {error}") from None
+
+
+def catalog_path(config: pytest.Config, options: ImplOptions) -> Path:
+    """`--catalog`, else the catalog.yaml at the rootdir."""
+    return (options.catalog or config.rootpath / "catalog.yaml").resolve()
+
+
 def ui_ids_path(config: pytest.Config, options: ImplOptions) -> Path:
     """`--ui-ids`, else the ui-ids.yaml next to the catalog: one file for the gate and the ui driver."""
-    catalog = options.catalog or config.rootpath / "catalog.yaml"
-    return (options.ui_ids or catalog.parent / "ui-ids.yaml").resolve()
+    return (options.ui_ids or catalog_path(config, options).parent / "ui-ids.yaml").resolve()
 
 
 def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]:
@@ -218,7 +251,7 @@ def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]
     for flag, spelling in (("ignore", "--ignore"), ("ignore_glob", "--ignore-glob"), ("lf", "--lf")):
         if config.getoption(flag, None):
             raise pytest.UsageError(f"--coverage-gate reads every conformance test; drop {spelling}")
-    catalog = (options.catalog or config.rootpath / "catalog.yaml").resolve()
+    catalog = catalog_path(config, options)
     ui_ids = ui_ids_path(config, options)
     for flag, path in (
         ("--catalog", catalog),
@@ -280,11 +313,13 @@ class MustPass:
 
 
 class NodeidReport:
-    """`--nodeid-report`: JSON lines of each selected test's merged outcome, collection errors and must-pass problems."""
+    """`--nodeid-report`: a run header with the run's catalog and ui-ids files, then JSON lines of each selected test's
+    merged outcome and `covers` targets, collection errors and must-pass problems."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
         self.partial = False
+        self.withheld = False  # setup failed before any test could be judged
         # set by `--ratchet-only` when nothing else narrowed the collection (selection.RatchetOnly)
         self.mode: str | None = None
         self.merged: dict[str, dict[str, Any]] = {}
@@ -324,23 +359,34 @@ class NodeidReport:
     @pytest.hookimpl(trylast=True)
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
         # trylast: MustPass's tryfirst sessionfinish has set its problems by now.
-        if session.exitstatus in (pytest.ExitCode.USAGE_ERROR, pytest.ExitCode.INTERNAL_ERROR):
-            # pytest refused its arguments (a path or node id that matches nothing) or broke: nothing was judged,
+        if self.withheld or session.exitstatus in (pytest.ExitCode.USAGE_ERROR, pytest.ExitCode.INTERNAL_ERROR):
+            # Setup failed, pytest refused its arguments, or it broke internally: nothing was judged,
             # and a header-only report would read as an empty run that holds the ratchet. No file instead, so
             # check_ratchet.py exits 2.
             return
         # a ratchet-only run is narrowed by design, even when the list happens to hold every collected test
         partial = self.partial or self.mode is not None or any("::" in arg for arg in session.config.args)
         mode = self.mode or (selection.PARTIAL if partial else selection.FULL)
-        lines: list[dict[str, Any]] = [{"kind": "run", "partial": partial, "mode": mode}]
+        # the run's catalog files, so its "ui ids exercised" line (coverage.main) counts against what it ran with
+        options = session.config.stash[_OPTIONS_KEY]
+        run: dict[str, Any] = {"kind": "run", "partial": partial, "mode": mode}
+        run.update(catalog=str(catalog_path(session.config, options)), ui_ids=str(ui_ids_path(session.config, options)))
+        lines: list[dict[str, Any]] = [run]
         for item in getattr(session, "items", []):
-            lines.append({"kind": "test", "nodeid": item.nodeid, **self.merged.get(item.nodeid, _not_run())})
+            lines.append(
+                {"kind": "test", "nodeid": item.nodeid, **self.merged.get(item.nodeid, _not_run()), "covers": _covers(item)}
+            )
         lines += self.collection_errors
         must_pass = session.config.pluginmanager.get_plugin("agterm-must-pass")
         if must_pass is not None:
             lines += [{"kind": "must-pass", "problem": problem} for problem in must_pass.problems]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+
+
+def _covers(item: pytest.Item) -> list[str]:
+    """The catalog items a test's `covers` markers name, each once (coverage.exercised)."""
+    return list(dict.fromkeys(str(target) for marker in item.iter_markers("covers") for target in marker.args))
 
 
 def _not_run() -> dict[str, Any]:
@@ -371,6 +417,21 @@ def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config
     if exercised:
         require_implementation(options)
         config.stash[_SUMMARY_KEY] = exercised
+        if (sys.platform.startswith("linux") and options.impl == "rust" and options.bin is not None
+                and not config.option.collectonly and any(is_ui_path(Path(item.path)) for item in items)):
+            from agterm_conformance import linux_ui
+            from agterm_conformance.impls.base import LaunchError, display_mode
+            try:
+                if display_mode() != "headless":
+                    raise LaunchError("Linux UI instances require headless display mode")
+                run = linux_ui.A11yRun().start()
+            except LaunchError as error:
+                report = config.pluginmanager.get_plugin("agterm-nodeid-report")
+                if report is not None:
+                    report.withheld = True
+                pytest.exit("\n".join([str(error), *getattr(error, "__notes__", [])]), returncode=2)
+            config.stash[_A11Y_KEY] = run
+            config.add_cleanup(run.close)
 
 
 def _uses_impl(item: pytest.Item) -> bool:
@@ -596,10 +657,11 @@ class Ctl:
 
     def __init__(self, instance: Instance) -> None:
         self.instance = instance
+        trace.remember(instance)
 
     @property
     def vocabulary(self) -> Vocabulary:
-        """The instance's names for upstream's `zmx` group, which a test translates every such name through."""
+        """The instance's names for the `live` group, which a test translates every such name through."""
         return self.instance.vocabulary
 
     def request(self, cmd: str, target: str | None = None, **args: Any) -> Response:
@@ -609,7 +671,7 @@ class Ctl:
         return assert_ok(self.request("tree"))
 
     def stream(self, cmd: str, target: str | None = None, **args: Any) -> Stream:
-        """A stream-mode command (`zmx.present`, `session.overlay.job.run`): its reply, then its frames."""
+        """A stream-mode command (`live.present`, `session.overlay.job.run`): its reply, then its frames."""
         return self.instance.client().open_stream(cmd, target, **args)
 
     def wait_tree(
@@ -673,6 +735,7 @@ class Cli:
         check_under_root(instance.socket, instance.root)
         self.ctl_path = ctl_path
         self.instance = instance
+        trace.remember(instance)
         self.program = program
 
     def argv(self, *args: str) -> list[str]:
@@ -687,7 +750,7 @@ class Cli:
 
     @property
     def vocabulary(self) -> Vocabulary:
-        """The instance's names for upstream's `agtermctl zmx` group and its texts."""
+        """The instance's names for the `ngtermctl live` group and its texts."""
         return self.instance.vocabulary
 
     def __call__(self, *args: str, input: str | None = None, timeout: float = CLI_TIMEOUT) -> CliResult:
@@ -722,19 +785,29 @@ class Cli:
         """A command that keeps running (`events`, a blocking `pick`/`ask`/`--block`); read it as it goes.
 
         `input` is written and stdin closed; `interactive` keeps stdin open for `send` (a stream bridge)."""
+        trace.remember(self.instance)
         return CliProcess(self.argv(*args), self.instance.env, self.instance.home, input, interactive, self.program)
 
     def _run(self, argv: list[str], env: Mapping[str, str], input: str | None, timeout: float) -> CliResult:
-        completed = subprocess.run(
-            argv,
-            env=env,
-            cwd=self.instance.home,
-            input=input,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        trace.remember(self.instance)
+        try:
+            completed = subprocess.run(
+                argv, env=llvm_profiles.with_profile(env), cwd=self.instance.home, input=input, capture_output=True,
+                text=True, timeout=timeout, check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            # subprocess.run killed it
+            llvm_profiles.record_lost(None, argv[0], f"cli: killed after its {timeout}s timeout")
+            def text(value):
+                return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+            trace.event("cli", argv=argv, error=f"{type(error).__name__}: {error}",
+                        stdout=text(error.stdout), stderr=text(error.stderr))
+            raise
+        except Exception as error:
+            trace.event("cli", argv=argv, error=f"{type(error).__name__}: {error}")
+            raise
+        trace.event("cli", argv=argv, returncode=completed.returncode,
+                    stdout=completed.stdout, stderr=completed.stderr)
         return CliResult(argv, completed.returncode, completed.stdout, completed.stderr, self.program)
 
 
@@ -752,28 +825,39 @@ class CliProcess:
     ) -> None:
         self.argv = argv
         self.program = program
-        self.process = subprocess.Popen(
-            argv,
-            env=dict(env),
-            cwd=cwd,
-            stdin=subprocess.PIPE if input is not None or interactive else subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        if input is not None:
-            self.send(input)
-            if not interactive:
-                assert self.process.stdin is not None
-                self.process.stdin.close()
+        self._trace = trace.ACTIVE.get()
+        self._transcript = []
+        self._trace_entry = None
         self._lines: queue.Queue[str | None] = queue.Queue()
         self._stderr: str | None = None
+        try:
+            self.process = subprocess.Popen(
+                argv, env=llvm_profiles.with_profile(env), cwd=cwd,
+                stdin=subprocess.PIPE if input is not None or interactive else subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+        except Exception as error:
+            trace.event("cli", argv=argv, error=f"{type(error).__name__}: {error}")
+            raise
         self._reader = threading.Thread(target=self._read, daemon=True)
         self._reader.start()
+        if self._trace is not None:
+            self._trace.cli_processes.append(self)
+        if input is not None:
+            try:
+                self.send(input)
+                if not interactive:
+                    assert self.process.stdin is not None
+                    self.process.stdin.close()
+            except Exception as error:
+                trace.event("cli", argv=argv, error=f"{type(error).__name__}: {error}")
+                self.close()
+                raise
 
     def _read(self) -> None:
         assert self.process.stdout is not None
         for line in self.process.stdout:
+            self._transcript.append(line)
             self._lines.put(line.rstrip("\n"))
         self._lines.put(None)
 
@@ -802,6 +886,7 @@ class CliProcess:
             lines.append(line)
         self._lines.put(None)
         stdout = "".join(f"{line}\n" for line in lines)
+        self._record_trace()
         return CliResult(self.argv, returncode, stdout, self.stderr(), self.program)
 
     def stderr(self) -> str:
@@ -813,20 +898,36 @@ class CliProcess:
 
     def close(self) -> None:
         if self.process.poll() is None:
-            self.process.terminate()
+            terminated = llvm_profiles.terminate(self.process)
             try:
                 self.process.wait(timeout=STOP_GRACE)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
+            # a CLI dying of the signal (or Windows' TerminateProcess) writes no coverage profile; one that exited
+            # between the poll and the terminate wrote it
+            llvm_profiles.record_if_signalled(
+                self.process.pid, self.argv[0], self.process.returncode, "CliProcess.close: ended before it exited",
+                terminated=terminated,
+            )
         self._reader.join(STOP_GRACE)
         self.stderr()
+        self._record_trace()
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             if stream is not None:
                 try:
                     stream.close()
                 except BrokenPipeError:
                     pass  # stdin's unflushed bytes had no reader left
+
+    def _record_trace(self) -> None:
+        if self._trace is not None:
+            entry = dict(argv=self.argv, returncode=self.process.poll(),
+                         stdout="".join(self._transcript), stderr=self.stderr())
+            if self._trace_entry is None:
+                self._trace_entry = self._trace.record("cli", entry)
+            elif self._trace_entry is not None:
+                self._trace_entry.update(entry)
 
     def __enter__(self) -> Self:
         return self
@@ -840,8 +941,23 @@ def adapter(pytestconfig: pytest.Config, impl_options: ImplOptions) -> Adapter:
     return get_adapter(pytestconfig)
 
 
-def _launched(adapter: Adapter) -> Iterator[Instance]:
-    instance = adapter.launch()
+def is_ui_path(path: Path) -> bool:
+    return any(a == "tests" and b == "ui" for a, b in zip(path.parts, path.parts[1:]))
+
+
+_A11Y_KEY = pytest.StashKey[Any]()
+
+
+def launch_options(request: pytest.FixtureRequest) -> dict[str, Any]:
+    if sys.platform.startswith("linux") and is_ui_path(Path(request.node.path)):
+        run = request.config.stash.get(_A11Y_KEY, None)
+        if run is not None:
+            return {"ui": run}
+    return {}
+
+
+def _launched(adapter: Adapter, **kwargs: Any) -> Iterator[Instance]:
+    instance = adapter.launch(**kwargs)
     try:
         yield instance
     finally:
@@ -849,15 +965,15 @@ def _launched(adapter: Adapter) -> Iterator[Instance]:
 
 
 @pytest.fixture
-def app(adapter: Adapter) -> Iterator[Instance]:
+def app(adapter: Adapter, request: pytest.FixtureRequest) -> Iterator[Instance]:
     """A pristine instance for this test alone."""
-    yield from _launched(adapter)
+    yield from _launched(adapter, **launch_options(request))
 
 
 @pytest.fixture(scope="module")
-def shared_app(adapter: Adapter) -> Iterator[Instance]:
+def shared_app(adapter: Adapter, request: pytest.FixtureRequest) -> Iterator[Instance]:
     """One instance for the module; the default target of `ctl` and `cli`."""
-    yield from _launched(adapter)
+    yield from _launched(adapter, **launch_options(request))
 
 
 class Launcher:
@@ -865,12 +981,13 @@ class Launcher:
     the same state directory; `launch.serving(ctl)` waits for a `first_run` launch's socket. Every instance still
     running is stopped at teardown."""
 
-    def __init__(self, adapter: Adapter) -> None:
+    def __init__(self, adapter: Adapter, **options: Any) -> None:
         self.adapter = adapter
+        self.options = options
         self.launched: list[Instance] = []
 
     def __call__(self, **kwargs: Any) -> Ctl:
-        instance = self.adapter.launch(**kwargs)
+        instance = self.adapter.launch(**{**kwargs, **self.options})
         self.launched.append(instance)
         return Ctl(instance)
 
@@ -900,9 +1017,9 @@ class Launcher:
 
 
 @pytest.fixture
-def launch(adapter: Adapter) -> Iterator[Launcher]:
+def launch(adapter: Adapter, request: pytest.FixtureRequest) -> Iterator[Launcher]:
     """Start further instances, such as one with seeded settings (`launch(settings={...})`); stopped at teardown."""
-    launcher = Launcher(adapter)
+    launcher = Launcher(adapter, **launch_options(request))
     yield launcher
     launcher.stop_all()
 
@@ -935,7 +1052,10 @@ def ui_for(request: pytest.FixtureRequest, adapter: Adapter, impl_options: ImplO
 
     def driver(target: Ctl | Instance) -> Driver:
         instance = target.instance if isinstance(target, Ctl) else target
-        return make_driver(adapter.name, instance.pid, ui_ids)
+        driver = make_driver(adapter.name, instance, ui_ids)
+        driver.instance = instance
+        trace.remember(instance, driver)
+        return driver
 
     return driver
 
@@ -944,3 +1064,63 @@ def ui_for(request: pytest.FixtureRequest, adapter: Adapter, impl_options: ImplO
 def ui(request: pytest.FixtureRequest, ui_for: Callable[[Any], Driver]) -> Driver:
     """The ui driver for the instance `ctl` drives."""
     return ui_for(_target_instance(request))
+
+
+_TRACE_KEY = pytest.StashKey[trace.Trace]()
+_TRACE_FAILED = pytest.StashKey[bool]()
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_protocol(item, nextitem):
+    directory = item.config.getoption("trace_dir")
+    if directory is None:
+        report = item.config.getoption("nodeid_report") or item.config.getoption("xmlpath", default=None)
+        directory = Path(report).parent / "traces" if report else item.config.rootpath / "reports/traces"
+    directory = item.config.invocation_params.dir / directory
+    record = trace.Trace(item.nodeid, directory, item.config.getoption("trace_mode"))
+    item.stash[_TRACE_KEY] = record
+    item.stash[_TRACE_FAILED] = False
+    token = trace.ACTIVE.set(record)
+    try:
+        yield
+    finally:
+        trace.ACTIVE.reset(token)
+        record.finish(item.stash[_TRACE_FAILED] and not record.rerun_pending)
+        record.release()
+        del item.stash[_TRACE_KEY]
+        del item.stash[_TRACE_FAILED]
+
+
+@pytest.hookimpl(hookwrapper=True, trylast=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    record = item.stash.get(_TRACE_KEY, None)
+    if record is not None and report.when == "setup":
+        from agterm_conformance.impls.base import Instance
+        for value in getattr(item, "funcargs", {}).values():
+            if isinstance(value, Instance):
+                record.remember(value)
+            elif isinstance(value, (Ctl, Cli)):
+                record.remember(value.instance)
+    if record is not None and report.when == "setup":
+        record.rerun_pending = False
+        if record.reset_outcome:
+            item.stash[_TRACE_FAILED] = False
+            record.reset_outcome = False
+    if record is not None:
+        if report.failed:
+            item.stash[_TRACE_FAILED] = True
+        if report.failed or (report.when == "teardown" and record.mode == "always"):
+            record.capture()
+            if report.when == "teardown":
+                record.refresh_logs()
+            else:
+                record.frozen = True
+
+
+def pytest_runtest_logreport(report):
+    # pytest-rerunfailures marks a retry after makereport. Evidence belongs to the final attempt.
+    record = trace.ACTIVE.get()
+    if record is not None and report.outcome == "rerun":
+        record.reset()

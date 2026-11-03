@@ -52,6 +52,24 @@ The Rust build (GPUI) gets, on top of that:
 - a headless weston started with `--fake-seat`, since GPUI needs a `wl_seat`: weston 15.0 or later (the system's, or
   the one `scripts/build-weston.sh` vendors where the system's is older).
 
+A Linux ui instance (one a `tests/ui` module launches: its module fixtures, `launch()`, `relaunch`) runs on X11
+instead, since Wayland gives a client neither global coordinates nor input injection (`agterm_conformance/linux_ui.py`):
+
+- once per run, before the first ui test, the harness starts a private session bus with `at-spi-bus-launcher` on it
+  (the a11y bus) and `at-spi2-registryd`, turns `org.a11y.Status.IsEnabled` on, sets its own `AT_SPI_BUS_ADDRESS` to
+  that bus before `Atspi.init()` (libatspi binds one a11y bus per process) and reaps all three at the session's end;
+- per instance, its own `Xvfb -displayfd` (no TCP, the weston instances' screen size, no window manager) and its own
+  session bus, on which a helper (`a11y_status.py`) answers `org.a11y.Bus.GetAddress` with the run's bus and
+  `IsEnabled` true, as AccessKit asks before it publishes;
+- the env: `DISPLAY` the instance's Xvfb, `GDK_BACKEND=x11`, `AT_SPI_BUS_ADDRESS` the run's, `GSETTINGS_BACKEND=memory`,
+  no `WAYLAND_DISPLAY` or `XAUTHORITY`. `check_launch_env` lets exactly these through and refuses any other display or
+  a11y address.
+
+The build publishes its AccessKit tree there (GPUI's X11 backend, `accesskit_unix`) with each node's author id as its
+`AccessibleId` and screen extents (`build/patches/gpui-pre-linux/0005-a11y-window-bounds.patch` reports the window's
+bounds to AccessKit); the `atspi` driver finds the application by the instance's pid and sends XTest input to the
+instance's display. Rendering stays on lavapipe.
+
 On Windows (`tools/run-windows.sh`) the launch differs where the OS does:
 
 - the control socket's path is the identity, and the build serves the named pipe it names
@@ -70,12 +88,13 @@ On Windows (`tools/run-windows.sh`) the launch differs where the OS does:
 SIGTERM must quit without a prompt within 10 seconds.
 Live sessions keep their sockets in a namespace directory named by the FNV-1a 64 hash (`%016x`, lowercase hex) over
 the UTF-8 bytes of the state dir's realpath, with a leading `/private` dropped on macOS when the shorter path exists:
-upstream's zmx sockets in `/tmp/agterm-zmx-<hash>` (`upstream_socket_directory` in
-`agterm_conformance/vocabulary.py`), the Rust build's session server in `/tmp/ngterm-live-<hash>`
-(`live_socket_directory`); the adapter's vocabulary names it, prefixed with the adapter's `app_dir_name` (the
-instance's `live_dir`). Every zmx or session-host process of the reference carries `ZMX_DIR=<that dir>`; the Rust
-build's one server per instance runs as `ngterm-session server <that dir>`, and its sessions' programs and their
-attach clients carry `NGTERM_LIVE_DIR=<that dir>`. One left running after the stop fails it (the server gets its idle
+the Rust build's session server in `/tmp/ngterm-live-<hash>` (`live_socket_directory` in
+`agterm_conformance/vocabulary.py`), the Swift reference's daemons in upstream's own directory
+(`upstream_socket_directory` in `agterm_conformance/impls/swift_macos.py`); the adapter's vocabulary names it, prefixed
+with the adapter's `app_dir_name` (the instance's `live_dir`). The Rust build's one server per instance runs as
+`ngterm-session server <that dir>`, and its sessions' programs and their attach clients carry
+`NGTERM_LIVE_DIR=<that dir>`; every daemon or session-host process of the reference carries its vocabulary's directory
+variable. One left running after the stop fails it (the server gets its idle
 grace to stop by itself once its sessions are reaped).
 The CLI (`agtermctl` for the Swift build, `ngtermctl` for the Rust one: `Adapter.ctl_name`) is taken from `--ctl`,
 else from beside `--bin`.
@@ -92,7 +111,7 @@ share is asserted directly, with no capability.
 | capability | swift-macos | meaning |
 |---|---|---|
 | `posix-shell` | yes | panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic |
-| `live-sessions` | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the Rust build's one session server per instance, ngterm-session) |
+| `live-sessions` | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's per-session daemons; the Rust build's one session server per instance, ngterm-session) |
 | `live-any-shell` |  | Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and ngterm-session is staged |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
@@ -102,6 +121,7 @@ share is asserted directly, with no capability.
 | `cmd-command-line` |  | Rust-only, Windows: a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs as `cmd.exe`'s command text (`%ComSpec% /D /S /C`), so a test's `cmd` line runs as written where `posix-command-line` is not claimed |
 | `untitled-panes` | yes | a pane has no title until a program sets one; Windows' console host titles each pane with its program's path |
 | `windows-shells` |  | Rust-only, Windows: a pane runs PowerShell or `cmd.exe` as its shell (the config's `command`), and a rerun restore types a captured program's replay, and a pinned line, as that shell reads them |
+| `ui-string-values` | yes | an element's string accessibility value is readable: a button's state (`split-toggle`'s `none`), an image's tint, a row's name beside its label (AX's AXValue, UIA's ValuePattern); AT-SPI carries none for them (AccessKit exposes Text on labels and text fields only, Value only as a number), so the Linux build's tests read that state back through the protocol |
 
 ## Rust target profile
 
@@ -127,6 +147,13 @@ It does not claim:
 - `window-geometry`, `window-minimize`: Wayland gives a client no window position and no minimized read-back; their
   tests branch, and the Rust build passes the other branch, on Windows too, where it claims neither;
 - `sidebar-min-width`: the GPUI frontend does not claim it; its test takes the other branch.
+- `ui-string-values`: AccessKit's AT-SPI mapping exposes no string value on a button, an image or a row, so on Linux
+  the ui tests take the other branch: they find the element and read its state back through the protocol. The
+  Linux branch leaves that state unread by assistive technology there: it is an open accessibility gap, not a parity
+  claim. UIA and AX do read a string value (ValuePattern, AXValue) where the app publishes one (the overlays
+  button's state, an icon's tint, a companion row's name), and the Windows ui layer runs green on the other branch,
+  but the app publishes none yet on `split-toggle` or the sidebar footer's toggles, which the claim's tests read
+  (docs/backlog/the-split-and-sidebar-toggles-publish-no-state-value.md); macOS and Windows claim it once they do.
 - on Windows, `posix-command-line`: a command line runs as `cmd.exe`'s command text there (`%ComSpec% /D /S /C`, as
   Ghostty runs a command on Windows; `ngterm-host`'s `command_line` chooses it for every caller), so the tests of
   hooks, custom commands, overlay programs and scratch commands take their `cmd` branch instead (`cmd-command-line`,
@@ -226,14 +253,15 @@ path and a terminal outside the app run the attach line. `clipboard set` prints 
 above with the print's own complaint after `the live-session print exited N: ` (the session gone, or no server:
 `ngterm-session print: no live session named NAME`) where upstream shows zmx's.
 
-The suite's tests, `catalog.yaml` and their `covers(...)` markers keep upstream's names, since the Swift reference
-answers to them; no test id changes, so the ratchet keeps its ids. Each adapter carries a vocabulary object
+The suite's tests, `catalog.yaml` (its generator renames upstream's group at that boundary, `tools/gen_catalog.py`),
+their `covers(...)` markers and the ratchet speak this build's names. Each adapter carries a vocabulary object
 (`agterm_conformance/vocabulary.py`) for every value that depends on it: command names, the result and tree keys, the
-CLI argv, the error-text templates, the environment names, the socket directory and the leading client. The Swift
-adapter's is upstream's own (`UPSTREAM`), the Rust adapter's renames the group (`LIVE`); `base.py`, `cli_format.py`
-and the shared tests read every such value through `ctl.vocabulary`, `cli.vocabulary` or the instance's. `LIVE`
-refuses an upstream text that names zmx and that it does not list, and `selftests/test_vocabulary.py` checks each
-listed text against the Rust sources.
+CLI argv, the error-text templates, the environment names, the socket directory and the leading client. The Rust
+adapter's is this build's own (`LIVE`); the Swift adapter's (`UPSTREAM`, `agterm_conformance/impls/swift_macos.py`)
+maps each to upstream's, the one place the suite speaks upstream's group. `base.py`, `cli_format.py` and the shared
+tests read every such value through `ctl.vocabulary`, `cli.vocabulary` or the instance's. `UPSTREAM` refuses a text
+that names the `live` group and that it does not list, and `selftests/test_vocabulary.py` checks each listed text
+against the Rust sources.
 
 The bundled agent skill (`resources/skills/ngterm`) is upstream's with
 `build/patches/skill-ngterm/` applied (the `live` names, this build's `ngterm` and `ngtermctl`, then the attach
@@ -267,7 +295,8 @@ wire is upstream's everywhere else.
 ## Ratchet
 
 `conformance/tools/run-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` and runs the
-protocol, cli and behaviors layers with `--impl rust`, each instance on its own headless weston and session bus.
+protocol, cli, behaviors and ui layers with `--impl rust`, each instance on its own headless weston and session bus (a
+ui instance on its own Xvfb, Launch contract above).
 pytest writes each test's merged outcome with `--nodeid-report` next to the report in
 `conformance/reports/rust-linux/`, and `conformance/tools/check_ratchet.py` holds `conformance/rust-passing.txt`
 against it: one pytest node id per line, verbatim and sorted.
@@ -335,3 +364,20 @@ needs the WebView2 Runtime), `ngterm-ctl` and `ngterm-session`, and stages them 
 staged elsewhere, such as the `windows` job's `rust-windows-stage` artifact on a VM. No lavapipe, weston or bus: the
 build renders through DirectX on the machine's adapter, on the desktop the run is on (Launch contract above). The
 probes are Linux's.
+
+## Coverage build
+
+`run-linux.sh --coverage` and `run-windows.sh --coverage` (conformance/README.md > Code coverage) build the release
+workspace under `cargo llvm-cov show-env`, which adds `-C instrument-coverage` and `cfg(coverage)` (declared in the
+workspace's `check-cfg`), in a target dir of its own, `target/llvm-cov-target`, after `cargo llvm-cov clean
+--workspace`, and stage it into `target/conformance-stage-cov`. It needs cargo-llvm-cov and the toolchain's
+`llvm-tools` component (`rustup component add llvm-tools`), which `rust-toolchain.toml` does not list.
+
+The harness gives every process it starts from the build `LLVM_PROFILE_FILE` in that target dir, pooled per binary
+(`%4m`, merged online), and drops an inherited one when the run names none. The profile runtime writes from an exit
+handler, so a process that ends past its handlers writes its profile first: `ngterm_app::coverage::write_profile`
+(`__llvm_profile_write_file`, then the counters reset) runs in the app's `exit_now` before `_exit` or `TerminateProcess`
+of itself, in `ngterm-headless`'s relaunch before its `exec`, and in `ngterm-wpe`'s `exit_process` (its own `_exit`, the
+HTML worker's too); nothing in a build without `cfg(coverage)`. A `process::exit` or a return from `main` needs nothing.
+After the suite `cargo llvm-cov report` merges the profiles against the staged binaries, which must be the build's own
+byte for byte (`agterm_conformance/code_coverage.py`).

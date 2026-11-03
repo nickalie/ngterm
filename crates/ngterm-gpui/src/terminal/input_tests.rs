@@ -2,7 +2,7 @@
 //! routing order (the window's keymap before ghostty's binds before the encoder), the input method's preedit, the
 //! mouse's selections, reports and wheel, links, focus reports, and a program's clipboard access under the prompt.
 //!
-//! Panes run `/bin/sh` scripts with no `NGTERM_*`, `AGTERM_*` or `ZMX_*` variable inherited; GPUI's test platform holds
+//! Panes run `/bin/sh` scripts with no `NGTERM_*` or `AGTERM_*` variable inherited; GPUI's test platform holds
 //! the clipboards and records the URL it was asked to open, so nothing reaches the desktop. The fake face's cells are
 //! 10x21 at scale 1 with 2 px of padding.
 
@@ -258,12 +258,12 @@ fn the_wheel_multiplier_and_the_pointer_shapes_follow_ghostty() {
 // ---------------------------------------------------------------------------------------------------------------
 // links on a real pane
 
-/// `sh -c script` with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed, in `dir`.
+/// `sh -c script` with the inherited `NGTERM_*`/`AGTERM_*` variables removed, in `dir`.
 fn command(script: &str, dir: &Path) -> PaneCommand {
     let mut command = PaneCommand::new("/bin/sh").arg("-c").arg(script).cwd(dir);
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") {
             command = command.env_remove(key);
         }
     }
@@ -434,12 +434,22 @@ impl Fixture<'_> {
 
 /// A terminal with `config` running `script` (which prints `ready`) in a 640x480 test window, its events collected.
 fn fixture<'a>(cx: &'a mut TestAppContext, script: &str, config: TerminalConfig) -> Fixture<'a> {
+    fixture_host(cx, script, config, None)
+}
+
+fn fixture_host<'a>(
+    cx: &'a mut TestAppContext,
+    script: &str,
+    config: TerminalConfig,
+    remote_host: Option<String>,
+) -> Fixture<'a> {
     let dir = tempfile::tempdir().unwrap();
     // the pane's threads wake the pump from outside the test scheduler
     cx.executor().allow_parking();
     let command = command(script, dir.path());
     let spawn: super::Spawn = Box::new(move |config: PaneConfig| Pane::spawn(&command, &config));
     let spec = TerminalSpec {
+        remote_host,
         token: "pane-token".into(),
         live: false,
         font_size: None,
@@ -469,6 +479,87 @@ fn fixture<'a>(cx: &'a mut TestAppContext, script: &str, config: TerminalConfig)
 
 /// `cat -v` behind a tty that echoes nothing itself: what reaches the program is printed visibly.
 const ECHO: &str = "stty -echo -icanon; printf 'ready\\r\\n'; exec cat -v";
+
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn remote_ctrl_v_reads_the_viewers_clipboard_and_respects_bindings(cx: &mut TestAppContext) {
+    let script = "stty raw -echo; printf 'ready\\r\\n'; exec cat -v";
+    let mut f = fixture_host(cx, script, config(""), Some("remote".to_owned()));
+    f.cx.write_to_clipboard(ClipboardItem::new_string("remote-paste".into()));
+    f.focus();
+    f.type_keys("ctrl-v");
+    f.wait_painted("remote-paste");
+    assert!(!f.painted().contains("^V"));
+    f.cx.write_to_clipboard(ClipboardItem::new_string("shift-paste".into()));
+    f.type_keys("ctrl-shift-v");
+    f.wait_painted("shift-paste");
+    f.terminal.update(f.cx, |terminal, cx| {
+        terminal.set_config(config("keybind = ctrl+v=text:custom-bind\n"), cx);
+    });
+    f.cx.write_to_clipboard(ClipboardItem::new_string("must-not-paste".into()));
+    f.type_keys("ctrl-v");
+    f.wait_painted("custom-bind");
+    assert!(!f.painted().contains("must-not-paste"));
+}
+
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn local_ctrl_v_still_reaches_the_program(cx: &mut TestAppContext) {
+    let script = "stty raw -echo; printf 'ready\\r\\n'; exec cat -v";
+    let mut f = fixture(cx, script, config(""));
+    f.cx.write_to_clipboard(ClipboardItem::new_string("must-not-paste".into()));
+    f.focus();
+    f.type_keys("ctrl-v");
+    f.wait_painted("^V");
+    assert!(!f.painted().contains("must-not-paste"));
+}
+
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn remote_image_paste_reports_upload_failure_and_readonly_does_not_upload(cx: &mut TestAppContext) {
+    let mut f = fixture_host(cx, ECHO, config(""), Some("unused-host".to_owned()));
+    // Empty data fails before launching SSH, making the real asynchronous error path deterministic.
+    f.cx.write_to_clipboard(ClipboardItem::new_image(&gpui_kit::Image::empty()));
+    f.focus();
+    let shared = f.view.read_with(f.cx, |view, _| Rc::clone(view.shared()));
+    shared.set_readonly(true);
+    f.type_keys("ctrl-v");
+    assert!(!f.alert_open());
+    shared.set_readonly(false);
+    f.type_keys("ctrl-v");
+    f.settle(Fixture::alert_open);
+    assert!(!f.painted().contains("^V"));
+    f.answer_alert("OK", false);
+    f.focus();
+    f.type_keys("ctrl-shift-v");
+    f.settle(Fixture::alert_open);
+}
+
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn remote_image_filename_is_bracketed_text_even_with_kitty_paste_events(cx: &mut TestAppContext) {
+    let script = "stty raw -echo; printf '\\033[?2004h\\033[?5522hready\\r\\n'; exec cat -v";
+    let mut f = fixture_host(cx, script, config(""), Some("remote".to_owned()));
+    let path = "/tmp/ngterm-paste.0123456789/clipboard.png";
+    super::image_paste::paste_filename(&f.pane(), path).unwrap();
+    f.wait_painted(path);
+    f.wait_painted("^[[201~");
+    assert!(f.painted().contains("^[[200~"));
+}
+
+#[gpui_kit::test]
+#[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
+fn remote_paste_prefers_text_when_the_clipboard_also_contains_an_image(cx: &mut TestAppContext) {
+    let mut f = fixture_host(cx, ECHO, config(""), Some("unused-host".to_owned()));
+    let mut item = ClipboardItem::new_image(&gpui_kit::Image::empty());
+    item.entries
+        .extend(ClipboardItem::new_string("text-before-image".to_owned()).entries);
+    f.cx.write_to_clipboard(item);
+    f.focus();
+    f.type_keys("ctrl-v");
+    f.wait_painted("text-before-image");
+    assert!(!f.alert_open());
+}
 
 #[gpui_kit::test]
 #[cfg_attr(windows, ignore = "drives its pane with a POSIX sh script")]
@@ -1291,6 +1382,7 @@ fn an_all_binding_changes_every_terminals_key_tables(cx: &mut TestAppContext) {
     let command = command("printf 'second'; exec sleep 30", dir.path());
     let spawn: super::Spawn = Box::new(move |config: PaneConfig| Pane::spawn(&command, &config));
     let spec = TerminalSpec {
+        remote_host: None,
         token: "second".into(),
         live: false,
         font_size: None,
@@ -1326,6 +1418,7 @@ fn new_terminal(
     let command = command(script, dir);
     let spawn: super::Spawn = Box::new(move |config: PaneConfig| Pane::spawn(&command, &config));
     let spec = TerminalSpec {
+        remote_host: None,
         token: token.into(),
         live: false,
         font_size: None,

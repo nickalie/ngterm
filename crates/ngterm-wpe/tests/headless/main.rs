@@ -13,7 +13,7 @@
 //! - `direct`: the engine on a thread of the child (`Host::start`); for a vendored WPE `WebKit` the child itself runs
 //!   under the overlay of `ngterm_wpe::launcher::command`, an engine-only reference of the in-process engine.
 //!
-//! Every child gets private XDG directories and an environment without `NGTERM_*`, `AGTERM_*` and `ZMX_*`.
+//! Every child gets private XDG directories and an environment without `NGTERM_*` and `AGTERM_*`.
 //!
 //! Each run of the cases ends with the engine's shutdown, itself a case: the web processes of the pages still open
 //! then, one of them spinning in a script, end with it.
@@ -152,7 +152,7 @@ fn run_child(exe: &Path, mode: &str, backend: &str, node: Option<&Path>, args: &
         .stdin(Stdio::null());
     for (name, _) in std::env::vars_os() {
         let text = name.to_string_lossy();
-        if text.starts_with("NGTERM_") || text.starts_with("AGTERM_") || text.starts_with("ZMX_") {
+        if text.starts_with("NGTERM_") || text.starts_with("AGTERM_") {
             command.env_remove(&name);
         }
     }

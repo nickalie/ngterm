@@ -327,6 +327,7 @@ fn spawn(session: &Session, generation: u64, hud: &HudContext<'_>, cx: &mut Cont
     );
     let config = hud.env.config_for(Some(&overlay));
     let spec = TerminalSpec {
+        remote_host: None,
         token: String::new(),
         live: false,
         font_size,

@@ -12,6 +12,11 @@ def _new(ctl, **args):
     return sid
 
 
+def _valued(adapter, value):
+    """The `value=` predicate where the accessibility tree carries a control's string value (`ui-string-values`)."""
+    return {"value": value} if adapter.has("ui-string-values") else {}
+
+
 def _texts(ui, ui_id):
     return [ui.text(element) for element in ui.all(ui_id)]
 
@@ -87,6 +92,7 @@ def test_agent_status_glyph_reads_the_session_status(ctl, ui):
 
 
 @pytest.mark.since("0.39.1")
+@pytest.mark.requires("ui-string-values", reason="the tint is only the icon's accessibility value")
 @pytest.mark.covers("ui:session-icon", "session.tint")
 def test_tinted_icon_names_its_tint(ctl, ui):
     sid = _new(ctl, noSelect=True, tint="orange")
@@ -100,7 +106,7 @@ def test_tinted_icon_names_its_tint(ctl, ui):
 
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("ui:companion-marker", "ui:session-row")
-def test_companion_rows_nest_fold_and_mark_attention(ctl, ui):
+def test_companion_rows_nest_fold_and_mark_attention(adapter, ctl, ui):
     """A companion's row is labelled `companion` with its name the value; folding its parent hides it, and the
     parent's marker names it while it needs attention."""
     wid = assert_ok(ctl.request("workspace.new", name="ui-companions-ws"))["id"]
@@ -112,16 +118,23 @@ def test_companion_rows_nest_fold_and_mark_attention(ctl, ui):
     def markers():
         return [element for element in ui.all("companion-marker") if element.name == marker]
 
+    def child_shown():
+        if adapter.has("ui-string-values"):
+            return "ui-child" in _texts(ui, "session-row")
+        # no row value to read: the companion's row by its label alone
+        return any(row.name == "companion" for row in ui.all("session-row"))
+
     try:
-        wait_until(lambda: "ui-child" in _texts(ui, "session-row"))
-        assert [row for row in ui.all("session-row") if row.name == "companion" and ui.text(row) == "ui-child"]
+        wait_until(child_shown)
+        if adapter.has("ui-string-values"):
+            assert [row for row in ui.all("session-row") if row.name == "companion" and ui.text(row) == "ui-child"]
         assert_ok(ctl.request("session.status", child, status="blocked"))
         assert not markers(), "an open parent shows its companions"
         assert_ok(ctl.request("session.collapse", parent))
-        wait_until(lambda: "ui-child" not in _texts(ui, "session-row"))
+        wait_until(lambda: not child_shown())
         wait_until(markers)
         assert_ok(ctl.request("session.expand", parent))
-        wait_until(lambda: "ui-child" in _texts(ui, "session-row"))
+        wait_until(child_shown)
         wait_until(lambda: not markers())
     finally:
         assert_ok(ctl.request("workspace.delete", wid))
@@ -146,7 +159,7 @@ def test_flagged_view_toggle_switches_the_sidebar_mode(ctl, ui):
 
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("ui:flagged-empty-add", "ui:palette-item-{item}")
-def test_the_empty_flagged_view_link_opens_the_session_editor(ctl, ui):
+def test_the_empty_flagged_view_link_opens_the_session_editor(ctl, ui, palette_hint):
     """The empty flagged view's Add Sessions… link opens Edit Flagged Sessions, whose Return flags the highlighted
     (first) row and keeps the editor open."""
     sid = _new(ctl)
@@ -154,12 +167,12 @@ def test_the_empty_flagged_view_link_opens_the_session_editor(ctl, ui):
     assert_ok(ctl.request("sidebar.mode", mode="flagged"))
     try:
         ui.click(ui.find("flagged-empty-add"))
-        ui.find("palette-editor-hint")
+        palette_hint()
         ui.find(ui.ui_ids.expand("palette-item-{item}", item=sid))
         ui.press("return")
         tree = ctl.wait_tree(lambda tree: [s for s in sessions(tree) if s.get("flagged")])
         assert [s["id"] for s in sessions(tree) if s.get("flagged")] == session_ids(tree)[:1]
-        ui.find("palette-editor-hint")
+        palette_hint()
         ui.press("escape")
         ui.absent("command-palette")
     finally:
@@ -169,16 +182,16 @@ def test_the_empty_flagged_view_link_opens_the_session_editor(ctl, ui):
 
 
 @pytest.mark.covers("ui:focus-filter-toggle")
-def test_focus_filter_toggle_applies_the_focus_set(ctl, ui):
+def test_focus_filter_toggle_applies_the_focus_set(adapter, ctl, ui):
     for wid in workspace_ids(ctl.tree()):
         ctl.request("workspace.focus", wid, mode="off")
-    ui.find("focus-filter-toggle", role="button", enabled=False, value="off")
+    ui.find("focus-filter-toggle", role="button", enabled=False, **_valued(adapter, "off"))
     wid = workspace_ids(ctl.tree())[0]
     assert_ok(ctl.request("workspace.focus", wid, mode="add"))
     try:
-        ui.click(ui.find("focus-filter-toggle", enabled=True, value="off"))
+        ui.click(ui.find("focus-filter-toggle", enabled=True, **_valued(adapter, "off")))
         ctl.wait_tree(lambda tree: tree["tree"]["workspaceFilter"] is True)
-        ui.find("focus-filter-toggle", value="on")
+        ui.find("focus-filter-toggle", **_valued(adapter, "on"))
         ui.click("focus-filter-toggle")
         ctl.wait_tree(lambda tree: tree["tree"]["workspaceFilter"] is False)
     finally:

@@ -22,10 +22,19 @@ ngterm-session = { path = "crates/ngterm-session" }
 ngterm-pty = { path = "crates/ngterm-pty" }
 ngterm-app = { path = "crates/ngterm-app" }
 ngterm-term = { path = "crates/ngterm-term" }
+ngterm-update = { path = "crates/ngterm-update" }
 ngterm-wpe-javascriptcore-sys = { path = "crates/ngterm-wpe-javascriptcore-sys" }
 ngterm-wpe-platform-sys = { path = "crates/ngterm-wpe-platform-sys" }
 ngterm-wpe-sys = { path = "crates/ngterm-wpe-sys" }
 ngterm-wpe = { path = "crates/ngterm-wpe" }
+# Release checks and streamed downloads run on a worker, with rustls TLS and bounded requests.
+ureq = "3.5.1"
+semver = "1"
+sha2 = "0.11"
+flate2 = "1"
+tar = "0.4"
+# Resolve launcher symlinks while keeping Windows paths usable by native installer tools.
+dunce = "1.0.5"
 async-channel = "2"
 # ngterm-gpui's main-loop consumer yields to GPUI's loop between tasks (`future::yield_now`); the futures-lite smol and
 # async-io already link.
@@ -200,6 +209,8 @@ zeroize = "1.9"
 # (gir). Only a reasoned outer `#[expect(..., reason = "...")]` on the one item can lift a lint: `#[allow]` is refused.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+# `cfg(coverage)`: set with `-C instrument-coverage` by `cargo llvm-cov` (the conformance runners' `--coverage`)
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
@@ -260,3 +271,11 @@ gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 # spawned into its job, a ConPTY session's handles exported and imported for the session server's update handoff, and
 # a failed openpty's errno kept (the macOS ptmx clone race's retry).
 portable-pty = { path = "vendor/portable-pty" }
+# AccessKit's AT-SPI mapping (gpui-pre-linux's accesskit_unix): vendor/accesskit_atspi_common is the verified
+# crates.io source plus build/patches/accesskit_atspi_common (scripts/vendor-accesskit-atspi.sh): a disabled node
+# without Enabled and Sensitive whatever its role, and a button with a menu as a push button menu.
+accesskit_atspi_common = { path = "vendor/accesskit_atspi_common" }
+# AccessKit's UI Automation mapping (gpui-pre-windows): vendor/accesskit_windows is the verified crates.io source plus
+# build/patches/accesskit_windows (scripts/vendor-accesskit-windows.sh): a clickable menu item with a highlight keeps
+# the Invoke pattern.
+accesskit_windows = { path = "vendor/accesskit_windows" }

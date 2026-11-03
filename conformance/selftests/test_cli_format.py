@@ -3,7 +3,7 @@ from collections.abc import Iterator
 
 import pytest
 from agterm_conformance import cli_format
-from agterm_conformance.vocabulary import LIVE
+from agterm_conformance.impls.swift_macos import UPSTREAM
 
 SID = "0771818B-B246-46C8-9F9E-7279CA4DE6A4"
 WID = "22FCC0D1-40EC-49AC-8CB8-D91BDD12B80B"
@@ -216,11 +216,11 @@ def test_restore_status_lines():
     )
     changed = {**RESTORE, "configured": "live", "restartRequired": True, "unavailableReason": "shell is fish"}
     assert cli_format.restore_status(changed).splitlines()[2:] == [
-        "restart agterm to apply the configured mode",
+        "restart ngterm to apply the configured mode",
         "live unavailable: shell is fish",
     ]
-    # the Rust build names itself
-    assert cli_format.restore_status(changed, LIVE).splitlines()[2] == "restart ngterm to apply the configured mode"
+    # the Swift reference names itself
+    assert cli_format.restore_status(changed, UPSTREAM).splitlines()[2] == "restart agterm to apply the configured mode"
 
 
 def test_recent_rows_carry_the_full_id_kind_title_and_subtitle():
@@ -242,7 +242,7 @@ def test_recent_rows_count_a_parent_entrys_companions():
     )
 
 
-def test_zmx_rows_carry_owner_and_state():
+def test_live_rows_carry_owner_and_state():
     entry = {
         "daemon": "agterm-5e1d",
         "state": "claimed",
@@ -257,13 +257,13 @@ def test_zmx_rows_carry_owner_and_state():
     }
     orphan = {"daemon": "agterm-0000", "state": "orphan", "observation": "running", "clients": 1, "outdated": True}
     inventory = {"restore": RESTORE, "inventoryComplete": False, "entries": [entry, orphan]}
-    assert cli_format.zmx(inventory).splitlines()[2:] == [
+    assert cli_format.live_inventory(inventory).splitlines()[2:] == [
         "inventory incomplete: some pane is unaccounted for, so nothing can be pruned",
         "",
         "agterm-5e1d  claimed [open window]  absent  -  0771818B second / workspace 1 / nick (left) win 22FCC0D1",
         "agterm-0000  orphan  running outdated  1 client  -",
     ]
-    assert cli_format.zmx({"restore": RESTORE, "inventoryComplete": True, "entries": []}).endswith("\nno daemons")
+    assert cli_format.live_inventory({"restore": RESTORE, "inventoryComplete": True, "entries": []}).endswith("\nno daemons")
 
 
 def test_remote_tree_rows():

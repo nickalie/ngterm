@@ -1,5 +1,5 @@
 //! Helpers for the real-PTY tests: a pane running `sh -c SCRIPT` in a private directory, isolated from any ngterm the
-//! tests run under (no `NGTERM_*`, `AGTERM_*` or `ZMX_*` reaches the child), and waits bounded by a deadline.
+//! tests run under (no `NGTERM_*` or `AGTERM_*` reaches the child), and waits bounded by a deadline.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,7 +29,7 @@ impl Fixture {
     }
 }
 
-/// `sh -c script` with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed and `DIR` set to a fresh
+/// `sh -c script` with the inherited `NGTERM_*`/`AGTERM_*` variables removed and `DIR` set to a fresh
 /// directory.
 pub fn command(script: &str, dir: &Path) -> PaneCommand {
     let mut command = PaneCommand::new("/bin/sh")
@@ -39,7 +39,7 @@ pub fn command(script: &str, dir: &Path) -> PaneCommand {
         .env("DIR", dir);
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") {
             command = command.env_remove(key);
         }
     }

@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{AnyWindowHandle, App, Global, KeyUpEvent, KeystrokeEvent, Subscription, Window};
 use ngterm_core::Core;
+use ngterm_core::ghostty_config::binds::KeyAction;
 use ngterm_core::keymap::{BuiltinAction, Chord, CustomCommand, CustomCommandEngine, EngineOutcome};
 use uuid::Uuid;
 
@@ -344,6 +345,12 @@ impl Router {
     /// One press, with an HTML page holding the keyboard while `page_keys`: whether it is consumed, and what it fired.
     fn press(&mut self, stroke: &KeyStroke, now: Instant, page_keys: bool) -> Press {
         self.released.remove(&stroke.identity);
+        if stroke.keycode != 0 && stroke.action == KeyAction::Press {
+            // the platform says the key went up since its consumed press: a release the monitor never heard (one
+            // dispatched while its window had no focused element, which GPUI routes to the root view alone) must not
+            // swallow the next press as an autorepeat
+            self.consumed.remove(&stroke.identity);
+        }
         if self.deadline.is_some_and(|deadline| now >= deadline) {
             self.lapse();
         }

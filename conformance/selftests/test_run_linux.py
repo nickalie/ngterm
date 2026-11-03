@@ -74,8 +74,11 @@ def test_reports_version(app):
 
 @pytest.fixture
 def layers(tmp_path: Path) -> Path:
+    """Test layers under a rootdir that holds the repository's catalog files (the run's default catalog)."""
     tests = tmp_path / "tests"
     (tests / "protocol").mkdir(parents=True)
+    for name in ("catalog.yaml", "ui-ids.yaml"):
+        shutil.copy2(SCRIPT.parents[1] / name, tmp_path / name)
     (tests / "protocol" / "test_probe.py").write_text(VERSION_TEST)
     return tests
 
@@ -165,6 +168,9 @@ def test_a_holding_run_writes_the_report(tmp_path: Path, stage: Path, layers: Pa
     (tmp_path / "report").mkdir()
     (tmp_path / "report" / "keep.txt").write_text("mine")
     (tmp_path / "report" / "report.md").write_text("stale")
+    stale_trace = tmp_path / "report/traces/removed-test"
+    stale_trace.mkdir(parents=True)
+    (stale_trace / "screenshot.png").write_bytes(b"stale")
     completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), AGTERM_SOCKET="/nowhere")
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert f"ngterm: `{stage}/bin/ngterm`" in report
@@ -180,6 +186,7 @@ def test_a_holding_run_writes_the_report(tmp_path: Path, stage: Path, layers: Pa
     assert {"kind": "test", "nodeid": PROBE_ID, "outcome": "passed"}.items() <= records[1].items()
     assert "scrubbed from env" not in (out / "pytest.log").read_text()
     assert (out / "keep.txt").read_text() == "mine"
+    assert not stale_trace.exists()
 
 
 def test_a_run_launches_its_binary_on_lavapipe_with_a_seat(
@@ -301,7 +308,9 @@ def test_a_ratchet_only_run_runs_the_listed_ids_and_judges_them(tmp_path: Path, 
     assert "rust: 1 pass, 0 fail" in report
     assert "ratchet holds: 1 listed id(s), ratchet-only run" in report
     header = json.loads((tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()[0])
-    assert header == {"kind": "run", "partial": True, "mode": "ratchet-only"}
+    assert {key: header[key] for key in ("kind", "partial", "mode")} == {
+        "kind": "run", "partial": True, "mode": "ratchet-only"
+    }
 
 
 def test_a_ratchet_only_run_breaks_on_a_red_listed_id(tmp_path: Path, stage: Path, layers: Path) -> None:
@@ -313,8 +322,8 @@ def test_a_ratchet_only_run_breaks_on_a_red_listed_id(tmp_path: Path, stage: Pat
 
 def test_a_ratchet_only_run_adds_the_tasks_extras(tmp_path: Path, stage: Path, layers: Path) -> None:
     (layers / "protocol" / "test_other.py").write_text(OTHER_TEST)
-    (layers / "ui").mkdir()
-    (layers / "ui" / "test_extra.py").write_text("def test_extra(ctl):\n    pass\n")
+    (layers / "extra").mkdir()
+    (layers / "extra" / "test_extra.py").write_text("def test_extra(ctl):\n    pass\n")
     (layers / "protocol" / "test_skipped.py").write_text("def test_never(ctl):\n    assert False\n")
     completed, report = run(
         tmp_path,
@@ -323,15 +332,15 @@ def test_a_ratchet_only_run_adds_the_tasks_extras(tmp_path: Path, stage: Path, l
         ratchet(tmp_path, PROBE_ID),
         "--ratchet-only",
         "--also",
-        "tests/ui/test_extra.py",
+        "tests/extra/test_extra.py",
         "--also-k",
         "test_other",
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert "--also tests/ui/test_extra.py + --also-k test_other" in report
+    assert "--also tests/extra/test_extra.py + --also-k test_other" in report
     assert "rust: 3 pass, 0 fail" in report
     assert re.search(rf"^{re.escape(OTHER_ID)}$", completed.stdout, re.MULTILINE)
-    assert re.search(r"^tests/ui/test_extra.py::test_extra$", completed.stdout, re.MULTILINE)
+    assert re.search(r"^tests/extra/test_extra.py::test_extra$", completed.stdout, re.MULTILINE)
 
 
 @pytest.mark.parametrize(
@@ -553,7 +562,7 @@ def test_a_second_run_waits_for_the_lock(tmp_path: Path, stage: Path, layers: Pa
 
 
 def test_the_run_does_not_inherit_the_lock(tmp_path: Path, stage: Path, layers: Path, lock: Path) -> None:
-    """zmx daemons outlive a run by design: started holding the lock's descriptor, they would hold it forever."""
+    """Live sessions' servers outlive a run by design: started holding the lock's descriptor, they would hold it forever."""
     (layers / "protocol" / "test_probe.py").write_text(PROBE_FDS_TEST)
     probe = tmp_path / "fds.json"
     completed, _ = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), FD_PROBE=str(probe))
@@ -589,3 +598,287 @@ def test_the_default_lock_is_the_users_runtime_dir(
             fcntl.flock(held, fcntl.LOCK_UN)
             output, _ = process.communicate(timeout=120)
     assert process.returncode == 0, output
+
+
+def test_ui_selection_refuses_session_display_before_starting(tmp_path, stage, layers):
+    ui = layers / 'ui'
+    ui.mkdir()
+    (ui / 'test_ui.py').write_text('def test_ui(impl_options): pass\n')
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID),
+                            '--ratchet-only', '--also', 'tests/ui', CONFORMANCE_LINUX_DISPLAY='session')
+    assert completed.returncode == 2
+    assert 'Linux UI instances require headless' in completed.stderr
+    assert not report
+
+
+def test_a_full_run_takes_the_ui_layer(tmp_path, stage, layers):
+    # ui is a default layer: a full run preflights it, so session display mode stops it before anything runs
+    ui = layers / 'ui'
+    ui.mkdir()
+    (ui / 'test_ui.py').write_text('def test_ui(impl_options): pass\n')
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), CONFORMANCE_LINUX_DISPLAY='session')
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert 'Linux UI instances require headless' in completed.stderr
+    assert not report
+
+
+def test_ui_setup_failure_withholds_runner_report(tmp_path, stage, layers):
+    # A ui dir outside the default layers, passed as an extra pytest path, bypasses the runner's early preflight (which
+    # would need at-spi2-core on the host): exercise the plugin's failure propagation.
+    ui = tmp_path / 'extra' / 'tests' / 'ui'
+    ui.mkdir(parents=True)
+    (ui / 'test_ui.py').write_text('def test_ui(impl_options): pass\n')
+    (layers.parent / 'conftest.py').write_text("""
+from agterm_conformance import linux_ui
+from agterm_conformance.impls.base import LaunchError
+
+def pytest_configure(config):
+    def fail(self):
+        error = LaunchError('owned launcher failed')
+        error.add_note('launcher log diagnostic')
+        raise error
+    linux_ui.A11yRun.start = fail
+""")
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID),
+                            '--', str(ui), '-k', 'test_ui')
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert 'owned launcher failed' in completed.stdout + completed.stderr
+    assert 'launcher log diagnostic' in completed.stdout + completed.stderr
+    assert not (tmp_path / 'report/nodeids.jsonl').exists()
+    assert 'ratchet holds' not in report
+
+
+def test_ui_preflight_without_xvfb_names_component(tmp_path, stage, layers, weston_on_path, monkeypatch):
+    ui = layers / 'ui'
+    ui.mkdir()
+    (ui / 'test_ui.py').write_text('def test_ui(impl_options): pass\n')
+    bare = tmp_path / 'bare-bin'
+    bare.mkdir()
+    for tool in ('bash', 'dirname', 'readlink', 'cat', 'git', 'grep', 'mktemp', 'rmdir', 'rm', 'mkdir', 'env', 'sed'):
+        if found := shutil.which(tool):
+            (bare / tool).symlink_to(found)
+    for helper in ('weston', 'dbus-daemon'):
+        (bare / helper).symlink_to(weston_on_path / helper)
+    # Xvfb can also be discovered under libexec; isolate discovery in the child interpreter.
+    (tmp_path / 'sitecustomize.py').write_text("""
+from agterm_conformance import linux_ui
+linux_ui.LIBEXEC_DIRS = ()
+""")
+    monkeypatch.setenv('PATH', str(bare))
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID),
+                            '--ratchet-only', '--also', 'tests/ui', PYTHONPATH=str(tmp_path))
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert 'missing Xvfb' in completed.stderr
+    assert not report
+    assert not (tmp_path / 'report/nodeids.jsonl').exists()
+
+
+# What the instance's profile variable was, written where the test runner says; a CLI of the build's ended by the
+# harness before it exited, which the run must list as lost.
+COVERAGE_PROBE_TEST = """
+import os
+import sys
+from agterm_conformance.plugin import CliProcess
+
+def test_reports_version(app):
+    with open(os.environ["LAUNCH_PROBE"], "w") as sink:
+        sink.write(app.env["LLVM_PROFILE_FILE"])
+    ctl = app.root / "ngtermctl"
+    ctl.write_text(f"#!{sys.executable}\\nimport time\\nprint('ready', flush=True)\\ntime.sleep(60)\\n")
+    ctl.chmod(0o755)
+    with CliProcess([str(ctl)], app.env, app.home, None) as process:
+        assert process.line() == "ready"
+"""
+
+
+# The probe above, which also leaves a profile where the instance's variable points, as an instrumented app would.
+PROFILE_WRITING_TEST = COVERAGE_PROBE_TEST.replace(
+    '        sink.write(app.env["LLVM_PROFILE_FILE"])\n',
+    '        sink.write(app.env["LLVM_PROFILE_FILE"])\n'
+    '    from pathlib import Path\n'
+    '    (Path(app.env["LLVM_PROFILE_FILE"]).parent / "conformance-1_0.profraw").write_bytes(b"raw")\n',
+)
+
+# `cargo llvm-cov`: show-env exports a marker, report demands it (the runner evaluated show-env) and writes what each
+# format asks for, with one ngterm-core file in its summary.
+FAKE_CARGO = """
+import json
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+if args[:2] == ["llvm-cov", "show-env"]:
+    print("export FAKE_LLVM_COV_ENV=1")
+    sys.exit(0)
+assert args[:2] == ["llvm-cov", "report"], args
+if os.environ.get("FAKE_LLVM_COV_ENV") != "1":
+    sys.exit("report outside show-env")
+if "--output-path" in args:
+    target = Path(args[args.index("--output-path") + 1])
+    lines = {"count": 8, "covered": 2, "percent": 25.0}
+    data = {"files": [{"filename": str(Path.cwd() / "crates/ngterm-core/src/lib.rs"),
+                       "summary": {"lines": lines, "regions": lines, "functions": lines}}]}
+    target.write_text(json.dumps({"data": [data]}) if "--json" in args else "TN:\\n")
+if "--html" in args:
+    (Path(args[args.index("--output-dir") + 1]) / "html").mkdir(parents=True, exist_ok=True)
+"""
+
+
+@pytest.fixture
+def fake_cargo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    directory = tmp_path / "cargo-bin"
+    directory.mkdir()
+    cargo = directory / "cargo"
+    cargo.write_text(f"#!{sys.executable}\n{FAKE_CARGO}")
+    cargo.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
+    return cargo
+
+
+def built(stage: Path, target: Path) -> Path:
+    """The instrumented build's own binary of the staged app, where the report reads its coverage map."""
+    release = target / "llvm-cov-target" / "release"
+    release.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(stage / "bin" / "ngterm", release / "ngterm")
+    return release / "ngterm"
+
+
+def instrument(binary: Path) -> None:
+    """Gives a fake binary the profile runtime's marker (`llvm_profiles.RUNTIME_MARKER`), as a coverage build has."""
+    with open(binary, "ab") as sink:
+        sink.write(b"\n# LLVM Profile Error\n")
+
+
+def test_a_coverage_run_refuses_a_stage_built_without_coverage(tmp_path: Path, stage: Path, layers: Path) -> None:
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--coverage")
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert "not built with coverage" in completed.stderr
+    assert f"{stage}/bin/ngterm" in completed.stderr
+    assert report == ""
+
+
+def test_a_coverage_run_pools_the_profiles_and_lists_the_lost(
+    tmp_path: Path, stage: Path, layers: Path, fake_cargo: Path
+) -> None:
+    instrument(stage / "bin" / "ngterm")
+    (layers / "protocol" / "test_probe.py").write_text(PROFILE_WRITING_TEST)
+    target = tmp_path / "target"
+    built(stage, target)
+    profiles = target / "llvm-cov-target"
+    (profiles / "stale-1-2.profraw").write_bytes(b"last run")
+    (profiles / "lost-profiles.txt").write_text("1 ngterm: last run\n")
+    probe = tmp_path / "launch.txt"
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--coverage",
+        LAUNCH_PROBE=str(probe), CARGO_TARGET_DIR=str(target), FAKE_TERM="quit",
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert probe.read_text() == f"{profiles}/conformance-%4m.profraw"
+    # the last run's profiles are gone; only the probe's is left
+    assert [path.name for path in profiles.glob("*.profraw")] == ["conformance-1_0.profraw"]
+    [lost] = (tmp_path / "report" / "lost-profiles.txt").read_text().splitlines()
+    assert re.fullmatch(r"\d+ ngtermctl: CliProcess.close: ended before it exited", lost), lost
+    assert f"- coverage: 1 profile files in `{profiles}`, 1 processes ended without one (lost-profiles.txt)" in report
+
+
+def test_a_coverage_run_reports_code_and_catalog_coverage(
+    tmp_path: Path, stage: Path, layers: Path, fake_cargo: Path
+) -> None:
+    instrument(stage / "bin" / "ngterm")
+    (layers / "protocol" / "test_probe.py").write_text(PROFILE_WRITING_TEST)
+    target = tmp_path / "target"
+    built(stage, target)
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--coverage",
+        LAUNCH_PROBE=str(tmp_path / "launch.txt"), CARGO_TARGET_DIR=str(target), FAKE_TERM="quit",
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    out = tmp_path / "report" / "coverage"
+    code = report.split("### code coverage\n", 1)[1].split("###", 1)[0]
+    assert "| ngterm-core | 25.00% (2/8) | 25.00% (2/8) | 25.00% (2/8) |" in code
+    assert f"lcov: `{out}/lcov.info`, html: `{out}/html/index.html`" in code
+    assert (out / "summary.md").read_text() in report
+    assert (out / "lcov.info").is_file() and (out / "html").is_dir()
+    catalog = report.split("### catalog coverage\n", 1)[1]
+    assert re.search(r"^ui ids exercised by a passing test: \d+/\d+ \(\d+\.\d%\)$", catalog, re.MULTILINE), catalog
+
+
+def test_a_coverage_run_without_profiles_exits_2_with_the_reason(
+    tmp_path: Path, stage: Path, layers: Path, fake_cargo: Path
+) -> None:
+    instrument(stage / "bin" / "ngterm")
+    target = tmp_path / "target"
+    built(stage, target)
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--coverage", CARGO_TARGET_DIR=str(target)
+    )
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    profiles = target / "llvm-cov-target"
+    assert f"code coverage: no profiles in {profiles}" in completed.stderr
+    assert f"no report: no profiles in {profiles}" in report
+    assert "ratchet holds" in report and "### catalog coverage" in report
+
+
+def test_a_coverage_run_on_another_builds_stage_exits_2_with_the_reason(
+    tmp_path: Path, stage: Path, layers: Path, fake_cargo: Path
+) -> None:
+    target = tmp_path / "target"
+    built(stage, target).write_bytes(b"another instrumented build\n# LLVM Profile Error\n")
+    instrument(stage / "bin" / "ngterm")
+    (layers / "protocol" / "test_probe.py").write_text(PROFILE_WRITING_TEST)
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--coverage",
+        LAUNCH_PROBE=str(tmp_path / "launch.txt"), CARGO_TARGET_DIR=str(target), FAKE_TERM="quit",
+    )
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    reason = f"binary mismatch: {stage}/bin/ngterm is not {target}/llvm-cov-target/release/ngterm"
+    assert f"code coverage: {reason}" in completed.stderr
+    assert f"no report: {reason}" in report
+
+
+def test_a_relative_target_dir_gives_the_instances_an_absolute_profile(
+    tmp_path: Path, stage: Path, layers: Path, fake_cargo: Path
+) -> None:
+    instrument(stage / "bin" / "ngterm")
+    built(stage, tmp_path / "target")
+    (layers / "protocol" / "test_probe.py").write_text(PROFILE_WRITING_TEST)
+    probe = tmp_path / "launch.txt"
+    # relative to the runner's working directory (`command`'s runner runs from the test's cwd)
+    target = os.path.relpath(tmp_path / "target", Path.cwd())
+    completed, _ = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--coverage",
+        LAUNCH_PROBE=str(probe), CARGO_TARGET_DIR=target, FAKE_TERM="quit",
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert probe.read_text() == f"{tmp_path / 'target' / 'llvm-cov-target'}/conformance-%4m.profraw"
+
+
+def test_a_run_without_coverage_names_no_profile(tmp_path: Path, stage: Path, layers: Path) -> None:
+    (layers / "protocol" / "test_probe.py").write_text(LAUNCH_PROBE_TEST)
+    probe = tmp_path / "launch.json"
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), LAUNCH_PROBE=str(probe),
+        LLVM_PROFILE_FILE=str(tmp_path / "inherited-%p.profraw"),
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "LLVM_PROFILE_FILE" not in json.loads(probe.read_text())["env"]
+    assert "- coverage:" not in report and not (tmp_path / "report" / "lost-profiles.txt").exists()
+    assert "### code coverage" not in report and not (tmp_path / "report" / "coverage").exists()
+    assert "### catalog coverage\n\nui ids exercised by a passing test: " in report
+
+
+def test_the_catalog_line_counts_against_the_runs_catalog(tmp_path: Path, stage: Path, layers: Path) -> None:
+    # a --catalog through the pytest args: one active ui id, which the passing test covers
+    (layers / "protocol" / "test_probe.py").write_text(
+        VERSION_TEST.replace("\ndef ", '\nimport pytest\n\n@pytest.mark.covers("ui:only-id")\ndef ', 1)
+    )
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    (custom / "catalog.yaml").write_text("commands: {}\n")
+    (custom / "ui-ids.yaml").write_text("ids:\n  only-id: {status: uncovered}\n")
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--", "--catalog", str(custom / "catalog.yaml")
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "### catalog coverage\n\nui ids exercised by a passing test: 1/1 (100.0%)\n" in report, report

@@ -11,6 +11,9 @@ AUTO_EXEMPTIONS are re-added when missing (drop one from its table to remove it)
 UI ids (ui-ids.yaml, next to the catalog) come from the `accessibilityIdentifier(...)` and
 `setAccessibilityIdentifier(...)` calls under `agterm/`; an argument that calls a `Self.` helper returning one string
 literal resolves to that literal.
+Names are ngterm's: upstream's live-session group, named after the zmx daemons that host it there, is renamed at
+this boundary (`UPSTREAM_GROUP`, `UPSTREAM_FIELDS`) to the `live` group ngterm hosts in its own session server, so the
+catalog, the tests' `covers(...)` markers and the ratchet speak ngterm's vocabulary.
 Anything the parser cannot read is reported and neither file is written.
 """
 
@@ -53,24 +56,30 @@ GENERATED_KEYS = ("mode", "wire", "variants", "uses")
 UI_GENERATED_KEYS = ("at",)
 UI_WIDTH = 4096  # source paths make ui items long; keep one line each
 
+# Upstream's live-session group (`zmx.*`, `agtermctl zmx`) and its fields, renamed to ngterm's (conformance/docs/
+# rust-build.md > The `live` group). A generated name that still names zmx is reported, never passed through.
+UPSTREAM_GROUP = "zmx"
+GROUP = "live"
+UPSTREAM_FIELDS = {"result.zmx": "result.live", "tree.session.backedByZmx": "tree.session.backedByLive"}
+
 # Commands whose connection outlives the reply: "covered" needs a test that drives the stream after the ok,
 # not only the refusals or the ok line (decided in docs/plans/20261011-rust-conformance-suite.md, Task 7).
 COMMAND_MODES = {
-    "zmx.present": "presentation-stream",
+    "live.present": "presentation-stream",
     "session.overlay.job.run": "job-stream",
     "session.overlay.page.serve": "page-serve-stream",
 }
 AUTO_BEHAVIORS = {
-    # `zmx tree HOST` runs the hostless form over ssh; the command itself is covered by the hostless form.
-    "zmx.tree.remote-host": {"status": "uncovered"},
+    # `live tree HOST` runs the hostless form over ssh; the command itself is covered by the hostless form.
+    "live.tree.remote-host": {"status": "uncovered"},
 }
 AUTO_EXEMPTIONS = {
     "debug.appearance": "refused outside UI-test mode; a UI-test-only hook with no CLI subcommand",
-    "zmx.attach": (
+    "live.attach": (
         "a successful attach re-discovers the remote over ssh before creating anything, which the suite's "
         "no-network, no-remote-host constraints exclude; its refusals are still tested"
     ),
-    "behavior:zmx.tree.remote-host": "remote discovery runs ssh, excluded by the suite's no-network constraints",
+    "behavior:live.tree.remote-host": "remote discovery runs ssh, excluded by the suite's no-network constraints",
 }
 
 HEADER = (
@@ -79,6 +88,7 @@ HEADER = (
     "# are hand-maintained, but the generator re-adds its own entries (AUTO_BEHAVIORS / AUTO_EXEMPTIONS) when\n"
     "# missing, so removing one means removing it from that table. Statuses: uncovered, covered, removed-upstream.\n"
     "# A cli item's `variants` maps a flag to the command the subcommand sends instead of `wire` when given it.\n"
+    "# Names are ngterm's: the generator renames upstream's live-session group to `live` (UPSTREAM_GROUP).\n"
 )
 
 
@@ -711,8 +721,7 @@ def generate(source: Path) -> Generated:
             return None
 
     if (commands := body(COMMAND_ENUM)) is not None:
-        for raw in enum_raw_values(commands, gen.problems):
-            gen.commands[raw] = {"mode": COMMAND_MODES[raw]} if raw in COMMAND_MODES else {}
+        gen.commands = {raw: {} for raw in enum_raw_values(commands, gen.problems)}
     if (events := body(EVENT_ENUM)) is not None:
         gen.events = {raw: {} for raw in enum_raw_values(events, gen.problems)}
     for prefix, name in FIELD_SOURCES:
@@ -729,6 +738,10 @@ def generate(source: Path) -> Generated:
         gen.problems.append(f"{COMMANDS_HTML} not found")
     for path in sorted((source / APP).rglob("*.swift")):
         ui_identifiers(path.relative_to(source), strip_comments(path.read_text(encoding="utf-8")), gen)
+    rename_upstream(gen)
+    for name, mode in COMMAND_MODES.items():
+        if name in gen.commands:
+            gen.commands[name]["mode"] = mode
 
     for section in GENERATED_SECTIONS:
         if not getattr(gen, section):
@@ -740,6 +753,42 @@ def generate(source: Path) -> Generated:
         for name in sorted(named - set(gen.commands)):
             gen.problems.append(f"generator table names {name}, which is not in the Command enum")
     return gen
+
+
+def command_name(upstream: str) -> str:
+    """ngterm's wire name for upstream's command `upstream`: `zmx.<name>` is `live.<name>`."""
+    group, dot, rest = upstream.partition(".")
+    return f"{GROUP}.{rest}" if group == UPSTREAM_GROUP and dot and rest else upstream
+
+
+def cli_name(upstream: str) -> str:
+    """ngterm's CLI subcommand path for upstream's `upstream`: `zmx <name>` is `live <name>`."""
+    first, space, rest = upstream.partition(" ")
+    return f"{GROUP} {rest}" if first == UPSTREAM_GROUP and space and rest else upstream
+
+
+def _cli_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
+    renamed = dict(entry)
+    if "wire" in renamed:
+        renamed["wire"] = command_name(renamed["wire"])
+    if "variants" in renamed:
+        renamed["variants"] = {flag: command_name(wire) for flag, wire in renamed["variants"].items()}
+    if "uses" in renamed:
+        renamed["uses"] = [command_name(wire) for wire in renamed["uses"]]
+    return renamed
+
+
+def rename_upstream(gen: Generated) -> None:
+    """Upstream's live-session group in ngterm's names, in every generated section; a name left naming zmx is a
+    problem (a field or event upstream added to the group, which needs its own entry in `UPSTREAM_FIELDS`)."""
+    gen.commands = {command_name(name): entry for name, entry in gen.commands.items()}
+    gen.fields = {UPSTREAM_FIELDS.get(name, name): entry for name, entry in gen.fields.items()}
+    gen.cli = {cli_name(name): _cli_entry(entry) for name, entry in gen.cli.items()}
+    for section in GENERATED_SECTIONS:
+        items = getattr(gen, section)
+        for name, entry in items.items():
+            if UPSTREAM_GROUP in f"{name} {entry}".lower():
+                gen.problems.append(f"{section} item {name} names {UPSTREAM_GROUP}, which has no ngterm name")
 
 
 @dataclass

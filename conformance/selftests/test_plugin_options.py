@@ -241,6 +241,11 @@ def run_nodeid_report(
     return result, [json.loads(line) for line in lines]
 
 
+def run_header(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """The run header without the catalog files it names (test_nodeid_report_names_the_runs_catalog_files)."""
+    return {key: value for key, value in records[0].items() if key not in ("catalog", "ui_ids")}
+
+
 def outcomes(records: list[dict[str, Any]]) -> list[tuple[str, str, str | None, str | None]]:
     return [(r["nodeid"], r["outcome"], r["skip"], r["reason"]) for r in records if r["kind"] == "test"]
 
@@ -297,7 +302,7 @@ def test_nodeid_report_merges_phases(pytester: pytest.Pytester) -> None:
     )
     result, records = run_nodeid_report(pytester)
     assert result.ret == pytest.ExitCode.TESTS_FAILED
-    assert records[0] == {"kind": "run", "partial": False, "mode": "full"}
+    assert run_header(records) == {"kind": "run", "partial": False, "mode": "full"}
     unsupported = "unsupported: rust lacks posix-shell on this host: no zsh (needs zsh)"
     not_yet = "not-yet-at-level: since 0.40.0, rust is at 0.36.0"
     assert outcomes(records) == [
@@ -314,6 +319,54 @@ def test_nodeid_report_merges_phases(pytester: pytest.Pytester) -> None:
         ("test_phases.py::test_spaces[   ]", "passed", None, None),
     ]
     assert len(records) == 12
+
+
+def test_nodeid_report_lines_carry_the_covers_targets(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(
+        test_covers="""
+        import pytest
+
+        pytestmark = pytest.mark.covers("ui:sidebar")
+
+        @pytest.mark.covers("version", "ui:ask-dialog")
+        @pytest.mark.covers("ui:sidebar")
+        def test_marked():
+            pass
+
+        def test_module_only():
+            assert False
+        """
+    )
+    _, records = run_nodeid_report(pytester)
+    tests = [record for record in records if record["kind"] == "test"]
+    # each target once, whichever markers name it
+    assert [(record["nodeid"], sorted(record["covers"])) for record in tests] == [
+        ("test_covers.py::test_marked", ["ui:ask-dialog", "ui:sidebar", "version"]),
+        ("test_covers.py::test_module_only", ["ui:sidebar"]),
+    ]
+    assert len(tests[0]["covers"]) == 3
+
+
+@pytest.mark.parametrize("overrides", ["default", "catalog", "catalog-and-ui-ids"])
+def test_nodeid_report_names_the_runs_catalog_files(pytester: pytest.Pytester, overrides: str) -> None:
+    pytester.makepyfile(test_one="def test_one():\n    pass\n")
+    args = {
+        "default": [],
+        "catalog": ["--catalog", "custom/catalog.yaml"],
+        "catalog-and-ui-ids": ["--catalog", "custom/catalog.yaml", "--ui-ids", "other/ids.yaml"],
+    }[overrides]
+    _, records = run_nodeid_report(pytester, *args)
+    catalog = pytester.path / ("catalog.yaml" if overrides == "default" else "custom/catalog.yaml")
+    ui_ids = pytester.path / ("other/ids.yaml" if overrides == "catalog-and-ui-ids" else "ui-ids.yaml")
+    if overrides == "catalog":
+        ui_ids = pytester.path / "custom/ui-ids.yaml"
+    assert (records[0]["catalog"], records[0]["ui_ids"]) == (str(catalog.resolve()), str(ui_ids.resolve()))
+
+
+def test_nodeid_report_lines_without_covers_name_none(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(test_plain="def test_plain():\n    pass\n")
+    _, records = run_nodeid_report(pytester)
+    assert records[1]["covers"] == []
 
 
 def test_nodeid_report_module_teardown_error_lands_on_last_test(pytester: pytest.Pytester) -> None:
@@ -394,7 +447,7 @@ def test_nodeid_report_collection_error(pytester: pytest.Pytester) -> None:
     pytester.makepyfile(test_ok="def test_ok():\n    pass\n", test_broken="import no_such_module_xyz\n")
     result, records = run_nodeid_report(pytester)
     assert result.ret == pytest.ExitCode.INTERRUPTED
-    assert records[0] == {"kind": "run", "partial": False, "mode": "full"}
+    assert run_header(records) == {"kind": "run", "partial": False, "mode": "full"}
     # A collection error stops the session before any test runs.
     assert outcomes(records) == [("test_ok.py::test_ok", "not-run", None, None)]
     (error,) = [r for r in records if r["kind"] == "collection-error"]
@@ -409,7 +462,7 @@ def test_nodeid_report_collection_error(pytester: pytest.Pytester) -> None:
 def test_nodeid_report_partial(pytester: pytest.Pytester, args: tuple[str, ...], partial: bool) -> None:
     pytester.makepyfile(test_partial="def test_one():\n    pass\n\ndef test_two():\n    pass\n")
     _, records = run_nodeid_report(pytester, *args)
-    assert records[0] == {"kind": "run", "partial": partial, "mode": "partial" if partial else "full"}
+    assert run_header(records) == {"kind": "run", "partial": partial, "mode": "partial" if partial else "full"}
     expected = ["test_partial.py::test_one"] + ([] if partial else ["test_partial.py::test_two"])
     assert [nodeid for nodeid, *_ in outcomes(records)] == expected
 
@@ -443,7 +496,7 @@ def test_ratchet_only_runs_the_listed_ids(pytester: pytest.Pytester) -> None:
     listed = ratchet_list(pytester, "test_r.py::test_three[beta]", "test_r.py::test_two", "test_r.py::test_gone")
     result, records = run_nodeid_report(pytester, "--ratchet-only", listed)
     assert result.ret == pytest.ExitCode.OK
-    assert records[0] == {"kind": "run", "partial": True, "mode": "ratchet-only"}
+    assert run_header(records) == {"kind": "run", "partial": True, "mode": "ratchet-only"}
     assert ran(records) == ["test_r.py::test_two", "test_r.py::test_three[beta]"]
 
 
@@ -478,7 +531,7 @@ def test_ratchet_only_narrowed_further_is_a_partial_run(pytester: pytest.Pyteste
     pytester.makepyfile(test_r=RATCHET_ONLY_TESTS)
     listed = ratchet_list(pytester, "test_r.py::test_one", "test_r.py::test_two")
     _, records = run_nodeid_report(pytester, "--ratchet-only", listed, *narrowing)
-    assert records[0] == {"kind": "run", "partial": True, "mode": "partial"}
+    assert run_header(records) == {"kind": "run", "partial": True, "mode": "partial"}
 
 
 @pytest.mark.parametrize(
@@ -522,7 +575,7 @@ def test_nodeid_report_not_run(pytester: pytest.Pytester, body: str, stopped: st
     pytester.makepyfile(test_stop=f"def test_stop():\n    {body}\n\ndef test_after():\n    pass\n")
     # A subprocess: in-process pytester re-raises a KeyboardInterrupt into this session.
     _, records = run_nodeid_report(pytester, "-x", subprocess=True)
-    assert records[0] == {"kind": "run", "partial": False, "mode": "full"}
+    assert run_header(records) == {"kind": "run", "partial": False, "mode": "full"}
     assert outcomes(records) == [
         ("test_stop.py::test_stop", stopped, None, None),
         ("test_stop.py::test_after", "not-run", None, None),

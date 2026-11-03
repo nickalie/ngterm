@@ -1,5 +1,5 @@
 //! Helpers for the pane tests on real PTYs, on every OS: the programs per OS, a session's spec with the test's
-//! environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables, and an attached client reading
+//! environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables, and an attached client reading
 //! its events; for the tests of the binary, the binary staged as a build and the wait for a process's end.
 
 use std::path::{Path, PathBuf};
@@ -67,7 +67,7 @@ pub fn environment() -> Vec<(String, String)> {
     std::env::vars()
         .filter(|(key, _)| {
             let key = key.to_ascii_uppercase();
-            !key.starts_with("NGTERM_") && !key.starts_with("AGTERM_") && !key.starts_with("ZMX_")
+            !key.starts_with("NGTERM_") && !key.starts_with("AGTERM_")
         })
         .collect()
 }

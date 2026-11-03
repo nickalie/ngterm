@@ -23,6 +23,8 @@
 //!   its web processes inherit, carries a request size for their `PulseAudio` streams that keeps Web Audio playing on
 //!   a Bluetooth sink (module `worker`). Every program that may start an engine calls [`worker::serve_if_asked`] first
 //!   thing in its `main`.
+//!   Release bundles additionally scope their module and injected-bundle paths to that worker, preserving the
+//!   environment of programs the consumer starts.
 //!
 //! - What `WebKitGTK` draws itself and an offscreen page cannot (module `engine::interaction`): the clipboard
 //!   (`WPEPlatform`'s is the engine's own: a page's copy is reported, the desktop's text is handed in before a paste),

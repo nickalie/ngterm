@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Resolve /usr/bin/ngterm's symlink as well as an AppImage mount or an unpacked archive.
+root="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+# Module paths are scoped to the engine worker by ngterm-wpe. Every bundled ELF
+# has a relative RPATH; terminal programs keep their own system libraries.
+exec "$root/usr/bin/ngterm" "$@"

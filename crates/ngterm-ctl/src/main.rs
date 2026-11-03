@@ -415,15 +415,9 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/catalog.yaml");
         let catalog: serde_norway::Value = serde_norway::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let cli = catalog["cli"].as_mapping().unwrap();
-        // upstream's `agtermctl zmx` is `ngtermctl live` here (conformance/docs/rust-build.md, The `live` group)
-        let expected: std::collections::BTreeSet<String> = cli
-            .keys()
-            .map(|name| name.as_str().unwrap())
-            .map(|name| {
-                name.strip_prefix("zmx ")
-                    .map_or_else(|| name.to_owned(), |rest| format!("live {rest}"))
-            })
-            .collect();
+        // the catalog speaks ngterm's names: upstream's `agtermctl zmx` is `live` there (conformance/tools/gen_catalog.py)
+        let expected: std::collections::BTreeSet<String> =
+            cli.keys().map(|name| name.as_str().unwrap().to_owned()).collect();
         let mut ours = std::collections::BTreeSet::new();
         catalog_names(&Ngtermctl::command(), &[], &mut ours);
         assert_eq!(ours, expected);

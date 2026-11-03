@@ -5,7 +5,9 @@
 #                  dmabuf import capabilities of the GPU GPUI renders with (0001); `TextSystem::font_metrics`, a face's
 #                  metrics as its font declares them (0002); `Window::paint_alpha_mask`, a coverage mask the caller
 #                  rasterized, tinted like a glyph (0003); `TextSystem::font_strikeout`, a face's OS/2 strikeout
-#                  metrics (0004)
+#                  metrics (0004); `aria_disabled` and `aria_has_popup`, an element's disabled state and popup for
+#                  assistive technology (E2E coverage Task 6, 0005); no accessibility node under an invisible
+#                  element, and a test window's accessibility a test can turn on (E2E coverage Task 7, 0006)
 #   gpui-pre-wgpu  the renderer's side of external surfaces (dmabufs imported through wgpu-hal Vulkan, acquired from
 #                  the foreign queue family and copied on the GPU into a texture of its own; CPU pixels uploaded by
 #                  damaged rectangles) and the Vulkan device opened with VK_EXT_image_drm_format_modifier and
@@ -18,7 +20,8 @@
 #                  fractional scale (Task 24, 0002); an X11 window's minimized and maximized state read back, and KWin's
 #                  blur behind a blurred X11 window (Task 33, 0003); a new keymap reported as a keyboard layout
 #                  change on X11 and Wayland even when the effective layout keeps its name, so a changed layout list
-#                  reaches `on_keyboard_layout_change` (Task 29 of the upstream v0.38.1 sync, 0004)
+#                  reaches `on_keyboard_layout_change` (Task 29 of the upstream v0.38.1 sync, 0004); window bounds
+#                  published to AccessKit on initialization and geometry changes (E2E coverage Task 4, 0005)
 #   gpui-pre-windows the native key behind each key event GPUI dispatches on Windows (its scan code, the layout's
 #                  unshifted character, the modifiers with Shift and those the layout used up, the text before Ctrl
 #                  transformations), which GPUI's `Keystroke` drops, for the terminal's physical-key bindings and the

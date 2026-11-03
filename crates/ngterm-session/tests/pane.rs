@@ -3,7 +3,7 @@
 //! out to every client alike, and a client that stops reading holding up neither the PTY nor the others.
 //!
 //! The programs are per OS: `/bin/sh` on Unix, `cmd.exe` and Windows PowerShell on Windows. Every session gets the
-//! test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables, and a namespace directory
+//! test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables, and a namespace directory
 //! of its own (only named in its environment: no server runs).
 
 #[expect(dead_code, reason = "the helpers serve the pane and the lead tests alike")]

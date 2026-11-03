@@ -113,13 +113,30 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// process that started the engine on a thread of its own ends through this, after [`Host::shutdown`]: `WebKit`
 /// registers static destructors that unreference its objects and assert they run on its main thread, which is the
 /// engine thread (it never ends), so `exit` (and returning from `main`) runs them on the calling thread, where they
-/// abort.
+/// abort. An instrumented build (`cfg(coverage)`) writes its coverage profile first, which the skipped exit handlers
+/// would have written: the worker process (crate `worker`) ends here too.
 pub fn exit_process(code: i32) -> ! {
     use std::io::Write as _;
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
+    write_coverage_profile();
     // SAFETY: `_exit` ends the process without touching any state of it; nothing after it runs.
     unsafe { libc::_exit(code) }
+}
+
+/// Writes an instrumented build's coverage profile now, as `ngterm_app::coverage::write_profile` does before the app's
+/// own `_exit` (this crate does not depend on the app's). Nothing in a build without coverage.
+fn write_coverage_profile() {
+    #[cfg(coverage)]
+    {
+        // compiler-rt's profile runtime, linked into every `-C instrument-coverage` binary
+        unsafe extern "C" {
+            fn __llvm_profile_write_file() -> std::ffi::c_int;
+        }
+        // SAFETY: the runtime's own writer, the one its exit handler calls; it touches only the runtime's state. A
+        // write that fails reports on stderr; nothing more to do.
+        unsafe { __llvm_profile_write_file() };
+    }
 }
 
 /// Where the engine runs.

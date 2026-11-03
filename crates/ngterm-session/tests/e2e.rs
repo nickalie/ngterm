@@ -8,7 +8,7 @@
 //! that ignores the hangup outlives it, on Unix) and `kill --force` end it all, and the server stops by itself.
 //!
 //! Each test has a private namespace that only `NGTERM_LIVE_DIR` names, every child the test's environment without the
-//! live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables (`binary::Namespace`); its sessions are killed at its
+//! live ngterm's `NGTERM_*` and `AGTERM_*` variables (`binary::Namespace`); its sessions are killed at its
 //! end.
 
 #[expect(

@@ -208,9 +208,10 @@ pub fn glyph(name: IconName, ink: gpui_kit::Hsla, size: Pixels) -> AnyElement {
         .into_any_element()
 }
 
-/// The search field's row: the magnifier and the field, at the interface size.
+/// The search field's row: the magnifier and the field, at the interface size. The field answers to the panel's id
+/// `panel` as well, as upstream's field inherits its panel's accessibility identifier.
 #[must_use]
-pub fn header(field: &Entity<InputState>, metrics: Metrics, colors: ChromeColors) -> AnyElement {
+pub fn header(field: &Entity<InputState>, panel: &'static str, metrics: Metrics, colors: ChromeColors) -> AnyElement {
     let dim = crate::chrome::color(colors.foreground, crate::chrome::DIM_ALPHA);
     div()
         .flex()
@@ -223,6 +224,7 @@ pub fn header(field: &Entity<InputState>, metrics: Metrics, colors: ChromeColors
             div().flex_1().min_w(px(0.)).child(
                 Input::new(field)
                     .id("palette-field")
+                    .accessibility_id(panel)
                     .appearance(false)
                     .text_size(modal::logical(metrics.base)),
             ),
@@ -230,14 +232,22 @@ pub fn header(field: &Entity<InputState>, metrics: Metrics, colors: ChromeColors
         .into_any_element()
 }
 
-/// One row's frame: the selection's accent wash, a hover wash on a live row, the interface size's padding.
+/// One row's frame, named `title` for assistive technology: the selection's accent wash, a hover wash on a live row,
+/// the interface size's padding.
 #[must_use]
-pub fn row(id: SharedString, selected: bool, live: bool, metrics: Metrics, colors: ChromeColors) -> Stateful<Div> {
+pub fn row(
+    (id, title): (SharedString, &str),
+    selected: bool,
+    live: bool,
+    metrics: Metrics,
+    colors: ChromeColors,
+) -> Stateful<Div> {
     let hover = crate::chrome::color(colors.foreground, 0.04);
     div()
         .id(id.clone())
         .accessibility_id(id.clone())
         .role(gpui_kit::Role::ListBoxOption)
+        .aria_label(SharedString::from(title.to_owned()))
         .aria_selected(selected)
         .debug_selector(move || id.to_string())
         .flex()
@@ -281,6 +291,8 @@ pub fn text_column(
                 .accessibility_id("palette-subtitle")
                 .role(gpui_kit::Role::Label)
                 .aria_label(SharedString::from(subtitle.to_owned()))
+                // a label's text is its value (AccessKit's label from value)
+                .aria_value(SharedString::from(subtitle.to_owned()))
                 .truncate()
                 .text_size(modal::logical(metrics.secondary))
                 .text_color(dim)
@@ -537,7 +549,7 @@ impl Picker {
             PickRow::Custom { label, .. } => ("pick-custom", label.as_str(), None, None),
         };
         row(
-            SharedString::from(format!("palette-item-{id}")),
+            (SharedString::from(format!("palette-item-{id}")), title),
             index == self.selection,
             true,
             self.metrics,
@@ -566,14 +578,15 @@ impl Render for Picker {
             .collect();
         let placement = Placement::of(window.viewport_size(), self.inset, PANEL_WIDTH, self.metrics);
         let picker = cx.entity().downgrade();
+        let ids = Ids {
+            scrim: "pick-scrim",
+            panel: "pick-palette",
+        };
         frame(
             Frame {
-                ids: Ids {
-                    scrim: "pick-scrim",
-                    panel: "pick-palette",
-                },
+                ids,
                 placement,
-                header: header(&self.field, self.metrics, colors),
+                header: header(&self.field, ids.panel, self.metrics, colors),
                 rows,
                 footer: None,
                 scroll: &self.scroll,

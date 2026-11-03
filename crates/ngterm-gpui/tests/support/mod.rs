@@ -2,7 +2,7 @@
 //! ngterm): a fresh root under `/tmp`, a private session bus and a private "system" bus (`DBUS_SYSTEM_BUS_ADDRESS`, so
 //! the app's `NetworkManager` and logind sources never reach the machine's), its own state dir, socket and application
 //! id, and
-//! every child's environment built from scratch, so no `NGTERM_*`, `AGTERM_*`, `ZMX_*`, `WAYLAND_DISPLAY`, `DISPLAY` or
+//! every child's environment built from scratch, so no `NGTERM_*`, `AGTERM_*`, `WAYLAND_DISPLAY`, `DISPLAY` or
 //! `NIRI_SOCKET` of the session the tests run in reaches it. Displays are private too: a headless weston, a private
 //! Xvfb, or a niri nested in that weston; GPUI on them renders through Mesa's lavapipe only.
 //!
@@ -190,7 +190,7 @@ impl Sandbox {
                 self.display
             );
         }
-        assert!(env.keys().all(|key| !key.starts_with("ZMX_")));
+        assert!(env.keys().all(|key| !key.starts_with("AGTERM_")));
         assert_ne!(env["NGTERM_STATE_DIR"], "", "no state dir");
     }
 

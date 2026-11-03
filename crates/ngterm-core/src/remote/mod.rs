@@ -2,8 +2,8 @@
 //! and the sessions it attached from other machines (the viewer side).
 //!
 //! - [`tree`]: `live.tree`, the attachable sessions here or, over ssh, on another host;
-//! - [`frames`] and [`hub`]: the `live.present` stream that carries a session's presentation (status, context, layout,
-//!   HUD, notifications) to its viewers, and decides which one viewer is the session's sole presenter;
+//! - [`frames`] and [`hub`]: the `live.present` stream that carries a session's presentation (status, context, name,
+//!   layout, HUD, notifications) to its viewers, and decides which one viewer is the session's sole presenter;
 //! - [`remotes`]: `remotes.conf`, the hosts offered for an attach;
 //! - the viewer side: `live.attach` and File ▸ Attach Remote ([`attach`]), the ssh lines it runs ([`ssh`]), each
 //!   attached row's presentation client ([`client`]) and what its frames put on the row ([`viewer`], [`layout`]), and
@@ -16,6 +16,7 @@
 //! - on the presenter, the pages an origin handed over ([`replica_page`]) and their end of that channel
 //!   ([`page_channel`]);
 //! - a remote row's companions, which its origin creates and this machine attaches under the row ([`companions`]), a
+//!   viewer's new split created on the origin and attached here ([`split`]), a
 //!   parent's respawn on the origin carried to its viewers' held panes ([`respawn`]), and the sessions this machine asks
 //!   an origin to create or end ([`origin_sessions`]); what an origin answers to those lines, read with no `Core`
 //!   ([`origin_replies`]).
@@ -27,6 +28,7 @@
 
 pub(crate) mod attach;
 pub mod client;
+pub mod clipboard;
 mod companion_page;
 pub(crate) mod companions;
 pub mod frames;
@@ -44,6 +46,7 @@ pub(crate) mod relaunch;
 pub mod remotes;
 pub mod replica_page;
 pub mod respawn;
+mod split;
 pub mod ssh;
 pub mod tree;
 mod viewer;
@@ -138,6 +141,7 @@ struct Stream {
 struct Published {
     status: Option<PresentationStatus>,
     context: Option<String>,
+    name: Option<String>,
 }
 
 /// A session's HUD as published to viewers (upstream's `hudPublishGeneration`, `hudExpiresAt` and `onHudWithdrawn`).
@@ -290,6 +294,18 @@ fn local_tree(core: &Core) -> Outcome {
 
 // MARK: - presentation state
 
+/// The most of a session's name a frame carries, in bytes. `session rename` takes a name of any length and a frame
+/// over [`frames::MAX_FRAME_BYTES`] closes the stream, so the name travels cut to what a row can show.
+const MAX_PRESENTED_NAME_BYTES: usize = 1024;
+
+/// The session's name as it travels: what the origin shows, cut at a character boundary to
+/// [`MAX_PRESENTED_NAME_BYTES`].
+fn presentation_name(session: &Session) -> String {
+    let mut name = session.display_name();
+    name.truncate(name.floor_char_boundary(MAX_PRESENTED_NAME_BYTES));
+    name
+}
+
 /// The session's status as it travels, `None` when idle (upstream's `presentationStatus`).
 fn presentation_status(session: &Session) -> Option<PresentationStatus> {
     let indicator = &session.agent_indicator;
@@ -396,6 +412,7 @@ impl Core {
             hud: self.remote.hud(found, Instant::now()),
             context: found.context.clone(),
             layout: presentation_layout(found),
+            name: Some(presentation_name(found)),
             respawns,
         }
     }
@@ -485,6 +502,7 @@ impl Core {
         self.remote.published.entry(session).or_insert_with(|| Published {
             status: snapshot.status.clone(),
             context: snapshot.context.clone(),
+            name: snapshot.name.clone(),
         });
         let sink = Box::new(ChannelSink(Rc::clone(&channel)));
         match self.remote.hub.subscribe(session, &hello, sink, move |_| snapshot) {
@@ -640,8 +658,8 @@ impl Core {
     }
 
     /// Brings the viewers in line with the model after a mutation, on every commit: the remote overlays the model
-    /// closed and the jobs that ended, a withdrawn HUD, and each watched session's status, context and layout where they
-    /// changed since its viewers last got them.
+    /// closed and the jobs that ended, a withdrawn HUD, and each watched session's status, context, name and layout
+    /// where they changed since its viewers last got them.
     pub(crate) fn sync_presentation(&mut self) {
         self.settle_remote_overlays();
         self.drop_orphaned_presentation_streams();
@@ -683,21 +701,27 @@ impl Core {
         let Some(found) = self.presented_session(session) else {
             return;
         };
-        let (status, context, layout) = (
+        let (status, context, name, layout) = (
             presentation_status(found),
             found.context.clone(),
+            presentation_name(found),
             presentation_layout(found),
         );
         let published = self.remote.published.entry(session).or_default();
         let status_changed = published.status != status;
         let context_changed = published.context != context;
+        let name_changed = published.name.as_ref() != Some(&name);
         published.status.clone_from(&status);
         published.context.clone_from(&context);
+        published.name = Some(name.clone());
         if status_changed {
             self.remote.hub.publish(&Body::Status(status), session);
         }
         if context_changed {
             self.remote.hub.publish(&Body::Context(context), session);
+        }
+        if name_changed {
+            self.remote.hub.publish(&Body::Name(name), session);
         }
         if let Some(layout) = layout {
             self.remote.hub.publish_layout(layout, session);

@@ -2,7 +2,7 @@ Upstream's v0.39.1 skill still says a Live sessions `session new --command` fall
 command exits and that `--wait` adds no hold prompt. Upstream's own #840 reversed that (CHANGELOG, "Behavior change"):
 the pane's creation command ends the pane, as outside Live, and `--wait` holds its final output; a captured command's
 replay after a clean quit and `session restart --command` still return to the shell. This build does the same
-(`ngterm_core::restore::spawn_plan::resolve_live_seed`, `Creation::EndingPane`; conformance `test_zmx.py`,
+(`ngterm_core::restore::spawn_plan::resolve_live_seed`, `Creation::EndingPane`; conformance `test_live_sessions.py`,
 `test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wait`), so the text says so.
 Applied after 0009-other-platforms.patch.
 

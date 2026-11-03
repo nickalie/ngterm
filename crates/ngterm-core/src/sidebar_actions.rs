@@ -169,6 +169,9 @@ impl Core {
                 })
             }
             SidebarAction::Duplicate(session) => {
+                if self.remote_row(window, session) {
+                    return self.begin_duplicate_remote_session(window, session);
+                }
                 let home = self.library().home().to_owned();
                 let created = self
                     .library_mut()

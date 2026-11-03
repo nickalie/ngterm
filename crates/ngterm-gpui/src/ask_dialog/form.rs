@@ -738,7 +738,10 @@ impl AskDialog {
             .choices
             .iter()
             .enumerate()
-            .map(|(index, choice)| self.render_row(index, choice, list.multiple, look, cx))
+            .map(|(index, choice)| {
+                self.render_row(index, choice, list.multiple, look, cx)
+                    .into_any_element()
+            })
             .collect();
         let other = field.map(|field| self.render_other_row(list, look, field, cx));
         div()
@@ -759,7 +762,7 @@ impl AskDialog {
         multiple: bool,
         look: RowLook,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let draft = self.draft();
         let (checked, current) = (draft.is_checked(&choice.id), draft.cursor() == index);
         let id = row_id(&choice.id);
@@ -772,11 +775,9 @@ impl AskDialog {
         div()
             .id(SharedString::from(id.clone()))
             .accessibility_id(SharedString::from(id.clone()))
-            .role(if multiple {
-                gpui_kit::Role::CheckBox
-            } else {
-                gpui_kit::Role::RadioButton
-            })
+            .role(choice_role(multiple))
+            .aria_label(SharedString::from(choice.label.clone()))
+            .aria_toggled(toggled(checked))
             .debug_selector(move || id)
             .relative()
             .flex()
@@ -787,20 +788,23 @@ impl AskDialog {
             .children(subtitle)
             .children(current.then(|| self.row_reveal()))
             .on_click(cx.listener(move |dialog, _, window, cx| dialog.toggle(index, window, cx)))
-            .into_any_element()
     }
 
     /// The free-form row: its marker, dimmed until the text is not blank, toggles like a row's; the field edits.
+    /// Assistive technology presses the row itself, which toggles as its marker does (a click on the row would land in
+    /// the field), and reads it disabled while the text is blank.
     fn render_other_row(
         &self,
         list: &AskChoiceForm,
         look: RowLook,
         field: AnyElement,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let index = list.choices.len();
         let draft = self.draft();
         let current = draft.cursor() == index;
+        let enabled = draft.other_enabled();
+        let press = cx.weak_entity();
         let marker = look
             .header(
                 look.marker(draft.other_selected(), list.multiple, current),
@@ -808,10 +812,21 @@ impl AskDialog {
                 current,
             )
             .flex_shrink_0()
-            .opacity(if draft.other_enabled() { 1.0 } else { 0.4 });
+            .opacity(if enabled { 1.0 } else { 0.4 });
         div()
             .id(OTHER_ROW_ID)
             .accessibility_id(OTHER_ROW_ID)
+            .role(choice_role(list.multiple))
+            .when_some(list.other.clone(), |row, placeholder| {
+                row.aria_label(SharedString::from(placeholder))
+            })
+            .aria_toggled(toggled(draft.other_selected()))
+            .aria_disabled(!enabled)
+            .when(enabled, |row| {
+                row.on_a11y_action(gpui_kit::accesskit::Action::Click, move |_, window, cx| {
+                    let _ = press.update(cx, |dialog, cx| dialog.toggle(index, window, cx));
+                })
+            })
             .debug_selector(|| OTHER_ROW_ID.to_owned())
             .relative()
             .flex()
@@ -833,7 +848,24 @@ impl AskDialog {
                     .child(field),
             )
             .children(current.then(|| self.row_reveal()))
-            .into_any_element()
+    }
+}
+
+/// A row's role: a checkbox in a multiple list, else a radio button.
+fn choice_role(multiple: bool) -> gpui_kit::Role {
+    if multiple {
+        gpui_kit::Role::CheckBox
+    } else {
+        gpui_kit::Role::RadioButton
+    }
+}
+
+/// A row's checked state as assistive technology reads it.
+fn toggled(checked: bool) -> gpui_kit::Toggled {
+    if checked {
+        gpui_kit::Toggled::True
+    } else {
+        gpui_kit::Toggled::False
     }
 }
 

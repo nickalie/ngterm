@@ -744,7 +744,7 @@ keeps the frontmost window unchanged; an invalid or closed target fails. Takes t
 listing, not the name, and resolves the remote again first, so a session that has gone fails instead of
 handing back a fresh shell wearing its name. Closing it here ends only this side's connection and forgets the
 row; a row still open at quit is attached again on the next launch, where it stood, once that machine answers.
-The attached row mirrors the origin session's status, context, `notify`
+The attached row mirrors the origin session's status, context, name (until renamed here), `notify`
 notifications, HUD and the layout of attached panes over a stream that reconnects by itself
 ([details](reference.md#restore)); read
 `presentation.state` in `tree`, and expect mirrored status, context and HUD to clear while it is down. One

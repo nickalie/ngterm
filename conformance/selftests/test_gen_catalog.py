@@ -41,9 +41,9 @@ COMMANDS = [
     "session.hud.open",
     "session.overlay.open",
     "session.overlay.navigate",
-    "zmx.tree",
-    "zmx.attach",
-    "zmx.present",
+    "live.tree",
+    "live.attach",
+    "live.present",
     "session.overlay.job.run",
     "session.overlay.page.serve",
     "version",
@@ -79,9 +79,9 @@ CLI = {
     "session hud": {"wire": "session.hud.open"},
     "session overlay open": {"wire": "session.overlay.open"},
     "session overlay navigate": {"wire": "session.overlay.navigate"},
-    "zmx tree": {"wire": "zmx.tree"},
-    "zmx attach": {"wire": "zmx.attach"},
-    "zmx present": {"wire": "zmx.present"},
+    "live tree": {"wire": "live.tree"},
+    "live attach": {"wire": "live.attach"},
+    "live present": {"wire": "live.present"},
     "session overlay run-job": {"wire": "session.overlay.job.run"},
     "session overlay page-serve": {"wire": "session.overlay.page.serve"},
     "session wait": {"uses": ["events.read", "tree"]},
@@ -116,11 +116,30 @@ def test_commands_keep_declaration_order_and_implicit_raw_values() -> None:
 
 def test_stream_commands_carry_their_mode() -> None:
     gen = gc.generate(MINI)
-    assert gen.commands["zmx.present"] == {"mode": "presentation-stream"}
+    assert gen.commands["live.present"] == {"mode": "presentation-stream"}
     assert gen.commands["session.overlay.job.run"] == {"mode": "job-stream"}
     assert gen.commands["session.overlay.page.serve"] == {"mode": "page-serve-stream"}
-    assert gen.commands["zmx.tree"] == {}
-    assert gen.commands["zmx.attach"] == {}
+    assert gen.commands["live.tree"] == {}
+    assert gen.commands["live.attach"] == {}
+
+
+def test_upstreams_group_is_renamed_to_ngterms() -> None:
+    gen = gc.Generated(
+        commands={"zmx.list": {}, "tree": {}},
+        fields={"result.zmx": {}, "tree.session.backedByZmx": {}, "tree.app": {}},
+        cli={"zmx list": {"wire": "zmx.list"}, "session wait": {"uses": ["zmx.list", "tree"]}},
+    )
+    gc.rename_upstream(gen)
+    assert list(gen.commands) == ["live.list", "tree"]
+    assert list(gen.fields) == ["result.live", "tree.session.backedByLive", "tree.app"]
+    assert gen.cli == {"live list": {"wire": "live.list"}, "session wait": {"uses": ["live.list", "tree"]}}
+    assert gen.problems == []
+
+
+def test_a_group_name_without_an_ngterm_name_is_a_problem() -> None:
+    gen = gc.Generated(fields={"tree.session.zmxSessionName": {}})
+    gc.rename_upstream(gen)
+    assert gen.problems == ["fields item tree.session.zmxSessionName names zmx, which has no ngterm name"]
 
 
 def test_fields_follow_stored_properties_and_coding_keys() -> None:
@@ -325,7 +344,7 @@ def test_comments_and_strings_do_not_shift_nesting() -> None:
             PROTOCOL,
             '    case zmxPresent = "zmx.present"\n',
             "",
-            "generator table names zmx.present, which is not in the Command enum",
+            "generator table names live.present, which is not in the Command enum",
         ),
         (
             PROTOCOL,
@@ -414,14 +433,14 @@ def test_merge_preserves_status_manual_keys_and_hand_sections() -> None:
         "upstream": "v0.35.0",
         "commands": {
             "tree": {"status": "covered", "note": "kept"},
-            "zmx.present": {"status": "covered", "mode": "stale-mode"},
+            "live.present": {"status": "covered", "mode": "stale-mode"},
         },
         "fields": {"tree.app": {"status": "covered"}},
         "behaviors": {"restore.live": {"requires": ["live-sessions"]}},
         "exemptions": {"debug.appearance": "a manual reason", "cli:clipboard set": "manual"},
     }
     gen = generated(
-        commands={"tree": {}, "zmx.present": {"mode": "presentation-stream"}, "new.cmd": {}},
+        commands={"tree": {}, "live.present": {"mode": "presentation-stream"}, "new.cmd": {}},
         fields={"tree.app": {}},
         events={"status": {}},
         cli={"tree": {"wire": "tree"}},
@@ -430,14 +449,14 @@ def test_merge_preserves_status_manual_keys_and_hand_sections() -> None:
     assert catalog["upstream"] == "v0.36.0"
     assert catalog["commands"] == {
         "tree": {"status": "covered", "note": "kept"},
-        "zmx.present": {"status": "covered", "mode": "presentation-stream"},
+        "live.present": {"status": "covered", "mode": "presentation-stream"},
         "new.cmd": {"status": "uncovered"},
     }
     assert catalog["fields"] == {"tree.app": {"status": "covered"}}
     assert catalog["behaviors"] == {"restore.live": {"requires": ["live-sessions"]}, **gc.AUTO_BEHAVIORS}
     assert catalog["exemptions"]["debug.appearance"] == "a manual reason"
     assert catalog["exemptions"]["cli:clipboard set"] == "manual"
-    assert catalog["exemptions"]["zmx.attach"] == gc.AUTO_EXEMPTIONS["zmx.attach"]
+    assert catalog["exemptions"]["live.attach"] == gc.AUTO_EXEMPTIONS["live.attach"]
     assert changes.added == {"commands": ["new.cmd"], "events": ["status"], "cli": ["tree"]}
     assert changes.removed == {}
 

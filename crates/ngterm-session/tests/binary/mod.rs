@@ -1,7 +1,7 @@
 //! The `ngterm-session` binary driven as its users drive it, for the cli and e2e tests: a private namespace that only
 //! `NGTERM_LIVE_DIR` names, the api commands run to their end, and `attach` as a terminal client on a real PTY, the
 //! test standing in for the outer terminal (it answers the client's probe, and keeps what reaches it). Every child
-//! runs with the test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables.
+//! runs with the test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables.
 
 use std::ffi::OsString;
 use std::io::Write as _;
@@ -65,7 +65,7 @@ impl Namespace {
         let mut environment: Vec<(OsString, OsString)> = std::env::vars_os()
             .filter(|(name, _)| {
                 let name = name.to_string_lossy().to_ascii_uppercase();
-                !name.starts_with("NGTERM_") && !name.starts_with("AGTERM_") && !name.starts_with("ZMX_")
+                !name.starts_with("NGTERM_") && !name.starts_with("AGTERM_")
             })
             .collect();
         environment.push(("NGTERM_LIVE_DIR".into(), self.directory.clone().into()));

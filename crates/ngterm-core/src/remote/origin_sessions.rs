@@ -6,6 +6,8 @@
 //!   session of its own, keeping its own selection, once it says it runs live sessions, the origin is listed until the
 //!   session is attachable, and it attaches here selected. It runs as a step of the Attach Remote flow
 //!   ([`super::attach`]), whose panels it shows.
+//! - Duplicate Session asks the origin to duplicate its source in its current focused directory, then attaches the
+//!   fresh shell beside the source here. The origin selects its copy too, as its plain duplicate command does.
 //! - End Session, an item of a remote row's menu the frontend confirms first: the origin closes the session with no undo
 //!   window, its programs and companions with it, then the row closes here. Closing a remote row any other way only
 //!   detaches.
@@ -36,7 +38,30 @@ pub(super) struct CreateRun {
     host: String,
     /// The workspace of the row it was asked from; the window's current one otherwise.
     workspace: Option<Uuid>,
+    request: CreateRequest,
     stage: CreateStage,
+}
+
+#[derive(Debug)]
+enum CreateRequest {
+    New,
+    Duplicate { source: Uuid, origin: String },
+}
+
+impl CreateRequest {
+    fn action(&self) -> &'static str {
+        match self {
+            Self::New => NEW_SESSION,
+            Self::Duplicate { .. } => "Duplicate Session",
+        }
+    }
+
+    fn arguments(&self) -> Vec<&str> {
+        match self {
+            Self::New => NEW_SESSION_ARGUMENTS.to_vec(),
+            Self::Duplicate { origin, .. } => vec!["session", "duplicate", "--target", origin],
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -65,6 +90,36 @@ pub(crate) struct EndRun {
 }
 
 impl Core {
+    /// Duplicate a remote row on its host, where the source's current focused directory is known.
+    pub(crate) fn begin_duplicate_remote_session(&mut self, window: Uuid, session: Uuid) -> bool {
+        let Some(store) = self.library().store(window) else {
+            return false;
+        };
+        let Some(row) = store.session(session) else {
+            return false;
+        };
+        let Some((host, presentation)) = row.remote_host().zip(row.remote_presentation()) else {
+            self.action_failed(
+                "Duplicate Session",
+                window,
+                Some(session),
+                "the remote session is not attached",
+            );
+            return true;
+        };
+        let host = host.to_owned();
+        let request = CreateRequest::Duplicate {
+            source: session,
+            origin: presentation.binding.remote_session_id.clone(),
+        };
+        let workspace = store.workspace_for_session(session).map(crate::model::Workspace::id);
+        let flow = AttachFlow::new(window, Some(session));
+        if let Some(flow) = self.start_create_session(flow, host, workspace, request) {
+            self.remote.viewer.attach_flows.push(flow);
+        }
+        true
+    }
+
     /// New Session on the machine remote row `session` of window `window` came from: the new row lands in that row's
     /// workspace, the waits and a failure in a panel over the row. Whether anything changed.
     pub(crate) fn begin_new_remote_session(&mut self, window: Uuid, session: Uuid) -> bool {
@@ -92,11 +147,21 @@ impl Core {
     /// Asks `host` for a session, as `flow`'s next step; `None` once the flow ended.
     pub(super) fn start_origin_session(
         &mut self,
-        mut flow: AttachFlow,
+        flow: AttachFlow,
         host: String,
         workspace: Option<Uuid>,
     ) -> Option<AttachFlow> {
-        flow.action = NEW_SESSION;
+        self.start_create_session(flow, host, workspace, CreateRequest::New)
+    }
+
+    fn start_create_session(
+        &mut self,
+        mut flow: AttachFlow,
+        host: String,
+        workspace: Option<Uuid>,
+        request: CreateRequest,
+    ) -> Option<AttachFlow> {
+        flow.action = request.action();
         self.attach_progress(&mut flow, &format!("creating a session on {host}…"));
         let Some(answer) = self.ask_origin(&host, &RESTORE_MODE_ARGUMENTS) else {
             self.attach_failed(&mut flow, &format!("the remote command failed on {host}"));
@@ -105,6 +170,7 @@ impl Core {
         flow.step = Step::CreatingSession(CreateRun {
             host,
             workspace,
+            request,
             stage: CreateStage::Checking(answer),
         });
         Some(flow)
@@ -112,17 +178,33 @@ impl Core {
 
     /// Moves a create on by what has arrived; `None` once the flow ended.
     pub(super) fn advance_origin_session(&mut self, mut flow: AttachFlow, run: CreateRun) -> Option<AttachFlow> {
-        let CreateRun { host, workspace, stage } = run;
+        let CreateRun {
+            host,
+            workspace,
+            request,
+            stage,
+        } = run;
         let stage = match stage {
-            CreateStage::Checking(answer) => self.step_checking(&mut flow, &host, answer),
+            CreateStage::Checking(answer) => self.step_checking(&mut flow, &host, &request, answer),
             CreateStage::Creating(answer) => self.step_creating(&mut flow, &host, answer),
-            CreateStage::Waiting(waiting) => self.step_waiting(&mut flow, &host, workspace, waiting),
+            CreateStage::Waiting(waiting) => self.step_waiting(&mut flow, &host, workspace, &request, waiting),
         }?;
-        flow.step = Step::CreatingSession(CreateRun { host, workspace, stage });
+        flow.step = Step::CreatingSession(CreateRun {
+            host,
+            workspace,
+            request,
+            stage,
+        });
         Some(flow)
     }
 
-    fn step_checking(&mut self, flow: &mut AttachFlow, host: &str, answer: Answer) -> Option<CreateStage> {
+    fn step_checking(
+        &mut self,
+        flow: &mut AttachFlow,
+        host: &str,
+        request: &CreateRequest,
+        answer: Answer,
+    ) -> Option<CreateStage> {
         let Some(result) = take_answer(&answer) else {
             return Some(CreateStage::Checking(answer));
         };
@@ -130,7 +212,8 @@ impl Core {
             self.attach_failed(flow, &reason);
             return None;
         }
-        let Some(answer) = self.ask_origin(host, &NEW_SESSION_ARGUMENTS) else {
+        // New Session preserves the origin's selection; Duplicate resolves the source and its directory there.
+        let Some(answer) = self.ask_origin(host, &request.arguments()) else {
             self.attach_failed(flow, &format!("the remote command failed on {host}"));
             return None;
         };
@@ -160,6 +243,7 @@ impl Core {
         flow: &mut AttachFlow,
         host: &str,
         workspace: Option<Uuid>,
+        request: &CreateRequest,
         mut waiting: Waiting,
     ) -> Option<CreateStage> {
         let (remote, tree) = match self.next_listing(host, &mut waiting) {
@@ -170,8 +254,15 @@ impl Core {
                 return None;
             }
         };
-        match self.attach_created_session(flow.window, workspace, host, &remote, &tree) {
-            Ok(()) => self.attach_close_hud(flow),
+        let placement = self.created_session_placement(flow.window, workspace, request);
+        let result = placement
+            .ok_or_else(|| "its window here was closed".to_owned())
+            .and_then(|placement| {
+                self.attach_remote_session(&remote, &tree, host, placement)
+                    .map_err(|error| error.to_string())
+            });
+        match result {
+            Ok(_) => self.attach_close_hud(flow),
             Err(reason) => self.attach_failed(flow, &waiting.wait.unattached(host, &reason)),
         }
         None
@@ -203,20 +294,29 @@ impl Core {
         Ok(waiting.wait.listed(&result, host, now))
     }
 
-    fn attach_created_session(
-        &mut self,
+    fn created_session_placement(
+        &self,
         window: Uuid,
         workspace: Option<Uuid>,
-        host: &str,
-        remote: &ControlRemoteSession,
-        tree: &ControlRemoteTree,
-    ) -> Result<(), String> {
+        request: &CreateRequest,
+    ) -> Option<Placement> {
+        if let CreateRequest::Duplicate { source, .. } = request
+            && let Some(location) = self.library().store(window)?.session_location(*source)
+        {
+            return Some(Placement {
+                window,
+                workspace: location.workspace,
+                at: Some(location.index + 1),
+                parent: None,
+                select: true,
+            });
+        }
         let kept = workspace.filter(|workspace| {
             self.library()
                 .store(window)
                 .is_some_and(|store| store.workspace(*workspace).is_some())
         });
-        let placement = match kept {
+        match kept {
             Some(workspace) => Some(Placement {
                 window,
                 workspace,
@@ -225,11 +325,7 @@ impl Core {
                 select: true,
             }),
             None => self.workspace_placement(window, true),
-        };
-        let placement = placement.ok_or("its window here was closed")?;
-        self.attach_remote_session(remote, tree, host, placement)
-            .map(drop)
-            .map_err(|error| error.to_string())
+        }
     }
 
     // MARK: - End Session

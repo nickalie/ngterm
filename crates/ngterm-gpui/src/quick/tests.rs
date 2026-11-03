@@ -3,7 +3,7 @@
 //! pane, on the window host (the test platform is no Wayland): shown, focused, hidden with its shell kept, shown
 //! again in a new window, dismissed by a focus loss and by the window manager's close, and gone with its shell.
 //!
-//! The pane runs `/bin/sh -c 'exec cat'` with no `NGTERM_*`, `AGTERM_*` or `ZMX_*` variable inherited (CLAUDE.md >
+//! The pane runs `/bin/sh -c 'exec cat'` with no `NGTERM_*` or `AGTERM_*` variable inherited (CLAUDE.md >
 //! Never touch the user's running ngterm).
 
 use std::sync::{Arc, Mutex};
@@ -331,12 +331,12 @@ impl MainLoop<AppState> for Posted {
     }
 }
 
-/// `/bin/sh -c <script>` with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed.
+/// `/bin/sh -c <script>` with the inherited `NGTERM_*`/`AGTERM_*` variables removed.
 fn script_command(script: &str) -> PaneCommand {
     let mut command = PaneCommand::new("/bin/sh").arg("-c").arg(script);
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") {
             command = command.env_remove(key);
         }
     }

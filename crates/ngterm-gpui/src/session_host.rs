@@ -1,7 +1,7 @@
-//! What every pane runs under (the GTK build's `zmx_runtime.rs` launch part and `ghostty_app.rs` config part, over
-//! `ngterm-term` instead of libghostty): the staged session server (`ngterm-session`, in upstream's zmx's place) as the
-//! core's session host, the live capabilities this host claims, the ghostty config the terminals draw with, and the
-//! [`Host`] their launches start under.
+//! What every pane runs under (the former GTK build's live-session runtime, its launch part, and `ghostty_app.rs`
+//! config part, over `ngterm-term` instead of libghostty): the staged session server (`ngterm-session`, in upstream's
+//! zmx's place) as the core's session host, the live capabilities this host claims, the ghostty config the terminals
+//! draw with, and the [`Host`] their launches start under.
 //!
 //! - **Live sessions** (upstream's `restoredRuntime` zmx wiring in `agtermApp.swift`): [`install`] hands a running
 //!   server of an older build over to the staged one (the update handoff, recorded for the outdated cutoff), gives the

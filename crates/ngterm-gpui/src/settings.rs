@@ -375,7 +375,7 @@ impl SettingsView {
                     SliderState::new()
                         .min(narrow(min))
                         .max(narrow(max))
-                        .step(1.0)
+                        .step(narrow(SliderKey::STEP))
                         .default_value(narrow(key.value(&snapshot.settings)))
                 });
                 subscriptions.push(cx.subscribe(&state, move |view: &mut Self, _, event: &SliderEvent, _| {

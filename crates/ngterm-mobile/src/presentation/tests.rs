@@ -372,6 +372,7 @@ fn the_snapshot_connects_and_its_status_is_no_change() {
             hud: Some(hud()),
             context: Some("fixing the build".to_owned()),
             layout: Some(layout()),
+            name: None,
             respawns: Some(PresentationRespawns {
                 epoch: "e1".to_owned(),
                 generations: std::collections::BTreeMap::new(),

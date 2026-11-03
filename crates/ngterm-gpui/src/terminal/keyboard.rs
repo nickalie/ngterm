@@ -23,7 +23,7 @@ use gpui_kit::{
     AnyWindowHandle, App, Bounds, Context, CursorHideMode, EntityInputHandler, FocusHandle, KeyUpEvent, Pixels,
     Subscription, UTF16Selection, WeakEntity, Window, point, px, size,
 };
-use ngterm_core::ghostty_config::binds::{Action, KeyEffect, Keyboard, Performer, Queued};
+use ngterm_core::ghostty_config::binds::{Action, KeyEffect, Keyboard, Mods, Performer, Queued};
 use ngterm_core::keymap::TypingSurface;
 use ngterm_term::{ClipboardLocation, Pane, PasteSource, SelectionText, Typing};
 
@@ -259,6 +259,13 @@ impl TerminalView {
             Queued::Drop => queued.clear(),
         }
         match result.effect {
+            KeyEffect::Encode
+                if self.shared.spec.remote_host.is_some()
+                    && stroke.mods & (Mods::CTRL | Mods::ALT | Mods::SHIFT | Mods::SUPER) == Mods::CTRL
+                    && super::input::chord(stroke).is_some_and(|chord| chord.key == "v") =>
+            {
+                self.shared.queue(super::Effect::Paste(ClipboardLocation::Standard));
+            }
             KeyEffect::Encode => send(&self.shared, &pane, [stroke.clone()]),
             KeyEffect::Queue => queued.push(stroke.clone()),
             KeyEffect::Consumed | KeyEffect::Closed | KeyEffect::Ignored => {}

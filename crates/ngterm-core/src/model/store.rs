@@ -1049,10 +1049,17 @@ impl AppStore {
     pub fn rename_session(&mut self, id: Uuid, name: &str) {
         let renamed = trimmed_or_none(&sanitized(name));
         let Some(session) = self.session_mut(id) else { return };
-        if session.custom_name == renamed {
+        let inherited = session
+            .remote_presentation
+            .as_ref()
+            .is_some_and(|remote| !remote.name_overridden);
+        if session.custom_name == renamed && !inherited {
             return;
         }
         session.custom_name = renamed;
+        if let Some(remote) = session.remote_presentation.as_mut() {
+            remote.name_overridden = true;
+        }
         self.schedule_tree_changed();
         self.save();
     }

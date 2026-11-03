@@ -1140,6 +1140,120 @@ fn a_create_the_origin_refuses_or_never_answers_says_so_and_attaches_nothing() {
 }
 
 #[test]
+fn duplicate_remote_session_lets_the_origin_resolve_its_directory() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let row = attach.attached_row();
+    let workspace = attach.fixture.store().current_workspace_id().unwrap();
+    let store = attach.fixture.store_mut().unwrap();
+    // A real attachment starts with the viewer's home; remote OSC 7 reports need not update that cache.
+    assert_eq!(store.session(row).unwrap().focused_cwd(), "/home/u");
+    let after = store
+        .add_session(workspace, crate::model::NewSession::at_cwd("/local"))
+        .unwrap();
+    let other = store.add_workspace("other");
+    store.select_workspace(other);
+    let count = attach.fixture.store().sessions().count();
+    attach.session = row;
+
+    assert!(attach.act(SidebarAction::Duplicate(row)));
+    assert_eq!(
+        attach.fixture.store().sessions().count(),
+        count,
+        "no local shell is created"
+    );
+    attach.wait_for_runs(3);
+    assert_eq!(
+        attach.hud(),
+        Some(panel("Duplicate Session", "creating a session on studio…", true))
+    );
+    attach.runner.answer(2, restore_mode("live"));
+    attach.wait_for_runs(4);
+    let expected =
+        crate::remote::ssh::control_command("studio", &["session", "duplicate", "--target", REMOTE_SESSION]).unwrap();
+    assert_eq!(attach.runner.hosts()[3], "studio");
+    assert_eq!(attach.runner.lines()[3], *expected.last().unwrap());
+    attach.runner.answer(3, created_receipt());
+    attach.wait_for_runs(5);
+    let mut created = created_session();
+    created["cwd"] = json!("/only-on-studio/project's files");
+    attach.runner.answer(4, listing(&[build_session(), created]));
+    attach.drive("the remote duplicate lands", |attach| {
+        attach.remote_rows() == ["build", "fresh"]
+    });
+
+    let store = attach.fixture.store();
+    let copy = store.active_session().unwrap();
+    assert_eq!(copy.remote_host(), Some("studio"));
+    assert_eq!(copy.remote_presentation().unwrap().binding.remote_session_id, CREATED);
+    assert_eq!(copy.parent_id(), None);
+    assert_eq!(store.workspace_for_session(copy.id()).unwrap().id(), workspace);
+    let order: Vec<_> = store
+        .workspace(workspace)
+        .unwrap()
+        .sessions
+        .iter()
+        .map(crate::model::Session::id)
+        .collect();
+    let source_index = order.iter().position(|id| *id == row).unwrap();
+    assert_eq!(&order[source_index..], &[row, copy.id(), after]);
+    assert_eq!(store.sessions().count(), count + 1);
+    assert_eq!(attach.hud(), None);
+    assert_eq!(attach.runner.lines().len(), 5, "the origin is asked once");
+}
+
+#[test]
+fn duplicate_remote_session_without_a_binding_never_creates_locally() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let store = attach.fixture.store_mut().unwrap();
+    let workspace = store.current_workspace_id().unwrap();
+    let row = store
+        .add_session(
+            workspace,
+            crate::model::NewSession {
+                remote_host: Some("studio".to_owned()),
+                ..crate::model::NewSession::at_cwd("/home/u")
+            },
+        )
+        .unwrap();
+    let count = store.sessions().count();
+    attach.session = row;
+    assert!(attach.act(SidebarAction::Duplicate(row)));
+    assert_eq!(
+        attach.hud(),
+        Some(panel("Duplicate Session", "the remote session is not attached", false))
+    );
+    assert_eq!(attach.fixture.store().sessions().count(), count);
+    assert!(attach.runner.lines().is_empty());
+    assert_eq!(attach.fixture.core.remote_wake(), None);
+}
+
+#[test]
+fn refused_remote_duplicate_never_creates_a_local_fallback() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let row = attach.attached_row();
+    let count = attach.fixture.store().sessions().count();
+    attach.session = row;
+    assert!(attach.act(SidebarAction::Duplicate(row)));
+    attach.wait_for_runs(3);
+    attach.runner.answer(2, restore_mode("live"));
+    attach.wait_for_runs(4);
+    attach
+        .runner
+        .answer(3, reply(&json!({"ok": false, "error": "source session is gone"})));
+    attach.drive("the refusal shows", |attach| {
+        attach.hud().is_some_and(|hud| hud.spinner.is_none())
+    });
+    assert_eq!(
+        attach.hud(),
+        Some(panel("Duplicate Session", "source session is gone", false))
+    );
+    assert_eq!(attach.fixture.store().sessions().count(), count);
+    assert_eq!(attach.fixture.store().selected_session_id(), Some(row));
+    assert_eq!(attach.runner.lines().len(), 4, "the create is never retried");
+    assert_eq!(attach.fixture.core.remote_wake(), None);
+}
+
+#[test]
 fn new_session_from_a_remote_row_lands_in_that_rows_workspace() {
     let mut attach = Attach::new(Some("studio\n"));
     let row = attach.attached_row();
@@ -1395,6 +1509,142 @@ fn a_relaunch_lists_the_machine_once_and_attaches_each_row_where_it_stood() {
 }
 
 #[test]
+fn locally_renamed_remote_rows_keep_their_names_across_relaunches() {
+    let mut attach = attached_between_local_rows();
+    let store = attach.fixture.store_mut().unwrap();
+    let parent = store.sessions().find(|row| row.display_name() == "one").unwrap().id();
+    let companion = store.sessions().find(|row| row.display_name() == "logs").unwrap().id();
+    store.rename_session(parent, "release build");
+    store.rename_session(companion, "release logs");
+    let expected = attach.row_names();
+
+    let snapshot = attach.fixture.store().snapshot();
+    let saved = snapshot.remote_sessions.as_ref().unwrap();
+    assert_eq!(
+        saved.iter().map(|row| row.local_name.as_deref()).collect::<Vec<_>>(),
+        [Some("release build"), Some("release logs"), None]
+    );
+    let snapshot = serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+    attach = Attach::new(Some("studio\n"));
+    attach.fixture.store_mut().unwrap().restore(&snapshot, true);
+    // Quitting before the host answers must also keep the local names for the next launch.
+    assert_eq!(
+        attach.fixture.store().snapshot().remote_sessions,
+        snapshot.remote_sessions
+    );
+
+    for origin_name in ["release build", "renamed at origin"] {
+        attach = attach.relaunch();
+        attach.core().reattach_saved_remotes();
+        attach.wait_for_runs(1);
+        attach.runner.answer(
+            0,
+            listing(&[
+                numbered_session(origin_name, 1, None),
+                numbered_session("origin logs", 3, Some(1)),
+                numbered_session("two", 2, None),
+            ]),
+        );
+        attach.drive("the renamed rows attach", |attach| attach.remote_rows().len() == 3);
+        assert_eq!(attach.row_names(), expected);
+        let store = attach.fixture.store();
+        let parent = store
+            .sessions()
+            .find(|row| row.display_name() == "release build")
+            .unwrap();
+        let companion = store
+            .sessions()
+            .find(|row| row.display_name() == "release logs")
+            .unwrap();
+        assert_eq!(companion.parent_id(), Some(parent.id()));
+        assert_eq!(
+            parent
+                .remote_presentation()
+                .unwrap()
+                .binding
+                .origin
+                .as_ref()
+                .unwrap()
+                .session_name,
+            origin_name,
+            "the local name does not replace the origin's metadata"
+        );
+    }
+}
+
+#[test]
+fn explicitly_keeping_an_inherited_remote_name_makes_it_a_local_override() {
+    let mut attach = attached_between_local_rows();
+    let store = attach.fixture.store_mut().unwrap();
+    let row = store.sessions().find(|row| row.display_name() == "one").unwrap().id();
+    let _ = store.take_outbox();
+    store.rename_session(row, "one");
+    assert_eq!(store.take_outbox().save, crate::model::SaveRequest::Now);
+    assert_eq!(
+        store.snapshot().remote_sessions.unwrap()[0].local_name.as_deref(),
+        Some("one")
+    );
+    store.rename_session(row, "one");
+    assert_eq!(store.take_outbox().save, crate::model::SaveRequest::None);
+    attach = attach.relaunch();
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    attach
+        .runner
+        .answer(0, listing(&[numbered_session("release", 1, None)]));
+    attach.drive("the locally named row attaches", |attach| {
+        attach.remote_rows().len() == 1
+    });
+    assert_eq!(attach.remote_rows(), ["one"]);
+}
+
+#[test]
+fn unrenamed_remote_rows_take_the_origins_current_name_after_relaunch() {
+    let mut attach = attached_between_local_rows().relaunch();
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    attach.runner.answer(
+        0,
+        listing(&[
+            numbered_session("release", 1, None),
+            numbered_session("release logs", 3, Some(1)),
+            numbered_session("two", 2, None),
+        ]),
+    );
+    attach.drive("the renamed origin rows attach", |attach| {
+        attach.remote_rows().len() == 3
+    });
+    assert_eq!(attach.remote_rows(), ["release", "release logs", "two"]);
+}
+
+#[test]
+fn a_remote_row_with_a_cleared_name_keeps_automatic_naming_after_relaunch() {
+    let mut attach = attached_between_local_rows();
+    let store = attach.fixture.store_mut().unwrap();
+    let row = store.sessions().find(|row| row.display_name() == "one").unwrap().id();
+    store.rename_session(row, "");
+    assert_eq!(
+        store.snapshot().remote_sessions.unwrap()[0].local_name.as_deref(),
+        Some("")
+    );
+    attach = attach.relaunch();
+    attach.core().reattach_saved_remotes();
+    attach.wait_for_runs(1);
+    attach
+        .runner
+        .answer(0, listing(&[numbered_session("release", 1, None)]));
+    attach.drive("the automatic row attaches", |attach| attach.remote_rows().len() == 1);
+    let store = attach.fixture.store_mut().unwrap();
+    let id = store.sessions().find(|row| row.remote_host().is_some()).unwrap().id();
+    let row = store.session_mut(id).unwrap();
+    assert_eq!(row.custom_name, None);
+    row.report_pwd(false, "/first");
+    assert_eq!(row.display_name(), "first");
+    row.report_pwd(false, "/second");
+    assert_eq!(row.display_name(), "second");
+}
+
+#[test]
 fn a_session_gone_from_its_machine_is_dropped_and_named_in_a_banner() {
     let mut attach = attached_between_local_rows().relaunch();
     attach.core().reattach_saved_remotes();
@@ -1488,6 +1738,7 @@ fn saved_row(
         host: host.to_owned(),
         session_id: Uuid::from_u128(number).to_string().to_uppercase(),
         name: name.to_owned(),
+        local_name: None,
         workspace_id: workspace,
         after_session_id: after,
         order,

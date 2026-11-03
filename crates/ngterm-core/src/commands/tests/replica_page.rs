@@ -561,6 +561,162 @@ fn a_page_presented_for_the_origins_split_takes_the_mapped_pane() {
     assert!(!replica.session().html_overlay_active());
 }
 
+fn announce_split(replica: &mut Replica, shown: bool) {
+    let (left, right) = replica.viewer.origin;
+    replica.viewer.frame(json!({"kind": "layout", "layout": {
+        "panes": [wire(left), wire(right)], "primary": wire(left), "axis": "vertical", "shown": shown
+    }}));
+}
+
+fn assert_remote_split_spawn(replica: &mut Replica, pane: Uuid) {
+    let id = replica.id();
+    replica
+        .viewer
+        .fixture
+        .store_mut()
+        .unwrap()
+        .session_mut(id)
+        .unwrap()
+        .split_surface
+        .replace(Box::new(ngterm_host::fakes::FakeSurface::new(wire(pane))));
+    let seed = replica.viewer.fixture.core.request_pane_spawn(id, &wire(pane)).unwrap();
+    let command = seed.command.unwrap();
+    assert!(command.contains("ssh") && command.contains(&crate::live::daemon_name(replica.viewer.origin.1)));
+    assert!(command.contains("NGTERM_LIVE_MANAGED_CLAIM=1") && command.contains("reconnecting"));
+    assert!(seed.wait_after_command && !seed.live);
+}
+
+#[test]
+fn a_page_request_attaches_the_origins_new_split_and_forwards_its_loopback() {
+    let mut replica = Replica::built(false);
+    let primary = replica.session().pane_identity;
+    announce_split(&mut replica, true);
+    assert!(!replica.session().split.exists, "a layout alone never creates a pane");
+    let mut request = Replica::page(Replica::url("http://127.0.0.1:41163/"));
+    request["pane"] = json!(wire(replica.viewer.origin.1));
+    request["chromeless"] = json!(true);
+    replica.request(request);
+    replica.tunnel_line(0, "ngterm-tunnel-ready");
+
+    assert!(replica.rejections().is_empty(), "{:?}", replica.rejections());
+    let session = replica.session();
+    assert_eq!(session.pane_identity, primary);
+    assert!(session.split.shown);
+    assert!(
+        !session.split.focused,
+        "the page must leave focus in the existing terminal"
+    );
+    assert_eq!(session.split.axis, crate::model::SplitAxis::LeftRight);
+    let pane = session.split_pane_identity.unwrap();
+    assert_eq!(
+        session.remote_presentation().unwrap().binding.remote_pane(pane),
+        Some(replica.viewer.origin.1)
+    );
+    let shown = replica.pane_page(OverlayPane::Right).unwrap();
+    assert_eq!(shown.replica_of.map(wire).as_deref(), Some(ORIGIN));
+    assert!(shown.flags.chromeless && shown.flags.javascript);
+    let HtmlSource::Url(url) = &shown.source else {
+        panic!("a forwarded URL")
+    };
+    let port = url.port().unwrap();
+    assert!(
+        replica
+            .launch(0)
+            .argv
+            .iter()
+            .any(|arg| arg == &format!("127.0.0.1:{port}:127.0.0.1:41163"))
+    );
+    assert_remote_split_spawn(&mut replica, pane);
+
+    replica.origin_frame("page.close", json!({"page": ORIGIN}));
+    assert!(replica.pane_page(OverlayPane::Right).is_none());
+    assert!(replica.launch(0).helper.0.borrow().stopped);
+    assert_eq!(replica.session().split_pane_identity, Some(pane));
+}
+
+#[test]
+fn a_page_request_reveals_its_existing_hidden_split() {
+    let mut replica = Replica::new();
+    announce_split(&mut replica, true);
+    let id = replica.id();
+    let pane = replica.session().split_pane_identity;
+    replica
+        .viewer
+        .fixture
+        .store_mut()
+        .unwrap()
+        .set_split_visibility(id, false, None);
+    let mut request = Replica::page(Replica::url("https://example.com/"));
+    request["pane"] = json!(wire(replica.viewer.origin.1));
+    replica.request(request);
+    assert!(replica.rejections().is_empty());
+    assert!(replica.pane_page(OverlayPane::Right).is_some());
+    assert_eq!(replica.session().split_pane_identity, pane);
+    assert!(replica.session().split.shown);
+}
+
+#[test]
+fn a_page_request_never_replaces_a_viewer_split_or_attaches_an_unknown_pane() {
+    for own_split in [false, true] {
+        let mut replica = Replica::built(false);
+        announce_split(&mut replica, true);
+        let id = replica.id();
+        if own_split {
+            replica
+                .viewer
+                .fixture
+                .store_mut()
+                .unwrap()
+                .set_split_visibility(id, true, None);
+        }
+        let pane = replica.session().split_pane_identity;
+        let mut request = Replica::page(Replica::url("https://example.com/"));
+        request["pane"] = json!(wire(if own_split {
+            replica.viewer.origin.1
+        } else {
+            Uuid::new_v4()
+        }));
+        replica.request(request);
+        assert_eq!(replica.rejections()[0]["reason"], "pane not visible");
+        assert_eq!(replica.session().split_pane_identity, pane);
+        assert!(replica.pane_page(OverlayPane::Right).is_none());
+    }
+}
+
+#[test]
+fn a_page_on_the_origins_maximized_pane_keeps_its_hidden_split() {
+    for focused_right in [false, true] {
+        let mut replica = Replica::new();
+        let id = replica.id();
+        replica
+            .viewer
+            .fixture
+            .store_mut()
+            .unwrap()
+            .session_mut(id)
+            .unwrap()
+            .split
+            .focused = focused_right;
+        announce_split(&mut replica, false);
+        assert!(!replica.session().split.shown);
+        let (remote, role) = if focused_right {
+            (replica.viewer.origin.1, OverlayPane::Right)
+        } else {
+            (replica.viewer.origin.0, OverlayPane::Left)
+        };
+        let mut request = Replica::page(Replica::url("https://example.com/"));
+        request["pane"] = json!(wire(remote));
+        replica.request(request);
+        assert!(replica.rejections().is_empty(), "{:?}", replica.rejections());
+        assert!(replica.pane_page(role).is_some());
+        assert!(
+            !replica.session().split.shown,
+            "the origin's maximized layout stays intact"
+        );
+        assert_eq!(replica.session().split.focused, focused_right);
+    }
+}
+
 /// Upstream's `aPageThatCannotBePlacedIsRefused` and `aTakenSlotRefusesThePage`, with the presenter's own refusals.
 #[test]
 fn a_page_that_cannot_be_placed_is_refused_with_its_reason() {

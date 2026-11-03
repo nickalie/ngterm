@@ -100,10 +100,7 @@ fn run_node(node: &Path, script: &Path, env: &[(&str, &Path)]) -> TestResult {
         static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
         for (key, _) in std::env::vars_os() {
             let key = key.to_string_lossy().into_owned();
-            if ["NGTERM_", "AGTERM_", "ZMX_"]
-                .iter()
-                .any(|prefix| key.starts_with(prefix))
-            {
+            if ["NGTERM_", "AGTERM_"].iter().any(|prefix| key.starts_with(prefix)) {
                 command.env_remove(key);
             }
         }

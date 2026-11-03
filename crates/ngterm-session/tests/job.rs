@@ -4,7 +4,7 @@
 //!
 //! The shells are per OS: an interactive `/bin/sh` (job control on its PTY) on Unix, `cmd.exe` on Windows, whose job
 //! is the shell's descendants. Every child gets the test's environment without the live ngterm's `NGTERM_*` and
-//! `ZMX_*` variables.
+//! `AGTERM_*` variables.
 
 #[expect(
     dead_code,
@@ -41,7 +41,7 @@ fn without_live_variables(mut command: Command) -> Command {
     for (key, _) in std::env::vars_os() {
         if key
             .to_str()
-            .is_some_and(|key| key.starts_with("NGTERM_") || key.starts_with("AGTERM_") || key.starts_with("ZMX_"))
+            .is_some_and(|key| key.starts_with("NGTERM_") || key.starts_with("AGTERM_"))
         {
             command = command.env_remove(key);
         }

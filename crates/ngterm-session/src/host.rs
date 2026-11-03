@@ -9,13 +9,13 @@
 //! - **Failures are never answers.** A listing that could not be read is an error, never an empty namespace; a screen
 //!   that could not be read is an error, never a blank screen; a kill that could not be sent is
 //!   [`KillOutcome::Failed`] with the reason. Every call is bounded by the client's timeout
-//!   ([`crate::client::DEFAULT_TIMEOUT`], zmx's per invocation; a kill [`crate::client::KILL_WAIT`] more, for its
-//!   programs' end) and never retried: a second typing after an unclear
-//!   failure would type twice.
-//! - **The error texts** are zmx's in live-session wording: `live session list failed: <reason>`,
-//!   `live session screen failed: <reason>`, `live session type failed: <reason>` (`ZmxClient`'s `zmx list failed`,
-//!   `zmx screen failed`, `zmx type failed`; its `zmx list output was incomplete` and `zmx screen answered no screen`
-//!   have no counterpart, since the server's replies are typed and a malformed one is a failed call). No core or suite
+//!   ([`crate::client::DEFAULT_TIMEOUT`], upstream's per zmx invocation; a kill [`crate::client::KILL_WAIT`] more,
+//!   for its programs' end) and never retried: a second typing after an unclear failure would type twice.
+//! - **The error texts** are upstream's in live-session wording: `live session list failed: <reason>`,
+//!   `live session screen failed: <reason>`, `live session type failed: <reason>` (upstream `ZmxClient`'s
+//!   `zmx list failed`, `zmx screen failed`, `zmx type failed`; its `zmx list output was incomplete` and
+//!   `zmx screen answered no screen` have no counterpart, since the server's replies are typed and a malformed one is
+//!   a failed call). No core or suite
 //!   assertion reads a [`HostError`]'s text: `ngterm-core` turns each failure into its own control error
 //!   (`commands::live::inventory`'s `could not read the live session list` and
 //!   `could not read the live session screen of <name>`, `commands::surface`'s and `commands::typing`'s read and typing

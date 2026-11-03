@@ -284,6 +284,18 @@ fn the_view_menus_overlays_row_names_what_it_will_do_and_toggles(cx: &mut TestAp
     // View is the second submenu: Down twice lands on it, Right opens it
     s.cx.simulate_keystrokes("down down right");
     s.cx.run_until_parked();
+    // View scrolls (a submenu is at most 450 points tall): wheel it down until the overlays row is in it, as a user
+    // scrolls to it
+    let first =
+        s.cx.debug_bounds("app-menu-item-increaseFontSize")
+            .expect("View's first row is drawn")
+            .center();
+    s.cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: first,
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-2000.))),
+        ..gpui_kit::ScrollWheelEvent::default()
+    });
+    s.cx.run_until_parked();
     // a menu row runs on a click once the pointer is over it, as a user's click comes
     let row =
         s.cx.debug_bounds("app-menu-item-toggleOverlay")

@@ -236,6 +236,7 @@ fn start(cx: &mut App, launch: Launch, main_loop: Arc<GpuiMainLoop<AppState>>, p
         state.launched_on(dark);
         state
     });
+    crate::updater::init(&state, poster.clone(), cx);
     let tasks = main_loop.tasks();
     let shell = Rc::new(Shell {
         main_loop,
@@ -374,6 +375,7 @@ fn windows(context: PaneContext, resources: Option<PathBuf>, dark: bool, poster:
 
 /// Brings the windows in line with the model, then lands what the last task left to the frontend.
 fn land(shell: &Shell, state: &Entity<AppState>, cx: &mut App) {
+    crate::updater::set_automatic(state.read(cx).core.settings().auto_update.unwrap_or(true), cx);
     let resettle = state.update(cx, |state, cx| {
         if state.is_quitting() {
             return false;
@@ -556,15 +558,18 @@ fn shut_down(shell: &Shell, cx: &mut App) {
         .map(|info| info.id)
         .collect();
     shell.windows.borrow_mut().save_frames(&known, cx);
-    shell.state.update(cx, |state, _| {
+    let live_reset = shell.state.update(cx, |state, _| {
         state.save_on_quit();
         tracing::info!("quit: the state is saved");
         // a confirmed live sessions reset is armed for the next launch, which this app then opens itself; without the
         // relauncher nothing reopens it, so the reset is not armed (upstream's `armLiveReset`)
-        if state.core.arm_live_reset_on_quit() && !crate::live_runtime::spawn_relauncher() {
+        let live_reset = state.core.arm_live_reset_on_quit();
+        if live_reset && !crate::live_runtime::spawn_relauncher() {
             state.core.disarm_live_reset();
         }
+        live_reset
     });
+    crate::updater::on_quit(live_reset, cx);
     shell.main_loop.close();
     tracing::info!("quit: the main loop is closed");
     shell.server.borrow_mut().stop();

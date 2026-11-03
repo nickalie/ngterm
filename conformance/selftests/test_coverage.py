@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import textwrap
@@ -6,7 +7,15 @@ from typing import Any
 
 import pytest
 import yaml
-from agterm_conformance.coverage import Catalog, CatalogError, Declaration, evaluate, load_baseline, load_catalog
+from agterm_conformance.coverage import (
+    Catalog,
+    CatalogError,
+    Declaration,
+    evaluate,
+    exercised,
+    load_baseline,
+    load_catalog,
+)
 
 CONFORMANCE = Path(__file__).resolve().parents[1]
 
@@ -15,7 +24,7 @@ CATALOG = {
     "commands": {
         "version": {"status": "uncovered"},
         "tree": {"status": "covered"},
-        "zmx.present": {"status": "uncovered", "mode": "presentation-stream"},
+        "live.present": {"status": "uncovered", "mode": "presentation-stream"},
         "old.cmd": {"status": "removed-upstream"},
         "debug.appearance": {"status": "uncovered"},
     },
@@ -33,7 +42,7 @@ UI_IDS = {
 EVERYTHING = (
     "version",
     "tree",
-    "zmx.present",
+    "live.present",
     "field:tree.session.splitRatio",
     "event:pane.split",
     "cli:session resize",
@@ -63,7 +72,7 @@ def with_exemptions(catalog: Catalog, exemptions: dict[str, Any]) -> Catalog:
 
 
 def test_full_coverage(catalog: Catalog) -> None:
-    report = evaluate(catalog, [Declaration("t", EVERYTHING, streams=("zmx.present",))])
+    report = evaluate(catalog, [Declaration("t", EVERYTHING, streams=("live.present",))])
     assert report.ok, report.failure_text()
     assert report.uncovered == [] and report.errors == []
     assert report.sections["commands"].line("commands") == (
@@ -77,7 +86,7 @@ def test_uncovered_items_fail_and_are_listed(catalog: Catalog) -> None:
     assert not report.ok
     assert report.uncovered == [
         "tree",
-        "zmx.present",
+        "live.present",
         "field:tree.session.splitRatio",
         "event:pane.split",
         "cli:session resize",
@@ -106,14 +115,14 @@ def test_status_does_not_decide_coverage(catalog: Catalog) -> None:
     ],
 )
 def test_unknown_or_removed_covers_target(catalog: Catalog, target: str, message: str) -> None:
-    report = evaluate(catalog, [Declaration("tests/test_x.py::test_y", (*EVERYTHING, target), ("zmx.present",))])
+    report = evaluate(catalog, [Declaration("tests/test_x.py::test_y", (*EVERYTHING, target), ("live.present",))])
     assert report.uncovered == []
     assert report.errors == [f"tests/test_x.py::test_y: {message}"]
     assert not report.ok
 
 
 def test_removed_items_are_not_required(catalog: Catalog) -> None:
-    report = evaluate(catalog, [Declaration("t", EVERYTHING, streams=("zmx.present",))])
+    report = evaluate(catalog, [Declaration("t", EVERYTHING, streams=("live.present",))])
     assert "old.cmd" not in report.uncovered
     assert report.sections["commands"].active == 4
 
@@ -121,7 +130,7 @@ def test_removed_items_are_not_required(catalog: Catalog) -> None:
 @pytest.mark.parametrize("reason", ["", "   ", None, 3])
 def test_exemption_without_reason(catalog: Catalog, reason: Any) -> None:
     exempt = with_exemptions(catalog, {"debug.appearance": reason})
-    report = evaluate(exempt, [Declaration("t", EVERYTHING, streams=("zmx.present",))])
+    report = evaluate(exempt, [Declaration("t", EVERYTHING, streams=("live.present",))])
     assert report.errors == ["exemption 'debug.appearance' needs a non-empty reason"]
     assert report.uncovered == ["debug.appearance"]
 
@@ -136,31 +145,31 @@ def test_exemption_without_reason(catalog: Catalog, reason: Any) -> None:
 )
 def test_exemption_must_name_an_active_item(catalog: Catalog, key: str, message: str) -> None:
     exempt = with_exemptions(catalog, {"debug.appearance": "why", key: "why"})
-    report = evaluate(exempt, [Declaration("t", EVERYTHING, streams=("zmx.present",))])
+    report = evaluate(exempt, [Declaration("t", EVERYTHING, streams=("live.present",))])
     assert report.errors == [message]
 
 
 def test_exempted_item_also_covered_counts_once_as_covered(catalog: Catalog) -> None:
-    report = evaluate(catalog, [Declaration("t", (*EVERYTHING, "debug.appearance"), ("zmx.present",))])
+    report = evaluate(catalog, [Declaration("t", (*EVERYTHING, "debug.appearance"), ("live.present",))])
     assert report.ok
     assert (report.sections["commands"].covered, report.sections["commands"].exempted) == (4, 0)
 
 
 def test_stream_command_needs_a_stream_declaration(catalog: Catalog) -> None:
-    targets = tuple(t for t in EVERYTHING if t != "zmx.present")
-    refusal = Declaration("tests/test_zmx.py::test_refused", ("zmx.present",))
+    targets = tuple(t for t in EVERYTHING if t != "live.present")
+    refusal = Declaration("tests/test_live_sessions.py::test_refused", ("live.present",))
     report = evaluate(catalog, [Declaration("t", targets), refusal])
-    assert report.uncovered == ["zmx.present"]
+    assert report.uncovered == ["live.present"]
     assert report.errors == []
-    assert "zmx.present is named only without streams=('zmx.present',): tests/test_zmx.py::test_refused" in (
+    assert "live.present is named only without streams=('live.present',): tests/test_live_sessions.py::test_refused" in (
         report.failure_text()
     )
-    driven = Declaration("tests/test_zmx.py::test_stream", ("zmx.present",), ("zmx.present",))
+    driven = Declaration("tests/test_live_sessions.py::test_stream", ("live.present",), ("live.present",))
     assert evaluate(catalog, [Declaration("t", targets), refusal, driven]).ok
 
 
 def test_streams_on_a_command_without_a_mode(catalog: Catalog) -> None:
-    report = evaluate(catalog, [Declaration("t", EVERYTHING, streams=("zmx.present", "version"))])
+    report = evaluate(catalog, [Declaration("t", EVERYTHING, streams=("live.present", "version"))])
     assert report.errors == ["t: streams names 'version', which has no stream mode"]
 
 
@@ -176,7 +185,7 @@ def test_baseline_accepts_listed_uncovered_items(catalog: Catalog) -> None:
 
 def test_baseline_does_not_accept_unlisted_items(catalog: Catalog) -> None:
     report = evaluate(catalog, [Declaration("t", ("version",))], baseline=["tree"])
-    assert "zmx.present" in report.uncovered and "tree" not in report.uncovered
+    assert "live.present" in report.uncovered and "tree" not in report.uncovered
     assert not report.ok
 
 
@@ -241,7 +250,7 @@ def gate_project(pytester: pytest.Pytester, tests: dict[str, str], catalog: Any 
 COVERS_ALL = f"""
 import pytest
 
-@pytest.mark.covers(*{EVERYTHING!r}, streams=("zmx.present",))
+@pytest.mark.covers(*{EVERYTHING!r}, streams=("live.present",))
 def test_everything(ctl):
     raise AssertionError("a conformance test ran under --coverage-gate")
 """
@@ -267,7 +276,7 @@ def test_gate_fails_listing_uncovered(pytester: pytest.Pytester) -> None:
             "tests/test_one.py": """
             import pytest
 
-            @pytest.mark.covers("version", "zmx.present", "field:nope")
+            @pytest.mark.covers("version", "live.present", "field:nope")
             def test_one():
                 pass
             """
@@ -279,8 +288,8 @@ def test_gate_fails_listing_uncovered(pytester: pytest.Pytester) -> None:
         [
             "*9 uncovered (cover, exempt with a reason, or baseline):",
             "  tree",
-            "  zmx.present",
-            "*zmx.present is named only without streams=('zmx.present',): tests/test_one.py::test_one",
+            "  live.present",
+            "*live.present is named only without streams=('live.present',): tests/test_one.py::test_one",
             "*1 declaration/catalog errors:",
             "  tests/test_one.py::test_one: covers unknown item 'field:nope'",
         ]
@@ -365,9 +374,9 @@ def test_gate_malformed_catalog_is_a_usage_error(pytester: pytest.Pytester) -> N
         ('covers("")', "*covers takes one or more item strings*"),
         ("covers(3)", "*covers takes one or more item strings*"),
         ('covers("tree", stream=True)', "*covers takes no stream*"),
-        ('covers("tree", streams="zmx.present")', "*covers streams must be a tuple of command names*"),
-        ('covers("zmx.present", streams=("zmx.present", "zmx.present"))', "*covers streams lists a command twice*"),
-        ('covers("tree", streams=("zmx.present",))', "*covers streams names zmx.present without covering it*"),
+        ('covers("tree", streams="live.present")', "*covers streams must be a tuple of command names*"),
+        ('covers("live.present", streams=("live.present", "live.present"))', "*covers streams lists a command twice*"),
+        ('covers("tree", streams=("live.present",))', "*covers streams names live.present without covering it*"),
     ],
 )
 @pytest.mark.parametrize("gate", [True, False])
@@ -386,3 +395,74 @@ def test_committed_catalog_passes_the_ci_gate() -> None:
     result = subprocess.run(command, cwd=CONFORMANCE.parent, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]
     assert "1 passed" in result.stdout
+
+
+def record(nodeid: str, outcome: str, *covers: str) -> dict[str, Any]:
+    return {"kind": "test", "nodeid": nodeid, "outcome": outcome, "skip": None, "reason": None, "covers": list(covers)}
+
+
+def test_exercised_counts_the_ui_ids_of_passed_tests_only(tmp_path: Path) -> None:
+    ui_ids = {**UI_IDS, "ids": {**UI_IDS["ids"], "gone-id": {"status": "removed-upstream"}}}
+    catalog = load_catalog(write_catalog(tmp_path, ui_ids=ui_ids), tmp_path / "ui-ids.yaml")
+    records = [
+        {"kind": "run", "partial": False, "mode": "full"},
+        record("t::passed", "passed", "ui:ask-dialog", "version", "ui:gone-id"),
+        record("t::xpassed", "xpassed", "ui:welcome-skill-checkbox"),
+        record("t::failed", "failed", "ui:ask-button-{choice}"),
+        record("t::skipped", "skipped", "ui:ask-button-{choice}"),
+        record("t::again", "passed", "ui:ask-dialog"),
+        {"kind": "test", "nodeid": "t::old", "outcome": "passed", "skip": None, "reason": None},
+    ]
+    result = exercised(catalog, records)
+    assert (result.exercised, result.active) == (2, 3)
+    assert result.line() == "ui ids exercised by a passing test: 2/3 (66.7%)"
+
+
+def test_the_exercised_line_from_a_report(tmp_path: Path) -> None:
+    write_catalog(tmp_path / "catalog")
+    report = tmp_path / "nodeids.jsonl"
+    report.write_text(
+        "".join(json.dumps(line) + "\n" for line in [{"kind": "run"}, record("t::a", "passed", "ui:ask-dialog")])
+    )
+    command = [sys.executable, "-m", "agterm_conformance.coverage", str(report), "--catalog",
+               str(tmp_path / "catalog" / "catalog.yaml")]
+    done = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "ui ids exercised by a passing test: 1/3 (33.3%)\n"
+
+
+@pytest.mark.parametrize("flags", ["header", "catalog-flag", "ui-ids-flag"])
+def test_the_exercised_line_uses_the_runs_catalog_files(tmp_path: Path, flags: str) -> None:
+    # the run's own catalog holds one active ui id that its passing test covers; the repository's holds many more
+    custom = {"ids": {"only-id": {"status": "uncovered"}}}
+    write_catalog(tmp_path / "custom", ui_ids=custom)
+    write_catalog(tmp_path / "flagged")
+    header = {"kind": "run", "partial": True, "mode": "partial", "catalog": str(tmp_path / "custom" / "catalog.yaml"),
+              "ui_ids": str(tmp_path / "custom" / "ui-ids.yaml")}
+    report = tmp_path / "nodeids.jsonl"
+    report.write_text("".join(json.dumps(line) + "\n" for line in [header, record("t::a", "passed", "ui:only-id")]))
+    command = [sys.executable, "-m", "agterm_conformance.coverage", str(report)]
+    expected = "ui ids exercised by a passing test: 1/1 (100.0%)\n"
+    if flags == "catalog-flag":
+        # a --catalog flag wins over the header, and takes the ui-ids.yaml beside it rather than the header's
+        command += ["--catalog", str(tmp_path / "flagged" / "catalog.yaml")]
+        expected = "ui ids exercised by a passing test: 0/3 (0.0%)\n"
+    elif flags == "ui-ids-flag":
+        command += ["--ui-ids", str(tmp_path / "flagged" / "ui-ids.yaml")]
+        expected = "ui ids exercised by a passing test: 0/3 (0.0%)\n"
+    done = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == expected
+
+
+@pytest.mark.parametrize("content", [None, "not json\n"], ids=["missing", "malformed"])
+def test_an_unreadable_report_exits_2(tmp_path: Path, content: str | None) -> None:
+    write_catalog(tmp_path / "catalog")
+    report = tmp_path / "nodeids.jsonl"
+    if content is not None:
+        report.write_text(content)
+    command = [sys.executable, "-m", "agterm_conformance.coverage", str(report), "--catalog",
+               str(tmp_path / "catalog" / "catalog.yaml")]
+    done = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert done.returncode == 2
+    assert done.stderr.startswith(f"catalog coverage: {report}: cannot read the report")

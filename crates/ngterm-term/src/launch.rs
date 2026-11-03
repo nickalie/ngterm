@@ -18,8 +18,9 @@
 //!   config's `command`) is split on whitespace as Ghostty splits it, quotes and all. No shell
 //!   integration is injected there (the zsh, bash and fish ones are POSIX shells'); `PATH` takes `;`.
 //! - **Environment**, later steps winning: the app's own; `GHOSTTY_LOG` and `VTE_VERSION` removed, and every inherited
-//!   `AGTERM_*` and `ZMX_*` variable (an agterm or its zmx the app was started under, which `agtermctl`, its hooks and
-//!   the agents in the pane would otherwise act on; the app's own `NGTERM_*` ones stay); the terminal
+//!   `AGTERM_*` and `ZMX_*` variable (an upstream agterm the app was started under, and the zmx session upstream wraps
+//!   its pane in, which `agtermctl`, its hooks, `zmx` and the agents in the pane would otherwise act on; the app's own
+//!   `NGTERM_*` ones stay); the terminal
 //!   identity ([`Host`]); `GHOSTTY_SHELL_FEATURES`; the shell integration of a zsh, bash or fish command line
 //!   ([`ngterm_core::live::shell_integration::setup`], as `shell-integration` asks); the config's `env`; the launch's
 //!   own variables; `PWD` for a working directory. On Windows, whose names ignore case, a later step's key replaces
@@ -84,9 +85,10 @@ const SYSTEM_RESOURCES: &str = "/usr/share/ghostty";
 /// Variables a pane never inherits from the app (libghostty's own log switch, and VTE's, which would make programs
 /// take the terminal for a VTE one).
 const NOT_INHERITED: [&str; 2] = ["GHOSTTY_LOG", "VTE_VERSION"];
-/// The prefixes of the variables a pane never inherits from the app: an outer agterm's pane identity and socket, and
-/// its zmx session's, which name another terminal (the session server strips the same from its own environment, with
-/// `NGTERM_` besides, `ngterm_session::server::spawn`). Compared ignoring case where names do (Windows).
+/// The prefixes of the variables a pane never inherits from the app: an outer upstream agterm's pane identity and
+/// socket, and those of the zmx session upstream wraps its pane in, which name another terminal (the session server
+/// strips the same from its own environment, with `NGTERM_` besides, `ngterm_session::server::spawn`). Compared
+/// ignoring case where names do (Windows).
 const FOREIGN_PREFIXES: [&str; 2] = ["AGTERM_", "ZMX_"];
 /// The largest `input = path:` file libghostty sends (10 MB).
 const INPUT_FILE_LIMIT: u64 = 10 * 1024 * 1024;
@@ -1059,7 +1061,7 @@ mod tests {
         );
     }
 
-    /// An app started inside an outer agterm's pane, which runs on its zmx: its environment.
+    /// An app started inside an outer upstream agterm's pane, which upstream runs on zmx: its environment.
     fn inside_an_outer_agterm() -> MapEnv {
         MapEnv::new()
             .with("AGTERM_ENABLED", "1")

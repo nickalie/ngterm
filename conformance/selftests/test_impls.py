@@ -38,7 +38,6 @@ from agterm_conformance.impls.base import (
     check_app_id,
     check_launch_env,
     find_leftovers,
-    hosts_zmx_dir,
     isolated_runtime_env,
     process_identity,
     remove_live_dir,
@@ -46,9 +45,15 @@ from agterm_conformance.impls.base import (
 )
 from agterm_conformance.impls.rust import ProfileError, RustAdapter, profile_from_version
 from upstream_adapter import UpstreamVocabularyAdapter
-from agterm_conformance.impls.swift_macos import SwiftMacosAdapter
-from agterm_conformance.plugin import ImplOptions
-from agterm_conformance.vocabulary import LIVE, UPSTREAM, Vocabulary, fnv1a64, upstream_socket_directory
+from agterm_conformance.impls.swift_macos import (
+    UPSTREAM,
+    SwiftMacosAdapter,
+    hosts_session_directory,
+    upstream_socket_directory,
+)
+from agterm_conformance import llvm_profiles
+from agterm_conformance.plugin import Cli, ImplOptions
+from agterm_conformance.vocabulary import LIVE, Vocabulary, fnv1a64
 
 
 @pytest.fixture
@@ -1039,7 +1044,7 @@ def test_stop_reaps_claimed_daemons_over_the_protocol(
     instance = adapter.launch()
     pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
     assert instance.request("fake.adopt", pid=pid).ok
-    assert find_leftovers(instance.live_dir) != []
+    assert find_leftovers(instance.live_dir, UPSTREAM) != []
     adapter.stop(instance, cleanup=False)
     requests = [json.loads(line) for line in (instance.state_dir / "fake-requests.jsonl").read_text().splitlines()]
     assert {"cmd": "zmx.kill", "target": f"s{pid}", "args": {"pane": "left", "force": True, "window": "w1"}} in requests
@@ -1054,12 +1059,12 @@ def test_stop_reaps_a_split_whose_survivor_is_promoted_by_the_first_kill(
         pid = spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
         assert instance.request("fake.adopt", pid=pid, session="s1", pane=pane, daemon=name).ok
     adapter.stop(instance)
-    assert find_leftovers(instance.live_dir) == []
+    assert find_leftovers(instance.live_dir, UPSTREAM) == []
 
 
 def test_a_refused_kill_is_not_retried(roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left"}
-    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    monkeypatch.setenv("FAKE_LIVE_LIST", json.dumps({"zmx": {"entries": [row]}}))
     adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     base.reap_live_sessions(instance)
@@ -1117,7 +1122,7 @@ def test_malformed_zmx_list_still_terminates_the_app(
     monkeypatch: pytest.MonkeyPatch,
     listing: str,
 ) -> None:
-    monkeypatch.setenv("FAKE_ZMX_LIST", listing)
+    monkeypatch.setenv("FAKE_LIVE_LIST", listing)
     adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     spawn_daemon(tmp_path, "zmx", instance.live_dir, daemons)
@@ -1143,7 +1148,7 @@ def test_leftover_check_matches_name_and_zmx_dir(tmp_path: Path, daemons: list[s
     zmx = spawn_daemon(tmp_path, "zmx", mine, daemons)
     spawn_daemon(tmp_path, "zmx", other, daemons)
     spawn_daemon(tmp_path, "unrelated", mine, daemons)
-    assert [pid for pid, *_ in find_leftovers(mine)] == [zmx]
+    assert [pid for pid, *_ in find_leftovers(mine, UPSTREAM)] == [zmx]
 
 
 def test_leftover_check_names_an_executable_whose_path_has_a_space(
@@ -1151,7 +1156,7 @@ def test_leftover_check_names_an_executable_whose_path_has_a_space(
 ) -> None:
     live_dir = "/tmp/agterm-zmx-spaced"
     pid = spawn_daemon(tmp_path, "zmx", live_dir, daemons, directory="Test Install")
-    assert [found for found, *_ in find_leftovers(live_dir)] == [pid]
+    assert [found for found, *_ in find_leftovers(live_dir, UPSTREAM)] == [pid]
 
 
 def test_leftover_check_under_a_session_server_finds_its_server_and_every_process_of_its_namespace(
@@ -1197,9 +1202,9 @@ def test_leftover_check_finds_a_session_host_by_its_host_argv(monkeypatch: pytes
         (3, "agterm-session-host", "c", ["/x/agterm-session-host", "client", mine]),
     ]
     monkeypatch.setattr(base, "_processes", lambda: iter(rows))
-    assert [pid for pid, *_ in find_leftovers(mine)] == [1]
-    assert hosts_zmx_dir(["/a b/agterm-session-host", "host", mine], mine)
-    assert not hosts_zmx_dir(["/x/agterm-session-host", "host"], mine)
+    assert [pid for pid, *_ in find_leftovers(mine, UPSTREAM)] == [1]
+    assert hosts_session_directory(["/a b/agterm-session-host", "host", mine], mine)
+    assert not hosts_session_directory(["/x/agterm-session-host", "host"], mine)
 
 
 def test_process_identity_reads_the_image_argv_and_environment(
@@ -1263,6 +1268,7 @@ def mac_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SwiftMaco
         log=root / "app.log",
         app_id=None,
         live_dir=upstream_socket_directory(state),
+        vocabulary=UPSTREAM,
     )
     adapter = SwiftMacosAdapter(bundle)
     adapter.session_host_timeout = 0.2
@@ -1635,7 +1641,7 @@ def test_swift_macos_launch_env(tmp_path: Path, mode: str, zmx: bool) -> None:
     assert "AGTERM_APP_ID" not in env
     assert ("AGTERM_UITEST_FORCE_SIDEBAR_VISIBLE" in env) is (mode == "uitest")
     assert ("AGTERM_UITEST_ENABLE_ZMX" in env) is zmx
-    check_launch_env(env, tmp_path, needs_app_id=False)
+    check_launch_env(env, tmp_path, needs_app_id=False, vocabulary=UPSTREAM)
 
 
 @pytest.mark.parametrize(("mode", "welcome"), [("uitest", True), ("plain", False)])
@@ -1672,7 +1678,7 @@ def test_reaping_waits_for_a_daemon_zmx_does_not_list_yet_and_reports_refusals(
     roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left", "observation": "absent"}
-    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    monkeypatch.setenv("FAKE_LIVE_LIST", json.dumps({"zmx": {"entries": [row]}}))
     adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     try:
@@ -1693,7 +1699,7 @@ def test_reaping_waits_out_a_closed_session_daemon(
     roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     row = {"daemon": "d1", "state": "pendingClose", "sessionID": "s1", "pane": "left", "observation": "running"}
-    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    monkeypatch.setenv("FAKE_LIVE_LIST", json.dumps({"zmx": {"entries": [row]}}))
     adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     try:
@@ -1713,7 +1719,7 @@ def test_stop_reaps_a_listed_daemon_that_has_no_process_yet(
     roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     row = {"daemon": "d1", "state": "claimed", "sessionID": "s1", "pane": "left", "observation": "running"}
-    monkeypatch.setenv("FAKE_ZMX_LIST", json.dumps({"zmx": {"entries": [row]}}))
+    monkeypatch.setenv("FAKE_LIVE_LIST", json.dumps({"zmx": {"entries": [row]}}))
     adapter = UpstreamVocabularyAdapter(fake_bin)
     instance = adapter.launch()
     requests_file = instance.state_dir / "fake-requests.jsonl"
@@ -1935,3 +1941,244 @@ def test_a_session_display_gpui_launch_still_renders_on_lavapipe(
     monkeypatch.setenv(base.DISPLAY_MODE_VARIABLE, "session")
     env = RustAdapter(fake_bin).build_env(Path("/tmp/agt-x"))
     assert env["VK_DRIVER_FILES"] == str(lavapipe)
+
+
+# -- coverage profiles (agterm_conformance.llvm_profiles)
+
+# A stand-in `ngtermctl`: `env` prints its LLVM_PROFILE_FILE, `sleep` waits under the default SIGTERM action, `trap`
+# exits 0 on SIGTERM as a CLI handling it would.
+FAKE_CTL = """
+import os, signal, sys, time
+if sys.argv[1] == "env":
+    print(os.environ.get("LLVM_PROFILE_FILE", "<none>"))
+    sys.exit(0)
+if sys.argv[1] == "trap":
+    signal.signal(signal.SIGTERM, lambda signum, frame: os._exit(0))
+print("ready", flush=True)
+time.sleep(60)
+"""
+
+
+@pytest.fixture
+def coverage_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The run's profile directory, as `run-linux.sh --coverage` exports it; an inherited per-pid profile beside it."""
+    directory = tmp_path / "llvm-cov-target"
+    monkeypatch.setenv(llvm_profiles.COVERAGE_DIR_VARIABLE, str(directory))
+    monkeypatch.setenv(llvm_profiles.PROFILE_VARIABLE, str(tmp_path / "elsewhere-%p.profraw"))
+    return directory
+
+
+@pytest.fixture
+def staged(tmp_path: Path, fake_bin: Path) -> Path:
+    """A stage whose bin/ holds the fake app as `ngterm` and a fake `ngtermctl`."""
+    app = tmp_path / "stage" / "bin" / "ngterm"
+    app.parent.mkdir(parents=True)
+    shutil.copy2(fake_bin, app)
+    ctl = app.parent / "ngtermctl"
+    ctl.write_text(f"#!{sys.executable}\n{FAKE_CTL}")
+    ctl.chmod(0o755)
+    return app
+
+
+def lost_lines(directory: Path) -> list[str]:
+    path = directory / llvm_profiles.LOST_FILE
+    return path.read_text().splitlines() if path.exists() else []
+
+
+def test_coverage_gives_the_app_a_pooled_profile(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_TERM", "quit")
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        seen = json.loads((instance.state_dir / "fake-env.json").read_text())
+        # one pooled file per binary signature in the run's directory, never the inherited per-pid one
+        assert seen["LLVM_PROFILE_FILE"] == str(coverage_dir / "conformance-%4m.profraw")
+    finally:
+        adapter.stop(instance)
+    # an orderly quit wrote its profile: nothing lost
+    assert lost_lines(coverage_dir) == []
+
+
+def test_without_coverage_an_inherited_profile_is_dropped(
+    tmp_path: Path, fake_bin: Path, lavapipe: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(llvm_profiles.COVERAGE_DIR_VARIABLE, raising=False)
+    monkeypatch.setenv(llvm_profiles.PROFILE_VARIABLE, str(tmp_path / "elsewhere-%p.profraw"))
+    env = RustAdapter(fake_bin).build_env(Path("/tmp/agt-x"))
+    assert llvm_profiles.PROFILE_VARIABLE not in env
+
+
+def test_coverage_gives_every_cli_the_pooled_profile(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path
+) -> None:
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        cli = Cli(staged.parent / "ngtermctl", instance, "ngtermctl")
+        pooled = str(coverage_dir / "conformance-%4m.profraw")
+        assert cli("env").stdout == f"{pooled}\n"
+        # an env of the caller's own, without the variable, gets it too
+        bare = {name: value for name, value in instance.env.items() if name != "LLVM_PROFILE_FILE"}
+        assert cli.local("env", env=bare).stdout == f"{pooled}\n"
+        with cli.spawn("env") as process:
+            assert process.line() == pooled
+    finally:
+        adapter.stop(instance)
+
+
+def test_a_cli_ended_by_its_close_is_listed_as_lost(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_TERM", "quit")
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        cli = Cli(staged.parent / "ngtermctl", instance, "ngtermctl")
+        killed = cli.spawn("sleep")
+        assert killed.line() == "ready"
+        killed.close()
+        handled = cli.spawn("trap")
+        assert handled.line() == "ready"
+        handled.close()
+    finally:
+        adapter.stop(instance)
+    assert killed.process.returncode == -signal.SIGTERM and handled.process.returncode == 0
+    # only the one that died of the signal: the other exited, writing its profile
+    assert lost_lines(coverage_dir) == [f"{killed.process.pid} ngtermctl: CliProcess.close: ended before it exited"]
+
+
+def test_a_windows_cli_that_exits_before_its_close_terminates_it_is_not_listed(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_TERM", "quit")
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        cli = Cli(staged.parent / "ngtermctl", instance, "ngtermctl")
+        ended = cli.spawn("sleep")
+        assert ended.line() == "ready"
+        raced = cli.spawn("sleep")
+        assert raced.line() == "ready"
+
+        def exited_first() -> None:
+            # Windows' Popen.terminate on a process that exited after close's poll: TerminateProcess is refused and
+            # the process's own exit code is taken
+            raced.process.kill()
+            raced.process.wait()
+            raced.process.returncode = 0
+
+        with monkeypatch.context() as patch:
+            patch.setattr(raced.process, "terminate", exited_first)
+            patch.setattr(llvm_profiles.sys, "platform", "win32")
+            ended.close()
+            raced.close()
+    finally:
+        adapter.stop(instance)
+    # only the one TerminateProcess reached: the other's own exit wrote its profile
+    assert lost_lines(coverage_dir) == [f"{ended.process.pid} ngtermctl: CliProcess.close: ended before it exited"]
+
+
+def test_an_app_aborted_by_the_stop_is_listed_as_lost(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
+    monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    with pytest.raises(StopError):
+        adapter.stop(instance)
+    assert lost_lines(coverage_dir) == [f"{instance.pid} ngterm: stop: SIGABRT after outliving SIGTERM"]
+
+
+def test_an_app_dying_of_sigterm_is_listed_as_lost(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path
+) -> None:
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    adapter.stop(instance)
+    assert instance.process.returncode == -signal.SIGTERM
+    assert lost_lines(coverage_dir) == [f"{instance.pid} ngterm: stop: died of SIGTERM"]
+
+
+def test_a_launch_beside_killed_after_its_timeout_is_listed_as_lost(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_TERM", "quit")
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        assert adapter.launch_beside(instance, timeout=0.5).returncode is None
+    finally:
+        adapter.stop(instance)
+    [line] = lost_lines(coverage_dir)
+    assert re.fullmatch(r"\d+ ngterm: launch_beside: killed after its timeout", line), line
+
+
+def test_a_relative_coverage_dir_reaches_the_cli_absolute(
+    tmp_path: Path, roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # as `CARGO_TARGET_DIR=target run-linux.sh --coverage` exports it; the CLI runs from the instance's home
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(llvm_profiles.COVERAGE_DIR_VARIABLE, os.path.relpath(coverage_dir, tmp_path))
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        cli = Cli(staged.parent / "ngtermctl", instance, "ngtermctl")
+        assert cli("env").stdout == f"{coverage_dir / 'conformance-%4m.profraw'}\n"
+    finally:
+        adapter.stop(instance)
+
+
+def test_the_windows_reap_lists_only_the_processes_it_ended(
+    coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 2 exits by itself between the last snapshot and its TerminateProcess: its exit wrote its profile
+    monkeypatch.setattr(base.winproc, "descendants", lambda roots: [])
+    monkeypatch.setattr(base.winproc, "alive", lambda process: True)
+    monkeypatch.setattr(base.winproc, "terminate", lambda process: process.pid == 1)
+    launched = [(types.SimpleNamespace(pid=pid, args=[f"C:/stage/bin/{name}"]), 5) for pid, name in
+                ((1, "ngterm.exe"), (2, "ngterm-session.exe"))]
+    base._end_tree(launched, grace=0)
+    assert lost_lines(coverage_dir) == ["1 ngterm: reap: ended by its pid (TerminateProcess)"]
+
+
+def test_lost_profiles_are_recorded_only_under_coverage_and_for_the_builds_programs(
+    tmp_path: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    llvm_profiles.record_lost(7, "/stage/bin/ngterm-session.exe", "reap")
+    llvm_profiles.record_lost(8, "/usr/bin/bash", "reap")
+    llvm_profiles.record_lost(None, "ngtermctl", "timeout")
+    assert lost_lines(coverage_dir) == ["7 ngterm-session: reap", "? ngtermctl: timeout"]
+    monkeypatch.delenv(llvm_profiles.COVERAGE_DIR_VARIABLE)
+    llvm_profiles.record_lost(9, "ngterm", "reap")
+    assert len(lost_lines(coverage_dir)) == 2
+
+
+def test_a_stage_without_the_profile_runtime_is_refused_under_coverage(staged: Path) -> None:
+    with pytest.raises(llvm_profiles.NotInstrumented, match="not built with coverage"):
+        llvm_profiles.check_instrumented(llvm_profiles.stage_binaries(staged.parent))
+    with open(staged, "ab") as sink:
+        sink.write(b"\n# " + llvm_profiles.RUNTIME_MARKER + b"\n")
+    # the CLI beside it is still plain
+    with pytest.raises(llvm_profiles.NotInstrumented, match="ngtermctl"):
+        llvm_profiles.check_instrumented(llvm_profiles.stage_binaries(staged.parent))
+    with open(staged.parent / "ngtermctl", "ab") as sink:
+        sink.write(b"\n# " + llvm_profiles.RUNTIME_MARKER + b"\n")
+    llvm_profiles.check_instrumented(llvm_profiles.stage_binaries(staged.parent))
+    with pytest.raises(llvm_profiles.NotInstrumented, match="no ngterm binary"):
+        llvm_profiles.check_instrumented([staged.parent / "ngtermctl"])
+
+
+def test_the_plugin_refuses_a_plain_stage_under_coverage(staged: Path, coverage_dir: Path) -> None:
+    from agterm_conformance.plugin import check_coverage_stage
+
+    options = ImplOptions(impl="rust", bin=staged, ctl=None, coverage_gate=False)
+    with pytest.raises(pytest.UsageError, match="CONFORMANCE_COVERAGE_DIR: not built with coverage"):
+        check_coverage_stage(options)
+    for binary in (staged, staged.parent / "ngtermctl"):
+        with open(binary, "ab") as sink:
+            sink.write(b"\n# " + llvm_profiles.RUNTIME_MARKER + b"\n")
+    check_coverage_stage(options)

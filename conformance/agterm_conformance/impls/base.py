@@ -1,7 +1,8 @@
 """Implementation adapter contract: isolated launch, socket wait, own-pid stop, leftover-process check.
 
-Safety is an allowlist: every path the instance is told about lives under a fresh `mkdtemp` root, and the
-guards refuse a launch env that points anywhere else before anything is spawned.
+Safety is an allowlist: instance paths live under a fresh `mkdtemp` root. Guards run before spawning
+and again after helper startup. Linux UI instances additionally use a run-owned accessibility bus
+and their own Xvfb display, pinned by X11Context.check.
 
 On Windows (the Rust build only) the control socket's path names a named pipe (`agterm_conformance.transport`), the
 instance's local and roaming application data move under the root with its home, its panes run a POSIX `sh`
@@ -30,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
-from agterm_conformance import winproc
+from agterm_conformance import llvm_profiles, winproc
 from agterm_conformance.client import (
     Client,
     ClientError,
@@ -41,11 +42,7 @@ from agterm_conformance.client import (
     check_under_root,
 )
 from agterm_conformance.plugin import RUST_PREFIX, SCRUB_PREFIXES, UPSTREAM_PREFIX
-from agterm_conformance.vocabulary import (
-    LIVE,
-    UPSTREAM,
-    Vocabulary,
-)
+from agterm_conformance.vocabulary import LIVE, Vocabulary
 
 if sys.platform != "win32":
     import pwd
@@ -81,10 +78,8 @@ WINDOWS_APP_DATA = {"LOCALAPPDATA": "AppData/Local", "APPDATA": "AppData/Roaming
 # HISTFILE), which would point the pane at the user's real startup and history files.
 SHELL_STARTUP_VARIABLES = ("ZDOTDIR", "GHOSTTY_ZSH_ZDOTDIR", "ENV", "BASH_ENV", "GHOSTTY_BASH_ENV", "HISTFILE")
 DEFAULT_APP_ID = "com.nickalie.ngterm"
+# Upstream's macOS session host, which the Swift reference's vocabulary counts among its leftovers.
 SESSION_HOST = "agterm-session-host"
-# The reference's live-session processes: upstream's zmx daemons and the macOS session host. A vocabulary with a
-# session server (the Rust build's) names its own leftovers instead (`find_leftovers`).
-LEFTOVER_NAMES = frozenset({"zmx", SESSION_HOST})
 # What a session server leaves in its namespace directory once it stopped: the lock file it held (kept on purpose,
 # crates/ngterm-session/src/endpoint/unix.rs) and, should it have stopped unclean, its socket.
 SERVER_NAMESPACE_FILES = frozenset({"server.lock", "server.sock"})
@@ -117,9 +112,8 @@ NOOP_MIME_TYPES = (
     "text/plain",
     "application/octet-stream",
 )
-# Every Linux instance draws into a headless weston of its own inside its private runtime dir and talks to a session
-# bus of its own there, so no window or notification reaches the user's desktop; `session` uses the user's display and
-# bus instead, for debugging only.
+# Linux instances use a private headless weston, or Xvfb for the UI layer, plus their own session bus.
+# No window or notification reaches the user's desktop; `session` remains available outside UI tests only.
 DISPLAY_MODE_VARIABLE = "CONFORMANCE_LINUX_DISPLAY"
 DISPLAY_MODES = ("headless", "session")
 WESTON_SOCKET = "wayland-0"
@@ -144,8 +138,9 @@ WESTON_SIZE = (1920, 1080)
 # No idle lock, no panel, and no `weston-keyboard` input-method client: the desktop shell's own helper is its only one.
 WESTON_CONFIG = "[core]\nidle-time=0\n\n[shell]\npanel-position=none\nlocking=false\n\n[input-method]\npath=\n"
 DBUS_SOCKET = "bus"
-# No service directories: nothing is activated, so a notification, Show in Files or the AT-SPI bus lookup finds no
-# owner instead of starting a desktop service. The instance's single-instance server still owns its app id here.
+# No service directories: nothing is activated. Weston instances have no AT-SPI bus owner; UI instances
+# explicitly serve discovery through the harness-owned linux_ui.start_status helper.
+# The instance's single-instance server still owns its app id here.
 DBUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
@@ -159,7 +154,7 @@ DBUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Confi
   </policy>
 </busconfig>
 """
-HEADLESS_HELPERS = ("weston", "dbus-daemon")
+HEADLESS_HELPERS = ("weston", "dbus-daemon", "Xvfb")
 LAUNCH_TIMEOUT = 30.0
 STOP_TIMEOUT = 10.0
 # How long the processes of a Windows app's tree get to end by themselves once it quit (its panes' ConPTYs closed)
@@ -178,8 +173,8 @@ POLL_INTERVAL = 0.05
 # test marker, or beside the branch a test takes on `has`.
 CAPABILITIES: Mapping[str, str] = {
     "posix-shell": "panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic",
-    "live-sessions": "restoreMode live keeps panes in live sessions that outlive the app (upstream's zmx daemons; the "
-    "Rust build's one session server per instance, ngterm-session)",
+    "live-sessions": "restoreMode live keeps panes in live sessions that outlive the app (upstream's per-session daemons; "
+    "the Rust build's one session server per instance, ngterm-session)",
     "live-any-shell": "Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, "
     "each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the "
     "password-database login shell is one of them and ngterm-session is staged",
@@ -197,6 +192,10 @@ CAPABILITIES: Mapping[str, str] = {
     "program's path",
     "windows-shells": "Rust-only, Windows: a pane runs PowerShell or `cmd.exe` as its shell (the config's `command`), "
     "and a rerun restore types a captured program's replay, and a pinned line, as that shell reads them",
+    "ui-string-values": "an element's string accessibility value is readable: a button's state (`split-toggle`'s "
+    "`none`), an image's tint, a row's name beside its label (AX's AXValue, UIA's ValuePattern); AT-SPI carries none for "
+    "them (AccessKit exposes Text on labels and text fields only, Value only as a number), so the Linux build's tests "
+    "read that state back through the protocol",
 }
 
 
@@ -205,7 +204,7 @@ class LaunchError(Exception):
 
 
 class LaunchRefused(LaunchError):
-    """A guard rejected the launch env before anything was spawned."""
+    """A guard rejected the launch env, either before spawning or after owned helper startup."""
 
 
 class StopError(Exception):
@@ -245,7 +244,7 @@ def version_tuple(version: str) -> tuple[int, ...]:
 
 
 def login_shell_blocker() -> str | None:
-    """Why Live sessions cannot run for this account, or None: upstream wraps a pane in zmx only when
+    """Why Live sessions cannot run for this account, or None: upstream wraps a pane in a live session only when
     the password-database login shell is zsh or fish (`ZmxSupport.configuration`), and the pane then execs it."""
     if WINDOWS:
         return "Windows has no password-database login shell"
@@ -325,10 +324,10 @@ OWN_VARIABLE_NAMES = (
 )
 
 
-def own_variables(prefix: str) -> frozenset[str]:
-    """The harness-owned variables of an implementation whose variables start with `prefix`, with each vocabulary's
+def own_variables(prefix: str, vocabulary: Vocabulary = LIVE) -> frozenset[str]:
+    """The harness-owned variables of an implementation whose variables start with `prefix`, with its vocabulary's
     UI-test opt-in (set only for the reference, which reads one, swift_macos.py)."""
-    return frozenset({*(prefix + name for name in OWN_VARIABLE_NAMES), UPSTREAM.ui_test_opt_in, LIVE.ui_test_opt_in})
+    return frozenset({*(prefix + name for name in OWN_VARIABLE_NAMES), vocabulary.ui_test_opt_in})
 
 
 # Every implementation's harness-owned variables.
@@ -381,10 +380,13 @@ def check_launch_env(
     needs_runtime_dir: bool = False,
     headless: bool = False,
     prefix: str = UPSTREAM_PREFIX,
+    ui: Any = None,
+    vocabulary: Vocabulary = LIVE,
 ) -> None:
-    """`prefix` is the implementation's (`Adapter.env_prefix`): its harness-owned variables are the only ones under a
-    scrubbed prefix the launch may carry, another implementation's included."""
-    own = own_variables(prefix)
+    """`prefix` and `vocabulary` are the implementation's (`Adapter.env_prefix`, `Adapter.vocabulary`): its
+    harness-owned variables are the only ones under a scrubbed prefix the launch may carry, another implementation's
+    included."""
+    own = own_variables(prefix, vocabulary)
     for name in sorted(env):
         if name.startswith(SCRUB_PREFIXES) and name not in own:
             raise LaunchRefused(f"{name} would leak into the instance: only harness-set {prefix}* are allowed")
@@ -392,11 +394,14 @@ def check_launch_env(
     rooted += ["XDG_RUNTIME_DIR"] if needs_runtime_dir else []
     rooted += list(WINDOWS_APP_DATA) if WINDOWS else []
     if headless:
-        if "DISPLAY" in env:
+        if ui is not None:
+            ui.check(env, root)
+        if ui is None and "DISPLAY" in env:
             raise LaunchRefused("DISPLAY is set: a headless instance would reach the user's X server")
-        if "AT_SPI_BUS_ADDRESS" in env:
+        if ui is None and "AT_SPI_BUS_ADDRESS" in env:
             raise LaunchRefused("AT_SPI_BUS_ADDRESS is set: a headless instance would reach the user's a11y bus")
-        rooted.append("WAYLAND_DISPLAY")
+        if ui is None:
+            rooted.append("WAYLAND_DISPLAY")
         address = env.get("DBUS_SESSION_BUS_ADDRESS", "")
         if not address.startswith("unix:path=") or "," in address or ";" in address:
             raise LaunchRefused(f"DBUS_SESSION_BUS_ADDRESS {address!r} is not the instance's own unix:path= bus")
@@ -432,12 +437,13 @@ class Instance:
     live_dir: str
     version: dict[str, Any] = field(default_factory=dict)
     # What the implementation calls the live-session group (agterm_conformance.vocabulary).
-    vocabulary: Vocabulary = UPSTREAM
+    vocabulary: Vocabulary = LIVE
     # The prefix of the implementation's own variables (`Adapter.env_prefix`).
     env_prefix: str = UPSTREAM_PREFIX
-    # The instance's own headless weston and session bus; a relaunch keeps both.
+    # The instance's own headless compositor (weston or Xvfb) and session bus; relaunch keeps both.
     compositor: subprocess.Popen[bytes] | None = None
     session_bus: subprocess.Popen[bytes] | None = None
+    ui: Any = None  # X11Context, retained through relaunch
     # Windows: the class of the top-level window the quit is asked of (`Adapter.quit_window_class`).
     quit_window_class: str | None = None
     # Windows: every app process launched on this root (relaunches too), with its creation time, kept open so no pid
@@ -451,6 +457,8 @@ class Instance:
         return self.process.pid
 
     def client(self, timeout: float | None = None) -> Client:
+        from agterm_conformance.drivers.trace import remember
+        remember(self)
         if timeout is None:
             return Client(self.socket, self.root)
         return Client(self.socket, self.root, timeout=timeout)
@@ -482,8 +490,7 @@ class Adapter:
 
     name: ClassVar[str] = ""
     # The name the implementation gives its state directory under the platform's application support directory, its
-    # control socket (`<name>.sock`) and its live-session socket directories (`/tmp/<name>-zmx-*` for upstream,
-    # `/tmp/<name>-live-*` for the Rust build: the vocabulary's).
+    # control socket (`<name>.sock`) and its live-session socket directories (the vocabulary's: `/tmp/<name>-live-*` for the Rust build).
     app_dir_name: ClassVar[str] = "agterm"
     # The implementation's CLI: the executable beside its binary and the name its usage lines and help print.
     ctl_name: ClassVar[str] = "agtermctl"
@@ -497,7 +504,7 @@ class Adapter:
     # lets weston-screenshooter read the output); `weston_args` adds an adapter's own.
     compositor_args: ClassVar[tuple[str, ...]] = ()
     # The names the implementation answers the shared tests' live-session group by (agterm_conformance.vocabulary).
-    vocabulary: ClassVar[Vocabulary] = UPSTREAM
+    vocabulary: ClassVar[Vocabulary] = LIVE
     # Windows: the class of the app's top-level window that takes the session's end, the polite quit (the Rust
     # build's hidden window, crates/ngterm-gpui/src/system_window.rs); None: the stop kills the app.
     quit_window_class: ClassVar[str | None] = None
@@ -621,6 +628,8 @@ class Adapter:
             env["GIO_USE_PORTALS"] = "0"
             env.pop("GTK_USE_PORTAL", None)
         self.platform_env(env)
+        # the run's pooled coverage profile, inherited by what the app starts (the session server); else none
+        llvm_profiles.apply(env)
         return env
 
     def launch(
@@ -631,8 +640,10 @@ class Adapter:
         first_run: bool = False,
         private_install: bool = False,
         pane_shell: str | None = None,
+        ui: Any = None,
     ) -> Instance:
         """`settings` seeds `<state>/settings.json`, which every implementation reads at launch (`restoreMode`, ...).
+        `ui` is the run-wide A11yRun selecting private Xvfb (headless only); Instance.ui keeps its X11Context.
         `pane_shell` names the shell the panes run by its full path (`ghostty_config`), kept by relaunches.
 
         `first_run` leaves out the prior-state marker and asks for the welcome dialog an isolated launch suppresses.
@@ -641,14 +652,19 @@ class Adapter:
         """
         self.executable()  # refuses before anything exists
         headless = self.headless
+        if ui is not None and not headless:
+            raise LaunchRefused("Linux UI instances require headless display mode")
         root = make_root()
+        ui_context = None
         compositor: subprocess.Popen[bytes] | None = None
         session_bus: subprocess.Popen[bytes] | None = None
         try:
             env = self.build_env(root, app_id)
             if first_run:
                 self.first_run_env(env)
-            check_launch_env(env, root, self.needs_app_id, self.needs_runtime_dir, headless, self.env_prefix)
+            check_launch_env(
+                env, root, self.needs_app_id, self.needs_runtime_dir, headless, self.env_prefix, vocabulary=self.vocabulary
+            )
             app_id = env.get(self.variable("APP_ID"))
             state_dir = env[self.variable("STATE_DIR")]
             config = self.ghostty_config(pane_shell)
@@ -659,11 +675,19 @@ class Adapter:
                 write_noop_launchers(Path(env["XDG_CONFIG_HOME"]), Path(env["XDG_DATA_HOME"]))
             if headless:
                 session_bus = start_session_bus(root, env, timeout)
-                compositor = start_compositor(root, env, timeout, self.weston_args())
+                if ui is not None:
+                    from agterm_conformance.linux_ui import start_xvfb
+                    compositor, ui_context = start_xvfb(root, env, ui, timeout)
+                else:
+                    compositor = start_compositor(root, env, timeout, self.weston_args())
+                check_launch_env(
+                    env, root, self.needs_app_id, self.needs_runtime_dir, headless, self.env_prefix, ui=ui_context,
+                    vocabulary=self.vocabulary,
+                )
             if app_id is not None:
                 _claim_app_id(app_id)
         except BaseException as error:
-            _note_headless_stop(error, compositor, session_bus, root)
+            _note_headless_stop(error, compositor, session_bus, root, ui_context)
             shutil.rmtree(root, ignore_errors=True)
             raise
         log = root / "app.log"
@@ -671,7 +695,7 @@ class Adapter:
             process = _spawn(command, env, log, "wb")
         except BaseException as error:
             _release_app_id(app_id)
-            _note_headless_stop(error, compositor, session_bus, root)
+            _note_headless_stop(error, compositor, session_bus, root, ui_context)
             shutil.rmtree(root, ignore_errors=True)
             raise
         launched = [(process, winproc.creation_time(process.pid) if WINDOWS else None)]
@@ -690,6 +714,7 @@ class Adapter:
             env_prefix=self.env_prefix,
             compositor=compositor,
             session_bus=session_bus,
+            ui=ui_context,
             quit_window_class=self.quit_window_class,
             launched=launched,
             job=job,
@@ -720,6 +745,8 @@ class Adapter:
                 self.needs_runtime_dir,
                 instance.compositor is not None,
                 instance.env_prefix,
+                ui=instance.ui,
+                vocabulary=instance.vocabulary,
             )
             if instance.app_id is not None:
                 _claim_app_id(instance.app_id)
@@ -731,7 +758,7 @@ class Adapter:
             if instance.job is not None:
                 _assign(instance.job, process)
         except BaseException as error:
-            _note_headless_stop(error, instance.compositor, instance.session_bus, instance.root)
+            _note_headless_stop(error, instance.compositor, instance.session_bus, instance.root, instance.ui)
             if (leftovers := _leftovers_error(instance.live_dir, vocabulary=instance.vocabulary)) is not None:
                 raise leftovers from error
             raise
@@ -749,6 +776,7 @@ class Adapter:
             env_prefix=instance.env_prefix,
             compositor=instance.compositor,
             session_bus=instance.session_bus,
+            ui=instance.ui,
             quit_window_class=instance.quit_window_class,
             launched=[*instance.launched, (process, winproc.creation_time(process.pid) if WINDOWS else None)],
             job=instance.job,
@@ -774,6 +802,8 @@ class Adapter:
             self.needs_runtime_dir,
             instance.compositor is not None,
             instance.env_prefix,
+            ui=instance.ui,
+            vocabulary=instance.vocabulary,
         )
         process = subprocess.Popen(
             self.instance_executable(instance.root),
@@ -799,6 +829,7 @@ class Adapter:
                     os.killpg(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate()
             code = None
+            llvm_profiles.record_lost(process.pid, process.args[0], "launch_beside: killed after its timeout")
         finally:
             if job is not None:
                 job.close()
@@ -825,6 +856,8 @@ class Adapter:
 
         The compositor and session bus go last, once the app is gone, and must leave no process of their own.
         """
+        from agterm_conformance.drivers.trace import before_stop
+        before_stop(instance)
         headless_problem: str | None = None
         try:
             steps: list[str] = []
@@ -843,7 +876,7 @@ class Adapter:
             reap_process_tree(instance)
         finally:
             _release_app_id(instance.app_id)
-            headless_problem = stop_headless(instance.compositor, instance.session_bus, instance.root)
+            headless_problem = stop_headless(instance.compositor, instance.session_bus, instance.root, instance.ui)
             keep_logs(instance)
         if leftovers is not None:
             raise leftovers
@@ -1045,19 +1078,22 @@ def wait_for_unix_socket(
 
 
 def stop_headless(
-    compositor: subprocess.Popen[bytes] | None, session_bus: subprocess.Popen[bytes] | None, root: Path
+    compositor: subprocess.Popen[bytes] | None, session_bus: subprocess.Popen[bytes] | None, root: Path, ui: Any = None
 ) -> str | None:
-    """SIGTERM the compositor's and the bus's own pids, then wait for their clients to follow; returns what went wrong."""
+    """Stop the a11y status helper, compositor and bus, wait for clients, and return any cleanup problems."""
+    ui_problem = ui.close() if ui is not None else None
     if compositor is None and session_bus is None:
-        return None
+        return ui_problem
     problems = [
         problem
         for process, label, log in (
-            (compositor, "weston", root / "weston.log"),
+            (compositor, "Xvfb" if ui is not None else "weston", root / ("xvfb.log" if ui is not None else "weston.log")),
             (session_bus, "dbus-daemon", root / "dbus.log"),
         )
         if process is not None and (problem := _stop_helper(process, label, log))
     ]
+    if ui_problem:
+        problems.insert(0, ui_problem)
     # Weston's desktop-shell helper exits on its own once the socket closes.
     runtime_dir = os.fspath(root / RUNTIME_DIR_NAME)
     deadline = time.monotonic() + STOP_TIMEOUT
@@ -1082,13 +1118,14 @@ def _note_headless_stop(
     compositor: subprocess.Popen[bytes] | None,
     session_bus: subprocess.Popen[bytes] | None,
     root: Path,
+    ui: Any = None,
 ) -> None:
-    if (problem := stop_headless(compositor, session_bus, root)) is not None:
+    if (problem := stop_headless(compositor, session_bus, root, ui)) is not None:
         error.add_note(problem)
 
 
 def find_headless_leftovers(runtime_dir: str) -> list[tuple[int, str, str]]:
-    """(pid, name, command) of weston, its clients and dbus-daemon carrying this instance's runtime dir."""
+    """(pid, name, command) of weston, its clients, Xvfb and dbus-daemon carrying this instance's runtime dir."""
     marker = f"XDG_RUNTIME_DIR={runtime_dir}"
     return [
         (pid, name, command)
@@ -1105,9 +1142,9 @@ def _tail(log: Path, lines: int = 20) -> str:
 
 
 def _leftovers_error(
-    live_dir: str, steps: Iterable[str] = (), vocabulary: Vocabulary = UPSTREAM
+    live_dir: str, steps: Iterable[str] = (), vocabulary: Vocabulary = LIVE
 ) -> LeftoverProcesses | None:
-    # A killed zmx daemon is confirmed gone by its socket and still exits for a moment after; a session server stops
+    # A killed per-session daemon (the reference's) is confirmed gone by its socket and still exits for a moment after; a session server stops
     # by itself once its last session and client are gone, after its idle grace.
     deadline = time.monotonic() + LEFTOVER_GRACE + vocabulary.server_idle
     while (leftovers := find_leftovers(live_dir, vocabulary)) and time.monotonic() < deadline:
@@ -1261,7 +1298,7 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
     """Best effort over the protocol; returns what it did, for the leftover check to report with what survived.
 
     Re-lists after every kill: killing a left pane promotes its split survivor into the left slot, so a
-    selector read before the kill no longer names that survivor. A claimed daemon zmx does not list yet
+    selector read before the kill no longer names that survivor. A claimed daemon the host does not list yet
     (`observation: absent`, as right after it starts) refuses a kill as not running, and a `pendingClose` one
     refuses it outright, so both are waited for until `settle` runs out.
     """
@@ -1281,10 +1318,10 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
             args: dict[str, Any] = {"pane": entry["pane"], "force": True}
             if entry.get("windowID"):
                 args["window"] = entry["windowID"]
-            kill = instance.vocabulary.command("zmx.kill")
+            kill = instance.vocabulary.command("live.kill")
             response = instance.request(kill, entry["sessionID"], **args)
             steps.append(f"{kill} {_daemon_key(entry)}: {'ok' if response.ok else response.error}")
-        prune_command = instance.vocabulary.command("zmx.prune")
+        prune_command = instance.vocabulary.command("live.prune")
         prune = instance.request(prune_command)
         if not prune.ok:
             steps.append(f"{prune_command}: {prune.error}")
@@ -1295,7 +1332,7 @@ def reap_live_sessions(instance: Instance, settle: float = REAP_SETTLE) -> list[
 
 
 def _listed(instance: Instance) -> str:
-    listing = instance.request(instance.vocabulary.command("zmx.list"))
+    listing = instance.request(instance.vocabulary.command("live.list"))
     inventory = _inventory(listing, instance.vocabulary)
     entries = inventory.get("entries") if isinstance(inventory, dict) else None
     if not isinstance(entries, list):
@@ -1305,13 +1342,13 @@ def _listed(instance: Instance) -> str:
 
 
 def _inventory(listing: Response, vocabulary: Vocabulary) -> Any:
-    """The `zmx.list` inventory a reply carries under the vocabulary's result key; None for a refusal."""
+    """The `live.list` inventory a reply carries under the vocabulary's result key; None for a refusal."""
     return (listing.result or {}).get(vocabulary.result_key) if listing.ok else None
 
 
 def _lists_daemons(instance: Instance) -> bool:
     try:
-        listing = instance.request(instance.vocabulary.command("zmx.list"))
+        listing = instance.request(instance.vocabulary.command("live.list"))
     except ClientError:
         return False
     inventory = _inventory(listing, instance.vocabulary)
@@ -1320,7 +1357,7 @@ def _lists_daemons(instance: Instance) -> bool:
 
 def _next_claimed(instance: Instance, tried: set[str], wait_absent: bool) -> tuple[dict[str, Any] | None, bool]:
     """The next claimed daemon to kill, and whether one not yet killable is still worth waiting for."""
-    inventory = _inventory(instance.request(instance.vocabulary.command("zmx.list")), instance.vocabulary)
+    inventory = _inventory(instance.request(instance.vocabulary.command("live.list")), instance.vocabulary)
     entries = inventory.get("entries") if isinstance(inventory, dict) else None
     waiting = False
     for entry in entries if isinstance(entries, list) else []:
@@ -1373,11 +1410,16 @@ def _terminate_app(instance: Instance) -> str | None:
     process.send_signal(signal.SIGTERM)
     try:
         process.wait(timeout=STOP_TIMEOUT)
+        # the app's quit ends in `exit_now`, which writes its profile; a death by the signal itself writes none
+        llvm_profiles.record_if_signalled(
+            process.pid, process.args[0], process.returncode, "stop: died of SIGTERM", terminated=True
+        )
         return None
     except subprocess.TimeoutExpired:
         pass
     snapshot = thread_snapshot(process.pid)
     process.send_signal(signal.SIGABRT)
+    llvm_profiles.record_lost(process.pid, process.args[0], "stop: SIGABRT after outliving SIGTERM")
     outlived_kill = ""
     try:
         process.wait(timeout=ABORT_GRACE)
@@ -1425,6 +1467,7 @@ def _end_windows_app(instance: Instance) -> str | None:
         except subprocess.TimeoutExpired:
             pass
     process.kill()
+    llvm_profiles.record_lost(process.pid, process.args[0], "stop: ended by its pid (TerminateProcess)")
     try:
         process.wait(timeout=STOP_TIMEOUT)
         outlived = ""
@@ -1468,7 +1511,9 @@ def _assign(job: winproc.Job, process: subprocess.Popen[bytes]) -> None:
 
 
 def _end_tree(launched: Iterable[tuple[subprocess.Popen[bytes], int | None]], grace: float) -> None:
-    roots = [winproc.Process(process.pid, 0, "", created) for process, created in launched]
+    roots = [
+        winproc.Process(process.pid, 0, os.path.basename(process.args[0]), created) for process, created in launched
+    ]
     deadline = time.monotonic() + grace
     while True:
         left = [process for process in [*roots, *winproc.descendants(roots)] if winproc.alive(process)]
@@ -1476,7 +1521,9 @@ def _end_tree(launched: Iterable[tuple[subprocess.Popen[bytes], int | None]], gr
             break
         threading.Event().wait(POLL_INTERVAL * 4)
     for process in left:
-        winproc.terminate(process)
+        # one that exited by itself since the snapshot wrote its profile
+        if winproc.terminate(process):
+            llvm_profiles.record_lost(process.pid, process.name, "reap: ended by its pid (TerminateProcess)")
 
 
 def thread_snapshot(pid: int) -> str:
@@ -1515,11 +1562,11 @@ def _core_hint(pid: int) -> str:
     return f"coredumpctl info {pid}"
 
 
-def find_leftovers(live_dir: str, vocabulary: Vocabulary = UPSTREAM) -> list[tuple[int, str, str]]:
+def find_leftovers(live_dir: str, vocabulary: Vocabulary = LIVE) -> list[tuple[int, str, str]]:
     """(pid, name, command) of this instance's live-session processes: under a vocabulary with a session server, that
     server (`<server> server <live_dir>`) and every process carrying the socket directory in the directory variable
-    (`NGTERM_LIVE_DIR`: its sessions' programs and their attach clients); else zmx / agterm-session-host processes
-    carrying it (`ZMX_DIR`)."""
+    (`NGTERM_LIVE_DIR`: its sessions' programs and their attach clients); else the vocabulary's daemon processes
+    (`daemon_names`) carrying it or hosting it (`hosts`)."""
     marker = f"{vocabulary.directory_variable}={live_dir}"
     if WINDOWS:
         return _windows_leftovers(live_dir, vocabulary)
@@ -1532,7 +1579,8 @@ def find_leftovers(live_dir: str, vocabulary: Vocabulary = UPSTREAM) -> list[tup
     return [
         (pid, name, command)
         for pid, name, command, words in _processes()
-        if name in LEFTOVER_NAMES and (marker in words or hosts_zmx_dir(words, live_dir))
+        if name in vocabulary.daemon_names
+        and (marker in words or (vocabulary.hosts is not None and vocabulary.hosts(words, live_dir)))
     ]
 
 
@@ -1570,15 +1618,6 @@ def serves_namespace(words: Iterable[str], live_dir: str, server: str) -> bool:
     if WINDOWS:
         return os.path.normcase(words[2]) == os.path.normcase(live_dir)
     return words[2] == live_dir
-
-
-def hosts_zmx_dir(words: Iterable[str], zmx_dir: str) -> bool:
-    """`agterm-session-host host <zmx_dir>`, the argv `ClientConnector.startHost` spawns the macOS host with."""
-    words = list(words)
-    return any(
-        os.path.basename(word) == SESSION_HOST and words[index + 1 : index + 3] == ["host", zmx_dir]
-        for index, word in enumerate(words)
-    )
 
 
 @dataclass(frozen=True)
@@ -1673,8 +1712,8 @@ def _ps_processes() -> Iterable[tuple[int, str, str, list[str]]]:
 
 
 def remove_live_dir(path: str) -> None:
-    """The instance's live-session socket directory, outside its root, once nothing runs there: zmx's own
-    `logs/*.log` and a stopped session server's lock file go with it; anything else keeps the directory for
+    """The instance's live-session socket directory, outside its root, once nothing runs there: the reference's daemons'
+    own `logs/*.log` and a stopped session server's lock file go with it; anything else keeps the directory for
     diagnosis."""
     logs = os.path.join(path, "logs")
     try:

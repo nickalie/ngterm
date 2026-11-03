@@ -3,7 +3,7 @@
 //! ratio; keyboard focus following the model; the inactive-pane wash following the focus; a covered pane taken over
 //! by a key press.
 //!
-//! Panes run `/bin/sh` with no `NGTERM_*`, `AGTERM_*` or `ZMX_*` variable inherited (CLAUDE.md > Never touch the user's
+//! Panes run `/bin/sh` with no `NGTERM_*` or `AGTERM_*` variable inherited (CLAUDE.md > Never touch the user's
 //! running ngterm); the test launcher runs `exec cat` whatever the launch asked, the live session host is a fake.
 
 use std::path::Path;

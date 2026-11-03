@@ -60,7 +60,7 @@ run_dev_instance() {
   local name
   while IFS= read -r name; do
     unset "$name"
-  done < <(compgen -e | grep -E '^(NGTERM_|AGTERM_|ZMX_)' | grep -vx NGTERM_LOG || true)
+  done < <(compgen -e | grep -E '^(NGTERM_|AGTERM_)' | grep -vx NGTERM_LOG || true)
   NGTERM_APP_ID="com.nickalie.ngterm.dev.i$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
   export NGTERM_APP_ID
   export NGTERM_STATE_DIR="$state"

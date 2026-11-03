@@ -1,0 +1,8 @@
+# Fixed install path of the native Linux release packages.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile ngterm-release /opt/ngterm/usr/bin/ngterm flags=(unconfined) {
+  userns,
+  include if exists <local/ngterm-release>
+}

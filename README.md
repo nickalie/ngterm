@@ -61,6 +61,72 @@ Linux build unless it names another OS.
   the build has none.
 - Behavior is checked by the black-box suite in [conformance/](conformance/README.md), held by a ratchet.
 
+## Downloads and releases
+
+[GitHub Releases](https://github.com/nickalie/ngterm/releases) receive these assets when a `vMAJOR.MINOR.PATCH`
+tag matching the workspace version in `Cargo.toml` is pushed:
+
+| Platform | Architectures | Downloads |
+|---|---|---|
+| Linux | x86_64, aarch64 | `.deb`, `.rpm`, Arch `.pkg.tar.zst`, `.AppImage`, portable `.tar.gz` |
+| Windows | x86_64 | per-user `.msi` installer, portable `.zip` |
+| macOS 14+ | Intel x86_64, Apple Silicon arm64 | `.pkg` installer, drag-to-Applications `.dmg`, `.app.zip`, binary `.tar.gz` |
+
+The archives include `ngterm`, `ngtermctl`, `ngterm-session`, `ngterm-headless`, themes, terminfo, shell and agent
+integrations, and license notices. Extract the entire archive together. Linux archives start through `ngterm/AppRun`;
+Windows binaries are under `ngterm/bin`; the macOS binary archive has `bin` and `share`. Native Linux packages install
+under `/opt/ngterm` and put all four commands on `PATH`. The macOS PKG installs `ngterm.app` into `/Applications`;
+the app's Help menu can install the CLI. Windows ZIPs include the same app-local VC++ runtime as the MSI.
+
+Official archives, AppImages, user-owned macOS app bundles (including DMG installs), and Windows MSI installs check GitHub
+for stable updates at launch and hourly. Updates download in the background and are verified against the release's
+`SHA256SUMS`. Choose **Restart to Update** in the titlebar, or **Help → Check for Updates…**, to install after the
+normal quit save and reopen ngterm. Ready updates also install on an ordinary quit, without reopening the app.
+Live sessions reconnect; other shells close and follow the configured restore
+mode. A failed archive replacement restores the previous installation. Windows MSI updates use Windows Installer
+without forcing other ngterm processes to close; busy files can require closing those processes and retrying.
+Interrupted downloads are cleaned up on a later launch or check. Backups needed for recovery are retained.
+Root-owned macOS PKG installations are updated manually with a newer PKG or DMG.
+
+Disable background checks and downloads in **Settings → General → Updates** (`autoUpdate: false` in `settings.json`);
+manual checks remain available. Archive installs must stay together in a dedicated directory named `ngterm`, with
+its parent writable by your user. For the macOS binary tarball, create that directory and extract `bin` and `share`
+inside it. Shared prefixes, source builds, and native Linux package installs are updated manually or through their
+package manager. Keep your state and configuration directories outside the installation. AppImages update their
+original file; manually extracted AppImages are updated manually.
+
+Linux packages target glibc 2.39+ and libstdc++ 13+ (Ubuntu 24.04 or newer and current Debian, Fedora, Arch, and
+openSUSE releases).
+WPE WebKit is built from source on Ubuntu 24.04 and bundled with its libraries and media plugins, keeping HTML
+overlays available without installing Arch's WPE package. A Vulkan-capable graphics driver, `bubblewrap`, and
+`xdg-dbus-proxy` are required on the host, along with the standard desktop libraries excluded by linuxdeploy;
+the native packages declare all of these dependencies in `packaging/linux/nfpm.yaml`. Alpine/musl and older glibc
+releases need a source build. AppImage users also need FUSE, or can use `--appimage-extract-and-run`. On hosts with
+restricted AppArmor user namespaces, native packages load a profile for their fixed install path; a portable install
+needs a profile for its extracted `usr/bin/ngterm`; see [WebKit sandbox on Ubuntu](#webkit-sandbox-on-ubuntu-apparmor).
+An AppImage on such a host must first be extracted to a permanent directory (`./ngterm-*.AppImage --appimage-extract`),
+because its ordinary mount path changes on every launch. For an extracted AppImage, install the bundled profile with:
+
+```sh
+binary="$(realpath squashfs-root/usr/bin/ngterm)"
+sed "s|@NGTERM_BIN@|$binary|" squashfs-root/usr/share/doc/ngterm/apparmor.profile.in | sudo tee /etc/apparmor.d/ngterm >/dev/null
+sudo apparmor_parser -r /etc/apparmor.d/ngterm
+./squashfs-root/AppRun
+```
+
+For a tarball, use the same commands with its extracted `ngterm` directory in place of `squashfs-root`.
+
+macOS bundles are ad-hoc signed; the PKG and DMG are not Developer ID signed or notarized. Public downloads can
+require a manual Gatekeeper approval until release signing credentials are configured. Windows installers are
+currently unsigned as well.
+
+To release, update the workspace version and lockfile, commit, then push the matching tag (for example `v0.1.0`).
+The `release` workflow builds all five platform/architecture combinations before uploading assets and `SHA256SUMS`
+to a GitHub Release. New releases stay drafts until uploads finish. It can also be run manually against an existing
+tag: leave **publish** disabled to inspect workflow artifacts, or enable it to publish/re-upload that tag's assets.
+Tag/version mismatches fail before any builds. Packaging tool versions, checksums, and the WPE source checksum live
+in `packaging/release/pins.env`; update the WPE source checksum and relocation patch when changing `WPE_VERSION`.
+
 ## Parity
 
 The build claims the behavior of the upstream release `version` reports as `conformance.parityLevel`
@@ -159,7 +225,14 @@ and how this build does it where the OS matters:
   line), which imports the plugin's bare ES module. A missing or older one skips them (`SKIPPED:`) unless
   `NGTERM_REQUIRE_NODE_TESTS` is set, as CI sets it, which fails them instead.
 - For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
-  weston and bus); zsh or fish as the login shell for the Live tests of that shell.
+  weston and bus); zsh or fish as the login shell for the Live tests of that shell. Its ui layer also needs Xvfb (an
+  X11 display per ui instance), at-spi2-core (`at-spi-bus-launcher` and `at-spi2-registryd`, found in the
+  distributions' libexec directories too), the `Atspi-2.0` typelib (Arch's `at-spi2-core`, Debian and Ubuntu's
+  `gir1.2-atspi-2.0`) and the suite's `linux-ui` extra (PyGObject and python-xlib; pip builds PyGObject against the
+  gobject-introspection (`libgirepository-2.0-dev`), cairo and Python development files with a C compiler). A missing
+  one fails a run that selects the ui layer (exit 2, naming it).
+- For the suite's code coverage (`run-linux.sh --coverage`): cargo-llvm-cov (`cargo install cargo-llvm-cov`) and the
+  toolchain's `llvm-tools` component (`rustup component add llvm-tools`).
 
 On Ubuntu 26.04, the `linux` CI job's packages (the last two lines, with meson and ninja, build weston 15, which
 the GPUI runs need and 26.04 lacks; fish and zsh run the replay scripts' tests in their shells) plus `zstd` and
@@ -175,12 +248,13 @@ sudo apt-get install pkg-config libfontconfig-dev libfreetype-dev \
 ```
 
 On Arch, the `conformance` CI container's packages but git and rustup (WPE WebKit and lavapipe from the distribution;
-zsh and fish for the Live tests of those login shells):
+zsh and fish for the Live tests of those login shells; at-spi2-core and gobject-introspection for the ui layer):
 
 ```sh
 sudo pacman -S --needed wpewebkit bubblewrap meson ninja wayland wayland-protocols libxkbcommon libxcb \
   curl xz zstd patch ncurses fontconfig ttf-dejavu procps-ng weston dbus xorg-server-xvfb mesa vulkan-swrast \
-  pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 python zsh fish
+  pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 python zsh fish \
+  at-spi2-core gobject-introspection
 ```
 
 Run-time dependencies of every `ngterm` binary:
@@ -285,7 +359,10 @@ Windows, the HTML clipboard offer, xdg-output geometry and X11 window state) are
 turns edits under `vendor/` back into the patch files). `vendor/portable-pty` (the PTY and child under `ngterm-pty`:
 ConPTY from kernel32 only, herdr's fixes for malformed Windows environments and directories on `PATH`, the child
 created in its job, a ConPTY session's handles exported and imported for the session server's update handoff) is
-the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`).
+the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`), and so is
+`vendor/accesskit_atspi_common` (AccessKit's AT-SPI mapping: a disabled control without Enabled, a menu button's
+role), through `scripts/vendor-accesskit-atspi.sh`, and `vendor/accesskit_windows` (AccessKit's UI Automation
+mapping: a highlighted menu item keeps its Invoke pattern), through `scripts/vendor-accesskit-windows.sh`.
 
 ### macOS and Windows
 
@@ -396,7 +473,7 @@ scripts/run-gpui-dev.sh [--release] [--state DIR] [-- NGTERM_ARGS...]   # an iso
 dev script and an install run from.
 `run-gpui-dev.sh` (`scripts/lib/dev-instance.sh`; on Windows from Git Bash, [Windows](#windows)) builds and stages
 the app into a fresh `/tmp/ngterm-dev-*` root and launches an isolated instance: a unique `NGTERM_APP_ID`, its own
-`NGTERM_STATE_DIR` and `NGTERM_CONTROL_SOCKET`, and `NGTERM_*`/`AGTERM_*`/`ZMX_*` inherited from a live terminal
+`NGTERM_STATE_DIR` and `NGTERM_CONTROL_SOCKET`, and `NGTERM_*`/`AGTERM_*` inherited from a live terminal
 session dropped (all but `NGTERM_LOG`). It prints the `ngtermctl <command> --socket ...` line that drives the instance
 and the instance's pid, by which to stop it.
 
@@ -482,6 +559,7 @@ rejects the host), each in a terminal nobody draws, so every session is attachab
 
 ```sh
 # on the server: the staged layout (scripts/stage.sh), ngtermctl on PATH (~/.local/bin or /usr/local/bin)
+ngterm-headless --install-agent-hooks  # install status hooks on the server, as Help does on the desktop
 nohup ngterm-headless [--grid 120x40] </dev/null >/dev/null 2>&1 &   # one per state dir, as the app
 # SIGTERM, SIGINT or SIGHUP saves and ends it (on Windows the console's Ctrl+C, Ctrl+Break or close); SIGINT or SIGHUP
 # ignored at its start stays ignored, so under nohup it outlives the ssh session that started it
@@ -490,6 +568,14 @@ ngtermctl session new --name build      # sessions to attach; they outlive ngter
 # File ▸ Attach Remote (Attach All takes every session not attached here yet, New Session creates one there), or
 ngtermctl live tree SERVER && ngtermctl live attach SERVER SESSION-ID
 ```
+
+Agent status indicators need the hooks installed on the machine running the agents; installing them on the viewer
+alone does not install them on the server. `--install-agent-hooks` runs the desktop's installer and exits without
+starting or contacting an instance, so it also works while the service is running. It preserves user settings and
+reports any config it could not safely merge. If OpenCode's version cannot be detected, its hooks are skipped;
+re-run with `--install-agent-hooks --opencode-version v1` or `v2` to choose it explicitly. After installation, start a
+new agent process; existing shells need to source `~/.config/ngterm/agent-status/shell/integration.sh` (fish:
+`source ~/.config/ngterm/agent-status/shell/integration.fish`) or start a new shell to load the shell integration.
 
 The attached row is as one from a desktop instance: each pane an ssh into its live session (the viewer claims the pty
 size), the status, context, split, HUD and notifications streamed over `ngtermctl live present`, asks, program
@@ -571,7 +657,8 @@ PowerShell 7):
   in `build/pins.env`, whose comment says why that version) into the vendor root on first use (`NGTERM_WIX` names a
   `wix` of that version instead), and the Visual C++ redistributable files of the Visual Studio the build links with,
   which it puts beside the executables;
-- for the suite, Python 3.11 or later with venv (CI runs 3.14).
+- for the suite, Python 3.11 or later with venv (CI runs 3.14); its ui layer's UI Automation bindings (comtypes) come
+  with the suite's install; its `--coverage` run needs cargo-llvm-cov and the `llvm-tools` component, as on Linux.
 
 Build and stage, from Git Bash (`stage.sh` takes a destination in either form and stages
 `bin\{ngterm,ngtermctl,ngterm-session}.exe` beside `share\`, the layout the suite, the installer and an install run
@@ -585,7 +672,7 @@ scripts/stage.sh 'C:\ngterm-stage'
 
 A dev build beside an installed ngterm runs through `scripts/run-gpui-dev.sh` from Git Bash, as on Linux
 ([Build and run](#build-and-run)): it builds and stages the debug app (`--release` the release one) into a fresh
-`%TEMP%\ngterm-dev-*` root and launches it with `NGTERM_*`, `AGTERM_*` and `ZMX_*` stripped from the environment, a
+`%TEMP%\ngterm-dev-*` root and launches it with `NGTERM_*` and `AGTERM_*` stripped from the environment, a
 unique `NGTERM_APP_ID` (its own instance pipe, so the launch is not forwarded to the installed app) and a private
 `NGTERM_STATE_DIR` (its config dir, its live-session namespace and its control socket, `<state dir>\ngterm.sock`,
 follow it). It prints the `ngtermctl <command> --socket <state dir>\ngterm.sock` line that drives the instance and the
@@ -610,7 +697,9 @@ after an upgrade (the .wxs header says why). `scripts/check-msi.ps1` installs an
 what it installed, upgrades and uninstalls it, on a throwaway machine or account only, as CI does.
 
 Tests, from Git Bash. The crates as CI runs them ([CI](#ci)), then the suite, which builds the release app, stages it
-into `target/conformance-stage` and runs the protocol, cli and behaviors layers against it, held by its own ratchet,
+into `target/conformance-stage` and runs the protocol, cli, behaviors and ui layers against it (the ui layer drives the
+app's windows on this desktop through UI Automation and `SendInput`: a CI runner or a throwaway VM only), held by its
+own ratchet,
 `conformance/rust-passing-windows.txt` (`check_ratchet.py --list` names it; see
 [conformance/README.md](conformance/README.md), Rust runner and ratchet):
 
@@ -621,13 +710,13 @@ cargo test -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ng
 cargo test -p ngterm-gpui --no-default-features && cargo test -p ngterm-gpui   # without and with the HTML overlays
 python -m venv .venv && .venv/Scripts/python.exe -m pip install -e conformance
 .venv/Scripts/python.exe -m pytest conformance/selftests/test_transport.py conformance/selftests/test_client.py \
-  conformance/selftests/test_windows_launch.py      # the harness's Windows self-tests: the pipe transport, the launch
-conformance/tools/run-windows.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS...]
+  conformance/selftests/test_windows_launch.py conformance/selftests/test_uia.py   # pipe, launch, UIA mappings
+conformance/tools/run-windows.sh [--ratchet-only] [--stage DIR] [--coverage] [-- PYTEST_ARGS...]
 ```
 
 - `ngterm-gpui`'s tests that need Xvfb, weston, lavapipe, a D-Bus bus or WPE WebKit are Linux-only, and those whose
   panes run POSIX `sh` scripts are ignored on Windows with that reason.
-- Windows has no headless desktop: the suite's instances (each on a private root, `NGTERM_*`, `AGTERM_*` and `ZMX_*`
+- Windows has no headless desktop: the suite's instances (each on a private root, `NGTERM_*` and `AGTERM_*`
   stripped, its processes ended by pid) open their windows on the desktop it runs on, and `session.reveal` or a
   clicked link reaches the system's handlers. Run it on a CI runner or a throwaway VM only, never beside a live
   ngterm. Its panes run Git for Windows' `sh.exe`; the conformance README's Safety guards have the rest.
@@ -661,12 +750,14 @@ scripts/check-tracing-features.sh           # no dependency turns on tracing's `
 scripts/vendor-calloop.sh --check           # vendor/ equals its crates.io sources plus build/patches/
 scripts/vendor-gpui.sh --check
 scripts/vendor-portable-pty.sh --check
+scripts/vendor-accesskit-atspi.sh --check
+scripts/vendor-accesskit-windows.sh --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo clippy -p ngterm-gpui --no-default-features --all-targets -- -D warnings   # the app without HTML overlays
 scripts/lint-report.sh                      # complexity #[expect]s with their reasons; refuses inner #![allow]
 GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace
 .venv/bin/python -m pytest conformance/selftests   # the suite's own tests, host-free
-conformance/tools/run-linux.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS...]
+conformance/tools/run-linux.sh [--ratchet-only] [--stage DIR] [--coverage] [-- PYTEST_ARGS...]
 ```
 
 A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`, as the `wpe` CI job does; one to
@@ -682,27 +773,36 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 - `--workspace` includes the WPE crates (`ngterm-wpe` and its -sys crates) and the GPUI frontend's HTML overlays,
   which need WPE WebKit ([WPE WebKit](#wpe-webkit)); without it, pass `"${WORKSPACE_WITHOUT_WPE[@]}"` and then
   `"${GPUI_WITHOUT_HTML[@]}"` (from `scripts/lib/native.sh`) instead, as the Ubuntu CI jobs do.
-- `run-linux.sh` builds the release workspace, stages it into `target/conformance-stage`, runs the protocol, cli
-  and behaviors layers with `--impl rust` and exits with the ratchet's status. It runs the suite with `$PYTHON`, else
-  `.venv/bin/python`, else `python3`, with the suite installed:
-  `python3 -m venv .venv && .venv/bin/pip install -e conformance`. See
+- `run-linux.sh` builds the release workspace, stages it into `target/conformance-stage`, runs the protocol, cli,
+  behaviors and ui layers with `--impl rust` and exits with the ratchet's status. It runs the suite with `$PYTHON`,
+  else `.venv/bin/python`, else `python3`, with the suite installed:
+  `python3 -m venv .venv && .venv/bin/pip install -e "conformance[linux-ui]"`. See
   [conformance/README.md](conformance/README.md) and [conformance/docs/rust-build.md](conformance/docs/rust-build.md).
-  It renders on lavapipe from `scripts/fetch-lavapipe.sh`.
+  It renders on lavapipe from `scripts/fetch-lavapipe.sh`; the ui layer's instances run on X11, each on a private
+  Xvfb, their accessibility trees on an a11y bus of the run's own, never the desktop's. A failed test leaves a trace
+  (`--trace-mode`) under the report's `traces/`.
+- `run-linux.sh --coverage` runs the suite on an instrumented build and writes the code coverage report
+  (`coverage/lcov.info`, `html/`, `summary.md`), which `conformance/tools/check_coverage.py` holds against
+  `conformance/coverage-floor-linux.txt` (conformance/README.md > Code coverage). It is CI's job; run it locally only
+  for a change to the coverage tooling.
 - Lint rules: `[workspace.lints]` in `Cargo.toml` (clippy `all` + `pedantic`, the complexity and robustness lints
   denied) with the thresholds in `clippy.toml`; the only exception is a reasoned outer `#[expect]` on one item.
 
 ## CI
 
+- `release.yml`: tag-triggered and manual release packaging, with Linux x86_64/aarch64, Windows x86_64, and macOS
+  Intel/Apple Silicon builds; see [Downloads and releases](#downloads-and-releases).
 - `linux.yml`: `linux` (format, clippy, the lint report into the job summary, `cargo test` with node for the
   OpenCode plugin's tests, all on the workspace without the WPE crates and the app without its HTML overlays), `wpe`
   (clippy, tests and the bindings' regeneration check of the WPE crates on Arch's `wpewebkit`, then the app with its
   overlays, see [WPE WebKit](#wpe-webkit)), then the staged build (HTML overlays on) under the suite in the `wpe`
   job's Arch container, on its lavapipe, held by `rust-passing.txt`, once per login shell (`conformance`, a matrix:
   bash, fish and zsh), each with `--must-pass live-any-shell`, the zsh and fish ones with `--must-pass live-sessions`
-  too; the bash one runs the app's process tests with the overlays on first.
+  too; the bash one runs the app's process tests with the overlays on first, and a `coverage` entry runs the suite on
+  an instrumented build, judged by `conformance/coverage-floor-linux.txt` only.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
   `ngterm-core`, `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt`, `ngterm-pty`, `ngterm-term`, `ngterm-server`,
-  `ngterm-ctl`, `ngterm-app`, `ngterm-headless` and `ngterm-mobile` so far), on Ubuntu, macOS and Windows runners: the libghostty-vt
+  `ngterm-ctl`, `ngterm-app`, `ngterm-headless`, `ngterm-mobile` and `ngterm-update` so far), on Ubuntu, macOS and Windows runners: the libghostty-vt
   prefix with each runner's pinned Zig (cached with Zig's global cache), format,
   clippy and `cargo test` (`crates`, a matrix), then the sys crate cross-built for the Zig targets no runner runs
   natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). The macOS leg also checks the frontend with and without WKWebView HTML overlays. The Windows leg also runs the
@@ -710,8 +810,9 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   its HTML overlays (WebView2, which the runner image carries). Beside it, `windows`: the harness's Windows
   self-tests and the suite against the staged release build (`conformance/tools/run-windows.sh`, with `--must-pass
   live-any-shell`: the runner's login shell is Windows PowerShell), held by `rust-passing-windows.txt`; the report
-  and the stage are kept as artifacts. It also runs on pushes to `ci/**` branches, to check a macOS or Windows form
-  without a PR.
+  and the stage are kept as artifacts; and `coverage-windows`, the suite on an instrumented build, judged by
+  `conformance/coverage-floor-windows.txt` only. The workflow also runs on pushes to `ci/**` branches, to check a
+  macOS or Windows form without a PR.
 - `android.yml` (path-filtered to the mobile core, the crates under it, `mobile/` and the Android scripts and pins;
   also on `ci/**` pushes): `app` sets up the pinned toolchain (`scripts/setup-android.sh`), runs
   `scripts/build-android.sh check assembleDebug` (Spotless, detekt, Android Lint, the JVM unit and Roborazzi screenshot
@@ -727,7 +828,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 
 - `crates/`: the Cargo workspace (crate map in [CLAUDE.md](CLAUDE.md)).
 - `conformance/`: the suite, its catalog of upstream's commands, the ratchet lists `rust-passing.txt` and
-  `rust-passing-windows.txt`.
+  `rust-passing-windows.txt`, the code coverage floors `coverage-floor-linux.txt` and `coverage-floor-windows.txt`.
 - `build/`: `pins.env`, the ghostty-vt, gir, calloop, GPUI and portable-pty patches, the bundled skill's patches over
   upstream's.
 - `vendor/`: the patched GPUI, calloop and portable-pty crates, recreated by the vendor scripts (an edit there goes back into its

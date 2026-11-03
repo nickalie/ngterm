@@ -400,6 +400,41 @@ fn a_remote_open_skips_the_local_page_follow_and_store() {
 // MARK: - the mirrored state
 
 #[test]
+fn a_headless_origins_new_split_hands_its_page_to_the_presenter() {
+    for role in ["leader", "unowned"] {
+        let mut origin = Origin::build(false, &SUPPORTED_KINDS, false);
+        origin.fixture().core.set_page_presenter_only();
+        assert!(
+            origin
+                .overlay(SessionCmd::Split, |a| {
+                    a.mode = Some("on".to_owned());
+                    a.axis = Some("vertical".to_owned());
+                })
+                .ok
+        );
+        let session = origin.session();
+        let right = origin
+            .fixture()
+            .store()
+            .session(session)
+            .unwrap()
+            .split_pane_identity
+            .unwrap();
+        set_lead(&mut origin.live.fixture.core, right, role);
+        let page = origin.opened("http://127.0.0.1:41163/", |a| {
+            a.pane = Some("right".to_owned());
+            a.javascript = Some(true);
+            a.chromeless = Some(true);
+        });
+        let request = origin.presenter.last("page.request").unwrap()["page"].clone();
+        assert_eq!(request["pane"], wire(right));
+        assert_eq!(request["javascript"], true);
+        assert_eq!(request["chromeless"], true);
+        assert_eq!(origin.slot_jobs(), [page]);
+    }
+}
+
+#[test]
 fn the_mirrored_state_is_reported_and_only_a_hidden_change_touches_the_tree() {
     let mut origin = Origin::pages();
     let page = origin.opened(FILE, |_| {});

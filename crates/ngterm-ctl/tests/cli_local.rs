@@ -1,7 +1,7 @@
 //! The two local-only subcommands, `clipboard set` and `terminfo install`, run as the built `ngtermctl` next to an
 //! in-process control server they must never talk to. Everything they touch is sandboxed: the CLI runs from a stage
 //! under cargo's test temp dir with a fake `ngterm-session` beside it, `ssh` is a fake first on `PATH` whose remote
-//! side is a temp `HOME`, and no `NGTERM_*`, `AGTERM_*` or `ZMX_*` variable of the caller reaches a run, so neither a
+//! side is a temp `HOME`, and no `NGTERM_*` or `AGTERM_*` variable of the caller reaches a run, so neither a
 //! real pane nor the desktop clipboard nor the account's own terminfo is ever written.
 //!
 //! The tests that run a fake are Unix only, their fakes being `sh` scripts (and `tic` compiling the entry); on Windows
@@ -152,7 +152,7 @@ impl Sandbox {
     }
 
     /// Runs the staged CLI (through `/bin/sh -c 'PREFIX exec ngtermctl "$@"'` when `prefix` is given) with stdin
-    /// `input`, the caller's `NGTERM_*`, `AGTERM_*` and `ZMX_*` removed, `NGTERM_STATE_DIR` naming the watched server,
+    /// `input`, the caller's `NGTERM_*` and `AGTERM_*` removed, `NGTERM_STATE_DIR` naming the watched server,
     /// the fake ssh first on `PATH`, and `env` on top.
     fn run(&self, prefix: Option<&str>, args: &[&str], env: &[(&str, &str)], input: &[u8]) -> TestResult<Output> {
         let client = self.path("stage/bin/ngtermctl");
@@ -166,11 +166,7 @@ impl Sandbox {
         };
         for (name, _) in std::env::vars_os() {
             let name_text = name.to_string_lossy();
-            if name_text.starts_with("NGTERM_")
-                || name_text.starts_with("AGTERM_")
-                || name_text.starts_with("ZMX_")
-                || name_text == "TERMINFO"
-            {
+            if name_text.starts_with("NGTERM_") || name_text.starts_with("AGTERM_") || name_text == "TERMINFO" {
                 command.env_remove(&name);
             }
         }

@@ -9,7 +9,7 @@
 //!
 //! On every OS with a PowerShell 7 (`pwsh`; every CI runner carries one, and Windows requires it). On Unix the shell
 //! runs in a throwaway home, so no profile, history or module cache of the user's is read or written; every session
-//! gets the test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables, and a namespace
+//! gets the test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables, and a namespace
 //! directory of its own (only named in its environment: no server runs).
 
 #[expect(dead_code, reason = "the helpers serve the pane, the lead and these tests alike")]

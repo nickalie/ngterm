@@ -22,6 +22,7 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 | `ngterm-term` | the toolkit-neutral pane core | any |
 | `ngterm-session` | the live-session server, its client and `SessionHost` | any |
 | `ngterm-app` | frontend-neutral app services | any |
+| `ngterm-update` | verified release downloads, staging and installation | any |
 | `ngterm-headless` | the core, control socket and live sessions with no window (an Attach Remote origin) | any |
 | `ngterm-mobile` | the Android app's Rust core: a remote-only viewer over ssh, exposed to Kotlin through UniFFI | any |
 | `ngterm-wpe-sys` and kin, `ngterm-wpe` | WPE WebKit bindings and the HTML overlays' host | Linux |
@@ -62,6 +63,7 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
    `site/commands.html` and its matching `.claude/rules/*.md`.
 2. Implement in `ngterm-core` with tests on the fakes, asserting upstream's error strings.
 3. Wire the frontend in `ngterm-gpui` (terminal behavior in `ngterm-term`), following upstream's UI in GPUI idioms.
+   A UI port lands with its ui test (`conformance/tests/ui`), green on the reference first.
 4. Port the `ngtermctl` subcommands from upstream's `agtermctlKit`.
 5. Claim a capability (rust-build.md > Rust target profile) once its commands implement it.
 6. Check it as [Choosing checks](#choosing-checks) says; add newly green conformance ids to the ratchet.

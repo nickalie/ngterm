@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,8 @@ class FakeDriver(Driver):
         self.typed: list[tuple[Element, str]] = []
         self.hovered: list[Element] = []
         self.focused: list[Element] = []
+        self.events = []
+        self.bounds = (10, 20, 100, 40)
         self.polls = 0
 
     def _elements(self, ui_id: str) -> list[Element]:
@@ -84,6 +87,24 @@ class FakeDriver(Driver):
 
     def _focus(self, element: Element) -> None:
         self.focused.append(element)
+
+    def _all_elements(self):
+        return self.elements + self.menu_items + self.tabs
+
+    def _bounds(self, element):
+        return self.bounds
+
+    def _pointer_move(self, x, y):
+        self.events.append(("move", x, y))
+
+    def _pointer_button(self, button, down):
+        self.events.append((button, down))
+
+    def _wheel(self, dx, dy):
+        self.events.append(("wheel", dx, dy))
+
+    def _type_text(self, text):
+        self.events.append(("text", text))
 
 
 # -- ids and templates
@@ -417,14 +438,19 @@ def test_driver_name_refuses_an_unknown_platform() -> None:
 @pytest.mark.parametrize(
     ("impl", "platform", "message"),
     [
-        ("rust", "linux", "atspi ui driver is not written yet"),
-        ("rust", "win32", "uia ui driver is not written yet"),
         ("swift-macos", "linux", "needs darwin, this host is linux"),
+        ("swift-macos", "win32", "needs darwin, this host is win32"),
     ],
 )
 def test_driver_class_says_why_there_is_none(impl: str, platform: str, message: str) -> None:
     with pytest.raises(NoDriver, match=message):
         driver_class(impl, platform)
+
+
+def test_uia_is_the_driver_for_windows() -> None:
+    from agterm_conformance.drivers import uia
+
+    assert driver_class("rust", "win32") is uia.UiaDriver
 
 
 def test_ax_is_the_driver_for_macos() -> None:
@@ -473,8 +499,9 @@ def run_ui_suite(pytester: pytest.Pytester, fake_bin: Path, *args: str) -> pytes
 
 
 def test_ui_fixture_skips_as_unsupported_before_anything_launches(
-    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(drivers, "IMPLEMENTED", {"ax": "agterm_conformance.drivers.ax:AxDriver"})
     pytester.makepyfile(
         """
         def test_ui(ui):
@@ -496,14 +523,16 @@ def test_ui_fixture_drives_the_ctl_instance(
     pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class Recording:
-        def __init__(self, pid: int, ui_ids: UiIds | None) -> None:
+        def __init__(self, pid: int, ui_ids: UiIds | None, instance=None) -> None:
             self.pid, self.ui_ids = pid, ui_ids
+            self.instance = instance
 
     monkeypatch.setattr(drivers, "driver_class", lambda impl, platform=sys.platform: Recording)
     pytester.makepyfile(
         """
         def test_ui(ctl, ui):
             assert ui.pid == ctl.instance.pid
+            assert ui.instance is ctl.instance
             assert ui.ui_ids.keys == {"next-to-the-catalog"}
         """
     )
@@ -513,8 +542,9 @@ def test_ui_fixture_drives_the_ctl_instance(
 
 
 def test_ui_for_skips_as_unsupported_before_anything_launches(
-    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path
+    pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(drivers, "IMPLEMENTED", {"ax": "agterm_conformance.drivers.ax:AxDriver"})
     pytester.makepyfile(
         """
         def test_ui_for(launch, ui_for):
@@ -531,7 +561,7 @@ def test_ui_for_drives_the_instance_it_is_given(
     pytester: pytest.Pytester, roots: list[Path], fake_bin: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class Recording:
-        def __init__(self, pid: int, ui_ids: UiIds | None) -> None:
+        def __init__(self, pid: int, ui_ids: UiIds | None, instance=None) -> None:
             self.pid = pid
 
     monkeypatch.setattr(drivers, "driver_class", lambda impl, platform=sys.platform: Recording)
@@ -546,3 +576,405 @@ def test_ui_for_drives_the_instance_it_is_given(
     (pytester.path / "spec").mkdir()
     (pytester.path / "spec" / "ui-ids.yaml").write_text("ids: {}\n")
     run_ui_suite(pytester, fake_bin, "--catalog", "spec/catalog.yaml").assert_outcomes(passed=1)
+
+
+@pytest.mark.parametrize("button", ["left", "right"])
+def test_pointer_click_and_double_click(button):
+    el = Element("add-session", "button", enabled=True)
+    driver = FakeDriver([el])
+    driver.mouse_click(el, button=button, offset=(0, 1))
+    assert driver.events == [("move", 10, 60), (button, True), (button, False)]
+    driver.events.clear()
+    driver.mouse_double_click(el, button=button)
+    assert driver.events == [("move", 60, 40), (button, True), (button, False),
+                             (button, True), (button, False)]
+
+
+def test_pointer_bounds_are_read_at_action_time_and_stale_identity_is_preserved():
+    old = Element("add-session", "button", "Second", handle="old")
+    first = Element("add-session", "button", "First", handle="first")
+    new = Element("add-session", "button", "Second", handle="new")
+    driver = FakeDriver([first, new])
+    seen = []
+    def bounds(el):
+        seen.append(el.handle)
+        return driver.bounds
+    driver._bounds = bounds
+    driver.move(old)
+    driver.bounds = (100, 200, 40, 20)
+    driver.move(old, offset=(1, 0))
+    assert seen == ["new", "new"]
+    assert driver.events == [("move", 60, 40), ("move", 140, 200)]
+    driver.elements = [first]
+    with pytest.raises(ElementNotFound):
+        driver.move(old)
+    assert len(driver.events) == 2
+
+
+def test_pointer_without_id_matches_role_and_name():
+    el = Element(None, "menu-item", "Open", handle="old")
+    replacement = Element(None, "menu-item", "Open", handle="new")
+    driver = FakeDriver([Element(None, "button", "Open"), replacement])
+    seen = []
+    driver._bounds = lambda current: (seen.append(current.handle) or driver.bounds)
+    driver.move(el)
+    assert seen == ["new"]
+    driver.elements = []
+    driver.events.clear()
+    with pytest.raises(ElementNotFound):
+        driver.move(el)
+    assert driver.events == []
+
+
+def test_pointer_waits_for_enabled_and_never_inputs_on_timeout():
+    driver = FakeDriver([Element("add-session", "button", enabled=False)])
+    with pytest.raises(ElementNotFound, match="enabled"):
+        driver.mouse_click("add-session")
+    assert driver.events == []
+    count = 0
+    def appears(ui_id):
+        nonlocal count
+        count += 1
+        return [Element(ui_id, "button", enabled=count >= 3)]
+    driver._elements = appears
+    driver.mouse_click("add-session")
+    assert count >= 3
+    assert driver.events[-1] == ("left", False)
+
+
+def test_drag_scroll_and_typing():
+    driver = FakeDriver([Element("add-session", "button")])
+    driver.drag_by("add-session", 20, -10, steps=2)
+    assert driver.events == [("move", 60, 40), ("left", True), ("move", 70, 35),
+                             ("move", 80, 30), ("left", False)]
+    driver.events.clear()
+    driver.drag("add-session", "add-session", src_offset=(0, 0), dst_offset=(1, 1), steps=1)
+    assert driver.events == [("move", 10, 20), ("left", True), ("move", 110, 60), ("left", False)]
+    driver.scroll("add-session", -3, dx=2)
+    driver.type_text("Hello, Я! 😀")
+    assert driver.events[-3:] == [("move", 60, 40), ("wheel", 2, -3), ("text", "Hello, Я! 😀")]
+
+
+def test_drag_paces_the_gesture_when_asked(monkeypatch):
+    """A press held still, moves spread over the duration, a hold before the release: a native drag's shape."""
+    driver = FakeDriver([Element("add-session", "button")])
+    monkeypatch.setattr(drivers.time, "sleep", lambda seconds: driver.events.append(("sleep", seconds)))
+    driver.drag_by("add-session", 20, 0, steps=2, press_for=0.5, duration=0.2, hold_for=0.25)
+    assert driver.events == [("move", 60, 40), ("left", True), ("sleep", 0.5), ("move", 70, 40), ("sleep", 0.1),
+                             ("move", 80, 40), ("sleep", 0.1), ("sleep", 0.25), ("left", False)]
+    driver.events.clear()
+    driver.drag("add-session", "add-session", steps=1)
+    assert not [event for event in driver.events if event[0] == "sleep"]
+
+
+@pytest.mark.parametrize("pacing", [{"press_for": -1}, {"duration": float("inf")}, {"hold_for": float("nan")}])
+def test_drag_pacing_must_be_finite_and_nonnegative(pacing):
+    driver = FakeDriver([Element("add-session", "button")])
+    with pytest.raises(ValueError):
+        driver.drag_by("add-session", 1, 1, **pacing)
+    assert driver.events == []
+
+
+def test_frame_reads_live_bounds_of_the_current_element():
+    old = Element("add-session", "button", "Add", handle="old")
+    new = Element("add-session", "button", "Add", handle="new")
+    driver = FakeDriver([new])
+    seen = []
+    driver._bounds = lambda element: (seen.append(element.handle) or driver.bounds)
+    assert driver.frame(old) == (10, 20, 100, 40)
+    assert driver.frame("add-session") == (10, 20, 100, 40)
+    assert seen == ["new", "new"]
+    assert driver.events == []
+    driver.elements = []
+    with pytest.raises(ElementNotFound):
+        driver.frame(old)
+
+
+def test_window_is_the_first_window_element():
+    window = Element(None, "window", "ngterm", handle="w")
+    driver = FakeDriver([Element("add-session", "button"), window, Element(None, "window", "other")])
+    assert driver.window() == window
+    driver.elements = [Element("add-session", "button")]
+    with pytest.raises(ElementNotFound, match="window"):
+        driver.window(timeout=0)
+
+
+@pytest.mark.parametrize(("action", "handle"), [
+    (lambda d: d.move("add-session"), "add"),
+    (lambda d: d.mouse_click("add-session", button="right"), "add"),
+    (lambda d: d.mouse_double_click("add-session"), "add"),
+    (lambda d: d.scroll("add-session", 2), "add"),
+    (lambda d: d.drag_by("add-session", 5, 5, steps=1), "add"),
+    (lambda d: d.drag("add-session", "settings-status-reset", steps=1), "add"),
+    (lambda d: d.drag("settings-status-reset", "add-session", steps=1), "reset"),
+])
+def test_pointer_actions_target_the_live_element_before_the_first_move(action, handle):
+    """Positional input reaches the window on top: every pointer action names its target first."""
+    driver = FakeDriver([Element("add-session", "button", handle="add"),
+                         Element("settings-status-reset", "button", handle="reset")])
+    driver._pointer_target = lambda element: driver.events.append(("target", element.handle))
+    action(driver)
+    assert driver.events[0] == ("target", handle)
+    assert [event for event in driver.events if event[0] == "target"] == [driver.events[0]]
+
+
+def test_pointer_target_is_not_raised_for_bad_arguments_or_missing_targets():
+    driver = FakeDriver([Element("add-session", "button", enabled=False)])
+    driver._pointer_target = lambda element: driver.events.append(("target", element.handle))
+    with pytest.raises(ValueError):
+        driver.move("add-session", offset=(2, 0))
+    with pytest.raises(ElementNotFound):
+        driver.mouse_click("add-session")
+    assert driver.events == []
+
+
+def test_drag_releases_button_on_failure_without_retry():
+    driver = FakeDriver([Element("add-session", "button")])
+    def move(x, y):
+        driver.events.append(("move", x, y))
+        if len(driver.events) > 1:
+            raise DriverError("injection failed")
+    driver._pointer_move = move
+    with pytest.raises(DriverError, match="injection failed"):
+        driver.drag_by("add-session", 20, 0)
+    assert driver.events[-1] == ("left", False)
+    assert driver.events.count(("left", True)) == 1
+
+
+@pytest.mark.parametrize("action", [
+    lambda d: d.move("add-session", offset=(2, 0)),
+    lambda d: d.mouse_click("add-session", button="middle"),
+    lambda d: d.drag_by("add-session", 1, 2, steps=0),
+    lambda d: d.drag_by("add-session", float("nan"), 2),
+    lambda d: d.type_text("hello\n"),
+])
+def test_pointer_bad_arguments_send_nothing(action):
+    driver = FakeDriver([Element("add-session", "button")])
+    with pytest.raises(ValueError):
+        action(driver)
+    assert driver.events == []
+
+
+def test_count_and_regex_name():
+    driver = FakeDriver([Element("add-session", "button", "Session 12")])
+    assert driver.find("add-session", name=re.compile(r"Session \d+")) == driver.elements[0]
+    assert driver.count("add-session", 1) == driver.elements
+    assert driver.count("htmlOverlay.back", 0) == []
+    with pytest.raises(ElementNotFound, match="count.*2.*last count.*1"):
+        driver.count("add-session", 2, timeout=0)
+    with pytest.raises(ElementNotFound):
+        driver.find("add-session", name=re.compile("Workspace"), timeout=0)
+
+
+def test_wait_cursor_returns_readback_and_timeout_has_last_value():
+    from agterm_conformance.client import decode_response
+    from agterm_conformance.wait import wait_cursor, WaitTimeout
+    class Client:
+        def request(self, command, target, **args):
+            assert (command, target, args) == ("surface.cursor", "sid", {"paneID": "right"})
+            return decode_response(b'{"ok":true,"result":{"cursor":{"column":7}}}')
+    assert wait_cursor(Client(), "sid", 7, paneID="right") == {"cursor": {"column": 7}}
+    with pytest.raises(WaitTimeout, match='column.*7'):
+        wait_cursor(Client(), "sid", 8, timeout=0, paneID="right")
+
+
+def test_wait_cursor_polls_until_column_matches():
+    from agterm_conformance.client import Response
+    from agterm_conformance.wait import wait_cursor
+    class Client:
+        columns = iter([1, 3, 7])
+        def request(self, command, target, **args):
+            result = {"cursor": {"column": next(self.columns)}}
+            return Response(True, result, None, {"ok": True, "result": result})
+    assert wait_cursor(Client(), "surface:sid:left", 7) == {"cursor": {"column": 7}}
+
+
+class FakeQuartz:
+    kCGEventLeftMouseDragged = "left-drag"
+    kCGEventRightMouseDragged = "right-drag"
+    kCGEventMouseMoved = "move"
+    kCGMouseButtonRight = "right"
+    kCGMouseButtonLeft = "left"
+    kCGEventLeftMouseDown = "left-down"
+    kCGEventLeftMouseUp = "left-up"
+    kCGEventRightMouseDown = "right-down"
+    kCGEventRightMouseUp = "right-up"
+    kCGMouseEventClickState = "clicks"
+    kCGHIDEventTap = "hid"
+    kCGScrollEventUnitLine = "line"
+
+    def __init__(self):
+        self.events = []
+
+    def CGEventCreateMouseEvent(self, source, kind, point, button):
+        return {"kind": kind, "point": point, "button": button}
+
+    def CGEventSetIntegerValueField(self, event, field, value):
+        event[field] = value
+
+    def CGEventPost(self, tap, event):
+        self.events.append((tap, event))
+
+    def CGEventPostToPid(self, pid, event):
+        self.events.append((pid, event))
+
+    def CGEventCreateScrollWheelEvent(self, source, units, count, dy, dx):
+        return {"units": units, "count": count, "dy": dy, "dx": dx}
+
+    def CGEventCreateKeyboardEvent(self, source, code, down):
+        return {"code": code, "down": down}
+
+    def CGEventKeyboardSetUnicodeString(self, event, length, text):
+        event.update(length=length, text=text)
+
+
+def test_ax_pointer_primitives_emit_drag_click_counts_and_scroll(monkeypatch):
+    driver = fake_ax_driver(monkeypatch, FakeAx([]))
+    driver.quartz = q = FakeQuartz()
+    driver.activate = lambda: None
+    driver._pointer_move(10, 20)
+    driver._pointer_button("left", True)
+    driver._pointer_move(30, 40)
+    driver._pointer_button("left", False)
+    driver._double_click("right")
+    driver._wheel(2, -3)
+    assert [event["kind"] for _, event in q.events[:4]] == ["move", "left-down", "left-drag", "left-up"]
+    assert q.events[3][1]["point"] == (30, 40)
+    assert [event["clicks"] for _, event in q.events[4:8]] == [1, 1, 2, 2]
+    assert [event["kind"] for _, event in q.events[4:8]] == [
+        "right-down", "right-up", "right-down", "right-up",
+    ]
+    assert all(event["button"] == "right" for _, event in q.events[4:8])
+    assert all(tap == "hid" for tap, _ in q.events)
+    assert q.events[-1][1] == {"units": "line", "count": 2, "dy": 3, "dx": -2}
+    assert driver._held_button is None
+
+
+@pytest.mark.parametrize("post", ["pid", "hid"])
+def test_ax_unicode_includes_utf16_surrogate_pairs(monkeypatch, post):
+    driver = fake_ax_driver(monkeypatch, FakeAx([]))
+    driver.quartz = q = FakeQuartz()
+    driver.post = post
+    driver.type_text("Я😀")
+    assert [event["length"] for _, event in q.events] == [1, 1, 2, 2]
+    assert [event["text"] for _, event in q.events] == ["Я", "Я", "😀", "😀"]
+    assert [event["down"] for _, event in q.events] == [True, False, True, False]
+    assert all(destination == (4242 if post == "pid" else "hid") for destination, _ in q.events)
+
+
+@pytest.mark.parametrize("target_kind", ["id", "snapshot", "no-id-snapshot"])
+def test_pointer_wait_follows_live_control_name_changes(target_kind):
+    ui_id = None if target_kind == "no-id-snapshot" else "add-session"
+    old = Element(ui_id, "button", "Saving…", enabled=False, handle="same")
+    new = Element(ui_id, "button", "Save", enabled=True, handle="same")
+    driver = FakeDriver([old])
+    polls = 0
+    def elements(*args):
+        nonlocal polls
+        polls += 1
+        return [old if polls == 1 else new]
+    driver._elements = elements
+    driver._all_elements = elements
+    driver.mouse_click("add-session" if target_kind == "id" else old)
+    assert polls >= 2
+    assert driver.events == [("move", 60, 40), ("left", True), ("left", False)]
+
+
+def test_pointer_id_wait_can_follow_a_rebuilt_and_renamed_control():
+    driver = FakeDriver([])
+    polls = 0
+    def elements(ui_id):
+        nonlocal polls
+        polls += 1
+        if polls == 1:
+            return [Element(ui_id, "button", "Saving…", enabled=False, handle="old")]
+        return [Element(ui_id, "button", "Save", enabled=True, handle="new")]
+    driver._elements = elements
+    driver.mouse_click("add-session")
+    assert driver.events[-1] == ("left", False)
+
+
+@pytest.mark.parametrize("ui_id", ["add-session", None])
+def test_pointer_same_named_controls_use_handle_and_reject_stale_ambiguity(ui_id):
+    first = Element(ui_id, "button", "Same", handle="first")
+    second = Element(ui_id, "button", "Same", handle="second")
+    driver = FakeDriver([first, second])
+    seen = []
+    driver._bounds = lambda el: (seen.append(el.handle) or driver.bounds)
+    driver.move(second)
+    assert seen == ["second"]
+    driver.events.clear()
+    with pytest.raises(ElementNotFound, match="ambiguous"):
+        driver.move(Element(ui_id, "button", "Same", handle="stale"))
+    assert driver.events == []
+
+
+@pytest.mark.parametrize("recovers", [True, False])
+def test_pointer_retries_failed_bounds_without_input(recovers):
+    el = Element("add-session", "button", handle="old")
+    driver = FakeDriver([el])
+    reads = 0
+    def bounds(current):
+        nonlocal reads
+        reads += 1
+        assert driver.events == []
+        if reads == 1 or not recovers:
+            raise ReadFailed("bounds vanished")
+        return driver.bounds
+    driver._bounds = bounds
+    if recovers:
+        driver.mouse_click(el)
+        assert reads == 2
+        assert driver.events[-1] == ("left", False)
+    else:
+        with pytest.raises(ElementNotFound, match="bounds vanished"):
+            driver.mouse_click(el)
+        assert driver.events == []
+
+
+@pytest.mark.parametrize("source_change", ["moves", "disappears", "disabled"])
+def test_drag_refreshes_source_while_destination_becomes_ready(source_change):
+    source = Element("add-session", "button", "Source", enabled=True, handle="source")
+    dest = Element("htmlOverlay.back", "button", "Destination", enabled=False, handle="dest")
+    driver = FakeDriver([source, dest])
+    dest_polls = 0
+    def elements(ui_id):
+        nonlocal dest_polls
+        if ui_id == dest.ui_id:
+            dest_polls += 1
+            return [Element(dest.ui_id, dest.role, dest.name, enabled=dest_polls > 1, handle="dest")]
+        if dest_polls and source_change == "disappears":
+            return []
+        return [Element(source.ui_id, source.role, source.name,
+                        enabled=not (dest_polls and source_change == "disabled"), handle="source")]
+    driver._elements = elements
+    def bounds(el):
+        if el.handle == "dest":
+            return (400, 0, 100, 40)
+        return (100 if dest_polls else 0, 0, 100, 40)
+    driver._bounds = bounds
+    if source_change == "moves":
+        driver.drag(source, dest, steps=1)
+        assert driver.events[0] == ("move", 150, 20)
+    else:
+        with pytest.raises(ElementNotFound):
+            driver.drag(source, dest, steps=1)
+        assert driver.events == []
+
+
+@pytest.mark.parametrize("missing", ["AXPosition", "AXSize"])
+def test_ax_missing_pointer_geometry_is_retryable_but_hover_error_unchanged(monkeypatch, missing):
+    from types import SimpleNamespace
+    bindings = FakeAx([])
+    bindings.kAXValueCGPointType = 1
+    bindings.kAXValueCGSizeType = 2
+    bindings.AXValueGetValue = lambda value, kind, out: (True, value)
+    driver = fake_ax_driver(monkeypatch, bindings)
+    driver.attribute = lambda handle, name: None if name == missing else SimpleNamespace(
+        x=10, y=20, width=100, height=40,
+    )
+    el = Element("add-session", "button", handle=bindings.dialog)
+    with pytest.raises(ReadFailed, match=missing):
+        driver._bounds(el)
+    with pytest.raises(DriverError, match=missing):
+        driver._hover(el)

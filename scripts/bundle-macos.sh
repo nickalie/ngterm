@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stage a standalone macOS application bundle; ad-hoc signed for local distribution.
-# Usage: scripts/bundle-macos.sh DEST.app [--profile debug|release]
+# Usage: scripts/bundle-macos.sh DEST.app [--profile debug|release | --staged DIR]
 set -euo pipefail
 source "$(dirname "$0")/lib/native.sh"
 [[ "$(host_os)" == macos ]] || die "run this script on macOS"
@@ -9,15 +9,20 @@ bundle="$1"
 shift
 [[ "$bundle" == *.app ]] || die "destination must end in .app"
 [[ ! -e "$bundle" ]] || die "destination exists: $bundle"
-stage="$(mktemp -d "${TMPDIR:-/tmp}/ngterm-bundle.XXXXXX")"
-trap 'rm -rf "$stage"' EXIT
-"$NATIVE_ROOT/scripts/stage.sh" "$stage/root" "$@"
+work="$(mktemp -d "${TMPDIR:-/tmp}/ngterm-bundle.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+if [[ "${1:-}" == --staged ]]; then
+  (($# == 2)) || die "--staged takes one directory"
+  cp -R "$2" "$work/root"
+else
+  "$NATIVE_ROOT/scripts/stage.sh" "$work/root" "$@"
+fi
 for binary in ngterm ngtermctl ngterm-session; do
-  [[ -x "$stage/root/bin/$binary" ]] || die "build $binary before bundling"
+  [[ -x "$work/root/bin/$binary" ]] || die "build $binary before bundling"
 done
 mkdir -p "$bundle/Contents/Resources"
-mv "$stage/root/bin" "$bundle/Contents/MacOS"
-mv "$stage/root/share" "$bundle/Contents/share"
+mv "$work/root/bin" "$bundle/Contents/MacOS"
+mv "$work/root/share" "$bundle/Contents/share"
 cp "$NATIVE_ROOT/resources/icons/ngterm.icns" "$bundle/Contents/Resources/"
 identity="$("$bundle/Contents/MacOS/ngterm" --build-identity)"
 version="$(echo "$identity" | head -n1)"

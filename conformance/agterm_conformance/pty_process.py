@@ -1,9 +1,5 @@
-"""A second zmx client on one of an instance's daemons: the local stand-in for a viewer attached over ssh.
-
-Upstream hands an overlay to a presenter only while every pane's own client follows (`followsRemotely`), and
-a pane follows only when another client of its daemon claimed the lead. `leading_client` is that client, started
-the way `RemoteSession.attachCommand` starts the viewer's on the origin, minus ssh.
-"""
+"""A program on a pty of its own, its output drained: a live session's second client (`live_client`, and the Swift
+reference's own in impls/swift_macos.py), the local stand-in for a viewer attached over ssh."""
 
 from __future__ import annotations
 
@@ -13,21 +9,20 @@ import struct
 import subprocess
 import termios
 import threading
-import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Protocol, Self
+from typing import Protocol, Self
 
-from agterm_conformance.impls.base import MINIMAL_PATH
+from agterm_conformance import llvm_profiles
 
 STOP_TIMEOUT = 5.0
 _KEPT_OUTPUT = 65536
-# The create-only command: should the daemon have gone, attach would otherwise create one running a shell.
-GONE_GUARD = "printf '%s\\n' 'agterm: remote session is gone'; exit 1"
 
 
-class ZmxInstance(Protocol):
+class LiveInstance(Protocol):
+    """What a leading client reads of the instance whose session it attaches."""
+
     live_dir: str
     home: Path
 
@@ -72,12 +67,16 @@ class PtyProcess:
     def stop(self, timeout: float = STOP_TIMEOUT) -> None:
         """SIGTERM this program's own pid, SIGKILL it if it ignores that, then close the pty."""
         if self.process.poll() is None:
-            self.process.terminate()
+            terminated = llvm_profiles.terminate(self.process)
             try:
                 self.process.wait(timeout)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout)
+            llvm_profiles.record_if_signalled(
+                self.process.pid, self.process.args[0], self.process.returncode, "PtyProcess.stop: ended before it exited",
+                terminated=terminated,
+            )
         self._drain.join(timeout)
         if self._master is not None:
             os.close(self._master)
@@ -91,28 +90,3 @@ class PtyProcess:
     ) -> None:
         self.stop()
 
-
-def leading_client(instance: ZmxInstance, endpoint: Mapping[str, Any], daemon: str) -> PtyProcess:
-    """`zmx attach <daemon>` claiming the lead, so the pane's own client in `instance` follows.
-
-    `endpoint` is the `zmx.tree` read-back (`live.tree` in the Rust build); one naming another instance's daemons is
-    refused.
-    """
-    executable, directory = endpoint["executable"], endpoint["socketDirectory"]
-    if directory != instance.live_dir:
-        raise ValueError(f"endpoint socket directory {directory!r} is not this instance's {instance.live_dir!r}")
-    if not os.path.isabs(executable):
-        raise ValueError(f"endpoint executable {executable!r} is not absolute")
-    env = {
-        "PATH": MINIMAL_PATH,
-        "HOME": os.fspath(instance.home),
-        "TERM": "xterm-256color",
-        # The variables the origin's own pane sets (`ZmxSupport`), empty meaning unset to zmx.
-        "ZMX_SESSION": "",
-        "ZMX_SESSION_PREFIX": "",
-        "ZMX_NO_DETACH_KEY": "1",
-        "ZMX_DIR": directory,
-        "ZMX_MANAGED": uuid.uuid4().hex,
-        "ZMX_MANAGED_CLAIM": "1",
-    }
-    return PtyProcess([executable, "attach", daemon, "/bin/sh", "-c", GONE_GUARD], env)

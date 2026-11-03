@@ -4,7 +4,7 @@
 //! has no render node for the engine to render on. No display, no compositor, no session bus.
 //!
 //! `WebKit` and GPUI's headless renderer run once per process, so this harness (no libtest) runs each GPU in a child
-//! process of its own, with an environment built from scratch (no `NGTERM_*`/`AGTERM_*`/`ZMX_*`, private XDG
+//! process of its own, with an environment built from scratch (no `NGTERM_*`/`AGTERM_*`, private XDG
 //! directories): a plain process, as the app is, whose registry starts the engine in a worker, as the app's does
 //! (`ngterm_wpe::worker`, the reason `main` calls `serve_if_asked` first). Where a piece is missing (lavapipe,
 //! a Mesa render node) its child is skipped with a message; under `NGTERM_REQUIRE_DISPLAY_TESTS` a missing lavapipe

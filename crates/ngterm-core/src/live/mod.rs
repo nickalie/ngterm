@@ -287,7 +287,8 @@ mod tests {
 
     #[test]
     fn the_socket_directory_hashes_as_upstreams_algorithm() {
-        // the FNV-1a 64 reference values, and the harness's `upstream_socket_directory` (vocabulary.py) of this dir
+        // the FNV-1a 64 reference values, and the harness's `upstream_socket_directory` (impls/swift_macos.py) of this
+        // dir
         assert_eq!(fnv1a64(b""), "cbf29ce484222325");
         assert_eq!(fnv1a64(b"a"), "af63dc4c8601ec8c");
         assert_eq!(fnv1a64(b"foobar"), "85944171f73967e8");

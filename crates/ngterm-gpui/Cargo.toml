@@ -27,6 +27,7 @@ ngterm-server.workspace = true
 # the live sessions' server: its `SessionHost`, the live-launch inputs and the update handoff
 ngterm-session.workspace = true
 ngterm-term.workspace = true
+ngterm-update.workspace = true
 async-channel.workspace = true
 cosmic-text.workspace = true
 fancy-regex.workspace = true
@@ -181,6 +182,11 @@ required-features = ["html"]
 [[test]]
 name = "macos_appkit_sweep"
 harness = false
+
+# Test-only real GPUI surface with nonzero decoration insets, driven by the private AT-SPI probe.
+[[example]]
+name = "a11y_inset_probe"
+path = "tests/support/a11y_inset_probe.rs"
 
 [lints]
 workspace = true

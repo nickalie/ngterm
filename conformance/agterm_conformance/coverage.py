@@ -4,10 +4,17 @@ Markers are the only source of coverage. A catalog item's `status` matters only 
 retires the item; `covered`/`uncovered` is informational and never checked. The optional baseline lists the
 uncovered items a transitional CI run accepts: it may only shrink, so an entry that is covered, exempted or
 gone fails the gate until it is deleted (plan Task 9).
+
+`exercised` counts what a run's passing tests exercised instead: the ui ids named in the `covers` of a passed test
+in its `--nodeid-report` (`python -m agterm_conformance.coverage REPORT`, the runners' report.md line), against the
+catalog files that run used (its run header names them).
 """
 
 from __future__ import annotations
 
+import argparse
+import json
+import sys
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -222,3 +229,81 @@ def evaluate(catalog: Catalog, declarations: Iterable[Declaration], baseline: li
             report.uncovered.append(key)
     report.stream_only_unqualified = {key: ids for key, ids in unqualified.items() if key not in covered}
     return report
+
+
+# The outcomes a run's report counts as passing (tools/check_ratchet.py's PASSING).
+PASSED = frozenset({"passed", "xpassed"})
+
+
+@dataclass(frozen=True)
+class Exercised:
+    """The active items of one section a passed test of a run declares it covers."""
+
+    section: str
+    exercised: int
+    active: int
+
+    def line(self) -> str:
+        pct = 100.0 * self.exercised / self.active if self.active else 100.0
+        label = "ui ids" if self.section == "ui" else self.section
+        return f"{label} exercised by a passing test: {self.exercised}/{self.active} ({pct:.1f}%)"
+
+
+def exercised(catalog: Catalog, records: Iterable[Mapping[str, Any]], section: str = "ui") -> Exercised:
+    """Counts `section`'s active items named in the `covers` of a passed test record (`--nodeid-report` lines)."""
+    named: set[str] = set()
+    for record in records:
+        if record.get("kind") == "test" and record.get("outcome") in PASSED:
+            named.update(target for target in record.get("covers", ()) if isinstance(target, str))
+    active = [key for key, item in catalog.items.items() if item.section == section and not item.removed]
+    return Exercised(section, sum(1 for key in active if key in named), len(active))
+
+
+def read_records(path: Path) -> list[dict[str, Any]]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        records = [json.loads(line) for line in lines if line.strip()]
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CatalogError(f"{path}: cannot read the report: {error}") from None
+    if not all(isinstance(record, dict) for record in records):
+        raise CatalogError(f"{path}: a line that is not a JSON object")
+    return records
+
+
+def run_catalog_paths(records: Iterable[Mapping[str, Any]]) -> tuple[Path | None, Path | None]:
+    """The catalog and ui-ids files a report's run header names (`plugin.NodeidReport`); None for a missing one."""
+    def path(value: Any) -> Path | None:
+        return Path(value) if isinstance(value, str) and value else None
+
+    for record in records:
+        if record.get("kind") == "run":
+            return path(record.get("catalog")), path(record.get("ui_ids"))
+    return None, None
+
+
+def main(argv: list[str]) -> int:
+    """`python -m agterm_conformance.coverage REPORT [--catalog P] [--ui-ids P]`: the "ui ids exercised" line.
+
+    A flag wins, then the files the report's run header names, then the repository's catalog.yaml and the
+    ui-ids.yaml beside the catalog."""
+    conformance = Path(__file__).resolve().parents[1]
+    parser = argparse.ArgumentParser(prog="python -m agterm_conformance.coverage")
+    parser.add_argument("report", type=Path, help="a --nodeid-report file")
+    parser.add_argument("--catalog", type=Path, default=None, help="default: the run's, else the repository's")
+    parser.add_argument("--ui-ids", type=Path, default=None, help="default: the run's, else beside the catalog")
+    args = parser.parse_args(argv)
+    try:
+        records = read_records(args.report)
+        run_catalog, run_ui_ids = run_catalog_paths(records)
+        catalog_path = args.catalog or run_catalog or conformance / "catalog.yaml"
+        ui_path = args.ui_ids or (run_ui_ids if args.catalog is None else None) or catalog_path.parent / "ui-ids.yaml"
+        catalog = load_catalog(catalog_path, ui_path)
+    except CatalogError as error:
+        print(f"catalog coverage: {error}", file=sys.stderr)
+        return 2
+    print(exercised(catalog, records).line())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

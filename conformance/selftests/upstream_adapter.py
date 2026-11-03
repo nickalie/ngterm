@@ -1,8 +1,8 @@
 """A self-test double: the base `Adapter` as a Linux desktop launch in upstream's vocabulary.
 
 It runs the machinery the real adapters share (the isolation guards, the launch env, the headless weston and bus, the
-socket wait, the stop and the leftover check) with upstream's `AGTERM_` variables, `agtermctl` and zmx names, which
-swift_macos.py speaks, on the Linux host the self-tests run on. No implementation stands behind it; `RustAdapter` is
+socket wait, the stop and the leftover check) with upstream's `AGTERM_` variables, `agtermctl` and its vocabulary
+(`swift_macos.UPSTREAM`), which swift_macos.py speaks, on the Linux host the self-tests run on. No implementation stands behind it; `RustAdapter` is
 the Rust build's Linux launch with its own vocabulary.
 """
 
@@ -11,12 +11,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from agterm_conformance.impls.base import Adapter, Profile
+from agterm_conformance.impls.swift_macos import UPSTREAM
 
 PROFILE = Profile("0.36.0", frozenset({"posix-shell"}))
 
 
 class UpstreamVocabularyAdapter(Adapter):
     name = "upstream"
+    vocabulary = UPSTREAM
     needs_app_id = True
     needs_runtime_dir = True
 

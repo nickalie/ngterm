@@ -7,7 +7,7 @@
 //! On Windows the pseudoconsole stands between the probe and the server and answers some queries itself
 //! ([`windows_conhost_record`]); the tests whose queries it keeps run on Unix.
 //!
-//! Every session gets the test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables,
+//! Every session gets the test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables,
 //! `TERM` set to `xterm-ghostty`, and a namespace directory of its own (only named in its environment: no server runs).
 
 #[expect(

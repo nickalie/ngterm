@@ -6,7 +6,7 @@ import json
 import pytest
 from agterm_conformance.drivers.base import ElementNotFound
 from agterm_conformance.match import assert_ok, session_ids
-from agterm_conformance.plugin import Ctl
+from agterm_conformance.plugin import Ctl, launch_options
 from agterm_conformance.wait import wait_until
 
 STATUSES = ("active", "blocked", "completed")
@@ -18,8 +18,8 @@ INTERFACE_ELEMENTS = (
 
 
 @pytest.fixture(scope="module")
-def seeded(adapter):
-    instance = adapter.launch()
+def seeded(adapter, request):
+    instance = adapter.launch(**launch_options(request))
     relaunching = False
     try:
         config = instance.state_dir / "config"
@@ -49,11 +49,20 @@ def seeded(adapter):
             adapter.stop(instance)
 
 
+def _open_settings(ui):
+    if ui.name in ("atspi", "uia"):
+        # Linux and Windows have no Settings chord (the GTK build's menu, which ngterm's follows): the app menu's item
+        # opens it.
+        ui.menu("ngterm", "Settings…")
+    else:
+        ui.press("cmd+,")
+
+
 def _open(ui, tab):
     try:
         found = ui.tab(tab, timeout=1)
     except ElementNotFound:
-        ui.press("cmd+,")
+        _open_settings(ui)
         found = ui.tab(tab)
     ui.click(found)
 

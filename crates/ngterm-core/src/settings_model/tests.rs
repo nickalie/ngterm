@@ -60,6 +60,7 @@ fn migrated(settings: &AppSettings) -> AppSettings {
 #[test]
 fn a_controls_default_value_is_stored_as_nil() {
     let defaults = applied([
+        general(GeneralChange::AutoUpdate(true)),
         general(GeneralChange::ScrollSpeed(3.0)),
         general(GeneralChange::RightClickPaste(true)),
         general(GeneralChange::LinkOpenMode(LinkOpenMode::Browser)),

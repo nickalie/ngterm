@@ -143,10 +143,12 @@ fn forward(remote: &instance::Remote, activation: &Activation) -> ExitCode {
 /// quirk 12; `docs/upstream-issues/gpui-wgpu-gles-exit-segfault.md`). Everything that must outlive the process is
 /// written by then: the quit save, the socket removed, the log written unbuffered. Windows ends it the same way
 /// (`TerminateProcess` of itself: no DLL detach, no TLS callbacks), so the threads still waiting in a quit handler
-/// (`signals.rs`) end with it.
+/// (`signals.rs`) end with it. An instrumented build writes its coverage profile first (`ngterm_app::coverage`).
 fn exit_now(status: i32) -> ! {
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
+    // an instrumented build's coverage profile, which the skipped exit handlers would have written
+    ngterm_app::coverage::write_profile();
     #[cfg(unix)]
     // SAFETY: `_exit` only ends the process; nothing of this process runs after it, so no invariant can break.
     unsafe {

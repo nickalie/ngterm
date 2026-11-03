@@ -59,6 +59,7 @@ pub mod terminal;
 pub mod titlebar;
 #[cfg(test)]
 mod ui_ids;
+pub mod updater;
 pub mod watermark;
 pub mod welcome;
 pub mod window;

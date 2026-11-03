@@ -638,13 +638,14 @@ fn companion_marker(row: &SidebarRow) -> impl IntoElement {
 }
 
 /// The unseen-notification badge: a red capsule with the count in white, a single digit a circle.
-fn badge(count: usize) -> impl IntoElement {
+pub(super) fn badge(count: usize) -> gpui_kit::Stateful<gpui_kit::Div> {
     div()
         .id("notify-badge")
         .debug_selector(|| "notify-badge".to_owned())
         .accessibility_id("notify-badge")
-        .role(gpui_kit::Role::Status)
-        .aria_label(SharedString::from(badge_text(count)))
+        // upstream's text whose value is the count; a label's text is its value (AccessKit's label from value)
+        .role(gpui_kit::Role::Label)
+        .aria_value(SharedString::from(badge_text(count)))
         .flex_none()
         .pl(px(BADGE_GAP))
         .child(

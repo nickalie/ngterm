@@ -332,15 +332,15 @@ pub(super) struct ActionPanel<'a> {
     pub(super) session: Uuid,
 }
 
-/// One File ▸ Attach Remote (upstream's `attachRemote` task with its `RemoteAttachHud`) or a remote row's New Session in
-/// progress.
+/// One File ▸ Attach Remote (upstream's `attachRemote` task with its `RemoteAttachHud`) or a remote row's New Session
+/// or Duplicate Session in progress.
 #[derive(Debug)]
 pub(crate) struct AttachFlow {
     pub(super) window: Uuid,
     /// What its panels are headed by.
     pub(super) action: &'static str,
     /// The session the progress and error panels go over: the window's selection when File ▸ Attach Remote started, the
-    /// clicked row for a row's New Session.
+    /// clicked row for a row's New Session or Duplicate Session.
     hud_session: Option<Uuid>,
     /// The slot generation of the panel this flow opened; one another caller posted meanwhile is not its to close.
     owned_hud: Option<u64>,

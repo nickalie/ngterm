@@ -48,3 +48,80 @@ fn tab_reaches_a_menu_button_in_the_tab_order_and_enter_opens_its_menu(cx: &mut 
     cx.run_until_parked();
     assert_eq!(*opened.borrow(), vec!["inside"]);
 }
+
+/// A menu's trigger publishes a menu button with its menu's open state, which UIA turns into the expand/collapse
+/// pattern, and takes AT-SPI's click and UIA's expand and collapse as its press; a disabled one takes none.
+#[gpui_kit::test]
+fn a_menu_trigger_publishes_its_open_state_and_takes_expand_and_collapse(cx: &mut TestAppContext) {
+    use gpui_kit::Element as _;
+    use gpui_kit::accesskit::{Action, HasPopup, Node};
+
+    let focus = cx.update(|cx| cx.focus_handle());
+    let node = |open: bool, press: Option<FocusHandle>| {
+        let element = menu_button(div().id("trigger"), open, press);
+        let mut node = Node::new(element.a11y_role().unwrap_or(Role::Button));
+        element.write_a11y_info(&mut node);
+        node
+    };
+    for open in [false, true] {
+        let pressed = node(open, Some(focus.clone()));
+        assert_eq!(pressed.has_popup(), Some(HasPopup::Menu));
+        assert_eq!(pressed.is_expanded(), Some(open));
+        for action in [Action::Click, Action::Expand, Action::Collapse] {
+            assert!(pressed.supports_action(action), "{action:?} presses the trigger");
+        }
+    }
+    let disabled = node(false, None);
+    assert!(!disabled.supports_action(Action::Expand));
+    assert!(!disabled.supports_action(Action::Collapse));
+}
+
+/// A page strip's buttons, the second one under an element that hides while `shown` is off.
+struct HidingProbe {
+    shown: bool,
+}
+
+impl Render for HidingProbe {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let ink = hsla(0., 0., 1., 1.);
+        let button = |id: &'static str| Button::new(id).size(px(24.)).hint_in(id, ink, ink);
+        div().size_full().flex().child(button("Always")).child(
+            div()
+                .size(px(24.))
+                .when(!self.shown, Styled::invisible)
+                .child(button("Hide")),
+        )
+    }
+}
+
+/// The labels of the buttons in the tree the window last sent to assistive technology.
+fn published_buttons(cx: &mut gpui_kit::VisualTestContext) -> Vec<String> {
+    let update = cx.a11y_tree_update().expect("the window sent its accessibility tree");
+    let mut labels: Vec<String> = update
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.role() == Role::Button)
+        .filter_map(|(_, node)| node.label().map(str::to_owned))
+        .collect();
+    labels.sort();
+    labels
+}
+
+/// Nothing under an invisible element reaches assistive technology, though it stays laid out (a hidden HTML overlay
+/// page's strip kept its Hide button in the AT-SPI and UIA trees), and it comes back once the element shows again.
+#[gpui_kit::test]
+fn a_button_under_an_invisible_element_leaves_the_accessibility_tree_until_it_shows(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (view, cx) = cx.add_window_view(|_, _| HidingProbe { shown: true });
+    cx.activate_a11y();
+    assert_eq!(published_buttons(cx), ["Always", "Hide"]);
+    for shown in [false, true] {
+        view.update(cx, |probe, cx| {
+            probe.shown = shown;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let expected: &[&str] = if shown { &["Always", "Hide"] } else { &["Always"] };
+        assert_eq!(published_buttons(cx), expected, "shown: {shown}");
+    }
+}

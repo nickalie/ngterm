@@ -6,15 +6,19 @@ attribute vocabulary (`role`, `name`, `value`, `enabled`), never the platform's 
 
 from __future__ import annotations
 
+from agterm_conformance.drivers.trace import action
+
 import importlib
+import math
 import re
 import string
 import sys
+import time
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 import yaml
 
@@ -24,7 +28,9 @@ DEFAULT_UI_IDS = Path(__file__).resolve().parents[2] / "ui-ids.yaml"
 # The accessibility API per platform; a Rust build on Linux exposes AT-SPI, on Windows UIA.
 PLATFORM_DRIVERS: Mapping[str, str] = {"darwin": "ax", "linux": "atspi", "win32": "uia"}
 IMPL_PLATFORMS: Mapping[str, str] = {"swift-macos": "darwin"}
-IMPLEMENTED: Mapping[str, str] = {"ax": "agterm_conformance.drivers.ax:AxDriver"}
+IMPLEMENTED: Mapping[str, str] = {"ax": "agterm_conformance.drivers.ax:AxDriver",
+                                  "atspi": "agterm_conformance.drivers.atspi:AtspiDriver",
+                                  "uia": "agterm_conformance.drivers.uia:UiaDriver"}
 ATTRIBUTES = frozenset({"role", "name", "value", "enabled"})
 ROLES = frozenset({
     "button", "menu-button", "menu-item", "checkbox", "radio", "popup", "text-field", "text", "slider", "row",
@@ -41,6 +47,7 @@ NAMED_KEYS = frozenset({
 PRINTABLE_KEYS = frozenset(string.ascii_lowercase + string.digits + "`-=[]\\;',./")
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 INVENTORY_LIMIT = 120
+T = TypeVar("T")
 
 
 class NoDriver(Exception):
@@ -81,7 +88,10 @@ class Element:
     handle: Any = field(default=None, compare=False, repr=False)
 
     def matches(self, attrs: Mapping[str, Any]) -> bool:
-        return all(getattr(self, key) == wanted for key, wanted in attrs.items())
+        return all(
+            bool(wanted.search(self.name or "")) if key == "name" and isinstance(wanted, re.Pattern)
+            else getattr(self, key) == wanted for key, wanted in attrs.items()
+        )
 
 
 class UiIds:
@@ -164,8 +174,12 @@ class Driver(ABC):
         self.ui_ids = ui_ids if ui_ids is not None else UiIds.load()
         self.timeout = timeout
 
+    @action
     def find(self, ui_id: str, timeout: float | None = None, **attrs: Any) -> Element:
-        """The first element carrying `ui_id` whose attributes equal `attrs`, waited for."""
+        """Wait for the first element carrying `ui_id` whose attributes equal `attrs`.
+
+        A compiled `name` pattern uses regex search; a missing name is read as an empty string.
+        """
         self.ui_ids.key_for(ui_id)
         if unknown := sorted(attrs.keys() - ATTRIBUTES):
             raise ValueError(f"unknown attribute {', '.join(unknown)} (known: {', '.join(sorted(ATTRIBUTES))})")
@@ -178,11 +192,30 @@ class Driver(ABC):
 
         return self._wait(check, wanted, timeout)
 
+    @action
     def all(self, ui_id: str) -> list[Element]:
         """Every element carrying `ui_id` now, unwaited: for counts and for picking one by its text."""
         self.ui_ids.key_for(ui_id)
         return self._elements(ui_id)
 
+    @action
+    def count(self, ui_id: str, n: int, timeout: float | None = None) -> list[Element]:
+        """Wait for exactly n matches, including zero, and return their snapshots."""
+        self.ui_ids.key_for(ui_id)
+        if not isinstance(n, int) or n < 0:
+            raise ValueError("count must be a nonnegative integer")
+        found = []
+
+        def check():
+            nonlocal found
+            found = self._elements(ui_id)
+            assert len(found) == n, f"last count: {len(found)}"
+            return True
+
+        self._wait(check, f"count {n} of {ui_id}", timeout)
+        return found
+
+    @action
     def absent(self, ui_id: str, timeout: float | None = None) -> None:
         """Wait until no element carries `ui_id`."""
         self.ui_ids.key_for(ui_id)
@@ -191,10 +224,12 @@ class Driver(ABC):
         except WaitTimeout as error:
             raise WaitTimeout(f"{self.name}: {ui_id} still present in pid {self.pid}: {error}") from None
 
+    @action
     def menu_item(self, name: str, timeout: float | None = None) -> Element:
         """An item of the open menu by title: system menus carry no identifiers."""
         return self._wait(lambda: self._menu_item(name), f"menu item {name!r}", timeout)
 
+    @action
     def menu(self, *path: str, timeout: float | None = None) -> None:
         """Run a main-menu command by its titles, top level first (`"View", "Find…"`)."""
         if not path:
@@ -202,38 +237,243 @@ class Driver(ABC):
         item = self._wait(lambda: self._menu_command(path), f"menu command {' > '.join(path)!r}", timeout)
         self._press_element(item)
 
+    @action
     def tab(self, name: str, timeout: float | None = None) -> Element:
         """A tab of a tabbed window, such as Settings, by its title."""
         return self._wait(lambda: self._tab(name), f"tab {name!r}", timeout)
 
+    @action
     def click(self, target: str | Element) -> None:
         self._press_element(self._resolve(target))
 
+    @action
     def text(self, target: str | Element) -> str:
         return self._text(self._resolve(target))
 
+    @action
     def set_text(self, target: str | Element, text: str) -> None:
         """Replace a text field's contents through the accessibility API, independent of keyboard focus."""
         self._set_text(self._resolve(target), text)
 
+    @action
     def focus(self, target: str | Element) -> None:
         """Give the element keyboard focus, so `press` types into it."""
         self._focus(self._resolve(target))
 
+    @action
     def hover(self, target: str | Element) -> None:
         """Move the pointer over the element, for controls that appear only under it."""
         self._hover(self._resolve(target))
 
+    @action
     def press(self, *chords: str) -> None:
         """Post each chord as a synthesized key down and up, to the app process."""
         parsed = [parse_chord(chord) for chord in chords]
         for chord in parsed:
             self._post_chord(chord)
 
+    def _pointer_element(self, target: str | Element, enabled: bool = True) -> Element:
+        if isinstance(target, str):
+            self.ui_ids.key_for(target)
+            # An id denotes the current control, not the label of its first snapshot.
+            current = next(iter(self._elements(target)), None)
+        else:
+            candidates = self._elements(target.ui_id) if target.ui_id else self._all_elements()
+            current = next((el for el in candidates if target.handle is not None and
+                            el.handle == target.handle), None)
+            if current is None:
+                matches = [el for el in candidates if el.name == target.name and
+                           (target.ui_id is not None or el.role == target.role)]
+                current = matches[0] if len(matches) == 1 else None
+        assert current is not None, "pointer target missing or ambiguous"
+        assert not enabled or current.enabled is not False, "element not enabled"
+        return current
+
+    def _point_now(
+        self, target: str | Element, offset: tuple[float, float]
+    ) -> tuple[Element, tuple[float, float]]:
+        """The live element behind `target` and the screen point at `offset` within it."""
+        if len(offset) != 2 or any(not math.isfinite(v) or not 0 <= v <= 1 for v in offset):
+            raise ValueError("offset must contain two finite fractions in [0, 1]")
+        current = self._pointer_element(target)
+        x, y, width, height = self._bounds(current)
+        assert all(math.isfinite(v) for v in (x, y, width, height)), "nonfinite bounds"
+        assert width > 0 and height > 0, "empty bounds"
+        return current, (x + width * offset[0], y + height * offset[1])
+
+    def _point(self, target: str | Element, offset: tuple[float, float]) -> tuple[float, float]:
+        """Wait for the target, bring it to the front for pointer input, and return its point."""
+        wanted = target if isinstance(target, str) else _describe(target)
+        current, point = self._wait(lambda: self._point_now(target, offset), f"enabled pointer target {wanted}", None)
+        self._pointer_target(current)
+        return point
+
+    @action
+    def move(self, target: str | Element, offset=(0.5, 0.5)) -> None:
+        self._pointer_move(*self._point(target, offset))
+
+    @action
+    def frame(self, target: str | Element) -> tuple[float, float, float, float]:
+        """The live element's screen rectangle (x, y, width, height), for read-backs of where a control sits."""
+        wanted = target if isinstance(target, str) else _describe(target)
+        return self._wait(lambda: self._bounds(self._pointer_element(target, enabled=False)), f"frame of {wanted}",
+                          None)
+
+    @action
+    def window(self, timeout: float | None = None) -> Element:
+        """The app's first window: a pointer target for points the control protocol locates (a split divider)."""
+        return self._wait(lambda: next((el for el in self._all_elements() if el.role == "window"), None),
+                          "window", timeout)
+
+    @staticmethod
+    def _check_button(button: str) -> None:
+        if button not in ("left", "right"):
+            raise ValueError("button must be left or right")
+
+    @action
+    def mouse_click(self, target: str | Element, button="left", offset=(0.5, 0.5)) -> None:
+        """A physical pointer click; click() remains the accessibility press."""
+        self._check_button(button)
+        self.move(target, offset)
+        self._pointer_button(button, True)
+        self._pointer_button(button, False)
+
+    @action
+    def mouse_double_click(self, target: str | Element, button="left", offset=(0.5, 0.5)) -> None:
+        self._check_button(button)
+        self.move(target, offset)
+        self._double_click(button)
+
+    @staticmethod
+    def _check_steps(steps: int) -> None:
+        if not isinstance(steps, int) or steps < 1:
+            raise ValueError("steps must be a positive integer")
+
+    @staticmethod
+    def _check_pacing(*seconds: float) -> None:
+        if any(not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 for v in seconds):
+            raise ValueError("drag pacing must be finite, nonnegative seconds")
+
+    def _drag_points(self, start, end, steps: int, press_for=0.0, duration=0.0, hold_for=0.0) -> None:
+        """Press at `start`, hold still `press_for`, move in `steps` spread over `duration`, hold `hold_for`, release.
+
+        A native drag source (an outline view's row) starts only from a press held a moment and moved at a human
+        pace; zero pacing posts the events back to back.
+        """
+        self._pointer_move(*start)
+        self._pointer_button("left", True)
+        try:
+            if press_for:
+                time.sleep(press_for)
+            for step in range(1, steps + 1):
+                self._pointer_move(*(a + (b - a) * step / steps for a, b in zip(start, end)))
+                if duration:
+                    time.sleep(duration / steps)
+            if hold_for:
+                time.sleep(hold_for)
+        finally:
+            self._pointer_button("left", False)
+
+    @action
+    def drag(self, src: str | Element, dst: str | Element, src_offset=(0.5, 0.5),
+             dst_offset=(0.5, 0.5), steps=10, press_for=0.0, duration=0.0, hold_for=0.0) -> None:
+        self._check_steps(steps)
+        self._check_pacing(press_for, duration, hold_for)
+        # Neither endpoint may retain coordinates across the other endpoint's readiness wait.
+        (source, start), (_, end) = self._wait(
+            lambda: (self._point_now(src, src_offset), self._point_now(dst, dst_offset)),
+            f"enabled drag endpoints {src!r} -> {dst!r}", None,
+        )
+        # The press lands on the source, so the source's window must be the one on top.
+        self._pointer_target(source)
+        self._drag_points(start, end, steps, press_for, duration, hold_for)
+
+    @action
+    def drag_by(self, target: str | Element, dx: float, dy: float, offset=(0.5, 0.5), steps=10,
+                press_for=0.0, duration=0.0, hold_for=0.0) -> None:
+        self._check_steps(steps)
+        self._check_pacing(press_for, duration, hold_for)
+        if not all(math.isfinite(v) for v in (dx, dy)):
+            raise ValueError("drag distances must be finite")
+        start = self._point(target, offset)
+        self._drag_points(start, (start[0] + dx, start[1] + dy), steps, press_for, duration, hold_for)
+
+    @action
+    def scroll(self, target: str | Element, dy: int, dx: int = 0) -> None:
+        """Scroll wheel ticks: positive down/right, negative up/left."""
+        if not all(isinstance(v, int) for v in (dx, dy)):
+            raise ValueError("scroll distances must be integer wheel ticks")
+        self.move(target)
+        self._wheel(dx, dy)
+
+    @action
+    def type_text(self, text: str) -> None:
+        """Type printable Unicode into the focused control; use press for control keys."""
+        if not isinstance(text, str) or any(not char.isprintable() for char in text):
+            raise ValueError("type_text needs printable text")
+        self._type_text(text)
+
+    def _double_click(self, button: str) -> None:
+        # Platforms with explicit click counts override this (CGEvent on macOS).
+        for _ in range(2):
+            self._pointer_button(button, True)
+            self._pointer_button(button, False)
+
+    @abstractmethod
+    def _all_elements(self) -> list[Element]:
+        """All elements, including controls without an author id."""
+
+    @abstractmethod
+    def _bounds(self, element: Element) -> tuple[float, float, float, float]:
+        """Fresh screen coordinates (x, y, width, height)."""
+
+    def _pointer_target(self, element: Element) -> None:
+        """Before pointer input at `element`'s point, make its window the one that receives it.
+
+        Screen coordinates hit whatever window is on top there, so a driver whose input is
+        positional raises and focuses the target's own window here. Called once per action,
+        after the target resolves and before the first move.
+        """
+
+    @abstractmethod
+    def _pointer_move(self, x: float, y: float) -> None: ...
+
+    @abstractmethod
+    def _pointer_button(self, button: str, down: bool) -> None: ...
+
+    @abstractmethod
+    def _wheel(self, dx: int, dy: int) -> None: ...
+
+    @abstractmethod
+    def _type_text(self, text: str) -> None: ...
+
+    def tree_dump(self) -> str:
+        return "\n".join(_describe(element) for element in self._all_elements()) + "\n"
+
+    def screenshot(self) -> bytes:
+        from io import BytesIO
+        from PIL import ImageGrab
+        import sys
+        options = {}
+        if sys.platform.startswith("linux"):
+            instance = getattr(self, "instance", None)
+            if instance is None or instance.ui is None:
+                raise DriverError("screenshot requires the instance's private Xvfb display")
+            instance.ui.check(instance.env, instance.root)
+            options["xdisplay"] = instance.ui.display
+        elif sys.platform == "darwin":
+            from Quartz import CGPreflightScreenCaptureAccess
+            if not CGPreflightScreenCaptureAccess():
+                raise DriverError("screenshot requires the Screen Recording grant")
+        image = ImageGrab.grab(**options)
+        output = BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue()
+
     def _resolve(self, target: str | Element) -> Element:
         return target if isinstance(target, Element) else self.find(target)
 
-    def _wait(self, check: Any, wanted: str, timeout: float | None) -> Element:
+    def _wait(self, check: Callable[[], T], wanted: str, timeout: float | None) -> T:
         try:
             return wait_until(check, self.timeout if timeout is None else timeout)
         except WaitTimeout as error:
@@ -304,6 +544,10 @@ def driver_class(impl: str, platform: str = sys.platform) -> type[Driver]:
 
 
 def make_driver(
-    impl: str, pid: int, ui_ids: UiIds | None = None, platform: str = sys.platform, **kwargs: Any
+    impl: str, instance: Any, ui_ids: UiIds | None = None, platform: str = sys.platform, **kwargs: Any
 ) -> Driver:
-    return driver_class(impl, platform)(pid, ui_ids, **kwargs)
+    if isinstance(instance, int):
+        return driver_class(impl, platform)(instance, ui_ids, **kwargs)
+    if driver_name(impl, platform) == "atspi":
+        kwargs["instance"] = instance
+    return driver_class(impl, platform)(instance.pid, ui_ids, **kwargs)

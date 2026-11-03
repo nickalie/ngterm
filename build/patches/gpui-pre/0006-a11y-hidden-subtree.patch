@@ -1,0 +1,163 @@
+No accessibility node under an invisible element (GPUI patch for docs/plans/20261031-e2e-ui-and-coverage.md Task 7):
+GPUI paints nothing of an element whose style is `Visibility::Hidden` (`.invisible()`), yet prepaints its children,
+which published their AccessKit nodes all the same, so assistive technology found controls nobody could see (a hidden
+HTML overlay page's strip, laid out where it would show, kept its Hide button in the tree on AT-SPI and UIA alike).
+A hidden div now prepaints its children with node publication held off (`A11y::hidden`, checked by
+`A11y::publishes` where an element pushes its node); the invisible element's own node, pushed before its style is
+known, stays. An upstream candidate (Zed).
+For its regression test (ngterm-gpui's chrome::button tests; gpui-pre's own lib tests do not build from the crates.io
+archive), the test window keeps the accessibility callbacks GPUI connects and the tree updates it sends, and
+`VisualTestContext::activate_a11y` connects assistive technology, `VisualTestContext::a11y_tree_update` reads the last
+update; a test that does not activate it runs as before.
+scripts/vendor-gpui.sh applies this after 0005.
+
+diff -ruN a/src/app/test_context.rs b/src/app/test_context.rs
+--- a/src/app/test_context.rs
++++ b/src/app/test_context.rs
+@@ -1060,6 +1060,26 @@
+         self.background_executor.run_until_parked();
+     }
+ 
++    /// Simulates assistive technology connecting to the window: from the next frame on, the window builds its
++    /// accessibility tree and sends it to the platform, where [`Self::a11y_tree_update`] reads it (ngterm patch 0006).
++    pub fn activate_a11y(&mut self) {
++        let test_window = self.cx.test_window(self.window);
++        let initial = test_window
++            .0
++            .lock()
++            .a11y_callbacks
++            .as_ref()
++            .map(|callbacks| (callbacks.activation)());
++        assert!(initial.is_some(), "the window's accessibility is disabled");
++        self.run_until_parked();
++    }
++
++    /// The accessibility tree update the window sent to the platform last, once [`Self::activate_a11y`] connected
++    /// assistive technology.
++    pub fn a11y_tree_update(&mut self) -> Option<accesskit::TreeUpdate> {
++        self.cx.test_window(self.window).0.lock().a11y_tree_update.clone()
++    }
++
+     /// Simulates the user blurring the window.
+     pub fn deactivate_window(&mut self) {
+         if Some(self.window) == self.test_platform.active_window() {
+diff -ruN a/src/element.rs b/src/element.rs
+--- a/src/element.rs
++++ b/src/element.rs
+@@ -425,7 +425,7 @@
+ 
+                 let bounds = window.layout_bounds(layout_id);
+                 let mut pushed_a11y_node = false;
+-                if window.a11y.is_active() {
++                if window.a11y.publishes() {
+                     if let Some(global_id) = global_id.as_ref() {
+                         if let Some(role) = self.element.a11y_role() {
+                             let node_id = global_id.accesskit_node_id();
+diff -ruN a/src/elements/div.rs b/src/elements/div.rs
+--- a/src/elements/div.rs
++++ b/src/elements/div.rs
+@@ -2043,7 +2043,9 @@
+                     return hitbox;
+                 }
+ 
+-                window.with_image_cache(image_cache, |window| {
++                // nothing of an invisible element is on screen: its descendants publish no accessibility node
++                let hidden = style.visibility == Visibility::Hidden;
++                let mut prepaint_children = |window: &mut Window, cx: &mut App| {
+                     window.with_element_offset(scroll_offset, |window| {
+                         if let Some(order_fn) = &self.prepaint_order_fn {
+                             let order = order_fn(window, cx);
+@@ -2058,6 +2060,13 @@
+                             }
+                         }
+                     });
++                };
++                window.with_image_cache(image_cache, |window| {
++                    if hidden {
++                        crate::window::a11y::A11y::hidden(window, |window| prepaint_children(window, cx));
++                    } else {
++                        prepaint_children(window, cx);
++                    }
+ 
+                     if let Some(listener) = self.prepaint_listener.as_ref() {
+                         listener(children_bounds, window, cx);
+diff -ruN a/src/platform/test/window.rs b/src/platform/test/window.rs
+--- a/src/platform/test/window.rs
++++ b/src/platform/test/window.rs
+@@ -58,6 +58,10 @@
+     appearance: WindowAppearance,
+     external_drag_files: Vec<(PathBuf, bool)>,
+     start_external_drag_result: bool,
++    /// The callbacks GPUI connected assistive technology through, and the tree update it sent last (ngterm patch
++    /// 0006: the test window's accessibility, which `VisualTestContext::activate_a11y` turns on).
++    pub(crate) a11y_callbacks: Option<crate::A11yCallbacks>,
++    pub(crate) a11y_tree_update: Option<accesskit::TreeUpdate>,
+ }
+ 
+ #[derive(Clone)]
+@@ -133,6 +137,8 @@
+             appearance: WindowAppearance::Light,
+             external_drag_files: Vec::new(),
+             start_external_drag_result: false,
++            a11y_callbacks: None,
++            a11y_tree_update: None,
+         })))
+     }
+     pub fn simulate_scheduled_frame(&self) -> bool {
+@@ -572,6 +578,14 @@
+         }
+     }
+ 
++    fn a11y_init(&self, callbacks: crate::A11yCallbacks) {
++        self.0.lock().a11y_callbacks = Some(callbacks);
++    }
++
++    fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
++        self.0.lock().a11y_tree_update = Some(tree_update);
++    }
++
+     fn as_test(&mut self) -> Option<&mut TestWindow> {
+         Some(self)
+     }
+diff -ruN a/src/window/a11y.rs b/src/window/a11y.rs
+--- a/src/window/a11y.rs
++++ b/src/window/a11y.rs
+@@ -146,6 +146,9 @@
+     /// determine whether we should actually send the finished [`TreeUpdate`].
+     active_this_frame: bool,
+     pub(crate) nodes: A11yNodeBuilder,
++    /// How many invisible elements ([`crate::Visibility::Hidden`]) enclose the element being prepainted: their
++    /// descendants publish no node, as nothing of them is on screen.
++    hidden_depth: usize,
+     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
+     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
+     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
+@@ -174,6 +177,7 @@
+             active_flag,
+             active_this_frame: false,
+             nodes: A11yNodeBuilder::new(),
++            hidden_depth: 0,
+             focus_ids: FxHashMap::default(),
+             node_bounds: FxHashMap::default(),
+             action_listeners: FxHashMap::default(),
+@@ -221,6 +225,20 @@
+         self.active_this_frame
+     }
+ 
++    /// Whether an element prepainted now publishes its node: accessibility is active and no invisible element
++    /// encloses it.
++    pub(crate) fn publishes(&self) -> bool {
++        self.is_active() && self.hidden_depth == 0
++    }
++
++    /// Runs `f` (an invisible element's children's prepaint) with their nodes left out of the tree.
++    pub(crate) fn hidden<R>(window: &mut crate::Window, f: impl FnOnce(&mut crate::Window) -> R) -> R {
++        window.a11y.hidden_depth += 1;
++        let result = f(window);
++        window.a11y.hidden_depth -= 1;
++        result
++    }
++
+     pub(crate) fn set_focusable(&mut self, node_id: NodeId, focus_id: FocusId) {
+         self.focus_ids.insert(node_id, focus_id);
+     }

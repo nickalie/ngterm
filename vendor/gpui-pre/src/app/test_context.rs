@@ -1060,6 +1060,26 @@ impl VisualTestContext {
         self.background_executor.run_until_parked();
     }
 
+    /// Simulates assistive technology connecting to the window: from the next frame on, the window builds its
+    /// accessibility tree and sends it to the platform, where [`Self::a11y_tree_update`] reads it (ngterm patch 0006).
+    pub fn activate_a11y(&mut self) {
+        let test_window = self.cx.test_window(self.window);
+        let initial = test_window
+            .0
+            .lock()
+            .a11y_callbacks
+            .as_ref()
+            .map(|callbacks| (callbacks.activation)());
+        assert!(initial.is_some(), "the window's accessibility is disabled");
+        self.run_until_parked();
+    }
+
+    /// The accessibility tree update the window sent to the platform last, once [`Self::activate_a11y`] connected
+    /// assistive technology.
+    pub fn a11y_tree_update(&mut self) -> Option<accesskit::TreeUpdate> {
+        self.cx.test_window(self.window).0.lock().a11y_tree_update.clone()
+    }
+
     /// Simulates the user blurring the window.
     pub fn deactivate_window(&mut self) {
         if Some(self.window) == self.test_platform.active_window() {

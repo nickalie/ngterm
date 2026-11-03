@@ -154,7 +154,7 @@ fn scrubbed_environment() -> Vec<(OsString, OsString)> {
     std::env::vars_os()
         .filter(|(name, _)| {
             let name = name.to_string_lossy().to_ascii_uppercase();
-            !name.starts_with("NGTERM_") && !name.starts_with("AGTERM_") && !name.starts_with("ZMX_")
+            !name.starts_with("NGTERM_") && !name.starts_with("AGTERM_")
         })
         .collect()
 }

@@ -67,8 +67,7 @@ class RustAdapter(Adapter):
     app_dir_name = "ngterm"
     ctl_name = "ngtermctl"
     env_prefix = RUST_PREFIX
-    # `live.*`, `ngtermctl live`, `result.live`, `backedByLive`: upstream's `zmx` group renamed
-    # (conformance/docs/rust-build.md > The `live` group).
+    # ngterm's own names, the ones the shared tests speak (`live.*`, `ngtermctl live`, `result.live`, `backedByLive`).
     vocabulary = LIVE
     # macOS and Windows name their single instance by the app id and the state dir: a unique id keeps it off the user's too.
     needs_app_id = sys.platform.startswith("linux") or sys.platform in ("darwin", "win32")
@@ -118,8 +117,9 @@ class RustAdapter(Adapter):
         first_run: bool = False,
         private_install: bool = False,
         pane_shell: str | None = None,
+        ui: Any = None,
     ) -> Instance:
-        instance = super().launch(timeout, app_id, settings, first_run, private_install, pane_shell)
+        instance = super().launch(timeout, app_id, settings, first_run, private_install, pane_shell, ui=ui)
         return instance if first_run else self._profiled(instance)
 
     def serving(self, instance: Instance, timeout: float = LAUNCH_TIMEOUT) -> Instance:

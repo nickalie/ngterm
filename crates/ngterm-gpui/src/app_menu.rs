@@ -20,7 +20,8 @@ use std::rc::Rc;
 
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::{
-    App, Context, Hsla, InteractiveElement as _, ParentElement as _, SharedString, Styled as _, Window, div,
+    App, Context, Hsla, InteractiveElement as _, ParentElement as _, Role, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, div,
 };
 use ngterm_core::Core;
 use ngterm_core::app_actions::{ActionEffect, ActionOrigin};
@@ -232,6 +233,7 @@ pub enum MenuAction {
 /// The items no keymap action runs: the app's and Help's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppAction {
+    CheckForUpdates,
     Settings,
     ResetLiveSessions,
     Quit,
@@ -506,6 +508,7 @@ fn help() -> Vec<Entry> {
         app("install-skill", "Install Agent Skill…", AppAction::InstallSkill),
         Entry::Separator,
         app("about", "About Ngterm", AppAction::About),
+        app("check-for-updates", "Check for Updates…", AppAction::CheckForUpdates),
     ]
 }
 
@@ -560,8 +563,10 @@ fn fill(
             Entry::Separator => popup.separator(),
             Entry::Submenu { title, entries } => {
                 let (entries, perform) = (entries.clone(), Rc::clone(perform));
+                // a submenu taller than its room scrolls (half the window at most, the library's default), so every
+                // item stays reachable in a small window
                 popup.submenu(title.clone(), window, cx, move |submenu, window, cx| {
-                    fill(submenu, &entries, &perform, ink, window, cx)
+                    fill(submenu.scrollable(true), &entries, &perform, ink, window, cx)
                 })
             }
         };
@@ -590,12 +595,22 @@ fn item_of(item: &MenuItem, perform: &Perform, ink: Ink) -> PopupMenuItem {
             .gap_4()
             .items_center()
             .justify_between()
-            .child(title.clone())
+            .child(item_title(&id, &title))
             .children(chord.clone().map(|chord| div().text_color(ink.chord).child(chord)))
     })
     .disabled(!item.enabled)
     .checked(item.checked)
     .on_click(move |_, window, cx| perform(action, window, cx))
+}
+
+/// An item's title, the one label in its row: a menu item names itself after the labels among its descendants
+/// (AccessKit), and the chord beside it is no label, so the item's accessible name is its title alone.
+fn item_title(id: &str, title: &SharedString) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(SharedString::from(format!("{id}-title")))
+        .role(Role::Label)
+        .aria_value(title.clone())
+        .child(title.clone())
 }
 
 /// What the menu of model window `id` runs: a row, a built-in or a live entry as a main-loop task in that window; the
@@ -614,6 +629,7 @@ pub fn perform(poster: &Poster, id: Uuid) -> Perform {
 fn run_app(action: AppAction, poster: &Poster, id: Uuid, window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
     match action {
+        AppAction::CheckForUpdates => crate::updater::check(window, cx),
         AppAction::Settings => post(poster, move |state: &mut AppState| {
             state.open_settings(id);
         }),

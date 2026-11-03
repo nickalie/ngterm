@@ -53,6 +53,7 @@ env:
   PACKAGES: >-
     -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys -p ngterm-ghostty-vt
     -p ngterm-pty -p ngterm-term -p ngterm-server -p ngterm-ctl -p ngterm-app -p ngterm-headless -p ngterm-mobile
+    -p ngterm-update
 
 defaults:
   run:
@@ -113,6 +114,15 @@ jobs:
           cp -r vendor/portable-pty "$copy"
           printf '\n[workspace]\n' >> "$copy/Cargo.toml"
           cargo test --manifest-path "$copy/Cargo.toml" --lib windows_
+      # vendor/accesskit_windows likewise: its patch 0001's tests (a clickable menu item keeps Invoke whatever its
+      # highlight); the crate builds on Windows only
+      - name: vendored accesskit_windows's patch tests
+        if: runner.os == 'Windows'
+        run: |
+          copy="$(cygpath -u "$RUNNER_TEMP")/accesskit_windows"
+          cp -r vendor/accesskit_windows "$copy"
+          printf '\n[workspace]\n' >> "$copy/Cargo.toml"
+          cargo test --manifest-path "$copy/Cargo.toml" --lib invoke_tests
       - name: terminal fonts (ngterm-gpui embeds them)
         if: runner.os != 'Linux'
         run: scripts/fetch-fonts.sh
@@ -145,9 +155,9 @@ jobs:
 
   # The conformance suite on Windows (conformance/tools/run-windows.sh): the release app with its HTML overlays, the
   # CLI and the live sessions' server staged by scripts/stage.sh, the protocol, cli and behaviors layers run against
-  # them over the control socket's named pipe, each instance on a private root (its home, application data, state dir
-  # and pipe; its window on the runner's desktop, which no one uses), its panes in Git for Windows' sh, its process
-  # tree reaped by pid. Held by conformance/rust-passing-windows.txt, the Windows ratchet beside rust-passing.txt. The
+  # them over the control socket's named pipe and the ui layer through UI Automation and SendInput (drivers/uia.py),
+  # each instance on a private root (its home, application data, state dir and pipe; its window on the runner's
+  # desktop, which no one uses), its panes in Git for Windows' sh, its process tree reaped by pid. Held by conformance/rust-passing-windows.txt, the Windows ratchet beside rust-passing.txt. The
   # harness's Windows self-tests (the pipe transport, the launch and stop) run first.
   windows:
     runs-on: windows-2025
@@ -178,11 +188,12 @@ jobs:
         run: >-
           .venv/Scripts/python.exe -m pytest conformance/selftests/test_transport.py
           conformance/selftests/test_client.py conformance/selftests/test_windows_launch.py
+          conformance/selftests/test_uia.py
       # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
       # every stopped instance's logs (the harness's and the app's own), named after its test, uploaded with the report
       # --must-pass live-any-shell: the login shell is Windows PowerShell, which the build runs its live sessions in; a
       # skipped, failed or deselected Live test fails the job, as does finding none.
-      - name: suite (protocol, cli, behaviors)
+      - name: suite (protocol, cli, behaviors, ui)
         run: >-
           CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows/instances")"
           conformance/tools/run-windows.sh -- --must-pass live-any-shell
@@ -196,6 +207,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: rust-windows-conformance
+          # Includes per-test traces/ alongside the nodeid report.
           path: conformance/reports/rust-windows/
           if-no-files-found: warn
       # the staged tree the suite ran, for a run on a Windows VM against the same build (run-windows.sh --stage)
@@ -206,4 +218,68 @@ jobs:
           name: rust-windows-stage
           path: target/conformance-stage/
           retention-days: 5
+          if-no-files-found: warn
+
+  # The windows job's suite again on an instrumented build (run-windows.sh --coverage: cargo-llvm-cov and the
+  # toolchain's llvm-tools), every layer, judged by conformance/coverage-floor-windows.txt (tools/check_coverage.py:
+  # line % per workspace crate) and nothing else: instrumentation slows the app, so the ratchet stays the windows job's.
+  # Its report (coverage/ with lcov.info and html/, traces/) is uploaded as rust-windows-coverage-conformance.
+  coverage-windows:
+    runs-on: windows-2025
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: llvm-tools
+        run: rustup component add llvm-tools
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite
+        run: |
+          python -m venv .venv
+          .venv/Scripts/python.exe -m pip install -e conformance
+      # Only a run without a coverage report (exit 2) fails here: the ratchet verdict (exit 1) is the windows job's to
+      # judge. Unsetting GITHUB_STEP_SUMMARY only keeps the ratchet checker's own summary block out; the suite's
+      # report.md, appended below, still carries its ratchet verdict.
+      - name: instrumented suite (protocol, cli, behaviors, ui)
+        run: |
+          status=0
+          CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows-coverage/instances")" \
+            env -u GITHUB_STEP_SUMMARY conformance/tools/run-windows.sh --coverage \
+            --out conformance/reports/rust-windows-coverage || status=$?
+          if ((status == 2)); then exit 2; fi
+          echo "run-windows.sh exited $status (the ratchet is not judged here)"
+      - name: coverage floors
+        run: >-
+          .venv/Scripts/python.exe conformance/tools/check_coverage.py
+          --summary conformance/reports/rust-windows-coverage/coverage/summary.md
+          --floor conformance/coverage-floor-windows.txt
+      - name: report into the summary
+        if: always()
+        run: |
+          report=conformance/reports/rust-windows-coverage/report.md
+          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-windows-coverage-conformance
+          # coverage/ (lcov.info, html/, summary.md) and the per-test traces/ beside the nodeid report
+          path: conformance/reports/rust-windows-coverage/
           if-no-files-found: warn

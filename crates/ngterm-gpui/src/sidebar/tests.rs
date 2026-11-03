@@ -1228,3 +1228,13 @@ fn a_companions_status_glyph_and_badge_stay_inside_the_sidebar(cx: &mut TestAppC
         );
     }
 }
+
+#[test]
+fn the_notify_badge_reads_as_text_valued_with_the_count() {
+    use gpui_kit::{Element as _, Role, accesskit::Node};
+    let badge = super::view::badge(2);
+    assert_eq!(badge.a11y_role(), Some(Role::Label));
+    let mut node = Node::new(Role::Label);
+    badge.write_a11y_info(&mut node);
+    assert_eq!(node.value(), Some("2"));
+}

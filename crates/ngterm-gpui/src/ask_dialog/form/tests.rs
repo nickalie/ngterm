@@ -1,5 +1,5 @@
 //! The form's pure parts: the guard, the editor's keys, the draft edits and the layout's choice (upstream's
-//! `AskDialogViewTests` cases that need no window).
+//! `AskDialogViewTests` cases that need no window), and the choice rows as assistive technology reads them.
 
 use gpui_kit::Keystroke;
 use ngterm_core::model::{AskChoiceForm, AskDraft, AskForm, AskInputForm, AskInputMode};
@@ -221,4 +221,117 @@ fn row_ids_are_tagged_and_the_free_form_row_carries_no_caller_prefix() {
         "a caller id named like the row stays apart"
     );
     assert!(!OTHER_ROW_ID.starts_with("ask-choice-"));
+}
+
+/// A GUI ask over a list of "a" and "b" with a free-form row, opened on `draft`.
+fn choice_dialog<'a>(
+    list: &AskChoiceForm,
+    draft: &AskDraft,
+    cx: &'a mut gpui_kit::TestAppContext,
+) -> (Entity<AskDialog>, &'a mut gpui_kit::VisualTestContext) {
+    use ngterm_core::model::{AskAlignment, AskStyle, PendingAsk};
+    cx.update(gpui_kit::init);
+    let pending = PendingAsk {
+        id: "A1".to_owned(),
+        title: "Pick".to_owned(),
+        message: None,
+        buttons: Vec::new(),
+        default_id: None,
+        destructive_id: None,
+        style: AskStyle::Gui,
+        align: AskAlignment::Right,
+        width: None,
+        anchor: None,
+        form: Some(AskForm::Choices(list.clone())),
+        cancel_id: None,
+    };
+    let look = super::super::Look {
+        family: None,
+        size: 13.0,
+        foreground: Rgb::WHITE,
+        background: Rgb::BLACK,
+    };
+    let opening = super::super::AskOpening {
+        ask: &pending,
+        draft: Some(draft),
+        owner: super::super::AskOwner::Session(uuid::Uuid::new_v4()),
+        look,
+        poster: crate::state::detached_poster(),
+    };
+    cx.add_window_view(|window, cx| AskDialog::new(opening, window, cx))
+}
+
+fn row_look() -> RowLook {
+    RowLook {
+        gui: true,
+        cell: 13.0,
+        colors: crate::chrome::default_colors(),
+        foreground: Rgb::WHITE,
+        background: Rgb::BLACK,
+        char_width: 8.0,
+    }
+}
+
+/// The accessibility node `row` publishes, as its role.
+fn node_of(row: &gpui_kit::Stateful<gpui_kit::Div>) -> gpui_kit::accesskit::Node {
+    use gpui_kit::Element as _;
+    let role = row.a11y_role().expect("a row is an accessibility node");
+    let mut node = gpui_kit::accesskit::Node::new(role);
+    row.write_a11y_info(&mut node);
+    node
+}
+
+#[gpui_kit::test]
+fn a_multiple_lists_rows_read_as_named_checkboxes_with_their_checks(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::accesskit::{Action, Role, Toggled};
+    let mut list = AskChoiceForm::new(choices(&["a", "b"]));
+    list.multiple = true;
+    list.other = Some("Something else".to_owned());
+    let mut draft = AskDraft::new(Some(&AskForm::Choices(list.clone())));
+    DraftEdit::Toggle(0).apply(&mut draft);
+    DraftEdit::Text("kept".to_owned()).apply(&mut draft);
+    let (dialog, cx) = choice_dialog(&list, &draft, cx);
+    dialog.update(cx, |dialog, cx| {
+        let checked = node_of(&dialog.render_row(0, &list.choices[0], true, row_look(), cx));
+        assert_eq!(checked.role(), Role::CheckBox);
+        assert_eq!(checked.author_id(), Some("ask-choice-a"));
+        assert_eq!(checked.label(), Some("A"), "named after its label, not its id");
+        assert_eq!(checked.toggled(), Some(Toggled::True));
+        let unchecked = node_of(&dialog.render_row(1, &list.choices[1], true, row_look(), cx));
+        assert_eq!(unchecked.label(), Some("B"));
+        assert_eq!(unchecked.toggled(), Some(Toggled::False));
+        assert!(unchecked.supports_action(Action::Click));
+        let field = div().into_any_element();
+        let other = node_of(&dialog.render_other_row(&list, row_look(), field, cx));
+        assert_eq!(other.role(), Role::CheckBox);
+        assert_eq!(other.author_id(), Some(OTHER_ROW_ID));
+        assert_eq!(other.label(), Some("Something else"), "named after its placeholder");
+        assert_eq!(other.toggled(), Some(Toggled::True), "its text selected it");
+        assert!(!other.is_disabled());
+        assert!(
+            other.supports_action(Action::Click),
+            "assistive technology presses the row itself, not only its marker"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn a_radio_lists_blank_free_form_row_reads_unchecked_and_disabled(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::accesskit::{Action, Role, Toggled};
+    let mut list = AskChoiceForm::new(choices(&["a", "b"]));
+    list.other = Some("Something else".to_owned());
+    let mut draft = AskDraft::new(Some(&AskForm::Choices(list.clone())));
+    DraftEdit::Toggle(1).apply(&mut draft);
+    let (dialog, cx) = choice_dialog(&list, &draft, cx);
+    dialog.update(cx, |dialog, cx| {
+        let picked = node_of(&dialog.render_row(1, &list.choices[1], false, row_look(), cx));
+        assert_eq!(picked.role(), Role::RadioButton);
+        assert_eq!(picked.label(), Some("B"));
+        assert_eq!(picked.toggled(), Some(Toggled::True));
+        let other = node_of(&dialog.render_other_row(&list, row_look(), div().into_any_element(), cx));
+        assert_eq!(other.role(), Role::RadioButton);
+        assert_eq!(other.toggled(), Some(Toggled::False));
+        assert!(other.is_disabled(), "blank text leaves nothing to pick");
+        assert!(!other.supports_action(Action::Click));
+    });
 }

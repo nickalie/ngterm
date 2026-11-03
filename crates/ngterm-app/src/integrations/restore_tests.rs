@@ -92,7 +92,7 @@ impl Bench {
             // the system's variables PowerShell needs stay; the live instance's and the agent's go
             for (key, _) in std::env::vars_os() {
                 let key = key.to_string_lossy().into_owned();
-                if ["NGTERM_", "AGTERM_", "ZMX_", "CLAUDE"]
+                if ["NGTERM_", "AGTERM_", "CLAUDE"]
                     .iter()
                     .any(|prefix| key.starts_with(prefix))
                 {

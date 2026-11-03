@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Build the Rust workspace, stage it and run the protocol, cli and behaviors layers against it, then hold the
-# ratchet: every id in conformance/rust-passing.txt must still pass. Every instance comes from the harness (unique NGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-*
-# parent, its own headless weston and session bus); no window, notification or a11y object reaches the desktop.
+# Build the Rust workspace, stage it and run the protocol, cli, behaviors and ui layers against it, then hold the
+# ratchet: every id in conformance/rust-passing.txt must still pass. Every instance comes from the harness (unique
+# NGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-* parent, its own headless weston and session bus; a ui
+# instance its own Xvfb on the run's private a11y bus); no window, notification or a11y object reaches the desktop.
 #
-#   conformance/tools/run-linux.sh [--stage DIR] [--out DIR] [--tests DIR]
+#   conformance/tools/run-linux.sh [--stage DIR] [--out DIR] [--tests DIR] [--coverage]
 #                                       [--ratchet FILE] [--ratchet-only [--also SELECTOR]... [--also-k EXPR]...]
 #                                       [-- PYTEST_ARGS...]
 #
@@ -15,10 +16,18 @@
 # The build (bin/ngterm, staged into target/conformance-stage, reports in conformance/reports/rust-linux) renders
 # on Mesa's lavapipe only, from scripts/fetch-lavapipe.sh (exit 2 without one), its weston with --fake-seat.
 # --stage runs an already staged tree (scripts/stage.sh layout) instead of building and staging into target/.
+# --coverage builds instrumented (cargo llvm-cov show-env, into target/llvm-cov-target after cargo llvm-cov clean
+# --workspace), stages into target/conformance-stage-cov, and gives every process of the build a pooled
+# LLVM_PROFILE_FILE in target/llvm-cov-target (agterm_conformance/llvm_profiles.py); a --stage not built so exits 2.
+# The processes the harness had to end past their exit are listed in DIR/lost-profiles.txt. After the suite
+# `cargo llvm-cov report` merges the profiles into DIR/coverage (lcov.info, html/, summary.md: line, region and
+# function % per workspace crate, vendor/ and the -sys crates excluded); a run that left no profile, or a stage that
+# is not the instrumented build, exits 2 with the reason (agterm_conformance/code_coverage.py).
 # Without the app's binary in the stage every test skips and parity reads 0%.
-# Writes report.md, junit.xml, pytest.log and nodeids.jsonl into DIR.
-# Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable report), or 1 when a run left an instance
-# root behind; pytest's own status does not count, since most tests are red by design until parity.
+# Writes report.md (with the ui ids a passing test exercised), junit.xml, pytest.log and nodeids.jsonl into DIR.
+# Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable report), 1 when a run left an instance
+# root behind, or 2 when --coverage yields no code coverage report; pytest's own status does not count, since most
+# tests are red by design until parity.
 # CONFORMANCE_LINUX_DISPLAY=session uses this desktop's display and bus instead, for debugging.
 # One run at a time per user: a second run waits on the lock $CONFORMANCE_LOCK (default
 # $XDG_RUNTIME_DIR/agterm-conformance.lock, else /tmp/agterm-conformance-<uid>/agterm-conformance.lock), shared by
@@ -37,6 +46,7 @@ out=""
 tests="$repo/conformance/tests"
 ratchet=""
 ratchet_only=""
+coverage=""
 also=()
 also_k=()
 extra=()
@@ -51,7 +61,8 @@ while (($#)); do
         --also) also+=("$2"); shift 2 ;;
         --also-k) also_k+=("$2"); shift 2 ;;
         --) shift; extra=("$@"); break ;;
-        -h|--help) sed -n '2,26s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --coverage) coverage=1; shift ;;
+        -h|--help) sed -n '2,35s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -81,12 +92,12 @@ if [[ "$display" == headless ]]; then
 fi
 
 layers=()
-for layer in protocol cli behaviors; do
+for layer in protocol cli behaviors ui; do
     if [[ -d "$tests/$layer" ]]; then layers+=("$tests/$layer"); fi
 done
-((${#layers[@]})) || { echo "no protocol, cli or behaviors layer under $tests" >&2; exit 2; }
+((${#layers[@]})) || { echo "no protocol, cli, behaviors or ui layer under $tests" >&2; exit 2; }
 
-# --ratchet-only: the plugin keeps the listed ids and the extras. An --also path outside the layers (tests/ui, say) is
+# --ratchet-only: the plugin keeps the listed ids and the extras. An --also path outside the layers (a fixture dir) is
 # collected as well; selectors are spelled like the list's ids, relative to the suite's root (the tests dir's parent).
 selection=()
 if [[ -n "$ratchet_only" ]]; then
@@ -107,7 +118,23 @@ if [[ -n "$ratchet_only" ]]; then
     for expression in "${also_k[@]}"; do selection+=(--also-k "$expression"); done
 fi
 
+# UI selections need real accessibility bindings even before the AT-SPI driver is enabled.
+for layer in "${layers[@]}"; do
+    if [[ "$layer" == "$tests/ui" || "$layer" == "$tests/ui/"* ]]; then
+        [[ "$display" == headless ]] || { echo "Linux UI instances require headless display mode" >&2; exit 2; }
+        "$python" -m agterm_conformance.linux_ui || exit 2
+        break
+    fi
+done
+
 [[ -z "$stage" || -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
+# --coverage: the instrumented build's own target dir, where its profiles go and `cargo llvm-cov report` reads them.
+# Absolute: the build runs from the repo and the harness's children from their instance homes.
+target_root="$(realpath -m -- "${CARGO_TARGET_DIR:-$repo/target}")"
+cov_target="$target_root/llvm-cov-target"
+if [[ -n "$coverage" && -n "$stage" ]] && ! "$python" -m agterm_conformance.llvm_profiles "$stage/bin"; then
+    exit 2
+fi
 
 # The build renders through Vulkan: on lavapipe and nothing else (the harness points VK_DRIVER_FILES at it), never on
 # this machine's GPU driver, so a missing lavapipe stops the run here. Not NGTERM_- or AGTERM_-prefixed: the plugin
@@ -157,8 +184,24 @@ if [[ -z "$locked" ]]; then
     exit "$status"
 fi
 
-if [[ -z "$stage" ]]; then
-    stage="${CARGO_TARGET_DIR:-$repo/target}/conformance-stage"
+if [[ -z "$stage" && -n "$coverage" ]]; then
+    stage="$target_root/conformance-stage-cov"
+    # as below, instrumented: show-env's rustc wrapper adds -C instrument-coverage and cfg(coverage) in a target dir
+    # of its own, cleaned of the last run's workspace build and profiles first
+    # shellcheck source=../../scripts/lib/native.sh
+    (
+        cd "$repo" && source scripts/lib/native.sh || exit
+        export CARGO_TARGET_DIR="$cov_target"
+        eval "$(cargo llvm-cov show-env --sh)" || exit
+        cargo llvm-cov clean --workspace || exit
+        cargo build --release "${WORKSPACE_WITHOUT_WPE[@]}" || exit
+        cargo build --release -p ngterm-gpui || exit
+        rm -rf "$stage"
+        "$repo/scripts/stage.sh" "$stage"
+    )
+    "$python" -m agterm_conformance.llvm_profiles "$stage/bin" || exit 2
+elif [[ -z "$stage" ]]; then
+    stage="$target_root/conformance-stage"
     # the workspace without what links WPE WebKit (WORKSPACE_WITHOUT_WPE: ngtermctl is in it), then the app with its
     # HTML overlays, which need a WPE WebKit (README > WPE WebKit)
     # shellcheck source=../../scripts/lib/native.sh
@@ -176,10 +219,17 @@ if [[ -x "$stage/bin/$app" ]]; then
 fi
 
 # A shell inside a live ngterm or agterm session exports its socket and session; the plugin scrubs these too.
-while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(NGTERM_|AGTERM_|ZMX_)' || true)
+while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(NGTERM_|AGTERM_)' || true)
 
 mkdir -p "$out"
-rm -f "$out/report.md" "$out/junit.xml" "$out/pytest.log" "$out/nodeids.jsonl"
+rm -rf "$out/traces"
+rm -f "$out/report.md" "$out/junit.xml" "$out/pytest.log" "$out/nodeids.jsonl" "$out/lost-profiles.txt"
+# --coverage: this run's profiles only, pooled per binary; the harness reads the directory from the environment.
+if [[ -n "$coverage" ]]; then
+    mkdir -p "$cov_target"
+    rm -f "$cov_target"/*.profraw "$cov_target/lost-profiles.txt"
+    export CONFORMANCE_COVERAGE_DIR="$cov_target"
+fi
 # A per-run parent, so a concurrent run's roots are neither blamed on this one nor listed for removal.
 parent="$(mktemp -d /tmp/agt-run-XXXXXX)"
 trap 'rmdir "$parent" 2>/dev/null || true' EXIT
@@ -202,6 +252,39 @@ left="$(find "$parent" -mindepth 1 -maxdepth 1 | sort)"
 if [[ -n "$left" && $status -eq 0 ]]; then
     status=1
 fi
+profiles=0
+lost=0
+if [[ -n "$coverage" ]]; then
+    profiles="$(find "$cov_target" -maxdepth 1 -name '*.profraw' | wc -l)"
+    if [[ -f "$cov_target/lost-profiles.txt" ]]; then
+        cp "$cov_target/lost-profiles.txt" "$out/lost-profiles.txt"
+        lost="$(wc -l < "$out/lost-profiles.txt")"
+    fi
+fi
+
+# --coverage: merge this run's profiles against the instrumented build (agterm_conformance/code_coverage.py) into
+# DIR/coverage; no profiles or a stage that is not that build exits 2 with the reason.
+coverage_error=""
+if [[ -n "$coverage" ]]; then
+    rm -rf "$out/coverage"
+    stage_bin="$(realpath -m -- "$stage/bin")"
+    coverage_out="$(realpath -m -- "$out/coverage")"
+    if ! coverage_error="$(
+        cd "$repo" || exit 2
+        export CARGO_TARGET_DIR="$cov_target"
+        llvm_cov_env="$(cargo llvm-cov show-env --sh 2>/dev/null)" \
+            || { echo "code coverage: cargo llvm-cov show-env failed"; exit 2; }
+        eval "$llvm_cov_env"
+        "$python" -m agterm_conformance.code_coverage --profiles "$cov_target" --stage-bin "$stage_bin" \
+            --release-dir "$cov_target/release" --repo "$repo" --out "$coverage_out" 2>&1 >/dev/null
+    )"; then
+        status=2
+        echo "$coverage_error" >&2
+    fi
+fi
+# The ui ids a passing test of this run exercised (agterm_conformance/coverage.py), counted against the catalog
+# files the run used (nodeids.jsonl names them, --catalog/--ui-ids in the pytest args included).
+catalog_line="$("$python" -m agterm_conformance.coverage "$out/nodeids.jsonl" 2>&1)" || true
 
 build_commit="$(git -C "$repo" rev-parse --short HEAD)"
 if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)"; fi
@@ -222,6 +305,10 @@ if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)
     echo "- host: $(uname -sr), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "- layers: ${layers[*]#"$tests/"}"
     echo "- display: $display"
+    if [[ -n "$coverage" ]]; then
+        echo "- coverage: $profiles profile files in \`$cov_target\`, $lost processes ended without one" \
+            "$( ((lost)) && echo '(lost-profiles.txt)')"
+    fi
     if ((${#extra[@]})); then echo "- pytest args: ${extra[*]}"; fi
     echo "- pytest status: $pytest_status"
     echo "- exit status: $status"
@@ -240,6 +327,22 @@ if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)
     echo '```'
     echo "$ratchet_log"
     echo '```'
+    if [[ -n "$coverage" ]]; then
+        echo
+        echo "### code coverage"
+        echo
+        if [[ -z "$coverage_error" ]]; then
+            cat "$out/coverage/summary.md"
+            echo
+            echo "lcov: \`$out/coverage/lcov.info\`, html: \`$out/coverage/html/index.html\`"
+        else
+            echo "no report: ${coverage_error#code coverage: }"
+        fi
+    fi
+    echo
+    echo "### catalog coverage"
+    echo
+    echo "$catalog_line"
     if [[ -n "$left" ]]; then
         echo
         echo "Left behind (kept for diagnosis, remove by hand):"

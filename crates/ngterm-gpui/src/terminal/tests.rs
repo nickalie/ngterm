@@ -3,7 +3,7 @@
 //! in GPUI's test windows over a real pane (spawn at the laid-out grid, glyph placement, two views of one pane, the
 //! cursor's blink), and the [`ngterm_host::Surface`] contract the fakes pin.
 //!
-//! Panes run `/bin/sh` scripts with no `NGTERM_*`, `AGTERM_*` or `ZMX_*` variable inherited (CLAUDE.md > Never touch
+//! Panes run `/bin/sh` scripts with no `NGTERM_*` or `AGTERM_*` variable inherited (CLAUDE.md > Never touch
 //! the user's running ngterm). GPUI's test platform draws nothing to a screen; its default text system is a fixed fake
 //! (1000 units per em, every ASCII advance 600, ascent 1025, descent -275), the real-font test uses GPUI's Linux text
 //! system.
@@ -50,12 +50,12 @@ const DEADLINE: Duration = Duration::from_secs(20);
 // ---------------------------------------------------------------------------------------------------------------
 // panes
 
-/// `sh -c script` with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed, in `dir`.
+/// `sh -c script` with the inherited `NGTERM_*`/`AGTERM_*` variables removed, in `dir`.
 fn command(script: &str, dir: &Path) -> PaneCommand {
     let mut command = PaneCommand::new("/bin/sh").arg("-c").arg(script).cwd(dir);
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") {
             command = command.env_remove(key);
         }
     }
@@ -679,6 +679,7 @@ fn a_password_prompt_shows_the_lock_whatever_the_cursor() {
 
 fn spec() -> TerminalSpec {
     TerminalSpec {
+        remote_host: None,
         token: "pane-token".into(),
         live: false,
         font_size: None,

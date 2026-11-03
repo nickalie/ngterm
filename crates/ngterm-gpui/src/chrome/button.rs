@@ -16,8 +16,8 @@ use std::rc::Rc;
 use gpui_kit::component::Selectable;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
 use gpui_kit::{
-    Anchor, App, AppContext as _, ClickEvent, Context, Div, ElementId, Hsla, InteractiveElement, Interactivity,
-    IntoElement, MouseButton, ParentElement, Render, RenderOnce, Role, SharedString, Stateful,
+    Anchor, App, AppContext as _, ClickEvent, Context, Div, ElementId, FocusHandle, Hsla, InteractiveElement,
+    Interactivity, IntoElement, MouseButton, ParentElement, Render, RenderOnce, Role, SharedString, Stateful,
     StatefulInteractiveElement, StyleRefinement, Styled, Toggled, Window, div, prelude::FluentBuilder as _, px,
 };
 use ngterm_core::chrome::ChromeColors;
@@ -224,6 +224,18 @@ impl Button {
         self
     }
 
+    /// The accessibility node the button itself publishes, its role, name and states (a menu's trigger adds its popup
+    /// and press when drawn): for the tests of the controls built on it.
+    #[cfg(test)]
+    pub(crate) fn a11y_node(self) -> gpui_kit::accesskit::Node {
+        use gpui_kit::Element as _;
+        let element = self.element(true);
+        let role = element.a11y_role().expect("a button is an accessibility node");
+        let mut node = gpui_kit::accesskit::Node::new(role);
+        element.write_a11y_info(&mut node);
+        node
+    }
+
     /// The button itself: its element, without a menu. `owns_press` keeps a press from the elements behind; a menu's
     /// trigger leaves it to the popover around it, which opens on it.
     fn element(self, owns_press: bool) -> Stateful<Div> {
@@ -246,7 +258,7 @@ impl Button {
             button.aria_toggled(if on { Toggled::True } else { Toggled::False })
         })
         .when(shows_pressed, |button| button.when_some(pressed, gpui_kit::Styled::bg))
-        .when(disabled, |button| button.opacity(DISABLED_OPACITY))
+        .when(disabled, |button| button.opacity(DISABLED_OPACITY).aria_disabled(true))
         .when(!disabled, |button| {
             button
                 .when_some(hover.filter(|_| !shows_pressed), |button, fill| {
@@ -276,6 +288,32 @@ impl Button {
     }
 }
 
+/// The accessibility actions that press a menu's trigger as Enter does: AT-SPI's click and UIA's invoke (both Click),
+/// and UIA's expand or collapse of the menu button, which it sends by the open state the trigger publishes.
+const MENU_PRESSES: [gpui_kit::accesskit::Action; 3] = [
+    gpui_kit::accesskit::Action::Click,
+    gpui_kit::accesskit::Action::Expand,
+    gpui_kit::accesskit::Action::Collapse,
+];
+
+/// A menu's trigger as assistive technology sees it: a menu button (AT-SPI's push button menu), its menu open or not
+/// (UIA's expand/collapse pattern, the only press UIA gives a button with a popup), pressed by `MENU_PRESSES` while it
+/// has a press (`focus`, which the press focuses before Enter's action).
+fn menu_button(button: Stateful<Div>, open: bool, press: Option<FocusHandle>) -> Stateful<Div> {
+    button
+        .aria_has_popup(gpui_kit::accesskit::HasPopup::Menu)
+        .aria_expanded(open)
+        .when_some(press, |button, focus| {
+            MENU_PRESSES.iter().fold(button, |button, &action| {
+                let focus = focus.clone();
+                button.on_a11y_action(action, move |_, window, cx| {
+                    window.focus(&focus, cx);
+                    window.dispatch_action(Box::new(gpui_kit::base::actions::Confirm { secondary: false }), cx);
+                })
+            })
+        })
+}
+
 /// A menu's trigger: the button, its press left to the popover around it, holding a focus of its own (the library's
 /// popover opens its menu on Enter or Space while its trigger is focused).
 #[derive(IntoElement)]
@@ -284,6 +322,7 @@ struct Trigger(Button);
 impl RenderOnce for Trigger {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let (hover, in_tab_order) = (self.0.hover, self.0.keyboard == Keyboard::TabStop);
+        let (disabled, open) = (self.0.disabled, self.0.open);
         let focus = self.0.interactivity().element_id.clone().map(|id| {
             window
                 .use_keyed_state(id, cx, |_, cx| cx.focus_handle())
@@ -291,8 +330,9 @@ impl RenderOnce for Trigger {
                 .clone()
                 .tab_stop(in_tab_order)
         });
-        self.0
-            .element(false)
+        // assistive technology's press opens the menu as Enter does on the focused trigger
+        let press = focus.clone().filter(|_| !disabled);
+        menu_button(self.0.element(false), open, press)
             .when_some(focus, |button, focus| button.track_focus(&focus))
             // the keyboard's focus shows as the pointer's hover does
             .when_some(hover, |button, fill| button.focus_visible(move |style| style.bg(fill)))

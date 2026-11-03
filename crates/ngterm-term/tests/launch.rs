@@ -18,11 +18,11 @@ use ngterm_core::ghostty_config::GhosttyConfig;
 use ngterm_term::{ExitStatus, Host, Launch, Pane, PaneConfig, PaneEvent, TextRegion};
 use support::{DEADLINE, SIZE, TestResult, wait_events, wait_text};
 
-/// The names of the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables, which no test pane may see.
+/// The names of the inherited `NGTERM_*`/`AGTERM_*` variables, which no test pane may see.
 fn isolation() -> Vec<String> {
     std::env::vars_os()
         .map(|(key, _)| key.to_string_lossy().into_owned())
-        .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_"))
+        .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_"))
         .collect()
 }
 

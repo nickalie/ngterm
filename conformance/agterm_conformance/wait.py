@@ -155,6 +155,19 @@ def wait_until(check: Callable[[], T], timeout: float = DEFAULT_TIMEOUT) -> T:
         _pause(POLL_INTERVAL)
 
 
+def wait_cursor(client: Requester, target: str | None, column: int,
+                timeout: float = DEFAULT_TIMEOUT, **args: Any) -> dict[str, Any]:
+    """Wait for the zero-based cursor column exposed by surface.cursor (the protocol has no row)."""
+    def reads(response: Response) -> bool:
+        cursor = assert_ok(response).get("cursor")
+        assert cursor == {"column": column}, f"last cursor: {cursor!r}"
+        return True
+
+    reads.__qualname__ = f"cursor of {target} at column {column}"
+    response = wait_response(client, "surface.cursor", target, reads, timeout, **args)
+    return response.result
+
+
 def wait_frame(
     read: Callable[[float], dict[str, Any]],
     kind: str,

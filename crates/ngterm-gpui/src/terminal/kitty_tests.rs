@@ -704,7 +704,7 @@ fn terminal(cx: &mut TestAppContext, script: &str, dir: &Path) -> Entity<Termina
     let mut command = PaneCommand::new("/bin/sh").arg("-c").arg(script).cwd(dir);
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") {
             command = command.env_remove(key);
         }
     }

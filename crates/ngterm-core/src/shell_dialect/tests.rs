@@ -262,7 +262,7 @@ fn recorded(mut command: Command, record: &Path) -> (Output, Option<Vec<String>>
     for (key, _) in std::env::vars_os() {
         if key
             .to_str()
-            .is_some_and(|key| key.starts_with("NGTERM_") || key.starts_with("AGTERM_") || key.starts_with("ZMX_"))
+            .is_some_and(|key| key.starts_with("NGTERM_") || key.starts_with("AGTERM_"))
         {
             command.env_remove(key);
         }

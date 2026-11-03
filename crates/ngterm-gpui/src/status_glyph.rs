@@ -286,9 +286,21 @@ pub(crate) fn set_motion(cx: &mut gpui_kit::AsyncApp, animations: bool) {
     });
 }
 
-/// `look`'s glyph in its 16-point slot, exposed under the element id `agent-status` with the status's hover text; it
-/// pulses while the look blinks and `animate` allows (the blink keeps running across redraws: the animation is keyed
-/// by the element, so reapplying the look shown leaves it alone).
+/// The glyph's slot as assistive technology reads it: upstream's text whose value is the status's name, the hover text
+/// describing it (a label's text is its value: AccessKit's label from value).
+fn slot(look: &GlyphLook) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id("agent-status")
+        .accessibility_id("agent-status")
+        .role(gpui_kit::Role::Label)
+        .aria_value(SharedString::from(look.status.wire_name()))
+        .aria_description(SharedString::from(look.tooltip.clone()))
+        .debug_selector(|| "agent-status".to_owned())
+}
+
+/// `look`'s glyph in its 16-point slot, exposed under the element id `agent-status` as text whose value is the status's
+/// name (`blocked`), described by its hover text; it pulses while the look blinks and `animate` allows (the blink keeps
+/// running across redraws: the animation is keyed by the element, so reapplying the look shown leaves it alone).
 #[must_use]
 pub fn glyph(look: &GlyphLook, animate: bool) -> impl IntoElement {
     let shape = look.shape;
@@ -313,12 +325,7 @@ pub fn glyph(look: &GlyphLook, animate: bool) -> impl IntoElement {
             )
             .size(px(SLOT)),
         );
-    let slot = div()
-        .id("agent-status")
-        .accessibility_id("agent-status")
-        .role(gpui_kit::Role::Image)
-        .aria_label(tooltip.clone())
-        .debug_selector(|| "agent-status".to_owned())
+    let slot = slot(look)
         .flex_none()
         .size(px(SLOT))
         .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx))

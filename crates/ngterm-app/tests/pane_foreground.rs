@@ -29,7 +29,7 @@ fn launch(command: Option<&str>, initial_input: Option<&str>) -> Launch {
         initial_input: initial_input.map(|line| PaneInput::Line(line.to_owned())),
         env_remove: std::env::vars_os()
             .map(|(key, _)| key.to_string_lossy().into_owned())
-            .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_"))
+            .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_"))
             .collect(),
         ..Launch::default()
     }

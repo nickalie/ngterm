@@ -1,6 +1,7 @@
 //! ngterm's frontend-neutral app services: the host pieces every frontend shares that need no window or toolkit, so
 //! a frontend keeps only its widget glue over them.
 //!
+//! - [`coverage`]: the coverage profile of an instrumented build, written before an exit that skips its handlers.
 //! - [`hook_runner`]: the [`ngterm_host::ProcessLauncher`] for hooks and custom commands.
 //! - [`process_table`]: this OS's [`ngterm_host::ProcessTable`], `ngterm-session`'s.
 //! - [`restore_launch`]: the restore decision a launch takes before its first terminal.
@@ -10,6 +11,7 @@
 //! - [`remote`]: the presentation bridge to an attached row's origin as a child process.
 //! - [`page_channel`]: the helper carrying a handed-over page's channel to its origin as a child process.
 
+pub mod coverage;
 pub mod hook_runner;
 pub mod integrations;
 pub mod logging;

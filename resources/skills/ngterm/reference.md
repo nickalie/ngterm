@@ -2186,21 +2186,26 @@ shows in a timed HUD over the row, and each is asked of the machine once, never 
 
 A program in an attached session runs on the origin and talks to the origin's ngterm, so what it asks
 ngterm to draw would show there only. Every attach therefore also opens a presentation stream, and this
-Mac mirrors the origin session's status, its `session context`, its `notify` notifications, its HUD and
-the layout of panes already attached.
+Mac mirrors the origin session's status, its `session context`, its name, its `notify` notifications, its
+HUD and the layout of panes already attached.
 Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to expect:
 
 - The origin's context shows in this Mac's title bar and as the row's `context` in `tree`. A
   `session context` set on this Mac's row wins over it, and `--clear` here removes only that local value,
   so the origin's latest context shows again. It cannot blank the origin's. An origin running an ngterm
   that predates context mirroring still connects and mirrors status and HUD, with no context.
+- The attached row takes the name the origin shows, live: a rename there, and for a session never renamed there its
+  automatic name, which follows its folder (and its terminal title when the origin names sessions from titles).
+  Renaming the row on this Mac stops that, and the local name stays. Upstream has no such frame: an origin that predates it, or an older ngterm here, keeps the
+  name the row was attached with until it is attached again.
 
-- Two existing remote panes follow the origin's split axis, hide/show and swaps. Local panes, divider
-  ratio and focus stay local. A layout never opens a pane: an origin split opened later requires closing
-  and attaching the row again, and a replica closed here stays closed. Older origins leave layout alone.
+- Two existing remote panes follow the origin's split axis, hide/show and swaps. Divider ratio and focus stay local.
+  Opening a split on an attached remote row creates the split on the origin and attaches its daemon over ssh;
+  commands sent to that pane run on the origin. This also attaches an origin split opened after the row was attached,
+  or reattaches a replica closed here. A layout alone never opens a pane. Older origins leave layout alone.
 - Confirmed origin removal closes its replica without acknowledgement, even if ssh already exited and
-  left a hold prompt. The last replica waits for its ssh exit and may then close the row. A pending local
-  split prevents automatic primary removal; an ordinary disconnect still shows the disconnect line, held
+  left a hold prompt. The last replica waits for its ssh exit and may then close the row. A pending viewer
+  split prevents automatic primary removal until its origin binding is ready; an ordinary disconnect still shows the disconnect line, held
   or reconnecting per the attach section above.
 - `presentation.state` in `tree` reports the stream. `connected` means mirroring works; it is not a claim
   about the panes' ssh connections. An origin too old for it reads `unsupported` and the attach still works.
@@ -2279,10 +2284,13 @@ The pane reports the far side's working directory, and the local launches that w
 their start directory by one rule: the reported path when it exists here as a directory, else local
 HOME. Those launches are a custom command (its `$AGT_SESSION_PWD` keeps the reported path and
 `$AGT_SESSION_HOST` names the destination), the scratch terminal, an overlay opened without `--cwd`,
-the quick terminal, a local split (the first one on a remote session that arrived without a split, or
-one opened after the attach-time split is closed), Duplicate Session, and New Session when it is set
+the quick terminal, Duplicate Session, and New Session when it is set
 to open in the current session's directory. An explicit overlay `--cwd` is used as given. Quote both
 variables; an existing local path is not checked to be the same repository as the remote one.
+
+A split opened on a remote row runs on the origin, including one opened after the original replica was closed.
+Its ssh process starts in the row's original local directory, regardless of remote working-directory reports.
+If creation or attachment fails, the pane shows an error and never starts a local interactive shell.
 
 Each pane has ONE leading Mac, whose window size the program inside sees. `live attach` takes the lead in
 every pane at once; the same panes on the Mac the session runs on are covered ("in use from another Mac").

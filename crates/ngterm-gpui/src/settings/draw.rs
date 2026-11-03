@@ -315,10 +315,10 @@ fn row(item: Item, view: &SettingsView, look: &Look) -> AnyElement {
             return diagnostics(id, lines, selectable.as_ref(), look);
         }
         Control::Button(action) => return frame(div().child(push_button(action, look))),
-        Control::Toggle { on, set } => toggle(&id, &title, on, enabled, set, look),
-        Control::Picker(picker) => picker_button(&id, &title, picker, look),
+        Control::Toggle { on, set } => toggle(&id, &title, on, enabled, set, look).into_any_element(),
+        Control::Picker(picker) => picker_button(&id, &title, picker, look).into_any_element(),
         Control::Stepper { value, range, set } => stepper((&id, &title), value, &range, enabled, &set, look),
-        Control::Slider { key, readout, .. } => slider(view, key, &title, readout, enabled, look),
+        Control::Slider { key, value, readout } => slider(view, (key, value), &title, readout, enabled, look),
         Control::Glyph { status, shape, .. } => glyph_controls(view, status, &id, shape, look),
     };
     frame(
@@ -362,6 +362,8 @@ fn hint(id: String, text: String, look: &Look) -> AnyElement {
         .accessibility_id(SharedString::from(id.clone()))
         .role(Role::Label)
         .aria_label(SharedString::from(text.clone()))
+        // a label's text is its value (AccessKit's label from value)
+        .aria_value(SharedString::from(text.clone()))
         .debug_selector(move || id.clone())
         .px(px(12.))
         .pb(px(6.))
@@ -371,8 +373,9 @@ fn hint(id: String, text: String, look: &Look) -> AnyElement {
         .into_any_element()
 }
 
-/// A switch, in the accent while on, named `title`. A gpui-kit switch takes no accessibility id of its own, so the group
-/// around it carries the row's.
+/// A switch, in the accent while on, named `title`. gpui-kit's switch is a switch node with neither the row's id nor a
+/// place for one, so the frame around it is the control the row's id addresses: upstream's checkbox, with its state, its
+/// disabled state and a press that flips it.
 fn toggle(
     id: &str,
     title: &str,
@@ -380,14 +383,24 @@ fn toggle(
     enabled: bool,
     set: Rc<dyn Fn(bool) -> ngterm_core::settings_model::SettingsChange>,
     look: &Look,
-) -> AnyElement {
+) -> Stateful<Div> {
     let edits = look.edits.clone();
     let selector = id.to_owned();
+    let press = enabled.then(|| (edits.clone(), Rc::clone(&set)));
     div()
         .id(SharedString::from(format!("{id}-group")))
         .accessibility_id(SharedString::from(id.to_owned()))
-        .role(Role::Group)
+        .role(Role::CheckBox)
         .aria_label(SharedString::from(title.to_owned()))
+        .aria_toggled(if on {
+            gpui_kit::Toggled::True
+        } else {
+            gpui_kit::Toggled::False
+        })
+        .aria_disabled(!enabled)
+        .when_some(press, |frame, (edits, set)| {
+            frame.on_a11y_action(gpui_kit::accesskit::Action::Click, move |_, _, _| edits.send(set(!on)))
+        })
         .debug_selector(move || selector.clone())
         .child(
             Switch::new(SharedString::from(id.to_owned()))
@@ -397,12 +410,11 @@ fn toggle(
                 .disabled(!enabled)
                 .on_click(move |checked, _, _| edits.send(set(*checked))),
         )
-        .into_any_element()
 }
 
 /// A picker's popup button, named `title`: the shown row's label (a shape's silhouette) and a caret; its menu checks the
 /// shown row.
-fn picker_button(id: &str, title: &str, picker: Picker, look: &Look) -> AnyElement {
+fn picker_button(id: &str, title: &str, picker: Picker, look: &Look) -> Button {
     let picker = Rc::new(picker);
     let ink = look.ink(1.0);
     let face = match picker.shapes {
@@ -414,6 +426,8 @@ fn picker_button(id: &str, title: &str, picker: Picker, look: &Look) -> AnyEleme
     };
     let edits = look.edits.clone();
     Button::new(SharedString::from(id.to_owned()))
+        // a picker of one value from a list: upstream's popup button
+        .role(Role::ComboBox)
         .aria_label(SharedString::from(title.to_owned()))
         .h(px(24.))
         .px(px(8.))
@@ -428,7 +442,6 @@ fn picker_button(id: &str, title: &str, picker: Picker, look: &Look) -> AnyEleme
         .menu(gpui_kit::Anchor::TopRight, move |menu, _, _| {
             options_menu(menu, &picker, &edits)
         })
-        .into_any_element()
 }
 
 /// The shown shape's silhouette, tinted.
@@ -556,24 +569,25 @@ fn step_button(
         .on_click(move |_, _, _| edits.send(set(to)))
 }
 
-/// A slider in the accent with its readout, grouped under `title`.
-fn slider(view: &SettingsView, key: SliderKey, title: &str, readout: String, enabled: bool, look: &Look) -> AnyElement {
+/// A slider in the accent at `value` with its readout, named `title`.
+fn slider(
+    view: &SettingsView,
+    (key, value): (SliderKey, f64),
+    title: &str,
+    readout: String,
+    enabled: bool,
+    look: &Look,
+) -> AnyElement {
     let Some(state) = view.slider(key) else {
         return div().into_any_element();
     };
-    let id = key.id();
     div()
         .flex()
         .flex_row()
         .items_center()
         .gap(px(8.))
         .child(
-            div()
-                .id(id)
-                .accessibility_id(id)
-                .role(Role::Group)
-                .aria_label(SharedString::from(title.to_owned()))
-                .debug_selector(move || id.to_owned())
+            slider_frame((key, value), title, enabled, &look.edits)
                 .w(px(SLIDER_WIDTH))
                 .child(
                     Slider::new(state)
@@ -591,6 +605,36 @@ fn slider(view: &SettingsView, key: SliderKey, title: &str, readout: String, ena
                 .child(readout),
         )
         .into_any_element()
+}
+
+/// The frame around gpui-kit's slider, the slider the row's id addresses: the library's own slider node takes neither
+/// the row's id nor its name, and its increment and decrement move the knob without the edit a drag makes. So the frame
+/// is upstream's slider, at `value` within the key's bounds, with steps that make the setting's edit.
+fn slider_frame((key, value): (SliderKey, f64), title: &str, enabled: bool, edits: &Edits) -> Stateful<Div> {
+    let id = key.id();
+    let (min, max) = key.bounds();
+    let step = |by: f64| {
+        let edits = edits.clone();
+        move |_: Option<&gpui_kit::accesskit::ActionData>, _: &mut Window, _: &mut App| {
+            edits.send(key.change((value + by).clamp(min, max)));
+        }
+    };
+    div()
+        .id(id)
+        .accessibility_id(id)
+        .role(Role::Slider)
+        .aria_label(SharedString::from(title.to_owned()))
+        .aria_numeric_value(value)
+        .aria_min_numeric_value(min)
+        .aria_max_numeric_value(max)
+        .aria_numeric_value_step(SliderKey::STEP)
+        .aria_disabled(!enabled)
+        .when(enabled, |frame| {
+            frame
+                .on_a11y_action(gpui_kit::accesskit::Action::Increment, step(SliderKey::STEP))
+                .on_a11y_action(gpui_kit::accesskit::Action::Decrement, step(-SliderKey::STEP))
+        })
+        .debug_selector(move || id.to_owned())
 }
 
 /// A path taking the row, dimmed while unset, then its buttons.
@@ -624,6 +668,8 @@ fn path(
                         frame
                             .accessibility_id(SharedString::from(id.to_owned()))
                             .role(Role::Label)
+                            // a label's text is its value (AccessKit's label from value)
+                            .aria_value(text.clone())
                             .aria_label(text)
                     })
                     .debug_selector(move || selector.clone())
@@ -664,6 +710,8 @@ fn diagnostics(
         .when_some(plain, |body, text| {
             body.accessibility_id(SharedString::from(id))
                 .role(Role::Label)
+                // a label's text is its value (AccessKit's label from value)
+                .aria_value(text.clone())
                 .aria_label(text)
         })
         .debug_selector(move || selector.clone())
@@ -733,3 +781,6 @@ fn glyph_controls(
         )
         .into_any_element()
 }
+
+#[cfg(test)]
+mod tests;
