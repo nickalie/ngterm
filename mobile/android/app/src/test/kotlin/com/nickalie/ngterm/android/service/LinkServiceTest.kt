@@ -124,7 +124,7 @@ class LinkServiceTest {
         val visible = MutableStateFlow(true)
         val attached = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
         val calls = mutableListOf<String>()
-        IdleKeeper(scope, visible, attached, { calls += "suspend" }, { calls += "resume" })
+        IdleKeeper(scope, visible, attached, MutableStateFlow(false), { calls += "suspend" }, { calls += "resume" })
         idle()
         assertEquals(emptyList<String>(), calls)
         // in the background with a session attached: the connection stays for it
@@ -143,6 +143,31 @@ class LinkServiceTest {
         attached.value = mapOf("m1" to setOf("s1"))
         idle()
         assertEquals(listOf("suspend", "resume", "suspend", "resume"), calls)
+        scope.cancel()
+    }
+
+    @Test
+    fun theIdleKeeperLeavesASignInConnectingWhileTheUserIsInTheBrowser() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val visible = MutableStateFlow(true)
+        val signingIn = MutableStateFlow(true)
+        val calls = mutableListOf<String>()
+        IdleKeeper(
+            scope,
+            visible,
+            MutableStateFlow(emptyMap()),
+            signingIn,
+            { calls += "suspend" },
+            { calls += "resume" },
+        )
+        // Open link sends the app to the background: the connect waiting for the sign-in stays
+        visible.value = false
+        idle()
+        assertEquals(emptyList<String>(), calls)
+        // signed in (or given up): nothing is left to keep
+        signingIn.value = false
+        idle()
+        assertEquals(listOf("suspend"), calls)
         scope.cancel()
     }
 }

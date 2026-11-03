@@ -100,6 +100,8 @@
   <string name="machine_reconnecting_now">Reconnecting</string>
   <string name="machine_connection_lost">The connection dropped; trying again</string>
   <string name="machine_confirm_key">Confirm its host key to connect</string>
+  <string name="machine_signing_in">Waiting for sign-in</string>
+  <string name="machine_sign_in_summary">Sign in at its link to connect</string>
   <string name="machine_key_changed">Host key changed</string>
   <string name="machine_key_changed_summary">Not connecting until you review it</string>
   <string name="machine_no_sessions">No sessions</string>
@@ -143,6 +145,13 @@
   <string name="hostkey_check">On the machine, run</string>
   <string name="hostkey_trust">Trust and connect</string>
   <string name="hostkey_decline">Don\'t connect</string>
+  <string name="signin_title">%1$s asks you to sign in</string>
+  <string name="signin_body">Open the link and sign in there. Once you have, the connection goes on by itself.</string>
+  <string name="signin_message">Message from %1$s</string>
+  <string name="signin_copy">Copy link</string>
+  <string name="signin_waiting">Waiting for you to sign in</string>
+  <string name="signin_open">Open link</string>
+  <string name="signin_cancel">Don\'t connect</string>
   <string name="hostkey_changed_title">%1$s\'s host key changed</string>
   <string name="hostkey_changed_body">%1$s offered a different host key from the one you trusted. Someone may be intercepting the connection, or the machine was reinstalled or its keys were made anew. ngterm won\'t connect until you check.</string>
   <string name="hostkey_changed_pinned">Trusted until now</string>

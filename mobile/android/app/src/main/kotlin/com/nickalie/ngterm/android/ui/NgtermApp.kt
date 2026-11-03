@@ -33,8 +33,11 @@ import com.nickalie.ngterm.android.ui.asks.AskPrompt
 import com.nickalie.ngterm.android.ui.asks.NotificationPermissionPrompt
 import com.nickalie.ngterm.android.ui.machines.HostKeySheet
 import com.nickalie.ngterm.android.ui.machines.MachinesRoute
+import com.nickalie.ngterm.android.ui.machines.MachinesUiState
 import com.nickalie.ngterm.android.ui.machines.MachinesViewModel
+import com.nickalie.ngterm.android.ui.machines.SignInSheet
 import com.nickalie.ngterm.android.ui.machines.hostKeyQuestions
+import com.nickalie.ngterm.android.ui.machines.signIns
 import com.nickalie.ngterm.android.ui.onboarding.OnboardingActions
 import com.nickalie.ngterm.android.ui.onboarding.OnboardingFlow
 import com.nickalie.ngterm.android.ui.onboarding.OnboardingStep
@@ -128,16 +131,7 @@ fun NgtermApp(
                 modifier = modifier,
             )
             val state by machines.state.collectAsStateWithLifecycle()
-            state.hostKeyQuestions().firstOrNull()?.let { (machine, question) ->
-                key(machine.id, question.fingerprint) {
-                    HostKeySheet(
-                        machine = machine.title,
-                        address = machine.address,
-                        fingerprint = question.fingerprint,
-                        onAnswer = { trust -> machines.answerHostKey(machine.id, question.fingerprint, trust) },
-                    )
-                }
-            }
+            ConnectPrompts(state, onAnswerHostKey = machines::answerHostKey, onCancelSignIn = machines::disconnect)
             ClipboardReadPrompt(graph)
             AskPrompt(graph)
             NotificationPermissionPrompt(graph)
@@ -147,6 +141,38 @@ fun NgtermApp(
             val actions = remember(onboarding) { OnboardingActions.of(onboarding) }
             OnboardingFlow(step, actions, modifier)
         }
+    }
+}
+
+// the questions a connect waits on, one sheet at a time: a host key question first, then a machine's sign-in
+@Composable
+private fun ConnectPrompts(
+    state: MachinesUiState,
+    onAnswerHostKey: (id: String, fingerprint: String, trust: Boolean) -> Unit,
+    onCancelSignIn: (id: String) -> Unit,
+) {
+    val hostKey = state.hostKeyQuestions().firstOrNull()
+    if (hostKey != null) {
+        val (machine, question) = hostKey
+        key(machine.id, question.fingerprint) {
+            HostKeySheet(
+                machine = machine.title,
+                address = machine.address,
+                fingerprint = question.fingerprint,
+                onAnswer = { trust -> onAnswerHostKey(machine.id, question.fingerprint, trust) },
+            )
+        }
+        return
+    }
+    val (machine, signIn) = state.signIns().firstOrNull() ?: return
+    key(machine.id) {
+        SignInSheet(
+            machine = machine.title,
+            address = machine.address,
+            message = signIn.message,
+            url = signIn.url,
+            onCancel = { onCancelSignIn(machine.id) },
+        )
     }
 }
 

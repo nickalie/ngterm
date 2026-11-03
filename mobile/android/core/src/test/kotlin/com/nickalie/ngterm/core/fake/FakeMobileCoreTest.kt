@@ -255,6 +255,43 @@ class FakeMobileCoreTest {
         }
 
     @Test
+    fun aSignInWaitsForTheUserAndConnectsOnceFinished() =
+        runTest {
+            val events = mutableListOf<MobileEvent>()
+            val core = FakeMobileCore(sink = EventSinkOf(events))
+            core.signIns["box.example"] = TailscaleSignIn
+            val connect = async { core.connect(machine) }
+            runCurrent()
+            assertEquals(
+                listOf(MobileEvent.SignInRequested("m1", TailscaleSignIn.message, TailscaleSignIn.url)),
+                events,
+            )
+            assertEquals(setOf("m1"), core.waitingForSignIn)
+            core.finishSignIn("m1")
+            connect.await()
+            assertEquals(MobileEvent.MachineState("m1", MachineState.Connected), events.last())
+        }
+
+    @Test
+    fun aSignInNotFinishedFailsAndADisconnectCancelsIt() =
+        runTest {
+            val events = mutableListOf<MobileEvent>()
+            val core = FakeMobileCore(sink = EventSinkOf(events))
+            core.signIns["box.example"] = TailscaleSignIn
+            val failing = async { runCatching { core.connect(machine) } }
+            runCurrent()
+            core.finishSignIn("m1", signedIn = false)
+            val error = failing.await().exceptionOrNull()
+            assertEquals(SIGN_IN_UNFINISHED, (error as MobileException.Unreachable).reason)
+            assertEquals(MobileEvent.MachineState("m1", MachineState.Unreachable(SIGN_IN_UNFINISHED)), events.last())
+            val cancelled = async { runCatching { core.connect(machine) } }
+            runCurrent()
+            core.disconnect("m1")
+            assertTrue(cancelled.await().exceptionOrNull() is MobileException.Cancelled)
+            assertTrue(core.waitingForSignIn.isEmpty())
+        }
+
+    @Test
     fun aChangedHostKeyReportsBothAndFails() =
         runTest {
             val events = mutableListOf<MobileEvent>()

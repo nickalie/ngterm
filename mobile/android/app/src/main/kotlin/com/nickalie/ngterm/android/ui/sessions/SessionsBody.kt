@@ -83,10 +83,16 @@ sealed interface SessionsBody {
 fun MachineSessions.body(): SessionsBody =
     when (link) {
         Link.Connected -> listingBody()
+
         Link.Offline -> SessionsBody.NotConnected(deviceOffline = offline)
-        Link.Connecting, is Link.HostKeyUnknown -> SessionsBody.Connecting
+
+        // a host key question and a sign-in are sheets over the app while the connect waits
+        Link.Connecting, is Link.HostKeyUnknown, is Link.SignIn -> SessionsBody.Connecting
+
         is Link.Reconnecting -> SessionsBody.Reconnecting(link.retryAt)
+
         is Link.Unreachable -> SessionsBody.Unreachable(link.reason)
+
         is Link.HostKeyChanged -> SessionsBody.HostKeyChanged
     }
 

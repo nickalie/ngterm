@@ -192,3 +192,10 @@ fun MachinesUiState.hostKeyQuestions(): List<Pair<StoredMachine, Link.HostKeyUnk
         ?.items
         ?.mapNotNull { item -> (item.link as? Link.HostKeyUnknown)?.let { item.machine to it } }
         .orEmpty()
+
+/** The machines whose connect waits for the user to sign in, first first. */
+fun MachinesUiState.signIns(): List<Pair<StoredMachine, Link.SignIn>> =
+    (this as? MachinesUiState.Ready)
+        ?.items
+        ?.mapNotNull { item -> (item.link as? Link.SignIn)?.let { item.machine to it } }
+        .orEmpty()

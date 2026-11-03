@@ -17,7 +17,8 @@ use tokio::task::LocalSet;
 
 use super::{
     CHANNEL_CLOSED, CONNECTION_LOST, Client, Deadline, HOST_KEY_CHANGED, HOST_KEY_REFUSED, HOST_KEY_UNCONFIRMED,
-    HOST_KEY_WITHDRAWN, OUTPUT_BUDGET, OUTPUT_OVERRUN, RusshConnection, RusshTransport, Timing,
+    HOST_KEY_WITHDRAWN, OUTPUT_BUDGET, OUTPUT_OVERRUN, RusshConnection, RusshTransport, SIGN_IN_UNFINISHED, Timing,
+    banner_link, banner_text,
 };
 use crate::api::{EventSink, HostKeyStore, KeyVault, Machine, MobileEvent, VaultError};
 use crate::keys;
@@ -42,11 +43,36 @@ struct TestServer {
 impl TestServer {
     /// A server with a new host key, accepting `authorized` for [`USER`], on a free local port.
     async fn start(authorized: &PublicKey) -> Self {
-        Self::start_opening_after(authorized, Duration::ZERO).await
+        Self::start_with(authorized, Script::default()).await
     }
 
     /// [`TestServer::start`], confirming each session channel `delay` after it is asked for.
     async fn start_opening_after(authorized: &PublicKey, delay: Duration) -> Self {
+        Self::start_with(
+            authorized,
+            Script {
+                open_delay: delay,
+                ..Script::default()
+            },
+        )
+        .await
+    }
+
+    /// [`TestServer::start`], sending `banner` as authentication starts and answering the client's key `hold` later,
+    /// as a server that asks the user to sign in elsewhere does (Tailscale SSH's `check` mode).
+    async fn start_holding_auth(authorized: &PublicKey, banner: &str, hold: Duration) -> Self {
+        Self::start_with(
+            authorized,
+            Script {
+                banner: Some(banner.to_owned()),
+                auth_hold: hold,
+                ..Script::default()
+            },
+        )
+        .await
+    }
+
+    async fn start_with(authorized: &PublicKey, script: Script) -> Self {
         let host_key = PrivateKey::random(&mut ::russh::keys::key::safe_rng(), Algorithm::Ed25519).unwrap();
         let public = host_key.public_key().clone();
         let config = Arc::new(server::Config {
@@ -65,7 +91,7 @@ impl TestServer {
             log: Arc::clone(&log),
             commands: HashMap::new(),
             ptys: HashMap::new(),
-            open_delay: delay,
+            script,
         };
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
@@ -106,8 +132,18 @@ struct Handler {
     log: Log,
     commands: HashMap<ChannelId, String>,
     ptys: HashMap<ChannelId, String>,
+    script: Script,
+}
+
+/// How a test server behaves besides its commands.
+#[derive(Clone, Default)]
+struct Script {
     /// How long a session channel waits for its confirmation.
     open_delay: Duration,
+    /// The banner sent as authentication starts.
+    banner: Option<String>,
+    /// How long the answer to the client's key waits.
+    auth_hold: Duration,
 }
 
 impl Handler {
@@ -117,7 +153,7 @@ impl Handler {
             log: Arc::clone(&self.log),
             commands: HashMap::new(),
             ptys: HashMap::new(),
-            open_delay: self.open_delay,
+            script: self.script.clone(),
         }
     }
 
@@ -191,7 +227,12 @@ async fn flood(handle: server::Handle, channel: ChannelId) {
 impl server::Handler for Handler {
     type Error = ::russh::Error;
 
+    async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
+        Ok(self.script.banner.clone())
+    }
+
     async fn auth_publickey(&mut self, user: &str, key: VerifiedPublicKey<'_>) -> Result<Auth, Self::Error> {
+        tokio::time::sleep(self.script.auth_hold).await;
         if user == USER && key.public_key.key_data() == self.authorized.key_data() {
             Ok(Auth::Accept)
         } else {
@@ -205,10 +246,10 @@ impl server::Handler for Handler {
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if self.open_delay.is_zero() {
+        if self.script.open_delay.is_zero() {
             reply.accept().await;
         } else {
-            let delay = self.open_delay;
+            let delay = self.script.open_delay;
             tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
                 reply.accept().await;
@@ -364,6 +405,8 @@ fn quick() -> Timing {
     Timing {
         connect: Duration::from_secs(10),
         confirm: Duration::from_secs(10),
+        sign_in: Duration::from_secs(10),
+        sign_in_grace: Duration::from_millis(50),
         keepalive: Duration::from_secs(10),
     }
 }
@@ -705,6 +748,190 @@ fn the_wait_for_an_answer_does_not_count_against_the_connect() {
     });
 }
 
+// --- signing in ---------------------------------------------------------------------------------------------------
+
+/// What Tailscale SSH sends a node its policy holds for a `check`: the link to sign in at.
+const SIGN_IN_BANNER: &str =
+    "# Tailscale SSH requires an additional check.\n# To authenticate, visit: https://login.tailscale.com/a/l1nk\n";
+
+/// The sign-in link in [`SIGN_IN_BANNER`].
+const SIGN_IN_LINK: &str = "https://login.tailscale.com/a/l1nk";
+
+fn sign_in_requested() -> MobileEvent {
+    MobileEvent::SignInRequested {
+        machine_id: "m1".to_owned(),
+        message: SIGN_IN_BANNER.trim().to_owned(),
+        url: SIGN_IN_LINK.to_owned(),
+    }
+}
+
+/// [`quick`] with a short network deadline, which a sign-in outlasts.
+fn signing_in() -> Timing {
+    Timing {
+        connect: Duration::from_millis(300),
+        ..quick()
+    }
+}
+
+#[test]
+fn a_machine_holding_authentication_for_a_sign_in_keeps_the_connect_waiting() {
+    run(async {
+        let mut fixture = fixture(signing_in());
+        let server = TestServer::start_holding_auth(&fixture.public, SIGN_IN_BANNER, Duration::from_millis(1200)).await;
+        fixture.hosts.pin("m1".to_owned(), server.fingerprint());
+        let started = std::time::Instant::now();
+
+        let connected = fixture.transport.connect(&machine(server.port)).await;
+
+        assert!(connected.is_ok(), "{:?}", connected.err());
+        assert!(
+            started.elapsed() >= Duration::from_millis(1200),
+            "it waited for the machine"
+        );
+        assert_eq!(fixture.events.try_recv().ok(), Some(sign_in_requested()));
+        assert!(fixture.events.try_recv().is_err(), "asked once");
+    });
+}
+
+#[test]
+fn a_sign_in_not_completed_in_time_fails_the_connect() {
+    run(async {
+        let mut fixture = fixture(Timing {
+            sign_in: Duration::from_millis(700),
+            ..signing_in()
+        });
+        let server = TestServer::start_holding_auth(&fixture.public, SIGN_IN_BANNER, Duration::from_secs(60)).await;
+        fixture.hosts.pin("m1".to_owned(), server.fingerprint());
+        let started = std::time::Instant::now();
+
+        let connected = fixture.transport.connect(&machine(server.port)).await;
+
+        assert_eq!(
+            connected.err(),
+            Some(TransportError::Unreachable(SIGN_IN_UNFINISHED.to_owned()))
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(700),
+            "the sign-in's wait, not the connect's"
+        );
+        assert_eq!(fixture.events.try_recv().ok(), Some(sign_in_requested()));
+    });
+}
+
+#[test]
+fn a_dropped_connect_stops_waiting_for_the_sign_in_and_raises_nothing_after() {
+    run(async {
+        let mut fixture = fixture(Timing {
+            sign_in_grace: Duration::from_millis(400),
+            ..signing_in()
+        });
+        let server = TestServer::start_holding_auth(&fixture.public, SIGN_IN_BANNER, Duration::from_secs(60)).await;
+        fixture.hosts.pin("m1".to_owned(), server.fingerprint());
+        let machine = machine(server.port);
+
+        // Dropped once the banner is in, before its grace is over (a disconnect, an edit, a suspend).
+        let connect = fixture.transport.connect(&machine);
+        let dropped = futures_lite::future::or(async { Some(connect.await.err()) }, async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            None
+        })
+        .await;
+        assert!(dropped.is_none(), "the connect was still waiting: {dropped:?}");
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(
+            fixture.events.try_recv().is_err(),
+            "a connect that is over asks nothing"
+        );
+
+        // Dropped once it asked: nothing follows.
+        let connect = fixture.transport.connect(&machine);
+        let asked = futures_lite::future::or(async { Err(connect.await.err()) }, async {
+            Ok(fixture.events.recv().await)
+        })
+        .await;
+        assert_eq!(asked, Ok(Some(sign_in_requested())));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(fixture.events.try_recv().is_err());
+    });
+}
+
+#[test]
+fn a_banner_without_a_link_changes_nothing() {
+    run(async {
+        let mut fixture = fixture(signing_in());
+        let banner = "Authorized use only.\n";
+        let held = TestServer::start_holding_auth(&fixture.public, banner, Duration::from_millis(1200)).await;
+        let prompt = TestServer::start_holding_auth(&fixture.public, banner, Duration::ZERO).await;
+
+        fixture.hosts.pin("m1".to_owned(), held.fingerprint());
+        let connected = fixture.transport.connect(&machine(held.port)).await;
+        assert_eq!(
+            connected.err(),
+            Some(TransportError::Unreachable(format!(
+                "127.0.0.1:{} did not answer in time",
+                held.port
+            ))),
+            "the network deadline still counts"
+        );
+
+        fixture.hosts.pin("m1".to_owned(), prompt.fingerprint());
+        assert!(fixture.transport.connect(&machine(prompt.port)).await.is_ok());
+        assert!(fixture.events.try_recv().is_err(), "nothing is asked");
+    });
+}
+
+#[test]
+fn a_link_the_machine_does_not_wait_on_asks_nothing() {
+    run(async {
+        let mut fixture = fixture(Timing {
+            sign_in_grace: Duration::from_millis(500),
+            ..signing_in()
+        });
+        let banner = "Authorized use only: see https://example.com/policy.\n";
+        let server = TestServer::start_holding_auth(&fixture.public, banner, Duration::from_millis(100)).await;
+        fixture.hosts.pin("m1".to_owned(), server.fingerprint());
+
+        assert!(fixture.transport.connect(&machine(server.port)).await.is_ok());
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(
+            fixture.events.try_recv().is_err(),
+            "a link answered within the grace asks nothing"
+        );
+    });
+}
+
+#[test]
+fn a_banner_link_is_its_first_http_link_without_the_sentence_around_it() {
+    assert_eq!(banner_link(SIGN_IN_BANNER).as_deref(), Some(SIGN_IN_LINK));
+    assert_eq!(
+        banner_link("Sign in (at HTTPS://Example.com/a?b=c#d), then wait.").as_deref(),
+        Some("HTTPS://Example.com/a?b=c#d")
+    );
+    assert_eq!(
+        banner_link("see http://[::1]:8080/x. or https://later.example").as_deref(),
+        Some("http://[::1]:8080/x")
+    );
+    assert_eq!(
+        banner_link("wiki: https://en.wikipedia.org/wiki/Foo_(bar)!").as_deref(),
+        Some("https://en.wikipedia.org/wiki/Foo_(bar)")
+    );
+    assert_eq!(
+        banner_link("<https://example.com/q>").as_deref(),
+        Some("https://example.com/q")
+    );
+    assert_eq!(banner_link("Authorized use only."), None);
+    assert_eq!(banner_link("ftp://example.com or https:// alone"), None);
+    assert_eq!(banner_link("javascript:alert(1) https:/x"), None);
+}
+
+#[test]
+fn a_banner_is_shown_without_control_characters_or_blank_edges() {
+    assert_eq!(
+        banner_text("\n\u{1b}[31m# visit:\thttps://x.example\u{1b}[0m\r\n\n"),
+        "[31m# visit:\thttps://x.example[0m"
+    );
+}
+
 #[test]
 fn a_connect_already_dropped_asks_nothing() {
     run(async {
@@ -720,8 +947,10 @@ fn a_connect_already_dropped_asks_nothing() {
             sink: Arc::clone(&fixture.transport.sink),
             challenges: Arc::clone(&fixture.transport.challenges),
             confirm: Duration::from_secs(10),
+            sign_in_wait: Duration::from_secs(10),
             deadline: Arc::new(Deadline::new(Duration::from_secs(10))),
             refusal: Arc::clone(&refusal),
+            sign_in: mpsc::unbounded_channel().0,
         };
 
         assert!(!client.ask("SHA256:offered".to_owned()).await);
@@ -1030,6 +1259,11 @@ impl EventSink for ThreadSink {
 
 /// A server on a thread of its own, for a core whose actor has its own runtime.
 fn server_thread(authorized: PublicKey) -> (u16, String) {
+    server_thread_with(authorized, Script::default())
+}
+
+/// [`server_thread`] with `script`.
+fn server_thread_with(authorized: PublicKey, script: Script) -> (u16, String) {
     let (started, port) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1037,7 +1271,7 @@ fn server_thread(authorized: PublicKey) -> (u16, String) {
             .build()
             .unwrap();
         runtime.block_on(async {
-            let server = TestServer::start(&authorized).await;
+            let server = TestServer::start_with(&authorized, script).await;
             started.send((server.port, server.fingerprint())).unwrap();
             std::future::pending::<()>().await;
         });
@@ -1087,4 +1321,76 @@ fn the_core_asks_about_an_unknown_host_and_connects_once_answered() {
         })
     );
     assert_eq!(hosts.pins(), HashMap::from([("m1".to_owned(), fingerprint)]));
+}
+
+/// A core over the real transport, reaching a server on its own thread run by `script`, with its host key pinned.
+fn signing_in_core(script: Script) -> (Arc<crate::MobileCore>, u16, std::sync::mpsc::Receiver<MobileEvent>) {
+    let pair = keys::generate("test").unwrap();
+    let (port, fingerprint) = server_thread_with(PublicKey::from_openssh(&pair.authorized_key).unwrap(), script);
+    let vault = Arc::new(Vault {
+        keys: HashMap::from([(KEY_ID.to_owned(), pair.private_key)]),
+    });
+    let hosts = Arc::new(Hosts::default());
+    hosts.pin("m1".to_owned(), fingerprint);
+    let (sender, events) = std::sync::mpsc::channel();
+    let core = crate::MobileCore::new(
+        Arc::new(ThreadSink {
+            events: Mutex::new(sender),
+        }),
+        vault,
+        hosts,
+    )
+    .unwrap();
+    (core, port, events)
+}
+
+#[test]
+fn the_core_asks_for_a_sign_in_and_the_connected_state_ends_it() {
+    let (core, port, events) = signing_in_core(Script {
+        banner: Some(SIGN_IN_BANNER.to_owned()),
+        auth_hold: Duration::from_secs(2),
+        ..Script::default()
+    });
+    let next = || events.recv_timeout(Duration::from_secs(10)).ok();
+
+    let connecting = {
+        let core = Arc::clone(&core);
+        std::thread::spawn(move || futures_lite::future::block_on(core.connect(machine(port))))
+    };
+
+    assert_eq!(next(), Some(sign_in_requested()));
+    assert_eq!(
+        next(),
+        Some(MobileEvent::MachineState {
+            machine_id: "m1".to_owned(),
+            state: crate::MachineState::Connected,
+        })
+    );
+    assert_eq!(connecting.join().unwrap(), Ok(()));
+}
+
+#[test]
+fn a_disconnect_while_the_core_waits_for_a_sign_in_cancels_it_quietly() {
+    let (core, port, events) = signing_in_core(Script {
+        banner: Some(SIGN_IN_BANNER.to_owned()),
+        auth_hold: Duration::from_secs(60),
+        ..Script::default()
+    });
+
+    let connecting = {
+        let core = Arc::clone(&core);
+        std::thread::spawn(move || futures_lite::future::block_on(core.connect(machine(port))))
+    };
+    assert_eq!(
+        events.recv_timeout(Duration::from_secs(10)).ok(),
+        Some(sign_in_requested())
+    );
+    core.disconnect("m1".to_owned()).unwrap();
+
+    assert_eq!(connecting.join().unwrap(), Err(crate::MobileError::Cancelled));
+    assert_eq!(
+        events.recv_timeout(Duration::from_millis(1500)).ok(),
+        None,
+        "nothing follows"
+    );
 }

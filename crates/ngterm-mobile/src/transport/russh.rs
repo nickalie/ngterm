@@ -13,6 +13,17 @@
 //!   disconnect, an edit) ends it. An answer is a statement about a key for a machine, not about one attempt: it
 //!   settles whichever connect of that machine is waiting on that same key.
 //!
+//! A machine may also ask the user to sign in elsewhere before it answers the client's key: it sends an ssh banner
+//! with a link and holds authentication until the user has signed in at it in a browser (Tailscale SSH does so for a
+//! node its policy puts under a `check` rule, and waits up to 30 minutes). A banner with an http(s) link holds the
+//! connect's network deadline off: from then the connect waits up to [`Timing::sign_in`] for authentication to finish,
+//! and fails with [`SIGN_IN_UNFINISHED`] once that passes. A machine still holding it [`Timing::sign_in_grace`] after
+//! the banner is asking for a sign-in, not only showing a link (a policy page, say): the connect then tells the app with
+//! [`MobileEvent::SignInRequested`] (again for each later banner with a link). The event comes from the connect itself,
+//! so a connect that is over (connected, failed, cancelled or overtaken) raises none. The wait ends with the
+//! connect's outcome, which the app learns as the machine's next [`MobileEvent::MachineState`]. A banner without a
+//! link changes nothing.
+//!
 //! A changed key, a key the user did not trust and a client key the machine does not accept fail the connect as
 //! [`TransportError::Refused`], which a retry won't fix; every other failure is [`TransportError::Unreachable`].
 //!
@@ -40,6 +51,7 @@ mod tests;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::convert::Infallible;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -77,10 +89,17 @@ pub const PTY_TERM: &str = "xterm-256color";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timing {
     /// Reaching the machine: resolving, connecting, the handshake and authentication, not counting the wait for the
-    /// user's answer about an unknown host key.
+    /// user's answer about an unknown host key, and given up for [`Timing::sign_in`] once the machine sends a banner
+    /// with a link (before the app is told, which waits for [`Timing::sign_in_grace`]).
     pub connect: Duration,
     /// How long a connect waits for the answer about an unknown host key.
     pub confirm: Duration,
+    /// How long a connect waits for authentication once the machine sent a link to sign in at: the user's time to
+    /// open it, sign in and come back. Tailscale SSH holds a `check` for 30 minutes; ten are plenty for a person and
+    /// don't leave a forgotten connect hanging for half an hour.
+    pub sign_in: Duration,
+    /// How long authentication must stay unanswered after a banner with a link before the user is asked to sign in.
+    pub sign_in_grace: Duration,
     /// Quiet time after which a keepalive is sent; [`KEEPALIVE_MAX`] unanswered ones close the connection.
     pub keepalive: Duration,
 }
@@ -93,6 +112,8 @@ impl Default for Timing {
         Self {
             connect: Duration::from_secs(15),
             confirm: Duration::from_secs(120),
+            sign_in: Duration::from_mins(10),
+            sign_in_grace: Duration::from_secs(1),
             keepalive: Duration::from_secs(15),
         }
     }
@@ -146,10 +167,11 @@ impl RusshTransport {
         key: ::russh::keys::PrivateKey,
         attempt: &Withdraw,
     ) -> Result<RusshConnection, TransportError> {
-        // One deadline for resolving, connecting, the handshake and authentication, held off only while the user is
-        // asked about the host key.
+        // One deadline for resolving, connecting, the handshake and authentication, held off while the user is asked
+        // about the host key, and replaced by the sign-in's once the machine sends a banner with a link.
         let deadline = Arc::new(Deadline::new(self.timing.connect));
         let refusal = Arc::new(Mutex::new(None));
+        let (sign_in, asked) = mpsc::unbounded_channel();
         // Dropped with the client when russh's session ends: the connection's `lost`.
         let (alive, gone) = watch::channel(());
         let client = Client {
@@ -162,8 +184,10 @@ impl RusshTransport {
             sink: Arc::clone(&self.sink),
             challenges: Arc::clone(&self.challenges),
             confirm: self.timing.confirm,
+            sign_in_wait: self.timing.sign_in,
             deadline: Arc::clone(&deadline),
             refusal: Arc::clone(&refusal),
+            sign_in,
         };
         let work = async {
             let socket = TcpStream::connect((machine.host.as_str(), machine.port))
@@ -177,9 +201,18 @@ impl RusshTransport {
             authenticate(&mut handle, machine, key).await?;
             Ok::<_, TransportError>(handle)
         };
+        let prompt = SignInPrompt {
+            sink: self.sink.as_ref(),
+            machine_id: &machine.id,
+            grace: self.timing.sign_in_grace,
+        };
         let handle = tokio::select! {
             reached = work => reached?,
-            () = deadline.passed() => return Err(timed_out(machine)),
+            expired = deadline.passed() => return Err(match expired {
+                Expired::Network => timed_out(machine),
+                Expired::SignIn => TransportError::Unreachable(SIGN_IN_UNFINISHED.to_owned()),
+            }),
+            never = prompt.run(asked) => match never {},
         };
         Ok(RusshConnection {
             handle: RefCell::new(Some(Rc::new(handle))),
@@ -305,12 +338,23 @@ impl Drop for Withdraw {
     }
 }
 
-/// A connect's network deadline, held off while the user is asked about the host key.
+/// A connect's network deadline, held off while the user is asked about the host key, and held for good once the
+/// machine sends a banner with a link to sign in at: the sign-in's own end is the deadline from then.
 struct Deadline {
     at: Mutex<Instant>,
     /// Asks under way: the deadline waits for them.
     asking: AtomicUsize,
-    answered: Notify,
+    /// When the wait for the user to sign in ends, once the machine sent a link to sign in at.
+    sign_in: Mutex<Option<Instant>>,
+    /// An ask ended, or a sign-in began.
+    changed: Notify,
+}
+
+/// Which of a connect's deadlines passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Expired {
+    Network,
+    SignIn,
 }
 
 impl Deadline {
@@ -318,12 +362,17 @@ impl Deadline {
         Self {
             at: Mutex::new(Instant::now() + budget),
             asking: AtomicUsize::new(0),
-            answered: Notify::new(),
+            sign_in: Mutex::new(None),
+            changed: Notify::new(),
         }
     }
 
     fn at(&self) -> Instant {
         *self.at.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn sign_in_ends(&self) -> Option<Instant> {
+        *self.sign_in.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Runs `ask`, moving the deadline out by the time it took.
@@ -336,14 +385,33 @@ impl Deadline {
         ask.await
     }
 
-    /// Resolves once the deadline has passed with no ask under way.
-    async fn passed(&self) {
+    /// The machine sent a link to sign in at: the network deadline no longer counts, and the connect waits up to
+    /// `wait` from now. A later ask keeps the first one's end.
+    fn hold_for_sign_in(&self, wait: Duration) {
+        let mut sign_in = self.sign_in.lock().unwrap_or_else(PoisonError::into_inner);
+        if sign_in.is_none() {
+            *sign_in = Some(Instant::now() + wait);
+            drop(sign_in);
+            self.changed.notify_one();
+        }
+    }
+
+    /// Resolves once the deadline has passed with no ask under way, or the sign-in's wait has.
+    async fn passed(&self) -> Expired {
         loop {
-            tokio::time::sleep_until(self.at()).await;
+            if let Some(end) = self.sign_in_ends() {
+                tokio::time::sleep_until(end).await;
+                return Expired::SignIn;
+            }
+            tokio::select! {
+                () = tokio::time::sleep_until(self.at()) => {}
+                // Looked at again: a sign-in that began, or an ask that moved the deadline out.
+                () = self.changed.notified() => continue,
+            }
             if self.asking.load(Ordering::SeqCst) > 0 {
-                self.answered.notified().await;
-            } else if self.at() <= Instant::now() {
-                return;
+                self.changed.notified().await;
+            } else if self.at() <= Instant::now() && self.sign_in_ends().is_none() {
+                return Expired::Network;
             }
         }
     }
@@ -359,8 +427,90 @@ impl Drop for Asking<'_> {
     fn drop(&mut self) {
         *self.deadline.at.lock().unwrap_or_else(PoisonError::into_inner) += self.since.elapsed();
         self.deadline.asking.fetch_sub(1, Ordering::SeqCst);
-        self.deadline.answered.notify_one();
+        self.deadline.changed.notify_one();
     }
+}
+
+/// What a machine asked the user to sign in with: its banner, as shown, and the link in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SignInAsk {
+    message: String,
+    url: String,
+}
+
+/// Tells the app about a connect's sign-in, from the connect itself: once the connect is over, nothing is told.
+struct SignInPrompt<'a> {
+    sink: &'a dyn EventSink,
+    machine_id: &'a str,
+    /// How long authentication must stay unanswered after the first banner with a link.
+    grace: Duration,
+}
+
+impl SignInPrompt<'_> {
+    /// Waits for the machine's banners with a link, and raises them once the first has gone unanswered for the
+    /// grace; never ends by itself.
+    async fn run(self, mut asked: mpsc::UnboundedReceiver<SignInAsk>) -> Infallible {
+        if let Some(mut ask) = asked.recv().await {
+            tokio::time::sleep(self.grace).await;
+            // A banner sent meanwhile has the latest link.
+            while let Ok(later) = asked.try_recv() {
+                ask = later;
+            }
+            self.raise(ask);
+            while let Some(later) = asked.recv().await {
+                self.raise(later);
+            }
+        }
+        // The session ended: the connect's own work says how.
+        std::future::pending().await
+    }
+
+    fn raise(&self, ask: SignInAsk) {
+        self.sink.on_event(MobileEvent::SignInRequested {
+            machine_id: self.machine_id.to_owned(),
+            message: ask.message,
+            url: ask.url,
+        });
+    }
+}
+
+/// A banner's first http(s) link, without the punctuation that ends a sentence around it.
+fn banner_link(banner: &str) -> Option<String> {
+    let lower = banner.to_ascii_lowercase();
+    let start = ["https://", "http://"]
+        .iter()
+        .filter_map(|scheme| lower.find(scheme))
+        .min()?;
+    let rest = &banner[start..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | '"' | '\'' | '`'))
+        .unwrap_or(rest.len());
+    let mut link = &rest[..end];
+    loop {
+        let trimmed = link.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        let trimmed = match trimmed.chars().last() {
+            Some(')') if !trimmed.contains('(') => &trimmed[..trimmed.len() - 1],
+            Some(']') if !trimmed.contains('[') => &trimmed[..trimmed.len() - 1],
+            _ => trimmed,
+        };
+        if trimmed.len() == link.len() {
+            break;
+        }
+        link = trimmed;
+    }
+    let host = &link[link.find("://")? + 3..];
+    host.starts_with(|c: char| c.is_alphanumeric() || c == '[')
+        .then(|| link.to_owned())
+}
+
+/// A banner as the app shows it: no control characters but line breaks and tabs, and no blank lines around it.
+fn banner_text(banner: &str) -> String {
+    banner
+        .chars()
+        .filter(|&c| !c.is_control() || c == '\n' || c == '\t')
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 
 /// russh's side of one connection: it checks the host key, and lives as long as russh's session does.
@@ -377,10 +527,14 @@ struct Client {
     sink: Arc<dyn EventSink>,
     challenges: Arc<Challenges>,
     confirm: Duration,
+    /// How long the connect waits for the user to sign in ([`Timing::sign_in`]).
+    sign_in_wait: Duration,
     /// The connect's deadline, held off while the user is asked.
     deadline: Arc<Deadline>,
     /// Why the host key was refused, for the connect's error.
     refusal: Arc<Mutex<Option<TransportError>>>,
+    /// The machine's asks to sign in, to the connect's [`SignInPrompt`]; nobody takes them once the connect is over.
+    sign_in: mpsc::UnboundedSender<SignInAsk>,
 }
 
 impl Client {
@@ -422,9 +576,27 @@ pub const HOST_KEY_UNCONFIRMED: &str = "the host key was not confirmed in time";
 pub const HOST_KEY_WITHDRAWN: &str = "the host key question was withdrawn";
 /// Why a connect failed when the machine offered another key than the pinned one.
 pub const HOST_KEY_CHANGED: &str = "the host key changed";
+/// Why a connect failed when the machine asked the user to sign in and did not answer within [`Timing::sign_in`].
+pub const SIGN_IN_UNFINISHED: &str = "the sign-in was not completed in time";
 
 impl client::Handler for Client {
     type Error = ::russh::Error;
+
+    fn auth_banner(
+        &mut self,
+        banner: &str,
+        _session: &mut client::Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        if let Some(url) = banner_link(banner) {
+            self.deadline.hold_for_sign_in(self.sign_in_wait);
+            // A connect that is over takes no more asks.
+            let _ = self.sign_in.send(SignInAsk {
+                message: banner_text(banner),
+                url,
+            });
+        }
+        std::future::ready(Ok(()))
+    }
 
     async fn check_server_key(
         &mut self,

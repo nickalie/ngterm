@@ -176,7 +176,7 @@ white on nothing, as Android masks it. The status glyphs are 16dp filled or stro
 | `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it; at most one quieter text-button action under it, for a retry after the fix the main one points to |
 | `Banner` | a strip about the whole screen while it stays usable, with an optional action and dismiss; announced politely |
 | `ConfirmDialog` | the confirmation before what can't be undone; the button repeats the action's words, in the error color |
-| `KeyPlate`, `CopyButton` | text compared or pasted character by character (a key line, a fingerprint, a command): mono, selectable, wrapping anywhere, on a `surfaceContainerLow` plate with an optional label above and Copy or Share under it; Copy says "Copied" for 2 s |
+| `KeyPlate`, `CopyButton` | text compared or pasted character by character (a key line, a fingerprint, a command, a machine's sign-in message): mono, selectable, wrapping anywhere, on a `surfaceContainerLow` plate with an optional label above and Copy or Share under it; Copy says "Copied" for 2 s. A link in it is copper and underlined and opens on a tap; a long press still selects |
 | `ScreenFrame` | a screen of reading and filling in: an optional top row (Back or Close, the title as a heading, one action such as Save), then a scrolling column no wider than 640dp (520dp in the first run), centered, with the phone's or the tablet's gutter, padded for the bars, the cutout and the keyboard |
 | `Cover` | a veil over a pane that can't be used as it is (another device drives it, it is reattaching), with its action; it takes every touch, and the pane under it is hidden from TalkBack (`Modifier.underCover`); `icon = null` shows a spinner instead of a glyph |
 
@@ -251,7 +251,8 @@ reading, not a poster), the mark on top of the welcome.
 - **Home:** "Machines" with Add machine at the top, then a `MachineCard` per machine, 640dp at most and centered.
   The card's badge is the connection; under the address, what the state means and the one action it calls for at
   the end of the line: Not connected / Connect, The connection dropped / Retry now (the badge counts down "in 4 s"),
-  the core's reason / Retry, Host key changed / Review. Connected shows the sessions' status instead: a badge per
+  the core's reason / Retry, Host key changed / Review, Waiting for sign-in (the attention diamond) / "Sign in at its
+  link to connect" with no action, as the sheet over the app carries it. Connected shows the sessions' status instead: a badge per
   status the origin reports with how many have it ("2 working"), then "1 idle". Tapping a card opens the machine's
   sessions; its More menu holds Connect or Disconnect, Edit and Remove (in the error color).
 - **States:** a spinner while the list is read; an error with Retry when it can't be; the empty state with Add
@@ -266,6 +267,17 @@ reading, not a poster), the mark on top of the welcome.
   diamond, "Trust build-01?", the fingerprint on a plate, the command that prints it on the machine, Trust and
   connect (filled) and Don't connect. Swiping the sheet away or back is Don't connect, which leaves the machine not
   connected rather than failed.
+- **Sign-in:** a machine may ask you to sign in elsewhere before it lets the app in (Tailscale SSH's `check`: an ssh
+  banner with a link, then authentication held until you have signed in in a browser). While its connect waits, a
+  bottom sheet over whichever destination is shown, with the first-connect sheet's shape: the attention diamond,
+  "build-01 asks you to sign in", the mono address, one line on what to do, the machine's message on a `KeyPlate`
+  ("Message from build-01") with its link copper and underlined (a tap opens it, a long press selects) and **Copy
+  link** under it, then a quiet "Waiting for you to sign in" with a 12dp spinner: the connect is alive and goes on by
+  itself. **Open link** (filled) hands the link to the browser and leaves the sheet as it is, so coming back to the
+  app shows the same wait; **Don't connect** (text), swiping the sheet away or back disconnects. The sheet goes when
+  the connect ends: connected, failed (the card then gives the core's reason, "the sign-in was not completed in time"
+  after ten minutes), or disconnected. A host-key question shows first when both wait. Leaving the app for the
+  browser doesn't close the connection: the app keeps it while a sign-in waits, with nothing attached too.
 - **Changed host key:** a hard stop, not a dialog: the error triangle, "build-01's host key changed", what that can
   mean, the key trusted until now and the one offered now, and what to do. Back to machines is the filled button;
   Remove pinned key is outlined in the error color and confirms. Removing it connects again, which asks about the new
@@ -307,7 +319,7 @@ machine is the subject: the list is quiet rows on the ground, not cards, since a
 - **End session** confirms ("End docs-site?", "It stops on build-01, with everything running in it. This can't be
   undone.", End session in the error color). A failed End or attach is a snackbar in the core's words.
 - **States**, each a `MessagePanel` in place of the list: connecting and reading are a spinner with what is under
-  way; not connected offers Connect; the device offline says so with Retry; a dropped connection counts down "Trying
+  way (a host-key question or a sign-in waits as its sheet over it); not connected offers Connect; the device offline says so with Retry; a dropped connection counts down "Trying
   again in 4 s" with Retry now; unreachable gives the core's reason with Retry; a changed host key offers Review
   (the changed-key stop); no sessions invites New session; a listing that failed gives its reason with Retry. A
   machine without `ngtermctl` (the far shell's "not found") says "ngtermctl isn't on build-01", what to install and

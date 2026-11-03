@@ -38,7 +38,7 @@ import java.io.File
  * The app's process: it makes the [AppGraph] on first use (not in `onCreate`, so the JVM tests, which run this class
  * without the native library, never load the core), with what works beside the screens: the network's nudges, the
  * notifications ([Alerts]), the foreground service while sessions are attached ([LinkKeeper]), and the core's
- * connections closed while the app is in the background with nothing attached ([IdleKeeper]).
+ * connections closed while the app is in the background with nothing attached and no sign-in under way ([IdleKeeper]).
  */
 class NgtermApplication :
     Application(),
@@ -68,7 +68,14 @@ class NgtermApplication :
         val prefs = NotificationPrefs(PreferenceDataStoreFactory.create { file("notifications") })
         Alerts(scope, connections, asks, machines.machines, prefs.enabled, Notifications(this))
         LinkKeeper(scope, connections.attached) { LinkService.start(this) }
-        IdleKeeper(scope, foreground.visible, connections.attached, connections::suspend, connections::resume)
+        IdleKeeper(
+            scope,
+            foreground.visible,
+            connections.attached,
+            connections.signingIn,
+            connections::suspend,
+            connections::resume,
+        )
         return AppGraph(
             machines = machines,
             keys =

@@ -15,12 +15,14 @@ import com.nickalie.ngterm.android.ui.machines.HostKeySheet
 import com.nickalie.ngterm.android.ui.machines.MachineDraft
 import com.nickalie.ngterm.android.ui.machines.MachineFormScreen
 import com.nickalie.ngterm.android.ui.machines.MachinesUiState
+import com.nickalie.ngterm.android.ui.machines.SignInSheet
 import com.nickalie.ngterm.android.ui.onboarding.ImportKeyScreen
 import com.nickalie.ngterm.android.ui.onboarding.ImportProblem
 import com.nickalie.ngterm.android.ui.onboarding.PublicKeyScreen
 import com.nickalie.ngterm.android.ui.onboarding.WelcomeScreen
 import com.nickalie.ngterm.android.ui.terminal.ClipboardReadSheet
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import com.nickalie.ngterm.core.fake.TailscaleSignIn
 import com.nickalie.ngterm.core.ffi.PaneRef
 import org.junit.Rule
 import org.junit.Test
@@ -61,8 +63,8 @@ internal class WindowRule(
 /**
  * Task 13's, 14's and 16's screens rendered by Robolectric and compared with their goldens
  * (src/test/screenshots/screens): the first run, the Machines home, a machine's sessions, the machine form, the
- * host-key sheet, the changed-key stop and a program's clipboard read, each on a phone (light, dark, font scale 2.0),
- * an unfolded foldable (light) and a landscape tablet (light, dark). The keys shown are made up.
+ * host-key sheet, the sign-in sheet, the changed-key stop and a program's clipboard read, each on a phone (light,
+ * dark, font scale 2.0), an unfolded foldable (light) and a landscape tablet (light, dark). The keys shown are made up.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -147,6 +149,25 @@ class ScreensScreenshotTest(
         }
         compose.waitForIdle()
         captureScreenRoboImage(golden("host_key_sheet"))
+    }
+
+    @OptIn(ExperimentalRoborazziApi::class)
+    @Test
+    fun signInSheet() {
+        compose.setContent {
+            NgtermTheme {
+                MachinesSample(MachinesUiState.Ready(listOf(SampleSignIn), offline = false))
+                SignInSheet(
+                    machine = "studio",
+                    address = "nick@studio.tail0f3c.ts.net:22",
+                    message = TailscaleSignIn.message,
+                    url = TailscaleSignIn.url,
+                    onCancel = {},
+                )
+            }
+        }
+        compose.waitForIdle()
+        captureScreenRoboImage(golden("sign_in_sheet"))
     }
 
     @OptIn(ExperimentalRoborazziApi::class)

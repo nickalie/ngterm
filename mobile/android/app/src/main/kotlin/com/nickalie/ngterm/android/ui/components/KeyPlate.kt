@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
@@ -36,6 +37,19 @@ import kotlinx.coroutines.launch
 @Composable
 fun KeyPlate(
     text: String,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    style: TextStyle = NgtermTheme.mono.medium,
+    actions: @Composable () -> Unit = {},
+) = KeyPlate(AnnotatedString(text), modifier, label, style, actions)
+
+/**
+ * A [KeyPlate] of annotated [text]: a link in it ([androidx.compose.ui.text.LinkAnnotation]) opens on a tap, and a
+ * long press still selects.
+ */
+@Composable
+fun KeyPlate(
+    text: AnnotatedString,
     modifier: Modifier = Modifier,
     label: String? = null,
     style: TextStyle = NgtermTheme.mono.medium,

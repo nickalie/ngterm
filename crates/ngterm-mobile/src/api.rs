@@ -84,6 +84,18 @@ pub enum MobileEvent {
         pinned: String,
         offered: String,
     },
+    /// A machine asks the user to sign in at `url` (an http(s) link from its ssh banner, `message`, which is
+    /// Tailscale SSH's way for a `check`) before it lets a connect in, and the connect waits for that up to ten minutes.
+    /// The wait ends with the connect: the machine's next [`MobileEvent::MachineState`] (`Connected` once the user
+    /// signed in, `Unreachable` or `Reconnecting` when it failed or the wait ran out), or the app's
+    /// [`MobileCore::disconnect`]. A connect overtaken meanwhile (a suspend, an edit) reports nothing, as ever; one
+    /// that takes its place asks again if the machine still wants a sign-in. A later banner with a link while it waits
+    /// arrives as another `SignInRequested`.
+    SignInRequested {
+        machine_id: String,
+        message: String,
+        url: String,
+    },
     /// A machine's sessions as it last listed them (after [`MobileCore::list_sessions`], a create, or an end), in the
     /// order to show them: no page companions, parents before their companions. A listing that finishes after its
     /// connection closed or was replaced, or after a later listing or an end landed, is stale and not reported.

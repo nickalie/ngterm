@@ -2,6 +2,8 @@ package com.nickalie.ngterm.android.data
 
 import com.nickalie.ngterm.core.fake.FakeMobileCore
 import com.nickalie.ngterm.core.fake.HOST_KEY_CHANGED
+import com.nickalie.ngterm.core.fake.SIGN_IN_UNFINISHED
+import com.nickalie.ngterm.core.fake.TailscaleSignIn
 import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.HostKeyStore
 import com.nickalie.ngterm.core.ffi.Machine
@@ -10,6 +12,7 @@ import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -132,6 +135,61 @@ class ConnectionsTest {
         }
 
     @Test
+    fun aSignInShowsWhileTheConnectWaitsAndTheConnectedStateEndsIt() =
+        runTest {
+            val connections = connections()
+            val signingIn = mutableListOf<Boolean>()
+            launch { connections.signingIn.collect { signingIn += it } }
+            core.signIns["build-01.lan"] = TailscaleSignIn
+            connections.connect(machine)
+            advanceUntilIdle()
+            assertEquals(Link.SignIn(TailscaleSignIn.message, TailscaleSignIn.url), connections.links.value["m1"])
+            // connecting again as it is joins the waiting connect: the sign-in stays
+            connections.connect(machine)
+            assertEquals(Link.SignIn(TailscaleSignIn.message, TailscaleSignIn.url), connections.links.value["m1"])
+            core.finishSignIn("m1")
+            advanceUntilIdle()
+            assertEquals(Link.Connected, connections.links.value["m1"])
+            assertEquals(listOf(false, true, false), signingIn)
+            coroutineContext.cancelChildren()
+        }
+
+    @Test
+    fun aSignInNotFinishedIsUnreachableAndADisconnectTakesItAway() =
+        runTest {
+            val connections = connections()
+            core.signIns["build-01.lan"] = TailscaleSignIn
+            connections.connect(machine)
+            advanceUntilIdle()
+            core.finishSignIn("m1", signedIn = false)
+            advanceUntilIdle()
+            assertEquals(Link.Unreachable(SIGN_IN_UNFINISHED), connections.links.value["m1"])
+            connections.connect(machine)
+            advanceUntilIdle()
+            assertEquals(Link.SignIn(TailscaleSignIn.message, TailscaleSignIn.url), connections.links.value["m1"])
+            connections.disconnect("m1")
+            advanceUntilIdle()
+            assertEquals(null, connections.links.value["m1"])
+            assertEquals(emptySet<String>(), core.waitingForSignIn)
+        }
+
+    @Test
+    fun anEditedMachineWaitingForASignInConnectsAnew() =
+        runTest {
+            val connections = connections()
+            core.signIns["build-01.lan"] = TailscaleSignIn
+            connections.connect(machine)
+            advanceUntilIdle()
+            connections.connect(machine.copy(host = "build-02.lan"))
+            assertEquals(Link.Connecting, connections.links.value["m1"])
+            advanceUntilIdle()
+            assertEquals(Link.Connected, connections.links.value["m1"])
+            // the overtaken connect, which the real core cancels, is let go here
+            core.finishSignIn("m1")
+            advanceUntilIdle()
+        }
+
+    @Test
     fun aChangedHostKeyStaysChangedThroughTheFailureThatFollowsIt() =
         runTest {
             val connections = connections()
@@ -197,6 +255,31 @@ class ConnectionsTest {
             core.emit(MobileEvent.MachineState("m1", MachineState.Connected))
             advanceUntilIdle()
             assertEquals(listings, core.calls.count { it.method == "listSessions" })
+        }
+
+    @Test
+    fun aReconnectThatHasToSignInAgainListsTheMachineOnceItIsBack() =
+        runTest {
+            val connections = connections()
+            connections.connect(machine)
+            advanceUntilIdle()
+            // the connection drops, and the core's reconnect meets a check that ran out while it was down
+            core.emit(MobileEvent.MachineState("m1", MachineState.Reconnecting(4_000u)))
+            core.emit(MobileEvent.SignInRequested("m1", TailscaleSignIn.message, TailscaleSignIn.url))
+            assertEquals(
+                Link.SignIn(TailscaleSignIn.message, TailscaleSignIn.url, reconnecting = true),
+                connections.links.value["m1"],
+            )
+            // a second link while it still waits keeps it a reconnect
+            core.emit(MobileEvent.SignInRequested("m1", TailscaleSignIn.message, TailscaleSignIn.url))
+            assertEquals(true, (connections.links.value["m1"] as Link.SignIn).reconnecting)
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            val listings = core.calls.count { it.method == "listSessions" }
+            core.emit(MobileEvent.MachineState("m1", MachineState.Connected))
+            advanceUntilIdle()
+            assertEquals(Link.Connected, connections.links.value["m1"])
+            assertEquals(listings + 1, core.calls.count { it.method == "listSessions" })
+            assertEquals(listOf(fakeSession("s1")), connections.trees.value["m1"])
         }
 
     @Test

@@ -21,6 +21,7 @@ import com.nickalie.ngterm.android.ui.machines.MachinesUiState
 import com.nickalie.ngterm.android.ui.sessions.MachineSessions
 import com.nickalie.ngterm.android.ui.sessions.SessionActions
 import com.nickalie.ngterm.android.ui.sessions.SessionsScreen
+import com.nickalie.ngterm.core.fake.TailscaleSignIn
 import com.nickalie.ngterm.core.fake.fakeSession
 
 // The screens' content for the screenshot tests: real-looking machines and made-up keys (never a real one).
@@ -76,6 +77,14 @@ val SampleMachines =
             null,
         ),
         MachineItem(testMachine(id = "m6", label = "", host = "scratch.lan"), Link.Offline, null),
+    )
+
+/** A machine whose connect waits for the user to sign in, as Tailscale SSH asks for a `check`. */
+val SampleSignIn =
+    MachineItem(
+        testMachine(id = "m7", label = "studio", host = "studio.tail0f3c.ts.net"),
+        Link.SignIn(TailscaleSignIn.message, TailscaleSignIn.url),
+        null,
     )
 
 val NoMachineActions = MachineActions({}, {}, {}, {}, {}, {}, {}, {})

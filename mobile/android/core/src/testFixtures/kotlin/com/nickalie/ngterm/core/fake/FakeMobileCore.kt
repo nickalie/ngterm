@@ -40,6 +40,9 @@ data class FakeCall(
  *   no pin reports [MobileEvent.HostKeyUnknown] and the connect waits for [answerHostKey], which pins the key through
  *   [hosts] and connects when it trusts the key on offer, and fails ([HOST_KEY_REFUSED]) otherwise; a [disconnect]
  *   while it waits cancels it ([MobileException.Cancelled]);
+ * - sign-ins, when [signIns] names what a machine's host asks the user to sign in with: after its host key, the
+ *   connect reports [MobileEvent.SignInRequested] and waits for [finishSignIn], which connects it once signed in and
+ *   fails it ([SIGN_IN_UNFINISHED]) otherwise; a [disconnect] while it waits cancels it ([MobileException.Cancelled]);
  * - [listSessions] keeps what it answers as the machine's listing and also delivers it as a [MobileEvent.Tree];
  *   [createSession] does the same with the listing that has the new session;
  * - [endSession] ends a session of [sessions] whether listed or not ([MobileException.Remote] for one the machine
@@ -57,6 +60,7 @@ data class FakeCall(
  * [showPane] returns what [paneFactory] makes; the default is a `Pane(NoHandle)`, a placeholder whose methods must not
  * be called (they would reach the native library): a test that drives a pane subclasses it.
  */
+@Suppress("TooManyFunctions") // the core's whole interface, and the hooks a test drives its waits with
 class FakeMobileCore(
     private val sink: EventSink? = null,
     private val hosts: HostKeyStore? = null,
@@ -76,6 +80,24 @@ class FakeMobileCore(
 
     /** The machines whose connect waits for [answerHostKey], by id, with the key on offer. */
     val waitingForHostKey: Map<String, String> get() = questions.mapValues { it.value.offered }
+
+    /** What each host asks the user to sign in with, by host name: its message and the link in it. */
+    val signIns: MutableMap<String, FakeSignIn> = mutableMapOf()
+
+    // each machine's connect waiting for the user to sign in: signed in or not; null when a disconnect overtook it
+    private val signInWaits = mutableMapOf<String, CompletableDeferred<Boolean?>>()
+
+    /** The machines whose connect waits for [finishSignIn]. */
+    val waitingForSignIn: Set<String> get() = signInWaits.keys.toSet()
+
+    /** Ends the wait of [machineId]'s connect for the user to sign in: [signedIn] connects it, else it fails. */
+    fun finishSignIn(
+        machineId: String,
+        signedIn: Boolean = true,
+    ) {
+        signInWaits.remove(machineId)?.complete(signedIn)
+    }
+
     private val failures = mutableMapOf<String, MobileException>()
 
     /**
@@ -181,6 +203,7 @@ class FakeMobileCore(
         }
         drop(id)
         checkHostKey(machine)
+        checkSignIn(machine)
         connected += id
         records[id] = machine
         emit(MobileEvent.MachineState(id, MachineState.Connected))
@@ -224,6 +247,21 @@ class FakeMobileCore(
         }
     }
 
+    private suspend fun checkSignIn(machine: Machine) {
+        val signIn = signIns[machine.host] ?: return
+        val wait = CompletableDeferred<Boolean?>()
+        signInWaits[machine.id] = wait
+        emit(MobileEvent.SignInRequested(machine.id, signIn.message, signIn.url))
+        val signedIn =
+            try {
+                wait.await()
+            } finally {
+                if (signInWaits[machine.id] === wait) signInWaits -= machine.id
+            }
+        if (signedIn == null) throw MobileException.Cancelled()
+        if (!signedIn) unreachable(machine.id, SIGN_IN_UNFINISHED)
+    }
+
     private fun drop(machineId: String) {
         synchronized(shown) { shown.keys.removeAll { it.machineId == machineId } }
         connected -= machineId
@@ -236,6 +274,7 @@ class FakeMobileCore(
         record("disconnect", machineId)
         drop(machineId)
         questions.remove(machineId)?.answer?.complete(null)
+        signInWaits.remove(machineId)?.complete(null)
     }
 
     override fun useKey(
@@ -364,6 +403,24 @@ const val UNKNOWN_PANE = "the session has no such pane"
 
 /** The core's reason for a connect whose unknown host key was not trusted (`HOST_KEY_REFUSED`). */
 const val HOST_KEY_REFUSED = "the host key was not trusted"
+
+/** The core's reason for a connect whose sign-in was not completed in time (`SIGN_IN_UNFINISHED`). */
+const val SIGN_IN_UNFINISHED = "the sign-in was not completed in time"
+
+/** What a host asks the user to sign in with: its [message] and the [url] in it. */
+data class FakeSignIn(
+    val message: String,
+    val url: String,
+)
+
+/** A sign-in as Tailscale SSH asks for one, for the tests: its banner and link (made up). */
+val TailscaleSignIn =
+    FakeSignIn(
+        message =
+            "# Tailscale SSH requires an additional check.\n" +
+                "# To authenticate, visit: https://login.tailscale.com/a/l1nk",
+        url = "https://login.tailscale.com/a/l1nk",
+    )
 
 /** A session as a machine's tree lists it, with what a test doesn't care about left plain. */
 fun fakeSession(

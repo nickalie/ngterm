@@ -66,7 +66,7 @@ private fun Link.tone(): StatusTone =
         Link.Offline -> StatusTone.Offline
         Link.Connecting, is Link.Reconnecting -> StatusTone.Connecting
         Link.Connected -> StatusTone.Online
-        is Link.HostKeyUnknown -> StatusTone.Attention
+        is Link.HostKeyUnknown, is Link.SignIn -> StatusTone.Attention
         is Link.Unreachable, is Link.HostKeyChanged -> StatusTone.Error
     }
 
@@ -91,6 +91,10 @@ private fun connectionLabel(
 
         is Link.HostKeyChanged -> {
             stringResource(R.string.machine_key_changed)
+        }
+
+        is Link.SignIn -> {
+            stringResource(R.string.machine_signing_in)
         }
 
         else -> {
@@ -153,6 +157,11 @@ private fun Summary(
         is Link.HostKeyUnknown -> {
             // the question itself is the sheet over the app, open while the connect waits
             Note(stringResource(R.string.machine_confirm_key))
+        }
+
+        is Link.SignIn -> {
+            // the link and its Open link are the sheet over the app, open while the connect waits
+            Note(stringResource(R.string.machine_sign_in_summary))
         }
 
         is Link.HostKeyChanged -> {
@@ -238,7 +247,8 @@ private fun MachineMenu(
             )
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            val connected = link == Link.Connected || link is Link.Reconnecting || link == Link.Connecting
+            val connected =
+                link == Link.Connected || link is Link.Reconnecting || link == Link.Connecting || link is Link.SignIn
             DropdownMenuItem(
                 text = {
                     Text(

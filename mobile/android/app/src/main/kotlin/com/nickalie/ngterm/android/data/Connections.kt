@@ -8,10 +8,13 @@ import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.RemoteSession
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.getAndUpdate
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
@@ -40,6 +43,18 @@ sealed interface Link {
     /** The machine has no pinned key and offered [fingerprint]: its connect waits for the user's answer. */
     data class HostKeyUnknown(
         val fingerprint: String,
+    ) : Link
+
+    /**
+     * The machine asks the user to sign in at [url] (from its [message], as Tailscale SSH does for a `check`) before it
+     * lets the connect in: the connect waits for that. The machine's next state ends it, or a disconnect.
+     * [reconnecting] when the wait is the core's reconnect of a lost connection, not a connect the app asked for: the
+     * machine is listed afresh once it is back, as after any reconnect.
+     */
+    data class SignIn(
+        val message: String,
+        val url: String,
+        val reconnecting: Boolean = false,
     ) : Link
 
     /** The machine offered [offered], not the [pinned] key: the connection stopped until the pin is removed. */
@@ -89,6 +104,13 @@ class Connections(
     /** Each machine's link, by id; a machine missing from it is [Link.Offline]. */
     val links: StateFlow<Map<String, Link>> = linkState.asStateFlow()
 
+    /** Whether any machine's connect waits for the user to sign in ([Link.SignIn]). */
+    val signingIn: Flow<Boolean> =
+        linkState
+            .map { links ->
+                links.values.any { it is Link.SignIn }
+            }.distinctUntilChanged()
+
     /** Each connected machine's sessions as it last listed them, by id. */
     val trees: StateFlow<Map<String, List<RemoteSession>>> = treeState.asStateFlow()
 
@@ -109,6 +131,7 @@ class Connections(
             is MobileEvent.MachineState -> machineState(event.machineId, event.state)
             is MobileEvent.HostKeyUnknown -> set(event.machineId, Link.HostKeyUnknown(event.fingerprint))
             is MobileEvent.HostKeyChanged -> set(event.machineId, Link.HostKeyChanged(event.pinned, event.offered))
+            is MobileEvent.SignInRequested -> signInRequested(event.machineId, event.message, event.url)
             is MobileEvent.Tree -> listed(event.machineId, event.sessions)
             else -> Unit
         }
@@ -155,12 +178,25 @@ class Connections(
         }
     }
 
+    // a reconnect that has to sign in again (a Tailscale check that ran out while the connection was down) stays a
+    // reconnect, so its Connected lists the machine afresh
+    private fun signInRequested(
+        machineId: String,
+        message: String,
+        url: String,
+    ) = linkState.update { links ->
+        val before = links[machineId]
+        val reconnecting = before is Link.Reconnecting || (before is Link.SignIn && before.reconnecting)
+        links + (machineId to Link.SignIn(message, url, reconnecting))
+    }
+
     // the core restores a lost connection's streams but lists nothing: a machine back from reconnecting is listed
     // afresh here, as a listing that failed or was dropped while it was down would otherwise never be redone
     private fun reconnected(machineId: String) {
         val before = linkState.getAndUpdate { it + (machineId to Link.Connected) }[machineId]
         val cancelled = unlisted.remove(machineId)
-        if (before is Link.Reconnecting || cancelled) scope.launch { listSessions(machineId) }
+        val wasReconnecting = before is Link.Reconnecting || (before is Link.SignIn && before.reconnecting)
+        if (wasReconnecting || cancelled) scope.launch { listSessions(machineId) }
     }
 
     // a failure doesn't hide a changed host key (the core reports one with both), and a declined key is no failure
@@ -186,16 +222,19 @@ class Connections(
     /**
      * Connects [machine] (or retries it at once), then lists its sessions for [trees]. A machine already connected as
      * it is stays connected; one connected as it was before an edit connects anew, and lets go of its attached sessions
-     * (the core ends their streams with the old connection).
+     * (the core ends their streams with the old connection). A machine waiting for the user to sign in keeps waiting
+     * (the core joins its connect), unless it was edited: that connect is overtaken, and the new one asks again.
      */
     fun connect(machine: Machine) {
         val id = machine.id
         val before = records.put(id, machine)
-        if (before != null && !before.reachedAs(machine)) replaced(id)
+        val edited = before != null && !before.reachedAs(machine)
+        if (edited) replaced(id)
         declined.update { it - id }
         linkState.update { links ->
             when (links[id]) {
                 Link.Connected, is Link.HostKeyUnknown -> links
+                is Link.SignIn -> if (edited) links + (id to Link.Connecting) else links
                 else -> links + (id to Link.Connecting)
             }
         }

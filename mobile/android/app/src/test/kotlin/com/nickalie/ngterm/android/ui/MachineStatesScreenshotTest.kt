@@ -17,7 +17,10 @@ import org.robolectric.annotation.GraphicsMode
 private const val PHONE = "w411dp-h891dp-xhdpi"
 private const val PHONE_NIGHT = "w411dp-h891dp-night-xhdpi"
 
-/** The Machines home's other states, and the first run's failure, on a phone in light and dark. */
+/**
+ * The Machines home's other states (a machine waiting for a sign-in among them), and the first run's failure, on a
+ * phone in light and dark.
+ */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class MachineStatesScreenshotTest {
@@ -58,6 +61,17 @@ class MachineStatesScreenshotTest {
     @Test
     @Config(qualifiers = PHONE_NIGHT)
     fun failedDark() = capture("machines_failed_dark") { MachinesSample(MachinesUiState.Failed("the file is corrupt")) }
+
+    // the sheet over it has its own golden (ScreensScreenshotTest): this is the card under it
+    @Test
+    @Config(qualifiers = PHONE)
+    fun signingInLight() =
+        capture("machines_signing_in_light") { MachinesSample(MachinesUiState.Ready(listOf(SampleSignIn), false)) }
+
+    @Test
+    @Config(qualifiers = PHONE_NIGHT)
+    fun signingInDark() =
+        capture("machines_signing_in_dark") { MachinesSample(MachinesUiState.Ready(listOf(SampleSignIn), false)) }
 
     @Test
     @Config(qualifiers = PHONE)

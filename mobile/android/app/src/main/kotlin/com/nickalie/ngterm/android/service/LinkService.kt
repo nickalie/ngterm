@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -141,21 +142,25 @@ class LinkKeeper(
 
 /**
  * Lets the core close its connections while the app has nothing to keep connected: in the background ([visible]
- * false) with no session attached, [suspend] runs (the core's `suspend`); once either changes, [resume] brings the
- * connections back. Nothing runs until the app first goes idle.
+ * false) with no session attached and no machine waiting for the user to sign in ([signingIn]: the user left the app
+ * for the browser to do it, and the connect must still be there when they have), [suspend] runs (the core's
+ * `suspend`); once any of them changes, [resume] brings the connections back. Nothing runs until the app first goes
+ * idle.
  */
 class IdleKeeper(
     scope: CoroutineScope,
     visible: StateFlow<Boolean>,
     attached: StateFlow<Map<String, Set<String>>>,
+    signingIn: Flow<Boolean>,
     private val suspend: () -> Unit,
     private val resume: () -> Unit,
 ) {
     init {
         scope.launch {
             var suspended = false
-            combine(visible, attached) { shown, sessions -> !shown && sessions.values.all { it.isEmpty() } }
-                .distinctUntilChanged()
+            combine(visible, attached, signingIn) { shown, sessions, waiting ->
+                !shown && !waiting && sessions.values.all { it.isEmpty() }
+            }.distinctUntilChanged()
                 .collect { idle ->
                     if (idle) {
                         suspend()
