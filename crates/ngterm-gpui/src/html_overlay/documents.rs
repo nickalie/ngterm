@@ -13,7 +13,8 @@ pub(super) fn script() -> String {
     [MARKDOWN, HIGHLIGHT, RENDER].join(";\n")
 }
 
-/// Native engines install at document start; the app's isolated script waits for the inert data elements.
+/// WebView2 installs at document creation and WKWebView at document end; the isolated script renders when the DOM
+/// is ready, waiting for `DOMContentLoaded` when needed so the inert data elements exist.
 #[cfg(any(target_os = "macos", windows))]
 pub(super) fn document_start_script() -> String {
     format!(

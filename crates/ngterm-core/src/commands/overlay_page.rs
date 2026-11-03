@@ -114,10 +114,11 @@ impl PageOpening {
     }
 }
 
-/// `session.overlay.open --html|--url` once validated (upstream's `openHtmlOverlay`): the page takes its slot with the
-/// slot rules of a program and answers with its id, the one `session.overlay.result --page` reads. A page the
-/// placement rule hands to the presenting machine is reserved for it before any local check: nothing renders here, so
-/// neither the web views, the saved store nor `--follow` are this machine's concern.
+/// `session.overlay.open --html|--url|--image|--markdown` once validated (upstream's `openHtmlOverlay`): a local
+/// document's descriptor is probed and an image's natural size resolved before the page takes its slot. It follows
+/// a program's slot rules and answers with its id, the one `session.overlay.result --page` reads. A page the
+/// placement rule hands to the presenting machine is reserved for it before any local check: nothing renders here,
+/// so neither the web views, the saved store nor `--follow` are this machine's concern.
 pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, opening: PageOpening) -> Outcome {
     open_checked(core, target, window, opening, None, false)
 }
@@ -338,7 +339,7 @@ pub(crate) fn navigate(
         return Err(ControlError::rejected(refusal));
     }
     if matches!(shown.source, HtmlSource::Markdown { .. }) && navigation == HtmlNavigation::Browser {
-        return Err(ControlError::rejected("a markdown page opens only in its overlay"));
+        return Err(ControlError::rejected(errors::MARKDOWN_IN_OVERLAY));
     }
     let page_id = shown.id;
     let host = core

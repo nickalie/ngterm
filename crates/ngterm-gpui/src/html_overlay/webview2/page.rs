@@ -1043,7 +1043,7 @@ impl Page {
             }
             HtmlNavigation::Browser => {
                 if matches!(self.overlay().source, HtmlSource::Markdown { .. }) {
-                    return Err("a markdown page opens only in its overlay".to_owned());
+                    return Err(errors::MARKDOWN_IN_OVERLAY.to_owned());
                 }
                 let opened = self.browser_url().is_some_and(|url| super::browser::open(url.as_str()));
                 if !opened {

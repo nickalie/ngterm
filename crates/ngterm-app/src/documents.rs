@@ -36,19 +36,26 @@ fn load_image(path: &Path, max_bytes: usize) -> Result<ImageData, String> {
         "image/webp" => ImageFormat::WebP,
         _ => return Err(not_image()),
     };
-    let mut reader = ImageReader::with_format(Cursor::new(&bytes), format);
-    // Only metadata is requested. The separate pixel cap below applies before any pixel allocation or decode.
-    reader.no_limits();
-    let mut decoder = reader.into_decoder().map_err(|_| not_image())?;
-    let (width, height) = decoder.dimensions();
-    if width == 0 || height == 0 {
+    if format == ImageFormat::WebP && !webp_chunks_are_bounded(&bytes) {
         return Err(not_image());
     }
-    if !image_page::allows_pixels(u64::from(width), u64::from(height)) {
-        return Err(format!("image too large (over 100 megapixels): {}", path.display()));
-    }
-    let orientation = decoder.orientation().map_or(1, image::metadata::Orientation::to_exif);
-    drop(decoder);
+    let (width, height, orientation) = if format == ImageFormat::WebP {
+        let mut decoder = webp_header_decoder(&bytes, bytes.len()).map_err(|_| not_image())?;
+        let (width, height) = checked_dimensions(decoder.dimensions(), path)?;
+        let orientation = decoder
+            .exif_metadata()
+            .ok()
+            .flatten()
+            .as_deref()
+            .and_then(image::metadata::Orientation::from_exif_chunk)
+            .map_or(1, image::metadata::Orientation::to_exif);
+        (width, height, orientation)
+    } else {
+        let mut decoder = header_decoder(&bytes, format, image_page::MAX_BYTES as u64).map_err(|_| not_image())?;
+        let (width, height) = checked_dimensions(decoder.dimensions(), path)?;
+        let orientation = decoder.orientation().map_or(1, image::metadata::Orientation::to_exif);
+        (width, height, orientation)
+    };
     Ok(ImageData {
         bytes,
         mime_type: mime_type.to_owned(),
@@ -56,6 +63,79 @@ fn load_image(path: &Path, max_bytes: usize) -> Result<ImageData, String> {
         height,
         orientation,
     })
+}
+
+fn checked_dimensions((width, height): (u32, u32), path: &Path) -> Result<(u32, u32), String> {
+    if width == 0 || height == 0 {
+        return Err(format!("not a png, jpg, gif or webp image: {}", path.display()));
+    }
+    if !image_page::allows_pixels(u64::from(width), u64::from(height)) {
+        return Err(format!("image too large (over 100 megapixels): {}", path.display()));
+    }
+    Ok((width, height))
+}
+
+fn webp_header_decoder(
+    bytes: &[u8],
+    metadata_limit: usize,
+) -> Result<image_webp::WebPDecoder<Cursor<&[u8]>>, image_webp::DecodingError> {
+    // Audited image-webp 0.2.4: construction indexes known chunk kinds plus at most two first-frame subchunks;
+    // its animation metadata read is capped at six bytes. Dimensions returns stored fields, and EXIF checks
+    // this limit before allocating.
+    // This covers our header/EXIF path only: the library's limit does not cover all pixel-decoding allocations.
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(bytes))?;
+    decoder.set_memory_limit(metadata_limit.min(bytes.len()));
+    Ok(decoder)
+}
+
+fn webp_chunks_are_bounded(bytes: &[u8]) -> bool {
+    // Keep the complete outer RIFF container within the accepted input, independently of the decoder's
+    // metadata allocation budget (which also covers ranges it indexes from animation frame subchunks).
+    let Some(header) = bytes.get(..12) else {
+        return false;
+    };
+    if &header[..4] != b"RIFF" || &header[8..] != b"WEBP" {
+        return false;
+    }
+    let size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+    let Some(end) = usize::try_from(size).ok().and_then(|size| size.checked_add(8)) else {
+        return false;
+    };
+    if end != bytes.len() {
+        return false;
+    }
+    let mut offset = 12;
+    while offset < end {
+        let Some(header) = bytes.get(offset..).and_then(|tail| tail.get(..8)) else {
+            return false;
+        };
+        let size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+        let Some(next) = usize::try_from(size)
+            .ok()
+            .and_then(|size| offset.checked_add(8)?.checked_add(size)?.checked_add(size & 1))
+        else {
+            return false;
+        };
+        if next > end {
+            return false;
+        }
+        offset = next;
+    }
+    offset == end
+}
+
+fn header_decoder(
+    bytes: &[u8],
+    format: ImageFormat,
+    allocation_limit: u64,
+) -> image::ImageResult<impl image::ImageDecoder + '_> {
+    // PNG can inflate compressed metadata while constructing its decoder, before dimensions are available.
+    // Set its allocation budget first, independently of the caller's pixel cap; neither step decodes pixels.
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(allocation_limit);
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    reader.limits(limits);
+    reader.into_decoder()
 }
 
 /// Check a Markdown candidate without reading or decoding it.

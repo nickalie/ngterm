@@ -21,7 +21,7 @@ use ngterm_term::{Launch, PaneEvent};
 use uuid::Uuid;
 
 use crate::state::{AppState, Poster, post};
-use crate::terminal::{Spawn, TerminalEvent, TerminalSpec};
+use crate::terminal::{LinkKind, Spawn, TerminalEvent, TerminalSpec};
 
 /// A terminal a page runs: one of its session's panes.
 #[derive(Debug, Clone, PartialEq)]
@@ -232,6 +232,7 @@ pub enum Report {
     OpenUrl {
         url: String,
         browser: bool,
+        kind: LinkKind,
     },
     /// A key the user pressed in the pane: user activity, and the status glyph it clears.
     Keystroke(StatusKeystroke),
@@ -254,9 +255,10 @@ pub fn report(event: &TerminalEvent, ran: Ran, hostname: &str, points: f32, cove
         ))],
         TerminalEvent::EndSearch => vec![Report::Search(SearchReport::Ended)],
         TerminalEvent::FontSize => vec![Report::FontSize(f64::from(points))],
-        TerminalEvent::OpenUrl { url, browser } => vec![Report::OpenUrl {
+        TerminalEvent::OpenUrl { url, browser, kind } => vec![Report::OpenUrl {
             url: url.clone(),
             browser: *browser,
+            kind: *kind,
         }],
         TerminalEvent::Keystroke(_) if covered => Vec::new(),
         TerminalEvent::Keystroke(keystroke) => vec![Report::Keystroke(*keystroke)],
@@ -303,7 +305,7 @@ pub fn post_report(poster: &Poster, session: Uuid, token: &str, report: Report, 
                 state.settle();
             }
         }
-        Report::OpenUrl { url, browser } => state.follow_pane_link(&url, session, &token, browser),
+        Report::OpenUrl { url, browser, kind } => state.follow_pane_link(&url, session, &token, browser, kind),
         Report::Keystroke(keystroke) => state.pane_keystroke(session, &token, keystroke),
         Report::Notification { title, body } => state.terminal_notification(session, &token, &title, &body, focus),
     });

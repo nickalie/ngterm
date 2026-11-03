@@ -5274,6 +5274,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "image",
+ "image-webp",
  "libc",
  "ngterm-core",
  "ngterm-host",

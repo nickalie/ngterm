@@ -104,7 +104,7 @@ static URL: LazyLock<Option<Regex>> = LazyLock::new(|| {
 pub enum LinkKind {
     /// An OSC 8 hyperlink.
     Osc8,
-    /// A URL found in the text.
+    /// A URL or path detected in the text.
     Url,
 }
 

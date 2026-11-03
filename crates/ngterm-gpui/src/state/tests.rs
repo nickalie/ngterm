@@ -1022,14 +1022,29 @@ fn a_notify_lands_its_banner_and_its_sound_with_the_frontend() {
 #[test]
 fn pane_relative_links_use_their_own_reported_local_directory() {
     let (mut state, _, session) = state_with_terminal();
-    let directory = std::env::temp_dir().join("local-links");
-    state.report_pane(session, "T", &PaneReport::Pwd(directory.to_string_lossy().into_owned()));
-    state.follow_pane_link("./name%20?# with spaces.txt", session, "T", false);
-    assert_eq!(
-        state.frontend.reveals,
-        vec![directory.join("name%20?# with spaces.txt")]
+    let directory = tempfile::tempdir().unwrap();
+    // Windows does not allow `?` in a filename; its other literal path characters are still exercised.
+    let name = if cfg!(windows) {
+        "name%20# with spaces.txt"
+    } else {
+        "name%20?# with spaces.txt"
+    };
+    let path = directory.path().join(name);
+    std::fs::write(&path, "local file").unwrap();
+    state.report_pane(
+        session,
+        "T",
+        &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
     );
-    state.follow_pane_link("./stale.txt", session, "gone", false);
+    state.follow_pane_link(
+        "./name%20?# with spaces.txt",
+        session,
+        "T",
+        false,
+        crate::terminal::LinkKind::Url,
+    );
+    assert_eq!(state.frontend.reveals, vec![path]);
+    state.follow_pane_link("./stale.txt", session, "gone", false, crate::terminal::LinkKind::Url);
     assert_eq!(state.frontend.reveals.len(), 1, "a replaced pane cannot route a link");
 }
 
@@ -1051,17 +1066,30 @@ fn remote_primary_paths_stay_remote_while_scratch_paths_stay_local() {
     found.surface.replace(Box::new(FakeSurface::new("R")));
     found.scratch_surface.replace(Box::new(FakeSurface::new("S")));
     let mut state = AppState::new(core(library, None));
-    state.follow_pane_link("/remote/a.png", session, "R", false);
-    state.follow_pane_link("relative.txt", session, "R", false);
+    let remote_path = std::env::temp_dir().join("remote-origin").join("a.png");
+    state.follow_pane_link(
+        &remote_path.to_string_lossy(),
+        session,
+        "R",
+        false,
+        crate::terminal::LinkKind::Url,
+    );
+    state.follow_pane_link("relative.txt", session, "R", false, crate::terminal::LinkKind::Url);
     assert!(state.frontend.reveals.is_empty());
     let local = std::env::temp_dir().join("remote.png");
     let file_url = url::Url::from_file_path(&local).unwrap();
-    state.follow_pane_link(file_url.as_str(), session, "R", false);
+    state.follow_pane_link(file_url.as_str(), session, "R", false, crate::terminal::LinkKind::Url);
     assert_eq!(state.frontend.reveals, vec![local]);
-    let directory = std::env::temp_dir().join("scratch-links");
-    state.report_pane(session, "S", &PaneReport::Pwd(directory.to_string_lossy().into_owned()));
-    state.follow_pane_link("./local.txt", session, "S", false);
-    assert_eq!(state.frontend.reveals.last(), Some(&directory.join("local.txt")));
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("local.txt");
+    std::fs::write(&path, "scratch file").unwrap();
+    state.report_pane(
+        session,
+        "S",
+        &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
+    );
+    state.follow_pane_link("./local.txt", session, "S", false, crate::terminal::LinkKind::Url);
+    assert_eq!(state.frontend.reveals.last(), Some(&path));
     let _ = state
         .core
         .library_mut()
@@ -1073,4 +1101,51 @@ fn remote_primary_paths_stay_remote_while_scratch_paths_stay_local() {
         .take();
     state.settle();
     assert!(!state.link_directories.contains_key(&(session, "S".to_owned())));
+}
+
+#[test]
+fn only_detected_existing_relative_links_with_an_osc7_directory_resolve() {
+    let (mut state, _, session) = state_with_terminal();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("notes.txt");
+    std::fs::write(&path, "notes").unwrap();
+    state
+        .core
+        .library_mut()
+        .store_for_session_mut(session)
+        .unwrap()
+        .session_mut(session)
+        .unwrap()
+        .set_current_cwd(&directory.path().to_string_lossy());
+    // Even an existing model cwd is not an OSC 7 report and cannot authorize relative resolution.
+    state.follow_pane_link("notes.txt", session, "T", false, crate::terminal::LinkKind::Url);
+    assert!(state.frontend.reveals.is_empty());
+    state.report_pane(
+        session,
+        "T",
+        &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
+    );
+    // OSC 8 links stay literal, even when their relative spelling names an existing local file.
+    state.follow_pane_link("notes.txt", session, "T", false, crate::terminal::LinkKind::Osc8);
+    state.follow_pane_link("missing.txt", session, "T", false, crate::terminal::LinkKind::Url);
+    assert!(state.frontend.reveals.is_empty());
+    state.follow_pane_link("notes.txt", session, "T", false, crate::terminal::LinkKind::Url);
+    assert_eq!(state.frontend.reveals, [path]);
+}
+
+#[test]
+fn detected_relative_resolution_refuses_network_and_automount_targets_before_existence_checks() {
+    for cwd in ["/net/server", "/misc/share"] {
+        assert_eq!(detected_relative_path("notes.md", cwd), None);
+    }
+    for raw in [
+        r"\\server\share\notes.md",
+        r"\\?\UNC\server\share\notes.md",
+        "/\\server/share/notes.md",
+    ] {
+        assert_eq!(
+            detected_relative_path(raw, &std::env::temp_dir().to_string_lossy()),
+            None
+        );
+    }
 }

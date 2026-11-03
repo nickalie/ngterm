@@ -37,6 +37,29 @@ use crate::instance::Activation;
 use crate::keymap_dispatch::{Fired, KeyOrigin};
 use crate::main_loop::GpuiMainLoop;
 
+// Ghostty's resolvePathForOpening: only a detected relative path with an OSC 7 pwd and an existing target.
+// Apply the link policy first, before even an existence query could mount a network or device path.
+fn detected_relative_path(raw: &str, cwd: &str) -> Option<String> {
+    if raw.is_empty()
+        || link_policy::is_bare_path(raw)
+        || raw.contains(':')
+        || raw.chars().any(char::is_control)
+        || !ngterm_core::html::is_absolute(cwd)
+    {
+        return None;
+    }
+    let candidate = std::path::Path::new(cwd).join(raw);
+    let (link_policy::LinkDisposition::Reveal(path)
+    | link_policy::LinkDisposition::Image(path)
+    | link_policy::LinkDisposition::Markdown(path)) = link_policy::disposition(&candidate.to_string_lossy())
+    else {
+        return None;
+    };
+    path.try_exists()
+        .is_ok_and(|exists| exists)
+        .then(|| path.to_string_lossy().into_owned())
+}
+
 /// What a window's activation that may be the window manager's own doing knows of it ([`AppState::window_activated`]):
 /// a new window's first one, the focus the window manager grants on mapping it, or the answer to a command's raise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -479,8 +502,16 @@ impl AppState {
         }
     }
 
-    /// Resolves a terminal-detected relative path only against its still-live local pane's cwd.
-    pub fn follow_pane_link(&mut self, raw: &str, session: Uuid, token: &str, browser: bool) {
+    /// Resolves only detected relative paths with an existing target and a still-live local pane's OSC 7 cwd.
+    /// OSC 8 URIs are passed through verbatim, as Ghostty's `processLinks` does.
+    pub fn follow_pane_link(
+        &mut self,
+        raw: &str,
+        session: Uuid,
+        token: &str,
+        browser: bool,
+        kind: crate::terminal::LinkKind,
+    ) {
         let Some(found) = self
             .core
             .library()
@@ -501,19 +532,10 @@ impl AppState {
         } else {
             ClickOrigin::Pane(session)
         };
-        let resolved = if !remote
-            && !raw.is_empty()
-            && !link_policy::is_bare_path(raw)
-            && !raw.contains(':')
-            && !raw.chars().any(char::is_control)
-        {
-            let cwd = self
-                .link_directories
+        let resolved = if !remote && kind == crate::terminal::LinkKind::Url {
+            self.link_directories
                 .get(&(session, token.to_owned()))
-                .map(String::as_str)
-                .or_else(|| (!scratch).then(|| found.cwd_for(role)));
-            cwd.filter(|cwd| ngterm_core::html::is_absolute(cwd))
-                .map(|cwd| std::path::Path::new(cwd).join(raw).to_string_lossy().into_owned())
+                .and_then(|cwd| detected_relative_path(raw, cwd))
         } else {
             None
         };

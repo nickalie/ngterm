@@ -223,7 +223,12 @@ pub enum TerminalEvent {
     /// policy ([`follow_link`] is the default route), as libghostty's `OPEN_URL` asked. `browser`: the click was the
     /// Ctrl/Super+Shift chord that sends this one link to the browser over an overlay link-open setting
     /// ([`ngterm_core::link_policy::wants_browser`]).
-    OpenUrl { url: String, browser: bool },
+    OpenUrl {
+        url: String,
+        browser: bool,
+        /// OSC 8 URIs stay verbatim; only detected paths may resolve against the terminal's reported cwd.
+        kind: LinkKind,
+    },
     /// `toggle_readonly` turned read-only mode on or off: the frontend shows it.
     Readonly(bool),
     /// `focus-follows-mouse`: the pointer moved over this terminal's owner view, which does not hold the keyboard,

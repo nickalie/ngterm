@@ -2,16 +2,18 @@
 //!
 //! A terminal renders untrusted program output, so an escape-sequence link (`GHOSTTY_ACTION_OPEN_URL`) can carry any
 //! scheme. [`disposition`] maps a raw link to opening a web or mail URL with the desktop's handler, revealing a
-//! local path in the file manager, showing bounded raster/Markdown documents, or ignoring it. A `file://` link is revealed, never opened: opening
-//! hands it to the default application for its type, which for a script or a `.desktop` file can run it, while a
-//! reveal only selects it. A `file://` whose host is not this machine is ignored, as is a path under an automount
-//! root, where even looking at the path can mount a network share. [`route`] adds the link-open setting on top: a
+//! local path in the file manager, showing bounded raster/Markdown documents, or ignoring it. Local raster and
+//! Markdown paths, bare or in a `file://` URL, become document overlays; other local files are only revealed, never
+//! opened in their default application (which could execute a script or `.desktop` file). A `file://` whose host is
+//! not this machine is ignored, as are network/device paths and automount roots, where even looking at the path can
+//! mount a network share. [`route`] adds the link-open setting on top: a
 //! web link clicked in a pane or the scratch terminal may go to a session overlay (full size, 95%, 75% or 50%)
 //! instead of the browser, and [`wants_browser`] says when a Ctrl/Super+Shift click overrides that for one link.
 //!
 //! Host-free: the local host names are injected (the `*_for_hosts` variants), and the frontend only carries out the
-//! route. URLs are parsed here as RFC 3986 references, strictly (a space, a control character or a broken
-//! percent-escape makes a link unparseable, so it is ignored), in place of Foundation's `URL(string:)`.
+//! route. Absolute and `~/` bare paths retain spaces, `%`, `?` and `#` literally; relative bare paths and control
+//! characters are ignored. URLs are parsed here as RFC 3986 references, strictly (spaces, controls and broken
+//! percent-escapes are invalid), in place of Foundation's `URL(string:)`.
 
 use std::collections::HashSet;
 use std::hash::BuildHasher;
@@ -26,10 +28,12 @@ use crate::persist::settings::LinkOpenMode;
 
 /// The schemes safe to hand to the desktop's opener: web and mail only, none that hands off to a local executable or
 /// handler.
-pub const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
-pub const MARKDOWN_EXTENSIONS: [&str; 2] = ["md", "markdown"];
-
 pub const PERMITTED_SCHEMES: [&str; 4] = ["http", "https", "mailto", "ftp"];
+
+/// Raster extensions routed to a bounded image overlay after the path guards.
+pub const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
+/// Text extensions routed to a bounded Markdown overlay after the path guards.
+pub const MARKDOWN_EXTENSIONS: [&str; 2] = ["md", "markdown"];
 
 /// The automount roots where revealing a path can mount a network share: autofs's `/net` (the `-hosts` map) and
 /// `/misc` (`auto.misc`). Upstream's macOS list (`/Network`, `auto_home`'s `/home` and their `/System/Volumes/Data`
@@ -152,11 +156,10 @@ pub fn disposition(raw: &str) -> LinkDisposition {
     disposition_for_hosts(raw, local_host_names())
 }
 
-/// Maps a raw terminal link to what a click does: a permitted web or mail scheme opens; a local `file://` link (an
-/// empty host or one in `local_hosts`) reveals its host-stripped, dot-normalized path; anything else is ignored: a
-/// `file://` with another host, an empty or relative path, a UNC-style `//` path or an automount path (checked after
-/// the `..` normalization, so `/tmp/../net/x` cannot sneak through), any other scheme, no scheme, or a link that does
-/// not parse.
+/// Maps a raw terminal link to what a click does: permitted web/mail schemes open; absolute and `~/` bare paths
+/// are literal, while local `file://` paths are decoded and dot-normalized. Raster/Markdown paths become bounded
+/// document overlays and other local paths are revealed. Relative bare paths, non-local file hosts, network/device
+/// paths, automount roots (checked after `..` normalization), other schemes and malformed URLs are ignored.
 #[must_use]
 pub fn disposition_for_hosts<S: BuildHasher>(raw: &str, local_hosts: &HashSet<String, S>) -> LinkDisposition {
     let home = crate::paths::home_dir(&crate::paths::ProcessEnv).unwrap_or_default();
@@ -217,7 +220,7 @@ pub fn is_bare_path(raw: &str) -> bool {
 
 fn local_path(path: &str) -> LinkDisposition {
     if !(crate::html::is_absolute(path) || path.starts_with('/'))
-        || path.starts_with("//")
+        || network_or_device_path(path)
         || path.contains('\0')
         || path.chars().any(char::is_control)
     {
@@ -244,6 +247,20 @@ fn local_path(path: &str) -> LinkDisposition {
     } else {
         LinkDisposition::Reveal(path)
     }
+}
+
+// Refuse UNC/device namespaces before normalizing or touching the filesystem, including mixed separators.
+// Windows disk prefixes are local; verbatim disk paths have a double separator prefix but still name a drive.
+fn network_or_device_path(path: &str) -> bool {
+    #[cfg(windows)]
+    if let Some(std::path::Component::Prefix(prefix)) = std::path::Path::new(path).components().next() {
+        return !matches!(
+            prefix.kind(),
+            std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)
+        );
+    }
+    let mut chars = path.chars();
+    matches!(chars.next(), Some('/' | '\\')) && matches!(chars.next(), Some('/' | '\\'))
 }
 
 /// [`route_for_hosts`] with this machine's names.
@@ -648,6 +665,38 @@ mod tests {
             "file://localhost/%2Fserver/share",
         ] {
             assert_eq!(disposition_of(raw), LinkDisposition::Ignore, "{raw}");
+        }
+    }
+
+    #[test]
+    fn network_and_device_prefixes_are_refused_before_any_path_probe() {
+        for path in [
+            r"\\server\share\a.png",
+            r"\\?\UNC\server\share\a.md",
+            r"\\.\PhysicalDrive0",
+            r"\\?\GLOBALROOT\Device\a.png",
+            "//server/share/a.png",
+            r"/\server/share/a.md",
+            r"\/server/share/a.txt",
+        ] {
+            assert!(network_or_device_path(path), "{path}");
+            assert_eq!(local_path(path), LinkDisposition::Ignore, "{path}");
+            assert_eq!(disposition_of(path), LinkDisposition::Ignore, "{path}");
+        }
+        for raw in [
+            "file://localhost/%5c%5cserver/share/a.png",
+            "file://localhost/%2f%5cserver/share/a.md",
+        ] {
+            assert_eq!(disposition_of(raw), LinkDisposition::Ignore, "{raw}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_local_disk_and_verbatim_disk_paths_still_open_documents() {
+        for path in [r"C:\local\a.png", r"\\?\C:\local\a.png"] {
+            assert!(!network_or_device_path(path), "{path}");
+            assert_eq!(local_path(path), LinkDisposition::Image(PathBuf::from(path)), "{path}");
         }
     }
 

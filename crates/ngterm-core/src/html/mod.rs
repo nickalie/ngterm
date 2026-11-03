@@ -620,6 +620,7 @@ pub mod errors {
     /// The page has not been shown yet, so there is no web view to drive.
     pub const NOT_REALIZED: &str = "html overlay not realized";
     pub const NO_BROWSER: &str = "no default web browser to open the page in";
+    pub const MARKDOWN_IN_OVERLAY: &str = "a markdown page opens only in its overlay";
     pub const FINDER_REQUIRES_FILE: &str = "show in Finder requires a file page";
     pub const PERSISTENT_UNAVAILABLE: &str = "persistent browser storage is not available";
     /// The saved store is being emptied: neither a second clear nor a persistent page may use it (upstream's

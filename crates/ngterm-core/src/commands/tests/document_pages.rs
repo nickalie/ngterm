@@ -95,6 +95,10 @@ fn documents_reject_sources_flags_and_paths_before_resolving_a_target() {
             "session.overlay.open takes one of a command, --html, --url, --image or --markdown",
         ),
         (
+            json!({"image": image, "url": "https://example.com/"}),
+            "session.overlay.open takes one of a command, --html, --url, --image or --markdown",
+        ),
+        (
             json!({"image": image, "markdownFile": markdown}),
             "session.overlay.open takes one of a command, --html, --url, --image or --markdown",
         ),
@@ -129,10 +133,9 @@ fn documents_reject_sources_flags_and_paths_before_resolving_a_target() {
     ];
     for (value, error) in cases {
         let input: Args = serde_json::from_value(value).unwrap();
-        assert_eq!(
-            f.session(SessionCmd::OverlayOpen, Some("missing"), input),
-            failure(error)
-        );
+        for command in [SessionCmd::OverlayOpen, SessionCmd::CompanionPage] {
+            assert_eq!(f.session(command, Some("missing"), input.clone()), failure(error));
+        }
     }
     for (key, value) in [("image", image), ("markdownFile", markdown)] {
         let input: Args = serde_json::from_value(json!({key: value})).unwrap();
@@ -145,6 +148,7 @@ fn documents_reject_sources_flags_and_paths_before_resolving_a_target() {
 
 #[test]
 fn document_options_refuse_each_true_flag_but_allow_explicit_false() {
+    let mut f = Fixture::new(0);
     for (source, name) in [("image", "x.png"), ("markdownFile", "x.md")] {
         for flag in ["wait", "navigation", "javascript", "chromeless", "persistent", "browse"] {
             for value in [true, false] {
@@ -153,6 +157,19 @@ fn document_options_refuse_each_true_flag_but_allow_explicit_false() {
                 let input: Args = serde_json::from_value(object).unwrap();
                 let result = crate::commands::overlay::overlay_content("", &input, None);
                 assert_eq!(result.is_err(), value, "{source}/{flag}={value}");
+                let kind = if source == "image" { "image" } else { "markdown" };
+                let error = if value {
+                    format!(
+                        "session.overlay.open: --{kind} takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse"
+                    )
+                } else {
+                    "a page companion needs --html or --url".to_owned()
+                };
+                assert_eq!(
+                    f.session(SessionCmd::CompanionPage, Some("missing"), input),
+                    failure(&error),
+                    "{source}/{flag}={value}"
+                );
             }
         }
     }

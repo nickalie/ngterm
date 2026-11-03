@@ -437,7 +437,7 @@ fn route(poster: &Poster, event: &TerminalEvent) {
             });
         }
         TerminalEvent::Keystroke(_) => post(poster, AppState::quick_keystroke),
-        TerminalEvent::OpenUrl { url, browser } => {
+        TerminalEvent::OpenUrl { url, browser, .. } => {
             let (url, browser) = (url.clone(), *browser);
             post(poster, move |state: &mut AppState| {
                 state.follow_link(&url, ClickOrigin::Quick, browser);

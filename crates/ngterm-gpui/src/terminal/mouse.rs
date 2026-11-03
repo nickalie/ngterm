@@ -517,7 +517,11 @@ impl TerminalView {
         }
         let browser = self.wants_browser(pane, self.pointer.mods, cx);
         self.terminal.update(cx, |_, cx| {
-            cx.emit(TerminalEvent::OpenUrl { url: link.url, browser });
+            cx.emit(TerminalEvent::OpenUrl {
+                url: link.url,
+                browser,
+                kind: link.kind,
+            });
         });
         true
     }
@@ -776,6 +780,7 @@ impl TerminalView {
                 cx.emit(TerminalEvent::OpenUrl {
                     url: link.url,
                     browser: false,
+                    kind: link.kind,
                 });
             });
         }
