@@ -103,6 +103,16 @@ fn workspace_node(
             .iter()
             .map(|session| {
                 let mut node = session_node(session, selected == Some(session.id()));
+                if let Some(surfaces) = &mut node.surfaces {
+                    for surface in surfaces {
+                        let count = surface
+                            .pane_id
+                            .as_deref()
+                            .and_then(|id| Uuid::parse_str(id).ok())
+                            .map_or(0, |pane| store.messages.pending(pane));
+                        surface.pending_messages = (count > 0).then_some(count);
+                    }
+                }
                 // a page companion has no shell of its own: it reports where its parent stands
                 if session.content() == SessionContent::Page
                     && let Some(parent) = store.parent_of(session)

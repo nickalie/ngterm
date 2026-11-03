@@ -165,36 +165,36 @@ lifecycle, protocol shapes from Task 1; finish `crates/ngterm-ctl/src/messages.r
 new `tests/cli/test_messages.py::{test_send_read_ack_output,test_identity_environment,test_send_partial_failure,test_read_wait_timeout,test_read_ack_requires_confirmation}`;
 cover the message command/result/event/CLI keys listed in Task 1. No preexisting feature IDs.
 
-- [ ] Implement an app-global in-memory bus keyed by stable pane identity across windows. Messages carry id,
+- [x] Implement an app-global in-memory bus keyed by stable pane identity across windows. Messages carry id,
   optional from, canonical to, epoch-seconds ts and body; a send uses one ID across recipients. Recipients allow
   UUID/role aliases, but sender identity must be UUID. Exact errors include `invalid address "X": expected SESSION:PANE`,
   `address "X" names a session, not a pane`, `identity "X" must name a pane id, not a role`.
-- [ ] Validate in Swift order: body required; exclusive recipient modes; one mode required; workspace only for
+- [x] Validate in Swift order: body required; exclusive recipient modes; one mode required; workspace only for
   broadcast; UTF-8 body size; sender; recipients. Preserve `msg.send requires a body`,
   `msg.send takes --to or --all, not both`, `msg.send requires --to or --all`,
   `msg.send: --workspace narrows --all only`, `message body too large (N bytes, max 65536)`,
   `msg.read requires an identity: --as SESSION:PANE-ID`, corresponding ack identity error,
   `msg.ack requires message ids`, `invalid message id: X`.
-- [ ] Realized local primary/split/scratch panes qualify; remote rows and unrealized splits do not. Reject forged
+- [x] Realized local primary/split/scratch panes qualify; remote rows and unrealized splits do not. Reject forged
   session/pane pairs (`pane P is not a live pane of session S`), never degrade stale identity to anonymous, and
   deduplicate recipients by pane token. Broadcast spans all windows, skips sender and optionally narrows workspace.
   Explicit missing recipients get `unknown pane` per-recipient rejections.
-- [ ] Cap body at 65536 bytes, mailbox at 256 messages/1 MiB body bytes, read batch at 32. Overfull recipient
+- [x] Cap body at 65536 bytes, mailbox at 256 messages/1 MiB body bytes, read batch at 32. Overfull recipient
   reports `mailbox full` without stopping others. Reads repeat oldest-first; read+ack is atomic and removes exactly
   that batch; ack is reader-scoped/idempotent. Emit one body-free `message` event at each recipient's owning
   window/workspace. Tree pending counts are omitted at zero.
-- [ ] Dispose on pane/session/workspace/window close, soft close, respawn and restart. Preserve surviving pane's
+- [x] Dispose on pane/session/workspace/window close, soft close, respawn and restart. Preserve surviving pane's
   mail on promotion, realized hidden split mail and identity through swaps. Dispose restart mail after old program
   shutdown and immediately before replacement; do not let mail sent during shutdown reach the new program.
   No persistence or undo resurrection.
-- [ ] CLI supports TEXT xor `--stdin`, repeated `--to`, `--all`, workspace, `--as` overriding the complete
+- [x] CLI supports TEXT xor `--stdin`, repeated `--to`, `--all`, workspace, `--as` overriding the complete
   `NGTERM_SESSION_ID`/`NGTERM_PANE_ID` pair. Keep raw JSON and exact human records (`ID`,
   `rejected ADDRESS: REASON`, `ID from SENDER`, body, `N more pending`, `acked N`). Adapt app identity through
   vocabulary and document the wording; no upstream-name fallback.
-- [ ] `read --wait` polls real reads every 250 ms with a monotonic positive finite timeout, exits 124 with
+- [x] `read --wait` polls real reads every 250 ms with a monotonic positive finite timeout, exits 124 with
   `timed out`. With ack, print nothing unless the app confirms precisely the returned IDs; preserve
   `error: the app did not confirm which messages it removed; nothing was printed`.
-- [ ] Port all Swift cases, validate protocol/CLI/lifecycle through Rust tests and scoped checks, and ratchet only
+- [x] Port all Swift cases, validate protocol/CLI/lifecycle through Rust tests and scoped checks, and ratchet only
   IDs that actually ran green (new since-gated IDs may wait for Task 11).
 
 ### Task 3: Implement session info, expiry and remote presentation (#864)

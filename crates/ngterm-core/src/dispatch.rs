@@ -797,6 +797,14 @@ impl Core {
         }
     }
 
+    /// Projects the window a tree request names.
+    fn requested_tree(&self, request: &Request) -> Result<Response, ControlError> {
+        let window = request.args.as_ref().and_then(|args| args.window.as_deref());
+        result_of(&TreeResult {
+            tree: self.tree(window)?,
+        })
+    }
+
     /// One arm per group, routing to the group's handler; groups without one yet are refused by name.
     fn route(&mut self, request: &Request) -> Result<Response, ControlError> {
         match request.cmd {
@@ -826,6 +834,7 @@ impl Core {
                 | SessionCmd::OverlayPageServe),
             ) => result_of(&commands::overlay::dispatch(self, cmd, request)?),
             Command::Notify => result_of(&commands::notify::dispatch(self, request)?),
+            Command::Msg(cmd) => result_of(&commands::messages::dispatch(self, cmd, request)?),
             Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
             Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd, request)?),
             Command::Workspace(cmd) => match commands::workspace::dispatch(self, cmd, request)? {
@@ -856,12 +865,7 @@ impl Core {
             Command::Hooks(cmd) => result_of(&commands::hooks::dispatch(self, cmd, request)?),
             Command::Events(EventsCmd::Read) => self.read_events(request.args.as_ref()),
             Command::Version => result_of(&self.version()),
-            Command::Tree => {
-                let window = request.args.as_ref().and_then(|args| args.window.as_deref());
-                result_of(&TreeResult {
-                    tree: self.tree(window)?,
-                })
-            }
+            Command::Tree => self.requested_tree(request),
             Command::Restore(cmd) => match commands::restore::dispatch_group(self, cmd, request)? {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
@@ -876,7 +880,7 @@ impl Core {
                 None => Ok(Response::success()),
             },
             // `browser.clear` and `config.reload` start through `deferred`
-            cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_) | Command::Msg(_)) => {
+            cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_)) => {
                 Err(ControlError::NotSupported(cmd))
             }
         }
@@ -1058,7 +1062,7 @@ mod tests {
 
     #[test]
     fn registered_v040_commands_refuse_until_their_feature_handlers_land() {
-        for name in ["msg.send", "msg.read", "msg.ack", "session.info", "live.attach.group"] {
+        for name in ["session.info", "live.attach.group"] {
             let cmd = name.parse().unwrap();
             let response = core().dispatch(&Request::new(cmd));
             assert!(!response.ok);

@@ -20,6 +20,7 @@ mod hooks;
 mod hud;
 mod keymap;
 mod live;
+mod messages;
 mod metadata;
 mod moves;
 mod overlay;

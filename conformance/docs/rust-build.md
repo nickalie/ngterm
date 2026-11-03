@@ -203,6 +203,13 @@ suite, the same workflow runs `ngterm-session`'s PowerShell session tests (`test
 and working directory, the foreground read, a replay) on Linux, macOS and Windows, and `ngterm-core`'s replay round
 trip through a real `pwsh` where one is installed.
 
+## Pane messaging identity
+
+`msg send/read/ack` use `NGTERM_SESSION_ID` and `NGTERM_PANE_ID` as a complete pair; `--as` replaces both.
+They never fall back to upstream's `AGTERM_*` variables. A message with no sender prints `outside ngterm`
+(upstream: `outside agterm`). The incomplete-pair diagnostic names `NGTERM_SESSION_ID` and `NGTERM_PANE_ID`
+where upstream names `AGTERM_SESSION_ID` and `AGTERM_PANE_ID`. Both texts go through the reference vocabulary.
+
 ## The `live` group
 
 The Rust build answers upstream's control-protocol group `zmx.*` as `live.*`, a deliberate deviation from upstream: no

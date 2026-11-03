@@ -12,6 +12,7 @@ mod duplicate;
 mod flagged_order;
 mod focus;
 mod html_overlay;
+mod messages;
 pub mod naming;
 mod navigation;
 mod outbox;

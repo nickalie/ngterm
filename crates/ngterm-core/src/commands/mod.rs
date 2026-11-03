@@ -16,6 +16,7 @@ pub(crate) mod hooks;
 pub(crate) mod hud;
 pub(crate) mod keymap;
 pub(crate) mod live;
+pub(crate) mod messages;
 pub(crate) mod metadata;
 pub(crate) mod notify;
 pub(crate) mod overlay;

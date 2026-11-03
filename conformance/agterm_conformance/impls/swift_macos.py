@@ -128,6 +128,10 @@ ZMX_TEXTS: Mapping[str, str] = {
 }
 # ngterm's texts that name the app, in upstream's name.
 NAME_TEXTS: Mapping[str, str] = {
+    "outside ngterm": "outside agterm",
+    "incomplete pane identity: NGTERM_SESSION_ID and NGTERM_PANE_ID must both be set; pass --as SESSION:PANE-ID": (
+        "incomplete pane identity: AGTERM_SESSION_ID and AGTERM_PANE_ID must both be set; pass --as SESSION:PANE-ID"
+    ),
     "restart ngterm to apply the configured mode": "restart agterm to apply the configured mode",
 }
 

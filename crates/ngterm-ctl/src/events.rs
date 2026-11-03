@@ -871,6 +871,20 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn message_human_form_reports_identity_and_id_without_body() {
+        assert_human_forms([
+            (
+                json!({"kind":"message","payload":{"name":"api","paneID":"P","from":"S:Q","messageID":"M"}}),
+                "00:00:00 message api pane-id=P from=S:Q id=M",
+            ),
+            (
+                json!({"kind":"message","window":"win"}),
+                "00:00:00 message win pane-id=- from=- id=-",
+            ),
+        ]);
+    }
+
     /// Each event's human line at UTC is `expected`, and its JSON line one line that decodes back to it.
     fn assert_human_forms<const N: usize>(cases: [(serde_json::Value, &str); N]) {
         for (seq, (fields, expected)) in (1..).zip(cases) {

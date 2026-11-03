@@ -33,6 +33,7 @@ pub mod keystrokes;
 pub mod link_policy;
 pub mod live;
 pub mod menu_lists;
+mod messages;
 pub mod modal;
 pub mod model;
 pub mod osc_background;

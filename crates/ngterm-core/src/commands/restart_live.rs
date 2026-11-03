@@ -195,6 +195,8 @@ fn rebuild(core: &mut Core, job: Job, ending: &Ending) -> Dispatched {
             "the old shell ended (pid {old}) and the pane changed during the restart; nothing was started"
         ));
     };
+    // The old program has finished its shutdown: discard mail immediately before its replacement.
+    store.dispose_pane_mailbox(job.session, job.pane);
     store.clear_pane_owned_state(job.session, job.pane);
     let cwd = store
         .session(job.session)

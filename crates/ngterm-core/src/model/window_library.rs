@@ -68,6 +68,8 @@ pub struct LibraryEffects {
 /// The app-global owner of the window set.
 #[derive(Debug, Default)]
 pub struct WindowLibrary {
+    /// The app-global, in-memory pane mailboxes, shared with every open store.
+    pub(crate) messages: crate::messages::MessageBus,
     windows: Vec<WindowInfo>,
     stores: HashMap<Uuid, AppStore>,
     /// The id of the frontmost on-screen window. Outlives the window only when it was the last one closed, so the
@@ -126,6 +128,7 @@ impl WindowLibrary {
     #[must_use]
     pub fn blank_store(&self) -> AppStore {
         let mut store = AppStore::new();
+        store.messages = self.messages.clone();
         store.set_flagged_layout(self.flagged_layout);
         store
     }
@@ -375,6 +378,7 @@ impl WindowLibrary {
             return;
         }
         store.recent_closed = self.recent_closed.share();
+        store.messages = self.messages.clone();
         store.set_flagged_layout(self.flagged_layout);
         self.stores.insert(id, store);
         self.index_dirty = true;
