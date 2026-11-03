@@ -236,6 +236,10 @@ jobs:
   # - zsh and fish: upstream wraps a pane in zmx only for one of these login shells, so the build claims
   #   `live-sessions` too and the live tests run: `--must-pass live-sessions` (every test upstream holds to Live
   #   sessions) and `--must-pass live-any-shell`.
+# - coverage: the bash entry again on an instrumented build (run-linux.sh --coverage: cargo-llvm-cov and the toolchain's
+#   llvm-tools), every layer, judged by conformance/coverage-floor-linux.txt (tools/check_coverage.py: line % per
+#   workspace crate) and nothing else: instrumentation slows the app, so the ratchet stays the entries above. Its report
+#   (coverage/ with lcov.info and html/, traces/) is uploaded as rust-linux-coverage-conformance.
   conformance:
     needs: linux
     runs-on: ubuntu-26.04
@@ -253,6 +257,9 @@ jobs:
           - shell: fish
             out: rust-linux-fish
             must-pass: --must-pass live-sessions --must-pass live-any-shell
+          - shell: bash
+            out: rust-linux-coverage
+            coverage: true
     container:
       # archlinux:base-devel-20261011.0.609700
       image: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
@@ -323,7 +330,7 @@ jobs:
       # the user's privileges while a page runs (with the system's wpewebkit its worker runs plainly here); quit:
       # SIGTERM within its deadline with Live sessions busy and pages open
       - name: the process tests with the HTML overlays
-        if: matrix.shell == 'bash'
+        if: matrix.shell == 'bash' && !matrix.coverage
         env:
           NGTERM_REQUIRE_DISPLAY_TESTS: "1"
         # the app's live panes attach through the cargo-built ngterm-session beside it, which a gpui-only test run
@@ -337,6 +344,7 @@ jobs:
           /opt/suite/bin/pip install -e "conformance[linux-ui]"
       # Exits with the ratchet's status; check_ratchet.py lists the newly green ids in the job summary.
       - name: full suite under a ${{ matrix.shell }} login shell (protocol, cli, behaviors)
+        if: ${{ !matrix.coverage }}
         env:
           PYTHON: /opt/suite/bin/python
         run: >-
@@ -345,8 +353,35 @@ jobs:
       # On the stage the suite ran: the terminal surface draws its first frame, a page loads in WPE WebKit's sandbox,
       # and the title bar, the sidebar and the terminal draw one color, the theme's background, with the sidebar tint
       # washing the sidebar alone (screenshots of the maximized window, its weston started with --debug).
+      - name: llvm-tools (coverage)
+        if: matrix.coverage
+        run: rustup component add llvm-tools
+      - name: cargo-llvm-cov (coverage)
+        if: matrix.coverage
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      # The instrumented build under every layer. Only a run without a coverage report (exit 2) fails here: the ratchet
+      # verdict (exit 1) is the entries above's to judge, so it stays out of the job summary too.
+      - name: instrumented suite (coverage)
+        if: matrix.coverage
+        shell: bash
+        env:
+          PYTHON: /opt/suite/bin/python
+        run: |
+          status=0
+          env -u GITHUB_STEP_SUMMARY conformance/tools/run-linux.sh --coverage \
+            --out conformance/reports/${{ matrix.out }} || status=$?
+          if ((status == 2)); then exit 2; fi
+          echo "run-linux.sh exited $status (the ratchet is not judged here)"
+      - name: coverage floors
+        if: matrix.coverage
+        run: >-
+          /opt/suite/bin/python conformance/tools/check_coverage.py
+          --summary conformance/reports/${{ matrix.out }}/coverage/summary.md
+          --floor conformance/coverage-floor-linux.txt
       - name: probes (terminal frame, web process, window chrome)
-        if: matrix.shell == 'bash'
+        if: matrix.shell == 'bash' && !matrix.coverage
         shell: bash
         run: |
           status=0

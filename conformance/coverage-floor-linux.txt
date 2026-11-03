@@ -1,0 +1,18 @@
+# Code coverage floors on Linux (conformance/tools/check_coverage.py): line % per workspace crate of the
+# instrumented suite run (tools/run-linux.sh --coverage: linux.yml's conformance job, its coverage entry).
+# A crate more than 0.5 pt below its floor fails the job. Raised, never lowered: check_coverage.py --summary
+# DIR/coverage/summary.md --floor THIS --add on a green run's summary (a new crate is added, a gone one dropped).
+# Sorted by crate.
+ngterm-app 9.25
+ngterm-core 60.49
+ngterm-ctl 74.28
+ngterm-ghostty-vt 48.32
+ngterm-gpui 64.37
+ngterm-headless 0.00
+ngterm-host 36.61
+ngterm-proto 79.82
+ngterm-pty 61.57
+ngterm-server 74.06
+ngterm-session 37.93
+ngterm-term 56.13
+ngterm-wpe 57.00

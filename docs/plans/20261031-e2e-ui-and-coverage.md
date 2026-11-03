@@ -622,14 +622,15 @@ ratchets. Self-tests pass except the two known host-dependent `test_impls` noop-
 - Create: `conformance/coverage-floor-linux.txt`, `conformance/coverage-floor-windows.txt`
 - Modify: `.github/workflows/linux.yml`, `.github/workflows/cross-platform.yml`
 
-- [ ] write self-tests first: a drop within 0.5 pt passes, a larger one fails naming the crate and both numbers,
+- [x] write self-tests first: a drop within 0.5 pt passes, a larger one fails naming the crate and both numbers,
       `--add` raises and never lowers, a new crate is added, a removed one dropped, a malformed floor file exits 2
-- [ ] implement `check_coverage.py`
-- [ ] add a coverage job to `linux.yml` and to `cross-platform.yml` (Windows): `llvm-tools` and cargo-llvm-cov
+- [x] implement `check_coverage.py`
+- [x] add a coverage job to `linux.yml` and to `cross-platform.yml` (Windows): `llvm-tools` and cargo-llvm-cov
       installed, the instrumented stage, all layers, `check_coverage.py` (no ratchet judgment), upload `coverage/` and
       `traces/`, the summary in the job summary; on pushes to `main` and on PRs
-- [ ] seed both floor files from the first green run of each job
-- [ ] both jobs green on CI
+- [x] seed both floor files from the first green run of each job
+- [x] both jobs green on CI (`ci/cov-task11`: seeding runs linux 41586363286, cross-platform 41586363312; with the
+      seeded floors linux 41591055949 holds 13 crates, cross-platform 41591055924 holds 11)
 
 ### Task 12: Verify acceptance criteria
 

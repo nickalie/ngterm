@@ -210,3 +210,66 @@ jobs:
           path: target/conformance-stage/
           retention-days: 5
           if-no-files-found: warn
+
+  # The windows job's suite again on an instrumented build (run-windows.sh --coverage: cargo-llvm-cov and the
+  # toolchain's llvm-tools), every layer, judged by conformance/coverage-floor-windows.txt (tools/check_coverage.py:
+  # line % per workspace crate) and nothing else: instrumentation slows the app, so the ratchet stays the windows job's.
+  # Its report (coverage/ with lcov.info and html/, traces/) is uploaded as rust-windows-coverage-conformance.
+  coverage-windows:
+    runs-on: windows-2025
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: llvm-tools
+        run: rustup component add llvm-tools
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - name: libghostty-vt prefix
+        run: scripts/build-ghostty-vt.sh
+      - name: terminal fonts
+        run: scripts/fetch-fonts.sh
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: install the suite
+        run: |
+          python -m venv .venv
+          .venv/Scripts/python.exe -m pip install -e conformance
+      # Only a run without a coverage report (exit 2) fails here: the ratchet verdict (exit 1) is the windows job's to
+      # judge, so it stays out of the job summary too.
+      - name: instrumented suite (protocol, cli, behaviors, ui)
+        run: |
+          status=0
+          CONFORMANCE_KEEP_LOGS="$(cygpath -w "$PWD/conformance/reports/rust-windows-coverage/instances")" \
+            env -u GITHUB_STEP_SUMMARY conformance/tools/run-windows.sh --coverage \
+            --out conformance/reports/rust-windows-coverage || status=$?
+          if ((status == 2)); then exit 2; fi
+          echo "run-windows.sh exited $status (the ratchet is not judged here)"
+      - name: coverage floors
+        run: >-
+          .venv/Scripts/python.exe conformance/tools/check_coverage.py
+          --summary conformance/reports/rust-windows-coverage/coverage/summary.md
+          --floor conformance/coverage-floor-windows.txt
+      - name: report into the summary
+        if: always()
+        run: |
+          report=conformance/reports/rust-windows-coverage/report.md
+          if [[ -f "$report" ]]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-windows-coverage-conformance
+          # coverage/ (lcov.info, html/, summary.md) and the per-test traces/ beside the nodeid report
+          path: conformance/reports/rust-windows-coverage/
+          if-no-files-found: warn

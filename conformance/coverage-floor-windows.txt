@@ -1,0 +1,16 @@
+# Code coverage floors on Windows (conformance/tools/check_coverage.py): line % per workspace crate of the
+# instrumented suite run (tools/run-windows.sh --coverage, cross-platform.yml's coverage-windows job).
+# A crate more than 0.5 pt below its floor fails the job. Raised, never lowered: check_coverage.py --summary
+# DIR/coverage/summary.md --floor THIS --add on a green run's summary (a new crate is added, a gone one dropped).
+# Sorted by crate.
+ngterm-app 8.81
+ngterm-core 60.88
+ngterm-ctl 74.03
+ngterm-ghostty-vt 52.14
+ngterm-gpui 68.31
+ngterm-host 40.84
+ngterm-proto 77.77
+ngterm-pty 58.35
+ngterm-server 74.69
+ngterm-session 41.93
+ngterm-term 58.57
