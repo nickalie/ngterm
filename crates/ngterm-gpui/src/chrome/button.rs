@@ -224,6 +224,18 @@ impl Button {
         self
     }
 
+    /// The accessibility node the button itself publishes, its role, name and states (a menu's trigger adds its popup
+    /// and press when drawn): for the tests of the controls built on it.
+    #[cfg(test)]
+    pub(crate) fn a11y_node(self) -> gpui_kit::accesskit::Node {
+        use gpui_kit::Element as _;
+        let element = self.element(true);
+        let role = element.a11y_role().expect("a button is an accessibility node");
+        let mut node = gpui_kit::accesskit::Node::new(role);
+        element.write_a11y_info(&mut node);
+        node
+    }
+
     /// The button itself: its element, without a menu. `owns_press` keeps a press from the elements behind; a menu's
     /// trigger leaves it to the popover around it, which opens on it.
     fn element(self, owns_press: bool) -> Stateful<Div> {
