@@ -20,11 +20,13 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nickalie.ngterm.android.AppGraph
+import com.nickalie.ngterm.android.data.SessionKey
 
 /**
  * A machine's sessions, over its [SessionsViewModel]: the list, the New session dialog and the snackbar for what failed
  * out of sight (an End, an attach). It lists the machine afresh when it opens (not again on a rotation), and goes
- * [onBack] when the machine is removed meanwhile. [onReviewHostKey] opens the changed-key stop.
+ * [onBack] when the machine is removed meanwhile. [onReviewHostKey] opens the changed-key stop; tapping a session
+ * attaches it and opens its view ([onOpenSession]).
  */
 @Composable
 fun SessionsRoute(
@@ -32,6 +34,7 @@ fun SessionsRoute(
     machineId: String,
     onBack: () -> Unit,
     onReviewHostKey: () -> Unit,
+    onOpenSession: (SessionKey) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: SessionsViewModel = viewModel(key = "sessions:$machineId") { SessionsViewModel(graph, machineId) },
 ) {
@@ -47,6 +50,7 @@ fun SessionsRoute(
     }
     val back by rememberUpdatedState(onBack)
     val review by rememberUpdatedState(onReviewHostKey)
+    val openSession by rememberUpdatedState(onOpenSession)
     LaunchedEffect(state is SessionsUiState.Gone) {
         if (state is SessionsUiState.Gone) back()
     }
@@ -60,7 +64,7 @@ fun SessionsRoute(
                 onConnect = viewModel::connect,
                 onReviewHostKey = { review() },
                 onOpenReadme = { uris.openUri(SERVER_SETUP_URL) },
-                onOpen = viewModel::attach,
+                onOpen = { id -> viewModel.attach(id) { openSession(SessionKey(machineId, id)) } },
                 onDetach = viewModel::detach,
                 onEnd = viewModel::end,
             )

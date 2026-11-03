@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -36,8 +37,8 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 /**
  * A veil over a pane that can't be used as it is: another device is driving it (with Take control as [action]), its
  * link is down and it is reattaching, or its program ended. The pane's last frame stays dimly visible under it, so
- * the user keeps their place. Lay it over the pane in a `Box`, and give the pane [Modifier.underCover] so TalkBack
- * doesn't reach it either.
+ * the user keeps their place. [icon] heads it; `null` shows a spinner instead, for a cover that waits. Lay it over
+ * the pane in a `Box`, and give the pane [Modifier.underCover] so TalkBack doesn't reach it either.
  *
  * The veil takes every touch that lands on it (a tap, a scroll, a long press), so none reaches the pane; only its
  * [action] answers.
@@ -47,7 +48,7 @@ fun Cover(
     title: String,
     body: String,
     modifier: Modifier = Modifier,
-    @DrawableRes icon: Int = R.drawable.ic_lock,
+    @DrawableRes icon: Int? = R.drawable.ic_lock,
     action: SectionAction? = null,
 ) {
     val spacing = NgtermTheme.spacing
@@ -73,12 +74,16 @@ fun Cover(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(spacing.sm, Alignment.CenterVertically),
         ) {
-            Icon(
-                painterResource(icon),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(28.dp),
-            )
+            if (icon != null) {
+                Icon(
+                    painterResource(icon),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(28.dp),
+                )
+            } else {
+                CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
+            }
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,

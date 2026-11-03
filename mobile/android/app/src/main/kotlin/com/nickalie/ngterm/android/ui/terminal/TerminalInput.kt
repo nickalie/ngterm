@@ -50,6 +50,9 @@ class TerminalInput internal constructor(
     /** Gives the view the focus, and opens the soft keyboard when asked to (a tap; a mouse click doesn't). */
     internal var keyboardRequest: (show: Boolean) -> Unit = {}
 
+    /** Where a finger's sideways swipe goes (the session view's next or previous pane); `null`: a drag only scrolls. */
+    internal var swipe: ((forward: Boolean) -> Unit)? = null
+
     private var rowCarry = 0f
     private var wheelRows = 0f
     private var wheelColumns = 0f

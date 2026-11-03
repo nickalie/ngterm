@@ -9,11 +9,13 @@ import com.nickalie.ngterm.android.data.ClipboardReads
 import com.nickalie.ngterm.android.data.ClipboardTrust
 import com.nickalie.ngterm.android.data.Connections
 import com.nickalie.ngterm.android.data.KeyMaker
+import com.nickalie.ngterm.android.data.LiveSessions
 import com.nickalie.ngterm.android.data.MachineStore
 import com.nickalie.ngterm.android.data.StoredMachine
 import com.nickalie.ngterm.android.platform.KeyWrapper
 import com.nickalie.ngterm.android.platform.KeystoreKeyVault
 import com.nickalie.ngterm.android.platform.PinnedHostKeys
+import com.nickalie.ngterm.android.ui.session.SessionPanes
 import com.nickalie.ngterm.core.fake.FakeMobileCore
 import com.nickalie.ngterm.core.ffi.KeyException
 import com.nickalie.ngterm.core.ffi.KeyPair
@@ -28,6 +30,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlin.coroutines.EmptyCoroutineContext
 
 /** The public key line the fake key maker hands out: a made-up key, never a real one. */
 const val FAKE_PUBLIC_KEY =
@@ -123,6 +126,13 @@ class TestGraph(
     @Volatile var clipboard: String? = null
     val trust = ClipboardTrust(testStore(dir, "clipboard"))
     val clipboardReads = ClipboardReads(scope, connections, trust) { clipboard }
+
+    /** What programs wrote to the device's clipboard, oldest first (`null`: cleared). */
+    val clipboardWrites: MutableList<String?> = java.util.Collections.synchronizedList(mutableListOf())
+    val live = LiveSessions(scope, connections) { clipboardWrites += it }
+
+    // the panes' frames are read on the main thread, where the UI tests' clock drives them
+    val panes = SessionPanes(scope, connections, live, EmptyCoroutineContext)
     val graph =
         AppGraph(
             machines = MachineStore(testStore(dir, "machines")),
@@ -130,6 +140,7 @@ class TestGraph(
             pins = pins,
             connections = connections,
             clipboardReads = clipboardReads,
+            panes = panes,
             online = online,
         )
 

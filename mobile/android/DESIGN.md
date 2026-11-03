@@ -168,7 +168,7 @@ Line icons drawn for the app in `res/drawable/ic_*.xml`: 24dp, 2dp strokes, roun
 | `ConfirmDialog` | the confirmation before what can't be undone; the button repeats the action's words, in the error color |
 | `KeyPlate`, `CopyButton` | text compared or pasted character by character (a key line, a fingerprint, a command): mono, selectable, wrapping anywhere, on a `surfaceContainerLow` plate with an optional label above and Copy or Share under it; Copy says "Copied" for 2 s |
 | `ScreenFrame` | a screen of reading and filling in: an optional top row (Back or Close, the title as a heading, one action such as Save), then a scrolling column no wider than 640dp (520dp in the first run), centered, with the phone's or the tablet's gutter, padded for the bars, the cutout and the keyboard |
-| `Cover` | a veil over a pane that can't be used as it is (another device drives it, it is reattaching), with its action; it takes every touch, and the pane under it is hidden from TalkBack (`Modifier.underCover`) |
+| `Cover` | a veil over a pane that can't be used as it is (another device drives it, it is reattaching), with its action; it takes every touch, and the pane under it is hidden from TalkBack (`Modifier.underCover`); `icon = null` shows a spinner instead of a glyph |
 
 Rules the components hold to:
 
@@ -213,9 +213,10 @@ compact (< 600dp)        medium (600-839dp)              expanded (>= 840dp)
   back-to-home shows that). The manifest opts in (`enableOnBackInvokedCallback`), so Android 14 and 15 get it too, not
   only Android 16, where target SDK 36 makes it the default.
 
-Destinations today: Machines, Sessions (what is attached, across machines) and Settings. A machine's own session list
-lives under Machines (tap a machine); Sessions is the cross-machine view of what is attached, and fills in with the
-session view.
+Destinations today: Machines, Sessions (what is attached, across machines, and the session view) and Settings. A
+machine's own session list lives under Machines (tap a machine); tapping a session there attaches it and opens it under
+Sessions. The rail (medium) and the sidebar (expanded) carry the attached sessions under the destinations on every
+destination, so a session is one tap away wherever you are (The session view, below).
 
 ## Screens
 
@@ -332,8 +333,9 @@ terminal's ground, which is the chrome's ground in Copper and Drafting, so the t
   Ghostty's inverse: an inverted block of copper text on a phone reads as an error).
 - **Before the first frame** and while the pane has no terminal (hidden, between attaches) the view keeps what it
   last drew, on the ground; the covers for those states are the session view's (`Cover`).
-- **TalkBack:** the view is announced as "Terminal". Reading its text out is the session view's (Task 18), which
-  knows which pane is on screen.
+- **TalkBack:** the view is announced as "Terminal". The session view asks the pane on screen to be read
+  (`readAloud`): its text is then the screen's rows, refreshed at most once a second while it changes, never a live
+  region (a busy program would talk over everything).
 
 ### Touch, mouse and selection (`ui/terminal/TerminalGestures.kt`, `TerminalMouse.kt`, `SelectionHandles.kt`)
 
@@ -436,6 +438,88 @@ sideways or wider (48dp a key or more): one line of sixteen
 - **Order:** a key from the row or a hardware key while the soft keyboard is composing commits the composition first,
   so the program gets the text before the key. A mouse click gives the terminal the focus without opening the soft
   keyboard; a tap opens it.
+
+### The session view (`ui/session/`)
+
+An attached session's panes, live. Everything here exists to get out of the terminal's way: one bar of chrome above
+it, the extra keys under it, and covers only when a pane can't be used as it is.
+
+The plan, reviewed against the brief:
+
+| First pass | Why it was generic | Revised to |
+|---|---|---|
+| A toolbar with the name, a status chip, and icon buttons for split, keyboard, detach and end | the "app bar of actions" every client draws, eating a terminal row per icon | one bar: the name over a line of status and context, the pane switcher, and one More menu (Detach, End session) |
+| Pager dots for the panes | dots say how many, not which, and are too small to tap | numbered pane tabs (the panes are a sequence: the origin's order), the bus bar under the one on screen |
+| A tinted frame or an accent border around the focused pane of a split | a second loud mark, and a frame costs the terminal its edge cells | the bus bar again, in a 4dp gutter at the focused pane's leading edge; the other pane's cursor goes hollow |
+| The HUD as a floating toast in the origin's colors | an overlay over the text, colored by someone else | a `Banner`-shaped strip under the bar, on `surfaceContainerHigh`, the origin's words and its spinner |
+| One full veil for every reason a pane can't be used | hides the screen the user is trying to keep their place in | the full `Cover` where the pane can't be trusted (another device drives it, it is attaching, its program ended); a light scrim and a strip while it reconnects, so the last screen stays readable |
+
+```
+compact                            medium (rail open)               expanded
++------------------------------+   +-------+--------------------+   +-----------+---------------------------+
+| <- docs-site          1 2  : |   | <=    | docs-site    1 2 : |   | >_ ngterm | docs-site            1 2 : |
+|    <> Waiting  Rewrite the.. |   | ...   | <> Waiting         |   | Machines  | <> Waiting  Rewrite the.. |
+|  Building the docs (HUD)     |   | ----- |--------------------|   | Sessions  |---------------------------|
+|                              |   |▌docs-.|                    |   | --------- |▌             |            |
+|        pane 1 (swipe)        |   |  api-.|  pane 1  | pane 2  |   | build-01  |  pane 1      |  pane 2    |
+|                              |   |       |          |         |   |▌docs-site |              |            |
+|------------------------------|   |       |--------------------|   |  api-refa.|              |            |
+| Esc / | ~ Home ↑ End PgUp    |   |       | extra keys         |   | nas       |---------------------------|
+| Tab Ctrl Alt - ← ↓ → PgDn    |   +-------+--------------------+   +-----------+ extra keys               +
++------------------------------+
+```
+
+- **Where it lives:** under Sessions. With nothing open, Sessions lists what is attached, grouped by machine (a
+  `SectionHeader` per machine, a `SessionRow` per session with its status and a menu: Detach, End session), or the
+  empty state pointing to Machines. Tapping a session opens its view. On a phone the view is a screen of its own over
+  the list (Back returns to it) and the bottom bar steps aside, so the terminal has the whole height; from the medium
+  width up it is the content beside the rail or the sidebar, which list the attached sessions (below).
+- **The bar** (`surfaceContainer`, under the status bar): Back on a phone; the session's name (titleMedium) over its
+  agent status (`AgentStatusBadge`, or the stream's own state while it isn't live: Connecting, Offline) and its
+  context in one line; the pane switcher; More. The bar is the one place the session's state shows; nothing in the
+  terminal repeats it.
+- **The pane switcher** (`PaneSwitcher`): only with two panes. A tab per pane, numbered in the origin's order, 48dp
+  square, the pane's title as its TalkBack label ("Pane 1 of 2, vim"). The pane on screen (a phone) or with the
+  focus (a split) has the copper number and the bus bar under it. On a phone a swipe across the terminal pages
+  between the panes too (a drag in the terminal scrolls it; the pager takes a clear horizontal fling).
+- **The split** (`SplitLayout`, medium and expanded): the origin's layout as it is, two panes side by side
+  (`vertical`) or stacked (`horizontal`), halves split by a 1dp `outlineVariant` rule, since the terminal's ground is
+  the chrome's. Each pane of a split keeps a 4dp gutter at its leading edge where the focused one shows the bus bar
+  (32dp, from its top); a tap on a pane focuses it, and the other's cursor goes hollow. A hidden split (the origin
+  zoomed a pane) shows the focused pane alone, and the switcher still moves between the two. On a phone every layout
+  is one pane at a time. A pane alone keeps 4dp at both sides, so its text stays off the screen's edge.
+- **The HUD** (`HudBanner`): a strip under the bar while the origin shows one, `surfaceContainerHigh`, 6dp radius,
+  the message in bodyMedium semibold and its detail under it, a small spinner when the origin runs one; announced
+  politely. The origin's colors and position are desktop's: on a phone the strip is where it can't cover text.
+- **Covers** (`LeadCover`), over a pane, each with the action that fixes it:
+  - *Another device drives it* (the pane follows): the lock, "Another device is driving this pane", "Its size and
+    keys are the other device's. Take control to type here; the other device follows.", **Take control**. On a
+    machine running `ngterm-headless` this is the first thing a pane shows: its own terminal attached first.
+  - *Attaching* (no screen yet): a spinner, "Attaching", "Reading this pane from build-01."
+  - *Reconnecting* (the link dropped): not a veil. A 40% scrim that takes the touches and a strip at the pane's top
+    with a spinner, "Reconnecting to build-01" and "The last screen stays until it is back." The screen stays
+    readable; nothing is typed into it.
+  - *Program exited*: "The program exited", with its code or signal ("Exit code 1", "Stopped by SIGKILL"), "The last
+    screen stays as it was.", **Detach**.
+  - *Can't show it* (the core refused the pane): "Can't show this pane", the core's words, **Retry**.
+- **Session states** in place of the panes (`MessagePanel`): opening (a spinner, "Opening docs-site"); a machine whose
+  ngterm can't stream ("build-01's ngterm can't share live sessions", update it there, **Detach**); and gone ("docs-site
+  is gone", "It ended on build-01, so there is nothing left to show.", **Close**), which also covers a session that
+  left the machine's list while it was open.
+- **More:** Detach (at once: it goes on running there, and the view closes) and End session (in the error color,
+  confirmed as on a machine's list).
+- **The keyboard:** one `TerminalKeyboard` for the view, shared by every pane and the extra-keys row, so a held Ctrl
+  stays as the focus moves; the row sits under the panes over the soft keyboard. Ctrl+Shift+Left and Right go to the
+  previous and next pane, Ctrl+Shift+Up and Down to the previous and next attached session.
+- **The attached sessions in the rail and the sidebar:** the sidebar groups them by machine (the machine's name as a
+  `SectionHeader`, then a `SessionRow` each with its status, the bus bar on the one open). The rail, collapsed, gives
+  each a 64dp cell, its status glyph over its name cut to fit; opened, the sidebar's rows. Either opens the session
+  under Sessions.
+- **State:** the open session, the focused pane of each session and the shown panes live in the app's process, not
+  the screen, so rotation, folding, a size-class change or a trip to another destination keeps them, and a pane keeps
+  its lead.
+- **Clipboard:** a program's OSC 52 write sets the device's clipboard (Android shows its own notice); a write to the
+  selection or primary clipboard, which Android lacks, is dropped.
 
 ## Copy
 

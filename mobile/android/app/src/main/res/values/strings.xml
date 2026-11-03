@@ -218,4 +218,26 @@
   <string name="sticky_off">Off</string>
   <string name="sticky_once">On for the next key</string>
   <string name="sticky_locked">Locked on</string>
+  <string name="session_reconnecting">Reconnecting</string>
+  <string name="session_cant_stream">Can\'t stream</string>
+  <string name="session_opening">Opening %1$s</string>
+  <string name="session_unsupported_title">%1$s\'s ngterm can\'t share live sessions</string>
+  <string name="session_unsupported_body">Update ngterm on %1$s to watch and type into its sessions from here.</string>
+  <string name="session_gone_title">%1$s is gone</string>
+  <string name="session_gone_body">It ended on %1$s, so there is nothing left to show.</string>
+  <string name="session_close">Close</string>
+  <string name="session_pane">Pane %1$d of %2$d</string>
+  <string name="session_pane_titled">Pane %1$d of %2$d, %3$s</string>
+  <string name="session_follower_title">Another device is driving this pane</string>
+  <string name="session_follower_body">Its size and keys are the other device\'s. Take control to type here; the other device follows.</string>
+  <string name="session_take_control">Take control</string>
+  <string name="session_attaching_title">Attaching</string>
+  <string name="session_attaching_body">Reading this pane from %1$s.</string>
+  <string name="session_reconnecting_title">Reconnecting to %1$s</string>
+  <string name="session_reconnecting_body">The last screen stays until it is back.</string>
+  <string name="session_exited_title">The program exited</string>
+  <string name="session_exited_code">Exit code %1$d. The last screen stays as it was.</string>
+  <string name="session_exited_signal">Stopped by %1$s. The last screen stays as it was.</string>
+  <string name="session_exited_unknown">The last screen stays as it was.</string>
+  <string name="session_pane_failed_title">Can\'t show this pane</string>
 </resources>

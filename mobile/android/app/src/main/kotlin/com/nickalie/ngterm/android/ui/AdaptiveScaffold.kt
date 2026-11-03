@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowSizeClass
 import com.nickalie.ngterm.android.ui.navigation.NavBar
 import com.nickalie.ngterm.android.ui.navigation.NavRail
@@ -89,7 +90,8 @@ internal val navigationInsets: WindowInsets
  * moves it rather than recreating it, and a new [content] lambda recomposes it in place, so nothing in it loses its
  * state. [sidebarContent]
  * fills the sidebar under the destinations, where the expanded layout has room for a list (machines and their
- * sessions); the other layouts don't show it.
+ * sessions), and [railContent] the rail under its destinations (told whether the rail is open); the bottom bar shows
+ * neither, and steps aside while [navigationVisible] is false (a phone's full-screen terminal).
  *
  * Back: the rail's labels close first (predictively, following the gesture), then a destination other than the first
  * goes back to the first, and only from the first does back leave the app.
@@ -101,6 +103,8 @@ fun AdaptiveScaffold(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
     layout: NavLayout = currentNavLayout(),
+    navigationVisible: Boolean = true,
+    railContent: (@Composable ColumnScope.(expanded: Boolean) -> Unit)? = null,
     sidebarContent: @Composable ColumnScope.() -> Unit = {},
     content: @Composable () -> Unit,
 ) {
@@ -113,7 +117,7 @@ fun AdaptiveScaffold(
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when (layout) {
             NavLayout.Bar -> {
-                BarFrame(destinations, selected, onSelect, movable)
+                BarFrame(destinations, selected, onSelect, navigationVisible, movable)
             }
 
             NavLayout.Rail -> {
@@ -124,6 +128,7 @@ fun AdaptiveScaffold(
                         onSelect = onSelect,
                         expanded = railExpanded,
                         onExpandedChange = { railExpanded = it },
+                        content = railContent,
                     )
                     ContentBeside(movable)
                 }
@@ -144,12 +149,13 @@ private fun BarFrame(
     destinations: List<NavDestination>,
     selected: String,
     onSelect: (String) -> Unit,
+    visible: Boolean,
     content: @Composable () -> Unit,
 ) {
     // the bar's whole height (its own and the navigation bar's) is below the content, so the content consumes it:
     // the keyboard's inset then counts from the content's bottom edge, not the screen's
     var barHeight by remember { mutableIntStateOf(0) }
-    val barHeightDp = with(LocalDensity.current) { barHeight.toDp() }
+    val barHeightDp = if (visible) with(LocalDensity.current) { barHeight.toDp() } else 0.dp
     Column {
         Box(
             modifier =
@@ -157,7 +163,7 @@ private fun BarFrame(
                     .weight(1f)
                     .consumeWindowInsets(PaddingValues(bottom = barHeightDp)),
         ) { content() }
-        NavBar(destinations, selected, onSelect, Modifier.onSizeChanged { barHeight = it.height })
+        if (visible) NavBar(destinations, selected, onSelect, Modifier.onSizeChanged { barHeight = it.height })
     }
 }
 

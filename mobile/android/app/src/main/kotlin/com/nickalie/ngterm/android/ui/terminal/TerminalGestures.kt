@@ -26,7 +26,8 @@ private val HandleReach = 24.dp
  * The terminal's pointer input, through [input] and [selection]:
  * - a finger: a drag scrolls (the pane reports it to a program that asked for the mouse, as wheel turns) and flings
  *   on; a long press selects the word with handles and a toolbar, and a drag from it extends the selection; a drag
- *   on a handle ([handles]) moves that end; two fingers pinch the text size; a tap clicks under mouse tracking and
+ *   on a handle ([handles]) moves that end; a sideways swipe goes to [TerminalInput.swipe] when the view has one;
+ *   two fingers pinch the text size; a tap clicks under mouse tracking and
  *   otherwise lets a touch selection go, and unless it let one go it opens the soft keyboard; a touch the system
  *   cancels (a consumed release) does none of these, and a canceled drag does not fling;
  * - a mouse or trackpad: a button gives the terminal the focus, then as [terminalMouse] says.
@@ -59,7 +60,7 @@ internal fun Modifier.terminalGestures(
     }.terminalMouse(input)
 
 /** What a finger turned out to be doing before the long-press timeout: [Cancel] is a touch the system took back. */
-private enum class Touch { Tap, Drag, Pinch, Cancel }
+private enum class Touch { Tap, Drag, Swipe, Pinch, Cancel }
 
 private suspend fun AwaitPointerEventScope.touchGesture(
     input: TerminalInput,
@@ -71,7 +72,8 @@ private suspend fun AwaitPointerEventScope.touchGesture(
     // every move counts toward a fling's speed, those before the drag was told apart too
     val velocity = VelocityTracker()
     velocity.addPointerInputChange(down)
-    when (withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) { classify(down, velocity) }) {
+    val swipes = input.swipe != null
+    when (withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) { classify(down, velocity, swipes) }) {
         null -> {
             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
             val anchor = input.cell(down.position)
@@ -97,6 +99,10 @@ private suspend fun AwaitPointerEventScope.touchGesture(
             scrollDrag(input, down, velocity, textSize)
         }
 
+        Touch.Swipe -> {
+            swipe(input, down, velocity)
+        }
+
         Touch.Pinch -> {
             pinch(input, textSize)
         }
@@ -105,12 +111,50 @@ private suspend fun AwaitPointerEventScope.touchGesture(
     }
 }
 
+/**
+ * A sideways swipe, followed to its end: far enough ([SwipeDistance]) or flung fast enough, it goes to the next pane
+ * (leftward) or the previous one; a swipe the system cancels goes nowhere.
+ */
+private suspend fun AwaitPointerEventScope.swipe(
+    input: TerminalInput,
+    down: PointerInputChange,
+    velocity: VelocityTracker,
+) {
+    var last = down.position
+    while (true) {
+        val event = awaitPointerEvent()
+        val change = event.changes.firstOrNull { it.id == down.id } ?: return
+        if (change.canceled || event.changes.count { it.pressed } > 1) return
+        velocity.addPointerInputChange(change)
+        last = change.position
+        change.consume()
+        if (!change.pressed) break
+    }
+    val distance = last.x - down.position.x
+    val speed = velocity.calculateVelocity().x
+    val flung = abs(speed) > viewConfiguration.minimumFlingVelocity * SWIPE_FLING_FACTOR
+    if (abs(distance) > SwipeDistance.toPx() || flung) input.swipe?.invoke((if (flung) speed else distance) < 0)
+}
+
+/** How far a sideways swipe goes to count without a fling. */
+private val SwipeDistance = 64.dp
+
+/** How much faster than a scroll's fling a swipe's must be to count on its own. */
+private const val SWIPE_FLING_FACTOR = 4
+
+// a drag past the slop: sideways (twice as far across as down) is a swipe where the view has one
+private fun drag(
+    moved: Offset,
+    swipes: Boolean,
+): Touch = if (swipes && abs(moved.x) > abs(moved.y) * 2) Touch.Swipe else Touch.Drag
+
 // a touch the system took back comes as a release already consumed (as `waitForUpOrCancellation` reads it)
 private val PointerInputChange.canceled get() = !pressed && isConsumed
 
 private suspend fun AwaitPointerEventScope.classify(
     down: PointerInputChange,
     velocity: VelocityTracker,
+    swipes: Boolean,
 ): Touch {
     val slop = viewConfiguration.touchSlop
     var touch: Touch? = null
@@ -123,7 +167,7 @@ private suspend fun AwaitPointerEventScope.classify(
                 event.changes.count { it.pressed } > 1 -> Touch.Pinch
                 change == null || change.canceled -> Touch.Cancel
                 !change.pressed -> Touch.Tap
-                (change.position - down.position).getDistance() > slop -> Touch.Drag
+                (change.position - down.position).getDistance() > slop -> drag(change.position - down.position, swipes)
                 else -> null
             }
         if (touch == Touch.Tap) change?.consume()

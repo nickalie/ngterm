@@ -1,0 +1,199 @@
+package com.nickalie.ngterm.android.ui.session
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.ui.components.AgentStatusBadge
+import com.nickalie.ngterm.android.ui.components.ConfirmDialog
+import com.nickalie.ngterm.android.ui.components.StatusBadge
+import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import com.nickalie.ngterm.android.ui.theme.StatusTone
+import com.nickalie.ngterm.core.ffi.StreamState
+
+/**
+ * The session view's one bar, under the status bar: Back ([onBack], a phone's), the session's name over its state
+ * (the agent's status while the stream is live, the stream's own state while it isn't) and its context, the pane
+ * switcher ([onSelectPane]; [focused] marked), and More: Detach ([onDetach], at once) and End session ([onEnd], once
+ * confirmed).
+ */
+@Composable
+fun SessionBar(
+    session: AttachedSession,
+    focused: String?,
+    onBack: (() -> Unit)?,
+    onSelectPane: (String) -> Unit,
+    onDetach: () -> Unit,
+    onEnd: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val spacing = NgtermTheme.spacing
+    var confirming by rememberSaveable { mutableStateOf(false) }
+    Row(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                .heightIn(min = BarHeight)
+                .padding(start = if (onBack == null) spacing.lg else spacing.xs, end = spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (onBack != null) {
+            IconButton(onClick = onBack) {
+                Icon(painterResource(R.drawable.ic_back), contentDescription = stringResource(R.string.action_back))
+            }
+        }
+        Column(
+            modifier = Modifier.weight(1f).padding(vertical = spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(spacing.xxs),
+        ) {
+            Text(
+                text = session.name,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.semantics { heading() },
+            )
+            StateLine(session)
+        }
+        val live = session.live
+        PaneSwitcher(
+            panes = live.layout?.panes.orEmpty(),
+            selected = focused,
+            titles = live.panes.mapValues { it.value.title },
+            onSelect = onSelectPane,
+        )
+        SessionMenu(session.name, onDetach = onDetach, onEnd = { confirming = true })
+    }
+    if (confirming) {
+        ConfirmDialog(
+            title = stringResource(R.string.machine_sessions_end_title, session.name),
+            body = stringResource(R.string.machine_sessions_end_body, session.machine),
+            confirmLabel = stringResource(R.string.machine_sessions_end),
+            onConfirm = {
+                confirming = false
+                onEnd()
+            },
+            onDismiss = { confirming = false },
+        )
+    }
+}
+
+// the session's state, then its context, on one line
+@Composable
+private fun StateLine(
+    session: AttachedSession,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(NgtermTheme.spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        StateBadge(session)
+        session.context?.let { context ->
+            Text(
+                text = context,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun StateBadge(
+    session: AttachedSession,
+    modifier: Modifier = Modifier,
+) {
+    val reconnecting = session.link is Link.Reconnecting
+    when (session.live.connection) {
+        StreamState.Connected -> {
+            session.status?.let { AgentStatusBadge(it.text, it.color, it.shape, modifier) }
+        }
+
+        StreamState.Connecting -> {
+            val label = if (reconnecting) R.string.session_reconnecting else R.string.status_connecting
+            StatusBadge(StatusTone.Connecting, modifier, stringResource(label))
+        }
+
+        is StreamState.Failed -> {
+            StatusBadge(StatusTone.Connecting, modifier, stringResource(R.string.session_reconnecting))
+        }
+
+        StreamState.Unsupported -> {
+            StatusBadge(StatusTone.Error, modifier, stringResource(R.string.session_cant_stream))
+        }
+    }
+}
+
+@Composable
+private fun SessionMenu(
+    name: String,
+    onDetach: () -> Unit,
+    onEnd: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        IconButton(onClick = { open = true }) {
+            Icon(
+                painterResource(R.drawable.ic_more),
+                contentDescription = stringResource(R.string.action_more, name),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.machine_sessions_detach)) },
+                onClick = {
+                    open = false
+                    onDetach()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.machine_sessions_end), color = MaterialTheme.colorScheme.error) },
+                onClick = {
+                    open = false
+                    onEnd()
+                },
+            )
+        }
+    }
+}
+
+private val BarHeight = 64.dp

@@ -74,7 +74,8 @@ internal fun NavBar(
 }
 
 /**
- * The medium layout's rail, which opens to show its labels beside the icons ([expanded]). Back closes it, and the
+ * The medium layout's rail, which opens to show its labels beside the icons ([expanded]), with [content] (the attached
+ * sessions), when given, under a rule. Back closes it, and the
  * predictive back gesture narrows it as the finger moves, so letting go finishes what the user already sees.
  */
 @Composable
@@ -85,6 +86,7 @@ internal fun NavRail(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    content: (@Composable ColumnScope.(expanded: Boolean) -> Unit)? = null,
 ) {
     val motion = NgtermTheme.motion
     val width = remember { Animatable(if (expanded) RailExpandedWidth else RailWidth, Dp.VectorConverter) }
@@ -133,6 +135,13 @@ internal fun NavRail(
                     RailItem(destination, destination.key == selected, pick)
                 }
             }
+        }
+        if (content != null) {
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = NgtermTheme.spacing.lg, vertical = NgtermTheme.spacing.md),
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
+            content(expanded)
         }
     }
 }

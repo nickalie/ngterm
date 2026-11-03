@@ -910,22 +910,49 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - Create: `ui/session/SessionScreen.kt`, `ui/session/PaneSwitcher.kt`, `ui/session/SplitLayout.kt`,
   `ui/session/HudBanner.kt`, `ui/session/LeadCover.kt`
 
-- [ ] invoke `frontend-design` for the session view at all three widths
-- [ ] compact: the active pane fills the screen; a top bar with name, status, context and pane switcher; swipe between
+- [x] invoke `frontend-design` for the session view at all three widths
+- [x] compact: the active pane fills the screen; a top bar with name, status, context and pane switcher; swipe between
       the panes; the HUD as a banner
-- [ ] medium: a collapsible rail of attached sessions
-- [ ] expanded: a sidebar of machines and their attached sessions with status badges, beside the server's split layout
+- [x] medium: a collapsible rail of attached sessions
+- [x] expanded: a sidebar of machines and their attached sessions with status badges, beside the server's split layout
       (1 or 2 panes on either axis, or a hidden split), where a tap focuses a pane
-- [ ] the follower cover with **Take control**; a reconnecting cover that keeps the last screen visible; "session
+- [x] the follower cover with **Take control**; a reconnecting cover that keeps the last screen visible; "session
       ended" and "session gone" states; Detach and End in the session's menu
-- [ ] ➕ route the shown panes' events to their views (`PaneDirty`, `PaneAttached` to `TerminalState`), and apply a
+- [x] ➕ route the shown panes' events to their views (`PaneDirty`, `PaneAttached` to `TerminalState`), and apply a
       program's clipboard write (`ClipboardWrite`, OSC 52) to the device's clipboard
-- [ ] ➕ the keyboard (from Task 17): one `TerminalKeyboard` for every pane's `TerminalView` and the `ExtraKeysRow`
+- [x] ➕ the keyboard (from Task 17): one `TerminalKeyboard` for every pane's `TerminalView` and the `ExtraKeysRow`
       (over the IME), its `TerminalShortcuts` moving between panes and sessions, and the terminal's text read by
       TalkBack
-- [ ] write screenshots at three widths for one pane, two panes on each axis, a hidden split, a follower and a
+- [x] write screenshots at three widths for one pane, two panes on each axis, a hidden split, a follower and a
       reconnecting pane, plus a UI test where pane switching and a size-class change keep the focused pane
-- [ ] run `./gradlew check` and the tests; all must pass before Task 19
+- [x] run `./gradlew check` and the tests; all must pass before Task 19
+  - result (2026-11-03): `data/LiveSessions.kt` keeps each attached session's stream as its events leave it (state,
+    status, context, layout, HUD; each pane's role, cover, end and title), routes `PaneDirty`/`PaneAttached` to the
+    pane's `TerminalState` (now a `PaneFrames`), lets a detached session's state go, and puts a program's OSC 52 write
+    to the standard clipboard on the device's (`ClipboardSink`, `AndroidClipboard.write`; selection and primary are
+    dropped: Android has neither). `ui/session/` holds `SessionPanes` (a pane is shown the first time its slot has a
+    size and stays shown, with its terminal, lead and text size, until its session is detached or its layout drops
+    it; why one can't be shown, with Retry), `SessionViewModel` (the attached sessions by machine, the open session,
+    live or gone, the focused pane per session, Detach, End), `SessionsDestination` (the list, the session view, the
+    gone state; Back closes), `SessionScreen` and `SessionBar` (name, status or stream state, context, `PaneSwitcher`,
+    More: Detach, End session confirmed), `HudBanner`, `SplitLayout` with `PaneSlot` (side by side or stacked, the bus
+    bar in the focused pane's gutter, a hidden split's focused pane alone), `PaneCover`/`LeadCover` (follower with
+    Take control, attaching, reconnecting as a light scrim and a strip over the last screen, program exited with
+    Detach, can't show with Retry) and `AttachedList` (the list, the sidebar's machines and sessions, the rail's cells
+    or rows). Tapping a session on a machine's list attaches it and opens its view under Sessions; a phone's open
+    session hides the bottom bar (`AdaptiveScaffold.navigationVisible`), and the rail gained a content slot. One
+    `TerminalKeyboard` serves the view's panes and `ExtraKeysRow`, follows the focused pane, and its chords move
+    between panes and sessions; the pane on screen is read by TalkBack (`TerminalView.readAloud`, refreshed at most
+    once a second); a sideways swipe on a phone's terminal moves between panes (`TerminalGestures`' swipe), and the
+    focus follows a pane switch while the soft keyboard is up. `FakeMobileCore` now hands back a shown pane's handle
+    and hides panes on `hidePane`, `detachSession` and `disconnect` (`shownPanes`). DESIGN.md gained the session view.
+    Tests: `LiveSessionsTest`, `SessionViewModelTest`, `SessionViewTest` (attach from the list opens the view; pane
+    switching, a size-class change and back keep the focused pane, where the extra keys type; a swipe; Take control;
+    reconnecting; a clipboard write; Detach), a `FakeMobileCoreTest` case, `SessionsFlowTest`'s tap now opening the
+    view, and 25 goldens in `screenshots/session` (one pane with the HUD, two panes on each axis, a hidden split, a
+    follower and a reconnecting pane at compact dark and light, medium light and expanded dark, plus the medium rail
+    open). `./gradlew check` is green; the instrumented tests compile and were not rerun on the emulator (Robolectric
+    drives the view here)
 
 ### Task 19: Foreground service, notifications and asks
 

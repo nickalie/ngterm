@@ -18,13 +18,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.R
-import com.nickalie.ngterm.android.ui.components.EmptyState
-import com.nickalie.ngterm.android.ui.components.PanelAction
+import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.ui.machines.HostKeySheet
 import com.nickalie.ngterm.android.ui.machines.MachinesRoute
 import com.nickalie.ngterm.android.ui.machines.MachinesViewModel
@@ -33,8 +31,16 @@ import com.nickalie.ngterm.android.ui.onboarding.OnboardingActions
 import com.nickalie.ngterm.android.ui.onboarding.OnboardingFlow
 import com.nickalie.ngterm.android.ui.onboarding.OnboardingStep
 import com.nickalie.ngterm.android.ui.onboarding.OnboardingViewModel
+import com.nickalie.ngterm.android.ui.session.AttachedActions
+import com.nickalie.ngterm.android.ui.session.AttachedUiState
+import com.nickalie.ngterm.android.ui.session.RailSessions
+import com.nickalie.ngterm.android.ui.session.SessionViewModel
+import com.nickalie.ngterm.android.ui.session.SessionsDestination
+import com.nickalie.ngterm.android.ui.session.SidebarSessions
 import com.nickalie.ngterm.android.ui.terminal.ClipboardReadPrompt
+import com.nickalie.ngterm.android.ui.terminal.TerminalState
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import com.nickalie.ngterm.core.ffi.PaneRef
 
 private const val MACHINES = "machines"
 private const val SESSIONS = "sessions"
@@ -51,11 +57,20 @@ val AppDestinations =
         NavDestination(SETTINGS, R.string.nav_settings, R.drawable.ic_settings),
     )
 
+/** The Sessions destination's state, as [NgtermApp] collects it from its [SessionViewModel]. */
+private class SessionsUi(
+    val state: AttachedUiState,
+    val panes: Map<PaneRef, TerminalState>,
+    val failures: Map<PaneRef, String>,
+    val notice: String?,
+)
+
 /**
  * The app over [graph]: the first run until it has a key, then [AdaptiveScaffold] over the top-level destinations,
- * with the host-key question and a program's clipboard read as sheets over whichever is shown. Sessions shows its
- * empty state until its screen lands; Settings the loaded core's [coreVersion]. The selected destination survives a
- * configuration change.
+ * with the host-key question and a program's clipboard read as sheets over whichever is shown. Sessions holds the
+ * attached sessions and the session view, and the rail and the sidebar list the attached sessions on every
+ * destination; Settings shows the loaded core's [coreVersion]. The selected destination survives a configuration
+ * change.
  */
 @Composable
 fun NgtermApp(
@@ -65,6 +80,7 @@ fun NgtermApp(
     layout: NavLayout = currentNavLayout(),
     onboarding: OnboardingViewModel = viewModel { OnboardingViewModel(graph.keys) },
     machines: MachinesViewModel = viewModel { MachinesViewModel(graph) },
+    sessions: SessionViewModel = viewModel { SessionViewModel(graph) },
 ) {
     val step by onboarding.step.collectAsStateWithLifecycle()
     when (step) {
@@ -73,7 +89,22 @@ fun NgtermApp(
         }
 
         OnboardingStep.Done -> {
-            Frame(graph, coreVersion, layout, modifier)
+            var selected by rememberSaveable { mutableStateOf(MACHINES) }
+            val attached by sessions.state.collectAsStateWithLifecycle()
+            val panes by sessions.panes.collectAsStateWithLifecycle()
+            val failures by sessions.paneFailures.collectAsStateWithLifecycle()
+            val notice by sessions.notice.collectAsStateWithLifecycle()
+            val actions = remember(sessions) { AttachedActions.of(sessions, onOpenMachines = { selected = MACHINES }) }
+            Frame(
+                graph = graph,
+                coreVersion = coreVersion,
+                layout = layout,
+                selected = selected,
+                onSelect = { selected = it },
+                sessions = SessionsUi(attached, panes, failures, notice),
+                actions = actions,
+                modifier = modifier,
+            )
             val state by machines.state.collectAsStateWithLifecycle()
             state.hostKeyQuestions().firstOrNull()?.let { (machine, question) ->
                 key(machine.id, question.fingerprint) {
@@ -100,15 +131,33 @@ private fun Frame(
     graph: AppGraph,
     coreVersion: String,
     layout: NavLayout,
+    selected: String,
+    onSelect: (String) -> Unit,
+    sessions: SessionsUi,
+    actions: AttachedActions,
     modifier: Modifier = Modifier,
 ) {
-    var selected by rememberSaveable { mutableStateOf(MACHINES) }
+    val open = sessions.state.open
+    val openSession = { key: SessionKey ->
+        actions.onOpen(key)
+        onSelect(SESSIONS)
+    }
+    val groups = sessions.state.groups
     AdaptiveScaffold(
         destinations = AppDestinations,
         selected = selected,
-        onSelect = { selected = it },
+        onSelect = onSelect,
         modifier = modifier,
         layout = layout,
+        // a phone's open session has the whole screen
+        navigationVisible = !(selected == SESSIONS && open != null),
+        railContent =
+            if (groups.isEmpty()) {
+                null
+            } else {
+                { expanded -> RailSessions(groups, open?.key, expanded, openSession) }
+            },
+        sidebarContent = { SidebarSessions(groups, open?.key, openSession) },
     ) {
         val motion = NgtermTheme.motion
         AnimatedContent(
@@ -116,41 +165,28 @@ private fun Frame(
             transitionSpec = { fadeIn(motion.standard()) togetherWith fadeOut(motion.quick()) },
             label = "destination",
         ) { destination ->
-            Destination(destination, graph, coreVersion, onSelect = { selected = it })
-        }
-    }
-}
+            when (destination) {
+                MACHINES -> {
+                    MachinesRoute(graph, onOpenSession = openSession)
+                }
 
-@Composable
-private fun Destination(
-    key: String,
-    graph: AppGraph,
-    coreVersion: String,
-    onSelect: (String) -> Unit,
-) {
-    when (key) {
-        MACHINES -> {
-            MachinesRoute(graph)
-        }
+                SESSIONS -> {
+                    SessionsDestination(
+                        state = sessions.state,
+                        panes = sessions.panes,
+                        failures = sessions.failures,
+                        compact = layout == NavLayout.Bar,
+                        notice = sessions.notice,
+                        actions = actions,
+                    )
+                }
 
-        SESSIONS -> {
-            Centered {
-                EmptyState(
-                    icon = R.drawable.ic_sessions,
-                    title = stringResource(R.string.sessions_empty_title),
-                    body = stringResource(R.string.sessions_empty_body),
-                    action = PanelAction(stringResource(R.string.sessions_open_machines)) { onSelect(MACHINES) },
-                )
+                else -> {
+                    Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.Center) {
+                        CoreStatus(coreVersion)
+                    }
+                }
             }
         }
-
-        else -> {
-            Centered { CoreStatus(coreVersion) }
-        }
     }
-}
-
-@Composable
-private fun Centered(content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.Center) { content() }
 }

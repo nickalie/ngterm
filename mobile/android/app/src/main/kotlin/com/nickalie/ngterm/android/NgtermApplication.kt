@@ -9,6 +9,7 @@ import com.nickalie.ngterm.android.data.AppKeys
 import com.nickalie.ngterm.android.data.ClipboardReads
 import com.nickalie.ngterm.android.data.ClipboardTrust
 import com.nickalie.ngterm.android.data.Connections
+import com.nickalie.ngterm.android.data.LiveSessions
 import com.nickalie.ngterm.android.data.MachineStore
 import com.nickalie.ngterm.android.data.NativeKeyMaker
 import com.nickalie.ngterm.android.platform.AndroidClipboard
@@ -16,6 +17,7 @@ import com.nickalie.ngterm.android.platform.AndroidKeystoreWrapper
 import com.nickalie.ngterm.android.platform.KeystoreKeyVault
 import com.nickalie.ngterm.android.platform.NetworkMonitor
 import com.nickalie.ngterm.android.platform.PinnedHostKeys
+import com.nickalie.ngterm.android.ui.session.SessionPanes
 import com.nickalie.ngterm.core.ffi.MobileCore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +38,8 @@ class NgtermApplication : Application() {
         val connections =
             Connections(scope, SystemClock::elapsedRealtime) { sink -> MobileCore(sink, vault, pins) }
         val network = NetworkMonitor(this, connections::networkChanged).also { it.start() }
+        val clipboard = AndroidClipboard(this)
+        val live = LiveSessions(scope, connections, clipboard)
         return AppGraph(
             machines = MachineStore(PreferenceDataStoreFactory.create { file("machines") }),
             keys =
@@ -52,8 +56,9 @@ class NgtermApplication : Application() {
                     scope = scope,
                     connections = connections,
                     trust = ClipboardTrust(PreferenceDataStoreFactory.create { file("clipboard") }),
-                    clipboard = AndroidClipboard(this),
+                    clipboard = clipboard,
                 ),
+            panes = SessionPanes(scope, connections, live),
             online = network.online,
         )
     }

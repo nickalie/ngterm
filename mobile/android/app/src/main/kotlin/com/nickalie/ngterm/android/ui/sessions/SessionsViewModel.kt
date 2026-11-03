@@ -203,11 +203,15 @@ class SessionsViewModel(
         }
     }
 
-    /** Attaches the session [sessionId]. */
-    fun attach(sessionId: String) {
+    /** Attaches the session [sessionId], then runs [onAttached]. */
+    fun attach(
+        sessionId: String,
+        onAttached: () -> Unit = {},
+    ) {
         viewModelScope.launch {
             try {
                 connections.attach(machineId, sessionId)
+                onAttached()
             } catch (error: MobileException) {
                 notices.value = error.reason()
             }

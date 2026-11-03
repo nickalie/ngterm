@@ -11,6 +11,7 @@ import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.NoHandle
 import com.nickalie.ngterm.core.ffi.Pane
+import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
 import com.nickalie.ngterm.core.ffi.RemoteSession
 import kotlinx.coroutines.CompletableDeferred
@@ -44,6 +45,9 @@ data class FakeCall(
  * - [attachSession] and [showPane] take only a session of the machine's last listing ([MobileException.NotListed]
  *   otherwise), not of [sessions]: seeding [sessions] without listing them is refused, as the real core refuses a
  *   session it has not listed.
+ *
+ * - [showPane] hands back the same handle for a pane already shown; [hidePane], [detachSession] (its session's
+ *   panes) and [disconnect] (its machine's) hide panes, and [shownPanes] lists those still shown.
  *
  * [showPane] returns what [paneFactory] makes; the default is a `Pane(NoHandle)`, a placeholder whose methods must not
  * be called (they would reach the native library): a test that drives a pane subclasses it.
@@ -87,6 +91,11 @@ class FakeMobileCore(
 
     /** Each machine's last listing, by machine id: what [listSessions] or [createSession] last answered. */
     private val listings = mutableMapOf<String, List<RemoteSession>>()
+
+    private val shown = mutableMapOf<PaneRef, Pane>()
+
+    /** The panes shown and not hidden since, as (machine, session, pane). */
+    val shownPanes: Set<PaneRef> get() = synchronized(shown) { shown.keys.toSet() }
 
     /** What [showPane] returns. */
     var paneFactory: (machineId: String, sessionId: String, paneId: String, size: PaneSize) -> Pane =
@@ -200,6 +209,7 @@ class FakeMobileCore(
     }
 
     private fun drop(machineId: String) {
+        synchronized(shown) { shown.keys.removeAll { it.machineId == machineId } }
         connected -= machineId
         records -= machineId
         listings -= machineId
@@ -250,7 +260,10 @@ class FakeMobileCore(
     override fun detachSession(
         machineId: String,
         sessionId: String,
-    ) = record("detachSession", machineId, sessionId)
+    ) {
+        record("detachSession", machineId, sessionId)
+        synchronized(shown) { shown.keys.removeAll { it.machineId == machineId && it.sessionId == sessionId } }
+    }
 
     override suspend fun showPane(
         machineId: String,
@@ -260,14 +273,21 @@ class FakeMobileCore(
     ): Pane {
         recordHeld("showPane", machineId, sessionId, paneId, size)
         listed(machineId, sessionId)
-        return paneFactory(machineId, sessionId, paneId, size)
+        val ref = PaneRef(machineId, sessionId, paneId)
+        synchronized(shown) { shown[ref] }?.let { return it }
+        val pane = paneFactory(machineId, sessionId, paneId, size)
+        synchronized(shown) { shown[ref] = pane }
+        return pane
     }
 
     override fun hidePane(
         machineId: String,
         sessionId: String,
         paneId: String,
-    ) = record("hidePane", machineId, sessionId, paneId)
+    ) {
+        record("hidePane", machineId, sessionId, paneId)
+        synchronized(shown) { shown.keys.remove(PaneRef(machineId, sessionId, paneId)) }
+    }
 
     override fun takeLead(
         machineId: String,

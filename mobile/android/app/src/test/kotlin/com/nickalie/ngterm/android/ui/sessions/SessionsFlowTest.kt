@@ -122,15 +122,17 @@ class SessionsFlowTest {
     }
 
     @Test
-    fun aSessionTappedIsAttached() {
+    fun aSessionTappedIsAttachedAndItsViewOpens() {
         test.core.sessions["m1"] = mutableListOf(fakeSession("s1", name = "build"), fakeSession("s2", name = "docs"))
         openMachine()
         compose.awaitText("docs")
         compose.onNodeWithText("docs").performClick()
-        compose.awaitText("Attached")
+        // the session view opens under Sessions, waiting for the stream's first layout
+        compose.awaitText("Opening docs")
         assertEquals(setOf("s2"), test.connections.attached.value["m1"])
         compose.onNodeWithContentDescription("More options for docs").performClick()
         compose.onNodeWithText("Detach").performClick()
-        gone("Attached")
+        compose.awaitText("Nothing attached")
+        assertEquals(null, test.connections.attached.value["m1"])
     }
 }

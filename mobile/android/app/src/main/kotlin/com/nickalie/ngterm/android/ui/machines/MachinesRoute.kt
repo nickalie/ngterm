@@ -31,6 +31,7 @@ import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.AppKey
 import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.ui.components.ScreenExit
 import com.nickalie.ngterm.android.ui.onboarding.PublicKeyScreen
 import com.nickalie.ngterm.android.ui.sessions.SessionsRoute
@@ -117,6 +118,7 @@ class PageViewModels : ViewModel() {
 fun MachinesRoute(
     graph: AppGraph,
     modifier: Modifier = Modifier,
+    onOpenSession: (SessionKey) -> Unit = {},
     viewModel: MachinesViewModel = viewModel { MachinesViewModel(graph) },
     pages: PageViewModels = viewModel { PageViewModels() },
 ) {
@@ -171,6 +173,7 @@ fun MachinesRoute(
                     },
                     onShowKey = { push(MachinesPage.PublicKey(it)) },
                     onPop = pop,
+                    onOpenSession = onOpenSession,
                 )
             }
         }
@@ -224,6 +227,7 @@ private fun Page(
     onRemovePin: (String) -> Unit,
     onShowKey: (String) -> Unit,
     onPop: () -> Unit,
+    onOpenSession: (SessionKey) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val machine = (page as? MachinesPage.Edit)?.id ?: (page as? MachinesPage.HostKeyChanged)?.id
@@ -239,6 +243,7 @@ private fun Page(
                 machineId = page.id,
                 onBack = onPop,
                 onReviewHostKey = { actions.onReviewHostKey(page.id) },
+                onOpenSession = onOpenSession,
                 modifier = modifier,
             )
         }

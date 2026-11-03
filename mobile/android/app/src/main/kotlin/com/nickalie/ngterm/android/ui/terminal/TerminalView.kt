@@ -15,6 +15,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -31,12 +32,15 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.PaneFrames
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.TerminalPalette
 import com.nickalie.ngterm.core.ffi.PaneColors
@@ -71,7 +75,7 @@ class TerminalState(
     internal val pane: PaneInterface,
     private val frameContext: CoroutineContext = Dispatchers.Default,
     textSize: TextUnit = TerminalTextSize,
-) {
+) : PaneFrames {
     /** The text size the view draws at: a pinch changes it, in whole sp within [TerminalTextSizes]. */
     var textSize by mutableStateOf(textSize)
 
@@ -94,12 +98,12 @@ class TerminalState(
     private val restart = AtomicBoolean(true)
 
     /** The pane has a new frame (`PaneDirty`); safe from any thread. */
-    fun dirty() {
+    override fun dirty() {
         wakes.trySend(Unit)
     }
 
     /** The pane has a fresh terminal (`PaneAttached`): the next frame is read whole; safe from any thread. */
-    fun attached() {
+    override fun attached() {
         restart.set(true)
         wakes.trySend(Unit)
     }
@@ -193,6 +197,9 @@ fun rememberTerminalState(pane: PaneInterface): TerminalState = remember(pane) {
  * size, the mouse and its right-click menu, and clicks a program tracking the mouse asks for ([TerminalOverlays]).
  * A tap gives it the focus and opens the soft keyboard (a mouse click only the focus): with the focus, the input
  * method and a hardware keyboard type into it through [keyboard], and a composition waits at the cursor.
+ * [focusRequester] lets its host give it the focus (the session view, as the focused pane moves). With [readAloud]
+ * TalkBack reads its screen's text; [onSwipe] takes a finger's sideways swipe (next pane: leftward), which otherwise
+ * scrolls like any drag.
  */
 @Composable
 fun TerminalView(
@@ -201,29 +208,32 @@ fun TerminalView(
     palette: TerminalPalette = NgtermTheme.terminal,
     focused: Boolean = true,
     keyboard: TerminalKeyboard = rememberTerminalKeyboard(),
+    focusRequester: FocusRequester? = null,
+    readAloud: Boolean = false,
+    onSwipe: ((forward: Boolean) -> Unit)? = null,
 ) {
-    val context = LocalContext.current
-    val typefaces = remember(context) { terminalTypefaces(context) }
     val density = LocalDensity.current
-    val pixels = with(density) { state.textSize.toPx() }
-    val font = remember(typefaces, pixels) { TerminalFont(typefaces, pixels) }
+    val font = rememberTerminalFont(state.textSize)
     val painter = remember(font) { TerminalPainter(font, GlyphCache(font)) }
     val scope = rememberCoroutineScope()
     val input = remember(state) { TerminalInput(state, scope) }
     val selection = remember(state) { TerminalSelection(state) }
-    val focus = remember { FocusRequester() }
+    val ownFocus = remember { FocusRequester() }
+    val focus = focusRequester ?: ownFocus
     val softKeyboard = rememberSoftKeyboardRequest(focus)
     val underline = with(density) { CompositionUnderline.toPx() }
     val composition = remember(font, underline) { CompositionPainter(font, underline) }
     SideEffect {
         input.font = font
         input.keyboardRequest = softKeyboard::request
+        input.swipe = onSwipe
     }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     LaunchedEffect(state) { state.run() }
     LaunchedEffect(state, palette) { state.colors(palette) }
     LaunchedEffect(state, viewSize, font) { gridFor(viewSize, font)?.let(state::resize) }
     val description = stringResource(R.string.terminal_description)
+    val spoken = if (readAloud) rememberSpokenText(state) else null
     val ground = palette.background
     val look = TerminalLook(palette.selectionBackground.toArgb(), focused)
     val knob = with(density) { KnobRadius.toPx() }
@@ -235,7 +245,7 @@ fun TerminalView(
         Spacer(
             Modifier
                 .matchParentSize()
-                .semantics { contentDescription = description }
+                .terminalSemantics(description, spoken)
                 .terminalTextInput(keyboard, state, softKeyboard)
                 .focusRequester(focus)
                 .focusable()
@@ -262,6 +272,52 @@ fun TerminalView(
         TerminalOverlays(state, selection, font, palette, viewSize.width)
     }
 }
+
+/** The terminal as TalkBack finds it: [description], and its screen's text when it is read aloud ([spoken]). */
+private fun Modifier.terminalSemantics(
+    description: String,
+    spoken: String?,
+): Modifier =
+    semantics {
+        contentDescription = description
+        if (spoken != null) text = AnnotatedString(spoken)
+    }
+
+/** The terminal's font at [textSize]: the bundled JetBrains Mono faces at that size in this density. */
+@Composable
+fun rememberTerminalFont(textSize: TextUnit): TerminalFont {
+    val context = LocalContext.current
+    val typefaces = remember(context) { terminalTypefaces(context) }
+    val pixels = with(LocalDensity.current) { textSize.toPx() }
+    return remember(typefaces, pixels) { TerminalFont(typefaces, pixels) }
+}
+
+/**
+ * [state]'s screen as text for TalkBack: its rows, one per line, trailing blank rows dropped, taken at most once per
+ * [SPOKEN_REFRESH_MS] while frames come, so a busy program doesn't rebuild it per frame.
+ */
+@Composable
+private fun rememberSpokenText(state: TerminalState): String {
+    var spoken by remember(state) { mutableStateOf("") }
+    LaunchedEffect(state) {
+        snapshotFlow { state.drawn }.collect {
+            spoken = state.screen.spokenText()
+            delay(SPOKEN_REFRESH_MS)
+        }
+    }
+    return spoken
+}
+
+/** The screen's rows as lines of text, the trailing blank ones dropped. */
+fun TerminalScreen.spokenText(): String =
+    (0 until rowCount)
+        .map(::text)
+        .dropLastWhile {
+            it.isEmpty()
+        }.joinToString("\n")
+
+/** How often the text TalkBack reads is taken again while the screen changes. */
+private const val SPOKEN_REFRESH_MS = 1_000L
 
 /** The terminal's [SoftKeyboardRequest]: it gives the focus to what [focus] is attached to. */
 @Composable

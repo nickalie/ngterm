@@ -1,0 +1,40 @@
+package com.nickalie.ngterm.android.ui.session
+
+import com.nickalie.ngterm.android.data.SessionKey
+import com.nickalie.ngterm.core.ffi.PaneRef
+import com.nickalie.ngterm.core.ffi.PaneSize
+
+/**
+ * What the Sessions destination does, over its [SessionViewModel]: open and close a session's view, give a pane the
+ * focus, show a pane, Take control, Detach, End session, go to the Machines destination ([onOpenMachines]), and say
+ * the snackbar was shown ([onNoticeShown]).
+ */
+data class AttachedActions(
+    val onOpen: (SessionKey) -> Unit,
+    val onClose: () -> Unit,
+    val onFocus: (SessionKey, String) -> Unit,
+    val onShow: (PaneRef, PaneSize) -> Unit,
+    val onTakeLead: (PaneRef) -> Unit,
+    val onDetach: (SessionKey) -> Unit,
+    val onEnd: (SessionKey) -> Unit,
+    val onOpenMachines: () -> Unit,
+    val onNoticeShown: () -> Unit,
+) {
+    companion object {
+        /** The actions of [viewModel], with [onOpenMachines] going to Machines. */
+        fun of(
+            viewModel: SessionViewModel,
+            onOpenMachines: () -> Unit,
+        ) = AttachedActions(
+            onOpen = viewModel::open,
+            onClose = viewModel::close,
+            onFocus = viewModel::focus,
+            onShow = viewModel::show,
+            onTakeLead = viewModel::takeLead,
+            onDetach = viewModel::detach,
+            onEnd = viewModel::end,
+            onOpenMachines = onOpenMachines,
+            onNoticeShown = viewModel::noticeShown,
+        )
+    }
+}

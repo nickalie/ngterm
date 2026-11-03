@@ -6,11 +6,15 @@ import com.nickalie.ngterm.core.ffi.Machine
 import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
+import com.nickalie.ngterm.core.ffi.PaneRef
+import com.nickalie.ngterm.core.ffi.PaneSize
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -139,6 +143,28 @@ class FakeMobileCoreTest {
             kotlinx.coroutines.runBlocking { core.attachSession("m1", "nope") }
         }
     }
+
+    @Test
+    fun aShownPaneIsHandedBackAsItIsUntilHiddenAndDetachingOrDisconnectingHidesIt() =
+        runTest {
+            val core = FakeMobileCore()
+            core.paneFactory = { _, _, pane, _ -> FakePane(pane) }
+            core.connect(machine)
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            core.listSessions("m1")
+            val size = PaneSize(80u, 24u, 10u, 20u)
+            val first = core.showPane("m1", "s1", "P1", size)
+            assertSame(first, core.showPane("m1", "s1", "P1", size))
+            core.hidePane("m1", "s1", "P1")
+            assertNotSame(first, core.showPane("m1", "s1", "P1", size))
+            core.showPane("m1", "s1", "P2", size)
+            assertEquals(setOf(PaneRef("m1", "s1", "P1"), PaneRef("m1", "s1", "P2")), core.shownPanes)
+            core.detachSession("m1", "s1")
+            assertTrue(core.shownPanes.isEmpty())
+            core.showPane("m1", "s1", "P1", size)
+            core.disconnect("m1")
+            assertTrue(core.shownPanes.isEmpty())
+        }
 
     @Test
     fun aFailedConnectReportsTheMachineUnreachable() =
