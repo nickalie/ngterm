@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="app_name">ngterm</string>
+  <!-- the loaded mobile core's version, under the app's name -->
+  <string name="core_version">core %1$s</string>
+</resources>

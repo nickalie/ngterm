@@ -12,8 +12,22 @@
 # tools archive of the host is pinned); the AVDs need an x86_64 host, since the pinned system image is x86_64. Windows
 # is left open: use Android Studio's SDK manager there with the same pins.
 #
-# Usage: scripts/setup-android.sh
+# Usage: scripts/setup-android.sh           set up what is missing
+#        scripts/setup-android.sh --check   change nothing: when what a build needs (JDK 21, the pinned platform,
+#                                           build-tools and NDK, the Rust targets and cargo-ndk) is in place, print
+#                                           the JAVA_HOME, ANDROID_HOME and ANDROID_NDK_HOME exports and exit 0, else
+#                                           list what is missing and exit 1 (scripts/build-android.sh evals them)
 set -euo pipefail
+
+CHECK=0
+case "${1:-}" in
+  "") ;;
+  --check) CHECK=1 ;;
+  *)
+    echo "usage: scripts/setup-android.sh [--check]" >&2
+    exit 2
+    ;;
+esac
 
 # shellcheck source=lib/native.sh
 source "$(dirname "$0")/lib/native.sh" # sources build/pins.env too
@@ -235,6 +249,38 @@ SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
 SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
 AVDMANAGER="$SDK/cmdline-tools/latest/bin/avdmanager"
 AVD_HOME="${ANDROID_AVD_HOME:-${ANDROID_USER_HOME:-$HOME/.android}/avd}"
+
+# --check: report what a build needs and is missing, change nothing.
+check_build_toolchain() {
+  local missing=() package target installed="" jdk=""
+  jdk="$(find_jdk21)" || missing+=("JDK 21 (JAVA_HOME or PATH): $(jdk_advice)")
+  for package in "platforms;android-$ANDROID_PLATFORM_VERSION" "build-tools;$ANDROID_BUILD_TOOLS_VERSION" \
+    "ndk;$ANDROID_NDK_VERSION"; do
+    [[ -f "$(package_dir "$package")/package.xml" ]] || missing+=("$package in $SDK")
+  done
+  if command -v rustup >/dev/null; then
+    installed="$(cd "$NATIVE_ROOT" && rustup target list --installed)"
+  fi
+  for target in aarch64-linux-android x86_64-linux-android; do
+    grep -qx "$target" <<<"$installed" || missing+=("Rust target $target")
+  done
+  [[ "$(cargo ndk --version 2>/dev/null | awk '{print $2}')" == "$CARGO_NDK_VERSION" ]] ||
+    missing+=("cargo-ndk $CARGO_NDK_VERSION")
+  if ((${#missing[@]})); then
+    echo "the Android toolchain is incomplete (run scripts/setup-android.sh):" >&2
+    printf '  missing: %s\n' "${missing[@]}" >&2
+    return 1
+  fi
+  echo "the Android toolchain is in place ($SDK)" >&2
+  echo "export JAVA_HOME=\"$jdk\""
+  echo "export ANDROID_HOME=\"$SDK\""
+  echo "export ANDROID_NDK_HOME=\"$SDK/ndk/$ANDROID_NDK_VERSION\""
+}
+
+if ((CHECK)); then
+  check_build_toolchain
+  exit
+fi
 
 if JDK="$(find_jdk21)"; then
   export JAVA_HOME="$JDK"

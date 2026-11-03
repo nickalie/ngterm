@@ -1,0 +1,9 @@
+# Gradle's caches and every module's outputs, the generated bindings and jniLibs among them (scripts/build-android.sh)
+.gradle/
+.kotlin/
+build/
+local.properties
+# IDE state
+.idea/
+*.iml
+captures/

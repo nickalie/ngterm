@@ -1,0 +1,7 @@
+# UniFFI's bindings of the mobile core (scripts/build-android.sh generates them in library mode).
+[bindings.kotlin]
+# the Android app's core module (mobile/android/core) holds them under its own namespace
+package_name = "com.nickalie.ngterm.core.ffi"
+# Android's cleaner (android.system.SystemCleaner from API 34, behind a version check, else JNA's) in place of
+# java.lang.ref.Cleaner, which Android Lint refuses below API 33 whatever the runtime check around it
+android = true

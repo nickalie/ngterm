@@ -255,7 +255,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
     fingerprints shown.
 - **Platform seams** (UniFFI callback interfaces): only `KeyVault`, `HostKeyStore` and `EventSink`. Notifications,
   asks and clipboard are events Kotlin acts on; clipboard answers and ask answers go back through the API.
-- **Android floor:** `minSdk 26`, `compileSdk`/`targetSdk 36`, and cargo-ndk `-P 26`, which is ≥ the libghostty-vt
+- **Android floor:** `minSdk 26`, `targetSdk 36`, `compileSdk 37` (the current AndroidX libraries need 37 to compile against; Task 11), and cargo-ndk `-P 26`, which is ≥ the libghostty-vt
   floor of 24.
 - **Foreground service:** type `specialUse`, with a `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` explanation ("keeps the ssh
   sessions of attached remote terminals connected"). `dataSync` is time-limited on Android 15.
@@ -655,24 +655,38 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Create: `mobile/android/` (`settings.gradle.kts`, `build.gradle.kts`, `gradle/libs.versions.toml`, the Gradle
   wrapper, `.editorconfig`, `config/detekt/detekt.yml`, and the modules `app` and `core`)
-- Create: `scripts/build-android.sh`
+- Create: `scripts/build-android.sh`, `crates/ngterm-mobile/uniffi.toml` (the bindings' package
+  `com.nickalie.ngterm.core.ffi`, and `android = true`: Lint refuses UniFFI's default `java.lang.ref.Cleaner` below API
+  33)
+- Modify: `scripts/setup-android.sh` (`--check`, which prints the exports), `build/pins.env` (platform `37.0`),
+  `crates/ngterm-mobile/src/api.rs` (`core_version()`, which the smoke test reads)
 
-- [ ] write `scripts/build-android.sh`:
+- [x] write `scripts/build-android.sh`:
   - check the toolchain (`scripts/setup-android.sh --check`) and build the libghostty-vt prefix;
   - `cargo ndk -t arm64-v8a -t x86_64 -P 26 build -p ngterm-mobile` (release by default);
   - generate the Kotlin through the in-crate `uniffi-bindgen` in library mode;
   - run Gradle
-- [ ] set up `core` (generated bindings, `jniLibs`, JNA aar) and `app`:
+- [x] set up `core` (generated bindings, `jniLibs`, JNA aar) and `app`:
   - Compose, Material 3, Navigation, DataStore, the adaptive and window-size-class libraries;
   - a fake `MobileCore` implementation for tests;
   - `minSdk 26`, `targetSdk 36`, current stable versions in the catalog;
   - the application id from ngterm's identity (`com.nickalie.ngterm.android`)
-- [ ] set up the whole lint gate from "Linting" before any feature code, and wire it into `./gradlew check`
-- [ ] prove the gate bites: add one violation per tool (an unused variable, misformatted code, a composable missing its
+- [x] set up the whole lint gate from "Linting" before any feature code, and wire it into `./gradlew check`
+- [x] prove the gate bites: add one violation per tool (an unused variable, misformatted code, a composable missing its
       `modifier` parameter, a hard-coded string), check that each fails `check`, then remove them
-- [ ] configure Roborazzi and the instrumented runner; add a smoke test where the app launches and the binding loads
+- [x] configure Roborazzi and the instrumented runner; add a smoke test where the app launches and the binding loads
       and reports its version
-- [ ] build the APK and run `./gradlew check` plus the tests; all must pass before Task 12
+- [x] build the APK and run `./gradlew check` plus the tests; all must pass before Task 12
+  - result (2026-11-03): AGP 9.5.0 (built-in Kotlin), Kotlin 2.4.21, Gradle 9.8.2, compose-bom 2026.09.00, Roborazzi
+    1.77.0, Robolectric 4.17, Spotless 8.11.0 with ktlint 1.8.0, detekt 1.23.8 with compose-rules 0.4.28 (detekt
+    2.0 is still alpha; compose-rules 0.5+ need it). The current AndroidX libraries require compileSdk 37, so the app
+    compiles against `android-37.0` and keeps `targetSdk 36`. `scripts/build-android.sh assembleDebug check` is
+    green; the instrumented smoke test passed on the headless `ngterm-phone` AVD (API 36, x86_64). Gate probes: an
+    unused variable and a composable without `modifier` failed detekt (`UnusedPrivateProperty`, `ModifierMissing`),
+    misformatted code failed `spotlessKotlinCheck`, a hard-coded layout string failed `lintDebug` (`HardcodedText`),
+    and a deprecated call failed `compileDebugKotlin` under `-Werror` (Kotlin 2.4 reports no unused-variable
+    warning, so detekt is what catches that one). Lint disables only the calendar-dependent checks (`OldTargetApi`,
+    `NewerVersionAvailable`, `GradleDependency`, `AndroidGradlePluginVersion`), with the reason in the build files
 
 ### Task 12: Design system and adaptive scaffold (frontend-design)
 

@@ -1,0 +1,100 @@
+# detekt over its default ruleset (buildUponDefaultConfig) plus the Compose rules (io.nlopez.compose.rules:detekt).
+# Formatting is Spotless's (ktlint), so the detekt-formatting plugin is not added. A finding is fixed in the code; a
+# suppression is `@Suppress("Rule")` on the item with a comment saying why. No baseline file.
+
+build:
+  maxIssues: 0
+
+# the default rules, tuned only where Compose's conventions differ from plain Kotlin's (as compose-rules advises)
+naming:
+  FunctionNaming:
+    # composables are named in PascalCase
+    ignoreAnnotated: ['Composable']
+  TopLevelPropertyNaming:
+    # design tokens (`val Ink = Color(...)`) are PascalCase top-level constants
+    constantPattern: '[A-Z][A-Za-z0-9]*'
+
+style:
+  UnusedPrivateMember:
+    # previews are private and only the IDE and the screenshot tests call them
+    ignoreAnnotated: ['Preview']
+  MagicNumber:
+    # dimensions and colors are literals where they are declared
+    ignorePropertyDeclaration: true
+    ignoreCompanionObjectPropertyDeclaration: true
+
+complexity:
+  TooManyFunctions:
+    # an implementation's size is its interface's (the UniFFI interfaces the fakes implement), not its own choice
+    ignoreOverridden: true
+  LongParameterList:
+    # a composable takes its state, its events and its modifier as parameters by design
+    ignoreAnnotated: ['Composable']
+
+Compose:
+  ComposableAnnotationNaming:
+    active: true
+  ComposableNaming:
+    active: true
+  ComposableParamOrder:
+    active: true
+  CompositionLocalAllowlist:
+    active: true
+  CompositionLocalNaming:
+    active: true
+  ContentEmitterReturningValues:
+    active: true
+  ContentTrailingLambda:
+    active: true
+  ContentSlotReused:
+    active: true
+  DefaultsVisibility:
+    active: true
+  LambdaParameterEventTrailing:
+    active: true
+  LambdaParameterInRestartableEffect:
+    active: true
+  # Material 3 is the app's base: Material 2 is refused outright
+  Material2:
+    active: true
+  ModifierClickableOrder:
+    active: true
+  ModifierComposed:
+    active: true
+  ModifierMissing:
+    active: true
+  ModifierNaming:
+    active: true
+  ModifierNotUsedAtRoot:
+    active: true
+  ModifierReused:
+    active: true
+  ModifierWithoutDefault:
+    active: true
+  MultipleEmitters:
+    active: true
+  MutableParams:
+    active: true
+  MutableStateAutoboxing:
+    active: true
+  MutableStateParam:
+    active: true
+  ParameterNaming:
+    active: true
+  PreviewAnnotationNaming:
+    active: true
+  PreviewNaming:
+    active: false
+  PreviewPublic:
+    active: true
+  RememberMissing:
+    active: true
+  RememberContentMissing:
+    active: true
+  # strong skipping is on (the Kotlin 2 Compose compiler's default), which makes unstable collections harmless
+  UnstableCollections:
+    active: false
+  ViewModelForwarding:
+    active: true
+  ViewModelInjection:
+    active: true

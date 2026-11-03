@@ -557,6 +557,13 @@ impl MobileCore {
     }
 }
 
+/// The core's version (the workspace's), which the app shows and its smoke test reads to prove the library loaded.
+#[uniffi::export]
+#[must_use]
+pub fn core_version() -> String {
+    env!("CARGO_PKG_VERSION").to_owned()
+}
+
 /// A new ed25519 key for the app, its public half commented `comment` (shown in the machine's `authorized_keys`).
 ///
 /// # Errors
@@ -582,4 +589,13 @@ pub fn import_key(private_key: Vec<u8>, passphrase: Option<String>) -> Result<Ke
     let private_key = zeroize::Zeroizing::new(private_key);
     let passphrase = passphrase.map(zeroize::Zeroizing::new);
     keys::import(&private_key, passphrase.as_deref().map(String::as_str))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn core_version_is_the_crate_version() {
+        assert_eq!(super::core_version(), env!("CARGO_PKG_VERSION"));
+        assert!(!super::core_version().is_empty());
+    }
 }
