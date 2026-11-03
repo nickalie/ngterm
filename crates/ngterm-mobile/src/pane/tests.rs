@@ -49,19 +49,34 @@ fn the_gone_guards_line_is_found_at_the_end_of_the_output_only() {
 
 #[test]
 fn the_gone_guards_line_is_found_before_the_attach_clients_restore() {
-    // under a pty the attach client leaves with RIS and the colour resets (ngterm-session's `cli/attach.rs` RESTORE)
-    let restore = "\x1bc\x1b]110\x1b\\\x1b]111\x1b\\\x1b]112\x1b\\";
-    let mut tail = Tail::default();
-    tail.push(format!("\x1b[2J\x1b[H{SESSION_GONE}\r\n{restore}").as_bytes());
-    assert!(tail.is_gone(), "escape sequences after the line are not output");
+    // Mobile sends a LeadAttachment: current remote clients use MANAGED_RESTORE from ngterm-session's
+    // `cli/attach.rs` (SGR, input-report DECRSTs and OSC colour resets). Keep older clients' RIS case too.
+    let managed = "\x1b[0m\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b[?2031l\x1b[?2048l\x1b]110\x1b\\\x1b]111\x1b\\\x1b]112\x1b\\";
+    let unmanaged = "\x1bc\x1b]110\x1b\\\x1b]111\x1b\\\x1b]112\x1b\\";
+    for restore in [managed, unmanaged] {
+        let ended = format!("{SESSION_GONE}\r\n{restore}");
+        assert!(ended.len() <= Tail::KEEP, "the guard and cleanup fit the tail");
+        let mut tail = Tail::default();
+        tail.push(&[b'x'; 4096]);
+        tail.push(b"\x1b[2J\x1b[H");
+        for byte in ended.bytes() {
+            tail.push(&[byte]);
+        }
+        assert!(tail.is_gone(), "escape sequences after the line are not output");
+
+        tail.push(&vec![b'\r'; Tail::KEEP - ended.len()]);
+        assert!(tail.is_gone(), "the entire guard still fits at the tail's boundary");
+        tail.push(b"\r");
+        assert!(!tail.is_gone(), "a truncated guard cannot identify a gone session");
+
+        let mut later = Tail::default();
+        later.push(format!("{ended}$ ").as_bytes());
+        assert!(!later.is_gone(), "text after the cleanup still is output");
+    }
 
     let mut bell = Tail::default();
     bell.push(format!("{SESSION_GONE}\r\n\x1b]110\x07\x1b[0m\r\n").as_bytes());
     assert!(bell.is_gone(), "nor are a BEL-ended OSC and a CSI");
-
-    let mut later = Tail::default();
-    later.push(format!("{SESSION_GONE}\r\n{restore}$ ").as_bytes());
-    assert!(!later.is_gone(), "text after them still is");
 }
 
 #[test]

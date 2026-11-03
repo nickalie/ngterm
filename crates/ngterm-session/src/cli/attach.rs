@@ -58,7 +58,8 @@ pub const OUTPUT_BUDGET: usize = 4 * 1024 * 1024;
 /// What the first attach writes ahead of its snapshot (zmx's `clear_seq`).
 const CLEAR: &[u8] = b"\x1b[2J\x1b[H";
 
-/// What leaving writes (zmx's `restore_seq`): RIS and the default foreground, background and cursor colours.
+/// What leaving an unmanaged terminal writes (zmx's `restore_seq`): RIS and the default foreground, background and
+/// cursor colours.
 const RESTORE: &[u8] = b"\x1bc\x1b]110\x1b\\\x1b]111\x1b\\\x1b]112\x1b\\";
 
 /// Upstream zmx patch 0004: leave a managed terminal's output intact, without leaving the program's input reports on.
