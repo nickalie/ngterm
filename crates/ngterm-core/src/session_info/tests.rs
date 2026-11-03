@@ -40,6 +40,41 @@ fn inline_markdown_maps_to_traits() {
 }
 
 #[test]
+fn strikethrough_keeps_its_text_and_other_inline_traits() {
+    for source in ["~done~ 3 agents", "~~done~~ 3 agents"] {
+        assert_eq!(info(source).spans, vec![span("done 3 agents")]);
+    }
+    assert_eq!(
+        info("**~~done~~ now** after").spans,
+        vec![
+            SessionInfoSpan {
+                bold: true,
+                ..span("done now")
+            },
+            span(" after"),
+        ]
+    );
+    assert_eq!(
+        info("~~^[done](color: 'green')~~").spans,
+        vec![SessionInfoSpan {
+            color: Some(TintColor::Green),
+            ..span("done")
+        }]
+    );
+    assert_eq!(
+        info("`~~done~~`").spans,
+        vec![SessionInfoSpan {
+            code: true,
+            ..span("~~done~~")
+        }]
+    );
+    assert_eq!(
+        SessionInfo::make("~~done~~", false, 0.0).unwrap().spans,
+        vec![span("~~done~~")]
+    );
+}
+
+#[test]
 fn color_and_dim_attributes_map_to_spans() {
     assert_eq!(
         info("^[running](color: \"green\") ^[idle](dim: true) ^[x](color: 'Blue', dim: true)").spans,

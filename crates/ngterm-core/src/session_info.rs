@@ -5,7 +5,7 @@
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use uuid::Uuid;
 
 use crate::Core;
@@ -165,10 +165,10 @@ fn parse(source: &str) -> Result<Vec<SessionInfoSpan>, String> {
     let mut spans = Vec::new();
     let mut styles = vec![SessionInfoSpan::default()];
     let mut prefix = true;
-    for (event, range) in Parser::new(&source).into_offset_iter() {
+    for (event, range) in Parser::new_ext(&source, Options::ENABLE_STRIKETHROUGH).into_offset_iter() {
         let style = styles.last().cloned().unwrap_or_default();
         match event {
-            Event::Start(Tag::Strong | Tag::Emphasis | Tag::Link { .. }) => {
+            Event::Start(Tag::Strong | Tag::Emphasis | Tag::Strikethrough | Tag::Link { .. }) => {
                 let mut next = style;
                 match event {
                     Event::Start(Tag::Strong) => next.bold = true,
@@ -177,7 +177,7 @@ fn parse(source: &str) -> Result<Vec<SessionInfoSpan>, String> {
                 }
                 styles.push(next);
             }
-            Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Link) => {
+            Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link) => {
                 styles.pop();
             }
             Event::InlineHtml(html) if attribute_event(&html, &mut styles, &attributes, &marker) => {}

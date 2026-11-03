@@ -2,7 +2,7 @@
 //! and the sessions it attached from other machines (the viewer side).
 //!
 //! - [`tree`]: `live.tree`, the attachable sessions here or, over ssh, on another host;
-//! - [`frames`] and [`hub`]: the `live.present` stream that carries a session's presentation (status, context, name,
+//! - [`frames`] and [`hub`]: the `live.present` stream that carries a session's presentation (status, context, info, name,
 //!   layout, HUD, notifications) to its viewers, and decides which one viewer is the session's sole presenter;
 //! - [`remotes`]: `remotes.conf`, the hosts offered for an attach;
 //! - the viewer side: `live.attach` and File ▸ Attach Remote ([`attach`]), the ssh lines it runs ([`ssh`]), each
@@ -661,7 +661,7 @@ impl Core {
     }
 
     /// Brings the viewers in line with the model after a mutation, on every commit: the remote overlays the model
-    /// closed and the jobs that ended, a withdrawn HUD, and each watched session's status, context, name and layout
+    /// closed and the jobs that ended, a withdrawn HUD, and each watched session's status, context, info, name and layout
     /// where they changed since its viewers last got them.
     pub(crate) fn sync_presentation(&mut self) {
         self.settle_remote_overlays();

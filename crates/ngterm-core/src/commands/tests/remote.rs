@@ -246,6 +246,7 @@ fn info_snapshot_refresh_and_origin_expiry_publish_the_configured_value_then_cle
     );
     assert!(set(&mut live.fixture).ok);
     let timer = live.fixture.core.take_info_timers()[0];
+    live.fixture.core.commit();
     assert!(viewer.frames("info").is_empty(), "refresh publishes no changed value");
     assert!(!live.fixture.core.fire_info_hide(first));
     assert!(live.fixture.core.fire_info_hide(timer));

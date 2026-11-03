@@ -1,8 +1,8 @@
 //! Remote sessions, viewer side (upstream's `ControlServer+RemotePresentation.swift`,
 //! `ControlServer+RemoteReconnect.swift`, the app half of `AppStore+RemotePresentation.swift` and the remote half of
 //! `Ghostty/PaneLead.swift`): the presentation client of every attached row, what its frames put on the row (status,
-//! context, name, HUD, notifications, the replicas of asks and overlays the origin hands over, the layout), and the panes
-//! whose ssh lost the connection waiting to be attached again.
+//! context, info, name, HUD, notifications, the replicas of asks and overlays the origin hands over, the layout), and the
+//! panes whose ssh lost the connection waiting to be attached again.
 //!
 //! The frontend installs the [`PresentationTransport`] that runs each bridge and reports its lines and its end, and
 //! runs [`Core::remote_tick`] whenever [`Core::remote_wake`] asks; everything else happens here.

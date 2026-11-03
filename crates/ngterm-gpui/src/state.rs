@@ -593,7 +593,7 @@ impl AppState {
         }
     }
 
-    /// Arms the HUD auto-hides the core asked for since the last arm; each lands in [`Core::fire_hud_hide`].
+    /// Arms the info expiries the core asked for since the last arm; each lands in [`Core::fire_info_hide`].
     fn arm_info_timers(&mut self) {
         let timers = self.core.take_info_timers();
         let Some(main_loop) = self.poster.upgrade() else {
@@ -611,6 +611,7 @@ impl AppState {
         }
     }
 
+    /// Arms the HUD auto-hides the core asked for since the last arm; each lands in [`Core::fire_hud_hide`].
     fn arm_hud_timers(&mut self) {
         let timers = self.core.take_hud_timers();
         let Some(main_loop) = self.poster.upgrade() else {
