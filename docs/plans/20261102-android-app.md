@@ -1047,20 +1047,87 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 
 ### Task 22: Verify acceptance criteria
 
-- [ ] on the emulator against Task 10's staged server, every Overview requirement works:
+- [x] on the emulator against Task 10's staged server, every Overview requirement works:
   - add a machine and pin its key;
   - list, create, attach, type;
   - see status, context, HUD and notifications;
   - answer an ask in-app and from a notification;
   - take the lead from a second client;
   - detach, end
-- [ ] the phone, medium and tablet layouts, multi-window and rotation behave as Task 18 specifies
-- [ ] a UI/UX review against the standard above (targets, contrast, states, TalkBack, font scale, motion), with its
+  - walked (2026-11-03) on the headless `ngterm-phone` and `ngterm-tablet` AVDs (API 36, x86_64, `-no-window`), driven
+    by adb, uiautomator dumps and screenshots, with the debug APK over the release core. The server was Task 10's
+    setup by hand: `scripts/stage.sh` binaries, `ngterm-headless` in a private `NGTERM_STATE_DIR`/`HOME` under
+    `target/`, an unprivileged `sshd` on 127.0.0.1:2222 whose `ForceCommand` exports the private environment (the
+    emulator reaches it as 10.0.2.2), every `ngtermctl` call with `--socket`, no `NGTERM_*` in anything launched.
+    Seen: Create a key, its `authorized_keys` line (copied into the sshd's file); Add machine (Save on empty fields
+    shows "Enter the machine's hostname or IP address."), the Trust sheet with the host key's fingerprint, which
+    matched `ssh-keygen -lf` of the sshd's key, then Connected. The machine's list (`home`), New session `walk`
+    (Creating with a spinner within the tap's frame; it appeared in `live tree`), attach, the notification-permission
+    sheet and the system's question; the pane opens as a follower (the machine's own terminal leads) and Take
+    control types: `echo hello-from-phone` ran, and taps on Gboard typing `teh ` were not autocorrected. `ngtermctl
+    session status/context/hud` showed in the bar and as the HUD strip; `notify` posted on the machine's channel; a
+    `blocked` status in the background posted "walk is waiting for you", whose tap opened the session. Asks: a button
+    ask answered in the sheet (`{"result":"answered","id":"yes"}`), with the app in the background a button ask from
+    the notification's Run action and an input ask by inline reply (`"text":"fix the parser"`). Lead: the origin's
+    `session lead` put the phone's cover back and Take control took it again; the tablet attached the same split
+    session as a follower and its Take control moved the phone to the follower cover. Detach on the tablet (no
+    question; the session stayed in `live tree`), End session on the phone (confirmed; gone from `live tree`, the
+    foreground service stopped). Reused: the e2e test (create, attach, read, two clients' leadership, drop,
+    reattach, end) and the instrumented tests below
+  - the emulator always reports a hardware keyboard (QEMU's "AT Translated Set 2 keyboard", configuration
+    `qwerty/v/v`), so the extra-keys row stands aside there by design and the soft keyboard still opens; the row and
+    its sticky keys are covered by Robolectric (`TerminalKeyboardTest`, `SessionViewTest`) and the
+    `keys_*`/`one_pane_*` goldens
+- [x] the phone, medium and tablet layouts, multi-window and rotation behave as Task 18 specifies
+  - phone: one pane, the bar with Back, numbered pane tabs for the split; tablet landscape (1280dp): the permanent
+    sidebar with the attached session under its machine and the real vertical split, the bus bar on the focused pane;
+    tablet portrait (800dp): the collapsed rail with the session's cell, which opens to the sidebar's list, and the
+    split. Rotation (phone portrait → landscape, which is expanded: sidebar; and back) kept the open session, its
+    screen and the focused pane. Multi-window: with freeform on, the tablet's task resized to 400dp (compact: one
+    pane, pane 1 still focused), to 700dp (medium: rail and split) and back to full screen, without losing the
+    session or the focus
+- [x] a UI/UX review against the standard above (targets, contrast, states, TalkBack, font scale, motion), with its
       fixes made
-- [ ] the checks: `cargo test -p ngterm-core remote`; `cargo test -p ngterm-term`, with default features and with
+  - targets and labels: a uiautomator scan of every clickable node of the app's screens on both AVDs (Machines and
+    its menu, a machine's sessions and a row's menu, the session view and its menu, Sessions, Settings scrolled
+    through, the form, the sheets) found none under 48dp and none without a label, except rows clipped at the scroll
+    edges; contrast: `ContrastTest` (now also every agent state's color); states: empty (no machines, nothing
+    attached), validation, creating, follower, ending seen live, the rest in the state goldens; TalkBack: badges,
+    tabs ("Pane 1 of 2, ~ - fish"), rail cells ("walk, Waiting") read as words; font scale 2.0 on the phone (Machines,
+    a machine's sessions: the address wraps rather than losing its end); dark mode seen; motion follows the system's
+    animator scale (Compose)
+  - fixed (1fab91d4): an origin sends an agent's color and shape only as overrides, so every status showed as the
+    grey circle with its wire name ("blocked"); it now gets the app's own look (`AgentState`: Working circle and
+    Done star in verdigris, Waiting diamond in attention copper, Idle capsule), and machine cards count by the words
+    ("2 working"). The attached sessions' service notification, dropped when the permission came after the service
+    started, is posted on the grant. A phone on its side with the soft keyboard up left the terminal no rows under
+    the bar and HUD; the HUD steps aside under 320dp of height. Goldens re-recorded with the wire statuses (55
+    changed); DESIGN.md updated
+- [x] the checks: `cargo test -p ngterm-core remote`; `cargo test -p ngterm-term`, with default features and with
       `--no-default-features --lib`; `cargo test -p ngterm-mobile`; `scripts/test-mobile-e2e.sh`;
       `scripts/build-android.sh` plus `./gradlew check`
-- [ ] a revmux round over the whole change, with every verified finding fixed
+  - all green (2026-11-03): core remote 379 passed; ngterm-term 207 passed (6 ignored) with default features, 59
+    with `--no-default-features --lib`; ngterm-mobile 163 passed (the e2e ignored there); `scripts/test-mobile-e2e.sh`
+    passed against a real sshd; `scripts/build-android.sh assembleDebug check` green before the fixes and
+    `./gradlew check assembleDebug` after them; and `scripts/build-android.sh --profile debug
+    connectedDebugAndroidTest` passed on both AVDs (`LaunchSmokeTest`, which Task 20 had not run on an emulator,
+    `KeystoreKeyVaultTest`, `TerminalFrameTimeTest`: 3 of 3 each). After the review's fixes: ngterm-mobile 166
+    passed, clippy `-D warnings` and fmt clean, `scripts/test-mobile-e2e.sh` passed again, and
+    `scripts/build-android.sh assembleDebug check` green
+- [x] a revmux round over the whole change, with every verified finding fixed
+  - `01-initial` (comprehensive, `git diff main...HEAD`): 1 major, 11 minor, 1 immaterial. Fixed in 184c52e5: the
+    gone guard's line is found with the attach client's RESTORE after it (major: under a pty a gone session read as
+    a plain exit 1); a renamed machine keeps its connection (`Machine::reached_as`), and the unused
+    `pinned_host_key` left the record; the app suspends the core in the background with nothing attached and
+    resumes it (`IdleKeeper`, `Foreground`); the stream's cleared status or context wins over a stale listing; a
+    stream failing before its session ever showed lists the machine again; a pane's writer waits while 64 KiB are
+    queued for ssh (`transport::Backlog`, `WRITE_BACKLOG`); code-point deletions take whole characters; tests for
+    the HUD's short-window rule and the permission grant; setup-android.sh's and README's words on JDK 21 and sshd,
+    and README's test commands with `-p ngterm-mobile`. The README Android section and CLAUDE.md's row are Task 23's.
+    Immaterial: `StreamOut::queued` has no caller (`Pane::queued_input` gives the same number)
+  - `02-final` (final): 2 major, both from 184c52e5, fixed in 992d42b9: a rotation counted as leaving the screen and
+    so suspended and resumed every connection (checked on the AVD: the ssh connection's port stayed across two
+    rotations, and closed in the background); a connect cancelled by a suspend was never listed after the resume
 
 ### Task 23: [Final] Update documentation
 
