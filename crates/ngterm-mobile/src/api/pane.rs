@@ -183,6 +183,9 @@ impl From<ngterm_term::PaneError> for PaneInputError {
     }
 }
 
+/// Why [`Pane::resize`] refused a grid with no columns or rows.
+const EMPTY_GRID: &str = "a pane needs at least one column and one row";
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -212,9 +215,26 @@ impl PaneSlot {
         *lock(&self.terminal) = terminal;
     }
 
+    /// Puts `terminal`, built at `built`, in place of the current one, and sizes it to the grid the view gave since:
+    /// a [`Pane::resize`] that raced the build stored its size and resized the terminal this one replaces.
+    pub(crate) fn install(&self, terminal: Arc<ngterm_term::Pane>, built: GridSize) {
+        let mut current = lock(&self.terminal);
+        let size = self.size();
+        if size != built {
+            // the stored size passed the zero check, so the terminal takes it
+            let _ = terminal.resize(size);
+        }
+        *current = Some(terminal);
+    }
+
     /// The grid the view last gave the pane.
     pub(crate) fn size(&self) -> GridSize {
         *lock(&self.size)
+    }
+
+    /// Stores the grid the view gave.
+    pub(crate) fn set_size(&self, size: GridSize) {
+        *lock(&self.size) = size;
     }
 
     fn current(&self) -> Result<Arc<ngterm_term::Pane>, PaneInputError> {
@@ -264,9 +284,15 @@ impl Pane {
     ///
     /// # Errors
     ///
-    /// [`PaneInputError::Refused`] for a size the terminal can't take; the size is kept for the next attach anyway.
+    /// [`PaneInputError::Refused`] for a size the terminal can't take. A size with no columns or rows is refused
+    /// and not kept; any other is kept for the next attach anyway.
     pub fn resize(&self, size: PaneSize) -> Result<(), PaneInputError> {
-        *lock(&self.slot.size) = size.into();
+        if size.cols == 0 || size.rows == 0 {
+            return Err(PaneInputError::Refused {
+                reason: EMPTY_GRID.to_owned(),
+            });
+        }
+        self.slot.set_size(size.into());
         match self.slot.terminal() {
             Some(terminal) => Ok(terminal.resize(size.into())?),
             None => Ok(()),

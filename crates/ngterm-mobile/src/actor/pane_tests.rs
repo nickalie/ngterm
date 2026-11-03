@@ -453,6 +453,37 @@ fn an_exit_is_reported_and_attaches_again_only_after_the_origin_respawned_the_pa
 }
 
 #[test]
+fn an_empty_grid_is_refused_and_a_pane_shown_at_one_attaches_once_the_view_sizes_it() {
+    let mut fixture = Fixture::connected();
+    let empty = PaneSize {
+        cols: 0,
+        rows: 0,
+        ..SIZE
+    };
+    let pane = block_on(
+        fixture
+            .core
+            .show_pane(MACHINE.to_owned(), SESSION.to_owned(), PANE.to_owned(), empty),
+    )
+    .unwrap();
+    assert!(
+        matches!(fixture.ended(), PaneEnd::Lost { .. }),
+        "the terminal refuses the grid"
+    );
+    assert!(matches!(
+        pane.resize(PaneSize { cols: 0, ..SIZE }),
+        Err(PaneInputError::Refused { .. })
+    ));
+    assert_eq!(pane.size(), empty, "a refused grid is not kept");
+
+    pane.resize(SIZE).unwrap();
+    assert_eq!(pane.size(), SIZE);
+    let opened = fixture.attach();
+    assert_eq!(opened.pty, Some(SIZE.into()), "the retry attaches at the view's grid");
+    fixture.attached();
+}
+
+#[test]
 fn a_signal_exit_is_reported_with_its_signal() {
     let mut fixture = Fixture::connected();
     fixture.show();

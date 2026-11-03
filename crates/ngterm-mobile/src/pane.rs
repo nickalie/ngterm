@@ -212,6 +212,17 @@ impl<C> Shown<C> {
             .collect()
     }
 
+    /// Attaches again after the backoff of one more loss.
+    fn retry_later(&mut self, notes: Notes) {
+        self.losses += 1;
+        let (delay, key) = (retry_delay(self.losses), self.key);
+        let retry = tokio::task::spawn_local(async move {
+            tokio::time::sleep(delay).await;
+            let _ = notes.send(Note::Retry(key));
+        });
+        self.retry = Some(retry.abort_handle());
+    }
+
     fn is(&self, machine_id: &str, session_id: &str) -> bool {
         self.reference.machine_id == machine_id && self.reference.session_id == session_id
     }
@@ -482,19 +493,24 @@ impl<C: Connection> Panes<C> {
             // An actor that is gone has nothing left to draw.
             let _ = wake_notes.send(Note::News(key));
         });
-        let (terminal, feed, out) = match ngterm_term::Pane::stream(&config(shown.slot.size(), wake)) {
+        let built = shown.slot.size();
+        let (terminal, feed, out) = match ngterm_term::Pane::stream(&config(built, wake)) {
             Ok(made) => made,
             Err(error) => {
+                // tried again on the backoff, so a grid the view fixes since (or memory freed) gets its attach
                 shown.phase = Phase::Waiting;
                 let reason = error.to_string();
                 events.push(shown.event(|pane| MobileEvent::PaneEnded {
                     pane,
                     end: PaneEnd::Lost { reason },
                 }));
+                if shown.connection.is_some() {
+                    shown.retry_later(notes);
+                }
                 return events;
             }
         };
-        shown.slot.replace(Some(Arc::new(terminal)));
+        shown.slot.install(Arc::new(terminal), built);
         let command = attach_tail(&shown.endpoint, &shown.daemon, Some(&lead));
         shown.lead = Some(LeadState::new(lead, cover));
         events.push(shown.event(|pane| MobileEvent::PaneAttached { pane }));
@@ -603,13 +619,7 @@ impl<C: Connection> Panes<C> {
             .zip(shown.connection.as_ref())
             .is_some_and(|(on, current)| Rc::ptr_eq(&on, current));
         if still_up {
-            shown.losses += 1;
-            let (delay, key) = (retry_delay(shown.losses), shown.key);
-            let retry = tokio::task::spawn_local(async move {
-                tokio::time::sleep(delay).await;
-                let _ = notes.send(Note::Retry(key));
-            });
-            shown.retry = Some(retry.abort_handle());
+            shown.retry_later(notes);
         }
         events
     }

@@ -38,8 +38,9 @@ pub enum PaneEnd {
     /// The link went away (the connection or the channel): the pane stays covered and attaches again into a fresh
     /// terminal on its own, once its machine is connected.
     Lost { reason: String },
-    /// The program exited: its status (`None` unknown, 1 for a signal) and the signal that ended it. The terminal
-    /// keeps the last screen; the pane attaches again by itself only when the machine respawned its shell.
+    /// The program exited: its status (`None` when unknown or when a signal ended it) and the signal that ended it.
+    /// The terminal keeps the last screen; the pane attaches again by itself only when the machine respawned its
+    /// shell.
     Exited { code: Option<u32>, signal: Option<String> },
     /// The session is gone from its machine: final, nothing attaches it again.
     Gone,
