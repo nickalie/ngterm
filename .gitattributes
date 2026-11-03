@@ -1,3 +1,6 @@
 # Every text file is checked out with LF on every OS: tests compare fixtures and pins byte for byte, and Windows'
 # core.autocrlf would otherwise check them out with CRLF.
 * text=auto eol=lf
+# Recorded PTY bytes and packed buffers are kept verbatim: their CR bytes are data, and a capture's marks are byte
+# offsets into it.
+*.bin binary

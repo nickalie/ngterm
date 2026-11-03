@@ -144,7 +144,7 @@
 
    The core never persists the record. It drops it when the pane identity leaves the model, and it checks lazily
    whether the pane's foreground is back to a shell: in `agent.get` and when the presentation frame is built. That
-   covers Codex, which has no `SessionEnd`.
+   covers Codex, whose `SessionEnd` comes only when the CLI exits, once for every thread it loaded (Task 1).
 2. **Approvals without new clearing logic.** A candidate is an approval only while that pane's agent status is
    `blocked`, which the existing adapters set and clear (Codex's watcher included, so Auto Review never makes a
    card). It is done when the status leaves `blocked` or when the transcript writes the `tool_result` for that tool
@@ -219,7 +219,7 @@ byte offset of its source line):
 | `conversation` | agent, conversation id, cwd, model |
 | `user` | text, image count |
 | `assistant` | Markdown text |
-| `thinking` | text (shown collapsed) |
+| `thinking` | text (shown collapsed; Claude writes it empty, Codex writes a summary title) |
 | `tool` | kind (shell, edit, read, search, web, task, other), one-line title, status (running, ok, error), output excerpt capped at 4 KiB, unified diff for edits, parent task id for subagent entries |
 | `question` | `AskUserQuestion`: each question, its options (label, description), and whether several can be picked |
 | `approval`, `approval_done` | tool, title, detail, tool use id when known |
@@ -235,9 +235,11 @@ byte offset of its source line):
 - `--after CURSOR`: everything after the cursor, then `live` and follow (used on reconnect).
 
 Following polls the file size every 250 ms and buffers a partial last line. A file that shrinks or is replaced means a
-`reset`. Subagent entries fold under their task tool's id. Task 1 settles whether they are inline (`isSidechain`) or
-separate files under `<session-id>/subagents/`. If they are separate, the follower follows them as extra sources.
-Codex's `response_item` and `event_msg` lines map onto the same events.
+`reset`. Subagent entries fold under their task tool's id. Claude writes them as separate files,
+`<session-id>/subagents/agent-<id>.jsonl`, whose `.meta.json` names the parent `Agent` tool use (`toolUseId`); the
+follower follows them as extra sources. Codex 0.166 runs every tool through code mode (one `exec` custom tool call
+holding JavaScript), so its chat events come from the `event_msg` `item_completed` items, and a `custom_tool_call`
+with no output yet is a running call (Task 1's fixture README).
 
 **Command catalog** (`agent commands`): `{ name, description, kind: builtin|skill|command|plugin, argument_hint }`.
 
@@ -251,24 +253,25 @@ Codex's `response_item` and `event_msg` lines map onto the same events.
     `<config>/plugins/installed_plugins.json`, named `plugin:name`.
 - **Codex:**
   - the curated built-ins;
-  - custom prompts from `<codex home>/prompts/*.md`, named as Codex shows them;
-  - skills from `<codex home>/skills/*/SKILL.md`, in whatever form Codex invokes them (Task 1 confirms which).
+  - skills from `<codex home>/skills/*/SKILL.md`, as `$name`, the mention Codex invokes them with (Task 1);
+  - no custom prompts: Codex 0.166 no longer offers `<codex home>/prompts/*.md` (Task 1).
 - A name and description come from the file's frontmatter, falling back to the file name and its first line. One
   unreadable file is skipped with no error.
 
 **Phone actions** (`ngterm-mobile`). Each is lead, then settle, then match, then send:
 
 - **Prompt:** a bracketed paste of the text, then Enter. It needs the idle or working prompt matcher, and is refused
-  (`DialogOpen`) while a dialog matcher fires. For a leading `/command`, Task 1 settles whether the TUI runs a pasted
-  `/name`; if it doesn't, the `/name` part is typed as keys and the rest is pasted.
-- **Stop:** Esc (or the interrupt key Task 1 finds for Codex).
+  (`DialogOpen`) while a dialog matcher fires. A pasted `/name args` runs as a command in both TUIs (Task 1), so a
+  leading `/command` is pasted with the rest.
+- **Stop:** Esc, in both agents (Task 1).
 - **Approval:**
   - Card labels come from the rows' dialog when the matcher can read them (`1. Yes`, `2. Yes, and don't ask
     again…`, `3. No…`), and otherwise from the payload's tool only.
   - On tap, after taking the lead, the matcher re-reads the dialog at the phone's grid. The phone sends the key of the
     option with the same label, or returns `NotOnScreen`.
-- **Question:** the picker is confirmed on screen, then the number and space keys are sent for the options, "Other"
-  text is typed, and the submit key is sent.
+- **Question:** the picker is confirmed on screen, then digit keys pick an option (single-select, which moves on) or
+  toggle it (multi-select), Tab moves to the next question, "Other" text goes through the "Type something." option,
+  and the review tab's `1. Submit answers` is sent with Enter (Task 1).
 - **Settled** means a `Leader` role plus no new output for a short quiet period (150 ms, injectable) after the
   resize redraw.
 
@@ -287,7 +290,7 @@ Codex's `response_item` and `event_msg` lines map onto the same events.
   `crates/ngterm-core/tests/fixtures/agent_chat/README.md` (versions, how each was recorded, the settled facts)
 - Create: `crates/ngterm-mobile/tests/fixtures/agent_screens/…` (PTY captures, next to `rows-golden.bin`)
 
-- [ ] record real Claude Code and Codex sessions in a scratch project with `NGTERM_*` stripped. Capture hook payloads
+- [x] record real Claude Code and Codex sessions in a scratch project with `NGTERM_*` stripped. Capture hook payloads
       with a scratch-project hook that dumps stdin (`.claude/settings.local.json`, and Codex's project config). The
       user's installed hooks are never touched. Cover:
   - plain chat, thinking, shell, edit with a diff, read, search, web, and a subagent;
@@ -297,9 +300,9 @@ Codex's `response_item` and `event_msg` lines map onto the same events.
   - a `claude -p` worker run from inside the session, for the worker guard.
 
   Note the agent versions.
-- [ ] capture the raw PTY bytes of each agent's permission dialog, `AskUserQuestion` picker, idle prompt and working
+- [x] capture the raw PTY bytes of each agent's permission dialog, `AskUserQuestion` picker, idle prompt and working
       turn, at three widths (a phone portrait grid, a tablet grid, a desktop grid)
-- [ ] settle and write down in the README:
+- [x] settle and write down in the README:
   - what Codex's `PermissionRequest` payload carries, and whether its rollout records approvals;
   - where Claude subagent entries live (inline `isSidechain` or `<session-id>/subagents/` files) and the current name
     of the subagent tool;
@@ -310,7 +313,7 @@ Codex's `response_item` and `event_msg` lines map onto the same events.
   - Codex's interrupt key.
 
   Where a fact differs from this plan's Technical Details, update the plan.
-- [ ] strip personal paths and content from the fixtures (rewrite them to `/home/user/project`)
+- [x] strip personal paths and content from the fixtures (rewrite them to `/home/user/project`)
 
 ### Task 2: Rust-only commands in the catalog tests
 
@@ -353,9 +356,10 @@ Codex's `response_item` and `event_msg` lines map onto the same events.
 - Create: `crates/ngterm-core/src/agent_chat/codex.rs`, `crates/ngterm-core/src/agent_chat/tests/codex.rs`
 
 - [ ] write golden tests first, one per Codex fixture
-- [ ] map `session_meta` to `conversation`, the user and agent messages, reasoning to `thinking`, function and custom
-      tool calls with their outputs (`shell` / `exec_command` → shell, `apply_patch` → edit with its diff), and
-      interrupts and errors to `notice`
+- [ ] map `session_meta` to `conversation`, the user and agent messages, reasoning to `thinking`, the tool items
+      (Codex 0.166, Task 1: `CommandExecution` → shell, `FileChange` → edit with its `unified_diff`, `Extension`
+      `web.search` → web, `CollabAgentToolCall` → task, and an `exec` `custom_tool_call` with no output yet → a running
+      tool), and interrupts (`turn_aborted`) and errors to `notice`
 - [ ] when an `event_msg` and a `response_item` describe the same message, emit it once
 - [ ] test the error and edge cases: an unknown item type, a truncated last line, and a call with no output yet
       (`running`)
@@ -398,7 +402,7 @@ Codex's `response_item` and `event_msg` lines map onto the same events.
 - [ ] write dispatcher tests first on the `ngterm-host` fakes:
   - report, then re-assert (no change), then a new path (a new conversation), then clear;
   - an approval candidate is live only while the pane's status is `blocked`, and done when the status changes;
-  - an `AskUserQuestion` that triggered `PermissionRequest` makes no duplicate (if Task 1 found one);
+  - an `AskUserQuestion` that triggered `PermissionRequest` makes no duplicate (Task 1 found that it does fire);
   - an unknown pane identity;
   - a record dropped when its pane identity leaves the model;
   - the record never appears in the snapshot.
@@ -438,7 +442,8 @@ Codex's `response_item` and `event_msg` lines map onto the same events.
 - [ ] write adapter tests first, with a stub `ngtermctl` on `PATH` that logs its argv and stdin:
   - the four events pipe their payload to `agent hook`;
   - a `claude -p` worker and a subagent payload make no call (`CLAUDE_CODE_ENTRYPOINT`, `agent_id`, and the status
-    adapter's process-topology guard);
+    adapter's process-topology guard); Codex's subagent events carry `agent_id` and the subagent's transcript path
+    (Task 1);
   - `PostToolUse` and `Stop` make no new call;
   - a Codex call that Auto Review approved never yields a live approval (end to end with the Task 6 dispatcher fake).
 - [ ] implement the calls in the POSIX scripts, then in the Claude PowerShell forms. Codex on Windows runs the POSIX
@@ -475,7 +480,7 @@ Codex's `response_item` and `event_msg` lines map onto the same events.
   - user and project skills, with a directory missing `SKILL.md` skipped and `user-invocable: false` hidden;
   - nested custom commands become `a:b`;
   - enabled versus disabled plugins;
-  - Codex prompts and skills;
+  - Codex skills (`$name`; 0.166 offers no custom prompts, Task 1);
   - the config dir derived from `transcript_path` (a custom `CLAUDE_CONFIG_DIR` or `CODEX_HOME`);
   - an unreadable or malformed file is skipped;
   - a duplicate name resolves the way the agent resolves it (per Task 1).
