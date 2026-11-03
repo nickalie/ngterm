@@ -5,10 +5,13 @@
 //!
 //! # Layout, version 1
 //!
-//! Every number is little-endian and unaligned. A color is a `u32` read as `0xAARRGGBB` (Android's color `Int`): its
-//! RGB is always the color to draw, resolved from the palette; alpha `0xFF` marks a color set on the cell and alpha
-//! `0x00` the terminal's default (a background the view need not paint; the default's RGB still there, for inverse).
-//! A color that can be unset (the cursor's, an underline's) is `0` when unset.
+//! Every number is little-endian and unaligned. A color is a `u32` read as `0xAARRGGBB` (Android's color `Int`). In
+//! the header it is always set (alpha `0xFF`). In a run, alpha `0xFF` marks a color set on the cell, its RGB resolved
+//! from the palette, and `0` (the whole `u32`) the terminal's default: draw the header's default foreground for a
+//! foreground slot and its default background for a background slot, read from the frame being drawn, and swap the
+//! two for inverse. A row the reader already holds is not sent again when only the defaults change (OSC 10/11), so
+//! the reader resolves a `0` at draw time, never caches it. A color that can be unset (the cursor's, an underline's)
+//! is `0` when unset.
 //!
 //! **Header** (40 bytes):
 //!
@@ -44,7 +47,7 @@
 //! |---|---|---|
 //! | 0 | `u16` | first column |
 //! | 2 | `u16` | columns covered |
-//! | 4 | `u8` | run kind (below) |
+//! | 4 | `u8` | run kind flags (below) |
 //! | 5 | `u8` | underline: 0 none, 1 single, 2 double, 3 curly, 4 dotted, 5 dashed |
 //! | 6 | `u16` | attribute bits (`ngterm-term`'s `CellFlags`) |
 //! | 8 | color | foreground |
@@ -54,8 +57,10 @@
 //! | 24 | UTF-8 | the text |
 //!
 //! Attribute bits: bold 1, italic 2, faint 4, blink 8, inverse 16, invisible 32, strikethrough 64, overline 128,
-//! hyperlink 256. Run kind: [`RUN_WIDE`] 1, each character covers two columns; [`RUN_CLUSTER`] 2, the text is one
-//! grapheme cluster, one glyph at the run's first column.
+//! hyperlink 256. Run kind flags, which combine: [`RUN_WIDE`] 1, each glyph covers two columns; [`RUN_CLUSTER`] 2,
+//! the text is one grapheme cluster, one glyph at the run's first column. Both (3) is one grapheme cluster drawn as a
+//! single two-column glyph (an emoji with a skin-tone modifier or VS16, a ZWJ sequence, a flag); 0 is narrow single
+//! code points.
 //!
 //! Outside a cluster run, each code point of the text is one glyph, one column wide (two in a wide run) after the one
 //! before; a blank cell is a space. Inverse is left to the reader (swap foreground and background), as are bold and
@@ -70,7 +75,7 @@
 //! 0, or past the frame's own `seq` (the view drew a terminal since replaced), sends every row with [`FRAME_FULL`].
 //! After [`crate::MobileEvent::PaneAttached`] the reader passes 0: a fresh terminal counts from the start again.
 
-use ngterm_term::{Cell, CellFlags, CellWidth, Colors, Cursor, CursorStyle, Frame, Rgb, Row, Underline};
+use ngterm_term::{Cell, CellFlags, CellWidth, Cursor, CursorStyle, Frame, Rgb, Row, Underline};
 
 /// The buffer's first four bytes.
 pub const MAGIC: [u8; 4] = *b"NGRB";
@@ -98,15 +103,15 @@ pub const CURSOR_WIDE_TAIL: u8 = 1 << 4;
 /// Row flag: soft-wraps into the next row.
 pub const ROW_WRAPPED: u8 = 1;
 
-/// Run kind: each character covers two columns.
+/// Run kind flag: each glyph covers two columns.
 pub const RUN_WIDE: u8 = 1;
-/// Run kind: the text is one grapheme cluster.
+/// Run kind flag: the text is one grapheme cluster (with [`RUN_WIDE`], drawn two columns wide).
 pub const RUN_CLUSTER: u8 = 1 << 1;
 
 /// Alpha of a color set on the cell.
 const SET: u8 = 0xff;
-/// Alpha of the terminal's default color.
-const DEFAULT: u8 = 0;
+/// A run's color that follows the terminal's default: the reader takes it from the header of the frame it draws.
+const DEFAULT: u32 = 0;
 
 /// Packs the rows of `frame` that changed after frame `since`, with its cursor, selection and grid; `stale` when the
 /// frame is older than the terminal ([`FRAME_STALE`]).
@@ -140,7 +145,7 @@ pub fn pack(frame: &Frame, since: u64, stale: bool) -> Vec<u8> {
     cursor(&mut out, &frame.cursor);
     out.u16(narrow(changed.len()));
     for (index, row) in changed {
-        self::row(&mut out, index, row, &frame.colors);
+        self::row(&mut out, index, row);
     }
     selection(&mut out, frame);
     out.0
@@ -190,8 +195,8 @@ fn selection(out: &mut Writer, frame: &Frame) {
     }
 }
 
-fn row(out: &mut Writer, index: usize, row: &Row, colors: &Colors) {
-    let runs = runs(row, colors);
+fn row(out: &mut Writer, index: usize, row: &Row) {
+    let runs = runs(row);
     out.u16(narrow(index));
     out.u8(if row.wrapped() { ROW_WRAPPED } else { 0 });
     out.u16(narrow(runs.len()));
@@ -220,8 +225,10 @@ struct Style {
 }
 
 impl Style {
-    fn of(cell: &Cell, colors: &Colors) -> Self {
-        let color = |set: Option<Rgb>, default: Rgb| set.map_or(argb(default, DEFAULT), |color| argb(color, SET));
+    /// The cell's style; a default color is [`DEFAULT`], never the default's RGB, which a later frame may change
+    /// without resending the row.
+    fn of(cell: &Cell) -> Self {
+        let color = |set: Option<Rgb>| set.map_or(DEFAULT, |color| argb(color, SET));
         Self {
             attrs: cell.flags.bits(),
             underline: match cell.underline {
@@ -232,8 +239,8 @@ impl Style {
                 Underline::Dotted => 4,
                 Underline::Dashed => 5,
             },
-            foreground: color(cell.foreground, colors.foreground),
-            background: color(cell.background, colors.background),
+            foreground: color(cell.foreground),
+            background: color(cell.background),
             underline_color: cell.underline_color.map_or(0, |color| argb(color, SET)),
         }
     }
@@ -259,7 +266,7 @@ fn draws_when_empty(cell: &Cell) -> bool {
 }
 
 /// The row's glyphs, left to right, with the blank ones at its end left out (the row is cleared first).
-fn glyphs<'a>(row: &'a Row, colors: &Colors) -> Vec<Glyph<'a>> {
+fn glyphs(row: &Row) -> Vec<Glyph<'_>> {
     let mut glyphs = Vec::with_capacity(row.cells().len());
     for (column, cell) in row.cells().iter().enumerate() {
         let wide = match cell.width {
@@ -273,7 +280,7 @@ fn glyphs<'a>(row: &'a Row, colors: &Colors) -> Vec<Glyph<'a>> {
             column: narrow(column),
             wide,
             text: if text.is_empty() { " " } else { text },
-            style: Style::of(cell, colors),
+            style: Style::of(cell),
             blank: text.is_empty() && !draws_when_empty(cell),
         });
     }
@@ -294,9 +301,9 @@ struct Run {
 
 /// The row's glyphs joined into runs: adjacent glyphs of one style and width share one, and a grapheme of more than
 /// one code point is a run of its own.
-fn runs(row: &Row, colors: &Colors) -> Vec<Run> {
+fn runs(row: &Row) -> Vec<Run> {
     let mut runs: Vec<Run> = Vec::new();
-    for glyph in glyphs(row, colors) {
+    for glyph in glyphs(row) {
         let span = if glyph.wide { 2 } else { 1 };
         let cluster = glyph.text.chars().nth(1).is_some();
         let mut kind = if glyph.wide { RUN_WIDE } else { 0 };

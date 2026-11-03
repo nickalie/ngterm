@@ -600,8 +600,10 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - [x] run the tests; they must pass before Task 10
   - Notes: `Pane::frame(since_seq) -> Result<Vec<u8>, PaneInputError>` (`Closed` with no terminal) packs with
     `rows::pack`; the layout (v1, magic `NGRB`) is in `rows`' module docs. The grid, seq, default colors and the cursor
-    are in a fixed 40-byte header; rows follow, then the selection of every row it crosses. Colors are `0xAARRGGBB`
-    with alpha 0 for the default; runs split at a width change and a multi-code-point cluster is a run of its own;
+    are in a fixed 40-byte header; rows follow, then the selection of every row it crosses. Colors are `0xAARRGGBB`;
+    a run's default color is `0`, resolved from the header of the frame being drawn (OSC 10/11 resends no rows); runs
+    split at a width change, a multi-code-point cluster is a run of its own, and the run kind is flag bits
+    (`RUN_WIDE | RUN_CLUSTER` is a wide cluster);
     blank cells after a row's last drawn cell are left out. `since` 0 or past the frame's seq sends every row
     (`FRAME_FULL`); after `PaneAttached` the reader passes 0. `UPDATE_GOLDEN=1` rewrites the golden fixture.
 

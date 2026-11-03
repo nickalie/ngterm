@@ -236,7 +236,6 @@ fn text_colors_and_attributes_come_through_in_runs() {
     let term = Term::new(30, 3);
     term.feed(b"\x1b[1;31mred\x1b[0m plain \x1b[3;4:3;38;2;10;20;30;48;2;1;2;3;58;2;4;5;6mx\x1b[0m\x1b[9;7m!\x1b[m");
     let frame = term.frame();
-    let (foreground, background) = (frame.colors.foreground, frame.colors.background);
     let run = |column, text: &str, attrs: CellFlags, foreground, background| DecodedRun {
         column,
         span: u16::try_from(text.chars().count()).unwrap(),
@@ -249,33 +248,15 @@ fn text_colors_and_attributes_come_through_in_runs() {
         text: text.to_owned(),
     };
     let expected = vec![
-        // a palette color, resolved; the default background keeps its RGB under alpha 0
-        run(
-            0,
-            "red",
-            CellFlags::BOLD,
-            set(frame.colors.palette[1]),
-            argb(background, 0),
-        ),
-        run(
-            3,
-            " plain ",
-            CellFlags::empty(),
-            argb(foreground, 0),
-            argb(background, 0),
-        ),
+        // a palette color, resolved; a default color is 0, taken from the header when drawn
+        run(0, "red", CellFlags::BOLD, set(frame.colors.palette[1]), 0),
+        run(3, " plain ", CellFlags::empty(), 0, 0),
         DecodedRun {
             underline: 3,
             underline_color: 0xff04_0506,
             ..run(10, "x", CellFlags::ITALIC, 0xff0a_141e, 0xff01_0203)
         },
-        run(
-            11,
-            "!",
-            CellFlags::STRIKETHROUGH | CellFlags::INVERSE,
-            argb(foreground, 0),
-            argb(background, 0),
-        ),
+        run(11, "!", CellFlags::STRIKETHROUGH | CellFlags::INVERSE, 0, 0),
     ];
     // the blank cells after the text are left out
     assert_eq!(decode(&pack(&frame, 0, false)).row(0).runs, expected);
@@ -299,6 +280,54 @@ fn wide_characters_and_clusters_have_runs_of_their_own() {
     let cluster = row.run("e\u{301}");
     assert_eq!((cluster.column, cluster.span, cluster.kind), (7, 1, RUN_CLUSTER));
     assert_eq!(row.run("x").column, 8);
+}
+
+#[test]
+fn a_wide_cluster_is_one_run_of_both_kinds() {
+    let term = Term::new(20, 2);
+    // grapheme clustering (mode 2027) joins the skin-tone modifier to the emoji
+    term.feed("\x1b[?2027ha\u{1f44d}\u{1f3fd}b".as_bytes());
+    let decoded = term.pack(0);
+    let row = decoded.row(0);
+    let cluster = row.run("\u{1f44d}\u{1f3fd}");
+    assert_eq!(
+        (cluster.column, cluster.span, cluster.kind),
+        (1, 2, RUN_WIDE | RUN_CLUSTER),
+        "one glyph two columns wide"
+    );
+    assert_eq!(row.run("b").column, 3);
+}
+
+/// A row sent before OSC 10/11 changed the defaults and not sent again still draws in the new defaults: its default
+/// colors are 0, resolved from the header of the frame being drawn.
+#[test]
+fn an_unsent_row_follows_a_change_of_the_default_colors() {
+    let term = Term::new(10, 3);
+    term.feed(b"kept\x1b[7mi\x1b[m\r\n\r\n");
+    let first = term.pack(0);
+    let kept = first.row(0).clone();
+    assert_eq!((kept.run("kept").foreground, kept.run("kept").background), (0, 0));
+    assert_eq!((kept.run("i").foreground, kept.run("i").background), (0, 0));
+
+    term.feed(b"\x1b]10;#000000\x07\x1b]11;#ffffff\x07");
+    let next = term.pack(first.seq);
+    assert!(next.seq > first.seq, "a new frame");
+    assert!(
+        next.changed.iter().all(|row| row.index != 0),
+        "row 0 did not change and is not sent"
+    );
+    assert_eq!((next.foreground, next.background), (0xff00_0000, 0xffff_ffff));
+    // drawn as the docs say, the row kept from the first frame takes the new defaults
+    let draw = |color: u32, default: u32| if color == 0 { default } else { color };
+    let plain = kept.run("kept");
+    assert_eq!(draw(plain.foreground, next.foreground), 0xff00_0000);
+    assert_eq!(draw(plain.background, next.background), 0xffff_ffff);
+    let inverse = kept.run("i");
+    assert_eq!(
+        draw(inverse.background, next.background),
+        0xffff_ffff,
+        "drawn as the foreground"
+    );
 }
 
 #[test]
@@ -407,10 +436,10 @@ fn the_handle_packs_its_current_terminal_and_refuses_with_none() {
     assert_eq!((decoded.cols, decoded.rows), (10, 2));
 }
 
-/// The golden fixture's screen: colors, attributes, a wide character, a cluster, a wrapped row, a bar cursor and a
+/// The golden fixture's screen: colors, attributes, a wide character, a cluster, a wide cluster, a wrapped row, a bar cursor and a
 /// selection, on a 12 × 4 grid.
 const GOLDEN_BYTES: &[u8] =
-    "\x1b[1;31mbold\x1b[0m \x1b[4;48;2;1;2;3mul\x1b[0m\r\n中e\u{301}\x1b[7mi\x1b[0m\r\nwrapping past the edge\x1b[5 q"
+    "\x1b[1;31mbold\x1b[0m \x1b[4;48;2;1;2;3mul\x1b[0m\r\n中e\u{301}\x1b[7mi\x1b[0m\u{1f44d}\u{1f3fd}\r\nwrapping past the edge\x1b[5 q"
         .as_bytes();
 
 fn golden_path() -> PathBuf {
@@ -495,6 +524,7 @@ fn the_golden_fixtures_rows() {
             (0, 2, RUN_WIDE, 0, 0, 0, text("中")),
             (2, 1, RUN_CLUSTER, 0, 0, 0, text("e\u{301}")),
             (3, 1, 0, 0, inverse, 0, text("i")),
+            (4, 2, RUN_WIDE | RUN_CLUSTER, 0, 0, 0, text("\u{1f44d}\u{1f3fd}")),
         ]
     );
     assert_eq!(decoded.row(2).flags, ROW_WRAPPED);
