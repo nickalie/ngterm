@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /** Where a machine's connection stands, as the app shows it. A machine with none is [Offline]. */
@@ -79,6 +80,10 @@ class Connections(
 
     // the machines whose unknown host key the user declined: the failure their connect reports is no failure to them
     private val declined = MutableStateFlow<Set<String>>(emptySet())
+
+    // the machines whose connect was cancelled before it listed them: the connection the core makes for them later
+    // (a resume's) is listed when it reports Connected
+    private val unlisted: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     /** Each machine's link, by id; a machine missing from it is [Link.Offline]. */
     val links: StateFlow<Map<String, Link>> = linkState.asStateFlow()
@@ -153,7 +158,8 @@ class Connections(
     // afresh here, as a listing that failed or was dropped while it was down would otherwise never be redone
     private fun reconnected(machineId: String) {
         val before = linkState.getAndUpdate { it + (machineId to Link.Connected) }[machineId]
-        if (before is Link.Reconnecting) scope.launch { listSessions(machineId) }
+        val cancelled = unlisted.remove(machineId)
+        if (before is Link.Reconnecting || cancelled) scope.launch { listSessions(machineId) }
     }
 
     // a failure doesn't hide a changed host key (the core reports one with both), and a declined key is no failure
@@ -200,7 +206,9 @@ class Connections(
                     if (links[id] == Link.Connecting) links + (id to Link.Connected) else links
                 }
             } catch (_: MobileException.Cancelled) {
-                // overtaken by a disconnect or another connect, which reports its own state
+                // overtaken by a disconnect or another connect, which reports its own state; or set aside by a
+                // suspend, whose resume connects it with no caller: that connection is listed when it comes
+                unlisted.add(id)
                 return@launch
             } catch (error: MobileException) {
                 if (linkState.value[id] is Link.Connecting) failed(id, error.reason())

@@ -7,7 +7,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Whether any of the app's activities is started (on screen), counted from [application]'s activity callbacks. */
+/**
+ * Whether any of the app's activities is started (on screen), counted from [application]'s activity callbacks. An
+ * activity stopped for a configuration change (it is recreated at once) doesn't count as leaving the screen.
+ */
 class Foreground(
     application: Application,
 ) {
@@ -27,7 +30,8 @@ class Foreground(
 
                 override fun onActivityStopped(activity: Activity) {
                     started = (started - 1).coerceAtLeast(0)
-                    shown.value = started > 0
+                    // a rotation, resize or theme switch stops the activity only to start it again at once
+                    if (!activity.isChangingConfigurations) shown.value = started > 0
                 }
 
                 override fun onActivityCreated(

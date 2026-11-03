@@ -57,6 +57,22 @@ class ConnectionsTest {
         }
 
     @Test
+    fun aConnectCancelledBySuspendIsListedWhenTheResumedConnectionComes() =
+        runTest {
+            val connections = connections()
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            core.failNext("connect", MobileException.Cancelled())
+            connections.connect(machine)
+            advanceUntilIdle()
+            assertEquals(null, connections.trees.value["m1"])
+            // the resume's connect has no caller in the app: the core only reports it (the fake connects as it would)
+            core.connect(machine)
+            advanceUntilIdle()
+            assertEquals(Link.Connected, connections.links.value["m1"])
+            assertEquals(listOf(fakeSession("s1")), connections.trees.value["m1"])
+        }
+
+    @Test
     fun aFailedConnectIsUnreachableWithTheCoresReason() =
         runTest {
             val connections = connections()
