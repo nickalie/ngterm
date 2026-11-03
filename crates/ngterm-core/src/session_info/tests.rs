@@ -126,6 +126,50 @@ fn links_keep_labels_only_and_unknown_attributes_are_unstyled() {
 }
 
 #[test]
+fn link_metadata_never_interprets_attributes_but_visible_labels_do() {
+    for source in [
+        "[PR](https://example.com \"^[x](color: red)\")",
+        "[PR](https://example.com '^[x](color: \"pink\")')",
+        "[PR](https://example.com (^[x]\\(dim: 42\\)))",
+        "[PR](https://example.com/^[x](color:red))",
+    ] {
+        let parsed = SessionInfo::make(source, true, 0.0).unwrap_or_else(|error| panic!("{source}: {error}"));
+        assert_eq!(parsed.spans, vec![span("PR")], "{source}");
+    }
+    assert_eq!(
+        info("[^[**PR**](color: 'green')](https://example.com \"^[x](color: red)\")").spans,
+        vec![SessionInfoSpan {
+            bold: true,
+            color: Some(TintColor::Green),
+            ..span("PR")
+        }]
+    );
+    assert_eq!(
+        info("<https://example.com/^[x](color:red)>").spans,
+        vec![span("https://example.com/^[x](color:red)")]
+    );
+    assert_eq!(
+        info("[a `]` b](https://example.com \"^[x](dim: 42)\")").spans,
+        vec![
+            span("a "),
+            SessionInfoSpan {
+                code: true,
+                ..span("]")
+            },
+            span(" b")
+        ]
+    );
+    assert_eq!(
+        SessionInfo::make("[^[PR](color: red)](https://example.com)", true, 0.0).unwrap_err(),
+        INVALID_MARKDOWN
+    );
+    assert_eq!(
+        SessionInfo::make("[PR](https://example.com) ^[x](color: red)", true, 0.0).unwrap_err(),
+        INVALID_MARKDOWN
+    );
+}
+
+#[test]
 fn bad_colors_and_typed_attributes_are_rejected() {
     assert_eq!(
         SessionInfo::make("^[a](color: \"pink\")", true, 0.0).unwrap_err(),

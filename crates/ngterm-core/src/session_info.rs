@@ -227,7 +227,7 @@ fn numeric_controls(source: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Converts Foundation attribute runs to private inline tags, skipping escaped syntax and inline code.
+/// Converts visible Foundation attribute runs to private inline tags, leaving code and link metadata literal.
 fn attribute_source(source: &str, attributes: &mut Vec<InfoAttributes>, marker: &str) -> Result<String, String> {
     let mut out = String::new();
     let mut rest = source;
@@ -248,6 +248,15 @@ fn attribute_source(source: &str, attributes: &mut Vec<InfoAttributes>, marker: 
             }
             out.push_str(&rest[..ticks]);
             rest = &rest[ticks..];
+            continue;
+        }
+        if code_ticks == 0
+            && let Some((label, end)) = link_bounds(rest)
+        {
+            out.push_str(&rest[..label.start]);
+            out.push_str(&attribute_source(&rest[label.clone()], attributes, marker)?);
+            out.push_str(&rest[label.end..end]);
+            rest = &rest[end..];
             continue;
         }
         if code_ticks == 0
@@ -281,17 +290,57 @@ fn has_closing_ticks(mut source: &str, count: usize) -> bool {
     false
 }
 
-fn attribute_bounds(source: &str) -> Option<(usize, usize)> {
+/// Parses a link with a plain temporary label so custom attributes in its actual label cannot hide its target.
+fn link_bounds(source: &str) -> Option<(std::ops::Range<usize>, usize)> {
+    if source.starts_with('<') {
+        return Parser::new(source).into_offset_iter().find_map(|(event, range)| {
+            matches!(event, Event::Start(Tag::Link { .. }))
+                .then_some(range)
+                .filter(|range| range.start == 0)
+                .map(|range| (0..0, range.end))
+        });
+    }
+    if !source.starts_with('[') {
+        return None;
+    }
+    let end = label_end(source, 0)?;
+    let candidate = format!("[x{}", &source[end..]);
+    Parser::new(&candidate).into_offset_iter().find_map(|(event, range)| {
+        matches!(event, Event::Start(Tag::Link { .. }))
+            .then_some(range)
+            .filter(|range| range.start == 0)
+            .map(|range| (1..end, end + range.end - 2))
+    })
+}
+
+fn label_end(source: &str, opening: usize) -> Option<usize> {
     let mut depth = 1;
     let mut escaped = false;
-    for (index, character) in source[2..].char_indices() {
-        let index = index + 2;
+    let mut code_ticks = 0;
+    let mut rest = &source[opening + 1..];
+    while !rest.is_empty() {
+        let index = source.len() - rest.len();
+        let character = rest.chars().next()?;
+        rest = &rest[character.len_utf8()..];
         if escaped {
             escaped = false;
             continue;
         }
-        if character == '\\' {
+        if character == '\\' && code_ticks == 0 {
             escaped = true;
+            continue;
+        }
+        if character == '`' {
+            let ticks = 1 + rest.bytes().take_while(|byte| *byte == b'`').count();
+            rest = &rest[ticks - 1..];
+            if code_ticks == 0 && has_closing_ticks(rest, ticks) {
+                code_ticks = ticks;
+            } else if code_ticks == ticks {
+                code_ticks = 0;
+            }
+            continue;
+        }
+        if code_ticks != 0 {
             continue;
         }
         if character == '[' {
@@ -301,29 +350,34 @@ fn attribute_bounds(source: &str) -> Option<(usize, usize)> {
             depth -= 1;
         }
         if depth == 0 {
-            if !source[index..].starts_with("](") {
-                return None;
-            }
-            let mut quote = None;
-            let mut escaped = false;
-            for (offset, character) in source[index + 2..].char_indices() {
-                if escaped {
-                    escaped = false;
-                    continue;
-                }
-                if character == '\\' {
-                    escaped = true;
-                    continue;
-                }
-                if quote == Some(character) {
-                    quote = None;
-                } else if quote.is_none() && matches!(character, '\'' | '"') {
-                    quote = Some(character);
-                } else if quote.is_none() && character == ')' {
-                    return Some((index, index + 2 + offset));
-                }
-            }
-            return None;
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn attribute_bounds(source: &str) -> Option<(usize, usize)> {
+    let index = label_end(source, 1)?;
+    if !source[index..].starts_with("](") {
+        return None;
+    }
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, character) in source[index + 2..].char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if quote == Some(character) {
+            quote = None;
+        } else if quote.is_none() && matches!(character, '\'' | '"') {
+            quote = Some(character);
+        } else if quote.is_none() && character == ')' {
+            return Some((index, index + 2 + offset));
         }
     }
     None
