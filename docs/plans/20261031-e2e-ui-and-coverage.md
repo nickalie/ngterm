@@ -664,15 +664,15 @@ ratchets. Self-tests pass except the two known host-dependent `test_impls` noop-
 
 ### Task 13: [Final] Update documentation
 
-- [ ] `conformance/README.md`: the ui layer on the Rust build, the drivers, the pointer API, `--trace-mode`, `--coverage`,
+- [x] `conformance/README.md`: the ui layer on the Rust build, the drivers, the pointer API, `--trace-mode`, `--coverage`,
       the floors; the reruns rule per side
-- [ ] `conformance/docs/rust-build.md`: the Linux ui launch contract (own Xvfb, the run's a11y bus, the env), the
+- [x] `conformance/docs/rust-build.md`: the Linux ui launch contract (own Xvfb, the run's a11y bus, the env), the
       coverage build and flush
-- [ ] `README.md` > Test and Native dependencies: Xvfb, at-spi2-core, the `Atspi` typelib, the Python packages,
+- [x] `README.md` > Test and Native dependencies: Xvfb, at-spi2-core, the `Atspi` typelib, the Python packages,
       cargo-llvm-cov and `llvm-tools`; the Windows setup if it changed
-- [ ] the bounds patch's header says why it is there, as the other `build/patches/gpui-pre-linux` patches do
-- [ ] `CLAUDE.md` > Porting a command group: a UI port lands with its ui test (the rule, no details)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] the bounds patch's header says why it is there, as the other `build/patches/gpui-pre-linux` patches do
+- [x] `CLAUDE.md` > Porting a command group: a UI port lands with its ui test (the rule, no details)
+- [x] move this plan to `docs/plans/completed/` (left to the harness, which moves the plan after all phases finish)
 
 ## Post-Completion
 

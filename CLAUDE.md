@@ -58,6 +58,7 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
    `site/commands.html` and its matching `.claude/rules/*.md`.
 2. Implement in `ngterm-core` with tests on the fakes, asserting upstream's error strings.
 3. Wire the frontend in `ngterm-gpui` (terminal behavior in `ngterm-term`), following upstream's UI in GPUI idioms.
+   A UI port lands with its ui test (`conformance/tests/ui`), green on the reference first.
 4. Port the `ngtermctl` subcommands from upstream's `agtermctlKit`.
 5. Claim a capability (rust-build.md > Rust target profile) once its commands implement it.
 6. Check it as [Choosing checks](#choosing-checks) says; add newly green conformance ids to the ratchet.

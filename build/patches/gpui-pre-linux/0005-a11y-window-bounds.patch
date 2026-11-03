@@ -1,13 +1,17 @@
-Publish window bounds to AccessKit when the adapter starts and when geometry changes.
-
-X11 translates the real client origin to root coordinates (ConfigureNotify can be
-parent-relative or stale during a resize), refreshes on ReparentNotify even without
-a subsequent configure event, rounds reconstructed device-pixel dimensions, and uses the
-full client surface as the node origin (client-drawn shadow insets are already
-included in GPUI node coordinates). Wayland exposes only scaled surface-relative bounds
-at zero origin, including on scale changes; it cannot report a global position.
-Without these updates AT-SPI root extents are unknown and pointer clients cannot
-locate controls on screen. Covered by the private-Xvfb/AT-SPI integration probe.
+Window bounds published to AccessKit (Task 4 of docs/plans/20261031-e2e-ui-and-coverage.md). AccessKit places each
+node in the bounds its adapter was last told for the window, and GPUI's Linux backends define
+`a11y_update_window_bounds` but never call it, so `accesskit_unix` gave AT-SPI clients window-local extents: a screen
+reader's or a test driver's `Component.get_extents(SCREEN)` landed at the screen's origin, and nothing could point at a
+control (the conformance suite's `atspi` driver clicks and drags by those extents; `accesskit_windows` maps to the
+screen itself through `ClientToScreen`, so Windows needs nothing). Both backends now report the bounds when the
+adapter starts and on every geometry change. X11 translates the client window's origin to root coordinates
+(`ConfigureNotify` can be parent-relative or stale during a resize), refreshes on `ReparentNotify` even without a
+configure that follows it, rounds the device-pixel size it rebuilds, and takes the whole client surface as the
+nodes' origin (the client-drawn shadow insets are already in GPUI's node coordinates). Wayland gives a client no
+global position, so it reports the scaled surface at a zero origin, a scale change included. The other platforms are
+unchanged. Checked on a private Xvfb and a11y bus by `conformance/selftests/test_linux_ui_integration.py` (the app,
+and the `a11y_inset_probe` example's window with client-drawn insets) and by the suite's ui layer.
+scripts/vendor-gpui.sh applies this to the verified crates.io archive.
 
 diff -ruN a/src/linux/wayland/window.rs b/src/linux/wayland/window.rs
 --- a/src/linux/wayland/window.rs

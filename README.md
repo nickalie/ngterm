@@ -206,7 +206,14 @@ and how this build does it where the OS matters:
   line), which imports the plugin's bare ES module. A missing or older one skips them (`SKIPPED:`) unless
   `NGTERM_REQUIRE_NODE_TESTS` is set, as CI sets it, which fails them instead.
 - For the conformance suite: Python 3.11+ with venv, weston and dbus-daemon (each instance gets its own headless
-  weston and bus); zsh or fish as the login shell for the Live tests of that shell.
+  weston and bus); zsh or fish as the login shell for the Live tests of that shell. Its ui layer also needs Xvfb (an
+  X11 display per ui instance), at-spi2-core (`at-spi-bus-launcher` and `at-spi2-registryd`, found in the
+  distributions' libexec directories too), the `Atspi-2.0` typelib (Arch's `at-spi2-core`, Debian and Ubuntu's
+  `gir1.2-atspi-2.0`) and the suite's `linux-ui` extra (PyGObject and python-xlib; pip builds PyGObject against the
+  gobject-introspection (`libgirepository-2.0-dev`), cairo and Python development files with a C compiler). A missing
+  one fails a run that selects the ui layer (exit 2, naming it).
+- For the suite's code coverage (`run-linux.sh --coverage`): cargo-llvm-cov (`cargo install cargo-llvm-cov`) and the
+  toolchain's `llvm-tools` component (`rustup component add llvm-tools`).
 
 On Ubuntu 26.04, the `linux` CI job's packages (the last two lines, with meson and ninja, build weston 15, which
 the GPUI runs need and 26.04 lacks; fish and zsh run the replay scripts' tests in their shells) plus `zstd` and
@@ -222,12 +229,13 @@ sudo apt-get install pkg-config libfontconfig-dev libfreetype-dev \
 ```
 
 On Arch, the `conformance` CI container's packages but git and rustup (WPE WebKit and lavapipe from the distribution;
-zsh and fish for the Live tests of those login shells):
+zsh and fish for the Live tests of those login shells; at-spi2-core and gobject-introspection for the ui layer):
 
 ```sh
 sudo pacman -S --needed wpewebkit bubblewrap meson ninja wayland wayland-protocols libxkbcommon libxcb \
   curl xz zstd patch ncurses fontconfig ttf-dejavu procps-ng weston dbus xorg-server-xvfb mesa vulkan-swrast \
-  pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 python zsh fish
+  pixman libinput libevdev libdrm cairo pango libpng hwdata seatd lcms2 python zsh fish \
+  at-spi2-core gobject-introspection
 ```
 
 Run-time dependencies of every `ngterm` binary:
@@ -585,7 +593,8 @@ PowerShell 7):
   in `build/pins.env`, whose comment says why that version) into the vendor root on first use (`NGTERM_WIX` names a
   `wix` of that version instead), and the Visual C++ redistributable files of the Visual Studio the build links with,
   which it puts beside the executables;
-- for the suite, Python 3.11 or later with venv (CI runs 3.14).
+- for the suite, Python 3.11 or later with venv (CI runs 3.14); its ui layer's UI Automation bindings (comtypes) come
+  with the suite's install; its `--coverage` run needs cargo-llvm-cov and the `llvm-tools` component, as on Linux.
 
 Build and stage, from Git Bash (`stage.sh` takes a destination in either form and stages
 `bin\{ngterm,ngtermctl,ngterm-session}.exe` beside `share\`, the layout the suite, the installer and an install run
@@ -637,8 +646,8 @@ cargo test -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ng
 cargo test -p ngterm-gpui --no-default-features && cargo test -p ngterm-gpui   # without and with the HTML overlays
 python -m venv .venv && .venv/Scripts/python.exe -m pip install -e conformance
 .venv/Scripts/python.exe -m pytest conformance/selftests/test_transport.py conformance/selftests/test_client.py \
-  conformance/selftests/test_windows_launch.py      # the harness's Windows self-tests: the pipe transport, the launch
-conformance/tools/run-windows.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS...]
+  conformance/selftests/test_windows_launch.py conformance/selftests/test_uia.py   # pipe, launch, UIA mappings
+conformance/tools/run-windows.sh [--ratchet-only] [--stage DIR] [--coverage] [-- PYTEST_ARGS...]
 ```
 
 - `ngterm-gpui`'s tests that need Xvfb, weston, lavapipe, a D-Bus bus or WPE WebKit are Linux-only, and those whose
@@ -684,7 +693,7 @@ cargo clippy -p ngterm-gpui --no-default-features --all-targets -- -D warnings  
 scripts/lint-report.sh                      # complexity #[expect]s with their reasons; refuses inner #![allow]
 GDK_BACKEND=x11 xvfb-run -a dbus-run-session cargo test --workspace
 .venv/bin/python -m pytest conformance/selftests   # the suite's own tests, host-free
-conformance/tools/run-linux.sh [--ratchet-only] [--stage DIR] [-- PYTEST_ARGS...]
+conformance/tools/run-linux.sh [--ratchet-only] [--stage DIR] [--coverage] [-- PYTEST_ARGS...]
 ```
 
 A change to the WPE or gir pins also runs `scripts/gen-wpe-bindings.sh --check`, as the `wpe` CI job does; one to
@@ -700,12 +709,18 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 - `--workspace` includes the WPE crates (`ngterm-wpe` and its -sys crates) and the GPUI frontend's HTML overlays,
   which need WPE WebKit ([WPE WebKit](#wpe-webkit)); without it, pass `"${WORKSPACE_WITHOUT_WPE[@]}"` and then
   `"${GPUI_WITHOUT_HTML[@]}"` (from `scripts/lib/native.sh`) instead, as the Ubuntu CI jobs do.
-- `run-linux.sh` builds the release workspace, stages it into `target/conformance-stage`, runs the protocol, cli
-  and behaviors layers with `--impl rust` and exits with the ratchet's status. It runs the suite with `$PYTHON`, else
-  `.venv/bin/python`, else `python3`, with the suite installed:
-  `python3 -m venv .venv && .venv/bin/pip install -e conformance`. See
+- `run-linux.sh` builds the release workspace, stages it into `target/conformance-stage`, runs the protocol, cli,
+  behaviors and ui layers with `--impl rust` and exits with the ratchet's status. It runs the suite with `$PYTHON`,
+  else `.venv/bin/python`, else `python3`, with the suite installed:
+  `python3 -m venv .venv && .venv/bin/pip install -e "conformance[linux-ui]"`. See
   [conformance/README.md](conformance/README.md) and [conformance/docs/rust-build.md](conformance/docs/rust-build.md).
-  It renders on lavapipe from `scripts/fetch-lavapipe.sh`.
+  It renders on lavapipe from `scripts/fetch-lavapipe.sh`; the ui layer's instances run on X11, each on a private
+  Xvfb, their accessibility trees on an a11y bus of the run's own, never the desktop's. A failed test leaves a trace
+  (`--trace-mode`) under the report's `traces/`.
+- `run-linux.sh --coverage` runs the suite on an instrumented build and writes the code coverage report
+  (`coverage/lcov.info`, `html/`, `summary.md`), which `conformance/tools/check_coverage.py` holds against
+  `conformance/coverage-floor-linux.txt` (conformance/README.md > Code coverage). It is CI's job; run it locally only
+  for a change to the coverage tooling.
 - Lint rules: `[workspace.lints]` in `Cargo.toml` (clippy `all` + `pedantic`, the complexity and robustness lints
   denied) with the thresholds in `clippy.toml`; the only exception is a reasoned outer `#[expect]` on one item.
 
@@ -719,7 +734,8 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   overlays, see [WPE WebKit](#wpe-webkit)), then the staged build (HTML overlays on) under the suite in the `wpe`
   job's Arch container, on its lavapipe, held by `rust-passing.txt`, once per login shell (`conformance`, a matrix:
   bash, fish and zsh), each with `--must-pass live-any-shell`, the zsh and fish ones with `--must-pass live-sessions`
-  too; the bash one runs the app's process tests with the overlays on first.
+  too; the bash one runs the app's process tests with the overlays on first, and a `coverage` entry runs the suite on
+  an instrumented build, judged by `conformance/coverage-floor-linux.txt` only.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
   `ngterm-core`, `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt`, `ngterm-pty`, `ngterm-term`, `ngterm-server`,
   `ngterm-ctl`, `ngterm-app` and `ngterm-headless` so far), on Ubuntu, macOS and Windows runners: the libghostty-vt
@@ -730,8 +746,9 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   its HTML overlays (WebView2, which the runner image carries). Beside it, `windows`: the harness's Windows
   self-tests and the suite against the staged release build (`conformance/tools/run-windows.sh`, with `--must-pass
   live-any-shell`: the runner's login shell is Windows PowerShell), held by `rust-passing-windows.txt`; the report
-  and the stage are kept as artifacts. It also runs on pushes to `ci/**` branches, to check a macOS or Windows form
-  without a PR.
+  and the stage are kept as artifacts; and `coverage-windows`, the suite on an instrumented build, judged by
+  `conformance/coverage-floor-windows.txt` only. The workflow also runs on pushes to `ci/**` branches, to check a
+  macOS or Windows form without a PR.
 - `windows-installer.yml` (the same triggers, and by hand): the release build staged, the MSI built from it with the
   pinned WiX and one of the next patch version, then `scripts/check-msi.ps1` installs, checks, upgrades and
   uninstalls it on the runner; the MSI is kept as the `ngterm-msi` artifact.
@@ -742,7 +759,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 
 - `crates/`: the Cargo workspace (crate map in [CLAUDE.md](CLAUDE.md)).
 - `conformance/`: the suite, its catalog of upstream's commands, the ratchet lists `rust-passing.txt` and
-  `rust-passing-windows.txt`.
+  `rust-passing-windows.txt`, the code coverage floors `coverage-floor-linux.txt` and `coverage-floor-windows.txt`.
 - `build/`: `pins.env`, the ghostty-vt, gir, calloop, GPUI and portable-pty patches, the bundled skill's patches over
   upstream's.
 - `vendor/`: the patched GPUI, calloop and portable-pty crates, recreated by the vendor scripts (an edit there goes back into its

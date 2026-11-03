@@ -52,6 +52,24 @@ The Rust build (GPUI) gets, on top of that:
 - a headless weston started with `--fake-seat`, since GPUI needs a `wl_seat`: weston 15.0 or later (the system's, or
   the one `scripts/build-weston.sh` vendors where the system's is older).
 
+A Linux ui instance (one a `tests/ui` module launches: its module fixtures, `launch()`, `relaunch`) runs on X11
+instead, since Wayland gives a client neither global coordinates nor input injection (`agterm_conformance/linux_ui.py`):
+
+- once per run, before the first ui test, the harness starts a private session bus with `at-spi-bus-launcher` on it
+  (the a11y bus) and `at-spi2-registryd`, turns `org.a11y.Status.IsEnabled` on, sets its own `AT_SPI_BUS_ADDRESS` to
+  that bus before `Atspi.init()` (libatspi binds one a11y bus per process) and reaps all three at the session's end;
+- per instance, its own `Xvfb -displayfd` (no TCP, the weston instances' screen size, no window manager) and its own
+  session bus, on which a helper (`a11y_status.py`) answers `org.a11y.Bus.GetAddress` with the run's bus and
+  `IsEnabled` true, as AccessKit asks before it publishes;
+- the env: `DISPLAY` the instance's Xvfb, `GDK_BACKEND=x11`, `AT_SPI_BUS_ADDRESS` the run's, `GSETTINGS_BACKEND=memory`,
+  no `WAYLAND_DISPLAY` or `XAUTHORITY`. `check_launch_env` lets exactly these through and refuses any other display or
+  a11y address.
+
+The build publishes its AccessKit tree there (GPUI's X11 backend, `accesskit_unix`) with each node's author id as its
+`AccessibleId` and screen extents (`build/patches/gpui-pre-linux/0005-a11y-window-bounds.patch` reports the window's
+bounds to AccessKit); the `atspi` driver finds the application by the instance's pid and sends XTest input to the
+instance's display. Rendering stays on lavapipe.
+
 On Windows (`tools/run-windows.sh`) the launch differs where the OS does:
 
 - the control socket's path is the identity, and the build serves the named pipe it names
@@ -275,7 +293,8 @@ wire is upstream's everywhere else.
 ## Ratchet
 
 `conformance/tools/run-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` and runs the
-protocol, cli and behaviors layers with `--impl rust`, each instance on its own headless weston and session bus.
+protocol, cli, behaviors and ui layers with `--impl rust`, each instance on its own headless weston and session bus (a
+ui instance on its own Xvfb, Launch contract above).
 pytest writes each test's merged outcome with `--nodeid-report` next to the report in
 `conformance/reports/rust-linux/`, and `conformance/tools/check_ratchet.py` holds `conformance/rust-passing.txt`
 against it: one pytest node id per line, verbatim and sorted.
@@ -343,3 +362,20 @@ needs the WebView2 Runtime), `ngterm-ctl` and `ngterm-session`, and stages them 
 staged elsewhere, such as the `windows` job's `rust-windows-stage` artifact on a VM. No lavapipe, weston or bus: the
 build renders through DirectX on the machine's adapter, on the desktop the run is on (Launch contract above). The
 probes are Linux's.
+
+## Coverage build
+
+`run-linux.sh --coverage` and `run-windows.sh --coverage` (conformance/README.md > Code coverage) build the release
+workspace under `cargo llvm-cov show-env`, which adds `-C instrument-coverage` and `cfg(coverage)` (declared in the
+workspace's `check-cfg`), in a target dir of its own, `target/llvm-cov-target`, after `cargo llvm-cov clean
+--workspace`, and stage it into `target/conformance-stage-cov`. It needs cargo-llvm-cov and the toolchain's
+`llvm-tools` component (`rustup component add llvm-tools`), which `rust-toolchain.toml` does not list.
+
+The harness gives every process it starts from the build `LLVM_PROFILE_FILE` in that target dir, pooled per binary
+(`%4m`, merged online), and drops an inherited one when the run names none. The profile runtime writes from an exit
+handler, so a process that ends past its handlers writes its profile first: `ngterm_app::coverage::write_profile`
+(`__llvm_profile_write_file`, then the counters reset) runs in the app's `exit_now` before `_exit` or `TerminateProcess`
+of itself, in `ngterm-headless`'s relaunch before its `exec`, and in `ngterm-wpe`'s `exit_process` (its own `_exit`, the
+HTML worker's too); nothing in a build without `cfg(coverage)`. A `process::exit` or a return from `main` needs nothing.
+After the suite `cargo llvm-cov report` merges the profiles against the staged binaries, which must be the build's own
+byte for byte (`agterm_conformance/code_coverage.py`).
