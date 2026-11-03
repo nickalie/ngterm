@@ -121,18 +121,25 @@ pub struct ControlResult {
     /// as `ControlLiveInventory::live_reset` does.
     #[serde(default)]
     pub companion_page: Option<serde_json::Value>,
+    /// `msg.send`: the id shared by every delivered copy.
     #[serde(default, rename = "messageID")]
     pub message_id: Option<String>,
+    /// `msg.send`: the recipient addresses that received a copy.
     #[serde(default)]
     pub delivered: Option<Vec<String>>,
+    /// `msg.send`: the rejected recipients and their reasons.
     #[serde(default)]
     pub rejected: Option<Vec<MessageRejection>>,
+    /// `msg.read`: the oldest messages in the reader's mailbox.
     #[serde(default)]
     pub messages: Option<Vec<BusMessage>>,
+    /// `msg.read`: how many pending messages were left out of this batch.
     #[serde(default)]
     pub remaining: Option<usize>,
+    /// `msg.ack`/`msg.read --ack`: the removed message ids, empty included.
     #[serde(default)]
     pub acked: Option<Vec<String>>,
+    /// `live.attach.group`: the membership discovery and companion attach outcomes.
     #[serde(default)]
     pub remote_group: Option<ControlRemoteGroup>,
 }
@@ -587,6 +594,53 @@ pub struct ControlWindowNode {
     pub minimized: Option<bool>,
 }
 
+/// A message queued in a pane's mailbox (upstream's `BusMessage` in `MessageBus.swift`).
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BusMessage {
+    pub id: String,
+    #[serde(default)]
+    pub from: Option<String>,
+    pub to: String,
+    pub ts: f64,
+    pub body: String,
+}
+
+/// A recipient a send could not reach (upstream's `MessageRejection` in `MessageBus.swift`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageRejection {
+    pub address: String,
+    pub reason: MessageRejectionReason,
+}
+
+/// A failed recipient's reason (upstream's `MessageRejection.Reason` in `MessageBus.swift`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MessageRejectionReason {
+    #[serde(rename = "mailbox full")]
+    MailboxFull,
+    #[serde(rename = "unknown pane")]
+    UnknownPane,
+}
+
+/// `live.attach.group`'s receipt (upstream's `ControlRemoteGroup` in `ControlPayloads.swift`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlRemoteGroup {
+    pub membership_known: bool,
+    pub companions: Vec<ControlRemoteGroupMember>,
+}
+
+/// One companion's attach outcome (upstream's `ControlRemoteGroupMember` in `ControlPayloads.swift`).
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlRemoteGroupMember {
+    pub origin: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -797,49 +851,4 @@ mod tests {
         let old: ControlRestartReceipt = serde_json::from_str(r#"{"paneID":"token","oldPid":11,"newPid":22}"#).unwrap();
         assert_eq!(old.replayed_argv, None);
     }
-}
-
-/// A message queued in a pane's mailbox (upstream's `BusMessage`).
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BusMessage {
-    pub id: String,
-    #[serde(default)]
-    pub from: Option<String>,
-    pub to: String,
-    pub ts: f64,
-    pub body: String,
-}
-
-/// A recipient a send could not reach.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MessageRejection {
-    pub address: String,
-    pub reason: MessageRejectionReason,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MessageRejectionReason {
-    #[serde(rename = "mailbox full")]
-    MailboxFull,
-    #[serde(rename = "unknown pane")]
-    UnknownPane,
-}
-
-/// The receipt for attaching a remote parent and its companions.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ControlRemoteGroup {
-    pub membership_known: bool,
-    pub companions: Vec<ControlRemoteGroupMember>,
-}
-
-#[skip_serializing_none]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ControlRemoteGroupMember {
-    pub origin: String,
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default)]
-    pub error: Option<String>,
 }

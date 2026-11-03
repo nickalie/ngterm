@@ -90,7 +90,7 @@ fn validate_spinner_style(style: Option<&str>) -> Result<(), String> {
 }
 
 /// Refuses what cannot be scheduled rather than clamping it, as the server does.
-fn validate_hide_after(seconds: Option<f64>) -> Result<(), String> {
+pub(crate) fn validate_hide_after(seconds: Option<f64>) -> Result<(), String> {
     match seconds {
         Some(seconds) if !HudSpec::is_valid_hide_after(seconds) => {
             Err(format!("hide-after must be 0...{:.0} seconds", HudSpec::MAX_HIDE_AFTER))

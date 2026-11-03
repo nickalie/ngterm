@@ -1,11 +1,13 @@
 //! The `session` subcommands that set per-session metadata rather than drive a surface
-//! (`agtermctlKit/SessionMetadataCommands.swift`, `Session.Seen`): `status`, `flag`, `context` and `seen`.
+//! (`agtermctlKit/SessionMetadataCommands.swift`, `Session.Seen`): `status`, `flag`, `context`, `info` and `seen`.
 
-use ngterm_core::model::{StatusShape, is_valid_color_hex};
+use ngterm_core::hud::HudSpec;
+use ngterm_core::model::{StatusShape, TintColor, is_valid_color_hex};
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Request};
 
 use crate::session::session_request;
+use crate::session_hud::validate_hide_after;
 use crate::session_io::validate_pane;
 use crate::{BasicOptions, ClientOptions, RequestCommand, TargetOptions};
 
@@ -230,14 +232,37 @@ impl RequestCommand for Context {
 
 /// `ngtermctl session info`: ephemeral sidebar activity.
 #[derive(Debug, clap::Args)]
-#[command(about = "Set or clear the info line drawn under a session's sidebar row.")]
+#[command(
+    about = "Set or clear the info line drawn under a session's sidebar row.",
+    long_about = format!(
+        "The line shows current activity, such as a status or a count. Each set replaces the whole \
+         line: omitting --markdown sends plain text and omitting --hide-after cancels an earlier \
+         expiry. It is not kept across a relaunch. Settings > Interface > Session info picks where it \
+         shows: Always (default), Flagged (the flagged view only) or Off; that hides it, never clears it.\n\
+         Markdown example: '**3** agents ^[running](color: \"green\") ^[idle](dim: true)'. Colors: \
+         {}; the value must be quoted.",
+        TintColor::valid_names_list()
+    )
+)]
 pub struct Info {
+    #[arg(help = "The line (omit with --clear); max 512 UTF-8 bytes, one visible line.")]
     text: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Remove the line.")]
     clear: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Read TEXT as inline markdown with ^[text](color: \"NAME\") and ^[text](dim: true)."
+    )]
     markdown: bool,
-    #[arg(long, allow_hyphen_values = true)]
+    #[arg(
+        long,
+        allow_hyphen_values = true,
+        help = format!(
+            "Clear the line by itself after SECONDS, 0...{:.0}, 0 for never; each set \
+             restarts it. Use a positive value and refresh activity lines so they expire if the caller stops.",
+            HudSpec::MAX_HIDE_AFTER
+        )
+    )]
     hide_after: Option<f64>,
     #[command(flatten)]
     target: TargetOptions,
@@ -257,13 +282,7 @@ impl RequestCommand for Info {
         if self.clear && (self.markdown || self.hide_after.is_some()) {
             return Err("--clear takes no --markdown or --hide-after".to_owned());
         }
-        if self
-            .hide_after
-            .is_some_and(|seconds| !seconds.is_finite() || !(0.0..=86400.0).contains(&seconds))
-        {
-            return Err("hide-after must be 0...86400 seconds".to_owned());
-        }
-        Ok(())
+        validate_hide_after(self.hide_after)
     }
 
     fn make_request(&self) -> Request {

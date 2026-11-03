@@ -436,8 +436,6 @@ impl RequestCommand for Tree {
                   this command does can kill them. The session is not restored after a relaunch."
 )]
 pub struct Attach {
-    #[arg(long, help = "Attach the parent and its companions as a group.")]
-    companions: bool,
     #[arg(help = "The host, as ssh would take it.")]
     host: String,
 
@@ -449,6 +447,12 @@ pub struct Attach {
         help = "Local open window id, unique prefix, or active (default: frontmost after discovery)."
     )]
     window: Option<String>,
+
+    #[arg(
+        long,
+        help = "Also attach every companion of the session, under it; the session must not itself be a companion."
+    )]
+    companions: bool,
 
     #[command(flatten)]
     options: BasicOptions,

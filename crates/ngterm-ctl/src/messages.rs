@@ -29,7 +29,7 @@ enum MsgCommand {
 struct Identity {
     #[arg(
         long = "as",
-        help = "Act as SESSION:PANE-ID (defaults to NGTERM_SESSION_ID:NGTERM_PANE_ID)."
+        help = "Act as this pane, SESSION:PANE-ID (defaults to NGTERM_SESSION_ID:NGTERM_PANE_ID)."
     )]
     identity: Option<String>,
 }
@@ -52,16 +52,25 @@ impl Identity {
 }
 
 #[derive(Debug, clap::Args)]
-#[command(about = "Send a message to one or more panes.")]
+#[command(
+    about = "Send a message to one or more panes.",
+    long_about = "msg send \"build done\" --to SESSION:right\n\
+                  msg send --stdin --all --workspace W < notes.txt\n\
+                  \n\
+                  A recipient is SESSION:PANE, where PANE is a pane id or left, right or scratch. --all reaches \
+                  every live pane in every open window except the sender. Prints the message id. Exit 1 when any \
+                  recipient was rejected; the copies that were delivered stay queued."
+)]
 struct Send {
+    #[arg(help = "Message body; use --stdin to read it instead.")]
     text: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Read the body from stdin.")]
     stdin: bool,
-    #[arg(long = "to", action = clap::ArgAction::Append)]
+    #[arg(long = "to", action = clap::ArgAction::Append, help = "Recipient SESSION:PANE; repeat for several.")]
     recipients: Vec<String>,
-    #[arg(long)]
+    #[arg(long, help = "Send to every live pane except the sender.")]
     all: bool,
-    #[arg(long)]
+    #[arg(long, help = "With --all, only the panes of this workspace.")]
     workspace: Option<String>,
     #[command(flatten)]
     identity: Identity,
@@ -70,13 +79,20 @@ struct Send {
 }
 
 #[derive(Debug, clap::Args)]
-#[command(about = "Read the oldest messages in this pane's mailbox.")]
+#[command(
+    about = "Read the oldest messages in this pane's mailbox.",
+    long_about = "msg read [--ack] [--wait [--timeout N]]\n\
+                  \n\
+                  Prints each message as a line \"ID from SENDER\" followed by its body. Reading does not remove \
+                  anything; acknowledge with msg ack, or pass --ack to remove the printed batch in the same step. \
+                  --wait repeats the read until a message arrives; --timeout ends it with exit 124."
+)]
 struct Read {
-    #[arg(long)]
+    #[arg(long, help = "Remove the messages this read returns.")]
     ack: bool,
-    #[arg(long)]
+    #[arg(long, help = "Wait until a message arrives.")]
     wait: bool,
-    #[arg(long, allow_hyphen_values = true)]
+    #[arg(long, allow_hyphen_values = true, help = "With --wait, seconds before exiting 124.")]
     timeout: Option<f64>,
     #[command(flatten)]
     identity: Identity,
@@ -85,9 +101,12 @@ struct Read {
 }
 
 #[derive(Debug, clap::Args)]
-#[command(about = "Remove messages from this pane's mailbox by id.")]
+#[command(
+    about = "Remove messages from this pane's mailbox by id.",
+    long_about = "Unknown or already removed ids are not an error. Prints how many were removed."
+)]
 struct Ack {
-    #[arg(required = true)]
+    #[arg(required = true, help = "Message ids from msg read.")]
     ids: Vec<String>,
     #[command(flatten)]
     identity: Identity,
@@ -167,7 +186,7 @@ impl Msg {
             let mut bytes = Vec::new();
             io::stdin()
                 .read_to_end(&mut bytes)
-                .map_err(|error| Failure::Local(format!("could not read stdin: {error}")))?;
+                .map_err(|error| Failure::Local(format!("could not read stdin: {}", client::os_message(&error))))?;
             Some(bytes)
         } else {
             None

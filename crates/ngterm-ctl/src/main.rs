@@ -80,7 +80,6 @@ struct Ngtermctl {
 enum Command {
     Tree(tree::Tree),
     Events(events::Events),
-    Msg(messages::Msg),
     Workspace(workspace::Workspace),
     Session(session::Session),
     Surface(surface::Surface),
@@ -89,6 +88,7 @@ enum Command {
     Quick(quick::Quick),
     Sidebar(sidebar::Sidebar),
     Notify(notify::Notify),
+    Msg(messages::Msg),
     Font(font::Font),
     Keymap(keymap::Keymap),
     Hooks(hooks::Hooks),
@@ -111,7 +111,6 @@ impl Command {
         match self {
             Self::Tree(command) => command.validate(),
             Self::Events(command) => command.validate(),
-            Self::Msg(command) => command.check(),
             Self::Workspace(group) => group.command().validate(),
             Self::Session(group) => group.command().validate(),
             Self::Surface(group) => group.command().validate(),
@@ -120,6 +119,7 @@ impl Command {
             Self::Quick(command) => command.check(),
             Self::Sidebar(command) => command.check(),
             Self::Notify(command) => command.validate(),
+            Self::Msg(command) => command.check(),
             Self::Font(command) => command.check(),
             Self::Keymap(command) => command.check(),
             Self::Hooks(command) => command.check(),
@@ -139,7 +139,6 @@ impl Command {
         match self {
             Self::Tree(command) => command.default_run(env),
             Self::Events(command) => command.run(env),
-            Self::Msg(command) => command.run(env),
             Self::Workspace(group) => group.command().default_run(env),
             Self::Session(group) => group.command().invoke(env),
             Self::Surface(group) => group.command().default_run(env),
@@ -148,6 +147,7 @@ impl Command {
             Self::Quick(command) => command.execute(env),
             Self::Sidebar(command) => command.execute(env),
             Self::Notify(command) => command.default_run(env),
+            Self::Msg(command) => command.run(env),
             Self::Font(command) => command.execute(env),
             Self::Keymap(command) => command.execute(env),
             Self::Hooks(command) => command.execute(env),

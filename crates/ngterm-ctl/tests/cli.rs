@@ -551,6 +551,7 @@ SUBCOMMANDS:
   sidebar                 Sidebar visibility and view mode.
   notify                  Post a desktop notification (default: the active
                           session of the frontmost window).
+  msg                     Send, read and acknowledge messages between panes.
   font                    Font size commands.
   keymap                  Keymap commands.
   hooks                   Event hook commands.
@@ -1350,6 +1351,8 @@ SUBCOMMANDS:
                           (on|off|toggle|clear|move).
   context                 Set or clear what a session is about, shown in the
                           title bar.
+  info                    Set or clear the info line drawn under a session's
+                          sidebar row.
   tint                    Tint a session's sidebar row (a color, or clear).
   seen                    Clear a session's unseen-notification badge without
                           changing the selection or focus (idempotent).
