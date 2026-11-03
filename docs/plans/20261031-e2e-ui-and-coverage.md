@@ -515,16 +515,46 @@ descendants publish no node) and in the ratchet.
 - Modify: `conformance/catalog.yaml` (behavior items a test covers, if any)
 - Modify: `crates/ngterm-gpui/src/*` (if a target lacks its id, role or bounds)
 
-- [ ] read upstream (`.upstream/agterm`: sidebar row drag, split dividers, sidebar scrolling, row and pane context
+- [x] read upstream (`.upstream/agterm`: sidebar row drag, split dividers, sidebar scrolling, row and pane context
       menus, typing into a pane, their UI tests) and list the interactions upstream has; for each, name its target
       (an upstream id, or an identified element plus geometry the control protocol reports) and its read-back (the
       tree, an element, `session.text`, `surface.cursor`); one with neither is left out with its reason here
-- [ ] write the ui tests first for the listed interactions: drag-reorder of sessions and workspaces, the divider drag,
+- [x] write the ui tests first for the listed interactions: drag-reorder of sessions and workspaces, the divider drag,
       the scroll, each context menu and one of its items, `type_text` into the selected pane read back with
       `wait_text` and `wait_cursor`
-- [ ] run them on `reference-macos.yml` until green there (red on the reference means the test is wrong)
-- [ ] run them on Linux and on the Windows runner; fix what the app lacks with its Rust test first
-- [ ] add the newly green ids to both ratchets
+- [x] run them on `reference-macos.yml` until green there (red on the reference means the test is wrong)
+- [x] run them on Linux and on the Windows runner; fix what the app lacks with its Rust test first
+- [x] add the newly green ids to both ratchets
+
+**Interactions upstream has (v0.39.1) and how each is read:**
+
+| interaction | upstream | target | read-back |
+|---|---|---|---|
+| session row drag onto a row | `ReorderUITests.testReorderSessionUp` | `session-row` by its text | tree order |
+| workspace row drag above a row | `ReorderUITests.testReorderWorkspace` | `workspace-row` by its text, top edge | tree order |
+| divider drag | `SplitRatioUITests.testDividerDragPersistsTheRatio` | the window (`ui.window()`) at the ratio's x, sidebar hidden | `splitRatio` |
+| divider double-click | `ControlOverlaySplitUITests.testDoubleClickOnDividerRestoresEvenSplit` | as the drag, at 0.7 | `splitRatio` back to 0.5 |
+| sidebar wheel | none (an `NSOutlineView` scrolls natively) | a `workspace-row` mid-window | the row's frame (`ui.frame`) moves up |
+| session row context menu, Flag | `FlaggedViewUITests`, `ReorderUITests` | `session-row`, right click | `flagged` in the tree |
+| workspace row context menu, New Session | `SidebarUITests` | `workspace-row`, right click | the workspace's sessions |
+| typing into the selected pane | `typeText` throughout (`SessionNavUITests`, ...) | the focused pane | `wait_text` and `wait_cursor` |
+
+- *Left out*: a pane context menu, since upstream has none (`GhosttySurfaceView+Input.swift`: a right click is the
+  terminal's own right-click-action, by default paste, which reads the desktop clipboard the suite may not seed).
+- The divider has no upstream id and no queryable element on every OS, so, as upstream's own test does, its point is
+  the window's at the ratio (the panes span the window's width with the sidebar hidden), tried at small offsets until
+  the ratio moves. The driver gained `frame(target)` (an element's live screen rectangle), `window()` and drag pacing
+  (`press_for`, `duration`, `hold_for`: an outline view starts a row drag only from a held press at a human pace).
+- The typed pane runs `cat` (`session.new --command`), not a login shell: a prompt of unknown length wrapped the line on
+  the reference, and the protocol's cursor has no row.
+- No app change was needed: every target already had its id, role and bounds.
+
+**Validation:** reference-macos (scoped to the two files, branch `ci/ref-task8`)
+[run 41573927676](https://github.com/nickalie/ngterm/actions/runs/41573927676): 8 passed, no reruns (the first run's
+red was the prompt-wrapped cursor, fixed in the test). Linux, private Xvfb and a11y bus, debug stage: the whole ui layer
+50 pass, 2 skip, 0 fail. Windows runner (`ci/win-task8`, suite scoped by `-k`)
+[run 41573927395](https://github.com/nickalie/ngterm/actions/runs/41573927395): 8 passed. The 8 ids are in both
+ratchets. Self-tests pass except the two known host-dependent `test_impls` noop-URI cases; the coverage gate passes.
 
 ### Task 9: Instrumented stage and the coverage flush
 

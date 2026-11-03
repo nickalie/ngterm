@@ -655,6 +655,50 @@ def test_drag_scroll_and_typing():
     assert driver.events[-3:] == [("move", 60, 40), ("wheel", 2, -3), ("text", "Hello, Я! 😀")]
 
 
+def test_drag_paces_the_gesture_when_asked(monkeypatch):
+    """A press held still, moves spread over the duration, a hold before the release: a native drag's shape."""
+    driver = FakeDriver([Element("add-session", "button")])
+    monkeypatch.setattr(drivers.time, "sleep", lambda seconds: driver.events.append(("sleep", seconds)))
+    driver.drag_by("add-session", 20, 0, steps=2, press_for=0.5, duration=0.2, hold_for=0.25)
+    assert driver.events == [("move", 60, 40), ("left", True), ("sleep", 0.5), ("move", 70, 40), ("sleep", 0.1),
+                             ("move", 80, 40), ("sleep", 0.1), ("sleep", 0.25), ("left", False)]
+    driver.events.clear()
+    driver.drag("add-session", "add-session", steps=1)
+    assert not [event for event in driver.events if event[0] == "sleep"]
+
+
+@pytest.mark.parametrize("pacing", [{"press_for": -1}, {"duration": float("inf")}, {"hold_for": float("nan")}])
+def test_drag_pacing_must_be_finite_and_nonnegative(pacing):
+    driver = FakeDriver([Element("add-session", "button")])
+    with pytest.raises(ValueError):
+        driver.drag_by("add-session", 1, 1, **pacing)
+    assert driver.events == []
+
+
+def test_frame_reads_live_bounds_of_the_current_element():
+    old = Element("add-session", "button", "Add", handle="old")
+    new = Element("add-session", "button", "Add", handle="new")
+    driver = FakeDriver([new])
+    seen = []
+    driver._bounds = lambda element: (seen.append(element.handle) or driver.bounds)
+    assert driver.frame(old) == (10, 20, 100, 40)
+    assert driver.frame("add-session") == (10, 20, 100, 40)
+    assert seen == ["new", "new"]
+    assert driver.events == []
+    driver.elements = []
+    with pytest.raises(ElementNotFound):
+        driver.frame(old)
+
+
+def test_window_is_the_first_window_element():
+    window = Element(None, "window", "ngterm", handle="w")
+    driver = FakeDriver([Element("add-session", "button"), window, Element(None, "window", "other")])
+    assert driver.window() == window
+    driver.elements = [Element("add-session", "button")]
+    with pytest.raises(ElementNotFound, match="window"):
+        driver.window(timeout=0)
+
+
 @pytest.mark.parametrize(("action", "handle"), [
     (lambda d: d.move("add-session"), "add"),
     (lambda d: d.mouse_click("add-session", button="right"), "add"),

@@ -867,6 +867,14 @@ tests/ui/test_html_overlay.py::test_file_page_strip_names_the_page_and_closes_it
 tests/ui/test_html_overlay.py::test_page_strip_hide_hides_its_own_pane
 tests/ui/test_html_overlay.py::test_the_page_strip_offers_hide_only_while_the_overlays_button_is_on
 tests/ui/test_html_overlay.py::test_url_page_offers_to_copy_its_link
+tests/ui/test_pane_input.py::test_typed_text_reaches_the_selected_pane_and_moves_its_cursor
+tests/ui/test_pointer.py::test_a_session_row_context_menu_flags_the_row
+tests/ui/test_pointer.py::test_a_workspace_row_context_menu_opens_a_session_in_it
+tests/ui/test_pointer.py::test_double_clicking_the_divider_restores_the_even_split
+tests/ui/test_pointer.py::test_dragging_a_session_row_onto_another_reorders_its_workspace
+tests/ui/test_pointer.py::test_dragging_a_workspace_row_above_another_reorders_the_workspaces
+tests/ui/test_pointer.py::test_dragging_the_divider_moves_the_split_ratio
+tests/ui/test_pointer.py::test_the_wheel_scrolls_an_overflowing_sidebar
 tests/ui/test_settings.py::test_agent_status_tab
 tests/ui/test_settings.py::test_appearance_tab
 tests/ui/test_settings.py::test_general_tab

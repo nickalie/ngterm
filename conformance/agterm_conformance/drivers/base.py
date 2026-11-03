@@ -13,6 +13,7 @@ import math
 import re
 import string
 import sys
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -271,7 +272,7 @@ class Driver(ABC):
         for chord in parsed:
             self._post_chord(chord)
 
-    def _pointer_element(self, target: str | Element) -> Element:
+    def _pointer_element(self, target: str | Element, enabled: bool = True) -> Element:
         if isinstance(target, str):
             self.ui_ids.key_for(target)
             # An id denotes the current control, not the label of its first snapshot.
@@ -285,7 +286,7 @@ class Driver(ABC):
                            (target.ui_id is not None or el.role == target.role)]
                 current = matches[0] if len(matches) == 1 else None
         assert current is not None, "pointer target missing or ambiguous"
-        assert current.enabled is not False, "element not enabled"
+        assert not enabled or current.enabled is not False, "element not enabled"
         return current
 
     def _point_now(
@@ -311,6 +312,19 @@ class Driver(ABC):
     def move(self, target: str | Element, offset=(0.5, 0.5)) -> None:
         self._pointer_move(*self._point(target, offset))
 
+    @action
+    def frame(self, target: str | Element) -> tuple[float, float, float, float]:
+        """The live element's screen rectangle (x, y, width, height), for read-backs of where a control sits."""
+        wanted = target if isinstance(target, str) else _describe(target)
+        return self._wait(lambda: self._bounds(self._pointer_element(target, enabled=False)), f"frame of {wanted}",
+                          None)
+
+    @action
+    def window(self, timeout: float | None = None) -> Element:
+        """The app's first window: a pointer target for points the control protocol locates (a split divider)."""
+        return self._wait(lambda: next((el for el in self._all_elements() if el.role == "window"), None),
+                          "window", timeout)
+
     @staticmethod
     def _check_button(button: str) -> None:
         if button not in ("left", "right"):
@@ -335,19 +349,36 @@ class Driver(ABC):
         if not isinstance(steps, int) or steps < 1:
             raise ValueError("steps must be a positive integer")
 
-    def _drag_points(self, start, end, steps: int) -> None:
+    @staticmethod
+    def _check_pacing(*seconds: float) -> None:
+        if any(not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0 for v in seconds):
+            raise ValueError("drag pacing must be finite, nonnegative seconds")
+
+    def _drag_points(self, start, end, steps: int, press_for=0.0, duration=0.0, hold_for=0.0) -> None:
+        """Press at `start`, hold still `press_for`, move in `steps` spread over `duration`, hold `hold_for`, release.
+
+        A native drag source (an outline view's row) starts only from a press held a moment and moved at a human
+        pace; zero pacing posts the events back to back.
+        """
         self._pointer_move(*start)
         self._pointer_button("left", True)
         try:
+            if press_for:
+                time.sleep(press_for)
             for step in range(1, steps + 1):
                 self._pointer_move(*(a + (b - a) * step / steps for a, b in zip(start, end)))
+                if duration:
+                    time.sleep(duration / steps)
+            if hold_for:
+                time.sleep(hold_for)
         finally:
             self._pointer_button("left", False)
 
     @action
     def drag(self, src: str | Element, dst: str | Element, src_offset=(0.5, 0.5),
-             dst_offset=(0.5, 0.5), steps=10) -> None:
+             dst_offset=(0.5, 0.5), steps=10, press_for=0.0, duration=0.0, hold_for=0.0) -> None:
         self._check_steps(steps)
+        self._check_pacing(press_for, duration, hold_for)
         # Neither endpoint may retain coordinates across the other endpoint's readiness wait.
         (source, start), (_, end) = self._wait(
             lambda: (self._point_now(src, src_offset), self._point_now(dst, dst_offset)),
@@ -355,15 +386,17 @@ class Driver(ABC):
         )
         # The press lands on the source, so the source's window must be the one on top.
         self._pointer_target(source)
-        self._drag_points(start, end, steps)
+        self._drag_points(start, end, steps, press_for, duration, hold_for)
 
     @action
-    def drag_by(self, target: str | Element, dx: float, dy: float, offset=(0.5, 0.5), steps=10) -> None:
+    def drag_by(self, target: str | Element, dx: float, dy: float, offset=(0.5, 0.5), steps=10,
+                press_for=0.0, duration=0.0, hold_for=0.0) -> None:
         self._check_steps(steps)
+        self._check_pacing(press_for, duration, hold_for)
         if not all(math.isfinite(v) for v in (dx, dy)):
             raise ValueError("drag distances must be finite")
         start = self._point(target, offset)
-        self._drag_points(start, (start[0] + dx, start[1] + dy), steps)
+        self._drag_points(start, (start[0] + dx, start[1] + dy), steps, press_for, duration, hold_for)
 
     @action
     def scroll(self, target: str | Element, dy: int, dx: int = 0) -> None:
