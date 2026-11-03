@@ -3,6 +3,7 @@ package com.nickalie.ngterm.core.fake
 import com.nickalie.ngterm.core.ffi.AskReply
 import com.nickalie.ngterm.core.ffi.ClipboardReply
 import com.nickalie.ngterm.core.ffi.EventSink
+import com.nickalie.ngterm.core.ffi.HostKeyStore
 import com.nickalie.ngterm.core.ffi.Machine
 import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileCoreInterface
@@ -12,6 +13,7 @@ import com.nickalie.ngterm.core.ffi.NoHandle
 import com.nickalie.ngterm.core.ffi.Pane
 import com.nickalie.ngterm.core.ffi.PaneSize
 import com.nickalie.ngterm.core.ffi.RemoteSession
+import kotlinx.coroutines.CompletableDeferred
 
 /** One call the app made on a [FakeMobileCore]: the method's name and its arguments, in order. */
 data class FakeCall(
@@ -25,8 +27,15 @@ data class FakeCall(
  * failure a test queued with [failNext] from that method's next call.
  *
  * It follows the real core's rules (crates/ngterm-mobile, api.rs and actor.rs) where the app sees them:
- * - [connect] reports [MachineState.Connected] as a [MobileEvent.MachineState] when the machine was not connected;
+ * - [connect] reports [MachineState.Connected] as a [MobileEvent.MachineState] when the machine was not connected
+ *   (or was connected as another record: an edited machine connects anew); a connect that fails reports
+ *   [MachineState.Unreachable] with the failure's reason before it throws [MobileException.Unreachable];
  *   [disconnect] reports nothing and forgets the machine's listing;
+ * - host keys, when the fake has [hosts] and [hostKeys] names the key a machine's host offers: a pinned key that
+ *   matches connects; another pinned key reports [MobileEvent.HostKeyChanged] with both and fails ([HOST_KEY_CHANGED]);
+ *   no pin reports [MobileEvent.HostKeyUnknown] and the connect waits for [answerHostKey], which pins the key through
+ *   [hosts] and connects when it trusts the key on offer, and fails ([HOST_KEY_REFUSED]) otherwise; a [disconnect]
+ *   while it waits cancels it ([MobileException.Cancelled]);
  * - [listSessions] keeps what it answers as the machine's listing and also delivers it as a [MobileEvent.Tree];
  *   [createSession] does the same with the listing that has the new session;
  * - [endSession] ends a session of [sessions] whether listed or not ([MobileException.Remote] for one the machine
@@ -40,13 +49,28 @@ data class FakeCall(
  */
 class FakeMobileCore(
     private val sink: EventSink? = null,
+    private val hosts: HostKeyStore? = null,
 ) : MobileCoreInterface {
     private val recorded = mutableListOf<FakeCall>()
+    private val records = mutableMapOf<String, Machine>()
+    private val questions = mutableMapOf<String, Question>()
+
+    private class Question(
+        val offered: String,
+        // trusted or not; null when a disconnect overtook the question
+        val answer: CompletableDeferred<Boolean?> = CompletableDeferred(),
+    )
+
+    /** The host key each host offers (OpenSSH's `SHA256:` fingerprint), by host name; a host not here offers none. */
+    val hostKeys: MutableMap<String, String> = mutableMapOf()
+
+    /** The machines whose connect waits for [answerHostKey], by id, with the key on offer. */
+    val waitingForHostKey: Map<String, String> get() = questions.mapValues { it.value.offered }
     private val failures = mutableMapOf<String, MobileException>()
     private var created = 0
 
     /** The calls made so far, oldest first. */
-    val calls: List<FakeCall> get() = recorded.toList()
+    val calls: List<FakeCall> get() = synchronized(recorded) { recorded.toList() }
 
     /** The machines connected (and not disconnected since), by id. */
     val connected: MutableSet<String> = mutableSetOf()
@@ -78,7 +102,8 @@ class FakeMobileCore(
         method: String,
         vararg args: Any?,
     ) {
-        recorded += FakeCall(method, args.toList())
+        // an app test may read the calls while its coroutines make them on other threads
+        synchronized(recorded) { recorded += FakeCall(method, args.toList()) }
         failures.remove(method)?.let { throw it }
     }
 
@@ -104,14 +129,68 @@ class FakeMobileCore(
     }
 
     override suspend fun connect(machine: Machine) {
-        record("connect", machine)
-        if (connected.add(machine.id)) emit(MobileEvent.MachineState(machine.id, MachineState.Connected))
+        try {
+            record("connect", machine)
+        } catch (error: MobileException.Unreachable) {
+            unreachable(machine.id, error.reason)
+        }
+        val id = machine.id
+        if (id in connected && records[id] == machine) return
+        drop(id)
+        checkHostKey(machine)
+        connected += id
+        records[id] = machine
+        emit(MobileEvent.MachineState(id, MachineState.Connected))
+    }
+
+    private fun unreachable(
+        machineId: String,
+        reason: String,
+    ): Nothing {
+        emit(MobileEvent.MachineState(machineId, MachineState.Unreachable(reason)))
+        throw MobileException.Unreachable(reason)
+    }
+
+    private suspend fun checkHostKey(machine: Machine) {
+        val store = hosts ?: return
+        val offered = hostKeys[machine.host] ?: return
+        val pinned = store.pinned(machine.id)
+        when {
+            // pinned as offered: the handshake goes on
+            pinned == offered -> {}
+
+            pinned != null -> {
+                emit(MobileEvent.HostKeyChanged(machine.id, pinned, offered))
+                unreachable(machine.id, HOST_KEY_CHANGED)
+            }
+
+            else -> {
+                val question = Question(offered)
+                questions[machine.id] = question
+                emit(MobileEvent.HostKeyUnknown(machine.id, offered))
+                val trusted =
+                    try {
+                        question.answer.await()
+                    } finally {
+                        if (questions[machine.id] === question) questions -= machine.id
+                    }
+                if (trusted == null) throw MobileException.Cancelled()
+                if (!trusted) unreachable(machine.id, HOST_KEY_REFUSED)
+                store.pin(machine.id, offered)
+            }
+        }
+    }
+
+    private fun drop(machineId: String) {
+        connected -= machineId
+        records -= machineId
+        listings -= machineId
     }
 
     override fun disconnect(machineId: String) {
         record("disconnect", machineId)
-        connected -= machineId
-        listings -= machineId
+        drop(machineId)
+        questions.remove(machineId)?.answer?.complete(null)
     }
 
     override suspend fun listSessions(machineId: String): List<RemoteSession> {
@@ -197,7 +276,12 @@ class FakeMobileCore(
         machineId: String,
         fingerprint: String,
         trust: Boolean,
-    ) = record("answerHostKey", machineId, fingerprint, trust)
+    ) {
+        record("answerHostKey", machineId, fingerprint, trust)
+        // an answer about another key than the one on offer refuses: the user never saw that key
+        val question = questions.remove(machineId) ?: return
+        question.answer.complete(trust && fingerprint == question.offered)
+    }
 
     override fun networkChanged() = record("networkChanged")
 
@@ -205,6 +289,12 @@ class FakeMobileCore(
 
     override fun resume() = record("resume")
 }
+
+/** The core's reason for a connect refused over a changed host key (transport/russh.rs's `HOST_KEY_CHANGED`). */
+const val HOST_KEY_CHANGED = "the host key changed"
+
+/** The core's reason for a connect whose unknown host key was not trusted (`HOST_KEY_REFUSED`). */
+const val HOST_KEY_REFUSED = "the host key was not trusted"
 
 /** A session as a machine's tree lists it, with what a test doesn't care about left plain. */
 fun fakeSession(

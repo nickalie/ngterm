@@ -14,9 +14,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val version = coreVersion()
+        val graph = (application as NgtermApplication).graph
         setContent {
             NgtermTheme {
-                NgtermApp(coreVersion = version)
+                NgtermApp(graph = graph, coreVersion = version)
             }
         }
     }

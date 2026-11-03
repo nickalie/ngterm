@@ -722,17 +722,37 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - Create: `ui/onboarding/`, `ui/machines/`, `data/MachineStore.kt`, `platform/KeystoreKeyVault.kt`,
   `platform/PinnedHostKeys.kt`
 
-- [ ] invoke `frontend-design` for these screens, inside `DESIGN.md`
-- [ ] first run: generate a key, then show the public-key screen (the `authorized_keys` line, Copy, Share, a short
+- [x] invoke `frontend-design` for these screens, inside `DESIGN.md`
+- [x] first run: generate a key, then show the public-key screen (the `authorized_keys` line, Copy, Share, a short
       how-to); offer importing a key with its passphrase
-- [ ] Machines home: one card per machine with its state and aggregate agent status; empty and offline states; Add and
+- [x] Machines home: one card per machine with its state and aggregate agent status; empty and offline states; Add and
       Edit Machine with inline validation; delete with undo
-- [ ] first connect: a fingerprint confirmation sheet; a changed host key gives a hard-stop screen explaining the risk,
+- [x] first connect: a fingerprint confirmation sheet; a changed host key gives a hard-stop screen explaining the risk,
       with Remove pinned key as a deliberate action
-- [ ] implement `KeyVault` (Keystore AES-GCM wrap) and `HostKeyStore` over DataStore
-- [ ] write view-model unit tests, screenshots of each screen and state, and a UI test of add machine → confirm
+- [x] implement `KeyVault` (Keystore AES-GCM wrap) and `HostKeyStore` over DataStore
+- [x] write view-model unit tests, screenshots of each screen and state, and a UI test of add machine → confirm
       fingerprint → connected (fake core)
-- [ ] run `./gradlew check` and the tests; all must pass before Task 14
+- [x] run `./gradlew check` and the tests; all must pass before Task 14
+  - result (2026-11-03): `data/` holds `MachineStore` (DataStore, JSON), `AppKeys` (the keys' public halves in
+    DataStore; `KeyMaker` wraps the core's `generate_key`/`import_key`) and `Connections` (the core's `EventSink`: each
+    machine's `Link` and last listing); `platform/` holds `KeystoreKeyVault` (AES-256-GCM under an Android Keystore key,
+    one sealed file per key in the no-backup dir, the handed bytes wiped), `PinnedHostKeys` (the core's
+    `HostKeyStore`) and `NetworkMonitor` (offline banner, `network_changed`). `NgtermApplication` makes the `AppGraph`
+    lazily, so the JVM tests never load the native library; the manifest gains INTERNET and ACCESS_NETWORK_STATE. The
+    first run (welcome, import, public key with Copy/Share and the append command) gates the scaffold; the Machines
+    destination stacks Add/Edit machine, a key's public half and the changed-key stop, with Undo for a removal; the
+    host-key question is a sheet over the whole app. A card's tap edits the machine until Task 14 points it at the
+    machine's sessions; its More menu has Connect/Disconnect, Edit and Remove. `FakeMobileCore` gained host keys
+    (`hostKeys` + a `HostKeyStore`: unknown waits for `answerHostKey`, changed fails as the core does), the
+    `Unreachable` event before a failed connect, and an edited machine connecting anew. MachineCard's name no longer
+    truncates beside a long label: the badge wraps under it (`rows_medium_font2` re-recorded). DESIGN.md gained the
+    screens, `KeyPlate`/`CopyButton`/`ScreenFrame` and the Back and More icons. `./gradlew check assembleDebug` is
+    green (50 new goldens in `screenshots/screens`, at phone light/dark/2.0, medium light and expanded light/dark;
+    the empty, offline, error and loading states at phone light and dark); the add → confirm fingerprint → connected
+    flow, a declined key, the changed-key stop, Undo and Edit run as Robolectric UI tests on the fake core, as Task
+    12's did. On the headless `ngterm-phone` AVD the smoke test now walks the first run with the real core (key made,
+    sealed by the Keystore) and a Keystore vault test passes
+
 
 ### Task 14: A machine's sessions
 

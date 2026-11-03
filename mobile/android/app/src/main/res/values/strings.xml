@@ -33,4 +33,118 @@
   <string name="sessions_empty_title">Nothing attached</string>
   <string name="sessions_empty_body">Open a machine and attach one of its sessions to see it here.</string>
   <string name="sessions_open_machines">Open machines</string>
+
+  <!-- the shared actions -->
+  <string name="action_back">Back</string>
+  <string name="action_copy">Copy</string>
+  <string name="action_copied">Copied</string>
+  <string name="action_share">Share</string>
+  <string name="action_retry">Retry</string>
+  <string name="action_undo">Undo</string>
+  <string name="action_more">More options for %1$s</string>
+
+  <!-- the first run (ui/onboarding) -->
+  <string name="welcome_title">Set up a key</string>
+  <string name="welcome_body">ngterm signs in to your machines over ssh with a key that stays on this device. Create one, or import a key you already use.</string>
+  <string name="welcome_create">Create a key</string>
+  <string name="welcome_creating">Creating a key</string>
+  <string name="welcome_import">Import a key</string>
+  <string name="welcome_create_failed">The key couldn\'t be created: %1$s</string>
+  <string name="welcome_keystore_note">The private key is sealed by this device\'s keystore and never leaves it.</string>
+  <string name="key_title">Add this key to your machines</string>
+  <string name="key_step_copy">Copy the public key below.</string>
+  <string name="key_step_append">On each machine, add it as a line of ~/.ssh/authorized_keys for the user you sign in as.</string>
+  <string name="key_step_add">Add the machine here.</string>
+  <string name="key_line_label">Public key</string>
+  <string name="key_fingerprint">Fingerprint %1$s</string>
+  <string name="key_command_label">Or run this on the machine</string>
+  <string name="key_done">Done</string>
+  <string name="key_share_title">ngterm public key</string>
+  <string name="import_title">Import a key</string>
+  <string name="import_body">Paste the private key, or choose its file. OpenSSH and PEM keys work; ngterm stores it sealed by this device\'s keystore.</string>
+  <string name="import_key_label">Private key</string>
+  <string name="import_choose_file">Choose file</string>
+  <string name="import_passphrase_label">Passphrase</string>
+  <string name="import_passphrase_hint">Only if the key has one</string>
+  <string name="import_show_passphrase">Show passphrase</string>
+  <string name="import_hide_passphrase">Hide passphrase</string>
+  <string name="import_action">Import key</string>
+  <string name="import_needs_passphrase">This key is protected: enter its passphrase.</string>
+  <string name="import_wrong_passphrase">That passphrase doesn\'t open this key.</string>
+  <string name="import_not_a_key">This isn\'t a private key ngterm can use: %1$s</string>
+  <string name="import_not_stored">The key couldn\'t be stored: %1$s</string>
+  <string name="import_empty">Paste a private key or choose its file.</string>
+  <string name="import_unreadable">That file couldn\'t be read. Choose another, or paste the key.</string>
+
+  <!-- the Machines home (ui/machines) -->
+  <string name="machines_title">Machines</string>
+  <string name="machines_loading">Reading your machines</string>
+  <string name="machines_failed_title">Your machines couldn\'t be read</string>
+  <string name="machines_failed_body">The app\'s storage answered: %1$s. Try again; if it keeps failing, restart the app.</string>
+  <string name="machines_offline">You\'re offline. Machines reconnect when the network is back.</string>
+  <string name="machines_removed">Removed %1$s</string>
+  <string name="machine_connect">Connect</string>
+  <string name="machine_disconnect">Disconnect</string>
+  <string name="machine_edit">Edit</string>
+  <string name="machine_remove">Remove</string>
+  <string name="machine_review_key">Review</string>
+  <string name="machine_retry_now">Retry now</string>
+  <string name="machine_not_connected">Not connected</string>
+  <string name="machine_unreachable">Unreachable</string>
+  <string name="machine_reconnecting">Reconnecting in %1$d s</string>
+  <string name="machine_reconnecting_now">Reconnecting</string>
+  <string name="machine_connection_lost">The connection dropped; trying again</string>
+  <string name="machine_confirm_key">Confirm its host key to connect</string>
+  <string name="machine_key_changed">Host key changed</string>
+  <string name="machine_key_changed_summary">Not connecting until you review it</string>
+  <string name="machine_no_sessions">No sessions</string>
+  <plurals name="machine_idle_sessions">
+    <item quantity="one">%1$d idle</item>
+    <item quantity="other">%1$d idle</item>
+  </plurals>
+  <string name="machine_status_count">%1$d %2$s</string>
+
+  <!-- the machine form -->
+  <string name="form_add_title">Add machine</string>
+  <string name="form_edit_title">Edit machine</string>
+  <string name="form_save">Save</string>
+  <string name="form_close">Close</string>
+  <string name="form_label">Name</string>
+  <string name="form_label_hint">Shown in the list; the host when empty</string>
+  <string name="form_host">Host</string>
+  <string name="form_host_hint">A hostname or an IP address</string>
+  <string name="form_port">Port</string>
+  <string name="form_user">User</string>
+  <string name="form_user_hint">The account you sign in as</string>
+  <string name="form_key">Key</string>
+  <string name="form_key_created">Created on this device</string>
+  <string name="form_key_imported">Imported</string>
+  <string name="form_show_key">Show public key</string>
+  <string name="form_pinned">Pinned host key</string>
+  <string name="form_pinned_none">None yet: the first connection asks you to confirm it.</string>
+  <string name="form_host_missing">Enter the machine\'s hostname or IP address.</string>
+  <string name="form_host_space">A hostname has no spaces.</string>
+  <string name="form_host_user">Put the user in User, not in the host.</string>
+  <string name="form_host_port">Put the port in Port, not in the host.</string>
+  <string name="form_port_invalid">Enter a port from 1 to 65535.</string>
+  <string name="form_user_missing">Enter the user you sign in as.</string>
+  <string name="form_user_space">A user name has no spaces.</string>
+  <string name="form_key_missing">Choose the key to sign in with.</string>
+
+  <!-- the host key: first connect and a changed key -->
+  <string name="hostkey_title">Trust %1$s?</string>
+  <string name="hostkey_body">This is the first connection to %1$s. Compare its host key\'s fingerprint with the one the machine shows before you trust it.</string>
+  <string name="hostkey_fingerprint">Fingerprint</string>
+  <string name="hostkey_check">On the machine, run</string>
+  <string name="hostkey_trust">Trust and connect</string>
+  <string name="hostkey_decline">Don\'t connect</string>
+  <string name="hostkey_changed_title">%1$s\'s host key changed</string>
+  <string name="hostkey_changed_body">%1$s offered a different host key from the one you trusted. Someone may be intercepting the connection, or the machine was reinstalled or its keys were made anew. ngterm won\'t connect until you check.</string>
+  <string name="hostkey_changed_pinned">Trusted until now</string>
+  <string name="hostkey_changed_offered">Offered now</string>
+  <string name="hostkey_changed_advice">If you know why the key changed, remove the pinned key and confirm the new one when you connect. If you don\'t, ask whoever runs the machine before you do anything.</string>
+  <string name="hostkey_keep_blocked">Back to machines</string>
+  <string name="hostkey_remove_pin">Remove pinned key</string>
+  <string name="hostkey_remove_title">Remove the pinned key of %1$s?</string>
+  <string name="hostkey_remove_body">The next connection asks you to trust whatever key %1$s offers then. Only do this if you know why its key changed.</string>
 </resources>

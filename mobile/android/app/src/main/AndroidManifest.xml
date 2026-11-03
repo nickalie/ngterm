@@ -2,9 +2,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+  <!-- ssh to the machines, and knowing when the network comes back to reconnect at once -->
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
   <!-- enableOnBackInvokedCallback opts Android 13-15 into predictive back (16 has it by default at target SDK 36);
        older versions ignore it and keep the classic back, hence targetApi 33 for lint's UnusedAttribute -->
   <application
+      android:name=".NgtermApplication"
       android:allowBackup="false"
       android:enableOnBackInvokedCallback="true"
       android:dataExtractionRules="@xml/data_extraction_rules"

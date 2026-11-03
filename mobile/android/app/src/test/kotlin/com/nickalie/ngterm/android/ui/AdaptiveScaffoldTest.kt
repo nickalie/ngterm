@@ -15,10 +15,15 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.nickalie.ngterm.android.TestGraph
+import com.nickalie.ngterm.android.awaitText
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
@@ -29,23 +34,43 @@ class AdaptiveScaffoldTest {
     @get:Rule
     val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @get:Rule
+    val dir = TemporaryFolder()
+
+    private lateinit var test: TestGraph
+
+    @Before
+    fun setUp() {
+        test = TestGraph(dir.root)
+        test.seedKey()
+    }
+
+    @After
+    fun tearDown() = test.close()
+
+    // the app with its key made, past the first run
+    private fun app(layout: NavLayout) {
+        compose.setContent { NgtermTheme { NgtermApp(graph = test.graph, coreVersion = "1.2.3", layout = layout) } }
+        compose.awaitText("Machines")
+    }
+
     private fun back() = compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
 
     @Test
     fun aDestinationIsPickedByTapAndBackReturnsToTheFirst() {
-        compose.setContent { NgtermTheme { NgtermApp(coreVersion = "1.2.3", layout = NavLayout.Bar) } }
-        compose.onNodeWithText("No machines yet").assertExists()
+        app(NavLayout.Bar)
+        compose.awaitText("No machines yet")
         compose.onNodeWithText("Settings").performClick()
         compose.onNodeWithText("Settings").assertIsSelected()
         compose.onNodeWithText("core 1.2.3").assertExists()
         back()
         compose.onNodeWithText("Machines").assertIsSelected()
-        compose.onNodeWithText("No machines yet").assertExists()
+        compose.awaitText("No machines yet")
     }
 
     @Test
     fun anEmptyStatesActionLeadsOn() {
-        compose.setContent { NgtermTheme { NgtermApp(coreVersion = "1.2.3", layout = NavLayout.Bar) } }
+        app(NavLayout.Bar)
         compose.onNodeWithText("Sessions").performClick()
         compose.onNodeWithText("Open machines").performClick()
         compose.onNodeWithText("Machines").assertIsSelected()
@@ -53,7 +78,7 @@ class AdaptiveScaffoldTest {
 
     @Test
     fun backClosesTheRailsLabelsBeforeLeavingTheDestination() {
-        compose.setContent { NgtermTheme { NgtermApp(coreVersion = "1.2.3", layout = NavLayout.Rail) } }
+        app(NavLayout.Rail)
         compose.onNodeWithText("Settings").performClick()
         compose.onNodeWithContentDescription("Show navigation labels").performClick()
         compose.onNodeWithContentDescription("Hide navigation labels").assertExists()

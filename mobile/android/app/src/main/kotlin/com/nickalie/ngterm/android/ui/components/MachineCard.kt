@@ -21,7 +21,10 @@ import com.nickalie.ngterm.android.ui.theme.StatusTone
 /**
  * A machine on the Machines home: its [label], its ssh [address] (`user@host:port`, in mono: it is compared
  * character by character), its connection as a [StatusBadge], and [summary] under them, the sessions' aggregate
- * status (an [AgentStatusBadge] or a line of text) or nothing. A flat tonal card, no shadow: depth is for what floats.
+ * status (an [AgentStatusBadge] or a line of text, and the action the state calls for) or nothing. [menu], when
+ * given, ends the top row (an icon button opening the machine's menu). A flat tonal card, no shadow: depth is for
+ * what floats. When the name and a long connection label don't fit side by side, the label moves under the name
+ * rather than cutting it short.
  */
 @Composable
 fun MachineCard(
@@ -31,6 +34,7 @@ fun MachineCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     connectionLabel: String? = null,
+    menu: (@Composable () -> Unit)? = null,
     summary: @Composable () -> Unit = {},
 ) {
     val spacing = NgtermTheme.spacing
@@ -45,15 +49,22 @@ fun MachineCard(
             verticalArrangement = Arrangement.spacedBy(spacing.xs),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(end = spacing.sm),
-                )
-                StatusBadge(connection, label = connectionLabel ?: stringResource(connection.label))
+                FlowRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    itemVerticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(end = spacing.sm),
+                    )
+                    StatusBadge(connection, label = connectionLabel ?: stringResource(connection.label))
+                }
+                menu?.invoke()
             }
             Text(
                 text = address,

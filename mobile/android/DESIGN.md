@@ -146,7 +146,7 @@ above headings.
 
 Line icons drawn for the app in `res/drawable/ic_*.xml`: 24dp, 2dp strokes, round ends, tinted by `Icon`. Machines
 (two racked servers), Sessions (a terminal window), Settings (sliders), Menu and Menu open, Add, Retry, Alert, Offline
-(a struck signal), Close, Lock. The status glyphs are 16dp filled or stroked shapes (`ic_status_*`). The mark
+(a struck signal), Close, Lock, Back (mirrored right to left) and More (an item's menu). The status glyphs are 16dp filled or stroked shapes (`ic_status_*`). The mark
 (`ic_ngterm_mark`) is the launcher's `>_` cut out of a copper tile. No icon font or icon library.
 
 ## Components
@@ -163,6 +163,8 @@ Line icons drawn for the app in `res/drawable/ic_*.xml`: 24dp, 2dp strokes, roun
 | `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it |
 | `Banner` | a strip about the whole screen while it stays usable, with an optional action and dismiss; announced politely |
 | `ConfirmDialog` | the confirmation before what can't be undone; the button repeats the action's words, in the error color |
+| `KeyPlate`, `CopyButton` | text compared or pasted character by character (a key line, a fingerprint, a command): mono, selectable, wrapping anywhere, on a `surfaceContainerLow` plate with an optional label above and Copy or Share under it; Copy says "Copied" for 2 s |
+| `ScreenFrame` | a screen of reading and filling in: an optional top row (Back or Close, the title as a heading, one action such as Save), then a scrolling column no wider than 640dp (520dp in the first run), centered, with the phone's or the tablet's gutter, padded for the bars, the cutout and the keyboard |
 | `Cover` | a veil over a pane that can't be used as it is (another device drives it, it is reattaching), with its action; it takes every touch, and the pane under it is hidden from TalkBack (`Modifier.underCover`) |
 
 Rules the components hold to:
@@ -209,6 +211,49 @@ compact (< 600dp)        medium (600-839dp)              expanded (>= 840dp)
   only Android 16, where target SDK 36 makes it the default.
 
 Destinations today: Machines, Sessions (what is attached, across machines) and Settings.
+
+## Screens
+
+### First run (`ui/onboarding/`)
+
+Full screen, no navigation: there is nowhere to go without a key. A column of 520dp at most, left aligned (it is
+reading, not a poster), the mark on top of the welcome.
+
+- **Welcome:** "Set up a key", what the key is for, and a line with the lock glyph in verdigris that the private key
+  is sealed by the device's keystore. Create a key is the filled button, Import a key the outlined one under it; while
+  the key is made the button shows a spinner and its words say so.
+- **Import:** the private key pasted into a mono field or read from a chosen file, and the passphrase (hidden, with a
+  Show toggle). What went wrong shows under the field it is about: no passphrase or the wrong one under the
+  passphrase, anything else under the key, and the text stays for another try. The key's text lives in memory only,
+  never in saved state.
+- **Public key:** the three steps, numbered because they are a sequence; the `authorized_keys` line on a `KeyPlate`
+  with Copy and Share; its fingerprint; the one command that appends it, with Copy; Done. The machine form opens the
+  same screen with Back.
+
+### Machines (`ui/machines/`)
+
+- **Home:** "Machines" with Add machine at the top, then a `MachineCard` per machine, 640dp at most and centered.
+  The card's badge is the connection; under the address, what the state means and the one action it calls for at
+  the end of the line: Not connected / Connect, The connection dropped / Retry now (the badge counts down "in 4 s"),
+  the core's reason / Retry, Host key changed / Review. Connected shows the sessions' status instead: a badge per
+  status the origin reports with how many have it ("2 working"), then "1 idle". Tapping a card edits the machine;
+  its More menu holds Connect or Disconnect, Edit and Remove (in the error color).
+- **States:** a spinner while the list is read; an error with Retry when it can't be; the empty state with Add
+  machine; an offline banner over the list while the device has no network.
+- **Remove** asks nothing: the machine goes at once and a snackbar offers Undo, which puts it back where it was, with
+  its pinned key.
+- **Add and Edit machine:** a `ScreenFrame` with Close and Save. Name, Host, Port and User (mono for what is compared
+  character by character), the key (a radio choice only when there is more than one), Show public key, and when
+  editing, the pinned host key. A field shows its problem once it has been left, or when Save is tried; the problem
+  replaces its hint and says how to fix it ("Put the user in User, not in the host").
+- **First connect:** a bottom sheet over whichever destination is shown, raised by the core's question: the attention
+  diamond, "Trust build-01?", the fingerprint on a plate, the command that prints it on the machine, Trust and
+  connect (filled) and Don't connect. Swiping the sheet away or back is Don't connect, which leaves the machine not
+  connected rather than failed.
+- **Changed host key:** a hard stop, not a dialog: the error triangle, "build-01's host key changed", what that can
+  mean, the key trusted until now and the one offered now, and what to do. Back to machines is the filled button;
+  Remove pinned key is outlined in the error color and confirms. Removing it connects again, which asks about the new
+  key.
 
 ## Copy
 
