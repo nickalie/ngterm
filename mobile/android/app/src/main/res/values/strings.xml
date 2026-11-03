@@ -3,4 +3,34 @@
   <string name="app_name">ngterm</string>
   <!-- the loaded mobile core's version, under the app's name -->
   <string name="core_version">core %1$s</string>
+
+  <!-- the top-level destinations (AdaptiveScaffold) -->
+  <string name="nav_machines">Machines</string>
+  <string name="nav_sessions">Sessions</string>
+  <string name="nav_settings">Settings</string>
+  <!-- the medium rail's toggle, read by TalkBack -->
+  <string name="nav_show_labels">Show navigation labels</string>
+  <string name="nav_hide_labels">Hide navigation labels</string>
+
+  <!-- the app-level statuses (StatusTone): every glyph comes with one of these words -->
+  <string name="status_online">Connected</string>
+  <string name="status_connecting">Connecting</string>
+  <string name="status_offline">Offline</string>
+  <string name="status_attention">Needs you</string>
+  <string name="status_error">Failed</string>
+  <string name="status_idle">Idle</string>
+
+  <!-- the shared components' fixed words -->
+  <string name="action_dismiss">Dismiss</string>
+  <string name="action_cancel">Cancel</string>
+  <string name="session_attached">Attached</string>
+  <string name="session_companion">Companion of %1$s</string>
+
+  <!-- the destinations until their screens land -->
+  <string name="machines_empty_title">No machines yet</string>
+  <string name="machines_empty_body">Add a server or desktop that runs ngterm, and drive its sessions from here over ssh.</string>
+  <string name="machines_add">Add machine</string>
+  <string name="sessions_empty_title">Nothing attached</string>
+  <string name="sessions_empty_body">Open a machine and attach one of its sessions to see it here.</string>
+  <string name="sessions_open_machines">Open machines</string>
 </resources>

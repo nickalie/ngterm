@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ngterm's mark in the app's chrome: the launcher's ">_" prompt cut out of a copper tile (the copper of
+     resources/icons/ngterm.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+  <path
+      android:fillColor="#FFCF6E31"
+      android:pathData="M8,0h16a8,8 0 0 1 8,8v16a8,8 0 0 1 -8,8h-16a8,8 0 0 1 -8,-8v-16a8,8 0 0 1 8,-8z" />
+  <path
+      android:fillColor="#FF1B2226"
+      android:pathData="M8.5,10.2l1.9,-1.9l7.7,7.7l-7.7,7.7l-1.9,-1.9l5.8,-5.8z" />
+  <path
+      android:fillColor="#FF1B2226"
+      android:pathData="M18,21h6.5v2.7h-6.5z" />
+</vector>

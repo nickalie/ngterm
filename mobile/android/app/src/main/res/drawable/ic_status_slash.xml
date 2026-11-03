@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- status glyph, a struck-through ring: out of reach (16dp; StatusGlyph tints it) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+  <path
+      android:pathData="M8,3a5,5 0 1 1 0,10a5,5 0 1 1 0,-10z"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeWidth="2" />
+  <path
+      android:pathData="M4.5,11.5l7,-7"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeWidth="2" />
+</vector>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- status glyph, a filled capsule (upstream's capsule) (16dp; StatusGlyph tints it) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+  <path
+      android:pathData="M5,4.5h6a3.5,3.5 0 0 1 0,7h-6a3.5,3.5 0 0 1 0,-7z"
+      android:fillColor="#FF000000" />
+</vector>

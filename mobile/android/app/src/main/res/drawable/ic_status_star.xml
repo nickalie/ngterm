@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- status glyph, a filled five-point star (upstream's star) (16dp; StatusGlyph tints it) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+  <path
+      android:pathData="M8,1l2.06,4.17l4.6,0.67l-3.33,3.25l0.79,4.58l-4.12,-2.16l-4.12,2.16l0.79,-4.58l-3.33,-3.25l4.6,-0.67z"
+      android:fillColor="#FF000000" />
+</vector>

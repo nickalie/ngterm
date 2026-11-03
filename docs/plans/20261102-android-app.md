@@ -694,18 +694,27 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - Create: `mobile/android/DESIGN.md`, `app/src/main/kotlin/.../ui/theme/`, `ui/components/`,
   `ui/AdaptiveScaffold.kt`
 
-- [ ] invoke `frontend-design`, choose the aesthetic direction, and record it in `DESIGN.md`:
+- [x] invoke `frontend-design`, choose the aesthetic direction, and record it in `DESIGN.md`:
   - tokens for light and dark, the type scale, spacing, shapes, motion;
   - the built-in terminal palettes;
   - status colors with paired icons;
   - the component inventory
-- [ ] build the theme and the components: status badge, machine card, session row, section header, empty, error and
+- [x] build the theme and the components: status badge, machine card, session row, section header, empty, error and
       offline states, banner, confirm dialog, cover
-- [ ] build `AdaptiveScaffold` on window size classes (compact stack, medium rail, expanded sidebar), with insets,
+- [x] build `AdaptiveScaffold` on window size classes (compact stack, medium rail, expanded sidebar), with insets,
       edge-to-edge and predictive back
-- [ ] write Roborazzi screenshots of the components and the scaffold at three widths, in light and dark and at font
+- [x] write Roborazzi screenshots of the components and the scaffold at three widths, in light and dark and at font
       scale 2.0, plus a contrast test on the status colors
-- [ ] run `./gradlew check` and the tests; all must pass before Task 13
+- [x] run `./gradlew check` and the tests; all must pass before Task 13
+  - result (2026-11-03): the direction is "copper and patina" (DESIGN.md): graphite / drafting-grey grounds, the
+    brand's copper as primary and verdigris as the healthy state, flat tonal surfaces, and one loud element, the
+    copper bus bar marking where you are. Type is Atkinson Hyperlegible Next with its Mono sibling (variable fonts,
+    OFL, `licenses/`, NOTICE). Icons are the app's own vector drawables (no icon library); the status glyphs reuse
+    upstream's six shapes. Window size classes come from `currentWindowAdaptiveInfoV2` (the V1 call is deprecated).
+    Destinations for now: Machines, Sessions, Settings (Settings shows the core version, which the smoke test now
+    opens). `./gradlew check assembleDebug` is green (30 design goldens plus 2
+    launch goldens, `ContrastTest`, `NavLayoutTest`, `AdaptiveScaffoldTest`), and the instrumented smoke test passed
+    on the headless `ngterm-phone` AVD
 
 ### Task 13: Keys, machines and first connect
 

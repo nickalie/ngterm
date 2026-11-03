@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- the window behind Compose: the light background (DESIGN.md's Drafting), so the first frame doesn't flash -->
+  <style name="Theme.Ngterm" parent="@android:style/Theme.Material.Light.NoActionBar">
+    <item name="android:windowBackground">@color/window_background</item>
+  </style>
+</resources>

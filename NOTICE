@@ -356,3 +356,17 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+Atkinson Hyperlegible Next and Atkinson Hyperlegible Mono
+---------------------------------------------------------
+
+https://github.com/googlefonts/atkinson-hyperlegible-next
+https://github.com/googlefonts/atkinson-hyperlegible-next-mono
+
+The Android app bundles both fonts unmodified, as Google Fonts ships them (the upright variable fonts, in
+mobile/android/app/src/main/res/font/). They are licensed under the SIL Open Font License, Version 1.1, whose full
+text, with each font's copyright line, is in mobile/android/licenses/.
+
+Copyright 2020-2024 The Atkinson Hyperlegible Next Project Authors
+Copyright 2020-2024 The Atkinson Hyperlegible Mono Project Authors

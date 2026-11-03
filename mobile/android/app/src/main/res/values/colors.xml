@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <color name="ic_launcher_background">#FF101418</color>
+  <!-- the window's background before Compose draws: ui/theme/Color.kt's light background -->
+  <color name="window_background">#FFF2F4F5</color>
 </resources>

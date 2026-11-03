@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- two racked servers, each with its status light: a 24dp line icon, 2dp strokes with round ends; Icon tints it -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <path
+      android:pathData="M6,4h12a2,2 0 0 1 2,2v3a2,2 0 0 1 -2,2h-12a2,2 0 0 1 -2,-2v-3a2,2 0 0 1 2,-2z"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+  <path
+      android:pathData="M6,13h12a2,2 0 0 1 2,2v3a2,2 0 0 1 -2,2h-12a2,2 0 0 1 -2,-2v-3a2,2 0 0 1 2,-2z"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+  <path
+      android:pathData="M8,7.5h0.01"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+  <path
+      android:pathData="M8,16.5h0.01"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+  <path
+      android:pathData="M12,7.5h4"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+  <path
+      android:pathData="M12,16.5h4"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+</vector>

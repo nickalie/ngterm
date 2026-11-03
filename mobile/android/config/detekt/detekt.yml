@@ -12,7 +12,8 @@ naming:
     ignoreAnnotated: ['Composable']
   TopLevelPropertyNaming:
     # design tokens (`val Ink = Color(...)`) are PascalCase top-level constants
-    constantPattern: '[A-Z][A-Za-z0-9]*'
+    # and the usual SCREAMING_CASE for plain `const val`s
+    constantPattern: '[A-Z][A-Za-z0-9]*|[A-Z][_A-Z0-9]*'
 
 style:
   UnusedPrivateMember:
@@ -40,6 +41,8 @@ Compose:
     active: true
   CompositionLocalAllowlist:
     active: true
+    # the design system's one local: the tokens Material 3's theme has no slot for (ui/theme/Theme.kt)
+    allowedCompositionLocals: ['LocalNgtermTokens']
   CompositionLocalNaming:
     active: true
   ContentEmitterReturningValues:
