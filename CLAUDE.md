@@ -23,6 +23,7 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 | `ngterm-session` | the live-session server, its client and `SessionHost` | any |
 | `ngterm-app` | frontend-neutral app services | any |
 | `ngterm-headless` | the core, control socket and live sessions with no window (an Attach Remote origin) | any |
+| `ngterm-mobile` | the Android app's Rust core: a remote-only viewer over ssh, exposed to Kotlin through UniFFI | any |
 | `ngterm-wpe-sys` and kin, `ngterm-wpe` | WPE WebKit bindings and the HTML overlays' host | Linux |
 | `ngterm-gpui` → `ngterm` | the GPUI frontend | Linux, macOS, Windows |
 
@@ -31,6 +32,9 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 - GPUI owns the main thread and the state; other threads hop onto it through `MainLoop`.
 - Put work that needs no terminal or widget in `ngterm-core` (tested on the `ngterm-host` fakes), and terminal work
   that needs no window in `ngterm-term` (tested on real PTYs). Keep both toolkit-neutral.
+- The Android app (`mobile/android`, Kotlin + Compose) is a frontend over `ngterm-mobile`. UI work there goes through
+  the `frontend-design` skill and stays inside `mobile/android/DESIGN.md`, extending it in the same change when a
+  screen needs something new.
 
 ## Platforms
 

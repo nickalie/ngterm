@@ -24,7 +24,7 @@ that costs nothing, and the plan has no iOS targets, checks or tasks.
 Two investigations ran on the dev box. Their working diffs are saved next to this plan. Both apply cleanly on
 `be924cc0`; prototyped on `5edec0d8`.
 
-- **`20261102-android-app/task3-libghostty-vt-android.patch`:** libghostty-vt builds for Android at the pinned revision
+- **`docs/plans/completed/20261102-android-app/task3-libghostty-vt-android.patch`:** libghostty-vt builds for Android at the pinned revision
   with **no Ghostty patch**.
   - `cargo ndk -t arm64-v8a -P 24` and `-t x86_64 -P 24` both build `ngterm-ghostty-vt --tests`, and all 103 x86_64
     test binaries passed on an x86_64 API 36.1 emulator.
@@ -35,7 +35,7 @@ Two investigations ran on the dev box. Their working diffs are saved next to thi
   - cargo-ndk doesn't export `ANDROID_NDK_HOME`, so the build script derives it from `CARGO_NDK_SYSROOT_PATH`.
   - The prefix needs no new Zig packages, so its key stays unchanged.
   - NDK 27.1.12297006 is verified (27.0 also builds). Arm64 binaries were built, not run.
-- **`20261102-android-app/task2-ngterm-term-stream-backend.patch`:** `ngterm-term` gets a default-on `local` feature
+- **`docs/plans/completed/20261102-android-app/task2-ngterm-term-stream-backend.patch`:** `ngterm-term` gets a default-on `local` feature
   (`ngterm-pty`, `ngterm-session`, `ngterm-host` and their modules: `launch`, `pty`, `session_io`, `painted`, `bench`)
   and a fourth `Pane` backend, `Pane::stream`.
   - The gate is needed: `ngterm-session` does not compile for Android (`job/mod.rs` has no `sys` for android, and
@@ -335,7 +335,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 ### Task 2: ngterm-term's stream backend and the `local` feature
 
 **Files:**
-- Apply: `docs/plans/20261102-android-app/task2-ngterm-term-stream-backend.patch`
+- Apply: `docs/plans/completed/20261102-android-app/task2-ngterm-term-stream-backend.patch`
 - Modify (by the patch): `crates/ngterm-term/{Cargo.toml,src/lib.rs,src/pane.rs,src/mailbox.rs,src/effects.rs,
   src/input.rs,src/pty.rs,tests/*.rs}`, `crates/ngterm-pty/src/…` (`From<Arc<AtomicBool>> for ReadPause`),
   `.github/workflows/{cross-platform.yml,linux.yml}`
@@ -355,7 +355,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 ### Task 3: libghostty-vt for Android
 
 **Files:**
-- Apply: `docs/plans/20261102-android-app/task3-libghostty-vt-android.patch`
+- Apply: `docs/plans/completed/20261102-android-app/task3-libghostty-vt-android.patch`
 - Modify (by the patch): `crates/ngterm-ghostty-vt-sys/{zig_build.rs,build.rs,tests/zig_build.rs}`,
   `scripts/build-ghostty-vt.sh`
 
@@ -1131,12 +1131,13 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 
 ### Task 23: [Final] Update documentation
 
-- [ ] README: an "Android" section (what it does, setup and build through the two scripts, adding the device key to
+- [x] README: an "Android" section (what it does, setup and build through the two scripts, adding the device key to
       the server, the v1 limits), listed among the extensions beyond upstream
-- [ ] CLAUDE.md: an `ngterm-mobile` row in the architecture table (platform `any`), and the rule that UI work goes
+- [x] CLAUDE.md: an `ngterm-mobile` row in the architecture table (platform `any`), and the rule that UI work goes
       through `frontend-design` and `mobile/android/DESIGN.md`
-- [ ] the crate root docs of `ngterm-mobile`: its module map, the threading model, the seams
-- [ ] move this plan and its `20261102-android-app/` directory to `docs/plans/completed/`
+- [x] the crate root docs of `ngterm-mobile`: its module map, the threading model, the seams
+- [x] move this plan and its `20261102-android-app/` directory to `docs/plans/completed/`
+  - the plan file itself is moved by the run's final step (move-plan.sh)
 
 ## Post-Completion
 

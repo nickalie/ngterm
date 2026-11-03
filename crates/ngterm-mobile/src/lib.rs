@@ -4,8 +4,8 @@
 //! `ngterm-session attach` per shown pane, and the control lines that create and end sessions. It runs no local
 //! sessions, so it builds `ngterm-term` without `local`.
 //!
-//! Kotlin reaches it through `UniFFI` (proc-macro form): [`api`] is the whole surface, thin handles that post commands
-//! to the core's [`actor`] thread, which owns the [`transport`]'s connections.
+//! Kotlin reaches it through `UniFFI` (proc-macro form); `scripts/build-android.sh` builds the `cdylib` and generates
+//! the bindings with the crate's own `uniffi-bindgen` binary (feature `bindgen`).
 //!
 //! Module map: [`api`] (the facade, its records, events and callback interfaces), [`actor`] (the thread, its runtime
 //! and commands), [`transport`] (the ssh seam, its channels, the russh transport and the scripted fake behind the
@@ -14,6 +14,24 @@
 //! show), [`pane`] (shown panes: their attach, terminal, leadership, ends and clipboard reads), [`reconnect`] (keeping
 //! machines connected: lost connections, network changes, suspend and resume), [`rows`] (the packed row buffer a pane
 //! is drawn from).
+//!
+//! Threading model:
+//! - One [`actor`] thread per [`MobileCore`] runs a current-thread tokio runtime and a `LocalSet`. It owns the
+//!   transport, one connection per machine with its exec channels, the `!Send` presentation clients and their
+//!   one-second tick, so none of them is `Send` or locked.
+//! - The [`api`] objects are thin `Send + Sync` handles: a [`MobileCore`] call posts a command to the actor and awaits
+//!   its answer (a Kotlin `suspend fun`). A [`Pane`] handle's input goes to its terminal directly, on the caller's
+//!   thread, so typing never waits on the actor.
+//! - Each shown pane has a feeder thread (its channel into the terminal's `StreamFeed`, which blocks while the terminal
+//!   is behind and so holds the channel back) and a writer thread (the terminal's `StreamOut`: input, replies and
+//!   resizes, down the channel). Both report back to the actor.
+//! - Events reach the app through the [`EventSink`] on the actor's thread, never the caller's.
+//!
+//! Seams: the app implements three `UniFFI` callback interfaces, [`EventSink`] (every [`MobileEvent`]), [`KeyVault`]
+//! (the Keystore-wrapped private keys, unwrapped per connection and wiped after use) and [`HostKeyStore`] (host keys
+//! pinned on first use). Notifications, asks and the clipboard are events the app acts on, answered back through
+//! [`MobileCore`]. Inside the crate, [`transport::Transport`] is the seam between the actor and ssh: russh in the app,
+//! the scripted fake (feature `fakes`) in tests.
 
 uniffi::setup_scaffolding!();
 

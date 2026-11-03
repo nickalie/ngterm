@@ -44,6 +44,8 @@ Linux build unless it names another OS.
   next launch lists each machine once and attaches every row it still offers where it stood; a machine that does not
   answer is listed again on the reconnect schedule for up to a week, and a session gone there is named in a banner
   (`crates/ngterm-core/src/remote/relaunch.rs`).
+- Another extension beyond upstream, which has no mobile app: an Android app that views and drives another machine's
+  live sessions over ssh ([Android](#android)).
 - No bundled theme of its own: upstream ships its `agterm` theme and starts a fresh install on it; this build ships
   Ghostty's theme catalog only, so a fresh install starts on Ghostty's built-in colors (the "default ghostty" row),
   and a settings file that still names `agterm` (a build from before the rename seeded it) loads on them too.
@@ -495,6 +497,41 @@ overlays and pages shown on the viewer. What would be drawn on the server (banne
 has no display there: banners go to its log. A session closes when its program ends, as in the app.
 It builds and runs on macOS and Windows too; a viewer reaches a Linux or macOS origin only, since Attach Remote runs
 its commands there through `/bin/sh` (`docs/backlog/attach-remote-cannot-reach-a-windows-origin.md`).
+
+## Android
+
+`mobile/android` is a native Android app (Kotlin, Jetpack Compose, phones and tablets) over the Rust core
+`crates/ngterm-mobile`, which Kotlin reaches through UniFFI. It is remote-only: it runs no sessions of its own, and
+reaches machines running ngterm (`ngterm-headless` on a server, or a desktop instance) over ssh, as File ▸ Attach Remote
+does. It lists a machine's live sessions, makes and ends them, and attaches them: their panes (one at a time on a
+phone, the origin's split on a tablet), status, context, HUD and notifications. Asks show as dialogs, or as
+notification actions while the app is in the background; a foreground service keeps attached sessions connected. Its
+design system is `mobile/android/DESIGN.md`.
+
+```sh
+scripts/setup-android.sh [--check]    # the pinned toolchain (Android toolchain), then export the lines it prints
+scripts/build-android.sh [--profile release|debug] [--no-gradle] [GRADLE_TASK...]   # default: assembleDebug
+scripts/build-android.sh check assembleDebug   # the lint gate and JVM tests, as CI runs it
+scripts/build-android.sh installDebug          # onto the device or emulator adb sees
+scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-headless behind a private sshd (Linux)
+```
+
+`build-android.sh` builds `libngterm_mobile.so` for arm64-v8a and x86_64 through cargo-ndk, generates the Kotlin
+bindings from it and runs Gradle; everything it generates stays under `mobile/android/core/build/`. The debug APK is
+`mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
+
+On its first run the app creates an ed25519 key, sealed by the Android Keystore, or imports an OpenSSH or PEM key. It
+shows the key's `authorized_keys` line (Copy, Share) and the command that appends it: add that line to
+`~/.ssh/authorized_keys` of the user the app signs in as, on each machine. A machine needs the staged layout with
+`ngtermctl` on `PATH`, where `~/.local/bin` or `/usr/local/bin` will do
+([A server without a display](#a-server-without-a-display)).
+A machine is a host, port, user and key; its host key is pinned on first use, and a changed one stops the connection
+with both fingerprints shown.
+
+Not in v1: HTML pages and program overlays (refused, as a viewer that can't show them refuses them), Kitty images
+(the pane reports no support), passwords and jump hosts (public-key auth to the machine itself only), Nerd Font
+symbols, a GPU renderer (the terminal is drawn on a Compose canvas), editing the layout from the phone, and Play Store
+publishing. A Windows machine can't be reached, as from Attach Remote.
 
 ## Windows
 
