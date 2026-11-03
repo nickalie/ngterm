@@ -1140,6 +1140,120 @@ fn a_create_the_origin_refuses_or_never_answers_says_so_and_attaches_nothing() {
 }
 
 #[test]
+fn duplicate_remote_session_lets_the_origin_resolve_its_directory() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let row = attach.attached_row();
+    let workspace = attach.fixture.store().current_workspace_id().unwrap();
+    let store = attach.fixture.store_mut().unwrap();
+    // A real attachment starts with the viewer's home; remote OSC 7 reports need not update that cache.
+    assert_eq!(store.session(row).unwrap().focused_cwd(), "/home/u");
+    let after = store
+        .add_session(workspace, crate::model::NewSession::at_cwd("/local"))
+        .unwrap();
+    let other = store.add_workspace("other");
+    store.select_workspace(other);
+    let count = attach.fixture.store().sessions().count();
+    attach.session = row;
+
+    assert!(attach.act(SidebarAction::Duplicate(row)));
+    assert_eq!(
+        attach.fixture.store().sessions().count(),
+        count,
+        "no local shell is created"
+    );
+    attach.wait_for_runs(3);
+    assert_eq!(
+        attach.hud(),
+        Some(panel("Duplicate Session", "creating a session on studio…", true))
+    );
+    attach.runner.answer(2, restore_mode("live"));
+    attach.wait_for_runs(4);
+    let expected =
+        crate::remote::ssh::control_command("studio", &["session", "duplicate", "--target", REMOTE_SESSION]).unwrap();
+    assert_eq!(attach.runner.hosts()[3], "studio");
+    assert_eq!(attach.runner.lines()[3], *expected.last().unwrap());
+    attach.runner.answer(3, created_receipt());
+    attach.wait_for_runs(5);
+    let mut created = created_session();
+    created["cwd"] = json!("/only-on-studio/project's files");
+    attach.runner.answer(4, listing(&[build_session(), created]));
+    attach.drive("the remote duplicate lands", |attach| {
+        attach.remote_rows() == ["build", "fresh"]
+    });
+
+    let store = attach.fixture.store();
+    let copy = store.active_session().unwrap();
+    assert_eq!(copy.remote_host(), Some("studio"));
+    assert_eq!(copy.remote_presentation().unwrap().binding.remote_session_id, CREATED);
+    assert_eq!(copy.parent_id(), None);
+    assert_eq!(store.workspace_for_session(copy.id()).unwrap().id(), workspace);
+    let order: Vec<_> = store
+        .workspace(workspace)
+        .unwrap()
+        .sessions
+        .iter()
+        .map(crate::model::Session::id)
+        .collect();
+    let source_index = order.iter().position(|id| *id == row).unwrap();
+    assert_eq!(&order[source_index..], &[row, copy.id(), after]);
+    assert_eq!(store.sessions().count(), count + 1);
+    assert_eq!(attach.hud(), None);
+    assert_eq!(attach.runner.lines().len(), 5, "the origin is asked once");
+}
+
+#[test]
+fn duplicate_remote_session_without_a_binding_never_creates_locally() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let store = attach.fixture.store_mut().unwrap();
+    let workspace = store.current_workspace_id().unwrap();
+    let row = store
+        .add_session(
+            workspace,
+            crate::model::NewSession {
+                remote_host: Some("studio".to_owned()),
+                ..crate::model::NewSession::at_cwd("/home/u")
+            },
+        )
+        .unwrap();
+    let count = store.sessions().count();
+    attach.session = row;
+    assert!(attach.act(SidebarAction::Duplicate(row)));
+    assert_eq!(
+        attach.hud(),
+        Some(panel("Duplicate Session", "the remote session is not attached", false))
+    );
+    assert_eq!(attach.fixture.store().sessions().count(), count);
+    assert!(attach.runner.lines().is_empty());
+    assert_eq!(attach.fixture.core.remote_wake(), None);
+}
+
+#[test]
+fn refused_remote_duplicate_never_creates_a_local_fallback() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let row = attach.attached_row();
+    let count = attach.fixture.store().sessions().count();
+    attach.session = row;
+    assert!(attach.act(SidebarAction::Duplicate(row)));
+    attach.wait_for_runs(3);
+    attach.runner.answer(2, restore_mode("live"));
+    attach.wait_for_runs(4);
+    attach
+        .runner
+        .answer(3, reply(&json!({"ok": false, "error": "source session is gone"})));
+    attach.drive("the refusal shows", |attach| {
+        attach.hud().is_some_and(|hud| hud.spinner.is_none())
+    });
+    assert_eq!(
+        attach.hud(),
+        Some(panel("Duplicate Session", "source session is gone", false))
+    );
+    assert_eq!(attach.fixture.store().sessions().count(), count);
+    assert_eq!(attach.fixture.store().selected_session_id(), Some(row));
+    assert_eq!(attach.runner.lines().len(), 4, "the create is never retried");
+    assert_eq!(attach.fixture.core.remote_wake(), None);
+}
+
+#[test]
 fn new_session_from_a_remote_row_lands_in_that_rows_workspace() {
     let mut attach = Attach::new(Some("studio\n"));
     let row = attach.attached_row();
