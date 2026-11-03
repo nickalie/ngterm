@@ -499,14 +499,10 @@ pub struct RusshConnection {
 impl Connection for RusshConnection {
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError> {
         let handle = self.handle.borrow().clone().ok_or(TransportError::Closed)?;
-        let channel = handle.channel_open_session().await.map_err(|error| {
-            if handle.is_closed() {
-                TransportError::Closed
-            } else {
-                TransportError::Rejected(error.to_string())
-            }
-        })?;
-        let mut opening = Opening(Some(channel));
+        // Opened apart from this future, so a channel confirmed after `exec` is dropped is still closed.
+        let (opened, open) = oneshot::channel();
+        tokio::task::spawn_local(open_session(handle, opened));
+        let mut opening = open.await.map_err(|_| TransportError::Closed)??;
         let mut early = VecDeque::new();
         let channel = opening.0.as_mut().ok_or(TransportError::Closed)?;
         if let Some(size) = pty {
@@ -546,10 +542,24 @@ impl Connection for RusshConnection {
     }
 }
 
+/// Opens a session channel for `exec`, handing it over as an [`Opening`]: one `exec` no longer waits for is closed.
+async fn open_session(handle: Rc<Handle<Client>>, opened: oneshot::Sender<Result<Opening, TransportError>>) {
+    let result = handle.channel_open_session().await.map_err(|error| {
+        if handle.is_closed() {
+            TransportError::Closed
+        } else {
+            TransportError::Rejected(error.to_string())
+        }
+    });
+    // A failed send drops the `Opening`, which closes the channel.
+    let _ = opened.send(result.map(|channel| Opening(Some(channel))));
+}
+
 /// A channel being opened: closed on the machine unless it reaches the bridge tasks.
 ///
-/// russh does not close a channel it drops, so a refused pty or command, or an `exec` dropped part-way, would leave
-/// it open on the machine and count against its `MaxSessions` until the connection ends.
+/// russh does not close a channel it drops, so a refused pty or command, or an `exec` dropped part-way (before the
+/// machine confirms the channel too, through [`open_session`]), would leave it open on the machine and count against
+/// its `MaxSessions` until the connection ends.
 struct Opening(Option<::russh::Channel<Msg>>);
 
 impl Drop for Opening {

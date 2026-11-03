@@ -42,6 +42,11 @@ struct TestServer {
 impl TestServer {
     /// A server with a new host key, accepting `authorized` for [`USER`], on a free local port.
     async fn start(authorized: &PublicKey) -> Self {
+        Self::start_opening_after(authorized, Duration::ZERO).await
+    }
+
+    /// [`TestServer::start`], confirming each session channel `delay` after it is asked for.
+    async fn start_opening_after(authorized: &PublicKey, delay: Duration) -> Self {
         let host_key = PrivateKey::random(&mut ::russh::keys::key::safe_rng(), Algorithm::Ed25519).unwrap();
         let public = host_key.public_key().clone();
         let config = Arc::new(server::Config {
@@ -60,6 +65,7 @@ impl TestServer {
             log: Arc::clone(&log),
             commands: HashMap::new(),
             ptys: HashMap::new(),
+            open_delay: delay,
         };
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
@@ -100,6 +106,8 @@ struct Handler {
     log: Log,
     commands: HashMap<ChannelId, String>,
     ptys: HashMap<ChannelId, String>,
+    /// How long a session channel waits for its confirmation.
+    open_delay: Duration,
 }
 
 impl Handler {
@@ -109,6 +117,7 @@ impl Handler {
             log: Arc::clone(&self.log),
             commands: HashMap::new(),
             ptys: HashMap::new(),
+            open_delay: self.open_delay,
         }
     }
 
@@ -196,7 +205,15 @@ impl server::Handler for Handler {
         reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        reply.accept().await;
+        if self.open_delay.is_zero() {
+            reply.accept().await;
+        } else {
+            let delay = self.open_delay;
+            tokio::spawn(async move {
+                tokio::time::sleep(delay).await;
+                reply.accept().await;
+            });
+        }
         Ok(())
     }
 
@@ -845,6 +862,21 @@ fn a_refused_pty_is_rejected_and_its_channel_closed() {
         assert!(matches!(refused, Err(TransportError::Rejected(reason)) if reason == "the machine refused a pty"));
         closed_by_client(&server).await;
         assert_eq!(server.log(), ["pty xterm-256color 1x24 10x480", "close"]);
+    });
+}
+
+#[test]
+fn an_exec_dropped_before_its_channel_opens_closes_it() {
+    run(async {
+        let fixture = fixture(quick());
+        let server = TestServer::start_opening_after(&fixture.public, Duration::from_millis(200)).await;
+        let connection = connected(&fixture, &server).await;
+
+        let dropped = tokio::time::timeout(Duration::from_millis(50), connection.exec("hang", None)).await;
+
+        assert!(dropped.is_err(), "the exec is dropped while its channel is opening");
+        closed_by_client(&server).await;
+        assert_eq!(server.log(), ["close"]);
     });
 }
 
