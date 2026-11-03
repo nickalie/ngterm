@@ -23,6 +23,7 @@
 mod cases;
 mod dmabuf;
 mod interaction;
+mod markdown;
 mod support;
 
 use std::path::{Path, PathBuf};

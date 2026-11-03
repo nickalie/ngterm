@@ -103,18 +103,19 @@ fn exit_byte(code: i64) -> u8 {
 
 // MARK: - open
 
-/// `ngtermctl session overlay open [<command>]`: a program, or a page with `--html`/`--url`; `--background-color` rides
+/// `ngtermctl session overlay open [<command>]`: a program, HTML/URL page, raster image or Markdown document;
+/// `--background-color` rides
 /// the wire as `color`.
 #[derive(Debug, clap::Args)]
 #[command(
-    about = "Open an overlay running COMMAND (it closes when COMMAND exits), or showing a page with --html or --url."
+    about = "Open an overlay running COMMAND (it closes when COMMAND exits), or showing a page with --html, --url, --image or --markdown."
 )]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "the flags are upstream's, one field each, in the order its help lists them"
 )]
 pub struct Open {
-    #[arg(help = "Program to run in the overlay (e.g. revdiff); omit with --html or --url.")]
+    #[arg(help = "Program to run in the overlay (e.g. revdiff); omit with --html, --url, --image or --markdown.")]
     command: Option<String>,
 
     #[arg(long, help = "Show this local HTML file instead of running COMMAND.")]
@@ -126,6 +127,20 @@ pub struct Open {
                 localhost means the Mac running ngterm."
     )]
     url: Option<String>,
+
+    #[arg(
+        long,
+        help = "Show this png, jpg, gif or webp picture instead of running COMMAND. Without --size-percent \
+        the panel fits the picture, up to 80% of the session; a larger picture is scaled down."
+    )]
+    image: Option<String>,
+
+    #[arg(
+        long,
+        help = "Show this .md or .markdown file rendered with the terminal theme instead of running COMMAND; \
+        pictures in its own folder are shown, and a web link opens in the browser after a confirmation."
+    )]
+    markdown: Option<String>,
 
     #[arg(
         long,
@@ -219,12 +234,37 @@ fn names_another_host(url: &str) -> bool {
 }
 
 impl Open {
-    /// What the overlay shows: exactly one of COMMAND, `--html` and `--url`, and the options that belong to it.
+    /// Exactly one of COMMAND, `--html`, `--url`, `--image` or `--markdown`, and that source's allowed options.
     fn validate_content(&self) -> Result<(), &'static str> {
         let program = self.command.is_some();
-        let sources = [program, self.html.is_some(), self.url.is_some()];
+        let sources = [
+            program,
+            self.html.is_some(),
+            self.url.is_some(),
+            self.image.is_some(),
+            self.markdown.is_some(),
+        ];
         if sources.iter().filter(|given| **given).count() != 1 {
-            return Err("provide exactly one of COMMAND, --html or --url");
+            return Err("provide exactly one of COMMAND, --html, --url, --image or --markdown");
+        }
+        for (kind, given) in [("image", self.image.is_some()), ("markdown", self.markdown.is_some())] {
+            if given
+                && (self.companion
+                    || self.block
+                    || self.wait
+                    || self.navigation
+                    || self.javascript
+                    || self.chromeless
+                    || self.persistent
+                    || self.browse
+                    || self.cwd.is_some())
+            {
+                return Err(if kind == "image" {
+                    "--image takes no --companion, --block, --wait, --navigation, --js, --chromeless, --persistent, --browse or --cwd"
+                } else {
+                    "--markdown takes no --companion, --block, --wait, --navigation, --js, --chromeless, --persistent, --browse or --cwd"
+                });
+            }
         }
         if !program && (self.wait || (self.url.is_some() && self.block)) {
             return Err("a page takes no --wait, and a --url page no --block");
@@ -393,6 +433,8 @@ impl RequestCommand for Open {
             height: self.height,
             color: self.background_color.clone(),
             html: self.html.as_deref().map(absolute),
+            image: self.image.as_deref().map(absolute),
+            markdown_file: self.markdown.as_deref().map(absolute),
             navigation: flag(self.navigation),
             url: self.url.clone(),
             javascript: flag(self.javascript),
@@ -1174,6 +1216,67 @@ mod tests {
     }
 
     #[test]
+    fn image_open_sends_resolved_path_and_no_page_flags() {
+        let request = request(&["open", "--image", "shots/../shots/a.png", "--follow"]);
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(request["cmd"], "session.overlay.open");
+        assert_eq!(
+            request["args"],
+            json!({"image": cwd.join("shots/a.png").to_string_lossy(), "follow": true})
+        );
+    }
+
+    #[test]
+    fn markdown_open_uses_its_own_wire_field_and_resolved_path() {
+        let value = request(&["open", "--markdown", "docs/../docs/r.md", "--size-percent", "95"]);
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(value["cmd"], "session.overlay.open");
+        assert_eq!(
+            value["args"],
+            json!({"markdownFile": cwd.join("docs/r.md").to_string_lossy(), "sizePercent": 95})
+        );
+        let encoded = serde_json::to_string(&value).unwrap();
+        assert!(encoded.contains("\"markdownFile\":"));
+        assert!(!encoded.contains("\"markdown\":"));
+        let request: Request = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), value);
+    }
+
+    #[test]
+    fn document_sources_refuse_conflicts_and_incompatible_page_options() {
+        for source in ["--image", "--markdown"] {
+            for other in ["--html", "--url", "--image", "--markdown"] {
+                if other == source {
+                    continue;
+                }
+                assert!(
+                    rejects(&["open", source, "doc.png", other, "other"]),
+                    "{source}/{other}"
+                );
+            }
+            assert!(rejects(&["open", "command", source, "doc.png"]));
+            for flag in [
+                "--companion",
+                "--block",
+                "--wait",
+                "--navigation",
+                "--js",
+                "--chromeless",
+                "--persistent",
+                "--browse",
+            ] {
+                assert!(rejects(&["open", source, "doc.png", flag]), "{source}/{flag}");
+            }
+            assert!(rejects(&["open", source, "doc.png", "--cwd", "/tmp"]));
+        }
+        assert!(rejects(&["open", "--image", "a.png", "--width", "400"]));
+        assert_eq!(
+            refusal(&["open", "--markdown", "doc.md", "--block"]),
+            "--markdown takes no --companion, --block, --wait, --navigation, --js, --chromeless, --persistent, --browse or --cwd"
+        );
+    }
+
+    #[test]
     fn open_refuses_a_missing_or_conflicting_content() {
         let cases: [&[&str]; 22] = [
             &["open"],
@@ -1251,7 +1354,10 @@ mod tests {
                 &["open", "cmd", "--pane", "left", "--block", "--wait"],
                 "--block cannot be combined with --wait",
             ),
-            (&["open"], "provide exactly one of COMMAND, --html or --url"),
+            (
+                &["open"],
+                "provide exactly one of COMMAND, --html, --url, --image or --markdown",
+            ),
             (
                 &["open", "--url", "http://x/", "--block"],
                 "a page takes no --wait, and a --url page no --block",

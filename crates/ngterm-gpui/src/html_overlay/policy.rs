@@ -335,7 +335,10 @@ fn file_url(path: &str) -> Option<Url> {
 /// The source's own address: a file page's file (a replica's on the machine that opened it), a URL page's URL.
 fn source_url(source: &HtmlSource) -> Option<Url> {
     match source {
-        HtmlSource::File { path, .. } | HtmlSource::Replica { path } => file_url(path),
+        HtmlSource::File { path, .. }
+        | HtmlSource::Replica { path }
+        | HtmlSource::Image { path }
+        | HtmlSource::Markdown { path } => file_url(path),
         HtmlSource::Url(url) => Some(url.clone()),
     }
 }
@@ -352,7 +355,8 @@ pub fn page_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>) -
         return Some(shown.unwrap_or(source).clone());
     }
     if overlay.text_loaded()
-        && let HtmlSource::File { path, .. } = &overlay.source
+        && let HtmlSource::File { path, .. } | HtmlSource::Image { path } | HtmlSource::Markdown { path } =
+            &overlay.source
     {
         return file_url(path);
     }
@@ -386,8 +390,8 @@ pub fn page_info(url: &Url, title: Option<&str>, can_go_back: bool, can_go_forwa
 #[must_use]
 pub fn browser_url(overlay: &HtmlOverlay, shown: Option<&Url>, web: Option<&Url>) -> Option<Url> {
     match &overlay.source {
-        HtmlSource::File { path, .. } => file_url(path),
-        HtmlSource::Replica { .. } => None,
+        HtmlSource::File { path, .. } | HtmlSource::Image { path } => file_url(path),
+        HtmlSource::Replica { .. } | HtmlSource::Markdown { .. } => None,
         HtmlSource::Url(original) => {
             let current = if overlay.flags.browse { shown } else { web };
             Some(
@@ -457,7 +461,7 @@ pub fn strip_items(overlay: &HtmlOverlay, hide_shown: bool) -> Option<Vec<StripI
     let sharing = match overlay.source {
         HtmlSource::File { .. } => Some(StripItem::Files),
         HtmlSource::Url(_) => Some(StripItem::CopyLink),
-        HtmlSource::Replica { .. } => None,
+        HtmlSource::Replica { .. } | HtmlSource::Image { .. } | HtmlSource::Markdown { .. } => None,
     };
     if overlay.flags.navigation
         && let Some(sharing) = sharing
@@ -1174,5 +1178,23 @@ mod tests {
             ThemeChange::Reinstall,
             "a palette change alone is a change"
         );
+    }
+    #[test]
+    fn document_sources_keep_the_original_path_after_text_loads_and_fragments() {
+        let path = std::env::temp_dir().join("document.md").to_string_lossy().into_owned();
+        for source in [
+            HtmlSource::Image { path: path.clone() },
+            HtmlSource::Markdown { path: path.clone() },
+        ] {
+            let overlay = HtmlOverlay::new(source, HtmlPageFlags::default());
+            let blank = url("about:blank#heading");
+            assert_eq!(
+                page_url(&overlay, Some(&blank), Some(&blank)),
+                Url::from_file_path(&path).ok()
+            );
+        }
+        let markdown = HtmlOverlay::new(HtmlSource::Markdown { path }, HtmlPageFlags::default());
+        assert!(browser_url(&markdown, None, None).is_none());
+        assert!(!strip_items(&markdown, false).unwrap().contains(&StripItem::Files));
     }
 }

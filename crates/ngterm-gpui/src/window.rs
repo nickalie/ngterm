@@ -884,6 +884,7 @@ impl WindowView {
     #[must_use = "a focus report the core took needs a settle"]
     pub fn sync(&mut self, core: &mut Core, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let id = self.id;
+        crate::html_overlay::set_window_scale(id, f64::from(window.scale_factor()));
         let dialog = core.modal_pending(id) || core.palette_holds(id);
         let alert = crate::modal::alert_open(window.window_handle(), cx);
         let alert_closed = std::mem::replace(&mut self.alert_up, alert) && !alert;

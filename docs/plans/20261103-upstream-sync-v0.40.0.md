@@ -334,40 +334,40 @@ CLI source/conflict cases; `tests/ui/test_html_overlay.py::test_a_markdown_file_
 Cover session.overlay.open/reload/navigate, session.companion.page, field:tree.session.htmlOverlays,
 cli:session overlay open and ui:htmlOverlay.page; do not invent nested catalog keys.
 
-- [ ] Add image and markdown sources to args/tree, `markdownFile` distinct from HUD markdown. Exactly one source
+- [x] Add image and markdown sources to args/tree, `markdownFile` distinct from HUD markdown. Exactly one source
   field projects. Current HtmlSource has File/Url/Replica only; add variants without granting normal file-page powers.
-- [ ] Match validation order/conflicts and exact strings: `session.overlay.open takes one of a command, --html, --url, --image or --markdown`;
+- [x] Match validation order/conflicts and exact strings: `session.overlay.open takes one of a command, --html, --url, --image or --markdown`;
   `session.overlay.open: --image takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse`
   and corresponding --markdown form; absolute paths/extensions refused with Swift's strings, including
   `session.overlay.open: --image must be a png, jpg, jpeg, gif or webp file` and
   `session.overlay.open: --markdown must be a .md or .markdown file`. CLI resolves relative paths, rejects
   --companion/--block/incompatible flags; companion API says `a page companion needs --html or --url`.
-- [ ] Open one descriptor and probe regular files only; follow symlinks to target, reject FIFO/devices before any
+- [x] Open one descriptor and probe regular files only; follow symlinks to target, reject FIFO/devices before any
   blocking read. Bound image file to 64 MiB/100 million pixels and sniff PNG/JPEG/GIF/WebP; reject disguised
   markup/SVG. Preserve ImageProbe.Failure strings/prefix. Handle Unix nonblocking IO and Windows regular handles;
   macOS dataless placeholder refusal has no literal Linux/Windows flag counterpart.
-- [ ] Images embed data URIs with no bridge/file grant/theme/remote form. Natural sizing uses display scale,
+- [x] Images embed data URIs with no bridge/file grant/theme/remote form. Natural sizing uses display scale,
   current zoom, EXIF 5–8 swapped dimensions, 240-point minimum width, base percent 95 and aspect-preserving
   fit within 80% detail bounds including strip chrome. Keep explicit size explicit.
-- [ ] Markdown input is at most 4 MiB UTF-8. Embed raster images only within lexical and canonical parent-folder
+- [x] Markdown input is at most 4 MiB UTF-8. Embed raster images only within lexical and canonical parent-folder
   containment; canonical aliases share payload. Budget 32 MiB image bytes/100 million pixels/256 distinct probes
   including failures. Existing embedded aliases still resolve after budget exhaustion.
-- [ ] Integrate upstream markdown-it/highlight assets, CSS, render.js and licenses with deterministic staging.
+- [x] Integrate upstream markdown-it/highlight assets, CSS, render.js and licenses with deterministic staging.
   Markdown follows terminal theme, no bridge/file grant/remote form. Authored markup stays inert, authored scripts
   disabled, no network fetches. Trusted renderer runs in an isolated helper context on Linux WPE, macOS WKWebView
   and Windows WebView2. Never solve helper execution by enabling arbitrary authored JS.
-- [ ] Permit only http(s) external links through existing confirmation and #anchor scrolling; other links become
+- [x] Permit only http(s) external links through existing confirmation and #anchor scrolling; other links become
   text. Preserve CSP/escaping (including combining marks), highlighted code, tight/loose task boxes, Unicode
   heading slugs and linear duplicate suffixing. Render at most 256 image occurrences; set repeated image data
   through DOM instead of multiplying base64 markup.
-- [ ] Reload rereads original source despite about:blank/fragments; theme change rerenders Markdown. Drop async
+- [x] Reload rereads original source despite about:blank/fragments; theme change rerenders Markdown. Drop async
   loads overtaken by close/newer load. Markdown browser navigation says `a markdown page opens only in its overlay`;
   Finder error stays `show in Finder requires a file page` with per-OS reveal equivalents.
-- [ ] Local path clicks open on owning session without selecting it, respecting HUD/zoom/busy slots and revealing
+- [x] Local path clicks open on owning session without selecting it, respecting HUD/zoom/busy slots and revealing
   on refusal. Bare paths treat %, #, ?, spaces literally; expand home, resolve relative paths against trustworthy
   local pane cwd; other local files reveal. Remote pane bare paths are ignored, remote scratch remains local,
   remote file:// targets reveal instead of opening local document overlays. Preserve authority/automount checks.
-- [ ] Port all Swift loader/parser/renderer tests and backend invariants, with meaningful cross-platform Rust
+- [x] Port all Swift loader/parser/renderer tests and backend invariants, with meaningful cross-platform Rust
   tests and reference UI cases. Keep existing overlay IDs green and run scoped checks. This is one feature cluster;
   image foundation then Markdown renderer are acceptable internal review seams if needed.
 

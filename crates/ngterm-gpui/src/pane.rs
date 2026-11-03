@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use ngterm_core::PaneReport;
-use ngterm_core::link_policy::ClickOrigin;
 use ngterm_core::model::{AppStore, SearchReport, Session, StatusKeystroke};
 use ngterm_core::pane_env::{self, PaneEnv, SessionPane, StatusPane};
 use ngterm_core::restore::spawn_plan::LaunchSeed;
@@ -304,7 +303,7 @@ pub fn post_report(poster: &Poster, session: Uuid, token: &str, report: Report, 
                 state.settle();
             }
         }
-        Report::OpenUrl { url, browser } => state.follow_link(&url, ClickOrigin::Pane(session), browser),
+        Report::OpenUrl { url, browser } => state.follow_pane_link(&url, session, &token, browser),
         Report::Keystroke(keystroke) => state.pane_keystroke(session, &token, keystroke),
         Report::Notification { title, body } => state.terminal_notification(session, &token, &title, &body, focus),
     });

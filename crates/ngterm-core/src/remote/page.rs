@@ -79,7 +79,7 @@ pub(super) fn presentation_source(source: &HtmlSource) -> Option<PresentationPag
         HtmlSource::Url(url) => Some(PresentationPageSource::Url {
             address: url.as_str().to_owned(),
         }),
-        HtmlSource::Replica { .. } => None,
+        HtmlSource::Replica { .. } | HtmlSource::Image { .. } | HtmlSource::Markdown { .. } => None,
     }
 }
 
@@ -501,5 +501,23 @@ impl Core {
     /// Runs the claim expiry, at a deadline the frontend armed from [`Core::take_page_claim_expiries`].
     pub fn expire_remote_page_claims(&mut self) {
         self.expire_remote_page_claims_at(Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod document_tests {
+    use super::*;
+    #[test]
+    fn local_documents_have_no_remote_form() {
+        for source in [
+            HtmlSource::Image {
+                path: "/tmp/x.png".to_owned(),
+            },
+            HtmlSource::Markdown {
+                path: "/tmp/x.md".to_owned(),
+            },
+        ] {
+            assert!(presentation_source(&source).is_none());
+        }
     }
 }

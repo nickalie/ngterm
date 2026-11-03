@@ -12,6 +12,7 @@
 //! - [`page_channel`]: the helper carrying a handed-over page's channel to its origin as a child process.
 
 pub mod coverage;
+pub mod documents;
 pub mod hook_runner;
 pub mod integrations;
 pub mod logging;

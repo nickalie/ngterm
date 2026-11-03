@@ -144,6 +144,54 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
     }
 }
 
+/// A local document's path and flags, before resolving any target (upstream imageContent/markdownContent).
+fn document_content(path: &str, args: &Args, image: bool) -> Result<OverlayContent, ControlError> {
+    let kind = if image { "image" } else { "markdown" };
+    if args.cwd.is_some()
+        || [
+            args.wait,
+            args.navigation,
+            args.javascript,
+            args.chromeless,
+            args.persistent,
+            args.browse,
+        ]
+        .contains(&Some(true))
+    {
+        return Err(ControlError::rejected(format!(
+            "session.overlay.open: --{kind} takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse"
+        )));
+    }
+    if !html::is_absolute(path) {
+        return Err(ControlError::rejected(format!(
+            "session.overlay.open: --{kind} must be an absolute path"
+        )));
+    }
+    let path = html::normalize_path(path);
+    let extension = std::path::Path::new(&path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let allowed = if image {
+        crate::link_policy::IMAGE_EXTENSIONS.contains(&extension.as_str())
+    } else {
+        crate::link_policy::MARKDOWN_EXTENSIONS.contains(&extension.as_str())
+    };
+    if !allowed {
+        return Err(ControlError::rejected(if image {
+            "session.overlay.open: --image must be a png, jpg, jpeg, gif or webp file"
+        } else {
+            "session.overlay.open: --markdown must be a .md or .markdown file"
+        }));
+    }
+    Ok(OverlayContent::Page(if image {
+        HtmlSource::Image { path }
+    } else {
+        HtmlSource::Markdown { path }
+    }))
+}
+
 /// The `session.overlay.*` pane selector (upstream's `parseOverlayPane`): absent keeps the session-wide slot, the
 /// pane aliases scope to one pane, anything else (the scratch included) is refused.
 fn parse_overlay_pane(raw: Option<&str>) -> Result<Option<OverlayPane>, ControlError> {
@@ -164,6 +212,18 @@ pub(super) enum OverlayContent {
 pub(super) fn overlay_content(command: &str, args: &Args, home: Option<&str>) -> Result<OverlayContent, ControlError> {
     let reject = |message: &str| Err(ControlError::rejected(message));
     let set = |flag: Option<bool>| flag == Some(true);
+    if let Some(path) = args.image.as_deref() {
+        if !command.is_empty() || args.html.is_some() || args.url.is_some() || args.markdown_file.is_some() {
+            return reject("session.overlay.open takes one of a command, --html, --url, --image or --markdown");
+        }
+        return document_content(path, args, true);
+    }
+    if let Some(path) = args.markdown_file.as_deref() {
+        if !command.is_empty() || args.html.is_some() || args.url.is_some() {
+            return reject("session.overlay.open takes one of a command, --html, --url, --image or --markdown");
+        }
+        return document_content(path, args, false);
+    }
     match (args.html.as_deref(), args.url.as_deref()) {
         (None, None) => {
             if set(args.navigation) {

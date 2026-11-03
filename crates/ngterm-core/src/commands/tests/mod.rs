@@ -14,6 +14,7 @@ mod companion_pages;
 mod companions;
 mod config_browser;
 mod dashboard;
+mod document_pages;
 mod events;
 mod font;
 mod hooks;

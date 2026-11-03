@@ -17,6 +17,8 @@ toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+# Only raster header metadata is inspected; no image pixels are decoded by the document probes.
+image = { workspace = true, features = ["gif", "webp"] }
 
 [target.'cfg(unix)'.dependencies]
 # the hook runner's stdin pump (`poll`, `O_NONBLOCK`), the log file's `O_NOFOLLOW`, the presentation bridge's

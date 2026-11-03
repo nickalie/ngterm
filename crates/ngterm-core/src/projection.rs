@@ -241,10 +241,12 @@ fn html_overlay_nodes(session: &Session) -> Option<Vec<ControlHtmlOverlayNode>> 
 /// that opened it, with no grant), the load state, what the web view shows once it reported, and the flags; the zoom
 /// is the app's, set by the tree.
 fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverlayNode {
-    let (file, cwd, url) = match &page.source {
-        HtmlSource::File { path, grant_root } => (Some(path.clone()), grant_root.clone(), None),
-        HtmlSource::Url(address) => (None, None, Some(address.as_str().to_owned())),
-        HtmlSource::Replica { path } => (Some(path.clone()), None, None),
+    let (file, cwd, url, image, markdown) = match &page.source {
+        HtmlSource::File { path, grant_root } => (Some(path.clone()), grant_root.clone(), None, None, None),
+        HtmlSource::Url(address) => (None, None, Some(address.as_str().to_owned()), None, None),
+        HtmlSource::Replica { path } => (Some(path.clone()), None, None, None, None),
+        HtmlSource::Image { path } => (None, None, None, Some(path.clone()), None),
+        HtmlSource::Markdown { path } => (None, None, None, None, Some(path.clone())),
     };
     let current = page.current.as_ref();
     ControlHtmlOverlayNode {
@@ -252,6 +254,8 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         file,
         cwd,
         url,
+        image,
+        markdown,
         state: page.load_state.wire_name().to_owned(),
         error: page.load_error.clone(),
         page: current.map(|current| current.page.clone()),

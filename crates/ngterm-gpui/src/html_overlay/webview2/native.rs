@@ -31,11 +31,12 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 };
 use webview2_com::{
     AcceleratorKeyPressedEventHandler, AddScriptToExecuteOnDocumentCreatedCompletedHandler,
-    ClearBrowsingDataCompletedHandler, ContentLoadingEventHandler, ContextMenuRequestedEventHandler,
-    DocumentTitleChangedEventHandler, FocusChangedEventHandler, HistoryChangedEventHandler,
-    NavigationCompletedEventHandler, NavigationStartingEventHandler, NewWindowRequestedEventHandler,
-    ProcessFailedEventHandler, ScriptDialogOpeningEventHandler, SourceChangedEventHandler,
-    WebMessageReceivedEventHandler, WebResourceRequestedEventHandler, WindowCloseRequestedEventHandler, take_pwstr,
+    CallDevToolsProtocolMethodCompletedHandler, ClearBrowsingDataCompletedHandler, ContentLoadingEventHandler,
+    ContextMenuRequestedEventHandler, DocumentTitleChangedEventHandler, FocusChangedEventHandler,
+    HistoryChangedEventHandler, NavigationCompletedEventHandler, NavigationStartingEventHandler,
+    NewWindowRequestedEventHandler, ProcessFailedEventHandler, ScriptDialogOpeningEventHandler,
+    SourceChangedEventHandler, WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
+    WindowCloseRequestedEventHandler, take_pwstr,
 };
 use windows::core::{BOOL, HSTRING, Interface as _, PWSTR, Result as ComResult};
 use wry::dpi::{LogicalPosition, LogicalSize};
@@ -170,6 +171,8 @@ pub struct Spec {
     /// The scripts in load order: the theme first (replaced by [`Native::set_theme`]), then the rest.
     pub theme: String,
     pub scripts: Vec<String>,
+    /// App-owned document renderer, installed in its own content world with authored scripts still disabled.
+    pub trusted_document_script: Option<String>,
     pub grant: Option<Grant>,
     pub replica: Option<ReplicaRead>,
     pub text: Option<Text>,
@@ -223,7 +226,38 @@ impl Native {
         for script in &spec.scripts {
             native.add_script_now(script)?;
         }
+        if let Some(script) = &spec.trusted_document_script {
+            native.add_isolated_document_script(script)?;
+        }
         Ok(native)
+    }
+
+    /// CDP's named world isolates the trusted Markdown renderer from the document's global objects.
+    /// Registration finishes before any document load, and does not enable authored JavaScript.
+    fn add_isolated_document_script(&self, script: &str) -> Result<(), String> {
+        let webview = self.webview();
+        let parameters = HSTRING::from(
+            serde_json::json!({
+                "source": script,
+                "worldName": super::super::documents::WORLD,
+            })
+            .to_string(),
+        );
+        CallDevToolsProtocolMethodCompletedHandler::wait_for_async_operation(
+            Box::new(move |handler| {
+                // SAFETY: the web view's COM object is called on its owning thread.
+                unsafe {
+                    webview.CallDevToolsProtocolMethod(
+                        &HSTRING::from("Page.addScriptToEvaluateOnNewDocument"),
+                        &parameters,
+                        &handler,
+                    )
+                }
+                .map_err(Into::into)
+            }),
+            Box::new(|result, _| result),
+        )
+        .map_err(|error| format!("the isolated document renderer was not added: {error}"))
     }
 
     /// Adds `script` for later documents and waits until `WebView2` did (pumping the window's messages); its id.

@@ -186,6 +186,8 @@ pub struct Args {
     pub auto_size: Option<bool>,
     pub mru: Option<bool>,
     pub html: Option<String>,
+    pub image: Option<String>,
+    pub markdown_file: Option<String>,
     pub current: Option<bool>,
     pub navigation: Option<bool>,
     pub url: Option<String>,

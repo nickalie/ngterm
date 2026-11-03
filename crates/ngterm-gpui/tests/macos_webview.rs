@@ -42,6 +42,7 @@ mod smoke {
         ) -> *mut c_void;
         fn ngterm_web_detach(delegate: *mut c_void);
         fn ngterm_web_reply(view: *mut c_void, json: *const c_char);
+        fn ngterm_web_document_script(view: *mut c_void, script: *const c_char);
     }
     extern "C" fn allow(_: *mut c_void, _: *const c_char, _: bool, _: bool, _: bool, _: u64) -> bool {
         true
@@ -88,6 +89,30 @@ mod smoke {
             let _: () = unsafe { msg_send![run_loop,runUntilDate:date] };
         }
     }
+    fn isolated_document_renderer(parent: &Parent) {
+        let view = wry::WebViewBuilder::new()
+            .with_incognito(true)
+            .with_javascript_disabled()
+            .build_as_child(parent)
+            .unwrap();
+        let pointer = Retained::as_ptr(&view.webview()).cast_mut().cast();
+        let script = CString::new("window.helperOnly=true; document.body.dataset.renderer='isolated'").unwrap();
+        // SAFETY: the live main-thread web view copies the helper script into its isolated content world.
+        unsafe { ngterm_web_document_script(pointer, script.as_ptr()) };
+        view.load_html("<body><script>window.authored=true</script></body>")
+            .unwrap();
+        let checked = std::sync::Arc::new(AtomicBool::new(false));
+        pump_until(|| {
+            let result = checked.clone();
+            view.evaluate_script_with_callback(
+                "document.body.dataset.renderer==='isolated' && typeof window.helperOnly==='undefined' && typeof window.authored==='undefined'",
+                move |value| { result.store(value=="true", Ordering::Relaxed); },
+            ).unwrap();
+            checked.load(Ordering::Relaxed)
+        });
+        println!("PASS: isolated document renderer with authored scripts disabled");
+    }
+
     pub fn run() {
         // Forces linkage of the crate's native adapter as well as checking that startup is not used.
         assert!(!ngterm_gpui::app::build_identity_text().is_empty());
@@ -147,6 +172,7 @@ mod smoke {
             ngterm_web_detach(delegate);
         }
         println!("PASS: Wry pending script flush and production bridge promise transport");
+        isolated_document_renderer(&parent);
     }
 }
 #[cfg(target_os = "macos")]

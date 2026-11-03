@@ -115,7 +115,7 @@ fn page_arguments(page: &RemotePage, origin: &str) -> Vec<String> {
             }
         }
         HtmlSource::Url(url) => arguments.extend(["--url".to_owned(), url.as_str().to_owned()]),
-        HtmlSource::Replica { .. } => {}
+        HtmlSource::Replica { .. } | HtmlSource::Image { .. } | HtmlSource::Markdown { .. } => {}
     }
     let flags = &page.flags;
     let set = [

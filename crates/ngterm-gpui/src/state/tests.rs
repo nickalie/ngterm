@@ -1018,3 +1018,59 @@ fn a_notify_lands_its_banner_and_its_sound_with_the_frontend() {
     state.settle();
     assert_eq!(state.take_frontend_work(), FrontendWork::default(), "landed once");
 }
+
+#[test]
+fn pane_relative_links_use_their_own_reported_local_directory() {
+    let (mut state, _, session) = state_with_terminal();
+    let directory = std::env::temp_dir().join("local-links");
+    state.report_pane(session, "T", &PaneReport::Pwd(directory.to_string_lossy().into_owned()));
+    state.follow_pane_link("./name%20?# with spaces.txt", session, "T", false);
+    assert_eq!(
+        state.frontend.reveals,
+        vec![directory.join("name%20?# with spaces.txt")]
+    );
+    state.follow_pane_link("./stale.txt", session, "gone", false);
+    assert_eq!(state.frontend.reveals.len(), 1, "a replaced pane cannot route a link");
+}
+
+#[test]
+fn remote_primary_paths_stay_remote_while_scratch_paths_stay_local() {
+    let mut library = WindowLibrary::seeded("/local/home");
+    let store = library.active_store_mut().unwrap();
+    let workspace = store.workspaces()[0].id();
+    let session = store
+        .add_session(
+            workspace,
+            NewSession {
+                remote_host: Some("remote".to_owned()),
+                ..NewSession::at_cwd("/local/home")
+            },
+        )
+        .unwrap();
+    let found = store.session_mut(session).unwrap();
+    found.surface.replace(Box::new(FakeSurface::new("R")));
+    found.scratch_surface.replace(Box::new(FakeSurface::new("S")));
+    let mut state = AppState::new(core(library, None));
+    state.follow_pane_link("/remote/a.png", session, "R", false);
+    state.follow_pane_link("relative.txt", session, "R", false);
+    assert!(state.frontend.reveals.is_empty());
+    let local = std::env::temp_dir().join("remote.png");
+    let file_url = url::Url::from_file_path(&local).unwrap();
+    state.follow_pane_link(file_url.as_str(), session, "R", false);
+    assert_eq!(state.frontend.reveals, vec![local]);
+    let directory = std::env::temp_dir().join("scratch-links");
+    state.report_pane(session, "S", &PaneReport::Pwd(directory.to_string_lossy().into_owned()));
+    state.follow_pane_link("./local.txt", session, "S", false);
+    assert_eq!(state.frontend.reveals.last(), Some(&directory.join("local.txt")));
+    let _ = state
+        .core
+        .library_mut()
+        .store_for_session_mut(session)
+        .unwrap()
+        .session_mut(session)
+        .unwrap()
+        .scratch_surface
+        .take();
+    state.settle();
+    assert!(!state.link_directories.contains_key(&(session, "S".to_owned())));
+}

@@ -145,6 +145,8 @@ pub struct Spec {
     /// The scripts in load order: the theme first (replaced by [`Native::set_theme`]), then the rest.
     pub theme: String,
     pub scripts: Vec<String>,
+    /// App-owned document renderer, installed in its own content world with authored scripts still disabled.
+    pub trusted_document_script: Option<String>,
     pub grant: Option<Grant>,
     pub replica: Option<ReplicaRead>,
     pub text: Option<Text>,
@@ -179,6 +181,7 @@ unsafe extern "C" {
     fn ngterm_web_focus_parent(view: *mut c_void);
     fn ngterm_web_reply(view: *mut c_void, json: *const c_char);
     fn ngterm_web_theme(view: *mut c_void, script: *const c_char);
+    fn ngterm_web_document_script(view: *mut c_void, script: *const c_char);
 }
 extern "C" fn decide(
     context: *mut c_void,
@@ -283,6 +286,16 @@ impl Drop for Native {
 impl Native {
     pub fn create(spec: &Spec) -> Result<Self, String> {
         let view = build(spec)?;
+        if let Some(script) = &spec.trusted_document_script {
+            let script = CString::new(script.as_str()).map_err(|error| error.to_string())?;
+            // SAFETY: the native adapter copies the live string into a document-end script in its named world.
+            unsafe {
+                ngterm_web_document_script(
+                    objc2::rc::Retained::as_ptr(&view.webview()).cast_mut().cast::<c_void>(),
+                    script.as_ptr(),
+                )
+            };
+        }
         let mut callbacks = Box::new(Callbacks {
             decide: spec.decide.clone(),
             post: spec.post.clone(),

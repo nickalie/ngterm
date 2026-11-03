@@ -19,6 +19,14 @@ pub struct Context {
 pub type Case = fn(&Harness, &Context) -> Outcome;
 
 pub const CASES: &[(&str, Case)] = &[
+    (
+        "markdown_keeps_authored_markup_inert_and_embeds_only_indexed_images",
+        crate::markdown::inert,
+    ),
+    (
+        "markdown_caps_repeated_images_and_allocates_heading_suffixes",
+        crate::markdown::limits,
+    ),
     ("frames_arrive_in_the_configured_mode_and_follow_the_geometry", frames),
     ("a_running_page_falls_back_to_shm_and_goes_on_drawing", fallback),
     ("scheme_pages_are_served_by_the_consumer", schemes),

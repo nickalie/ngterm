@@ -3859,8 +3859,8 @@ OPTIONS:
 
 SUBCOMMANDS:
   open                    Open an overlay running COMMAND (it closes when
-                          COMMAND exits), or showing a page with --html or
-                          --url.
+                          COMMAND exits), or showing a page with --html, --url,
+                          --image or --markdown.
   close                   Close the overlay terminal (destroys it; for one
                           shown on another Mac, requests its cancel).
   hide                    Hide the session's overlays without closing them.

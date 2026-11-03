@@ -71,6 +71,9 @@ pub(crate) fn page(core: &mut Core, target: Option<&str>, args: &Args) -> Outcom
 /// The page `session.companion.page` asks for, once its own checks passed; a file page's paths are checked against
 /// `home` by this machine's rules, or left to a remote origin's with `None`.
 fn validated_source(args: &Args, home: Option<&str>) -> Result<HtmlSource, ControlError> {
+    if args.image.is_some() || args.markdown_file.is_some() {
+        return Err(ControlError::rejected(NEEDS_PAGE));
+    }
     let command = args.command.as_deref().unwrap_or_default();
     let source = match overlay_content(command, args, home)? {
         OverlayContent::Program => return Err(ControlError::rejected(NEEDS_PAGE)),

@@ -101,6 +101,9 @@ verify_ghostty_resources "$DEST/share" >&2
 mkdir -p "$DEST/share/ngterm/shell-integration/pwsh"
 install -m644 "$NATIVE_ROOT/resources/shell-integration/pwsh/ngterm.ps1" \
   "$DEST/share/ngterm/shell-integration/pwsh/ngterm.ps1"
+# Trusted Markdown renderer, stylesheet and third-party notices.
+mkdir -p "$DEST/share/ngterm/markdown"
+cp -R "$NATIVE_ROOT/resources/markdown/." "$DEST/share/ngterm/markdown/"
 # the agent integrations' payloads (upstream's agent-status package and agent skill, see resources/): the Help menu
 # installers copy them from share/ngterm
 mkdir -p "$DEST/share/ngterm/skills"

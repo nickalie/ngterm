@@ -37,6 +37,8 @@
 //!
 //! Without the `html` cargo feature no host is installed, so the core refuses every page and nothing here mounts.
 
+#[cfg(all(feature = "html", any(target_os = "linux", target_os = "macos", windows)))]
+mod documents;
 #[cfg(all(feature = "html", target_os = "linux"))]
 mod engine;
 #[cfg(all(feature = "html", target_os = "linux"))]
@@ -65,7 +67,7 @@ pub use panel::{TerminalColors, sync_hide_shown as sync_strip_hide};
 #[cfg(all(feature = "html", target_os = "linux"))]
 pub use registry::{
     ReplicaLink, answer, answer_resource, answer_value, apply, init, install, key_down, mount, page_holds_keyboard,
-    refresh_themes, reject, set_replica_link, settle, shutdown,
+    refresh_themes, reject, set_replica_link, set_window_scale, settle, shutdown,
 };
 #[cfg(all(feature = "html", target_os = "linux"))]
 use registry::{copy_link, navigate};
@@ -74,7 +76,7 @@ pub use view::{FrameStats, PageView};
 #[cfg(all(feature = "html", windows))]
 pub use webview2::{
     PageView, answer, apply, hide, init, install, key_down, mount, page_holds_keyboard, refresh_themes, reject,
-    set_covered, settle, shutdown,
+    set_covered, set_window_scale, settle, shutdown,
 };
 #[cfg(all(feature = "html", windows))]
 use webview2::{copy_link, navigate};
@@ -84,7 +86,7 @@ mod wkwebview;
 #[cfg(all(feature = "html", target_os = "macos"))]
 pub use wkwebview::{
     PageView, answer, apply, hide, init, install, key_down, mount, page_holds_keyboard, refresh_themes, reject,
-    set_covered, settle, shutdown,
+    set_covered, set_window_scale, settle, shutdown,
 };
 #[cfg(all(feature = "html", target_os = "macos"))]
 use wkwebview::{copy_link, navigate};
@@ -203,3 +205,7 @@ pub use unavailable::{
     PageView, TerminalColors, answer, apply, colors_of, hide, init, install, key_down, mount, page_holds_keyboard,
     refresh_themes, reject, settle, shutdown, sync_strip_hide,
 };
+
+/// A build without page support has no display-scale registry.
+#[cfg(not(all(feature = "html", any(target_os = "linux", target_os = "macos", windows))))]
+pub fn set_window_scale(_: uuid::Uuid, _: f64) {}

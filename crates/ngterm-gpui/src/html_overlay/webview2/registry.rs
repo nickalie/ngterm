@@ -51,6 +51,7 @@ pub enum Job {
     Sync(Uuid),
     /// A web view's report about page `id`.
     Report(Uuid, Report),
+    DocumentLoaded(Uuid, u64, Result<String, String>),
     /// A read of page `page`'s replica protocol: the app's address and the responder.
     ReplicaRead {
         page: Uuid,
@@ -78,6 +79,7 @@ struct Registry {
     swept: bool,
     /// The page zoom every page shows at; `None` before the first settle (actual size).
     zoom: Option<f64>,
+    scales: HashMap<Uuid, f64>,
     /// The saved store's profile once the browser profile is read.
     saved: Option<String>,
     clearing: bool,
@@ -108,6 +110,13 @@ fn with<R>(change: impl FnOnce(&mut Registry) -> R) -> R {
     REGISTRY.with(|registry| change(&mut registry.borrow_mut()))
 }
 
+/// The window's actual display scale, recorded before any document page is opened.
+pub fn set_window_scale(window: Uuid, scale: f64) {
+    if scale.is_finite() && scale > 0.0 {
+        with(|registry| registry.scales.insert(window, scale));
+    }
+}
+
 fn page(id: Uuid) -> Option<Rc<Page>> {
     with(|registry| registry.pages.get(&id).cloned())
 }
@@ -124,6 +133,22 @@ struct PageHost;
 impl HtmlHost for PageHost {
     fn web_views_unavailable(&self) -> Option<String> {
         with(|registry| registry.failure.clone())
+    }
+
+    fn probe_image(&self, path: &str) -> Result<ngterm_core::html::image_page::ImageData, String> {
+        ngterm_app::documents::probe_image(std::path::Path::new(path))
+    }
+
+    fn check_markdown(&self, path: &str) -> Result<(), String> {
+        ngterm_app::documents::check_markdown(std::path::Path::new(path))
+    }
+
+    fn page_zoom(&self) -> f64 {
+        with(|registry| registry.zoom.unwrap_or(1.0))
+    }
+
+    fn display_scale(&self, window: Uuid) -> f64 {
+        with(|registry| registry.scales.get(&window).copied().unwrap_or(1.0))
     }
 
     fn persistent_store_failure(&self) -> Option<String> {
@@ -190,6 +215,7 @@ pub fn init(cx: &mut App) {
 fn run(job: Job, cx: &mut AsyncApp) {
     match job {
         Job::Build(id) => build(id),
+        Job::DocumentLoaded(id, generation, result) => cx.update(|_| document_loaded(id, generation, result)),
         Job::Sync(id) => {
             if let Some(page) = page(id) {
                 page.sync_native();
@@ -280,6 +306,22 @@ fn request_build(page: &Page) {
     }
 }
 
+pub(super) fn read_document(id: Uuid, generation: u64, source: HtmlSource) {
+    let Some(jobs) = with(|registry| registry.jobs.clone()) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let result = super::super::documents::read(&source);
+        let _ = jobs.try_send(Job::DocumentLoaded(id, generation, result));
+    });
+}
+
+pub(super) fn document_loaded(id: Uuid, generation: u64, result: Result<String, String>) {
+    if let Some(page) = page(id) {
+        page.document_loaded(generation, result);
+    }
+}
+
 /// Makes page `id`'s web view (the pump, outside GPUI's callbacks).
 fn build(id: Uuid) {
     let Some(page) = page(id) else { return };
@@ -365,8 +407,14 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
         zoom: with(|registry| registry.zoom.unwrap_or(1.0)),
         bounds: placement.bounds,
         visible: false,
-        theme: super::bridge::theme_script(&page.theme().script(overlay.themed())),
+        theme: if matches!(overlay.source, HtmlSource::Image { .. }) {
+            String::new()
+        } else {
+            super::bridge::theme_script(&page.theme().script(overlay.themed()))
+        },
         scripts: page.scripts(),
+        trusted_document_script: matches!(overlay.source, HtmlSource::Markdown { .. })
+            .then(super::super::documents::document_start_script),
         grant: granted.then(|| page.grant().clone()),
         replica,
         text: overlay.text_loaded().then(|| Arc::clone(page.text())),

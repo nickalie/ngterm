@@ -416,6 +416,10 @@ pub struct ControlHtmlOverlayNode {
     pub cwd: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub markdown: Option<String>,
     /// `loading`, `loaded` or `failed`.
     pub state: String,
     #[serde(default)]
