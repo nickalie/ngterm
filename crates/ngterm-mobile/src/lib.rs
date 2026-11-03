@@ -9,16 +9,19 @@
 //!
 //! Module map: [`api`] (the facade, its records, events and callback interfaces), [`actor`] (the thread, its runtime
 //! and commands), [`transport`] (the ssh seam, its channels, the russh transport and the scripted fake behind the
-//! `fakes` feature), [`keys`] (generating, importing and loading the app's ssh keys).
+//! `fakes` feature), [`keys`] (generating, importing and loading the app's ssh keys), [`sessions`] (a machine's session
+//! list, New Session and End Session).
 
 uniffi::setup_scaffolding!();
 
 pub mod actor;
 pub mod api;
 pub mod keys;
+pub mod sessions;
 pub mod transport;
 
 pub use api::{
     EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileError, MobileEvent, Pane, VaultError,
 };
 pub use keys::{KeyError, KeyPair};
+pub use sessions::RemoteSession;

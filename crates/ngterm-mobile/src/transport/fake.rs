@@ -1,6 +1,7 @@
 //! The scripted in-memory transport: a machine is refused or connects, at once or once the test releases it
-//! ([`FakeTransport::hold`]), a command with a script answers it and ends, and any other command's channel is handed to
-//! the test ([`FakeTransport::take_opened`]) to drive by hand.
+//! ([`FakeTransport::hold`]), a command with a script answers it and ends (a sequence of scripts answers its runs in
+//! turn, [`FakeTransport::script_sequence`]), and any other command's channel is handed to the test
+//! ([`FakeTransport::take_opened`]) to drive by hand.
 //!
 //! The state is shared behind a mutex, so a test keeps a clone of the [`FakeTransport`] it moved onto the actor and
 //! inspects what the core did through it.
@@ -74,7 +75,8 @@ struct State {
     held: HashSet<String>,
     /// The connects waiting on a held host, by host.
     gates: Vec<(String, oneshot::Sender<()>)>,
-    scripts: HashMap<String, Script>,
+    /// Each command's answers in turn; the last one answers every later run.
+    scripts: HashMap<String, VecDeque<Script>>,
     connects: Vec<String>,
     closed: Vec<String>,
     execs: Vec<Exec>,
@@ -125,7 +127,18 @@ impl FakeTransport {
 
     /// Answers every exec of exactly `command` with `script`.
     pub fn script(&self, command: &str, script: Script) {
-        self.lock().scripts.insert(command.to_owned(), script);
+        self.script_sequence(command, vec![script]);
+    }
+
+    /// Answers the runs of exactly `command` with `scripts` in turn, the last one answering every later run; an empty
+    /// sequence removes the command's script.
+    pub fn script_sequence(&self, command: &str, scripts: Vec<Script>) {
+        let mut state = self.lock();
+        if scripts.is_empty() {
+            state.scripts.remove(command);
+        } else {
+            state.scripts.insert(command.to_owned(), scripts.into());
+        }
     }
 
     /// The machine ids connected so far, in order, refused and held ones included.
@@ -212,7 +225,13 @@ impl Connection for FakeConnection {
                 command: command.to_owned(),
                 pty,
             });
-            state.scripts.get(command).cloned()
+            state.scripts.get_mut(command).and_then(|scripts| {
+                if scripts.len() > 1 {
+                    scripts.pop_front()
+                } else {
+                    scripts.front().cloned()
+                }
+            })
         };
         let (channel, peer) = Channel::pair();
         let Some(script) = script else {

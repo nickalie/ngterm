@@ -344,3 +344,152 @@ fn dropping_the_core_from_an_event_on_the_actor_does_not_deadlock() {
         thread::yield_now();
     }
 }
+
+// MARK: - sessions
+
+const PARENT: &str = "00000000-0000-0000-0000-0000000000A1";
+const COMPANION: &str = "00000000-0000-0000-0000-0000000000A2";
+const OTHER: &str = "00000000-0000-0000-0000-0000000000A3";
+
+fn listing(sessions: &[(&str, Option<&str>)]) -> crate::transport::fake::Script {
+    let sessions: Vec<serde_json::Value> = sessions
+        .iter()
+        .map(|(id, parent)| {
+            serde_json::json!({
+                "id": id, "name": id, "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
+                "workspaceName": "work", "cwd": "/repo", "panes": [], "parent": parent,
+            })
+        })
+        .collect();
+    let body = serde_json::json!({"ok": true, "result": {"remote": {
+        "endpoint": {"executable": "/ngterm-session", "socketDirectory": "/tmp/ngterm-live-x"},
+        "sessions": sessions,
+    }}});
+    crate::transport::fake::Script::ok(&body.to_string())
+}
+
+fn ids(sessions: &[crate::sessions::RemoteSession]) -> Vec<&str> {
+    sessions.iter().map(|session| session.id.as_str()).collect()
+}
+
+/// The next event, skipping the machine's connection state.
+fn next_tree(events: &Receiver<Received>) -> (String, Vec<crate::sessions::RemoteSession>) {
+    loop {
+        match events.recv_timeout(WAIT).expect("an event").2 {
+            MobileEvent::Tree { machine_id, sessions } => return (machine_id, sessions),
+            MobileEvent::MachineState { .. } => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn session_commands_need_a_connection() {
+    let transport = FakeTransport::new();
+    let (sink, _events) = recorder();
+    let core = core(&transport, &sink);
+    let not_connected = Err(MobileError::NotConnected {
+        machine_id: "m1".to_owned(),
+    });
+
+    assert_eq!(block_on(core.list_sessions("m1".to_owned())).map(|_| ()), not_connected);
+    assert_eq!(
+        block_on(core.create_session("m1".to_owned(), None)).map(|_| ()),
+        not_connected
+    );
+    assert_eq!(
+        block_on(core.end_session("m1".to_owned(), PARENT.to_owned())),
+        not_connected
+    );
+    assert!(transport.execs().is_empty());
+}
+
+#[test]
+fn a_listing_is_answered_and_arrives_as_a_tree() {
+    let transport = FakeTransport::new();
+    let tree = ngterm_core::remote::ssh::tree_tail();
+    transport.script(&tree, listing(&[(COMPANION, Some(PARENT)), (PARENT, None)]));
+    let (sink, events) = recorder();
+    let core = core(&transport, &sink);
+    block_on(core.connect(machine("m1", "box"))).expect("connected");
+
+    let sessions = block_on(core.list_sessions("m1".to_owned())).expect("listed");
+
+    assert_eq!(ids(&sessions), [PARENT, COMPANION]);
+    let (machine_id, event) = next_tree(&events);
+    assert_eq!(machine_id, "m1");
+    assert_eq!(event, sessions);
+}
+
+#[test]
+fn a_remote_failure_names_the_machine_by_its_label() {
+    let transport = FakeTransport::new();
+    let tree = ngterm_core::remote::ssh::tree_tail();
+    transport.script(&tree, crate::transport::fake::Script::failing(1, ""));
+    let (sink, _events) = recorder();
+    let core = core(&transport, &sink);
+    let mut studio = machine("m1", "box.example");
+    studio.label = "Studio".to_owned();
+    block_on(core.connect(studio)).expect("connected");
+
+    assert_eq!(
+        block_on(core.list_sessions("m1".to_owned())),
+        Err(MobileError::Remote {
+            reason: "the remote command failed on Studio".to_owned()
+        })
+    );
+}
+
+#[test]
+fn an_ended_session_leaves_the_tree_with_its_companions() {
+    let transport = FakeTransport::new();
+    let tree = ngterm_core::remote::ssh::tree_tail();
+    transport.script(
+        &tree,
+        listing(&[(PARENT, None), (COMPANION, Some(PARENT)), (OTHER, None)]),
+    );
+    let close =
+        ngterm_core::remote::ssh::control_tail(&ngterm_core::remote::origin_replies::end_session_arguments(PARENT));
+    transport.script(
+        &close,
+        crate::transport::fake::Script::ok(r#"{"ok": true, "result": {}}"#),
+    );
+    let (sink, events) = recorder();
+    let core = core(&transport, &sink);
+    block_on(core.connect(machine("m1", "box"))).expect("connected");
+    block_on(core.list_sessions("m1".to_owned())).expect("listed");
+    next_tree(&events);
+
+    assert_eq!(block_on(core.end_session("m1".to_owned(), PARENT.to_owned())), Ok(()));
+
+    let (_, sessions) = next_tree(&events);
+    assert_eq!(ids(&sessions), [OTHER]);
+}
+
+#[test]
+fn a_disconnect_ends_a_session_command_running_on_the_connection() {
+    let transport = FakeTransport::new();
+    let (sink, _events) = recorder();
+    let core = core(&transport, &sink);
+    block_on(core.connect(machine("m1", "box"))).expect("connected");
+    // the listing is unscripted: it runs until the connection closes under it
+    let listing = core.list_sessions("m1".to_owned());
+    let mut listing = std::pin::pin!(listing);
+    assert!(block_on(poll_once(listing.as_mut())).is_none());
+    let deadline = std::time::Instant::now() + WAIT;
+    while transport.execs().is_empty() {
+        assert!(std::time::Instant::now() < deadline, "the listing never ran");
+        thread::yield_now();
+    }
+    let opened = transport.take_opened();
+
+    core.disconnect("m1".to_owned()).expect("posted");
+
+    assert_eq!(
+        block_on(listing),
+        Err(MobileError::Remote {
+            reason: "the connection is closed".to_owned()
+        })
+    );
+    drop(opened);
+}

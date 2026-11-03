@@ -12,6 +12,7 @@ use tokio::sync::oneshot;
 
 use crate::actor::{Actor, Command};
 use crate::keys::{self, KeyError, KeyPair};
+use crate::sessions::RemoteSession;
 use crate::transport::Transport;
 use crate::transport::russh::RusshTransport;
 
@@ -62,6 +63,12 @@ pub enum MobileEvent {
         pinned: String,
         offered: String,
     },
+    /// A machine's sessions as it last listed them (after [`MobileCore::list_sessions`], a create, or an end), in the
+    /// order to show them: no page companions, parents before their companions.
+    Tree {
+        machine_id: String,
+        sessions: Vec<RemoteSession>,
+    },
 }
 
 /// Why a [`MobileCore`] call failed.
@@ -76,6 +83,12 @@ pub enum MobileError {
     /// The core's actor has stopped (its runtime failed to start, or the core is shutting down).
     #[error("the mobile core has stopped")]
     Stopped,
+    /// The machine has no connection: connect it first.
+    #[error("{machine_id} is not connected")]
+    NotConnected { machine_id: String },
+    /// The machine answered, or failed to: why a session command did not do what was asked, in words for the user.
+    #[error("{reason}")]
+    Remote { reason: String },
 }
 
 /// Why a [`KeyVault`] could not hand over a key.
@@ -206,6 +219,54 @@ impl MobileCore {
             fingerprint,
             trust,
         })
+    }
+
+    /// `machine_id`'s sessions, as its `ngtermctl live tree` lists them for a picker: no page companions, parents
+    /// before their companions. They also arrive as a [`MobileEvent::Tree`].
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::NotConnected`], [`MobileError::Remote`] with why there is no listing, or
+    /// [`MobileError::Stopped`].
+    pub async fn list_sessions(&self, machine_id: String) -> Result<Vec<RemoteSession>, MobileError> {
+        let (reply, answer) = oneshot::channel();
+        self.actor.post(Command::ListSessions { machine_id, reply })?;
+        answer.await.unwrap_or(Err(MobileError::Stopped))
+    }
+
+    /// New Session on `machine_id`, named `name` when given (a blank name is none): answered with the session once
+    /// the machine lists it as attachable, the listing also arriving as a [`MobileEvent::Tree`]. The machine keeps
+    /// its own selection.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::NotConnected`], [`MobileError::Remote`] with why it was not created (the machine runs no live
+    /// sessions, its ngterm is too old, it refused) or was created but not attachable in time, or
+    /// [`MobileError::Stopped`].
+    pub async fn create_session(&self, machine_id: String, name: Option<String>) -> Result<RemoteSession, MobileError> {
+        let (reply, answer) = oneshot::channel();
+        self.actor.post(Command::CreateSession {
+            machine_id,
+            name,
+            reply,
+        })?;
+        answer.await.unwrap_or(Err(MobileError::Stopped))
+    }
+
+    /// End Session: `machine_id` closes its session `session_id`, its programs and companions with it, with no undo
+    /// (the app confirms first). The listing without it arrives as a [`MobileEvent::Tree`].
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::NotConnected`], [`MobileError::Remote`] with why it did not end, or [`MobileError::Stopped`].
+    pub async fn end_session(&self, machine_id: String, session_id: String) -> Result<(), MobileError> {
+        let (reply, answer) = oneshot::channel();
+        self.actor.post(Command::EndSession {
+            machine_id,
+            session_id,
+            reply,
+        })?;
+        answer.await.unwrap_or(Err(MobileError::Stopped))
     }
 }
 

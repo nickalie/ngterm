@@ -5431,8 +5431,11 @@ name = "ngterm-mobile"
 version = "0.1.0"
 dependencies = [
  "futures-lite",
+ "ngterm-core",
+ "ngterm-proto",
  "ngterm-term",
  "russh",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
  "uniffi",

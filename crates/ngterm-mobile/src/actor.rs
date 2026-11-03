@@ -5,7 +5,9 @@
 //!
 //! Commands are handled in the order posted. A connect settles on the loop what it can at once (already connected,
 //! joining a connect in flight, closing the connection of a machine since edited) and only waits on the network in a local task, so the queue keeps moving behind it
-//! and a later disconnect cancels that task.
+//! and a later disconnect cancels that task. A machine's session commands ([`crate::sessions`]) run as local tasks on
+//! its connection as it was when they were posted: a disconnect closes it under them, which ends them with the
+//! transport's text.
 
 #[cfg(test)]
 mod tests;
@@ -16,11 +18,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle, ThreadId};
 
+use ngterm_proto::ControlRemoteTree;
+
 use tokio::runtime::Builder;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{AbortHandle, LocalSet};
 
 use crate::api::{EventSink, Machine, MachineState, MobileError, MobileEvent};
+use crate::sessions::{self, RemoteSession};
 use crate::transport::{Connection, Transport};
 
 /// The actor thread's name.
@@ -39,6 +44,20 @@ pub(crate) enum Command {
         machine_id: String,
         fingerprint: String,
         trust: bool,
+    },
+    ListSessions {
+        machine_id: String,
+        reply: oneshot::Sender<Result<Vec<RemoteSession>, MobileError>>,
+    },
+    CreateSession {
+        machine_id: String,
+        name: Option<String>,
+        reply: oneshot::Sender<Result<RemoteSession, MobileError>>,
+    },
+    EndSession {
+        machine_id: String,
+        session_id: String,
+        reply: Reply,
     },
 }
 
@@ -107,12 +126,15 @@ struct State<T: Transport> {
     attempts: RefCell<HashMap<String, Attempt>>,
     /// The last attempt's number: an attempt that finishes no longer current was overtaken and changes nothing.
     generation: Cell<u64>,
+    /// Each connected machine's last listing, whole (endpoint and panes included), for attaching its sessions.
+    trees: RefCell<HashMap<String, ControlRemoteTree>>,
 }
 
 /// A live connection and the machine record it was made from: a connect of the machine as edited replaces it.
 struct Link<C> {
     machine: Machine,
-    connection: C,
+    /// Shared with the session commands running on it.
+    connection: Rc<C>,
 }
 
 /// One connect in flight.
@@ -139,6 +161,7 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
         connections: RefCell::new(HashMap::new()),
         attempts: RefCell::new(HashMap::new()),
         generation: Cell::new(0),
+        trees: RefCell::new(HashMap::new()),
     });
     while let Some(command) = queue.recv().await {
         match command {
@@ -149,6 +172,23 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
                 fingerprint,
                 trust,
             } => state.transport.answer_host_key(&machine_id, &fingerprint, trust),
+            Command::ListSessions { machine_id, reply } => {
+                spawn_on_machine(&state, machine_id, reply, list_sessions);
+            }
+            Command::CreateSession {
+                machine_id,
+                name,
+                reply,
+            } => spawn_on_machine(&state, machine_id, reply, |state, link, id| {
+                create_session(state, link, id, name)
+            }),
+            Command::EndSession {
+                machine_id,
+                session_id,
+                reply,
+            } => spawn_on_machine(&state, machine_id, reply, |state, link, id| {
+                end_session(state, link, id, session_id)
+            }),
         }
     }
     // Waiters dropped unanswered read as `Stopped`.
@@ -222,7 +262,7 @@ async fn reach<T: Transport>(state: Rc<State<T>>, machine: Machine, generation: 
         Ok(connection) => {
             let link = Link {
                 machine: machine.clone(),
-                connection,
+                connection: Rc::new(connection),
             };
             state.connections.borrow_mut().insert(machine.id.clone(), link);
             state.emit(MobileEvent::MachineState {
@@ -263,10 +303,121 @@ fn disconnect<T: Transport>(state: &State<T>, machine_id: &str) {
     close(state, machine_id);
 }
 
-/// Closes `machine_id`'s connection, if any.
+/// Closes `machine_id`'s connection, if any, and forgets its listing.
 fn close<T: Transport>(state: &State<T>, machine_id: &str) {
+    state.trees.borrow_mut().remove(machine_id);
     let link = state.connections.borrow_mut().remove(machine_id);
     if let Some(link) = link {
         link.connection.close();
     }
+}
+
+/// What a session command runs with: the machine's connection and the name its messages give the machine.
+struct OnMachine<C> {
+    connection: Rc<C>,
+    host: String,
+}
+
+/// Runs `job` as a local task on `machine_id`'s connection, answering `reply` with what it returns;
+/// [`MobileError::NotConnected`] at once when the machine has no connection.
+fn spawn_on_machine<T, R, F, Fut>(
+    state: &Rc<State<T>>,
+    machine_id: String,
+    reply: oneshot::Sender<Result<R, MobileError>>,
+    job: F,
+) where
+    T: Transport,
+    R: 'static,
+    F: FnOnce(Rc<State<T>>, OnMachine<T::Connection>, String) -> Fut,
+    Fut: Future<Output = Result<R, MobileError>> + 'static,
+{
+    let link = state.connections.borrow().get(&machine_id).map(|link| OnMachine {
+        connection: Rc::clone(&link.connection),
+        host: shown_name(&link.machine),
+    });
+    let Some(link) = link else {
+        let _ = reply.send(Err(MobileError::NotConnected { machine_id }));
+        return;
+    };
+    let work = job(Rc::clone(state), link, machine_id);
+    tokio::task::spawn_local(async move {
+        // A caller that stopped waiting has nothing to be told.
+        let _ = reply.send(work.await);
+    });
+}
+
+/// The name the session messages give `machine`: what the app shows for it, or its host when it has no label.
+fn shown_name(machine: &Machine) -> String {
+    let label = machine.label.trim();
+    if label.is_empty() {
+        machine.host.clone()
+    } else {
+        label.to_owned()
+    }
+}
+
+fn remote(reason: String) -> MobileError {
+    MobileError::Remote { reason }
+}
+
+/// Keeps `tree` as `machine_id`'s listing while its connection is the one it was read on, and reports it.
+fn listed<T: Transport>(
+    state: &State<T>,
+    link: &OnMachine<T::Connection>,
+    machine_id: String,
+    tree: ControlRemoteTree,
+) -> Vec<RemoteSession> {
+    let sessions = sessions::listed_sessions(&tree);
+    let current = state
+        .connections
+        .borrow()
+        .get(&machine_id)
+        .is_some_and(|current| Rc::ptr_eq(&current.connection, &link.connection));
+    if current {
+        state.trees.borrow_mut().insert(machine_id.clone(), tree);
+    }
+    state.emit(MobileEvent::Tree {
+        machine_id,
+        sessions: sessions.clone(),
+    });
+    sessions
+}
+
+async fn list_sessions<T: Transport>(
+    state: Rc<State<T>>,
+    link: OnMachine<T::Connection>,
+    machine_id: String,
+) -> Result<Vec<RemoteSession>, MobileError> {
+    let tree = sessions::list(&*link.connection, &link.host).await.map_err(remote)?;
+    Ok(listed(&state, &link, machine_id, tree))
+}
+
+async fn create_session<T: Transport>(
+    state: Rc<State<T>>,
+    link: OnMachine<T::Connection>,
+    machine_id: String,
+    name: Option<String>,
+) -> Result<RemoteSession, MobileError> {
+    let (created, tree) = sessions::create(&*link.connection, &link.host, name.as_deref())
+        .await
+        .map_err(remote)?;
+    listed(&state, &link, machine_id, tree);
+    Ok(RemoteSession::from(&created))
+}
+
+async fn end_session<T: Transport>(
+    state: Rc<State<T>>,
+    link: OnMachine<T::Connection>,
+    machine_id: String,
+    session_id: String,
+) -> Result<(), MobileError> {
+    sessions::end(&*link.connection, &link.host, &session_id)
+        .await
+        .map_err(remote)?;
+    let tree = state.trees.borrow().get(&machine_id).cloned();
+    if let Some(mut tree) = tree {
+        sessions::forget(&mut tree, &session_id);
+        listed(&state, &link, machine_id, tree);
+    }
+    Ok(())
 }

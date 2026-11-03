@@ -27,6 +27,10 @@ bindgen = ["uniffi/cli"]
 # the panes' terminals, fed by their ssh channels (`Pane::stream`); no `local`: no PTY or session server here. By
 # path, since the workspace entry keeps the default features its other users rely on and a member can't drop them.
 ngterm-term = { path = "../ngterm-term", default-features = false }
+# the remote command lines desktop's Attach Remote runs (`remote::ssh`'s tails) and what the far `ngtermctl` answers
+# to them (`remote::origin_replies`), with their strings
+ngterm-core.workspace = true
+ngterm-proto.workspace = true
 # the actor's current-thread runtime and `LocalSet`, its command queue and the channels' queues
 tokio = { workspace = true, features = ["rt", "sync", "time", "net", "macros"] }
 # ssh: one connection per machine, exec channels, keys and host keys
@@ -39,6 +43,10 @@ uniffi.workspace = true
 [dev-dependencies]
 # block on the facade's async calls in tests
 futures-lite.workspace = true
+# the far `ngtermctl`'s scripted answers
+serde_json.workspace = true
+# New Session's waits on a paused clock
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

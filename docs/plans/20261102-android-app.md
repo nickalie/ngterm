@@ -464,16 +464,27 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Create: `crates/ngterm-mobile/src/sessions.rs`
 
-- [ ] write tests first, on the fake transport:
+- [x] write tests first, on the fake transport:
   - the tree parses, with companions with content filtered out and parents first;
   - errors from the remote and a missing `ngtermctl` surface through Task 5's strings;
   - create covers all three stages (not live, then `session new`, then poll until listed or the budget runs out), with
     and without a name;
   - end succeeds, and end failures map to their errors
-- [ ] decide which reused strings carry desktop CLI advice (for example "`ngtermctl live attach HOST ID`"); map those to
+- [x] decide which reused strings carry desktop CLI advice (for example "`ngtermctl live attach HOST ID`"); map those to
       phone wording in the event, and record the choice here
-- [ ] implement them over Task 4's tails and Task 5's replies
-- [ ] run the tests; they must pass before Task 9
+- [x] implement them over Task 4's tails and Task 5's replies
+- [x] run the tests; they must pass before Task 9
+  - Notes: the CLI-advice choice: only two reused strings carry it, both "…; `ngtermctl live attach HOST ID` attaches
+    it" (`origin_created`'s failed-after-receipt and `unattached`, i.e. created but never attachable in time).
+    `sessions::phone_wording` replaces that advice with "attach it from the session list once it shows there"
+    (`ATTACH_FROM_LIST`); every other reused string names no CLI and keeps desktop's words. Messages name the machine by
+    its label (its host when the label is blank). The API is `MobileCore::list_sessions(machine_id)`,
+    `create_session(machine_id, name)` and `end_session(machine_id, session_id)`, each needing a connection
+    (`MobileError::NotConnected`) and failing with `MobileError::Remote { reason }`; each emits `MobileEvent::Tree` with
+    the picker's sessions (`RemoteSession`), and the actor keeps the whole last listing per machine for attaching. A
+    name goes as `--name=NAME`. A control line runs within desktop's 30 s `COMPANION_DEADLINE`, a listing within
+    `TREE_DEADLINE`; a command that can't start fails with the transport's text, and a create whose listing can't start
+    (the connection closed) gives up at once. The fake gained `script_sequence` for successive answers.
 
 ### Task 9a: Presentation stream and effects
 
