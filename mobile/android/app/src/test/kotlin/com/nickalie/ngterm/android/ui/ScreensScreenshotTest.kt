@@ -9,6 +9,7 @@ import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.captureScreenRoboImage
 import com.nickalie.ngterm.android.ENCRYPTED_FAKE_KEY
+import com.nickalie.ngterm.android.data.ClipboardRead
 import com.nickalie.ngterm.android.ui.machines.HostKeyChangedScreen
 import com.nickalie.ngterm.android.ui.machines.HostKeySheet
 import com.nickalie.ngterm.android.ui.machines.MachineDraft
@@ -18,7 +19,9 @@ import com.nickalie.ngterm.android.ui.onboarding.ImportKeyScreen
 import com.nickalie.ngterm.android.ui.onboarding.ImportProblem
 import com.nickalie.ngterm.android.ui.onboarding.PublicKeyScreen
 import com.nickalie.ngterm.android.ui.onboarding.WelcomeScreen
+import com.nickalie.ngterm.android.ui.terminal.ClipboardReadSheet
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import com.nickalie.ngterm.core.ffi.PaneRef
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -56,10 +59,10 @@ private class WindowRule(
 }
 
 /**
- * Task 13's and Task 14's screens rendered by Robolectric and compared with their goldens
+ * Task 13's, 14's and 16's screens rendered by Robolectric and compared with their goldens
  * (src/test/screenshots/screens): the first run, the Machines home, a machine's sessions, the machine form, the
- * host-key sheet and the changed-key stop, each on a phone (light, dark, font scale 2.0), an unfolded foldable (light)
- * and a landscape tablet (light, dark). The keys shown are made up.
+ * host-key sheet, the changed-key stop and a program's clipboard read, each on a phone (light, dark, font scale 2.0),
+ * an unfolded foldable (light) and a landscape tablet (light, dark). The keys shown are made up.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -144,6 +147,26 @@ class ScreensScreenshotTest(
         }
         compose.waitForIdle()
         captureScreenRoboImage(golden("host_key_sheet"))
+    }
+
+    @OptIn(ExperimentalRoborazziApi::class)
+    @Test
+    fun clipboardReadSheet() {
+        compose.setContent {
+            NgtermTheme {
+                MachinesSample(MachinesUiState.Ready(SampleMachines.take(1), offline = false))
+                ClipboardReadSheet(
+                    read = ClipboardRead(PaneRef("m1", "s1", "P1"), readId = 1u, listOnly = false),
+                    machine = "build-01",
+                    session = "docs-site",
+                    onAllow = {},
+                    onAlways = {},
+                    onDeny = {},
+                )
+            }
+        }
+        compose.waitForIdle()
+        captureScreenRoboImage(golden("clipboard_read_sheet"))
     }
 
     @Test

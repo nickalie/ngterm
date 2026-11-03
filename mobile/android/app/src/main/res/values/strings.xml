@@ -186,4 +186,14 @@
 
   <!-- ui/terminal -->
   <string name="terminal_description">Terminal</string>
+  <string name="terminal_paste">Paste</string>
+  <string name="terminal_select_all">Select all</string>
+  <string name="paste_unsafe_title">Paste text that can run a command?</string>
+  <string name="paste_unsafe_body">It has a line break or a control character in it, so the program may take it as Enter and run it as soon as it lands.</string>
+  <string name="clipboard_read_title">Let %1$s read your clipboard?</string>
+  <string name="clipboard_read_body">A program in %1$s on %2$s asks for the text you copied. It sees it only if you allow it.</string>
+  <string name="clipboard_read_list_body">A program in %1$s on %2$s asks what kind of content your clipboard holds. It doesn\'t see the text itself.</string>
+  <string name="clipboard_read_allow">Allow</string>
+  <string name="clipboard_read_always">Always allow on %1$s</string>
+  <string name="clipboard_read_deny">Deny</string>
 </resources>

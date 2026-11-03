@@ -315,7 +315,8 @@ terminal's ground, which is the chrome's ground in Copper and Drafting, so the t
   does by default; they take the columns of the characters they join. CJK and emoji fall back to the platform's fonts,
   centered in their two cells or squeezed into them. No Nerd Font symbols in v1: the symbols font is 2.5 MB.
 - **Size:** 13 sp by default (`TerminalTextSize`): about 50 columns on a phone held upright, 110 in landscape. It
-  follows the system font scale like any text (at 2.0, about 25 columns); pinching changes it (Task 16).
+  follows the system font scale like any text (at 2.0, about 25 columns); a pinch changes it in whole sp steps
+  between 8 and 32 (`TerminalTextSizes`), so the machine's pty is resized once per step, not per frame.
 - **Cell:** the font's advance wide, unrounded, so runs of the font's own glyphs sit on the grid; ascent to descent
   tall, rounded up to whole pixels. The pane's grid is what fits, and it goes to the pane as its size on every
   change (rotation, multi-window, folding).
@@ -331,6 +332,48 @@ terminal's ground, which is the chrome's ground in Copper and Drafting, so the t
 - **Before the first frame** and while the pane has no terminal (hidden, between attaches) the view keeps what it
   last drew, on the ground; the covers for those states are the session view's (`Cover`).
 - **TalkBack:** the view is announced as "Terminal". Reading its text out is Task 17's, with the input connection.
+
+### Touch, mouse and selection (`ui/terminal/TerminalGestures.kt`, `TerminalMouse.kt`, `SelectionHandles.kt`)
+
+The terminal keeps the gestures people already know from Android's text and from desktop terminals; nothing new to
+learn, and nothing drawn until a gesture asks for it.
+
+| Input | Does |
+|---|---|
+| a finger's drag | scrolls by whole rows, and a flick flings on and slows as a list does; the pane routes it as wheel turns: the scrollback, or the program when it asked for the mouse (or cursor keys under alternate scroll) |
+| a long press | selects the word (a haptic tick), with handles and the toolbar; dragging on without lifting extends it |
+| a handle's drag | moves that end of the selection |
+| two fingers | pinch the text size |
+| a tap | a click for a program tracking the mouse; otherwise it lets a touch selection go (and Task 17's keyboard) |
+| a mouse or trackpad | under mouse tracking its buttons, drags and moves go to the program (shift held selects instead); otherwise a click lets the selection go, a double click selects the word and a triple one the line, a drag selects; the wheel scrolls either way |
+| the right button | the menu: Copy (while there is a selection), Paste, Select all |
+
+- **Handles** are the terminal's own copper (the palette's cursor color, rust in Drafting): a 2dp stem on the
+  selection's edge, as tall as its row, and a teardrop knob (22dp) hanging under the row, the start's to the left of
+  its stem and the end's to the right, the square corner at the stem's foot, so the two point at what they hold. At
+  the view's edge a knob hangs on the other side of its stem. A finger within 24dp of a knob (a 48dp target) takes
+  it. A mouse selection has no handles: the mouse is precise, and the right button has the menu.
+- **Toolbar:** Copy, Paste and Select all as text buttons in copper on a `surfaceContainerHigh` strip (12dp radius,
+  an `outlineVariant` edge, since it floats over text of any color), 8dp over the selection, or under its knobs when
+  there is no room above, centered on a one-row selection and kept 8dp inside the view. It hides while a finger
+  moves the selection and comes back when it lifts. Copy copies and lets the selection go; Paste pastes and lets it
+  go; Select all keeps the handles.
+- **Menu:** Material's dropdown at the pointer, on `surfaceContainerHigh`; Copy is greyed with nothing selected.
+- **Paste protection:** text the pane refuses as unsafe (a line break the program would take as Enter, or a control
+  character) is not pasted until a dialog confirms it: "Paste text that can run a command?", why, the text itself
+  in mono on a `surfaceContainerLow` plate (its first six lines), then Cancel and Paste (the toolbar's word). Safe
+  text pastes without asking.
+
+### A program reads the clipboard (`ui/terminal/TerminalPrompts.kt`, `data/ClipboardReads.kt`)
+
+A program's OSC 52 read waits for the user, as Ghostty's `clipboard-read = ask`. It is a sheet over whatever is on
+screen, the same shape as the first connect's: the attention diamond, "Let docs-site read your clipboard?", what the
+program would see and from where ("A program in docs-site on build-01 asks for the text you copied. It sees it only
+if you allow it."; a read that only lists what kinds the clipboard holds says so), then **Allow** (filled), **Always
+allow on build-01** (outlined) and **Deny**. Swiping the sheet away denies. Reads queue and show one at a time; a read
+the core gives up on (its pane hidden, detached, lost or exited) closes its sheet. "Always" is the app's to keep, per
+machine (`ClipboardTrust`, which Settings lists), and answers that machine's later reads at once. In the background
+Android lets no app read the clipboard, so an always-allowed read then gets an empty one.
 
 ## Copy
 

@@ -6,9 +6,12 @@ import android.os.SystemClock
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.preferencesDataStoreFile
 import com.nickalie.ngterm.android.data.AppKeys
+import com.nickalie.ngterm.android.data.ClipboardReads
+import com.nickalie.ngterm.android.data.ClipboardTrust
 import com.nickalie.ngterm.android.data.Connections
 import com.nickalie.ngterm.android.data.MachineStore
 import com.nickalie.ngterm.android.data.NativeKeyMaker
+import com.nickalie.ngterm.android.platform.AndroidClipboard
 import com.nickalie.ngterm.android.platform.AndroidKeystoreWrapper
 import com.nickalie.ngterm.android.platform.KeystoreKeyVault
 import com.nickalie.ngterm.android.platform.NetworkMonitor
@@ -44,6 +47,13 @@ class NgtermApplication : Application() {
                 ),
             pins = pins,
             connections = connections,
+            clipboardReads =
+                ClipboardReads(
+                    scope = scope,
+                    connections = connections,
+                    trust = ClipboardTrust(PreferenceDataStoreFactory.create { file("clipboard") }),
+                    clipboard = AndroidClipboard(this),
+                ),
             online = network.online,
         )
     }

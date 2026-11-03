@@ -1,14 +1,17 @@
 package com.nickalie.ngterm.android.ui.terminal
 
 import android.content.Context
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
@@ -19,6 +22,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -53,12 +57,17 @@ val TerminalTextSize = 13.sp
  * the last screen on view.
  *
  * @param frameContext where `Pane.frame` and its decoding run, off the main thread.
+ * @param textSize the text size to start at.
  */
 @Stable
 class TerminalState(
-    private val pane: PaneInterface,
+    internal val pane: PaneInterface,
     private val frameContext: CoroutineContext = Dispatchers.Default,
+    textSize: TextUnit = TerminalTextSize,
 ) {
+    /** The text size the view draws at: a pinch changes it, in whole sp within [TerminalTextSizes]. */
+    var textSize by mutableStateOf(textSize)
+
     /** The rows read so far. Read and changed on the main thread only. */
     val screen = TerminalScreen()
 
@@ -144,25 +153,32 @@ class TerminalState(
 fun rememberTerminalState(pane: PaneInterface): TerminalState = remember(pane) { TerminalState(pane) }
 
 /**
- * A pane's terminal: the rows of [state]'s screen on a canvas in the bundled JetBrains Mono at [textSize] (Ghostty's
- * and desktop ngterm's default face), the platform's fonts covering what it lacks (CJK, emoji), with the cursor and
- * the selection. It fills what it is given with whole cells from the top left and gives the pane the grid that fits
- * ([TerminalState.grid]), and the colors of [palette] (the theme's by default). [focused] draws the cursor as it
- * is; an unfocused terminal shows a hollow block.
+ * A pane's terminal: the rows of [state]'s screen on a canvas in the bundled JetBrains Mono at the state's text size
+ * (Ghostty's and desktop ngterm's default face), the platform's fonts covering what it lacks (CJK, emoji), with the
+ * cursor and the selection. It fills what it is given with whole cells from the top left and gives the pane the grid
+ * that fits ([TerminalState.grid]), and the colors of [palette] (the theme's by default). [focused] draws the cursor
+ * as it is; an unfocused terminal shows a hollow block.
+ *
+ * It takes the pointer as [terminalGestures] says: scrolling, selecting with handles and a toolbar, pinching the text
+ * size, the mouse and its right-click menu, and clicks a program tracking the mouse asks for ([TerminalOverlays]).
  */
 @Composable
 fun TerminalView(
     state: TerminalState,
     modifier: Modifier = Modifier,
     palette: TerminalPalette = NgtermTheme.terminal,
-    textSize: TextUnit = TerminalTextSize,
     focused: Boolean = true,
 ) {
     val context = LocalContext.current
     val typefaces = remember(context) { terminalTypefaces(context) }
-    val pixels = with(LocalDensity.current) { textSize.toPx() }
+    val density = LocalDensity.current
+    val pixels = with(density) { state.textSize.toPx() }
     val font = remember(typefaces, pixels) { TerminalFont(typefaces, pixels) }
     val painter = remember(font) { TerminalPainter(font, GlyphCache(font)) }
+    val scope = rememberCoroutineScope()
+    val input = remember(state) { TerminalInput(state, scope) }
+    val selection = remember(state) { TerminalSelection(state) }
+    SideEffect { input.font = font }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     LaunchedEffect(state) { state.run() }
     LaunchedEffect(state, palette) { state.colors(palette) }
@@ -170,18 +186,32 @@ fun TerminalView(
     val description = stringResource(R.string.terminal_description)
     val ground = palette.background
     val look = TerminalLook(palette.selectionBackground.toArgb(), focused)
-    Spacer(
-        modifier
-            .onSizeChanged { viewSize = it }
-            .semantics { contentDescription = description }
-            .clipToBounds()
-            .drawBehind {
-                // read here, so a new frame draws again without composing again
-                state.drawn
-                drawRect(ground)
-                painter.draw(drawContext.canvas.nativeCanvas, state.screen, size, look)
-            },
-    )
+    val knob = with(density) { KnobRadius.toPx() }
+    val haptics = LocalHapticFeedback.current
+    Box(modifier.onSizeChanged { viewSize = it }) {
+        Spacer(
+            Modifier
+                .matchParentSize()
+                .semantics { contentDescription = description }
+                .clipToBounds()
+                .drawBehind {
+                    // read here, so a new frame draws again without composing again
+                    state.drawn
+                    drawRect(ground)
+                    painter.draw(drawContext.canvas.nativeCanvas, state.screen, size, look)
+                }.terminalGestures(
+                    input = input,
+                    selection = selection,
+                    haptics = haptics,
+                    handles = {
+                        val width = viewSize.width.toFloat()
+                        if (selection.touchSelection) handleSpots(state.screen.selection, font, knob, width) else null
+                    },
+                    textSize = { state.textSize.value },
+                ),
+        )
+        TerminalOverlays(state, selection, font, palette, viewSize.width)
+    }
 }
 
 /** The grid of whole cells of [font] that fits [size] pixels; `null` when not one cell fits. */

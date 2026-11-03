@@ -33,6 +33,7 @@ import com.nickalie.ngterm.android.ui.onboarding.OnboardingActions
 import com.nickalie.ngterm.android.ui.onboarding.OnboardingFlow
 import com.nickalie.ngterm.android.ui.onboarding.OnboardingStep
 import com.nickalie.ngterm.android.ui.onboarding.OnboardingViewModel
+import com.nickalie.ngterm.android.ui.terminal.ClipboardReadPrompt
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 private const val MACHINES = "machines"
@@ -52,8 +53,9 @@ val AppDestinations =
 
 /**
  * The app over [graph]: the first run until it has a key, then [AdaptiveScaffold] over the top-level destinations,
- * with the host-key question as a sheet over whichever is shown. Sessions shows its empty state until its screen
- * lands; Settings the loaded core's [coreVersion]. The selected destination survives a configuration change.
+ * with the host-key question and a program's clipboard read as sheets over whichever is shown. Sessions shows its
+ * empty state until its screen lands; Settings the loaded core's [coreVersion]. The selected destination survives a
+ * configuration change.
  */
 @Composable
 fun NgtermApp(
@@ -83,6 +85,7 @@ fun NgtermApp(
                     )
                 }
             }
+            ClipboardReadPrompt(graph)
         }
 
         else -> {

@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.concurrent.CopyOnWriteArrayList
 
 /** Where a machine's connection stands, as the app shows it. A machine with none is [Offline]. */
 sealed interface Link {
@@ -91,6 +92,9 @@ class Connections(
     /** The sessions this app has attached, by machine id: each machine's session ids. */
     val attached: StateFlow<Map<String, Set<String>>> = attachedState.asStateFlow()
 
+    // the app's other parts that take the core's events (clipboard reads, panes), called on the core's thread
+    private val listeners = CopyOnWriteArrayList<(MobileEvent) -> Unit>()
+
     /** The core, for what this class doesn't wrap. */
     val core: MobileCoreInterface = coreFactory(this)
 
@@ -102,6 +106,15 @@ class Connections(
             is MobileEvent.Tree -> listed(event.machineId, event.sessions)
             else -> Unit
         }
+        listeners.forEach { it(event) }
+    }
+
+    /**
+     * Hands [listener] every event the core reports from now on, after this class has taken it, on the core's
+     * thread: it must not block.
+     */
+    fun listen(listener: (MobileEvent) -> Unit) {
+        listeners += listener
     }
 
     // a listing replaces the last one and its failure; an attached session it no longer has has ended there, so its

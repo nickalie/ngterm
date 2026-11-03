@@ -5,6 +5,8 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import com.nickalie.ngterm.android.data.AppKey
 import com.nickalie.ngterm.android.data.AppKeys
+import com.nickalie.ngterm.android.data.ClipboardReads
+import com.nickalie.ngterm.android.data.ClipboardTrust
 import com.nickalie.ngterm.android.data.Connections
 import com.nickalie.ngterm.android.data.KeyMaker
 import com.nickalie.ngterm.android.data.MachineStore
@@ -100,8 +102,9 @@ fun testStore(
 
 /**
  * The app's graph over fakes in [dir]: the [core] a [FakeMobileCore] pinning through the real [PinnedHostKeys], the
- * stores real DataStores, the vault sealing with a [SoftwareWrapper], the clock [now] and the network [online] set by
- * the test. [scope] runs the connections' calls (the main thread's in UI tests); [close] stops it.
+ * stores real DataStores, the vault sealing with a [SoftwareWrapper], the clock [now], the network [online] and the
+ * clipboard's text [clipboard] set by the test. [scope] runs the connections' calls (the main thread's in UI tests);
+ * [close] stops it.
  */
 class TestGraph(
     dir: File,
@@ -115,12 +118,18 @@ class TestGraph(
     lateinit var core: FakeMobileCore
         private set
     val connections = Connections(scope, { now }) { sink -> FakeMobileCore(sink, pins).also { core = it } }
+
+    /** What the device's clipboard holds, as the clipboard reads see it. */
+    @Volatile var clipboard: String? = null
+    val trust = ClipboardTrust(testStore(dir, "clipboard"))
+    val clipboardReads = ClipboardReads(scope, connections, trust) { clipboard }
     val graph =
         AppGraph(
             machines = MachineStore(testStore(dir, "machines")),
             keys = AppKeys(testStore(dir, "keys"), vault, maker, "ngterm@test"),
             pins = pins,
             connections = connections,
+            clipboardReads = clipboardReads,
             online = online,
         )
 

@@ -832,15 +832,40 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Create: `ui/terminal/TerminalGestures.kt`, `ui/terminal/SelectionHandles.kt`
 
-- [ ] touch:
+- [x] touch:
   - drag scrolls, using mouse reporting when the program asked for it;
   - long-press starts a selection with handles and a Copy/Paste toolbar;
   - pinch changes font size;
   - a tap sends a click under mouse tracking
-- [ ] mouse and trackpad: click, drag, wheel, and a right-click menu
-- [ ] the clipboard-read prompt (Allow, Deny, Always for this machine) and the paste confirmation for unsafe text
-- [ ] write UI tests for each gesture against the fake core, which records the input
-- [ ] run `./gradlew check` and the tests; all must pass before Task 17
+- [x] mouse and trackpad: click, drag, wheel, and a right-click menu
+- [x] the clipboard-read prompt (Allow, Deny, Always for this machine) and the paste confirmation for unsafe text
+- [x] write UI tests for each gesture against the fake core, which records the input
+- [x] run `./gradlew check` and the tests; all must pass before Task 17
+  - result (2026-11-03): `ui/terminal/` gained `TerminalInput` (positions as the pane's cells and pixels; mouse,
+    wheel, scroll, drag in whole rows, a spline fling, pinch zoom in whole sp within `TerminalTextSizes` 8-32) and
+    `TerminalSelection` (the touch selection, the right-click menu, copy, paste with its unsafe hold) in
+    `TerminalInput.kt`; `TerminalGestures.kt` (a finger: drag scrolls through `Pane.wheel`, which the pane reports to
+    a program tracking the mouse; long press selects the word and drags on; a handle's drag moves its end; pinch; a
+    tap clicks under tracking), `TerminalMouse.kt` (buttons, drags and moves to a tracking program, shift overriding;
+    otherwise click/double/triple and drag select, the right button the menu; the wheel and hover motion),
+    `SelectionHandles.kt` (copper stems and teardrop knobs, flipped at the view's edge; the toolbar; the menu),
+    `TerminalOverlays.kt` and `TerminalPrompts.kt` (`PasteConfirmDialog`, the clipboard-read sheet). The text size
+    moved into `TerminalState.textSize` (Task 17's shortcuts and Task 20's setting set it there). The mouse-tracking
+    state the app needs was already exposed (`Pane.mouse_tracking`), so no Rust change. Clipboard reads:
+    `data/ClipboardReads.kt` takes the core's `ClipboardReadRequest`/`ClipboardReadDismiss` through a new
+    `Connections.listen` hook, queues them for the sheet (shown from `NgtermApp` over any destination), answers with
+    the device's clipboard (`platform/AndroidClipboard`) or `Deny`, and keeps "Always allow on build-01" per machine
+    in `ClipboardTrust` (its own DataStore; Settings lists it in Task 20), answering that machine's later reads at
+    once. `FakePane` records every input call (`FakeInput`) and answers as the terminal would (tracking, unsafe
+    paste). Tests: `TerminalGesturesTest` (drag both ways, fling, long press + Copy, long press + drag, handle drag,
+    unsafe paste confirmed, pinch up and clamped down, tap with and without tracking, mouse to a tracking program,
+    mouse drag and double click, wheel and the right-click menu), `ClipboardReadsTest`, `ClipboardReadPromptTest`
+    (the app on the fake core: allow, deny, always, dismissed), goldens `terminal/touch_selection_*`, `menu_*`,
+    `paste_unsafe_*` and `screens/clipboard_read_sheet_*`. `./gradlew check` is green (spotless, detekt, lint, unit
+    and screenshot tests); the instrumented tests compile, and were not rerun on the emulator: Robolectric drives
+    every gesture here
+  - ➕ A program's clipboard write (`ClipboardWrite`, OSC 52) is not applied yet: added to Task 18, which routes the
+    shown panes' events
 
 ### Task 17: Keyboard input
 
@@ -871,6 +896,8 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
       (1 or 2 panes on either axis, or a hidden split), where a tap focuses a pane
 - [ ] the follower cover with **Take control**; a reconnecting cover that keeps the last screen visible; "session
       ended" and "session gone" states; Detach and End in the session's menu
+- [ ] ➕ route the shown panes' events to their views (`PaneDirty`, `PaneAttached` to `TerminalState`), and apply a
+      program's clipboard write (`ClipboardWrite`, OSC 52) to the device's clipboard
 - [ ] write screenshots at three widths for one pane, two panes on each axis, a hidden split, a follower and a
       reconnecting pane, plus a UI test where pane switching and a size-class change keep the focused pane
 - [ ] run `./gradlew check` and the tests; all must pass before Task 19
