@@ -565,17 +565,36 @@ ratchets. Self-tests pass except the two known host-dependent `test_impls` noop-
 - Modify: `conformance/agterm_conformance/impls/base.py`, `plugin.py` (`LLVM_PROFILE_FILE`, `lost-profiles.txt`)
 - Modify: `conformance/selftests/test_impls.py`, `test_run_linux.py`
 
-- [ ] list every path in `ngterm-gpui`, `ngterm-session`, `ngterm-ctl` and the helper binaries that ends the process
+- [x] list every path in `ngterm-gpui`, `ngterm-session`, `ngterm-ctl` and the helper binaries that ends the process
       without running the exit handlers (`_exit`, `TerminateProcess`, signal deaths); check on Windows whether the
       session server ends by its idle grace or is killed by the reap (`IDLE_GRACE` vs `REAP_TREE_GRACE`)
-- [ ] write self-tests first: `--coverage` exports a pooled `LLVM_PROFILE_FILE` for every process the adapter and
+      - `ngterm`: `exit_now` (`_exit`, `TerminateProcess` of itself) → flushed now; the early `ExitCode` returns of
+        `main` run the handlers. Lost: a second SIGTERM's default action (`signals.rs`; the harness sends one), a
+        crash, the harness's SIGABRT/SIGKILL of a stalled app (recorded).
+      - `ngterm-headless`: the Unix relaunch by `exec` (`relaunch.rs`) → flushed before the `exec`; else `ExitCode`.
+      - `ngterm-session`: the server returns its `ExitCode` (handlers run). Lost: a server its client kills as not
+        detached (`spawn/mod.rs`, an error path); `ngterm-session attach` stopped by the harness (`PtyProcess.stop`,
+        recorded). The sessions' programs it ends (`job/windows.rs`) are pane programs, not the build's.
+      - `ngtermctl`: its `process::exit` paths (`session_wait.rs`, `overlay_job.rs`) run the handlers; it handles no
+        SIGTERM, so a stream the harness closes (`CliProcess.close`) dies of it (recorded: 3 on the dev box's partial
+        run). The app's presentation bridge and page channel children (`ngterm-app/src/remote.rs`,
+        `page_channel.rs`) are ended by SIGTERM / `TerminateProcess`: an `ngtermctl` there loses its profile
+        unrecorded (remote rows only). A pane's `ngtermctl` gets no `LLVM_PROFILE_FILE` (the panes' env is cleared).
+      - Windows: the server ends by its idle grace. The stop's leftover check waits `LEFTOVER_GRACE` +
+        `server_idle` (5 + 3 s) for it to exit before `reap_process_tree` (`REAP_TREE_GRACE`), so the reap ends it
+        only after a leftover failure; it breaks away from the Job, whose close never ends it. Every process the reap
+        ends by its pid is recorded in `lost-profiles.txt`.
+- [x] write self-tests first: `--coverage` exports a pooled `LLVM_PROFILE_FILE` for every process the adapter and
       `CliProcess` start; a process killed or SIGTERMed without its quit is listed in `lost-profiles.txt`; a stage
       built without coverage is refused under `--coverage`
-- [ ] implement the flush in `exit_now` (and any path the list found) and the `check-cfg` entry; the runners'
+- [x] implement the flush in `exit_now` (and any path the list found) and the `check-cfg` entry; the runners'
       `--coverage` build and stage through `cargo llvm-cov show-env`
-- [ ] check on the dev box that a partial instrumented run leaves profiles for the app, `ngtermctl` and the session
+- [x] check on the dev box that a partial instrumented run leaves profiles for the app, `ngtermctl` and the session
       server, and that their count stays bounded
-- [ ] run clippy and tests on the touched crates and the self-tests; the Windows side on the Windows runner
+- [x] run clippy and tests on the touched crates and the self-tests; the Windows side on the Windows runner
+      (`ci/win-task9`, run 41579360351: 3 pooled profiles for the app, `ngtermctl` and the session server, 3
+      `ngtermctl` streams lost, no reap kill; 72 pass, `test_overlay_page_blocks_until_submitted` red under
+      instrumentation by a 10 s socket timeout; the dev box's partial run: 11 files over 3 binaries, 4 lost)
 
 ### Task 10: Coverage report and the "ui ids exercised" line
 

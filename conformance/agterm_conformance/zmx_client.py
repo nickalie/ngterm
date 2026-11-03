@@ -19,6 +19,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Protocol, Self
 
+from agterm_conformance import llvm_profiles
 from agterm_conformance.impls.base import MINIMAL_PATH
 
 STOP_TIMEOUT = 5.0
@@ -78,6 +79,9 @@ class PtyProcess:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout)
+            llvm_profiles.record_if_signalled(
+                self.process.pid, self.process.args[0], self.process.returncode, "PtyProcess.stop: ended before it exited"
+            )
         self._drain.join(timeout)
         if self._master is not None:
             os.close(self._master)

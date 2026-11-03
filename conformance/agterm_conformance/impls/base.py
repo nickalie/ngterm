@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
-from agterm_conformance import winproc
+from agterm_conformance import llvm_profiles, winproc
 from agterm_conformance.client import (
     Client,
     ClientError,
@@ -633,6 +633,8 @@ class Adapter:
             env["GIO_USE_PORTALS"] = "0"
             env.pop("GTK_USE_PORTAL", None)
         self.platform_env(env)
+        # the run's pooled coverage profile, inherited by what the app starts (the session server); else none
+        llvm_profiles.apply(env)
         return env
 
     def launch(
@@ -825,6 +827,7 @@ class Adapter:
                     os.killpg(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate()
             code = None
+            llvm_profiles.record_lost(process.pid, process.args[0], "launch_beside: killed after its timeout")
         finally:
             if job is not None:
                 job.close()
@@ -1405,11 +1408,14 @@ def _terminate_app(instance: Instance) -> str | None:
     process.send_signal(signal.SIGTERM)
     try:
         process.wait(timeout=STOP_TIMEOUT)
+        # the app's quit ends in `exit_now`, which writes its profile; a death by the signal itself writes none
+        llvm_profiles.record_if_signalled(process.pid, process.args[0], process.returncode, "stop: died of SIGTERM")
         return None
     except subprocess.TimeoutExpired:
         pass
     snapshot = thread_snapshot(process.pid)
     process.send_signal(signal.SIGABRT)
+    llvm_profiles.record_lost(process.pid, process.args[0], "stop: SIGABRT after outliving SIGTERM")
     outlived_kill = ""
     try:
         process.wait(timeout=ABORT_GRACE)
@@ -1457,6 +1463,7 @@ def _end_windows_app(instance: Instance) -> str | None:
         except subprocess.TimeoutExpired:
             pass
     process.kill()
+    llvm_profiles.record_lost(process.pid, process.args[0], "stop: ended by its pid (TerminateProcess)")
     try:
         process.wait(timeout=STOP_TIMEOUT)
         outlived = ""
@@ -1500,7 +1507,9 @@ def _assign(job: winproc.Job, process: subprocess.Popen[bytes]) -> None:
 
 
 def _end_tree(launched: Iterable[tuple[subprocess.Popen[bytes], int | None]], grace: float) -> None:
-    roots = [winproc.Process(process.pid, 0, "", created) for process, created in launched]
+    roots = [
+        winproc.Process(process.pid, 0, os.path.basename(process.args[0]), created) for process, created in launched
+    ]
     deadline = time.monotonic() + grace
     while True:
         left = [process for process in [*roots, *winproc.descendants(roots)] if winproc.alive(process)]
@@ -1509,6 +1518,7 @@ def _end_tree(launched: Iterable[tuple[subprocess.Popen[bytes], int | None]], gr
         threading.Event().wait(POLL_INTERVAL * 4)
     for process in left:
         winproc.terminate(process)
+        llvm_profiles.record_lost(process.pid, process.name, "reap: ended by its pid (TerminateProcess)")
 
 
 def thread_snapshot(pid: int) -> str:

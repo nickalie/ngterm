@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Mapping
 from typing import Any
 
+from agterm_conformance import llvm_profiles
 from agterm_conformance.impls.base import MINIMAL_PATH
 from agterm_conformance.zmx_client import PtyProcess, ZmxInstance
 
@@ -42,4 +43,5 @@ def leading_client(instance: ZmxInstance, endpoint: Mapping[str, Any], session: 
         "NGTERM_LIVE_MANAGED": uuid.uuid4().hex,
         "NGTERM_LIVE_MANAGED_CLAIM": "1",
     }
-    return PtyProcess([executable, "attach", session, "/bin/sh", "-c", GONE_GUARD], env)
+    # the run's coverage profile, as every process of the build under test gets (`llvm_profiles`)
+    return PtyProcess([executable, "attach", session, "/bin/sh", "-c", GONE_GUARD], llvm_profiles.apply(env))

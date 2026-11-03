@@ -4,7 +4,7 @@
 # NGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-* parent, its own headless weston and session bus; a ui
 # instance its own Xvfb on the run's private a11y bus); no window, notification or a11y object reaches the desktop.
 #
-#   conformance/tools/run-linux.sh [--stage DIR] [--out DIR] [--tests DIR]
+#   conformance/tools/run-linux.sh [--stage DIR] [--out DIR] [--tests DIR] [--coverage]
 #                                       [--ratchet FILE] [--ratchet-only [--also SELECTOR]... [--also-k EXPR]...]
 #                                       [-- PYTEST_ARGS...]
 #
@@ -16,6 +16,10 @@
 # The build (bin/ngterm, staged into target/conformance-stage, reports in conformance/reports/rust-linux) renders
 # on Mesa's lavapipe only, from scripts/fetch-lavapipe.sh (exit 2 without one), its weston with --fake-seat.
 # --stage runs an already staged tree (scripts/stage.sh layout) instead of building and staging into target/.
+# --coverage builds instrumented (cargo llvm-cov show-env, into target/llvm-cov-target after cargo llvm-cov clean
+# --workspace), stages into target/conformance-stage-cov, and gives every process of the build a pooled
+# LLVM_PROFILE_FILE in target/llvm-cov-target (agterm_conformance/llvm_profiles.py); a --stage not built so exits 2.
+# The processes the harness had to end past their exit are listed in DIR/lost-profiles.txt.
 # Without the app's binary in the stage every test skips and parity reads 0%.
 # Writes report.md, junit.xml, pytest.log and nodeids.jsonl into DIR.
 # Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable report), or 1 when a run left an instance
@@ -38,6 +42,7 @@ out=""
 tests="$repo/conformance/tests"
 ratchet=""
 ratchet_only=""
+coverage=""
 also=()
 also_k=()
 extra=()
@@ -52,7 +57,8 @@ while (($#)); do
         --also) also+=("$2"); shift 2 ;;
         --also-k) also_k+=("$2"); shift 2 ;;
         --) shift; extra=("$@"); break ;;
-        -h|--help) sed -n '2,26s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        --coverage) coverage=1; shift ;;
+        -h|--help) sed -n '2,30s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -118,6 +124,12 @@ for layer in "${layers[@]}"; do
 done
 
 [[ -z "$stage" || -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
+# --coverage: the instrumented build's own target dir, where its profiles go and `cargo llvm-cov report` reads them.
+target_root="${CARGO_TARGET_DIR:-$repo/target}"
+cov_target="$target_root/llvm-cov-target"
+if [[ -n "$coverage" && -n "$stage" ]] && ! "$python" -m agterm_conformance.llvm_profiles "$stage/bin"; then
+    exit 2
+fi
 
 # The build renders through Vulkan: on lavapipe and nothing else (the harness points VK_DRIVER_FILES at it), never on
 # this machine's GPU driver, so a missing lavapipe stops the run here. Not NGTERM_- or AGTERM_-prefixed: the plugin
@@ -167,8 +179,24 @@ if [[ -z "$locked" ]]; then
     exit "$status"
 fi
 
-if [[ -z "$stage" ]]; then
-    stage="${CARGO_TARGET_DIR:-$repo/target}/conformance-stage"
+if [[ -z "$stage" && -n "$coverage" ]]; then
+    stage="$target_root/conformance-stage-cov"
+    # as below, instrumented: show-env's rustc wrapper adds -C instrument-coverage and cfg(coverage) in a target dir
+    # of its own, cleaned of the last run's workspace build and profiles first
+    # shellcheck source=../../scripts/lib/native.sh
+    (
+        cd "$repo" && source scripts/lib/native.sh || exit
+        export CARGO_TARGET_DIR="$cov_target"
+        eval "$(cargo llvm-cov show-env --sh)" || exit
+        cargo llvm-cov clean --workspace || exit
+        cargo build --release "${WORKSPACE_WITHOUT_WPE[@]}" || exit
+        cargo build --release -p ngterm-gpui || exit
+        rm -rf "$stage"
+        "$repo/scripts/stage.sh" "$stage"
+    )
+    "$python" -m agterm_conformance.llvm_profiles "$stage/bin" || exit 2
+elif [[ -z "$stage" ]]; then
+    stage="$target_root/conformance-stage"
     # the workspace without what links WPE WebKit (WORKSPACE_WITHOUT_WPE: ngtermctl is in it), then the app with its
     # HTML overlays, which need a WPE WebKit (README > WPE WebKit)
     # shellcheck source=../../scripts/lib/native.sh
@@ -190,7 +218,13 @@ while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(NGTE
 
 mkdir -p "$out"
 rm -rf "$out/traces"
-rm -f "$out/report.md" "$out/junit.xml" "$out/pytest.log" "$out/nodeids.jsonl"
+rm -f "$out/report.md" "$out/junit.xml" "$out/pytest.log" "$out/nodeids.jsonl" "$out/lost-profiles.txt"
+# --coverage: this run's profiles only, pooled per binary; the harness reads the directory from the environment.
+if [[ -n "$coverage" ]]; then
+    mkdir -p "$cov_target"
+    rm -f "$cov_target"/*.profraw "$cov_target/lost-profiles.txt"
+    export CONFORMANCE_COVERAGE_DIR="$cov_target"
+fi
 # A per-run parent, so a concurrent run's roots are neither blamed on this one nor listed for removal.
 parent="$(mktemp -d /tmp/agt-run-XXXXXX)"
 trap 'rmdir "$parent" 2>/dev/null || true' EXIT
@@ -213,6 +247,15 @@ left="$(find "$parent" -mindepth 1 -maxdepth 1 | sort)"
 if [[ -n "$left" && $status -eq 0 ]]; then
     status=1
 fi
+profiles=0
+lost=0
+if [[ -n "$coverage" ]]; then
+    profiles="$(find "$cov_target" -maxdepth 1 -name '*.profraw' | wc -l)"
+    if [[ -f "$cov_target/lost-profiles.txt" ]]; then
+        cp "$cov_target/lost-profiles.txt" "$out/lost-profiles.txt"
+        lost="$(wc -l < "$out/lost-profiles.txt")"
+    fi
+fi
 
 build_commit="$(git -C "$repo" rev-parse --short HEAD)"
 if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)"; fi
@@ -233,6 +276,10 @@ if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)
     echo "- host: $(uname -sr), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "- layers: ${layers[*]#"$tests/"}"
     echo "- display: $display"
+    if [[ -n "$coverage" ]]; then
+        echo "- coverage: $profiles profile files in \`$cov_target\`, $lost processes ended without one" \
+            "$( ((lost)) && echo '(lost-profiles.txt)')"
+    fi
     if ((${#extra[@]})); then echo "- pytest args: ${extra[*]}"; fi
     echo "- pytest status: $pytest_status"
     echo "- exit status: $status"

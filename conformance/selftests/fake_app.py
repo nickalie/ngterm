@@ -4,9 +4,10 @@ adapter, `NGTERM_CONTROL_SOCKET`: whichever prefix the adapter set).
 FAKE_APP_MODE: serve (default), exit (exit 3 before binding), silent (never binds), refuse (`version` fails), no-window
 (Windows: serve without the quit window),
 ignore-term (serve, ignoring SIGTERM and SIGABRT, each recorded in `fake-signals`; FAKE_ABORT=exit makes SIGABRT
-exit 134 instead, without a core). FAKE_VERSION: JSON for the `version` result. FAKE_ZMX_LIST: JSON
-replacing the `zmx.list` result. FAKE_LIVE_GROUP: the live-session group's name, `zmx` (upstream's) by default; the
-fake answers `<group>.list` under the result key `<group>`, as the Rust build answers `live.list` under `live`.
+exit 134 instead, without a core). FAKE_TERM=quit: SIGTERM exits 0, as the app's orderly quit does. FAKE_VERSION:
+JSON for the `version` result. FAKE_ZMX_LIST: JSON replacing the `zmx.list` result. FAKE_LIVE_GROUP: the live-session
+group's name, `zmx` (upstream's) by default; the fake answers `<group>.list` under the result key `<group>`, as the
+Rust build answers `live.list` under `live`.
 `fake.adopt {pid, session?, pane?, daemon?}` makes that pid a claimed zmx daemon which `zmx.kill` terminates;
 killing a left pane promotes the session's right pane into the left slot, as upstream does.
 `tree` serves a settable tree (`fake.set_tree {tree?, error?, delay?}`); `events.read` serves a ring with
@@ -138,6 +139,10 @@ if mode == "ignore-term" and not WINDOWS:
     signal.signal(signal.SIGTERM, record)
     # Handled, never the default action: no test may leave a real core behind.
     signal.signal(signal.SIGABRT, record)
+
+if os.environ.get("FAKE_TERM") == "quit" and not WINDOWS:
+    # the app's quit on SIGTERM: an orderly exit with a status, as `exit_now` ends it (writing its coverage profile)
+    signal.signal(signal.SIGTERM, lambda signum, frame: os._exit(0))
 
 daemons: list[dict] = []
 lock = threading.Lock()

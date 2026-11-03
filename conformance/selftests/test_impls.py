@@ -47,7 +47,8 @@ from agterm_conformance.impls.base import (
 from agterm_conformance.impls.rust import ProfileError, RustAdapter, profile_from_version
 from upstream_adapter import UpstreamVocabularyAdapter
 from agterm_conformance.impls.swift_macos import SwiftMacosAdapter
-from agterm_conformance.plugin import ImplOptions
+from agterm_conformance import llvm_profiles
+from agterm_conformance.plugin import Cli, ImplOptions
 from agterm_conformance.vocabulary import LIVE, UPSTREAM, Vocabulary, fnv1a64, upstream_socket_directory
 
 
@@ -1935,3 +1936,184 @@ def test_a_session_display_gpui_launch_still_renders_on_lavapipe(
     monkeypatch.setenv(base.DISPLAY_MODE_VARIABLE, "session")
     env = RustAdapter(fake_bin).build_env(Path("/tmp/agt-x"))
     assert env["VK_DRIVER_FILES"] == str(lavapipe)
+
+
+# -- coverage profiles (agterm_conformance.llvm_profiles)
+
+# A stand-in `ngtermctl`: `env` prints its LLVM_PROFILE_FILE, `sleep` waits under the default SIGTERM action, `trap`
+# exits 0 on SIGTERM as a CLI handling it would.
+FAKE_CTL = """
+import os, signal, sys, time
+if sys.argv[1] == "env":
+    print(os.environ.get("LLVM_PROFILE_FILE", "<none>"))
+    sys.exit(0)
+if sys.argv[1] == "trap":
+    signal.signal(signal.SIGTERM, lambda signum, frame: os._exit(0))
+print("ready", flush=True)
+time.sleep(60)
+"""
+
+
+@pytest.fixture
+def coverage_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The run's profile directory, as `run-linux.sh --coverage` exports it; an inherited per-pid profile beside it."""
+    directory = tmp_path / "llvm-cov-target"
+    monkeypatch.setenv(llvm_profiles.COVERAGE_DIR_VARIABLE, str(directory))
+    monkeypatch.setenv(llvm_profiles.PROFILE_VARIABLE, str(tmp_path / "elsewhere-%p.profraw"))
+    return directory
+
+
+@pytest.fixture
+def staged(tmp_path: Path, fake_bin: Path) -> Path:
+    """A stage whose bin/ holds the fake app as `ngterm` and a fake `ngtermctl`."""
+    app = tmp_path / "stage" / "bin" / "ngterm"
+    app.parent.mkdir(parents=True)
+    shutil.copy2(fake_bin, app)
+    ctl = app.parent / "ngtermctl"
+    ctl.write_text(f"#!{sys.executable}\n{FAKE_CTL}")
+    ctl.chmod(0o755)
+    return app
+
+
+def lost_lines(directory: Path) -> list[str]:
+    path = directory / llvm_profiles.LOST_FILE
+    return path.read_text().splitlines() if path.exists() else []
+
+
+def test_coverage_gives_the_app_a_pooled_profile(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_TERM", "quit")
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        seen = json.loads((instance.state_dir / "fake-env.json").read_text())
+        # one pooled file per binary signature in the run's directory, never the inherited per-pid one
+        assert seen["LLVM_PROFILE_FILE"] == str(coverage_dir / "conformance-%4m.profraw")
+    finally:
+        adapter.stop(instance)
+    # an orderly quit wrote its profile: nothing lost
+    assert lost_lines(coverage_dir) == []
+
+
+def test_without_coverage_an_inherited_profile_is_dropped(
+    tmp_path: Path, fake_bin: Path, lavapipe: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(llvm_profiles.COVERAGE_DIR_VARIABLE, raising=False)
+    monkeypatch.setenv(llvm_profiles.PROFILE_VARIABLE, str(tmp_path / "elsewhere-%p.profraw"))
+    env = RustAdapter(fake_bin).build_env(Path("/tmp/agt-x"))
+    assert llvm_profiles.PROFILE_VARIABLE not in env
+
+
+def test_coverage_gives_every_cli_the_pooled_profile(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path
+) -> None:
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        cli = Cli(staged.parent / "ngtermctl", instance, "ngtermctl")
+        pooled = str(coverage_dir / "conformance-%4m.profraw")
+        assert cli("env").stdout == f"{pooled}\n"
+        # an env of the caller's own, without the variable, gets it too
+        bare = {name: value for name, value in instance.env.items() if name != "LLVM_PROFILE_FILE"}
+        assert cli.local("env", env=bare).stdout == f"{pooled}\n"
+        with cli.spawn("env") as process:
+            assert process.line() == pooled
+    finally:
+        adapter.stop(instance)
+
+
+def test_a_cli_ended_by_its_close_is_listed_as_lost(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_TERM", "quit")
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        cli = Cli(staged.parent / "ngtermctl", instance, "ngtermctl")
+        killed = cli.spawn("sleep")
+        assert killed.line() == "ready"
+        killed.close()
+        handled = cli.spawn("trap")
+        assert handled.line() == "ready"
+        handled.close()
+    finally:
+        adapter.stop(instance)
+    assert killed.process.returncode == -signal.SIGTERM and handled.process.returncode == 0
+    # only the one that died of the signal: the other exited, writing its profile
+    assert lost_lines(coverage_dir) == [f"{killed.process.pid} ngtermctl: CliProcess.close: ended before it exited"]
+
+
+def test_an_app_aborted_by_the_stop_is_listed_as_lost(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_APP_MODE", "ignore-term")
+    monkeypatch.setattr(base, "STOP_TIMEOUT", 0.5)
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    with pytest.raises(StopError):
+        adapter.stop(instance)
+    assert lost_lines(coverage_dir) == [f"{instance.pid} ngterm: stop: SIGABRT after outliving SIGTERM"]
+
+
+def test_an_app_dying_of_sigterm_is_listed_as_lost(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path
+) -> None:
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    adapter.stop(instance)
+    assert instance.process.returncode == -signal.SIGTERM
+    assert lost_lines(coverage_dir) == [f"{instance.pid} ngterm: stop: died of SIGTERM"]
+
+
+def test_a_launch_beside_killed_after_its_timeout_is_listed_as_lost(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_TERM", "quit")
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        assert adapter.launch_beside(instance, timeout=0.5).returncode is None
+    finally:
+        adapter.stop(instance)
+    [line] = lost_lines(coverage_dir)
+    assert re.fullmatch(r"\d+ ngterm: launch_beside: killed after its timeout", line), line
+
+
+def test_lost_profiles_are_recorded_only_under_coverage_and_for_the_builds_programs(
+    tmp_path: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    llvm_profiles.record_lost(7, "/stage/bin/ngterm-session.exe", "reap")
+    llvm_profiles.record_lost(8, "/usr/bin/bash", "reap")
+    llvm_profiles.record_lost(None, "ngtermctl", "timeout")
+    assert lost_lines(coverage_dir) == ["7 ngterm-session: reap", "? ngtermctl: timeout"]
+    monkeypatch.delenv(llvm_profiles.COVERAGE_DIR_VARIABLE)
+    llvm_profiles.record_lost(9, "ngterm", "reap")
+    assert len(lost_lines(coverage_dir)) == 2
+
+
+def test_a_stage_without_the_profile_runtime_is_refused_under_coverage(staged: Path) -> None:
+    with pytest.raises(llvm_profiles.NotInstrumented, match="not built with coverage"):
+        llvm_profiles.check_instrumented(llvm_profiles.stage_binaries(staged.parent))
+    with open(staged, "ab") as sink:
+        sink.write(b"\n# " + llvm_profiles.RUNTIME_MARKER + b"\n")
+    # the CLI beside it is still plain
+    with pytest.raises(llvm_profiles.NotInstrumented, match="ngtermctl"):
+        llvm_profiles.check_instrumented(llvm_profiles.stage_binaries(staged.parent))
+    with open(staged.parent / "ngtermctl", "ab") as sink:
+        sink.write(b"\n# " + llvm_profiles.RUNTIME_MARKER + b"\n")
+    llvm_profiles.check_instrumented(llvm_profiles.stage_binaries(staged.parent))
+    with pytest.raises(llvm_profiles.NotInstrumented, match="no ngterm binary"):
+        llvm_profiles.check_instrumented([staged.parent / "ngtermctl"])
+
+
+def test_the_plugin_refuses_a_plain_stage_under_coverage(staged: Path, coverage_dir: Path) -> None:
+    from agterm_conformance.plugin import check_coverage_stage
+
+    options = ImplOptions(impl="rust", bin=staged, ctl=None, coverage_gate=False)
+    with pytest.raises(pytest.UsageError, match="CONFORMANCE_COVERAGE_DIR: not built with coverage"):
+        check_coverage_stage(options)
+    for binary in (staged, staged.parent / "ngtermctl"):
+        with open(binary, "ab") as sink:
+            sink.write(b"\n# " + llvm_profiles.RUNTIME_MARKER + b"\n")
+    check_coverage_stage(options)

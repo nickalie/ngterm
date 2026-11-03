@@ -68,7 +68,11 @@ fn executable() -> io::Result<PathBuf> {
 pub fn relaunch(options: &Options) -> io::Error {
     use std::os::unix::process::CommandExt as _;
     match executable() {
-        Ok(executable) => std::process::Command::new(executable).args(arguments(options)).exec(),
+        Ok(executable) => {
+            // `exec` runs no exit handler: an instrumented build's coverage profile is written first
+            ngterm_app::coverage::write_profile();
+            std::process::Command::new(executable).args(arguments(options)).exec()
+        }
         Err(error) => error,
     }
 }

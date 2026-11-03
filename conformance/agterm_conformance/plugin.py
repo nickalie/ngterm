@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 
-from agterm_conformance import coverage, selection, wait
+from agterm_conformance import coverage, llvm_profiles, selection, wait
 from agterm_conformance.drivers import trace
 from agterm_conformance.client import Response, SocketOutsideRoot, Stream, check_under_root
 from agterm_conformance.match import assert_ok
@@ -185,6 +185,8 @@ def pytest_configure(config: pytest.Config) -> None:
     for flag, path in (("--bin", options.bin), ("--ctl", options.ctl)):
         if path is not None and not path.exists():
             raise pytest.UsageError(f"{flag} {path} does not exist")
+    if not options.coverage_gate:
+        check_coverage_stage(options)
     config.stash[_OPTIONS_KEY] = options
     if (nodeid_report := config.getoption("nodeid_report")) is not None:
         if options.coverage_gate:
@@ -208,6 +210,23 @@ def pytest_configure(config: pytest.Config) -> None:
         if unknown := sorted(set(must_pass) - set(CAPABILITIES)):
             raise pytest.UsageError(f"--must-pass: unknown capability {', '.join(unknown)}")
         config.pluginmanager.register(MustPass(frozenset(must_pass)), "agterm-must-pass")
+
+
+def check_coverage_stage(options: ImplOptions) -> None:
+    """Under the runner's `--coverage` (`llvm_profiles.COVERAGE_DIR_VARIABLE`), refuses a `--bin` whose stage is not
+    instrumented: the build's programs beside it and `--ctl` must carry the profile runtime, or the run writes no
+    profile."""
+    if llvm_profiles.profile_dir() is None:
+        return
+    if options.bin is None or not options.bin.is_file():
+        raise pytest.UsageError(f"{llvm_profiles.COVERAGE_DIR_VARIABLE}: coverage needs --bin, a staged binary")
+    binaries = {options.bin, *llvm_profiles.stage_binaries(options.bin.parent)}
+    if options.ctl is not None:
+        binaries.add(options.ctl)
+    try:
+        llvm_profiles.check_instrumented(sorted(binaries))
+    except (llvm_profiles.NotInstrumented, OSError) as error:
+        raise pytest.UsageError(f"{llvm_profiles.COVERAGE_DIR_VARIABLE}: {error}") from None
 
 
 def ui_ids_path(config: pytest.Config, options: ImplOptions) -> Path:
@@ -754,10 +773,12 @@ class Cli:
         trace.remember(self.instance)
         try:
             completed = subprocess.run(
-                argv, env=env, cwd=self.instance.home, input=input, capture_output=True,
+                argv, env=llvm_profiles.with_profile(env), cwd=self.instance.home, input=input, capture_output=True,
                 text=True, timeout=timeout, check=False,
             )
         except subprocess.TimeoutExpired as error:
+            # subprocess.run killed it
+            llvm_profiles.record_lost(None, argv[0], f"cli: killed after its {timeout}s timeout")
             def text(value):
                 return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
             trace.event("cli", argv=argv, error=f"{type(error).__name__}: {error}",
@@ -792,7 +813,7 @@ class CliProcess:
         self._stderr: str | None = None
         try:
             self.process = subprocess.Popen(
-                argv, env=dict(env), cwd=cwd,
+                argv, env=llvm_profiles.with_profile(env), cwd=cwd,
                 stdin=subprocess.PIPE if input is not None or interactive else subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
@@ -864,6 +885,10 @@ class CliProcess:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
+            # a CLI dying of the signal (or Windows' TerminateProcess) writes no coverage profile
+            llvm_profiles.record_if_signalled(
+                self.process.pid, self.argv[0], self.process.returncode, "CliProcess.close: ended before it exited"
+            )
         self._reader.join(STOP_GRACE)
         self.stderr()
         self._record_trace()

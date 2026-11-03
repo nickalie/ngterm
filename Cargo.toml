@@ -188,6 +188,8 @@ netlink-packet-route = "0.33"
 # (gir). Only a reasoned outer `#[expect(..., reason = "...")]` on the one item can lift a lint: `#[allow]` is refused.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+# `cfg(coverage)`: set with `-C instrument-coverage` by `cargo llvm-cov` (the conformance runners' `--coverage`)
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

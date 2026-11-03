@@ -665,3 +665,71 @@ linux_ui.LIBEXEC_DIRS = ()
     assert 'missing Xvfb' in completed.stderr
     assert not report
     assert not (tmp_path / 'report/nodeids.jsonl').exists()
+
+
+# What the instance's profile variable was, written where the test runner says; a CLI of the build's ended by the
+# harness before it exited, which the run must list as lost.
+COVERAGE_PROBE_TEST = """
+import os
+import sys
+from agterm_conformance.plugin import CliProcess
+
+def test_reports_version(app):
+    with open(os.environ["LAUNCH_PROBE"], "w") as sink:
+        sink.write(app.env["LLVM_PROFILE_FILE"])
+    ctl = app.root / "ngtermctl"
+    ctl.write_text(f"#!{sys.executable}\\nimport time\\nprint('ready', flush=True)\\ntime.sleep(60)\\n")
+    ctl.chmod(0o755)
+    with CliProcess([str(ctl)], app.env, app.home, None) as process:
+        assert process.line() == "ready"
+"""
+
+
+def instrument(binary: Path) -> None:
+    """Gives a fake binary the profile runtime's marker (`llvm_profiles.RUNTIME_MARKER`), as a coverage build has."""
+    with open(binary, "ab") as sink:
+        sink.write(b"\n# LLVM Profile Error\n")
+
+
+def test_a_coverage_run_refuses_a_stage_built_without_coverage(tmp_path: Path, stage: Path, layers: Path) -> None:
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--coverage")
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert "not built with coverage" in completed.stderr
+    assert f"{stage}/bin/ngterm" in completed.stderr
+    assert report == ""
+
+
+def test_a_coverage_run_pools_the_profiles_and_lists_the_lost(
+    tmp_path: Path, stage: Path, layers: Path
+) -> None:
+    instrument(stage / "bin" / "ngterm")
+    (layers / "protocol" / "test_probe.py").write_text(COVERAGE_PROBE_TEST)
+    target = tmp_path / "target"
+    profiles = target / "llvm-cov-target"
+    profiles.mkdir(parents=True)
+    (profiles / "stale-1-2.profraw").write_bytes(b"last run")
+    (profiles / "lost-profiles.txt").write_text("1 ngterm: last run\n")
+    probe = tmp_path / "launch.txt"
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--coverage",
+        LAUNCH_PROBE=str(probe), CARGO_TARGET_DIR=str(target), FAKE_TERM="quit",
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert probe.read_text() == f"{profiles}/conformance-%4m.profraw"
+    # the last run's profiles are gone; the fakes write none
+    assert not list(profiles.glob("*.profraw"))
+    [lost] = (tmp_path / "report" / "lost-profiles.txt").read_text().splitlines()
+    assert re.fullmatch(r"\d+ ngtermctl: CliProcess.close: ended before it exited", lost), lost
+    assert f"- coverage: 0 profile files in `{profiles}`, 1 processes ended without one (lost-profiles.txt)" in report
+
+
+def test_a_run_without_coverage_names_no_profile(tmp_path: Path, stage: Path, layers: Path) -> None:
+    (layers / "protocol" / "test_probe.py").write_text(LAUNCH_PROBE_TEST)
+    probe = tmp_path / "launch.json"
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), LAUNCH_PROBE=str(probe),
+        LLVM_PROFILE_FILE=str(tmp_path / "inherited-%p.profraw"),
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "LLVM_PROFILE_FILE" not in json.loads(probe.read_text())["env"]
+    assert "- coverage:" not in report and not (tmp_path / "report" / "lost-profiles.txt").exists()

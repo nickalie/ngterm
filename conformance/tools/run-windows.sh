@@ -8,11 +8,12 @@
 # pid at the stop). Its window opens on this desktop: run it on a CI runner or a throwaway VM only, never beside a
 # live ngterm.
 #
-#   conformance/tools/run-windows.sh [--stage DIR] [--out DIR] [--tests DIR]
+#   conformance/tools/run-windows.sh [--stage DIR] [--out DIR] [--tests DIR] [--coverage]
 #                                         [--ratchet FILE] [--ratchet-only [--also SELECTOR]... [--also-k EXPR]...]
 #                                         [-- PYTEST_ARGS...]
 #
-# The options are run-linux.sh's. The build needs the libghostty-vt prefix (scripts/build-ghostty-vt.sh) and the
+# The options are run-linux.sh's, --coverage included (an instrumented build in target\llvm-cov-target staged into
+# target\conformance-stage-cov, its profiles in target\llvm-cov-target). The build needs the libghostty-vt prefix (scripts/build-ghostty-vt.sh) and the
 # terminal fonts (scripts/fetch-fonts.sh); its HTML overlays need the WebView2 runtime. The panes run Git for Windows'
 # sh.exe (the harness's CONFORMANCE_POSIX_SHELL, else the one beside git). Reports go to
 # conformance/reports/rust-windows by default. Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable
@@ -30,6 +31,7 @@ out=""
 tests="$repo/conformance/tests"
 ratchet=""
 ratchet_only=""
+coverage=""
 also=()
 also_k=()
 extra=()
@@ -44,6 +46,7 @@ while (($#)); do
         --also) also+=("$2"); shift 2 ;;
         --also-k) also_k+=("$2"); shift 2 ;;
         --) shift; extra=("$@"); break ;;
+        --coverage) coverage=1; shift ;;
         -h|--help) sed -n '2,23s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -91,8 +94,27 @@ if [[ -n "$ratchet_only" ]]; then
 fi
 
 [[ -z "$stage" || -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
-if [[ -z "$stage" ]]; then
-    target="$(cygpath -u "${CARGO_TARGET_DIR:-$repo/target}")"
+target="$(cygpath -u "${CARGO_TARGET_DIR:-$repo/target}")"
+# --coverage: the instrumented build's own target dir, where its profiles go and `cargo llvm-cov report` reads them.
+cov_target="$target/llvm-cov-target"
+if [[ -n "$coverage" && -n "$stage" ]] && ! "$python" -m agterm_conformance.llvm_profiles "$(win "$stage/bin")"; then
+    exit 2
+fi
+if [[ -z "$stage" && -n "$coverage" ]]; then
+    stage="$target/conformance-stage-cov"
+    # as below, instrumented: show-env's rustc wrapper adds -C instrument-coverage and cfg(coverage) in a target dir
+    # of its own, cleaned of the last run's workspace build and profiles first
+    (
+        cd "$repo" || exit
+        export CARGO_TARGET_DIR="$(win "$cov_target")"
+        eval "$(cargo llvm-cov show-env --sh)" || exit
+        cargo llvm-cov clean --workspace || exit
+        cargo build --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session || exit
+        rm -rf "$stage"
+        "$repo/scripts/stage.sh" "$stage"
+    )
+    "$python" -m agterm_conformance.llvm_profiles "$(win "$stage/bin")" || exit 2
+elif [[ -z "$stage" ]]; then
     stage="$target/conformance-stage"
     # the app with its HTML overlays (WebView2), the CLI and the live sessions' server
     (cd "$repo" && cargo build --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session)
@@ -109,7 +131,13 @@ while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(NGTE
 
 mkdir -p "$out"
 rm -rf "$out/traces"
-rm -f "$out/report.md" "$out/junit.xml" "$out/pytest.log" "$out/nodeids.jsonl"
+rm -f "$out/report.md" "$out/junit.xml" "$out/pytest.log" "$out/nodeids.jsonl" "$out/lost-profiles.txt"
+# --coverage: this run's profiles only, pooled per binary; the harness reads the directory from the environment.
+if [[ -n "$coverage" ]]; then
+    mkdir -p "$cov_target"
+    rm -f "$cov_target"/*.profraw "$cov_target/lost-profiles.txt"
+    export CONFORMANCE_COVERAGE_DIR="$(win "$cov_target")"
+fi
 # A per-run parent under %TEMP%, so a concurrent run's roots are neither blamed on this one nor listed for removal.
 parent="$(mktemp -d "$(cygpath -u "${TEMP:-/tmp}")/agt-run-XXXXXX")"
 trap 'rmdir "$parent" 2>/dev/null || true' EXIT
@@ -134,6 +162,15 @@ left="$(find "$parent" -mindepth 1 -maxdepth 1 | sort)"
 if [[ -n "$left" && $status -eq 0 ]]; then
     status=1
 fi
+profiles=0
+lost=0
+if [[ -n "$coverage" ]]; then
+    profiles="$(find "$cov_target" -maxdepth 1 -name '*.profraw' | wc -l)"
+    if [[ -f "$cov_target/lost-profiles.txt" ]]; then
+        cp "$cov_target/lost-profiles.txt" "$out/lost-profiles.txt"
+        lost="$(wc -l < "$out/lost-profiles.txt")"
+    fi
+fi
 
 # A VM's copy of the sources may carry no .git: the report then says so rather than the run ending here.
 if build_commit="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)"; then
@@ -156,6 +193,10 @@ fi
     if ((${#bin_args[@]})); then echo "- ngterm: \`${bin_args[1]}\`"; else echo "- ngterm: not staged"; fi
     echo "- host: $(uname -sr), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "- layers: ${layers[*]#"$tests/"}"
+    if [[ -n "$coverage" ]]; then
+        echo "- coverage: $profiles profile files in \`$(win "$cov_target")\`, $lost processes ended without one" \
+            "$( ((lost)) && echo '(lost-profiles.txt)')"
+    fi
     if ((${#extra[@]})); then echo "- pytest args: ${extra[*]}"; fi
     echo "- pytest status: $pytest_status"
     echo "- exit status: $status"
