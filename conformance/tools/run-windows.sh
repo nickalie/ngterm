@@ -13,11 +13,13 @@
 #                                         [-- PYTEST_ARGS...]
 #
 # The options are run-linux.sh's, --coverage included (an instrumented build in target\llvm-cov-target staged into
-# target\conformance-stage-cov, its profiles in target\llvm-cov-target). The build needs the libghostty-vt prefix (scripts/build-ghostty-vt.sh) and the
-# terminal fonts (scripts/fetch-fonts.sh); its HTML overlays need the WebView2 runtime. The panes run Git for Windows'
-# sh.exe (the harness's CONFORMANCE_POSIX_SHELL, else the one beside git). Reports go to
-# conformance/reports/rust-windows by default. Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable
-# report), or 1 when a run left an instance root behind. No lock: one suite per machine, as a runner or a VM runs it.
+# target\conformance-stage-cov, its profiles in target\llvm-cov-target, merged after the suite into DIR\coverage).
+# The build needs the libghostty-vt prefix (scripts/build-ghostty-vt.sh) and the terminal fonts
+# (scripts/fetch-fonts.sh); its HTML overlays need the WebView2 runtime. The panes run Git for Windows' sh.exe (the
+# harness's CONFORMANCE_POSIX_SHELL, else the one beside git). Reports go to conformance/reports/rust-windows by
+# default. Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable report), 1 when a run left an
+# instance root behind, or 2 when --coverage yields no code coverage report. No lock: one suite per machine, as a
+# runner or a VM runs it.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,7 +49,7 @@ while (($#)); do
         --also-k) also_k+=("$2"); shift 2 ;;
         --) shift; extra=("$@"); break ;;
         --coverage) coverage=1; shift ;;
-        -h|--help) sed -n '2,23s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,25s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -173,6 +175,29 @@ if [[ -n "$coverage" ]]; then
     fi
 fi
 
+# --coverage: merge this run's profiles against the instrumented build (agterm_conformance/code_coverage.py) into
+# DIR/coverage; no profiles or a stage that is not that build exits 2 with the reason.
+coverage_error=""
+if [[ -n "$coverage" ]]; then
+    rm -rf "$out/coverage"
+    stage_bin="$(win "$(cygpath -ua "$stage/bin")")"
+    coverage_out="$(win "$(cygpath -ua "$out/coverage")")"
+    if ! coverage_error="$(
+        cd "$repo" || exit 2
+        export CARGO_TARGET_DIR="$(win "$cov_target")"
+        llvm_cov_env="$(cargo llvm-cov show-env --sh 2>/dev/null)" \
+            || { echo "code coverage: cargo llvm-cov show-env failed"; exit 2; }
+        eval "$llvm_cov_env"
+        "$python" -m agterm_conformance.code_coverage --profiles "$(win "$cov_target")" --stage-bin "$stage_bin" \
+            --release-dir "$(win "$cov_target/release")" --repo "$(win "$repo")" --out "$coverage_out" 2>&1 >/dev/null
+    )"; then
+        status=2
+        echo "$coverage_error" >&2
+    fi
+fi
+# The ui ids a passing test of this run exercised (agterm_conformance/coverage.py), beside the catalog gate's count.
+catalog_line="$("$python" -m agterm_conformance.coverage "$(win "$out/nodeids.jsonl")" 2>&1)" || true
+
 # A VM's copy of the sources may carry no .git: the report then says so rather than the run ending here.
 if build_commit="$(git -C "$repo" rev-parse --short HEAD 2>/dev/null)"; then
     if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)"; fi
@@ -216,6 +241,22 @@ fi
     echo '```'
     echo "$ratchet_log"
     echo '```'
+    if [[ -n "$coverage" ]]; then
+        echo
+        echo "### code coverage"
+        echo
+        if [[ -z "$coverage_error" ]]; then
+            cat "$out/coverage/summary.md"
+            echo
+            echo "lcov: \`$(win "$out/coverage/lcov.info")\`, html: \`$(win "$out/coverage/html/index.html")\`"
+        else
+            echo "no report: ${coverage_error#code coverage: }"
+        fi
+    fi
+    echo
+    echo "### catalog coverage"
+    echo
+    echo "$catalog_line"
     if [[ -n "$left" ]]; then
         echo
         echo "Left behind (kept for diagnosis, remove by hand):"

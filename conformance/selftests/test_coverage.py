@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import textwrap
@@ -6,7 +7,15 @@ from typing import Any
 
 import pytest
 import yaml
-from agterm_conformance.coverage import Catalog, CatalogError, Declaration, evaluate, load_baseline, load_catalog
+from agterm_conformance.coverage import (
+    Catalog,
+    CatalogError,
+    Declaration,
+    evaluate,
+    exercised,
+    load_baseline,
+    load_catalog,
+)
 
 CONFORMANCE = Path(__file__).resolve().parents[1]
 
@@ -386,3 +395,50 @@ def test_committed_catalog_passes_the_ci_gate() -> None:
     result = subprocess.run(command, cwd=CONFORMANCE.parent, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]
     assert "1 passed" in result.stdout
+
+
+def record(nodeid: str, outcome: str, *covers: str) -> dict[str, Any]:
+    return {"kind": "test", "nodeid": nodeid, "outcome": outcome, "skip": None, "reason": None, "covers": list(covers)}
+
+
+def test_exercised_counts_the_ui_ids_of_passed_tests_only(tmp_path: Path) -> None:
+    ui_ids = {**UI_IDS, "ids": {**UI_IDS["ids"], "gone-id": {"status": "removed-upstream"}}}
+    catalog = load_catalog(write_catalog(tmp_path, ui_ids=ui_ids), tmp_path / "ui-ids.yaml")
+    records = [
+        {"kind": "run", "partial": False, "mode": "full"},
+        record("t::passed", "passed", "ui:ask-dialog", "version", "ui:gone-id"),
+        record("t::xpassed", "xpassed", "ui:welcome-skill-checkbox"),
+        record("t::failed", "failed", "ui:ask-button-{choice}"),
+        record("t::skipped", "skipped", "ui:ask-button-{choice}"),
+        record("t::again", "passed", "ui:ask-dialog"),
+        {"kind": "test", "nodeid": "t::old", "outcome": "passed", "skip": None, "reason": None},
+    ]
+    result = exercised(catalog, records)
+    assert (result.exercised, result.active) == (2, 3)
+    assert result.line() == "ui ids exercised by a passing test: 2/3 (66.7%)"
+
+
+def test_the_exercised_line_from_a_report(tmp_path: Path) -> None:
+    write_catalog(tmp_path / "catalog")
+    report = tmp_path / "nodeids.jsonl"
+    report.write_text(
+        "".join(json.dumps(line) + "\n" for line in [{"kind": "run"}, record("t::a", "passed", "ui:ask-dialog")])
+    )
+    command = [sys.executable, "-m", "agterm_conformance.coverage", str(report), "--catalog",
+               str(tmp_path / "catalog" / "catalog.yaml")]
+    done = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == "ui ids exercised by a passing test: 1/3 (33.3%)\n"
+
+
+@pytest.mark.parametrize("content", [None, "not json\n"], ids=["missing", "malformed"])
+def test_an_unreadable_report_exits_2(tmp_path: Path, content: str | None) -> None:
+    write_catalog(tmp_path / "catalog")
+    report = tmp_path / "nodeids.jsonl"
+    if content is not None:
+        report.write_text(content)
+    command = [sys.executable, "-m", "agterm_conformance.coverage", str(report), "--catalog",
+               str(tmp_path / "catalog" / "catalog.yaml")]
+    done = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert done.returncode == 2
+    assert done.stderr.startswith(f"catalog coverage: {report}: cannot read the report")

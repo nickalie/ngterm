@@ -306,7 +306,8 @@ class MustPass:
 
 
 class NodeidReport:
-    """`--nodeid-report`: JSON lines of each selected test's merged outcome, collection errors and must-pass problems."""
+    """`--nodeid-report`: JSON lines of each selected test's merged outcome and `covers` targets, collection errors and
+    must-pass problems."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -361,13 +362,20 @@ class NodeidReport:
         mode = self.mode or (selection.PARTIAL if partial else selection.FULL)
         lines: list[dict[str, Any]] = [{"kind": "run", "partial": partial, "mode": mode}]
         for item in getattr(session, "items", []):
-            lines.append({"kind": "test", "nodeid": item.nodeid, **self.merged.get(item.nodeid, _not_run())})
+            lines.append(
+                {"kind": "test", "nodeid": item.nodeid, **self.merged.get(item.nodeid, _not_run()), "covers": _covers(item)}
+            )
         lines += self.collection_errors
         must_pass = session.config.pluginmanager.get_plugin("agterm-must-pass")
         if must_pass is not None:
             lines += [{"kind": "must-pass", "problem": problem} for problem in must_pass.problems]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+
+
+def _covers(item: pytest.Item) -> list[str]:
+    """The catalog items a test's `covers` markers name, each once (coverage.exercised)."""
+    return list(dict.fromkeys(str(target) for marker in item.iter_markers("covers") for target in marker.args))
 
 
 def _not_run() -> dict[str, Any]:

@@ -69,6 +69,17 @@ def test_holding_run(files: tuple[Path, Path], capsys: pytest.CaptureFixture[str
     assert out == ["ratchet holds: 2 listed id(s), full run"]
 
 
+def test_a_records_covers_targets_leave_the_verdict_alone(
+    files: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    report, ratchet = files
+    write_report(report, rec(A) | {"covers": ["ui:sidebar", "version"]}, rec(B, "failed") | {"covers": []}, rec(C))
+    write_list(ratchet, A, C)
+    code, out, err = check(capsys, report, ratchet)
+    assert (code, err) == (0, "")
+    assert out == ["ratchet holds: 2 listed id(s), full run"]
+
+
 @pytest.mark.parametrize(
     ("record", "expected"),
     [

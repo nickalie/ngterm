@@ -605,11 +605,14 @@ ratchets. Self-tests pass except the two known host-dependent `test_impls` noop-
 - Modify: `conformance/selftests/test_coverage.py`, `test_run_linux.py`, `test_ratchet.py` (the report lines' new
       field leaves the ratchet unchanged)
 
-- [ ] write self-tests first: report lines carry `covers`; the exercised count counts passed tests only; `report.md`
+- [x] write self-tests first: report lines carry `covers`; the exercised count counts passed tests only; `report.md`
       carries both sections; no profiles or a binary mismatch exits 2 with the reason
-- [ ] implement the `cargo llvm-cov report` step (lcov, html, per-crate summary with the exclusions) and the line
-- [ ] run a partial instrumented run on the dev box and check the summary's crates and numbers are plausible
-- [ ] run the self-tests
+- [x] implement the `cargo llvm-cov report` step (lcov, html, per-crate summary with the exclusions) and the line
+- [x] run a partial instrumented run on the dev box and check the summary's crates and numbers are plausible
+      (`--stage target/conformance-stage-cov`, 84 tests: 13 crates, `-sys` gone, total 45.9% lines, ngterm-headless 0%
+      as never launched; 14/127 ui ids exercised; llvm-cov warns of 4 mismatched functions with the build's own
+      stage, so the warning is noted in the summary and the mismatch refusal compares the staged binaries' bytes)
+- [x] run the self-tests
 
 ### Task 11: Coverage floors and the CI coverage jobs
 

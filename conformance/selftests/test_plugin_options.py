@@ -316,6 +316,38 @@ def test_nodeid_report_merges_phases(pytester: pytest.Pytester) -> None:
     assert len(records) == 12
 
 
+def test_nodeid_report_lines_carry_the_covers_targets(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(
+        test_covers="""
+        import pytest
+
+        pytestmark = pytest.mark.covers("ui:sidebar")
+
+        @pytest.mark.covers("version", "ui:ask-dialog")
+        @pytest.mark.covers("ui:sidebar")
+        def test_marked():
+            pass
+
+        def test_module_only():
+            assert False
+        """
+    )
+    _, records = run_nodeid_report(pytester)
+    tests = [record for record in records if record["kind"] == "test"]
+    # each target once, whichever markers name it
+    assert [(record["nodeid"], sorted(record["covers"])) for record in tests] == [
+        ("test_covers.py::test_marked", ["ui:ask-dialog", "ui:sidebar", "version"]),
+        ("test_covers.py::test_module_only", ["ui:sidebar"]),
+    ]
+    assert len(tests[0]["covers"]) == 3
+
+
+def test_nodeid_report_lines_without_covers_name_none(pytester: pytest.Pytester) -> None:
+    pytester.makepyfile(test_plain="def test_plain():\n    pass\n")
+    _, records = run_nodeid_report(pytester)
+    assert records[1]["covers"] == []
+
+
 def test_nodeid_report_module_teardown_error_lands_on_last_test(pytester: pytest.Pytester) -> None:
     pytester.makepyfile(
         test_module_fixture="""

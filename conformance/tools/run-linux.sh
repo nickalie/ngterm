@@ -19,11 +19,15 @@
 # --coverage builds instrumented (cargo llvm-cov show-env, into target/llvm-cov-target after cargo llvm-cov clean
 # --workspace), stages into target/conformance-stage-cov, and gives every process of the build a pooled
 # LLVM_PROFILE_FILE in target/llvm-cov-target (agterm_conformance/llvm_profiles.py); a --stage not built so exits 2.
-# The processes the harness had to end past their exit are listed in DIR/lost-profiles.txt.
+# The processes the harness had to end past their exit are listed in DIR/lost-profiles.txt. After the suite
+# `cargo llvm-cov report` merges the profiles into DIR/coverage (lcov.info, html/, summary.md: line, region and
+# function % per workspace crate, vendor/ and the -sys crates excluded); a run that left no profile, or a stage that
+# is not the instrumented build, exits 2 with the reason (agterm_conformance/code_coverage.py).
 # Without the app's binary in the stage every test skips and parity reads 0%.
-# Writes report.md, junit.xml, pytest.log and nodeids.jsonl into DIR.
-# Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable report), or 1 when a run left an instance
-# root behind; pytest's own status does not count, since most tests are red by design until parity.
+# Writes report.md (with the ui ids a passing test exercised), junit.xml, pytest.log and nodeids.jsonl into DIR.
+# Exits with check_ratchet.py's status (0 holds, 1 broken, 2 no usable report), 1 when a run left an instance
+# root behind, or 2 when --coverage yields no code coverage report; pytest's own status does not count, since most
+# tests are red by design until parity.
 # CONFORMANCE_LINUX_DISPLAY=session uses this desktop's display and bus instead, for debugging.
 # One run at a time per user: a second run waits on the lock $CONFORMANCE_LOCK (default
 # $XDG_RUNTIME_DIR/agterm-conformance.lock, else /tmp/agterm-conformance-<uid>/agterm-conformance.lock), shared by
@@ -58,7 +62,7 @@ while (($#)); do
         --also-k) also_k+=("$2"); shift 2 ;;
         --) shift; extra=("$@"); break ;;
         --coverage) coverage=1; shift ;;
-        -h|--help) sed -n '2,30s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,35s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -258,6 +262,29 @@ if [[ -n "$coverage" ]]; then
     fi
 fi
 
+# --coverage: merge this run's profiles against the instrumented build (agterm_conformance/code_coverage.py) into
+# DIR/coverage; no profiles or a stage that is not that build exits 2 with the reason.
+coverage_error=""
+if [[ -n "$coverage" ]]; then
+    rm -rf "$out/coverage"
+    stage_bin="$(realpath -m -- "$stage/bin")"
+    coverage_out="$(realpath -m -- "$out/coverage")"
+    if ! coverage_error="$(
+        cd "$repo" || exit 2
+        export CARGO_TARGET_DIR="$cov_target"
+        llvm_cov_env="$(cargo llvm-cov show-env --sh 2>/dev/null)" \
+            || { echo "code coverage: cargo llvm-cov show-env failed"; exit 2; }
+        eval "$llvm_cov_env"
+        "$python" -m agterm_conformance.code_coverage --profiles "$cov_target" --stage-bin "$stage_bin" \
+            --release-dir "$cov_target/release" --repo "$repo" --out "$coverage_out" 2>&1 >/dev/null
+    )"; then
+        status=2
+        echo "$coverage_error" >&2
+    fi
+fi
+# The ui ids a passing test of this run exercised (agterm_conformance/coverage.py), beside the catalog gate's count.
+catalog_line="$("$python" -m agterm_conformance.coverage "$out/nodeids.jsonl" 2>&1)" || true
+
 build_commit="$(git -C "$repo" rev-parse --short HEAD)"
 if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)"; fi
 
@@ -299,6 +326,22 @@ if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then build_commit+=" (dirty)
     echo '```'
     echo "$ratchet_log"
     echo '```'
+    if [[ -n "$coverage" ]]; then
+        echo
+        echo "### code coverage"
+        echo
+        if [[ -z "$coverage_error" ]]; then
+            cat "$out/coverage/summary.md"
+            echo
+            echo "lcov: \`$out/coverage/lcov.info\`, html: \`$out/coverage/html/index.html\`"
+        else
+            echo "no report: ${coverage_error#code coverage: }"
+        fi
+    fi
+    echo
+    echo "### catalog coverage"
+    echo
+    echo "$catalog_line"
     if [[ -n "$left" ]]; then
         echo
         echo "Left behind (kept for diagnosis, remove by hand):"
