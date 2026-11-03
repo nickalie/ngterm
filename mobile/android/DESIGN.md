@@ -425,10 +425,17 @@ sideways or wider (48dp a key or more): one line of sixteen
   second tap locks it (a copper face, `onPrimary` legend); a third lets it go. A held modifier joins the next key from
   the row, the soft keyboard (the character's key on a US layout: Ctrl and a typed `c` is Ctrl+C) or a hardware key,
   and a once-held one lets go after it.
-- **A hardware keyboard** types straight into the focused terminal, and the row stands aside. Its chords are
-  desktop's Linux ones: Ctrl+= (or Ctrl++) and Ctrl+- step the text size a whole sp (8-32), Ctrl+0 puts it back to
-  13 sp; Ctrl+Shift+Left and Right go to the previous and next pane, Ctrl+Shift+Up and Down to the previous and next
-  session (the session view's to wire; a chord with nowhere to go is the program's).
+- **A hardware keyboard** types straight into the focused terminal, and the row stands aside. It types what its
+  layout types: AltGr's characters (German AltGr+Q is `@`) are text, not Alt chords, and a dead key's accent waits at
+  the cursor like a composition until the next key takes it (`´` then `e` is `é`; a space, the same accent again, or a
+  key it doesn't go on types the accent itself first). Its chords are desktop's Linux ones, by the character the
+  layout types: Ctrl+= (or Ctrl++) and Ctrl+- step the text size a whole sp (8-32), Ctrl+0 puts it back to 13 sp (on
+  Dvorak, Ctrl+[ and Ctrl+] stay the program's); Ctrl+Shift+Left and Right go to the previous and next pane,
+  Ctrl+Shift+Up and Down to the previous and next session (the session view's to wire; a chord with nowhere to go is
+  the program's).
+- **Order:** a key from the row or a hardware key while the soft keyboard is composing commits the composition first,
+  so the program gets the text before the key. A mouse click gives the terminal the focus without opening the soft
+  keyboard; a tap opens it.
 
 ## Copy
 

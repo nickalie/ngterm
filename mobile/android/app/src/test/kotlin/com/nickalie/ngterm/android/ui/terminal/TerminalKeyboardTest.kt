@@ -25,6 +25,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.withKeyDown
@@ -35,6 +36,7 @@ import com.nickalie.ngterm.core.fake.FakeInput
 import com.nickalie.ngterm.core.ffi.PaneKey
 import com.nickalie.ngterm.core.ffi.PaneKeyAction
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -290,6 +292,174 @@ class TerminalKeyboardTest {
         val up = presses().singleOrNull { it.key == "arrow_up" }
         assertNotNull("a chord the app has no action for is the program's", up)
         assertEquals(KeyMapping.CTRL or KeyMapping.SHIFT, up!!.mods.toInt())
+    }
+
+    @Test
+    fun aMouseClickFocusesTheTerminalWithoutTheSoftKeyboard() {
+        show()
+        terminal.performMouseInput { click(center) }
+        compose.waitForIdle()
+        terminal.assertIsFocused()
+        val methods = RuntimeEnvironment.getApplication().getSystemService(InputMethodManager::class.java)
+        assertFalse("a mouse click doesn't open the soft keyboard", shadowOf(methods).isSoftInputVisible)
+        terminal.performTouchInput { click(center) }
+        compose.waitForIdle()
+        assertTrue("a tap does", shadowOf(methods).isSoftInputVisible)
+        connect()
+    }
+
+    @Test
+    fun aKeyFromElsewhereCommitsTheCompositionFirst() {
+        show()
+        focus()
+        val connection = connect()
+        connection.setComposingText("ls", 1)
+        key("Tab").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(FakeInput.Typed("ls"), FakeInput.Key(press("tab"))), pane.inputs.take(2))
+        assertEquals("", state.composing)
+
+        pane.inputs.clear()
+        connection.setComposingText("cd", 1)
+        connection.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+        connection.setComposingText("pwd", 1)
+        connection.performEditorAction(EditorInfo.IME_ACTION_DONE)
+        connection.setComposingText("x", 1)
+        key("Vertical bar").performClick()
+        compose.waitForIdle()
+        assertEquals(
+            listOf(
+                FakeInput.Typed("cd"),
+                FakeInput.Key(press("enter")),
+                FakeInput.Typed("pwd"),
+                FakeInput.Key(press("enter")),
+                FakeInput.Typed("x"),
+                FakeInput.Typed("|"),
+            ),
+            pane.inputs.filter { it !is FakeInput.Key || it.key.action != PaneKeyAction.RELEASE },
+        )
+    }
+
+    @Test
+    fun aDeletionPastTheCompositionIsTheProgramsBackspace() {
+        show()
+        focus()
+        val connection = connect()
+        connection.setComposingText("ab", 1)
+        connection.deleteSurroundingText(1, 0)
+        compose.waitForIdle()
+        assertEquals("a", state.composing)
+        assertTrue("the composition held what was deleted", pane.inputs.isEmpty())
+        connection.deleteSurroundingText(3, 0)
+        compose.waitForIdle()
+        assertEquals("", state.composing)
+        assertEquals(listOf(press("backspace"), press("backspace")), presses())
+    }
+
+    @Test
+    fun aConnectionCommitsToTheTerminalItWasOpenedFor() {
+        val other = SelectingPane()
+        val first = TerminalState(pane, EmptyCoroutineContext)
+        val second = TerminalState(other, EmptyCoroutineContext)
+        val host = View(RuntimeEnvironment.getApplication())
+        keyboard.target = first
+        val connection = TerminalInputConnection(host, keyboard, first)
+        connection.setComposingText("vi", 1)
+        keyboard.target = second
+        connection.closeConnection()
+        assertEquals(listOf(FakeInput.Typed("vi")), pane.inputs.toList())
+        assertTrue("nothing crosses to the terminal focused since", other.inputs.isEmpty())
+    }
+
+    /** A hardware keyboard with [layout], typing into the fake pane through a [TerminalState] of its own. */
+    private fun hardware(layout: KeyLayout): TerminalKeyboard {
+        state = TerminalState(pane, EmptyCoroutineContext)
+        return TerminalKeyboard(layout = layout).also { it.target = state }
+    }
+
+    private fun TerminalKeyboard.stroke(
+        keyCode: Int,
+        meta: Int = 0,
+    ) {
+        key(KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, keyCode, 0, meta))
+        key(KeyEvent(0L, 0L, KeyEvent.ACTION_UP, keyCode, 0, meta))
+    }
+
+    // what reached the program as text: typed text and the keys' text, in order
+    private fun texts(): List<String> =
+        pane.inputs
+            .mapNotNull {
+                when (it) {
+                    is FakeInput.Typed -> {
+                        it.text
+                    }
+
+                    is FakeInput.Key -> {
+                        it.key.text.takeIf { _ ->
+                            it.key.action == PaneKeyAction.PRESS && !it.key.composing
+                        }
+                    }
+
+                    else -> {
+                        null
+                    }
+                }
+            }.filter { it.isNotEmpty() }
+
+    @Test
+    fun aDeadKeyHoldsItsAccentForTheNextKey() {
+        val german = hardware(TestLayout.German)
+        german.key(KeyEvent(0L, 0L, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_EQUALS, 0, 0))
+        assertEquals("the accent waits at the cursor", "´", state.composing)
+        german.key(KeyEvent(0L, 0L, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_EQUALS, 0, 0))
+        german.stroke(KeyEvent.KEYCODE_E)
+        assertEquals("", state.composing)
+        assertEquals(listOf("é"), texts())
+        val combined = presses().last()
+        assertEquals("key_e", combined.key)
+
+        pane.inputs.clear()
+        german.stroke(KeyEvent.KEYCODE_GRAVE)
+        german.stroke(KeyEvent.KEYCODE_SPACE)
+        german.stroke(KeyEvent.KEYCODE_GRAVE)
+        german.stroke(KeyEvent.KEYCODE_GRAVE)
+        german.stroke(KeyEvent.KEYCODE_EQUALS)
+        german.stroke(KeyEvent.KEYCODE_Q)
+        german.stroke(KeyEvent.KEYCODE_GRAVE)
+        german.stroke(KeyEvent.KEYCODE_C, KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON)
+        german.stroke(KeyEvent.KEYCODE_GRAVE)
+        german.stroke(KeyEvent.KEYCODE_ENTER)
+        assertEquals(
+            "a space or the same accent types it; a key it doesn't go on, or a chord, comes after it",
+            listOf("^", "^", "´", "q", "^", "c", "^"),
+            texts(),
+        )
+        assertEquals(
+            listOf("key_c" to KeyMapping.CTRL, "enter" to 0),
+            presses().filter { it.key == "key_c" || it.key == "enter" }.map { it.key to it.mods.toInt() },
+        )
+    }
+
+    @Test
+    fun altGrTypesTheLayoutsCharacters() {
+        val german = hardware(TestLayout.German)
+        german.stroke(KeyEvent.KEYCODE_Q, KeyEvent.META_ALT_ON or KeyEvent.META_ALT_RIGHT_ON)
+        german.stroke(KeyEvent.KEYCODE_RIGHT_BRACKET, KeyEvent.META_ALT_ON or KeyEvent.META_ALT_RIGHT_ON)
+        assertEquals(listOf("@", "~"), texts())
+        assertTrue(presses().all { it.consumed.toInt() and KeyMapping.ALT != 0 })
+    }
+
+    @Test
+    fun ctrlBracketIsTheProgramsOnDvorak() {
+        val dvorak = hardware(TestLayout.Dvorak)
+        val ctrl = KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+        dvorak.stroke(KeyEvent.KEYCODE_MINUS, ctrl)
+        dvorak.stroke(KeyEvent.KEYCODE_EQUALS, ctrl)
+        assertEquals(TerminalTextSize, state.textSize)
+        assertEquals(listOf("[", "]"), presses().map { it.text })
+        assertTrue(presses().all { it.mods.toInt() == KeyMapping.CTRL })
+        dvorak.stroke(KeyEvent.KEYCODE_RIGHT_BRACKET, ctrl)
+        assertEquals("Dvorak's '=' key is the chord", 14.sp, state.textSize)
     }
 
     @Test

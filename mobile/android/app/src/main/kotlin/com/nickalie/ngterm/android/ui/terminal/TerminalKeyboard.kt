@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.ui.terminal
 
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
@@ -38,15 +39,25 @@ class TerminalShortcuts(
 )
 
 /**
+ * An input method's composition in progress: a key from elsewhere (the extra-keys row, a hardware key) commits it
+ * first, so the program gets the text before the key, in the order it was typed.
+ */
+internal fun interface PendingComposition {
+    fun commit()
+}
+
+/**
  * The keyboard's side of the terminal: what the soft keyboard commits and composes, the extra-keys row and a
  * hardware keyboard's keys go to the [target] pane (the terminal that last took focus), with the row's sticky Ctrl and
  * Alt held for the next key; a hardware keyboard's app chords ([TerminalShortcut]) change the target's text size or
- * run [shortcuts]. One keyboard serves every terminal on screen, so the sticky modifiers stay as the focus moves.
- * Used on the main thread.
+ * run [shortcuts], and its dead keys hold their accent at the cursor for the next key. One keyboard serves every
+ * terminal on screen, so the sticky modifiers stay as the focus moves. [layout] is what the hardware keys type (the
+ * device's, or a test's). Used on the main thread.
  */
 @Stable
 class TerminalKeyboard(
     shortcuts: TerminalShortcuts = TerminalShortcuts(),
+    private val layout: KeyLayout = KeyLayout.Device,
 ) {
     /** The chords' actions. */
     var shortcuts: TerminalShortcuts by mutableStateOf(shortcuts)
@@ -62,8 +73,15 @@ class TerminalKeyboard(
     var alt by mutableStateOf(Sticky.Off)
         private set
 
-    // keys whose press ran a chord: their repeats and release are the chord's too, not the program's
-    private val chordKeys = mutableSetOf<Int>()
+    private val chords = HeldChords()
+    private val pending = PendingInput(layout)
+
+    /** The input method's composition waiting to commit, which a key from elsewhere commits first. */
+    internal var composition: PendingComposition?
+        get() = pending.composition
+        set(value) {
+            pending.composition = value
+        }
 
     /** Where [modifier] stands. */
     fun sticky(modifier: StickyModifier): Sticky =
@@ -106,19 +124,25 @@ class TerminalKeyboard(
     }
 
     /**
-     * A key event from a hardware keyboard, or one an input method sends (Enter, backspace): an app chord runs, any
-     * other key goes to the target with the sticky modifiers. Whether it was taken: a key with no name and no text
-     * (Back, the volume) is the system's.
+     * A key event from a hardware keyboard: an app chord runs, any other key goes to the target with the sticky
+     * modifiers, after the input method's composition. Whether it was taken: a key with no name and no text (Back,
+     * the volume) is the system's.
      */
-    fun key(event: KeyEvent): Boolean {
-        val target = target
-        val key = KeyMapping.fromEvent(event)
-        return when {
-            target == null -> {
-                false
-            }
+    fun key(event: KeyEvent): Boolean = key(event, target, commitFirst = true)
 
-            chord(event, target) -> {
+    /**
+     * [event] for [to]: as [key], from the input method's connection to [to] when [commitFirst] is false (it has
+     * committed its own composition).
+     */
+    internal fun key(
+        event: KeyEvent,
+        to: TerminalState?,
+        commitFirst: Boolean,
+    ): Boolean {
+        val target = to ?: return false
+        val key = KeyMapping.fromEvent(event, layout)
+        return when {
+            chords.take(event, key?.text.orEmpty(), target, shortcuts) -> {
                 true
             }
 
@@ -126,84 +150,191 @@ class TerminalKeyboard(
                 false
             }
 
+            key.action != PaneKeyAction.PRESS || KeyEvent.isModifierKey(event.keyCode) -> {
+                target.key(key)
+                true
+            }
+
             else -> {
-                val sticky =
-                    if (key.action == PaneKeyAction.PRESS &&
-                        !KeyEvent.isModifierKey(event.keyCode)
-                    ) {
-                        takeSticky()
-                    } else {
-                        0
-                    }
-                target.key(key.copy(mods = (key.mods.toInt() or sticky).toUByte()))
+                if (commitFirst) pending.commitComposition()
+                pending.pressed(event, key, target, ::takeSticky)
                 true
             }
         }
     }
 
-    private fun chord(
-        event: KeyEvent,
-        target: TerminalState,
-    ): Boolean =
-        when (event.action) {
-            KeyEvent.ACTION_UP -> chordKeys.remove(event.keyCode)
-            KeyEvent.ACTION_DOWN -> runChord(event, target)
-            else -> false
-        }
-
-    // a size step repeats while its chord is held; a move happens once per press; the held chord's key is the app's
-    private fun runChord(
-        event: KeyEvent,
-        target: TerminalState,
-    ): Boolean {
-        val code = event.keyCode
-        val held = code in chordKeys
-        val run =
-            KeyMapping
-                .shortcut(code, KeyMapping.mods(event.metaState))
-                ?.takeIf { !held || it in SIZE_STEPS }
-                ?.let { shortcuts.action(it, target) }
-        run?.invoke()
-        if (run != null) chordKeys += code
-        return run != null || held
+    /** Text from the extra-keys row: as [type] for the target, after the input method's composition. */
+    fun type(text: String) {
+        val target = target ?: return
+        pending.commitBefore(target)
+        type(text, target)
     }
 
     /**
-     * Text the input method committed: line breaks go as Enter, the rest as typed text; with a sticky modifier held,
-     * the first character goes as the key that types it, with the modifier.
+     * Text the input method committed to [to]: line breaks go as Enter, the rest as typed text; with a sticky
+     * modifier held, the first character goes as the key that types it, with the modifier.
      */
-    fun type(text: String) {
-        val target = target ?: return
+    internal fun type(
+        text: String,
+        to: TerminalState,
+    ) {
         var rest = text
         val held = ctrl != Sticky.Off || alt != Sticky.Off
         if (held && rest.isNotEmpty() && !rest.startsWith('\n')) {
             val first = rest.substring(0, rest.offsetByCodePoints(0, 1))
-            target.pressKey(KeyMapping.forText(first, takeSticky()))
+            to.pressKey(KeyMapping.forText(first, takeSticky()))
             rest = rest.substring(first.length)
         }
         val lines = rest.split('\n')
         lines.forEachIndexed { index, line ->
-            if (index > 0) press(ENTER)
-            if (line.isNotEmpty()) target.type(line)
+            if (index > 0) press(ENTER, to)
+            if (line.isNotEmpty()) to.type(line)
         }
     }
 
-    /** The input method's composition, drawn at the target's cursor until it commits; empty for none. */
-    fun compose(text: String) {
-        target?.composing = text
-    }
-
-    /** Presses and lets go of the key Ghostty names [name], with the sticky modifiers (the extra keys, Enter). */
+    /**
+     * Presses and lets go of the key Ghostty names [name] on the target, with the sticky modifiers (the extra keys),
+     * after the input method's composition.
+     */
     fun press(name: String) {
         val target = target ?: return
-        target.pressKey(KeyMapping.named(name, takeSticky()))
+        pending.commitBefore(target)
+        press(name, target)
+    }
+
+    /** Presses and lets go of the key Ghostty names [name] on [to], with the sticky modifiers. */
+    internal fun press(
+        name: String,
+        to: TerminalState,
+    ) {
+        to.pressKey(KeyMapping.named(name, takeSticky()))
     }
 
     private companion object {
         const val ENTER = "enter"
+    }
+}
+
+/** A hardware keyboard's app chords ([TerminalShortcut]) as they are pressed, held and let go. */
+private class HeldChords {
+    // keys whose press ran a chord: their repeats and release are the chord's too, not the program's
+    private val keys = mutableSetOf<Int>()
+
+    /**
+     * Whether [event] (its key typing [text]) is a chord's, running its action on [target]: a size step repeats while
+     * its chord is held, a move happens once per press, and the held chord's key is the app's until it lets go.
+     */
+    fun take(
+        event: KeyEvent,
+        text: String,
+        target: TerminalState,
+        shortcuts: TerminalShortcuts,
+    ): Boolean {
+        val code = event.keyCode
+        val held = code in keys
+        val run =
+            KeyMapping
+                .shortcut(code, KeyMapping.mods(event.metaState), text)
+                ?.takeIf { event.action == KeyEvent.ACTION_DOWN && (!held || it in SIZE_STEPS) }
+                ?.let { shortcuts.action(it, target) }
+        run?.invoke()
+        if (run != null) keys += code
+        return when (event.action) {
+            KeyEvent.ACTION_UP -> keys.remove(code)
+            KeyEvent.ACTION_DOWN -> run != null || held
+            else -> false
+        }
+    }
+
+    private companion object {
         val SIZE_STEPS = setOf(TerminalShortcut.Bigger, TerminalShortcut.Smaller, TerminalShortcut.ResetSize)
     }
 }
+
+/**
+ * What waits for the next key: the input method's [composition], and a hardware dead key's accent, shown at the
+ * cursor of the terminal it was typed into. The next hardware key combines with the accent ([pressed]); a key from
+ * elsewhere commits both first ([commitBefore]).
+ */
+private class PendingInput(
+    private val layout: KeyLayout,
+) {
+    var composition: PendingComposition? = null
+
+    private var accent = 0
+    private var accentTarget: TerminalState? = null
+
+    /**
+     * A hardware key's press for [target], [sticky] giving the sticky modifiers: a dead key holds its accent (a held
+     * one goes first, unless it is the same: twice types it once); another key combines with a held accent, or types
+     * it before its own when the two don't combine or the key is a chord.
+     */
+    fun pressed(
+        event: KeyEvent,
+        key: PaneKey,
+        target: TerminalState,
+        sticky: () -> Int,
+    ) {
+        val held = takeAccent(target)
+        val dead = KeyMapping.deadAccent(event, layout)
+        if (dead != 0) {
+            if (held != 0) target.type(accentText(held))
+            if (held != dead) holdAccent(dead, target)
+            target.key(key)
+            return
+        }
+        val mods = key.mods.toInt() or sticky()
+        val unconsumed = mods and key.consumed.toInt().inv() and CHORD_BITS
+        val combined =
+            key.text
+                .takeIf { held != 0 && unconsumed == 0 && it.codePointCount(0, it.length) == 1 }
+                ?.let { KeyCharacterMap.getDeadChar(held, it.codePointAt(0)) } ?: 0
+        if (held != 0 && combined == 0) target.type(accentText(held))
+        val text = if (combined != 0) accentText(combined) else key.text
+        target.key(key.copy(mods = mods.toUByte(), text = text))
+    }
+
+    /** A key from elsewhere than the hardware keyboard is coming to [target]: the composition and accent go first. */
+    fun commitBefore(target: TerminalState) {
+        commitComposition()
+        val held = takeAccent(target)
+        if (held != 0) target.type(accentText(held))
+    }
+
+    /** Commits the input method's composition, if one waits. */
+    fun commitComposition() {
+        val waiting = composition ?: return
+        composition = null
+        waiting.commit()
+    }
+
+    private fun holdAccent(
+        accent: Int,
+        target: TerminalState,
+    ) {
+        this.accent = accent
+        accentTarget = target
+        target.composing = accentText(accent)
+    }
+
+    // the accent held for [target] (0 for none), let go of; one held for another terminal is dropped
+    private fun takeAccent(target: TerminalState): Int {
+        val held = accent
+        val heldFor = accentTarget ?: return 0
+        accent = 0
+        accentTarget = null
+        if (heldFor.composing == accentText(held)) heldFor.composing = ""
+        return if (heldFor === target) held else 0
+    }
+
+    private companion object {
+        // the modifiers that make a key a chord, which a held accent doesn't combine with
+        const val CHORD_BITS = KeyMapping.CTRL or KeyMapping.ALT or KeyMapping.SUPER
+    }
+}
+
+/** [codePoint] as a string. */
+private fun accentText(codePoint: Int) = String(Character.toChars(codePoint))
 
 /** A key with no name and no text (Back, the volume): the system's, not the program's. */
 private fun PaneKey.isSystems() = key == "unidentified" && text.isEmpty() && !composing

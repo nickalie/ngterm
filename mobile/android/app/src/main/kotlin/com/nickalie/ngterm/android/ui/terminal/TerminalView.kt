@@ -1,7 +1,6 @@
 package com.nickalie.ngterm.android.ui.terminal
 
 import android.content.Context
-import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
@@ -213,12 +212,12 @@ fun TerminalView(
     val input = remember(state) { TerminalInput(state, scope) }
     val selection = remember(state) { TerminalSelection(state) }
     val focus = remember { FocusRequester() }
-    val keyboardRequest = rememberKeyboardRequest(focus)
+    val softKeyboard = rememberSoftKeyboardRequest(focus)
     val underline = with(density) { CompositionUnderline.toPx() }
     val composition = remember(font, underline) { CompositionPainter(font, underline) }
     SideEffect {
         input.font = font
-        input.keyboardRequest = keyboardRequest
+        input.keyboardRequest = softKeyboard::request
     }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     LaunchedEffect(state) { state.run() }
@@ -237,7 +236,7 @@ fun TerminalView(
             Modifier
                 .matchParentSize()
                 .semantics { contentDescription = description }
-                .terminalTextInput(keyboard, state)
+                .terminalTextInput(keyboard, state, softKeyboard)
                 .focusRequester(focus)
                 .focusable()
                 .clipToBounds()
@@ -264,16 +263,11 @@ fun TerminalView(
     }
 }
 
-/** Gives the focus to what [focus] is attached to and, when asked to, opens the soft keyboard on it. */
+/** The terminal's [SoftKeyboardRequest]: it gives the focus to what [focus] is attached to. */
 @Composable
-private fun rememberKeyboardRequest(focus: FocusRequester): (show: Boolean) -> Unit {
+private fun rememberSoftKeyboardRequest(focus: FocusRequester): SoftKeyboardRequest {
     val view = LocalView.current
-    return remember(focus, view) {
-        { show ->
-            focus.requestFocus()
-            if (show) view.context.getSystemService(InputMethodManager::class.java)?.showSoftInput(view, 0)
-        }
-    }
+    return remember(focus, view) { SoftKeyboardRequest(focus, view) }
 }
 
 /** The grid of whole cells of [font] that fits [size] pixels; `null` when not one cell fits. */

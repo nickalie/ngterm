@@ -138,8 +138,54 @@ class KeyMappingTest {
 
     @Test
     fun aDeadKeyComposes() {
-        val acute = KeyMapping.key(KeyEvent.KEYCODE_E, PaneKeyAction.PRESS, 0, ACCENT or '´'.code, 'e'.code)
+        val acute = KeyMapping.key(KeyEvent.KEYCODE_E, PaneKeyAction.PRESS, 0, KeyChars(ACCENT or '´'.code, 'e'.code))
         assertEquals(key("key_e", unshifted = "e").copy(composing = true), acute)
+        val circumflex = event(KeyEvent.KEYCODE_GRAVE)
+        assertEquals(
+            key("backquote", unshifted = "^").copy(composing = true),
+            KeyMapping.fromEvent(circumflex, TestLayout.German),
+        )
+        assertEquals('^'.code, KeyMapping.deadAccent(circumflex, TestLayout.German))
+        assertEquals(0, KeyMapping.deadAccent(event(KeyEvent.KEYCODE_E), TestLayout.German))
+    }
+
+    @Test
+    fun aNonUsLayoutTypesItsOwnCharactersAtUsPositions() {
+        val german = TestLayout.German
+        assertEquals(key("key_z", "y", unshifted = "y"), KeyMapping.fromEvent(event(KeyEvent.KEYCODE_Z), german))
+        assertEquals(key("minus", "ß", unshifted = "ß"), KeyMapping.fromEvent(event(KeyEvent.KEYCODE_MINUS), german))
+        assertEquals(
+            key("bracket_left", "/", unshifted = "/"),
+            KeyMapping.fromEvent(event(KeyEvent.KEYCODE_LEFT_BRACKET), TestLayout.Dvorak),
+        )
+    }
+
+    @Test
+    fun altGrTypesTheLayoutsCharacterAndUsesUpAlt() {
+        val german = TestLayout.German
+        val altGr = KeyEvent.META_ALT_ON or KeyEvent.META_ALT_RIGHT_ON
+        assertEquals(
+            key("key_q", "@", mods = KeyMapping.ALT, consumed = KeyMapping.ALT, unshifted = "q"),
+            KeyMapping.fromEvent(event(KeyEvent.KEYCODE_Q, altGr), german),
+        )
+        assertEquals(
+            key("digit_7", "{", mods = KeyMapping.ALT, consumed = KeyMapping.ALT, unshifted = "7"),
+            KeyMapping.fromEvent(event(KeyEvent.KEYCODE_7, altGr), german),
+        )
+        assertEquals(
+            "the left Alt types no character of its own: Alt+q for the program",
+            key("key_q", "q", mods = KeyMapping.ALT, unshifted = "q"),
+            KeyMapping.fromEvent(event(KeyEvent.KEYCODE_Q, KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON), german),
+        )
+        assertEquals(
+            "a key with no AltGr character is Alt and the key",
+            key("key_x", "x", mods = KeyMapping.ALT, unshifted = "x"),
+            KeyMapping.fromEvent(event(KeyEvent.KEYCODE_X, altGr), german),
+        )
+        assertEquals(
+            key("key_q", "@", mods = KeyMapping.ALT, consumed = KeyMapping.ALT, unshifted = "q"),
+            KeyMapping.key(KeyEvent.KEYCODE_Q, PaneKeyAction.PRESS, altGr, KeyChars('q'.code, 'q'.code, '@'.code)),
+        )
     }
 
     @Test
@@ -168,21 +214,50 @@ class KeyMappingTest {
     fun theAppsChordsAreDesktopsLinuxOnes() {
         val ctrl = KeyMapping.CTRL
         val ctrlShift = KeyMapping.CTRL or KeyMapping.SHIFT
-        assertEquals(TerminalShortcut.Bigger, KeyMapping.shortcut(KeyEvent.KEYCODE_EQUALS, ctrl))
-        assertEquals(TerminalShortcut.Bigger, KeyMapping.shortcut(KeyEvent.KEYCODE_EQUALS, ctrlShift))
-        assertEquals(TerminalShortcut.Bigger, KeyMapping.shortcut(KeyEvent.KEYCODE_NUMPAD_ADD, ctrl))
-        assertEquals(TerminalShortcut.Smaller, KeyMapping.shortcut(KeyEvent.KEYCODE_MINUS, ctrl))
-        assertEquals(TerminalShortcut.ResetSize, KeyMapping.shortcut(KeyEvent.KEYCODE_0, ctrl))
-        assertEquals(TerminalShortcut.NextPane, KeyMapping.shortcut(KeyEvent.KEYCODE_DPAD_RIGHT, ctrlShift))
-        assertEquals(TerminalShortcut.PreviousPane, KeyMapping.shortcut(KeyEvent.KEYCODE_DPAD_LEFT, ctrlShift))
-        assertEquals(TerminalShortcut.NextSession, KeyMapping.shortcut(KeyEvent.KEYCODE_DPAD_DOWN, ctrlShift))
-        assertEquals(TerminalShortcut.PreviousSession, KeyMapping.shortcut(KeyEvent.KEYCODE_DPAD_UP, ctrlShift))
+        assertEquals(TerminalShortcut.Bigger, KeyMapping.shortcut(KeyEvent.KEYCODE_EQUALS, ctrl, "="))
+        assertEquals(TerminalShortcut.Bigger, KeyMapping.shortcut(KeyEvent.KEYCODE_EQUALS, ctrlShift, "+"))
+        assertEquals(TerminalShortcut.Bigger, KeyMapping.shortcut(KeyEvent.KEYCODE_NUMPAD_ADD, ctrl, "+"))
+        assertEquals(TerminalShortcut.Smaller, KeyMapping.shortcut(KeyEvent.KEYCODE_MINUS, ctrl, "-"))
+        assertEquals(TerminalShortcut.Smaller, KeyMapping.shortcut(KeyEvent.KEYCODE_NUMPAD_SUBTRACT, ctrl, "-"))
+        assertEquals(TerminalShortcut.ResetSize, KeyMapping.shortcut(KeyEvent.KEYCODE_0, ctrl, "0"))
+        assertEquals(TerminalShortcut.ResetSize, KeyMapping.shortcut(KeyEvent.KEYCODE_NUMPAD_0, ctrl, ""))
+        assertEquals(TerminalShortcut.NextPane, KeyMapping.shortcut(KeyEvent.KEYCODE_DPAD_RIGHT, ctrlShift, ""))
+        assertEquals(TerminalShortcut.PreviousPane, KeyMapping.shortcut(KeyEvent.KEYCODE_DPAD_LEFT, ctrlShift, ""))
+        assertEquals(TerminalShortcut.NextSession, KeyMapping.shortcut(KeyEvent.KEYCODE_DPAD_DOWN, ctrlShift, ""))
+        assertEquals(TerminalShortcut.PreviousSession, KeyMapping.shortcut(KeyEvent.KEYCODE_DPAD_UP, ctrlShift, ""))
         // the locks don't count; anything else held, or nothing, is the program's
-        assertEquals(TerminalShortcut.Smaller, KeyMapping.shortcut(KeyEvent.KEYCODE_MINUS, ctrl or KeyMapping.NUM_LOCK))
-        assertNull(KeyMapping.shortcut(KeyEvent.KEYCODE_MINUS, 0))
-        assertNull(KeyMapping.shortcut(KeyEvent.KEYCODE_DPAD_RIGHT, ctrl))
-        assertNull(KeyMapping.shortcut(KeyEvent.KEYCODE_EQUALS, ctrl or KeyMapping.ALT))
-        assertNull(KeyMapping.shortcut(KeyEvent.KEYCODE_C, ctrl))
+        assertEquals(
+            TerminalShortcut.Smaller,
+            KeyMapping.shortcut(KeyEvent.KEYCODE_MINUS, ctrl or KeyMapping.NUM_LOCK, "-"),
+        )
+        assertNull(KeyMapping.shortcut(KeyEvent.KEYCODE_MINUS, 0, "-"))
+        assertNull(KeyMapping.shortcut(KeyEvent.KEYCODE_DPAD_RIGHT, ctrl, ""))
+        assertNull(KeyMapping.shortcut(KeyEvent.KEYCODE_EQUALS, ctrl or KeyMapping.ALT, "="))
+        assertNull(KeyMapping.shortcut(KeyEvent.KEYCODE_C, ctrl, "c"))
+        assertNull("Ctrl+Shift+0 types ')' on a US keyboard", KeyMapping.shortcut(KeyEvent.KEYCODE_0, ctrlShift, ")"))
+    }
+
+    @Test
+    fun theTextSizeChordsGoByTheCharacterTheLayoutTypes() {
+        fun chord(
+            layout: KeyLayout,
+            keyCode: Int,
+        ): TerminalShortcut? {
+            val held = KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+            val key = requireNotNull(KeyMapping.fromEvent(event(keyCode, held), layout))
+            return KeyMapping.shortcut(keyCode, key.mods.toInt(), key.text)
+        }
+        // Dvorak's keys at US '-' and '=' type '[' and ']': Ctrl+[ is Esc and Ctrl+] telnet's escape, the program's
+        assertNull(chord(TestLayout.Dvorak, KeyEvent.KEYCODE_MINUS))
+        assertNull(chord(TestLayout.Dvorak, KeyEvent.KEYCODE_EQUALS))
+        assertEquals(TerminalShortcut.Smaller, chord(TestLayout.Dvorak, KeyEvent.KEYCODE_APOSTROPHE))
+        assertEquals(TerminalShortcut.Bigger, chord(TestLayout.Dvorak, KeyEvent.KEYCODE_RIGHT_BRACKET))
+        // German '-' and '+' sit at US '/' and ']'; its 'ß' and dead '´' are no chords
+        assertEquals(TerminalShortcut.Smaller, chord(TestLayout.German, KeyEvent.KEYCODE_SLASH))
+        assertEquals(TerminalShortcut.Bigger, chord(TestLayout.German, KeyEvent.KEYCODE_RIGHT_BRACKET))
+        assertEquals(TerminalShortcut.ResetSize, chord(TestLayout.German, KeyEvent.KEYCODE_0))
+        assertNull(chord(TestLayout.German, KeyEvent.KEYCODE_MINUS))
+        assertNull(chord(TestLayout.German, KeyEvent.KEYCODE_EQUALS))
     }
 
     private companion object {

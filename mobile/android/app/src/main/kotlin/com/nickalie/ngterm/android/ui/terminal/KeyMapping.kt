@@ -30,6 +30,42 @@ enum class TerminalShortcut {
 }
 
 /**
+ * What a hardware keyboard's layout types: the code point [event]'s key types with [metaState] held, as
+ * `KeyEvent.getUnicodeChar` gives it from the device's key character map. Tests stand in for a layout (German, Dvorak)
+ * the JVM's stand-in for Android has no map of.
+ */
+fun interface KeyLayout {
+    fun unicodeChar(
+        event: KeyEvent,
+        metaState: Int,
+    ): Int
+
+    companion object {
+        /** The layout of the keyboard the event came from. */
+        val Device = KeyLayout { event, metaState -> event.getUnicodeChar(metaState) }
+    }
+}
+
+/**
+ * The code points a key types, as `KeyEvent.getUnicodeChar` gives them (a dead key's carry
+ * `KeyCharacterMap.COMBINING_ACCENT`): [typed] with the held modifiers but Ctrl, Alt and Meta, [base] with none, and
+ * [altGr] with Alt kept (0 with no Alt held). Where the layout types a character of its own with AltGr (German
+ * AltGr+Q's `@`), that is the key's text and Alt is used up by it.
+ */
+class KeyChars(
+    val typed: Int,
+    val base: Int,
+    val altGr: Int = 0,
+) {
+    /** What the key types with Alt held when [altHeld]: AltGr's character where it has one of its own, else [typed]. */
+    internal fun chosen(altHeld: Boolean): Int {
+        val accentless = altGr and KeyCharacterMap.COMBINING_ACCENT_MASK
+        val own = accentless != 0 && !Character.isISOControl(accentless) && altGr != typed
+        return if (altHeld && own) altGr else typed
+    }
+}
+
+/**
  * Android's keys as the pane's (`PaneKey`, ngterm-term's `KeyInput`): the key's position by Ghostty's name, the
  * modifiers as the pane's bits, the text the layout types before Ctrl and Alt, the character the key types with no
  * modifier (the Kitty protocol's key code), and the action.
@@ -50,6 +86,9 @@ object KeyMapping {
 
     /** The meta state that changes what a key types into what the program reads as a chord. */
     private const val CHORD_META = KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK or KeyEvent.META_META_MASK
+
+    /** The meta state left out when asking for AltGr's character: Alt stays. */
+    private const val ALT_GR_META = KeyEvent.META_CTRL_MASK or KeyEvent.META_META_MASK
 
     private const val FIRST_PRINTABLE = 0x20
     private const val DELETE = 0x7F
@@ -84,49 +123,69 @@ object KeyMapping {
     }
 
     /**
-     * [event] as the pane's key; `null` for what is not one key's press, repeat or release (a run of characters an
-     * input method sends as one event).
+     * [event] as the pane's key, its characters by [layout]; `null` for what is not one key's press, repeat or release
+     * (a run of characters an input method sends as one event).
      */
-    fun fromEvent(event: KeyEvent): PaneKey? {
+    fun fromEvent(
+        event: KeyEvent,
+        layout: KeyLayout = KeyLayout.Device,
+    ): PaneKey? {
         val action =
             when (event.action) {
                 KeyEvent.ACTION_DOWN -> if (event.repeatCount > 0) PaneKeyAction.REPEAT else PaneKeyAction.PRESS
                 KeyEvent.ACTION_UP -> PaneKeyAction.RELEASE
                 else -> return null
             }
-        val meta = event.metaState
-        return key(
-            keyCode = event.keyCode,
-            action = action,
-            metaState = meta,
-            typed = event.getUnicodeChar(meta and CHORD_META.inv()),
-            base = event.getUnicodeChar(0),
-        )
+        return key(event.keyCode, action, event.metaState, chars(event, layout))
     }
 
     /**
-     * The key at [keyCode] with [metaState] held, typing the code point [typed] (what the layout types with the held
-     * modifiers but Ctrl, Alt and Meta, as `KeyEvent.getUnicodeChar` gives it; a dead key's carries
-     * `KeyCharacterMap.COMBINING_ACCENT`) and [base] with no modifier.
+     * The accent [event]'s key holds for the next key when it is a dead key on [layout] (the spacing accent, as
+     * `KeyCharacterMap.getDeadChar` takes it); 0 for any other key.
      */
+    fun deadAccent(
+        event: KeyEvent,
+        layout: KeyLayout = KeyLayout.Device,
+    ): Int {
+        val chosen = chars(event, layout).chosen(mods(event.metaState) and ALT != 0)
+        val dead = chosen and KeyCharacterMap.COMBINING_ACCENT != 0
+        return if (dead) chosen and KeyCharacterMap.COMBINING_ACCENT_MASK else 0
+    }
+
+    // what [event]'s key types on [layout]; with Alt kept only while Alt is held (AltGr's are the layout's `ralt:`)
+    private fun chars(
+        event: KeyEvent,
+        layout: KeyLayout,
+    ): KeyChars {
+        val meta = event.metaState
+        val altHeld = meta and KeyEvent.META_ALT_MASK != 0
+        return KeyChars(
+            typed = layout.unicodeChar(event, meta and CHORD_META.inv()),
+            base = layout.unicodeChar(event, 0),
+            altGr = if (altHeld) layout.unicodeChar(event, meta and ALT_GR_META.inv()) else 0,
+        )
+    }
+
+    /** The key at [keyCode] with [metaState] held, typing [chars]. */
     fun key(
         keyCode: Int,
         action: PaneKeyAction,
         metaState: Int,
-        typed: Int,
-        base: Int,
+        chars: KeyChars,
     ): PaneKey {
-        val composing = typed and KeyCharacterMap.COMBINING_ACCENT != 0
-        val text = if (composing) "" else printable(typed)
         val mods = mods(metaState)
+        val chosen = chars.chosen(mods and ALT != 0)
+        val composing = chosen and KeyCharacterMap.COMBINING_ACCENT != 0
+        val text = if (composing) "" else printable(chosen)
+        val usedUp = if (chosen == chars.typed) SHIFT else SHIFT or ALT
         return PaneKey(
             action = action,
             key = physicalKey(keyCode),
             mods = mods.toUByte(),
-            consumed = (if (text.isNotEmpty()) mods and SHIFT else 0).toUByte(),
+            consumed = (if (text.isNotEmpty()) mods and usedUp else 0).toUByte(),
             composing = composing,
             text = text,
-            unshifted = printable(base and KeyCharacterMap.COMBINING_ACCENT_MASK).ifEmpty { null },
+            unshifted = printable(chars.base and KeyCharacterMap.COMBINING_ACCENT_MASK).ifEmpty { null },
         )
     }
 
@@ -160,25 +219,23 @@ object KeyMapping {
         action: PaneKeyAction = PaneKeyAction.PRESS,
     ): PaneKey = PaneKey(action, name, mods.toUByte(), 0u, false, "", null)
 
-    /** What [keyCode] pressed with [mods] does in the app; `null` for a key that is the program's. */
+    /**
+     * What [keyCode] pressed with [mods] and typing [text] (its characters before Ctrl and Alt) does in the app; `null`
+     * for a key that is the program's. The text size's chords go by the character the layout types (desktop's
+     * `ctrl+=`, `ctrl+-`, `ctrl+0`), so they move with the layout, the numpad's by its keys; the moves by the arrows.
+     */
     fun shortcut(
         keyCode: Int,
         mods: Int,
-    ): TerminalShortcut? =
-        when (mods and CHORD_MODS) {
-            CTRL -> {
-                SIZE_CHORDS[keyCode]
-            }
-
-            CTRL or SHIFT -> {
-                NAVIGATION_CHORDS[keyCode]
-                    ?: SIZE_CHORDS[keyCode]?.takeIf { it == TerminalShortcut.Bigger }
-            }
-
-            else -> {
-                null
-            }
+        text: String,
+    ): TerminalShortcut? {
+        val size = NUMPAD_CHORDS[keyCode] ?: SIZE_CHORDS[text]
+        return when (mods and CHORD_MODS) {
+            CTRL -> size
+            CTRL or SHIFT -> NAVIGATION_CHORDS[keyCode] ?: size?.takeIf { it == TerminalShortcut.Bigger }
+            else -> null
         }
+    }
 
     private fun printable(codePoint: Int): String =
         when {
@@ -190,12 +247,16 @@ object KeyMapping {
 
     private val SIZE_CHORDS =
         mapOf(
-            KeyEvent.KEYCODE_EQUALS to TerminalShortcut.Bigger,
-            KeyEvent.KEYCODE_PLUS to TerminalShortcut.Bigger,
+            "=" to TerminalShortcut.Bigger,
+            "+" to TerminalShortcut.Bigger,
+            "-" to TerminalShortcut.Smaller,
+            "0" to TerminalShortcut.ResetSize,
+        )
+
+    private val NUMPAD_CHORDS =
+        mapOf(
             KeyEvent.KEYCODE_NUMPAD_ADD to TerminalShortcut.Bigger,
-            KeyEvent.KEYCODE_MINUS to TerminalShortcut.Smaller,
             KeyEvent.KEYCODE_NUMPAD_SUBTRACT to TerminalShortcut.Smaller,
-            KeyEvent.KEYCODE_0 to TerminalShortcut.ResetSize,
             KeyEvent.KEYCODE_NUMPAD_0 to TerminalShortcut.ResetSize,
         )
 
