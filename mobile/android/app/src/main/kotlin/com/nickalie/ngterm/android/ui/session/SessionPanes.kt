@@ -27,9 +27,10 @@ import kotlin.coroutines.CoroutineContext
  * has a size ([show]) and stays shown, keeping its terminal, its lead and its text size, while the user is elsewhere
  * in the app, until its session is detached (the core hides it then) or the session's layout drops it ([hide]s it).
  * Why a pane could not be shown is in [failures] until the next try, or until its machine's link comes back
- * ([Link.Connected]) after it was lost, when its slot tries again. The core finds a pane through its machine's last
- * listing, so a pane added since (a split) is shown after a fresh listing, and [retry] always lists first. Its frames
- * reach its state through [live], the attached sessions' live state.
+ * ([Link.Connected]) after it was lost, when its slot tries again; a show that fails on the lost link after it came
+ * back is tried again at once. The core finds a pane through its machine's last listing, so a pane added since (a
+ * split) is shown after a fresh listing, and [retry] always lists first. Its frames reach its state through [live],
+ * the attached sessions' live state.
  * Used on the main thread; [frameContext] is where the states read their frames.
  */
 class SessionPanes(
@@ -81,22 +82,27 @@ class SessionPanes(
         failureState.update { it - pane }
         val began = returns[pane.machineId]
         scope.launch {
+            var again = false
             try {
                 val handle = open(pane, size, listFirst)
                 val state = TerminalState(handle, frameContext)
                 live.route(pane, state)
                 shownState.update { it + (pane to state) }
-                // detached while it was on its way: the core hid it with the session
-                if (!attached(pane.session)) drop(pane)
+                // detached while it was on its way: the core opened it for a session it no longer streams, so it is
+                // hidden again
+                if (!attached(pane.session)) hide(pane)
             } catch (error: MobileException) {
                 // a session detached while it was on its way keeps no failure to block the show on re-attach, and a
-                // failure from before its machine came back is stale: its slot is trying again
-                if (attached(pane.session) && returns[pane.machineId] == began) {
-                    failureState.update { it + (pane to error.reason()) }
+                // failure from before its machine came back is stale: the pane is tried again on the link that's back
+                when {
+                    !attached(pane.session) -> Unit
+                    returns[pane.machineId] == began -> failureState.update { it + (pane to error.reason()) }
+                    else -> again = true
                 }
             } finally {
                 showing -= pane
             }
+            if (again) show(pane, size, listFirst)
         }
     }
 

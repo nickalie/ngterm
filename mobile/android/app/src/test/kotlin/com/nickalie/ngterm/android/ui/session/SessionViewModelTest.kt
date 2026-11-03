@@ -259,7 +259,8 @@ class SessionViewModelTest {
         test.core.emit(MobileEvent.MachineState("m1", MachineState.Connected))
         eventually { p1 !in model.paneFailures.value }
 
-        // a show begun while the machine was down, failing after it came back, is stale: it records nothing
+        // a show begun while the machine was down, failing after it came back, is stale: it records nothing, and the
+        // pane is tried again on the link that's back, since its slot won't ask again
         val p2 = PaneRef("m1", "s1", "P2")
         test.core.emit(MobileEvent.MachineState("m1", MachineState.Reconnecting(5_000u)))
         eventually { test.connections.links.value["m1"] is Link.Reconnecting }
@@ -273,7 +274,29 @@ class SessionViewModelTest {
         shadowOf(Looper.getMainLooper()).idle()
         gate.complete(Unit)
         shadowOf(Looper.getMainLooper()).idle()
+        eventually { p2 in model.panes.value || p2 in model.paneFailures.value }
         assertTrue(p2 !in model.paneFailures.value)
+        assertEquals(2, test.core.calls.count { it.method == "showPane" && it.args[2] == "P2" })
+    }
+
+    @Test
+    fun aPaneShownAfterItsSessionDetachedWhileItWasOnItsWayIsHiddenAgain() {
+        attached("s1")
+        val model = model()
+        val p1 = PaneRef("m1", "s1", "P1")
+        // a Retry waits on the machine's listing while the session is detached; the core still shows the pane then
+        val gate = CompletableDeferred<Unit>()
+        test.core.holds["listSessions"] = gate
+        val listed = test.core.calls.count { it.method == "listSessions" }
+        model.retry(p1, size)
+        eventually { test.core.calls.count { it.method == "listSessions" } > listed }
+        model.detach(key)
+        eventually { test.connections.attached.value["m1"] == null }
+        gate.complete(Unit)
+        eventually { test.core.calls.any { it.method == "hidePane" && it.args == listOf("m1", "s1", "P1") } }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(test.core.shownPanes.isEmpty())
+        assertTrue(p1 !in model.panes.value)
     }
 
     @Test
