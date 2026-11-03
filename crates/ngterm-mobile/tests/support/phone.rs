@@ -33,6 +33,8 @@ pub(crate) const PRINTED: &str = "e2e-42";
 pub(crate) struct Seen {
     pub(crate) layout: Option<RemoteLayout>,
     pub(crate) role: Option<PaneRole>,
+    /// Every role a `PaneLead` gave, in order.
+    pub(crate) roles: Vec<Option<PaneRole>>,
     pub(crate) attached: usize,
     pub(crate) lost: usize,
     pub(crate) states: Vec<MachineState>,
@@ -42,7 +44,10 @@ impl Seen {
     pub(crate) fn record(&mut self, event: MobileEvent) {
         match event {
             MobileEvent::SessionLayout { layout, .. } => self.layout = Some(layout),
-            MobileEvent::PaneLead { role, .. } => self.role = role,
+            MobileEvent::PaneLead { role, .. } => {
+                self.role = role;
+                self.roles.push(role);
+            }
             MobileEvent::PaneAttached { .. } => self.attached += 1,
             MobileEvent::PaneEnded {
                 end: PaneEnd::Lost { .. },
@@ -117,6 +122,17 @@ impl Client {
                     "{}: no {what} within {WAIT:?} ({error}); seen {:?}",
                     self.label, self.seen
                 ),
+            }
+        }
+    }
+
+    /// Takes in the events that arrive within `wait`.
+    pub(crate) fn settle(&mut self, wait: Duration) {
+        let deadline = Instant::now() + wait;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match self.events.recv_timeout(left) {
+                Ok(event) => self.seen.record(event),
+                Err(_) => break,
             }
         }
     }

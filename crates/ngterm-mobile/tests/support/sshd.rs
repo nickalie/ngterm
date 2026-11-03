@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::machine::quoted;
+
 /// How long `sshd` gets to answer on its port.
 const READY_WAIT: Duration = Duration::from_secs(15);
 
@@ -140,12 +142,11 @@ impl Drop for Sshd {
 }
 
 fn config_text(setup: &SshdSetup<'_>, port: u16, host_key: &Path, authorized: &Path) -> String {
-    let directory = setup.directory.display();
     format!(
         "ListenAddress 127.0.0.1\n\
          Port {port}\n\
          HostKey {host_key}\n\
-         PidFile {directory}/sshd.pid\n\
+         PidFile {pid_file}\n\
          AuthorizedKeysFile {authorized}\n\
          AuthenticationMethods publickey\n\
          PubkeyAuthentication yes\n\
@@ -162,11 +163,20 @@ fn config_text(setup: &SshdSetup<'_>, port: u16, host_key: &Path, authorized: &P
          PrintMotd no\n\
          ForceCommand {force}\n\
          LogLevel VERBOSE\n",
-        host_key = host_key.display(),
-        authorized = authorized.display(),
+        host_key = config_word(host_key),
+        pid_file = config_word(&setup.directory.join("sshd.pid")),
+        // sshd expands %-tokens in it
+        authorized = config_word(authorized).replace('%', "%%"),
         user = setup.user,
-        force = setup.force_command.display(),
+        // sshd hands the rest of the line to the account's shell as is
+        force = quoted(&setup.force_command.display().to_string()),
     )
+}
+
+/// `path` as one double-quoted `sshd_config` argument, which may hold spaces.
+fn config_word(path: &Path) -> String {
+    let path = path.display().to_string();
+    format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {

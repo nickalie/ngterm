@@ -1,10 +1,15 @@
 //! The e2e test's steps, in the order the test runs them.
 
+use std::time::Duration;
+
 use ngterm_mobile::{MachineState, PaneRole};
 
 use crate::machine::World;
 use crate::phone::{Client, GRID, MACHINE_ID, PRINTED, block_on, nanos, poll};
 use crate::sshd::Proxy;
+
+/// How long a client listens for events a step should not have caused.
+const SETTLE: Duration = Duration::from_millis(500);
 
 /// The marker session made through the private instance's own socket is the only one `live tree` lists over the
 /// `sshd`: the ssh side reaches the private instance and nothing else. Answers the marker's name.
@@ -75,6 +80,7 @@ pub(crate) fn create_and_read(client: &mut Client) -> String {
 /// A second client of the same pane follows the one that leads; Take control turns the roles round.
 pub(crate) fn leadership(first: &mut Client, second: &mut Client, session: &str, pane: &str) {
     first.wait("the first client leading", |seen| seen.role == Some(PaneRole::Leader));
+    let roles = first.seen.roles.len();
     assert!(!second.list().is_empty());
     let shown = block_on(
         second
@@ -87,6 +93,15 @@ pub(crate) fn leadership(first: &mut Client, second: &mut Client, session: &str,
         seen.role == Some(PaneRole::Follower)
     });
     second.wait_screen(PRINTED);
+    // a lead the second attach took from the first would reach the first as its own event
+    first.settle(SETTLE);
+    assert!(
+        first.seen.roles[roles..]
+            .iter()
+            .all(|role| *role == Some(PaneRole::Leader)),
+        "the first client lost the lead to a follower's attach: {:?}",
+        &first.seen.roles[roles..]
+    );
     assert_eq!(first.seen.role, Some(PaneRole::Leader));
 
     second

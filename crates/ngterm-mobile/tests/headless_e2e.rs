@@ -38,6 +38,10 @@ fn the_mobile_core_drives_a_real_headless_machine_over_ssh() {
             "CI needs sshd for the mobile e2e test"
         );
         eprintln!("skipped: no sshd on this machine");
+        // tells the script it was a skip, not a pass
+        if let Some(work) = std::env::var_os(machine::WORK_VARIABLE) {
+            std::fs::write(std::path::Path::new(&work).join("skipped"), "no sshd\n").expect("mark the skip");
+        }
         return;
     };
     let world = World::start(&binary);

@@ -127,6 +127,10 @@ impl Headless {
             .stderr(log)
             .spawn()
             .expect("start ngterm-headless");
+        // for the script's exit trap, which reaps through the same namespace when the test dies without unwinding
+        let namespace = ngterm_core::live::socket_directory(&private.state);
+        fs::write(work.join("live-dir"), &namespace).expect("record the live sessions' namespace");
+        fs::write(work.join("headless.pid"), child.id().to_string()).expect("record the instance's pid");
         let headless = Self { child, private };
         poll("the private instance's control socket", || {
             headless.ctl(&["live", "tree", "--json"]).ok()
@@ -225,12 +229,12 @@ impl Headless {
         // socket instead
         let socket = Path::new(&namespace).join("server.sock");
         for _ in 0..3 {
-            // `list` never starts a server: it fails when none runs
-            let Ok(listed) = run(&["list", "--short"]) else { return };
-            if !listed.status.success() {
-                return;
-            }
-            let listed = String::from_utf8_lossy(&listed.stdout).into_owned();
+            // `list` never starts a server and lists nothing when none runs, so a failing `list` is a client error
+            // (a timeout, a refused connect): try again in the next round
+            let listed = match run(&["list", "--short"]) {
+                Ok(listed) if listed.status.success() => String::from_utf8_lossy(&listed.stdout).into_owned(),
+                _ => String::new(),
+            };
             let names: Vec<&str> = listed.split_whitespace().collect();
             if !names.is_empty() {
                 let _ = run(&[["kill", "--force"].as_slice(), &names].concat());
@@ -245,6 +249,7 @@ impl Headless {
                 thread::sleep(Duration::from_millis(100));
             }
         }
+        eprintln!("reap: the session server of {namespace} is still running; it and the directory are left behind");
     }
 }
 
