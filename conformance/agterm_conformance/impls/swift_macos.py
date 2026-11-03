@@ -36,7 +36,7 @@ from agterm_conformance.wait import WaitTimeout, wait_until
 if TYPE_CHECKING:
     from agterm_conformance.pty_process import LiveInstance, PtyProcess
 
-PARITY_LEVEL = "0.39.1"
+PARITY_LEVEL = "0.40.0"
 BASE_CAPABILITIES = frozenset(
     {
         "posix-shell", "posix-command-line", "untitled-panes", "window-geometry", "window-minimize",

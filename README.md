@@ -846,5 +846,5 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   each goes).
 - `docs/plans/`: implementation plans.
 - `.upstream/agterm`, `.upstream/herdr`: read-only reference clones, git-ignored through `.git/info/exclude`. When
-  missing: `git clone --depth 1 --branch v0.39.1 https://github.com/umputun/agterm .upstream/agterm` (the parity tag;
+  missing: `git clone --depth 1 --branch v0.40.0 https://github.com/umputun/agterm .upstream/agterm` (the parity tag;
   the sync skill moves it), and `HERDR_REPO` checked out at `HERDR_REV` from `build/pins.env`.
