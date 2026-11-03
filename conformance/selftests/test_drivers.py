@@ -438,13 +438,19 @@ def test_driver_name_refuses_an_unknown_platform() -> None:
 @pytest.mark.parametrize(
     ("impl", "platform", "message"),
     [
-        ("rust", "win32", "uia ui driver is not written yet"),
         ("swift-macos", "linux", "needs darwin, this host is linux"),
+        ("swift-macos", "win32", "needs darwin, this host is win32"),
     ],
 )
 def test_driver_class_says_why_there_is_none(impl: str, platform: str, message: str) -> None:
     with pytest.raises(NoDriver, match=message):
         driver_class(impl, platform)
+
+
+def test_uia_is_the_driver_for_windows() -> None:
+    from agterm_conformance.drivers import uia
+
+    assert driver_class("rust", "win32") is uia.UiaDriver
 
 
 def test_ax_is_the_driver_for_macos() -> None:

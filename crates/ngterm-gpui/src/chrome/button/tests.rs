@@ -48,3 +48,30 @@ fn tab_reaches_a_menu_button_in_the_tab_order_and_enter_opens_its_menu(cx: &mut 
     cx.run_until_parked();
     assert_eq!(*opened.borrow(), vec!["inside"]);
 }
+
+/// A menu's trigger publishes a menu button with its menu's open state, which UIA turns into the expand/collapse
+/// pattern, and takes AT-SPI's click and UIA's expand and collapse as its press; a disabled one takes none.
+#[gpui_kit::test]
+fn a_menu_trigger_publishes_its_open_state_and_takes_expand_and_collapse(cx: &mut TestAppContext) {
+    use gpui_kit::Element as _;
+    use gpui_kit::accesskit::{Action, HasPopup, Node};
+
+    let focus = cx.update(|cx| cx.focus_handle());
+    let node = |open: bool, press: Option<FocusHandle>| {
+        let element = menu_button(div().id("trigger"), open, press);
+        let mut node = Node::new(element.a11y_role().unwrap_or(Role::Button));
+        element.write_a11y_info(&mut node);
+        node
+    };
+    for open in [false, true] {
+        let pressed = node(open, Some(focus.clone()));
+        assert_eq!(pressed.has_popup(), Some(HasPopup::Menu));
+        assert_eq!(pressed.is_expanded(), Some(open));
+        for action in [Action::Click, Action::Expand, Action::Collapse] {
+            assert!(pressed.supports_action(action), "{action:?} presses the trigger");
+        }
+    }
+    let disabled = node(false, None);
+    assert!(!disabled.supports_action(Action::Expand));
+    assert!(!disabled.supports_action(Action::Collapse));
+}

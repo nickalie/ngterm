@@ -252,3 +252,7 @@ portable-pty = { path = "vendor/portable-pty" }
 # crates.io source plus build/patches/accesskit_atspi_common (scripts/vendor-accesskit-atspi.sh): a disabled node
 # without Enabled and Sensitive whatever its role, and a button with a menu as a push button menu.
 accesskit_atspi_common = { path = "vendor/accesskit_atspi_common" }
+# AccessKit's UI Automation mapping (gpui-pre-windows): vendor/accesskit_windows is the verified crates.io source plus
+# build/patches/accesskit_windows (scripts/vendor-accesskit-windows.sh): a clickable menu item with a highlight keeps
+# the Invoke pattern.
+accesskit_windows = { path = "vendor/accesskit_windows" }

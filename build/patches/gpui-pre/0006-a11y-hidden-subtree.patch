@@ -1,0 +1,91 @@
+No accessibility node under an invisible element (GPUI patch for docs/plans/20261031-e2e-ui-and-coverage.md Task 7):
+GPUI paints nothing of an element whose style is `Visibility::Hidden` (`.invisible()`), yet prepaints its children,
+which published their AccessKit nodes all the same, so assistive technology found controls nobody could see (a hidden
+HTML overlay page's strip, laid out where it would show, kept its Hide button in the tree on AT-SPI and UIA alike).
+A hidden div now prepaints its children with node publication held off (`A11y::hidden`, checked by
+`A11y::publishes` where an element pushes its node); the invisible element's own node, pushed before its style is
+known, stays. An upstream candidate (Zed).
+scripts/vendor-gpui.sh applies this after 0005.
+
+diff -ruN a/src/element.rs b/src/element.rs
+--- a/src/element.rs
++++ b/src/element.rs
+@@ -425,7 +425,7 @@
+ 
+                 let bounds = window.layout_bounds(layout_id);
+                 let mut pushed_a11y_node = false;
+-                if window.a11y.is_active() {
++                if window.a11y.publishes() {
+                     if let Some(global_id) = global_id.as_ref() {
+                         if let Some(role) = self.element.a11y_role() {
+                             let node_id = global_id.accesskit_node_id();
+diff -ruN a/src/elements/div.rs b/src/elements/div.rs
+--- a/src/elements/div.rs
++++ b/src/elements/div.rs
+@@ -2043,7 +2043,9 @@
+                     return hitbox;
+                 }
+ 
+-                window.with_image_cache(image_cache, |window| {
++                // nothing of an invisible element is on screen: its descendants publish no accessibility node
++                let hidden = style.visibility == Visibility::Hidden;
++                let mut prepaint_children = |window: &mut Window, cx: &mut App| {
+                     window.with_element_offset(scroll_offset, |window| {
+                         if let Some(order_fn) = &self.prepaint_order_fn {
+                             let order = order_fn(window, cx);
+@@ -2058,6 +2060,13 @@
+                             }
+                         }
+                     });
++                };
++                window.with_image_cache(image_cache, |window| {
++                    if hidden {
++                        crate::window::a11y::A11y::hidden(window, |window| prepaint_children(window, cx));
++                    } else {
++                        prepaint_children(window, cx);
++                    }
+ 
+                     if let Some(listener) = self.prepaint_listener.as_ref() {
+                         listener(children_bounds, window, cx);
+diff -ruN a/src/window/a11y.rs b/src/window/a11y.rs
+--- a/src/window/a11y.rs
++++ b/src/window/a11y.rs
+@@ -146,6 +146,9 @@
+     /// determine whether we should actually send the finished [`TreeUpdate`].
+     active_this_frame: bool,
+     pub(crate) nodes: A11yNodeBuilder,
++    /// How many invisible elements ([`crate::Visibility::Hidden`]) enclose the element being prepainted: their
++    /// descendants publish no node, as nothing of them is on screen.
++    hidden_depth: usize,
+     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
+     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
+     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
+@@ -174,6 +177,7 @@
+             active_flag,
+             active_this_frame: false,
+             nodes: A11yNodeBuilder::new(),
++            hidden_depth: 0,
+             focus_ids: FxHashMap::default(),
+             node_bounds: FxHashMap::default(),
+             action_listeners: FxHashMap::default(),
+@@ -221,6 +225,20 @@
+         self.active_this_frame
+     }
+ 
++    /// Whether an element prepainted now publishes its node: accessibility is active and no invisible element
++    /// encloses it.
++    pub(crate) fn publishes(&self) -> bool {
++        self.is_active() && self.hidden_depth == 0
++    }
++
++    /// Runs `f` (an invisible element's children's prepaint) with their nodes left out of the tree.
++    pub(crate) fn hidden<R>(window: &mut crate::Window, f: impl FnOnce(&mut crate::Window) -> R) -> R {
++        window.a11y.hidden_depth += 1;
++        let result = f(window);
++        window.a11y.hidden_depth -= 1;
++        result
++    }
++
+     pub(crate) fn set_focusable(&mut self, node_id: NodeId, focus_id: FocusId) {
+         self.focus_ids.insert(node_id, focus_id);
+     }

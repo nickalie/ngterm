@@ -249,6 +249,8 @@ that could reach it:
   on the distribution's lavapipe, held by the ratchet, once per login shell (`conformance`, a matrix), each with
   `--must-pass live-any-shell`: bash, fish and zsh (the last two with `--must-pass live-sessions` too).
 - `cross-platform`'s `windows` job (`windows-2025`): the harness's Windows self-tests (the pipe transport, the client,
-  the launch and stop), then `tools/run-windows.sh` with `--must-pass live-any-shell` (the login shell is Windows
-  PowerShell): protocol, cli and behaviors against the staged Windows build, held by `rust-passing-windows.txt`. The
+  the launch and stop, the UIA driver's mappings), then `tools/run-windows.sh` with `--must-pass live-any-shell` (the
+  login shell is Windows PowerShell): protocol, cli, behaviors and ui (UI Automation and `SendInput`,
+  `drivers/uia.py`, its windows on the runner's desktop) against the staged Windows build, held by
+  `rust-passing-windows.txt`. The
   staged tree is kept as an artifact, for a run on a Windows VM against the same build (`--stage DIR`).

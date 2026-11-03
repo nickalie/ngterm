@@ -132,10 +132,11 @@ def test_the_view_menu_opens_each_membership_editor_with_its_hint(ctl, ui, palet
 
 @pytest.mark.covers("ui:session-switcher")
 def test_ctrl_tab_opens_the_session_switcher_and_escape_keeps_the_session(app, ctl, ui):
-    if ui.name == "atspi":
-        # XTest presses and releases Control around the chord as a keyboard does, and the release commits the walk
-        # (upstream's), so the switcher never stays up for Escape; AX posts the chord's flags with no Control key.
-        pytest.skip("atspi: a posted chord releases Control, which ends the Ctrl-Tab walk at once")
+    if ui.name in ("atspi", "uia"):
+        # XTest and SendInput press and release Control around the chord as a keyboard does, and the release commits
+        # the walk (upstream's), so the switcher never stays up for Escape; AX posts the chord's flags with no Control
+        # key.
+        pytest.skip(f"{ui.name}: a posted chord releases Control, which ends the Ctrl-Tab walk at once")
     (first,) = session_ids(ctl.tree())
     ctl.wait_mounted(first, "left")
     second = _new(ctl)

@@ -14,6 +14,8 @@ dependencies = [
     "Pillow",
     # the Windows stand-in for `ssh` in tests/cli/test_cli_only.py: an .exe launcher over a Python script
     "distlib>=0.3.8; sys_platform == 'win32'",
+    # the Windows ui driver (agterm_conformance.drivers.uia): UI Automation's COM interfaces
+    "comtypes>=1.4; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

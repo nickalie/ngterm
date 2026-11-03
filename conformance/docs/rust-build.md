@@ -130,9 +130,11 @@ It does not claim:
 - `sidebar-min-width`: the GPUI frontend does not claim it; its test takes the other branch.
 - `ui-string-values`: AccessKit's AT-SPI mapping exposes no string value on a button, an image or a row, so on Linux
   the ui tests take the other branch: they find the element and read its state back through the protocol. The
-  macOS and Windows builds publish the values (AX and UIA expose them) but claim it only once their ui layers run
-  green (Windows: Task 7 of docs/plans/20261031-e2e-ui-and-coverage.md). The Linux branch leaves that state unread
-  by assistive technology there: it is an open accessibility gap, not a parity claim.
+  Linux branch leaves that state unread by assistive technology there: it is an open accessibility gap, not a parity
+  claim. UIA and AX do read a string value (ValuePattern, AXValue) where the app publishes one (the overlays
+  button's state, an icon's tint, a companion row's name), and the Windows ui layer runs green on the other branch,
+  but the app publishes none yet on `split-toggle` or the sidebar footer's toggles, which the claim's tests read
+  (docs/backlog/the-split-and-sidebar-toggles-publish-no-state-value.md); macOS and Windows claim it once they do.
 - on Windows, `posix-command-line`: a command line runs as `cmd.exe`'s command text there (`%ComSpec% /D /S /C`, as
   Ghostty runs a command on Windows; `ngterm-host`'s `command_line` chooses it for every caller), so the tests of
   hooks, custom commands, overlay programs and scratch commands take their `cmd` branch instead (`cmd-command-line`,

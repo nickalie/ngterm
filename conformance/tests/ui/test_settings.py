@@ -50,8 +50,9 @@ def seeded(adapter, request):
 
 
 def _open_settings(ui):
-    if ui.name == "atspi":
-        # Linux has no Settings chord (the GTK build's menu, which ngterm's follows): the app menu's item opens it.
+    if ui.name in ("atspi", "uia"):
+        # Linux and Windows have no Settings chord (the GTK build's menu, which ngterm's follows): the app menu's item
+        # opens it.
         ui.menu("ngterm", "Settings…")
     else:
         ui.press("cmd+,")

@@ -28,7 +28,8 @@ DEFAULT_UI_IDS = Path(__file__).resolve().parents[2] / "ui-ids.yaml"
 PLATFORM_DRIVERS: Mapping[str, str] = {"darwin": "ax", "linux": "atspi", "win32": "uia"}
 IMPL_PLATFORMS: Mapping[str, str] = {"swift-macos": "darwin"}
 IMPLEMENTED: Mapping[str, str] = {"ax": "agterm_conformance.drivers.ax:AxDriver",
-                                  "atspi": "agterm_conformance.drivers.atspi:AtspiDriver"}
+                                  "atspi": "agterm_conformance.drivers.atspi:AtspiDriver",
+                                  "uia": "agterm_conformance.drivers.uia:UiaDriver"}
 ATTRIBUTES = frozenset({"role", "name", "value", "enabled"})
 ROLES = frozenset({
     "button", "menu-button", "menu-item", "checkbox", "radio", "popup", "text-field", "text", "slider", "row",

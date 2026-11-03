@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The Windows counterpart of run-linux.sh, run from Git Bash: build the app, the CLI and the live sessions' server
 # (release), stage them with scripts/stage.sh (bin\ngterm.exe, bin\ngtermctl.exe and bin\ngterm-session.exe beside
-# share\ghostty and share\terminfo), run the protocol, cli and behaviors layers against the stage, then hold the
+# share\ghostty and share\terminfo), run the protocol, cli, behaviors and ui layers against the stage, then hold the
 # Windows ratchet: every id in conformance/rust-passing-windows.txt must still pass. Every instance comes from the
 # harness (a fresh root under this run's own %TEMP%\agt-run-* parent holding its home, application data, state dir and
 # control socket, whose named pipe its path names; NGTERM_*, AGTERM_* and ZMX_* stripped; its process tree reaped by
@@ -66,10 +66,10 @@ export PYTHONPATH="$(win "$repo/conformance")${PYTHONPATH:+;$PYTHONPATH}"
 export PYTHONUTF8=1
 
 layers=()
-for layer in protocol cli behaviors; do
+for layer in protocol cli behaviors ui; do
     if [[ -d "$tests/$layer" ]]; then layers+=("$tests/$layer"); fi
 done
-((${#layers[@]})) || { echo "no protocol, cli or behaviors layer under $tests" >&2; exit 2; }
+((${#layers[@]})) || { echo "no protocol, cli, behaviors or ui layer under $tests" >&2; exit 2; }
 
 selection=()
 if [[ -n "$ratchet_only" ]]; then

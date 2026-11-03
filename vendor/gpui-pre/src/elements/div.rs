@@ -2043,7 +2043,9 @@ impl Element for Div {
                     return hitbox;
                 }
 
-                window.with_image_cache(image_cache, |window| {
+                // nothing of an invisible element is on screen: its descendants publish no accessibility node
+                let hidden = style.visibility == Visibility::Hidden;
+                let mut prepaint_children = |window: &mut Window, cx: &mut App| {
                     window.with_element_offset(scroll_offset, |window| {
                         if let Some(order_fn) = &self.prepaint_order_fn {
                             let order = order_fn(window, cx);
@@ -2058,6 +2060,13 @@ impl Element for Div {
                             }
                         }
                     });
+                };
+                window.with_image_cache(image_cache, |window| {
+                    if hidden {
+                        crate::window::a11y::A11y::hidden(window, |window| prepaint_children(window, cx));
+                    } else {
+                        prepaint_children(window, cx);
+                    }
 
                     if let Some(listener) = self.prepaint_listener.as_ref() {
                         listener(children_bounds, window, cx);

@@ -459,8 +459,9 @@ is suspected but not established. Custom app command menu rows also lack accessi
   read them as editable fields; `test_general_tab` and `test_key_mapping_tab_reports_a_keymap_error_after_reload` are
   green and in the ratchet (`selectable` Rust test).
 
-⚠️ Still red on Linux, left out of the ratchet: `test_html_overlay.py::test_page_strip_hide_hides_its_own_pane` (the
-Hide button stays in the tree for over 10 s after the pane's page hides, cause not established).
+Was red on Linux at the end of this task: `test_html_overlay.py::test_page_strip_hide_hides_its_own_pane` (the Hide
+button stayed in the tree after the pane's page hid). Fixed in Task 7 (GPUI patch 0006: an invisible element's
+descendants publish no node) and in the ratchet.
 
 ### Task 7: The UIA driver and the Windows ui layer
 
@@ -472,15 +473,40 @@ Hide button stays in the tree for over 10 s after the pane's page hides, cause n
 - Modify: `crates/ngterm-gpui/src/*` (accessibility gaps, each with its Rust test)
 - Modify: `conformance/rust-passing-windows.txt`
 
-- [ ] write host-free self-tests first: UIA control types to `ROLES`, key names to virtual keys, the `SendInput`
+- [x] write host-free self-tests first: UIA control types to `ROLES`, key names to virtual keys, the `SendInput`
       structures for a chord, a text and a drag, the lazy import
-- [ ] implement `uia.py`: the tree by process id, `AutomationId` as the ui id, the portable attributes, Invoke/Toggle/
+- [x] implement `uia.py`: the tree by process id, `AutomationId` as the ui id, the portable attributes, Invoke/Toggle/
       Value/SelectionItem patterns, the in-window menu and tabs, `SendInput` for keys, text (unicode) and pointer,
       bounds from `BoundingRectangle`
-- [ ] run the ui layer on the Windows CI runner (`ci/win-<task>` branch, traces from Task 3 for the reds); debug in the
+- [x] run the ui layer on the Windows CI runner (`ci/win-<task>` branch, traces from Task 3 for the reds); debug in the
       VM only; fix each app-caused red with its Rust test first, record each divergence as a capability
-- [ ] add `tests/ui` to `run-windows.sh`'s default layers; the Windows CI job green; add the newly green ids to
+- [x] add `tests/ui` to `run-windows.sh`'s default layers; the Windows CI job green; add the newly green ids to
       `rust-passing-windows.txt`
+
+**Reds found on the Windows runner (first run: 27 pass, 15 fail) and their causes:**
+
+- *Menu items with no press*: gpui-component's menu rows publish their highlight as `aria_selected`, and AccessKit's
+  UIA mapping withholds Invoke from every node with a selected state, while a menu item gets no SelectionItem either.
+  Fixed in AccessKit: vendored `accesskit_windows` 0.34.0 with patch 0001 (a clickable node whose selected state UIA
+  cannot express keeps Invoke), `scripts/vendor-accesskit-windows.sh`, its `--check` in `linux.yml`.
+- *Menu buttons with no press*: UIA gives a button with a popup only expand/collapse, which needs an expanded state
+  the trigger did not publish. The chrome button's menu trigger now publishes `aria_expanded` and takes Expand and
+  Collapse as its press (`chrome::button::menu_button`, Rust test).
+- *Settings opener and the Ctrl+Tab switcher*: as on Linux, Windows has no Settings chord (the app menu's item opens
+  it) and `SendInput` releases Control after the chord; both branches take `uia` beside `atspi`.
+- *The page strip's Hide button lingering* (the Linux red of Task 6 too): GPUI published accessibility nodes under an
+  invisible element (`.invisible()`, a hidden page laid out where it would show). GPUI patch 0006 leaves an invisible
+  div's descendants out of the tree; `test_page_strip_hide_hides_its_own_pane` is green on both and in both ratchets.
+- *Not claimed*: `ui-string-values` stays unclaimed on Windows: UIA reads a value where the app publishes one, but
+  `split-toggle` and the sidebar footer's toggles publish none
+  (docs/backlog/the-split-and-sidebar-toggles-publish-no-state-value.md).
+- ⚠️ The win11 VM has no interactive logon (no autologon, password unknown) and GPUI opens no window in its ssh
+  session, so every ui run went to the runner; the VM checked only the UIA bindings.
+- ⚠️ The Windows job's ui layer is green (41 pass, 1 skip, 2 unsupported, no red), but the job stays red from protocol
+  ids that fail intermittently on `main` as well (companions, config browser), and the arm64 crates job from a clippy
+  lint on `main` (docs/backlog/windows-ci-is-red-on-main-from-three-protocol-tests-and-a-clippy-lint.md).
+- ➕ Task 6 left `the_view_menus_overlays_row_names_what_it_will_do_and_toggles` red (View's submenu now scrolls past
+  450 points, so its overlays row lay outside it): the test wheels View to the row first.
 
 ### Task 8: Pointer and typing tests
 

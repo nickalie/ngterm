@@ -334,7 +334,8 @@ ConPTY from kernel32 only, herdr's fixes for malformed Windows environments and 
 created in its job, a ConPTY session's handles exported and imported for the session server's update handoff) is
 the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`), and so is
 `vendor/accesskit_atspi_common` (AccessKit's AT-SPI mapping: a disabled control without Enabled, a menu button's
-role), through `scripts/vendor-accesskit-atspi.sh`.
+role), through `scripts/vendor-accesskit-atspi.sh`, and `vendor/accesskit_windows` (AccessKit's UI Automation
+mapping: a highlighted menu item keeps its Invoke pattern), through `scripts/vendor-accesskit-windows.sh`.
 
 ### macOS and Windows
 
@@ -623,7 +624,9 @@ after an upgrade (the .wxs header says why). `scripts/check-msi.ps1` installs an
 what it installed, upgrades and uninstalls it, on a throwaway machine or account only, as CI does.
 
 Tests, from Git Bash. The crates as CI runs them ([CI](#ci)), then the suite, which builds the release app, stages it
-into `target/conformance-stage` and runs the protocol, cli and behaviors layers against it, held by its own ratchet,
+into `target/conformance-stage` and runs the protocol, cli, behaviors and ui layers against it (the ui layer drives the
+app's windows on this desktop through UI Automation and `SendInput`: a CI runner or a throwaway VM only), held by its
+own ratchet,
 `conformance/rust-passing-windows.txt` (`check_ratchet.py --list` names it; see
 [conformance/README.md](conformance/README.md), Rust runner and ratchet):
 
@@ -675,6 +678,7 @@ scripts/vendor-calloop.sh --check           # vendor/ equals its crates.io sourc
 scripts/vendor-gpui.sh --check
 scripts/vendor-portable-pty.sh --check
 scripts/vendor-accesskit-atspi.sh --check
+scripts/vendor-accesskit-windows.sh --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo clippy -p ngterm-gpui --no-default-features --all-targets -- -D warnings   # the app without HTML overlays
 scripts/lint-report.sh                      # complexity #[expect]s with their reasons; refuses inner #![allow]

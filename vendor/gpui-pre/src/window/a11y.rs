@@ -146,6 +146,9 @@ pub(crate) struct A11y {
     /// determine whether we should actually send the finished [`TreeUpdate`].
     active_this_frame: bool,
     pub(crate) nodes: A11yNodeBuilder,
+    /// How many invisible elements ([`crate::Visibility::Hidden`]) enclose the element being prepainted: their
+    /// descendants publish no node, as nothing of them is on screen.
+    hidden_depth: usize,
     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
@@ -174,6 +177,7 @@ impl A11y {
             active_flag,
             active_this_frame: false,
             nodes: A11yNodeBuilder::new(),
+            hidden_depth: 0,
             focus_ids: FxHashMap::default(),
             node_bounds: FxHashMap::default(),
             action_listeners: FxHashMap::default(),
@@ -219,6 +223,20 @@ impl A11y {
 
     pub(crate) fn is_active(&self) -> bool {
         self.active_this_frame
+    }
+
+    /// Whether an element prepainted now publishes its node: accessibility is active and no invisible element
+    /// encloses it.
+    pub(crate) fn publishes(&self) -> bool {
+        self.is_active() && self.hidden_depth == 0
+    }
+
+    /// Runs `f` (an invisible element's children's prepaint) with their nodes left out of the tree.
+    pub(crate) fn hidden<R>(window: &mut crate::Window, f: impl FnOnce(&mut crate::Window) -> R) -> R {
+        window.a11y.hidden_depth += 1;
+        let result = f(window);
+        window.a11y.hidden_depth -= 1;
+        result
     }
 
     pub(crate) fn set_focusable(&mut self, node_id: NodeId, focus_id: FocusId) {

@@ -1,0 +1,33 @@
+A clickable node whose selected state UIA cannot express keeps the Invoke pattern.
+
+AccessKit's `is_invocable` excludes every node with a selected state, meant for the roles UIA gives the SelectionItem
+pattern (list and tree items, tabs, radios). A menu item that publishes its highlight as `aria_selected` (gpui-component's
+menu rows do, true or false) then supports neither pattern, and assistive technology has no way to press it (the ui
+layer's Windows driver found every menu item so; docs/plans/20261031-e2e-ui-and-coverage.md Task 7). Such a node stays
+invocable, under the rest of `is_invocable`'s conditions. It can go once AccessKit makes the same exception upstream.
+
+diff -ruN a/src/node.rs b/src/node.rs
+--- a/src/node.rs
++++ b/src/node.rs
+@@ -585,7 +585,20 @@
+     }
+ 
+     fn is_invoke_pattern_supported(&self) -> bool {
+-        self.node.is_invocable(&filter)
++        self.node.is_invocable(&filter) || self.is_clickable_with_unexposed_selection()
++    }
++
++    /// A clickable node that carries a selected state its role has no SelectionItem pattern for (a menu item's
++    /// highlight): `is_invocable` excludes every node with a selected state, which would leave this one with no
++    /// pattern to press it by at all (ngterm patch 0001).
++    fn is_clickable_with_unexposed_selection(&self) -> bool {
++        self.node.is_selected().is_some()
++            && !self.is_selection_item_pattern_supported()
++            && self.node.is_clickable(&filter)
++            && !self.node.is_text_input()
++            && !matches!(self.node.role(), Role::Document | Role::Terminal)
++            && !self.node.supports_toggle()
++            && !self.node.supports_expand_collapse()
+     }
+ 
+     fn is_value_pattern_supported(&self) -> bool {
