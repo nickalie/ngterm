@@ -519,6 +519,7 @@ rejects the host), each in a terminal nobody draws, so every session is attachab
 
 ```sh
 # on the server: the staged layout (scripts/stage.sh), ngtermctl on PATH (~/.local/bin or /usr/local/bin)
+ngterm-headless --install-agent-hooks  # install status hooks on the server, as Help does on the desktop
 nohup ngterm-headless [--grid 120x40] </dev/null >/dev/null 2>&1 &   # one per state dir, as the app
 # SIGTERM, SIGINT or SIGHUP saves and ends it (on Windows the console's Ctrl+C, Ctrl+Break or close); SIGINT or SIGHUP
 # ignored at its start stays ignored, so under nohup it outlives the ssh session that started it
@@ -527,6 +528,14 @@ ngtermctl session new --name build      # sessions to attach; they outlive ngter
 # File ▸ Attach Remote (Attach All takes every session not attached here yet, New Session creates one there), or
 ngtermctl live tree SERVER && ngtermctl live attach SERVER SESSION-ID
 ```
+
+Agent status indicators need the hooks installed on the machine running the agents; installing them on the viewer
+alone does not install them on the server. `--install-agent-hooks` runs the desktop's installer and exits without
+starting or contacting an instance, so it also works while the service is running. It preserves user settings and
+reports any config it could not safely merge. If OpenCode's version cannot be detected, its hooks are skipped;
+re-run with `--install-agent-hooks --opencode-version v1` or `v2` to choose it explicitly. After installation, start a
+new agent process; existing shells need to source `~/.config/ngterm/agent-status/shell/integration.sh` (fish:
+`source ~/.config/ngterm/agent-status/shell/integration.fish`) or start a new shell to load the shell integration.
 
 The attached row is as one from a desktop instance: each pane an ssh into its live session (the viewer claims the pty
 size), the status, context, split, HUD and notifications streamed over `ngtermctl live present`, asks, program
