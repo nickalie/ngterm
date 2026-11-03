@@ -73,6 +73,27 @@ class ConnectionsTest {
         }
 
     @Test
+    fun aConnectCancelledAfterTheResumedConnectionReportedIsStillListed() =
+        runTest {
+            val connections = connections()
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            core.failNext("connect", MobileException.Cancelled())
+            val gate = CompletableDeferred<Unit>()
+            core.holds["connect"] = gate
+            connections.connect(machine)
+            runCurrent()
+            // the resume connects and reports Connected while the cancelled call has yet to return to the app
+            core.connect(machine)
+            runCurrent()
+            assertEquals(Link.Connected, connections.links.value["m1"])
+            assertEquals(null, connections.trees.value["m1"])
+            gate.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(listOf(fakeSession("s1")), connections.trees.value["m1"])
+            assertEquals(1, core.calls.count { it.method == "listSessions" })
+        }
+
+    @Test
     fun aFailedConnectIsUnreachableWithTheCoresReason() =
         runTest {
             val connections = connections()

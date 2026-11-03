@@ -82,7 +82,8 @@ class Connections(
     private val declined = MutableStateFlow<Set<String>>(emptySet())
 
     // the machines whose connect was cancelled before it listed them: the connection the core makes for them later
-    // (a resume's) is listed when it reports Connected
+    // (a resume's) is listed when it reports Connected. Whoever takes a machine's marker out lists it, so a Connected
+    // that lands before the cancellation is handled is listed once, by the handler or by the event
     private val unlisted: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     /** Each machine's link, by id; a machine missing from it is [Link.Offline]. */
@@ -209,7 +210,9 @@ class Connections(
                 // overtaken by a disconnect or another connect, which reports its own state; or set aside by a
                 // suspend, whose resume connects it with no caller: that connection is listed when it comes
                 unlisted.add(id)
-                return@launch
+                // a resumed connection may have reported Connected before the marker went in: list it here, unless
+                // that event took the marker first and lists it itself
+                if (linkState.value[id] != Link.Connected || !unlisted.remove(id)) return@launch
             } catch (error: MobileException) {
                 if (linkState.value[id] is Link.Connecting) failed(id, error.reason())
                 return@launch
