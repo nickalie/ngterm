@@ -453,7 +453,7 @@ fn an_exit_is_reported_and_attaches_again_only_after_the_origin_respawned_the_pa
 }
 
 #[test]
-fn an_empty_grid_is_refused_and_a_pane_shown_at_one_attaches_once_the_view_sizes_it() {
+fn an_empty_grid_is_refused_and_a_pane_shown_at_one_attaches_as_soon_as_the_view_sizes_it() {
     let mut fixture = Fixture::connected();
     let empty = PaneSize {
         cols: 0,
@@ -467,20 +467,77 @@ fn an_empty_grid_is_refused_and_a_pane_shown_at_one_attaches_once_the_view_sizes
     )
     .unwrap();
     assert!(
-        matches!(fixture.ended(), PaneEnd::Lost { .. }),
-        "the terminal refuses the grid"
+        !fixture
+            .quiet()
+            .iter()
+            .any(|event| matches!(event, MobileEvent::PaneEnded { .. })),
+        "a pane with no grid waits for one, not lost"
     );
+    assert!(!fixture.attaches_soon(), "nothing attaches without a grid");
     assert!(matches!(
         pane.resize(PaneSize { cols: 0, ..SIZE }),
         Err(PaneInputError::Refused { .. })
     ));
     assert_eq!(pane.size(), empty, "a refused grid is not kept");
 
+    // well before the backoff's first retry (1 s after the show)
     pane.resize(SIZE).unwrap();
     assert_eq!(pane.size(), SIZE);
+    assert!(fixture.attaches_soon(), "the grid wakes the attach at once");
     let opened = fixture.attach();
-    assert_eq!(opened.pty, Some(SIZE.into()), "the retry attaches at the view's grid");
+    assert_eq!(opened.pty, Some(SIZE.into()), "it attaches at the view's grid");
     fixture.attached();
+    assert!(!fixture.attaches_soon(), "one attach");
+}
+
+#[test]
+fn a_pane_shown_after_its_sessions_snapshot_finds_a_respawn_missed_while_the_stream_was_down() {
+    let mut fixture = Fixture::connected();
+    block_on(fixture.core.attach_session(MACHINE.to_owned(), SESSION.to_owned())).unwrap();
+    let stream = fixture.opened(|opened| opened.command == present_tail(SESSION).unwrap());
+    let snapshot = |generation: i64| {
+        Body::Snapshot(PresentationSnapshot {
+            respawns: Some(PresentationRespawns {
+                epoch: "e1".to_owned(),
+                generations: std::collections::BTreeMap::from([(daemon(), generation)]),
+            }),
+            ..PresentationSnapshot::default()
+        })
+    };
+    let hello = Body::Hello(PresentationHello {
+        version: frames::VERSION,
+        kinds: Vec::new(),
+        mode: PresentationMode::Mirror,
+    });
+    let frame = |rev: i64, body: Body| {
+        frames::encode(&PresentationFrame {
+            generation: 1,
+            rev,
+            body,
+        })
+        .unwrap()
+    };
+    send(&stream.peer, &frame(1, hello));
+    // the session's pane respawned once already, before the pane is shown
+    send(&stream.peer, &frame(2, snapshot(1)));
+    fixture.quiet();
+
+    fixture.show();
+    let first = fixture.attach();
+    end(
+        first.peer,
+        ChannelEnd::Exit {
+            code: Some(0),
+            signal: None,
+        },
+    );
+    fixture.ended();
+    assert!(!fixture.attaches_soon(), "no respawn since the pane was shown");
+
+    // the respawn's frame was missed; the next snapshot (a reconnect's) carries it
+    send(&stream.peer, &frame(3, snapshot(2)));
+    let again = fixture.attach();
+    assert!(!lead_of(&again.command).claim, "attach-only");
 }
 
 #[test]

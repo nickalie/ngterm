@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use ngterm_core::ghostty_config::binds::{KeyAction, Mods, PhysicalKey};
 use ngterm_term::{
     ClipboardLocation, GridPoint, GridSize, KeyInput, ModSides, MouseAction, MouseButton, MouseInput, Paste,
-    PasteSource, SelectionText, Wheel, WheelInput,
+    PasteSource, SelectionText, Wake, Wheel, WheelInput,
 };
 
 /// A pane's grid: cells and the pixel size of one cell (`ngterm-term`'s `GridSize`).
@@ -191,17 +191,30 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// What a [`Pane`] handle and the actor share: the pane's current terminal and its grid.
-#[derive(Debug)]
 pub(crate) struct PaneSlot {
     terminal: Mutex<Option<Arc<ngterm_term::Pane>>>,
     size: Mutex<GridSize>,
+    /// Tells the actor the view gave a grid while the slot held no terminal: a pane waiting for one attaches.
+    sized: Wake,
+}
+
+impl std::fmt::Debug for PaneSlot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PaneSlot")
+            .field("terminal", &self.terminal)
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PaneSlot {
-    pub(crate) fn new(size: GridSize) -> Self {
+    /// A slot at `size`; `sized` runs when a grid is given with no terminal in place.
+    pub(crate) fn new(size: GridSize, sized: Wake) -> Self {
         Self {
             terminal: Mutex::new(None),
             size: Mutex::new(size),
+            sized,
         }
     }
 
@@ -280,7 +293,8 @@ impl Pane {
         self.slot.size().into()
     }
 
-    /// The view's new grid: the terminal reflows and the machine's pty follows (only the pane's leader sizes it).
+    /// The view's new grid: the terminal reflows and the machine's pty follows (only the pane's leader sizes it). A
+    /// pane shown with no grid attaches once the view gives it one.
     ///
     /// # Errors
     ///
@@ -293,10 +307,11 @@ impl Pane {
             });
         }
         self.slot.set_size(size.into());
-        match self.slot.terminal() {
-            Some(terminal) => Ok(terminal.resize(size.into())?),
-            None => Ok(()),
+        if let Some(terminal) = self.slot.terminal() {
+            return Ok(terminal.resize(size.into())?);
         }
+        (self.slot.sized)();
+        Ok(())
     }
 
     /// Sends a key, encoded for the program's keyboard modes; whether anything was sent (a lone modifier sends

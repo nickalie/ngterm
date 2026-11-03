@@ -13,19 +13,23 @@
 //! - **How an attach ends** ([`PaneEnd`]): a *lost* link covers the pane, and it attaches again into a fresh terminal
 //!   once its machine is connected (at once on reconnect; on the reconnect backoff when only the channel went);
 //!   an *exit* reports the program's status after `end_of_output` and `exited`, and attaches again, attach-only, when
-//!   the origin reports the pane's shell respawned (`RemoteRespawnBook`, fed by the session's presentation stream);
+//!   the origin reports the pane's shell respawned (`RemoteRespawnBook`, fed by the session's presentation stream,
+//!   whose latest counts are kept for a pane shown later);
 //!   an exit 1 after the gone guard's [`SESSION_GONE`] line is checked against a fresh listing, and a session no
 //!   longer listed is *gone*: final.
 //! - **Clipboard reads** (OSC 52) stop the pane's output until answered: each raises
 //!   [`MobileEvent::ClipboardReadRequest`] under an id of the core's own, answered through
 //!   [`crate::MobileCore::answer_clipboard_read`]. Hiding the pane, losing its link or its program's exit deny any read
 //!   still open and dismiss it ([`MobileEvent::ClipboardReadDismiss`]).
+//! - **A pane shown with no grid** (0 columns or rows) waits without a terminal and attaches once the view gives it
+//!   one ([`crate::api::Pane::resize`]).
 //! - **Kitty images** are off (`kitty_image_limit` 0): the attach client's probe reports no support.
 
 mod records;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +38,7 @@ use std::time::Duration;
 
 use ngterm_core::live::lead::{LeadAttachment, LeadNotice, LeadRole, LeadState};
 use ngterm_core::pane_env::uuid_string;
+use ngterm_core::remote::frames::PresentationRespawns;
 use ngterm_core::remote::reconnect::retry_delay;
 use ngterm_core::remote::respawn::{Mark, RemoteRespawnBook};
 use ngterm_core::remote::ssh::{SESSION_GONE, attach_tail};
@@ -72,6 +77,8 @@ pub(crate) enum Note {
     Ended { key: u64, end: ChannelEnd, gone: bool },
     /// A lost attach's wait before it attaches again is over.
     Retry(u64),
+    /// The view gave a grid to the shown pane with this id while it held no terminal.
+    Sized(u64),
 }
 
 /// Where the notes go: the actor's.
@@ -161,6 +168,8 @@ struct Read {
 
 /// One shown pane.
 struct Shown<C> {
+    /// Names the pane as long as it is shown, across its attaches.
+    id: u64,
     reference: PaneRef,
     session: Uuid,
     pane: Uuid,
@@ -232,7 +241,11 @@ impl<C> Shown<C> {
 pub(crate) struct Panes<C> {
     shown: Vec<Shown<C>>,
     book: RemoteRespawnBook,
+    /// Each attached session's latest respawn counts, by machine and session id, whether or not a pane of it is
+    /// shown: a pane shown later takes its baseline from them.
+    counts: HashMap<(String, String), PresentationRespawns>,
     notes: Notes,
+    /// The last attach key, and the last shown pane's id, taken from one counter.
     last_key: u64,
     last_read: u64,
 }
@@ -242,6 +255,7 @@ impl<C: Connection> Panes<C> {
         Self {
             shown: Vec::new(),
             book: RemoteRespawnBook::default(),
+            counts: HashMap::new(),
             notes,
             last_key: 0,
             last_read: 0,
@@ -268,8 +282,17 @@ impl<C: Connection> Panes<C> {
         if let Some(shown) = self.find(&target.machine_id, &target.session_id, target.pane) {
             return Ok((Arc::clone(&self.shown[shown].slot), Vec::new()));
         }
-        let slot = Arc::new(PaneSlot::new(size));
+        self.last_key += 1;
+        let id = self.last_key;
+        let notes = self.notes.clone();
+        let sized: Wake = Arc::new(move || {
+            // An actor that is gone attaches nothing.
+            let _ = notes.send(Note::Sized(id));
+        });
+        let slot = Arc::new(PaneSlot::new(size, sized));
+        self.seed_baseline(&target, session);
         self.shown.push(Shown {
+            id,
             reference: PaneRef {
                 machine_id: target.machine_id,
                 session_id: target.session_id,
@@ -293,6 +316,20 @@ impl<C: Connection> Panes<C> {
         Ok((slot, events))
     }
 
+    /// Starts a newly shown pane's respawn baseline at its session's latest counts, if any were reported: a respawn
+    /// missed while the session's stream is down is then found by the next snapshot.
+    fn seed_baseline(&mut self, target: &Target, session: Uuid) {
+        let key = (target.machine_id.clone(), target.session_id.clone());
+        let Some(counts) = self.counts.get(&key) else {
+            return;
+        };
+        let mark = Mark {
+            epoch: counts.epoch.clone(),
+            generation: counts.generations.get(&target.daemon).copied().unwrap_or_default(),
+        };
+        self.book.observe(mark, target.pane, session, true);
+    }
+
     /// Hides a shown pane: its attach ends and its reads are denied; nothing more is reported about it.
     pub(crate) fn hide(&mut self, machine_id: &str, session_id: &str, pane: Uuid) -> Vec<MobileEvent> {
         match self.find(machine_id, session_id, pane) {
@@ -301,18 +338,21 @@ impl<C: Connection> Panes<C> {
         }
     }
 
-    /// Hides every shown pane of `session_id`.
+    /// Hides every shown pane of `session_id`, whose stream was detached: its respawn counts go too.
     pub(crate) fn hide_session(&mut self, machine_id: &str, session_id: &str) -> Vec<MobileEvent> {
+        self.counts.remove(&(machine_id.to_owned(), session_id.to_owned()));
         self.remove_where(|shown| shown.is(machine_id, session_id))
     }
 
     /// Hides every shown pane of `machine_id`.
     pub(crate) fn forget_machine(&mut self, machine_id: &str) -> Vec<MobileEvent> {
+        self.counts.retain(|(machine, _), _| machine != machine_id);
         self.remove_where(|shown| shown.reference.machine_id == machine_id)
     }
 
     /// Hides every shown pane.
     pub(crate) fn clear(&mut self) {
+        self.counts.clear();
         self.remove_where(|_| true);
     }
 
@@ -393,6 +433,7 @@ impl<C: Connection> Panes<C> {
     /// What the session's origin reported about respawning its panes: an exited pane the origin respawned attaches
     /// again, attach-only (desktop's `apply_remote_respawns`).
     pub(crate) fn respawns(&mut self, reported: &Respawns) -> Vec<MobileEvent> {
+        self.keep_counts(reported);
         let mut due = Vec::new();
         for (index, shown) in self.shown.iter().enumerate() {
             if !shown.is(&reported.machine_id, &reported.session_id) {
@@ -413,6 +454,26 @@ impl<C: Connection> Panes<C> {
         due.into_iter()
             .flat_map(|index| self.attach(index, LeadAttachment::new(false), true))
             .collect()
+    }
+
+    /// Keeps the session's latest counts: a snapshot's replace them, a respawn frame's update them (or replace them,
+    /// from another origin run).
+    fn keep_counts(&mut self, reported: &Respawns) {
+        let key = (reported.machine_id.clone(), reported.session_id.clone());
+        match self.counts.get_mut(&key) {
+            Some(kept) if !reported.seed && kept.epoch == reported.counts.epoch => {
+                kept.generations.extend(
+                    reported
+                        .counts
+                        .generations
+                        .iter()
+                        .map(|(daemon, generation)| (daemon.clone(), *generation)),
+                );
+            }
+            _ => {
+                self.counts.insert(key, reported.counts.clone());
+            }
+        }
     }
 
     /// The user's answer to the clipboard read `read_id` of a shown pane; an answer to a read no longer open is
@@ -442,6 +503,7 @@ impl<C: Connection> Panes<C> {
             Note::Opened(key, opened) => self.opened(key, opened).into(),
             Note::Ended { key, end, gone } => self.ended(key, end, gone),
             Note::Retry(key) => self.retry(key).into(),
+            Note::Sized(id) => self.sized(id).into(),
         }
     }
 
@@ -487,18 +549,22 @@ impl<C: Connection> Panes<C> {
         let shown = &mut self.shown[index];
         let mut events = shown.leave();
         shown.key = key;
+        shown.phase = Phase::Waiting;
+        let built = shown.slot.size();
+        if built.cols == 0 || built.rows == 0 {
+            // the view has no grid yet: the pane attaches once it gives one ([`Panes::sized`])
+            return events;
+        }
         self.book.attach_started(shown.pane, shown.session);
         let wake_notes = notes.clone();
         let wake: Wake = Arc::new(move || {
             // An actor that is gone has nothing left to draw.
             let _ = wake_notes.send(Note::News(key));
         });
-        let built = shown.slot.size();
         let (terminal, feed, out) = match ngterm_term::Pane::stream(&config(built, wake)) {
             Ok(made) => made,
             Err(error) => {
-                // tried again on the backoff, so a grid the view fixes since (or memory freed) gets its attach
-                shown.phase = Phase::Waiting;
+                // tried again on the backoff, in case memory is freed since
                 let reason = error.to_string();
                 events.push(shown.event(|pane| MobileEvent::PaneEnded {
                     pane,
@@ -521,7 +587,6 @@ impl<C: Connection> Panes<C> {
             ends: Some((feed, out)),
             opening: None,
         };
-        shown.phase = Phase::Waiting;
         if let (Some(connection), Ok(command)) = (shown.connection.clone(), command) {
             let size = shown.slot.size();
             let opening = tokio::task::spawn_local(async move {
@@ -634,6 +699,21 @@ impl<C: Connection> Panes<C> {
             return Vec::new();
         }
         self.attach(index, LeadAttachment::new(false), true)
+    }
+
+    /// The view gave the pane `id` a grid while it held no terminal: a pane still waiting for its first attach, with
+    /// its machine connected and no retry on its way, attaches now.
+    fn sized(&mut self, id: u64) -> Vec<MobileEvent> {
+        let Some(index) = self.shown.iter().position(|shown| shown.id == id) else {
+            return Vec::new();
+        };
+        let shown = &self.shown[index];
+        let waiting = shown.phase == Phase::Waiting && shown.attachment.is_none() && shown.retry.is_none();
+        if !waiting || shown.connection.is_none() {
+            return Vec::new();
+        }
+        let cover = shown.lead.is_some();
+        self.attach(index, LeadAttachment::new(false), cover)
     }
 
     /// The program exited: reported, and attached again, attach-only, when the origin respawned it.

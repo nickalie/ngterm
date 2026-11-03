@@ -55,7 +55,7 @@ fn a_terminal_installed_after_a_resize_raced_its_build_takes_the_new_grid() {
         cell_width: 9,
         cell_height: 18,
     };
-    let slot = PaneSlot::new(built);
+    let slot = PaneSlot::new(built, Arc::new(|| {}));
     let (terminal, _feed, out) = ngterm_term::Pane::stream(&config(built, Arc::new(|| {}))).unwrap();
     // the view's resize lands between the build and the install
     let resized = GridSize { cols: 100, ..built };
