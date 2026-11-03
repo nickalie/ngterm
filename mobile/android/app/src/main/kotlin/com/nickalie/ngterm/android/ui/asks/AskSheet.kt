@@ -18,12 +18,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
@@ -31,6 +33,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nickalie.ngterm.android.AppGraph
+import com.nickalie.ngterm.android.data.askTag
 import com.nickalie.ngterm.android.ui.components.StatusGlyph
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.StatusShape
@@ -41,15 +44,27 @@ import com.nickalie.ngterm.core.ffi.RemoteAskButton
 /**
  * The first open ask of the session on screen, as a sheet over it (the ask rule: an ask out of sight is a
  * notification instead). Its answer, or a dismissal (Back or a swipe, which the origin gets as Escape), goes to the
- * core once.
+ * core once. A sheet's draft outlives the sheet while its ask is open: one that left the screen (the app went to the
+ * background, another session was opened) comes back as the user left it.
  */
 @Composable
 fun AskPrompt(graph: AppGraph) {
     val open by graph.asks.open.collectAsStateWithLifecycle()
     val shown by graph.asks.onScreen.collectAsStateWithLifecycle()
+    val drafts = rememberSaveableStateHolder()
+    // the asks open before: a draft goes with its ask
+    val before = rememberSaveable { ArrayList<String>() }
+    LaunchedEffect(open) {
+        val now = open.map(::askTag)
+        before.filterNot { it in now }.forEach(drafts::removeState)
+        before.clear()
+        before.addAll(now)
+    }
     val ask = open.firstOrNull { it.key == shown } ?: return
     key(ask.key, ask.ask.id) {
-        AskSheet(ask = ask.ask, onAnswer = { reply -> graph.asks.answer(ask.key, ask.ask.id, reply) })
+        drafts.SaveableStateProvider(askTag(ask)) {
+            AskSheet(ask = ask.ask, onAnswer = { reply -> graph.asks.answer(ask.key, ask.ask.id, reply) })
+        }
     }
 }
 

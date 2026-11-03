@@ -141,11 +141,17 @@ fun statusTag(key: SessionKey): String = "status:${key.machineId}:${key.sessionI
 fun lostTag(machineId: String): String = "lost:$machineId"
 
 /** The tag of [open]'s notification. */
-fun askTag(open: OpenAsk): String = "ask:${open.key.machineId}:${open.key.sessionId}:${open.ask.id}"
+fun askTag(open: OpenAsk): String = askTag(open.key, open.ask.id)
+
+/** The tag of the notification of [key]'s ask [askId]. */
+fun askTag(
+    key: SessionKey,
+    askId: String,
+): String = "ask:${key.machineId}:${key.sessionId}:$askId"
 
 /**
  * What reaches the user as notifications ([sink]), from the core's events and the open [asks]:
- * - a session's agent's notifications ([AlertKind.Notices]);
+ * - a session's agent's notifications ([AlertKind.Notices]), taken down when the session is detached;
  * - an agent status change to waiting (`blocked`) or done (`completed`) while its session isn't on screen, replaced
  *   by the next change and taken down by one to anything else, by the session coming on screen or being detached;
  * - a machine with attached sessions lost for good ([AlertKind.Errors]: unreachable, or its host key changed), taken
@@ -175,6 +181,9 @@ class Alerts(
     // the asks posted, by tag (scope's thread)
     private val posted = mutableSetOf<String>()
 
+    // the agents' notices up, by session: taken down with its detach, since their tap leads to an attached session
+    private val noticeTags = ConcurrentHashMap<SessionKey, MutableSet<String>>()
+
     init {
         connections.listen(::onEvent)
         scope.launch {
@@ -189,7 +198,10 @@ class Alerts(
             var before = emptySet<SessionKey>()
             connections.attached.collect { attached ->
                 val now = attached.flatMap { (machine, ids) -> ids.map { SessionKey(machine, it) } }.toSet()
-                (before - now).forEach { sink.cancel(statusTag(it)) }
+                (before - now).forEach { gone ->
+                    sink.cancel(statusTag(gone))
+                    noticeTags.remove(gone)?.forEach(sink::cancel)
+                }
                 before = now
             }
         }
@@ -251,6 +263,7 @@ class Alerts(
         if (AlertKind.Notices !in kinds) return
         val session = sessionName(key)
         val tag = "notice:${key.machineId}:${key.sessionId}:${notices.incrementAndGet()}"
+        noticeTags.computeIfAbsent(key) { ConcurrentHashMap.newKeySet() } += tag
         sink.post(Alert.Notice(tag, key, machineName(key.machineId), session, title.ifBlank { session }, body, pane))
     }
 

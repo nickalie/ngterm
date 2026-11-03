@@ -34,6 +34,9 @@ class LinkService : Service() {
     private lateinit var notifications: Notifications
     private var names: List<String> = emptyList()
 
+    // whether it has been in the foreground: a service started for the foreground must get there before it stops
+    private var foreground = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -47,7 +50,12 @@ class LinkService : Service() {
                 .distinctUntilChanged()
                 .collect { now ->
                     names = now
-                    if (now.isEmpty()) stopSelf() else show()
+                    // the first emission runs inside onCreate, before onStartCommand has put it in the foreground:
+                    // stopping then would crash the app, so an empty one waits for onStartCommand to stop it
+                    when {
+                        now.isNotEmpty() -> show()
+                        foreground -> stopSelf()
+                    }
                 }
         }
     }
@@ -77,6 +85,7 @@ class LinkService : Service() {
                 0
             }
         ServiceCompat.startForeground(this, LINK_NOTIFICATION_ID, notifications.link(names), type)
+        foreground = true
     }
 
     private fun detachAll() {
@@ -94,7 +103,8 @@ class LinkService : Service() {
             try {
                 ContextCompat.startForegroundService(context, Intent(context, LinkService::class.java))
             } catch (_: IllegalStateException) {
-                // the system refuses a foreground start from the background (Android 12+); the next attach retries
+                // the system refuses a foreground start from the background (Android 12+); it is tried again only when
+                // the attached sessions next go from none to some
             }
         }
     }

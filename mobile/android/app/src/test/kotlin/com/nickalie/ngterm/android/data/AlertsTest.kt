@@ -217,6 +217,18 @@ class AlertsTest {
         }
 
     @Test
+    fun detachingASessionTakesItsAgentsNoticesDown() =
+        runTest {
+            attached()
+            core.emit(MobileEvent.Notify("m1", "s1", RemoteNotice("Build done", "All tests passed", null, "notify")))
+            settle()
+            val notice = sink.posted.filterIsInstance<Alert.Notice>().single()
+            connections.detach("m1", "s1")
+            settle()
+            assertTrue(notice.tag in sink.cancelled)
+        }
+
+    @Test
     fun anAsksDeliveryFollowsItsForm() {
         assertEquals(AskDelivery.Actions, deliveryOf(testAsk("yes", "no", "later")))
         assertEquals(AskDelivery.OpenApp, deliveryOf(testAsk("a", "b", "c", "d")))

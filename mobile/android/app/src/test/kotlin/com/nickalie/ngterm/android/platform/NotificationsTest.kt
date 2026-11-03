@@ -116,6 +116,29 @@ class NotificationsTest {
     }
 
     @Test
+    fun aChoiceAskWithAMessageStillSaysToAnswerInTheApp() {
+        val ask = testAsk(choices = testChoices()).copy(message = "Which branch?")
+        val alert = askAlert(AskDelivery.OpenApp, ask)
+        notifications.post(alert)
+        val notification = posted(askTag(alert.open))!!
+        assertEquals("Which branch?", notification.extras.getCharSequence(Notification.EXTRA_TEXT))
+        assertEquals(
+            "Which branch?\nTap to answer in ngterm.",
+            notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString(),
+        )
+    }
+
+    @Test
+    fun buttonsWhoseIdsHashAlikeKeepTheirOwnActions() {
+        // "Aa" and "BB" share a String hash: the request code alone would merge their intents
+        val alert = askAlert(AskDelivery.Actions, testAsk("Aa", "BB"))
+        notifications.post(alert)
+        val actions = posted(askTag(alert.open))!!.actions
+        val pressed = actions.map { askAction(shadowOf(it.actionIntent).savedIntent)!!.buttonId }
+        assertEquals(listOf("Aa", "BB"), pressed)
+    }
+
+    @Test
     fun nothingIsPostedWithoutThePermission() {
         shadowOf(app).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
         val alert = askAlert(AskDelivery.Actions)

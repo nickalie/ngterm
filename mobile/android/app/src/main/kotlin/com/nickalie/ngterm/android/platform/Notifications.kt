@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
@@ -42,6 +43,9 @@ const val ACTION_ANSWER_ASK = "com.nickalie.ngterm.android.ANSWER_ASK"
 const val KEY_ASK_REPLY = "ask_reply"
 
 private const val EXTRA_MACHINE = "machine"
+
+// the scheme of the data URI that makes each notification's intents distinct
+private const val INTENT_SCHEME = "ngterm"
 private const val EXTRA_SESSION = "session"
 private const val EXTRA_PANE = "pane"
 private const val EXTRA_ASK = "ask"
@@ -185,8 +189,10 @@ class Notifications(
         alert: Alert.Ask,
     ) {
         val ask = alert.open.ask
-        val text =
-            ask.message ?: context.getString(R.string.notify_ask_open).takeIf { alert.delivery == AskDelivery.OpenApp }
+        // one answered in the app says so: as its text, or under its message
+        val hint = context.getString(R.string.notify_ask_open).takeIf { alert.delivery == AskDelivery.OpenApp }
+        val message = ask.message?.takeIf { it.isNotBlank() }
+        val text = message ?: hint
         builder
             .setContentTitle(ask.title)
             .setContentText(text)
@@ -194,7 +200,9 @@ class Notifications(
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(false)
             .setOnlyAlertOnce(true)
-        text?.let { builder.setStyle(NotificationCompat.BigTextStyle().bigText(it)) }
+        listOfNotNull(message, hint).takeIf { it.isNotEmpty() }?.let { lines ->
+            builder.setStyle(NotificationCompat.BigTextStyle().bigText(lines.joinToString("\n")))
+        }
         if (alert.delivery == AskDelivery.OpenApp) return
         for (button in ask.buttons) {
             val replies = alert.delivery == AskDelivery.Reply && button.id != ask.cancelId
@@ -211,6 +219,8 @@ class Notifications(
         val intent =
             Intent(context, AskActionReceiver::class.java)
                 .setAction(ACTION_ANSWER_ASK)
+                // the data tells the pending intents apart: extras don't, and the request code is only a hash
+                .setData(Uri.fromParts(INTENT_SCHEME, "${alert.tag}:${button.id}", null))
                 .putExtra(EXTRA_MACHINE, open.key.machineId)
                 .putExtra(EXTRA_SESSION, open.key.sessionId)
                 .putExtra(EXTRA_ASK, open.ask.id)
@@ -242,7 +252,7 @@ class Notifications(
         PendingIntent.getActivity(
             context,
             tag.hashCode(),
-            openIntent(context, target),
+            openIntent(context, target).setData(Uri.fromParts(INTENT_SCHEME, tag, null)),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 

@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.ui
 
+import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -108,7 +109,7 @@ fun NgtermApp(
             val target by graph.opens.pending.collectAsStateWithLifecycle()
             LaunchedEffect(target) {
                 target?.let { opened ->
-                    selected = goTo(opened, sessions)
+                    selected = goTo(opened, sessions, graph.connections.attached.value)
                     graph.opens.consume(opened)
                 }
             }
@@ -146,30 +147,36 @@ fun NgtermApp(
     }
 }
 
-// opens a notification's target: its session (and pane) under Sessions, or the first destination for a machine's
+// opens a notification's target: its session (and pane) under Sessions while it is attached ([attached]); Machines for
+// a machine's, or for a session no longer attached (detached since, or gone with a process the system ended)
 private fun goTo(
     target: OpenTarget,
     sessions: SessionViewModel,
+    attached: Map<String, Set<String>>,
 ): String {
-    val session = target.sessionId ?: return MACHINES
+    val session = target.sessionId?.takeIf { it in attached[target.machineId].orEmpty() } ?: return MACHINES
     val key = SessionKey(target.machineId, session)
     sessions.open(key)
     target.paneId?.let { sessions.focus(key, it) }
     return SESSIONS
 }
 
-// tells the asks which session is on screen: the open one while Sessions shows it and the app is in the foreground
+// tells the asks which session is on screen: the open one while Sessions shows it and the app is in the foreground. An
+// activity recreated for a configuration change (a rotation, a theme switch) keeps it: the new one restores it on its
+// first frame, and letting it go in between would post the sheet's ask as a notification.
 @Composable
 private fun OnScreen(
     graph: AppGraph,
     open: OpenSession?,
 ) {
+    val activity = LocalActivity.current
+    val changing = { activity?.isChangingConfigurations == true }
     // collected whatever the state: collecting only while started would never see the app leave
     val state by LocalLifecycleOwner.current.lifecycle.currentStateFlow
         .collectAsState()
     val shown = (open as? OpenSession.Live)?.key?.takeIf { state.isAtLeast(Lifecycle.State.STARTED) }
-    LaunchedEffect(shown) { graph.asks.showing(shown) }
-    DisposableEffect(graph) { onDispose { graph.asks.showing(null) } }
+    LaunchedEffect(shown) { if (shown != null || !changing()) graph.asks.showing(shown) }
+    DisposableEffect(graph) { onDispose { if (!changing()) graph.asks.showing(null) } }
 }
 
 @Composable

@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -80,6 +82,20 @@ class LinkServiceTest {
         idle()
         assertEquals(emptyMap<String, Set<String>>(), test.connections.attached.value)
         assertEquals(2, test.core.calls.count { it.method == "detachSession" })
+        assertTrue(shadowOf(service).isStoppedBySelf)
+    }
+
+    @Test
+    fun aServiceCreatedWithNothingAttachedGetsToTheForegroundBeforeItStops() {
+        // the sessions went back to none between the keeper's start and the service's creation
+        val controller = Robolectric.buildService(LinkService::class.java).create()
+        idle()
+        val service = controller.get()
+        // stopping before startForeground would crash the app
+        assertFalse(shadowOf(service).isStoppedBySelf)
+        controller.startCommand(0, 1)
+        idle()
+        assertNotNull(shadowOf(service).lastForegroundNotification)
         assertTrue(shadowOf(service).isStoppedBySelf)
     }
 

@@ -19,7 +19,11 @@ import androidx.core.app.RemoteInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestApplication
 import com.nickalie.ngterm.android.TestGraph
+import com.nickalie.ngterm.android.data.Alert
 import com.nickalie.ngterm.android.data.Alerts
+import com.nickalie.ngterm.android.data.AskDelivery
+import com.nickalie.ngterm.android.data.OpenAsk
+import com.nickalie.ngterm.android.data.OpenTarget
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.platform.KEY_ASK_REPLY
 import com.nickalie.ngterm.android.platform.Notifications
@@ -47,6 +51,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -181,6 +186,48 @@ class AskFlowTest {
         compose.runOnIdle { test.core.emit(MobileEvent.AskDismiss("m1", "s1", "A1")) }
         waitFor { !shows("Deploy to production?") }
         assertEquals(emptyList<FakeCall>(), answers())
+    }
+
+    @Test
+    fun anAsksDraftOutlivesItsSheetLeavingTheScreen() {
+        attach(open = true)
+        ask(testAsk(input = RemoteAskInput(false, "main", "Branch")))
+        waitFor { shows("main") }
+        compose.onNode(hasSetTextAction()).performTextReplacement("release/2.0")
+        // the app goes to the background, or another session is opened, and comes back
+        compose.runOnIdle { test.asks.showing(null) }
+        waitFor { !shows("Deploy to production?") }
+        compose.runOnIdle { test.asks.showing(key) }
+        waitFor { shows("release/2.0") }
+        compose.onNodeWithText("yes").performClick()
+        waitFor { answers().isNotEmpty() }
+        assertEquals(answer(AskReply("yes", "release/2.0", null)), answers().single())
+    }
+
+    @Test
+    fun anActionOfAnAskNoLongerOpenTakesItsNotificationDown() {
+        // a notification left from a process the system ended: its ask is open no more
+        val app = compose.activity.application
+        val stale = Alert.Ask(OpenAsk(key, testAsk()), "build-01", "docs-site", AskDelivery.Actions)
+        Notifications(app).post(stale)
+        val manager = compose.activity.getSystemService(NotificationManager::class.java)
+        val notification: Notification = shadowOf(manager).getNotification(stale.tag, 1)
+        notification.actions[0].actionIntent.send()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertNull(shadowOf(manager).getNotification(stale.tag, 1))
+        assertEquals(emptyList<FakeCall>(), answers())
+    }
+
+    @Test
+    fun aNotificationsTapForASessionNoLongerAttachedStaysOnMachines() {
+        attach(open = false)
+        compose.runOnIdle { test.connections.detach("m1", "s1") }
+        compose.runOnIdle { test.opens.request(OpenTarget("m1", "s1", "P2")) }
+        compose.waitForIdle()
+        waitFor { test.opens.pending.value == null }
+        // the machine's listing, not an empty Sessions
+        assertTrue(shows("docs-site"))
+        assertEquals(emptySet<PaneRef>(), test.core.shownPanes)
     }
 
     @Test

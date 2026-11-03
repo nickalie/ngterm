@@ -7,6 +7,7 @@ import androidx.core.app.RemoteInput
 import com.nickalie.ngterm.android.GraphOwner
 import com.nickalie.ngterm.android.data.Asks
 import com.nickalie.ngterm.android.data.SessionKey
+import com.nickalie.ngterm.android.data.askTag
 import com.nickalie.ngterm.android.ui.asks.askReply
 import com.nickalie.ngterm.android.ui.asks.fitAskText
 import com.nickalie.ngterm.core.ffi.AskReply
@@ -15,7 +16,8 @@ import com.nickalie.ngterm.core.ffi.RemoteAsk
 /**
  * Answers an ask from its notification: the button an action names, with an input ask's inline reply as its text.
  * The ask leaves the open asks, which takes its notification down; an ask no longer open (answered or taken back
- * meanwhile) is left be.
+ * meanwhile, or lost with a process the system ended) is left be, and its notification, which nothing else would
+ * take down any more, is cancelled.
  */
 class AskActionReceiver : BroadcastReceiver() {
     override fun onReceive(
@@ -25,7 +27,9 @@ class AskActionReceiver : BroadcastReceiver() {
         val action = askAction(intent) ?: return
         val typed = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_ASK_REPLY)?.toString()
         val owner = context.applicationContext as? GraphOwner ?: return
-        answerFromNotification(owner.graph.asks, action, typed)
+        if (!answerFromNotification(owner.graph.asks, action, typed)) {
+            Notifications(context).cancel(askTag(SessionKey(action.machineId, action.sessionId), action.askId))
+        }
     }
 }
 

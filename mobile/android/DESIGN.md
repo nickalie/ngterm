@@ -586,11 +586,12 @@ The plan, reviewed against the brief:
 
 Each machine has its own channel, named after it ("Questions, notifications and agent status from build-01"), so
 the system's settings can quiet one machine. Notifications use the small `>_` and the brand copper as accent; a tap
-opens the session and the pane it is about (through the session view's selection, never the keyboard's focus).
+opens the session and the pane it is about (through the session view's selection, never the keyboard's focus), or
+Machines when that session is no longer attached.
 
 | What | Title / text | Lasts |
 |---|---|---|
-| An agent's notification (`ngtermctl notify`) | its title (or the session's name) / its body; the session as the header's subtext | each its own |
+| An agent's notification (`ngtermctl notify`) | its title (or the session's name) / its body; the session as the header's subtext | each its own, until the session is detached |
 | Waiting (status `blocked`) | "docs-site is waiting for you" / the session's context, or "On build-01" | one per session: the next status replaces it, any other takes it down, and so does opening the session or detaching it |
 | Done (status `completed`) | "docs-site finished" / as above | as above |
 | A machine lost for good while sessions are attached | "Lost build-01" / the core's reason, or that its host key changed | until it connects again; the tap opens the app |
@@ -598,8 +599,8 @@ opens the session and the pane it is about (through the session view's selection
 
 - **Asks in a notification:** a button ask gets an action per button; an input ask an inline reply per answering
   button (its placeholder as the hint; a one-line field's line breaks become spaces) and its cancel button as a plain
-  action; a choice ask, or one with more than three buttons, says "Tap to answer in ngterm." and opens the session,
-  where the ask is then its sheet. An ask says it once (`onlyAlertOnce`) and isn't cleared by a tap.
+  action; a choice ask, or one with more than three buttons, says "Tap to answer in ngterm." (as its text, or under
+  its message) and opens the session, where the ask is then its sheet. An ask says it once (`onlyAlertOnce`) and isn't cleared by a tap.
 - Waiting, Done, agents' notifications and lost machines can each be turned off (Settings); asks can't, since they
   wait for an answer. A status change of the session on screen posts nothing: the user is looking at it.
 
