@@ -40,6 +40,30 @@ fn context() -> PaneContext {
     }
 }
 
+#[test]
+fn remote_clipboard_destination_follows_both_session_panes() {
+    let mut session = Session::new(ngterm_core::model::SessionSeed {
+        initial_cwd: "/srv".to_owned(),
+        remote_host: Some("user@remote".to_owned()),
+        split_pane_identity: Some(Uuid::new_v4()),
+        ..ngterm_core::model::SessionSeed::default()
+    });
+    let (window, workspace) = (Uuid::new_v4(), Uuid::new_v4());
+    for spec in [
+        PaneSpec::left(window, workspace, &session),
+        PaneSpec::split(window, workspace, &session).unwrap(),
+    ] {
+        assert_eq!(spec.terminal_spec().remote_host.as_deref(), Some("user@remote"));
+    }
+    // Scratch panes run a local shell even when the session was attached from another machine.
+    assert_eq!(
+        PaneSpec::scratch(window, workspace, &mut session)
+            .terminal_spec()
+            .remote_host,
+        None
+    );
+}
+
 /// A window of one workspace holding three sessions, the first selected.
 pub(crate) fn three_sessions() -> (WindowLibrary, Uuid, Vec<Uuid>) {
     let mut library = WindowLibrary::seeded("/home/u");

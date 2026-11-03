@@ -679,6 +679,7 @@ fn a_password_prompt_shows_the_lock_whatever_the_cursor() {
 
 fn spec() -> TerminalSpec {
     TerminalSpec {
+        remote_host: None,
         token: "pane-token".into(),
         live: false,
         font_size: None,

@@ -28,6 +28,7 @@ mod clipboard;
 mod colors;
 mod element;
 mod font;
+mod image_paste;
 pub mod input;
 mod keyboard;
 mod keycodes;
@@ -179,6 +180,8 @@ impl Default for TerminalConfig {
 /// Who a terminal is (GTK's `SurfaceSpec` identity part).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TerminalSpec {
+    /// SSH destination for clipboard uploads and local Ctrl+V handling.
+    pub remote_host: Option<String>,
     /// Baked into the shell as `NGTERM_PANE_ID`; empty for a terminal with no pane identity.
     pub token: String,
     /// Attached to a live-session daemon.
@@ -975,13 +978,19 @@ fn run_effect(shared: &Shared, effect: Effect, cx: &mut Context<Terminal>) {
         // each location's store per OS (`selection_clipboard.rs`)
         Effect::Copy(text, location) => selection_clipboard::write(location, ClipboardItem::new_string(text), cx),
         Effect::Paste(location) => {
-            let item = selection_clipboard::read(location, cx);
-            let (Some(text), Some(pane)) = (item.and_then(|item| item.text()), shared.pane()) else {
-                return;
-            };
             if shared.is_readonly() {
                 return;
             }
+            let item = selection_clipboard::read(location, cx);
+            if location == ClipboardLocation::Standard
+                && let (Some(host), Some(item)) = (&shared.spec.remote_host, &item)
+                && image_paste::start(shared, host, item, cx)
+            {
+                return;
+            }
+            let (Some(text), Some(pane)) = (item.and_then(|item| item.text()), shared.pane()) else {
+                return;
+            };
             // pasted as confirmed, as upstream and the GTK build complete libghostty's unsafe-paste confirmation
             if let Err(err) = pane.paste(&text, PasteSource::Clipboard, location, true) {
                 tracing::warn!(target: "ngterm::surface", key = shared.key, %err, "paste failed");

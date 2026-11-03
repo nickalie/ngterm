@@ -42,6 +42,8 @@ pub struct PaneSpec {
     pub wait: bool,
     /// The point size the terminal starts at: the session's persisted size, `None` for the configured one.
     pub font_size: Option<f64>,
+    /// The SSH destination of an attached remote pane.
+    pub remote_host: Option<String>,
 }
 
 impl PaneSpec {
@@ -65,6 +67,7 @@ impl PaneSpec {
             command: session.launch.command.clone(),
             wait: session.launch.wait,
             font_size: session.font_size,
+            remote_host: session.remote_host().map(str::to_owned),
         }
     }
 
@@ -81,6 +84,7 @@ impl PaneSpec {
             command: session.split_launch.command.clone(),
             wait: session.split_launch.wait,
             font_size: session.font_size,
+            remote_host: session.remote_host().map(str::to_owned),
         })
     }
 
@@ -98,6 +102,7 @@ impl PaneSpec {
             command: session.scratch_command.take(),
             wait: false,
             font_size: session.font_size,
+            remote_host: None,
         }
     }
 
@@ -143,6 +148,7 @@ impl PaneSpec {
             token: self.token.clone(),
             live: false,
             font_size,
+            remote_host: self.remote_host.clone(),
         }
     }
 

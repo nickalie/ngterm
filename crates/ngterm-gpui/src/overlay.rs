@@ -605,6 +605,7 @@ fn spawn(
     #[expect(clippy::cast_possible_truncation, reason = "a point size fits an f32")]
     let font_size = session.font_size.map(|size| size as f32);
     let spec = TerminalSpec {
+        remote_host: None,
         token: String::new(),
         live: false,
         font_size,

@@ -27,6 +27,7 @@
 
 pub(crate) mod attach;
 pub mod client;
+pub mod clipboard;
 mod companion_page;
 pub(crate) mod companions;
 pub mod frames;
