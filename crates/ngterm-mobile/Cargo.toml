@@ -49,7 +49,8 @@ serde_json.workspace = true
 futures-lite.workspace = true
 # New Session's waits on a paused clock
 tokio = { workspace = true, features = ["test-util"] }
-# a stand-in far `ngtermctl` the chat's remote lines are run against
+# a stand-in far `ngtermctl` the chat's remote lines are run against, and the scratch home, vendor root and stubs
+# of scripts/setup-ios.sh's tests
 tempfile.workspace = true
 
 [lints]
