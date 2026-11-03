@@ -223,8 +223,8 @@ class SessionScreenshotTest(
 
     companion object {
         private const val CONTEXT = "Rewrite the install guide"
-        private val Waiting = AgentStatus("Waiting for input", "#f0904f", "diamond")
-        private val Working = AgentStatus("Working", "#5fbfaa", "circle")
+        private val Waiting = AgentStatus("blocked", null, null)
+        private val Working = AgentStatus("active", null, null)
 
         private val SCREENS =
             mapOf(

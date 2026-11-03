@@ -69,3 +69,36 @@ enum class StatusTone(
             Idle -> colors.idle
         }
 }
+
+/**
+ * An agent's status as its origin names it (ngterm-core's `AgentStatus` wire names), with the word, glyph and color
+ * the app gives it when the origin sets none. The origin sends a color and a shape only when the agent overrides them;
+ * desktop otherwise falls back to its settings and then its defaults (orange for blocked, green for completed:
+ * ngterm-gpui's `status_glyph::resolve`). The app's defaults are its own tones in those roles: working is the healthy
+ * verdigris, waiting the attention copper and diamond, done the verdigris star.
+ */
+enum class AgentState(
+    private val wire: String,
+    @param:StringRes val word: Int,
+    val shape: StatusShape,
+) {
+    Active("active", R.string.agent_active, StatusShape.Circle),
+    Blocked("blocked", R.string.agent_blocked, StatusShape.Diamond),
+    Completed("completed", R.string.agent_completed, StatusShape.Star),
+    Idle("idle", R.string.status_idle, StatusShape.Capsule),
+    ;
+
+    /** This state's color in [colors] when the origin sets none. */
+    fun color(colors: StatusColors) =
+        when (this) {
+            Active, Completed -> colors.online
+            Blocked -> colors.attention
+            Idle -> colors.idle
+        }
+
+    companion object {
+        /** The state an origin names (its wire spelling); `null` for none or one this build doesn't know. */
+        fun fromWire(name: String?): AgentState? =
+            entries.firstOrNull { it.wire.equals(name?.trim(), ignoreCase = true) }
+    }
+}

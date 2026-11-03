@@ -30,6 +30,7 @@ import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.ui.components.AgentStatusBadge
 import com.nickalie.ngterm.android.ui.components.MachineCard
 import com.nickalie.ngterm.android.ui.components.StatusBadge
+import com.nickalie.ngterm.android.ui.components.agentStatusWord
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.StatusTone
 import com.nickalie.ngterm.core.ffi.RemoteSession
@@ -189,9 +190,10 @@ private fun Sessions(sessions: List<RemoteSession>) {
     withStatus.groupBy { it.status.orEmpty() }.forEach { (status, group) ->
         val first = group.first()
         AgentStatusBadge(
-            text = stringResource(R.string.machine_status_count, group.size, status.lowercase()),
+            status = status,
             colorHex = first.statusColor,
             shape = first.statusShape,
+            label = stringResource(R.string.machine_status_count, group.size, agentStatusWord(status).lowercase()),
         )
     }
     if (idle.isNotEmpty()) {

@@ -19,6 +19,10 @@
   <string name="status_attention">Needs you</string>
   <string name="status_error">Failed</string>
   <string name="status_idle">Idle</string>
+  <!-- an agent's status, as the origin names it: active, blocked, completed -->
+  <string name="agent_active">Working</string>
+  <string name="agent_blocked">Waiting</string>
+  <string name="agent_completed">Done</string>
 
   <!-- the shared components' fixed words -->
   <string name="action_dismiss">Dismiss</string>

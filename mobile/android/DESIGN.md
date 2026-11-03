@@ -75,10 +75,19 @@ Defined in `ui/theme/Color.kt`. `ContrastTest` checks every promise below, light
 
 - Every status color is 4.5:1 on every surface up to `surfaceContainerHigh`, so it can be text.
 - No two tones share a glyph.
-- An agent's status comes from its origin as text, a hex color and one of upstream's six shapes (circle, square,
-  triangle, diamond, capsule, star). `AgentStatusBadge` draws that shape, and lifts the color toward white or black
-  (`readableOn`) until it reads on every surface up to `surfaceContainerHigh`, so it holds on a card or the sidebar
-  as on the ground: the origin's color is the user's choice, the legibility is ours.
+- An agent's status comes from its origin as its wire name (`active`, `blocked`, `completed`, `idle`), with a hex
+  color and one of upstream's six shapes (circle, square, triangle, diamond, capsule, star) only when the agent
+  overrode them. `AgentStatusBadge` says the name as a word and draws the origin's shape, lifting its color toward
+  white or black (`readableOn`) until it reads on every surface up to `surfaceContainerHigh`, so it holds on a card
+  or the sidebar as on the ground: the origin's color is the user's choice, the legibility is ours. What the origin
+  leaves unset comes from `AgentState`, the app's tones in desktop's roles (orange blocked, green completed):
+
+  | Wire name | Word | Glyph | Color |
+  |---|---|---|---|
+  | `active` | Working | filled circle | Online |
+  | `blocked` | Waiting | diamond | Attention |
+  | `completed` | Done | star | Online |
+  | `idle` | Idle | capsule | Idle |
 
 ### Terminal palettes
 
@@ -496,7 +505,9 @@ compact                            medium (rail open)               expanded
   is one pane at a time. A pane alone keeps 4dp at both sides, so its text stays off the screen's edge.
 - **The HUD** (`HudBanner`): a strip under the bar while the origin shows one, `surfaceContainerHigh`, 6dp radius,
   the message in bodyMedium semibold and its detail under it, a small spinner when the origin runs one; announced
-  politely. The origin's colors and position are desktop's: on a phone the strip is where it can't cover text.
+  politely. The origin's colors and position are desktop's: on a phone the strip is where it can't cover text. Under
+  320dp of height (a phone on its side with the soft keyboard up) the strip steps aside, so the terminal keeps its
+  rows; it comes back with the room.
 - **Covers** (`LeadCover`), over a pane, each with the action that fixes it:
   - *Another device drives it* (the pane follows): the lock, "Another device is driving this pane", "Its size and
     keys are the other device's. Take control to type here; the other device follows.", **Take control**. On a

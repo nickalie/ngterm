@@ -7,6 +7,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
@@ -39,6 +40,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.ExtraKeysChoice
 import com.nickalie.ngterm.android.data.SessionKey
@@ -86,7 +88,7 @@ fun SessionScreen(
     val move: (Boolean) -> Unit = { forward -> ids.cyclicNeighbor(focused, forward)?.let(focus) }
     val selected = focused?.let { PaneRef(key.machineId, key.sessionId, it) }
     SessionKeyboard(keyboard, selected?.let(panes::get), move, actions)
-    Column(
+    BoxWithConstraints(
         modifier
             .fillMaxSize()
             .background(NgtermTheme.terminal.background)
@@ -94,33 +96,40 @@ fun SessionScreen(
                 WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
             ),
     ) {
-        SessionBar(
-            session = session,
-            focused = focused,
-            onBack = actions.onBack,
-            onSelectPane = focus,
-            onDetach = { actions.onDetach(key) },
-            onEnd = { actions.onEnd(key) },
-        )
-        live.hud?.let { HudBanner(it, Modifier.padding(NgtermTheme.spacing.sm)) }
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            val paneActions =
-                remember(keyboard, session.machine, actions, key) {
-                    PaneActions(
-                        keyboard = keyboard,
-                        machine = session.machine,
-                        onShow = actions.onShow,
-                        onRetry = actions.onRetry,
-                        onFocus = { actions.onFocus(key, it) },
-                        onTakeLead = actions.onTakeLead,
-                        onDetach = { actions.onDetach(key) },
-                    )
-                }
-            Panes(session, spots, focused, compact, paneActions, move)
+        // a short window (a phone on its side with the soft keyboard up) keeps its rows for the terminal
+        val roomy = maxHeight >= HudRoom
+        Column(Modifier.fillMaxSize()) {
+            SessionBar(
+                session = session,
+                focused = focused,
+                onBack = actions.onBack,
+                onSelectPane = focus,
+                onDetach = { actions.onDetach(key) },
+                onEnd = { actions.onEnd(key) },
+            )
+            live.hud?.takeIf { roomy }?.let { HudBanner(it, Modifier.padding(NgtermTheme.spacing.sm)) }
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                val paneActions =
+                    remember(keyboard, session.machine, actions, key) {
+                        PaneActions(
+                            keyboard = keyboard,
+                            machine = session.machine,
+                            onShow = actions.onShow,
+                            onRetry = actions.onRetry,
+                            onFocus = { actions.onFocus(key, it) },
+                            onTakeLead = actions.onTakeLead,
+                            onDetach = { actions.onDetach(key) },
+                        )
+                    }
+                Panes(session, spots, focused, compact, paneActions, move)
+            }
+            ExtraKeysRow(keyboard, layout = extraKeys)
         }
-        ExtraKeysRow(keyboard, layout = extraKeys)
     }
 }
+
+// the least height the session view shows the origin's HUD in: below it the HUD would take the terminal's last rows
+private val HudRoom = 320.dp
 
 // the panes, or what stands in for them before the layout arrives
 @Composable

@@ -32,6 +32,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nickalie.ngterm.android.AppGraph
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.service.LinkService
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
@@ -51,7 +52,17 @@ fun NotificationPermissionPrompt(graph: AppGraph) {
     val asked by askedFlow.collectAsStateWithLifecycle(initialValue = true)
     val attached by graph.connections.attached.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    // the attached sessions' service went to the foreground before the answer, its notification dropped for want of
+    // the permission: started again, it posts it now
+    val launcher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
+            if (allowed &&
+                graph.connections.attached.value.values
+                    .any { it.isNotEmpty() }
+            ) {
+                LinkService.start(context)
+            }
+        }
     val granted =
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED

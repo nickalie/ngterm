@@ -41,11 +41,9 @@ import com.nickalie.ngterm.android.ui.components.BusBar
 import com.nickalie.ngterm.android.ui.components.SectionHeader
 import com.nickalie.ngterm.android.ui.components.SessionRow
 import com.nickalie.ngterm.android.ui.components.StatusGlyph
+import com.nickalie.ngterm.android.ui.components.agentStatusLook
+import com.nickalie.ngterm.android.ui.components.agentStatusWord
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
-import com.nickalie.ngterm.android.ui.theme.StatusShape
-import com.nickalie.ngterm.android.ui.theme.parseHexColor
-import com.nickalie.ngterm.android.ui.theme.readableOn
-import com.nickalie.ngterm.android.ui.theme.textGrounds
 
 /**
  * The attached sessions as the Sessions destination lists them when none is open: a heading per machine, then a row
@@ -150,7 +148,7 @@ private fun RailSession(
 ) {
     val colors = MaterialTheme.colorScheme
     val status = session.status
-    val description = listOfNotNull(session.name, status?.text).joinToString(", ")
+    val description = listOfNotNull(session.name, status?.let { agentStatusWord(it.text) }).joinToString(", ")
     Row(
         modifier =
             modifier
@@ -166,9 +164,8 @@ private fun RailSession(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(NgtermTheme.spacing.xs),
         ) {
-            val tint =
-                parseHexColor(status?.color)?.let { readableOn(it, colors.textGrounds()) } ?: NgtermTheme.status.idle
-            StatusGlyph(StatusShape.fromWire(status?.shape), tint)
+            val look = agentStatusLook(status?.text, status?.color, status?.shape)
+            StatusGlyph(look.shape, look.color)
             Text(
                 text = session.name,
                 style = MaterialTheme.typography.labelSmall,

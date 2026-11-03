@@ -38,12 +38,13 @@ val SampleImportedKey =
         imported = true,
     )
 
+// an agent's status as an origin lists it: its wire name, with a color and a shape only when the agent overrode them
 private fun status(
     id: String,
-    text: String,
-    color: String,
-    shape: String,
-) = fakeSession(id).copy(status = text, statusColor = color, statusShape = shape)
+    wire: String,
+    color: String? = null,
+    shape: String? = null,
+) = fakeSession(id).copy(status = wire, statusColor = color, statusShape = shape)
 
 /** One machine in each state the home shows. */
 val SampleMachines =
@@ -52,9 +53,9 @@ val SampleMachines =
             testMachine(id = "m1"),
             Link.Connected,
             listOf(
-                status("s1", "Working", "#5fbfaa", "circle"),
-                status("s2", "Working", "#5fbfaa", "circle"),
-                status("s3", "Waiting", "#f0904f", "diamond"),
+                status("s1", "active"),
+                status("s2", "active"),
+                status("s3", "blocked"),
                 fakeSession("s4"),
             ),
         ),
@@ -114,11 +115,11 @@ val SampleSessions =
         link = Link.Connected,
         sessions =
             listOf(
-                status("s1", "Working", "#5fbfaa", "circle").copy(
+                status("s1", "active").copy(
                     name = "api-refactor",
                     context = "Split the billing service into its own crate",
                 ),
-                status("s3", "Waiting for input", "#f0904f", "diamond").copy(
+                status("s3", "blocked").copy(
                     name = "docs-site",
                     context = "Rewrite the install guide",
                 ),

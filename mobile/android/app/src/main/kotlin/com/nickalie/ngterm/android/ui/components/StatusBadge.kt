@@ -17,6 +17,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.nickalie.ngterm.android.ui.theme.AgentState
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.StatusShape
 import com.nickalie.ngterm.android.ui.theme.StatusTone
@@ -51,21 +52,52 @@ fun StatusBadge(
 }
 
 /**
- * An agent's status as its origin sets it: [text] after the glyph its [shape] names, in its [colorHex] made readable on
- * every one of [backgrounds] (an origin's color is the user's choice and may not contrast; the word is always there
- * besides). By default those are every surface up to `surfaceContainerHigh`, so the badge reads on the ground, a
- * [MachineCard] or a sidebar [SessionRow] alike.
+ * An agent's status as its origin sets it: [label] (by default the word for [status], the origin's wire name:
+ * [agentStatusWord]) after the glyph [agentStatusLook] resolves. By default [backgrounds] are every surface up to
+ * `surfaceContainerHigh`, so the badge reads on the ground, a [MachineCard] or a sidebar [SessionRow] alike.
  */
 @Composable
 fun AgentStatusBadge(
-    text: String,
+    status: String,
     colorHex: String?,
     shape: String?,
     modifier: Modifier = Modifier,
     backgrounds: List<Color> = MaterialTheme.colorScheme.textGrounds(),
+    label: String = agentStatusWord(status),
 ) {
-    val color = parseHexColor(colorHex)?.let { readableOn(it, backgrounds) } ?: NgtermTheme.status.idle
-    GlyphAndLabel(StatusShape.fromWire(shape), color, text, modifier)
+    val look = agentStatusLook(status, colorHex, shape, backgrounds)
+    GlyphAndLabel(look.shape, look.color, label, modifier)
+}
+
+/** The word for an agent's [status] as its origin names it ([AgentState]); a status this build doesn't know as is. */
+@Composable
+fun agentStatusWord(status: String): String = AgentState.fromWire(status)?.let { stringResource(it.word) } ?: status
+
+/** The glyph and color an agent status is drawn with. */
+data class AgentStatusLook(
+    val shape: StatusShape,
+    val color: Color,
+)
+
+/**
+ * How an agent's [status] is drawn: the shape and the `#rrggbb` color its origin sets ([shape], [colorHex]), the color
+ * made readable on every one of [backgrounds] (an origin's color is the user's choice and may not contrast; the word
+ * is always there besides). What the origin leaves unset comes from the status's [AgentState], then the circle and the
+ * idle color.
+ */
+@Composable
+fun agentStatusLook(
+    status: String?,
+    colorHex: String?,
+    shape: String?,
+    backgrounds: List<Color> = MaterialTheme.colorScheme.textGrounds(),
+): AgentStatusLook {
+    val state = AgentState.fromWire(status)
+    val color =
+        parseHexColor(colorHex)?.let { readableOn(it, backgrounds) }
+            ?: (state?.color(NgtermTheme.status) ?: NgtermTheme.status.idle)
+    val glyph = if (shape.isNullOrBlank()) state?.shape ?: StatusShape.Circle else StatusShape.fromWire(shape)
+    return AgentStatusLook(glyph, color)
 }
 
 @Composable

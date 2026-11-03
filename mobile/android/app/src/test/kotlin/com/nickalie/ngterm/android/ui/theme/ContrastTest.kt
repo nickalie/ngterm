@@ -40,6 +40,18 @@ class ContrastTest {
     }
 
     @Test
+    fun everyAgentStateDefaultReadsAsTextOnEverySurface() {
+        for ((side, pair) in sides) {
+            val (scheme, status) = pair
+            for (state in AgentState.entries) {
+                for ((name, ground) in scheme.grounds()) {
+                    assertContrast("$side ${state.name} on $name", state.color(status), ground)
+                }
+            }
+        }
+    }
+
+    @Test
     fun everyTextRoleReadsOnItsContainer() {
         for ((side, pair) in sides) {
             val scheme = pair.first
