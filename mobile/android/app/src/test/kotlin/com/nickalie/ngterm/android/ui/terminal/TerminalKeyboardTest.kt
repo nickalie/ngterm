@@ -400,12 +400,15 @@ class TerminalKeyboardTest {
         val second = TerminalState(other, EmptyCoroutineContext)
         val host = View(RuntimeEnvironment.getApplication())
         keyboard.target = first
-        val connection = TerminalInputConnection(host, keyboard, first)
+        val connection = TerminalInputConnection(host, keyboard, first).also(keyboard.connections::bind)
         connection.setComposingText("vi", 1)
+        // the target moving on finishes the composition where it was typed, and ends the connection
         keyboard.target = second
+        assertEquals(listOf(FakeInput.Typed("vi")), pane.inputs.toList())
+        connection.commitText("x", 1)
         connection.closeConnection()
         assertEquals(listOf(FakeInput.Typed("vi")), pane.inputs.toList())
-        assertTrue("nothing crosses to the terminal focused since", other.inputs.isEmpty())
+        assertTrue("nothing crosses to the terminal targeted since", other.inputs.isEmpty())
     }
 
     /** A hardware keyboard with [layout], typing into the fake pane through a [TerminalState] of its own. */

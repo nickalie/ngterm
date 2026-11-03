@@ -253,6 +253,7 @@ class SessionScreenshotTest(
                 onBack = if (compact) ({}) else null,
                 onFocus = { _, _ -> },
                 onShow = { _, _ -> },
+                onRetry = { _, _ -> },
                 onTakeLead = {},
                 onDetach = {},
                 onEnd = {},

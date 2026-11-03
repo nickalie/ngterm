@@ -25,12 +25,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
@@ -57,6 +60,10 @@ import com.nickalie.ngterm.core.ffi.StreamState
  * alone and a swipe across it moves to the next or previous one; wider windows show the origin's split. The shown
  * panes' states are [panes] (by pane), and why one could not be shown [failures]. One [keyboard] serves every pane
  * and the extra keys; its chords move between the panes and the sessions.
+ *
+ * The [focused] pane is the selected one, the only one anything typed reaches: a tab, a swipe, a chord and a touch
+ * on a pane ask [SessionViewActions.onFocus] to select it, and the keyboard's target and the input focus follow the
+ * selection, never the other way round. While the selected pane can't be shown, typing goes nowhere.
  */
 @Composable
 fun SessionScreen(
@@ -75,7 +82,8 @@ fun SessionScreen(
     val spots = ids.map { id -> spot(key, id, panes, failures, session) }
     val focus by rememberUpdatedState({ id: String -> actions.onFocus(key, id) })
     val move: (Boolean) -> Unit = { forward -> ids.cyclicNeighbor(focused, forward)?.let(focus) }
-    SessionKeyboard(keyboard, spots.firstOrNull { it.ref.paneId == focused }?.state, move, actions)
+    val selected = focused?.let { PaneRef(key.machineId, key.sessionId, it) }
+    SessionKeyboard(keyboard, selected?.let(panes::get), move, actions)
     Column(
         modifier
             .fillMaxSize()
@@ -100,6 +108,7 @@ fun SessionScreen(
                         keyboard = keyboard,
                         machine = session.machine,
                         onShow = actions.onShow,
+                        onRetry = actions.onRetry,
                         onFocus = { actions.onFocus(key, it) },
                         onTakeLead = actions.onTakeLead,
                         onDetach = { actions.onDetach(key) },
@@ -127,7 +136,9 @@ private fun Panes(
             val ids = spots.map { it.ref.paneId }
             val requesters = remember(ids) { ids.associateWith { FocusRequester() } }
             val ready = spots.firstOrNull { it.ref.paneId == focused }?.state != null
-            FollowFocus(focused, ready, requesters)
+            // the pane that has the input focus, which may still be one the selection has left
+            var holder by remember { mutableStateOf<String?>(null) }
+            FollowFocus(focused, ready, holder, requesters)
             val slot: @Composable (PaneSpot, Modifier) -> Unit = { spot, slotModifier ->
                 val id = spot.ref.paneId
                 PaneSlot(
@@ -138,6 +149,13 @@ private fun Panes(
                     focusRequester = requesters[id],
                     readAloud = id == focused,
                     onSwipe = if (compact && spots.size > 1) move else null,
+                    onHoldsFocus = { holds ->
+                        if (holds) {
+                            holder = id
+                        } else if (holder == id) {
+                            holder = null
+                        }
+                    },
                 )
             }
             if (compact) {
@@ -187,7 +205,7 @@ private fun OnePane(
     }
 }
 
-// the keyboard follows the focused pane, and its chords move between the panes and the sessions
+// the keyboard types into the selected pane alone, and its chords move between the panes and the sessions
 @Composable
 private fun SessionKeyboard(
     keyboard: TerminalKeyboard,
@@ -196,8 +214,12 @@ private fun SessionKeyboard(
     actions: SessionViewActions,
 ) {
     val moveNow by rememberUpdatedState(move)
-    // a focused pane with no state yet (on its way, or it couldn't be shown) takes the keys too: they go nowhere
-    SideEffect { keyboard.target = target }
+    // the selection sets the target, not a pane taking the focus; a selected pane with no state yet (on its way, or
+    // it couldn't be shown) takes the keys too: they go nowhere
+    SideEffect {
+        keyboard.selectsOnFocus = false
+        keyboard.target = target
+    }
     LaunchedEffect(keyboard, actions) {
         keyboard.shortcuts =
             TerminalShortcuts(
@@ -209,28 +231,48 @@ private fun SessionKeyboard(
     }
 }
 
-// while the soft keyboard is up or a hardware keyboard is attached, the pane the focus moves to takes it once its
-// terminal is there ([ready]), so typing goes on there
+// the input focus follows the selected pane ([focused]) once its terminal is there ([ready]): while the soft keyboard
+// is up or a hardware keyboard is attached, the selected pane takes it, so typing goes on there; otherwise a pane the
+// selection left ([holder]) lets it go without the soft keyboard opening, so the next tap on any pane focuses it
+// afresh. While the selected pane can't take it, a hardware keyboard's focus stays where it is, typing nowhere, so its
+// chords still move away
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FollowFocus(
     focused: String?,
     ready: Boolean,
+    holder: String?,
     requesters: Map<String, FocusRequester>,
 ) {
-    val typing = WindowInsets.isImeVisible || hardwareKeyboardAttached()
-    val typingNow by rememberUpdatedState(typing)
+    val imeUp = WindowInsets.isImeVisible
+    val hardware = hardwareKeyboardAttached()
+    val now by rememberUpdatedState(FocusFacts(imeUp || hardware, hardware, holder))
+    val focusManager = LocalFocusManager.current
     LaunchedEffect(focused, ready) {
-        if (!typingNow || focused == null || !ready) return@LaunchedEffect
+        if (focused == null) return@LaunchedEffect
         // the pane's view joins the composition in this frame: its requester is attached in the next
         withFrameNanos { }
-        try {
-            requesters[focused]?.requestFocus()
-        } catch (_: IllegalStateException) {
-            // its view is not placed (a cover hides it, or it is not shown yet): the keyboard still targets it
+        val facts = now
+        val left = facts.holder != null && facts.holder != focused
+        if (ready && facts.typing) {
+            try {
+                requesters[focused]?.requestFocus()
+            } catch (_: IllegalStateException) {
+                // its view is not placed (a cover hides it): the keyboard still targets it
+            }
+        } else if (left && (ready || !facts.hardware)) {
+            focusManager.clearFocus()
         }
     }
 }
+
+// what the focus's move depends on as it happens: whether the user is typing (the soft keyboard up, or a hardware
+// one attached), whether a hardware keyboard is, and which pane has the focus
+private data class FocusFacts(
+    val typing: Boolean,
+    val hardware: Boolean,
+    val holder: String?,
+)
 
 @Composable
 private fun Opening(

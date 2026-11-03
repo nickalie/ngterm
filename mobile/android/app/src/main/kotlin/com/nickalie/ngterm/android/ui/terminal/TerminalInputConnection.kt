@@ -18,6 +18,8 @@ import androidx.compose.ui.focus.FocusState
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.KeyInputModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.ObserverModifierNode
+import androidx.compose.ui.node.observeReads
 import androidx.compose.ui.node.requireView
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.PlatformTextInputMethodRequest
@@ -35,12 +37,20 @@ import androidx.compose.ui.input.key.KeyEvent as ComposeKeyEvent
  * composition: once committed nothing is left in it, so a deletion past the composition is the program's (backspace
  * before it, delete after it). While a composition waits, a key from elsewhere commits it first and restarts the
  * input method ([TerminalKeyboard.composition]).
+ *
+ * It types only while [terminal] is the keyboard's target and until it is [close]d: what the input method sends to a
+ * connection whose terminal is not (or no longer) the one selected lands nowhere, so it never reaches another program.
  */
 internal class TerminalInputConnection(
     private val host: View,
     private val keyboard: TerminalKeyboard,
-    private val terminal: TerminalState,
+    val terminal: TerminalState,
 ) : BaseInputConnection(host, true) {
+    private var closed = false
+
+    // whether what the input method sends now reaches the terminal
+    private val live get() = !closed && keyboard.target === terminal
+
     // what a key from elsewhere does with the composition waiting here: commits it and tells the input method
     private val pending =
         PendingComposition {
@@ -69,10 +79,28 @@ internal class TerminalInputConnection(
         show()
     }
 
+    /**
+     * Ends this connection: its composition is finished into its terminal while that is still the target (dropped
+     * otherwise), and nothing it is sent afterwards lands anywhere.
+     */
+    fun close() {
+        if (closed) return
+        val waiting = composed().isNotEmpty()
+        finishComposingText()
+        closed = true
+        if (waiting) host.context.getSystemService(InputMethodManager::class.java)?.restartInput(host)
+    }
+
+    override fun closeConnection() {
+        close()
+        super.closeConnection()
+    }
+
     override fun commitText(
         text: CharSequence?,
         newCursorPosition: Int,
     ): Boolean {
+        if (!live) return false
         clear()
         keyboard.type(text?.toString().orEmpty(), terminal)
         return true
@@ -82,6 +110,7 @@ internal class TerminalInputConnection(
         text: CharSequence?,
         newCursorPosition: Int,
     ): Boolean {
+        if (!live) return false
         super.setComposingText(text, newCursorPosition)
         show()
         return true
@@ -91,7 +120,7 @@ internal class TerminalInputConnection(
         val pending = composed()
         super.finishComposingText()
         clear()
-        if (pending.isNotEmpty()) keyboard.type(pending, terminal)
+        if (pending.isNotEmpty() && live) keyboard.type(pending, terminal)
         return true
     }
 
@@ -99,6 +128,7 @@ internal class TerminalInputConnection(
         beforeLength: Int,
         afterLength: Int,
     ): Boolean {
+        if (!live) return false
         var before = beforeLength.coerceAtLeast(0)
         var after = afterLength.coerceAtLeast(0)
         val text = editable
@@ -126,12 +156,14 @@ internal class TerminalInputConnection(
     ): Boolean = deleteSurroundingText(beforeLength, afterLength)
 
     override fun sendKeyEvent(event: KeyEvent): Boolean {
+        if (!live) return false
         if (event.action == KeyEvent.ACTION_DOWN && composed().isNotEmpty()) finishComposingText()
         keyboard.key(event, terminal, commitFirst = false)
         return true
     }
 
     override fun performEditorAction(actionCode: Int): Boolean {
+        if (!live) return false
         if (composed().isNotEmpty()) finishComposingText()
         keyboard.press(ENTER, terminal)
         return true
@@ -187,9 +219,12 @@ internal class SoftKeyboardRequest(
 }
 
 /**
- * A terminal's keyboard input: while it has focus, the input method talks to it through a [TerminalInputConnection]
- * and [keyboard] sends to [state]; a hardware key goes through [keyboard] as well. [request] says whether a focus
- * wants the soft keyboard. It goes before the focus target whose focus it follows.
+ * A terminal's keyboard input: while it has focus and is [keyboard]'s target, the input method talks to it through a
+ * [TerminalInputConnection]; a hardware key goes through [keyboard] to its target (a chord runs even with none).
+ * Taking the focus makes it the target only where the keyboard says so ([TerminalKeyboard.selectsOnFocus]); a
+ * focused terminal the target leaves keeps the focus but lets its input method session go, and opens one again when
+ * the target comes back. [request] says whether a focus wants the soft keyboard. It goes before the focus target
+ * whose focus it follows.
  */
 internal fun Modifier.terminalTextInput(
     keyboard: TerminalKeyboard,
@@ -220,10 +255,28 @@ private class TerminalTextInputNode(
 ) : Modifier.Node(),
     PlatformTextInputModifierNode,
     FocusEventModifierNode,
-    KeyInputModifierNode {
+    KeyInputModifierNode,
+    ObserverModifierNode {
     private var session: Job? = null
     private var focused = false
-    private val startWanted: () -> Unit = { if (focused && session == null) start() }
+    private val startWanted: () -> Unit = { if (focused && session == null && owns()) start() }
+
+    private fun owns() = keyboard.target === state
+
+    override fun onAttach() = follow()
+
+    override fun onObservedReadsChanged() = follow()
+
+    // the input method session goes with the target: let go when it leaves, opened again (for a focus that wanted
+    // it, or a hardware keyboard) when it comes back
+    private fun follow() {
+        var owns = false
+        observeReads { owns = owns() }
+        when {
+            !owns -> stop()
+            focused && session == null && (request.wanted || hardwareKeyboard()) -> start()
+        }
+    }
 
     fun update(
         keyboard: TerminalKeyboard,
@@ -237,23 +290,20 @@ private class TerminalTextInputNode(
         }
         if (keyboard === this.keyboard && state === this.state) return
         // the old connection is bound to the old terminal: closing it commits its composition there
-        val restart = session != null
         stop()
         this.keyboard = keyboard
         this.state = state
-        if (focused) {
-            keyboard.target = state
-            if (restart) start()
-        }
+        if (focused && keyboard.selectsOnFocus) keyboard.target = state
+        if (isAttached) follow()
     }
 
     override fun onFocusEvent(focusState: FocusState) {
         if (focusState.isFocused == focused) return
         focused = focusState.isFocused
         if (focused) {
-            keyboard.target = state
+            if (keyboard.selectsOnFocus) keyboard.target = state
             request.onWanted = startWanted
-            if (request.wanted || hardwareKeyboard()) start()
+            follow()
         } else {
             if (request.onWanted === startWanted) request.onWanted = null
             stop()
@@ -268,6 +318,7 @@ private class TerminalTextInputNode(
     }
 
     private fun stop() {
+        keyboard.connections.release(state)
         session?.cancel()
         session = null
     }
@@ -284,7 +335,9 @@ private class TerminalTextInputNode(
                         object : PlatformTextInputMethodRequest {
                             override fun createInputConnection(outAttributes: EditorInfo): InputConnection {
                                 outAttributes.forTerminal()
-                                return TerminalInputConnection(view, keyboard, terminal)
+                                val connection = TerminalInputConnection(view, keyboard, terminal)
+                                keyboard.connections.bind(connection)
+                                return connection
                             }
                         },
                     )
@@ -294,12 +347,12 @@ private class TerminalTextInputNode(
 
     override fun onDetach() {
         if (request.onWanted === startWanted) request.onWanted = null
+        keyboard.connections.release(state)
         session = null
         focused = false
     }
 
-    override fun onKeyEvent(event: ComposeKeyEvent): Boolean =
-        keyboard.key(event.nativeKeyEvent, state, commitFirst = true)
+    override fun onKeyEvent(event: ComposeKeyEvent): Boolean = keyboard.key(event.nativeKeyEvent)
 
     override fun onPreKeyEvent(event: ComposeKeyEvent): Boolean = false
 }

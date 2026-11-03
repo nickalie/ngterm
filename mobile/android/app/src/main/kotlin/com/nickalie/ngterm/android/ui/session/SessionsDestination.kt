@@ -105,6 +105,7 @@ private fun LiveSession(
                 onBack = if (compact) actions.onClose else null,
                 onFocus = actions.onFocus,
                 onShow = actions.onShow,
+                onRetry = actions.onRetry,
                 onTakeLead = actions.onTakeLead,
                 onDetach = actions.onDetach,
                 onEnd = actions.onEnd,

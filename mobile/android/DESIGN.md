@@ -486,7 +486,8 @@ compact                            medium (rail open)               expanded
 - **The split** (`SplitLayout`, medium and expanded): the origin's layout as it is, two panes side by side
   (`vertical`) or stacked (`horizontal`), halves split by a 1dp `outlineVariant` rule, since the terminal's ground is
   the chrome's. Each pane of a split keeps a 4dp gutter at its leading edge where the focused one shows the bus bar
-  (32dp, from its top); a tap on a pane focuses it, and the other's cursor goes hollow. A hidden split (the origin
+  (32dp, from its top); a touch on a pane selects it (even one that already has the input focus), and the other's
+  cursor goes hollow. A hidden split (the origin
   zoomed a pane) shows the focused pane alone, and the switcher still moves between the two. On a phone every layout
   is one pane at a time. A pane alone keeps 4dp at both sides, so its text stays off the screen's edge.
 - **The HUD** (`HudBanner`): a strip under the bar while the origin shows one, `surfaceContainerHigh`, 6dp radius,
@@ -502,7 +503,10 @@ compact                            medium (rail open)               expanded
     readable; nothing is typed into it.
   - *Program exited*: "The program exited", with its code or signal ("Exit code 1", "Stopped by SIGKILL"), "The last
     screen stays as it was.", **Detach**.
-  - *Can't show it* (the core refused the pane): "Can't show this pane", the core's words, **Retry**.
+  - *Can't show it* (the core refused the pane): "Can't show this pane", the core's words, **Retry** (which reads the
+    machine's sessions again first). A pane a split added since the machine was last read is looked for in a fresh
+    read before it can't be shown, and a pane refused while its machine was reconnecting is tried again once the
+    machine is back.
 - **Session states** in place of the panes (`MessagePanel`): opening (a spinner, "Opening docs-site"); a machine whose
   ngterm can't stream ("build-01's ngterm can't share live sessions", update it there, **Detach**); and gone ("docs-site
   is gone", "It ended on build-01, so there is nothing left to show.", **Close**), which also covers a session that
@@ -510,10 +514,16 @@ compact                            medium (rail open)               expanded
 - **More:** Detach (at once: it goes on running there, and the view closes) and End session (in the error color,
   confirmed as on a machine's list).
 - **The keyboard:** one `TerminalKeyboard` for the view, shared by every pane and the extra-keys row, so a held Ctrl
-  stays as the focus moves; the row sits under the panes over the soft keyboard. Ctrl+Shift+Left and Right go to the
-  previous and next pane, Ctrl+Shift+Up and Down to the previous and next attached session. While the soft keyboard is
-  up or a hardware keyboard is attached, the pane switched to takes the focus once its terminal is there, so typing
-  goes on in it; until then (a pane on its way or one that couldn't be shown) the keys go nowhere.
+  stays as the selection moves; the row sits under the panes over the soft keyboard. Ctrl+Shift+Left and Right go to
+  the previous and next pane, Ctrl+Shift+Up and Down to the previous and next attached session.
+- **One selected pane:** each session has one selected pane, the one a tab, a swipe, a chord or a touch on a pane
+  picked, and everything typed goes to it alone: the soft keyboard's text, the extra keys and a hardware keyboard's
+  keys. The input focus follows the selection, never the reverse. While the soft keyboard is up or a hardware keyboard
+  is attached, the pane selected takes the focus once its terminal is there, so typing goes on in it; with the soft
+  keyboard down, a pane the selection left lets the focus go without the keyboard opening, and the next touch on a
+  pane focuses it. Selecting another pane first finishes a word the soft keyboard is composing in the pane it was
+  typed in. Until the selected pane's terminal is there (on its way, or it couldn't be shown) the keys go nowhere,
+  but the chords still move between panes and sessions.
 - **The attached sessions in the rail and the sidebar:** the sidebar groups them by machine (the machine's name as a
   `SectionHeader`, then a `SessionRow` each with its status, the bus bar on the one open). The rail, collapsed, gives
   each a 64dp cell, its status glyph over its name cut to fit; opened, the sidebar's rows. Either opens the session

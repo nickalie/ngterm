@@ -1,6 +1,8 @@
 package com.nickalie.ngterm.android.ui.session
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +23,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -50,13 +54,15 @@ data class PaneSpot(
 
 /**
  * What a pane's slot does: [keyboard] is the one every pane types through; [onShow] shows a pane at the grid its
- * slot first has room for; [onFocus] follows the pane a tap or the keyboard focused; [onTakeLead] is Take control;
- * [onDetach] lets the session go (an exited program's cover offers it); [machine] names where the panes live.
+ * slot first has room for, and [onRetry] tries one that could not be shown again; [onFocus] selects the pane a touch
+ * or the input focus landed on; [onTakeLead] is Take control; [onDetach] lets the session go (an exited program's
+ * cover offers it); [machine] names where the panes live.
  */
-class PaneActions(
+data class PaneActions(
     val keyboard: TerminalKeyboard,
     val machine: String,
     val onShow: (PaneRef, PaneSize) -> Unit,
+    val onRetry: (PaneRef, PaneSize) -> Unit,
     val onFocus: (String) -> Unit,
     val onTakeLead: (PaneRef) -> Unit,
     val onDetach: () -> Unit,
@@ -65,8 +71,9 @@ class PaneActions(
 /**
  * A pane's slot: its terminal (once shown; the slot's first size shows it), with its cover when it can't be used as
  * it is. [focused] draws its cursor as it is (the others' go hollow); [readAloud] lets TalkBack read its text;
- * [onSwipe] takes a sideways swipe (a phone's next or previous pane). A focus taken inside it goes to
- * [PaneActions.onFocus].
+ * [onSwipe] takes a sideways swipe (a phone's next or previous pane). Every touch on it, even on a pane that has the
+ * input focus already, and a focus taken inside it select it ([PaneActions.onFocus]); [onHoldsFocus] says whether the
+ * input focus is inside it.
  */
 @Composable
 fun PaneSlot(
@@ -77,6 +84,7 @@ fun PaneSlot(
     focusRequester: FocusRequester? = null,
     readAloud: Boolean = false,
     onSwipe: ((forward: Boolean) -> Unit)? = null,
+    onHoldsFocus: (Boolean) -> Unit = {},
 ) {
     var size by remember { mutableStateOf(IntSize.Zero) }
     val font = rememberTerminalFont(spot.state?.textSize ?: TerminalTextSize)
@@ -88,11 +96,22 @@ fun PaneSlot(
     }
     val cover = PaneCover.of(spot.live, spot.state != null, spot.failure)
     val paneId = spot.ref.paneId
+    val select by rememberUpdatedState { actions.onFocus(paneId) }
+    val holds by rememberUpdatedState(onHoldsFocus)
     Box(
         modifier
             .onSizeChanged { size = it }
             .background(NgtermTheme.terminal.background)
-            .onFocusChanged { if (it.hasFocus) actions.onFocus(paneId) },
+            .pointerInput(Unit) {
+                // seen before the terminal's own gestures take it, so a touch selects the pane whatever it does next
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    select()
+                }
+            }.onFocusChanged {
+                holds(it.hasFocus)
+                if (it.hasFocus) select()
+            },
     ) {
         spot.state?.let { state ->
             TerminalView(
@@ -111,7 +130,7 @@ fun PaneSlot(
                 machine = actions.machine,
                 onTakeLead = { actions.onTakeLead(spot.ref) },
                 onDetach = actions.onDetach,
-                onRetry = { grid?.let { actions.onShow(spot.ref, it) } },
+                onRetry = { grid?.let { actions.onRetry(spot.ref, it) } },
             )
         }
     }

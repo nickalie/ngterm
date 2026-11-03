@@ -1,15 +1,18 @@
 package com.nickalie.ngterm.android.ui.session
 
+import android.os.Looper
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestGraph
+import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.core.fake.FakePane
 import com.nickalie.ngterm.core.fake.fakeSession
+import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneEnd
@@ -17,6 +20,7 @@ import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
 import com.nickalie.ngterm.core.ffi.RemoteLayout
 import com.nickalie.ngterm.core.ffi.RemoteStatus
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
@@ -33,6 +37,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
+import org.robolectric.Shadows.shadowOf
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
@@ -201,6 +206,74 @@ class SessionViewModelTest {
         eventually { p1 in model.panes.value && p1 !in model.paneFailures.value }
         model.takeLead(p1)
         assertTrue(test.core.calls.any { it.method == "takeLead" && it.args == listOf("m1", "s1", "P1") })
+    }
+
+    @Test
+    fun aPaneASplitAddedSinceTheLastListingIsShownAfterTheMachineIsListedAgain() {
+        // the core finds a pane through the machine's last listing, which has only the pane the session started with
+        test.core.panes["s1"] = setOf("P1")
+        attached("s1")
+        val model = model()
+        layout("P1")
+        val p1 = PaneRef("m1", "s1", "P1")
+        model.show(p1, size)
+        eventually { p1 in model.panes.value }
+        test.core.panes["s1"] = setOf("P1", "P2")
+        layout("P1", "P2")
+        val p2 = PaneRef("m1", "s1", "P2")
+        model.show(p2, size)
+        eventually { p2 in model.panes.value || p2 in model.paneFailures.value }
+        assertEquals(null, model.paneFailures.value[p2])
+        assertTrue(p2 in model.panes.value)
+    }
+
+    @Test
+    fun aRetryReadsTheMachinesSessionsAgainBeforeShowingThePane() {
+        attached("s1")
+        val model = model()
+        val p1 = PaneRef("m1", "s1", "P1")
+        test.core.failNext("showPane", MobileException.Remote("no pane P1"))
+        model.show(p1, size)
+        eventually { model.paneFailures.value[p1] == "no pane P1" }
+        val before = test.core.calls.size
+        model.retry(p1, size)
+        eventually { p1 in model.panes.value }
+        assertEquals(
+            listOf("listSessions", "showPane"),
+            test.core.calls
+                .drop(before)
+                .map { it.method },
+        )
+    }
+
+    @Test
+    fun aPaneThatFailedWhileItsMachineReconnectedIsTriedAgainOnceItIsBack() {
+        attached("s1")
+        val model = model()
+        val p1 = PaneRef("m1", "s1", "P1")
+        test.core.emit(MobileEvent.MachineState("m1", MachineState.Reconnecting(5_000u)))
+        eventually { test.connections.links.value["m1"] is Link.Reconnecting }
+        test.core.failNext("showPane", MobileException.NotConnected("m1"))
+        model.show(p1, size)
+        eventually { p1 in model.paneFailures.value }
+        test.core.emit(MobileEvent.MachineState("m1", MachineState.Connected))
+        eventually { p1 !in model.paneFailures.value }
+
+        // a show begun while the machine was down, failing after it came back, is stale: it records nothing
+        val p2 = PaneRef("m1", "s1", "P2")
+        test.core.emit(MobileEvent.MachineState("m1", MachineState.Reconnecting(5_000u)))
+        eventually { test.connections.links.value["m1"] is Link.Reconnecting }
+        val gate = CompletableDeferred<Unit>()
+        test.core.holds["showPane"] = gate
+        test.core.failNext("showPane", MobileException.NotConnected("m1"))
+        model.show(p2, size)
+        eventually { test.core.calls.any { it.method == "showPane" && it.args[2] == "P2" } }
+        test.core.emit(MobileEvent.MachineState("m1", MachineState.Connected))
+        eventually { test.connections.links.value["m1"] == Link.Connected }
+        shadowOf(Looper.getMainLooper()).idle()
+        gate.complete(Unit)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(p2 !in model.paneFailures.value)
     }
 
     @Test

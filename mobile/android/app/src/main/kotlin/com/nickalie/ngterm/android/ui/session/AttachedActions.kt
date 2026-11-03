@@ -6,14 +6,15 @@ import com.nickalie.ngterm.core.ffi.PaneSize
 
 /**
  * What the Sessions destination does, over its [SessionViewModel]: open and close a session's view, give a pane the
- * focus, show a pane, Take control, Detach, End session, go to the Machines destination ([onOpenMachines]), and say
- * the snackbar was shown ([onNoticeShown]).
+ * focus, show a pane (and try one again), Take control, Detach, End session, go to the Machines destination
+ * ([onOpenMachines]), and say the snackbar was shown ([onNoticeShown]).
  */
 data class AttachedActions(
     val onOpen: (SessionKey) -> Unit,
     val onClose: () -> Unit,
     val onFocus: (SessionKey, String) -> Unit,
     val onShow: (PaneRef, PaneSize) -> Unit,
+    val onRetry: (PaneRef, PaneSize) -> Unit,
     val onTakeLead: (PaneRef) -> Unit,
     val onDetach: (SessionKey) -> Unit,
     val onEnd: (SessionKey) -> Unit,
@@ -30,6 +31,7 @@ data class AttachedActions(
             onClose = viewModel::close,
             onFocus = viewModel::focus,
             onShow = viewModel::show,
+            onRetry = viewModel::retry,
             onTakeLead = viewModel::takeLead,
             onDetach = viewModel::detach,
             onEnd = viewModel::end,

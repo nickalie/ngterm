@@ -44,7 +44,10 @@ data class FakeCall(
  *   doesn't have) and delivers a [MobileEvent.Tree] only when a listing is kept;
  * - [attachSession] and [showPane] take only a session of the machine's last listing ([MobileException.NotListed]
  *   otherwise), not of [sessions]: seeding [sessions] without listing them is refused, as the real core refuses a
- *   session it has not listed.
+ *   session it has not listed;
+ * - a session given [panes] has those panes: [showPane] takes only one the session had at the machine's last listing
+ *   ([MobileException.Remote] with [UNKNOWN_PANE] otherwise), as the real core resolves a pane through the kept
+ *   listing, so a pane added since (a split) needs a new listing first. A session not in [panes] takes any pane.
  *
  * - [showPane] hands back the same handle for a pane already shown; [hidePane], [detachSession] (its session's
  *   panes) and [disconnect] (its machine's) hide panes, and [shownPanes] lists those still shown.
@@ -91,6 +94,12 @@ class FakeMobileCore(
 
     /** Each machine's last listing, by machine id: what [listSessions] or [createSession] last answered. */
     private val listings = mutableMapOf<String, List<RemoteSession>>()
+
+    /** Each session's panes, by session id, for the sessions a test gives them: see the class's rules. */
+    val panes: MutableMap<String, Set<String>> = mutableMapOf()
+
+    // each machine's sessions' panes at its last listing, by machine id then session id
+    private val listedPanes = mutableMapOf<String, Map<String, Set<String>>>()
 
     private val shown = mutableMapOf<PaneRef, Pane>()
 
@@ -151,6 +160,7 @@ class FakeMobileCore(
     private fun keepListing(machineId: String): List<RemoteSession> {
         val listing = sessionsOf(machineId).toList()
         listings[machineId] = listing
+        listedPanes[machineId] = listing.mapNotNull { session -> panes[session.id]?.let { session.id to it } }.toMap()
         emit(MobileEvent.Tree(machineId, listing))
         return listing
     }
@@ -213,6 +223,7 @@ class FakeMobileCore(
         connected -= machineId
         records -= machineId
         listings -= machineId
+        listedPanes -= machineId
     }
 
     override fun disconnect(machineId: String) {
@@ -273,6 +284,9 @@ class FakeMobileCore(
     ): Pane {
         recordHeld("showPane", machineId, sessionId, paneId, size)
         listed(machineId, sessionId)
+        if (sessionId in panes && paneId !in listedPanes[machineId]?.get(sessionId).orEmpty()) {
+            throw MobileException.Remote(UNKNOWN_PANE)
+        }
         val ref = PaneRef(machineId, sessionId, paneId)
         synchronized(shown) { shown[ref] }?.let { return it }
         val pane = paneFactory(machineId, sessionId, paneId, size)
@@ -330,6 +344,9 @@ class FakeMobileCore(
 
 /** The core's reason for a connect refused over a changed host key (transport/russh.rs's `HOST_KEY_CHANGED`). */
 const val HOST_KEY_CHANGED = "the host key changed"
+
+/** The core's reason for a pane its session's listing doesn't have (pane.rs's `UNKNOWN_PANE`). */
+const val UNKNOWN_PANE = "the session has no such pane"
 
 /** The core's reason for a connect whose unknown host key was not trusted (`HOST_KEY_REFUSED`). */
 const val HOST_KEY_REFUSED = "the host key was not trusted"

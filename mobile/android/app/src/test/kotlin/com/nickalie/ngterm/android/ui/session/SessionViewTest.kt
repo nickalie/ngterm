@@ -1,6 +1,10 @@
 package com.nickalie.ngterm.android.ui.session
 
 import android.content.res.Configuration
+import android.view.View
+import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
@@ -34,6 +38,7 @@ import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneClipboard
 import com.nickalie.ngterm.core.ffi.PaneEnd
+import com.nickalie.ngterm.core.ffi.PaneKeyAction
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneRole
 import com.nickalie.ngterm.core.ffi.RemoteLayout
@@ -172,6 +177,137 @@ class SessionViewTest {
         compose.onNode(isFocused()).performKeyInput { pressKey(Key.A) }
         waitFor { panes.getValue("P2").inputs.any { it is FakeInput.Key } }
         assertTrue(panes.getValue("P1").inputs.none { it is FakeInput.Key })
+    }
+
+    // the split's two panes side by side, both shown
+    private fun openSplit() {
+        openSession()
+        layout.value = NavLayout.Sidebar
+        waitFor { panes["P1"] != null && panes["P2"] != null }
+        compose.waitForIdle()
+    }
+
+    private fun terminal(index: Int) = compose.onAllNodesWithContentDescription("Terminal")[index]
+
+    // the view the input method talks to: the window's compose view
+    private fun composeView(): View {
+        val views = ArrayDeque<View>(listOf(compose.activity.window.decorView))
+        while (views.isNotEmpty()) {
+            val view = views.removeFirst()
+            if (view.javaClass.simpleName == "AndroidComposeView") return view
+            if (view is ViewGroup) (0 until view.childCount).forEach { views += view.getChildAt(it) }
+        }
+        error("no compose view")
+    }
+
+    // the input method's connection as it opens one now; null when no terminal takes it
+    private fun connect(): InputConnection? = composeView().onCreateInputConnection(EditorInfo())
+
+    private fun clearInputs() = panes.values.forEach { it.inputs.clear() }
+
+    // what reached [pane] from the keyboard: the text typed, and the keys pressed (not their releases)
+    private fun typed(pane: String) =
+        panes
+            .getValue(pane)
+            .inputs
+            .filterIsInstance<FakeInput.Typed>()
+            .joinToString("") { it.text }
+
+    private fun pressed(pane: String) =
+        panes
+            .getValue(pane)
+            .inputs
+            .filterIsInstance<FakeInput.Key>()
+            .filter { it.key.action != PaneKeyAction.RELEASE }
+            .map { it.key.key }
+
+    private fun nothingReached(pane: String) = typed(pane).isEmpty() && pressed(pane).isEmpty()
+
+    private fun chord(arrow: Key) {
+        compose.onNode(isFocused()).performKeyInput {
+            withKeysDown(listOf(Key.CtrlLeft, Key.ShiftLeft)) { pressKey(arrow) }
+        }
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun aTabPickedWithTheSoftKeyboardDownThenARetapTypesEverythingIntoTheRetappedPane() {
+        openSplit()
+        terminal(1).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
+        // the tab moves the selection; the keyboard stays down
+        compose.onNodeWithContentDescription("Pane 1 of 2").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Pane 1 of 2").assertIsSelected()
+        // a tap on the pane that had the focus selects it again: the input method and the extra keys both go there
+        terminal(1).performClick()
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
+        clearInputs()
+        requireNotNull(connect()) { "no input connection after the tap" }.commitText("ls", 1)
+        compose.onNodeWithContentDescription("Escape").performClick()
+        compose.waitForIdle()
+        assertEquals("ls", typed("P2"))
+        assertEquals(listOf("escape"), pressed("P2"))
+        assertTrue(nothingReached("P1"))
+    }
+
+    @Test
+    fun anOldInputConnectionLandsItsCompositionInItsOwnPaneAndNothingAfterTheSelectionMoves() {
+        openSplit()
+        terminal(0).performClick()
+        compose.waitForIdle()
+        val old = requireNotNull(connect()) { "no input connection after the tap" }
+        clearInputs()
+        old.setComposingText("ab", 1)
+        compose.onNodeWithContentDescription("Pane 2 of 2").performClick()
+        compose.waitForIdle()
+        // the composition pending at the switch is finished where it was typed
+        assertEquals("ab", typed("P1"))
+        old.commitText("zz", 1)
+        old.setComposingText("q", 1)
+        old.deleteSurroundingText(1, 0)
+        old.performEditorAction(EditorInfo.IME_ACTION_NONE)
+        old.sendKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_X))
+        compose.waitForIdle()
+        assertEquals("ab", typed("P1"))
+        assertTrue(pressed("P1").isEmpty())
+        assertTrue(nothingReached("P2"))
+    }
+
+    @Test
+    @Config(qualifiers = "+qwerty")
+    fun anUnavailablePaneTakesNoTypingWhileTheChordsStillMoveAndTakesItOnceItRecovers() {
+        compose.activity.resources.configuration.hardKeyboardHidden = Configuration.HARDKEYBOARDHIDDEN_NO
+        openSession()
+        waitFor { panes["P1"] != null }
+        test.core.failNext("showPane", MobileException.Remote("no pane P2"))
+        layout.value = NavLayout.Sidebar
+        waitFor { shows("no pane P2") }
+        terminal(0).performClick()
+        compose.waitForIdle()
+        chord(Key.DirectionRight)
+        compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
+        clearInputs()
+        compose.onNode(isFocused()).performKeyInput { pressKey(Key.A) }
+        connect()?.commitText("x", 1)
+        compose.onNodeWithContentDescription("Escape").assertDoesNotExist()
+        compose.waitForIdle()
+        assertTrue(nothingReached("P1"))
+        // the chords still move, away and back
+        chord(Key.DirectionLeft)
+        compose.onNodeWithContentDescription("Pane 1 of 2").assertIsSelected()
+        chord(Key.DirectionRight)
+        compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
+        clearInputs()
+        // shown at last, it takes the keys
+        compose.onNodeWithText("Retry").performClick()
+        waitFor { panes["P2"] != null }
+        compose.waitForIdle()
+        compose.onNode(isFocused()).performKeyInput { pressKey(Key.A) }
+        waitFor { pressed("P2").isNotEmpty() }
+        assertTrue(nothingReached("P1"))
     }
 
     @Test

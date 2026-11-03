@@ -48,8 +48,8 @@ internal fun interface PendingComposition {
 
 /**
  * The keyboard's side of the terminal: what the soft keyboard commits and composes, the extra-keys row and a
- * hardware keyboard's keys go to the [target] pane (the terminal that last took focus), with the row's sticky Ctrl and
- * Alt held for the next key; a hardware keyboard's app chords ([TerminalShortcut]) change the target's text size or
+ * hardware keyboard's keys go to the [target] pane and nowhere else, with the row's sticky Ctrl and Alt held for the
+ * next key; a hardware keyboard's app chords ([TerminalShortcut]) change the target's text size or
  * run [shortcuts], and its dead keys hold their accent at the cursor for the next key. One keyboard serves every
  * terminal on screen, so the sticky modifiers stay as the focus moves. [layout] is what the hardware keys type (the
  * device's, or a test's). Used on the main thread.
@@ -62,8 +62,30 @@ class TerminalKeyboard(
     /** The chords' actions. */
     var shortcuts: TerminalShortcuts by mutableStateOf(shortcuts)
 
-    /** The terminal keys go to: the one that took focus last; `null` before any did. */
-    var target: TerminalState? by mutableStateOf(null)
+    private var selected: TerminalState? by mutableStateOf(null)
+
+    /** The input method's connection opened last, which only types while its terminal is the target. */
+    internal val connections = InputConnections()
+
+    /**
+     * The terminal every key goes to; `null` while none can take them (keys then go nowhere, but the chords still
+     * run). A lone terminal becomes it as it takes the focus ([selectsOnFocus]); the session view sets it to its
+     * selected pane. Moving it ends the input method's connection to the terminal it leaves: the composition waiting
+     * there is finished there first, and nothing the connection sends later lands anywhere.
+     */
+    var target: TerminalState?
+        get() = selected
+        set(value) {
+            if (value === selected) return
+            connections.leave(value)
+            selected = value
+        }
+
+    /**
+     * Whether a terminal taking the focus becomes the [target]: so for a lone terminal; the session view turns it off,
+     * as it sets the target from the pane it has selected.
+     */
+    var selectsOnFocus = true
 
     /** The sticky Ctrl's state. */
     var ctrl by mutableStateOf(Sticky.Off)
@@ -144,8 +166,8 @@ class TerminalKeyboard(
         to: TerminalState?,
         commitFirst: Boolean,
     ): Boolean {
-        val target = to ?: return false
         val key = KeyMapping.fromEvent(event, layout)
+        val target = to
         return when {
             chords.take(event, key?.text.orEmpty(), target, shortcuts) -> {
                 true
@@ -153,6 +175,11 @@ class TerminalKeyboard(
 
             key == null || key.isSystems() -> {
                 false
+            }
+
+            // no terminal takes keys now: the key goes nowhere (nor moves the focus about)
+            target == null -> {
+                true
             }
 
             key.action != PaneKeyAction.PRESS || KeyEvent.isModifierKey(event.keyCode) -> {
@@ -220,6 +247,36 @@ class TerminalKeyboard(
     }
 }
 
+/**
+ * The input method's live connection to a terminal: one at a time, the one opened last. Ending one finishes its
+ * composition in its own terminal first ([TerminalInputConnection.close]).
+ */
+internal class InputConnections {
+    private var connection: TerminalInputConnection? = null
+
+    /** [opened] is the input method's connection now: one opened before is ended. */
+    fun bind(opened: TerminalInputConnection) {
+        if (opened === connection) return
+        connection?.let(::end)
+        connection = opened
+    }
+
+    /** Ends the connection to [terminal], if there is one. */
+    fun release(terminal: TerminalState) {
+        connection?.takeIf { it.terminal === terminal }?.let(::end)
+    }
+
+    /** The keyboard's target moves to [target]: a connection to another terminal ends, before it moves. */
+    fun leave(target: TerminalState?) {
+        connection?.takeIf { it.terminal !== target }?.let(::end)
+    }
+
+    private fun end(ended: TerminalInputConnection) {
+        if (connection === ended) connection = null
+        ended.close()
+    }
+}
+
 /** A hardware keyboard's app chords ([TerminalShortcut]) as they are pressed, held and let go. */
 private class HeldChords {
     // keys whose press ran a chord: their repeats and release are the chord's too, not the program's
@@ -227,12 +284,13 @@ private class HeldChords {
 
     /**
      * Whether [event] (its key typing [text]) is a chord's, running its action on [target]: a size step repeats while
-     * its chord is held, a move happens once per press, and the held chord's key is the app's until it lets go.
+     * its chord is held, a move happens once per press, and the held chord's key is the app's until it lets go. With
+     * no [target], only the moves run.
      */
     fun take(
         event: KeyEvent,
         text: String,
-        target: TerminalState,
+        target: TerminalState?,
         shortcuts: TerminalShortcuts,
     ): Boolean {
         val code = event.keyCode
@@ -350,15 +408,18 @@ private fun TerminalState.pressKey(key: PaneKey) {
     key(key.copy(action = PaneKeyAction.RELEASE))
 }
 
-/** What [shortcut] does for [target]: the text size's chords always, the moves when the session view set them. */
+/**
+ * What [shortcut] does for [target]: the text size's chords while there is one, the moves when the session view set
+ * them.
+ */
 private fun TerminalShortcuts.action(
     shortcut: TerminalShortcut,
-    target: TerminalState,
+    target: TerminalState?,
 ): (() -> Unit)? =
     when (shortcut) {
-        TerminalShortcut.Bigger -> ({ target.stepTextSize(1) })
-        TerminalShortcut.Smaller -> ({ target.stepTextSize(-1) })
-        TerminalShortcut.ResetSize -> ({ target.textSize = TerminalTextSize })
+        TerminalShortcut.Bigger -> target?.let { { it.stepTextSize(1) } }
+        TerminalShortcut.Smaller -> target?.let { { it.stepTextSize(-1) } }
+        TerminalShortcut.ResetSize -> target?.let { { it.textSize = TerminalTextSize } }
         TerminalShortcut.NextPane -> nextPane
         TerminalShortcut.PreviousPane -> previousPane
         TerminalShortcut.NextSession -> nextSession

@@ -167,6 +167,25 @@ class FakeMobileCoreTest {
         }
 
     @Test
+    fun aPaneAddedSinceTheLastListingIsUnknownUntilTheMachineIsListedAgain() =
+        runTest {
+            val core = FakeMobileCore()
+            core.paneFactory = { _, _, pane, _ -> FakePane(pane) }
+            core.connect(machine)
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            core.panes["s1"] = setOf("P1")
+            core.listSessions("m1")
+            val size = PaneSize(80u, 24u, 10u, 20u)
+            core.showPane("m1", "s1", "P1", size)
+            core.panes["s1"] = setOf("P1", "P2")
+            val refused = runCatching { core.showPane("m1", "s1", "P2", size) }.exceptionOrNull()
+            assertEquals(UNKNOWN_PANE, (refused as? MobileException.Remote)?.reason)
+            core.listSessions("m1")
+            core.showPane("m1", "s1", "P2", size)
+            assertTrue(PaneRef("m1", "s1", "P2") in core.shownPanes)
+        }
+
+    @Test
     fun aFailedConnectReportsTheMachineUnreachable() =
         runTest {
             val events = mutableListOf<MobileEvent>()

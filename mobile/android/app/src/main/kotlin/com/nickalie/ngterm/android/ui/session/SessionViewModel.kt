@@ -55,7 +55,10 @@ data class AttachedGroup(
 sealed interface OpenSession {
     val key: SessionKey
 
-    /** Attached: [session], with the pane that has the focus ([focused]; `null` before its layout arrives). */
+    /**
+     * Attached: [session], with the pane selected ([focused]; `null` before its layout arrives), the one every key
+     * goes to.
+     */
     data class Live(
         val session: AttachedSession,
         val focused: String?,
@@ -180,6 +183,12 @@ class SessionViewModel(
         pane: PaneRef,
         size: PaneSize,
     ) = graph.panes.show(pane, size)
+
+    /** Tries [pane] again at [size], after it could not be shown: its machine is listed afresh first. */
+    fun retry(
+        pane: PaneRef,
+        size: PaneSize,
+    ) = graph.panes.retry(pane, size)
 
     /** Take control of [pane]. */
     fun takeLead(pane: PaneRef) = graph.panes.takeLead(pane)
