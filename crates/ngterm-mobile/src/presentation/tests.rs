@@ -58,6 +58,8 @@ struct Harness {
     presentations: Rc<RefCell<Presentations<FakeConnection>>>,
     events: Rc<RefCell<Vec<MobileEvent>>>,
     now: Rc<Cell<Instant>>,
+    /// The key of each report the links made, in order.
+    keys: Rc<RefCell<Vec<LinkKey>>>,
     peer: Option<ChannelPeer>,
     rev: i64,
 }
@@ -81,18 +83,21 @@ impl Harness {
             presentations: Rc::new(RefCell::new(Presentations::default())),
             events: Rc::new(RefCell::new(Vec::new())),
             now: Rc::new(Cell::new(Instant::now())),
+            keys: Rc::new(RefCell::new(Vec::new())),
             peer: None,
             rev: 0,
         }
     }
 
     fn links(&self) -> ChannelLinks<FakeConnection> {
-        let (presentations, events, now) = (
+        let (presentations, events, now, keys) = (
             Rc::clone(&self.presentations),
             Rc::clone(&self.events),
             Rc::clone(&self.now),
+            Rc::clone(&self.keys),
         );
         let report: Reporter = Rc::new(move |key, event| {
+            keys.borrow_mut().push(key);
             let made = presentations.borrow_mut().link_event(key, event, now.get());
             events.borrow_mut().extend(made);
         });
@@ -178,6 +183,11 @@ impl Harness {
     async fn end(&mut self, end: ChannelEnd) {
         self.peer.take().expect("a stream").end(end).await;
         settle().await;
+    }
+
+    /// The key of the latest report.
+    fn last_key(&self) -> LinkKey {
+        *self.keys.borrow().last().expect("a report")
     }
 
     fn take_events(&self) -> Vec<MobileEvent> {
@@ -764,6 +774,7 @@ fn an_undecodable_line_drops_the_stream_and_it_reopens_after_its_backoff() {
         harness.take_events();
 
         harness.raw(b"not a frame\n").await;
+        let first = harness.last_key();
         assert!(harness.received().await.closed);
         assert_eq!(
             harness.take_events(),
@@ -777,6 +788,45 @@ fn an_undecodable_line_drops_the_stream_and_it_reopens_after_its_backoff() {
         harness.open().await;
         assert_eq!(harness.take_events(), [connection(StreamState::Connecting)]);
         assert!(matches!(harness.received().await.bodies.as_slice(), [Body::Hello(_)]));
+
+        // The second launch's frames reach the client under that launch's key.
+        harness
+            .connect(PresentationMode::Mirror, PresentationSnapshot::default())
+            .await;
+        let second = harness.last_key();
+        assert_eq!((second.session, second.client), (first.session, first.client));
+        assert_eq!(second.launch, first.launch + 1);
+        assert_eq!(harness.take_events()[0], connection(StreamState::Connected));
+        harness.received().await;
+
+        // A late report of the first launch changes nothing.
+        let late = frames::encode(&PresentationFrame {
+            generation: GENERATION,
+            rev: harness.rev + 1,
+            body: Body::Snapshot(PresentationSnapshot {
+                context: Some("stale".to_owned()),
+                ..PresentationSnapshot::default()
+            }),
+        })
+        .unwrap();
+        let late = late.strip_suffix(b"\n").unwrap().to_vec();
+        let now = harness.now.get();
+        let presentations = &harness.presentations;
+        assert!(
+            presentations
+                .borrow_mut()
+                .link_event(first, LinkEvent::Line(late), now)
+                .is_empty()
+        );
+        let closed = LinkEvent::Closed("exit 1".to_owned());
+        assert!(presentations.borrow_mut().link_event(first, closed, now).is_empty());
+        harness.deliver(Body::Ping).await;
+        assert!(harness.take_events().is_empty(), "the second launch is still connected");
+        assert_eq!(
+            harness.received().await.bodies,
+            [Body::Ack],
+            "the second launch still answers"
+        );
     });
 }
 
