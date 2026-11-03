@@ -194,7 +194,7 @@ object TerminalScenes {
         return writer
     }
 
-    /** A prompt with the cursor in [style] (0 block, 1 bar, 2 underline, 3 hollow block) on a wide character's tail. */
+    /** A prompt with the cursor in [style] (0 block, 1 bar, 2 underline, 3 hollow block) on a colored character. */
     fun cursor(style: Int): (Scene) -> RowBufferWriter =
         { scene ->
             scene

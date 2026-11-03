@@ -46,7 +46,7 @@ class TerminalFrameTimeTest {
         }
     }
 
-    /** The grid's rows after [first] lines of the file scrolled by, each line wrapped at [columns]. */
+    /** The grid's rows after [first] lines of the file scrolled by, each line one row, cut at [columns]. */
     private fun screen(
         first: Int,
         columns: Int,

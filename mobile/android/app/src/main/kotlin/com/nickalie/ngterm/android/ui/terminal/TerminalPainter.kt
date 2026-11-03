@@ -98,6 +98,8 @@ class TerminalPainter(
             paint.color = color ?: colors(run, header).foreground
             paint.textScaleX = draw.scaleX
             canvas.drawText(draw.text, draw.x, baseline, paint)
+            // the paints are shared with GlyphCache, which measures at the face's own width
+            paint.textScaleX = 1f
         }
     }
 
