@@ -463,16 +463,25 @@ def test_duplicate_as_companion_rebinds_session_and_pane_ids(shells):
         letters = itertools.cycle((str.lower, str.upper))
         return "".join(next(letters)(char) if char.isalpha() else char for char in identity)
 
-    def arguments(session, left, right, *, source):
+    def arguments(session, left, right, *, source, originals=None):
+        original_session, original_left, original_right = originals or (session, left, right)
+
+        def rebound(identity, spelling):
+            # Zero-letter and one-letter UUIDs need not produce any uppercase letter in mixed().
+            return identity.lower() if spelling == spelling.lower() else identity.upper()
+
+        session_upper = session.upper() if source else rebound(session, original_session.upper())
+        left_upper = left.upper() if source else rebound(left, original_left.upper())
+        right_upper = right.upper() if source else rebound(right, original_right.upper())
         daemon = lambda pane: ctl.vocabulary.daemon_prefix + pane.replace("-", "").lower()
         return [
-            f"session={session.upper()}",
+            f"session={session_upper}",
             f"embedded=before{session.lower()}after",
-            f"mixed={mixed(session) if source else session.upper()}",
-            f"repeat={session.upper()}:{session.upper()}",
-            f"panes={left.upper()}:{right.upper()}",
+            f"mixed={mixed(session) if source else rebound(session, mixed(original_session))}",
+            f"repeat={session_upper}:{session_upper}",
+            f"panes={left_upper}:{right_upper}",
             f"pane-lower={left.lower()}",
-            f"pane-mixed={mixed(right) if source else right.upper()}",
+            f"pane-mixed={mixed(right) if source else rebound(right, mixed(original_right))}",
             f"daemons={daemon(left)}:{daemon(right)}",
             "unrelated=CCCCCCCC-1234-5678-9ABC-0123456789AB",
             "roles=left:right",
@@ -498,7 +507,13 @@ def test_duplicate_as_companion_rebinds_session_and_pane_ids(shells):
         assert {copy, copied_panes["left"], copied_panes["right"]}.isdisjoint(
             {parent, panes["left"], panes["right"]}
         )
-        expected = arguments(copy, copied_panes["left"], copied_panes["right"], source=False)
+        expected = arguments(
+            copy,
+            copied_panes["left"],
+            copied_panes["right"],
+            source=False,
+            originals=(parent, panes["left"], panes["right"]),
+        )
         for field in ("foreground", "splitForeground"):
             assert program_argv(_runs(ctl, copy, "cat", field))[1:] == expected
         copied = find_session(ctl.tree(), copy)

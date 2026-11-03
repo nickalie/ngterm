@@ -160,6 +160,16 @@ fn assert_persisted_pane(command: Option<&str>, argv: Option<&[String]>, expecte
     assert_eq!(command, ORDINARY_DIALECT.line(expected).as_deref());
 }
 
+/// An all-digit UUID also has a wholly lowercase spelling; random fixtures need not contain any letters.
+fn rebound_identity(spelling: &str, destination: Uuid) -> String {
+    let destination = uuid_string(destination);
+    if spelling == spelling.to_ascii_lowercase() {
+        destination.to_ascii_lowercase()
+    } else {
+        destination
+    }
+}
+
 /// Upstream's `duplicateAsCompanionRebindsTheSourcesIdentitiesInBothPanes`, including both persisted argv copies.
 #[test]
 fn duplicate_as_companion_rebinds_the_sources_identities_in_both_panes() {
@@ -191,15 +201,15 @@ fn duplicate_as_companion_rebinds_the_sources_identities_in_both_panes() {
     let session = g.session(copied);
     let copied_split = session.split_pane_identity.unwrap();
     let expected_left = identity_arguments(
-        &uuid_string(copied),
-        &uuid_string(session.pane_identity),
+        &rebound_identity(&source_id, copied),
+        &rebound_identity(&primary, session.pane_identity),
         &uuid_string(copied_split).to_ascii_lowercase(),
         &crate::live::daemon_name(session.pane_identity),
         &unrelated,
     );
     let expected_right = identity_arguments(
-        &uuid_string(copied),
-        &uuid_string(copied_split),
+        &rebound_identity(&mixed, copied),
+        &rebound_identity(&split, copied_split),
         &uuid_string(session.pane_identity).to_ascii_lowercase(),
         &crate::live::daemon_name(copied_split),
         &unrelated,
@@ -246,7 +256,11 @@ fn duplicate_as_companion_persists_the_rebound_command_of_a_single_pane() {
         None,
     );
     let copied = g.store.duplicate_as_companion(g.parent, spec, HOME).unwrap();
-    let expected = vec!["tool".to_owned(), "--session".to_owned(), uuid_string(copied)];
+    let expected = vec![
+        "tool".to_owned(),
+        "--session".to_owned(),
+        rebound_identity(&uuid_string(g.parent), copied),
+    ];
     let snapshot = g.store.snapshot();
     let saved = snapshot.workspaces[0]
         .sessions
