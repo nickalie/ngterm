@@ -255,7 +255,9 @@ impl MobileCore {
 #[uniffi::export]
 impl MobileCore {
     /// Connects `machine`, answered once it is connected (at once when it already is; a connect of the same machine in
-    /// flight is joined, not repeated). A connect of the machine as edited (another host, user, key or pin) closes its
+    /// flight is joined, not repeated, and a machine waiting to reconnect is retried at once). Once connected, a lost
+    /// connection is retried on its own, reported as [`MachineState::Reconnecting`], until
+    /// [`MobileCore::disconnect`]. A connect of the machine as edited (another host, user, key or pin) closes its
     /// connection and connects anew. The state also arrives as a
     /// [`MobileEvent::MachineState`].
     ///
@@ -269,7 +271,8 @@ impl MobileCore {
         answer.await.unwrap_or(Err(MobileError::Stopped))
     }
 
-    /// Closes the connection to `machine_id`, if any, and cancels a connect in flight.
+    /// Closes the connection to `machine_id`, if any, cancels a connect or reconnect in flight, and ends its attached
+    /// sessions' streams.
     ///
     /// # Errors
     ///
@@ -370,6 +373,37 @@ impl MobileCore {
     /// [`MobileError::Stopped`] when the core has stopped.
     pub fn detach_session(&self, machine_id: String, session_id: String) -> Result<(), MobileError> {
         self.actor.post(Command::DetachSession { machine_id, session_id })
+    }
+
+    /// The device's network changed (another Wi-Fi, mobile data, back online): every machine waiting to reconnect is
+    /// retried at once, its backoff starting over.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn network_changed(&self) -> Result<(), MobileError> {
+        self.actor.post(Command::NetworkChanged)
+    }
+
+    /// The app has nothing to keep connected (in the background with no attached session to watch): every machine's
+    /// connection closes and every connect in flight is cancelled ([`MobileError::Cancelled`]), with no state
+    /// reported, and the attached sessions' streams stop quietly. [`MobileCore::resume`] brings them back.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn suspend(&self) -> Result<(), MobileError> {
+        self.actor.post(Command::Suspend)
+    }
+
+    /// Brings back what [`MobileCore::suspend`] closed: each machine reconnects at once (and keeps retrying, reported
+    /// as [`MachineState::Reconnecting`]), and its attached sessions' streams start again once it is connected.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn resume(&self) -> Result<(), MobileError> {
+        self.actor.post(Command::Resume)
     }
 
     /// The user's answer to the ask `ask_id` of an attached session (a [`MobileEvent::Ask`]). An answer to an ask no

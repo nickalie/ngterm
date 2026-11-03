@@ -6,6 +6,9 @@
 //!   and reports each one, and the channel's end, tagged with the launch's [`LinkKey`]; a report of an earlier launch
 //!   is dropped by the client. Lines sent before the channel opened (the hello) wait for it. A line over
 //!   [`MAX_FRAME_BYTES`] ends the stream, as desktop's bridge reader does, and a partial line at the end is dropped.
+//!   While the machine's connection is down the adapter has none, and a launch's link closes at once
+//!   ([`CONNECTION_DOWN`]), so each client keeps failing on its own backoff until the machine is back
+//!   ([`Presentations::machine_up`]).
 //! - **The owner.** [`Presentations`] holds the clients, passes them the actor's clock, runs their [`TICK`] (reconnect
 //!   on backoff, a stream quiet for [`STALE_AFTER`] dropped and reopened) and applies their effects with the semantics
 //!   desktop's viewer applies them (`viewer.rs::apply_client_effect`), re-derived for a phone:
@@ -18,6 +21,9 @@
 //!   - when the stream leaves `connected`, what it showed goes with it: context, status and HUD clear, and the asks
 //!     still open are dismissed (the origin takes them back), as desktop's row does.
 //!
+//! A lost connection keeps the streams ([`Presentations::machine_down`]); a suspended core stops them without a word
+//! ([`Presentations::suspend_machine`]); the machine back, each client starts again if stopped and retries at once.
+//!
 //! The origin's respawn counts are for the panes (Task 9c) and its warnings name nothing the app shows: the stream's
 //! own state carries the reason it failed.
 //!
@@ -28,6 +34,7 @@ mod records;
 #[cfg(test)]
 mod tests;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -53,6 +60,9 @@ use crate::transport::{ChannelEnd, ChannelOutput, Connection};
 /// How often the clients are ticked (desktop's one-second remote tick).
 pub const TICK: Duration = Duration::from_secs(1);
 
+/// Why a stream launched while its machine's connection is down ended at once.
+pub const CONNECTION_DOWN: &str = "the connection to the machine is down";
+
 /// Why a stream ended that sent a line over [`MAX_FRAME_BYTES`].
 pub const OVERSIZE_LINE: &str = "the presentation stream sent an oversize line";
 
@@ -68,31 +78,41 @@ pub(crate) enum LinkEvent {
 /// Where the links report: the owner, which hands each report to the client its key names.
 pub(crate) type Reporter = Rc<dyn Fn(LinkKey, LinkEvent)>;
 
-/// A client's [`PresentationTransport`]: its streams run on exec channels of `connection`.
+/// A client's [`PresentationTransport`]: its streams run on exec channels of its machine's connection, while there
+/// is one.
 pub(crate) struct ChannelLinks<C> {
-    connection: Rc<C>,
+    /// `None` while the machine's connection is down.
+    connection: RefCell<Option<Rc<C>>>,
     report: Reporter,
 }
 
 impl<C> ChannelLinks<C> {
     /// Streams on `connection`'s channels, reporting to `report`.
     pub(crate) fn new(connection: Rc<C>, report: Reporter) -> Self {
-        Self { connection, report }
+        Self {
+            connection: RefCell::new(Some(connection)),
+            report,
+        }
+    }
+
+    /// The machine's connection from now on: `None` while it is down.
+    fn set_connection(&self, connection: Option<Rc<C>>) {
+        *self.connection.borrow_mut() = connection;
     }
 }
 
 impl<C: Connection> PresentationTransport for ChannelLinks<C> {
     fn open(&self, argv: &[String], key: LinkKey) -> Box<dyn PresentationLink> {
         let (input, queue) = mpsc::unbounded_channel();
+        let report = Rc::clone(&self.report);
+        let Some(connection) = self.connection.borrow().clone() else {
+            // Reported from a task: the owner is busy with the client that opened it.
+            tokio::task::spawn_local(async move { report(key, LinkEvent::Closed(CONNECTION_DOWN.to_owned())) });
+            return Box::new(ChannelLink { input });
+        };
         // The argv is the remote command alone: the connection is the ssh part.
         let command = argv.last().cloned().unwrap_or_default();
-        tokio::task::spawn_local(run_link(
-            Rc::clone(&self.connection),
-            command,
-            key,
-            queue,
-            Rc::clone(&self.report),
-        ));
+        tokio::task::spawn_local(run_link(connection, command, key, queue, report));
         Box::new(ChannelLink { input })
     }
 }
@@ -305,6 +325,43 @@ impl<C: Connection> Presentations<C> {
             }
             keep
         });
+    }
+
+    /// `machine_id`'s connection was lost: its streams stay, and each one launched until [`Presentations::machine_up`]
+    /// closes at once, so its client fails on its own backoff.
+    pub(crate) fn machine_down(&mut self, machine_id: &str) {
+        for attached in self.of_machine(machine_id) {
+            attached.links.set_connection(None);
+        }
+    }
+
+    /// Stops the streams of `machine_id`, whose connection the core closed to suspend, reporting nothing: they start
+    /// again once the machine is back ([`Presentations::machine_up`]).
+    pub(crate) fn suspend_machine(&mut self, machine_id: &str) {
+        for attached in self.of_machine(machine_id) {
+            attached.links.set_connection(None);
+            attached.client.stop();
+        }
+    }
+
+    /// `machine_id` is connected again, on `connection`: each of its streams starts again if stopped, and retries at
+    /// once with its backoff over.
+    pub(crate) fn machine_up(&mut self, machine_id: &str, connection: &Rc<C>, now: Instant) -> Vec<MobileEvent> {
+        let mut events = Vec::new();
+        for attached in self.of_machine(machine_id) {
+            attached.links.set_connection(Some(Rc::clone(connection)));
+            let mut effects = attached.client.start(&attached.links, now);
+            attached.client.retry_now(now);
+            effects.extend(attached.client.tick(&attached.links, now));
+            events.extend(attached.apply_all(effects));
+        }
+        events
+    }
+
+    fn of_machine<'a>(&'a mut self, machine_id: &'a str) -> impl Iterator<Item = &'a mut Attached<C>> {
+        self.attached
+            .iter_mut()
+            .filter(move |attached| attached.machine_id == machine_id)
     }
 
     /// What a link reported, handed to the client its key names; a report of a client since gone is dropped.

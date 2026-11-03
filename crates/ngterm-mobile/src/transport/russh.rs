@@ -28,6 +28,9 @@
 //! the machine's answering close), one whose connection was closed as [`ChannelEnd::Lost`] with
 //! [`TransportError::Closed`]'s text, and one whose connection went away as [`ChannelEnd::Lost`] ([`CONNECTION_LOST`]).
 //! A channel whose writers are all gone still delivers its output, and is closed once its reader is gone too.
+//!
+//! A connection's [`Connection::lost`] resolves when russh's session ends: closed by the core, said goodbye to by the
+//! machine, or dropped (the socket failed, [`KEEPALIVE_MAX`] keepalives went unanswered).
 
 #[cfg(test)]
 mod tests;
@@ -44,7 +47,7 @@ use ::russh::keys::{HashAlg, PrivateKeyWithHashAlg};
 use ::russh::{ChannelMsg, Disconnect, Sig};
 use ngterm_term::GridSize;
 use tokio::net::TcpStream;
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::time::Instant;
 use zeroize::Zeroizing;
 
@@ -143,7 +146,10 @@ impl RusshTransport {
         // asked about the host key.
         let deadline = Arc::new(Deadline::new(self.timing.connect));
         let refusal = Arc::new(Mutex::new(None));
+        // Dropped with the client when russh's session ends: the connection's `lost`.
+        let (alive, gone) = watch::channel(());
         let client = Client {
+            _alive: alive,
             machine_id: machine.id.clone(),
             token: attempt.token,
             withdrawn: Arc::clone(&attempt.withdrawn),
@@ -174,6 +180,7 @@ impl RusshTransport {
         Ok(RusshConnection {
             handle: RefCell::new(Some(Rc::new(handle))),
             closed: Arc::new(AtomicBool::new(false)),
+            gone,
         })
     }
 }
@@ -352,8 +359,10 @@ impl Drop for Asking<'_> {
     }
 }
 
-/// russh's side of one connection: it checks the host key.
+/// russh's side of one connection: it checks the host key, and lives as long as russh's session does.
 struct Client {
+    /// Its drop tells the connection's [`Connection::lost`] that the session ended.
+    _alive: watch::Sender<()>,
     machine_id: String,
     /// The connect's token, which its question is asked under.
     token: u64,
@@ -494,6 +503,8 @@ pub struct RusshConnection {
     handle: RefCell<Option<Rc<Handle<Client>>>>,
     /// Set by [`Connection::close`], so the channels it ends say so.
     closed: Arc<AtomicBool>,
+    /// Closed once russh's session has ended (its [`Client`] dropped).
+    gone: watch::Receiver<()>,
 }
 
 impl Connection for RusshConnection {
@@ -539,6 +550,11 @@ impl Connection for RusshConnection {
         tokio::task::spawn_local(async move {
             let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
         });
+    }
+
+    async fn lost(&self) {
+        // Nothing is ever sent: the wait ends when the session's client is dropped.
+        let _ = self.gone.clone().wait_for(|()| false).await;
     }
 }
 

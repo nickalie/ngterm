@@ -11,7 +11,7 @@
 //! and commands), [`transport`] (the ssh seam, its channels, the russh transport and the scripted fake behind the
 //! `fakes` feature), [`keys`] (generating, importing and loading the app's ssh keys), [`sessions`] (a machine's session
 //! list, New Session and End Session), [`presentation`] (attached sessions' presentation streams and what they
-//! show).
+//! show), [`reconnect`] (keeping machines connected: lost connections, network changes, suspend and resume).
 
 uniffi::setup_scaffolding!();
 
@@ -19,6 +19,7 @@ pub mod actor;
 pub mod api;
 pub mod keys;
 pub mod presentation;
+pub mod reconnect;
 pub mod sessions;
 pub mod transport;
 

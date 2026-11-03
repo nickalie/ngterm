@@ -19,10 +19,10 @@ use crate::presentation::{AskReply, StreamState};
 use crate::transport::fake::{FakeTransport, Script};
 use crate::transport::{ChannelInput, ChannelPeer};
 
-const SESSION: &str = "00000000-0000-0000-0000-0000000000A1";
+pub(super) const SESSION: &str = "00000000-0000-0000-0000-0000000000A1";
 
 #[derive(Default)]
-struct Recorder(Mutex<Vec<MobileEvent>>);
+pub(super) struct Recorder(Mutex<Vec<MobileEvent>>);
 
 impl EventSink for Recorder {
     fn on_event(&self, event: MobileEvent) {
@@ -31,12 +31,12 @@ impl EventSink for Recorder {
 }
 
 impl Recorder {
-    fn take(&self) -> Vec<MobileEvent> {
+    pub(super) fn take(&self) -> Vec<MobileEvent> {
         std::mem::take(&mut *self.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// The stream states reported since the last take.
-    fn states(&self) -> Vec<StreamState> {
+    pub(super) fn states(&self) -> Vec<StreamState> {
         self.take()
             .into_iter()
             .filter_map(|event| match event {
@@ -47,7 +47,7 @@ impl Recorder {
     }
 }
 
-fn machine() -> Machine {
+pub(super) fn machine() -> Machine {
     Machine {
         id: "m1".to_owned(),
         label: "box".to_owned(),
@@ -60,7 +60,7 @@ fn machine() -> Machine {
 }
 
 /// A listing of the session, from an ngterm speaking presentation `version` when given.
-fn listing(version: Option<i64>) -> Script {
+pub(super) fn listing(version: Option<i64>) -> Script {
     let mut remote = serde_json::json!({
         "endpoint": {"executable": "/ngterm-session", "socketDirectory": "/tmp/ngterm-live-x"},
         "sessions": [{
@@ -75,14 +75,14 @@ fn listing(version: Option<i64>) -> Script {
 }
 
 /// The actor's loop on the test's `LocalSet`, its transport and its events.
-struct Actor {
-    commands: mpsc::UnboundedSender<Command>,
-    transport: FakeTransport,
-    sink: Arc<Recorder>,
+pub(super) struct Actor {
+    pub(super) commands: mpsc::UnboundedSender<Command>,
+    pub(super) transport: FakeTransport,
+    pub(super) sink: Arc<Recorder>,
 }
 
 impl Actor {
-    fn start() -> Self {
+    pub(super) fn start() -> Self {
         let transport = FakeTransport::new();
         let sink = Arc::new(Recorder::default());
         let (commands, queue) = mpsc::unbounded_channel();
@@ -95,7 +95,7 @@ impl Actor {
         }
     }
 
-    async fn connect(&self) {
+    pub(super) async fn connect(&self) {
         let (reply, answer) = oneshot::channel();
         assert!(
             self.commands
@@ -108,14 +108,14 @@ impl Actor {
         answer.await.unwrap().unwrap();
     }
 
-    async fn list(&self) {
+    pub(super) async fn list(&self) {
         let (reply, answer) = oneshot::channel();
         let machine_id = "m1".to_owned();
         assert!(self.commands.send(Command::ListSessions { machine_id, reply }).is_ok());
         answer.await.unwrap().unwrap();
     }
 
-    async fn attach(&self) -> Result<(), MobileError> {
+    pub(super) async fn attach(&self) -> Result<(), MobileError> {
         let (reply, answer) = oneshot::channel();
         let command = Command::AttachSession {
             machine_id: "m1".to_owned(),
@@ -126,12 +126,12 @@ impl Actor {
         answer.await.unwrap()
     }
 
-    fn post(&self, command: Command) {
+    pub(super) fn post(&self, command: Command) {
         assert!(self.commands.send(command).is_ok());
     }
 
     /// The stream's channel, opened since the last call.
-    async fn stream(&self) -> ChannelPeer {
+    pub(super) async fn stream(&self) -> ChannelPeer {
         settle().await;
         let mut opened = self.transport.take_opened();
         assert_eq!(opened.len(), 1, "one stream opened");
@@ -141,14 +141,14 @@ impl Actor {
     }
 }
 
-async fn settle() {
+pub(super) async fn settle() {
     for _ in 0..32 {
         tokio::task::yield_now().await;
     }
 }
 
 /// What the core sent down `peer`: its frames' bodies, and whether it closed the channel.
-async fn received(peer: &mut ChannelPeer) -> (Vec<Body>, bool) {
+pub(super) async fn received(peer: &mut ChannelPeer) -> (Vec<Body>, bool) {
     settle().await;
     let (mut bodies, mut closed) = (Vec::new(), false);
     while let Some(input) = peer.try_input() {
@@ -162,7 +162,7 @@ async fn received(peer: &mut ChannelPeer) -> (Vec<Body>, bool) {
 }
 
 /// The origin's hello and snapshot, then `bodies`, in order.
-async fn deliver(peer: &ChannelPeer, bodies: Vec<Body>) {
+pub(super) async fn deliver(peer: &ChannelPeer, bodies: Vec<Body>) {
     let hello = Body::Hello(PresentationHello {
         version: frames::VERSION,
         kinds: Vec::new(),
@@ -183,7 +183,7 @@ async fn deliver(peer: &ChannelPeer, bodies: Vec<Body>) {
     settle().await;
 }
 
-fn local(test: impl Future<Output = ()>) {
+pub(super) fn local(test: impl Future<Output = ()>) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .start_paused(true)

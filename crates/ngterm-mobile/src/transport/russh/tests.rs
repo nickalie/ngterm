@@ -715,6 +715,7 @@ fn a_connect_already_dropped_asks_nothing() {
         let mut fixture = fixture(quick());
         let refusal = Arc::new(Mutex::new(None));
         let client = Client {
+            _alive: tokio::sync::watch::channel(()).0,
             machine_id: "m1".to_owned(),
             token: 7,
             withdrawn: Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -894,6 +895,8 @@ fn a_dropped_connection_ends_every_channel_as_lost() {
         let lost = ChannelEnd::Lost(CONNECTION_LOST.to_owned());
         assert_eq!(drain(&mut first).await.2, lost);
         assert_eq!(drain(&mut second).await.2, lost);
+        // And the connection says it is gone.
+        connection.lost().await;
     });
 }
 
@@ -911,6 +914,7 @@ fn closing_the_connection_ends_its_channels_and_refuses_new_ones() {
             drain(&mut channel).await.2,
             ChannelEnd::Lost(TransportError::Closed.to_string())
         );
+        connection.lost().await;
         assert_eq!(
             connection.exec("echo hi", None).await.err(),
             Some(TransportError::Closed)

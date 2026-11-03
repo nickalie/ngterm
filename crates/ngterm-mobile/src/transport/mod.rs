@@ -77,6 +77,10 @@ pub trait Connection: 'static {
     /// Closes the connection: every open channel ends as [`ChannelEnd::Lost`], and later [`Connection::exec`]s fail
     /// with [`TransportError::Closed`].
     fn close(&self);
+
+    /// Resolves once the connection is gone, whether it was lost (the machine or the network went away, its
+    /// keepalives went unanswered) or closed by [`Connection::close`]; the actor watches it to reconnect a lost one.
+    async fn lost(&self);
 }
 
 /// What a channel carries from the machine.

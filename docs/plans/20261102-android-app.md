@@ -525,14 +525,29 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - Create: `crates/ngterm-mobile/src/reconnect.rs`
 - Modify: `crates/ngterm-mobile/src/actor.rs`
 
-- [ ] write tests first, on a fake clock:
+- [x] write tests first, on a fake clock:
   - the machine connection retries on `retry_delay`;
   - `network_changed` retries at once;
   - while the connection is down, opened links close at once and each client keeps its own backoff;
   - on reconnect, every client gets `retry_now`;
   - `suspend` closes the links with no error state, and `resume` reattaches everything
-- [ ] implement them
-- [ ] run the tests; they must pass before Task 9c
+- [x] implement them
+- [x] run the tests; they must pass before Task 9c
+  - Notes: `Connection` gained `lost()` (resolves once the connection is gone, closed or lost; russh's resolves when
+    its session's `Client` handler drops, the fake's on `close` or the new `FakeTransport::drop_connections`). The
+    actor watches each connection it holds; one lost while still the machine's becomes a reconnect: a connect attempt
+    with a `reconnect::Retry` that waits `retry_delay(failures)` first (1 s after the loss, doubling), each wait
+    reported as `MachineState::Reconnecting { next_in_ms }`, a failure scheduling the next. A connect the app asks for
+    still fails for good with `Unreachable`; only a machine that was connected (or resumed) keeps retrying, whatever
+    the error (the transport doesn't tell a refused key from a dead network). The machine's listing and attached
+    streams stay across the loss: `ChannelLinks` holds the connection as an `Option`, and a launch while it is `None`
+    reports `CONNECTION_DOWN` at once, so each client fails on its own backoff; `Presentations::machine_up` starts
+    each client again if stopped, gives it `retry_now` and ticks it at once. New API: `MobileCore::network_changed()`
+    (every reconnect waiting out its delay retries at once, its backoff over; a `connect` of a machine waiting to
+    reconnect does the same and joins), `suspend()` (closes every connection, cancels connects in flight with
+    `Cancelled`, stops the streams without a word, and sets each machine aside) and `resume()` (reconnects each one at
+    once on the reconnect schedule, its streams starting again once it is up; a connect of a set-aside machine does the
+    same). A disconnect or a connect as edited still ends the machine's streams, retries and suspension.
 
 ### Task 9c: Remote pane: stream, leadership, channel end, clipboard
 

@@ -1,18 +1,19 @@
 //! The scripted in-memory transport: a machine is refused or connects, at once or once the test releases it
 //! ([`FakeTransport::hold`]), a command with a script answers it and ends (a sequence of scripts answers its runs in
 //! turn, [`FakeTransport::script_sequence`]), and any other command's channel is handed to the test
-//! ([`FakeTransport::take_opened`]) to drive by hand.
+//! ([`FakeTransport::take_opened`]) to drive by hand. [`FakeTransport::drop_connections`] loses a machine's
+//! connections as a network gone away would.
 //!
 //! The state is shared behind a mutex, so a test keeps a clone of the [`FakeTransport`] it moved onto the actor and
 //! inspects what the core did through it.
 
-use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ngterm_term::GridSize;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
+use super::russh::CONNECTION_LOST;
 use super::{Channel, ChannelEnd, ChannelOutput, ChannelPeer, Connection, Transport, TransportError};
 use crate::api::Machine;
 
@@ -81,6 +82,36 @@ struct State {
     closed: Vec<String>,
     execs: Vec<Exec>,
     opened: VecDeque<Opened>,
+    /// Every connection made, by its number, until it is closed or lost.
+    links: HashMap<u64, Link>,
+    last_link: u64,
+}
+
+/// One connection's shared part: what closing or losing it ends.
+#[derive(Debug)]
+struct Link {
+    machine_id: String,
+    /// Set when it is closed or lost, which resolves [`Connection::lost`].
+    gone: watch::Sender<bool>,
+    /// The channels opened with no script, held weakly so a peer the test drops still reads as gone.
+    channels: Vec<mpsc::WeakSender<ChannelOutput>>,
+}
+
+impl State {
+    /// Ends connection `id`, if still up: its channels end as lost for `reason`, and later execs fail.
+    fn end_link(&mut self, id: u64, reason: &str) -> bool {
+        let Some(link) = self.links.remove(&id) else {
+            return false;
+        };
+        link.gone.send_replace(true);
+        // A channel whose reader is a full queue behind keeps its place and misses the end: ending can't wait.
+        for channel in link.channels {
+            if let Some(output) = channel.upgrade() {
+                let _ = output.try_send(ChannelOutput::End(ChannelEnd::Lost(reason.to_owned())));
+            }
+        }
+        true
+    }
 }
 
 /// The scripted transport; clones share one state.
@@ -159,6 +190,21 @@ impl FakeTransport {
         self.lock().execs.clone()
     }
 
+    /// Loses every connection of `machine_id` still up: their channels end as lost ([`CONNECTION_LOST`]) and their
+    /// [`Connection::lost`] resolves, as when the network goes away.
+    pub fn drop_connections(&self, machine_id: &str) {
+        let mut state = self.lock();
+        let ids: Vec<u64> = state
+            .links
+            .iter()
+            .filter(|(_, link)| link.machine_id == machine_id)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            state.end_link(id, CONNECTION_LOST);
+        }
+    }
+
     /// The unscripted channels opened since the last call, oldest first.
     #[must_use]
     pub fn take_opened(&self) -> Vec<Opened> {
@@ -180,14 +226,24 @@ impl Transport for FakeTransport {
     fn connect(&self, machine: &Machine) -> impl Future<Output = Result<FakeConnection, TransportError>> {
         let mut state = self.lock();
         state.connects.push(machine.id.clone());
-        let connected = match state.refusals.get(&machine.host) {
-            Some(reason) => Err(TransportError::Unreachable(reason.clone())),
-            None => Ok(FakeConnection {
+        let connected = if let Some(reason) = state.refusals.get(&machine.host) {
+            Err(TransportError::Unreachable(reason.clone()))
+        } else {
+            state.last_link += 1;
+            let id = state.last_link;
+            let (gone, lost) = watch::channel(false);
+            let link = Link {
+                machine_id: machine.id.clone(),
+                gone,
+                channels: Vec::new(),
+            };
+            state.links.insert(id, link);
+            Ok(FakeConnection {
+                id,
                 machine_id: machine.id.clone(),
                 state: Arc::clone(&self.state),
-                closed: Cell::new(false),
-                channels: RefCell::new(Vec::new()),
-            }),
+                lost,
+            })
         };
         let gate = state.held.contains(&machine.host).then(|| {
             let (open, gate) = oneshot::channel();
@@ -206,20 +262,20 @@ impl Transport for FakeTransport {
 /// A fake machine's connection.
 #[derive(Debug)]
 pub struct FakeConnection {
+    /// Its number among the transport's connections.
+    id: u64,
     machine_id: String,
     state: Arc<Mutex<State>>,
-    closed: Cell<bool>,
-    /// The channels opened with no script, held weakly so a peer the test drops still reads as gone.
-    channels: RefCell<Vec<mpsc::WeakSender<ChannelOutput>>>,
+    lost: watch::Receiver<bool>,
 }
 
 impl Connection for FakeConnection {
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError> {
-        if self.closed.get() {
-            return Err(TransportError::Closed);
-        }
         let script = {
             let mut state = lock(&self.state);
+            if !state.links.contains_key(&self.id) {
+                return Err(TransportError::Closed);
+            }
             state.execs.push(Exec {
                 machine_id: self.machine_id.clone(),
                 command: command.to_owned(),
@@ -235,8 +291,11 @@ impl Connection for FakeConnection {
         };
         let (channel, peer) = Channel::pair();
         let Some(script) = script else {
-            self.channels.borrow_mut().push(peer.output.downgrade());
-            lock(&self.state).opened.push_back(Opened {
+            let mut state = lock(&self.state);
+            if let Some(link) = state.links.get_mut(&self.id) {
+                link.channels.push(peer.output.downgrade());
+            }
+            state.opened.push_back(Opened {
                 machine_id: self.machine_id.clone(),
                 command: command.to_owned(),
                 pty,
@@ -256,14 +315,20 @@ impl Connection for FakeConnection {
     }
 
     fn close(&self) {
-        if !self.closed.replace(true) {
-            lock(&self.state).closed.push(self.machine_id.clone());
+        let mut state = lock(&self.state);
+        if state.end_link(self.id, &TransportError::Closed.to_string()) {
+            state.closed.push(self.machine_id.clone());
         }
-        // `close` can't wait: a channel whose reader is a full queue behind keeps its place and misses the end.
-        for channel in self.channels.take() {
-            if let Some(output) = channel.upgrade() {
-                let _ = output.try_send(ChannelOutput::End(ChannelEnd::Lost(TransportError::Closed.to_string())));
-            }
-        }
+    }
+
+    async fn lost(&self) {
+        // The sender goes with the connection's link: set when closed or lost, dropped when this connection is.
+        let _ = self.lost.clone().wait_for(|gone| *gone).await;
+    }
+}
+
+impl Drop for FakeConnection {
+    fn drop(&mut self) {
+        lock(&self.state).links.remove(&self.id);
     }
 }

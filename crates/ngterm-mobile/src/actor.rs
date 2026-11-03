@@ -13,10 +13,16 @@
 //!
 //! An attached session's presentation stream ([`crate::presentation`]) runs on its machine's connection as it was at
 //! the attach; its links report back to the actor as local tasks, and a ticker task runs the streams' one-second tick.
-//! Closing a machine's connection ends its sessions' streams.
+//!
+//! A connection the core holds is watched: lost by itself, it is retried on the reconnect schedule as a connect
+//! attempt that waits first ([`crate::reconnect`]), and the machine's sessions stay attached across it. Closing a
+//! machine's connection (a disconnect, a connect of the machine as edited) ends its sessions' streams and its retries;
+//! suspending closes every connection but keeps the streams to start again on resume.
 
 #[cfg(test)]
 mod presentation_tests;
+#[cfg(test)]
+mod reconnect_tests;
 #[cfg(test)]
 mod tests;
 
@@ -25,6 +31,7 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle, ThreadId};
+use std::time::Duration;
 
 use ngterm_proto::ControlRemoteTree;
 
@@ -34,6 +41,7 @@ use tokio::task::{AbortHandle, LocalSet};
 
 use crate::api::{EventSink, Machine, MachineState, MobileError, MobileEvent};
 use crate::presentation::{self, AskReply, ChannelLinks, LinkEvent, Presentations, Reporter};
+use crate::reconnect::Retry;
 use crate::sessions::{self, RemoteSession};
 use crate::transport::{Connection, Transport};
 
@@ -83,6 +91,9 @@ pub(crate) enum Command {
         ask_id: String,
         reply: AskReply,
     },
+    NetworkChanged,
+    Suspend,
+    Resume,
 }
 
 /// The facade's handle on the actor thread: dropping it stops the thread and joins it.
@@ -156,6 +167,8 @@ struct State<T: Transport> {
     tickets: Cell<u64>,
     /// The attached sessions' presentation streams.
     presentations: RefCell<Presentations<T::Connection>>,
+    /// The machines [`suspend`] set aside, to reconnect on [`resume`].
+    suspended: RefCell<HashMap<String, Machine>>,
 }
 
 /// What the actor knows of a connected machine's sessions.
@@ -182,6 +195,10 @@ struct Attempt {
     /// The callers waiting on it.
     waiters: Vec<Reply>,
     task: AbortHandle,
+    /// A reconnect's place in its schedule; `None` for a connect the app asked for, whose failure is final.
+    retry: Option<Retry>,
+    /// Whether it is still waiting out its retry's delay, not yet reaching the machine.
+    waiting: bool,
 }
 
 type Reply = oneshot::Sender<Result<(), MobileError>>;
@@ -197,6 +214,7 @@ impl<T: Transport> State<T> {
             listings: RefCell::new(HashMap::new()),
             tickets: Cell::new(0),
             presentations: RefCell::new(Presentations::default()),
+            suspended: RefCell::new(HashMap::new()),
         }
     }
 
@@ -278,6 +296,9 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
                     .borrow_mut()
                     .answer_ask(&machine_id, &session_id, &ask_id, reply);
             }
+            Command::NetworkChanged => network_changed(&state),
+            Command::Suspend => suspend(&state),
+            Command::Resume => resume(&state),
         }
     }
     ticker.abort();
@@ -295,51 +316,94 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
 /// Settles what a connect can at once, on the loop, so a command posted after it sees its effect; only the network
 /// part runs as a local task.
 fn connect<T: Transport>(state: &Rc<State<T>>, machine: Machine, reply: Reply) {
+    // A connect of the machine as edited replaces whatever it had (a connection, a connect or retry in flight, a
+    // suspension), and its sessions' streams with it: the new connection reports its own state.
+    if known(state, &machine.id).is_some_and(|known| known != machine) {
+        disconnect(state, &machine.id);
+    }
+    if state.connections.borrow().contains_key(&machine.id) {
+        let _ = reply.send(Ok(()));
+        return;
+    }
+    let mut attempts = state.attempts.borrow_mut();
+    if let Some(attempt) = attempts.get_mut(&machine.id) {
+        attempt.waiters.push(reply);
+        let waiting = attempt.waiting;
+        drop(attempts);
+        // A machine being reconnected is retried at once for the caller.
+        if waiting {
+            retry_at_once(state, &machine.id);
+        }
+        return;
+    }
+    drop(attempts);
+    // A machine set aside by a suspend comes back as resume brings it.
+    let retry = state.suspended.borrow().contains_key(&machine.id).then(Retry::at_once);
+    start_attempt(state, machine, vec![reply], retry);
+}
+
+/// The machine record `machine_id` is connected, being connected, or set aside with.
+fn known<T: Transport>(state: &State<T>, machine_id: &str) -> Option<Machine> {
     let connected = state
         .connections
         .borrow()
-        .get(&machine.id)
-        .map(|link| link.machine == machine);
-    match connected {
-        Some(true) => {
-            let _ = reply.send(Ok(()));
-            return;
-        }
-        // A connect of the machine as edited replaces its connection: the new one reports its own state.
-        Some(false) => close(state, &machine.id),
-        None => {}
-    }
-    if let Some(attempt) = state.attempts.borrow_mut().get_mut(&machine.id)
-        && attempt.machine == machine
-    {
-        attempt.waiters.push(reply);
-        return;
-    }
-    // A connect of the machine as edited replaces the one in flight.
-    cancel(state, &machine.id);
+        .get(machine_id)
+        .map(|link| link.machine.clone());
+    connected
+        .or_else(|| {
+            let attempts = state.attempts.borrow();
+            attempts.get(machine_id).map(|attempt| attempt.machine.clone())
+        })
+        .or_else(|| state.suspended.borrow().get(machine_id).cloned())
+}
+
+/// Starts a connect of `machine` for `waiters`: a reconnect waits out its `retry`'s delay first, reported as
+/// [`MachineState::Reconnecting`].
+fn start_attempt<T: Transport>(state: &Rc<State<T>>, machine: Machine, waiters: Vec<Reply>, retry: Option<Retry>) {
+    state.suspended.borrow_mut().remove(&machine.id);
     let generation = state.generation.get() + 1;
     state.generation.set(generation);
-    let task = tokio::task::spawn_local(reach(Rc::clone(state), machine.clone(), generation)).abort_handle();
+    let delay = retry.map_or(Duration::ZERO, Retry::delay);
+    if retry.is_some() {
+        state.emit(MobileEvent::MachineState {
+            machine_id: machine.id.clone(),
+            state: MachineState::Reconnecting {
+                next_in_ms: u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+            },
+        });
+    }
+    let task = tokio::task::spawn_local(reach(Rc::clone(state), machine.clone(), generation, delay)).abort_handle();
     let id = machine.id.clone();
     let attempt = Attempt {
         generation,
         machine,
-        waiters: vec![reply],
+        waiters,
         task,
+        retry,
+        waiting: !delay.is_zero(),
     };
     state.attempts.borrow_mut().insert(id, attempt);
 }
 
-/// The network part of a connect: aborted when the attempt is cancelled.
-async fn reach<T: Transport>(state: Rc<State<T>>, machine: Machine, generation: u64) {
-    let result = state.transport.connect(&machine).await;
-    let current = state
+/// Whether `generation` is still `machine_id`'s attempt.
+fn is_attempt<T: Transport>(state: &State<T>, machine_id: &str, generation: u64) -> bool {
+    state
         .attempts
         .borrow()
-        .get(&machine.id)
-        .map(|attempt| attempt.generation)
-        == Some(generation);
-    if !current {
+        .get(machine_id)
+        .is_some_and(|attempt| attempt.generation == generation)
+}
+
+/// The network part of a connect, after a reconnect's `delay`: aborted when the attempt is cancelled.
+async fn reach<T: Transport>(state: Rc<State<T>>, machine: Machine, generation: u64, delay: Duration) {
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
+        if let Some(attempt) = state.attempts.borrow_mut().get_mut(&machine.id) {
+            attempt.waiting = false;
+        }
+    }
+    let result = state.transport.connect(&machine).await;
+    if !is_attempt(&state, &machine.id, generation) {
         // Overtaken: its callers were answered when it was.
         if let Ok(connection) = result {
             connection.close();
@@ -351,29 +415,115 @@ async fn reach<T: Transport>(state: Rc<State<T>>, machine: Machine, generation: 
     };
     let answer = match result {
         Ok(connection) => {
-            let link = Link {
-                machine: machine.clone(),
-                connection: Rc::new(connection),
-            };
-            state.connections.borrow_mut().insert(machine.id.clone(), link);
-            state.emit(MobileEvent::MachineState {
-                machine_id: machine.id.clone(),
-                state: MachineState::Connected,
-            });
+            connected(&state, machine, connection);
             Ok(())
         }
         Err(error) => {
             let reason = error.to_string();
-            state.emit(MobileEvent::MachineState {
-                machine_id: machine.id.clone(),
-                state: MachineState::Unreachable { reason: reason.clone() },
-            });
+            match attempt.retry {
+                Some(retry) => start_attempt(&state, machine, Vec::new(), Some(retry.failed())),
+                None => state.emit(MobileEvent::MachineState {
+                    machine_id: machine.id.clone(),
+                    state: MachineState::Unreachable { reason: reason.clone() },
+                }),
+            }
             Err(MobileError::Unreachable { reason })
         }
     };
     for waiter in attempt.waiters {
         // A caller that stopped waiting has nothing to be told.
         let _ = waiter.send(answer.clone());
+    }
+}
+
+/// `machine` is connected on `connection`: it is kept and watched, and the machine's streams start again.
+fn connected<T: Transport>(state: &Rc<State<T>>, machine: Machine, connection: T::Connection) {
+    let id = machine.id.clone();
+    let connection = Rc::new(connection);
+    let link = Link {
+        machine,
+        connection: Rc::clone(&connection),
+    };
+    state.connections.borrow_mut().insert(id.clone(), link);
+    tokio::task::spawn_local(watch(Rc::clone(state), id.clone(), Rc::clone(&connection)));
+    state.emit(MobileEvent::MachineState {
+        machine_id: id.clone(),
+        state: MachineState::Connected,
+    });
+    let events = state
+        .presentations
+        .borrow_mut()
+        .machine_up(&id, &connection, sessions::now());
+    state.emit_all(events);
+}
+
+/// Waits for `connection` to go; still the machine's then, it was lost, and the machine is reconnected.
+async fn watch<T: Transport>(state: Rc<State<T>>, machine_id: String, connection: Rc<T::Connection>) {
+    connection.lost().await;
+    if !state.is_current(&machine_id, &connection) {
+        return;
+    }
+    let Some(link) = state.connections.borrow_mut().remove(&machine_id) else {
+        return;
+    };
+    state.presentations.borrow_mut().machine_down(&machine_id);
+    start_attempt(&state, link.machine, Vec::new(), Some(Retry::after_loss()));
+}
+
+/// A reconnect of `machine_id` waiting out its delay runs at once, its backoff over, for the same callers.
+fn retry_at_once<T: Transport>(state: &Rc<State<T>>, machine_id: &str) {
+    let attempt = state.attempts.borrow_mut().remove(machine_id);
+    let Some(attempt) = attempt else { return };
+    attempt.task.abort();
+    start_attempt(state, attempt.machine, attempt.waiters, Some(Retry::at_once()));
+}
+
+/// The device's network changed: every reconnect waiting out its delay runs at once.
+fn network_changed<T: Transport>(state: &Rc<State<T>>) {
+    let mut waiting: Vec<String> = state
+        .attempts
+        .borrow()
+        .iter()
+        .filter(|(_, attempt)| attempt.waiting)
+        .map(|(id, _)| id.clone())
+        .collect();
+    waiting.sort();
+    for machine_id in waiting {
+        retry_at_once(state, &machine_id);
+    }
+}
+
+/// The app went to the background with nothing to keep: every connection closes and every connect in flight is
+/// cancelled, with no state reported, and each machine is set aside for [`resume`] with its streams stopped.
+fn suspend<T: Transport>(state: &State<T>) {
+    let connections = std::mem::take(&mut *state.connections.borrow_mut());
+    let attempts = std::mem::take(&mut *state.attempts.borrow_mut());
+    let mut set_aside = Vec::new();
+    for (machine_id, link) in connections {
+        link.connection.close();
+        set_aside.push((machine_id, link.machine));
+    }
+    for (machine_id, attempt) in attempts {
+        attempt.task.abort();
+        for waiter in attempt.waiters {
+            let _ = waiter.send(Err(MobileError::Cancelled));
+        }
+        set_aside.push((machine_id, attempt.machine));
+    }
+    for (machine_id, machine) in set_aside {
+        state.presentations.borrow_mut().suspend_machine(&machine_id);
+        state.suspended.borrow_mut().insert(machine_id, machine);
+    }
+}
+
+/// The app is back: each machine [`suspend`] set aside is reconnected at once, on the reconnect schedule.
+fn resume<T: Transport>(state: &Rc<State<T>>) {
+    let mut machines: Vec<Machine> = std::mem::take(&mut *state.suspended.borrow_mut())
+        .into_values()
+        .collect();
+    machines.sort_by(|left, right| left.id.cmp(&right.id));
+    for machine in machines {
+        start_attempt(state, machine, Vec::new(), Some(Retry::at_once()));
     }
 }
 
@@ -394,8 +544,9 @@ fn disconnect<T: Transport>(state: &State<T>, machine_id: &str) {
     close(state, machine_id);
 }
 
-/// Closes `machine_id`'s connection, if any, and forgets its listing and its sessions' streams.
+/// Closes `machine_id`'s connection, if any, and forgets its listing, its sessions' streams and its suspension.
 fn close<T: Transport>(state: &State<T>, machine_id: &str) {
+    state.suspended.borrow_mut().remove(machine_id);
     state.listings.borrow_mut().remove(machine_id);
     state.presentations.borrow_mut().forget_machine(machine_id);
     let link = state.connections.borrow_mut().remove(machine_id);
