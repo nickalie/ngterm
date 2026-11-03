@@ -9,3 +9,8 @@ __pycache__/
 conformance/**/build/
 conformance/reports/
 target/
+# Xcode per-user state and build output (mobile/ios, docs/spikes probes)
+xcuserdata/
+*.xcuserstate
+DerivedData/
+.swiftpm/

@@ -47,6 +47,8 @@ uniffi.workspace = true
 futures-lite.workspace = true
 # the far `ngtermctl`'s scripted answers
 serde_json.workspace = true
+# the scratch home, vendor root and stubs of scripts/setup-ios.sh's tests
+tempfile.workspace = true
 # New Session's waits on a paused clock
 tokio = { workspace = true, features = ["test-util"] }
 
