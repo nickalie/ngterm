@@ -2,22 +2,23 @@
 name: ngterm
 description: >
   Drive ngterm (upstream agterm in Rust, a GPUI terminal) via the ngtermctl CLI.
-  Use in an ngterm session: manage sessions, companions and workspaces; split panes; toggle the scratch terminal; run, hide or show overlays;
-  read exit status; create and show HTML pages, interactive too, URLs or dev servers in an overlay with saved logins;
-  post a HUD/caption/notification; show a picker, question or input dialog; show images inline; type
-  into or restart a pane by id, copy its selection, set the clipboard, search its scrollback; manage windows; set font size and
+  Use in an ngterm session:
+  manage sessions, companions and workspaces; split panes; toggle the scratch pane; run, hide or show overlays;
+  read exit status; show HTML pages, interactive too, URLs or dev servers in an overlay with saved logins;
+  post a HUD/caption/notification/sidebar activity line; message panes; show a picker, question or input dialog; show images/markdown; type
+  into or restart a pane by id, copy its selection, set the clipboard, search its scrollback; manage windows, font size and
   theme; reload or edit the keymap, event hooks and ngterm-scoped ghostty config; run a custom command; read
   a closed window's session screen; subscribe to status, notify, lifecycle, selection,
   pane, tree and launch events; wait on agent status.
   Covers window/workspace/session addressing, NGTERM_* variables,
-  attaching a session from another Mac, cookbook recipes, running/installed version, upgrades, diagnosing
+  attaching sessions and companions from another Mac, cookbook recipes, running/installed version, upgrades, diagnosing
   problems, filing a bug or feature request.
 when_to_use: >
   Trigger on: ngterm, ngtermctl, NGTERM_SESSION_ID, and, from inside a session, plain requests such as
   split the pane, close the overlay, hide the overlay for a moment, show a message over the session, show a question dialog, ngtermctl ask,
   ask the user to type a value or a message, let the user pick one or several items from a list,
-  show an image inline, show this HTML page or artifact, make an HTML page or explainer for this and show
-  it, make a page that switches sessions or returns a choice, preview the report you generated, show this URL or the running dev server, keep me logged in to a page shown in an overlay, search the scrollback, flag every session in a workspace, tint a session or workspace row a color, make a companion session, keep a related program next to a session, duplicate this session with its programs as a companion, open a sub-session under this one, fold a session's companions, show a page as a companion of this session, run my custom command, tell me when the selected session changes, wait until that worker session finishes, bring back the session I just closed, attach a session from another Mac, copy this to the clipboard, was ngterm upgraded under the running app, upgrade ngterm without losing sessions, what recipes are there,
+  show an image inline, show this markdown file rendered, show this HTML page or artifact, make an HTML page or explainer for this and show
+  it, make a page that switches sessions or returns a choice, preview the report you generated, show this URL or the running dev server, keep me logged in to a page shown in an overlay, search the scrollback, flag every session in a workspace, tint a session or workspace row a color, show status or activity under a session in the sidebar, make a companion session, keep a related program next to a session, duplicate this session with its programs as a companion, open a sub-session under this one, fold a session's companions, show a page as a companion of this session, run my custom command, send a message to the other pane or another agent, read my messages, wait for a message, tell me when the selected session changes, wait until that worker session finishes, bring back the session I just closed, attach a session from another Mac, attach a remote session with all its companions, copy this to the clipboard, was ngterm upgraded under the running app, upgrade ngterm without losing sessions, what recipes are there,
   the keymap editor will not open.
 allowed-tools: Bash(ngtermctl *)
 ---
@@ -195,12 +196,12 @@ ngtermctl session new --cwd ~/proj --name worker \
   --command "zsh -lc 'claude \"\$(cat ~/brief.md)\"'"   # GUI PATH: wrap a non-default binary
 ```
 
-In every mode the session closes when this command exits unless `--wait` holds the final output, so pass
-`--wait` for a finite build or test whose output you mean to read. In Live sessions mode the command is a create-only
-live-session payload, which bypasses the 1,024-byte PTY input cap. A surviving daemon ignores the payload; a new
-daemon runs it, and the pane ends with it. After a clean quit, a missing daemon replays the captured running command
-inside a new persistent shell, which stays open after it exits, as after `session restart --command`. The exclusions
-above start a fresh shell.
+The session closes when this command exits unless `--wait` holds the final output. In Live sessions mode the
+command is a create-only live-session payload, which bypasses the 1,024-byte PTY input cap. A surviving daemon ignores
+the payload; a new daemon runs it and the pane ends with it, held by `--wait`. Creation and attachment are one
+operation, so a quickly ending command keeps its output. After a clean quit, a missing daemon replays the
+captured running command inside a new persistent shell that stays open after it exits, as after
+`session restart --command`. The exclusions above start a fresh shell.
 
 `session type` drives an ALREADY-RUNNING program — it is not a launcher. Its keystrokes land in a line
 buffer you do not own: a newline submits (a multi-line brief becomes N premature Enters), and the user
@@ -304,8 +305,8 @@ given. Use `--json` for one bare event object per line; filter with repeatable o
 `--kind` over `status`, `notify`, `session.created` (carries `parent` for a companion), `session.closed`, `session.selected` (a window's
 selection moved; carries the session that lost it as `previous`), `tree.changed`, `pane.split`,
 `pane.scratch`, `pane.focused` (a session's selection moved between its two split panes; carries the
-pane and its `paneID`), `remote.opened`, `remote.closed` and `app.launched` (once per app run, when hooks and
-the socket are ready); resume with paired `--run RUN --after SEQ`; and set
+pane and its `paneID`), `remote.opened`, `remote.closed`, `app.launched` (once per app run, when hooks and
+the socket are ready) and `message` (mail queued for a pane; carries `paneID`, `from` and `messageID`, never the body); resume with paired `--run RUN --after SEQ`; and set
 page size with `--limit 1...1000`. The app retains 4,096 events for one process run. Cursor run changes,
 expiry, and ahead-of-tail errors are fatal and are never silently rebaselined. Once the stream holds a
 cursor, a refused connection is retried with that cursor for about 30 s before the stream exits.
@@ -463,6 +464,12 @@ omitted when expanded).
   origin's mirrored context; `--clear` removes that override and reveals the origin's latest value.
   The mirrored value is never persisted. Read the shown value from the tree node's `context` field;
   setting the text already shown emits no `tree.changed` event.
+- `session info <TEXT|--clear> [--markdown] [--hide-after SECONDS] [--target] [--window W]` - show one line of
+  current activity under the session's sidebar row: a step, a count, a progress note. `--markdown` allows
+  `**bold**`, `*italic*`, `` `code` ``, `^[text](color: "green")` and `^[text](dim: true)`. Each set replaces the
+  whole line, so pass every flag every time. A process reporting activity must pass a positive `--hide-after`
+  and set the line again before it runs out, so the line goes away if the process dies. Not kept across a
+  relaunch. Read back as the tree's `info`; details in reference.md.
 - `session tint <red|orange|yellow|green|blue|purple|gray|clear> [--on icon|name|icon,name]` and `workspace tint`
   (same arguments) - color a sidebar row so it stands out, e.g. red for production; a workspace tint colors only
   its own row. `session new`/`workspace new` take `--tint`/`--tint-on`. Read back as the tree node's `tint`/`tintOn`;
@@ -495,7 +502,7 @@ omitted when expanded).
   and `clear --pane` returns the pane to the default. `--opacity` 0.0–1.0. (An image/text watermark
   renders the pane opaque, overriding window translucency, so it shows; a `color` takes no opacity and
   honors the Settings window translucency instead.)
-- `session overlay open (<command> [--cwd DIR] [--wait] [--block] | --html FILE [--cwd DIR] [--navigation | --chromeless] [--js] [--block] | --url URL [--navigation | --chromeless] [--js]) [--size-percent N [--width PT] [--height PT]] [--background-color #rrggbb] [--follow] [--pane left|right]` ·
+- `session overlay open (<command> [--cwd DIR] [--wait] [--block] | --html FILE [--cwd DIR] [--navigation | --chromeless] [--js] [--block] | --url URL [--navigation | --chromeless] [--js] | --image FILE | --markdown FILE) [--size-percent N [--width PT] [--height PT]] [--background-color #rrggbb] [--follow] [--pane left|right]` ·
   `session overlay resize (--size-percent N [--width PT] [--height PT] | --width PT [--height PT] | --height PT | --full)` ·
   `session overlay close [--pane left|right]` ·
   `session overlay hide|show|toggle [--pane left|right]` ·
@@ -534,9 +541,9 @@ omitted when expanded).
   that session. **Pass `--follow` to select the target after opening** (a no-op if it is already active):
   use `--follow` when you want the user pulled to the overlay, omit it to open quietly on your own or
   another session.
-  `--background-color` gives the overlay pane its own solid color, independent of the session's. An
-  overlay is a real terminal (pty), which is also how you **display an image inline** — via the bundled
-  `scripts/show-image.sh` (see below).
+  `--background-color` gives the overlay pane its own solid color, independent of the session's.
+  `--image FILE` is how you **display an image inline**, and `--markdown FILE` how you **show a markdown file
+  rendered** (see below).
 - `session hud [open] <message> [--detail T] [--spinner] [--spinner-style S] [--position P] [--background-color #rrggbb] [--text-color #rrggbb] [--size-percent N] [--sticky] [--no-frame] [--hide-after SECONDS] [--pane P] [--pane-id ID]` ·
   `session hud update <message> [--detail T] [--spinner] [--spinner-style S] [--position P] [--text-color #rrggbb] [--size-percent N] [--sticky] [--no-frame] [--hide-after SECONDS] [--pane P] [--pane-id ID]` ·
   `session hud close` — post a small **passive** panel over the session saying what you are doing
@@ -682,6 +689,14 @@ Visibility/mode act on the frontmost window; `sidebar expand`/`collapse`/`width`
 
 **notify** — `notify <body> [--title T]` — post a desktop notification attributed to a session. To signal that you need the user, prefer `session status` (`blocked`/`completed`), a persistent typed attention state rather than a one-shot banner; keep `notify` for a one-off nudge.
 
+**msg** — `msg send TEXT|--stdin --to SESSION:PANE [--to ...]` or `--all [--workspace W]` · `msg read [--ack] [--wait [--timeout N]]` ·
+`msg ack ID...` — per-pane mailboxes for passing a message to another pane's program without typing into its
+terminal. PANE is a pane id (`surfaces[].paneID` in `tree`) or `left`/`right`/`scratch`; `--all` reaches every live pane
+but the sender. Inside a pane the CLI acts as that pane through `NGTERM_SESSION_ID`/`NGTERM_PANE_ID` (`--as SESSION:PANE-ID`
+overrides). `read` prints `ID from SENDER` then the body, oldest first, and removes nothing until `ack`; `read --ack` takes
+the batch in one step. Mail is in memory only and is dropped when the pane closes or restarts. Read back
+`pendingMessages` on the tree surface and the `message` event. See [reference.md](reference.md#msg).
+
 **font** — `font inc|dec|reset [--pane left|right|scratch]` — change a session pane's font size (omitted/`left` = main pane, `right` = the split pane, `scratch` = the scratch terminal). Read the resulting size back from `tree` (`fontSize`/`splitFontSize`/`scratchFontSize` per pane). A pane under an HTML overlay zooms the page instead, read back as `htmlOverlays[].zoom`.
 
 **keymap** — `keymap reload` — re-read `keymap.conf` (prints the parse-diagnostic count). `keymap run NAME [--target T] [--window W]` — start one of the user's custom commands by the name `keymap list` prints, against that session; the reply means it started, not that it succeeded. `keymap list` — show the resolved keymap AND the live menu key equivalents: every built-in with its current binds (the menu chord first, then any `|`-separated alternatives a key monitor delivers), the custom commands, the parse diagnostics, and what the menu bar is actually dispatching. Use it to check a rebind took effect, to find a free chord, or to spot a chord the keymap resolved but the menu is not carrying.
@@ -744,7 +759,8 @@ keeps the frontmost window unchanged; an invalid or closed target fails. Takes t
 listing, not the name, and resolves the remote again first, so a session that has gone fails instead of
 handing back a fresh shell wearing its name. Closing it here ends only this side's connection and forgets the
 row; a row still open at quit is attached again on the next launch, where it stood, once that machine answers.
-The attached row mirrors the origin session's status, context, name (until renamed here), `notify`
+Add `--companions` to attach the group; see [details](reference.md#restore).
+The attached row mirrors the origin session's status, context, name (until renamed here), info, `notify`
 notifications, HUD and the layout of attached panes over a stream that reconnects by itself
 ([details](reference.md#restore)); read
 `presentation.state` in `tree`, and expect mirrored status, context and HUD to clear while it is down. One
@@ -787,9 +803,32 @@ socket explicitly (`--socket "$NGTERM_SOCKET"`, or `"$AGT_SOCKET"` in a keymap c
 resolves the DEFAULT socket, which may be another app. The same identity is on the tree top level as
 `app`.
 
+## Showing a markdown file rendered
+
+Render a `.md` or `.markdown` file as a themed page with `--markdown`, at 95% here:
+
+```bash
+ngtermctl session overlay open --markdown /path/to/plan.md --size-percent 95 --target "$NGTERM_SESSION_ID"
+```
+
+Pictures kept in the file's own folder show; other pictures show their alt text, raw HTML stays text, and a web
+link opens in the browser after the user confirms. The user gets the same view by ⌘-clicking (ctrl-clicking on Linux and Windows) the file's path, so
+printing the absolute path of a plan or report you wrote is often enough. Read back `markdown` in `htmlOverlays`.
+
 ## Displaying an image inline
 
-This skill bundles `scripts/show-image.sh`. It opens an overlay (a real terminal) and renders the
+Show a png, jpg, gif or webp picture with `--image`; the panel takes the picture's shape and size, up to
+80% of the session:
+
+```bash
+ngtermctl session overlay open --image /tmp/shot.png --target "$NGTERM_SESSION_ID"
+```
+
+The user can open the same view by ⌘-clicking (ctrl-clicking on Linux and Windows) a picture's path in the terminal, so printing the absolute
+path of an image you produced is often enough. When `--image` is rejected, by an older CLI as an unknown
+option or by an older app, fall back to the script below.
+
+This skill also bundles `scripts/show-image.sh`. It opens an overlay (a real terminal) and renders the
 image there via the kitty graphics protocol, which ghostty draws natively — no kitty binary and no
 external image tool, just `base64` + `printf`. Run it with the image path (optional size percent,
 default 60):

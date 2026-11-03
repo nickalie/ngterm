@@ -2,7 +2,7 @@ What the shell integration's `codex` wrapper does to the shared-daemon advice, a
 0010-live-creation-ends-pane.patch.
 
 diff --git a/troubleshooting.md b/troubleshooting.md
-index 1a17f3cf..31589b93 100644
+index 1a17f3c..31589b9 100644
 --- a/troubleshooting.md
 +++ b/troubleshooting.md
 @@ -298,6 +298,13 @@ when the server started outside ngterm or that session has closed. Diagnose: run

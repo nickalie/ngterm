@@ -454,14 +454,20 @@ validate the command examples. Upstream skill documentation must not override ac
 **Conformance:** existing `conformance/selftests/test_gen_catalog.py`, existing integration tests;
 no invented feature coverage IDs for resource copying.
 
-- [ ] Rebase 0001-live-group.patch and every later conflicting patch against v0.40.0. Retain ngterm/live names,
+- [x] Rebase 0001-live-group.patch and every later conflicting patch against v0.40.0. Retain ngterm/live names,
   NGTERM_LIVE_* environment, remote far-side ngtermctl, Linux/platform glue and local identity changes.
   Reconcile/remove redundant portions of 0010-live-creation-ends-pane.patch now upstream corrected its text.
-- [ ] Regenerate whole skill via `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh`, never hand-edit
+- [x] Regenerate whole skill via `.claude/skills/agterm-upstream-sync/scripts/sync-resources.sh`, never hand-edit
   only generated payloads. Record patches as unified diffs of upstream versus intended local copy. Verify
   `sync-resources.sh --check v0.40.0 v0.40.0` says unchanged for patched copies.
-- [ ] Bump integration provenance only after successful regeneration. Confirm agent-status/defaults/LICENSE
+- [x] Bump integration provenance only after successful regeneration. Confirm agent-status/defaults/LICENSE
   remain unchanged and Markdown resources from Task 6 are accounted for. Run scoped resource/integration checks.
+  Validation: the whole v0.40.0 skill regenerates, and `sync-resources.sh --check v0.40.0 v0.40.0` reports
+  both patched bundles unchanged. Agent-status, defaults and LICENSE are unchanged; Task 6's separate
+  `scripts/sync-markdown-resources.py --check` passes (its mapping is recorded in `references/areas.md`).
+  All 101 scoped integration tests, 82 catalog generator selftests, Rust formatting and diff checks passed.
+  Rebased 0010 retains only ngterm's create-and-attach/output and returning-replay differences. New 0016 records
+  existing remote-name mirroring prose that previously appeared only in the generated payload.
 
 ### Task 10: Finish sidebar settings and desktop cursor/window-drag behavior
 

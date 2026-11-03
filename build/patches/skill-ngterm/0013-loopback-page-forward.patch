@@ -2,10 +2,10 @@ A loopback --url page on a presented session loads on the presenting machine thr
 upstream's presenter refuses it. Applied after 0012-remote-new-end-session.patch.
 
 diff --git a/reference.md b/reference.md
-index fd67961..91803ce 100644
+index af3d6e5..d00c4d0 100644
 --- a/reference.md
 +++ b/reference.md
-@@ -2238,9 +2238,16 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
+@@ -2354,9 +2354,16 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
    keeps its own `--persistent` storage. A file page's files and its `data-ngterm`/`ngterm.request` commands
    go back to the origin over a channel the presenting Mac opens (`ngtermctl session overlay page-serve`,
    plumbing not meant to be typed), so commands act on the origin's session and `overlay submit` answers the

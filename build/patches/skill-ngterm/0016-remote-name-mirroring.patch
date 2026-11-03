@@ -1,0 +1,42 @@
+Preserve this build's live remote-row name mirroring (90d0aea2), whose skill documentation previously lived only
+in the generated payload. A local rename keeps precedence over the origin's name. Applied after
+0015-remote-split-origin.patch, alongside upstream v0.40.0's new info-line mirroring text.
+
+diff --git a/SKILL.md b/SKILL.md
+index 4c88795..3d9dceb 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -760,7 +760,7 @@ listing, not the name, and resolves the remote again first, so a session that ha
+ handing back a fresh shell wearing its name. Closing it here ends only this side's connection and forgets the
+ row; a row still open at quit is attached again on the next launch, where it stood, once that machine answers.
+ Add `--companions` to attach the group; see [details](reference.md#restore).
+-The attached row mirrors the origin session's status, context, `notify`
++The attached row mirrors the origin session's status, context, name (until renamed here), info, `notify`
+ notifications, HUD and the layout of attached panes over a stream that reconnects by itself
+ ([details](reference.md#restore)); read
+ `presentation.state` in `tree`, and expect mirrored status, context and HUD to clear while it is down. One
+diff --git a/reference.md b/reference.md
+index 8458a79..312f8cd 100644
+--- a/reference.md
++++ b/reference.md
+@@ -2299,7 +2299,7 @@ shows in a timed HUD over the row, and each is asked of the machine once, never
+
+ A program in an attached session runs on the origin and talks to the origin's ngterm, so what it asks
+ ngterm to draw would show there only. Every attach therefore also opens a presentation stream, and this
+-Mac mirrors the origin session's status, its `session context`, its `session info` line, its `notify` notifications, its HUD and
++Mac mirrors the origin session's status, its `session context`, its name, its `session info` line, its `notify` notifications, its HUD and
+ the layout of panes already attached.
+ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to expect:
+
+@@ -2307,6 +2307,11 @@ Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to
+   `session context` set on this Mac's row wins over it, and `--clear` here removes only that local value,
+   so the origin's latest context shows again. It cannot blank the origin's. An origin running an ngterm
+   that predates context mirroring still connects and mirrors status and HUD, with no context.
++- The attached row takes the name the origin shows, live: a rename there, and for a session never renamed there its
++  automatic name, which follows its folder (and its terminal title when the origin names sessions from titles).
++  Renaming the row on this Mac stops that, and the local name stays. Upstream has no such frame: an origin that predates it, or an older ngterm here, keeps the
++  name the row was attached with until it is attached again.
++
+ - The origin's `session info` line shows under this Mac's row the same way: a line set here wins, and
+   `--clear` here reveals the origin's again. Origin expiry clears the mirrored line; a line set on this
+   Mac remains until cleared or its own expiry.
