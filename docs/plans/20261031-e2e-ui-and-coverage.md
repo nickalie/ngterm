@@ -110,6 +110,9 @@ suite's reference discipline already requires.
   slowness never turns an id red.
 - **Coverage is gated by a ratchet**: one floor file per OS, line % per workspace crate, a drop of more than 0.5 pt
   fails, floors are only ever raised (`--add`), the first run on `main` seeds them.
+  ➕ Amended in Task 12: one run's line % of the same build varies by more than 0.5 pt (Linux ngterm-gpui 63.80-64.38%
+  over three runs), so the floors are seeded from the per-crate minimum of three same-build CI runs and `--add` takes a
+  batch of at least two summaries, raising each floor to the batch's lowest.
 - **Not in scope**: visual snapshot assertions, video, an HTML trace viewer, tests whose target has no upstream id and
   no reachable stand-in (Task 7 decides each one from upstream).
 
@@ -634,13 +637,30 @@ ratchets. Self-tests pass except the two known host-dependent `test_impls` noop-
 
 ### Task 12: Verify acceptance criteria
 
-- [ ] the ui layer runs (not skips) in the default layers on Linux (each shell entry) and Windows CI, its ids in both
-      ratchets
-- [ ] the pointer and typing tests are green on reference-macos, Linux and Windows
-- [ ] a failing test anywhere leaves a complete trace, uploaded by CI
-- [ ] both coverage jobs report per-crate numbers and hold their floors; `report.md` shows code and catalog coverage
-- [ ] gates on the changed part only: clippy on the touched crates and dependents, their tests, the self-tests, a
-      partial suite run over the ui ids; the whole workspace and the full suite are CI's
+- [x] the ui layer runs (not skips) in the default layers on Linux (each shell entry) and Windows CI, its ids in both
+      ratchets (`ci/verify-task12`, d76bcbea = 86485f92 plus a trigger-only commit: linux 41596232222 bash/zsh/fish
+      green, layers protocol cli behaviors ui, ui 49/50/50 pass with 3/2/2 driver skips, ratchet holds 932; Windows
+      job in cross-platform 41596231921: ui 49 pass/3 skip/0 fail, its only reds the three protocol ids of
+      docs/backlog/windows-ci-is-red-on-main-from-three-protocol-tests-and-a-clippy-lint.md; 50 Linux and 49 Windows
+      ui ids in the ratchets)
+- [x] the pointer and typing tests are green on reference-macos, Linux and Windows (8/8 in each Linux shell entry and
+      the Windows job above; reference-macos 41596241267 ui layer 52/52 on both attempts)
+- [x] a failing test anywhere leaves a complete trace, uploaded by CI (ui failures: reference-macos 41573455447 and
+      Windows 41560456592 artifacts hold screenshot.png, a11y-tree.txt, actions, socket, cli, panes, app.log; protocol
+      failures: the Windows 41596231921 and coverage-windows artifacts hold socket, cli, panes and app.log; the Linux
+      upload path is the same step, its runs had no failure; a Linux Xvfb failure trace was checked locally in Task 3)
+- [x] both coverage jobs report per-crate numbers and hold their floors; `report.md` shows code and catalog coverage
+      (coverage-windows 41596231921 held 11 crates; the Linux coverage entry broke ngterm-gpui at 63.80% against a
+      64.37% floor on the same build that seeded it: ➕ floors reseeded from the per-crate minimum of three same-build
+      runs per OS and `check_coverage.py --add` now takes a batch of at least two summaries, see Decisions; both
+      reports carry `### code coverage` and `### catalog coverage`, 121/127 ui ids exercised)
+- [x] gates on the changed part only: clippy on the touched crates and dependents, their tests, the self-tests, a
+      partial suite run over the ui ids; the whole workspace and the full suite are CI's (clippy -D warnings on
+      ngterm-gpui/app/headless/wpe clean, fmt clean, selftests 1133 pass with the 2 known noop-URI host failures;
+      conformance-gate on `ci/verify-task12` 41596232288 broke on test_ui_setup_failure_withholds_runner_report (it
+      needed at-spi2-core on the host since ui became a default layer) ➕ fixed, gate green on `ci/gate-task12`
+      41596782313; the ui ids ran in full on CI above; reference-macos protocol reds are on `main` too, run 41603323048,
+      docs/backlog/reference-macos-zmx-restart-and-hold-tests-time-out.md)
 
 ### Task 13: [Final] Update documentation
 

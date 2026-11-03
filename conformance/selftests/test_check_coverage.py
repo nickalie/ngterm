@@ -49,8 +49,12 @@ def write(summary: Path, floor: Path, rows: dict[str, tuple[int, int] | None], f
     floor.write_text(HEADER + floors, encoding="utf-8")
 
 
-def check(capsys: pytest.CaptureFixture[str], summary: Path, floor: Path, *extra: str) -> tuple[int, str, str]:
-    code = cc.main(["--summary", str(summary), "--floor", str(floor), *extra])
+def check(
+    capsys: pytest.CaptureFixture[str], summary: Path, floor: Path, *extra: str, batch: list[Path] | None = None
+) -> tuple[int, str, str]:
+    """Runs the tool on `batch` (default: the one summary, given twice under --add, a batch of two identical runs)."""
+    summaries = batch if batch is not None else [summary] * (cc.MIN_ADD_SUMMARIES if "--add" in extra else 1)
+    code = cc.main([arg for path in summaries for arg in ("--summary", str(path))] + ["--floor", str(floor), *extra])
     out, err = capsys.readouterr()
     return code, out, err
 
@@ -121,6 +125,54 @@ def test_add_writes_nothing_when_the_floors_are_broken(files, capsys):
     assert code == 1
     assert "--add skipped" in err
     assert floor.read_text(encoding="utf-8") == HEADER + "ngterm-core 60.00\n"
+
+
+def test_add_refuses_a_single_summary(files, capsys):
+    summary, floor = files
+    write(summary, floor, {"ngterm-core": (6123, 10000)}, "ngterm-core 60.00\n")
+    code, _, err = check(capsys, summary, floor, "--add", batch=[summary])
+    assert code == 2
+    assert "--add needs at least 2 --summary" in err
+    assert floor.read_text(encoding="utf-8") == HEADER + "ngterm-core 60.00\n"
+
+
+def batch_of(tmp_path: Path, *runs: dict[str, tuple[int, int] | None]) -> list[Path]:
+    paths = []
+    for number, rows in enumerate(runs):
+        path = tmp_path / f"summary-{number}.md"
+        path.write_text(summary_text(rows), encoding="utf-8")
+        paths.append(path)
+    return paths
+
+
+def test_a_repeated_summary_judges_each_crate_by_its_lowest(files, capsys, tmp_path):
+    summary, floor = files
+    write(summary, floor, {}, "ngterm-gpui 64.37\n")
+    batch = batch_of(tmp_path, {"ngterm-gpui": (6438, 10000)}, {"ngterm-gpui": (6380, 10000)})
+    code, out, _ = check(capsys, summary, floor, batch=batch)
+    assert code == 1
+    assert "BROKEN ngterm-gpui: 63.80%, floor 64.37% (0.57 pt below" in out
+
+
+def test_add_raises_to_the_batch_lowest(files, capsys, tmp_path):
+    summary, floor = files
+    write(summary, floor, {}, "ngterm-core 60.00\nngterm-gpui 63.00\n")
+    batch = batch_of(tmp_path, {"ngterm-core": (6200, 10000), "ngterm-gpui": (6438, 10000)},
+                     {"ngterm-core": (6100, 10000), "ngterm-gpui": (6402, 10000)},
+                     {"ngterm-core": (6300, 10000), "ngterm-gpui": (6380, 10000)})
+    assert check(capsys, summary, floor, "--add", batch=batch)[0] == 0
+    assert floor.read_text(encoding="utf-8") == HEADER + "ngterm-core 61.00\nngterm-gpui 63.80\n"
+
+
+def test_add_over_a_batch_keeps_a_partly_measured_crate_and_adds_only_one_measured_everywhere(files, capsys, tmp_path):
+    summary, floor = files
+    write(summary, floor, {}, "ngterm-core 60.00\nngterm-old 40.00\nngterm-wpe 50.00\n")
+    batch = batch_of(tmp_path, {"ngterm-core": (7000, 10000), "ngterm-wpe": (9000, 10000), "ngterm-a": (1, 2),
+                                "ngterm-b": (1, 4)},
+                     {"ngterm-core": (7000, 10000), "ngterm-b": (1, 2)})
+    assert check(capsys, summary, floor, "--add", batch=batch)[0] == 0
+    # wpe: measured by one summary only, floor kept; old: by none, dropped; a: not everywhere, not added
+    assert floor.read_text(encoding="utf-8") == HEADER + "ngterm-b 25.00\nngterm-core 70.00\nngterm-wpe 50.00\n"
 
 
 def test_a_crate_with_no_lines_is_neither_judged_nor_added(files, capsys):

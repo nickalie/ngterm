@@ -623,10 +623,11 @@ def test_a_full_run_takes_the_ui_layer(tmp_path, stage, layers):
 
 
 def test_ui_setup_failure_withholds_runner_report(tmp_path, stage, layers):
-    ui = layers / 'ui'
-    ui.mkdir()
+    # A ui dir outside the default layers, passed as an extra pytest path, bypasses the runner's early preflight (which
+    # would need at-spi2-core on the host): exercise the plugin's failure propagation.
+    ui = tmp_path / 'extra' / 'tests' / 'ui'
+    ui.mkdir(parents=True)
     (ui / 'test_ui.py').write_text('def test_ui(impl_options): pass\n')
-    # Extra pytest paths bypass the runner's early layer preflight: exercise plugin failure propagation.
     (layers.parent / 'conftest.py').write_text("""
 from agterm_conformance import linux_ui
 from agterm_conformance.impls.base import LaunchError

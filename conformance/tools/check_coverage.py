@@ -5,10 +5,15 @@ Reads the per-crate table of `summary.md` (agterm_conformance/code_coverage.py w
 `DIR/coverage`) and a floor file (`conformance/coverage-floor-linux.txt`, `coverage-floor-windows.txt`): `#` header
 comments, then one `crate line%` per line, sorted by crate. A crate more than TOLERANCE points below its floor breaks
 the floors and is named with both numbers. A crate the summary measures but the file lacks is new to the workspace;
-one the file lists but the summary lacks is gone from it: neither breaks. `--add` (when the floors hold) rewrites the
-file from the run: each floor raised to the measured line % (rounded down to two places), never lowered; a new crate
-added, a gone one dropped. A crate with no lines (n/a) is neither judged nor added. Appends a markdown summary to
+one the file lists but the summary lacks is gone from it: neither breaks. `--summary` may repeat: each crate is judged
+by its lowest measurement. A crate with no lines (n/a) is neither judged nor added. Appends a markdown summary to
 `$GITHUB_STEP_SUMMARY` when it is set. Exit 0: holds, 1: broken, 2: usage error or a malformed input file.
+
+`--add` (when the floors hold) rewrites the file from a batch of at least MIN_ADD_SUMMARIES summaries of the same build:
+the GUI's timing makes one run's line % vary by more than TOLERANCE (ngterm-gpui 63.80-64.38% over three runs of one
+build), so a floor taken from a single lucky run would break the next. Each floor is raised to the crate's lowest line %
+over the batch (rounded down to two places), never lowered; a crate measured by every summary and with no floor is
+added, one no summary measures is dropped, and one only some summaries measure keeps its floor.
 """
 
 from __future__ import annotations
@@ -23,6 +28,8 @@ from pathlib import Path
 
 # The drop below a floor that still holds, in percentage points: the run-to-run noise of a suite with timing in it.
 TOLERANCE = 0.5
+# The fewest summaries `--add` raises the floors from: a batch's minimum, not one run's luck.
+MIN_ADD_SUMMARIES = 2
 # Below this a difference of two percentages is float noise, not a drop (floors keep two decimals).
 _EPSILON = 1e-9
 # A row of code_coverage.render's table: `| crate | 45.90% (1234/2688) | ... |` or `| crate | n/a | ... |`.
@@ -153,11 +160,23 @@ def judge(measured: dict[str, float], floors: Floors) -> Verdict:
     return verdict
 
 
-def raised(measured: dict[str, float], floors: Floors) -> Floors:
-    """The floors after a run: each measured crate's floor raised to its line % (two places, down), never lowered."""
-    merged = {}
-    for name, now in measured.items():
-        merged[name] = max(floors.floors.get(name, 0.0), math.floor(now * 100 + _EPSILON) / 100)
+def lowest(batch: list[dict[str, float]]) -> tuple[dict[str, float], set[str]]:
+    """Each crate's lowest line % over the summaries that measure it, and the crates every summary measures."""
+    measured: dict[str, float] = {}
+    for crates in batch:
+        for name, now in crates.items():
+            measured[name] = min(now, measured.get(name, now))
+    everywhere = set.intersection(*(set(crates) for crates in batch)) if batch else set()
+    return measured, everywhere
+
+
+def raised(measured: dict[str, float], floors: Floors, everywhere: set[str] | None = None) -> Floors:
+    """The floors after a batch: each crate every summary measures raised to its lowest line % (two places, down),
+    never lowered, and added when new; a crate only some summaries measure keeps its floor; one none measures dropped."""
+    everywhere = set(measured) if everywhere is None else everywhere
+    merged = {name: floor for name, floor in floors.floors.items() if name in measured}
+    for name in everywhere:
+        merged[name] = max(floors.floors.get(name, 0.0), math.floor(measured[name] * 100 + _EPSILON) / 100)
     return Floors(floors.header, dict(sorted(merged.items())))
 
 
@@ -191,12 +210,19 @@ def summary_markdown(verdict: Verdict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
-    parser.add_argument("--summary", type=Path, required=True, help="a --coverage run's coverage/summary.md")
+    parser.add_argument("--summary", type=Path, action="append", required=True,
+                        help="a --coverage run's coverage/summary.md (repeatable: each crate judged by its lowest)")
     parser.add_argument("--floor", type=Path, required=True, help="the floor file (crate line%% per line)")
-    parser.add_argument("--add", action="store_true", help="raise the floors to this run, add new crates")
+    parser.add_argument("--add", action="store_true",
+                        help=f"raise the floors to the batch's lowest, add new crates (at least {MIN_ADD_SUMMARIES} "
+                             "--summary of the same build)")
     args = parser.parse_args(argv)
+    if args.add and len(args.summary) < MIN_ADD_SUMMARIES:
+        print(f"check_coverage: --add needs at least {MIN_ADD_SUMMARIES} --summary of the same build (one run's "
+              "line % varies by more than the tolerance)", file=sys.stderr)
+        return 2
     try:
-        measured = read_summary(args.summary)
+        measured, everywhere = lowest([read_summary(path) for path in args.summary])
         floors = read_floors(args.floor)
     except InputError as error:
         print(f"check_coverage: {error}", file=sys.stderr)
@@ -212,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
             print("check_coverage: --add skipped: the floors are broken", file=sys.stderr)
         return 1
     if args.add:
-        updated = raised(measured, floors)
+        updated = raised(measured, floors, everywhere)
         if updated != floors:
             args.floor.write_bytes(render_floors(updated).encode("utf-8"))
             print(f"floors updated in {args.floor}")
