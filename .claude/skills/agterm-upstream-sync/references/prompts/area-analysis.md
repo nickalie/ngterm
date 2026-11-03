@@ -1,8 +1,9 @@
 # Feature analysis subagent
 
-One subagent per feature cluster (a command group, or one changelog entry with its commits). Spawn them in parallel,
-`subagent_type: "general-purpose"`, read-only work. Replace every `<...>` before sending; the subagent sees nothing
-of this skill.
+One subagent per feature cluster (a command group, or one changelog entry with its commits), doing read-only work.
+Use Claude's `Agent` with `subagent_type: "general-purpose"` or Codex's available subagent tool, within the concurrency
+limit in SKILL.md. If delegation is unavailable or disallowed, use this checklist yourself. Replace every `<...>`
+before sending, including the absolute `SKILL_DIR`; the subagent sees nothing of this skill.
 
 ```
 You analyse one upstream agterm change for a port into ngterm (Rust, GPUI; macOS, Linux and Windows are equal
@@ -11,7 +12,7 @@ anything and you do NOT edit, create or commit files: read, grep and run read-on
 (build, test, clippy): the gates share target/ and are running or about to. Your answer is a draft plan task.
 
 Repository: <ROOT> (ngterm). Upstream clone (read-only): <UPSTREAM>, range <OLD>..<NEW>.
-Read <ROOT>/CLAUDE.md first (crate map, reference rule, porting order).
+Read applicable AGENTS.md instructions and <ROOT>/CLAUDE.md first (crate map, reference rule, porting order).
 The cluster: <cluster title>
 Upstream commits: <hash subject, one per line>
 Changelog text: <the matching changelog bullets, verbatim>
@@ -24,12 +25,12 @@ Do this:
    strings, `site/commands.html` and `.claude/rules/*.md` hunks for the contract. Note the validation order, every
    refusal string, defaults, read-back fields and field order, on-disk format changes, and what changed in the UI.
    Code that only moved (the report marks such strings `(moved)`) is not a behavior change: say so and skip it.
-2. Find the Rust side: the files that hold this behavior today (`grep -rn` in <ROOT>/crates for the command's wire
+2. Find the Rust side: the files that hold this behavior today (`rg -n` in <ROOT>/crates for the command's wire
    name, its fields, the strings without Swift interpolation, the old behavior). Decide per behavior: already
    ported (cite file:line and the unit test), partly ported (what is missing), or absent.
 3. Find the conformance coverage: run
    `cd <ROOT> && .venv/bin/python <SKILL_DIR>/scripts/coverage-map.py <catalog keys of this cluster>` (or
-   `--grep <regex>`), and `grep -rn` in <ROOT>/conformance/tests for the behavior. List the ids that cover it, which
+   `--grep <regex>`), and `rg -n` in <ROOT>/conformance/tests for the behavior. List the ids that cover it, which
    are in `conformance/rust-passing.txt`, and the tests still missing (propose file, function name, `covers` keys,
    and what each asserts). A UI-only behavior has no suite test on Linux: propose its UI item
    (the GPUI form) instead.
