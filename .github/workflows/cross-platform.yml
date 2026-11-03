@@ -246,7 +246,8 @@ jobs:
           python -m venv .venv
           .venv/Scripts/python.exe -m pip install -e conformance
       # Only a run without a coverage report (exit 2) fails here: the ratchet verdict (exit 1) is the windows job's to
-      # judge, so it stays out of the job summary too.
+      # judge. Unsetting GITHUB_STEP_SUMMARY only keeps the ratchet checker's own summary block out; the suite's
+      # report.md, appended below, still carries its ratchet verdict.
       - name: instrumented suite (protocol, cli, behaviors, ui)
         run: |
           status=0

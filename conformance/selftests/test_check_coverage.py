@@ -167,6 +167,11 @@ def test_a_missing_floor_file_exits_2(files, capsys):
     "text, message",
     [
         ("no report\n", "no per-crate table"),
+        (
+            "| crate | lines | regions | functions |\n| ngterm-core | 10.00% (1/10) |\n| total | 10.00% (1/10) |\n",
+            "no separator row",
+        ),
+        ("| crate | lines | regions | functions |", "no separator row"),
         ("| crate | lines | regions | functions |\n|---|---:|---:|---:|\n| ngterm-core | 50.00% (1/2) |", "no total row"),
         ("| crate | lines | regions | functions |\n|---|---:|---:|---:|\n| ngterm-core | half |\n", "not a crate row"),
     ],

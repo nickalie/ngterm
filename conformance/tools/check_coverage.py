@@ -28,6 +28,8 @@ _EPSILON = 1e-9
 # A row of code_coverage.render's table: `| crate | 45.90% (1234/2688) | ... |` or `| crate | n/a | ... |`.
 _ROW = re.compile(r"^\|\s*([^|\s]+)\s*\|\s*(n/a|[0-9.]+% \((\d+)/(\d+)\))\s*\|")
 _NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+# The separator row under the table's header: `|---|---:|...|`.
+_SEPARATOR = re.compile(r"^\|(\s*:?-+:?\s*\|)+\s*$")
 
 
 class InputError(Exception):
@@ -70,6 +72,9 @@ def read_summary(path: Path) -> dict[str, float]:
         start = next(i for i, line in enumerate(lines) if line.replace(" ", "").startswith("|crate|lines|"))
     except StopIteration:
         raise InputError(f"{path}: no per-crate table (`| crate | lines | ...`)") from None
+    separator = lines[start + 1] if start + 1 < len(lines) else ""
+    if not _SEPARATOR.match(separator):
+        raise InputError(f"{path}:{start + 2}: no separator row under the table's header: {separator!r}")
     crates: dict[str, float] = {}
     total = False
     for number, line in enumerate(lines[start + 2 :], start=start + 3):

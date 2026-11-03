@@ -362,7 +362,8 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.9.1
       # The instrumented build under every layer. Only a run without a coverage report (exit 2) fails here: the ratchet
-      # verdict (exit 1) is the entries above's to judge, so it stays out of the job summary too.
+      # verdict (exit 1) is the entries above's to judge. Unsetting GITHUB_STEP_SUMMARY only keeps the ratchet checker's
+      # own summary block out; the suite's report.md, appended below, still carries its ratchet verdict.
       - name: instrumented suite (coverage)
         if: matrix.coverage
         shell: bash
