@@ -2044,6 +2044,37 @@ def test_a_cli_ended_by_its_close_is_listed_as_lost(
     assert lost_lines(coverage_dir) == [f"{killed.process.pid} ngtermctl: CliProcess.close: ended before it exited"]
 
 
+def test_a_windows_cli_that_exits_before_its_close_terminates_it_is_not_listed(
+    roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_TERM", "quit")
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        cli = Cli(staged.parent / "ngtermctl", instance, "ngtermctl")
+        ended = cli.spawn("sleep")
+        assert ended.line() == "ready"
+        raced = cli.spawn("sleep")
+        assert raced.line() == "ready"
+
+        def exited_first() -> None:
+            # Windows' Popen.terminate on a process that exited after close's poll: TerminateProcess is refused and
+            # the process's own exit code is taken
+            raced.process.kill()
+            raced.process.wait()
+            raced.process.returncode = 0
+
+        with monkeypatch.context() as patch:
+            patch.setattr(raced.process, "terminate", exited_first)
+            patch.setattr(llvm_profiles.sys, "platform", "win32")
+            ended.close()
+            raced.close()
+    finally:
+        adapter.stop(instance)
+    # only the one TerminateProcess reached: the other's own exit wrote its profile
+    assert lost_lines(coverage_dir) == [f"{ended.process.pid} ngtermctl: CliProcess.close: ended before it exited"]
+
+
 def test_an_app_aborted_by_the_stop_is_listed_as_lost(
     roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2078,6 +2109,35 @@ def test_a_launch_beside_killed_after_its_timeout_is_listed_as_lost(
         adapter.stop(instance)
     [line] = lost_lines(coverage_dir)
     assert re.fullmatch(r"\d+ ngterm: launch_beside: killed after its timeout", line), line
+
+
+def test_a_relative_coverage_dir_reaches_the_cli_absolute(
+    tmp_path: Path, roots: list[Path], staged: Path, lavapipe: Path, coverage_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # as `CARGO_TARGET_DIR=target run-linux.sh --coverage` exports it; the CLI runs from the instance's home
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(llvm_profiles.COVERAGE_DIR_VARIABLE, os.path.relpath(coverage_dir, tmp_path))
+    adapter = RustAdapter(staged)
+    instance = adapter.launch()
+    try:
+        cli = Cli(staged.parent / "ngtermctl", instance, "ngtermctl")
+        assert cli("env").stdout == f"{coverage_dir / 'conformance-%4m.profraw'}\n"
+    finally:
+        adapter.stop(instance)
+
+
+def test_the_windows_reap_lists_only_the_processes_it_ended(
+    coverage_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 2 exits by itself between the last snapshot and its TerminateProcess: its exit wrote its profile
+    monkeypatch.setattr(base.winproc, "descendants", lambda roots: [])
+    monkeypatch.setattr(base.winproc, "alive", lambda process: True)
+    monkeypatch.setattr(base.winproc, "terminate", lambda process: process.pid == 1)
+    launched = [(types.SimpleNamespace(pid=pid, args=[f"C:/stage/bin/{name}"]), 5) for pid, name in
+                ((1, "ngterm.exe"), (2, "ngterm-session.exe"))]
+    base._end_tree(launched, grace=0)
+    assert lost_lines(coverage_dir) == ["1 ngterm: reap: ended by its pid (TerminateProcess)"]
 
 
 def test_lost_profiles_are_recorded_only_under_coverage_and_for_the_builds_programs(

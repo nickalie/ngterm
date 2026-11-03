@@ -723,6 +723,22 @@ def test_a_coverage_run_pools_the_profiles_and_lists_the_lost(
     assert f"- coverage: 0 profile files in `{profiles}`, 1 processes ended without one (lost-profiles.txt)" in report
 
 
+def test_a_relative_target_dir_gives_the_instances_an_absolute_profile(
+    tmp_path: Path, stage: Path, layers: Path
+) -> None:
+    instrument(stage / "bin" / "ngterm")
+    (layers / "protocol" / "test_probe.py").write_text(COVERAGE_PROBE_TEST)
+    probe = tmp_path / "launch.txt"
+    # relative to the runner's working directory (`command`'s runner runs from the test's cwd)
+    target = os.path.relpath(tmp_path / "target", Path.cwd())
+    completed, _ = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--coverage",
+        LAUNCH_PROBE=str(probe), CARGO_TARGET_DIR=target, FAKE_TERM="quit",
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert probe.read_text() == f"{tmp_path / 'target' / 'llvm-cov-target'}/conformance-%4m.profraw"
+
+
 def test_a_run_without_coverage_names_no_profile(tmp_path: Path, stage: Path, layers: Path) -> None:
     (layers / "protocol" / "test_probe.py").write_text(LAUNCH_PROBE_TEST)
     probe = tmp_path / "launch.json"

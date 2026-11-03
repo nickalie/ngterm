@@ -1409,7 +1409,9 @@ def _terminate_app(instance: Instance) -> str | None:
     try:
         process.wait(timeout=STOP_TIMEOUT)
         # the app's quit ends in `exit_now`, which writes its profile; a death by the signal itself writes none
-        llvm_profiles.record_if_signalled(process.pid, process.args[0], process.returncode, "stop: died of SIGTERM")
+        llvm_profiles.record_if_signalled(
+            process.pid, process.args[0], process.returncode, "stop: died of SIGTERM", terminated=True
+        )
         return None
     except subprocess.TimeoutExpired:
         pass
@@ -1517,8 +1519,9 @@ def _end_tree(launched: Iterable[tuple[subprocess.Popen[bytes], int | None]], gr
             break
         threading.Event().wait(POLL_INTERVAL * 4)
     for process in left:
-        winproc.terminate(process)
-        llvm_profiles.record_lost(process.pid, process.name, "reap: ended by its pid (TerminateProcess)")
+        # one that exited by itself since the snapshot wrote its profile
+        if winproc.terminate(process):
+            llvm_profiles.record_lost(process.pid, process.name, "reap: ended by its pid (TerminateProcess)")
 
 
 def thread_snapshot(pid: int) -> str:

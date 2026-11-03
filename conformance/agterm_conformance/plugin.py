@@ -879,15 +879,17 @@ class CliProcess:
 
     def close(self) -> None:
         if self.process.poll() is None:
-            self.process.terminate()
+            terminated = llvm_profiles.terminate(self.process)
             try:
                 self.process.wait(timeout=STOP_GRACE)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
-            # a CLI dying of the signal (or Windows' TerminateProcess) writes no coverage profile
+            # a CLI dying of the signal (or Windows' TerminateProcess) writes no coverage profile; one that exited
+            # between the poll and the terminate wrote it
             llvm_profiles.record_if_signalled(
-                self.process.pid, self.argv[0], self.process.returncode, "CliProcess.close: ended before it exited"
+                self.process.pid, self.argv[0], self.process.returncode, "CliProcess.close: ended before it exited",
+                terminated=terminated,
             )
         self._reader.join(STOP_GRACE)
         self.stderr()

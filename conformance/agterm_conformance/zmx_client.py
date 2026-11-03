@@ -73,14 +73,15 @@ class PtyProcess:
     def stop(self, timeout: float = STOP_TIMEOUT) -> None:
         """SIGTERM this program's own pid, SIGKILL it if it ignores that, then close the pty."""
         if self.process.poll() is None:
-            self.process.terminate()
+            terminated = llvm_profiles.terminate(self.process)
             try:
                 self.process.wait(timeout)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout)
             llvm_profiles.record_if_signalled(
-                self.process.pid, self.process.args[0], self.process.returncode, "PtyProcess.stop: ended before it exited"
+                self.process.pid, self.process.args[0], self.process.returncode, "PtyProcess.stop: ended before it exited",
+                terminated=terminated,
             )
         self._drain.join(timeout)
         if self._master is not None:

@@ -125,7 +125,8 @@ done
 
 [[ -z "$stage" || -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
 # --coverage: the instrumented build's own target dir, where its profiles go and `cargo llvm-cov report` reads them.
-target_root="${CARGO_TARGET_DIR:-$repo/target}"
+# Absolute: the build runs from the repo and the harness's children from their instance homes.
+target_root="$(realpath -m -- "${CARGO_TARGET_DIR:-$repo/target}")"
 cov_target="$target_root/llvm-cov-target"
 if [[ -n "$coverage" && -n "$stage" ]] && ! "$python" -m agterm_conformance.llvm_profiles "$stage/bin"; then
     exit 2

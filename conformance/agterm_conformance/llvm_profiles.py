@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import mmap
 import os
+import subprocess
 import sys
 import threading
 from collections.abc import Iterable, Mapping, MutableMapping
 from pathlib import Path
+from typing import Any
 
 COVERAGE_DIR_VARIABLE = "CONFORMANCE_COVERAGE_DIR"
 PROFILE_VARIABLE = "LLVM_PROFILE_FILE"
@@ -46,9 +48,10 @@ class NotInstrumented(Exception):
 
 
 def profile_dir(environ: Mapping[str, str] | None = None) -> Path | None:
-    """The run's profile directory, or None when the run measures no coverage."""
+    """The run's profile directory, absolute (against the harness's working directory: the processes given it run from
+    their instance homes), or None when the run measures no coverage."""
     value = (os.environ if environ is None else environ).get(COVERAGE_DIR_VARIABLE)
-    return Path(value) if value else None
+    return Path(os.path.abspath(value)) if value else None
 
 
 def apply(env: MutableMapping[str, str], environ: Mapping[str, str] | None = None) -> MutableMapping[str, str]:
@@ -88,10 +91,21 @@ def record_lost(
             sink.write(line)
 
 
-def record_if_signalled(pid: int, program: str | os.PathLike[str], returncode: int | None, how: str) -> None:
-    """Records a POSIX process that died of a signal (a negative `returncode`); one that handled the signal and exited
-    with a code wrote its profile. On Windows every end by the harness is `TerminateProcess`: recorded."""
-    if sys.platform == "win32" or (returncode is not None and returncode < 0):
+def terminate(process: subprocess.Popen[Any]) -> bool:
+    """`process.terminate()`; whether it reached a running process. Popen skips one that has already exited and takes
+    its exit code (on Windows from `TerminateProcess`'s refusal), so a `returncode` set here means the process exited
+    by itself, writing its profile."""
+    process.terminate()
+    return process.returncode is None
+
+
+def record_if_signalled(
+    pid: int, program: str | os.PathLike[str], returncode: int | None, how: str, *, terminated: bool
+) -> None:
+    """Records a process the harness ended (`terminated`: its signal or `TerminateProcess` reached it running). On
+    POSIX only one that died of the signal (a negative `returncode`): one that handled it and exited with a code wrote
+    its profile. On Windows every `TerminateProcess` that took effect: recorded."""
+    if terminated and (sys.platform == "win32" or (returncode is not None and returncode < 0)):
         record_lost(pid, program, how)
 
 
