@@ -130,7 +130,12 @@ class ScreensScreenshotTest(
         compose.setContent {
             NgtermTheme {
                 MachinesSample(MachinesUiState.Ready(SampleMachines.take(1), offline = false))
-                HostKeySheet("build-01", "SHA256:q0Gm4d1Xb7pKc2yT9wVZ5eRj8sHnLfA3uMiO6tYvB1E", onAnswer = {})
+                HostKeySheet(
+                    "build-01",
+                    "nick@build-01.lan:22",
+                    "SHA256:q0Gm4d1Xb7pKc2yT9wVZ5eRj8sHnLfA3uMiO6tYvB1E",
+                    onAnswer = {},
+                )
             }
         }
         compose.waitForIdle()

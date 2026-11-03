@@ -32,8 +32,11 @@ data class StoredMachine(
     /** Its ssh address as `user@host:port`, in the form people compare. */
     val address: String get() = "$user@$host:$port"
 
-    /** The record the core connects, with [pinnedHostKey] as its display copy of the pin. */
-    fun toCore(pinnedHostKey: String?): Machine =
+    /**
+     * The record the core connects. It never carries the pin: the core trusts only its host-key store, and a record
+     * that differs from the one it holds (as one with a pin trusted since would) replaces the live connection.
+     */
+    fun toCore(): Machine =
         Machine(
             id = id,
             label = title,
@@ -41,7 +44,7 @@ data class StoredMachine(
             port = port.toUShort(),
             user = user,
             keyId = keyId,
-            pinnedHostKey = pinnedHostKey,
+            pinnedHostKey = null,
         )
 }
 

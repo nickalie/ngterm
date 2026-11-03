@@ -9,8 +9,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Whether the device has a network that reaches the internet, in [online], and a nudge through [onChange] whenever
- * the default network comes, goes or changes (the core then retries what waits to reconnect).
+ * Whether the device has a network that reaches the internet, in [online], and a nudge through [onChange] whenever a
+ * default network becomes available: a new one, or the old one regaining internet (the core then retries what waits
+ * to reconnect).
  */
 class NetworkMonitor(
     context: Context,

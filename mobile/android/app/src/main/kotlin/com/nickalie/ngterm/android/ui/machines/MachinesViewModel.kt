@@ -116,7 +116,7 @@ class MachinesViewModel(
     }
 
     private suspend fun connect(machine: StoredMachine) {
-        graph.connections.connect(machine.toCore(graph.pins.get(machine.id)))
+        graph.connections.connect(machine.toCore())
     }
 
     /** Closes the connection of the machine [id]. */
@@ -140,10 +140,12 @@ class MachinesViewModel(
             val list = graph.machines.machines.first()
             val index = list.indexOfFirst { it.id == id }
             if (index < 0) return@launch
-            removal.value = Removal(list[index], index, graph.pins.get(id))
+            val pin = graph.pins.get(id)
             graph.connections.disconnect(id)
             graph.pins.remove(id)
             graph.machines.delete(id)
+            // offered only now: an undo must not reach the machine store ahead of the delete
+            removal.value = Removal(list[index], index, pin)
         }
     }
 

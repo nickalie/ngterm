@@ -1,6 +1,10 @@
 package com.nickalie.ngterm.android.ui.onboarding
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.net.Uri
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,6 +15,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,8 +40,10 @@ private const val MAX_KEY_BYTES = 64 * 1024
 
 /**
  * Importing a key the user already has: pasted, or read from a file they choose, and its passphrase. [problem] says
- * what was wrong with the last attempt, under the field it is about, and the text stays for another try. The key's
- * text and the passphrase live only in this screen's memory, never in saved state, and go when the screen does.
+ * what was wrong with the last attempt, under the field it is about, and the text (or the chosen file's key) stays for
+ * another try. The key's text, the chosen file's bytes and the passphrase live only in this screen's memory, never in
+ * saved state, and go when the screen does. While the screen is up the window is secure, so the key stays out of
+ * screenshots, recordings and the Recents thumbnail.
  */
 @Composable
 fun ImportKeyScreen(
@@ -48,9 +55,13 @@ fun ImportKeyScreen(
     modifier: Modifier = Modifier,
     initialKey: String = "",
 ) {
+    SecureWindow()
     var keyText by remember { mutableStateOf(initialKey) }
     var passphrase by remember { mutableStateOf("") }
-    val chooseFile = rememberKeyFileChooser(onRead = { onImport(it, passphrase) }, onUnreadable = onUnreadable)
+    val chosen = remember { ChosenKey() }
+    DisposableEffect(chosen) { onDispose { chosen.set(null) } }
+    val chooseFile =
+        rememberKeyFileChooser(onRead = { onImport(chosen.keep(it), passphrase) }, onUnreadable)
     val keyProblem = problem?.takeUnless { it.isAboutPassphrase() }
     ScreenFrame(
         modifier = modifier,
@@ -65,13 +76,13 @@ fun ImportKeyScreen(
         )
         OutlinedTextField(
             value = keyText,
-            onValueChange = { keyText = it },
+            onValueChange = { keyText = it.also { chosen.set(null) } },
             label = { Text(stringResource(R.string.import_key_label)) },
             textStyle = NgtermTheme.mono.small,
             minLines = 6,
             maxLines = 12,
             isError = keyProblem != null,
-            supportingText = keyProblem?.let { { Text(it.words()) } },
+            supportingText = keyFieldNote(keyProblem, fileChosen = chosen.bytes != null),
             keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
@@ -88,11 +99,65 @@ fun ImportKeyScreen(
         BusyButton(
             label = stringResource(R.string.import_action),
             busy = busy,
-            onClick = { onImport(keyText.toByteArray(), passphrase) },
+            onClick = { onImport(chosen.bytes?.copyOf() ?: keyText.toByteArray(), passphrase) },
             modifier = Modifier.fillMaxWidth().padding(top = NgtermTheme.spacing.sm),
         )
     }
 }
+
+/**
+ * The key read from the file the user chose, kept for a retry (with its passphrase, say) until they type a key or
+ * leave. Import wipes what it is handed, so it gets a copy; a key replaced or let go is wiped here.
+ */
+private class ChosenKey {
+    var bytes by mutableStateOf<ByteArray?>(null)
+        private set
+
+    fun set(key: ByteArray?) {
+        bytes?.fill(0)
+        bytes = key
+    }
+
+    /** Keeps [key] and returns a copy of it, for import to use and wipe. */
+    fun keep(key: ByteArray): ByteArray = key.copyOf().also { set(key) }
+}
+
+// what shows under the key field: the last attempt's problem with the key, or that the chosen file's key is used
+private fun keyFieldNote(
+    problem: ImportProblem?,
+    fileChosen: Boolean,
+): (@Composable () -> Unit)? =
+    when {
+        problem != null -> {
+            { Text(problem.words()) }
+        }
+
+        fileChosen -> {
+            { Text(stringResource(R.string.import_file_chosen)) }
+        }
+
+        else -> {
+            null
+        }
+    }
+
+// keeps the window out of screenshots, screen recordings and the Recents thumbnail while it is composed
+@Composable
+private fun SecureWindow() {
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(activity) {
+        val window = activity?.window
+        window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        onDispose { window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
+    }
+}
+
+private tailrec fun Context.findActivity(): Activity? =
+    when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
 
 // opens the system's file chooser and hands over the chosen file's bytes, or says it couldn't be read
 @Composable

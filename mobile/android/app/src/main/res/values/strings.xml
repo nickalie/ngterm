@@ -73,6 +73,7 @@
   <string name="import_wrong_passphrase">That passphrase doesn\'t open this key.</string>
   <string name="import_not_a_key">This isn\'t a private key ngterm can use: %1$s</string>
   <string name="import_not_stored">The key couldn\'t be stored: %1$s</string>
+  <string name="import_file_chosen">The key from the chosen file is ready. Typing here uses the text instead.</string>
   <string name="import_empty">Paste a private key or choose its file.</string>
   <string name="import_unreadable">That file couldn\'t be read. Choose another, or paste the key.</string>
 
@@ -81,7 +82,7 @@
   <string name="machines_loading">Reading your machines</string>
   <string name="machines_failed_title">Your machines couldn\'t be read</string>
   <string name="machines_failed_body">The app\'s storage answered: %1$s. Try again; if it keeps failing, restart the app.</string>
-  <string name="machines_offline">You\'re offline. Machines reconnect when the network is back.</string>
+  <string name="machines_offline">You\'re offline. Connected machines reconnect when the network is back.</string>
   <string name="machines_removed">Removed %1$s</string>
   <string name="machine_connect">Connect</string>
   <string name="machine_disconnect">Disconnect</string>

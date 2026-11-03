@@ -40,13 +40,15 @@ import com.nickalie.ngterm.android.ui.theme.StatusShape
 const val FINGERPRINT_COMMAND = "ssh-keyscan localhost 2>/dev/null | ssh-keygen -lf -"
 
 /**
- * The first connection to [machine]: it offered [fingerprint] and waits for the user. Trust pins it and connects;
- * Don't connect, swiping the sheet away or back refuses it.
+ * The first connection to [machine], reached at [address] (`user@host:port`, which tells apart machines that share a
+ * name): it offered [fingerprint] and waits for the user. Trust pins it and connects; Don't connect, swiping the sheet
+ * away or back refuses it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HostKeySheet(
     machine: String,
+    address: String,
     fingerprint: String,
     onAnswer: (trust: Boolean) -> Unit,
     modifier: Modifier = Modifier,
@@ -59,7 +61,7 @@ fun HostKeySheet(
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = MaterialTheme.shapes.large,
     ) {
-        HostKeyQuestion(machine, fingerprint, onAnswer)
+        HostKeyQuestion(machine, address, fingerprint, onAnswer)
     }
 }
 
@@ -67,6 +69,7 @@ fun HostKeySheet(
 @Composable
 internal fun HostKeyQuestion(
     machine: String,
+    address: String,
     fingerprint: String,
     onAnswer: (trust: Boolean) -> Unit,
     modifier: Modifier = Modifier,
@@ -88,6 +91,11 @@ internal fun HostKeyQuestion(
             style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.semantics { heading() },
+        )
+        Text(
+            text = address,
+            style = NgtermTheme.mono.small,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
             text = stringResource(R.string.hostkey_body, machine),

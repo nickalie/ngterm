@@ -77,6 +77,7 @@ fun NgtermApp(
                 key(machine.id, question.fingerprint) {
                     HostKeySheet(
                         machine = machine.title,
+                        address = machine.address,
                         fingerprint = question.fingerprint,
                         onAnswer = { trust -> machines.answerHostKey(machine.id, question.fingerprint, trust) },
                     )
