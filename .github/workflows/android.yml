@@ -18,7 +18,8 @@
 # crowd the vendor and cargo caches out of the repository's cache space. Gradle's caches go through setup-gradle's
 # basic (MIT, actions/cache) provider.
 #
-# Path-filtered to what the app builds from: the mobile core and the crates it builds on, mobile/, the scripts and
+# Path-filtered to what the app builds from: the mobile core and the crates it builds on, the crates the e2e test
+# stages, the workspace manifest, lock file and toolchain, mobile/, the scripts, patches and
 # pins of its toolchain, and this file. Pushes to a `ci/**` branch run it too, as they do cross-platform.yml, and it
 # can be run by hand (a `ci/**` branch made at a commit another branch already holds changes no file, so no path
 # filter matches it).
@@ -27,18 +28,38 @@ name: android
 on:
   pull_request:
     paths: &paths
+      # the mobile core and its build closure (`cargo tree -p ngterm-mobile`)
       - crates/ngterm-mobile/**
       - crates/ngterm-term/**
       - crates/ngterm-core/**
+      - crates/ngterm-host/**
       - crates/ngterm-proto/**
       - crates/ngterm-ghostty-vt/**
       - crates/ngterm-ghostty-vt-sys/**
+      # what the e2e test builds and stages besides: ngterm-headless, ngtermctl, ngterm-session and the crates under
+      # them
+      - crates/ngterm-headless/**
+      - crates/ngterm-session/**
+      - crates/ngterm-ctl/**
+      - crates/ngterm-server/**
+      - crates/ngterm-app/**
+      - crates/ngterm-pty/**
+      - vendor/portable-pty/**
+      # the workspace's dependency pins, toolchain and cargo config
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .cargo/**
       - mobile/**
       - scripts/build-android.sh
       - scripts/setup-android.sh
       - scripts/build-ghostty-vt.sh
       - scripts/test-mobile-e2e.sh
+      - scripts/stage.sh
+      - scripts/lib/native.sh
       - build/pins.env
+      - build/patches/ghostty-vt/**
+      - build/patches/portable-pty/**
       - .github/workflows/android.yml
   push:
     branches: [main, "ci/**"]
