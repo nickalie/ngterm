@@ -120,6 +120,11 @@ pub struct Args {
     pub all: Option<bool>,
     pub lines: Option<i64>,
     pub to: Option<String>,
+    /// Message addresses, independent of the scalar navigation `to`.
+    pub recipients: Option<Vec<String>>,
+    pub identity: Option<String>,
+    pub ack: Option<bool>,
+    pub ids: Option<Vec<String>>,
     pub after: Option<String>,
     pub before: Option<String>,
     pub run: Option<String>,

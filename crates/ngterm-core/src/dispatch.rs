@@ -876,7 +876,7 @@ impl Core {
                 None => Ok(Response::success()),
             },
             // `browser.clear` and `config.reload` start through `deferred`
-            cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_)) => {
+            cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_) | Command::Msg(_)) => {
                 Err(ControlError::NotSupported(cmd))
             }
         }
@@ -1053,6 +1053,20 @@ mod tests {
             // a fresh core each, so `window.new` opens no window for the commands after it
             let response = core().dispatch(&Request::new(cmd));
             assert_eq!(response.ok, ANSWERED.contains(&cmd), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn registered_v040_commands_refuse_until_their_feature_handlers_land() {
+        for name in ["msg.send", "msg.read", "msg.ack", "session.info", "live.attach.group"] {
+            let cmd = name.parse().unwrap();
+            let response = core().dispatch(&Request::new(cmd));
+            assert!(!response.ok);
+            assert_eq!(
+                response.error.as_deref(),
+                Some(format!("{name} is not supported by this host").as_str())
+            );
+            assert!(response.result.is_none());
         }
     }
 

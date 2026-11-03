@@ -129,23 +129,23 @@ No port needed:
 create `crates/ngterm-ctl/src/messages.rs` and conformance files named in Tasks 2/3/5/10.
 **Conformance:** all new 22 keys below are currently uncovered; no existing IDs cover them.
 
-- [ ] Register `msg.send`, `msg.read`, `msg.ack`, `session.info`, `live.attach.group` and event `message`, plus
+- [x] Register `msg.send`, `msg.read`, `msg.ack`, `session.info`, `live.attach.group` and event `message`, plus
   request/result types; use the dispatcher's established not-implemented refusal until their feature task lands.
   Preserve existing scalar `args.to`; message recipients use their own list. Add the CLI leaves `msg send`,
   `msg read`, `msg ack`, `session info` and `live attach --companions`; no success stubs.
-- [ ] Introduce substantive reference tests for these keys: the five commands; `field:result.messageID`,
+- [x] Introduce substantive reference tests for these keys: the five commands; `field:result.messageID`,
   `field:result.delivered`, `field:result.rejected`, `field:result.messages`, `field:result.remaining`,
   `field:result.acked`, `field:result.remoteGroup`; `field:tree.session.info`,
   `field:tree.session.infoMarkdown`, `field:tree.session.infoHideAfter`; `event:message`; the four CLI leaves;
   `ui:session-info`, `ui:settings-session-info-display`. Tasks 2/3/5/10 specify source cases and proposed IDs.
   Assertions must inspect their named behavior/field, not merely label a skeleton test as coverage.
-- [ ] For `remoteGroup`, first look for a supported network-free receipt seam. If none, add a narrow catalog
+- [x] For `remoteGroup`, first look for a supported network-free receipt seam. If none, add a narrow catalog
   exemption with the existing remote-attach rationale, backed by the fake-runner receipt tests in Task 5;
   do not invent a successful SSH call against an external machine for the conformance gate.
-- [ ] The current generator does not list `tree.surface.pendingMessages`; still assert omission at zero and
+- [x] The current generator does not list `tree.surface.pendingMessages`; still assert omission at zero and
   changes on delivery/ack. If extending catalog generation for this field, add generator tests and cover the new
   key in this task as well. Keep generated files reproducible through `gen_catalog.py`.
-- [ ] Both catalog cargo checks, all host-free selftests and the coverage gate pass. Existing ratchet IDs stay
+- [x] Both catalog cargo checks, all host-free selftests and the coverage gate pass. Existing ratchet IDs stay
   present. Reference-specific new tests remain gated on Rust until the final parity task.
 
 ### Task 2: Implement the pane message bus (#847)

@@ -280,3 +280,20 @@ def test_key_mapping_tab_reports_a_keymap_error_after_reload(seeded, ui_for):
     finally:
         keymap.write_text("")
         assert_ok(seeded.request("keymap.reload"))
+
+
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("ui:settings-session-info-display")
+def test_session_info_display_picker_persists(seeded, ui_for):
+    ui = ui_for(seeded)
+    _open(ui, "Interface")
+    picker = ui.find("settings-session-info-display", role="popup", value="Always")
+    ui.click(picker)
+    ui.click(ui.menu_item("Flagged"))
+    try:
+        wait_until(lambda: _settings(seeded).get("sessionInfoDisplay") == "flagged")
+        ui.find("settings-session-info-display", role="popup", value="Flagged")
+    finally:
+        ui.click(ui.find("settings-session-info-display", role="popup"))
+        ui.click(ui.menu_item("Always"))
+    wait_until(lambda: _settings(seeded).get("sessionInfoDisplay", "always") == "always")

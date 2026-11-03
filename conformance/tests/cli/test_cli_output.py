@@ -1594,3 +1594,18 @@ def test_page_attach_hands_out_one_attachment_of_a_page_companion(cli, ctl):
     assert handed["token"]
     _refused(cli("session", "overlay", "page-attach", "--target", parent), "not a page companion")
     assert_ok(ctl.request("session.close", parent))
+
+
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("cli:session info")
+def test_session_info_sets_and_clears(cli, ctl):
+    sid = _new(ctl)
+    source = "**busy**"
+    try:
+        _ok(cli("session", "info", source, "--markdown", "--hide-after", "600", "--target", sid), "ok\n")
+        assert_subset(_node(ctl, sid), {"info": source, "infoMarkdown": True, "infoHideAfter": 600})
+        _ok(cli("session", "info", "--clear", "--target", sid), "ok\n")
+        assert_absent(_node(ctl, sid), "info", "infoMarkdown", "infoHideAfter")
+        _usage(cli("session", "info", "--clear", "--markdown"), "--clear takes no --markdown or --hide-after")
+    finally:
+        assert_ok(ctl.request("session.close", sid))

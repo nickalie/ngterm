@@ -374,6 +374,7 @@ fn surface_nodes(session: &Session) -> Vec<ControlSurfaceNode> {
                 lead: None,
                 reconnect: None,
                 pane_id: pane_token(slot),
+                pending_messages: None,
             }
         })
         .collect()

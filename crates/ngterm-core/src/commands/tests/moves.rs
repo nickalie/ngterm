@@ -188,7 +188,7 @@ fn move_rejects_every_invalid_form_without_moving() {
     let mut fixture = Fixture::new(1);
     let [sid, anchor] = [0, 1].map(|at| wire(fixture.sessions[at]));
     let workspace = wire(fixture.workspace);
-    let cases: [(Args, &str); 10] = [
+    let cases: Vec<(Args, &str)> = vec![
         (Args::default(), "session.move requires --to or a workspace"),
         (
             move_args(|a| a.to = Some("left".into())),

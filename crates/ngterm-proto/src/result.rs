@@ -121,6 +121,20 @@ pub struct ControlResult {
     /// as `ControlLiveInventory::live_reset` does.
     #[serde(default)]
     pub companion_page: Option<serde_json::Value>,
+    #[serde(default, rename = "messageID")]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub delivered: Option<Vec<String>>,
+    #[serde(default)]
+    pub rejected: Option<Vec<MessageRejection>>,
+    #[serde(default)]
+    pub messages: Option<Vec<BusMessage>>,
+    #[serde(default)]
+    pub remaining: Option<usize>,
+    #[serde(default)]
+    pub acked: Option<Vec<String>>,
+    #[serde(default)]
+    pub remote_group: Option<ControlRemoteGroup>,
 }
 
 /// The restore-mode policy `restore.mode` reads (upstream's `ControlRestoreStatus`). The modes travel as raw strings,
@@ -783,4 +797,49 @@ mod tests {
         let old: ControlRestartReceipt = serde_json::from_str(r#"{"paneID":"token","oldPid":11,"newPid":22}"#).unwrap();
         assert_eq!(old.replayed_argv, None);
     }
+}
+
+/// A message queued in a pane's mailbox (upstream's `BusMessage`).
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BusMessage {
+    pub id: String,
+    #[serde(default)]
+    pub from: Option<String>,
+    pub to: String,
+    pub ts: f64,
+    pub body: String,
+}
+
+/// A recipient a send could not reach.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageRejection {
+    pub address: String,
+    pub reason: MessageRejectionReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MessageRejectionReason {
+    #[serde(rename = "mailbox full")]
+    MailboxFull,
+    #[serde(rename = "unknown pane")]
+    UnknownPane,
+}
+
+/// The receipt for attaching a remote parent and its companions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlRemoteGroup {
+    pub membership_known: bool,
+    pub companions: Vec<ControlRemoteGroupMember>,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlRemoteGroupMember {
+    pub origin: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
 }

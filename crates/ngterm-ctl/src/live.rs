@@ -436,6 +436,8 @@ impl RequestCommand for Tree {
                   this command does can kill them. The session is not restored after a relaunch."
 )]
 pub struct Attach {
+    #[arg(long, help = "Attach the parent and its companions as a group.")]
+    companions: bool,
     #[arg(help = "The host, as ssh would take it.")]
     host: String,
 
@@ -468,7 +470,12 @@ impl RequestCommand for Attach {
             window: self.window.clone(),
             ..Args::default()
         };
-        live_request(LiveCmd::Attach, Some(self.session.clone()), Some(args))
+        let cmd = if self.companions {
+            LiveCmd::AttachGroup
+        } else {
+            LiveCmd::Attach
+        };
+        live_request(cmd, Some(self.session.clone()), Some(args))
     }
 }
 
@@ -594,6 +601,30 @@ mod tests {
             pane: None,
             outdated: None,
         }
+    }
+
+    #[test]
+    fn companions_switches_only_the_attach_command() {
+        use clap::Parser;
+        let parsed = crate::Ngtermctl::try_parse_from([
+            "ngtermctl",
+            "live",
+            "attach",
+            "host",
+            "remote",
+            "--companions",
+            "--window",
+            "win",
+        ])
+        .unwrap();
+        let crate::Command::Live(group) = parsed.command else {
+            unreachable!()
+        };
+        let request = group.command().make_request();
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({"cmd":"live.attach.group","target":"remote","args":{"host":"host","window":"win"}})
+        );
     }
 
     #[test]

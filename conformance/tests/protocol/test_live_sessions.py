@@ -1003,3 +1003,13 @@ def test_losing_the_page_helper_ends_only_the_page(live, tmp_path):
         assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "dismissed"}
         _presenters(live, sid, {"mirrors": 0, "presenter": True})
 
+
+
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("live.attach.group")
+def test_group_attach_validates_before_remote_discovery(ctl):
+    command = ctl.vocabulary.command("live.attach.group")
+    assert_error(ctl.request(command), f"{command} requires a host")
+    assert_error(ctl.request(command, host="  "), f"{command} requires a host")
+    assert_error(ctl.request(command, host="unused.invalid"), f"{command} requires a remote session")
+    assert_error(ctl.request(command, "bad\nname", host="unused.invalid"), "invalid remote session")

@@ -461,6 +461,8 @@ exemptions:
   debug.appearance: refused outside UI-test mode; a UI-test-only hook with no CLI subcommand
   live.attach: a successful attach re-discovers the remote over ssh before creating anything, which the suite's no-network,
     no-remote-host constraints exclude; its refusals are still tested
+  field:result.remoteGroup: a group attach receipt requires successful parent attachment over ssh, excluded with live.attach;
+    request validation is covered without networking and receipt behavior is tested with Rust fake runners in Task 5
   behavior:live.tree.remote-host: remote discovery runs ssh, excluded by the suite's no-network constraints
   behavior:companion.remote-create: a companion of a row attached from another machine is created on that machine over ssh
     and attached here, which needs live.attach over ssh, excluded by the suite's no-network constraints; the origin side is

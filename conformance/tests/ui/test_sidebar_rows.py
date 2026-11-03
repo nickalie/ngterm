@@ -208,3 +208,16 @@ def test_idle_ms_starts_with_a_gui_keystroke(app, ctl, ui):
     tree = ctl.wait_tree(lambda tree: "idleMs" in tree["tree"])
     assert isinstance(tree["tree"]["idleMs"], int) and tree["tree"]["idleMs"] >= 0
     ctl.wait_text(sid, "q")
+
+
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("ui:session-info")
+def test_session_info_renders_visible_text_below_its_row(ctl, ui):
+    sid = _new(ctl)
+    try:
+        assert_ok(ctl.request("session.info", sid, mode="set", text="**3** agents", markdown=True))
+        ui.find("session-info", role="text", value="3 agents")
+        assert_ok(ctl.request("session.info", sid, mode="clear"))
+        ui.absent("session-info")
+    finally:
+        assert_ok(ctl.request("session.close", sid))

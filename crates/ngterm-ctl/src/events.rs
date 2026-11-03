@@ -396,6 +396,12 @@ fn format_human(event: &ControlEvent, zone: Zone) -> String {
             parts.extend(payload.shape.as_ref().map(|shape| format!("shape={shape}")));
             parts.join(" ")
         }
+        EventKind::Message => format!(
+            "{time} {kind} {name} pane-id={} from={} id={}",
+            payload.pane_id.as_deref().unwrap_or("-"),
+            payload.from.as_deref().unwrap_or("-"),
+            payload.message_id.as_deref().unwrap_or("-")
+        ),
         EventKind::Notify => format!(
             "{time} {kind} {name} {}: {}",
             payload.title.as_deref().unwrap_or(name),

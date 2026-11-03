@@ -15,6 +15,7 @@ mod hooks;
 mod keymap;
 mod live;
 mod local;
+mod messages;
 mod modal;
 mod notify;
 mod output;
@@ -79,6 +80,7 @@ struct Ngtermctl {
 enum Command {
     Tree(tree::Tree),
     Events(events::Events),
+    Msg(messages::Msg),
     Workspace(workspace::Workspace),
     Session(session::Session),
     Surface(surface::Surface),
@@ -109,6 +111,7 @@ impl Command {
         match self {
             Self::Tree(command) => command.validate(),
             Self::Events(command) => command.validate(),
+            Self::Msg(command) => command.check(),
             Self::Workspace(group) => group.command().validate(),
             Self::Session(group) => group.command().validate(),
             Self::Surface(group) => group.command().validate(),
@@ -136,6 +139,7 @@ impl Command {
         match self {
             Self::Tree(command) => command.default_run(env),
             Self::Events(command) => command.run(env),
+            Self::Msg(command) => command.run(env),
             Self::Workspace(group) => group.command().default_run(env),
             Self::Session(group) => group.command().invoke(env),
             Self::Surface(group) => group.command().default_run(env),

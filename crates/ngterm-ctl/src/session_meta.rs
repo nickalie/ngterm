@@ -228,6 +228,61 @@ impl RequestCommand for Context {
     }
 }
 
+/// `ngtermctl session info`: ephemeral sidebar activity.
+#[derive(Debug, clap::Args)]
+#[command(about = "Set or clear the info line drawn under a session's sidebar row.")]
+pub struct Info {
+    text: Option<String>,
+    #[arg(long)]
+    clear: bool,
+    #[arg(long)]
+    markdown: bool,
+    #[arg(long, allow_hyphen_values = true)]
+    hide_after: Option<f64>,
+    #[command(flatten)]
+    target: TargetOptions,
+    #[command(flatten)]
+    options: ClientOptions,
+}
+
+impl RequestCommand for Info {
+    fn options(&self) -> &BasicOptions {
+        &self.options.basic
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.text.is_some() == self.clear {
+            return Err("provide exactly one of a TEXT or --clear".to_owned());
+        }
+        if self.clear && (self.markdown || self.hide_after.is_some()) {
+            return Err("--clear takes no --markdown or --hide-after".to_owned());
+        }
+        if self
+            .hide_after
+            .is_some_and(|seconds| !seconds.is_finite() || !(0.0..=86400.0).contains(&seconds))
+        {
+            return Err("hide-after must be 0...86400 seconds".to_owned());
+        }
+        Ok(())
+    }
+
+    fn make_request(&self) -> Request {
+        let args = Args {
+            text: self.text.clone(),
+            mode: Some(if self.clear { "clear" } else { "set" }.to_owned()),
+            markdown: self.markdown.then_some(true),
+            hide_after: self.hide_after,
+            ..Args::default()
+        };
+        session_request(
+            SessionCmd::Info,
+            Some(self.target.target.clone()),
+            Some(args),
+            &self.options,
+        )
+    }
+}
+
 /// `ngtermctl session seen`.
 #[derive(Debug, clap::Args)]
 #[command(about = "Clear a session's unseen-notification badge without changing the selection or focus (idempotent).")]
@@ -446,5 +501,41 @@ mod tests {
             request(&["seen", "--target", "x", "--window", "win"]),
             json!({"cmd": "session.seen", "target": "x", "args": {"window": "win"}})
         );
+    }
+    #[test]
+    fn info_carries_optional_markup_and_expiry_and_rejects_invalid_clear_forms() {
+        assert_eq!(
+            request(&[
+                "info",
+                "**busy**",
+                "--markdown",
+                "--hide-after",
+                "1.5",
+                "--target",
+                "s",
+                "--window",
+                "w"
+            ]),
+            json!({"cmd":"session.info","target":"s","args":{"text":"**busy**","mode":"set","markdown":true,"hideAfter":1.5,"window":"w"}})
+        );
+        assert_eq!(
+            request(&["info", "literal"]),
+            json!({"cmd":"session.info","target":"active","args":{"text":"literal","mode":"set"}})
+        );
+        assert_eq!(
+            request(&["info", "--clear"]),
+            json!({"cmd":"session.info","target":"active","args":{"mode":"clear"}})
+        );
+        assert_eq!(refusal(&["info"]), "provide exactly one of a TEXT or --clear");
+        assert_eq!(
+            refusal(&["info", "--clear", "--markdown"]),
+            "--clear takes no --markdown or --hide-after"
+        );
+        for seconds in ["-1", "NaN", "inf", "86401"] {
+            assert_eq!(
+                refusal(&["info", "text", "--hide-after", seconds]),
+                "hide-after must be 0...86400 seconds"
+            );
+        }
     }
 }
