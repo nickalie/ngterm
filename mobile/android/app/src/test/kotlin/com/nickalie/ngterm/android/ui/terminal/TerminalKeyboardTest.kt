@@ -341,6 +341,43 @@ class TerminalKeyboardTest {
     }
 
     @Test
+    fun aStickyModifierArmedWhileComposingIsForTheKeyAfter() {
+        show()
+        focus()
+        val connection = connect()
+        connection.setComposingText("ls", 1)
+        key("Control").performClick()
+        compose.waitForIdle()
+        assertEquals("the composition went out plain", listOf(FakeInput.Typed("ls")), pane.inputs)
+        assertEquals(Sticky.Once, keyboard.ctrl)
+        key("Left arrow").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(press("arrow_left", KeyMapping.CTRL)), presses())
+        assertEquals(Sticky.Off, keyboard.ctrl)
+
+        pane.inputs.clear()
+        connection.setComposingText("かな", 1)
+        key("Control").performClick()
+        connection.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+        compose.waitForIdle()
+        assertEquals(
+            listOf(FakeInput.Typed("かな"), FakeInput.Key(press("enter", KeyMapping.CTRL))),
+            pane.inputs.filter { it !is FakeInput.Key || it.key.action != PaneKeyAction.RELEASE },
+        )
+
+        pane.inputs.clear()
+        key("Control").performClick()
+        connection.setComposingText("c", 1)
+        connection.finishComposingText()
+        compose.waitForIdle()
+        assertEquals(
+            "a composition after the tap still gets the modifier",
+            listOf(KeyMapping.forText("c", KeyMapping.CTRL)),
+            presses(),
+        )
+    }
+
+    @Test
     fun aDeletionPastTheCompositionIsTheProgramsBackspace() {
         show()
         focus()

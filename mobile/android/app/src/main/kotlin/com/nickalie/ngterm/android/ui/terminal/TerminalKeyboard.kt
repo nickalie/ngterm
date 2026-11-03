@@ -90,8 +90,13 @@ class TerminalKeyboard(
             StickyModifier.Alt -> alt
         }
 
-    /** A tap on [modifier]'s key: off to once, once to locked, locked to off. Returns where it stands now. */
+    /**
+     * A tap on [modifier]'s key: off to once, once to locked, locked to off. What waits (the input method's
+     * composition, a held accent) was typed before the tap, so it goes first, under the modifiers as they stood.
+     * Returns where it stands now.
+     */
     fun toggle(modifier: StickyModifier): Sticky {
+        target?.let(pending::commitBefore) ?: pending.commitComposition()
         val next =
             when (sticky(modifier)) {
                 Sticky.Off -> Sticky.Once
