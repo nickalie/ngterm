@@ -170,6 +170,9 @@ struct Read {
 struct Shown<C> {
     /// Names the pane as long as it is shown, across its attaches.
     id: u64,
+    /// Keys this pane's respawn entry: one per shown pane, so two machines showing one origin pane each reattach on
+    /// their own.
+    local: Uuid,
     reference: PaneRef,
     session: Uuid,
     pane: Uuid,
@@ -290,9 +293,11 @@ impl<C: Connection> Panes<C> {
             let _ = notes.send(Note::Sized(id));
         });
         let slot = Arc::new(PaneSlot::new(size, sized));
-        self.seed_baseline(&target, session);
+        let local = Uuid::from_u64_pair(0, id);
+        self.seed_baseline(&target, local, session);
         self.shown.push(Shown {
             id,
+            local,
             reference: PaneRef {
                 machine_id: target.machine_id,
                 session_id: target.session_id,
@@ -318,7 +323,7 @@ impl<C: Connection> Panes<C> {
 
     /// Starts a newly shown pane's respawn baseline at its session's latest counts, if any were reported: a respawn
     /// missed while the session's stream is down is then found by the next snapshot.
-    fn seed_baseline(&mut self, target: &Target, session: Uuid) {
+    fn seed_baseline(&mut self, target: &Target, local: Uuid, session: Uuid) {
         let key = (target.machine_id.clone(), target.session_id.clone());
         let Some(counts) = self.counts.get(&key) else {
             return;
@@ -327,7 +332,7 @@ impl<C: Connection> Panes<C> {
             epoch: counts.epoch.clone(),
             generation: counts.generations.get(&target.daemon).copied().unwrap_or_default(),
         };
-        self.book.observe(mark, target.pane, session, true);
+        self.book.observe(mark, local, session, true);
     }
 
     /// Hides a shown pane: its attach ends and its reads are denied; nothing more is reported about it.
@@ -368,8 +373,8 @@ impl<C: Connection> Panes<C> {
         let mut shown = self.shown.remove(index);
         let events = shown.leave();
         shown.slot.replace(None);
-        let pane = shown.pane;
-        self.book.prune(|kept, _| kept != pane);
+        let local = shown.local;
+        self.book.prune(|kept, _| kept != local);
         events
     }
 
@@ -447,7 +452,7 @@ impl<C: Connection> Panes<C> {
                 epoch: reported.counts.epoch.clone(),
                 generation: generation.unwrap_or_default(),
             };
-            if self.book.observe(mark, shown.pane, shown.session, reported.seed) {
+            if self.book.observe(mark, shown.local, shown.session, reported.seed) {
                 due.push(index);
             }
         }
@@ -521,12 +526,12 @@ impl<C: Connection> Panes<C> {
         }
         let shown = &mut self.shown[index];
         shown.phase = Phase::Gone;
-        let pane = shown.pane;
+        let local = shown.local;
         let event = shown.event(|pane| MobileEvent::PaneEnded {
             pane,
             end: PaneEnd::Gone,
         });
-        self.book.prune(|kept, _| kept != pane);
+        self.book.prune(|kept, _| kept != local);
         vec![event]
     }
 
@@ -555,7 +560,7 @@ impl<C: Connection> Panes<C> {
             // the view has no grid yet: the pane attaches once it gives one ([`Panes::sized`])
             return events;
         }
-        self.book.attach_started(shown.pane, shown.session);
+        self.book.attach_started(shown.local, shown.session);
         let wake_notes = notes.clone();
         let wake: Wake = Arc::new(move || {
             // An actor that is gone has nothing left to draw.
@@ -726,7 +731,7 @@ impl<C: Connection> Panes<C> {
             pane,
             end: PaneEnd::Exited { code, signal },
         }));
-        if self.book.held(shown.pane, shown.session) {
+        if self.book.held(shown.local, shown.session) {
             events.extend(self.attach(index, LeadAttachment::new(false), true));
         }
         events
@@ -765,7 +770,7 @@ impl<C: Connection> Panes<C> {
                     return None;
                 }
                 shown.losses = 0;
-                self.book.acknowledged(shown.pane);
+                self.book.acknowledged(shown.local);
                 events.push(shown.lead_event());
                 return Some(notice.role == LeadRole::Unowned);
             }

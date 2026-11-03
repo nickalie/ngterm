@@ -541,6 +541,91 @@ fn a_pane_shown_after_its_sessions_snapshot_finds_a_respawn_missed_while_the_str
 }
 
 #[test]
+fn two_machines_showing_one_origin_pane_each_attach_again_after_its_respawn() {
+    const OTHER: &str = "m2";
+    let mut fixture = Fixture::connected();
+    // a second record of the same origin (another address), showing the same pane
+    let other = Machine {
+        id: OTHER.to_owned(),
+        label: "box over tailscale".to_owned(),
+        host: "box.tail".to_owned(),
+        port: 22,
+        user: "nick".to_owned(),
+        key_id: "key".to_owned(),
+        pinned_host_key: None,
+    };
+    block_on(fixture.core.connect(other)).unwrap();
+    block_on(fixture.core.list_sessions(OTHER.to_owned())).unwrap();
+    let counts = |generation: i64| PresentationRespawns {
+        epoch: "e1".to_owned(),
+        generations: std::collections::BTreeMap::from([(daemon(), generation)]),
+    };
+    let frame = |rev: i64, body: Body| {
+        frames::encode(&PresentationFrame {
+            generation: 1,
+            rev,
+            body,
+        })
+        .unwrap()
+    };
+    let mut streams = Vec::new();
+    for machine in [MACHINE, OTHER] {
+        block_on(fixture.core.attach_session(machine.to_owned(), SESSION.to_owned())).unwrap();
+        let stream =
+            fixture.opened(|opened| opened.machine_id == machine && opened.command == present_tail(SESSION).unwrap());
+        let hello = Body::Hello(PresentationHello {
+            version: frames::VERSION,
+            kinds: Vec::new(),
+            mode: PresentationMode::Mirror,
+        });
+        send(&stream.peer, &frame(1, hello));
+        let snapshot = PresentationSnapshot {
+            respawns: Some(counts(0)),
+            ..PresentationSnapshot::default()
+        };
+        send(&stream.peer, &frame(2, Body::Snapshot(snapshot)));
+        streams.push(stream);
+    }
+    fixture.quiet();
+
+    for machine in [MACHINE, OTHER] {
+        block_on(
+            fixture
+                .core
+                .show_pane(machine.to_owned(), SESSION.to_owned(), PANE.to_owned(), SIZE),
+        )
+        .unwrap();
+        let attach = fixture.opened(|opened| opened.machine_id == machine && opened.pty.is_some());
+        end(
+            attach.peer,
+            ChannelEnd::Exit {
+                code: Some(0),
+                signal: None,
+            },
+        );
+    }
+    let exited = |events: &[MobileEvent], machine: &str| {
+        events.iter().any(|event| {
+            matches!(event, MobileEvent::PaneEnded { pane, end: PaneEnd::Exited { .. } } if pane.machine_id == machine)
+        })
+    };
+    let events = fixture.quiet();
+    assert!(
+        exited(&events, MACHINE) && exited(&events, OTHER),
+        "both exits are reported"
+    );
+    assert!(!fixture.attaches_soon(), "no respawn yet");
+
+    for stream in &streams {
+        send(&stream.peer, &frame(3, Body::Respawn(counts(1))));
+    }
+    for machine in [MACHINE, OTHER] {
+        let again = fixture.opened(|opened| opened.machine_id == machine && opened.pty.is_some());
+        assert!(!lead_of(&again.command).claim, "attach-only");
+    }
+}
+
+#[test]
 fn a_signal_exit_is_reported_with_its_signal() {
     let mut fixture = Fixture::connected();
     fixture.show();
