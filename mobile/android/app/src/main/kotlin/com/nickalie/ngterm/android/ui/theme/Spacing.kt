@@ -27,7 +27,7 @@ data class Spacing(
 
 /**
  * The radii, by rank rather than one for everything: badges and chips are nearly square (4-6dp), cards and rows 12dp,
- * sheets and dialogs 20dp, and only a status capsule is fully round.
+ * sheets and dialogs 20dp, and buttons (Material's default) and the status capsule are fully round.
  */
 val NgtermShapes =
     Shapes(

@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -28,7 +30,8 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
  * What a screen shows instead of its content: an [icon] in [tint], a [title] saying what is the case, a [body] saying
  * what to do about it, and the one [action] that does it. Every empty, error and offline state is one of these, so no
  * screen is ever blank and none leaves the user without a next step. Use [EmptyState], [ErrorState] or
- * [OfflineState].
+ * [OfflineState]. The panel scrolls itself when its window is too short for it, so don't put it in a vertical
+ * scroller.
  */
 @Composable
 fun MessagePanel(
@@ -41,7 +44,9 @@ fun MessagePanel(
 ) {
     val spacing = NgtermTheme.spacing
     Column(
-        modifier = modifier.fillMaxWidth().padding(spacing.xl),
+        // scrolls when it is taller than its window (a landscape phone at a large font scale), so the action stays
+        // reachable; centered by its host when it fits
+        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(spacing.xl),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(spacing.md),
     ) {

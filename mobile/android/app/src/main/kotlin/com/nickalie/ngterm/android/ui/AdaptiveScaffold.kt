@@ -6,6 +6,7 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -23,11 +24,15 @@ import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.window.core.layout.WindowSizeClass
 import com.nickalie.ngterm.android.ui.navigation.NavBar
 import com.nickalie.ngterm.android.ui.navigation.NavRail
@@ -78,9 +83,11 @@ internal val navigationInsets: WindowInsets
  * The app's frame: the top-level [destinations] as a bottom bar, a rail or a sidebar ([layout], by default the
  * window's width class), and [content] beside or above them, edge to edge.
  *
- * The frame pads its navigation for the system bars and the cutout and consumes those sides, so [content] pads only
- * for what is left (its own `safeDrawingPadding` and the like). [content] is movable: a change of [layout] (a
- * rotation, a fold, a resize) moves it rather than recreating it, so nothing in it loses its state. [sidebarContent]
+ * The frame pads its navigation for the system bars and the cutout and consumes those sides (under the bottom bar,
+ * the bar's whole height), so [content] pads only for what is left (its own `safeDrawingPadding` and the like), and
+ * the keyboard meets its bottom edge. [content] is movable: a change of [layout] (a rotation, a fold, a resize)
+ * moves it rather than recreating it, and a new [content] lambda recomposes it in place, so nothing in it loses its
+ * state. [sidebarContent]
  * fills the sidebar under the destinations, where the expanded layout has room for a list (machines and their
  * sessions); the other layouts don't show it.
  *
@@ -100,7 +107,9 @@ fun AdaptiveScaffold(
     val start = destinations.first().key
     BackHandler(enabled = selected != start) { onSelect(start) }
     var railExpanded by rememberSaveable { mutableStateOf(false) }
-    val movable = remember(content) { movableContentOf(content) }
+    // keyed on nothing: a new lambda (one capturing a changed value) recomposes the content rather than replacing it
+    val current by rememberUpdatedState(content)
+    val movable = remember { movableContentOf { current() } }
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when (layout) {
             NavLayout.Bar -> {
@@ -137,14 +146,18 @@ private fun BarFrame(
     onSelect: (String) -> Unit,
     content: @Composable () -> Unit,
 ) {
+    // the bar's whole height (its own and the navigation bar's) is below the content, so the content consumes it:
+    // the keyboard's inset then counts from the content's bottom edge, not the screen's
+    var barHeight by remember { mutableIntStateOf(0) }
+    val barHeightDp = with(LocalDensity.current) { barHeight.toDp() }
     Column {
         Box(
             modifier =
                 Modifier
                     .weight(1f)
-                    .consumeWindowInsets(navigationInsets.only(WindowInsetsSides.Bottom)),
+                    .consumeWindowInsets(PaddingValues(bottom = barHeightDp)),
         ) { content() }
-        NavBar(destinations, selected, onSelect)
+        NavBar(destinations, selected, onSelect, Modifier.onSizeChanged { barHeight = it.height })
     }
 }
 

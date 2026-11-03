@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.ui.theme
 
+import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
@@ -34,22 +35,35 @@ fun readableOn(
     color: Color,
     background: Color,
     minimum: Float = TEXT_CONTRAST,
+): Color = readableOn(color, listOf(background), minimum)
+
+/**
+ * [color] made to reach [minimum] against every one of [backgrounds] at once, as [readableOn] does for one: for a
+ * color that may land on any of them (a badge on the ground, a card or a bar).
+ */
+fun readableOn(
+    color: Color,
+    backgrounds: List<Color>,
+    minimum: Float = TEXT_CONTRAST,
 ): Color {
-    if (contrastRatio(color, background) >= minimum) return color
+    fun reads(candidate: Color) = backgrounds.all { contrastRatio(candidate, it) >= minimum }
+    if (reads(color)) return color
+    // the end that contrasts with the worst of the grounds the most
     val target =
-        if (contrastRatio(Color.White, background) >
-            contrastRatio(Color.Black, background)
-        ) {
-            Color.White
-        } else {
-            Color.Black
-        }
+        listOf(Color.White, Color.Black).maxBy { end -> backgrounds.minOf { contrastRatio(end, it) } }
     return (1..STEPS)
         .asSequence()
         .map { lerp(color, target, it / STEPS.toFloat()) }
-        .firstOrNull { contrastRatio(it, background) >= minimum }
+        .firstOrNull(::reads)
         ?: target
 }
+
+/**
+ * The surfaces text and badges are put on: the ground and the containers up to the high one (cards, bars, banners
+ * and dialogs). Every promise of DESIGN.md's color section holds on each of them.
+ */
+fun ColorScheme.textGrounds(): List<Color> =
+    listOf(surface, surfaceContainerLowest, surfaceContainerLow, surfaceContainer, surfaceContainerHigh)
 
 /** The color a status hex (`#rrggbb` or `rrggbb`, as the origin sends it) names, or `null` for anything else. */
 fun parseHexColor(hex: String?): Color? =

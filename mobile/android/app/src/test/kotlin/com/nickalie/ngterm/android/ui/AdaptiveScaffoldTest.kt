@@ -3,6 +3,7 @@ package com.nickalie.ngterm.android.ui
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -83,4 +84,30 @@ class AdaptiveScaffoldTest {
         }
         assertEquals(NavLayout.Bar, layout)
     }
+
+    @Test
+    fun theContentKeepsItsStateWhenItsLambdaChanges() {
+        var label by mutableStateOf("first")
+        compose.setContent {
+            NgtermTheme {
+                AdaptiveScaffold(
+                    AppDestinations,
+                    AppDestinations.first().key,
+                    onSelect = {},
+                    layout = NavLayout.Bar,
+                    content = counter(label),
+                )
+            }
+        }
+        compose.onNodeWithText("first tapped 0").performClick()
+        label = "second"
+        compose.onNodeWithText("second tapped 1").assertExists()
+    }
 }
+
+// a new lambda on every call, as a caller's content is when it is built outside the composition
+private fun counter(label: String): @Composable () -> Unit =
+    {
+        var taps by remember { mutableIntStateOf(0) }
+        TextButton(onClick = { taps++ }) { Text("$label tapped $taps") }
+    }

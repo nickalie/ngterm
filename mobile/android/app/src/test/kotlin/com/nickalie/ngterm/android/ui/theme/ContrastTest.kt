@@ -11,15 +11,11 @@ import org.junit.Test
 class ContrastTest {
     private val sides = listOf("light" to (LightScheme to LightStatus), "dark" to (DarkScheme to DarkStatus))
 
-    // the surfaces text and badges are put on: the ground and the containers up to the high one
-    private fun ColorScheme.grounds() =
-        listOf(
-            "surface" to surface,
-            "surfaceContainerLowest" to surfaceContainerLowest,
-            "surfaceContainerLow" to surfaceContainerLow,
-            "surfaceContainer" to surfaceContainer,
-            "surfaceContainerHigh" to surfaceContainerHigh,
-        )
+    private val groundNames =
+        listOf("surface", "surfaceContainerLowest", "surfaceContainerLow", "surfaceContainer", "surfaceContainerHigh")
+
+    // the surfaces text and badges are put on, by name
+    private fun ColorScheme.grounds() = groundNames.zip(textGrounds())
 
     private fun assertContrast(
         what: String,
@@ -99,6 +95,22 @@ class ContrastTest {
     }
 
     @Test
+    fun anOriginsColorIsMadeReadableOnEverySurfaceAtOnce() {
+        // a grid over the color cube, and two colors a lift against the ground alone left unreadable on a card
+        val levels = (0..GRID_STEPS).map { it / GRID_STEPS.toFloat() }
+        val colors =
+            levels.flatMap { r -> levels.flatMap { g -> levels.map { b -> Color(r, g, b) } } } +
+                listOf("#f84050", "#f8f8f0").map { checkNotNull(parseHexColor(it)) }
+        for ((side, pair) in sides) {
+            val grounds = pair.first.grounds()
+            for (color in colors) {
+                val lifted = readableOn(color, grounds.map { it.second })
+                for ((name, ground) in grounds) assertContrast("$side $color lifted on $name", lifted, ground)
+            }
+        }
+    }
+
+    @Test
     fun parseHexColorTakesTheOriginsSpellingsAndNothingElse() {
         assertEquals(Color(0xFFFF8800), parseHexColor("#ff8800"))
         assertEquals(Color(0xFFFF8800), parseHexColor("FF8800"))
@@ -124,3 +136,5 @@ class ContrastTest {
         assertEquals("no two tones share a glyph, so none rests on color", shapes.size, shapes.toSet().size)
     }
 }
+
+private const val GRID_STEPS = 16

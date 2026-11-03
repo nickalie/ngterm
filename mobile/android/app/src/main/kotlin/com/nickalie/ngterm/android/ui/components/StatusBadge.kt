@@ -22,6 +22,7 @@ import com.nickalie.ngterm.android.ui.theme.StatusShape
 import com.nickalie.ngterm.android.ui.theme.StatusTone
 import com.nickalie.ngterm.android.ui.theme.parseHexColor
 import com.nickalie.ngterm.android.ui.theme.readableOn
+import com.nickalie.ngterm.android.ui.theme.textGrounds
 
 /** A status's glyph alone, in [color]. Decorative: the word next to it is what TalkBack reads. */
 @Composable
@@ -51,7 +52,9 @@ fun StatusBadge(
 
 /**
  * An agent's status as its origin sets it: [text] after the glyph its [shape] names, in its [colorHex] made readable on
- * [background] (an origin's color is the user's choice and may not contrast; the word is always there besides).
+ * every one of [backgrounds] (an origin's color is the user's choice and may not contrast; the word is always there
+ * besides). By default those are every surface up to `surfaceContainerHigh`, so the badge reads on the ground, a
+ * [MachineCard] or a sidebar [SessionRow] alike.
  */
 @Composable
 fun AgentStatusBadge(
@@ -59,9 +62,9 @@ fun AgentStatusBadge(
     colorHex: String?,
     shape: String?,
     modifier: Modifier = Modifier,
-    background: Color = MaterialTheme.colorScheme.surface,
+    backgrounds: List<Color> = MaterialTheme.colorScheme.textGrounds(),
 ) {
-    val color = parseHexColor(colorHex)?.let { readableOn(it, background) } ?: NgtermTheme.status.idle
+    val color = parseHexColor(colorHex)?.let { readableOn(it, backgrounds) } ?: NgtermTheme.status.idle
     GlyphAndLabel(StatusShape.fromWire(shape), color, text, modifier)
 }
 

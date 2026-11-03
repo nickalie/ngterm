@@ -17,9 +17,9 @@ private val EmphasizedDecelerate = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
 data class Motion(
     /** A state flip in place: a selection, a badge's change. */
     val quickMillis: Int = 120,
-    /** Something opening or closing: the rail's labels, a banner. */
+    /** Something opening or closing: the rail's labels, a banner, a destination fading in. */
     val standardMillis: Int = 220,
-    /** A layout swapping wholesale: a destination, a cover. */
+    /** A layout swapping wholesale: a cover. */
     val emphasizedMillis: Int = 320,
     /** Material's emphasized-decelerate: fast out of the touch, settling into place. */
     val easing: Easing = EmphasizedDecelerate,

@@ -13,7 +13,7 @@ import com.nickalie.ngterm.android.R
 // Atkinson Hyperlegible Next for the chrome, Atkinson Hyperlegible Mono for what the user compares character by
 // character (hosts, ports, fingerprints, key lines): one family, built by the Braille Institute to tell 0 from O and
 // l from 1 from I. Both are the variable fonts (wght 200-800) Google Fonts ships, under the OFL
-// (mobile/android/licenses/). The sizes follow the classic scale (11, 12, 14, 16, 18, 21, 24, 36, 48).
+// (mobile/android/licenses/). The sizes follow the classic scale (11, 12, 14, 16, 18, 21, 24, 30, 36, 48).
 
 private fun variable(
     resource: Int,
@@ -42,7 +42,10 @@ private fun style(
     letterSpacing = tracking.sp,
 )
 
-/** Material 3's type roles on the scale. Display sizes are light, titles and labels semibold, body regular. */
+/**
+ * Material 3's type roles on the scale. The two largest display sizes are light, headlines medium, titles and labels
+ * semibold, body regular.
+ */
 val NgtermTypography =
     Typography(
         displayLarge = style(48, 56, FontWeight.Light, tracking = -0.5),

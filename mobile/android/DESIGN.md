@@ -77,7 +77,8 @@ Defined in `ui/theme/Color.kt`. `ContrastTest` checks every promise below, light
 - No two tones share a glyph.
 - An agent's status comes from its origin as text, a hex color and one of upstream's six shapes (circle, square,
   triangle, diamond, capsule, star). `AgentStatusBadge` draws that shape, and lifts the color toward white or black
-  (`readableOn`) until it reads on its background: the origin's color is the user's choice, the legibility is ours.
+  (`readableOn`) until it reads on every surface up to `surfaceContainerHigh`, so it holds on a card or the sidebar
+  as on the ground: the origin's color is the user's choice, the legibility is ours.
 
 ### Terminal palettes
 
@@ -102,8 +103,9 @@ OFL (`licenses/`):
 - **Atkinson Hyperlegible Mono** for what is compared character by character: `user@host:port`, fingerprints, key
   lines (`NgtermTheme.mono`). It is not the terminal's font; the terminal's is its own choice (TerminalView).
 
-The scale is the classic one (11, 12, 14, 16, 18, 21, 24, 30, 36, 48 sp). Display sizes are light, headlines medium,
-titles and labels semibold, body regular. Sentence case everywhere; no all-caps labels, no eyebrows above headings.
+The scale is the classic one (11, 12, 14, 16, 18, 21, 24, 30, 36, 48 sp). The two largest display sizes are light,
+headlines medium, titles and labels semibold, body regular. Sentence case everywhere; no all-caps labels, no eyebrows
+above headings.
 
 | Role | Size / line | Weight | Used for |
 |---|---|---|---|
@@ -161,7 +163,7 @@ Line icons drawn for the app in `res/drawable/ic_*.xml`: 24dp, 2dp strokes, roun
 | `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it |
 | `Banner` | a strip about the whole screen while it stays usable, with an optional action and dismiss; announced politely |
 | `ConfirmDialog` | the confirmation before what can't be undone; the button repeats the action's words, in the error color |
-| `Cover` | a veil over a pane that can't be used as it is (another device drives it, it is reattaching), with its action |
+| `Cover` | a veil over a pane that can't be used as it is (another device drives it, it is reattaching), with its action; it takes every touch, and the pane under it is hidden from TalkBack (`Modifier.underCover`) |
 
 Rules the components hold to:
 
@@ -195,8 +197,10 @@ compact (< 600dp)        medium (600-839dp)              expanded (>= 840dp)
   the icons.
 - **Expanded:** a permanent 296dp sidebar: the mark and name, the destinations, a rule, then a list of its own (a
   machine's sessions) taking the rest of the height. The real split layout of panes is the content's.
-- **Edge to edge:** the navigation pads for the system bars and the cutout and consumes those sides; the content pads
-  for the rest itself (`safeDrawingPadding`). The keyboard is not the navigation's to avoid.
+- **Edge to edge:** the navigation pads for the system bars and the cutout and consumes those sides (the bottom bar
+  its whole height); the content pads for the rest itself (`safeDrawingPadding`), so it meets the keyboard's top
+  edge. The keyboard is not the navigation's to avoid. A rail's or sidebar's width is beside a start-side inset, not
+  inside it.
 - **State:** the content is movable content, so a layout change moves it rather than recreating it, and nothing in it
   is lost; the rail's open state and the destination are saveable.
 - **Back:** predictive back first narrows the open rail with the gesture and closes it on release; then a destination

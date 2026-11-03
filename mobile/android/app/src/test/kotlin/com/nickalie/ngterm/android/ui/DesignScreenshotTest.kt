@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -26,6 +27,7 @@ import com.nickalie.ngterm.android.ui.components.PanelAction
 import com.nickalie.ngterm.android.ui.components.SectionHeader
 import com.nickalie.ngterm.android.ui.components.SessionRow
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,20 +35,25 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 // The windows the sheets and the scaffold are rendered in: a phone (compact), an unfolded foldable (medium) and a
-// landscape tablet (expanded). The component sheets get a tall window so nothing is cut off.
+// landscape tablet (expanded). The component sheets get windows tall enough for all of them (assertSheetFits checks),
+// taller still at the large font scale.
 private const val PHONE = "w411dp-h891dp-xhdpi"
 private const val PHONE_NIGHT = "w411dp-h891dp-night-xhdpi"
 private const val PHONE_TALL = "w411dp-h1400dp-xhdpi"
 private const val PHONE_TALL_NIGHT = "w411dp-h1400dp-night-xhdpi"
+private const val PHONE_TALLER = "w411dp-h2100dp-xhdpi"
 private const val FOLDABLE = "w700dp-h1000dp-hdpi"
 private const val FOLDABLE_NIGHT = "w700dp-h1000dp-night-hdpi"
+private const val FOLDABLE_TALL = "w700dp-h1200dp-hdpi"
 private const val TABLET = "w1280dp-h800dp-land-mdpi"
 private const val TABLET_NIGHT = "w1280dp-h800dp-land-night-mdpi"
+private const val TABLET_TALL = "w1280dp-h1040dp-mdpi"
 private const val LARGE_TYPE = 2f
 
 /**
  * The design system rendered by Robolectric and compared with its goldens (src/test/screenshots/design): the
- * component sheets and the adaptive scaffold at the three widths, each light, dark, and light at font scale 2.0.
+ * component sheets, the adaptive scaffold and the confirm dialog at the three widths, each light, dark, and light at
+ * font scale 2.0.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -59,7 +66,21 @@ class DesignScreenshotTest {
         content: @Composable () -> Unit,
     ) {
         compose.setContent { NgtermTheme { content() } }
+        assertSheetFits()
         compose.onRoot().captureRoboImage("src/test/screenshots/design/$name.png")
+    }
+
+    // a sheet's blocks all end inside the window, so its golden shows every component (a no-op for the scaffold)
+    private fun assertSheetFits() {
+        val window =
+            compose
+                .onRoot()
+                .fetchSemanticsNode()
+                .size.height
+        for (block in compose.onAllNodesWithTag(SHEET_BLOCK).fetchSemanticsNodes()) {
+            val bottom = block.positionInRoot.y + block.size.height
+            assertTrue("a sheet block ends at $bottom px, below the window's $window px", bottom <= window)
+        }
     }
 
     // the component sheets
@@ -73,7 +94,7 @@ class DesignScreenshotTest {
     fun rowsCompactDark() = capture("rows_compact_dark") { RowsSheet() }
 
     @Test
-    @Config(qualifiers = PHONE_TALL, fontScale = LARGE_TYPE)
+    @Config(qualifiers = PHONE_TALLER, fontScale = LARGE_TYPE)
     fun rowsCompactLargeType() = capture("rows_compact_font2") { RowsSheet() }
 
     @Test
@@ -85,7 +106,7 @@ class DesignScreenshotTest {
     fun rowsMediumDark() = capture("rows_medium_dark") { RowsSheet() }
 
     @Test
-    @Config(qualifiers = FOLDABLE, fontScale = LARGE_TYPE)
+    @Config(qualifiers = FOLDABLE_TALL, fontScale = LARGE_TYPE)
     fun rowsMediumLargeType() = capture("rows_medium_font2") { RowsSheet() }
 
     @Test
@@ -97,7 +118,7 @@ class DesignScreenshotTest {
     fun rowsExpandedDark() = capture("rows_expanded_dark") { RowsSheet() }
 
     @Test
-    @Config(qualifiers = TABLET, fontScale = LARGE_TYPE)
+    @Config(qualifiers = TABLET_TALL, fontScale = LARGE_TYPE)
     fun rowsExpandedLargeType() = capture("rows_expanded_font2") { RowsSheet() }
 
     @Test
@@ -109,7 +130,7 @@ class DesignScreenshotTest {
     fun statesCompactDark() = capture("states_compact_dark") { StatesSheet() }
 
     @Test
-    @Config(qualifiers = PHONE_TALL, fontScale = LARGE_TYPE)
+    @Config(qualifiers = PHONE_TALLER, fontScale = LARGE_TYPE)
     fun statesCompactLargeType() = capture("states_compact_font2") { StatesSheet() }
 
     @Test
@@ -121,7 +142,7 @@ class DesignScreenshotTest {
     fun statesMediumDark() = capture("states_medium_dark") { StatesSheet() }
 
     @Test
-    @Config(qualifiers = FOLDABLE, fontScale = LARGE_TYPE)
+    @Config(qualifiers = FOLDABLE_TALL, fontScale = LARGE_TYPE)
     fun statesMediumLargeType() = capture("states_medium_font2") { StatesSheet() }
 
     @Test
@@ -133,7 +154,7 @@ class DesignScreenshotTest {
     fun statesExpandedDark() = capture("states_expanded_dark") { StatesSheet() }
 
     @Test
-    @Config(qualifiers = TABLET, fontScale = LARGE_TYPE)
+    @Config(qualifiers = TABLET_TALL, fontScale = LARGE_TYPE)
     fun statesExpandedLargeType() = capture("states_expanded_font2") { StatesSheet() }
 
     // the scaffold, its layout picked from the window as the app does
@@ -182,7 +203,7 @@ class DesignScreenshotTest {
     @Config(qualifiers = TABLET, fontScale = LARGE_TYPE)
     fun scaffoldExpandedLargeType() = capture("scaffold_expanded_font2") { ScaffoldSample() }
 
-    // the confirm dialog, in its own window
+    // the confirm dialog, in its own window, at the three widths
 
     @OptIn(ExperimentalRoborazziApi::class)
     private fun captureDialog(name: String) {
@@ -202,11 +223,39 @@ class DesignScreenshotTest {
 
     @Test
     @Config(qualifiers = PHONE)
-    fun confirmDialogLight() = captureDialog("confirm_dialog_light")
+    fun confirmDialogCompactLight() = captureDialog("confirm_dialog_compact_light")
 
     @Test
     @Config(qualifiers = PHONE_NIGHT)
-    fun confirmDialogDark() = captureDialog("confirm_dialog_dark")
+    fun confirmDialogCompactDark() = captureDialog("confirm_dialog_compact_dark")
+
+    @Test
+    @Config(qualifiers = PHONE, fontScale = LARGE_TYPE)
+    fun confirmDialogCompactLargeType() = captureDialog("confirm_dialog_compact_font2")
+
+    @Test
+    @Config(qualifiers = FOLDABLE)
+    fun confirmDialogMediumLight() = captureDialog("confirm_dialog_medium_light")
+
+    @Test
+    @Config(qualifiers = FOLDABLE_NIGHT)
+    fun confirmDialogMediumDark() = captureDialog("confirm_dialog_medium_dark")
+
+    @Test
+    @Config(qualifiers = FOLDABLE, fontScale = LARGE_TYPE)
+    fun confirmDialogMediumLargeType() = captureDialog("confirm_dialog_medium_font2")
+
+    @Test
+    @Config(qualifiers = TABLET)
+    fun confirmDialogExpandedLight() = captureDialog("confirm_dialog_expanded_light")
+
+    @Test
+    @Config(qualifiers = TABLET_NIGHT)
+    fun confirmDialogExpandedDark() = captureDialog("confirm_dialog_expanded_dark")
+
+    @Test
+    @Config(qualifiers = TABLET, fontScale = LARGE_TYPE)
+    fun confirmDialogExpandedLargeType() = captureDialog("confirm_dialog_expanded_font2")
 }
 
 /** The scaffold as the app frames it, with a machine's sessions in the expanded sidebar. */

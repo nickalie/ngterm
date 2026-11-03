@@ -42,13 +42,13 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-/** The collapsed rail's width: an icon and a short label. */
+/** The collapsed rail's width (an icon and a short label), beside a start-side system bar or cutout. */
 val RailWidth: Dp = 88.dp
 
-/** The open rail's width: icons beside their labels. */
+/** The open rail's width (icons beside their labels), beside a start-side system bar or cutout. */
 val RailExpandedWidth: Dp = 248.dp
 
-/** The permanent sidebar's width. */
+/** The permanent sidebar's width, beside a start-side system bar or cutout. */
 val SidebarWidth: Dp = 296.dp
 
 /** The compact layout's bottom bar, clear of the navigation bar. */
@@ -102,10 +102,10 @@ internal fun NavRail(
     Column(
         modifier =
             modifier
-                .width(width.value)
                 .fillMaxHeight()
                 .background(MaterialTheme.colorScheme.surfaceContainerLow)
                 .windowInsetsPadding(navigationInsets.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical))
+                .width(width.value)
                 .clipToBounds(),
     ) {
         IconButton(
@@ -153,10 +153,10 @@ internal fun NavSidebar(
     Column(
         modifier =
             modifier
-                .width(SidebarWidth)
                 .fillMaxHeight()
                 .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                .windowInsetsPadding(navigationInsets.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical)),
+                .windowInsetsPadding(navigationInsets.only(WindowInsetsSides.Start + WindowInsetsSides.Vertical))
+                .width(SidebarWidth),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = spacing.xl, vertical = spacing.lg),

@@ -1,6 +1,5 @@
 package com.nickalie.ngterm.android.ui.components
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -32,26 +31,27 @@ fun SectionHeader(
         modifier = modifier.fillMaxWidth().heightIn(min = spacing.touchTarget).padding(start = spacing.lg),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.semantics { heading() },
-        )
-        if (count != null) {
+        // the heading gives way first: the action keeps its words whole and the title ellipsizes
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = count.toString(),
-                style = MaterialTheme.typography.labelMedium,
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = spacing.sm),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false).semantics { heading() },
             )
-        }
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
-            if (action != null) {
-                TextButton(onClick = action.onClick) { Text(action.label) }
+            if (count != null) {
+                Text(
+                    text = count.toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = spacing.sm),
+                )
             }
+        }
+        if (action != null) {
+            TextButton(onClick = action.onClick) { Text(action.label, maxLines = 1, softWrap = false) }
         }
     }
 }
