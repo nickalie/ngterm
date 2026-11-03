@@ -1,5 +1,8 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
 import io.gitlab.arturbosch.detekt.extensions.DetektExtension
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+import org.gradle.api.tasks.testing.logging.TestLogEvent
+import java.time.Duration
 
 plugins {
     // the root's own `check`, for the Spotless check of the root build scripts
@@ -53,4 +56,17 @@ subprojects {
     dependencies {
         add("detektPlugins", rootProject.libs.compose.rules.detekt)
     }
+
+    // The JVM tests take under a minute: a hung one fails its task in minutes rather than at the CI job's limit, and on
+    // CI (`CI` set) each test is logged as it starts, so the log names the one that hung.
+    val onCi = providers.environmentVariable("CI").isPresent
+    tasks.withType<Test>().configureEach {
+        timeout.set(Duration.ofMinutes(15))
+        testLogging {
+            val always = listOf(TestLogEvent.FAILED, TestLogEvent.SKIPPED)
+            events = (if (onCi) always + listOf(TestLogEvent.STARTED, TestLogEvent.PASSED) else always).toSet()
+            exceptionFormat = TestExceptionFormat.FULL
+        }
+    }
 }
+
