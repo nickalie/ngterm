@@ -19,7 +19,9 @@
 # basic (MIT, actions/cache) provider.
 #
 # Path-filtered to what the app builds from: the mobile core and the crates it builds on, mobile/, the scripts and
-# pins of its toolchain, and this file. Pushes to a `ci/**` branch run it too, as they do cross-platform.yml.
+# pins of its toolchain, and this file. Pushes to a `ci/**` branch run it too, as they do cross-platform.yml, and it
+# can be run by hand (a `ci/**` branch made at a commit another branch already holds changes no file, so no path
+# filter matches it).
 name: android
 
 on:
@@ -41,6 +43,7 @@ on:
   push:
     branches: [main, "ci/**"]
     paths: *paths
+  workflow_dispatch:
 
 permissions:
   contents: read
