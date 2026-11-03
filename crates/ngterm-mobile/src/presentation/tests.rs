@@ -371,6 +371,7 @@ fn the_snapshot_connects_and_its_status_is_no_change() {
             status: Some(blocked()),
             hud: Some(hud()),
             context: Some("fixing the build".to_owned()),
+            info: None,
             layout: Some(layout()),
             name: None,
             respawns: Some(PresentationRespawns {
