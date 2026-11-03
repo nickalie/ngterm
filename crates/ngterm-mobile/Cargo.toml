@@ -31,6 +31,8 @@ ngterm-term = { path = "../ngterm-term", default-features = false }
 # to them (`remote::origin_replies`), with their strings
 ngterm-core.workspace = true
 ngterm-proto.workspace = true
+# a session's id as the core's presentation client keys it
+uuid.workspace = true
 # the actor's current-thread runtime and `LocalSet`, its command queue and the channels' queues
 tokio = { workspace = true, features = ["rt", "sync", "time", "net", "macros"] }
 # ssh: one connection per machine, exec channels, keys and host keys

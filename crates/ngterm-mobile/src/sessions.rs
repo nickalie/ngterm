@@ -251,7 +251,7 @@ pub fn forget(tree: &mut ControlRemoteTree, session: &str) {
         .retain(|listed| listed.id != session && listed.parent.as_deref() != Some(session));
 }
 
-/// The clock New Session's wait reads: tokio's, so a test's paused clock drives it.
-fn now() -> std::time::Instant {
+/// The clock New Session's wait and the presentation streams read: tokio's, so a test's paused clock drives it.
+pub(crate) fn now() -> std::time::Instant {
     tokio::time::Instant::now().into_std()
 }

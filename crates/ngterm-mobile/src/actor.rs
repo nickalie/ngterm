@@ -10,13 +10,19 @@
 //! transport's text. They may overlap, so a listing changes the kept listing and is reported only while its connection
 //! is still the machine's and nothing newer about its sessions is known: no later listing landed and no session ended
 //! after it began.
+//!
+//! An attached session's presentation stream ([`crate::presentation`]) runs on its machine's connection as it was at
+//! the attach; its links report back to the actor as local tasks, and a ticker task runs the streams' one-second tick.
+//! Closing a machine's connection ends its sessions' streams.
 
+#[cfg(test)]
+mod presentation_tests;
 #[cfg(test)]
 mod tests;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle, ThreadId};
 
@@ -27,6 +33,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{AbortHandle, LocalSet};
 
 use crate::api::{EventSink, Machine, MachineState, MobileError, MobileEvent};
+use crate::presentation::{self, AskReply, ChannelLinks, LinkEvent, Presentations, Reporter};
 use crate::sessions::{self, RemoteSession};
 use crate::transport::{Connection, Transport};
 
@@ -60,6 +67,21 @@ pub(crate) enum Command {
         machine_id: String,
         session_id: String,
         reply: Reply,
+    },
+    AttachSession {
+        machine_id: String,
+        session_id: String,
+        reply: Reply,
+    },
+    DetachSession {
+        machine_id: String,
+        session_id: String,
+    },
+    AnswerAsk {
+        machine_id: String,
+        session_id: String,
+        ask_id: String,
+        reply: AskReply,
     },
 }
 
@@ -132,6 +154,8 @@ struct State<T: Transport> {
     listings: RefCell<HashMap<String, Kept>>,
     /// The last ticket handed out ([`State::ticket`]).
     tickets: Cell<u64>,
+    /// The attached sessions' presentation streams.
+    presentations: RefCell<Presentations<T::Connection>>,
 }
 
 /// What the actor knows of a connected machine's sessions.
@@ -172,11 +196,18 @@ impl<T: Transport> State<T> {
             generation: Cell::new(0),
             listings: RefCell::new(HashMap::new()),
             tickets: Cell::new(0),
+            presentations: RefCell::new(Presentations::default()),
         }
     }
 
     fn emit(&self, event: MobileEvent) {
         self.sink.on_event(event);
+    }
+
+    fn emit_all(&self, events: Vec<MobileEvent>) {
+        for event in events {
+            self.emit(event);
+        }
     }
 
     /// A ticket later than every one before: taken as a listing begins and as an end is applied, it orders what the
@@ -199,6 +230,7 @@ impl<T: Transport> State<T> {
 
 async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mpsc::UnboundedReceiver<Command>) {
     let state = Rc::new(State::new(transport, sink));
+    let ticker = tokio::task::spawn_local(tick(Rc::downgrade(&state))).abort_handle();
     while let Some(command) = queue.recv().await {
         match command {
             Command::Connect { machine, reply } => connect(&state, machine, reply),
@@ -225,8 +257,31 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
             } => spawn_on_machine(&state, machine_id, reply, |state, link, id| {
                 end_session(state, link, id, session_id)
             }),
+            Command::AttachSession {
+                machine_id,
+                session_id,
+                reply,
+            } => {
+                let _ = reply.send(attach_session(&state, &machine_id, &session_id));
+            }
+            Command::DetachSession { machine_id, session_id } => {
+                state.presentations.borrow_mut().detach(&machine_id, &session_id);
+            }
+            Command::AnswerAsk {
+                machine_id,
+                session_id,
+                ask_id,
+                reply,
+            } => {
+                state
+                    .presentations
+                    .borrow_mut()
+                    .answer_ask(&machine_id, &session_id, &ask_id, reply);
+            }
         }
     }
+    ticker.abort();
+    *state.presentations.borrow_mut() = Presentations::default();
     // Waiters dropped unanswered read as `Stopped`.
     for (_, attempt) in state.attempts.borrow_mut().drain() {
         attempt.task.abort();
@@ -339,9 +394,10 @@ fn disconnect<T: Transport>(state: &State<T>, machine_id: &str) {
     close(state, machine_id);
 }
 
-/// Closes `machine_id`'s connection, if any, and forgets its listing.
+/// Closes `machine_id`'s connection, if any, and forgets its listing and its sessions' streams.
 fn close<T: Transport>(state: &State<T>, machine_id: &str) {
     state.listings.borrow_mut().remove(machine_id);
+    state.presentations.borrow_mut().forget_machine(machine_id);
     let link = state.connections.borrow_mut().remove(machine_id);
     if let Some(link) = link {
         link.connection.close();
@@ -480,4 +536,58 @@ async fn end_session<T: Transport>(
         state.emit(MobileEvent::Tree { machine_id, sessions });
     }
     Ok(())
+}
+
+/// Opens the presentation stream of `session_id`, a session of `machine_id`'s last listing, on the machine's
+/// connection.
+fn attach_session<T: Transport>(state: &Rc<State<T>>, machine_id: &str, session_id: &str) -> Result<(), MobileError> {
+    let connection = state
+        .connections
+        .borrow()
+        .get(machine_id)
+        .map(|link| Rc::clone(&link.connection))
+        .ok_or_else(|| MobileError::NotConnected {
+            machine_id: machine_id.to_owned(),
+        })?;
+    let version = state
+        .listings
+        .borrow()
+        .get(machine_id)
+        .and_then(|kept| kept.tree.as_ref())
+        .filter(|tree| tree.sessions.iter().any(|listed| listed.id == session_id))
+        .map(|tree| tree.presentation)
+        .ok_or_else(|| MobileError::NotListed {
+            session_id: session_id.to_owned(),
+        })?;
+    let events = state.presentations.borrow_mut().attach(
+        machine_id,
+        session_id,
+        version,
+        ChannelLinks::new(connection, reporter(state)),
+        sessions::now(),
+    )?;
+    state.emit_all(events);
+    Ok(())
+}
+
+/// Where the streams' links report: the actor's [`Presentations`], once the link's task has the report.
+fn reporter<T: Transport>(state: &Rc<State<T>>) -> Reporter {
+    let state = Rc::downgrade(state);
+    Rc::new(move |key, event: LinkEvent| {
+        let Some(state) = state.upgrade() else { return };
+        let events = state.presentations.borrow_mut().link_event(key, event, sessions::now());
+        state.emit_all(events);
+    })
+}
+
+/// The streams' tick, every [`presentation::TICK`] while the actor runs.
+async fn tick<T: Transport>(state: Weak<State<T>>) {
+    let mut interval = tokio::time::interval(presentation::TICK);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        let Some(state) = state.upgrade() else { return };
+        let events = state.presentations.borrow_mut().tick(sessions::now());
+        state.emit_all(events);
+    }
 }

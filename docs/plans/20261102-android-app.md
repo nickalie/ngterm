@@ -493,15 +493,31 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Create: `crates/ngterm-mobile/src/presentation.rs`
 
-- [ ] write tests first, one per `ClientEffect` variant, mapped to its event:
+- [x] write tests first, one per `ClientEffect` variant, mapped to its event:
   - `SnapshotStatus` emits no notification;
   - an ask is accepted under the ask rule, and its answer echoes `owner`;
   - an overlay is refused with `OverlayRejected`, and a page with `PageRejected(PAGES_UNSUPPORTED)`;
   - the hello lists `viewer_kinds(false)`;
   - pings are answered, and a quiet stream reconnects after `STALE_AFTER`
-- [ ] implement the `PresentationTransport`/`PresentationLink` adapter over the mobile transport on the actor: line
+- [x] implement the `PresentationTransport`/`PresentationLink` adapter over the mobile transport on the actor: line
       splitting, launch numbers, the 1 s tick
-- [ ] run the tests; they must pass before Task 9b
+- [x] run the tests; they must pass before Task 9b
+  - Notes: `MobileCore::attach_session(machine_id, session_id)` (needs the connection and a kept listing holding the
+    session, `MobileError::NotListed` otherwise; the listing's `presentation` version decides, `None` reporting
+    `StreamState::Unsupported`), `detach_session` (ends the stream, reports nothing) and `answer_ask(machine_id,
+    session_id, ask_id, AskReply)`: the core keeps each open ask's `owner` and echoes it, and drops an answer to an ask
+    no longer open. Events: `SessionConnection(StreamState)`, `SessionStatus { status, changed }` (`changed` false for
+    a snapshot's status and for the clearing below, so the app notifies nothing), `SessionContext`, `SessionLayout`,
+    `SessionMode(PresentationRole)`, `Hud`, `Notify(RemoteNotice)`, `Sound(name)`, `Ask(RemoteAsk)`, `AskDismiss`;
+    wire enumerations travel as their wire names and panes as their identities. As desktop's row does, leaving
+    `connected` dismisses the open asks and clears context, status and HUD. Respawn counts and warnings make no event
+    yet (9c takes the respawns). The adapter (`ChannelLinks`) runs each launch as a local task on the machine's
+    connection as it was at the attach: lines sent before the channel opens wait for it, a line over
+    `MAX_FRAME_BYTES` ends the stream, a trailing partial line is dropped, and an end reads as desktop's bridge words
+    it (`exit N`, `signal NAME`, or the lost link's reason). Closing a machine's connection (disconnect, or a connect
+    as edited) ends its sessions' streams for now; 9b keeps them across a lost connection. `MobileEvent` is no longer
+    `Eq` (records carry `f64`s).
+
 
 ### Task 9b: Reconnect and lifecycle
 

@@ -12,6 +12,9 @@ use tokio::sync::oneshot;
 
 use crate::actor::{Actor, Command};
 use crate::keys::{self, KeyError, KeyPair};
+use crate::presentation::{
+    AskReply, PresentationRole, RemoteAsk, RemoteHud, RemoteLayout, RemoteNotice, RemoteStatus, StreamState,
+};
 use crate::sessions::RemoteSession;
 use crate::transport::Transport;
 use crate::transport::russh::RusshTransport;
@@ -48,7 +51,7 @@ pub enum MachineState {
 }
 
 /// What the core tells the app on its own, through [`EventSink::on_event`].
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
 pub enum MobileEvent {
     /// A machine's connection changed.
     MachineState { machine_id: String, state: MachineState },
@@ -70,6 +73,72 @@ pub enum MobileEvent {
         machine_id: String,
         sessions: Vec<RemoteSession>,
     },
+    /// An attached session's presentation stream changed state ([`MobileCore::attach_session`]). Leaving `Connected`
+    /// is followed by what that takes away: the open asks dismissed, the context, status and HUD cleared.
+    SessionConnection {
+        machine_id: String,
+        session_id: String,
+        state: StreamState,
+    },
+    /// An attached session's agent status. `changed` is false for the status a snapshot carries (one arrives with
+    /// every reconnect) and for the clearing when the stream goes: no change on the origin, so nothing to notify.
+    SessionStatus {
+        machine_id: String,
+        session_id: String,
+        status: Option<RemoteStatus>,
+        changed: bool,
+    },
+    /// An attached session's note of what it is for.
+    SessionContext {
+        machine_id: String,
+        session_id: String,
+        context: Option<String>,
+    },
+    /// An attached session's panes and their arrangement.
+    SessionLayout {
+        machine_id: String,
+        session_id: String,
+        layout: RemoteLayout,
+    },
+    /// This app's role on an attached session.
+    SessionMode {
+        machine_id: String,
+        session_id: String,
+        role: PresentationRole,
+    },
+    /// The HUD panel over an attached session; `None` takes it down.
+    Hud {
+        machine_id: String,
+        session_id: String,
+        hud: Option<RemoteHud>,
+    },
+    /// A notification from an attached session, to post as the app's own.
+    Notify {
+        machine_id: String,
+        session_id: String,
+        notice: RemoteNotice,
+    },
+    /// A status sound an attached session's origin handed over instead of playing it: `name`, or for `None` the app's
+    /// own blocked sound.
+    Sound {
+        machine_id: String,
+        session_id: String,
+        name: Option<String>,
+    },
+    /// An ask from an attached session: a dialog when the session is on screen, otherwise a notification. Answer it
+    /// with [`MobileCore::answer_ask`].
+    Ask {
+        machine_id: String,
+        session_id: String,
+        ask: RemoteAsk,
+    },
+    /// An ask ended without this app's answer (answered elsewhere, ended on the origin, or its stream went): take it
+    /// down.
+    AskDismiss {
+        machine_id: String,
+        session_id: String,
+        ask_id: String,
+    },
 }
 
 /// Why a [`MobileCore`] call failed.
@@ -90,6 +159,9 @@ pub enum MobileError {
     /// The machine answered, or failed to: why a session command did not do what was asked, in words for the user.
     #[error("{reason}")]
     Remote { reason: String },
+    /// The session is not in the machine's last listing: list the machine's sessions first.
+    #[error("{session_id} is not in the machine's session list")]
+    NotListed { session_id: String },
 }
 
 /// Why a [`KeyVault`] could not hand over a key.
@@ -269,6 +341,56 @@ impl MobileCore {
             reply,
         })?;
         answer.await.unwrap_or(Err(MobileError::Stopped))
+    }
+
+    /// Attaches `session_id` of `machine_id`: its presentation stream opens and stays up, reconnecting on its own
+    /// backoff, until [`MobileCore::detach_session`]. What it shows arrives as events
+    /// ([`MobileEvent::SessionConnection`] and the session events after it). Attaching an attached session changes
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::NotConnected`], [`MobileError::NotListed`] when the machine's last listing doesn't hold the
+    /// session, [`MobileError::Remote`] for an id that is not a session's, or [`MobileError::Stopped`].
+    pub async fn attach_session(&self, machine_id: String, session_id: String) -> Result<(), MobileError> {
+        let (reply, answer) = oneshot::channel();
+        self.actor.post(Command::AttachSession {
+            machine_id,
+            session_id,
+            reply,
+        })?;
+        answer.await.unwrap_or(Err(MobileError::Stopped))
+    }
+
+    /// Detaches `session_id` of `machine_id`: its stream ends, with no further events about it. The session goes on
+    /// running there.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn detach_session(&self, machine_id: String, session_id: String) -> Result<(), MobileError> {
+        self.actor.post(Command::DetachSession { machine_id, session_id })
+    }
+
+    /// The user's answer to the ask `ask_id` of an attached session (a [`MobileEvent::Ask`]). An answer to an ask no
+    /// longer open (dismissed, or its stream went) is dropped: the origin took the ask back.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn answer_ask(
+        &self,
+        machine_id: String,
+        session_id: String,
+        ask_id: String,
+        reply: AskReply,
+    ) -> Result<(), MobileError> {
+        self.actor.post(Command::AnswerAsk {
+            machine_id,
+            session_id,
+            ask_id,
+            reply,
+        })
     }
 }
 
