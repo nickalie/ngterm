@@ -123,8 +123,8 @@ class SessionsViewModel(
     val notice: StateFlow<String?> = notices.asStateFlow()
 
     /**
-     * The screen opened: the machine is listed afresh when it is connected. One that connects while the screen is open
-     * is listed by its connect.
+     * The screen opened: the machine is listed afresh when it is connected. One that connects or reconnects while the
+     * screen is open is listed by [Connections][com.nickalie.ngterm.android.data.Connections] then.
      */
     fun opened() {
         viewModelScope.launch {

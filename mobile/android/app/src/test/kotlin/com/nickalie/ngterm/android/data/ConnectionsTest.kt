@@ -137,6 +137,32 @@ class ConnectionsTest {
         }
 
     @Test
+    fun aListingDroppedWhileReconnectingIsRedoneOnceTheMachineIsBack() =
+        runTest {
+            val connections = connections()
+            core.failNext("listSessions", MobileException.Remote("build-01 gave no answer"))
+            val gate = CompletableDeferred<Unit>().also { core.holds["listSessions"] = it }
+            connections.connect(machine)
+            runCurrent()
+            // the connection drops before the first listing answers, which then fails while it is down
+            core.emit(MobileEvent.MachineState("m1", MachineState.Reconnecting(4_000u)))
+            gate.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(null, connections.treeFailures.value["m1"])
+            assertEquals(null, connections.trees.value["m1"])
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            core.emit(MobileEvent.MachineState("m1", MachineState.Connected))
+            advanceUntilIdle()
+            assertEquals(Link.Connected, connections.links.value["m1"])
+            assertEquals(listOf(fakeSession("s1")), connections.trees.value["m1"])
+            // a Connected that changes nothing lists nothing more
+            val listings = core.calls.count { it.method == "listSessions" }
+            core.emit(MobileEvent.MachineState("m1", MachineState.Connected))
+            advanceUntilIdle()
+            assertEquals(listings, core.calls.count { it.method == "listSessions" })
+        }
+
+    @Test
     fun anAttachedSessionIsLetGoWhenItEndsLeavesTheListingOrTheMachineDisconnects() =
         runTest {
             val connections = connections()

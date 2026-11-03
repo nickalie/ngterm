@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -49,7 +50,8 @@ sealed interface Link {
 /**
  * The app's side of the mobile core: it makes the core with itself as the [EventSink] ([coreFactory]), turns the
  * core's events and its connect answers into each machine's [Link] in [links], keeps each machine's last listing in
- * [trees] (and why the last one failed in [treeFailures]), and the sessions this app has attached in [attached].
+ * [trees] (and why the last one failed in [treeFailures]; a connect and a reconnect each list anew), and the sessions
+ * this app has attached in [attached].
  * Events arrive on the core's thread; the state flows take them from any thread. Calls are made from the main thread
  * and the suspending ones run in [scope] or the caller's, except [detach], which a listing event also makes on the
  * core's thread (it only posts to the core, so it must never block on it).
@@ -128,10 +130,17 @@ class Connections(
         state: MachineState,
     ) {
         when (state) {
-            MachineState.Connected -> set(machineId, Link.Connected)
+            MachineState.Connected -> reconnected(machineId)
             is MachineState.Reconnecting -> set(machineId, Link.Reconnecting(clock() + state.nextInMs.toLong()))
             is MachineState.Unreachable -> failed(machineId, state.reason)
         }
+    }
+
+    // the core restores a lost connection's streams but lists nothing: a machine back from reconnecting is listed
+    // afresh here, as a listing that failed or was dropped while it was down would otherwise never be redone
+    private fun reconnected(machineId: String) {
+        val before = linkState.getAndUpdate { it + (machineId to Link.Connected) }[machineId]
+        if (before is Link.Reconnecting) scope.launch { listSessions(machineId) }
     }
 
     // a failure doesn't hide a changed host key (the core reports one with both), and a declined key is no failure
