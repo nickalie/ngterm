@@ -1026,20 +1026,24 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - Create: `.github/workflows/android.yml`
 - Modify: `.github/workflows/cross-platform.yml`
 
-- [ ] add `ngterm-mobile` to the `crates` job's packages on all three OSes; the e2e test stays `#[ignore]` there
-- [ ] `android.yml`, path-filtered to:
+- [x] add `ngterm-mobile` to the `crates` job's packages on all three OSes; the e2e test stays `#[ignore]` there
+- [x] `android.yml`, path-filtered to:
   - `crates/ngterm-mobile`, `ngterm-term`, `ngterm-core`, `ngterm-proto`, `ngterm-ghostty-vt`(-sys);
   - `mobile/`;
   - `scripts/{build-android,setup-android,build-ghostty-vt,test-mobile-e2e}.sh`;
   - `build/pins.env`
-- [ ] in `android.yml`, run on Ubuntu:
+- [x] in `android.yml`, run on Ubuntu:
   - `scripts/setup-android.sh`;
   - `scripts/build-android.sh`;
   - `./gradlew check` and the unit and screenshot tests;
   - emulator UI tests on phone and tablet profiles (`reactivecircus/android-emulator-runner`, KVM);
   - `scripts/test-mobile-e2e.sh` with `openssh-server` installed;
   - upload a debug APK
-- [ ] push to a CI branch and confirm both workflows are green
+- [x] push to a CI branch and confirm both workflows are green
+  - accepted with deviation: Android workflow (41641582552) and all cross-platform crates legs (41641582502) passed at
+    544b6555; the cross-platform `windows` conformance job remains red on pre-existing failures also seen without this
+    branch (41609564950, 41639206173, 41596231921, 41612583486); see
+    docs/backlog/windows-conformance-job-fails-on-main.md
 
 ### Task 22: Verify acceptance criteria
 
