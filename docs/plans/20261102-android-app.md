@@ -435,7 +435,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Create: `crates/ngterm-mobile/src/transport/russh.rs`, `src/keys.rs`
 
-- [ ] write tests first, against an in-process russh server inside the test:
+- [x] write tests first, against an in-process russh server inside the test:
   - connect with a key loaded through a test `KeyVault`;
   - an unknown host emits `HostKeyUnknown`, the connection proceeds once `HostKeyStore` pins the key, a later
     connection with the same key passes, and a changed key fails with `HostKeyChanged` carrying both fingerprints;
@@ -443,10 +443,21 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
   - exec with a pty: the size arrives and a resize is delivered;
   - exit status vs a lost link;
   - a dropped connection ends every channel as `Lost`
-- [ ] `keys.rs`: generate an ed25519 key (returns the OpenSSH private bytes plus the `authorized_keys` line), parse an
+- [x] `keys.rs`: generate an ed25519 key (returns the OpenSSH private bytes plus the `authorized_keys` line), parse an
       imported key with its passphrase, zeroize after use
-- [ ] implement the russh `Transport`: one connection per machine, keepalive, connect timeout
-- [ ] run the tests and clippy; both must pass before Task 8
+- [x] implement the russh `Transport`: one connection per machine, keepalive, connect timeout
+- [x] run the tests and clippy; both must pass before Task 8
+  - Notes: an unknown host key keeps the connect waiting (up to `Timing::confirm`, 120 s) for the new
+    `MobileCore::answer_host_key(machine_id, fingerprint, trust)`, posted through the actor to
+    `Transport::answer_host_key` (a no-op on the fake); trusting the offered fingerprint calls `HostKeyStore::pin` and
+    the handshake goes on, while a refusal, another fingerprint, the timeout or a dropped connect ends it.
+    `HostKeyStore::pinned` is the only authority on the pin (`Machine.pinned_host_key` is the app's display copy), so
+    Task 13's Remove pinned key can't be undone by a stale record. The UniFFI constructor is `MobileCore::new(sink,
+    vault, hosts)`; `generate_key(comment)` and `import_key(bytes, passphrase)` are exported functions returning a
+    `KeyPair` (unencrypted OpenSSH private bytes, `authorized_keys` line, fingerprint). A channel the core closes ends
+    as `Lost(CHANNEL_CLOSED)` (russh drops the server's answering close), one whose connection the core closed as
+    `Lost` with `TransportError::Closed`'s text, and one whose link dropped as `Lost(CONNECTION_LOST)`; a channel with
+    no reader and no writer left is closed. The actor's runtime now enables time and IO.
 
 ### Task 8: Sessions: tree, create and end
 

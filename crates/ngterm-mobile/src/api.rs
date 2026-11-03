@@ -11,7 +11,9 @@ use std::sync::Arc;
 use tokio::sync::oneshot;
 
 use crate::actor::{Actor, Command};
+use crate::keys::{self, KeyError, KeyPair};
 use crate::transport::Transport;
+use crate::transport::russh::RusshTransport;
 
 /// A machine the app knows, as it stores it and passes it in.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -25,7 +27,8 @@ pub struct Machine {
     pub user: String,
     /// The [`KeyVault`] id of the private key the machine is reached with.
     pub key_id: String,
-    /// The host key pinned on first use (OpenSSH's `SHA256:` fingerprint), if any.
+    /// The host key pinned on first use (OpenSSH's `SHA256:` fingerprint), if any: the app's copy, for showing. The
+    /// core trusts only [`HostKeyStore::pinned`], so a pin removed from the store stays removed.
     pub pinned_host_key: Option<String>,
 }
 
@@ -48,10 +51,12 @@ pub enum MachineState {
 pub enum MobileEvent {
     /// A machine's connection changed.
     MachineState { machine_id: String, state: MachineState },
-    /// A machine with no pinned key offered `fingerprint`: pinning it through [`HostKeyStore`] lets the connection
-    /// proceed.
+    /// A machine with no pinned key offered `fingerprint`, and its connect waits for
+    /// [`MobileCore::answer_host_key`]: trusting it pins it through [`HostKeyStore::pin`] and the connection
+    /// proceeds.
     HostKeyUnknown { machine_id: String, fingerprint: String },
-    /// A machine offered a key other than the pinned one; the connection stopped.
+    /// A machine offered a key other than the pinned one; the connection stopped. Only removing the pin from the
+    /// [`HostKeyStore`] lets a later connect ask about the new key.
     HostKeyChanged {
         machine_id: String,
         pinned: String,
@@ -126,6 +131,25 @@ pub struct MobileCore {
     actor: Actor,
 }
 
+#[uniffi::export]
+impl MobileCore {
+    /// The app's core: ssh through russh, with keys from `vault` and host keys pinned in `hosts`, its events going to
+    /// `sink`.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the actor's runtime or thread can't start.
+    #[uniffi::constructor]
+    pub fn new(
+        sink: Arc<dyn EventSink>,
+        vault: Arc<dyn KeyVault>,
+        hosts: Arc<dyn HostKeyStore>,
+    ) -> Result<Arc<Self>, MobileError> {
+        let transport = RusshTransport::new(vault, hosts, Arc::clone(&sink));
+        Self::with_transport(transport, sink)
+    }
+}
+
 impl MobileCore {
     /// A core over `transport`, its events going to `sink`.
     ///
@@ -167,6 +191,49 @@ impl MobileCore {
     pub fn disconnect(&self, machine_id: String) -> Result<(), MobileError> {
         self.actor.post(Command::Disconnect { machine_id })
     }
+
+    /// The user's answer about the unknown host key `fingerprint` of `machine_id` (a
+    /// [`MobileEvent::HostKeyUnknown`]): `trust` pins it and the waiting connect goes on; a refusal, or an answer
+    /// about a key other than the one on offer, ends that connect. An answer with no connect waiting changes
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn answer_host_key(&self, machine_id: String, fingerprint: String, trust: bool) -> Result<(), MobileError> {
+        self.actor.post(Command::AnswerHostKey {
+            machine_id,
+            fingerprint,
+            trust,
+        })
+    }
+}
+
+/// A new ed25519 key for the app, its public half commented `comment` (shown in the machine's `authorized_keys`).
+///
+/// # Errors
+///
+/// [`KeyError::Invalid`] when the key can't be generated.
+#[uniffi::export]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "UniFFI passes the foreign side's arguments owned"
+)]
+pub fn generate_key(comment: String) -> Result<KeyPair, KeyError> {
+    keys::generate(&comment)
+}
+
+/// A key the user imports (OpenSSH, PKCS#1 or PKCS#8 PEM), opened with `passphrase` when it is encrypted, as the
+/// unencrypted OpenSSH key the app stores. The bytes and the passphrase are wiped once read.
+///
+/// # Errors
+///
+/// [`KeyError::PassphraseRequired`], [`KeyError::WrongPassphrase`] or [`KeyError::Invalid`].
+#[uniffi::export]
+pub fn import_key(private_key: Vec<u8>, passphrase: Option<String>) -> Result<KeyPair, KeyError> {
+    let private_key = zeroize::Zeroizing::new(private_key);
+    let passphrase = passphrase.map(zeroize::Zeroizing::new);
+    keys::import(&private_key, passphrase.as_deref().map(String::as_str))
 }
 
 /// A shown pane of an attached session: a handle onto the terminal the actor feeds from its ssh channel.

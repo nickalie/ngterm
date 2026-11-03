@@ -2,7 +2,7 @@
 //! commands on exec [`Channel`]s (the tree and control lines with no pty, `ngtermctl live present` per attached
 //! session, `ngterm-session attach` per shown pane with a pty sized by the view).
 //!
-//! The traits are the seam between the actor and ssh: the russh implementation is the app's, the scripted
+//! The traits are the seam between the actor and ssh: the russh implementation ([`russh`]) is the app's, the scripted
 //! `fake` (feature `fakes`) the tests'. Both run on the actor's `LocalSet`, so neither a transport's futures nor its
 //! connections need to be `Send`.
 //!
@@ -15,6 +15,7 @@
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod fake;
+pub mod russh;
 
 #[cfg(test)]
 mod tests;
@@ -54,6 +55,12 @@ pub trait Transport: 'static {
 
     /// Connects to `machine`.
     async fn connect(&self, machine: &Machine) -> Result<Self::Connection, TransportError>;
+
+    /// The app's answer about the unknown host key `fingerprint` a connect of `machine_id` is waiting on: `trust`
+    /// pins it and the connect goes on, anything else ends that connect. A transport that never asks ignores it.
+    fn answer_host_key(&self, machine_id: &str, fingerprint: &str, trust: bool) {
+        let _ = (machine_id, fingerprint, trust);
+    }
 }
 
 /// One machine's connection: every channel to the machine is opened on it.

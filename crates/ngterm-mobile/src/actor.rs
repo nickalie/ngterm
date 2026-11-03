@@ -28,8 +28,18 @@ pub const THREAD_NAME: &str = "ngterm-mobile";
 
 /// What the facade asks of the actor.
 pub(crate) enum Command {
-    Connect { machine: Machine, reply: Reply },
-    Disconnect { machine_id: String },
+    Connect {
+        machine: Machine,
+        reply: Reply,
+    },
+    Disconnect {
+        machine_id: String,
+    },
+    AnswerHostKey {
+        machine_id: String,
+        fingerprint: String,
+        trust: bool,
+    },
 }
 
 /// The facade's handle on the actor thread: dropping it stops the thread and joins it.
@@ -45,7 +55,9 @@ impl Actor {
     where
         T: Transport + Send,
     {
+        // Time and IO: the russh transport's sockets, timeouts and keepalives.
         let runtime = Builder::new_current_thread()
+            .enable_all()
             .build()
             .map_err(|_| MobileError::Stopped)?;
         let (commands, queue) = mpsc::unbounded_channel();
@@ -132,6 +144,11 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
         match command {
             Command::Connect { machine, reply } => connect(&state, machine, reply),
             Command::Disconnect { machine_id } => disconnect(&state, &machine_id),
+            Command::AnswerHostKey {
+                machine_id,
+                fingerprint,
+                trust,
+            } => state.transport.answer_host_key(&machine_id, &fingerprint, trust),
         }
     }
     // Waiters dropped unanswered read as `Stopped`.

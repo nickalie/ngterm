@@ -28,7 +28,11 @@ bindgen = ["uniffi/cli"]
 # path, since the workspace entry keeps the default features its other users rely on and a member can't drop them.
 ngterm-term = { path = "../ngterm-term", default-features = false }
 # the actor's current-thread runtime and `LocalSet`, its command queue and the channels' queues
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "net", "macros"] }
+# ssh: one connection per machine, exec channels, keys and host keys
+russh.workspace = true
+# wipes private key bytes once a connection has used them
+zeroize.workspace = true
 thiserror.workspace = true
 uniffi.workspace = true
 
