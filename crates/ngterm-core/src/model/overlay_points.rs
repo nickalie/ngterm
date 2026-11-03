@@ -168,7 +168,7 @@ impl Session {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayPointResizeFailure {
     NoOverlay,
-    /// The slot is shown on another machine, or this one shows another machine's overlay.
+    /// This machine shows another machine's overlay.
     Remote,
     /// A HUD measures its own height.
     Hud,
@@ -181,8 +181,8 @@ pub const POINTS_NOT_FLOATING: &str =
     "session.overlay.resize: --width/--height need a floating overlay; pass --size-percent too";
 /// Upstream's `OverlayPointError.hud`.
 pub const POINTS_HUD: &str = "a hud measures its own height: --width/--height do not apply";
-/// Upstream's `OverlayPointError.remote`: the presentation wire carries only a percent.
-pub const POINTS_REMOTE: &str = "--width/--height are not supported for an overlay shown on another Mac";
+/// Upstream's `OverlayPointError.remote`, adapted to ngterm's platforms.
+pub const POINTS_REMOTE: &str = "--width/--height are not supported for an overlay this computer shows for another computer; resize it on that computer";
 
 impl OverlayPointResizeFailure {
     /// The control error for this refusal (upstream's `message`).
@@ -200,7 +200,7 @@ impl OverlayPointResizeFailure {
 impl AppStore {
     /// Resizes the session-wide occupant with point sizes (upstream's `resizeOverlayInPoints`): with a percent, the
     /// panel re-sizes from it keeping exactly `points`; without one, only the given axes of a panel already floating
-    /// change. Refused for a slot shown on, or replicated from, another machine (a program replica is the core's to
+    /// change. A remote origin reservation is handled by the core first; a replica refuses (a program replica is the core's to
     /// know, and it refuses before asking), and for a HUD.
     ///
     /// # Errors

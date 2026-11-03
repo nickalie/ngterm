@@ -323,6 +323,8 @@ impl AppStore {
             }
             if let Some((page, seq)) = self.number_remote_page_command(id, *pane, action) {
                 let command = PresentationPageCommand {
+                    width: None,
+                    height: None,
                     page,
                     seq,
                     action,

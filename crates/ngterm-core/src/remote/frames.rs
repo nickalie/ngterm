@@ -548,9 +548,24 @@ pub struct PresentationOverlay {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_percent: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_color: Option<String>,
     pub follow: bool,
     pub wait: bool,
+}
+
+impl PresentationOverlay {
+    /// The point axes sent by the origin; an older frame carries neither.
+    #[must_use]
+    pub fn points(&self) -> crate::model::OverlayPointSize {
+        crate::model::OverlayPointSize {
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 /// Names one remote overlay job, with a size for a resize.
@@ -560,6 +575,21 @@ pub struct PresentationOverlayChange {
     pub job: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_percent: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
+}
+
+impl PresentationOverlayChange {
+    /// The point axes sent by the origin; an older frame carries neither.
+    #[must_use]
+    pub fn points(&self) -> crate::model::OverlayPointSize {
+        crate::model::OverlayPointSize {
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 impl PresentationOverlayChange {
@@ -568,6 +598,8 @@ impl PresentationOverlayChange {
         Self {
             job: job.into(),
             size_percent: None,
+            width: None,
+            height: None,
         }
     }
 }
@@ -615,7 +647,22 @@ pub struct PresentationPage {
     pub pane: Option<PresentationPane>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_percent: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
     pub follow: bool,
+}
+
+impl PresentationPage {
+    /// The point axes sent by the origin; an older frame carries neither.
+    #[must_use]
+    pub fn points(&self) -> crate::model::OverlayPointSize {
+        crate::model::OverlayPointSize {
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 /// Names one handed-over page by the origin's id, with the presenter's reason when it refuses the page (upstream's
@@ -661,6 +708,21 @@ pub struct PresentationPageCommand {
     pub action: PresentationPageAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_percent: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
+}
+
+impl PresentationPageCommand {
+    /// The point axes sent by the origin; an older frame carries neither.
+    #[must_use]
+    pub fn points(&self) -> crate::model::OverlayPointSize {
+        crate::model::OverlayPointSize {
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 /// What a handed-over page shows on the presenter (upstream's `PresentationPageState`). `address` is the origin's
@@ -1189,6 +1251,8 @@ mod tests {
 
     fn change(size: Option<i64>) -> PresentationOverlayChange {
         PresentationOverlayChange {
+            width: None,
+            height: None,
             job: "j1".to_owned(),
             size_percent: size,
         }
@@ -1272,6 +1336,8 @@ mod tests {
             Body::AskRejected(reference()),
             Body::AskDismiss(reference()),
             Body::OverlayRequest(PresentationOverlay {
+                width: None,
+                height: None,
                 job: "j1".to_owned(),
                 pane: Some(pane()),
                 size_percent: Some(60),
@@ -1280,6 +1346,8 @@ mod tests {
                 wait: true,
             }),
             Body::OverlayRequest(PresentationOverlay {
+                width: None,
+                height: None,
                 job: "j1".to_owned(),
                 pane: None,
                 size_percent: None,
@@ -1336,6 +1404,8 @@ mod tests {
 
     fn page_request(id: &str, source: PresentationPageSource, pane: Option<PresentationPane>) -> PresentationPage {
         PresentationPage {
+            width: None,
+            height: None,
             page: id.to_owned(),
             token: format!("t-{id}"),
             source,
@@ -1386,6 +1456,8 @@ mod tests {
         };
         let command = |seq: i64, action: PresentationPageAction, size_percent: Option<i64>| {
             Body::PageCommand(PresentationPageCommand {
+                width: None,
+                height: None,
                 page: "p1".to_owned(),
                 seq,
                 action,
@@ -1488,6 +1560,88 @@ mod tests {
         "\"".repeat(AskInputForm::MAX_TEXT_BYTES)
     }
 
+    fn sized_frames() -> [(&'static str, &'static str, Value); 4] {
+        [
+            (
+                "overlay.request",
+                "overlay",
+                json!({"job": "j1", "sizePercent": 60, "follow": false, "wait": false}),
+            ),
+            ("overlay.resize", "overlay", json!({"job": "j1", "sizePercent": 60})),
+            (
+                "page.request",
+                "page",
+                json!({"page": "p1", "token": "t1", "source": {"url": {"_0": "https://example.com/"}},
+                "identity": "example.com", "chromeless": false, "javascript": false, "navigation": true,
+                "browse": false, "persistent": false, "sizePercent": 60, "follow": false}),
+            ),
+            (
+                "page.command",
+                "page",
+                json!({"page": "p1", "seq": 1, "action": "resize", "sizePercent": 60}),
+            ),
+        ]
+    }
+
+    fn sized_frame_points(body: &Body) -> crate::model::OverlayPointSize {
+        match body {
+            Body::OverlayRequest(frame) => frame.points(),
+            Body::OverlayResize(frame) => frame.points(),
+            Body::PageRequest(frame) => frame.points(),
+            Body::PageCommand(frame) => frame.points(),
+            other => panic!("not a sized frame: {other:?}"),
+        }
+    }
+
+    /// Upstream's `aSizedFrameFromAnOriginWithoutPointSizesDecodesWithNone`, for each sized wire shape.
+    #[test]
+    fn old_sized_frames_decode_without_points_and_omit_absent_axes() {
+        for (kind, key, payload) in sized_frames() {
+            let mut value = json!({"kind": kind, "gen": 1, "rev": 2});
+            value[key] = payload;
+            let frame = decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert_eq!(
+                sized_frame_points(&frame.body),
+                crate::model::OverlayPointSize::default(),
+                "{kind}"
+            );
+            let encoded: Value = serde_json::from_slice(&encode(&frame).unwrap()).unwrap();
+            assert!(encoded[key].get("width").is_none(), "{kind}");
+            assert!(encoded[key].get("height").is_none(), "{kind}");
+        }
+    }
+
+    #[test]
+    fn sized_frames_round_trip_each_point_axis_and_both() {
+        for (kind, key, payload) in sized_frames() {
+            for (width, height) in [(Some(320), None), (None, Some(240)), (Some(320), Some(240))] {
+                let mut value = json!({"kind": kind, "gen": 1, "rev": 2});
+                value[key] = payload.clone();
+                value[key]["width"] = json!(width);
+                value[key]["height"] = json!(height);
+                let frame = decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+                assert_eq!(
+                    sized_frame_points(&frame.body),
+                    crate::model::OverlayPointSize { width, height },
+                    "{kind}"
+                );
+                let bytes = encode(&frame).unwrap();
+                let encoded: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(
+                    encoded[key].get("width"),
+                    width.as_ref().map(|_| &value[key]["width"]),
+                    "{kind}"
+                );
+                assert_eq!(
+                    encoded[key].get("height"),
+                    height.as_ref().map(|_| &value[key]["height"]),
+                    "{kind}"
+                );
+                assert_eq!(decode(&bytes[..bytes.len() - 1]).unwrap(), frame, "{kind}");
+            }
+        }
+    }
+
     #[test]
     fn every_frame_survives_a_round_trip() {
         for (rev, body) in (0..).zip(bodies()) {
@@ -1535,6 +1689,8 @@ mod tests {
         assert_eq!(request["page"]["pane"], "11111111-2222-3333-4444-555555555555");
         assert_eq!(request["page"]["backgroundColor"], "#102030");
         let command = encoded(Body::PageCommand(PresentationPageCommand {
+            width: None,
+            height: None,
             page: "p1".to_owned(),
             seq: 3,
             action: PresentationPageAction::ReloadOriginal,

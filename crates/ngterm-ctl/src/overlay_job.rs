@@ -13,6 +13,7 @@
 
 use std::ffi::OsString;
 use std::net::Shutdown;
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -270,6 +271,41 @@ fn claim_request(job: &str) -> Request {
     }
 }
 
+/// ssh-spawned overlay programs bypass libghostty's terminfo setup (upstream's
+/// `OverlayJobRunner.terminalEnvironment`). The launch context still overlays this helper environment.
+fn terminal_environment(
+    mut base: Vec<(OsString, OsString)>,
+    bundled_terminfo: Option<&Path>,
+) -> Vec<(OsString, OsString)> {
+    let value = |name: &str| {
+        base.iter()
+            .find(|(key, _)| environment_key_is(key, name))
+            .map(|(_, value)| value.as_os_str())
+    };
+    if value("TERM") != Some(crate::terminfo::ENTRY.as_ref())
+        || value("TERMINFO").is_some_and(|value| !value.is_empty())
+    {
+        return base;
+    }
+    if let Some(directory) = bundled_terminfo {
+        base.retain(|(key, _)| !environment_key_is(key, "TERMINFO"));
+        base.push(("TERMINFO".into(), directory.as_os_str().to_owned()));
+    }
+    base
+}
+
+/// Environment names are case-insensitive on Windows, as they are when the program is spawned there.
+fn environment_key_is(key: &std::ffi::OsStr, expected: &str) -> bool {
+    #[cfg(windows)]
+    {
+        key.eq_ignore_ascii_case(expected)
+    }
+    #[cfg(not(windows))]
+    {
+        key == expected
+    }
+}
+
 /// `ngtermctl session overlay run-job <job>`.
 #[derive(Debug, clap::Args)]
 #[command(
@@ -309,7 +345,11 @@ impl RequestCommand for RunJob {
             }
         };
         sys::route_signals(runner.canceler());
-        let base: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+        let bundled = crate::terminfo::terminfo_directory(
+            crate::version::client_path().as_deref(),
+            &std::collections::HashMap::new(),
+        );
+        let base = terminal_environment(std::env::vars_os().collect(), bundled.as_deref());
         match u8::try_from(runner.run(&context, &base)) {
             Ok(0) => Ok(()),
             Ok(status) => Err(Failure::Exit(ExitCode::from(status))),
@@ -732,6 +772,93 @@ mod tests {
         let (status, frames) = run_to_end(command, &base);
         assert_eq!(status, 0);
         assert_eq!(frames, [OverlayJobFrame::Started, OverlayJobFrame::Exited { code: 0 }]);
+    }
+
+    #[test]
+    fn the_bundled_terminfo_backs_a_ghostty_terminal() {
+        let cases = [
+            ("unset is filled", Some("xterm-ghostty"), None, Some("/b"), Some("/b")),
+            (
+                "empty is filled",
+                Some("xterm-ghostty"),
+                Some(""),
+                Some("/b"),
+                Some("/b"),
+            ),
+            (
+                "existing is kept",
+                Some("xterm-ghostty"),
+                Some("/mine"),
+                Some("/b"),
+                Some("/mine"),
+            ),
+            (
+                "other terminal is left alone",
+                Some("xterm-256color"),
+                None,
+                Some("/b"),
+                None,
+            ),
+            (
+                "no bundled database leaves it unset",
+                Some("xterm-ghostty"),
+                None,
+                None,
+                None,
+            ),
+            ("unset terminal is left alone", None, None, Some("/b"), None),
+        ];
+        for (name, term, terminfo, bundled, expected) in cases {
+            let mut base = vec![("PATH".into(), OsString::from("/usr/bin"))];
+            if let Some(term) = term {
+                base.push(("TERM".into(), term.into()));
+            }
+            if let Some(terminfo) = terminfo {
+                base.push(("TERMINFO".into(), terminfo.into()));
+            }
+            let actual = terminal_environment(base, bundled.map(Path::new));
+            let value = |key: &str| {
+                actual
+                    .iter()
+                    .find(|(name, _)| environment_key_is(name, key))
+                    .map(|(_, value)| value.as_os_str())
+            };
+            assert_eq!(value("TERMINFO"), expected.map(std::ffi::OsStr::new), "{name}");
+            assert_eq!(value("TERM"), term.map(std::ffi::OsStr::new), "{name}");
+            assert_eq!(value("PATH"), Some(std::ffi::OsStr::new("/usr/bin")), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_program_gets_bundled_terminfo_but_context_environment_wins() {
+        for context_override in [None, Some("context database")] {
+            let directory = tempfile::tempdir().unwrap();
+            let expected = context_override.map_or_else(|| directory.path().as_os_str().to_owned(), OsString::from);
+            let mut base = plain_base();
+            base.retain(|(key, _)| !environment_key_is(key, "TERM") && !environment_key_is(key, "TERMINFO"));
+            base.extend([
+                ("TERM".into(), crate::terminfo::ENTRY.into()),
+                ("EXPECTED_TERMINFO".into(), expected),
+            ]);
+            let base = terminal_environment(base, Some(directory.path()));
+            #[cfg(unix)]
+            let command = r#"test "$TERMINFO" = "$EXPECTED_TERMINFO""#;
+            #[cfg(windows)]
+            let command = r#"if "%TERMINFO%"=="%EXPECTED_TERMINFO%" (exit 0) else (exit 1)"#;
+            let mut context = context(command);
+            if let Some(value) = context_override {
+                context.environment.insert("TERMINFO".into(), value.into());
+            }
+            let (helper, origin) = FakeOrigin::serve(OK_REPLY, Some(context), false);
+            let runner = runner(helper, DEFAULT_GRACE);
+            let status = runner.run(&runner.claim("job").unwrap(), &base);
+            drop(runner);
+            assert_eq!(status, 0, "context override: {context_override:?}");
+            assert_eq!(
+                origin.frames(),
+                [OverlayJobFrame::Started, OverlayJobFrame::Exited { code: 0 }]
+            );
+        }
     }
 
     #[cfg(unix)]

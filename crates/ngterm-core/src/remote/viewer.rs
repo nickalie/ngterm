@@ -722,6 +722,7 @@ impl Core {
             command: shell_quoted_line(&argv),
             wait: overlay.wait,
             size_percent: overlay.size_percent,
+            points: overlay.points(),
             background_color: overlay.background_color.clone(),
             ..OverlayProgram::default()
         };
@@ -809,7 +810,7 @@ impl Core {
             return;
         };
         if generation.is_some() && store.session(session).map(|found| found.overlay.generation) == generation {
-            store.resize_overlay(session, change.size_percent);
+            store.resize_overlay_with_points(session, change.size_percent, change.points());
         }
     }
 

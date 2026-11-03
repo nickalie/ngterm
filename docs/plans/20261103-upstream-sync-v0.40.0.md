@@ -391,23 +391,23 @@ new `test_remote_overlay_points_reach_capable_presenters`, `test_older_presenter
 Cover live.present (stream), session.overlay.open/resize/job.run, field:tree.session.remoteOverlays,
 cli:session overlay run-job.
 
-- [ ] Add optional point axes to overlay/page request, resize and presentation frames; absent decodes as none.
+- [x] Add optional point axes to overlay/page request, resize and presentation frames; absent decodes as none.
   Advertise `overlay.points`; origin stores axes and sends only to capable presenters, older ones receive percent
   alone and still open. Presenter installs/replaces points using its own bounds/local 80% sizing cap.
-- [ ] Origin resize merges axes when points-only, replaces axes when percent+points, clears them when percent-only,
+- [x] Origin resize merges axes when points-only, replaces axes when percent+points, clears them when percent-only,
   clears everything on full. Full+points-only says
   `session.overlay.resize: --width/--height need a floating overlay; pass --size-percent too`.
   Stale presenter generation preserves state with viewer-gone error. Origin tree still exposes remote percent only.
-- [ ] Replica-local point resize remains refused:
+- [x] Replica-local point resize remains refused:
   `--width/--height are not supported for an overlay this Mac shows for another Mac; resize it on that Mac`;
   decide ngterm's platform wording and update adapter/string documentation together.
-- [ ] Preserve existing ratchet ID `test_points_are_refused_for_an_overlay_a_presenter_shows` while adapting
+- [x] Preserve existing ratchet ID `test_points_are_refused_for_an_overlay_a_presenter_shows` while adapting
   its assertions to the new contract (version-aware until parity claim, or retain ID testing replica-side refusal).
   Do not delete its ratchet line or leave obsolete origin-side refusal assertions.
-- [ ] Overlay helper fills absent/empty TERMINFO from actual bundled database only for TERM=xterm-ghostty,
+- [x] Overlay helper fills absent/empty TERMINFO from actual bundled database only for TERM=xterm-ghostty,
   before context overlays the base environment. Preserve nonempty value, other TERM and unrelated environment;
   missing database is not an error. Reuse lookup without creating directories, SSH or control requests.
-- [ ] Port point/capability/backward-compatibility tests and all five terminfo cases; assert actual helper
+- [x] Port point/capability/backward-compatibility tests and all five terminfo cases; assert actual helper
   environment in conformance; run scoped checks on all applicable OS mechanisms.
 
 ### Task 8: Preserve managed attach output and test Live wait scrollback (#859, zmx patch behavior)

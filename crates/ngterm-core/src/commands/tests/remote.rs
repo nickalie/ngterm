@@ -922,45 +922,169 @@ fn a_refused_remote_overlay_leaves_the_tree_alone() {
     assert_eq!(live.fixture.core.commit().tree_changed.len(), 0);
 }
 
-const POINTS_REMOTE: &str = "--width/--height are not supported for an overlay shown on another Mac";
-
-/// Upstream's `pointSizesAreRefusedBeforeAnythingIsReserved`: the presentation wire carries only a percent.
+/// Upstream's `pointSizesReachOnlyAPresenterThatTakesThem`.
 #[test]
-fn point_sizes_are_refused_before_anything_is_reserved() {
-    let (mut live, _, presenter) = presented();
+fn remote_program_points_reach_only_capable_presenters() {
+    for (kinds, capable) in [(&SUPPORTED_KINDS[..], true), (&OLDER_KINDS[..], false)] {
+        let (mut live, _, presenter) = presented_listing(kinds);
+        let session = live.session;
+        assert!(
+            overlay(&mut live.fixture, SessionCmd::OverlayOpen, session, |a| {
+                a.command = Some("revdiff".to_owned());
+                a.size_percent = Some(60);
+                a.height = Some(240);
+            })
+            .ok
+        );
+        let request = presenter.last("overlay.request").unwrap();
+        assert_eq!(
+            request["overlay"]["height"],
+            if capable { json!(240) } else { Value::Null }
+        );
+        let slot = live
+            .fixture
+            .store()
+            .session(session)
+            .unwrap()
+            .remote_overlays()
+            .slot(None)
+            .unwrap();
+        assert_eq!(slot.points.height, Some(240));
+        assert_eq!(
+            node(&mut live.fixture, session)["remoteOverlays"],
+            json!([{"sizePercent":60}])
+        );
+    }
+}
+
+/// Upstream's resolved resize transitions: each sent size replaces the presenter's whole state.
+#[test]
+fn remote_program_point_resize_resolves_all_transitions() {
+    let (mut live, _, presenter) = presented_listing(&SUPPORTED_KINDS);
     let session = live.session;
+    assert!(
+        overlay(&mut live.fixture, SessionCmd::OverlayOpen, session, |a| {
+            a.command = Some("revdiff".to_owned());
+            a.size_percent = Some(60);
+            a.width = Some(300);
+        })
+        .ok
+    );
+    let cases = [
+        (None, None, Some(240), Some(60), Some(300), Some(240)),
+        (Some(50), None, Some(200), Some(50), None, Some(200)),
+        (Some(40), None, None, Some(40), None, None),
+        (None, None, None, None, None, None),
+    ];
+    for (percent, width, height, expected_percent, expected_width, expected_height) in cases {
+        assert!(
+            overlay(&mut live.fixture, SessionCmd::OverlayResize, session, |a| {
+                a.size_percent = percent;
+                a.width = width;
+                a.height = height;
+                if percent.is_none() && width.is_none() && height.is_none() {
+                    a.full = Some(true);
+                }
+            })
+            .ok
+        );
+        let change = &presenter.last("overlay.resize").unwrap()["overlay"];
+        assert_eq!(change["sizePercent"], json!(expected_percent));
+        assert_eq!(change["width"], json!(expected_width));
+        assert_eq!(change["height"], json!(expected_height));
+    }
     let sent = presenter.sent();
-    let opened = overlay(&mut live.fixture, SessionCmd::OverlayOpen, session, |a| {
-        a.command = Some("revdiff".to_owned());
-        a.size_percent = Some(60);
-        a.height = Some(240);
-    });
-    assert_eq!(opened, failure(POINTS_REMOTE));
-    assert!(node(&mut live.fixture, session).get("remoteOverlays").is_none());
+    assert_eq!(
+        overlay(&mut live.fixture, SessionCmd::OverlayResize, session, |a| {
+            a.height = Some(240);
+        }),
+        failure(crate::model::POINTS_NOT_FLOATING)
+    );
     assert_eq!(presenter.sent(), sent);
 }
 
-/// Upstream's `aSlotShownOnThePresenterTakesNoPointSizes`.
 #[test]
-fn a_slot_shown_on_the_presenter_takes_no_point_sizes() {
+fn an_older_presenter_gets_a_point_resize_as_its_percent_alone() {
     let (mut live, _, presenter) = presented();
     let session = live.session;
-    let opened = overlay(&mut live.fixture, SessionCmd::OverlayOpen, session, |a| {
-        a.command = Some("revdiff".to_owned());
-        a.size_percent = Some(60);
-    });
-    assert!(opened.ok, "{opened:?}");
-    let sent = presenter.sent();
-    let resized = overlay(&mut live.fixture, SessionCmd::OverlayResize, session, |a| {
-        a.size_percent = Some(40);
-        a.height = Some(240);
-    });
-    assert_eq!(resized, failure(POINTS_REMOTE));
-    assert_eq!(
-        node(&mut live.fixture, session)["remoteOverlays"],
-        json!([{"sizePercent": 60}])
+    assert!(
+        overlay(&mut live.fixture, SessionCmd::OverlayOpen, session, |a| {
+            a.command = Some("true".to_owned());
+            a.size_percent = Some(60);
+            a.width = Some(300);
+        })
+        .ok
     );
+    assert!(
+        overlay(&mut live.fixture, SessionCmd::OverlayResize, session, |a| {
+            a.height = Some(200);
+        })
+        .ok
+    );
+    let sent = presenter.last("overlay.resize").unwrap();
+    assert_eq!(sent["overlay"]["sizePercent"], 60);
+    assert!(sent["overlay"].get("width").is_none());
+    assert!(sent["overlay"].get("height").is_none());
+    let slot = live
+        .fixture
+        .store()
+        .session(session)
+        .unwrap()
+        .remote_overlays()
+        .slot(None)
+        .unwrap();
+    assert_eq!(
+        slot.points,
+        crate::model::OverlayPointSize {
+            width: Some(300),
+            height: Some(200)
+        }
+    );
+}
+
+/// A reservation still belongs to its original presenter generation.
+#[test]
+fn a_point_resize_after_the_program_presenter_changed_preserves_the_slot() {
+    use crate::model::{OverlayPointSize, RemoteOverlaySlot};
+
+    let (mut live, _, presenter) = presented_listing(&SUPPORTED_KINDS);
+    let session = live.session;
+    let points = OverlayPointSize {
+        width: Some(300),
+        height: Some(240),
+    };
+    live.fixture.store_mut().unwrap().reserve_remote_overlay(
+        session,
+        RemoteOverlaySlot {
+            job: "stale".to_owned(),
+            pane: None,
+            owner: 99,
+            size_percent: Some(60),
+            points,
+            wait: false,
+            ended: false,
+            page: None,
+        },
+    );
+    live.fixture.core.commit();
+    let sent = presenter.sent();
+    assert_eq!(
+        overlay(&mut live.fixture, SessionCmd::OverlayResize, session, |a| a.height =
+            Some(500)),
+        failure(crate::remote::VIEWER_GONE)
+    );
+    let slot = live
+        .fixture
+        .store()
+        .session(session)
+        .unwrap()
+        .remote_overlays()
+        .slot(None)
+        .unwrap();
+    assert_eq!(slot.points, points);
+    assert_eq!(slot.size_percent, Some(60));
     assert_eq!(presenter.sent(), sent);
+    assert!(live.fixture.core.commit().tree_changed.is_empty());
 }
 
 /// Upstream's `aPresentedSessionStillRefusesAnOpenIntoItsHiddenLocalSlot`: the hidden slot is checked before the

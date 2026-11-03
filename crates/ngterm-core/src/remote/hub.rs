@@ -121,11 +121,14 @@ impl PresenterGrant {
     }
 }
 
+/// A presenter accepts optional overlay width and height axes (upstream's `overlayPointsKind`).
+pub const OVERLAY_POINTS_KIND: &str = "overlay.points";
+
 /// The frame kinds this origin produces, in upstream's order; a hello's kinds are filtered through it. Work handed to a
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's.
-pub const SUPPORTED_KINDS: [&str; 16] = [
+pub const SUPPORTED_KINDS: [&str; 17] = [
     "status",
     "hud",
     "notify",
@@ -135,6 +138,7 @@ pub const SUPPORTED_KINDS: [&str; 16] = [
     "sound",
     ASK_FORM_KIND,
     ASK_OTHER_KIND,
+    OVERLAY_POINTS_KIND,
     super::page_tunnel::TUNNEL_KIND,
     PAGE_KINDS[0],
     PAGE_KINDS[1],
@@ -837,6 +841,7 @@ mod tests {
                 "sound",
                 "ask.form",
                 "ask.other",
+                "overlay.points",
                 "page.tunnel",
                 "page.request",
                 "page.rejected",

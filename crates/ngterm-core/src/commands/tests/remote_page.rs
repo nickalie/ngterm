@@ -300,28 +300,55 @@ fn a_loopback_url_goes_to_a_presenter_that_forwards_it_as_written() {
     );
 }
 
-/// Upstream's `pointSizesAreRefusedOnlyWhenThePageWouldGoToThePresenter`: the presentation wire carries only a percent,
-/// so nothing is reserved or sent; a page the placement rule keeps here takes its points.
+/// Upstream's page capability pair: axes remain stored when the presenter is older.
 #[test]
-fn point_sizes_are_refused_only_when_the_page_would_go_to_the_presenter() {
+fn remote_page_points_reach_only_capable_presenters() {
+    let older: Vec<&str> = SUPPORTED_KINDS
+        .into_iter()
+        .filter(|kind| *kind != "overlay.points")
+        .collect();
+    for (kinds, capable) in [(&SUPPORTED_KINDS[..], true), (&older[..], false)] {
+        let mut origin = Origin::new(false, kinds);
+        origin.opened(FILE, |a| {
+            a.size_percent = Some(60);
+            a.height = Some(240);
+        });
+        let request = origin.presenter.last("page.request").unwrap();
+        assert_eq!(
+            request["page"]["height"],
+            if capable { json!(240) } else { Value::Null }
+        );
+        let session = origin.session();
+        assert_eq!(
+            origin
+                .fixture()
+                .store()
+                .session(session)
+                .unwrap()
+                .remote_overlays()
+                .slot(None)
+                .unwrap()
+                .points
+                .height,
+            Some(240)
+        );
+    }
     let mut origin = Origin::pages();
-    let sent = origin.presenter.sent();
-    let points = |a: &mut Args| {
-        a.size_percent = Some(60);
-        a.height = Some(240);
-    };
-    assert_eq!(
-        origin.open(FILE, points),
-        failure("--width/--height are not supported for an overlay shown on another Mac")
-    );
-    assert!(origin.slot_jobs().is_empty());
-    assert_eq!(origin.presenter.sent(), sent);
     let left = origin.live.left;
     set_lead(&mut origin.live.fixture.core, left, "leader");
-    assert!(origin.open(FILE, points).ok);
+    assert!(
+        origin
+            .open(FILE, |a| {
+                a.size_percent = Some(60);
+                a.height = Some(240);
+            })
+            .ok
+    );
     let session = origin.session();
-    let slot = &origin.fixture().store().session(session).unwrap().overlay;
-    assert_eq!(slot.points.height, Some(240));
+    assert_eq!(
+        origin.fixture().store().session(session).unwrap().overlay.points.height,
+        Some(240)
+    );
 }
 
 #[test]
@@ -633,17 +660,42 @@ fn a_remote_program_still_refuses_to_hide() {
 #[test]
 fn resize_reaches_the_presenter_as_a_command() {
     let mut origin = Origin::pages();
-    let page = origin.opened(FILE, |_| {});
+    let page = origin.opened(FILE, |a| {
+        a.size_percent = Some(60);
+        a.width = Some(300);
+    });
+    assert!(origin.overlay(SessionCmd::OverlayResize, |a| a.height = Some(240)).ok);
+    assert_eq!(
+        origin.commands().last().unwrap(),
+        &json!({"page":page,"seq":1,"action":"resize","sizePercent":60,"width":300,"height":240})
+    );
     assert!(
         origin
-            .overlay(SessionCmd::OverlayResize, |a| a.size_percent = Some(40))
+            .overlay(SessionCmd::OverlayResize, |a| {
+                a.size_percent = Some(40);
+                a.height = Some(200);
+            })
             .ok
     );
     assert_eq!(
         origin.commands().last().unwrap(),
-        &json!({"page": page, "seq": 1, "action": "resize", "sizePercent": 40})
+        &json!({"page":page,"seq":2,"action":"resize","sizePercent":40,"height":200})
     );
-    assert_eq!(origin.node()["remoteOverlays"][0]["sizePercent"], 40);
+    assert!(
+        origin
+            .overlay(SessionCmd::OverlayResize, |a| a.size_percent = Some(30))
+            .ok
+    );
+    assert_eq!(
+        origin.commands().last().unwrap(),
+        &json!({"page":page,"seq":3,"action":"resize","sizePercent":30})
+    );
+    assert!(origin.overlay(SessionCmd::OverlayResize, |a| a.full = Some(true)).ok);
+    assert_eq!(
+        origin.commands().last().unwrap(),
+        &json!({"page":page,"seq":4,"action":"resize"})
+    );
+    assert_eq!(origin.node()["remoteOverlays"], json!([{"pageID":page}]));
 }
 
 #[test]
@@ -717,6 +769,10 @@ fn a_reservation_whose_stream_is_gone_refuses_without_reopening() {
         HtmlPageFlags::default(),
     );
     let slot = RemoteOverlaySlot {
+        points: crate::model::OverlayPointSize {
+            width: Some(300),
+            height: Some(240),
+        },
         job: wire(page.id),
         pane: None,
         owner: 99,
@@ -741,7 +797,25 @@ fn a_reservation_whose_stream_is_gone_refuses_without_reopening() {
         origin.overlay(SessionCmd::OverlayResize, |a| a.size_percent = Some(40)),
         failure(VIEWER_GONE)
     );
+    assert_eq!(
+        origin.overlay(SessionCmd::OverlayResize, |a| a.height = Some(500)),
+        failure(VIEWER_GONE)
+    );
     assert!(origin.commands().is_empty());
+    let session = origin.session();
+    assert_eq!(
+        origin
+            .fixture()
+            .store()
+            .session(session)
+            .unwrap()
+            .remote_overlays()
+            .slot(None)
+            .unwrap()
+            .points
+            .height,
+        Some(240)
+    );
     assert_eq!(origin.node()["overlay"], false);
 }
 
@@ -819,5 +893,6 @@ fn a_local_page_omits_the_remote_fields_and_a_replica_reports_its_origin_path() 
 
 #[test]
 fn the_page_kinds_close_upstreams_list() {
-    assert_eq!(&SUPPORTED_KINDS[9..], crate::remote::hub::PAGE_KINDS);
+    let pages = crate::remote::hub::PAGE_KINDS;
+    assert_eq!(&SUPPORTED_KINDS[SUPPORTED_KINDS.len() - pages.len()..], pages);
 }

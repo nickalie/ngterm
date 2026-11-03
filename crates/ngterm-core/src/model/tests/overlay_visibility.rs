@@ -190,6 +190,7 @@ fn a_hud_alone_has_nothing_to_hide() {
 
 fn reservation(pane: Option<OverlayPane>) -> RemoteOverlaySlot {
     RemoteOverlaySlot {
+        points: crate::model::OverlayPointSize::default(),
         job: "job".to_owned(),
         pane,
         owner: 1,

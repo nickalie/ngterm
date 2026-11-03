@@ -750,7 +750,7 @@ fn a_handed_over_overlay_runs_the_jobs_helper_and_its_close_here_tells_the_origi
     assert_eq!(viewer.sent("overlay.closed").last().unwrap()["overlay"]["job"], "J3");
 }
 
-/// Upstream's `aHandedOverOverlayTakesNoPointSizes`: the origin sizes a replica by a percent alone.
+/// Point changes on a replica must be issued at its origin.
 #[test]
 fn a_handed_over_overlay_takes_no_point_sizes() {
     let mut viewer = viewer_with(false);
@@ -764,10 +764,59 @@ fn a_handed_over_overlay_takes_no_point_sizes() {
     );
     assert_eq!(
         resized,
-        failure("--width/--height are not supported for an overlay shown on another Mac")
+        failure(
+            "--width/--height are not supported for an overlay this computer shows for another computer; resize it on that computer"
+        )
     );
     assert!(viewer.session().overlay.points.is_empty());
     assert_eq!(viewer.session().overlay.size_percent, Some(60));
+}
+
+#[test]
+fn a_handed_over_program_installs_and_replaces_points_using_local_bounds() {
+    use crate::hud::{HudPaneFrame, HudPaneFrames};
+    use crate::model::OverlayPointSize;
+
+    let mut viewer = viewer_with(false);
+    viewer.connect(&json!({}));
+    let mut request = overlay_request("J1", None, false);
+    request["overlay"]["width"] = json!(5_000);
+    request["overlay"]["height"] = json!(5_000);
+    viewer.frame(request);
+    let session = viewer.session;
+    viewer.fixture.core.report_hud_frames(
+        session,
+        &HudPaneFrames {
+            detail: Some(HudPaneFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 500.0,
+                height: 300.0,
+            }),
+            ..HudPaneFrames::default()
+        },
+    );
+    let node = crate::projection::session_node(viewer.session(), true);
+    assert_eq!(node.overlay_width, Some(400.0));
+    assert_eq!(node.overlay_height, Some(240.0));
+    assert_eq!(
+        viewer.session().overlay.points,
+        OverlayPointSize {
+            width: Some(5_000),
+            height: Some(5_000)
+        }
+    );
+
+    for (mut change, percent, width, height) in [
+        (json!({"sizePercent": 50, "height": 120}), Some(50), None, Some(120)),
+        (json!({"sizePercent": 40}), Some(40), None, None),
+        (json!({}), None, None, None),
+    ] {
+        change["job"] = json!("J1");
+        viewer.frame(json!({"kind": "overlay.resize", "overlay": change}));
+        assert_eq!(viewer.session().overlay.size_percent, percent);
+        assert_eq!(viewer.session().overlay.points, OverlayPointSize { width, height });
+    }
 }
 
 #[test]

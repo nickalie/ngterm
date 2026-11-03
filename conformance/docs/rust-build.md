@@ -288,6 +288,7 @@ it no longer does:
 
 | upstream | Rust build |
 |---|---|
+| `--width/--height are not supported for an overlay this Mac shows for another Mac; resize it on that Mac` | the same refusal naming “this computer”, “another computer” and “that computer” on every ngterm platform |
 | `infocmp exited N: …` (`terminfo install`, the local dump failing) | `could not read <file>: <reason>`: the CLI decompiles the staged compiled entry itself on every OS (`ngterm-ctl`'s `terminfo/source.rs`, a port of ncurses' entry reader and `infocmp -x`'s layout), since Windows has no `infocmp` |
 
 Texts with no upstream counterpart, each the build's own: `live.reset is not supported on this platform` (above),
@@ -388,3 +389,9 @@ of itself, in `ngterm-headless`'s relaunch before its `exec`, and in `ngterm-wpe
 HTML worker's too); nothing in a build without `cfg(coverage)`. A `process::exit` or a return from `main` needs nothing.
 After the suite `cargo llvm-cov report` merges the profiles against the staged binaries, which must be the build's own
 byte for byte (`agterm_conformance/code_coverage.py`).
+
+Remote overlays and pages retain origin-requested point axes and send them to presenters advertising
+`overlay.points`; older presenters receive percent-only sizes. Replica-local point resizing remains refused.
+The historical ratchet ID `test_points_are_refused_for_an_overlay_a_presenter_shows` now checks the older-presenter
+downgrade rather than an obsolete origin refusal. Replica-local refusal is checked by core presenter tests;
+creating that state in conformance requires successful SSH, outside its network-free seams.

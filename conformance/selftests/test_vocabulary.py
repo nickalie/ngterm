@@ -9,7 +9,7 @@ from agterm_conformance import cli_format
 from agterm_conformance.impls import ADAPTERS
 from agterm_conformance.impls import swift_macos
 from agterm_conformance.impls.rust import RustAdapter
-from agterm_conformance.impls.swift_macos import NAME_TEXTS, UPSTREAM, ZMX_TEXTS, upstream_socket_directory
+from agterm_conformance.impls.swift_macos import NAME_TEXTS, PLATFORM_TEXTS, UPSTREAM, ZMX_TEXTS, upstream_socket_directory
 from agterm_conformance.vocabulary import LIVE, SERVER_IDLE_GRACE, live_socket_directory
 
 REPO = Path(__file__).resolve().parents[2]
@@ -106,7 +106,7 @@ def test_every_live_text_is_what_the_rust_build_says():
     # Each text the reference translates, up to its first field, is a literal in the Rust sources: a rewording there
     # fails here, not only in a full conformance run.
     sources = _rust_sources()
-    for live in [*ZMX_TEXTS, *NAME_TEXTS]:
+    for live in [*ZMX_TEXTS, *NAME_TEXTS, *PLATFORM_TEXTS]:
         assert live.split("{", 1)[0] in sources, live
 
 

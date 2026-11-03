@@ -31,7 +31,7 @@ use crate::model::{
     PaneOverlayOpenFailure, Session, is_valid_color_hex,
 };
 use crate::overlay_jobs::{EXPIRY_SLACK, LAUNCH_WINDOW, OverlayJobFrame, OverlayJobOutcome, OverlayJobs, START_WINDOW};
-use crate::remote::{RemoteOverlayOpen, RemoteProgram, VIEWER_GONE};
+use crate::remote::{RemoteOverlayOpen, RemoteOverlayResize, RemoteProgram, VIEWER_GONE};
 use crate::resolve::{ACTIVE, Resolver, trimmed};
 
 // MARK: - messages
@@ -361,9 +361,6 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         RemoteOverlayOpen::SlotTaken => return Err(taken()),
         RemoteOverlayOpen::PaneMissing => return Err(ControlError::rejected(PANE_NOT_VISIBLE)),
         RemoteOverlayOpen::TooLarge => return Err(ControlError::rejected(TOO_LARGE)),
-        RemoteOverlayOpen::PointsUnsupported => {
-            return Err(ControlError::rejected(OverlayPointResizeFailure::Remote.message()));
-        }
         RemoteOverlayOpen::Opened => return Ok(with_id(resolved.session)),
     }
     let (store, id) = session_store(core, target, args.window.as_deref())?;
@@ -524,10 +521,8 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     }
     let size = args.size_percent;
     let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
-    match core.resize_remote_overlay(resolved.session, size) {
-        Some(true) => return Ok(with_id(resolved.session)),
-        Some(false) => return Err(ControlError::rejected(VIEWER_GONE)),
-        None => {}
+    if let Some(result) = remote_resize(core, resolved.session, size, OverlayPointSize::default()) {
+        return result;
     }
     let (store, id) = session_store(core, target, args.window.as_deref())?;
     let slot = store.session(id).map(|session| &session.overlay);
@@ -553,9 +548,12 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
 
 /// `session.overlay.resize` with `--width`/`--height` (upstream's `resizeSessionOverlay` `points`): with a percent the
 /// panel re-sizes from it keeping exactly those axes, alone they change only their axes of a panel already floating.
-/// Nothing goes to a presenter: its wire carries only a percent, so a slot shown on or for another machine refuses.
+/// An origin resolves its remote slot first; a local replica still refuses point changes.
 fn resize_in_points(core: &mut Core, target: Option<&str>, args: &Args, points: OverlayPointSize) -> Outcome {
     let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
+    if let Some(result) = remote_resize(core, resolved.session, args.size_percent, points) {
+        return result;
+    }
     if core.shows_replica_overlay(resolved.session) {
         return Err(ControlError::rejected(OverlayPointResizeFailure::Remote.message()));
     }
@@ -564,6 +562,16 @@ fn resize_in_points(core: &mut Core, target: Option<&str>, args: &Args, points: 
         .resize_overlay_in_points(id, args.size_percent, points)
         .map_err(|failure| ControlError::rejected(failure.message()))?;
     Ok(with_id(id))
+}
+
+/// Maps an origin reservation's resize result without confusing a local replica with its origin.
+fn remote_resize(core: &mut Core, session: Uuid, percent: Option<i64>, points: OverlayPointSize) -> Option<Outcome> {
+    core.resize_remote_overlay(session, percent, points)
+        .map(|result| match result {
+            RemoteOverlayResize::Sent => Ok(with_id(session)),
+            RemoteOverlayResize::ViewerGone => Err(ControlError::rejected(VIEWER_GONE)),
+            RemoteOverlayResize::NotFloating => Err(ControlError::rejected(crate::model::POINTS_NOT_FLOATING)),
+        })
 }
 
 // MARK: - result and the page commands

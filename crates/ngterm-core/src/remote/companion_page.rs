@@ -85,6 +85,8 @@ impl Core {
             return Err(LOOPBACK_PAGE);
         }
         let page = PresentationPage {
+            width: None,
+            height: None,
             page: uuid_string(overlay.id),
             token: uuid_string(Uuid::new_v4()),
             source,

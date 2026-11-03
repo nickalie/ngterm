@@ -295,7 +295,7 @@ fn a_page_shown_here_for_another_machine_takes_no_point_sizes() {
             Some(&wire(id)),
             args(|a| a.height = Some(240))
         ),
-        failure("--width/--height are not supported for an overlay shown on another Mac")
+        failure(crate::model::POINTS_REMOTE)
     );
     assert!(slot_points(&fixture, id).is_empty());
 }

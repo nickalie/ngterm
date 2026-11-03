@@ -135,6 +135,13 @@ NAME_TEXTS: Mapping[str, str] = {
     "restart ngterm to apply the configured mode": "restart agterm to apply the configured mode",
 }
 
+# Platform-neutral replica ownership wording, where upstream names its two Macs.
+PLATFORM_TEXTS: Mapping[str, str] = {
+    "--width/--height are not supported for an overlay this computer shows for another computer; resize it on that computer": (
+        "--width/--height are not supported for an overlay this Mac shows for another Mac; resize it on that Mac"
+    ),
+}
+
 UPSTREAM = Vocabulary(
     name="upstream",
     group=ZMX,
@@ -146,7 +153,7 @@ UPSTREAM = Vocabulary(
     variable_prefix="ZMX_",
     # `ZmxSupport.namePrefix`
     daemon_prefix="agterm-",
-    texts={**ZMX_TEXTS, **NAME_TEXTS},
+    texts={**ZMX_TEXTS, **NAME_TEXTS, **PLATFORM_TEXTS},
     socket_directory=upstream_socket_directory,
     leading_client=leading_client,
     # zmx's daemons and the macOS session host

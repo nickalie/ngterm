@@ -9,6 +9,7 @@ import json
 import os
 import re
 import uuid
+from pathlib import Path
 
 import pytest
 from agterm_conformance import cli_format
@@ -1577,6 +1578,56 @@ def test_live_run_job_runs_the_handed_over_program(cli, live):
             assert assert_ok(live.request("session.overlay.result", sid))["exitCode"] == 3
             _refused(cli("session", "overlay", "run-job", job), "job not claimable")
     assert_ok(live.request("session.close", sid))
+
+
+@LIVE
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("cli:session overlay run-job")
+@pytest.mark.parametrize("terminfo", [None, ""], ids=["absent", "empty"])
+def test_live_run_job_uses_bundled_terminfo(cli, live, adapter, monkeypatch, terminfo):
+    """Run the actual job helper with no inherited database and inspect the child program's environment."""
+    cli = cli.on(live.instance)
+    monkeypatch.setitem(live.instance.env, "TERM", "xterm-ghostty")
+    if terminfo is None:
+        monkeypatch.delitem(live.instance.env, "TERMINFO", raising=False)
+    else:
+        monkeypatch.setitem(live.instance.env, "TERMINFO", terminfo)
+    # The resolved CLI is in <prefix>/bin or Contents/MacOS. The reference's bundle uses Resources.
+    prefix = cli.ctl_path.resolve().parent.parent
+    candidates = [prefix / "share" / "terminfo", prefix / "Resources" / "terminfo"]
+    bundled = next(
+        (path for path in candidates if any((path / layout / "xterm-ghostty").is_file() for layout in ("x", "78"))),
+        None,
+    )
+    output = live.instance.root / f"{_name('helper-env')}.txt"
+    lines = CommandLines.of(adapter, "overlay helper environment")
+    command = lines.write(output, lines.var("TERM"), lines.var("TERMINFO"))
+    sid = _live_session(live)
+    try:
+        endpoint = assert_ok(live.request(live.vocabulary.command("live.tree")))["remote"]["endpoint"]
+        daemon = _live_rows(live, sid)["left"]["daemon"]
+        with live.vocabulary.leading_client(live.instance, endpoint, daemon):
+            live.wait_tree(
+                lambda tree: next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left").get("lead") == "follower"
+            )
+            with live.stream(live.vocabulary.command("live.present"), sid) as presenter:
+                presenter.send({**PRESENTATION_HELLO, "hello": {**PRESENTATION_HELLO["hello"], "mode": "presenter"}})
+                gen = wait_frame(presenter.read, "hello", presenter.send)["gen"]
+                presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
+                wait_frame(presenter.read, "presenter.granted", presenter.send)
+                assert_ok(live.request("session.overlay.open", sid, command=command))
+                job = wait_frame(presenter.read, "overlay.request", presenter.send)["overlay"]["job"]
+                ran = cli("session", "overlay", "run-job", job)
+                assert ran.returncode == 0, (ran.stdout, ran.stderr)
+                term, actual = output.read_text().split("|", 1)
+                assert term == "xterm-ghostty"
+                if bundled is None:
+                    assert actual == ("%TERMINFO%" if lines.cmd else ""), "missing database must leave TERMINFO unset"
+                else:
+                    assert Path(actual).resolve() == bundled.resolve()
+                live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
+    finally:
+        assert_ok(live.request("session.close", sid))
 
 
 @pytest.mark.since("0.39.1")

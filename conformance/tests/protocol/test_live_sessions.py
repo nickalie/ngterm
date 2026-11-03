@@ -568,37 +568,99 @@ def test_job_run_serves_an_overlay_a_presenter_shows(live):
     assert_ok(live.request("session.close", sid))
 
 
-POINTS_REMOTE = "--width/--height are not supported for an overlay shown on another Mac"
-
-
 @LIVE
 @pytest.mark.covers("session.overlay.open", "session.overlay.resize", "field:tree.session.remoteOverlays")
 def test_points_are_refused_for_an_overlay_a_presenter_shows(live):
-    """The presentation wire carries only a percent, so point sizes are refused before a reservation or a send."""
-    sid = _live_session(live)
-    endpoint = assert_ok(live.request(live.vocabulary.command("live.tree")))["remote"]["endpoint"]
-    daemon = _entries(live, sid)["left"]["daemon"]
-    with live.vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
-        live.wait_tree(lambda tree: _follows(tree, sid, viewer))
-        presenter, gen = _subscribed(live, sid, "presenter")
-        with presenter:
-            presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
-            wait_frame(presenter.read, "presenter.granted", presenter.send)
-            _presenters(live, sid, {"mirrors": 0, "presenter": True})
-            refused = live.request("session.overlay.open", sid, command="true", sizePercent=60, height=240)
-            assert_error(refused, POINTS_REMOTE)
-            node = find_session(live.tree(), sid)
-            assert "remoteOverlays" not in node and node["overlay"] is False
-            assert assert_ok(live.request("session.overlay.open", sid, command="true", sizePercent=60))["id"] == sid
-            wait_frame(presenter.read, "overlay.request", presenter.send)
-            live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == [{"sizePercent": 60}])
-            resized = live.request("session.overlay.resize", sid, sizePercent=40, height=240)
-            assert_error(resized, POINTS_REMOTE)
-            assert find_session(live.tree(), sid)["remoteOverlays"] == [{"sizePercent": 60}]
-            assert_ok(live.request("session.overlay.close", sid))
-            wait_frame(presenter.read, "overlay.close", presenter.send)
-    _presenters(live, sid, None)
-    assert_ok(live.request("session.close", sid))
+    """Historical ratchet ID: an older presenter now gets percent-only origin requests, including point resizes.
+
+    A local replica's refusal is covered by core presenter tests: creating one here would require successful SSH.
+    """
+    with _page_presenter(live) as (sid, presenter, _):
+        assert_ok(live.request("session.overlay.open", sid, command="true", sizePercent=60, height=240))
+        opened = wait_frame(presenter.read, "overlay.request", presenter.send)["overlay"]
+        assert opened["sizePercent"] == 60
+        assert_absent(opened, "width", "height")
+        resized = live.request("session.overlay.resize", sid, sizePercent=40, height=360)
+        assert_ok(resized)
+        change = wait_frame(presenter.read, "overlay.resize", presenter.send)["overlay"]
+        assert change["sizePercent"] == 40
+        assert_absent(change, "width", "height")
+        assert find_session(live.tree(), sid)["remoteOverlays"] == [{"sizePercent": 40}]
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "overlay.close", presenter.send)
+
+
+@LIVE
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("session.overlay.open", "session.overlay.resize", "field:tree.session.remoteOverlays")
+def test_remote_overlay_points_reach_capable_presenters(live):
+    with _page_presenter(live, [*PAGE_PRESENTER_KINDS, "overlay.points"]) as (sid, presenter, _):
+        assert_ok(live.request("session.overlay.open", sid, command="true", sizePercent=60, width=320, height=240))
+        opened = wait_frame(presenter.read, "overlay.request", presenter.send)["overlay"]
+        assert_subset(opened, {"sizePercent": 60, "width": 320, "height": 240})
+        # Points merge axes; percent plus points replaces them; percent alone and full clear them.
+        for args, expected, omitted in [
+            ({"height": 360}, {"sizePercent": 60, "width": 320, "height": 360}, ()),
+            ({"sizePercent": 40, "width": 420}, {"sizePercent": 40, "width": 420}, ("height",)),
+            ({"sizePercent": 30}, {"sizePercent": 30}, ("width", "height")),
+            ({"full": True}, {}, ("sizePercent", "width", "height")),
+        ]:
+            assert_ok(live.request("session.overlay.resize", sid, **args))
+            change = wait_frame(presenter.read, "overlay.resize", presenter.send)["overlay"]
+            assert_subset(change, expected)
+            assert_absent(change, *omitted)
+            percent = expected.get("sizePercent")
+            assert find_session(live.tree(), sid)["remoteOverlays"] == ([{}] if percent is None else [{"sizePercent": percent}])
+        assert_error(
+            live.request("session.overlay.resize", sid, height=240),
+            "session.overlay.resize: --width/--height need a floating overlay; pass --size-percent too",
+        )
+        assert find_session(live.tree(), sid)["remoteOverlays"] == [{}]
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "overlay.close", presenter.send)
+
+
+@LIVE
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("live.present", "session.overlay.open", "session.overlay.resize", streams=("live.present",))
+@pytest.mark.parametrize("source", [{"command": "true"}, {"url": "https://example.com/points"}], ids=["program", "page"])
+def test_older_presenter_gets_percent_without_points(live, source):
+    with _page_presenter(live) as (sid, presenter, _):
+        assert_ok(live.request("session.overlay.open", sid, **source, sizePercent=60, width=320, height=240))
+        page = "url" in source
+        body = "page" if page else "overlay"
+        opened = wait_frame(presenter.read, "page.request" if page else "overlay.request", presenter.send)[body]
+        assert opened["sizePercent"] == 60
+        assert_absent(opened, "width", "height")
+        assert_ok(live.request("session.overlay.resize", sid, height=360))
+        resized = wait_frame(presenter.read, "page.command" if page else "overlay.resize", presenter.send)[body]
+        assert resized["sizePercent"] == 60
+        assert_absent(resized, "width", "height")
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "page.close" if page else "overlay.close", presenter.send)
+
+
+@LIVE
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("live.present", "session.overlay.open", "session.overlay.resize", streams=("live.present",))
+def test_remote_page_points_and_resizes_reach_presenter(live):
+    with _page_presenter(live, [*PAGE_PRESENTER_KINDS, "overlay.points"]) as (sid, presenter, _):
+        page_id, opened = _handed_over(
+            live, sid, presenter, url="https://example.com/points", sizePercent=70, width=320, height=240
+        )
+        assert_subset(opened, {"width": 320, "height": 240, "sizePercent": 70})
+        for seq, (args, expected, omitted) in enumerate([
+            ({"height": 360}, {"sizePercent": 70, "width": 320, "height": 360}, ()),
+            ({"sizePercent": 40, "width": 420}, {"sizePercent": 40, "width": 420}, ("height",)),
+            ({"sizePercent": 30}, {"sizePercent": 30}, ("width", "height")),
+            ({"full": True}, {}, ("sizePercent", "width", "height")),
+        ], start=1):
+            assert_ok(live.request("session.overlay.resize", sid, **args))
+            changed = wait_frame(presenter.read, "page.command", presenter.send)["page"]
+            assert_subset(changed, {"page": page_id, "seq": seq, "action": "resize", **expected})
+            assert_absent(changed, *omitted)
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "page.close", presenter.send)
 
 
 def _acquired(live, sid, kinds):

@@ -28,9 +28,7 @@ use crate::html::{
     HtmlHost, HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlPageInfo, HtmlPageOutcomes,
     HtmlReloadTarget, HtmlSource, errors, zoom,
 };
-use crate::model::{
-    HtmlOverlayOpenFailure, HtmlPageSlot, OverlayPane, OverlayPointSize, OverlaySize, POINTS_REMOTE, StatusPane,
-};
+use crate::model::{HtmlOverlayOpenFailure, HtmlPageSlot, OverlayPane, OverlayPointSize, OverlaySize, StatusPane};
 use crate::pane_env::uuid_string;
 use crate::remote::{REMOTE_LOOPBACK, REMOTE_TOO_LARGE, RemotePageCommand, RemotePageOpen};
 
@@ -153,7 +151,6 @@ fn open_checked(
         RemotePageOpen::Unsupported => Some(PRESENTER),
         RemotePageOpen::Loopback => Some(REMOTE_LOOPBACK),
         RemotePageOpen::TooLarge => Some(REMOTE_TOO_LARGE),
-        RemotePageOpen::PointsUnsupported => Some(POINTS_REMOTE),
     };
     if let Some(refusal) = refusal {
         return Err(ControlError::rejected(refusal));

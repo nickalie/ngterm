@@ -658,6 +658,8 @@ mod tests {
         assert_eq!(hello.kinds, SUPPORTED_KINDS.map(str::to_owned));
         harness.connect(PresentationSnapshot::default(), 7, PresentationMode::Presenter);
         let request = PresentationPage {
+            width: None,
+            height: None,
             page: "p1".to_owned(),
             token: "t1".to_owned(),
             source: PresentationPageSource::Url {
@@ -675,6 +677,8 @@ mod tests {
             follow: false,
         };
         let command = PresentationPageCommand {
+            width: None,
+            height: None,
             page: "p1".to_owned(),
             seq: 3,
             action: PresentationPageAction::Hide,

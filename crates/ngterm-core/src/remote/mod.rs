@@ -70,7 +70,7 @@ use self::frames::{
 };
 pub use self::handoff::PRESENTATION_LOST;
 pub(crate) use self::handoff::{
-    AskPlacement, RemoteOverlayOpen, RemoteProgram, open_remote_overlay, present_ask_remotely,
+    AskPlacement, RemoteOverlayOpen, RemoteOverlayResize, RemoteProgram, open_remote_overlay, present_ask_remotely,
 };
 use self::hub::{CloseReason, HubEvent, PresentationHub, PresentationSink, SubscriberId};
 pub use self::page::PAGE_CLAIM_WINDOW;
