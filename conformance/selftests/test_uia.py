@@ -133,12 +133,41 @@ def test_absolute_normalizes_over_the_virtual_desktop():
     assert uia.absolute(-100, 0, (-100, 0, 201, 101)) == (0, 0)
 
 
+class _User32:
+    """user32 as the driver's input reaches it: SendInput records each event, the virtual desktop is fixed."""
+
+    METRICS = {uia.SM_XVIRTUALSCREEN: 0, uia.SM_YVIRTUALSCREEN: 0, uia.SM_CXVIRTUALSCREEN: 1001,
+               uia.SM_CYVIRTUALSCREEN: 1001}  # fmt: skip
+
+    def __init__(self):
+        self.sent = []
+
+    def SendInput(self, count, array, size):  # noqa: N802 (user32's name)
+        assert size == ctypes.sizeof(uia.INPUT)
+        for item in array[:count]:
+            assert item.type == uia.INPUT_MOUSE
+            self.sent.append((item.mi.dwFlags, item.mi.dx, item.mi.dy))
+        return count
+
+    def GetSystemMetrics(self, index):  # noqa: N802
+        return self.METRICS[index]
+
+
+def _bare_driver(**stubs):
+    """A UiaDriver without UI Automation behind it: its own code with `stubs` in place of the tree reads."""
+    driver = object.__new__(uia.UiaDriver)
+    driver.pid, driver.timeout, driver.user32 = 1, 1.0, _User32()
+    for name, stub in stubs.items():
+        setattr(driver, name, stub)
+    return driver
+
+
 def test_drag_moves_presses_steps_and_releases():
+    driver = _bare_driver(_point=lambda target, offset: (100.0, 100.0))
+    driver.drag_by("src", 100, 200, steps=2)
     desk = (0, 0, 1001, 1001)
-    inputs = uia.drag_inputs((100, 100), (200, 300), 2, desk)
-    assert all(item.type == uia.INPUT_MOUSE for item in inputs)
     move = uia.MOUSEEVENTF_MOVE | uia.MOUSEEVENTF_ABSOLUTE | uia.MOUSEEVENTF_VIRTUALDESK
-    assert [(item.mi.dwFlags, item.mi.dx, item.mi.dy) for item in inputs] == [
+    assert driver.user32.sent == [
         (move, *uia.absolute(100, 100, desk)),
         (uia.MOUSEEVENTF_LEFTDOWN, 0, 0),
         (move, *uia.absolute(150, 200, desk)),
@@ -146,6 +175,46 @@ def test_drag_moves_presses_steps_and_releases():
         (uia.MOUSEEVENTF_LEFTUP, 0, 0),
     ]
     assert uia.button_input("right", True).mi.dwFlags == uia.MOUSEEVENTF_RIGHTDOWN
+
+
+def test_menu_reveals_each_item_before_the_pointer_reaches_it():
+    """A scrolled menu may hold a submenu's trigger below its viewport: it is wheeled into view before the hover."""
+    calls = []
+    opened = ["app"]
+    shown = []
+
+    def menus(hwnd):
+        assert hwnd == 7
+        return set(shown)
+
+    def click(button):
+        calls.append(("click", button))
+        shown.append(opened.pop(0))
+
+    def reveal(scope, item):
+        calls.append(("reveal", scope, item))
+        return f"{item} in view"
+
+    def hover(item):
+        calls.append(("hover", item))
+        shown.append(f"{item} submenu")
+
+    button = uia.Node(element=object(), runtime_id=(1,), props={uia.AUTOMATION_ID: "app-menu-button"}, hwnd=7)
+    driver = _bare_driver(
+        _menu_path=None, _menu_depth=0, _menu_hwnd=0, _menu_scope=None, _menu_pending=None,
+        _key_window=lambda: 7, _nodes=lambda: [button], snapshot=lambda node: "app-menu-button", _menus=menus,
+        mouse_click=click, _scoped_menu_item=lambda scope, name: f"{scope}/{name}", _reveal=reveal, _hover=hover,
+    )  # fmt: skip
+    found = driver._menu_command(("File", "Open Recent", "Recent"))
+    file_item = "app/File"
+    recent_item = f"{file_item} in view submenu/Open Recent"
+    assert calls == [
+        ("click", "app-menu-button"),
+        ("reveal", "app", file_item), ("hover", f"{file_item} in view"),
+        ("reveal", f"{file_item} in view submenu", recent_item), ("hover", f"{recent_item} in view"),
+        ("reveal", f"{recent_item} in view submenu", f"{recent_item} in view submenu/Recent"),
+    ]  # fmt: skip
+    assert found == f"{recent_item} in view submenu/Recent in view"
 
 
 def test_wheel_ticks_are_notches_down_and_right_positive():

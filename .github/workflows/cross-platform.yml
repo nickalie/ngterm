@@ -105,6 +105,15 @@ jobs:
           cp -r vendor/portable-pty "$copy"
           printf '\n[workspace]\n' >> "$copy/Cargo.toml"
           cargo test --manifest-path "$copy/Cargo.toml" --lib windows_
+      # vendor/accesskit_windows likewise: its patch 0001's tests (a clickable menu item keeps Invoke whatever its
+      # highlight); the crate builds on Windows only
+      - name: vendored accesskit_windows's patch tests
+        if: runner.os == 'Windows'
+        run: |
+          copy="$(cygpath -u "$RUNNER_TEMP")/accesskit_windows"
+          cp -r vendor/accesskit_windows "$copy"
+          printf '\n[workspace]\n' >> "$copy/Cargo.toml"
+          cargo test --manifest-path "$copy/Cargo.toml" --lib invoke_tests
       - name: terminal fonts (ngterm-gpui embeds them)
         if: runner.os != 'Linux'
         run: scripts/fetch-fonts.sh

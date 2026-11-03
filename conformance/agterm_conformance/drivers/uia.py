@@ -195,18 +195,6 @@ def wheel_inputs(dx: int, dy: int) -> list[INPUT]:
     return inputs
 
 
-def drag_inputs(
-    start: tuple[float, float], end: tuple[float, float], steps: int, desk: tuple[int, int, int, int]
-) -> list[INPUT]:
-    """The input a drag sends: a move to the start, the left button down, `steps` moves to the end, the button up.
-
-    The driver sends them one at a time through the base class's drag; this is their sequence for the self-tests.
-    """
-    moves = [move_input(*(a + (b - a) * step / steps for a, b in zip(start, end)), desk)
-             for step in range(1, steps + 1)]
-    return [move_input(*start, desk), button_input("left", True), *moves, button_input("left", False)]
-
-
 def plain(value: Any) -> Any:
     """A cached property's VARIANT as a Python value; UIA's not-supported sentinel and anything else is None."""
     if isinstance(value, (str, bool, int, float)):
@@ -435,7 +423,8 @@ class UiaDriver(Driver):
             if item is None:
                 return None
             before = self._menus(self._menu_hwnd)
-            self._hover(item)
+            # A submenu's trigger may sit below a scrolled menu's viewport too: the pointer only opens it in view.
+            self._hover(self._reveal(self._menu_scope, item))
             self._menu_pending = before
             self._menu_depth += 1
 

@@ -1549,3 +1549,70 @@ fn platform_node_impl_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<PlatformNode>();
 }
+
+// ngterm patch 0001: a clickable menu item keeps Invoke whatever its highlight (selected state), while an item whose
+// selection UIA exposes through SelectionItem still does not take Invoke.
+#[cfg(test)]
+mod invoke_tests {
+    use accesskit::{
+        Action, Node as NodeData, NodeId as LocalNodeId, Role, Tree as TreeData, TreeId, TreeUpdate,
+    };
+    use accesskit_consumer::Tree;
+
+    use super::NodeWrapper;
+
+    /// Whether `child`, in a window, supports UIA's Invoke pattern.
+    fn invocable(child: NodeData) -> bool {
+        let mut window = NodeData::new(Role::Window);
+        window.set_children(vec![LocalNodeId(1)]);
+        let tree = Tree::new(
+            TreeUpdate {
+                nodes: vec![(LocalNodeId(0), window), (LocalNodeId(1), child)],
+                tree: Some(TreeData::new(LocalNodeId(0))),
+                tree_id: TreeId::ROOT,
+                focus: LocalNodeId(0),
+            },
+            false,
+        );
+        let state = tree.state();
+        let node = state.root().children().next().unwrap();
+        let mut string_buffer = Vec::new();
+        let wrapper = NodeWrapper {
+            node: &node,
+            string_buffer: &mut string_buffer,
+        };
+        wrapper.is_invoke_pattern_supported()
+    }
+
+    fn clickable(role: Role, selected: Option<bool>) -> NodeData {
+        let mut node = NodeData::new(role);
+        node.add_action(Action::Click);
+        if let Some(selected) = selected {
+            node.set_selected(selected);
+        }
+        node
+    }
+
+    #[test]
+    fn a_clickable_menu_item_takes_invoke_whatever_its_highlight() {
+        for selected in [None, Some(false), Some(true)] {
+            assert!(
+                invocable(clickable(Role::MenuItem, selected)),
+                "a menu item selected {selected:?} takes Invoke"
+            );
+        }
+    }
+
+    #[test]
+    fn a_selection_item_with_a_selected_state_takes_no_invoke() {
+        for selected in [false, true] {
+            assert!(
+                !invocable(clickable(Role::ListBoxOption, Some(selected))),
+                "a list box option selected {selected} is pressed through SelectionItem"
+            );
+        }
+        let mut menu_item = NodeData::new(Role::MenuItem);
+        menu_item.set_selected(true);
+        assert!(!invocable(menu_item), "a menu item that takes no click takes no Invoke");
+    }
+}

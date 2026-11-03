@@ -5,8 +5,42 @@ HTML overlay page's strip, laid out where it would show, kept its Hide button in
 A hidden div now prepaints its children with node publication held off (`A11y::hidden`, checked by
 `A11y::publishes` where an element pushes its node); the invisible element's own node, pushed before its style is
 known, stays. An upstream candidate (Zed).
+For its regression test (ngterm-gpui's chrome::button tests; gpui-pre's own lib tests do not build from the crates.io
+archive), the test window keeps the accessibility callbacks GPUI connects and the tree updates it sends, and
+`VisualTestContext::activate_a11y` connects assistive technology, `VisualTestContext::a11y_tree_update` reads the last
+update; a test that does not activate it runs as before.
 scripts/vendor-gpui.sh applies this after 0005.
 
+diff -ruN a/src/app/test_context.rs b/src/app/test_context.rs
+--- a/src/app/test_context.rs
++++ b/src/app/test_context.rs
+@@ -1060,6 +1060,26 @@
+         self.background_executor.run_until_parked();
+     }
+ 
++    /// Simulates assistive technology connecting to the window: from the next frame on, the window builds its
++    /// accessibility tree and sends it to the platform, where [`Self::a11y_tree_update`] reads it (ngterm patch 0006).
++    pub fn activate_a11y(&mut self) {
++        let test_window = self.cx.test_window(self.window);
++        let initial = test_window
++            .0
++            .lock()
++            .a11y_callbacks
++            .as_ref()
++            .map(|callbacks| (callbacks.activation)());
++        assert!(initial.is_some(), "the window's accessibility is disabled");
++        self.run_until_parked();
++    }
++
++    /// The accessibility tree update the window sent to the platform last, once [`Self::activate_a11y`] connected
++    /// assistive technology.
++    pub fn a11y_tree_update(&mut self) -> Option<accesskit::TreeUpdate> {
++        self.cx.test_window(self.window).0.lock().a11y_tree_update.clone()
++    }
++
+     /// Simulates the user blurring the window.
+     pub fn deactivate_window(&mut self) {
+         if Some(self.window) == self.test_platform.active_window() {
 diff -ruN a/src/element.rs b/src/element.rs
 --- a/src/element.rs
 +++ b/src/element.rs
@@ -47,6 +81,44 @@ diff -ruN a/src/elements/div.rs b/src/elements/div.rs
  
                      if let Some(listener) = self.prepaint_listener.as_ref() {
                          listener(children_bounds, window, cx);
+diff -ruN a/src/platform/test/window.rs b/src/platform/test/window.rs
+--- a/src/platform/test/window.rs
++++ b/src/platform/test/window.rs
+@@ -58,6 +58,10 @@
+     appearance: WindowAppearance,
+     external_drag_files: Vec<(PathBuf, bool)>,
+     start_external_drag_result: bool,
++    /// The callbacks GPUI connected assistive technology through, and the tree update it sent last (ngterm patch
++    /// 0006: the test window's accessibility, which `VisualTestContext::activate_a11y` turns on).
++    pub(crate) a11y_callbacks: Option<crate::A11yCallbacks>,
++    pub(crate) a11y_tree_update: Option<accesskit::TreeUpdate>,
+ }
+ 
+ #[derive(Clone)]
+@@ -133,6 +137,8 @@
+             appearance: WindowAppearance::Light,
+             external_drag_files: Vec::new(),
+             start_external_drag_result: false,
++            a11y_callbacks: None,
++            a11y_tree_update: None,
+         })))
+     }
+     pub fn simulate_scheduled_frame(&self) -> bool {
+@@ -572,6 +578,14 @@
+         }
+     }
+ 
++    fn a11y_init(&self, callbacks: crate::A11yCallbacks) {
++        self.0.lock().a11y_callbacks = Some(callbacks);
++    }
++
++    fn a11y_tree_update(&self, tree_update: accesskit::TreeUpdate) {
++        self.0.lock().a11y_tree_update = Some(tree_update);
++    }
++
+     fn as_test(&mut self) -> Option<&mut TestWindow> {
+         Some(self)
+     }
 diff -ruN a/src/window/a11y.rs b/src/window/a11y.rs
 --- a/src/window/a11y.rs
 +++ b/src/window/a11y.rs
