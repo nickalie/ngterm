@@ -431,6 +431,30 @@ def test_the_exercised_line_from_a_report(tmp_path: Path) -> None:
     assert done.stdout == "ui ids exercised by a passing test: 1/3 (33.3%)\n"
 
 
+@pytest.mark.parametrize("flags", ["header", "catalog-flag", "ui-ids-flag"])
+def test_the_exercised_line_uses_the_runs_catalog_files(tmp_path: Path, flags: str) -> None:
+    # the run's own catalog holds one active ui id that its passing test covers; the repository's holds many more
+    custom = {"ids": {"only-id": {"status": "uncovered"}}}
+    write_catalog(tmp_path / "custom", ui_ids=custom)
+    write_catalog(tmp_path / "flagged")
+    header = {"kind": "run", "partial": True, "mode": "partial", "catalog": str(tmp_path / "custom" / "catalog.yaml"),
+              "ui_ids": str(tmp_path / "custom" / "ui-ids.yaml")}
+    report = tmp_path / "nodeids.jsonl"
+    report.write_text("".join(json.dumps(line) + "\n" for line in [header, record("t::a", "passed", "ui:only-id")]))
+    command = [sys.executable, "-m", "agterm_conformance.coverage", str(report)]
+    expected = "ui ids exercised by a passing test: 1/1 (100.0%)\n"
+    if flags == "catalog-flag":
+        # a --catalog flag wins over the header, and takes the ui-ids.yaml beside it rather than the header's
+        command += ["--catalog", str(tmp_path / "flagged" / "catalog.yaml")]
+        expected = "ui ids exercised by a passing test: 0/3 (0.0%)\n"
+    elif flags == "ui-ids-flag":
+        command += ["--ui-ids", str(tmp_path / "flagged" / "ui-ids.yaml")]
+        expected = "ui ids exercised by a passing test: 0/3 (0.0%)\n"
+    done = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == expected
+
+
 @pytest.mark.parametrize("content", [None, "not json\n"], ids=["missing", "malformed"])
 def test_an_unreadable_report_exits_2(tmp_path: Path, content: str | None) -> None:
     write_catalog(tmp_path / "catalog")

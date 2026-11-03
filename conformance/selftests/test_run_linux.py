@@ -74,8 +74,11 @@ def test_reports_version(app):
 
 @pytest.fixture
 def layers(tmp_path: Path) -> Path:
+    """Test layers under a rootdir that holds the repository's catalog files (the run's default catalog)."""
     tests = tmp_path / "tests"
     (tests / "protocol").mkdir(parents=True)
+    for name in ("catalog.yaml", "ui-ids.yaml"):
+        shutil.copy2(SCRIPT.parents[1] / name, tmp_path / name)
     (tests / "protocol" / "test_probe.py").write_text(VERSION_TEST)
     return tests
 
@@ -305,7 +308,9 @@ def test_a_ratchet_only_run_runs_the_listed_ids_and_judges_them(tmp_path: Path, 
     assert "rust: 1 pass, 0 fail" in report
     assert "ratchet holds: 1 listed id(s), ratchet-only run" in report
     header = json.loads((tmp_path / "report" / "nodeids.jsonl").read_text().splitlines()[0])
-    assert header == {"kind": "run", "partial": True, "mode": "ratchet-only"}
+    assert {key: header[key] for key in ("kind", "partial", "mode")} == {
+        "kind": "run", "partial": True, "mode": "ratchet-only"
+    }
 
 
 def test_a_ratchet_only_run_breaks_on_a_red_listed_id(tmp_path: Path, stage: Path, layers: Path) -> None:
@@ -860,3 +865,19 @@ def test_a_run_without_coverage_names_no_profile(tmp_path: Path, stage: Path, la
     assert "- coverage:" not in report and not (tmp_path / "report" / "lost-profiles.txt").exists()
     assert "### code coverage" not in report and not (tmp_path / "report" / "coverage").exists()
     assert "### catalog coverage\n\nui ids exercised by a passing test: " in report
+
+
+def test_the_catalog_line_counts_against_the_runs_catalog(tmp_path: Path, stage: Path, layers: Path) -> None:
+    # a --catalog through the pytest args: one active ui id, which the passing test covers
+    (layers / "protocol" / "test_probe.py").write_text(
+        VERSION_TEST.replace("\ndef ", '\nimport pytest\n\n@pytest.mark.covers("ui:only-id")\ndef ', 1)
+    )
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    (custom / "catalog.yaml").write_text("commands: {}\n")
+    (custom / "ui-ids.yaml").write_text("ids:\n  only-id: {status: uncovered}\n")
+    completed, report = run(
+        tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), "--", "--catalog", str(custom / "catalog.yaml")
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "### catalog coverage\n\nui ids exercised by a passing test: 1/1 (100.0%)\n" in report, report

@@ -6,7 +6,8 @@ uncovered items a transitional CI run accepts: it may only shrink, so an entry t
 gone fails the gate until it is deleted (plan Task 9).
 
 `exercised` counts what a run's passing tests exercised instead: the ui ids named in the `covers` of a passed test
-in its `--nodeid-report` (`python -m agterm_conformance.coverage REPORT`, the runners' report.md line).
+in its `--nodeid-report` (`python -m agterm_conformance.coverage REPORT`, the runners' report.md line), against the
+catalog files that run used (its run header names them).
 """
 
 from __future__ import annotations
@@ -269,17 +270,34 @@ def read_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def run_catalog_paths(records: Iterable[Mapping[str, Any]]) -> tuple[Path | None, Path | None]:
+    """The catalog and ui-ids files a report's run header names (`plugin.NodeidReport`); None for a missing one."""
+    def path(value: Any) -> Path | None:
+        return Path(value) if isinstance(value, str) and value else None
+
+    for record in records:
+        if record.get("kind") == "run":
+            return path(record.get("catalog")), path(record.get("ui_ids"))
+    return None, None
+
+
 def main(argv: list[str]) -> int:
-    """`python -m agterm_conformance.coverage REPORT [--catalog P] [--ui-ids P]`: the "ui ids exercised" line."""
+    """`python -m agterm_conformance.coverage REPORT [--catalog P] [--ui-ids P]`: the "ui ids exercised" line.
+
+    A flag wins, then the files the report's run header names, then the repository's catalog.yaml and the
+    ui-ids.yaml beside the catalog."""
     conformance = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(prog="python -m agterm_conformance.coverage")
     parser.add_argument("report", type=Path, help="a --nodeid-report file")
-    parser.add_argument("--catalog", type=Path, default=conformance / "catalog.yaml")
-    parser.add_argument("--ui-ids", type=Path, default=None, help="default: ui-ids.yaml beside the catalog")
+    parser.add_argument("--catalog", type=Path, default=None, help="default: the run's, else the repository's")
+    parser.add_argument("--ui-ids", type=Path, default=None, help="default: the run's, else beside the catalog")
     args = parser.parse_args(argv)
     try:
-        catalog = load_catalog(args.catalog, args.ui_ids or args.catalog.parent / "ui-ids.yaml")
         records = read_records(args.report)
+        run_catalog, run_ui_ids = run_catalog_paths(records)
+        catalog_path = args.catalog or run_catalog or conformance / "catalog.yaml"
+        ui_path = args.ui_ids or (run_ui_ids if args.catalog is None else None) or catalog_path.parent / "ui-ids.yaml"
+        catalog = load_catalog(catalog_path, ui_path)
     except CatalogError as error:
         print(f"catalog coverage: {error}", file=sys.stderr)
         return 2

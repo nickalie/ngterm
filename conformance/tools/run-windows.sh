@@ -195,7 +195,8 @@ if [[ -n "$coverage" ]]; then
         echo "$coverage_error" >&2
     fi
 fi
-# The ui ids a passing test of this run exercised (agterm_conformance/coverage.py), beside the catalog gate's count.
+# The ui ids a passing test of this run exercised (agterm_conformance/coverage.py), counted against the catalog
+# files the run used (nodeids.jsonl names them, --catalog/--ui-ids in the pytest args included).
 catalog_line="$("$python" -m agterm_conformance.coverage "$(win "$out/nodeids.jsonl")" 2>&1)" || true
 
 # A VM's copy of the sources may carry no .git: the report then says so rather than the run ending here.

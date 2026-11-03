@@ -229,10 +229,14 @@ def check_coverage_stage(options: ImplOptions) -> None:
         raise pytest.UsageError(f"{llvm_profiles.COVERAGE_DIR_VARIABLE}: {error}") from None
 
 
+def catalog_path(config: pytest.Config, options: ImplOptions) -> Path:
+    """`--catalog`, else the catalog.yaml at the rootdir."""
+    return (options.catalog or config.rootpath / "catalog.yaml").resolve()
+
+
 def ui_ids_path(config: pytest.Config, options: ImplOptions) -> Path:
     """`--ui-ids`, else the ui-ids.yaml next to the catalog: one file for the gate and the ui driver."""
-    catalog = options.catalog or config.rootpath / "catalog.yaml"
-    return (options.ui_ids or catalog.parent / "ui-ids.yaml").resolve()
+    return (options.ui_ids or catalog_path(config, options).parent / "ui-ids.yaml").resolve()
 
 
 def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]:
@@ -244,7 +248,7 @@ def gate_paths(config: pytest.Config, options: ImplOptions) -> tuple[Path, Path]
     for flag, spelling in (("ignore", "--ignore"), ("ignore_glob", "--ignore-glob"), ("lf", "--lf")):
         if config.getoption(flag, None):
             raise pytest.UsageError(f"--coverage-gate reads every conformance test; drop {spelling}")
-    catalog = (options.catalog or config.rootpath / "catalog.yaml").resolve()
+    catalog = catalog_path(config, options)
     ui_ids = ui_ids_path(config, options)
     for flag, path in (
         ("--catalog", catalog),
@@ -306,8 +310,8 @@ class MustPass:
 
 
 class NodeidReport:
-    """`--nodeid-report`: JSON lines of each selected test's merged outcome and `covers` targets, collection errors and
-    must-pass problems."""
+    """`--nodeid-report`: a run header with the run's catalog and ui-ids files, then JSON lines of each selected test's
+    merged outcome and `covers` targets, collection errors and must-pass problems."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -360,7 +364,11 @@ class NodeidReport:
         # a ratchet-only run is narrowed by design, even when the list happens to hold every collected test
         partial = self.partial or self.mode is not None or any("::" in arg for arg in session.config.args)
         mode = self.mode or (selection.PARTIAL if partial else selection.FULL)
-        lines: list[dict[str, Any]] = [{"kind": "run", "partial": partial, "mode": mode}]
+        # the run's catalog files, so its "ui ids exercised" line (coverage.main) counts against what it ran with
+        options = session.config.stash[_OPTIONS_KEY]
+        run: dict[str, Any] = {"kind": "run", "partial": partial, "mode": mode}
+        run.update(catalog=str(catalog_path(session.config, options)), ui_ids=str(ui_ids_path(session.config, options)))
+        lines: list[dict[str, Any]] = [run]
         for item in getattr(session, "items", []):
             lines.append(
                 {"kind": "test", "nodeid": item.nodeid, **self.merged.get(item.nodeid, _not_run()), "covers": _covers(item)}
