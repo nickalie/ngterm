@@ -10,8 +10,9 @@
 //! [`ChannelPeer`], and the core reads and writes the near one. Its [`ChannelReader`] can be read on the actor
 //! ([`ChannelReader::read`]) or on a pane's feeder thread ([`ChannelReader::blocking_read`]), and its
 //! [`ChannelWriter`] is cloned onto whichever thread writes. The output queue is bounded ([`CHANNEL_DEPTH`]): a
-//! reader that falls behind (a feeder blocked in `StreamFeed::deliver`) stops the transport reading, which is how the
-//! terminal's backpressure reaches ssh's window.
+//! reader that falls behind (a feeder blocked in `StreamFeed::deliver`) stops the transport delivering. How far behind
+//! it may fall is the transport's: russh's holds up to [`russh::OUTPUT_BUDGET`] more and then closes the channel, as
+//! its connection's other channels would otherwise wait on it.
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod fake;

@@ -16,13 +16,13 @@ use tokio::sync::mpsc;
 use tokio::task::LocalSet;
 
 use super::{
-    CHANNEL_CLOSED, CONNECTION_LOST, HOST_KEY_CHANGED, HOST_KEY_REFUSED, HOST_KEY_UNCONFIRMED, RusshConnection,
-    RusshTransport, Timing,
+    CHANNEL_CLOSED, CONNECTION_LOST, Client, Deadline, HOST_KEY_CHANGED, HOST_KEY_REFUSED, HOST_KEY_UNCONFIRMED,
+    HOST_KEY_WITHDRAWN, OUTPUT_BUDGET, OUTPUT_OVERRUN, RusshConnection, RusshTransport, Timing,
 };
 use crate::api::{EventSink, HostKeyStore, KeyVault, Machine, MobileEvent, VaultError};
 use crate::keys;
 use crate::transport::{
-    Channel, ChannelEnd, ChannelInput, ChannelOutput, Connection, PEER_GONE, Transport, TransportError,
+    Channel, ChannelEnd, ChannelInput, ChannelOutput, ChannelReader, Connection, PEER_GONE, Transport, TransportError,
 };
 
 const USER: &str = "nick";
@@ -90,7 +90,8 @@ async fn serve(config: Arc<server::Config>, stream: tokio::net::TcpStream, handl
 
 /// One server connection. Its commands: `echo TEXT`, `chunks` (out, err, out, exit 3), `signal` (killed by TERM),
 /// `vanish` (closes with no status), `cat` (echoes input until EOF, then exits 0), `pty` (reports its pty, and each
-/// resize), `hang`, `drop` (drops the whole connection) and `refuse` (refused).
+/// resize), `later` (`later` and exit 0, a moment after it starts), `flood` (twice [`OUTPUT_BUDGET`] as fast as it is
+/// taken), `hang`, `drop` (drops the whole connection) and `refuse` (refused).
 struct Handler {
     authorized: PublicKey,
     log: Log,
@@ -139,8 +140,34 @@ impl Handler {
                 let pty = self.ptys.get(&channel).cloned().unwrap_or_else(|| "none".to_owned());
                 session.data(channel, format!("pty {pty}\n").into_bytes())
             }
+            ("later", _) => {
+                tokio::spawn(later(session.handle(), channel));
+                Ok(())
+            }
+            ("flood", _) => {
+                tokio::spawn(flood(session.handle(), channel));
+                Ok(())
+            }
             ("drop", _) => Err(::russh::Error::Disconnect),
             _ => Ok(()),
+        }
+    }
+}
+
+/// `later`'s run: its output and exit a moment after it starts.
+async fn later(handle: server::Handle, channel: ChannelId) {
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let _ = handle.data(channel, b"later".to_vec()).await;
+    let _ = handle.exit_status_request(channel, 0).await;
+    let _ = handle.close(channel).await;
+}
+
+/// `flood`'s run: twice [`OUTPUT_BUDGET`], as fast as the client takes it.
+async fn flood(handle: server::Handle, channel: ChannelId) {
+    let chunk = vec![b'x'; 32 * 1024];
+    for _ in 0..2 * OUTPUT_BUDGET / chunk.len() {
+        if handle.data(channel, chunk.clone()).await.is_err() {
+            break;
         }
     }
 }
@@ -350,13 +377,25 @@ async fn connected(fixture: &Fixture, server: &TestServer) -> RusshConnection {
 
 /// Everything the channel delivers up to and including its end.
 async fn drain(channel: &mut Channel) -> (Vec<u8>, Vec<u8>, ChannelEnd) {
+    drain_reader(&mut channel.reader).await
+}
+
+/// [`drain`] for a reader on its own.
+async fn drain_reader(reader: &mut ChannelReader) -> (Vec<u8>, Vec<u8>, ChannelEnd) {
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     loop {
-        match channel.reader.read().await {
+        match reader.read().await {
             ChannelOutput::Data(bytes) => stdout.extend(bytes),
             ChannelOutput::Stderr(bytes) => stderr.extend(bytes),
             ChannelOutput::End(end) => return (stdout, stderr, end),
         }
+    }
+}
+
+/// Waits until the server has seen the client close a channel.
+async fn closed_by_client(server: &TestServer) {
+    while !server.log().iter().any(|line| line == "close") {
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -599,6 +638,76 @@ fn a_machine_that_never_answers_times_out() {
     });
 }
 
+#[test]
+fn an_unknown_machine_that_never_answers_times_out_without_the_confirm_wait() {
+    run(async {
+        let fixture = fixture(Timing {
+            connect: Duration::from_millis(200),
+            ..quick()
+        });
+        // Accepts the connection but never speaks ssh, so nothing is ever asked.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let started = std::time::Instant::now();
+
+        let connected = fixture.transport.connect(&machine(port)).await;
+
+        assert!(connected.is_err());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "only the connect's own time"
+        );
+        drop(listener);
+    });
+}
+
+#[test]
+fn the_wait_for_an_answer_does_not_count_against_the_connect() {
+    run(async {
+        let mut fixture = fixture(Timing {
+            connect: Duration::from_secs(1),
+            ..quick()
+        });
+        let server = TestServer::start(&fixture.public).await;
+        let transport = &fixture.transport;
+
+        let answer = async {
+            fixture.events.recv().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            transport.answer_host_key("m1", &server.fingerprint(), true);
+        };
+        let (connected, ()) = zip(transport.connect(&machine(server.port)), answer).await;
+
+        assert!(connected.is_ok());
+    });
+}
+
+#[test]
+fn a_connect_already_dropped_asks_nothing() {
+    run(async {
+        let mut fixture = fixture(quick());
+        let refusal = Arc::new(Mutex::new(None));
+        let client = Client {
+            machine_id: "m1".to_owned(),
+            token: 7,
+            withdrawn: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            pinned: None,
+            hosts: Arc::clone(&fixture.transport.hosts),
+            sink: Arc::clone(&fixture.transport.sink),
+            challenges: Arc::clone(&fixture.transport.challenges),
+            confirm: Duration::from_secs(10),
+            deadline: Arc::new(Deadline::new(Duration::from_secs(10))),
+            refusal: Arc::clone(&refusal),
+        };
+
+        assert!(!client.ask("SHA256:offered".to_owned()).await);
+
+        assert_eq!(*refusal.lock().unwrap(), Some(HOST_KEY_WITHDRAWN.to_owned()));
+        assert!(fixture.transport.challenges.lock().is_empty());
+        assert!(fixture.events.try_recv().is_err(), "nothing is shown");
+    });
+}
+
 // --- channels -----------------------------------------------------------------------------------------------------
 
 #[test]
@@ -776,6 +885,49 @@ fn a_channel_dropped_by_the_core_is_closed() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert_eq!(server.log(), ["close"]);
+    });
+}
+
+#[test]
+fn a_channel_whose_writers_are_gone_still_delivers_and_is_closed_with_its_reader() {
+    run(async {
+        let fixture = fixture(quick());
+        let server = TestServer::start(&fixture.public).await;
+        let connection = connected(&fixture, &server).await;
+
+        let Channel { mut reader, writer } = connection.exec("later", None).await.unwrap();
+        drop(writer);
+        assert_eq!(
+            drain_reader(&mut reader).await,
+            (b"later".to_vec(), Vec::new(), exited(0))
+        );
+
+        let Channel { reader, writer } = connection.exec("hang", None).await.unwrap();
+        drop(writer);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(server.log().is_empty(), "the reader still holds the channel open");
+        drop(reader);
+        closed_by_client(&server).await;
+        assert_eq!(server.log(), ["close"]);
+    });
+}
+
+#[test]
+fn a_reader_far_behind_loses_its_channel_but_holds_up_no_other() {
+    run(async {
+        let fixture = fixture(quick());
+        let server = TestServer::start(&fixture.public).await;
+        let connection = connected(&fixture, &server).await;
+
+        // Nobody reads the flood until the transport has given it up.
+        let mut flood = connection.exec("flood", None).await.unwrap();
+        closed_by_client(&server).await;
+
+        let mut other = connection.exec("echo still", None).await.unwrap();
+        assert_eq!(drain(&mut other).await.0, b"still");
+        let (stdout, _, end) = drain(&mut flood).await;
+        assert_eq!(end, ChannelEnd::Lost(OUTPUT_OVERRUN.to_owned()));
+        assert!(stdout.len() > OUTPUT_BUDGET);
     });
 }
 

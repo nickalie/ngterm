@@ -17,12 +17,17 @@
 //! showing, so removing a pin from the store is never undone by a stale record.
 //!
 //! Each exec channel is bridged to the core's [`Channel`] by two tasks: one copies the machine's output into the
-//! [`ChannelPeer`] (waiting while the reader is behind, which holds back ssh's window), one copies the core's input to
-//! ssh. A channel that closes after an exit status ends as [`ChannelEnd::Exit`]; one that closes without it ends as
+//! [`ChannelPeer`], one copies the core's input to ssh. russh hands every channel's messages over from one session loop
+//! and opens ssh's window as data arrives, not as it is read, so the output task never stops taking them: a reader
+//! that is behind would hold up the whole connection. It holds what the reader has not taken, up to
+//! [`OUTPUT_BUDGET`], and closes a channel whose reader falls further behind ([`ChannelEnd::Lost`],
+//! [`OUTPUT_OVERRUN`]).
+//!
+//! A channel that closes after an exit status ends as [`ChannelEnd::Exit`]; one that closes without it ends as
 //! [`ChannelEnd::Lost`] ([`PEER_GONE`]), one the core closed as [`ChannelEnd::Lost`] ([`CHANNEL_CLOSED`]: russh drops
 //! the machine's answering close), one whose connection was closed as [`ChannelEnd::Lost`] with
 //! [`TransportError::Closed`]'s text, and one whose connection went away as [`ChannelEnd::Lost`] ([`CONNECTION_LOST`]).
-//! A channel whose reader and writers are all gone is closed.
+//! A channel whose writers are all gone still delivers its output, and is closed once its reader is gone too.
 
 #[cfg(test)]
 mod tests;
@@ -30,7 +35,7 @@ mod tests;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -39,7 +44,8 @@ use ::russh::keys::{HashAlg, PrivateKeyWithHashAlg};
 use ::russh::{ChannelMsg, Disconnect, Sig};
 use ngterm_term::GridSize;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::time::Instant;
 use zeroize::Zeroizing;
 
 use super::{
@@ -52,6 +58,11 @@ use crate::keys;
 pub const CONNECTION_LOST: &str = "the connection was lost";
 /// Why a channel ended when the core closed it.
 pub const CHANNEL_CLOSED: &str = "the channel was closed";
+/// Why a channel ended when its reader fell more than [`OUTPUT_BUDGET`] behind.
+pub const OUTPUT_OVERRUN: &str = "the channel's output was not read in time";
+/// Output a channel holds for a reader that is behind, on top of its queue's [`super::CHANNEL_DEPTH`] chunks; past
+/// it the channel is closed rather than hold up the connection's other channels.
+pub const OUTPUT_BUDGET: usize = 8 * 1024 * 1024;
 /// The `TERM` a pane's pty is requested with: one every server's terminfo knows.
 pub const PTY_TERM: &str = "xterm-256color";
 
@@ -126,45 +137,40 @@ impl RusshTransport {
         &self,
         machine: &Machine,
         key: ::russh::keys::PrivateKey,
-        token: u64,
+        attempt: &Withdraw,
     ) -> Result<RusshConnection, TransportError> {
-        let pinned = self.hosts.pinned(machine.id.clone());
-        // An unknown host may wait for the user on top of the connect's own time.
-        let budget = if pinned.is_some() {
-            self.timing.connect
-        } else {
-            self.timing.connect + self.timing.confirm
-        };
+        // One deadline for resolving, connecting, the handshake and authentication, held off only while the user is
+        // asked about the host key.
+        let deadline = Arc::new(Deadline::new(self.timing.connect));
         let refusal = Arc::new(Mutex::new(None));
         let client = Client {
             machine_id: machine.id.clone(),
-            token,
-            pinned,
+            token: attempt.token,
+            withdrawn: Arc::clone(&attempt.withdrawn),
+            pinned: self.hosts.pinned(machine.id.clone()),
             hosts: Arc::clone(&self.hosts),
             sink: Arc::clone(&self.sink),
             challenges: Arc::clone(&self.challenges),
             confirm: self.timing.confirm,
+            deadline: Arc::clone(&deadline),
             refusal: Arc::clone(&refusal),
         };
-        let mut handle = tokio::time::timeout(budget, async {
-            let socket = tokio::time::timeout(
-                self.timing.connect,
-                TcpStream::connect((machine.host.as_str(), machine.port)),
-            )
-            .await
-            .map_err(|_| timed_out(machine))?
-            .map_err(|error| unreachable(machine, &error))?;
+        let work = async {
+            let socket = TcpStream::connect((machine.host.as_str(), machine.port))
+                .await
+                .map_err(|error| unreachable(machine, &error))?;
             // Keystrokes go out at once rather than waiting to fill a segment.
             let _ = socket.set_nodelay(true);
-            client::connect_stream(self.config(), socket, client)
+            let mut handle = client::connect_stream(self.config(), socket, client)
                 .await
-                .map_err(|error| refused(machine, &refusal, &error))
-        })
-        .await
-        .map_err(|_| timed_out(machine))??;
-        tokio::time::timeout(self.timing.connect, authenticate(&mut handle, machine, key))
-            .await
-            .map_err(|_| timed_out(machine))??;
+                .map_err(|error| refused(machine, &refusal, &error))?;
+            authenticate(&mut handle, machine, key).await?;
+            Ok::<_, TransportError>(handle)
+        };
+        let handle = tokio::select! {
+            reached = work => reached?,
+            () = deadline.passed() => return Err(timed_out(machine)),
+        };
         Ok(RusshConnection {
             handle: RefCell::new(Some(Rc::new(handle))),
             closed: Arc::new(AtomicBool::new(false)),
@@ -188,8 +194,9 @@ impl Transport for RusshTransport {
             challenges: Arc::clone(&self.challenges),
             machine_id: machine.id.clone(),
             token: self.challenges.token(),
+            withdrawn: Arc::new(AtomicBool::new(false)),
         };
-        self.reach(machine, key, withdraw.token).await
+        self.reach(machine, key, &withdraw).await
     }
 
     fn answer_host_key(&self, machine_id: &str, fingerprint: &str, trust: bool) {
@@ -221,17 +228,29 @@ impl Challenges {
         self.next.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Asks about `fingerprint` for `machine_id` under `token`; the answer arrives on the receiver.
-    fn ask(&self, machine_id: &str, token: u64, fingerprint: &str) -> oneshot::Receiver<bool> {
+    /// Asks about `fingerprint` for `machine_id` under `token`; the answer arrives on the receiver. `None` when the
+    /// connect was dropped already (its session task runs on after it): a question it could never withdraw.
+    fn ask(
+        &self,
+        machine_id: &str,
+        token: u64,
+        fingerprint: &str,
+        withdrawn: &AtomicBool,
+    ) -> Option<oneshot::Receiver<bool>> {
         let (decide, decision) = oneshot::channel();
         let challenge = Challenge {
             token,
             fingerprint: fingerprint.to_owned(),
             decide,
         };
+        let mut pending = self.lock();
+        // Checked under the lock the withdrawal takes, so a question is either never asked or withdrawn.
+        if withdrawn.load(Ordering::SeqCst) {
+            return None;
+        }
         // A question still open for the machine belongs to a connect that was overtaken: dropping it refuses it.
-        self.lock().insert(machine_id.to_owned(), challenge);
-        decision
+        pending.insert(machine_id.to_owned(), challenge);
+        Some(decision)
     }
 
     fn answer(&self, machine_id: &str, fingerprint: &str, trust: bool) {
@@ -264,11 +283,72 @@ struct Withdraw {
     challenges: Arc<Challenges>,
     machine_id: String,
     token: u64,
+    /// Set once the connect is over, so its handshake (which russh runs on in its own task) asks nothing after.
+    withdrawn: Arc<AtomicBool>,
 }
 
 impl Drop for Withdraw {
     fn drop(&mut self) {
+        self.withdrawn.store(true, Ordering::SeqCst);
         self.challenges.withdraw(&self.machine_id, self.token);
+    }
+}
+
+/// A connect's network deadline, held off while the user is asked about the host key.
+struct Deadline {
+    at: Mutex<Instant>,
+    /// Asks under way: the deadline waits for them.
+    asking: AtomicUsize,
+    answered: Notify,
+}
+
+impl Deadline {
+    fn new(budget: Duration) -> Self {
+        Self {
+            at: Mutex::new(Instant::now() + budget),
+            asking: AtomicUsize::new(0),
+            answered: Notify::new(),
+        }
+    }
+
+    fn at(&self) -> Instant {
+        *self.at.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Runs `ask`, moving the deadline out by the time it took.
+    async fn hold<T>(&self, ask: impl Future<Output = T>) -> T {
+        let _asking = Asking {
+            deadline: self,
+            since: Instant::now(),
+        };
+        self.asking.fetch_add(1, Ordering::SeqCst);
+        ask.await
+    }
+
+    /// Resolves once the deadline has passed with no ask under way.
+    async fn passed(&self) {
+        loop {
+            tokio::time::sleep_until(self.at()).await;
+            if self.asking.load(Ordering::SeqCst) > 0 {
+                self.answered.notified().await;
+            } else if self.at() <= Instant::now() {
+                return;
+            }
+        }
+    }
+}
+
+/// One ask holding a [`Deadline`] off; ended (answered or dropped), it moves the deadline out.
+struct Asking<'a> {
+    deadline: &'a Deadline,
+    since: Instant,
+}
+
+impl Drop for Asking<'_> {
+    fn drop(&mut self) {
+        *self.deadline.at.lock().unwrap_or_else(PoisonError::into_inner) += self.since.elapsed();
+        self.deadline.asking.fetch_sub(1, Ordering::SeqCst);
+        self.deadline.answered.notify_one();
     }
 }
 
@@ -277,11 +357,15 @@ struct Client {
     machine_id: String,
     /// The connect's token, which its question is asked under.
     token: u64,
+    /// Set once the connect is over: no question is asked after.
+    withdrawn: Arc<AtomicBool>,
     pinned: Option<String>,
     hosts: Arc<dyn HostKeyStore>,
     sink: Arc<dyn EventSink>,
     challenges: Arc<Challenges>,
     confirm: Duration,
+    /// The connect's deadline, held off while the user is asked.
+    deadline: Arc<Deadline>,
     /// Why the host key was refused, for the connect's error.
     refusal: Arc<Mutex<Option<String>>>,
 }
@@ -293,12 +377,17 @@ impl Client {
     }
 
     async fn ask(&self, offered: String) -> bool {
-        let decision = self.challenges.ask(&self.machine_id, self.token, &offered);
+        let Some(decision) = self
+            .challenges
+            .ask(&self.machine_id, self.token, &offered, &self.withdrawn)
+        else {
+            return self.refuse(HOST_KEY_WITHDRAWN);
+        };
         self.sink.on_event(MobileEvent::HostKeyUnknown {
             machine_id: self.machine_id.clone(),
             fingerprint: offered.clone(),
         });
-        let answer = tokio::time::timeout(self.confirm, decision).await;
+        let answer = self.deadline.hold(tokio::time::timeout(self.confirm, decision)).await;
         self.challenges.withdraw(&self.machine_id, self.token);
         match answer {
             Ok(Ok(true)) => {
@@ -431,12 +520,13 @@ impl Connection for RusshConnection {
         let (core, peer) = Channel::pair();
         let ChannelPeer { output, input } = peer;
         let (read, write) = channel.split();
+        let write = Rc::new(write);
         let (closing, closed) = oneshot::channel();
         let ending = Ending {
             closed,
             connection: Arc::clone(&self.closed),
         };
-        tokio::task::spawn_local(copy_output(read, early, output.clone(), ending));
+        tokio::task::spawn_local(copy_output(read, early, output.clone(), Rc::clone(&write), ending));
         tokio::task::spawn_local(copy_input(write, input, output, closing));
         Ok(core)
     }
@@ -479,68 +569,133 @@ async fn replied(
 
 /// What ends a channel besides the machine: the core closing it, or closing its connection.
 struct Ending {
-    /// Fires when the core closes the channel.
+    /// Fires when the core closes the channel; dropped unfired when the input side stops without closing it.
     closed: oneshot::Receiver<()>,
     /// Set when the core closes the connection.
     connection: Arc<AtomicBool>,
 }
 
-/// Copies the machine's output to the core until the channel ends or the core stops reading.
-async fn copy_output(
-    mut read: ::russh::ChannelReadHalf,
-    mut early: VecDeque<ChannelMsg>,
-    output: mpsc::Sender<ChannelOutput>,
-    mut ending: Ending,
-) {
-    let mut exit = None;
-    loop {
-        let message = if let Some(message) = early.pop_front() {
-            Some(message)
-        } else {
-            tokio::select! {
-                message = read.wait() => message,
-                _ = &mut ending.closed => {
-                    let _ = output.send(ChannelOutput::End(ChannelEnd::Lost(CHANNEL_CLOSED.to_owned()))).await;
-                    return;
-                }
-            }
-        };
-        let chunk = match message {
-            Some(ChannelMsg::Data { data }) => ChannelOutput::Data(data.to_vec()),
-            Some(ChannelMsg::ExtendedData { data, ext: 1 }) => ChannelOutput::Stderr(data.to_vec()),
+/// The machine's output on its way to the core: what the reader has not taken yet, and how the channel ended.
+#[derive(Default)]
+struct Pending {
+    chunks: VecDeque<ChannelOutput>,
+    /// The bytes in `chunks`.
+    bytes: usize,
+    /// The exit status or signal, which the machine's close turns into the end.
+    exit: Option<ChannelEnd>,
+    /// Whether the end is in `chunks`: nothing more is taken from the machine.
+    ended: bool,
+}
+
+impl Pending {
+    /// Takes the machine's next message; `None` is its connection gone, closed by the core when `closed`.
+    fn take(&mut self, message: Option<ChannelMsg>, closed: bool) {
+        match message {
+            Some(ChannelMsg::Data { data }) => self.push(ChannelOutput::Data(data.to_vec())),
+            Some(ChannelMsg::ExtendedData { data, ext: 1 }) => self.push(ChannelOutput::Stderr(data.to_vec())),
             Some(ChannelMsg::ExitStatus { exit_status }) => {
-                exit = Some(ChannelEnd::Exit {
+                self.exit = Some(ChannelEnd::Exit {
                     code: Some(exit_status),
                     signal: None,
                 });
-                continue;
             }
             Some(ChannelMsg::ExitSignal { signal_name, .. }) => {
-                exit = Some(ChannelEnd::Exit {
+                self.exit = Some(ChannelEnd::Exit {
                     code: None,
                     signal: Some(signal(signal_name)),
                 });
-                continue;
             }
             Some(ChannelMsg::Close) => {
-                let end = exit.take().unwrap_or_else(|| ChannelEnd::Lost(PEER_GONE.to_owned()));
-                let _ = output.send(ChannelOutput::End(end)).await;
-                return;
+                let end = self
+                    .exit
+                    .take()
+                    .unwrap_or_else(|| ChannelEnd::Lost(PEER_GONE.to_owned()));
+                self.end(end);
             }
             None => {
-                let reason = if ending.connection.load(Ordering::Relaxed) {
+                let reason = if closed {
                     TransportError::Closed.to_string()
                 } else {
                     CONNECTION_LOST.to_owned()
                 };
-                let end = exit.take().unwrap_or(ChannelEnd::Lost(reason));
-                let _ = output.send(ChannelOutput::End(end)).await;
-                return;
+                let end = self.exit.take().unwrap_or(ChannelEnd::Lost(reason));
+                self.end(end);
             }
-            Some(_) => continue,
-        };
+            Some(_) => {}
+        }
+    }
+
+    fn push(&mut self, chunk: ChannelOutput) {
+        self.bytes += size(&chunk);
+        self.chunks.push_back(chunk);
+    }
+
+    fn end(&mut self, end: ChannelEnd) {
+        self.chunks.push_back(ChannelOutput::End(end));
+        self.ended = true;
+    }
+
+    fn pop(&mut self) -> Option<ChannelOutput> {
+        let chunk = self.chunks.pop_front()?;
+        self.bytes -= size(&chunk);
+        Some(chunk)
+    }
+}
+
+/// The bytes a chunk of output holds.
+fn size(chunk: &ChannelOutput) -> usize {
+    match chunk {
+        ChannelOutput::Data(bytes) | ChannelOutput::Stderr(bytes) => bytes.len(),
+        ChannelOutput::End(_) => 0,
+    }
+}
+
+/// Copies the machine's output to the core until the channel ends or the core stops reading.
+///
+/// It takes the machine's messages as they come: russh hands them over from the session's one loop, which waits on a
+/// channel that is not read, and with it every other channel of the connection. What the reader has not taken is held
+/// here, up to [`OUTPUT_BUDGET`] bytes; past it the channel is closed and ends as [`ChannelEnd::Lost`]
+/// ([`OUTPUT_OVERRUN`]).
+async fn copy_output(
+    mut read: ::russh::ChannelReadHalf,
+    early: VecDeque<ChannelMsg>,
+    output: mpsc::Sender<ChannelOutput>,
+    write: Rc<::russh::ChannelWriteHalf<Msg>>,
+    ending: Ending,
+) {
+    let Ending { mut closed, connection } = ending;
+    let mut pending = Pending::default();
+    for message in early {
+        pending.take(Some(message), false);
+    }
+    // Whether the core can still close the channel: the input side gone without closing it cannot.
+    let mut closable = true;
+    while !pending.ended {
+        // Delivering first, then the machine's messages, so what is queued wins over the core's close.
+        tokio::select! {
+            biased;
+            permit = output.reserve(), if !pending.chunks.is_empty() => {
+                // Nobody reads any more: the core closes the channel through its writer when it means to.
+                let Ok(permit) = permit else { return };
+                if let Some(chunk) = pending.pop() {
+                    permit.send(chunk);
+                }
+            }
+            message = read.wait() => pending.take(message, connection.load(Ordering::Relaxed)),
+            signal = &mut closed, if closable => match signal {
+                Ok(()) => pending.end(ChannelEnd::Lost(CHANNEL_CLOSED.to_owned())),
+                Err(_) => closable = false,
+            },
+        }
+        if !pending.ended && pending.bytes > OUTPUT_BUDGET {
+            let _ = write.close().await;
+            pending.end(ChannelEnd::Lost(OUTPUT_OVERRUN.to_owned()));
+        }
+    }
+    // Nothing more comes from the machine: russh drops what it would hand a reader that is gone.
+    drop(read);
+    while let Some(chunk) = pending.pop() {
         if output.send(chunk).await.is_err() {
-            // Nobody reads any more: the core closes the channel through its writer when it means to.
             return;
         }
     }
@@ -549,7 +704,7 @@ async fn copy_output(
 /// Copies the core's input to the machine until the channel closes or every writer is gone; a channel left with no
 /// reader and no writer is closed.
 async fn copy_input(
-    write: ::russh::ChannelWriteHalf<Msg>,
+    write: Rc<::russh::ChannelWriteHalf<Msg>>,
     mut input: mpsc::UnboundedReceiver<ChannelInput>,
     output: mpsc::Sender<ChannelOutput>,
     closing: oneshot::Sender<()>,
@@ -571,12 +726,14 @@ async fn copy_input(
             }
         };
         if sent.is_err() {
+            // The channel or its connection is gone; the output side tells the reader how it ended.
             return;
         }
     }
-    if output.is_closed() {
-        let _ = write.close().await;
-    }
+    // Every writer is gone: the reader still gets what comes, and the channel is closed once it is gone too.
+    output.closed().await;
+    let _ = write.close().await;
+    let _ = closing.send(());
 }
 
 /// A signal's name as `StreamFeed::exited` takes it (`TERM`, `KILL`, …).
