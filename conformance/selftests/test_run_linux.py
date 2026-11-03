@@ -606,6 +606,17 @@ def test_ui_selection_refuses_session_display_before_starting(tmp_path, stage, l
     assert not report
 
 
+def test_a_full_run_takes_the_ui_layer(tmp_path, stage, layers):
+    # ui is a default layer: a full run preflights it, so session display mode stops it before anything runs
+    ui = layers / 'ui'
+    ui.mkdir()
+    (ui / 'test_ui.py').write_text('def test_ui(impl_options): pass\n')
+    completed, report = run(tmp_path, stage, layers, ratchet(tmp_path, PROBE_ID), CONFORMANCE_LINUX_DISPLAY='session')
+    assert completed.returncode == 2, completed.stdout + completed.stderr
+    assert 'Linux UI instances require headless' in completed.stderr
+    assert not report
+
+
 def test_ui_setup_failure_withholds_runner_report(tmp_path, stage, layers):
     ui = layers / 'ui'
     ui.mkdir()

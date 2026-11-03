@@ -45,9 +45,10 @@ def test_snapshot_reads_portable_values():
     from types import SimpleNamespace as NS
     from agterm_conformance.drivers.atspi import AtspiDriver
     driver = object.__new__(AtspiDriver)
-    driver.atspi = NS(StateType=NS(CHECKED='checked', SELECTED='selected', ENABLED='enabled'))
+    driver.atspi = NS(StateType=NS(CHECKED='checked', SELECTED='selected', ENABLED='enabled', EDITABLE='editable'))
+    states = {'checked', 'enabled', 'editable'}
     class Handle:
-        def get_state_set(self): return NS(contains=lambda state: state in {'checked', 'enabled'})
+        def get_state_set(self): return NS(contains=lambda state: state in states)
         def get_role_name(self): return 'check box'
         def get_interfaces(self): return []
         def get_accessible_id(self): return 'check'
@@ -60,9 +61,23 @@ def test_snapshot_reads_portable_values():
     handle.get_text = lambda start, end: 'hello'
     assert driver.snapshot(handle).role == 'text-field'
     assert driver.snapshot(handle).value == 'hello'
+    # a read-only entry is selectable text
+    handle.get_role_name = lambda: 'entry'
+    states.discard('editable')
+    assert (driver.snapshot(handle).role, driver.snapshot(handle).value) == ('text', 'hello')
+    states.add('editable')
+    assert driver.snapshot(handle).role == 'text-field'
+    handle.get_role_name = lambda: 'text'
     handle.get_interfaces = lambda: ['Value']
     handle.get_current_value = lambda: 0.5
     assert driver.snapshot(handle).value == 0.5
+    # a static label with no text runs: AccessKit names it after its text, which is its value
+    handle.get_role_name = lambda: 'label'
+    handle.get_interfaces = lambda: []
+    handle.get_name = lambda: '2'
+    assert (driver.snapshot(handle).role, driver.snapshot(handle).value) == ('text', '2')
+    handle.get_name = lambda: ''
+    assert driver.snapshot(handle).value is None
 
 
 def input_driver():
@@ -136,6 +151,7 @@ def test_menu_open_and_hover_are_not_retried_before_readback():
     driver._scoped_menu_item = lambda scope, title: items.get(title)
     driver.mouse_click = lambda el: actions.append(('click',el))
     driver._hover = lambda el: actions.append(('hover',el))
+    driver._reveal = lambda scope, item: item
     path = ('View','Find…')
     assert driver._menu_command(path) is None
     assert driver._menu_command(path) is None
@@ -208,6 +224,7 @@ def test_menu_path_keeps_deferred_popup_scope_with_duplicate_names():
     driver._activate_menu_window = lambda: None
     driver.mouse_click = lambda el: frame.children.append(root_menu)
     driver.snapshot = lambda h: Element(None, 'menu-item', h.name, handle=h)
+    driver._reveal = lambda scope, item: item
     hovered = []
     driver._hover = lambda el: hovered.append(el.handle)
     path = ('File', 'Open Window', 'File')
@@ -579,6 +596,7 @@ def test_menu_uses_focused_window_independent_of_accessibility_order(reverse, sa
     driver._menus = lambda scope: list(menus) if scope is second_frame else []
     driver._scoped_menu_item = lambda scope, name: target if scope is popup else None
     driver.mouse_click = lambda el: (actions.append(('click',el)), menus.append(popup))
+    driver._reveal = lambda scope, item: item
     assert driver._menu_command(('File',)) is target
     assert driver._menu_window is second_frame
     assert raises(second) == [{'stack_mode':0}] and raises(first) == []
@@ -617,3 +635,50 @@ def test_menu_button_waits_for_frame_bounds_and_reads_utf8_window_title():
     assert driver._window_title(first) == 'home — Second'
     first.get_full_text_property = lambda *args:None
     assert driver._window_title(first) == 'wrong legacy decoding'
+
+
+def test_menu_item_below_its_scrolled_menu_is_wheeled_into_view():
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    from agterm_conformance.drivers.base import DriverError, Element
+    menu, item = object(), object()
+    offset = {'y': 450}
+    driver = object.__new__(AtspiDriver)
+    driver._extents = lambda handle: (0, 100, 200, 300) if handle is menu else (0, offset['y'], 200, 20)
+    moves, wheels = [], []
+    driver._pointer_move = lambda x, y: moves.append((x, y))
+
+    def wheel(dx, dy):
+        wheels.append(dy)
+        offset['y'] -= 60 * dy
+    driver._wheel = wheel
+    target = Element(None, 'menu-item', 'Find', handle=item)
+    assert driver._reveal(menu, target) is target
+    assert wheels == [1, 1] and moves == [(100, 250), (100, 250)]
+    offset['y'] = 40
+    wheels.clear()
+    assert driver._reveal(menu, target) is target and wheels == [-1]
+    driver._wheel = lambda dx, dy: wheels.append(dy)
+    offset['y'] = 900
+    with pytest.raises(DriverError, match='stays outside'):
+        driver._reveal(menu, target, attempts=2)
+
+
+def test_set_text_without_editable_text_types_over_the_selection():
+    from agterm_conformance.drivers.atspi import AtspiDriver
+    from agterm_conformance.drivers.base import Chord, DriverError, Element
+    driver = object.__new__(AtspiDriver)
+    driver._native_error = OSError
+    calls = []
+    driver._focus = lambda el: calls.append(('focus', el.ui_id))
+    driver._post_chord = lambda chord: calls.append(('chord', chord))
+    driver._type_text = lambda text: calls.append(('type', text))
+    class Handle:
+        def get_interfaces(self): return ['Text']
+    field = Element('search-field', 'text-field', handle=Handle())
+    driver._set_text(field, 'needle')
+    assert calls == [('focus', 'search-field'), ('chord', Chord('a', frozenset({'ctrl'}))), ('type', 'needle')]
+    calls.clear()
+    driver._set_text(field, '')
+    assert calls[-1] == ('chord', Chord('delete', frozenset()))
+    with pytest.raises(DriverError, match='cannot set text'):
+        driver._set_text(Element('label', 'text', handle=Handle()), 'x')

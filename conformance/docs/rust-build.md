@@ -102,6 +102,7 @@ share is asserted directly, with no capability.
 | `cmd-command-line` |  | Rust-only, Windows: a command line (an overlay's program, a scratch pane's command, a hook, a custom command) runs as `cmd.exe`'s command text (`%ComSpec% /D /S /C`), so a test's `cmd` line runs as written where `posix-command-line` is not claimed |
 | `untitled-panes` | yes | a pane has no title until a program sets one; Windows' console host titles each pane with its program's path |
 | `windows-shells` |  | Rust-only, Windows: a pane runs PowerShell or `cmd.exe` as its shell (the config's `command`), and a rerun restore types a captured program's replay, and a pinned line, as that shell reads them |
+| `ui-string-values` | yes | an element's string accessibility value is readable: a button's state (`split-toggle`'s `none`), an image's tint, a row's name beside its label (AX's AXValue, UIA's ValuePattern); AT-SPI carries none for them (AccessKit exposes Text on labels and text fields only, Value only as a number), so the Linux build's tests read that state back through the protocol |
 
 ## Rust target profile
 
@@ -127,6 +128,11 @@ It does not claim:
 - `window-geometry`, `window-minimize`: Wayland gives a client no window position and no minimized read-back; their
   tests branch, and the Rust build passes the other branch, on Windows too, where it claims neither;
 - `sidebar-min-width`: the GPUI frontend does not claim it; its test takes the other branch.
+- `ui-string-values`: AccessKit's AT-SPI mapping exposes no string value on a button, an image or a row, so on Linux
+  the ui tests take the other branch: they find the element and read its state back through the protocol. The
+  macOS and Windows builds publish the values (AX and UIA expose them) but claim it only once their ui layers run
+  green (Windows: Task 7 of docs/plans/20261031-e2e-ui-and-coverage.md). The Linux branch leaves that state unread
+  by assistive technology there: it is an open accessibility gap, not a parity claim.
 - on Windows, `posix-command-line`: a command line runs as `cmd.exe`'s command text there (`%ComSpec% /D /S /C`, as
   Ghostty runs a command on Windows; `ngterm-host`'s `command_line` chooses it for every caller), so the tests of
   hooks, custom commands, overlay programs and scratch commands take their `cmd` branch instead (`cmd-command-line`,

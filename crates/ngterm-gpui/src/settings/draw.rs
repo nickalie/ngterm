@@ -362,6 +362,8 @@ fn hint(id: String, text: String, look: &Look) -> AnyElement {
         .accessibility_id(SharedString::from(id.clone()))
         .role(Role::Label)
         .aria_label(SharedString::from(text.clone()))
+        // a label's text is its value (AccessKit's label from value)
+        .aria_value(SharedString::from(text.clone()))
         .debug_selector(move || id.clone())
         .px(px(12.))
         .pb(px(6.))
@@ -371,8 +373,9 @@ fn hint(id: String, text: String, look: &Look) -> AnyElement {
         .into_any_element()
 }
 
-/// A switch, in the accent while on, named `title`. A gpui-kit switch takes no accessibility id of its own, so the group
-/// around it carries the row's.
+/// A switch, in the accent while on, named `title`. A gpui-kit switch publishes no accessibility node of its own, so the
+/// frame around it is the control assistive technology reads and presses: upstream's checkbox with the row's id, its
+/// state and a press that flips it.
 fn toggle(
     id: &str,
     title: &str,
@@ -383,11 +386,21 @@ fn toggle(
 ) -> AnyElement {
     let edits = look.edits.clone();
     let selector = id.to_owned();
+    let press = enabled.then(|| (edits.clone(), Rc::clone(&set)));
     div()
         .id(SharedString::from(format!("{id}-group")))
         .accessibility_id(SharedString::from(id.to_owned()))
-        .role(Role::Group)
+        .role(Role::CheckBox)
         .aria_label(SharedString::from(title.to_owned()))
+        .aria_toggled(if on {
+            gpui_kit::Toggled::True
+        } else {
+            gpui_kit::Toggled::False
+        })
+        .aria_disabled(!enabled)
+        .when_some(press, |frame, (edits, set)| {
+            frame.on_a11y_action(gpui_kit::accesskit::Action::Click, move |_, _, _| edits.send(set(!on)))
+        })
         .debug_selector(move || selector.clone())
         .child(
             Switch::new(SharedString::from(id.to_owned()))
@@ -414,6 +427,8 @@ fn picker_button(id: &str, title: &str, picker: Picker, look: &Look) -> AnyEleme
     };
     let edits = look.edits.clone();
     Button::new(SharedString::from(id.to_owned()))
+        // a picker of one value from a list: upstream's popup button
+        .role(Role::ComboBox)
         .aria_label(SharedString::from(title.to_owned()))
         .h(px(24.))
         .px(px(8.))
@@ -571,8 +586,10 @@ fn slider(view: &SettingsView, key: SliderKey, title: &str, readout: String, ena
             div()
                 .id(id)
                 .accessibility_id(id)
-                .role(Role::Group)
+                // the library's slider publishes no node of its own: its frame is the slider
+                .role(Role::Slider)
                 .aria_label(SharedString::from(title.to_owned()))
+                .aria_disabled(!enabled)
                 .debug_selector(move || id.to_owned())
                 .w(px(SLIDER_WIDTH))
                 .child(
@@ -624,6 +641,8 @@ fn path(
                         frame
                             .accessibility_id(SharedString::from(id.to_owned()))
                             .role(Role::Label)
+                            // a label's text is its value (AccessKit's label from value)
+                            .aria_value(text.clone())
                             .aria_label(text)
                     })
                     .debug_selector(move || selector.clone())
@@ -664,6 +683,8 @@ fn diagnostics(
         .when_some(plain, |body, text| {
             body.accessibility_id(SharedString::from(id))
                 .role(Role::Label)
+                // a label's text is its value (AccessKit's label from value)
+                .aria_value(text.clone())
                 .aria_label(text)
         })
         .debug_selector(move || selector.clone())

@@ -7,7 +7,7 @@ use gpui_kit::Keystroke;
 use ngterm_core::keymap::{CustomCommandEngine, linux_defaults, parse_keymap};
 
 use super::{Fired, Press, Router};
-use crate::terminal::input::{KeyStroke, Source};
+use crate::terminal::input::{KeyStroke, NativeKey, Source};
 
 fn stroke(text: &str) -> KeyStroke {
     let keystroke = Keystroke::parse(text).unwrap().with_simulated_ime();
@@ -86,6 +86,50 @@ fn an_autorepeat_of_a_leader_prefix_is_swallowed_without_rearming() {
     assert!(router.engine.as_ref().is_some_and(CustomCommandEngine::is_armed));
     assert!(press(&mut router, "g", now));
     assert_eq!(names(&router), ["g"]);
+}
+
+/// The S key as the platform describes it (XKB keycode 39), held with `ctrl` and `shift`, pressed fresh or repeating.
+fn native_s(ctrl_shift: bool, repeat: bool) -> KeyStroke {
+    let modifiers = gpui_kit::Modifiers {
+        control: ctrl_shift,
+        shift: ctrl_shift,
+        ..gpui_kit::Modifiers::default()
+    };
+    let keystroke = Keystroke::parse(if ctrl_shift { "ctrl-shift-s" } else { "s" })
+        .unwrap()
+        .with_simulated_ime();
+    let native = NativeKey {
+        keycode: 39,
+        modifiers,
+        unshifted: Some('s'),
+        ascii_layout: true,
+        text: if ctrl_shift { "S" } else { "s" }.into(),
+        repeat,
+        ..NativeKey::default()
+    };
+    KeyStroke::new(&keystroke, &Source::Native(native), false)
+}
+
+#[test]
+fn a_fresh_native_press_after_an_unheard_release_passes() {
+    // Ctrl+Shift+S toggles the sidebar; its release reached a window with no focused element, so the monitor never
+    // heard it, and the next press of S typed elsewhere must not read as its autorepeat
+    let now = Instant::now();
+    let mut router = router("");
+    assert!(matches!(
+        router.press(&native_s(true, false), now, false),
+        Press::Fired(Fired::Builtin(_))
+    ));
+    assert_eq!(
+        router.press(&native_s(true, true), now, false),
+        Press::Consumed,
+        "the platform's autorepeat of the chord stays the keymap's"
+    );
+    assert_eq!(router.press(&native_s(false, false), now, false), Press::Passed);
+    assert!(
+        !router.release(native_s(false, false).identity, now),
+        "the passed press's release is the terminal's"
+    );
 }
 
 #[test]

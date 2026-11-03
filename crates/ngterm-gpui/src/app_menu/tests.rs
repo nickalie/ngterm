@@ -370,3 +370,14 @@ fn about_names_the_build_and_links_the_website() {
     assert_eq!(alert.default_button(), Some(0));
     assert_eq!(alert.buttons[ABOUT_WEBSITE].id.as_deref(), Some("about-website"));
 }
+
+#[test]
+fn an_items_title_is_the_label_its_menu_item_is_named_after() {
+    use gpui_kit::{Element as _, Role, accesskit::Node};
+    let title = item_title("app-menu-item-find", &SharedString::from("Find…"));
+    assert_eq!(title.a11y_role(), Some(Role::Label));
+    let mut node = Node::new(Role::Label);
+    title.write_a11y_info(&mut node);
+    // a label's text is its value (AccessKit's `label_comes_from_value`)
+    assert_eq!(node.value(), Some("Find…"));
+}

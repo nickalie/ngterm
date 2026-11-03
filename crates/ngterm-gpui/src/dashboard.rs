@@ -491,6 +491,8 @@ fn overlay_cover(cover: &DashboardCover, look: Look) -> AnyElement {
             .accessibility_id(id)
             .role(gpui_kit::Role::Label)
             .aria_label(SharedString::from(text.clone()))
+            // a label's text is its value (AccessKit's label from value)
+            .aria_value(SharedString::from(text.clone()))
             .debug_selector(move || id.to_owned())
             .max_w_full()
             .whitespace_nowrap()

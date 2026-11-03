@@ -248,3 +248,7 @@ gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 # spawned into its job, a ConPTY session's handles exported and imported for the session server's update handoff, and
 # a failed openpty's errno kept (the macOS ptmx clone race's retry).
 portable-pty = { path = "vendor/portable-pty" }
+# AccessKit's AT-SPI mapping (gpui-pre-linux's accesskit_unix): vendor/accesskit_atspi_common is the verified
+# crates.io source plus build/patches/accesskit_atspi_common (scripts/vendor-accesskit-atspi.sh): a disabled node
+# without Enabled and Sensitive whatever its role, and a button with a menu as a push button menu.
+accesskit_atspi_common = { path = "vendor/accesskit_atspi_common" }

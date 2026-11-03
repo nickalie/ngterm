@@ -517,3 +517,33 @@ fn a_gui_line_field_edits_inset_and_centered_inside_its_box(cx: &mut gpui_kit::T
         "the box's padding takes the click"
     );
 }
+
+#[gpui_kit::test]
+fn the_title_and_message_publish_their_text(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::{Element as _, Role, accesskit::Node};
+    cx.update(gpui_kit::init);
+    let pending = ask(AskStyle::Gui);
+    let look = Look {
+        family: None,
+        size: 13.0,
+        foreground: Rgb::WHITE,
+        background: Rgb::BLACK,
+    };
+    let owner = AskOwner::Session(Uuid::new_v4());
+    let (dialog, cx) = cx.add_window_view(|window, cx| AskDialog::new(opening(&pending, owner, look), window, cx));
+    dialog.read_with(cx, |dialog, _| {
+        let title = dialog.render_title();
+        assert_eq!(title.a11y_role(), Some(Role::Heading));
+        let mut node = Node::new(Role::Heading);
+        title.write_a11y_info(&mut node);
+        assert_eq!(node.label(), Some(pending.title.as_str()));
+        let message = dialog
+            .render_message(crate::chrome::default_colors())
+            .expect("the ask has a message");
+        assert_eq!(message.a11y_role(), Some(Role::Label));
+        let mut node = Node::new(Role::Label);
+        message.write_a11y_info(&mut node);
+        // a label's text is its value, which AccessKit names it after
+        assert_eq!(node.value(), pending.message.as_deref());
+    });
+}

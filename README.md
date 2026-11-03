@@ -332,7 +332,9 @@ Windows, the HTML clipboard offer, xdg-output geometry and X11 window state) are
 turns edits under `vendor/` back into the patch files). `vendor/portable-pty` (the PTY and child under `ngterm-pty`:
 ConPTY from kernel32 only, herdr's fixes for malformed Windows environments and directories on `PATH`, the child
 created in its job, a ConPTY session's handles exported and imported for the session server's update handoff) is
-the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`).
+the same, through `scripts/vendor-portable-pty.sh` (`--check`, `--diff`), and so is
+`vendor/accesskit_atspi_common` (AccessKit's AT-SPI mapping: a disabled control without Enabled, a menu button's
+role), through `scripts/vendor-accesskit-atspi.sh`.
 
 ### macOS and Windows
 
@@ -672,6 +674,7 @@ scripts/check-tracing-features.sh           # no dependency turns on tracing's `
 scripts/vendor-calloop.sh --check           # vendor/ equals its crates.io sources plus build/patches/
 scripts/vendor-gpui.sh --check
 scripts/vendor-portable-pty.sh --check
+scripts/vendor-accesskit-atspi.sh --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo clippy -p ngterm-gpui --no-default-features --all-targets -- -D warnings   # the app without HTML overlays
 scripts/lint-report.sh                      # complexity #[expect]s with their reasons; refuses inner #![allow]

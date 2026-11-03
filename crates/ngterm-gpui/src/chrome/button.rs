@@ -246,7 +246,7 @@ impl Button {
             button.aria_toggled(if on { Toggled::True } else { Toggled::False })
         })
         .when(shows_pressed, |button| button.when_some(pressed, gpui_kit::Styled::bg))
-        .when(disabled, |button| button.opacity(DISABLED_OPACITY))
+        .when(disabled, |button| button.opacity(DISABLED_OPACITY).aria_disabled(true))
         .when(!disabled, |button| {
             button
                 .when_some(hover.filter(|_| !shows_pressed), |button, fill| {
@@ -284,6 +284,7 @@ struct Trigger(Button);
 impl RenderOnce for Trigger {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let (hover, in_tab_order) = (self.0.hover, self.0.keyboard == Keyboard::TabStop);
+        let disabled = self.0.disabled;
         let focus = self.0.interactivity().element_id.clone().map(|id| {
             window
                 .use_keyed_state(id, cx, |_, cx| cx.focus_handle())
@@ -291,8 +292,18 @@ impl RenderOnce for Trigger {
                 .clone()
                 .tab_stop(in_tab_order)
         });
+        // assistive technology's press opens the menu as Enter does on the focused trigger
+        let press = focus.clone().filter(|_| !disabled);
         self.0
             .element(false)
+            // a menu button for assistive technology (AT-SPI's push button menu)
+            .aria_has_popup(gpui_kit::accesskit::HasPopup::Menu)
+            .when_some(press, |button, focus| {
+                button.on_a11y_action(gpui_kit::accesskit::Action::Click, move |_, window, cx| {
+                    window.focus(&focus, cx);
+                    window.dispatch_action(Box::new(gpui_kit::base::actions::Confirm { secondary: false }), cx);
+                })
+            })
             .when_some(focus, |button, focus| button.track_focus(&focus))
             // the keyboard's focus shows as the pointer's hover does
             .when_some(hover, |button, fill| button.focus_visible(move |style| style.bg(fill)))

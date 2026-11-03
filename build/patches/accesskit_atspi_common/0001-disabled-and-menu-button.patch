@@ -1,0 +1,135 @@
+A disabled node and a menu button on AT-SPI (docs/plans/20261031-e2e-ui-and-coverage.md Task 6). AccessKit's mapping
+gave every node whose role takes no read-only state (a button, a menu item) Enabled and Sensitive even when it was
+disabled, and folded disabled into ReadOnly for the others; a button whose `has_popup` is a menu mapped to a plain push
+button. Here a disabled node has neither Enabled nor Sensitive whatever its role, ReadOnly marks a read-only node only
+(AT-SPI's ReadOnly is an enabled, sensitive object whose value cannot change), a disabled field is not Editable, and a
+button with a menu is a PushButtonMenu with HasPopup (a toggle button stays a ToggleButton). An upstream candidate
+(AccessKit); it can go when a release carries it.
+
+diff -ruN a/src/node.rs b/src/node.rs
+--- a/src/node.rs
++++ b/src/node.rs
+@@ -9,8 +9,8 @@
+ // found in the LICENSE.chromium file.
+ 
+ use accesskit::{
+-    Action, ActionData, ActionRequest, Affine, Live, NodeId as LocalNodeId, Orientation, Point,
+-    Rect, Role, Toggled, TreeId,
++    Action, ActionData, ActionRequest, Affine, HasPopup, Live, NodeId as LocalNodeId, Orientation,
++    Point, Rect, Role, Toggled, TreeId,
+ };
+ use accesskit_consumer::{FilterResult, Node, NodeId, Tree, TreeState};
+ use atspi_common::{
+@@ -103,6 +103,8 @@
+             Role::Button => {
+                 if self.0.toggled().is_some() {
+                     AtspiRole::ToggleButton
++                } else if self.0.has_popup() == Some(HasPopup::Menu) {
++                    AtspiRole::PushButtonMenu
+                 } else {
+                     AtspiRole::Button
+                 }
+@@ -309,9 +311,12 @@
+         {
+             atspi_state.insert(State::Active);
+         }
+-        if state.is_text_input() && !state.is_read_only() {
++        if state.is_text_input() && !state.is_read_only_or_disabled() {
+             atspi_state.insert(State::Editable);
+         }
++        if state.has_popup().is_some() {
++            atspi_state.insert(State::HasPopup);
++        }
+         // TODO: Focus and selection.
+         if state.is_focusable(&filter) {
+             atspi_state.insert(State::Focusable);
+@@ -370,9 +375,12 @@
+             _ => {}
+         }
+ 
+-        if state.is_read_only_supported() && state.is_read_only_or_disabled() {
++        // a read-only node is enabled and sensitive, its value fixed; a disabled one is neither,
++        // whatever its role
++        if state.is_read_only_supported() && state.is_read_only() {
+             atspi_state.insert(State::ReadOnly);
+-        } else {
++        }
++        if !state.is_disabled() {
+             atspi_state.insert(State::Enabled | State::Sensitive);
+         }
+ 
+@@ -1942,3 +1950,74 @@
+     pub role: AtspiRole,
+     pub states: StateSet,
+ }
++
++#[cfg(test)]
++mod state_tests {
++    use accesskit::{
++        HasPopup, Node as NodeData, NodeId as LocalNodeId, Role, Toggled, Tree as TreeData, TreeId,
++        TreeUpdate,
++    };
++    use accesskit_consumer::Tree;
++    use atspi_common::{Role as AtspiRole, State};
++
++    use super::NodeWrapper;
++
++    /// A window holding `child`; the child's AT-SPI role and state.
++    fn mapped(child: NodeData) -> (AtspiRole, atspi_common::StateSet) {
++        let mut window = NodeData::new(Role::Window);
++        window.set_children(vec![LocalNodeId(1)]);
++        let tree = Tree::new(
++            TreeUpdate {
++                nodes: vec![(LocalNodeId(0), window), (LocalNodeId(1), child)],
++                tree: Some(TreeData::new(LocalNodeId(0))),
++                tree_id: TreeId::ROOT,
++                focus: LocalNodeId(0),
++            },
++            false,
++        );
++        let state = tree.state();
++        let node = state.root().children().next().unwrap();
++        let wrapper = NodeWrapper(&node);
++        (wrapper.role(), wrapper.state(false))
++    }
++
++    #[test]
++    fn a_disabled_button_is_neither_enabled_nor_sensitive() {
++        let (_, enabled) = mapped(NodeData::new(Role::Button));
++        assert!(enabled.contains(State::Enabled) && enabled.contains(State::Sensitive));
++        let mut button = NodeData::new(Role::Button);
++        button.set_disabled();
++        let (_, disabled) = mapped(button);
++        assert!(!disabled.contains(State::Enabled) && !disabled.contains(State::Sensitive));
++        assert!(!disabled.contains(State::ReadOnly));
++    }
++
++    #[test]
++    fn a_read_only_field_stays_enabled_and_a_disabled_one_is_not_editable() {
++        let mut field = NodeData::new(Role::TextInput);
++        field.set_read_only();
++        let (_, read_only) = mapped(field);
++        assert!(read_only.contains(State::ReadOnly) && read_only.contains(State::Enabled));
++        assert!(!read_only.contains(State::Editable));
++        let mut field = NodeData::new(Role::TextInput);
++        field.set_disabled();
++        let (_, disabled) = mapped(field);
++        assert!(!disabled.contains(State::Editable) && !disabled.contains(State::Enabled));
++        let (_, editable) = mapped(NodeData::new(Role::TextInput));
++        assert!(editable.contains(State::Editable) && editable.contains(State::Enabled));
++    }
++
++    #[test]
++    fn a_button_with_a_menu_is_a_push_button_menu() {
++        let mut button = NodeData::new(Role::Button);
++        button.set_has_popup(HasPopup::Menu);
++        let (role, state) = mapped(button);
++        assert_eq!(role, AtspiRole::PushButtonMenu);
++        assert!(state.contains(State::HasPopup));
++        let mut toggle = NodeData::new(Role::Button);
++        toggle.set_has_popup(HasPopup::Menu);
++        toggle.set_toggled(Toggled::False);
++        assert_eq!(mapped(toggle).0, AtspiRole::ToggleButton);
++        assert_eq!(mapped(NodeData::new(Role::Button)).0, AtspiRole::Button);
++    }
++}

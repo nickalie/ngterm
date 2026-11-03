@@ -198,6 +198,10 @@ CAPABILITIES: Mapping[str, str] = {
     "program's path",
     "windows-shells": "Rust-only, Windows: a pane runs PowerShell or `cmd.exe` as its shell (the config's `command`), "
     "and a rerun restore types a captured program's replay, and a pinned line, as that shell reads them",
+    "ui-string-values": "an element's string accessibility value is readable: a button's state (`split-toggle`'s "
+    "`none`), an image's tint, a row's name beside its label (AX's AXValue, UIA's ValuePattern); AT-SPI carries none for "
+    "them (AccessKit exposes Text on labels and text fields only, Value only as a number), so the Linux build's tests "
+    "read that state back through the protocol",
 }
 
 

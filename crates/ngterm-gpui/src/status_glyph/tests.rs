@@ -256,3 +256,15 @@ fn the_glyph_keeps_its_slot_and_blinks_only_while_animations_run(cx: &mut TestAp
         assert!(!animations_enabled(cx));
     });
 }
+
+#[test]
+fn the_slot_reads_as_text_valued_with_the_status_name() {
+    use gpui_kit::{Element as _, Role, accesskit::Node};
+    let blocked = look(AgentStatus::Blocked, &AppSettings::default());
+    let element = slot(&blocked);
+    assert_eq!(element.a11y_role(), Some(Role::Label));
+    let mut node = Node::new(Role::Label);
+    element.write_a11y_info(&mut node);
+    assert_eq!(node.value(), Some("blocked"));
+    assert_eq!(node.description(), Some(blocked.tooltip.as_str()));
+}

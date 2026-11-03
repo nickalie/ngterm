@@ -846,6 +846,8 @@ impl AskDialog {
         let reveal = highlighted.then(|| Self::reveal_canvas(self.scroll.clone(), Rc::clone(&self.reveal)));
         // a press on a button is the button's: it does not focus the dialog or select its pane
         Button::new(selector)
+            // its name is its label, the hotkey's marks aside
+            .aria_label(SharedString::from(button.label.clone()))
             .relative()
             .when_some(width, |button, width| button.w(modal::logical(width)))
             .text_center()
@@ -950,6 +952,7 @@ impl AskDialog {
             .id("ask-title")
             .accessibility_id("ask-title")
             .role(gpui_kit::Role::Heading)
+            .aria_label(SharedString::from(self.ask.title.clone()))
             .font_weight(FontWeight::BOLD)
             .child(SharedString::from(self.ask.title.clone()))
     }
@@ -967,6 +970,8 @@ impl AskDialog {
                 .id("ask-message")
                 .accessibility_id("ask-message")
                 .role(gpui_kit::Role::Label)
+                // a label's text is its value (AccessKit's label from value)
+                .aria_value(SharedString::from(message.clone()))
                 .text_color(ink)
                 .child(SharedString::from(message)),
         )

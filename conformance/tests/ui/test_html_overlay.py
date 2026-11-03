@@ -11,6 +11,14 @@ from agterm_conformance.match import assert_ok, find_session
 from agterm_conformance.wait import wait_until
 
 
+def _open_settings(ui):
+    if ui.name == "atspi":
+        # Linux has no Settings chord (the GTK build's menu, which ngterm's follows): the app menu's item opens it.
+        ui.menu("ngterm", "Settings…")
+    else:
+        ui.press("cmd+,")
+
+
 def _new(ctl):
     sid = assert_ok(ctl.request("session.new"))["id"]
     ctl.wait_mounted(sid, "left")
@@ -127,7 +135,7 @@ def test_the_page_strip_offers_hide_only_while_the_overlays_button_is_on(launch,
         try:
             found = ui.tab("Interface", timeout=1)
         except ElementNotFound:
-            ui.press("cmd+,")
+            _open_settings(ui)
             found = ui.tab("Interface")
         ui.click(found)
         ui.click(ui.find(toggle, role="checkbox", value=0))

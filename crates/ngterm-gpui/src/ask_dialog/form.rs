@@ -772,11 +772,9 @@ impl AskDialog {
         div()
             .id(SharedString::from(id.clone()))
             .accessibility_id(SharedString::from(id.clone()))
-            .role(if multiple {
-                gpui_kit::Role::CheckBox
-            } else {
-                gpui_kit::Role::RadioButton
-            })
+            .role(choice_role(multiple))
+            .aria_label(SharedString::from(choice.label.clone()))
+            .aria_toggled(toggled(checked))
             .debug_selector(move || id)
             .relative()
             .flex()
@@ -812,6 +810,11 @@ impl AskDialog {
         div()
             .id(OTHER_ROW_ID)
             .accessibility_id(OTHER_ROW_ID)
+            .role(choice_role(list.multiple))
+            .when_some(list.other.clone(), |row, placeholder| {
+                row.aria_label(SharedString::from(placeholder))
+            })
+            .aria_toggled(toggled(draft.other_selected()))
             .debug_selector(|| OTHER_ROW_ID.to_owned())
             .relative()
             .flex()
@@ -834,6 +837,24 @@ impl AskDialog {
             )
             .children(current.then(|| self.row_reveal()))
             .into_any_element()
+    }
+}
+
+/// A row's role: a checkbox in a multiple list, else a radio button.
+fn choice_role(multiple: bool) -> gpui_kit::Role {
+    if multiple {
+        gpui_kit::Role::CheckBox
+    } else {
+        gpui_kit::Role::RadioButton
+    }
+}
+
+/// A row's checked state as assistive technology reads it.
+fn toggled(checked: bool) -> gpui_kit::Toggled {
+    if checked {
+        gpui_kit::Toggled::True
+    } else {
+        gpui_kit::Toggled::False
     }
 }
 

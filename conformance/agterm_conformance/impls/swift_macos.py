@@ -27,8 +27,11 @@ from agterm_conformance.wait import WaitTimeout, wait_until
 
 PARITY_LEVEL = "0.39.1"
 BASE_CAPABILITIES = frozenset(
-    {"posix-shell", "posix-command-line", "untitled-panes", "window-geometry", "window-minimize", "sidebar-min-width"}
-)
+    {
+        "posix-shell", "posix-command-line", "untitled-panes", "window-geometry", "window-minimize",
+        "sidebar-min-width", "ui-string-values",
+    }
+)  # fmt: skip
 LAUNCH_MODES = ("uitest", "plain")
 BUNDLE_DIR = "app"
 # The bundle's build metadata keys `version`'s `installed` is read from.

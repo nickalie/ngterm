@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Build the Rust workspace, stage it and run the protocol, cli and behaviors layers against it, then hold the
-# ratchet: every id in conformance/rust-passing.txt must still pass. Every instance comes from the harness (unique NGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-*
-# parent, its own headless weston and session bus); no window, notification or a11y object reaches the desktop.
+# Build the Rust workspace, stage it and run the protocol, cli, behaviors and ui layers against it, then hold the
+# ratchet: every id in conformance/rust-passing.txt must still pass. Every instance comes from the harness (unique
+# NGTERM_APP_ID, fresh root under this run's own /tmp/agt-run-* parent, its own headless weston and session bus; a ui
+# instance its own Xvfb on the run's private a11y bus); no window, notification or a11y object reaches the desktop.
 #
 #   conformance/tools/run-linux.sh [--stage DIR] [--out DIR] [--tests DIR]
 #                                       [--ratchet FILE] [--ratchet-only [--also SELECTOR]... [--also-k EXPR]...]
@@ -81,12 +82,12 @@ if [[ "$display" == headless ]]; then
 fi
 
 layers=()
-for layer in protocol cli behaviors; do
+for layer in protocol cli behaviors ui; do
     if [[ -d "$tests/$layer" ]]; then layers+=("$tests/$layer"); fi
 done
-((${#layers[@]})) || { echo "no protocol, cli or behaviors layer under $tests" >&2; exit 2; }
+((${#layers[@]})) || { echo "no protocol, cli, behaviors or ui layer under $tests" >&2; exit 2; }
 
-# --ratchet-only: the plugin keeps the listed ids and the extras. An --also path outside the layers (tests/ui, say) is
+# --ratchet-only: the plugin keeps the listed ids and the extras. An --also path outside the layers (a fixture dir) is
 # collected as well; selectors are spelled like the list's ids, relative to the suite's root (the tests dir's parent).
 selection=()
 if [[ -n "$ratchet_only" ]]; then

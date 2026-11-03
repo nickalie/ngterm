@@ -17,6 +17,11 @@ def _top(ctl):
     return ctl.tree()["tree"]
 
 
+def _valued(adapter, value):
+    """The `value=` predicate where the accessibility tree carries a control's string value (`ui-string-values`)."""
+    return {"value": value} if adapter.has("ui-string-values") else {}
+
+
 def _sidebar_visible(ctl):
     (window,) = assert_ok(ctl.request("window.list"))["windows"]
     return window["sidebarVisible"]
@@ -35,17 +40,17 @@ def test_sidebar_toggle_button_hides_and_shows_the_sidebar(ctl, ui):
 
 
 @pytest.mark.covers("ui:split-toggle")
-def test_split_toggle_reads_back_the_split(ctl, ui):
+def test_split_toggle_reads_back_the_split(adapter, ctl, ui):
     sid = _new(ctl)
-    ui.find("split-toggle", role="button", value="none")
+    ui.find("split-toggle", role="button", **_valued(adapter, "none"))
     ui.click("split-toggle")
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("split") is True)
     ctl.wait_mounted(sid, "right")
-    ui.find("split-toggle", value="both")
+    ui.find("split-toggle", **_valued(adapter, "both"))
     ui.click("split-toggle")
     tree = ctl.wait_tree(lambda tree: find_session(tree, sid).get("split") is False)
     shown = "right" if find_session(tree, sid)["splitFocused"] else "left"
-    ui.find("split-toggle", value=shown)
+    ui.find("split-toggle", **_valued(adapter, shown))
     assert_ok(ctl.request("session.close", sid))
 
 
@@ -152,15 +157,15 @@ def test_recent_sessions_popover_switches_to_the_previous_session(app, ctl, ui):
 
 
 @pytest.mark.covers("ui:attention-button", "ui:attention-session-row")
-def test_attention_button_lists_the_blocked_session(launch, ui_for):
+def test_attention_button_lists_the_blocked_session(adapter, launch, ui_for):
     ctl = launch(settings={"attentionButtonEnabled": True})
     ui = ui_for(ctl)
     (first,) = session_ids(ctl.tree())
     ctl.wait_mounted(first, "left")
-    ui.find("attention-button", role="button", enabled=False, value="none")
+    ui.find("attention-button", role="button", enabled=False, **_valued(adapter, "none"))
     blocked = _new(ctl, noSelect=True)
     assert_ok(ctl.request("session.status", blocked, status="blocked"))
-    ui.click(ui.find("attention-button", enabled=True, value="blocked"))
+    ui.click(ui.find("attention-button", enabled=True, **_valued(adapter, "blocked")))
     wait_until(lambda: len(ui.all("attention-session-row")) == 1)
     ui.click("attention-session-row")
     ctl.wait_tree(lambda tree: active_session_id(tree) == blocked)
@@ -168,7 +173,7 @@ def test_attention_button_lists_the_blocked_session(launch, ui_for):
 
 
 @pytest.mark.covers("ui:overlay-toggle")
-def test_overlay_toggle_hides_and_shows_the_session_overlays(launch, ui_for):
+def test_overlay_toggle_hides_and_shows_the_session_overlays(adapter, launch, ui_for):
     # Hidden by default; once enabled it stays drawn, disabled with nothing to hide (upstream's
     # testTheTitleBarButtonStaysVisibleAndHidesAndShowsTheSessionOverlays).
     ctl = launch(settings={"shownInterfaceElements": ["overlayToggle"]})
@@ -179,10 +184,10 @@ def test_overlay_toggle_hides_and_shows_the_session_overlays(launch, ui_for):
     assert_ok(ctl.request("session.overlay.open", sid, command="sh -c 'cat'"))
     ui.click(ui.find("overlay-toggle", enabled=True))
     ctl.wait_tree(lambda tree: find_session(tree, sid).get("hiddenOverlays") == ["session"])
-    ui.find("overlay-toggle", value="hidden")
+    ui.find("overlay-toggle", **_valued(adapter, "hidden"))
     ui.click("overlay-toggle")
     ctl.wait_tree(lambda tree: "hiddenOverlays" not in find_session(tree, sid))
-    ui.find("overlay-toggle", value="shown")
+    ui.find("overlay-toggle", **_valued(adapter, "shown"))
     pick = assert_ok(ctl.request("pick.open", items=[{"id": "one", "label": "One"}]))["id"]
     try:
         # An open picker disables it, as it does the menu item.

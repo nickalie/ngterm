@@ -420,13 +420,46 @@ is suspected but not established. Custom app command menu rows also lack accessi
 - Modify: `conformance/tools/run-linux.sh` (ui into the default layers)
 - Modify: `conformance/rust-passing.txt`
 
-- [ ] run each remaining ui file on Linux and list each red with its cause
-- [ ] per file: for each red caused by the app, write the Rust test for the element's role/name/value first, then fix
+- [x] run each remaining ui file on Linux and list each red with its cause
+- [x] per file: for each red caused by the app, write the Rust test for the element's role/name/value first, then fix
       it in `ngterm-gpui`; for each legitimate platform divergence, record a capability with its reason and branch the
       test as the reference discipline says (the branch green on reference-macos)
-- [ ] add `tests/ui` to `run-linux.sh`'s default layers and its self-test
-- [ ] run clippy and tests on the touched crates, the self-tests and the ui layer; add the newly green ids with
+- [x] add `tests/ui` to `run-linux.sh`'s default layers and its self-test
+- [x] run clippy and tests on the touched crates, the self-tests and the ui layer; add the newly green ids with
       `check_ratchet.py --add`
+
+**Reds found (first run: 12 pass, 32 fail) and their causes:**
+
+- *Labels without text* (ask title/message/buttons, palette rows and subtitle, the editor hint, the page strip's
+  identity and title, the dashboard cover, settings hints): AccessKit names a Label after its value, and a Button,
+  MenuItem or ListBoxOption only after its own label or its Label descendants; the app set neither. Fixed with
+  `aria_value`/`aria_label`, Rust tests on the elements.
+- *Menu items without names*, the Task 5 note: gpui-kit's element rows carry no label. Each row's title is now its
+  Label descendant (`app_menu::item_title`), which AccessKit names the item after; View's long submenu scrolls
+  (`scrollable`) and the driver wheels an item outside its menu into view before the press.
+- *Shortcut release, the Task 5 note*: a keymap press whose release reached a window with no focused element (GPUI
+  routes such a key-up to the root view only) left the key consumed, so the next press of it anywhere read as its
+  autorepeat and was dropped. A fresh native press (the platform's repeat flag clear) now drops the stale entry
+  (`keymap_dispatch::Router::press`, Rust test).
+- *Disabled controls and menu buttons*: GPUI had no way to publish either (new GPUI patch 0005, `aria_disabled`,
+  `aria_has_popup`) and AccessKit's AT-SPI mapping gave a disabled button Enabled and a menu button a push button's
+  role (vendored `accesskit_atspi_common` with patch 0001, `scripts/vendor-accesskit-atspi.sh`, CI check). The chrome
+  button publishes both and opens its menu on an accessibility press.
+- *Roles upstream gives*: `command-palette`/`pick-palette` on the field too (upstream's field inherits the panel's id),
+  `notify-badge` and `agent-status` as text valued with the count and status, settings switches as checkboxes,
+  sliders as sliders, pickers as combo boxes (AT-SPI's popup), ask choices and Other as checkboxes/radios.
+- *Driver*: a static label's text is its name; a read-only entry is text; text is replaced through the keyboard
+  (AccessKit publishes no EditableText); a menu item outside its scrolled menu is wheeled in.
+- *Platform divergences*: `ui-string-values` (rust-build.md): AT-SPI carries no string value on a button, image or
+  row, so those predicates branch and `test_tinted_icon_names_its_tint` is unsupported on Linux (an open
+  accessibility gap, recorded there). The Settings opener uses the app menu on Linux (no Settings chord there), and the
+  Ctrl+Tab switcher test skips on AT-SPI (XTest releases Control after the chord, which ends the walk).
+
+⚠️ Still red on Linux, left out of the ratchet: `test_settings.py::test_general_tab` and
+`test_key_mapping_tab_reports_a_keymap_error_after_reload` (gpui-kit's read-only `Input` publishes an editable text
+input: no read-only flag reaches AccessKit, so the selectable path reads as a text field; needs a gpui-kit patch or a
+read-only builder), and `test_html_overlay.py::test_page_strip_hide_hides_its_own_pane` (the Hide button stays in the
+tree for over 10 s after the pane's page hides, cause not established).
 
 ### Task 7: The UIA driver and the Windows ui layer
 

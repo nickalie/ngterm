@@ -379,7 +379,7 @@ impl Palette {
                 .child(SharedString::from(shortcut.clone()))
         });
         let element = picker::row(
-            SharedString::from(format!("palette-item-{}", entry.id)),
+            (SharedString::from(format!("palette-item-{}", entry.id)), &entry.title),
             row == self.selection,
             look.enabled,
             metrics,
@@ -422,6 +422,8 @@ impl Palette {
                     .accessibility_id("palette-editor-hint")
                     .role(gpui_kit::Role::Label)
                     .aria_label(SharedString::from(hint.clone()))
+                    // a label's text is its value (AccessKit's label from value)
+                    .aria_value(SharedString::from(hint.clone()))
                     .debug_selector(|| "palette-editor-hint".to_owned())
                     .px(modal::logical(self.metrics.scaled(12.0)))
                     .py(modal::logical(self.metrics.scaled(6.0)))
@@ -469,14 +471,15 @@ impl Render for Palette {
         let placement = Placement::of(window.viewport_size(), self.inset, picker::PANEL_WIDTH, self.metrics);
         let footer = self.footer(cx);
         let palette = cx.entity().downgrade();
+        let ids = Ids {
+            scrim: "palette-scrim",
+            panel: "command-palette",
+        };
         picker::frame(
             Frame {
-                ids: Ids {
-                    scrim: "palette-scrim",
-                    panel: "command-palette",
-                },
+                ids,
                 placement,
-                header: picker::header(&self.field, self.metrics, colors),
+                header: picker::header(&self.field, ids.panel, self.metrics, colors),
                 rows,
                 footer,
                 scroll: &self.scroll,

@@ -49,11 +49,19 @@ def seeded(adapter, request):
             adapter.stop(instance)
 
 
+def _open_settings(ui):
+    if ui.name == "atspi":
+        # Linux has no Settings chord (the GTK build's menu, which ngterm's follows): the app menu's item opens it.
+        ui.menu("ngterm", "Settings…")
+    else:
+        ui.press("cmd+,")
+
+
 def _open(ui, tab):
     try:
         found = ui.tab(tab, timeout=1)
     except ElementNotFound:
-        ui.press("cmd+,")
+        _open_settings(ui)
         found = ui.tab(tab)
     ui.click(found)
 

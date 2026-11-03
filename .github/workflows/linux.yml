@@ -88,6 +88,8 @@ jobs:
         run: scripts/vendor-gpui.sh --check
       - name: vendored portable-pty
         run: scripts/vendor-portable-pty.sh --check
+      - name: vendored accesskit_atspi_common
+        run: scripts/vendor-accesskit-atspi.sh --check
       # the workspace without what links WPE WebKit, which the Arch jobs check, then the app without its HTML overlays
       # (its own invocation: --all-features would turn them back on)
       - name: clippy

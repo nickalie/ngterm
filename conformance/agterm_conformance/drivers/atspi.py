@@ -143,6 +143,12 @@ class AtspiDriver(Driver):
             value = handle.get_current_value()
         if role == 'text' and 'EditableText' in interfaces:
             role = 'text-field'
+        if role == 'text-field' and not state.contains(self.atspi.StateType.EDITABLE):
+            # A read-only field is selectable text (upstream's static text with `.textSelection`).
+            role = 'text'
+        elif role == 'text' and value is None:
+            # A static label without text runs exposes its text only as its name (AccessKit's label from value).
+            value = handle.get_name() or None
         return Element(handle.get_accessible_id() or None, role, handle.get_name() or None, value,
                        state.contains(self.atspi.StateType.ENABLED), handle)
 
@@ -263,7 +269,8 @@ class AtspiDriver(Driver):
                     return None
                 self._menu_scope, self._menu_pending = opened[0], None
             if self._menu_depth == len(path) - 1:
-                return self._scoped_menu_item(self._menu_scope, path[-1])
+                item = self._scoped_menu_item(self._menu_scope, path[-1])
+                return None if item is None else self._reveal(self._menu_scope, item)
             title = path[self._menu_depth]
             if title in ('ngterm', 'agterm'):
                 self._menu_depth += 1
@@ -276,6 +283,31 @@ class AtspiDriver(Driver):
             self._hover(item)
             self._menu_pending = before
             self._menu_depth += 1
+
+    def _reveal(self, scope, item, attempts=40):
+        # A menu taller than its room scrolls, and a press lands at the item's centre: wheel the
+        # menu under the pointer until the item lies inside it, as a person scrolls to it.
+        def placement():
+            top, bottom = self._extents(scope), self._extents(item.handle)
+            if bottom[1] < top[1]:
+                return -1
+            if bottom[1] + bottom[3] > top[1] + top[3]:
+                return 1
+            return 0
+        for _ in range(attempts):
+            step = placement()
+            if step == 0:
+                return item
+            x, y, w, h = self._extents(scope)
+            self._pointer_move(x + w / 2, y + h / 2)
+            self._wheel(0, step)
+            # the scroll lands on the next frame: wait for the item to move before judging again
+            before = self._extents(item.handle)
+            try:
+                wait_until(lambda: self._extents(item.handle) != before, 1)
+            except WaitTimeout:
+                pass
+        raise DriverError(f'atspi: menu item {item.name!r} stays outside its menu after {attempts} wheel ticks')
 
     def _tab(self, name):
         return next((el for el in self._all_elements()
@@ -297,11 +329,21 @@ class AtspiDriver(Driver):
         return element.value if isinstance(element.value, str) else element.name or ''
 
     def _set_text(self, element, text):
-        def replace():
-            handle = element.handle
-            if 'EditableText' not in handle.get_interfaces() or not handle.set_text_contents(text):
+        handle = element.handle
+        if 'EditableText' in self._read(handle.get_interfaces):
+            if not self._read(lambda: handle.set_text_contents(text)):
                 raise DriverError(f'atspi cannot set text on {element}')
-        self._read(replace)
+            return
+        # AccessKit publishes no EditableText: replace the field's text as a person does, through the keyboard on
+        # the focused field (select all, then type or delete).
+        if element.role != 'text-field':
+            raise DriverError(f'atspi cannot set text on {element}')
+        self._focus(element)
+        self._post_chord(Chord('a', frozenset({'ctrl'})))
+        if text:
+            self._type_text(text)
+        else:
+            self._post_chord(Chord('delete', frozenset()))
 
     def _window(self, element=None):
         self.instance.ui.check(self.instance.env, self.instance.root)
