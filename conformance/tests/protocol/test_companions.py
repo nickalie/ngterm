@@ -4,6 +4,7 @@ parent's respawn also runs on an instance of its own under Live sessions."""
 
 import itertools
 import os
+import shlex
 
 import pytest
 from agterm_conformance.match import (
@@ -446,6 +447,65 @@ def test_duplicate_as_companion_copies_the_split_and_runs_each_program(ctl):
     copied = work / "copied.txt"
     wait_until(lambda: copied.exists() and copied.read_text() == "from the copy\n")
     assert_ok(ctl.request("workspace.delete", wid))
+
+
+@POSIX_SHELL
+@pytest.mark.since("0.40.0")
+@pytest.mark.parametrize("shells", ["plain", pytest.param("live", marks=LIVE)], indirect=True)
+@pytest.mark.covers("session.companion.duplicate", "field:tree.session.foreground", "field:tree.session.splitForeground")
+def test_duplicate_as_companion_rebinds_session_and_pane_ids(shells):
+    """Both copied programs receive their own session/pane IDs and daemon names, even inside arguments (#843)."""
+    ctl = shells
+    work = _work(ctl)
+    wid = assert_ok(ctl.request("workspace.new"))["id"]
+
+    def mixed(identity):
+        letters = itertools.cycle((str.lower, str.upper))
+        return "".join(next(letters)(char) if char.isalpha() else char for char in identity)
+
+    def arguments(session, left, right, *, source):
+        daemon = lambda pane: ctl.vocabulary.daemon_prefix + pane.replace("-", "").lower()
+        return [
+            f"session={session.upper()}",
+            f"embedded=before{session.lower()}after",
+            f"mixed={mixed(session) if source else session.upper()}",
+            f"repeat={session.upper()}:{session.upper()}",
+            f"panes={left.upper()}:{right.upper()}",
+            f"pane-lower={left.lower()}",
+            f"pane-mixed={mixed(right) if source else right.upper()}",
+            f"daemons={daemon(left)}:{daemon(right)}",
+            "unrelated=CCCCCCCC-1234-5678-9ABC-0123456789AB",
+            "roles=left:right",
+            "-",
+        ]
+
+    try:
+        parent = assert_ok(ctl.request("session.new", workspace=wid, cwd=str(work)))["id"]
+        ctl.wait_mounted(parent, "left")
+        assert_ok(ctl.request("session.split", parent, mode="on"))
+        source = find_session(ctl.wait_mounted(parent, "right"), parent)
+        panes = {surface["kind"]: surface["paneID"] for surface in source["surfaces"]}
+        original = arguments(parent, panes["left"], panes["right"], source=True)
+        # These deliberately absent filenames carry arbitrary argv. After reporting them, cat's final '-' reads
+        # terminal stdin indefinitely, so neither a scripting runtime nor files named after future IDs are needed.
+        for pane, field in (("left", "foreground"), ("right", "splitForeground")):
+            assert_ok(ctl.request("session.type", parent, pane=pane, text=shlex.join(["cat", *original]) + "\n"))
+            assert program_argv(_runs(ctl, parent, "cat", field))[1:] == original
+
+        copy = _duplicate(ctl, parent)["id"]
+        copied = find_session(ctl.wait_mounted(copy, "left", "right"), copy)
+        copied_panes = {surface["kind"]: surface["paneID"] for surface in copied["surfaces"]}
+        assert {copy, copied_panes["left"], copied_panes["right"]}.isdisjoint(
+            {parent, panes["left"], panes["right"]}
+        )
+        expected = arguments(copy, copied_panes["left"], copied_panes["right"], source=False)
+        for field in ("foreground", "splitForeground"):
+            assert program_argv(_runs(ctl, copy, "cat", field))[1:] == expected
+        copied = find_session(ctl.tree(), copy)
+        assert os.path.realpath(copied["cwd"]) == os.path.realpath(work)
+        assert os.path.realpath(copied["splitCwd"]) == os.path.realpath(work)
+    finally:
+        assert_ok(ctl.request("workspace.delete", wid))
 
 
 @POSIX_SHELL

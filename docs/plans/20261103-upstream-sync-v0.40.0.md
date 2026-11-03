@@ -253,12 +253,12 @@ before creating split identities; no rebinding helper exists.
 **Conformance:** existing listed `tests/protocol/test_companions.py::{test_duplicate_as_companion_copies_the_split_and_runs_each_program,test_duplicate_as_companion_with_no_select_keeps_the_selection,test_duplicate_as_companion_refusals,test_a_duplicated_program_pane_closes_when_the_program_exits[plain],test_a_duplicated_program_pane_closes_when_the_program_exits[live]}`;
 new `test_duplicate_as_companion_rebinds_session_and_pane_ids`, covers session.companion.duplicate.
 
-- [ ] Allocate copied session and primary/split identities before launch commands. Replace source session UUID,
+- [x] Allocate copied session and primary/split identities before launch commands. Replace source session UUID,
   both pane UUIDs and live daemon names everywhere inside raw arguments, case-insensitively; wholly lowercase
   occurrences stay lowercase, mixed case maps to canonical uppercase. Leave unrelated IDs/shells/cwd alone.
-- [ ] Recompute the platform-quoted command from rebound argv; persist it after rebinding for single and split
+- [x] Recompute the platform-quoted command from rebound argv; persist it after rebinding for single and split
   panes. Handle macOS/Linux POSIX and Windows quoting without diverging command versus argv representations.
-- [ ] Port all three Swift regressions and add a live foreground-argv conformance check of both panes, unrelated
+- [x] Port all three Swift regressions and add a live foreground-argv conformance check of both panes, unrelated
   IDs, embedded/lowercase/mixed-case identities and persistence. Existing IDs remain green; run scoped checks.
 
 ### Task 5: Attach remote companion groups and place individual companions (#849)
