@@ -1013,3 +1013,29 @@ def test_group_attach_validates_before_remote_discovery(ctl):
     assert_error(ctl.request(command, host="  "), f"{command} requires a host")
     assert_error(ctl.request(command, host="unused.invalid"), f"{command} requires a remote session")
     assert_error(ctl.request(command, "bad\nname", host="unused.invalid"), "invalid remote session")
+
+
+@LIVE
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("live.tree", "field:result.remote", "session.companion.page", "session.companion.new")
+def test_tree_parent_membership_lists_companions_in_sidebar_order(live, tmp_path):
+    sid = _live_session(live)
+    page_path = tmp_path / "membership.html"
+    page_path.write_text("<!doctype html><title>membership</title>")
+    page = assert_ok(live.request("session.companion.page", sid, html=str(page_path)))["id"]
+    companion = assert_ok(live.request("session.companion.new", sid, noSelect=True))["id"]
+    tree_cmd = live.vocabulary.command("live.tree")
+
+    def rows(response):
+        return {row["id"]: row for row in assert_ok(response)["remote"]["sessions"]}
+
+    listed = rows(live.wait_response(tree_cmd, None, lambda r: {sid, page, companion} <= rows(r).keys()))
+    members = listed[sid]["companions"]
+    assert {member["id"] for member in members} == {page, companion}
+    assert all(member["name"] == listed[member["id"]]["name"] for member in members)
+    assert [member["id"] for member in members] == [
+        row for row in session_ids(live.tree()) if row in {page, companion}
+    ]
+    assert_absent(listed[page], "companions")
+    assert_absent(listed[companion], "companions")
+    assert_ok(live.request("session.close", sid))

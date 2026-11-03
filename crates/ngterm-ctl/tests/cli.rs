@@ -24,6 +24,9 @@ type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 const NGTERMCTL: &str = env!("CARGO_BIN_EXE_ngtermctl");
 const NOT_RUNNING: &str = "ngterm may be stopped or unable to accept connections";
 
+#[path = "cli/remote_group.rs"]
+mod remote_group;
+
 /// A short temp dir: socket paths must stay under 104 bytes whatever `TMPDIR` is. Windows has no such limit (the
 /// pipe's name is derived from the path), and no `/tmp`.
 fn short_dir() -> io::Result<TempDir> {

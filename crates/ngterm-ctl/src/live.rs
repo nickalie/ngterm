@@ -2,8 +2,10 @@
 //! `agtermctl zmx`, renamed: conformance/docs/rust-build.md): the daemons behind live sessions, and attaching them
 //! from another machine.
 //! Every one needs a running ngterm, the only party that can join its windows, pending closes and saved snapshots
-//! against what the session host reports. `list` prints through [`format_live`]; the rest print their `result.text`
-//! (or `ok`).
+//! against what the session host reports. `list` prints through [`format_live`], `attach` echoes the new local row
+//! (and with `--companions`, its group receipt); other one-shot commands print their listing, `result.text` or `ok`.
+
+use std::process::ExitCode;
 
 use ngterm_core::live::inventory::PaneRole;
 use ngterm_core::paths::Env;
@@ -481,6 +483,76 @@ impl RequestCommand for Attach {
         };
         live_request(cmd, Some(self.session.clone()), Some(args))
     }
+
+    /// Group receipts print each local row; older apps are named without falling back to a single attach.
+    fn invoke(&self, env: &dyn Env) -> Result<(), Failure> {
+        if !self.companions {
+            return self.default_run(env);
+        }
+        let request = self.run_request()?;
+        let reply = crate::client::send(&self.options.socket_path(env), &request)?;
+        if !self.options.json && reply.response.refuses_unknown(request.cmd) {
+            eprintln!("error: the running app is too old for group attach");
+            return Err(Failure::Exit(ExitCode::FAILURE));
+        }
+        if self.options.json {
+            println!("{}", reply.line());
+        } else {
+            self.print_group(&reply.response);
+        }
+        if reply.response.ok {
+            Ok(())
+        } else {
+            Err(Failure::Exit(ExitCode::FAILURE))
+        }
+    }
+}
+
+impl Attach {
+    /// Unknown membership is relevant even after a partial failure: an old origin may have omitted children.
+    fn print_group(&self, response: &ngterm_proto::Response) {
+        if response.ok {
+            println!("{}", format_remote_group(response.result.as_ref()));
+        } else {
+            eprintln!("{}", crate::output::format_response(response, false));
+        }
+        if response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("remoteGroup"))
+            .and_then(|group| group.get("membershipKnown"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+        {
+            eprintln!("{}", remote_group_note(&self.host));
+        }
+    }
+}
+
+/// Upstream's `formatRemoteGroup`: parent id, then companion origin-to-local identities, in receipt order.
+fn format_remote_group(result: Option<&serde_json::Value>) -> String {
+    let parent = result
+        .and_then(|result| result.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("ok");
+    let mut lines = vec![parent.to_owned()];
+    if let Some(members) = result
+        .and_then(|result| result.get("remoteGroup"))
+        .and_then(|group| group.get("companions"))
+        .and_then(serde_json::Value::as_array)
+    {
+        lines.extend(members.iter().map(|member| {
+            let origin = member["origin"].as_str().unwrap_or_default();
+            let local = member["id"].as_str().unwrap_or("-");
+            format!("  {origin} -> {local}")
+        }));
+    }
+    lines.join("\n")
+}
+
+/// Upstream's `remoteGroupNote`, including the host whose old membership listing may be incomplete.
+fn remote_group_note(host: &str) -> String {
+    format!("note: {host} does not report group membership; unlisted companions cannot be detected")
 }
 
 /// `ngtermctl live present SESSION`.
@@ -629,6 +701,11 @@ mod tests {
             serde_json::to_value(request).unwrap(),
             serde_json::json!({"cmd":"live.attach.group","target":"remote","args":{"host":"host","window":"win"}})
         );
+        let plain = crate::Ngtermctl::try_parse_from(["ngtermctl", "live", "attach", "host", "remote"]).unwrap();
+        let crate::Command::Live(group) = plain.command else {
+            unreachable!()
+        };
+        assert_eq!(group.command().make_request().cmd, Command::Live(LiveCmd::Attach));
     }
 
     #[test]

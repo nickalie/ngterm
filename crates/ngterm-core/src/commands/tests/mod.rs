@@ -38,6 +38,7 @@ mod recent;
 mod remote;
 mod remote_ask_form;
 mod remote_companions;
+mod remote_group;
 mod remote_page;
 mod remote_roles;
 mod remote_split;

@@ -281,26 +281,26 @@ create `remote/group_attach.rs` and fake-runner tests as needed; finish `crates/
 new `test_group_attach_validates_before_remote_discovery`, membership-order tests and CLI --companions refusal case.
 Cover live.attach.group and field:result.remoteGroup as decided in Task 1; success uses fake runners.
 
-- [ ] Add optional remote-session `companions:[{id,name}]` and `remoteGroup:{membershipKnown,companions:[{origin,id?,error?}]}`
+- [x] Add optional remote-session `companions:[{id,name}]` and `remoteGroup:{membershipKnown,companions:[{origin,id?,error?}]}`
   receipt. Distinguish unknown membership from empty []. Project parents' membership from the unfiltered
   workspace, including unattachable members in sidebar order; omit it on companion rows.
-- [ ] Validate host before remote session: `live.attach.group requires a host`,
+- [x] Validate host before remote session: `live.attach.group requires a host`,
   `live.attach.group requires a remote session`, `invalid remote session`. Fetch one fresh remote tree; refuse
   companion target before creating anything (`<id> is a companion, not a group's parent`). No fallback single attach.
-- [ ] Attach parent once, then terminal/page children in order, selecting parent only. Keep successful rows on
+- [x] Attach parent once, then terminal/page children in order, selecting parent only. Keep successful rows on
   failures and return receipt even with ok:false. Preserve summaries `kept <name> (<parent-id>) and <N> companion(s); not attached: <name> (<reason>), …`,
   missing `unavailable on <host>`, fallback `attach failed`. Old origins attach listed children with membershipKnown:false.
-- [ ] Re-read parent location before each async member operation; follow parent moves and stop after close.
+- [x] Re-read parent location before each async member operation; follow parent moves and stop after close.
   Closed summary `parent row <id> was closed; not attached: <names>`; member reason `parent row was closed`.
   Avoid orphan rows and do not block unrelated control requests during discovery/page attach.
-- [ ] Individual terminal companion joins parent only if exactly one destination-window row matches origin
+- [x] Individual terminal companion joins parent only if exactly one destination-window row matches origin
   parent ID, host and endpoint; otherwise top-level. Reuse page placement machinery. Group command is locally
   placed in HTML bridge. Preserve ngterm's existing Attach All features without double attaching children.
-- [ ] CLI prints parent ID then `  <origin> -> <local>`; unknown membership emits
+- [x] CLI prints parent ID then `  <origin> -> <local>`; unknown membership emits
   `note: <host> does not report group membership; unlisted companions cannot be detected` even on partial failure.
   Raw JSON prints only original reply, exits nonzero for failure. Unknown group command reports
   `the running app is too old for group attach` and sends no fallback.
-- [ ] Picker attaches selected parent through fresh group discovery even if old picker list showed zero children;
+- [x] Picker attaches selected parent through fresh group discovery even if old picker list showed zero children;
   selected companion attaches alone. Labels are `parent › child` when parent listed; partial error HUD moves to
   newly attached parent. Port Swift fake-runner/socket/picker tests, all three OS SSH forms, scoped checks.
 

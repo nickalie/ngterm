@@ -1067,21 +1067,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn registered_v040_commands_refuse_until_their_feature_handlers_land() {
-        {
-            let name = "live.attach.group";
-            let cmd = name.parse().unwrap();
-            let response = core().dispatch(&Request::new(cmd));
-            assert!(!response.ok);
-            assert_eq!(
-                response.error.as_deref(),
-                Some(format!("{name} is not supported by this host").as_str())
-            );
-            assert!(response.result.is_none());
-        }
-    }
-
     /// The cases of `test_undecodable_request_is_refused` (`conformance/tests/protocol/test_addressing.py`), with the
     /// full text the suite leaves open.
     #[test]

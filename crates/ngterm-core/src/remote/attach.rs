@@ -6,7 +6,7 @@
 //! The remote is resolved again before anything is created, so a session gone since the list was taken fails rather
 //! than handing back a fresh shell wearing its name; everything that can fail is checked before the model is touched.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -131,7 +131,7 @@ impl Placement {
 
 impl Core {
     /// `live.attach` once its host's list arrived: a page companion attaches under the one row here showing its
-    /// parent ([`super::companions`]), any other session as a row of its own.
+    /// parent ([`super::companions`]); a terminal companion joins its unique matching parent in this window.
     fn attach_answered(&mut self, result: &RemoteCommandResult, request: &AttachRequest) -> Dispatched {
         let remote_tree = match read_remote_tree(result, &request.host) {
             Ok(tree) => tree,
@@ -163,19 +163,20 @@ impl Core {
             .find(|candidate| candidate.id == request.session)
             .ok_or_else(|| ControlError::rejected(format!("no attachable session {} on {host}", request.session)))?;
         let window = Resolver::new(self.library()).open_placement_window(request.window.as_deref())?;
-        let workspace = self
-            .library()
-            .store(window)
-            .ok_or(ControlError::NoOpenWindow)?
-            .current_workspace_id()
-            .ok_or_else(|| ControlError::rejected("no window to attach into"))?;
-        let placement = Placement {
+        let rows = super::companions::matching_parent_rows(
+            self,
             window,
-            workspace,
-            at: None,
-            parent: None,
-            select: true,
+            host,
+            remote.parent.as_deref(),
+            &remote_tree.endpoint,
+        );
+        let under = match rows.as_slice() {
+            [parent] => Placement::under(self.library(), *parent, true),
+            _ => None,
         };
+        let placement = under
+            .or_else(|| self.workspace_placement(window, true))
+            .ok_or_else(|| ControlError::rejected("no window to attach into"))?;
         self.attach_remote_session(remote, remote_tree, host, placement)
     }
 
@@ -316,9 +317,15 @@ pub(super) enum Step {
     /// The machine's sessions are being listed.
     Listing { host: String, answer: Answer },
     /// The window's picker asks which session.
-    ChoosingSession { host: String, pick: String },
+    ChoosingSession {
+        host: String,
+        pick: String,
+        parents: HashSet<String>,
+    },
     /// The chosen session is being attached; its label names it in the progress panel.
     Attaching { request: AttachRequest, answer: Answer },
+    /// A selected parent attaches its freshly discovered companion group.
+    AttachingGroup(super::group_attach::GroupRun),
     /// The machine is being listed again for Attach All, so what attaches is what it offers now.
     AttachingAll { host: String, answer: Answer },
     /// The machine creates a session, which attaches here once it is attachable ([`super::origin_sessions`]).
@@ -546,14 +553,17 @@ impl Core {
                 };
                 self.listed(flow, &host, &result)
             }
-            Step::ChoosingSession { host, pick } => match self.picked(flow.window, &pick) {
+            Step::ChoosingSession { host, pick, parents } => match self.picked(flow.window, &pick) {
                 Picked::Waiting => {
-                    flow.step = Step::ChoosingSession { host, pick };
+                    flow.step = Step::ChoosingSession { host, pick, parents };
                     Some(flow)
                 }
                 Picked::Chosen(session, _) if session == ATTACH_ALL_ID => self.start_attach_all(flow, host),
                 Picked::Chosen(session, _) if session == NEW_SESSION_ID => self.start_origin_session(flow, host, None),
-                Picked::Chosen(session, label) => self.start_attach(flow, host, session, &label),
+                Picked::Chosen(session, label) => {
+                    let group = parents.contains(&session);
+                    self.start_picked_attach(flow, host, session, &label, group)
+                }
                 Picked::Ended => None,
             },
             Step::Attaching { request, answer } => {
@@ -567,6 +577,16 @@ impl Core {
                 }
                 None
             }
+            Step::AttachingGroup(run) => match super::group_attach::step(self, run) {
+                super::group_attach::GroupStep::Pending(run, _) => {
+                    flow.step = Step::AttachingGroup(run);
+                    Some(flow)
+                }
+                super::group_attach::GroupStep::Done(reply) => {
+                    self.finish_picked_group(&mut flow, &reply);
+                    None
+                }
+            },
             Step::AttachingAll { host, answer } => {
                 let Some(result) = take_answer(&answer) else {
                     flow.step = Step::AttachingAll { host, answer };
@@ -606,6 +626,11 @@ impl Core {
         flow.step = Step::ChoosingSession {
             host: host.to_owned(),
             pick,
+            parents: sessions
+                .iter()
+                .filter(|row| row.parent.is_none() && row.content.is_none())
+                .map(|row| row.id.clone())
+                .collect(),
         };
         Some(flow)
     }
@@ -624,7 +649,20 @@ impl Core {
             .iter()
             .filter(|session| !rows.contains_key(&session.id))
             .count();
-        let mut items: Vec<PickItem> = sessions.iter().map(pick_item).collect();
+        let names: HashMap<&str, &str> = sessions
+            .iter()
+            .map(|row| (row.id.as_str(), row.name.as_str()))
+            .collect();
+        let mut items: Vec<PickItem> = sessions
+            .iter()
+            .map(|session| {
+                let mut item = pick_item(session);
+                if let Some(parent) = session.parent.as_deref().and_then(|id| names.get(id)) {
+                    item.label = format!("{parent} › {}", session.name);
+                }
+                item
+            })
+            .collect();
         if missing > 1 && items.len() < MAX_PICK_ITEMS {
             items.push(PickItem {
                 id: ATTACH_ALL_ID.to_owned(),
@@ -746,6 +784,57 @@ impl Core {
             parent: None,
             select,
         })
+    }
+
+    fn start_picked_attach(
+        &mut self,
+        mut flow: AttachFlow,
+        host: String,
+        session: String,
+        label: &str,
+        group: bool,
+    ) -> Option<AttachFlow> {
+        if !group {
+            return self.start_attach(flow, host, session, label);
+        }
+        self.attach_progress(&mut flow, &format!("attaching {label}…"));
+        let request = AttachRequest {
+            host,
+            session,
+            window: Some(uuid_string(flow.window)),
+        };
+        match super::group_attach::start(self, request) {
+            Ok(run) => {
+                flow.step = Step::AttachingGroup(run);
+                Some(flow)
+            }
+            Err(error) => {
+                self.attach_failed(&mut flow, &error.to_string());
+                None
+            }
+        }
+    }
+
+    fn finish_picked_group(&mut self, flow: &mut AttachFlow, reply: &Response) {
+        if reply.ok {
+            self.attach_close_hud(flow);
+            return;
+        }
+        let parent = reply
+            .result
+            .as_ref()
+            .and_then(|result| result.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(frames::parse_uuid);
+        let error = reply.error.as_deref().unwrap_or("attach failed");
+        if let Some(parent) = parent
+            && let Some(window) = self.library().window_holding_session(parent)
+        {
+            self.attach_close_hud(flow);
+            self.action_failed(flow.action, window, Some(parent), error);
+        } else {
+            self.attach_failed(flow, error);
+        }
     }
 
     fn start_attach(&mut self, mut flow: AttachFlow, host: String, session: String, label: &str) -> Option<AttachFlow> {

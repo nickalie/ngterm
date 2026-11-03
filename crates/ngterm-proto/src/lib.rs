@@ -23,9 +23,9 @@ pub use response::Response;
 pub use result::{
     BusMessage, ControlAskOutcome, ControlAskResult, ControlCursor, ControlHtmlPageOutcome,
     ControlHtmlPageOutcomeState, ControlLiveEndpoint, ControlLiveEntry, ControlLiveInventory, ControlLiveResetStatus,
-    ControlPickOutcome, ControlPickResult, ControlRemoteGroup, ControlRemoteGroupMember, ControlRemotePane,
-    ControlRemoteSession, ControlRemoteTree, ControlRestartReceipt, ControlRestoreStatus, ControlResult,
-    ControlWindowFrame, ControlWindowNode, MessageRejection, MessageRejectionReason,
+    ControlPickOutcome, ControlPickResult, ControlRemoteGroup, ControlRemoteGroupMember, ControlRemoteMember,
+    ControlRemotePane, ControlRemoteSession, ControlRemoteTree, ControlRestartReceipt, ControlRestoreStatus,
+    ControlResult, ControlWindowFrame, ControlWindowNode, MessageRejection, MessageRejectionReason,
 };
 pub use tree::{ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode};
 pub use version::{AppIdentity, ConformanceProfile, PARITY_LEVEL, VersionResult};

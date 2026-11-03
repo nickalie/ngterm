@@ -226,6 +226,13 @@ pub struct ControlRemotePane {
     pub foreground: Option<Vec<String>>,
 }
 
+/// A parent's companion membership entry, whether or not that row is attachable (upstream's `ControlRemoteMember`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlRemoteMember {
+    pub id: String,
+    pub name: String,
+}
+
 /// A session whose every pane resolves to a live daemon (upstream's `ControlRemoteSession`); one whose panes did not
 /// all resolve is absent rather than partial.
 #[skip_serializing_none]
@@ -261,6 +268,9 @@ pub struct ControlRemoteSession {
     /// `page` for a page companion, which has no panes and attaches only under its parent's row.
     #[serde(default)]
     pub content: Option<String>,
+    /// Complete sidebar-ordered membership on parent rows; absent on companions or origins predating groups.
+    #[serde(default)]
+    pub companions: Option<Vec<ControlRemoteMember>>,
 }
 
 /// `live.tree [HOST]` (upstream's `ControlRemoteTree`): every open window's attachable sessions and the one endpoint

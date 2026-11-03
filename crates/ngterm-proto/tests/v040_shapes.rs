@@ -1,5 +1,5 @@
 //! New v0.40.0 shapes are optional on older peers and retain their exact wire keys.
-use ngterm_proto::{Args, ControlEvent, ControlResult, ControlSessionNode, Request};
+use ngterm_proto::{Args, ControlEvent, ControlRemoteSession, ControlResult, ControlSessionNode, Request};
 use serde_json::json;
 
 #[test]
@@ -21,6 +21,25 @@ fn message_receipts_and_remote_group_members_round_trip() {
     assert_eq!(serde_json::to_value(result).unwrap(), wire);
     let old: ControlResult = serde_json::from_value(json!({"id":"old"})).unwrap();
     assert!(old.message_id.is_none() && old.remote_group.is_none() && old.messages.is_none());
+}
+
+#[test]
+fn remote_membership_distinguishes_unknown_empty_and_ordered_members() {
+    let old = json!({"id":"S","name":"build","windowID":"W","windowName":"main","workspaceID":"WS",
+        "workspaceName":"work","cwd":"/repo","panes":[]});
+    let session: ControlRemoteSession = serde_json::from_value(old.clone()).unwrap();
+    assert!(session.companions.is_none());
+    assert_eq!(serde_json::to_value(session).unwrap(), old);
+    for members in [json!([]), json!([{"id":"C","name":"logs"},{"id":"P","name":"report"}])] {
+        let mut wire = old.clone();
+        wire["companions"] = members.clone();
+        let session: ControlRemoteSession = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            session.companions.as_ref().unwrap().len(),
+            members.as_array().unwrap().len()
+        );
+        assert_eq!(serde_json::to_value(session).unwrap(), wire);
+    }
 }
 
 #[test]

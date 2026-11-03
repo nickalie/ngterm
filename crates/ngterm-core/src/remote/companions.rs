@@ -183,6 +183,7 @@ pub(crate) struct CompanionFlow {
 }
 
 /// One attachment of a page companion of another machine being shown here (upstream's `attachRemotePage`).
+#[derive(Debug)]
 pub(crate) struct PageAttach {
     origin_session: String,
     host: String,
@@ -225,24 +226,7 @@ pub(crate) fn begin_page_row_attach(
         Ok(window) => window,
         Err(error) => return Dispatched::done(Err(error)),
     };
-    let rows: Vec<Uuid> = core
-        .library()
-        .store(window)
-        .map(|store| {
-            store
-                .sessions()
-                .filter(|row| row.parent_id().is_none() && row.remote_host() == Some(host))
-                .filter(|row| {
-                    row.remote_presentation().is_some_and(|state| {
-                        let binding = &state.binding;
-                        Some(binding.remote_session_id.as_str()) == remote.parent.as_deref()
-                            && binding.origin.as_ref().map(|origin| &origin.endpoint) == Some(&tree.endpoint)
-                    })
-                })
-                .map(crate::model::Session::id)
-                .collect()
-        })
-        .unwrap_or_default();
+    let rows = matching_parent_rows(core, window, host, remote.parent.as_deref(), &tree.endpoint);
     let [parent] = rows[..] else {
         let error = if rows.is_empty() {
             format!("attach the page's parent session from {host} first")
@@ -255,6 +239,33 @@ pub(crate) fn begin_page_row_attach(
         Ok(attach) => drive_page(attach),
         Err(error) => Dispatched::done(Err(ControlError::rejected(error))),
     }
+}
+
+/// Top-level rows in this destination window showing exactly this origin parent.
+pub(super) fn matching_parent_rows(
+    core: &Core,
+    window: Uuid,
+    host: &str,
+    parent: Option<&str>,
+    endpoint: &ngterm_proto::ControlLiveEndpoint,
+) -> Vec<Uuid> {
+    core.library()
+        .store(window)
+        .map(|store| {
+            store
+                .sessions()
+                .filter(|row| row.parent_id().is_none() && row.remote_host() == Some(host))
+                .filter(|row| {
+                    row.remote_presentation().is_some_and(|state| {
+                        let binding = &state.binding;
+                        Some(binding.remote_session_id.as_str()) == parent
+                            && binding.origin.as_ref().map(|origin| &origin.endpoint) == Some(endpoint)
+                    })
+                })
+                .map(crate::model::Session::id)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// What the origin's create said: the created session's id, or why there is none.

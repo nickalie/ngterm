@@ -195,8 +195,9 @@ const WINDOWLESS: [Command; 6] = [
 ];
 /// Their ids name something else (a remote session, dashboard cells, a Recent Closed entry), and they still land in a
 /// local window.
-const PLACED_LOCALLY: [Command; 3] = [
+const PLACED_LOCALLY: [Command; 4] = [
     Command::Live(LiveCmd::Attach),
+    Command::Live(LiveCmd::AttachGroup),
     Command::Dashboard,
     Command::Recent(RecentCmd::Open),
 ];
@@ -600,6 +601,9 @@ mod tests {
         let attach = fixture.request(r#"{"cmd":"live.attach","target":"REMOTE","args":{"host":"mac"}}"#);
         assert_eq!(attach.target.as_deref(), Some("REMOTE"));
         assert_eq!(window(&attach), Some("W1"));
+        let group = fixture.request(r#"{"cmd":"live.attach.group","target":"REMOTE","args":{"host":"mac"}}"#);
+        assert_eq!(group.target.as_deref(), Some("REMOTE"));
+        assert_eq!(window(&group), Some("W1"));
         let dashboard = fixture.request(r#"{"cmd":"dashboard","args":{"targets":["A","B"]}}"#);
         assert_eq!(targets(&dashboard), Some(strings(&["A", "B"])));
         assert_eq!(window(&dashboard), Some("W1"));

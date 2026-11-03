@@ -32,6 +32,8 @@ pub mod clipboard;
 mod companion_page;
 pub(crate) mod companions;
 pub mod frames;
+/// One parent and its freshly discovered companion group.
+pub(crate) mod group_attach;
 mod handoff;
 pub mod hub;
 mod layout;

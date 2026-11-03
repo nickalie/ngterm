@@ -81,6 +81,7 @@ pub(crate) fn deferred(core: &mut Core, request: &Request) -> Option<Dispatched>
         Command::Browser(BrowserCmd::Clear) => Some(super::browser::begin_clear(core, request)),
         Command::Live(LiveCmd::Tree) => Some(crate::remote::begin_tree(core, request)),
         Command::Live(LiveCmd::Attach) => Some(crate::remote::attach::begin_attach(core, request)),
+        Command::Live(LiveCmd::AttachGroup) => Some(crate::remote::group_attach::begin(core, request)),
         _ => None,
     }
 }
