@@ -676,24 +676,40 @@ fn a_page_is_refused_as_unsupported_and_its_closes_change_nothing() {
 }
 
 #[test]
-fn respawn_counts_and_warnings_make_no_event() {
+fn respawn_counts_are_handed_to_the_panes_and_warnings_make_no_event() {
     local(async {
         let mut harness = Harness::attached(Some(1)).await;
-        harness
-            .connect(PresentationMode::Mirror, PresentationSnapshot::default())
-            .await;
+        let counts = |generation: i64| PresentationRespawns {
+            epoch: "e1".to_owned(),
+            generations: std::collections::BTreeMap::from([(PANE.to_owned(), generation)]),
+        };
+        let snapshot = PresentationSnapshot {
+            respawns: Some(counts(1)),
+            ..PresentationSnapshot::default()
+        };
+        harness.connect(PresentationMode::Mirror, snapshot).await;
         harness.take_events();
 
-        harness
-            .deliver(Body::Respawn(PresentationRespawns {
-                epoch: "e1".to_owned(),
-                generations: std::collections::BTreeMap::from([(PANE.to_owned(), 2)]),
-            }))
-            .await;
+        harness.deliver(Body::Respawn(counts(2))).await;
         // an invalid layout is only a warning
         harness.deliver(Body::Layout(PresentationLayout::invalid())).await;
 
         assert!(harness.take_events().is_empty());
+        let respawns = |generation: i64, seed: bool| Respawns {
+            machine_id: MACHINE.to_owned(),
+            session_id: SESSION.to_owned(),
+            counts: counts(generation),
+            seed,
+        };
+        assert_eq!(
+            harness.presentations.borrow_mut().take_respawns(),
+            [respawns(1, true), respawns(2, false)],
+            "the snapshot's counts seed, the frame's follow"
+        );
+        assert!(
+            harness.presentations.borrow_mut().take_respawns().is_empty(),
+            "each handed on once"
+        );
     });
 }
 

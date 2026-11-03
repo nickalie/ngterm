@@ -11,22 +11,27 @@
 //! and commands), [`transport`] (the ssh seam, its channels, the russh transport and the scripted fake behind the
 //! `fakes` feature), [`keys`] (generating, importing and loading the app's ssh keys), [`sessions`] (a machine's session
 //! list, New Session and End Session), [`presentation`] (attached sessions' presentation streams and what they
-//! show), [`reconnect`] (keeping machines connected: lost connections, network changes, suspend and resume).
+//! show), [`pane`] (shown panes: their attach, terminal, leadership, ends and clipboard reads), [`reconnect`] (keeping
+//! machines connected: lost connections, network changes, suspend and resume).
 
 uniffi::setup_scaffolding!();
 
 pub mod actor;
 pub mod api;
 pub mod keys;
+pub mod pane;
 pub mod presentation;
 pub mod reconnect;
 pub mod sessions;
 pub mod transport;
 
 pub use api::{
-    EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileError, MobileEvent, Pane, VaultError,
+    CellPoint, EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileError, MobileEvent, Pane,
+    PaneInputError, PaneKey, PaneKeyAction, PaneMouse, PaneMouseAction, PaneMouseButton, PaneSendOutcome, PaneSize,
+    PaneWheel, PaneWheelOutcome, VaultError,
 };
 pub use keys::{KeyError, KeyPair};
+pub use pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};
 pub use presentation::{
     AskReply, PresentationRole, RemoteAsk, RemoteAskButton, RemoteAskChoice, RemoteAskChoices, RemoteAskInput,
     RemoteHud, RemoteLayout, RemoteNotice, RemoteStatus, StreamState,

@@ -1,17 +1,26 @@
-//! The `UniFFI` facade the Kotlin app calls: [`MobileCore`] and its handles, the records and events they carry, and the
-//! callback interfaces the app implements ([`EventSink`], [`KeyVault`], [`HostKeyStore`]).
+//! The `UniFFI` facade the Kotlin app calls: [`MobileCore`] and its handles (a shown pane's [`Pane`]), the records and
+//! events they carry, and the callback interfaces the app implements ([`EventSink`], [`KeyVault`], [`HostKeyStore`]).
 //!
 //! Everything here is thin: a [`MobileCore`] call posts a command to the core's actor (`crate::actor`) and, when it
 //! has an answer, awaits it (a Kotlin `suspend fun`); what the actor learns on its own reaches the app as
 //! [`MobileEvent`]s through the [`EventSink`], on the actor's thread. `UniFFI` passes owned arguments, so a signature
 //! clippy would take by reference keeps its owned form under an item-level `#[expect]`.
 
+mod pane;
+
 use std::sync::Arc;
 
 use tokio::sync::oneshot;
 
+pub(crate) use self::pane::PaneSlot;
+pub use self::pane::{
+    CellPoint, Pane, PaneInputError, PaneKey, PaneKeyAction, PaneMouse, PaneMouseAction, PaneMouseButton,
+    PaneSendOutcome, PaneSize, PaneWheel, PaneWheelOutcome,
+};
+
 use crate::actor::{Actor, Command};
 use crate::keys::{self, KeyError, KeyPair};
+use crate::pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};
 use crate::presentation::{
     AskReply, PresentationRole, RemoteAsk, RemoteHud, RemoteLayout, RemoteNotice, RemoteStatus, StreamState,
 };
@@ -142,6 +151,43 @@ pub enum MobileEvent {
         session_id: String,
         ask_id: String,
     },
+    /// A shown pane has a fresh terminal (its first attach, or another after a lost link, a respawn or a takeover):
+    /// draw it from scratch.
+    PaneAttached { pane: PaneRef },
+    /// A shown pane's terminal has a new frame to draw.
+    PaneDirty { pane: PaneRef },
+    /// A shown pane's program set its title (never the attach client's role reports, which arrive as
+    /// [`MobileEvent::PaneLead`]).
+    PaneTitle { pane: PaneRef, title: String },
+    /// A shown pane's role at its session (`None` until its attach reports one) and whether it is covered: a
+    /// follower's grid is another client's, and a pane attaching again has nothing to show yet. A covered pane offers
+    /// [`MobileCore::take_lead`].
+    PaneLead {
+        pane: PaneRef,
+        role: Option<PaneRole>,
+        covered: bool,
+    },
+    /// A shown pane's attach ended, as [`PaneEnd`] says; a pane covered for its role is no longer covered.
+    PaneEnded { pane: PaneRef, end: PaneEnd },
+    /// A shown pane's program rang the bell.
+    Bell { pane: PaneRef },
+    /// A shown pane's program set the clipboard (`None` clears it).
+    ClipboardWrite {
+        pane: PaneRef,
+        clipboard: PaneClipboard,
+        text: Option<String>,
+    },
+    /// A shown pane's program asks to read the clipboard (`list_only`: only which kinds it holds): its output waits
+    /// for [`MobileCore::answer_clipboard_read`].
+    ClipboardReadRequest {
+        pane: PaneRef,
+        read_id: u64,
+        clipboard: PaneClipboard,
+        list_only: bool,
+    },
+    /// A clipboard read was denied without the user's answer (the pane hidden, its link lost, its program ended):
+    /// take its prompt down.
+    ClipboardReadDismiss { pane: PaneRef, read_id: u64 },
 }
 
 /// Why a [`MobileCore`] call failed.
@@ -274,8 +320,8 @@ impl MobileCore {
         answer.await.unwrap_or(Err(MobileError::Stopped))
     }
 
-    /// Closes the connection to `machine_id`, if any, cancels a connect or reconnect in flight, and ends its attached
-    /// sessions' streams.
+    /// Closes the connection to `machine_id`, if any, cancels a connect or reconnect in flight, ends its attached
+    /// sessions' streams and hides its shown panes.
     ///
     /// # Errors
     ///
@@ -368,8 +414,8 @@ impl MobileCore {
         answer.await.unwrap_or(Err(MobileError::Stopped))
     }
 
-    /// Detaches `session_id` of `machine_id`: its stream ends, with no further events about it. The session goes on
-    /// running there.
+    /// Detaches `session_id` of `machine_id`: its stream ends and its shown panes are hidden
+    /// ([`MobileCore::hide_pane`]), with no further events about them. The session goes on running there.
     ///
     /// # Errors
     ///
@@ -431,6 +477,84 @@ impl MobileCore {
             reply,
         })
     }
+
+    /// Shows the pane `pane_id` (its identity, as the session's layout names it) of `session_id`, a session of
+    /// `machine_id`'s last listing, at `size`: its terminal attaches on a channel with a pty of that size, claiming
+    /// nothing (it leads only a session nobody leads; [`MobileCore::take_lead`] claims). What happens to it arrives
+    /// as pane events ([`MobileEvent::PaneAttached`] and the ones after). Showing a shown pane hands back a handle on
+    /// the same pane.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::NotConnected`], [`MobileError::NotListed`] when the machine's last listing doesn't hold the
+    /// session, [`MobileError::Remote`] when the session has no such pane, or [`MobileError::Stopped`].
+    pub async fn show_pane(
+        &self,
+        machine_id: String,
+        session_id: String,
+        pane_id: String,
+        size: PaneSize,
+    ) -> Result<Arc<Pane>, MobileError> {
+        let (reply, answer) = oneshot::channel();
+        self.actor.post(Command::ShowPane {
+            machine_id,
+            session_id,
+            pane_id,
+            size,
+            reply,
+        })?;
+        answer.await.unwrap_or(Err(MobileError::Stopped))
+    }
+
+    /// Hides a shown pane: its channel closes and any clipboard read it holds open is denied. Its handles go dead
+    /// ([`PaneInputError::Closed`]).
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn hide_pane(&self, machine_id: String, session_id: String, pane_id: String) -> Result<(), MobileError> {
+        self.actor.post(Command::HidePane(PaneRef {
+            machine_id,
+            session_id,
+            pane_id,
+        }))
+    }
+
+    /// Take control: a shown pane attaches again claiming the lead, so its grid sizes the machine's pty and the
+    /// client that led follows. A pane whose program ended, or whose takeover is on its way, stays as it is.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn take_lead(&self, machine_id: String, session_id: String, pane_id: String) -> Result<(), MobileError> {
+        self.actor.post(Command::TakeLead(PaneRef {
+            machine_id,
+            session_id,
+            pane_id,
+        }))
+    }
+
+    /// The user's answer to a shown pane's clipboard read `read_id` (a [`MobileEvent::ClipboardReadRequest`]); an
+    /// answer to a read no longer open is dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn answer_clipboard_read(
+        &self,
+        machine_id: String,
+        session_id: String,
+        pane_id: String,
+        read_id: u64,
+        reply: ClipboardReply,
+    ) -> Result<(), MobileError> {
+        let pane = PaneRef {
+            machine_id,
+            session_id,
+            pane_id,
+        };
+        self.actor.post(Command::AnswerClipboardRead { pane, read_id, reply })
+    }
 }
 
 /// A new ed25519 key for the app, its public half commented `comment` (shown in the machine's `authorized_keys`).
@@ -458,19 +582,4 @@ pub fn import_key(private_key: Vec<u8>, passphrase: Option<String>) -> Result<Ke
     let private_key = zeroize::Zeroizing::new(private_key);
     let passphrase = passphrase.map(zeroize::Zeroizing::new);
     keys::import(&private_key, passphrase.as_deref().map(String::as_str))
-}
-
-/// A shown pane of an attached session: a handle onto the terminal the actor feeds from its ssh channel.
-#[derive(Debug, uniffi::Object)]
-pub struct Pane {
-    id: u64,
-}
-
-#[uniffi::export]
-impl Pane {
-    /// The pane's id within its session, as the origin numbers it.
-    #[must_use]
-    pub fn id(&self) -> u64 {
-        self.id
-    }
 }

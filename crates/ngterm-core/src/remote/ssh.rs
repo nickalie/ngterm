@@ -148,8 +148,12 @@ pub fn tunnel_command(host: &str, plan: &super::page_tunnel::TunnelPlan) -> Resu
     Ok(argv)
 }
 
+/// What the attach's gone guard prints before it exits 1: a pane whose attach ends so names a session gone from its
+/// machine.
+pub const SESSION_GONE: &str = "ngterm: remote session is gone";
+
 /// The create-only guard after the attach: an existing daemon ignores it, a vanished one runs it and fails, so the
-/// attach never hands back a fresh shell wearing the old session's name.
+/// attach never hands back a fresh shell wearing the old session's name. It prints [`SESSION_GONE`].
 const GONE_GUARD: &str = "printf '%s\\n' 'ngterm: remote session is gone'; exit 1";
 
 /// One ssh invocation attaching to `daemon` on `host` for the lifetime of the pane (upstream's `attachCommand`, which
@@ -348,6 +352,15 @@ mod tests {
 
     use super::*;
     use crate::live::daemon_name;
+
+    #[test]
+    fn the_gone_guard_prints_the_session_gone_line() {
+        assert_eq!(
+            GONE_GUARD,
+            format!("printf '%s\\n' '{SESSION_GONE}'; exit 1"),
+            "a viewer reads the guard's line to tell a gone session from a program's exit"
+        );
+    }
 
     fn endpoint() -> ControlLiveEndpoint {
         ControlLiveEndpoint {

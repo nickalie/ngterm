@@ -551,7 +551,11 @@ fn a_listing_read_on_a_replaced_connection_answers_but_is_neither_kept_nor_repor
 
     let transport = FakeTransport::new();
     let (sink, events) = recorder();
-    let state = super::State::new(transport.clone(), Arc::clone(&sink) as Arc<dyn EventSink>);
+    let state = super::State::new(
+        transport.clone(),
+        Arc::clone(&sink) as Arc<dyn EventSink>,
+        tokio::sync::mpsc::unbounded_channel().0,
+    );
     let machine = machine("m1", "box");
     let old = std::rc::Rc::new(block_on(transport.connect(&machine)).expect("connected"));
     let new = std::rc::Rc::new(block_on(transport.connect(&machine)).expect("connected"));
@@ -598,7 +602,11 @@ fn a_listing_overtaken_by_a_later_one_is_neither_kept_nor_reported() {
 
     let transport = FakeTransport::new();
     let (sink, events) = recorder();
-    let state = super::State::new(transport.clone(), Arc::clone(&sink) as Arc<dyn EventSink>);
+    let state = super::State::new(
+        transport.clone(),
+        Arc::clone(&sink) as Arc<dyn EventSink>,
+        tokio::sync::mpsc::unbounded_channel().0,
+    );
     let machine = machine("m1", "box");
     let connection = std::rc::Rc::new(block_on(transport.connect(&machine)).expect("connected"));
     state.connections.borrow_mut().insert(

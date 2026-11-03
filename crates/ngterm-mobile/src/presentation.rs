@@ -1,15 +1,15 @@
 //! Attached sessions' presentation streams: one core [`PresentationClient`] per attached session, run on the actor
 //! over the machine's connection, with what it reports turned into [`MobileEvent`]s and the answers the origin expects.
 //!
-//! - **The adapter.** [`ChannelLinks`] is the client's [`PresentationTransport`]: each launch runs the session's
+//! - **The adapter.** `ChannelLinks` is the client's [`PresentationTransport`]: each launch runs the session's
 //!   `ngtermctl live present` tail on an exec channel with no pty, as a local task that splits the output into lines
 //!   and reports each one, and the channel's end, tagged with the launch's [`LinkKey`]; a report of an earlier launch
 //!   is dropped by the client. Lines sent before the channel opened (the hello) wait for it. A line over
 //!   [`MAX_FRAME_BYTES`] ends the stream, as desktop's bridge reader does, and a partial line at the end is dropped.
 //!   While the machine's connection is down the adapter has none, and a launch's link closes at once
 //!   ([`CONNECTION_DOWN`]), so each client keeps failing on its own backoff until the machine is back
-//!   ([`Presentations::machine_up`]).
-//! - **The owner.** [`Presentations`] holds the clients, passes them the actor's clock, runs their [`TICK`] (reconnect
+//!   (`Presentations::machine_up`).
+//! - **The owner.** `Presentations` holds the clients, passes them the actor's clock, runs their [`TICK`] (reconnect
 //!   on backoff, a stream quiet for [`STALE_AFTER`] dropped and reopened) and applies their effects with the semantics
 //!   desktop's viewer applies them (`viewer.rs::apply_client_effect`), re-derived for a phone:
 //!   - a snapshot's status is no change on the origin ([`MobileEvent::SessionStatus`]'s `changed` is false), so the
@@ -21,11 +21,11 @@
 //!   - when the stream leaves `connected`, what it showed goes with it: context, status and HUD clear, and the asks
 //!     still open are dismissed (the origin takes them back), as desktop's row does.
 //!
-//! A lost connection keeps the streams ([`Presentations::machine_down`]); a suspended core stops them without a word
-//! ([`Presentations::suspend_machine`]); the machine back, each client starts again if stopped and retries at once.
+//! A lost connection keeps the streams (`Presentations::machine_down`); a suspended core stops them without a word
+//! (`Presentations::suspend_machine`); the machine back, each client starts again if stopped and retries at once.
 //!
-//! The origin's respawn counts are for the panes (Task 9c) and its warnings name nothing the app shows: the stream's
-//! own state carries the reason it failed.
+//! The origin's respawn counts are handed on to the session's panes (`Presentations::take_respawns`, then
+//! [`crate::pane`]), and its warnings name nothing the app shows: the stream's own state carries the reason it failed.
 //!
 //! [`STALE_AFTER`]: ngterm_core::remote::client::STALE_AFTER
 //! [`PAGES_UNSUPPORTED`]: ngterm_core::remote::client::PAGES_UNSUPPORTED
@@ -43,6 +43,7 @@ use ngterm_core::model::RemoteConnection;
 use ngterm_core::remote::client::{ClientEffect, PAGES_UNSUPPORTED, PresentationClient};
 use ngterm_core::remote::frames::{
     Body, MAX_FRAME_BYTES, PresentationAskAnswer, PresentationOverlayChange, PresentationPageChange,
+    PresentationRespawns,
 };
 use ngterm_core::remote::ssh::present_tail;
 use ngterm_core::remote::tree::INVALID_REMOTE_SESSION;
@@ -252,6 +253,18 @@ struct Attached<C> {
     connected: bool,
     /// The asks shown and not yet answered or dismissed, with the `owner` their answer echoes.
     asks: HashMap<String, i64>,
+    /// The respawn counts reported and not yet handed to the panes, each with whether a snapshot carried it.
+    respawns: Vec<(PresentationRespawns, bool)>,
+}
+
+/// Respawn counts an attached session's origin reported, for its panes ([`crate::pane`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Respawns {
+    pub(crate) machine_id: String,
+    pub(crate) session_id: String,
+    pub(crate) counts: PresentationRespawns,
+    /// Whether a snapshot carried them (a reconnect's baseline) rather than a respawn frame.
+    pub(crate) seed: bool,
 }
 
 /// Every attached session's stream.
@@ -302,6 +315,7 @@ impl<C: Connection> Presentations<C> {
             links,
             connected: false,
             asks: HashMap::new(),
+            respawns: Vec::new(),
         };
         let effects = attached.client.start(&attached.links, now);
         let events = attached.apply_all(effects);
@@ -410,6 +424,20 @@ impl<C: Connection> Presentations<C> {
         true
     }
 
+    /// The respawn counts reported since the last call, oldest first.
+    pub(crate) fn take_respawns(&mut self) -> Vec<Respawns> {
+        let mut taken = Vec::new();
+        for attached in &mut self.attached {
+            taken.extend(attached.respawns.drain(..).map(|(counts, seed)| Respawns {
+                machine_id: attached.machine_id.clone(),
+                session_id: attached.session_id.clone(),
+                counts,
+                seed,
+            }));
+        }
+        taken
+    }
+
     fn find(&self, machine_id: &str, session_id: &str) -> Option<usize> {
         self.attached
             .iter()
@@ -491,13 +519,14 @@ impl<C> Attached<C> {
                     ask_id: reference.id,
                 }
             }
+            ClientEffect::Respawns(respawns, seed) => return self.respawns.push((respawns, seed)),
             other => return self.refuse(other),
         };
         events.push(event);
     }
 
     /// What the app never shows: an overlay or a page is refused, so the origin takes it back at once; their closes
-    /// and commands, the respawn counts (the panes' business) and the warnings change nothing here.
+    /// and commands and the warnings change nothing here.
     fn refuse(&self, effect: ClientEffect) {
         match effect {
             ClientEffect::OverlayRequest(overlay) => self

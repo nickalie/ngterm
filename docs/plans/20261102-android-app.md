@@ -556,7 +556,7 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Create: `crates/ngterm-mobile/src/pane.rs`
 
-- [ ] write tests first, on the fake transport:
+- [x] write tests first, on the fake transport:
   - bytes reach the `Pane::stream`, and replies and input go back in order;
   - resize reaches the channel;
   - the `LeadAttachment` words are in the attach tail; reserved titles become `PaneLead` and never `PaneTitle`;
@@ -566,9 +566,28 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
   - a clipboard read raises `ClipboardReadRequest`, and both Allow and Deny unfreeze the output; detach denies any read
     still open;
   - `kitty_image_limit` is 0
-- [ ] implement `Pane` with its feeder and writer threads, and its key, mouse, wheel, paste and selection API over
+- [x] implement `Pane` with its feeder and writer threads, and its key, mouse, wheel, paste and selection API over
       `ngterm-term`'s types
-- [ ] run the tests; they must pass before Task 9d
+- [x] run the tests; they must pass before Task 9d
+  - Notes: `MobileCore::show_pane(machine_id, session_id, pane_id, PaneSize) -> Pane` (the pane's identity as the
+    layout names it; needs the connection and a kept listing whose session lists the pane's daemon, not an attached
+    stream), `hide_pane`, `take_lead` and `answer_clipboard_read(…, read_id, ClipboardReply)`; `detach_session` and
+    `disconnect` hide the session's or machine's panes. The first attach and every automatic one claim nothing
+    (`LeadAttachment::new(false)`); only Take control claims. The `Pane` handle (`api::pane`) calls the terminal
+    directly on the caller's thread (key, type, mouse, wheel, paste, focus, resize, select*, selection text) over
+    `PaneKey`/`PaneMouse`/`PaneWheel` records that become `ngterm-term`'s `KeyInput`/`MouseInput`/`WheelInput` (the key
+    named as Ghostty names the physical key, modifiers as `Mods` bits); every reattach swaps a fresh terminal into the
+    same handle and reports `PaneAttached` (redraw from scratch). Pane events carry a `PaneRef` (machine, session,
+    pane): `PaneAttached`, `PaneDirty` (per wake), `PaneTitle`, `PaneLead { role, covered }`, `PaneEnded(PaneEnd::
+    Lost | Exited { code, signal } | Gone)`, `Bell`, `ClipboardWrite`, `ClipboardReadRequest { read_id, list_only }`
+    and `ClipboardReadDismiss`. Read ids are the core's own (a fresh terminal restarts the terminal's), and a read
+    still open when its pane is hidden, loses its link or exits is denied and dismissed. A link lost while the
+    connection stays up attaches again on `retry_delay` (reset by a role report); one lost with its connection waits
+    for `machine_up`. A gone-guard exit (core's new `ssh::SESSION_GONE` line, then exit 1) reads a fresh listing,
+    kept and reported as any other: no longer listed is `Gone`, otherwise (or with no listing) a plain exit 1.
+    Respawn counts reach the panes from `Presentations::take_respawns` through `RemoteRespawnBook`. "Always allow
+    for this machine" is the app's to store: it answers a request at once without asking. A stopped writer sends what
+    is still queued (a denied read's reply) and closes the channel once the queue is quiet for `WRITER_POLL`.
 
 ### Task 9d: Packed row buffer
 
