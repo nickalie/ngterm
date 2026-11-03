@@ -1,6 +1,6 @@
 ---
 name: agterm-upstream-sync
-description: "Sync ngterm's parity target with a new umputun/agterm release: analyse upstream changes, make the mechanical bump, and write a docs/plans/ porting plan for plan-exec-revmux. Use for upstream release syncs, parity target bumps, or upstream change analysis, including 'синхронизируй с апстримом'. Ports no features itself."
+description: "Sync ngterm's parity target with a new umputun/agterm release: analyse upstream changes, make the mechanical bump, and write a docs/plans/ porting plan for plan-exec-revmux. Use for upstream release syncs, parity target bumps, or upstream change analysis, including 'sync with upstream'. Ports no features itself."
 ---
 
 # agterm-upstream-sync
