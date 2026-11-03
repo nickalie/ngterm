@@ -499,24 +499,27 @@ pub struct RusshConnection {
 impl Connection for RusshConnection {
     async fn exec(&self, command: &str, pty: Option<GridSize>) -> Result<Channel, TransportError> {
         let handle = self.handle.borrow().clone().ok_or(TransportError::Closed)?;
-        let mut channel = handle.channel_open_session().await.map_err(|error| {
+        let channel = handle.channel_open_session().await.map_err(|error| {
             if handle.is_closed() {
                 TransportError::Closed
             } else {
                 TransportError::Rejected(error.to_string())
             }
         })?;
+        let mut opening = Opening(Some(channel));
         let mut early = VecDeque::new();
+        let channel = opening.0.as_mut().ok_or(TransportError::Closed)?;
         if let Some(size) = pty {
             let (width, height) = pixels(size);
             channel
                 .request_pty(true, PTY_TERM, size.cols.into(), size.rows.into(), width, height, &[])
                 .await
                 .map_err(|_| TransportError::Closed)?;
-            replied(&mut channel, &mut early, "the machine refused a pty").await?;
+            replied(channel, &mut early, "the machine refused a pty").await?;
         }
         channel.exec(true, command).await.map_err(|_| TransportError::Closed)?;
-        replied(&mut channel, &mut early, "the machine refused to run the command").await?;
+        replied(channel, &mut early, "the machine refused to run the command").await?;
+        let channel = opening.0.take().ok_or(TransportError::Closed)?;
         let (core, peer) = Channel::pair();
         let ChannelPeer { output, input } = peer;
         let (read, write) = channel.split();
@@ -540,6 +543,25 @@ impl Connection for RusshConnection {
         tokio::task::spawn_local(async move {
             let _ = handle.disconnect(Disconnect::ByApplication, "", "en").await;
         });
+    }
+}
+
+/// A channel being opened: closed on the machine unless it reaches the bridge tasks.
+///
+/// russh does not close a channel it drops, so a refused pty or command, or an `exec` dropped part-way, would leave
+/// it open on the machine and count against its `MaxSessions` until the connection ends.
+struct Opening(Option<::russh::Channel<Msg>>);
+
+impl Drop for Opening {
+    fn drop(&mut self) {
+        let Some(channel) = self.0.take() else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = channel.close().await;
+            });
+        }
     }
 }
 

@@ -94,6 +94,7 @@ async fn serve(config: Arc<server::Config>, stream: tokio::net::TcpStream, handl
 /// `vanish` (closes with no status), `cat` (echoes input until EOF, then exits 0), `pty` (reports its pty, and each
 /// resize), `later` (`later` and exit 0, a moment after it starts), `flood` (twice [`OUTPUT_BUDGET`] as fast as it is
 /// taken), `stall` (never reads its input), `hang`, `drop` (drops the whole connection) and `refuse` (refused).
+/// A pty one column wide is refused.
 struct Handler {
     authorized: PublicKey,
     log: Log,
@@ -212,6 +213,9 @@ impl server::Handler for Handler {
     ) -> Result<(), Self::Error> {
         let pty = format!("{term} {cols}x{rows} {width}x{height}");
         self.record(format!("pty {pty}"));
+        if cols == 1 {
+            return session.channel_failure(channel);
+        }
         self.ptys.insert(channel, pty);
         session.channel_success(channel)
     }
@@ -818,6 +822,29 @@ fn a_refused_command_is_rejected() {
         let refused = connection.exec("refuse", None).await;
 
         assert!(matches!(refused, Err(TransportError::Rejected(_))));
+        closed_by_client(&server).await;
+        assert_eq!(server.log(), ["close"]);
+    });
+}
+
+#[test]
+fn a_refused_pty_is_rejected_and_its_channel_closed() {
+    run(async {
+        let fixture = fixture(quick());
+        let server = TestServer::start(&fixture.public).await;
+        let connection = connected(&fixture, &server).await;
+        let size = GridSize {
+            cols: 1,
+            rows: 24,
+            cell_width: 10,
+            cell_height: 20,
+        };
+
+        let refused = connection.exec("pty", Some(size)).await;
+
+        assert!(matches!(refused, Err(TransportError::Rejected(reason)) if reason == "the machine refused a pty"));
+        closed_by_client(&server).await;
+        assert_eq!(server.log(), ["pty xterm-256color 1x24 10x480", "close"]);
     });
 }
 
