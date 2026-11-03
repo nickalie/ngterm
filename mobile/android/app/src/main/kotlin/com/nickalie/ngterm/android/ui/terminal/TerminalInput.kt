@@ -199,6 +199,9 @@ class TerminalSelection internal constructor(
     var unsafePaste by mutableStateOf<String?>(null)
         private set
 
+    /** The selection's rows, whole, as the latest frame shows them. */
+    internal val spans: List<SelectedSpan> get() = state.screen.selection
+
     // a touch selection is let go once a frame shows it gone (copied, cleared by output), not before its first frame
     private var selectionSeen = false
     private var lastClick = Click(CellPoint(0u, 0u), 0L, 0)

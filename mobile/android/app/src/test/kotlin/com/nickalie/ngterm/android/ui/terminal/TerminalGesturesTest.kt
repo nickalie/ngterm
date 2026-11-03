@@ -144,18 +144,28 @@ class TerminalGesturesTest {
         compose.onNodeWithText("Copy").assertDoesNotExist()
     }
 
-    @Test
-    fun aLongPressThenADragExtendsTheSelection() {
-        show()
+    /** A finger long-presses [at], held until a frame shows the word, then drags to [to] and lifts. */
+    private fun longPressAndDrag(
+        at: Offset,
+        to: Offset,
+    ) {
+        terminal.performTouchInput { down(at) }
+        compose.mainClock.advanceTimeBy(LONG_PRESS_MS)
+        compose.waitForIdle()
         terminal.performTouchInput {
-            down(cell(2, 1))
-            advanceEventTime(viewConfiguration.longPressTimeoutMillis + HOLD_MS)
-            moveTo(cell(9, 3))
+            moveTo(to)
             up()
         }
         compose.waitForIdle()
+    }
+
+    @Test
+    fun aLongPressThenADragExtendsTheSelection() {
+        show()
+        // "alpha" is cells 0 to 4 of row 1: dragging on from its 'p' keeps the word and extends from its start
+        longPressAndDrag(cell(2, 1), cell(9, 3))
         assertEquals(
-            listOf(FakeInput.SelectWord(point(2, 1)), FakeInput.Select(point(2, 1), point(9, 3), false)),
+            listOf(FakeInput.SelectWord(point(2, 1)), FakeInput.Select(point(0, 1), point(9, 3), false)),
             pane.inputs,
         )
         compose.onNodeWithText("Select all").performClick()
@@ -163,20 +173,72 @@ class TerminalGesturesTest {
     }
 
     @Test
+    fun aLongPressThenADragBackExtendsFromTheWordsEnd() {
+        show()
+        // "beta" is cells 6 to 9 of row 1: dragging back from its 't' keeps the word and extends from its end
+        longPressAndDrag(cell(8, 1), cell(1, 0))
+        assertEquals(FakeInput.Select(point(9, 1), point(1, 0), false), pane.inputs.last())
+    }
+
+    /** The end handle's knob of a selection whose last cell is ([column] - 1, [row]): right of the edge, under it. */
+    private fun endKnob(
+        column: Int,
+        row: Int,
+    ): Offset {
+        val knob = 11f * 2
+        return Offset(column * grid.cellWidth.toFloat() + knob, (row + 1) * grid.cellHeight.toFloat() + knob)
+    }
+
+    @Test
     fun draggingAHandleMovesItsEndOfTheSelection() {
         show()
         terminal.performTouchInput { longClick(cell(2, 1)) }
         compose.waitForIdle()
-        // the word is "alpha", cells 0 to 4 of row 1: the end's knob hangs right of column 5's edge, under the row
-        val knob = 11f * 2
-        val endKnob = Offset(5 * grid.cellWidth.toFloat() + knob, 2 * grid.cellHeight.toFloat() + knob)
+        // the word is "alpha", cells 0 to 4 of row 1
         terminal.performTouchInput {
-            down(endKnob)
+            down(endKnob(5, 1))
             moveBy(Offset(grid.cellWidth.toFloat() * 3, grid.cellHeight.toFloat() * 2))
             up()
         }
         compose.waitForIdle()
         assertEquals(FakeInput.Select(point(0, 1), point(7, 3), false), pane.inputs.last())
+    }
+
+    @Test
+    fun aHandleIsTakenWhereItIsDrawnAfterAPinch() {
+        show()
+        terminal.performTouchInput {
+            pinch(
+                start0 = center - Offset(PINCH_FROM, 0f),
+                end0 = center - Offset(PINCH_TO, 0f),
+                start1 = center + Offset(PINCH_FROM, 0f),
+                end1 = center + Offset(PINCH_TO, 0f),
+            )
+        }
+        compose.waitForIdle()
+        assertTrue("larger text: ${state.textSize}", state.textSize > TerminalTextSize)
+        terminal.performTouchInput { longClick(cell(2, 1)) }
+        compose.waitForIdle()
+        pane.inputs.clear()
+        terminal.performTouchInput {
+            down(endKnob(5, 1))
+            moveBy(Offset(grid.cellWidth.toFloat() * 2, grid.cellHeight.toFloat()))
+            up()
+        }
+        compose.waitForIdle()
+        assertEquals(listOf(FakeInput.Select(point(0, 1), point(6, 2), false)), pane.inputs)
+    }
+
+    @Test
+    fun aCanceledTouchClicksNothing() {
+        show()
+        pane.tracking = true
+        terminal.performTouchInput {
+            down(cell(3, 2))
+            cancel()
+        }
+        compose.waitForIdle()
+        assertEquals("a canceled touch is no tap", emptyList<FakeInput>(), pane.inputs)
     }
 
     @Test
@@ -313,6 +375,7 @@ class TerminalGesturesTest {
         const val STEPS = 10
         const val ROWS_DRAGGED = 5
         const val HOLD_MS = 200L
+        const val LONG_PRESS_MS = 1_000L
         const val FLING_MS = 2_000L
         const val PINCH_FROM = 50f
         const val PINCH_TO = 150f

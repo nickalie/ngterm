@@ -113,12 +113,23 @@ class ClipboardReads(
     /** Hands [read]'s program the clipboard's text, this once. */
     fun allow(read: ClipboardRead) = answer(read, ClipboardReply.Allow(clipboard.read()))
 
-    /** Hands [read]'s program the clipboard's text, and lets its machine's programs read it from now on unasked. */
+    /**
+     * Hands [read]'s program the clipboard's text, and lets its machine's programs read it from now on unasked: the
+     * machine's other reads already waiting are answered with it.
+     */
     fun allowAlways(read: ClipboardRead) {
-        allow(read)
-        unsaved.update { it + read.pane.machineId }
-        trustedState.update { it + read.pane.machineId }
-        scope.launch { trust.allow(read.pane.machineId) }
+        val machine = read.pane.machineId
+        unsaved.update { it + machine }
+        trustedState.update { it + machine }
+        scope.launch { trust.allow(machine) }
+        var answered = emptyList<ClipboardRead>()
+        pendingState.update { reads ->
+            val (same, others) = reads.partition { it.pane.machineId == machine }
+            answered = same
+            others
+        }
+        val text = clipboard.read()
+        for (each in (listOf(read) + answered).distinct()) reply(each, ClipboardReply.Allow(text))
     }
 
     /** Refuses [read]: its program reads an empty clipboard. */

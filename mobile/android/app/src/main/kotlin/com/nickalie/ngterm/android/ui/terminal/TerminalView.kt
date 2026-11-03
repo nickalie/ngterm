@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
@@ -187,6 +188,9 @@ fun TerminalView(
     val ground = palette.background
     val look = TerminalLook(palette.selectionBackground.toArgb(), focused)
     val knob = with(density) { KnobRadius.toPx() }
+    // the gestures' coroutine outlives a pinch (a pinch is one of its gestures): it reads the handles' geometry here
+    val handleFont by rememberUpdatedState(font)
+    val handleKnob by rememberUpdatedState(knob)
     val haptics = LocalHapticFeedback.current
     Box(modifier.onSizeChanged { viewSize = it }) {
         Spacer(
@@ -205,7 +209,8 @@ fun TerminalView(
                     haptics = haptics,
                     handles = {
                         val width = viewSize.width.toFloat()
-                        if (selection.touchSelection) handleSpots(state.screen.selection, font, knob, width) else null
+                        val spans = state.screen.selection
+                        if (selection.touchSelection) handleSpots(spans, handleFont, handleKnob, width) else null
                     },
                     textSize = { state.textSize.value },
                 ),

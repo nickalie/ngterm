@@ -121,6 +121,27 @@ class ClipboardReadsTest {
         }
 
     @Test
+    fun alwaysAllowAnswersTheMachinesReadsAlreadyWaiting() =
+        runTest {
+            val reads = reads()
+            advanceUntilIdle()
+            val sibling = PaneRef("m1", "s2", "P2")
+            val other = PaneRef("m2", "s9", "P9")
+            request(1u)
+            request(2u, sibling)
+            request(3u, other)
+            reads.allowAlways(reads.pending.value.first())
+            assertEquals("another machine still asks", listOf(ClipboardRead(other, 3u, false)), reads.pending.value)
+            assertEquals(
+                listOf(
+                    answer(1u, ClipboardReply.Allow("copied text")),
+                    answer(2u, ClipboardReply.Allow("copied text"), sibling),
+                ),
+                answers(),
+            )
+        }
+
+    @Test
     fun aReadTheCoreDismissesLeavesUnanswered() =
         runTest {
             val reads = reads()

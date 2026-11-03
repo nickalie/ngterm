@@ -27,7 +27,8 @@ private val HandleReach = 24.dp
  * - a finger: a drag scrolls (the pane reports it to a program that asked for the mouse, as wheel turns) and flings
  *   on; a long press selects the word with handles and a toolbar, and a drag from it extends the selection; a drag
  *   on a handle ([handles]) moves that end; two fingers pinch the text size; a tap clicks under mouse tracking and
- *   otherwise lets a touch selection go;
+ *   otherwise lets a touch selection go; a touch the system cancels (a consumed release) does none of these, and a
+ *   canceled drag does not fling;
  * - a mouse or trackpad: as [terminalMouse] says.
  */
 internal fun Modifier.terminalGestures(
@@ -56,8 +57,8 @@ internal fun Modifier.terminalGestures(
         }
     }.terminalMouse(input)
 
-/** What a finger turned out to be doing before the long-press timeout. */
-private enum class Touch { Tap, Drag, Pinch }
+/** What a finger turned out to be doing before the long-press timeout: [Cancel] is a touch the system took back. */
+private enum class Touch { Tap, Drag, Pinch, Cancel }
 
 private suspend fun AwaitPointerEventScope.touchGesture(
     input: TerminalInput,
@@ -75,7 +76,7 @@ private suspend fun AwaitPointerEventScope.touchGesture(
             val anchor = input.cell(down.position)
             if (anchor != null) {
                 selection.selectWordAt(anchor)
-                adjust(input, selection, down, Grip(anchor, anchor))
+                adjust(input, selection, down, WordGrip(anchor) { selection.spans })
             }
         }
 
@@ -95,8 +96,13 @@ private suspend fun AwaitPointerEventScope.touchGesture(
         Touch.Pinch -> {
             pinch(input, textSize)
         }
+
+        Touch.Cancel -> {}
     }
 }
+
+// a touch the system took back comes as a release already consumed (as `waitForUpOrCancellation` reads it)
+private val PointerInputChange.canceled get() = !pressed && isConsumed
 
 private suspend fun AwaitPointerEventScope.classify(
     down: PointerInputChange,
@@ -111,7 +117,8 @@ private suspend fun AwaitPointerEventScope.classify(
         touch =
             when {
                 event.changes.count { it.pressed } > 1 -> Touch.Pinch
-                change == null || !change.pressed -> Touch.Tap
+                change == null || change.canceled -> Touch.Cancel
+                !change.pressed -> Touch.Tap
                 (change.position - down.position).getDistance() > slop -> Touch.Drag
                 else -> null
             }
@@ -129,12 +136,14 @@ private suspend fun AwaitPointerEventScope.scrollDrag(
     var last = down.position
     var pinched = false
     var lifted = false
+    var canceled = false
     while (!pinched && !lifted) {
         val event = awaitPointerEvent()
         val change = event.changes.firstOrNull { it.id == down.id }
         pinched = event.changes.count { it.pressed } > 1
-        if (change == null) {
+        if (change == null || change.canceled) {
             lifted = true
+            canceled = true
         } else if (!pinched) {
             velocity.addPointerInputChange(change)
             input.drag(change.position.y - last.y, change.position)
@@ -145,7 +154,7 @@ private suspend fun AwaitPointerEventScope.scrollDrag(
     }
     if (pinched) {
         pinch(input, textSize)
-    } else {
+    } else if (!canceled) {
         val fling = velocity.calculateVelocity().y
         if (abs(fling) > viewConfiguration.minimumFlingVelocity) input.fling(fling, last, this)
     }
@@ -189,11 +198,53 @@ private suspend fun AwaitPointerEventScope.adjust(
  * How a pointer holds the selection: [moving] is the end it moves, from the cell under the pointer plus [offset];
  * [fixed] is the other end.
  */
-internal class Grip(
+internal open class Grip(
     val fixed: CellPoint,
     val moving: CellPoint,
     val offset: Offset = Offset.Zero,
-)
+) {
+    /** The pointer is over [cell]: selects from the fixed end to it. */
+    open fun select(
+        selection: TerminalSelection,
+        cell: CellPoint,
+    ) = selection.select(fixed, cell)
+}
+
+/**
+ * A long press's hold on the word it selected at [anchor] (Android's text selection): a drag past the word's end
+ * selects from its start, a drag before its start from its end, and within it the word stays. The word is the
+ * selection a frame shows on [anchor]'s row around it ([spans]); until a frame has it, the anchor stands for it.
+ */
+private class WordGrip(
+    private val anchor: CellPoint,
+    private val spans: () -> List<SelectedSpan>,
+) : Grip(anchor, anchor) {
+    private var word: Pair<CellPoint, CellPoint>? = null
+
+    override fun select(
+        selection: TerminalSelection,
+        cell: CellPoint,
+    ) {
+        val (start, end) = word ?: shownWord()?.also { word = it } ?: (anchor to anchor)
+        when {
+            before(cell, start) -> selection.select(end, cell)
+            before(end, cell) -> selection.select(start, cell)
+            else -> selection.select(start, end)
+        }
+    }
+
+    private fun shownWord(): Pair<CellPoint, CellPoint>? {
+        val row = anchor.y.toInt()
+        val column = anchor.x.toInt()
+        val span = spans().singleOrNull()?.takeIf { it.row == row && column in it.first..it.last } ?: return null
+        return CellPoint(span.first.toUShort(), anchor.y) to CellPoint(span.last.toUShort(), anchor.y)
+    }
+
+    private fun before(
+        a: CellPoint,
+        b: CellPoint,
+    ) = a.y < b.y || (a.y == b.y && a.x < b.x)
+}
 
 /** Moves one end of the selection with [down]'s pointer, as [grip] holds it, until the pointer lifts. */
 internal suspend fun AwaitPointerEventScope.extendWhileHeld(
@@ -208,7 +259,7 @@ internal suspend fun AwaitPointerEventScope.extendWhileHeld(
         val cell = input.cell(change.position + grip.offset)
         if (cell != null && cell != last) {
             last = cell
-            selection.select(grip.fixed, cell)
+            grip.select(selection, cell)
         }
     }
 }
