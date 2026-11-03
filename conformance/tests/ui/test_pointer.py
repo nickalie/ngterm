@@ -18,6 +18,9 @@ ROW_DRAG = {"press_for": 0.7, "duration": 0.4, "hold_for": 0.25, "steps": 12}
 DIVIDER_DRAG = {"press_for": 0.2, "duration": 0.5, "hold_for": 0.2, "steps": 10}
 # A thin divider's grab band is a few points wide: upstream retries the start at small offsets until the ratio moves.
 DIVIDER_OFFSETS = (0, -2, 2, -4, 4)
+# Upstream drags 60 points across a 900-point window (0.067 of it); a fraction of the window's own width keeps the move
+# past the 0.05 the test asserts whatever the display scale (UIA's bounds and SendInput are physical pixels).
+DIVIDER_DRAG_FRACTION = 0.08
 # A session row's lower part: upstream drops ON the row (inserted after it), this build after a row's lower half.
 AFTER_ROW = (0.5, 0.7)
 # A workspace row's top sliver: the slot above it (`ReorderUITests.dragWorkspaceRow`).
@@ -113,13 +116,15 @@ def _divider_offsets(ui, window, ratio):
 
 @pytest.mark.covers("field:tree.session.splitRatio", "behavior:split.divider-drag")
 def test_dragging_the_divider_moves_the_split_ratio(ctl, ui):
-    """`SplitRatioUITests.testDividerDragPersistsTheRatio`: a drag of 60 points right moves the ratio past 0.55."""
+    """`SplitRatioUITests.testDividerDragPersistsTheRatio`: a drag right by 0.08 of the window's width (upstream: 60
+    points) moves the ratio past 0.55."""
     sid = _split_session(ctl, ui)
     try:
         assert _ratio(ctl, sid) == pytest.approx(0.5, abs=0.004)
         window = ui.window()
+        distance = ui.frame(window)[2] * DIVIDER_DRAG_FRACTION
         for offset in _divider_offsets(ui, window, 0.5):
-            ui.drag_by(window, 60, 0, offset=offset, **DIVIDER_DRAG)
+            ui.drag_by(window, distance, 0, offset=offset, **DIVIDER_DRAG)
             try:
                 wait_until(lambda: _ratio(ctl, sid) > 0.55, timeout=2)
                 break
