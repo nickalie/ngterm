@@ -2,6 +2,7 @@ package com.nickalie.ngterm.core.fake
 
 import com.nickalie.ngterm.core.ffi.EventSink
 import com.nickalie.ngterm.core.ffi.Machine
+import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import kotlinx.coroutines.test.runTest
@@ -34,13 +35,76 @@ class FakeMobileCoreTest {
             core.endSession("m1", session.id)
             assertTrue(core.listSessions("m1").isEmpty())
             assertEquals(
-                listOf(MobileEvent.Tree("m1", listOf(session)), MobileEvent.Tree("m1", emptyList())),
+                listOf(
+                    MobileEvent.MachineState("m1", MachineState.Connected),
+                    MobileEvent.Tree("m1", listOf(session)),
+                    MobileEvent.Tree("m1", listOf(session)),
+                    MobileEvent.Tree("m1", emptyList()),
+                    MobileEvent.Tree("m1", emptyList()),
+                ),
                 events,
             )
             assertEquals(
                 listOf("connect", "createSession", "listSessions", "endSession", "listSessions"),
                 core.calls.map { it.method },
             )
+        }
+
+    @Test
+    fun connectReportsTheStateOnceAndDisconnectReportsNothing() =
+        runTest {
+            val events = mutableListOf<MobileEvent>()
+            val core = FakeMobileCore(sink = EventSinkOf(events))
+            core.connect(machine)
+            core.connect(machine)
+            core.disconnect("m1")
+            assertEquals(listOf(MobileEvent.MachineState("m1", MachineState.Connected)), events)
+        }
+
+    @Test
+    fun aBlankNameIsNone() =
+        runTest {
+            val core = FakeMobileCore()
+            core.connect(machine)
+            assertEquals("session 1", core.createSession("m1", " ").name)
+        }
+
+    @Test
+    fun endingAnUnlistedSessionNeedsNoListingAndDeliversNoTree() =
+        runTest {
+            val events = mutableListOf<MobileEvent>()
+            val core = FakeMobileCore(sink = EventSinkOf(events))
+            core.connect(machine)
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            events.clear()
+            core.endSession("m1", "s1")
+            assertTrue(core.sessions.getValue("m1").isEmpty())
+            assertTrue(events.isEmpty())
+        }
+
+    @Test
+    fun endingASessionTheMachineDoesNotHaveIsARemoteError() =
+        runTest {
+            val core = FakeMobileCore()
+            core.connect(machine)
+            val error = runCatching { core.endSession("m1", "nope") }.exceptionOrNull()
+            assertTrue(error is MobileException.Remote)
+        }
+
+    @Test
+    fun attachTakesOnlyASessionOfTheLastListing() =
+        runTest {
+            val core = FakeMobileCore()
+            core.connect(machine)
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            val unlisted = runCatching { core.attachSession("m1", "s1") }.exceptionOrNull()
+            assertTrue(unlisted is MobileException.NotListed)
+            core.listSessions("m1")
+            core.attachSession("m1", "s1")
+            core.disconnect("m1")
+            core.connect(machine)
+            val forgotten = runCatching { core.attachSession("m1", "s1") }.exceptionOrNull()
+            assertTrue(forgotten is MobileException.NotListed)
         }
 
     @Test

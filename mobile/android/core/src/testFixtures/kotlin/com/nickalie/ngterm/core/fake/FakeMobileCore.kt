@@ -4,6 +4,7 @@ import com.nickalie.ngterm.core.ffi.AskReply
 import com.nickalie.ngterm.core.ffi.ClipboardReply
 import com.nickalie.ngterm.core.ffi.EventSink
 import com.nickalie.ngterm.core.ffi.Machine
+import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileCoreInterface
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
@@ -23,6 +24,17 @@ data class FakeCall(
  * [calls], keeps each machine's sessions in [sessions], hands [sink] the events a test [emit]s, and throws the
  * failure a test queued with [failNext] from that method's next call.
  *
+ * It follows the real core's rules (crates/ngterm-mobile, api.rs and actor.rs) where the app sees them:
+ * - [connect] reports [MachineState.Connected] as a [MobileEvent.MachineState] when the machine was not connected;
+ *   [disconnect] reports nothing and forgets the machine's listing;
+ * - [listSessions] keeps what it answers as the machine's listing and also delivers it as a [MobileEvent.Tree];
+ *   [createSession] does the same with the listing that has the new session;
+ * - [endSession] ends a session of [sessions] whether listed or not ([MobileException.Remote] for one the machine
+ *   doesn't have) and delivers a [MobileEvent.Tree] only when a listing is kept;
+ * - [attachSession] and [showPane] take only a session of the machine's last listing ([MobileException.NotListed]
+ *   otherwise), not of [sessions]: seeding [sessions] without listing them is refused, as the real core refuses a
+ *   session it has not listed.
+ *
  * [showPane] returns what [paneFactory] makes; the default is a `Pane(NoHandle)`, a placeholder whose methods must not
  * be called (they would reach the native library): a test that drives a pane subclasses it.
  */
@@ -41,6 +53,9 @@ class FakeMobileCore(
 
     /** Each machine's sessions, by machine id, as [listSessions] answers them. */
     val sessions: MutableMap<String, MutableList<RemoteSession>> = mutableMapOf()
+
+    /** Each machine's last listing, by machine id: what [listSessions] or [createSession] last answered. */
+    private val listings = mutableMapOf<String, List<RemoteSession>>()
 
     /** What [showPane] returns. */
     var paneFactory: (machineId: String, sessionId: String, paneId: String, size: PaneSize) -> Pane =
@@ -75,22 +90,33 @@ class FakeMobileCore(
     private fun listed(
         machineId: String,
         sessionId: String,
-    ): RemoteSession =
-        sessionsOf(machineId).firstOrNull { it.id == sessionId } ?: throw MobileException.NotListed(sessionId)
+    ): RemoteSession {
+        sessionsOf(machineId)
+        return listings[machineId]?.firstOrNull { it.id == sessionId } ?: throw MobileException.NotListed(sessionId)
+    }
+
+    /** Keeps the machine's sessions as its listing and delivers them, as the real core does with a fresh listing. */
+    private fun keepListing(machineId: String): List<RemoteSession> {
+        val listing = sessionsOf(machineId).toList()
+        listings[machineId] = listing
+        emit(MobileEvent.Tree(machineId, listing))
+        return listing
+    }
 
     override suspend fun connect(machine: Machine) {
         record("connect", machine)
-        connected += machine.id
+        if (connected.add(machine.id)) emit(MobileEvent.MachineState(machine.id, MachineState.Connected))
     }
 
     override fun disconnect(machineId: String) {
         record("disconnect", machineId)
         connected -= machineId
+        listings -= machineId
     }
 
     override suspend fun listSessions(machineId: String): List<RemoteSession> {
         record("listSessions", machineId)
-        return sessionsOf(machineId).toList()
+        return keepListing(machineId)
     }
 
     override suspend fun createSession(
@@ -99,10 +125,9 @@ class FakeMobileCore(
     ): RemoteSession {
         record("createSession", machineId, name)
         created += 1
-        val session = fakeSession(id = "fake-$created", name = name ?: "session $created")
-        val list = sessionsOf(machineId)
-        list += session
-        emit(MobileEvent.Tree(machineId, list.toList()))
+        val session = fakeSession(id = "fake-$created", name = name?.takeIf { it.isNotBlank() } ?: "session $created")
+        sessionsOf(machineId) += session
+        keepListing(machineId)
         return session
     }
 
@@ -112,8 +137,9 @@ class FakeMobileCore(
     ) {
         record("endSession", machineId, sessionId)
         val list = sessionsOf(machineId)
-        list.remove(listed(machineId, sessionId))
-        emit(MobileEvent.Tree(machineId, list.toList()))
+        if (!list.removeAll { it.id == sessionId }) throw MobileException.Remote("no session $sessionId")
+        val listing = listings[machineId] ?: return
+        listings[machineId] = listing.filter { it.id != sessionId }.also { emit(MobileEvent.Tree(machineId, it)) }
     }
 
     override suspend fun attachSession(

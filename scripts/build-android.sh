@@ -9,6 +9,10 @@
 #    built .so, into mobile/android/core/build/generated/uniffi/kotlin/;
 # 4. run Gradle in mobile/android with the given tasks (default: assembleDebug).
 #
+# The clean tasks among them (`clean`, `:core:clean`, ...) run first, before step 2, since they delete what steps 2 and
+# 3 generate; the others run in step 4, which is skipped when only clean tasks were given. Gradle options (`-...`) go
+# to both runs.
+#
 # Everything generated lives under the core module's build/, so nothing of it is committed; `./gradlew clean` removes
 # it, and a Gradle build without it fails and points here. Gradle and what it runs (the JVM and instrumented tests) get
 # an environment without NGTERM_*, so no test can reach the ngterm the script was started from; cargo keeps the
@@ -48,6 +52,18 @@ while (($#)); do
   esac
 done
 ((${#TASKS[@]})) || TASKS=(assembleDebug)
+CLEAN=()
+BUILD=()
+for task in "${TASKS[@]}"; do
+  if [[ "$task" == -* ]]; then
+    CLEAN+=("$task")
+    BUILD+=("$task")
+  elif [[ "$task" == clean || "$task" == *:clean ]]; then
+    CLEAN+=("$task")
+  else
+    BUILD+=("$task")
+  fi
+done
 
 cd "$NATIVE_ROOT"
 exports="$(scripts/setup-android.sh --check)"
@@ -56,6 +72,28 @@ eval "$exports"
 scripts/build-ghostty-vt.sh >/dev/null
 
 ANDROID_DIR="$NATIVE_ROOT/mobile/android"
+
+# whether the arguments name a task, not only options
+has_task() {
+  local arg
+  for arg in "$@"; do
+    [[ "$arg" == -* ]] || return 0
+  done
+  return 1
+}
+
+# runs Gradle in mobile/android, stripping NGTERM_* from what it starts: no build or test reaches the caller's ngterm
+gradle() {
+  local unset_args=() name
+  while IFS= read -r name; do
+    unset_args+=(-u "$name")
+  done < <(env | sed -n 's/^\(NGTERM_[A-Za-z0-9_]*\)=.*/\1/p')
+  (cd "$ANDROID_DIR" && env ${unset_args[@]+"${unset_args[@]}"} ./gradlew "$@")
+}
+
+if ((GRADLE)) && has_task ${CLEAN[@]+"${CLEAN[@]}"}; then
+  gradle "${CLEAN[@]}"
+fi
 GENERATED="$ANDROID_DIR/core/build/generated"
 JNI_LIBS="$GENERATED/jniLibs"
 BINDINGS="$GENERATED/uniffi/kotlin"
@@ -73,12 +111,6 @@ rm -rf "$BINDINGS"
 "$TARGET/debug/uniffi-bindgen" generate --library "$JNI_LIBS/x86_64/libngterm_mobile.so" --language kotlin \
   --no-format --out-dir "$BINDINGS"
 
-if ((GRADLE)); then
-  cd "$ANDROID_DIR"
-  # strip NGTERM_* from what Gradle starts: no build or test reaches the caller's ngterm
-  unset_args=()
-  while IFS= read -r name; do
-    unset_args+=(-u "$name")
-  done < <(env | sed -n 's/^\(NGTERM_[A-Za-z0-9_]*\)=.*/\1/p')
-  env ${unset_args[@]+"${unset_args[@]}"} ./gradlew "${TASKS[@]}"
+if ((GRADLE)) && has_task ${BUILD[@]+"${BUILD[@]}"}; then
+  gradle "${BUILD[@]}"
 fi
