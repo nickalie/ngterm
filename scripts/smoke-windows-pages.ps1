@@ -6,7 +6,7 @@ desktop, on a private state directory, showing pages through `ngtermctl session 
 .DESCRIPTION
 Run it on the desktop the window should open on (in a VM: `vmrun runProgramInGuest -interactive`), never on a machine
 whose own ngterm runs there: the instance is private (its own state directory, app id, home and control pipe;
-NGTERM_*, AGTERM_* and ZMX_* stripped), but its window takes the desktop.
+NGTERM_* and AGTERM_* stripped), but its window takes the desktop.
 
 The check: a `--js` file page, granted its folder, shows (its load state `loaded` in the tree, a screenshot); its bridge
 round-trips (the page asks for the tree, renames its session with the answer's workspace count, and titles itself with
@@ -219,7 +219,7 @@ http.createServer((request, response) => {
 }).listen(Number(port), '127.0.0.1');
 '@
 
-Get-ChildItem env: | Where-Object { $_.Name -match '^(NGTERM|AGTERM|ZMX)_' } | ForEach-Object {
+Get-ChildItem env: | Where-Object { $_.Name -match '^(NGTERM|AGTERM)_' } | ForEach-Object {
     Remove-Item -LiteralPath "env:$($_.Name)"
 }
 $env:NGTERM_STATE_DIR = $state

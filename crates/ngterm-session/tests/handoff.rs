@@ -8,7 +8,7 @@
 //! hand over refuses and keeps serving (on Windows, where the `ConPTY` layout gate refuses an unknown layout before any
 //! handle is read, as `server::handoff`'s unit tests show).
 //!
-//! Every session gets the test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables,
+//! Every session gets the test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables,
 //! and every server is the test's own: no handoff here ever reaches another one.
 
 #[expect(

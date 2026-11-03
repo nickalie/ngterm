@@ -36,13 +36,13 @@ use uuid::Uuid;
 /// How long a wait may take: PowerShell can take seconds to start on a CI runner.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// The names of the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables, which no test pane may see.
+/// The names of the inherited `NGTERM_*`/`AGTERM_*` variables, which no test pane may see.
 fn isolation() -> Vec<String> {
     std::env::vars_os()
         .map(|(key, _)| key.to_string_lossy().into_owned())
         .filter(|name| {
             let name = name.to_ascii_uppercase();
-            name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_")
+            name.starts_with("NGTERM_") || name.starts_with("AGTERM_")
         })
         .collect()
 }

@@ -1,5 +1,5 @@
 //! The `ngterm-session` binary's client commands, each test in a private namespace that only `NGTERM_LIVE_DIR` names,
-//! every child run with the test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables:
+//! every child run with the test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables:
 //! the api commands' output and exit status, and `attach` as a terminal client on a real PTY, the test standing in for
 //! the outer terminal (it answers the client's probe, and reads what reaches it): a round trip with a resize, detach
 //! and reattach, the gone guard, the role title on a lead change, `NGTERM_LIVE_SESSION`, and (on Unix, where no

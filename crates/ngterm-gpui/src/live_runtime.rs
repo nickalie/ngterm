@@ -1,6 +1,6 @@
 //! Reset Live Sessions… and the reopen after its quit (upstream's `LiveResetCoordinator.swift` dialogs and
-//! `LiveResetRelauncher.swift`; the GTK build's `zmx_runtime.rs` reset part, whose session host install and live
-//! capabilities live in `session_host.rs` here).
+//! `LiveResetRelauncher.swift`; the reset part of the former GTK build's live-session runtime, whose session host
+//! install and live capabilities live in `session_host.rs` here).
 //!
 //! - **The menu item** (the app menu's closing section, between Settings… and Quit, as upstream's Quit group), shown
 //!   only while live sessions are both configured and running ([`Core::live_reset_menu_visible`]), asks the core first

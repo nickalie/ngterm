@@ -4,7 +4,7 @@
 #
 # The instance gets a unique NGTERM_APP_ID (so the launch is not forwarded to a running ngterm), its own
 # NGTERM_STATE_DIR (settings, windows, logs and the config dir with keymap.conf/hooks.conf live there) and its own
-# NGTERM_CONTROL_SOCKET inside it. NGTERM_*, AGTERM_* and ZMX_* inherited from a live session are dropped first, all but
+# NGTERM_CONTROL_SOCKET inside it. NGTERM_* and AGTERM_* inherited from a live session are dropped first, all but
 # the NGTERM_LOG level. The stage (scripts/stage.sh) is built into <root>/stage, the state into <root>/state, under a
 # fresh /tmp/ngterm-dev-* root that is kept after the app quits (printed on start) and removed when the script fails
 # before the launch. It prints the app id, the state dir, the socket, the `ngtermctl <command> --socket ...` line that

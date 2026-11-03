@@ -4,7 +4,7 @@
 //! the PTY over.
 //!
 //! The commands are per OS: `/bin/sh` on Unix, `cmd.exe` and Windows PowerShell on Windows. Every child gets the
-//! test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables.
+//! test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables.
 
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -29,7 +29,7 @@ fn command(program: &str) -> Command {
         .map(|(key, _)| key)
         .filter(|key| {
             key.to_str()
-                .is_some_and(|key| key.starts_with("NGTERM_") || key.starts_with("AGTERM_") || key.starts_with("ZMX_"))
+                .is_some_and(|key| key.starts_with("NGTERM_") || key.starts_with("AGTERM_"))
         })
         .fold(Command::new(program), Command::env_remove)
 }

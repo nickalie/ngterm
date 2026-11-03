@@ -81,7 +81,7 @@ fn replayed() -> TestResult<Vec<String>> {
 fn launch(shell: &Path, argv: &[String], record: &Path, dir: &Path) -> TestResult<Pane> {
     let isolation = std::env::vars_os()
         .map(|(key, _)| key.to_string_lossy().into_owned())
-        .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_"))
+        .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_"))
         .collect();
     let launch = Launch {
         initial_input: Some(PaneInput::Replay(argv.to_vec())),

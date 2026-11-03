@@ -444,7 +444,7 @@ scripts/run-gpui-dev.sh [--release] [--state DIR] [-- NGTERM_ARGS...]   # an iso
 dev script and an install run from.
 `run-gpui-dev.sh` (`scripts/lib/dev-instance.sh`; on Windows from Git Bash, [Windows](#windows)) builds and stages
 the app into a fresh `/tmp/ngterm-dev-*` root and launches an isolated instance: a unique `NGTERM_APP_ID`, its own
-`NGTERM_STATE_DIR` and `NGTERM_CONTROL_SOCKET`, and `NGTERM_*`/`AGTERM_*`/`ZMX_*` inherited from a live terminal
+`NGTERM_STATE_DIR` and `NGTERM_CONTROL_SOCKET`, and `NGTERM_*`/`AGTERM_*` inherited from a live terminal
 session dropped (all but `NGTERM_LOG`). It prints the `ngtermctl <command> --socket ...` line that drives the instance
 and the instance's pid, by which to stop it.
 
@@ -608,7 +608,7 @@ scripts/stage.sh 'C:\ngterm-stage'
 
 A dev build beside an installed ngterm runs through `scripts/run-gpui-dev.sh` from Git Bash, as on Linux
 ([Build and run](#build-and-run)): it builds and stages the debug app (`--release` the release one) into a fresh
-`%TEMP%\ngterm-dev-*` root and launches it with `NGTERM_*`, `AGTERM_*` and `ZMX_*` stripped from the environment, a
+`%TEMP%\ngterm-dev-*` root and launches it with `NGTERM_*` and `AGTERM_*` stripped from the environment, a
 unique `NGTERM_APP_ID` (its own instance pipe, so the launch is not forwarded to the installed app) and a private
 `NGTERM_STATE_DIR` (its config dir, its live-session namespace and its control socket, `<state dir>\ngterm.sock`,
 follow it). It prints the `ngtermctl <command> --socket <state dir>\ngterm.sock` line that drives the instance and the
@@ -652,7 +652,7 @@ conformance/tools/run-windows.sh [--ratchet-only] [--stage DIR] [--coverage] [--
 
 - `ngterm-gpui`'s tests that need Xvfb, weston, lavapipe, a D-Bus bus or WPE WebKit are Linux-only, and those whose
   panes run POSIX `sh` scripts are ignored on Windows with that reason.
-- Windows has no headless desktop: the suite's instances (each on a private root, `NGTERM_*`, `AGTERM_*` and `ZMX_*`
+- Windows has no headless desktop: the suite's instances (each on a private root, `NGTERM_*` and `AGTERM_*`
   stripped, its processes ended by pid) open their windows on the desktop it runs on, and `session.reveal` or a
   clicked link reaches the system's handlers. Run it on a CI runner or a throwaway VM only, never beside a live
   ngterm. Its panes run Git for Windows' `sh.exe`; the conformance README's Safety guards have the rest.

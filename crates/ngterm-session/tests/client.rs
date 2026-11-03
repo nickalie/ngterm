@@ -4,7 +4,7 @@
 //! and (on Unix, where the pseudoconsole does not answer the queries itself) a delegated OSC 52 read and the reply
 //! metadata, changed mid-stream, answering the program's queries.
 //!
-//! Every session gets the test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables, in
+//! Every session gets the test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables, in
 //! a private namespace.
 
 #[expect(

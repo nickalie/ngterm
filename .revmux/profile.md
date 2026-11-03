@@ -14,7 +14,7 @@ Source of truth: `CLAUDE.md` (rules), `README.md` (commands, gates), `conformanc
 ## What a real failure looks like
 
 - **critical**: loss or corruption of on-disk state (`windows.json`, settings, keymap, hooks), killing or
-  orphaning a user's live sessions (zmx), a dev/test run touching the user's running ngterm (its socket, bus,
+  orphaning a user's live sessions, a dev/test run touching the user's running ngterm (its socket, bus,
   display, state dir or session namespace), a crash on a path users reach.
 - **major**: a deviation from upstream's wire protocol, command semantics, error strings, `ngtermctl` output or
   on-disk formats; a ratchet id in `conformance/rust-passing.txt` going red; a platform-specific mechanism with no
@@ -24,7 +24,7 @@ Source of truth: `CLAUDE.md` (rules), `README.md` (commands, gates), `conformanc
 
 ## Blast radius
 
-- Agents and users run this inside their live terminal; a wrong default socket, env leak (`NGTERM_*`, `ZMX_*`)
+- Agents and users run this inside their live terminal; a wrong default socket, env leak (`NGTERM_*`)
   or a reap by process name hits real work.
 - `ngterm-core` changes reach every frontend and the control protocol; the frontend's UI changes reach only GPUI.
 

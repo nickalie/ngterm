@@ -502,7 +502,7 @@ mod tests {
             env: std::env::vars()
                 .filter(|(key, _)| {
                     let key = key.to_ascii_uppercase();
-                    !key.starts_with("NGTERM_") && !key.starts_with("AGTERM_") && !key.starts_with("ZMX_")
+                    !key.starts_with("NGTERM_") && !key.starts_with("AGTERM_")
                 })
                 .collect(),
             cwd: None,

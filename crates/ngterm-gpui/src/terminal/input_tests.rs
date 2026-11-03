@@ -2,7 +2,7 @@
 //! routing order (the window's keymap before ghostty's binds before the encoder), the input method's preedit, the
 //! mouse's selections, reports and wheel, links, focus reports, and a program's clipboard access under the prompt.
 //!
-//! Panes run `/bin/sh` scripts with no `NGTERM_*`, `AGTERM_*` or `ZMX_*` variable inherited; GPUI's test platform holds
+//! Panes run `/bin/sh` scripts with no `NGTERM_*` or `AGTERM_*` variable inherited; GPUI's test platform holds
 //! the clipboards and records the URL it was asked to open, so nothing reaches the desktop. The fake face's cells are
 //! 10x21 at scale 1 with 2 px of padding.
 
@@ -258,12 +258,12 @@ fn the_wheel_multiplier_and_the_pointer_shapes_follow_ghostty() {
 // ---------------------------------------------------------------------------------------------------------------
 // links on a real pane
 
-/// `sh -c script` with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed, in `dir`.
+/// `sh -c script` with the inherited `NGTERM_*`/`AGTERM_*` variables removed, in `dir`.
 fn command(script: &str, dir: &Path) -> PaneCommand {
     let mut command = PaneCommand::new("/bin/sh").arg("-c").arg(script).cwd(dir);
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") {
             command = command.env_remove(key);
         }
     }

@@ -587,7 +587,7 @@ mod tests {
         node.content = Some("page".to_owned());
     }
 
-    /// The catalog's `field:tree.session.*` order (its `backedByZmx` is `backedByLive` here).
+    /// The catalog's `field:tree.session.*` order (upstream's `backedByZmx` is `backedByLive` here).
     const SESSION_FIELDS: [&str; 58] = [
         "id",
         "name",

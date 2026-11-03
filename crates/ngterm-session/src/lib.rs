@@ -23,7 +23,8 @@
 //!   leaves running;
 //! - [`process_table`]: the process table a pane's foreground is read through, on every OS;
 //! - [`client`]: the client library: the api and a session's attach stream, its contract checked on the client's side;
-//! - [`host`]: the `SessionHost` over the client ([`host::ServerHost`]), with `ZmxClient`'s error kinds and outcomes;
+//! - [`host`]: the `SessionHost` over the client ([`host::ServerHost`]), with upstream `ZmxClient`'s error kinds and
+//!   outcomes;
 //! - [`cli`]: the binary's client commands: `attach`, the attach contract's terminal client and the session's reply
 //!   owner over [`attach_tty`] (the outer terminal, the output's filter, the input's answers), and the api's `list`,
 //!   `kill`, `screen`, `type`, `print` and `version`.

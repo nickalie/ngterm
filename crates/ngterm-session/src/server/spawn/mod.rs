@@ -13,8 +13,9 @@
 //! again only when it lost the namespace to another server ([`super::EXIT_TAKEN`]) or stopped by itself, and reported
 //! otherwise; once ready, the server this call started must report itself detached ([`super::CAPABILITY_DETACHED`]) or
 //! it is stopped and the start fails, since it would end with its launcher; the child's environment drops the variables
-//! of the live session the launcher may run in (`NGTERM_*`, `AGTERM_*`, `ZMX_*`, the isolation rule of CLAUDE.md >
-//! Never touch the user's running ngterm); and the spawn itself is per OS (the `linux`, `macos` and `windows` modules).
+//! of the live session the launcher may run in (`NGTERM_*`; an outer upstream agterm's `AGTERM_*` and its zmx's
+//! `ZMX_*`; the isolation rule of CLAUDE.md > Never touch the user's running ngterm); and the spawn itself is per OS
+//! (the `linux`, `macos` and `windows` modules).
 //!
 //! # Builds
 //!
@@ -87,7 +88,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 const MIN_PROBE_WAIT: Duration = Duration::from_millis(10);
 
 /// The prefixes of the variables a server's environment drops: the attach contract's and the session variables of
-/// whatever live session the launcher runs in, which mean nothing to the server and must not reach its sessions.
+/// whatever live session the launcher runs in (ngterm's, or an outer upstream agterm's and the zmx session upstream
+/// wraps its pane in), which mean nothing to the server and must not reach its sessions.
 const STRIPPED_PREFIXES: [&str; 3] = ["NGTERM_", "AGTERM_", "ZMX_"];
 
 /// How to start a server.

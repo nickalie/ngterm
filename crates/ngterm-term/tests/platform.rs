@@ -34,7 +34,7 @@ fn launch(command: &str) -> TestResult<Pane> {
 fn launch_recording(command: &str, status_file: Option<PathBuf>) -> TestResult<Pane> {
     let isolation = std::env::vars_os()
         .map(|(key, _)| key.to_string_lossy().into_owned())
-        .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_"))
+        .filter(|name| name.starts_with("NGTERM_") || name.starts_with("AGTERM_"))
         .collect();
     let launch = Launch {
         command: Some(command.to_owned()),

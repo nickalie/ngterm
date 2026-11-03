@@ -21,12 +21,12 @@ pub(crate) fn idle_program() -> ngterm_term::PaneCommand {
 /// What ends [`idle_program`]'s input when typed: Ctrl+D, and on Windows Ctrl+Z and Enter.
 pub(crate) const IDLE_EOF: &[u8] = if cfg!(windows) { b"\x1a\r" } else { b"\x04" };
 
-/// [`idle_program`] with the inherited `NGTERM_*`/`AGTERM_*`/`ZMX_*` variables removed.
+/// [`idle_program`] with the inherited `NGTERM_*`/`AGTERM_*` variables removed.
 pub(crate) fn idle_command() -> ngterm_term::PaneCommand {
     let mut command = idle_program();
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") {
             command = command.env_remove(key);
         }
     }

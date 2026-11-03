@@ -1,9 +1,8 @@
-//! `ServerHost`, the `SessionHost` over the session server, on every OS: the zmx host's tests (upstream's
-//! `ZmxClientTests.swift`, and the real-zmx tests of the crate this host replaced) ported onto it, against a scripted
-//! peer for each answer and error path, and against a real server run in the test process for the round trip, the
+//! `ServerHost`, the `SessionHost` over the session server, on every OS: upstream's `ZmxClientTests.swift` ported onto
+//! it, against a scripted peer for each answer and error path, and against a real server run in the test process for the round trip, the
 //! forced batch kill that leaves nothing of the namespace running, and a restart's foreground job.
 //!
-//! Every session gets the test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables, in
+//! Every session gets the test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables, in
 //! a private namespace.
 
 #[expect(

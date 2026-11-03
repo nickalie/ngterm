@@ -12,7 +12,7 @@
 //! terminal's foreground group, then sends SIGINT to its group; the final shell records the variables the replay
 //! re-armed and the flags it was exec'd with, then ends, which ends the session. Each shell runs without the user's
 //! startup files (a throwaway home, a `ZDOTDIR` whose `.zshenv` only turns the host's global rc files off,
-//! `fish --no-config`) and without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables, with a namespace
+//! `fish --no-config`) and without the live ngterm's `NGTERM_*` and `AGTERM_*` variables, with a namespace
 //! directory of its own (only named in its environment: no server runs). Windows has none of these shells: its live
 //! pane runs PowerShell, whose interrupted replay `pwsh.rs` covers.
 #![cfg(unix)]

@@ -5,7 +5,7 @@
 //! run on Unix, as Windows' pseudoconsole re-renders what a program writes; the snapshot's own unit tests cover those
 //! on every OS.
 //!
-//! Every session gets the test's environment without the live ngterm's `NGTERM_*`, `AGTERM_*` and `ZMX_*` variables,
+//! Every session gets the test's environment without the live ngterm's `NGTERM_*` and `AGTERM_*` variables,
 //! and a namespace directory of its own (only named in its environment: no server runs).
 
 #[expect(dead_code, reason = "the helpers serve the pane, lead and snapshot tests alike")]

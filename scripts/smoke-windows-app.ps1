@@ -6,7 +6,7 @@ a private state directory, driven through its control socket.
 .DESCRIPTION
 Run it on the desktop the window should open on (in a VM: `vmrun runProgramInGuest -interactive`, or an interactive
 scheduled task), never on a machine whose own ngterm runs there: the instance is private (its own state directory,
-app id, home and control pipe; NGTERM_*, AGTERM_* and ZMX_* stripped), but its window takes the desktop.
+app id, home and control pipe; NGTERM_* and AGTERM_* stripped), but its window takes the desktop.
 
 The check: the app launches and serves its control socket (the named pipe its socket path names, spoken to directly, and
 with -Ctl through `ngtermctl --socket` too: its tree, a typed line and the text read back); the pane runs PowerShell (a
@@ -529,7 +529,7 @@ function Stop-App($process) {
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
-Get-ChildItem env: | Where-Object { $_.Name -match '^(NGTERM|AGTERM|ZMX)_' } | ForEach-Object {
+Get-ChildItem env: | Where-Object { $_.Name -match '^(NGTERM|AGTERM)_' } | ForEach-Object {
     Remove-Item -LiteralPath "env:$($_.Name)"
 }
 $appId = 'com.nickalie.ngterm.smoke'

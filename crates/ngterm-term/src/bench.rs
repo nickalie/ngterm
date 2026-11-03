@@ -206,7 +206,7 @@ fn command(script: &str) -> PaneCommand {
     let mut command = PaneCommand::new("/bin/sh").arg("-c").arg(script);
     for (key, _) in std::env::vars_os() {
         let name = key.to_string_lossy();
-        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_") {
+        if name.starts_with("NGTERM_") || name.starts_with("AGTERM_") {
             command = command.env_remove(key);
         }
     }
@@ -244,7 +244,7 @@ enum Via<'a> {
 /// The bench's environment: the test's, without the live ngterm's variables.
 fn environment() -> Vec<(String, String)> {
     std::env::vars()
-        .filter(|(key, _)| !key.starts_with("NGTERM_") && !key.starts_with("AGTERM_") && !key.starts_with("ZMX_"))
+        .filter(|(key, _)| !key.starts_with("NGTERM_") && !key.starts_with("AGTERM_"))
         .collect()
 }
 
@@ -364,7 +364,7 @@ fn memory_kib(pid: u32) -> (u64, u64) {
 }
 
 /// Task 2's idle memory baseline against the session server: N sessions, each an idle `/bin/sh` that printed 20 000
-/// lines, every client detached; the server's memory (Task 2 measured N idle zmx daemons against it).
+/// lines, every client detached; the server's memory.
 #[test]
 #[ignore = "a measurement, run by hand (see the module docs)"]
 fn idle_sessions_memory() {

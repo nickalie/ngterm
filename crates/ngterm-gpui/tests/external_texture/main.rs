@@ -5,7 +5,7 @@
 //! display and no compositor: Vulkan only.
 //!
 //! GPUI's headless renderer opens one device per process, so this harness (no libtest) runs each GPU in a child process
-//! of its own, with an environment built from scratch (no display, no session bus, no `NGTERM_*`/`AGTERM_*`/`ZMX_*`):
+//! of its own, with an environment built from scratch (no display, no session bus, no `NGTERM_*`/`AGTERM_*`):
 //! `lavapipe` (Mesa's software Vulkan) and `mesa`, the first render node a Mesa Vulkan driver runs (Intel, AMD), where
 //! there is one. GPUI is kept to the Vulkan adapter: on lavapipe Mesa's GL is forced to software (a CPU adapter like
 //! lavapipe, which Vulkan then outranks), on hardware `ZED_DEVICE_ID` names the node's PCI device (GL needs the

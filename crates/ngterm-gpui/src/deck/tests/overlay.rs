@@ -4,7 +4,7 @@
 //! `session.overlay.result`; upstream's `show-image.sh` drawing its image through chunked Kitty APC in a PTY overlay.
 //!
 //! The terminals run what they are launched with (the overlay's wrapper and command), through `/bin/sh -c`, with no
-//! inherited `NGTERM_*`, `AGTERM_*` or `ZMX_*` variable; a pane without a command runs `cat`.
+//! inherited `NGTERM_*` or `AGTERM_*` variable; a pane without a command runs `cat`.
 
 use ngterm_proto::Response;
 
@@ -26,7 +26,7 @@ fn running_launcher(launches: Arc<Mutex<Vec<Launch>>>) -> pane::Launcher {
         for (key, _) in std::env::vars_os() {
             let name = key.to_string_lossy();
             let ours = launch.env.iter().any(|(set, _)| set.as_str() == name);
-            if (name.starts_with("NGTERM_") || name.starts_with("AGTERM_") || name.starts_with("ZMX_")) && !ours {
+            if (name.starts_with("NGTERM_") || name.starts_with("AGTERM_")) && !ours {
                 command = command.env_remove(key);
             }
         }

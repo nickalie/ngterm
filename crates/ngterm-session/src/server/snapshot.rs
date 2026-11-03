@@ -2,13 +2,12 @@
 //! offset, so that the session's output from that offset on continues it exactly as it continues the session's own.
 //!
 //! zmx: `serializeTerminalState`, `writeColorOverrides` and `writePwd` (`src/util.zig`) at `8bab1f0` (upstream's
-//! `ZMX_REV`, `.upstream/agterm/scripts/setup.sh`), with agterm's own zmx patch `0003-first-attach-snapshot` (in
-//! `build/patches/zmx/` until zmx left the build: the parser's unfinished sequence after the snapshot), licensed under
-//! the MIT License (`NOTICE`), modified: ported over libghostty-vt's C API ([`ngterm_ghostty_vt`]'s formatter and
-//! stream continuation); the continuation is required, never left out (a snapshot without one is unavailable,
-//! [`SnapshotError::Unavailable`]), except in a session's last snapshot ([`Kind::Last`]); the palette the program set
-//! is carried too; a client that was already sent some of the session's output is fully reset first ([`RESYNC_RESET`])
-//! in place of the patch's `ATTACH_RESET`, which undoes only what a short burst of output before a first attach leaves;
+//! `ZMX_REV`, `.upstream/agterm/scripts/setup.sh`), licensed under the MIT License (`NOTICE`), modified: ported over
+//! libghostty-vt's C API ([`ngterm_ghostty_vt`]'s formatter and stream continuation, which carries the parser's
+//! unfinished sequence after the snapshot); the continuation is required, never left out (a snapshot without one is
+//! unavailable, [`SnapshotError::Unavailable`]), except in a session's last snapshot ([`Kind::Last`]); the palette the
+//! program set is carried too; a client that was already sent some of the session's output is fully reset first
+//! ([`RESYNC_RESET`]), rather than reset only for what a short burst of output before a first attach leaves;
 //! OSC 133 prompt marks are left as the program wrote them (zmx's `redraw=0` rewrite is for an outer terminal, the
 //! attach CLI's to make).
 //!
@@ -52,8 +51,8 @@ use ngterm_ghostty_vt::{
 };
 
 /// The longest unfinished sequence the session's terminal keeps for a snapshot: the largest default buffer of the
-/// library's APC protocols (`apc.Protocol.maxDefaultBytes`, 65 MiB for a Kitty image), the limit zmx's patch and the
-/// library's own snapshots use.
+/// library's APC protocols (`apc.Protocol.maxDefaultBytes`, 65 MiB for a Kitty image), the limit the library's own
+/// snapshots use.
 pub const CONTINUATION_LIMIT: usize = 65 * 1024 * 1024;
 
 /// The most snapshot bytes one `SnapshotChunk` carries.
