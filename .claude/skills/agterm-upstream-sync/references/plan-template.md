@@ -1,7 +1,8 @@
 # Plan template
 
-`/plan-exec-revmux` reads `## Overview` and `## Context`, then runs each `### Task N:` in a fresh subagent that sees
-only the plan and the repo (CLAUDE.md included). The `- [ ]` items are that subagent's work list. So each task names
+The `plan-exec-revmux` skill (Claude: `/plan-exec-revmux`; Codex: `$plan-exec-revmux`) reads `## Overview` and
+`## Context`, then runs each `### Task N:` in a fresh subagent that sees only the plan and the repo (applicable
+AGENTS.md instructions and CLAUDE.md included). The `- [ ]` items are that subagent's work list. So each task names
 its own files and sources. Write the plan in English and drop sections that would stay empty.
 
 ````markdown

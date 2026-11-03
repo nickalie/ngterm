@@ -1,7 +1,6 @@
 ---
 name: agterm-upstream-sync
-description: "Bring ngterm up to a new release of upstream umputun/agterm, its parity target: find what changed upstream since the current tag, sort it by area and command group, do the mechanical bump (catalog, vendored copies, tag mentions) on branch upstream-sync-TAG, and write a docs/plans/ plan for /plan-exec-revmux with one task per feature to port. It ports no features itself. Use it in ngterm whenever the user mentions a new upstream agterm release, syncing or catching up with upstream, bumping the parity target, or what changed upstream: 'sync with upstream', 'upstream released v0.37', 'синхронизируй с апстримом', 'вышел новый релиз agterm', 'что изменилось в upstream'."
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, Agent
+description: "Sync ngterm's parity target with a new umputun/agterm release: analyse upstream changes, make the mechanical bump, and write a docs/plans/ porting plan for plan-exec-revmux. Use for upstream release syncs, parity target bumps, or upstream change analysis, including 'синхронизируй с апстримом'. Ports no features itself."
 ---
 
 # agterm-upstream-sync
@@ -10,14 +9,30 @@ Moves ngterm from the upstream release it targets to a newer one in three parts:
 
 1. **Analysis**: what changed upstream, and how much of it the Rust build already has.
 2. **Mechanical bump** on a branch: everything that needs no porting judgment.
-3. **Plan** for the porting, executed later by `/plan-exec-revmux`. The skill ports no behavior itself, so every port
+3. **Plan** for the porting, executed later by the `plan-exec-revmux` skill. The skill ports no behavior itself, so every port
    goes through that run's per-task review.
 
-`SKILL_DIR` is this file's directory; its `scripts/` and `references/` are meant below. The scripts act on the
+## Claude and Codex
+
+The shared source is `.claude/skills/agterm-upstream-sync`; `.agents/skills/agterm-upstream-sync` links to it for
+Codex discovery. Edit the shared source so both agents get the same workflow.
+
+- **Claude Code:** invoke `/agterm-upstream-sync [TARGET]`; later execute the plan with
+  `/plan-exec-revmux docs/plans/<file>`.
+- **Codex:** invoke `$agterm-upstream-sync [TARGET]`; later execute the plan with
+  `$plan-exec-revmux docs/plans/<file>`.
+
+Read applicable `AGENTS.md` instructions and the checkout's `CLAUDE.md` (the shared architecture and check guidance)
+before starting. Use the current agent's file, search, shell and subagent tools; Claude tool names are not required.
+
+Set `SKILL_DIR` to the absolute directory containing the loaded `SKILL.md`; either discovery path works.
+Its `scripts/` and `references/` are meant below. The scripts act on the
 repository of the current directory, so run them from the checkout (or worktree) being synced. Most take
 `--upstream DIR` for a clone other than `.upstream/agterm`.
 
-Keep scratch output (the classify report, analyses, logs, saved patches) in a `WORK` dir in the session scratchpad.
+Keep scratch output (the classify report, analyses, logs, saved patches) in a `WORK` dir in the session scratchpad
+when available, otherwise create one with `WORK=$(mktemp -d "${TMPDIR:-/tmp}/ngterm-upstream-sync.XXXXXX")`.
+Use the same absolute `WORK` path across tool calls and pass it to subagents that need the reports.
 
 **Sync-specific rules** (CLAUDE.md covers the rest):
 - `.upstream/agterm` is read-only apart from fetching and checking out the new tag.
@@ -55,9 +70,11 @@ For each cluster, decide per behavior:
   a behavior the suite can test. This becomes a task that ports the tests and fixes the code if they expose a bug.
 - **already-ported**: code and tests are both there. No task; record the evidence.
 
-Analyse small syncs yourself. For more than a few clusters, spawn read-only `general-purpose` subagents with
-`references/prompts/area-analysis.md`, up to four at a time. Before a subagent's `absent` or `already-ported` claim
-goes into the plan, confirm it with a grep of your own.
+Analyse small syncs yourself. For more than a few clusters, delegate read-only analysis using
+`references/prompts/area-analysis.md`: Claude's `Agent` with `subagent_type: "general-purpose"`, or Codex's available
+subagent tool (for example, `spawn_agent`). Use up to four at a time, within the environment's available slots.
+If subagents are unavailable or disallowed, analyse the clusters yourself with the same prompt. Before a
+subagent's `absent` or `already-ported` claim goes into the plan, confirm it with a search of your own.
 
 ## 3. Mechanical bump
 
@@ -111,5 +128,6 @@ Reply in the user's language with:
 - the baseline result and which task fixes each expected red;
 - the plan's path and its task list;
 - what is already in the Rust build, and what needs no port;
-- next steps: `/plan-exec-revmux docs/plans/<file>`; then the user pushes, runs `reference-macos.yml` on the branch,
+- next steps: invoke `plan-exec-revmux` with the plan path using the current agent's syntax above (if that skill is
+  unavailable, report the missing dependency); then the user pushes, runs `reference-macos.yml` on the branch,
   and opens a PR so the cross-platform jobs and the full suite run.
