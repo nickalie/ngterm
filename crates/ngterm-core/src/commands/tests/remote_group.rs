@@ -352,13 +352,13 @@ fn a_failing_page_is_named_and_later_terminals_stay() {
     assert_eq!(group.origins(group.parent()), ["c1"]);
 }
 
-fn close_during_page(members: &[&str], missing: &str) {
+fn close_during_page(members: &[&str], missing: &str, page_reply: RemoteCommandResult, page_error: &str) {
     let mut group = Group::new(vec![tree(&[parent(Some(members)), page(), terminal("c1", Some("P"))])]);
     let dispatch = group.begin();
     let dispatch = group.until_calls(dispatch, 2);
     let parent = group.parent();
     group.fixture.store_mut().unwrap().close_session(parent);
-    group.runner.answer(1, page_attach());
+    group.runner.answer(1, page_reply);
     let reply = dispatch.finish_now(&mut group.fixture.core);
     assert!(!reply.ok);
     assert_eq!(
@@ -379,7 +379,11 @@ fn close_during_page(members: &[&str], missing: &str) {
             .iter()
             .filter_map(|r| r.error.as_deref())
             .collect::<Vec<_>>(),
-        vec!["parent row was closed"; if members[0] == "pg" { 2 } else { 1 }]
+        if members[0] == "pg" {
+            vec![page_error, "parent row was closed"]
+        } else {
+            vec![page_error]
+        }
     );
     if members[0] == "c1" {
         assert!(
@@ -391,12 +395,27 @@ fn close_during_page(members: &[&str], missing: &str) {
 
 #[test]
 fn a_parent_closed_during_page_wait_stops_later_members() {
-    close_during_page(&["pg", "c1"], "report, c1-name");
+    close_during_page(
+        &["pg", "c1"],
+        "report, c1-name",
+        page_attach(),
+        "its parent row here was closed",
+    );
 }
 
 #[test]
 fn a_parent_closed_during_the_last_page_wait_is_reported_closed() {
-    close_during_page(&["c1", "pg"], "report");
+    close_during_page(&["c1", "pg"], "report", page_attach(), "its parent row here was closed");
+}
+
+#[test]
+fn an_origin_page_refusal_survives_a_parent_closed_during_the_wait() {
+    close_during_page(
+        &["pg", "c1"],
+        "report, c1-name",
+        result(1, &json!({"ok":false,"error":"no such page"})),
+        "no such page",
+    );
 }
 
 #[test]

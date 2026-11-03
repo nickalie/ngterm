@@ -115,14 +115,7 @@ pub(crate) fn step(core: &mut Core, mut run: GroupRun) -> GroupStep {
                         run.state = State::Attaching(attached);
                         return GroupStep::Pending(run, after);
                     }
-                    Step::Done(result) => {
-                        let outcome = if core.library().store_for_session(attached.parent).is_none() {
-                            Err(CLOSED.to_owned())
-                        } else {
-                            *result
-                        };
-                        attached.record(outcome);
-                    }
+                    Step::Done(result) => attached.record(*result),
                 }
             }
             while attached.outcomes.len() < attached.members.len() {
