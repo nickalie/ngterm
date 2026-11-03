@@ -97,7 +97,6 @@ impl Client {
             port,
             user: account(),
             key_id: KEY_ID.to_owned(),
-            pinned_host_key: None,
         };
         block_on(self.core.connect(machine)).unwrap_or_else(|error| panic!("{}: connect: {error:?}", self.label));
     }

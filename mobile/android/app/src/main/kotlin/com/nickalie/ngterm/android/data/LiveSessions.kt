@@ -40,7 +40,9 @@ data class PaneLive(
 
 /**
  * An attached session as its presentation stream left it: the stream's [connection], the agent's [status], its
- * [context], its panes' [layout] (`null` before the first), the [hud] over it, and its shown [panes] by id.
+ * [context], its panes' [layout] (`null` before the first), the [hud] over it, and its shown [panes] by id. Whether
+ * the stream has said a status or context yet is [statusSaid] and [contextSaid]: once it has, its `null` is a clear,
+ * not a gap the machine's listing fills.
  */
 data class LiveSession(
     val connection: StreamState = StreamState.Connecting,
@@ -49,6 +51,8 @@ data class LiveSession(
     val layout: RemoteLayout? = null,
     val hud: RemoteHud? = null,
     val panes: Map<String, PaneLive> = emptyMap(),
+    val statusSaid: Boolean = false,
+    val contextSaid: Boolean = false,
 )
 
 /** Where a shown pane's new frames go: its view's state (`TerminalState`). Called on the core's thread. */
@@ -70,11 +74,12 @@ fun interface ClipboardSink {
  * stream's state, status, context, layout and HUD, and each pane's role, cover, end and title. A shown pane's frames
  * go to the [PaneFrames] [route]d to it, and a program's write to the standard clipboard goes to [clipboard] (in
  * [scope]); Android has no selection or primary clipboard, so a write to either is dropped. A detached session's
- * state is let go. Events arrive on the core's thread; [sessions] takes them from any.
+ * state is let go. A stream that fails before the session was ever shown has the machine listed again, so a session
+ * ended elsewhere since its listing leaves. Events arrive on the core's thread; [sessions] takes them from any.
  */
 class LiveSessions(
     private val scope: CoroutineScope,
-    connections: Connections,
+    private val connections: Connections,
     private val clipboard: ClipboardSink,
 ) {
     private val state = MutableStateFlow<Map<SessionKey, LiveSession>>(emptyMap())
@@ -105,21 +110,29 @@ class LiveSessions(
         if (frames == null) this.frames.remove(pane) else this.frames[pane] = frames
     }
 
+    private fun connectionChanged(event: MobileEvent.SessionConnection) {
+        val before = state.value[SessionKey(event.machineId, event.sessionId)]
+        session(event.machineId, event.sessionId) { copy(connection = event.state) }
+        // a stream failing before it ever showed the session may be failing for a session ended elsewhere: the
+        // machine is listed again, and a listing without it lets it go (once per run of failures)
+        val first = before?.connection !is StreamState.Failed
+        if (event.state is StreamState.Failed && before?.layout == null && first) {
+            scope.launch { connections.listSessions(event.machineId) }
+        }
+    }
+
     private fun onEvent(event: MobileEvent) {
         when (event) {
             is MobileEvent.SessionConnection -> {
-                session(
-                    event.machineId,
-                    event.sessionId,
-                ) { copy(connection = event.state) }
+                connectionChanged(event)
             }
 
             is MobileEvent.SessionStatus -> {
-                session(event.machineId, event.sessionId) { copy(status = event.status) }
+                session(event.machineId, event.sessionId) { copy(status = event.status, statusSaid = true) }
             }
 
             is MobileEvent.SessionContext -> {
-                session(event.machineId, event.sessionId) { copy(context = event.context) }
+                session(event.machineId, event.sessionId) { copy(context = event.context, contextSaid = true) }
             }
 
             is MobileEvent.SessionLayout -> {

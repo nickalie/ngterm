@@ -32,10 +32,7 @@ data class StoredMachine(
     /** Its ssh address as `user@host:port`, in the form people compare. */
     val address: String get() = "$user@$host:$port"
 
-    /**
-     * The record the core connects. It never carries the pin: the core trusts only its host-key store, and a record
-     * that differs from the one it holds (as one with a pin trusted since would) replaces the live connection.
-     */
+    /** The record the core connects (it never carries the pin: the core trusts only its host-key store). */
     fun toCore(): Machine =
         Machine(
             id = id,
@@ -44,9 +41,14 @@ data class StoredMachine(
             port = port.toUShort(),
             user = user,
             keyId = keyId,
-            pinnedHostKey = null,
         )
 }
+
+/**
+ * Whether [other] is reached as this record is: the same host, port, user and key (the core's `Machine::reached_as`).
+ * A record differing in its label alone is the machine renamed, and keeps its connection.
+ */
+fun Machine.reachedAs(other: Machine): Boolean = copy(label = other.label) == other
 
 /**
  * The machines the user added, in the order they were added, kept in [store] (Preferences DataStore, one JSON value).

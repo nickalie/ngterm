@@ -250,16 +250,20 @@ private fun attached(
 ): AttachedSession {
     val listing = listed.trees[machine.id]?.firstOrNull { it.id == key.sessionId }
     val stream = live[key] ?: LiveSession()
+    // the stream's word wins once it has said one, a clear included; the listing's stands in until then
     val status =
-        stream.status?.let { AgentStatus(it.status, it.color, it.shape) }
-            ?: listing?.status?.takeIf { it.isNotBlank() }?.let {
+        if (stream.statusSaid) {
+            stream.status?.let { AgentStatus(it.status, it.color, it.shape) }
+        } else {
+            listing?.status?.takeIf { it.isNotBlank() }?.let {
                 AgentStatus(it, listing.statusColor, listing.statusShape)
             }
+        }
     return AttachedSession(
         key = key,
         machine = machine.title,
         name = listing?.name ?: seen[key]?.name ?: key.sessionId,
-        context = stream.context ?: listing?.context?.takeIf { it.isNotBlank() },
+        context = if (stream.contextSaid) stream.context else listing?.context?.takeIf { it.isNotBlank() },
         status = status,
         link = listed.links[machine.id] ?: Link.Offline,
         live = stream,

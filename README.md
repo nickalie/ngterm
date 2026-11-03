@@ -295,7 +295,7 @@ then run Cargo:
 scripts/build-ghostty-vt.sh    # stock bash 3.2 on macOS, Git Bash on Windows
 cargo test -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys \
   -p ngterm-ghostty-vt -p ngterm-pty -p ngterm-term -p ngterm-server -p ngterm-ctl -p ngterm-app \
-  -p ngterm-headless
+  -p ngterm-headless -p ngterm-mobile
 ```
 
 A Mac, a Windows machine or a VM of either needs, besides Rust from rustup (`rust-toolchain.toml`):
@@ -377,8 +377,9 @@ Cargo does not notice the provider changing: after installing or removing either
 The Android app needs JDK 21, the Android SDK and NDK, the Rust Android targets and cargo-ndk, at the `ANDROID_*` and
 `CARGO_NDK_VERSION` pins of `build/pins.env`. `scripts/setup-android.sh` (Linux and macOS) installs them into
 `ANDROID_HOME` (else `~/Android/Sdk`): the command-line tools, platform, build-tools, NDK, platform-tools, emulator,
-an x86_64 system image with a phone and a tablet AVD, `rustup target add` and `cargo install cargo-ndk`. It only
-advises on JDK 21 and `sshd` (the mobile e2e test), which are system packages. It is idempotent, reports what it did
+an x86_64 system image with a phone and a tablet AVD, `rustup target add` and `cargo install cargo-ndk`. It
+doesn't install JDK 21 or `sshd` (the mobile e2e test), which are system packages: a missing one is reported with the
+command that installs it, and the script exits 1. It is idempotent, reports what it did
 and could not do, and prints the `JAVA_HOME`, `ANDROID_HOME` and `ANDROID_NDK_HOME` lines to export.
 
 ## Build and run
@@ -579,7 +580,7 @@ into `target/conformance-stage` and runs the protocol, cli and behaviors layers 
 ```sh
 cargo test -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys \
   -p ngterm-ghostty-vt -p ngterm-pty -p ngterm-term -p ngterm-server -p ngterm-ctl -p ngterm-app \
-  -p ngterm-headless --all-features
+  -p ngterm-headless -p ngterm-mobile --all-features
 cargo test -p ngterm-gpui --no-default-features && cargo test -p ngterm-gpui   # without and with the HTML overlays
 python -m venv .venv && .venv/Scripts/python.exe -m pip install -e conformance
 .venv/Scripts/python.exe -m pytest conformance/selftests/test_transport.py conformance/selftests/test_client.py \

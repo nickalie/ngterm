@@ -29,7 +29,6 @@ class FakeMobileCoreTest {
             port = 22u,
             user = "me",
             keyId = "k1",
-            pinnedHostKey = null,
         )
 
     @Test

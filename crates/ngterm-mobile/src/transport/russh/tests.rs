@@ -376,7 +376,6 @@ fn machine(port: u16) -> Machine {
         port,
         user: USER.to_owned(),
         key_id: KEY_ID.to_owned(),
-        pinned_host_key: None,
     }
 }
 
@@ -587,11 +586,8 @@ fn the_store_is_the_only_authority_on_the_pin() {
     run(async {
         let mut fixture = fixture(quick());
         let server = TestServer::start(&fixture.public).await;
-        // A stale record's pin, removed from the store since, is not trusted.
-        let machine = Machine {
-            pinned_host_key: Some(server.fingerprint()),
-            ..machine(server.port)
-        };
+        // A pin removed from the store is not trusted: the store is all the transport asks.
+        let machine = machine(server.port);
         let transport = &fixture.transport;
 
         let answer = async {

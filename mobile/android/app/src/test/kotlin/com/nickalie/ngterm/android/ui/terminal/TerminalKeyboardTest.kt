@@ -394,6 +394,21 @@ class TerminalKeyboardTest {
     }
 
     @Test
+    fun aDeletionInCodePointsTakesAWholeEmojiFromTheComposition() {
+        show()
+        focus()
+        val connection = connect()
+        connection.setComposingText("a\uD83D\uDE00", 1)
+        connection.deleteSurroundingTextInCodePoints(1, 0)
+        compose.waitForIdle()
+        assertEquals("a", state.composing)
+        connection.deleteSurroundingTextInCodePoints(2, 0)
+        compose.waitForIdle()
+        assertEquals("", state.composing)
+        assertEquals("one past the composition is the program's", listOf(press("backspace")), presses())
+    }
+
+    @Test
     fun aConnectionCommitsToTheTerminalItWasOpenedFor() {
         val other = SelectingPane()
         val first = TerminalState(pane, EmptyCoroutineContext)

@@ -13,7 +13,6 @@ fn machine(host: &str) -> Machine {
         port: 22,
         user: "nick".to_owned(),
         key_id: "key".to_owned(),
-        pinned_host_key: None,
     }
 }
 
@@ -57,6 +56,30 @@ fn a_peer_gone_without_an_end_reads_as_lost() {
         ChannelOutput::End(ChannelEnd::Lost(PEER_GONE.to_owned()))
     );
     assert!(!channel.writer.write(b"x"), "nobody takes input any more");
+}
+
+#[test]
+fn the_backlog_counts_the_input_bytes_until_the_peer_takes_them() {
+    let (channel, mut peer) = Channel::pair();
+    let other = channel.writer.clone();
+
+    assert!(channel.writer.write(b"ls\r"));
+    assert!(other.resize(SIZE));
+    assert!(other.write(b"pwd\r"));
+    assert_eq!(channel.writer.backlog(), 7, "a resize carries no bytes");
+    assert_eq!(peer.try_input(), Some(ChannelInput::Data(b"ls\r".to_vec())));
+    assert_eq!(other.backlog(), 4);
+    let _ = peer.try_input();
+    let _ = peer.try_input();
+    assert_eq!(channel.writer.backlog(), 0);
+
+    drop(peer);
+    assert!(!channel.writer.write(b"lost"));
+    assert_eq!(
+        channel.writer.backlog(),
+        0,
+        "a write to a gone channel leaves nothing queued"
+    );
 }
 
 #[test]

@@ -380,9 +380,12 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
 /// part runs as a local task.
 fn connect<T: Transport>(state: &Rc<State<T>>, machine: Machine, reply: Reply) {
     // A connect of the machine as edited replaces whatever it had (a connection, a connect or retry in flight, a
-    // suspension), and its sessions' streams with it: the new connection reports its own state.
-    if known(state, &machine.id).is_some_and(|known| known != machine) {
-        disconnect(state, &machine.id);
+    // suspension), and its sessions' streams with it: the new connection reports its own state. One only renamed
+    // keeps it all and takes the new label.
+    match known(state, &machine.id) {
+        Some(known) if !known.reached_as(&machine) => disconnect(state, &machine.id),
+        Some(known) if known.label != machine.label => relabel(state, &machine.id, &machine.label),
+        _ => {}
     }
     if state.connections.borrow().contains_key(&machine.id) {
         let _ = reply.send(Ok(()));
@@ -434,6 +437,19 @@ fn use_key<T: Transport>(state: &State<T>, machine_id: &str, key_id: &str) {
     }
     if let Some(set_aside) = state.suspended.borrow_mut().get_mut(machine_id) {
         key_id.clone_into(&mut set_aside.machine.key_id);
+    }
+}
+
+/// `machine_id`'s record, connected, being connected or set aside, takes the label `label`; its connection stays.
+fn relabel<T: Transport>(state: &State<T>, machine_id: &str, label: &str) {
+    if let Some(link) = state.connections.borrow_mut().get_mut(machine_id) {
+        label.clone_into(&mut link.machine.label);
+    }
+    if let Some(attempt) = state.attempts.borrow_mut().get_mut(machine_id) {
+        label.clone_into(&mut attempt.machine.label);
+    }
+    if let Some(set_aside) = state.suspended.borrow_mut().get_mut(machine_id) {
+        label.clone_into(&mut set_aside.machine.label);
     }
 }
 

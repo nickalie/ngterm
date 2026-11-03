@@ -33,7 +33,7 @@ private class MemoryPins : HostKeyStore {
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectionsTest {
-    private val machine = Machine("m1", "build-01", "build-01.lan", 22u, "nick", "k1", null)
+    private val machine = Machine("m1", "build-01", "build-01.lan", 22u, "nick", "k1")
     private val pins = MemoryPins()
     private lateinit var core: FakeMobileCore
     private var now = 5_000L
@@ -216,8 +216,13 @@ class ConnectionsTest {
             connections.connect(machine)
             advanceUntilIdle()
             assertEquals(setOf("s1"), connections.attached.value["m1"])
-            // edited: the core replaces the connection and ends the streams; the new listing still has s1
+            // renamed: the connection and the attachment stay
             connections.connect(machine.copy(label = "build-01 (lab)"))
+            advanceUntilIdle()
+            assertEquals(setOf("s1"), connections.attached.value["m1"])
+            assertEquals(0, core.calls.count { it.method == "detachSession" })
+            // edited: the core replaces the connection and ends the streams; the new listing still has s1
+            connections.connect(machine.copy(label = "build-01 (lab)", port = 2222u))
             advanceUntilIdle()
             assertEquals(Link.Connected, connections.links.value["m1"])
             assertEquals(listOf("s1", "s2"), connections.trees.value["m1"]?.map { it.id })

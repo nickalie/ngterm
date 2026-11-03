@@ -21,6 +21,9 @@ pub mod russh;
 #[cfg(test)]
 mod tests;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use ngterm_term::GridSize;
 use tokio::sync::mpsc;
 
@@ -133,18 +136,23 @@ impl Channel {
     pub fn pair() -> (Channel, ChannelPeer) {
         let (output_tx, output_rx) = mpsc::channel(CHANNEL_DEPTH);
         let (input_tx, input_rx) = mpsc::unbounded_channel();
+        let backlog = Backlog::default();
         let channel = Channel {
             reader: ChannelReader {
                 output: output_rx,
                 ended: None,
             },
-            writer: ChannelWriter { input: input_tx },
+            writer: ChannelWriter {
+                input: input_tx,
+                backlog: backlog.clone(),
+            },
         };
         (
             channel,
             ChannelPeer {
                 output: output_tx,
                 input: input_rx,
+                backlog,
             },
         )
     }
@@ -191,17 +199,58 @@ impl ChannelReader {
     }
 }
 
+/// The bytes of standard input a channel's writers queued that its transport has not sent yet, shared by both ends:
+/// a writer that may out-produce the machine waits on it ([`ChannelWriter::backlog`]) rather than queue without bound
+/// while ssh's window is shut.
+#[derive(Debug, Clone, Default)]
+pub struct Backlog(Arc<AtomicUsize>);
+
+impl Backlog {
+    fn add(&self, bytes: usize) {
+        self.0.fetch_add(bytes, Ordering::AcqRel);
+    }
+
+    /// `bytes` queued earlier have been sent (or will never be).
+    pub fn sent(&self, bytes: usize) {
+        let _ = self.0.fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+            Some(queued.saturating_sub(bytes))
+        });
+    }
+
+    /// The bytes queued and not yet sent.
+    #[must_use]
+    pub fn get(&self) -> usize {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
 /// The writing half of a [`Channel`]; clones write to the same channel, in the order their sends happen.
 #[derive(Debug, Clone)]
 pub struct ChannelWriter {
     input: mpsc::UnboundedSender<ChannelInput>,
+    backlog: Backlog,
 }
 
 impl ChannelWriter {
     /// Queues `input` for the transport; false once the channel is gone.
     #[must_use]
     pub fn send(&self, input: ChannelInput) -> bool {
-        self.input.send(input).is_ok()
+        let bytes = match &input {
+            ChannelInput::Data(data) => data.len(),
+            _ => 0,
+        };
+        self.backlog.add(bytes);
+        let sent = self.input.send(input).is_ok();
+        if !sent {
+            self.backlog.sent(bytes);
+        }
+        sent
+    }
+
+    /// The bytes of standard input queued and not yet sent to the machine.
+    #[must_use]
+    pub fn backlog(&self) -> usize {
+        self.backlog.get()
     }
 
     /// Queues bytes for the command's standard input.
@@ -234,6 +283,8 @@ impl ChannelWriter {
 pub struct ChannelPeer {
     output: mpsc::Sender<ChannelOutput>,
     input: mpsc::UnboundedReceiver<ChannelInput>,
+    /// What the writers queued and the transport has not sent: the input this peer hands out counts as sent.
+    backlog: Backlog,
 }
 
 impl ChannelPeer {
@@ -254,14 +305,23 @@ impl ChannelPeer {
         let _ = self.output.send(ChannelOutput::End(end)).await;
     }
 
-    /// The core's next input, or `None` once every writer is gone.
+    /// The core's next input, or `None` once every writer is gone; it counts as sent.
     pub async fn input(&mut self) -> Option<ChannelInput> {
-        self.input.recv().await
+        let input = self.input.recv().await;
+        self.taken(input)
     }
 
-    /// The core's next input if one is queued.
+    /// The core's next input if one is queued; it counts as sent.
     pub fn try_input(&mut self) -> Option<ChannelInput> {
-        self.input.try_recv().ok()
+        let input = self.input.try_recv().ok();
+        self.taken(input)
+    }
+
+    fn taken(&self, input: Option<ChannelInput>) -> Option<ChannelInput> {
+        if let Some(ChannelInput::Data(bytes)) = &input {
+            self.backlog.sent(bytes.len());
+        }
+        input
     }
 
     /// Whether the reader is gone (nothing delivered would be read).

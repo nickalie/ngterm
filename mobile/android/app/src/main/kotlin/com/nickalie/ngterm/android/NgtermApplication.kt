@@ -19,10 +19,12 @@ import com.nickalie.ngterm.android.data.OpenRequests
 import com.nickalie.ngterm.android.data.SettingsStore
 import com.nickalie.ngterm.android.platform.AndroidClipboard
 import com.nickalie.ngterm.android.platform.AndroidKeystoreWrapper
+import com.nickalie.ngterm.android.platform.Foreground
 import com.nickalie.ngterm.android.platform.KeystoreKeyVault
 import com.nickalie.ngterm.android.platform.NetworkMonitor
 import com.nickalie.ngterm.android.platform.Notifications
 import com.nickalie.ngterm.android.platform.PinnedHostKeys
+import com.nickalie.ngterm.android.service.IdleKeeper
 import com.nickalie.ngterm.android.service.LinkKeeper
 import com.nickalie.ngterm.android.service.LinkService
 import com.nickalie.ngterm.android.ui.session.SessionPanes
@@ -35,12 +37,21 @@ import java.io.File
 /**
  * The app's process: it makes the [AppGraph] on first use (not in `onCreate`, so the JVM tests, which run this class
  * without the native library, never load the core), with what works beside the screens: the network's nudges, the
- * notifications ([Alerts]) and the foreground service while sessions are attached ([LinkKeeper]).
+ * notifications ([Alerts]), the foreground service while sessions are attached ([LinkKeeper]), and the core's
+ * connections closed while the app is in the background with nothing attached ([IdleKeeper]).
  */
 class NgtermApplication :
     Application(),
     GraphOwner {
     override val graph: AppGraph by lazy { makeGraph() }
+
+    // counted from the start, before the graph is made by the first screen
+    private lateinit var foreground: Foreground
+
+    override fun onCreate() {
+        super.onCreate()
+        foreground = Foreground(this)
+    }
 
     private fun makeGraph(): AppGraph {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -57,6 +68,7 @@ class NgtermApplication :
         val prefs = NotificationPrefs(PreferenceDataStoreFactory.create { file("notifications") })
         Alerts(scope, connections, asks, machines.machines, prefs.enabled, Notifications(this))
         LinkKeeper(scope, connections.attached) { LinkService.start(this) }
+        IdleKeeper(scope, foreground.visible, connections.attached, connections::suspend, connections::resume)
         return AppGraph(
             machines = machines,
             keys =

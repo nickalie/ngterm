@@ -127,33 +127,40 @@ internal class TerminalInputConnection(
     override fun deleteSurroundingText(
         beforeLength: Int,
         afterLength: Int,
+    ): Boolean = delete(beforeLength, afterLength, codePoints = false)
+
+    override fun deleteSurroundingTextInCodePoints(
+        beforeLength: Int,
+        afterLength: Int,
+    ): Boolean = delete(beforeLength, afterLength, codePoints = true)
+
+    // [beforeLength] and [afterLength] in UTF-16 units, or in code points: the part of the deletion the composition
+    // holds goes from it; the rest is the program's, a key press per character
+    private fun delete(
+        beforeLength: Int,
+        afterLength: Int,
+        codePoints: Boolean,
     ): Boolean {
         if (!live) return false
         var before = beforeLength.coerceAtLeast(0)
         var after = afterLength.coerceAtLeast(0)
         val text = editable
         if (!text.isNullOrEmpty()) {
-            // the part of the deletion the composition holds goes from it; the rest is the program's
             val start = Selection.getSelectionStart(text).coerceIn(0, text.length)
             val end = Selection.getSelectionEnd(text).coerceIn(start, text.length)
-            val localAfter = minOf(after, text.length - end)
-            val localBefore = minOf(before, start)
-            text.delete(end, end + localAfter)
-            text.delete(start - localBefore, start)
+            val (to, takenAfter) = text.step(end, after, forward = true, codePoints)
+            val (from, takenBefore) = text.step(start, before, forward = false, codePoints)
+            text.delete(end, to)
+            text.delete(from, start)
             if (text.isEmpty()) removeComposingSpans(text)
-            before -= localBefore
-            after -= localAfter
+            before -= takenBefore
+            after -= takenAfter
             show()
         }
         repeat(before) { keyboard.press(BACKSPACE, terminal) }
         repeat(after) { keyboard.press(DELETE, terminal) }
         return true
     }
-
-    override fun deleteSurroundingTextInCodePoints(
-        beforeLength: Int,
-        afterLength: Int,
-    ): Boolean = deleteSurroundingText(beforeLength, afterLength)
 
     override fun sendKeyEvent(event: KeyEvent): Boolean {
         if (!live) return false
@@ -170,6 +177,32 @@ internal class TerminalInputConnection(
     }
 
     private companion object {
+        // up to [count] characters (UTF-16 units, or code points) from [at] toward the end or the start: where that
+        // lands, and how many it took
+        fun CharSequence.step(
+            at: Int,
+            count: Int,
+            forward: Boolean,
+            codePoints: Boolean,
+        ): Pair<Int, Int> {
+            if (!codePoints) {
+                val taken = if (forward) minOf(count, length - at) else minOf(count, at)
+                return (if (forward) at + taken else at - taken) to taken
+            }
+            var index = at
+            var taken = 0
+            while (taken < count && (if (forward) index < length else index > 0)) {
+                index +=
+                    if (forward) {
+                        Character.charCount(Character.codePointAt(this, index))
+                    } else {
+                        -Character.charCount(Character.codePointBefore(this, index))
+                    }
+                taken += 1
+            }
+            return index to taken
+        }
+
         const val BACKSPACE = "backspace"
         const val DELETE = "delete"
         const val ENTER = "enter"

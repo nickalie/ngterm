@@ -48,6 +48,23 @@ fn the_gone_guards_line_is_found_at_the_end_of_the_output_only() {
 }
 
 #[test]
+fn the_gone_guards_line_is_found_before_the_attach_clients_restore() {
+    // under a pty the attach client leaves with RIS and the colour resets (ngterm-session's `cli/attach.rs` RESTORE)
+    let restore = "\x1bc\x1b]110\x1b\\\x1b]111\x1b\\\x1b]112\x1b\\";
+    let mut tail = Tail::default();
+    tail.push(format!("\x1b[2J\x1b[H{SESSION_GONE}\r\n{restore}").as_bytes());
+    assert!(tail.is_gone(), "escape sequences after the line are not output");
+
+    let mut bell = Tail::default();
+    bell.push(format!("{SESSION_GONE}\r\n\x1b]110\x07\x1b[0m\r\n").as_bytes());
+    assert!(bell.is_gone(), "nor are a BEL-ended OSC and a CSI");
+
+    let mut later = Tail::default();
+    later.push(format!("{SESSION_GONE}\r\n{restore}$ ").as_bytes());
+    assert!(!later.is_gone(), "text after them still is");
+}
+
+#[test]
 fn a_terminal_installed_after_a_resize_raced_its_build_takes_the_new_grid() {
     let built = GridSize {
         cols: 80,

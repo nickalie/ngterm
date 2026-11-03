@@ -130,6 +130,39 @@ class SessionViewModelTest {
     }
 
     @Test
+    fun theStreamsClearOutranksTheListingsStatusAndContext() {
+        val stored = testMachine(keyId = test.seedKey().id)
+        test.seedMachine(stored)
+        test.core.sessions["m1"] =
+            mutableListOf(fakeSession("s1", name = "s1-name").copy(status = "blocked", context = "Rewrite the guide"))
+        test.connections.connect(stored.toCore())
+        eventually { test.connections.trees.value["m1"] != null }
+        runBlocking { test.connections.attach("m1", "s1") }
+        val model = model()
+        eventually { model.state.value.sessions.size == 1 }
+        // the listing stands in until the stream says
+        assertEquals(
+            AgentStatus("blocked", null, null),
+            model.state.value.sessions
+                .single()
+                .status,
+        )
+        assertEquals(
+            "Rewrite the guide",
+            model.state.value.sessions
+                .single()
+                .context,
+        )
+        test.core.emit(MobileEvent.SessionStatus("m1", "s1", null, true))
+        test.core.emit(MobileEvent.SessionContext("m1", "s1", null))
+        eventually {
+            model.state.value.sessions
+                .single()
+                .let { it.status == null && it.context == null }
+        }
+    }
+
+    @Test
     fun anOpenSessionFocusesItsPrimaryPaneUntilAnotherIsFocused() {
         attached("s1")
         val model = model()

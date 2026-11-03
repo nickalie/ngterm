@@ -2,8 +2,8 @@
 # Set up the Android toolchain the app's build (scripts/build-android.sh, mobile/android) and its tests need, at the
 # ANDROID_* and CARGO_NDK_* pins of build/pins.env: the SDK's command-line tools, platform, build-tools, NDK,
 # platform-tools, emulator and system image, two AVDs (a phone and a tablet), the Rust Android targets and cargo-ndk.
-# It checks for JDK 21 and for sshd (the mobile e2e test) and only advises when they are missing: they are system
-# packages.
+# It checks for JDK 21 and for sshd (the mobile e2e test) but doesn't install them, since they are system packages:
+# a missing one is reported with the command that installs it, and counts as not done (exit 1).
 #
 # Idempotent: what is already in place is left alone, so a second run changes nothing. It ends with a report of what it
 # did, what it could not do, and the lines to export; it exits 1 when something could not be done.

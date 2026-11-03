@@ -63,6 +63,10 @@ pub const WRITER_POLL: Duration = Duration::from_millis(100);
 /// The most waits a stopped writer makes before it closes the channel whatever is still queued.
 const STOPPED_POLLS: u32 = 10;
 
+/// The most bytes a pane's writer leaves queued for ssh before it stops taking the terminal's output: past it the
+/// input waits in the pane's own queue, whose limits push back on typing and pasting and drop surplus replies.
+pub const WRITE_BACKLOG: usize = 64 * 1024;
+
 /// Why a pane was refused that its session doesn't hold.
 pub const UNKNOWN_PANE: &str = "the session has no such pane";
 
@@ -813,12 +817,15 @@ fn clipboard_read<C>(shown: &mut Shown<C>, id: u64, request: ClipboardReadReques
     })
 }
 
-/// The last bytes of a channel's output, enough to hold the gone guard's line.
+/// The last bytes of a channel's output, enough to hold the gone guard's line and what the attach client writes after
+/// it as it leaves.
 #[derive(Debug, Default)]
 pub(crate) struct Tail(Vec<u8>);
 
 impl Tail {
-    const KEEP: usize = 2 * SESSION_GONE.len() + 8;
+    // the line, and room for the attach client's RESTORE (RIS and three OSC resets, ngterm-session's
+    // `cli/attach.rs`) and a few more sequences
+    const KEEP: usize = 2 * SESSION_GONE.len() + 128;
 
     pub(crate) fn push(&mut self, bytes: &[u8]) {
         self.0.extend_from_slice(bytes);
@@ -826,11 +833,56 @@ impl Tail {
         self.0.drain(..excess);
     }
 
-    /// Whether the output ended with the gone guard's line (and its line ending).
+    /// Whether the output ended with the gone guard's line (and its line ending), escape sequences aside: under a pty
+    /// the attach client writes its terminal resets after the line, as it leaves.
     pub(crate) fn is_gone(&self) -> bool {
-        let text = String::from_utf8_lossy(&self.0);
+        let text = String::from_utf8_lossy(&without_escapes(&self.0)).into_owned();
         text.trim_end().ends_with(SESSION_GONE)
     }
+}
+
+/// `bytes` without their escape sequences: CSI (to its final byte), OSC, DCS, SOS, PM and APC (to BEL or ST), and
+/// two-byte ones (`ESC c`). An unfinished sequence at the end is dropped too.
+fn without_escapes(bytes: &[u8]) -> Vec<u8> {
+    const ESC: u8 = 0x1b;
+    const BEL: u8 = 0x07;
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] != ESC {
+            out.push(bytes[at]);
+            at += 1;
+            continue;
+        }
+        at = match bytes.get(at + 1) {
+            None => bytes.len(),
+            // CSI: parameters and intermediates, then a final byte in 0x40..=0x7e
+            Some(b'[') => bytes[at + 2..]
+                .iter()
+                .position(|byte| (0x40..=0x7e).contains(byte))
+                .map_or(bytes.len(), |end| at + 2 + end + 1),
+            // strings ended by BEL or ST (ESC \)
+            Some(b']' | b'P' | b'X' | b'^' | b'_') => {
+                let body = at + 2;
+                let mut end = bytes.len();
+                let mut index = body;
+                while index < bytes.len() {
+                    if bytes[index] == BEL {
+                        end = index + 1;
+                        break;
+                    }
+                    if bytes[index] == ESC && bytes.get(index + 1) == Some(&b'\\') {
+                        end = index + 2;
+                        break;
+                    }
+                    index += 1;
+                }
+                end
+            }
+            Some(_) => at + 2,
+        };
+    }
+    out
 }
 
 /// The feeder: the channel's output into the terminal until either ends; the channel's end, after the terminal's,
@@ -863,12 +915,18 @@ fn feed_pane(mut reader: ChannelReader, feed: &StreamFeed, notes: &Notes, key: u
 fn write_pane(out: &StreamOut, writer: &ChannelWriter, stop: &AtomicBool, terminal: Arc<ngterm_term::Pane>) {
     let mut stopped_polls = 0;
     loop {
-        let sent = match out.next(Some(WRITER_POLL)) {
-            Ok(Some(Outgoing::Bytes(bytes))) => writer.write(&bytes),
-            Ok(Some(Outgoing::Resize(size))) => writer.resize(size),
-            Ok(None) if stop.load(Ordering::Acquire) => break,
-            Ok(None) => true,
-            Err(_) => break,
+        // the machine isn't reading (ssh's window is shut): what the terminal queues stays in its accounting
+        let sent = if writer.backlog() >= WRITE_BACKLOG {
+            thread::sleep(WRITER_POLL / 4);
+            true
+        } else {
+            match out.next(Some(WRITER_POLL)) {
+                Ok(Some(Outgoing::Bytes(bytes))) => writer.write(&bytes),
+                Ok(Some(Outgoing::Resize(size))) => writer.resize(size),
+                Ok(None) if stop.load(Ordering::Acquire) => break,
+                Ok(None) => true,
+                Err(_) => break,
+            }
         };
         if !sent {
             break;

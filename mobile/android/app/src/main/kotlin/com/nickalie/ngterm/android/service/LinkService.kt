@@ -138,3 +138,33 @@ class LinkKeeper(
         }
     }
 }
+
+/**
+ * Lets the core close its connections while the app has nothing to keep connected: in the background ([visible]
+ * false) with no session attached, [suspend] runs (the core's `suspend`); once either changes, [resume] brings the
+ * connections back. Nothing runs until the app first goes idle.
+ */
+class IdleKeeper(
+    scope: CoroutineScope,
+    visible: StateFlow<Boolean>,
+    attached: StateFlow<Map<String, Set<String>>>,
+    private val suspend: () -> Unit,
+    private val resume: () -> Unit,
+) {
+    init {
+        scope.launch {
+            var suspended = false
+            combine(visible, attached) { shown, sessions -> !shown && sessions.values.all { it.isEmpty() } }
+                .distinctUntilChanged()
+                .collect { idle ->
+                    if (idle) {
+                        suspend()
+                        suspended = true
+                    } else if (suspended) {
+                        resume()
+                        suspended = false
+                    }
+                }
+        }
+    }
+}

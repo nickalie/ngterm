@@ -55,7 +55,7 @@ class LiveSessionsTest {
     // m1 connected and listed, with s1 attached
     private suspend fun TestScope.attach() {
         core.sessions["m1"] = mutableListOf(fakeSession("s1"))
-        connections.connect(Machine("m1", "build-01", "build-01.lan", 22u, "nick", "k1", null))
+        connections.connect(Machine("m1", "build-01", "build-01.lan", 22u, "nick", "k1"))
         settle()
         connections.attach("m1", "s1")
         settle()
@@ -76,11 +76,44 @@ class LiveSessionsTest {
             core.emit(MobileEvent.SessionContext("m1", "s1", "Rewrite the guide"))
             core.emit(MobileEvent.Hud("m1", "s1", hud))
             assertEquals(
-                LiveSession(StreamState.Connected, status, "Rewrite the guide", layout, hud),
+                LiveSession(
+                    StreamState.Connected,
+                    status,
+                    "Rewrite the guide",
+                    layout,
+                    hud,
+                    statusSaid = true,
+                    contextSaid = true,
+                ),
                 live.sessions.value[key],
             )
             core.emit(MobileEvent.Hud("m1", "s1", null))
             assertNull(live.sessions.value[key]?.hud)
+        }
+
+    @Test
+    fun aStreamFailingBeforeTheSessionShowedListsTheMachineAgainAndAGoneSessionLeaves() =
+        runTest {
+            val live = live()
+            attach()
+            val listings = core.calls.count { it.method == "listSessions" }
+            // ended elsewhere after the listing the attach went by
+            core.sessions["m1"] = mutableListOf()
+            core.emit(MobileEvent.SessionConnection("m1", "s1", StreamState.Failed("no such session")))
+            settle()
+            assertEquals(listings + 1, core.calls.count { it.method == "listSessions" })
+            assertNull(connections.attached.value["m1"]?.takeIf { it.isNotEmpty() })
+            assertNull(live.sessions.value[key])
+            // a stream that has shown its session failing is retried by the core, not listed again
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            connections.listSessions("m1")
+            connections.attach("m1", "s1")
+            settle()
+            core.emit(MobileEvent.SessionLayout("m1", "s1", RemoteLayout(listOf("P1"), "P1", null, false)))
+            val before = core.calls.count { it.method == "listSessions" }
+            core.emit(MobileEvent.SessionConnection("m1", "s1", StreamState.Failed("link down")))
+            settle()
+            assertEquals(before, core.calls.count { it.method == "listSessions" })
         }
 
     @Test

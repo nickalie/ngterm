@@ -184,7 +184,7 @@ class Connections(
     fun connect(machine: Machine) {
         val id = machine.id
         val before = records.put(id, machine)
-        if (before != null && before != machine) replaced(id)
+        if (before != null && !before.reachedAs(machine)) replaced(id)
         declined.update { it - id }
         linkState.update { links ->
             when (links[id]) {
@@ -333,6 +333,15 @@ class Connections(
 
     /** The network came back or changed: a machine waiting to reconnect tries at once. */
     fun networkChanged() = guarded { core.networkChanged() }
+
+    /**
+     * The app has nothing to keep connected (in the background, nothing attached): the core closes every connection
+     * quietly until [resume], which connects again the machines that were.
+     */
+    fun suspend() = guarded { core.suspend() }
+
+    /** Brings back what [suspend] closed. */
+    fun resume() = guarded { core.resume() }
 
     // a core that has stopped answers nothing more; there is nothing left to tell it
     private inline fun guarded(call: () -> Unit) {

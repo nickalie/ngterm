@@ -117,4 +117,32 @@ class LinkServiceTest {
         assertEquals(2, starts)
         scope.cancel()
     }
+
+    @Test
+    fun theIdleKeeperSuspendsInTheBackgroundWithNothingAttachedAndResumesAfter() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val visible = MutableStateFlow(true)
+        val attached = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
+        val calls = mutableListOf<String>()
+        IdleKeeper(scope, visible, attached, { calls += "suspend" }, { calls += "resume" })
+        idle()
+        assertEquals(emptyList<String>(), calls)
+        // in the background with a session attached: the connection stays for it
+        attached.value = mapOf("m1" to setOf("s1"))
+        visible.value = false
+        idle()
+        assertEquals(emptyList<String>(), calls)
+        attached.value = mapOf("m1" to emptySet())
+        idle()
+        assertEquals(listOf("suspend"), calls)
+        visible.value = true
+        idle()
+        assertEquals(listOf("suspend", "resume"), calls)
+        visible.value = false
+        idle()
+        attached.value = mapOf("m1" to setOf("s1"))
+        idle()
+        assertEquals(listOf("suspend", "resume", "suspend", "resume"), calls)
+        scope.cancel()
+    }
 }

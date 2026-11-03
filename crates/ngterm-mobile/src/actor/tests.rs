@@ -45,7 +45,6 @@ fn machine(id: &str, host: &str) -> Machine {
         port: 22,
         user: "nick".to_owned(),
         key_id: "key".to_owned(),
-        pinned_host_key: None,
     }
 }
 
@@ -141,6 +140,32 @@ fn connecting_a_connected_machine_as_edited_replaces_its_connection() {
         ),
         "{unreachable:?}"
     );
+}
+
+#[test]
+fn connecting_a_connected_machine_only_renamed_keeps_its_connection() {
+    let transport = FakeTransport::new();
+    let (sink, events) = recorder();
+    let core = core(&transport, &sink);
+
+    assert_eq!(block_on(core.connect(machine("m1", "host"))), Ok(()));
+    let renamed = Machine {
+        label: "build box".to_owned(),
+        ..machine("m1", "host")
+    };
+    assert_eq!(block_on(core.connect(renamed)), Ok(()));
+
+    assert!(transport.closed().is_empty(), "the connection stays");
+    assert_eq!(transport.connects(), ["m1"]);
+    assert_eq!(events.recv_timeout(WAIT).expect("connected").2, connected("m1"));
+    assert!(events.try_recv().is_err(), "a rename changes no state");
+
+    let moved = Machine {
+        port: 2222,
+        ..machine("m1", "host")
+    };
+    assert_eq!(block_on(core.connect(moved)), Ok(()));
+    assert_eq!(transport.closed(), ["m1"], "another port is another machine");
 }
 
 #[test]

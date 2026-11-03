@@ -16,8 +16,8 @@
 //! A changed key, a key the user did not trust and a client key the machine does not accept fail the connect as
 //! [`TransportError::Refused`], which a retry won't fix; every other failure is [`TransportError::Unreachable`].
 //!
-//! [`HostKeyStore::pinned`] is the only authority on the pin: [`Machine::pinned_host_key`] is the app's copy for
-//! showing, so removing a pin from the store is never undone by a stale record.
+//! [`HostKeyStore::pinned`] is the only authority on the pin: the [`Machine`] record carries none, so removing a pin
+//! from the store is never undone by a stale record.
 //!
 //! Each exec channel is bridged to the core's [`Channel`] by two tasks: one copies the machine's output into the
 //! [`ChannelPeer`], one copies the core's input to ssh. russh hands every channel's messages over from one session loop
@@ -55,7 +55,8 @@ use tokio::time::Instant;
 use zeroize::Zeroizing;
 
 use super::{
-    Channel, ChannelEnd, ChannelInput, ChannelOutput, ChannelPeer, Connection, PEER_GONE, Transport, TransportError,
+    Backlog, Channel, ChannelEnd, ChannelInput, ChannelOutput, ChannelPeer, Connection, PEER_GONE, Transport,
+    TransportError,
 };
 use crate::api::{EventSink, HostKeyStore, KeyVault, Machine, MobileEvent};
 use crate::keys;
@@ -532,7 +533,7 @@ impl Connection for RusshConnection {
         replied(channel, &mut early, "the machine refused to run the command").await?;
         let channel = opening.0.take().ok_or(TransportError::Closed)?;
         let (core, peer) = Channel::pair();
-        let ChannelPeer { output, input } = peer;
+        let ChannelPeer { output, input, backlog } = peer;
         let (read, write) = channel.split();
         let write = Rc::new(write);
         let (closing, closed) = oneshot::channel();
@@ -541,7 +542,7 @@ impl Connection for RusshConnection {
             connection: Arc::clone(&self.closed),
         };
         tokio::task::spawn_local(copy_output(read, early, output.clone(), Rc::clone(&write), ending));
-        tokio::task::spawn_local(copy_input(write, input, output, closing));
+        tokio::task::spawn_local(copy_input(write, input, backlog, output, closing));
         Ok(core)
     }
 
@@ -761,6 +762,7 @@ async fn copy_output(
 async fn copy_input(
     write: Rc<::russh::ChannelWriteHalf<Msg>>,
     mut input: mpsc::UnboundedReceiver<ChannelInput>,
+    backlog: Backlog,
     output: mpsc::Sender<ChannelOutput>,
     closing: oneshot::Sender<()>,
 ) {
@@ -777,6 +779,7 @@ async fn copy_input(
         };
         let step = Step {
             write: &write,
+            backlog: &backlog,
             input: &mut input,
             output: &output,
             queued: &mut queued,
@@ -805,6 +808,8 @@ enum Sent {
 /// One input on its way to the machine, and what the core sends meanwhile.
 struct Step<'a> {
     write: &'a ::russh::ChannelWriteHalf<Msg>,
+    /// The writers' bytes not yet sent: the one on its way counts until ssh has taken it.
+    backlog: &'a Backlog,
     input: &'a mut mpsc::UnboundedReceiver<ChannelInput>,
     output: &'a mpsc::Sender<ChannelOutput>,
     /// Inputs taken while a write waits, sent after it.
@@ -815,6 +820,10 @@ struct Step<'a> {
 
 impl Step<'_> {
     async fn run(self, next: ChannelInput) -> Sent {
+        let bytes = match &next {
+            ChannelInput::Data(data) => data.len(),
+            _ => 0,
+        };
         let sending = match next {
             ChannelInput::Close => return Sent::Close,
             other => send(self.write, other),
@@ -823,7 +832,10 @@ impl Step<'_> {
         loop {
             tokio::select! {
                 biased;
-                sent = &mut sending => return if sent.is_ok() { Sent::Done } else { Sent::Failed },
+                sent = &mut sending => {
+                    self.backlog.sent(bytes);
+                    return if sent.is_ok() { Sent::Done } else { Sent::Failed };
+                }
                 more = self.input.recv(), if *self.writers => match more {
                     Some(ChannelInput::Close) => return Sent::Close,
                     Some(other) => self.queued.push_back(other),

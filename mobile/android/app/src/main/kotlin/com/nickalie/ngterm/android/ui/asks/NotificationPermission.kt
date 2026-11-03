@@ -52,16 +52,9 @@ fun NotificationPermissionPrompt(graph: AppGraph) {
     val asked by askedFlow.collectAsStateWithLifecycle(initialValue = true)
     val attached by graph.connections.attached.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    // the attached sessions' service went to the foreground before the answer, its notification dropped for want of
-    // the permission: started again, it posts it now
     val launcher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
-            if (allowed &&
-                graph.connections.attached.value.values
-                    .any { it.isNotEmpty() }
-            ) {
-                LinkService.start(context)
-            }
+            afterPermissionAnswer(allowed, graph.connections.attached.value) { LinkService.start(context) }
         }
     val granted =
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
@@ -75,6 +68,19 @@ fun NotificationPermissionPrompt(graph: AppGraph) {
         },
         onLater = { done() },
     )
+}
+
+/**
+ * The system's answer to the permission: the attached sessions' service went to the foreground before it, its
+ * notification dropped for want of the permission, so a grant with a session [attached] starts it again ([restart]),
+ * which posts the notification now.
+ */
+internal fun afterPermissionAnswer(
+    allowed: Boolean,
+    attached: Map<String, Set<String>>,
+    restart: () -> Unit,
+) {
+    if (allowed && attached.values.any { it.isNotEmpty() }) restart()
 }
 
 /** [NotificationPermissionQuestion] in a sheet; dismissing it is [onLater]. */

@@ -40,9 +40,15 @@ pub struct Machine {
     pub user: String,
     /// The [`KeyVault`] id of the private key the machine is reached with.
     pub key_id: String,
-    /// The host key pinned on first use (OpenSSH's `SHA256:` fingerprint), if any: the app's copy, for showing. The
-    /// core trusts only [`HostKeyStore::pinned`], so a pin removed from the store stays removed.
-    pub pinned_host_key: Option<String>,
+}
+
+impl Machine {
+    /// Whether `other` is reached as this one is: the same host, port, user and key. A record differing in its label
+    /// alone is the same machine renamed.
+    #[must_use]
+    pub fn reached_as(&self, other: &Self) -> bool {
+        self.host == other.host && self.port == other.port && self.user == other.user && self.key_id == other.key_id
+    }
 }
 
 /// A machine's connection.
@@ -306,14 +312,15 @@ impl MobileCore {
     /// Connects `machine`, answered once it is connected (at once when it already is; a connect of the same machine in
     /// flight is joined, not repeated, and a machine waiting to reconnect is retried at once). Once connected, a lost
     /// connection is retried on its own, reported as [`MachineState::Reconnecting`], until
-    /// [`MobileCore::disconnect`]. A connect of the machine as edited (another host, user, key or pin) closes its
-    /// connection and connects anew. The state also arrives as a
+    /// [`MobileCore::disconnect`]. A connect of the machine as edited (another host, port, user or key:
+    /// [`Machine::reached_as`]) closes its connection and connects anew; one only renamed keeps it and takes the new
+    /// label. The state also arrives as a
     /// [`MobileEvent::MachineState`].
     ///
     /// # Errors
     ///
     /// [`MobileError::Unreachable`] when the machine can't be reached, [`MobileError::Cancelled`] when a disconnect
-    /// or a connect of the machine as edited (another host, user, key or pin) overtook the connect, [`MobileError::Stopped`] when the core has stopped.
+    /// or a connect of the machine as edited (another host, port, user or key) overtook the connect, [`MobileError::Stopped`] when the core has stopped.
     pub async fn connect(&self, machine: Machine) -> Result<(), MobileError> {
         let (reply, answer) = oneshot::channel();
         self.actor.post(Command::Connect { machine, reply })?;
