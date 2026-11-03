@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use ngterm_core::remote::origin_replies::{
     self, NEW_SESSION_ARGUMENTS, NOT_ATTACHABLE, PAUSE, READY_BUDGET, RESTORE_MODE_ARGUMENTS, SESSION_NOUN,
     end_session_arguments,
@@ -252,7 +250,7 @@ async fn create_checks_live_creates_and_lists_until_the_session_is_there() {
     let connection = connected(&transport).await;
     let started = Instant::now();
 
-    let (created, tree) = create(&connection, HOST, None).await.expect("created");
+    let (created, tree) = create(&connection, HOST, None, || {}).await.expect("created");
 
     assert_eq!(created.id, CREATED);
     assert_eq!(tree.sessions.len(), 2);
@@ -275,7 +273,7 @@ async fn create_with_a_name_passes_it_as_one_value() {
     transport.script(&tree_tail(), listing(&[session(CREATED, "-build logs", None, None)]));
     let connection = connected(&transport).await;
 
-    let (created, _) = create(&connection, HOST, Some("  -build logs "))
+    let (created, _) = create(&connection, HOST, Some("  -build logs "), || {})
         .await
         .expect("created");
 
@@ -294,7 +292,7 @@ async fn create_on_a_machine_without_live_sessions_creates_nothing() {
     transport.script(&restore_line(), restore_mode("off"));
     let connection = connected(&transport).await;
 
-    let error = create(&connection, HOST, None).await.expect_err("not live");
+    let error = create(&connection, HOST, None, || {}).await.expect_err("not live");
 
     assert_eq!(
         error,
@@ -324,7 +322,7 @@ async fn create_fails_on_an_old_ngterm_a_missing_ngtermctl_and_a_refusal() {
         transport.script(&restore_line(), answer);
         let connection = connected(&transport).await;
 
-        assert_eq!(create(&connection, HOST, None).await.map(|_| ()), Err(expected));
+        assert_eq!(create(&connection, HOST, None, || {}).await.map(|_| ()), Err(expected));
     }
 }
 
@@ -354,7 +352,7 @@ async fn create_reports_session_new_failures() {
         transport.script(&new_line(None), answer);
         let connection = connected(&transport).await;
 
-        assert_eq!(create(&connection, HOST, None).await.map(|_| ()), Err(expected));
+        assert_eq!(create(&connection, HOST, None, || {}).await.map(|_| ()), Err(expected));
         assert!(!commands(&transport).contains(&tree_tail()), "nothing is listed");
     }
 }
@@ -367,7 +365,7 @@ async fn create_gives_up_once_the_budget_runs_out() {
     let connection = connected(&transport).await;
     let started = Instant::now();
 
-    let error = create(&connection, HOST, None).await.expect_err("never listed");
+    let error = create(&connection, HOST, None, || {}).await.expect_err("never listed");
 
     assert_eq!(
         error,
@@ -388,7 +386,7 @@ async fn a_failed_listing_is_the_reason_a_give_up_names() {
     transport.script(&tree_tail(), refusal("the store is busy"));
     let connection = connected(&transport).await;
 
-    let error = create(&connection, HOST, None).await.expect_err("never listed");
+    let error = create(&connection, HOST, None, || {}).await.expect_err("never listed");
 
     assert_eq!(
         error,
@@ -403,7 +401,7 @@ async fn create_stops_waiting_once_the_connection_is_gone() {
     let connection = connected(&transport).await;
     let started = Instant::now();
     // the first listing is left open: closing the connection under it ends the wait
-    let waiting = create(&connection, HOST, None);
+    let waiting = create(&connection, HOST, None, || {});
     let closing = async {
         tokio::task::yield_now().await;
         while transport.take_opened().is_empty() {
@@ -467,8 +465,11 @@ async fn end_refuses_an_id_that_is_not_one_token_before_running_anything() {
     let transport = FakeTransport::new();
     let connection = connected(&transport).await;
 
-    assert_eq!(end(&connection, HOST, "a b").await, Err(INVALID_SESSION.to_owned()));
-    assert_eq!(end(&connection, HOST, "").await, Err(INVALID_SESSION.to_owned()));
+    assert_eq!(
+        end(&connection, HOST, "a b").await,
+        Err(INVALID_REMOTE_SESSION.to_owned())
+    );
+    assert_eq!(end(&connection, HOST, "").await, Err(INVALID_REMOTE_SESSION.to_owned()));
     assert!(transport.execs().is_empty());
 }
 
@@ -522,10 +523,4 @@ fn other_messages_keep_desktops_words() {
     ] {
         assert_eq!(phone_wording(message.clone()), message);
     }
-}
-
-#[test]
-fn the_run_deadlines_are_desktops() {
-    assert_eq!(CONTROL_DEADLINE, Duration::from_secs(30));
-    assert_eq!(NO_ANSWER_IN_TIME, "the remote did not answer in time");
 }

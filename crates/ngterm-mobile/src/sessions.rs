@@ -6,7 +6,7 @@
 //!   their companions.
 //! - New Session is desktop's three stages: the machine must run live sessions (`restore mode`), it creates a session
 //!   of its own with `session new --no-select` (named, when the user gave a name), and it is listed every
-//!   [`PAUSE`](ngterm_core::remote::origin_replies::PAUSE) until the session is attachable or the
+//!   [`PAUSE`] until the session is attachable or the
 //!   [`READY_BUDGET`](ngterm_core::remote::origin_replies::READY_BUDGET) runs out.
 //! - End Session closes the session there (`session close --target`), with no undo.
 //!
@@ -25,23 +25,17 @@ mod tests;
 use std::time::Duration;
 
 use ngterm_core::remote::origin_replies::{
-    ListingWait, NEW_SESSION_ARGUMENTS, PAUSE, RESTORE_MODE_ARGUMENTS, WaitStep, check_restore_mode, end_failure,
-    end_session_arguments, pickable_sessions, read_remote_tree, session_created,
+    COMPANION_DEADLINE, ListingWait, NEW_SESSION_ARGUMENTS, PAUSE, RESTORE_MODE_ARGUMENTS, WaitStep,
+    check_restore_mode, end_failure, end_session_arguments, pickable_sessions, read_remote_tree, session_created,
 };
 use ngterm_core::remote::ssh::{control_tail, tree_tail};
-use ngterm_core::remote::tree::{REMOTE_CLI, RemoteCommandResult, TREE_DEADLINE, is_plain};
+use ngterm_core::remote::tree::{
+    INVALID_REMOTE_SESSION, NO_ANSWER_IN_TIME, REMOTE_CLI, RemoteCommandResult, TREE_DEADLINE, is_plain,
+};
 use ngterm_proto::{ControlRemoteSession, ControlRemoteTree};
 
 use crate::transport::{ChannelEnd, ChannelOutput, Connection};
 
-/// How long a control line (`restore mode`, `session new`, `session close`) may run: desktop's
-/// `COMPANION_DEADLINE`.
-pub const CONTROL_DEADLINE: Duration = Duration::from_secs(30);
-/// What a line that did not finish within its deadline answers: desktop's runner's words.
-pub const NO_ANSWER_IN_TIME: &str = "the remote did not answer in time";
-/// Why End Session refuses a session id before running anything: desktop's words for a target that is not one plain
-/// token.
-pub const INVALID_SESSION: &str = "invalid remote session";
 /// What replaces desktop's CLI advice in a created-but-unattached failure ([`phone_wording`]).
 pub const ATTACH_FROM_LIST: &str = "attach it from the session list once it shows there";
 
@@ -175,7 +169,7 @@ fn out_of_time() -> RemoteCommandResult {
 
 /// Runs `host`'s `ngtermctl ARGUMENTS --json`.
 async fn control<C: Connection, S: AsRef<str>>(connection: &C, arguments: &[S]) -> Result<RemoteCommandResult, String> {
-    run(connection, &control_tail(arguments), CONTROL_DEADLINE).await
+    run(connection, &control_tail(arguments), COMPANION_DEADLINE).await
 }
 
 /// `host`'s attachable sessions, within `deadline`; `host` is the name the messages give the machine.
@@ -202,7 +196,7 @@ pub async fn list<C: Connection>(connection: &C, host: &str) -> Result<ControlRe
 }
 
 /// New Session on `host`, named `name` when given: the created session once it is attachable, and the listing that
-/// showed it.
+/// showed it. `listing_starts` is called as each listing begins, so the caller knows how recent the last one is.
 ///
 /// # Errors
 ///
@@ -211,6 +205,7 @@ pub async fn create<C: Connection>(
     connection: &C,
     host: &str,
     name: Option<&str>,
+    mut listing_starts: impl FnMut(),
 ) -> Result<(ControlRemoteSession, ControlRemoteTree), String> {
     let mode = control(connection, &RESTORE_MODE_ARGUMENTS).await?;
     check_restore_mode(&mode, host)?;
@@ -222,6 +217,7 @@ pub async fn create<C: Connection>(
             WaitStep::Wait => tokio::time::sleep(PAUSE).await,
             WaitStep::GiveUp(reason) => return Err(phone_wording(wait.unattached(host, &reason))),
             WaitStep::List(within) => {
+                listing_starts();
                 // The connection is gone: no later listing could run either.
                 let result = match run(connection, &tree_tail(), within).await {
                     Ok(result) => result,
@@ -239,11 +235,11 @@ pub async fn create<C: Connection>(
 ///
 /// # Errors
 ///
-/// [`INVALID_SESSION`] for an id that is not one plain token, otherwise why it did not end there (desktop's
+/// [`INVALID_REMOTE_SESSION`] for an id that is not one plain token, otherwise why it did not end there (desktop's
 /// `end_failure`) or the transport's text.
 pub async fn end<C: Connection>(connection: &C, host: &str, session: &str) -> Result<(), String> {
     if !is_plain(session) {
-        return Err(INVALID_SESSION.to_owned());
+        return Err(INVALID_REMOTE_SESSION.to_owned());
     }
     let result = control(connection, &end_session_arguments(session)).await?;
     end_failure(&result, host).map_or(Ok(()), Err)

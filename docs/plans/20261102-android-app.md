@@ -480,8 +480,10 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
     (`ATTACH_FROM_LIST`); every other reused string names no CLI and keeps desktop's words. Messages name the machine by
     its label (its host when the label is blank). The API is `MobileCore::list_sessions(machine_id)`,
     `create_session(machine_id, name)` and `end_session(machine_id, session_id)`, each needing a connection
-    (`MobileError::NotConnected`) and failing with `MobileError::Remote { reason }`; each emits `MobileEvent::Tree` with
-    the picker's sessions (`RemoteSession`), and the actor keeps the whole last listing per machine for attaching. A
+    (`MobileError::NotConnected`) and failing with `MobileError::Remote { reason }`; a listing (list, create) emits
+    `MobileEvent::Tree` with the picker's sessions (`RemoteSession`) unless stale by then (its connection closed or
+    replaced, or a later listing or an end landed: the actor orders them by tickets), and an end emits the kept listing
+    without the session when one is kept; the actor keeps the whole last listing per machine for attaching. A
     name goes as `--name=NAME`. A control line runs within desktop's 30 s `COMPANION_DEADLINE`, a listing within
     `TREE_DEADLINE`; a command that can't start fails with the transport's text, and a create whose listing can't start
     (the connection closed) gives up at once. The fake gained `script_sequence` for successive answers.

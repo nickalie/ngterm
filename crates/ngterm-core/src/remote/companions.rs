@@ -22,7 +22,7 @@ use uuid::Uuid;
 use super::attach::{ActionPanel, AttachRequest, ERROR_SECONDS, PROGRESS_SECONDS, Placement};
 use super::frames::{self, PresentationPage, PresentationPageSource};
 use super::origin_replies::{
-    NOT_ATTACHABLE, PAUSE, READY_BUDGET, origin_created, read_remote_tree, reply_of, unattached,
+    COMPANION_DEADLINE, NOT_ATTACHABLE, PAUSE, READY_BUDGET, origin_created, read_remote_tree, reply_of, unattached,
 };
 use super::ssh::{control_command, page_serve_command};
 use super::tree::{RemoteCommandResult, TREE_DEADLINE};
@@ -35,8 +35,6 @@ use crate::model::{CompanionOptions, RemoteBinding, ReplicaPageRefusal, SidebarT
 use crate::pane_env::uuid_string;
 use crate::resolve::Resolver;
 
-/// How long the origin's create may take (upstream's `remoteCompanionDeadline`).
-pub const COMPANION_DEADLINE: Duration = Duration::from_secs(30);
 /// What a created companion is called in the messages about it.
 const COMPANION_NOUN: &str = "companion";
 /// How often a running ssh call is checked for its answer.

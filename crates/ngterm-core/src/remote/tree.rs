@@ -23,6 +23,10 @@ use crate::live::is_daemon_name;
 
 /// How long the remote form waits for the far side's answer (upstream's `remoteTreeDeadline`).
 pub const TREE_DEADLINE: Duration = Duration::from_secs(10);
+/// What a remote command that did not finish within its deadline answers.
+pub const NO_ANSWER_IN_TIME: &str = "the remote did not answer in time";
+/// Why a remote session id that is not one plain token ([`is_plain`]) is refused before anything runs.
+pub const INVALID_REMOTE_SESSION: &str = "invalid remote session";
 
 /// A host or remote-session token: not empty, no whitespace, no control characters (upstream's
 /// `RemoteSession.isPlain`). One predicate decides what may reach both an argv and an error message.
@@ -192,7 +196,7 @@ impl RemoteCommandRunner for ProcessRemoteRunner {
             end_child(&mut child);
             // the output stays empty on a miss: the caller prefers a remote error parsed from stdout, and a partial one
             // must not replace this diagnostic
-            return RemoteCommandResult::failed("the remote did not answer in time");
+            return RemoteCommandResult::failed(NO_ANSWER_IN_TIME);
         };
         RemoteCommandResult {
             status: status.code().unwrap_or(-1),

@@ -64,7 +64,8 @@ pub enum MobileEvent {
         offered: String,
     },
     /// A machine's sessions as it last listed them (after [`MobileCore::list_sessions`], a create, or an end), in the
-    /// order to show them: no page companions, parents before their companions.
+    /// order to show them: no page companions, parents before their companions. A listing that finishes after its
+    /// connection closed or was replaced, or after a later listing or an end landed, is stale and not reported.
     Tree {
         machine_id: String,
         sessions: Vec<RemoteSession>,
@@ -222,7 +223,7 @@ impl MobileCore {
     }
 
     /// `machine_id`'s sessions, as its `ngtermctl live tree` lists them for a picker: no page companions, parents
-    /// before their companions. They also arrive as a [`MobileEvent::Tree`].
+    /// before their companions. They also arrive as a [`MobileEvent::Tree`] unless stale by then (see there).
     ///
     /// # Errors
     ///
@@ -235,7 +236,7 @@ impl MobileCore {
     }
 
     /// New Session on `machine_id`, named `name` when given (a blank name is none): answered with the session once
-    /// the machine lists it as attachable, the listing also arriving as a [`MobileEvent::Tree`]. The machine keeps
+    /// the machine lists it as attachable, the listing also arriving as a [`MobileEvent::Tree`] unless stale by then. The machine keeps
     /// its own selection.
     ///
     /// # Errors
@@ -254,7 +255,8 @@ impl MobileCore {
     }
 
     /// End Session: `machine_id` closes its session `session_id`, its programs and companions with it, with no undo
-    /// (the app confirms first). The listing without it arrives as a [`MobileEvent::Tree`].
+    /// (the app confirms first). When a listing of the machine is kept (one was read on this connection), the listing
+    /// without it arrives as a [`MobileEvent::Tree`].
     ///
     /// # Errors
     ///

@@ -76,7 +76,7 @@ pub(crate) fn begin_attach(core: &mut Core, request: &Request) -> Dispatched {
         return Dispatched::done(Err(ControlError::rejected("live.attach requires a remote session")));
     };
     if !tree::is_plain(&session) {
-        return Dispatched::done(Err(ControlError::rejected("invalid remote session")));
+        return Dispatched::done(Err(ControlError::rejected(tree::INVALID_REMOTE_SESSION)));
     }
     let window = trimmed(args.and_then(|args| args.window.as_deref())).map(str::to_owned);
     match start_tree_read(core, &host) {

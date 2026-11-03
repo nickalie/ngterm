@@ -14,7 +14,7 @@ use ngterm_proto::{ControlRemoteSession, ControlRemoteTree};
 use uuid::Uuid;
 
 use super::attach::{ActionPanel, AttachFlow, PROGRESS_SECONDS, Placement, Step};
-use super::companions::COMPANION_DEADLINE;
+use super::origin_replies::COMPANION_DEADLINE;
 use super::origin_replies::{
     ListingWait, NEW_SESSION_ARGUMENTS, RESTORE_MODE_ARGUMENTS, WaitStep, check_restore_mode, end_failure,
     end_session_arguments, session_created,

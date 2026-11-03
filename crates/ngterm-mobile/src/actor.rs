@@ -7,7 +7,9 @@
 //! joining a connect in flight, closing the connection of a machine since edited) and only waits on the network in a local task, so the queue keeps moving behind it
 //! and a later disconnect cancels that task. A machine's session commands ([`crate::sessions`]) run as local tasks on
 //! its connection as it was when they were posted: a disconnect closes it under them, which ends them with the
-//! transport's text.
+//! transport's text. They may overlap, so a listing changes the kept listing and is reported only while its connection
+//! is still the machine's and nothing newer about its sessions is known: no later listing landed and no session ended
+//! after it began.
 
 #[cfg(test)]
 mod tests;
@@ -126,8 +128,20 @@ struct State<T: Transport> {
     attempts: RefCell<HashMap<String, Attempt>>,
     /// The last attempt's number: an attempt that finishes no longer current was overtaken and changes nothing.
     generation: Cell<u64>,
-    /// Each connected machine's last listing, whole (endpoint and panes included), for attaching its sessions.
-    trees: RefCell<HashMap<String, ControlRemoteTree>>,
+    /// What the actor knows of each connected machine's sessions.
+    listings: RefCell<HashMap<String, Kept>>,
+    /// The last ticket handed out ([`State::ticket`]).
+    tickets: Cell<u64>,
+}
+
+/// What the actor knows of a connected machine's sessions.
+#[derive(Default)]
+struct Kept {
+    /// Its last listing, whole (endpoint and panes included), for attaching its sessions, as the ends since left it;
+    /// `None` until one is read on the connection.
+    tree: Option<ControlRemoteTree>,
+    /// The ticket of the newest news: the listing kept, or the last end. A listing that began before it is stale.
+    as_of: u64,
 }
 
 /// A live connection and the machine record it was made from: a connect of the machine as edited replaces it.
@@ -149,20 +163,42 @@ struct Attempt {
 type Reply = oneshot::Sender<Result<(), MobileError>>;
 
 impl<T: Transport> State<T> {
+    fn new(transport: T, sink: Arc<dyn EventSink>) -> Self {
+        Self {
+            transport,
+            sink,
+            connections: RefCell::new(HashMap::new()),
+            attempts: RefCell::new(HashMap::new()),
+            generation: Cell::new(0),
+            listings: RefCell::new(HashMap::new()),
+            tickets: Cell::new(0),
+        }
+    }
+
     fn emit(&self, event: MobileEvent) {
         self.sink.on_event(event);
+    }
+
+    /// A ticket later than every one before: taken as a listing begins and as an end is applied, it orders what the
+    /// actor learns of a machine's sessions.
+    fn ticket(&self) -> u64 {
+        let ticket = self.tickets.get() + 1;
+        self.tickets.set(ticket);
+        ticket
+    }
+
+    /// Whether `connection` is still `machine_id`'s: a result read on a connection since closed or replaced changes
+    /// nothing.
+    fn is_current(&self, machine_id: &str, connection: &Rc<T::Connection>) -> bool {
+        self.connections
+            .borrow()
+            .get(machine_id)
+            .is_some_and(|current| Rc::ptr_eq(&current.connection, connection))
     }
 }
 
 async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mpsc::UnboundedReceiver<Command>) {
-    let state = Rc::new(State {
-        transport,
-        sink,
-        connections: RefCell::new(HashMap::new()),
-        attempts: RefCell::new(HashMap::new()),
-        generation: Cell::new(0),
-        trees: RefCell::new(HashMap::new()),
-    });
+    let state = Rc::new(State::new(transport, sink));
     while let Some(command) = queue.recv().await {
         match command {
             Command::Connect { machine, reply } => connect(&state, machine, reply),
@@ -305,7 +341,7 @@ fn disconnect<T: Transport>(state: &State<T>, machine_id: &str) {
 
 /// Closes `machine_id`'s connection, if any, and forgets its listing.
 fn close<T: Transport>(state: &State<T>, machine_id: &str) {
-    state.trees.borrow_mut().remove(machine_id);
+    state.listings.borrow_mut().remove(machine_id);
     let link = state.connections.borrow_mut().remove(machine_id);
     if let Some(link) = link {
         link.connection.close();
@@ -360,21 +396,28 @@ fn remote(reason: String) -> MobileError {
     MobileError::Remote { reason }
 }
 
-/// Keeps `tree` as `machine_id`'s listing while its connection is the one it was read on, and reports it.
+/// The sessions of `tree`, a listing of `machine_id` that began at ticket `began`. It is kept and reported as a
+/// [`MobileEvent::Tree`] only while its connection is still the machine's and nothing newer about the machine's
+/// sessions is known; a stale listing still answers its caller.
 fn listed<T: Transport>(
     state: &State<T>,
     link: &OnMachine<T::Connection>,
     machine_id: String,
     tree: ControlRemoteTree,
+    began: u64,
 ) -> Vec<RemoteSession> {
     let sessions = sessions::listed_sessions(&tree);
-    let current = state
-        .connections
-        .borrow()
-        .get(&machine_id)
-        .is_some_and(|current| Rc::ptr_eq(&current.connection, &link.connection));
-    if current {
-        state.trees.borrow_mut().insert(machine_id.clone(), tree);
+    if !state.is_current(&machine_id, &link.connection) {
+        return sessions;
+    }
+    {
+        let mut listings = state.listings.borrow_mut();
+        let kept = listings.entry(machine_id.clone()).or_default();
+        if kept.as_of > began {
+            return sessions;
+        }
+        kept.tree = Some(tree);
+        kept.as_of = began;
     }
     state.emit(MobileEvent::Tree {
         machine_id,
@@ -388,8 +431,9 @@ async fn list_sessions<T: Transport>(
     link: OnMachine<T::Connection>,
     machine_id: String,
 ) -> Result<Vec<RemoteSession>, MobileError> {
+    let began = state.ticket();
     let tree = sessions::list(&*link.connection, &link.host).await.map_err(remote)?;
-    Ok(listed(&state, &link, machine_id, tree))
+    Ok(listed(&state, &link, machine_id, tree, began))
 }
 
 async fn create_session<T: Transport>(
@@ -398,13 +442,18 @@ async fn create_session<T: Transport>(
     machine_id: String,
     name: Option<String>,
 ) -> Result<RemoteSession, MobileError> {
-    let (created, tree) = sessions::create(&*link.connection, &link.host, name.as_deref())
-        .await
-        .map_err(remote)?;
-    listed(&state, &link, machine_id, tree);
+    let began = Cell::new(0);
+    let (created, tree) = sessions::create(&*link.connection, &link.host, name.as_deref(), || {
+        began.set(state.ticket());
+    })
+    .await
+    .map_err(remote)?;
+    listed(&state, &link, machine_id, tree, began.get());
     Ok(RemoteSession::from(&created))
 }
 
+/// Ends the session there; while the connection is still the machine's, a listing that began before is stale from now
+/// on, and the kept listing, if any, loses the session and is reported.
 async fn end_session<T: Transport>(
     state: Rc<State<T>>,
     link: OnMachine<T::Connection>,
@@ -414,10 +463,21 @@ async fn end_session<T: Transport>(
     sessions::end(&*link.connection, &link.host, &session_id)
         .await
         .map_err(remote)?;
-    let tree = state.trees.borrow().get(&machine_id).cloned();
-    if let Some(mut tree) = tree {
-        sessions::forget(&mut tree, &session_id);
-        listed(&state, &link, machine_id, tree);
+    if !state.is_current(&machine_id, &link.connection) {
+        return Ok(());
+    }
+    let ticket = state.ticket();
+    let sessions = {
+        let mut listings = state.listings.borrow_mut();
+        let kept = listings.entry(machine_id.clone()).or_default();
+        kept.as_of = ticket;
+        kept.tree.as_mut().map(|tree| {
+            sessions::forget(tree, &session_id);
+            sessions::listed_sessions(tree)
+        })
+    };
+    if let Some(sessions) = sessions {
+        state.emit(MobileEvent::Tree { machine_id, sessions });
     }
     Ok(())
 }

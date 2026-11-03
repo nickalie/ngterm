@@ -11,6 +11,9 @@ use ngterm_proto::{ControlRemoteSession, ControlRemoteTree, ControlResult, Respo
 use super::frames;
 use super::tree::{self, RemoteCommandResult, TREE_DEADLINE};
 
+/// How long a line run on the origin (`restore mode`, `session new`, `session close`, a companion's create) may take
+/// (upstream's `remoteCompanionDeadline`).
+pub const COMPANION_DEADLINE: Duration = Duration::from_secs(30);
 /// How long a created session may take to become attachable: every pane's daemon must run first (upstream's
 /// `remoteCompanionReadyBudget`).
 pub const READY_BUDGET: Duration = Duration::from_secs(20);

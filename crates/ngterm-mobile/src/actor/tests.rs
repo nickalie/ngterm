@@ -493,3 +493,136 @@ fn a_disconnect_ends_a_session_command_running_on_the_connection() {
     );
     drop(opened);
 }
+
+#[test]
+fn a_listing_that_began_before_an_end_answers_but_is_neither_kept_nor_reported() {
+    let transport = FakeTransport::new();
+    let close =
+        ngterm_core::remote::ssh::control_tail(&ngterm_core::remote::origin_replies::end_session_arguments(PARENT));
+    transport.script(
+        &close,
+        crate::transport::fake::Script::ok(r#"{"ok": true, "result": {}}"#),
+    );
+    let (sink, events) = recorder();
+    let core = core(&transport, &sink);
+    block_on(core.connect(machine("m1", "box"))).expect("connected");
+    // the first listing is unscripted: it reads the tree while PARENT still exists, and answers after the end
+    let first = core.list_sessions("m1".to_owned());
+    let mut first = std::pin::pin!(first);
+    assert!(block_on(poll_once(first.as_mut())).is_none());
+    let deadline = std::time::Instant::now() + WAIT;
+    let opened = loop {
+        let mut opened = transport.take_opened();
+        if let Some(opened) = opened.pop() {
+            break opened;
+        }
+        assert!(std::time::Instant::now() < deadline, "the listing never ran");
+        thread::yield_now();
+    };
+
+    assert_eq!(block_on(core.end_session("m1".to_owned(), PARENT.to_owned())), Ok(()));
+    let old = listing(&[(PARENT, None), (OTHER, None)]);
+    block_on(opened.peer.data(old.stdout));
+    block_on(opened.peer.end(old.end));
+
+    let answered = block_on(first).expect("listed");
+    assert_eq!(ids(&answered), [PARENT, OTHER]);
+    // a later listing is kept and reported, and it is the first tree the app sees
+    transport.script(&ngterm_core::remote::ssh::tree_tail(), listing(&[(OTHER, None)]));
+    block_on(core.list_sessions("m1".to_owned())).expect("listed again");
+    let (_, sessions) = next_tree(&events);
+    assert_eq!(ids(&sessions), [OTHER]);
+}
+
+/// A listing of `sessions` as the far side answers it.
+fn tree_of(sessions: &[(&str, Option<&str>)]) -> ngterm_proto::ControlRemoteTree {
+    let script = listing(sessions);
+    let result = ngterm_core::remote::tree::RemoteCommandResult {
+        status: 0,
+        stdout: String::from_utf8(script.stdout).expect("utf-8"),
+        stderr: String::new(),
+    };
+    ngterm_core::remote::origin_replies::read_remote_tree(&result, "box").expect("a tree")
+}
+
+#[test]
+fn a_listing_read_on_a_replaced_connection_answers_but_is_neither_kept_nor_reported() {
+    use crate::transport::Transport as _;
+
+    let transport = FakeTransport::new();
+    let (sink, events) = recorder();
+    let state = super::State::new(transport.clone(), Arc::clone(&sink) as Arc<dyn EventSink>);
+    let machine = machine("m1", "box");
+    let old = std::rc::Rc::new(block_on(transport.connect(&machine)).expect("connected"));
+    let new = std::rc::Rc::new(block_on(transport.connect(&machine)).expect("connected"));
+    state.connections.borrow_mut().insert(
+        "m1".to_owned(),
+        super::Link {
+            machine,
+            connection: std::rc::Rc::clone(&new),
+        },
+    );
+    let on = |connection: &std::rc::Rc<_>| super::OnMachine {
+        connection: std::rc::Rc::clone(connection),
+        host: "m1".to_owned(),
+    };
+
+    let overtaken = super::listed(
+        &state,
+        &on(&old),
+        "m1".to_owned(),
+        tree_of(&[(PARENT, None)]),
+        state.ticket(),
+    );
+
+    assert_eq!(ids(&overtaken), [PARENT]);
+    assert!(events.try_recv().is_err());
+    assert!(state.listings.borrow().is_empty());
+
+    let current = super::listed(
+        &state,
+        &on(&new),
+        "m1".to_owned(),
+        tree_of(&[(OTHER, None)]),
+        state.ticket(),
+    );
+
+    assert_eq!(ids(&current), [OTHER]);
+    let (_, sessions) = next_tree(&events);
+    assert_eq!(sessions, current);
+}
+
+#[test]
+fn a_listing_overtaken_by_a_later_one_is_neither_kept_nor_reported() {
+    use crate::transport::Transport as _;
+
+    let transport = FakeTransport::new();
+    let (sink, events) = recorder();
+    let state = super::State::new(transport.clone(), Arc::clone(&sink) as Arc<dyn EventSink>);
+    let machine = machine("m1", "box");
+    let connection = std::rc::Rc::new(block_on(transport.connect(&machine)).expect("connected"));
+    state.connections.borrow_mut().insert(
+        "m1".to_owned(),
+        super::Link {
+            machine,
+            connection: std::rc::Rc::clone(&connection),
+        },
+    );
+    let on = super::OnMachine {
+        connection,
+        host: "m1".to_owned(),
+    };
+    let first = state.ticket();
+    let second = state.ticket();
+
+    super::listed(&state, &on, "m1".to_owned(), tree_of(&[(OTHER, None)]), second);
+    let overtaken = super::listed(&state, &on, "m1".to_owned(), tree_of(&[(PARENT, None)]), first);
+
+    assert_eq!(ids(&overtaken), [PARENT]);
+    let (_, sessions) = next_tree(&events);
+    assert_eq!(ids(&sessions), [OTHER]);
+    assert!(events.try_recv().is_err());
+    let kept = state.listings.borrow();
+    let tree = kept.get("m1").and_then(|kept| kept.tree.as_ref()).expect("kept");
+    assert_eq!(ids(&crate::sessions::listed_sessions(tree)), [OTHER]);
+}
