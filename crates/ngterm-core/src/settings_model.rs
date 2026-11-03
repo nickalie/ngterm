@@ -72,9 +72,10 @@ pub enum SettingsChange {
     WelcomeShown,
 }
 
-/// The General page: Mouse and Sessions.
+/// The General page: Mouse, Sessions and Updates.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GeneralChange {
+    AutoUpdate(bool),
     ScrollSpeed(f64),
     RightClickPaste(bool),
     LinkOpenMode(LinkOpenMode),
@@ -234,6 +235,7 @@ impl SettingsChange {
 impl GeneralChange {
     fn apply_to(self, settings: &mut AppSettings) -> Effect {
         match self {
+            Self::AutoUpdate(on) => settings.auto_update = default_on(on),
             Self::ScrollSpeed(speed) => {
                 if let Some(speed) = stepped(speed, &SCROLL_SPEED_RANGE) {
                     settings.mouse_scroll_multiplier = unless_default(speed, DEFAULT_SCROLL_SPEED);

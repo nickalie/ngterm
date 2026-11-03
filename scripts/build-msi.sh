@@ -154,6 +154,7 @@ rm -f "$ROOT/share/ngterm/session-BUILD"
 # The portable ZIP includes the MSI's app-local VC++ runtime and resources,
 # plus the headless binary when it was built. Python preserves relative paths.
 if [[ -n "$ARCHIVE" ]]; then
+  echo windows-archive > "$ROOT/share/ngterm/update-format"
   [[ "$ARCHIVE" == *.zip ]] || die "the archive is a .zip: $ARCHIVE"
   mkdir -p "$(dirname "$ARCHIVE")"
   python - "$ROOT" "$ARCHIVE" <<'PY'
@@ -169,6 +170,7 @@ with zipfile.ZipFile(sys.argv[2], "w", zipfile.ZIP_DEFLATED) as archive:
 PY
 fi
 
+echo windows-msi > "$ROOT/share/ngterm/update-format"
 WIX_TOOL="$(wix_tool)"
 mkdir -p "$(dirname "$OUTPUT")"
 echo "→ building the ngterm $VERSION installer ($(wix_arch))" >&2

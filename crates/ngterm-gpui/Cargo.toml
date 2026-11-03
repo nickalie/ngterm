@@ -27,6 +27,7 @@ ngterm-server.workspace = true
 # the live sessions' server: its `SessionHost`, the live-launch inputs and the update handoff
 ngterm-session.workspace = true
 ngterm-term.workspace = true
+ngterm-update.workspace = true
 async-channel.workspace = true
 cosmic-text.workspace = true
 fancy-regex.workspace = true

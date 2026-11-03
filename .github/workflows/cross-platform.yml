@@ -50,7 +50,7 @@ env:
   # `-p` per crate; word-split by bash, which every step runs in (Git Bash on Windows)
   PACKAGES: >-
     -p ngterm-session -p ngterm-proto -p ngterm-host -p ngterm-core -p ngterm-ghostty-vt-sys -p ngterm-ghostty-vt
-    -p ngterm-pty -p ngterm-term -p ngterm-server -p ngterm-ctl -p ngterm-app -p ngterm-headless
+    -p ngterm-pty -p ngterm-term -p ngterm-server -p ngterm-ctl -p ngterm-app -p ngterm-headless -p ngterm-update
 
 defaults:
   run:

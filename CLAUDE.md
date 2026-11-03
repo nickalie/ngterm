@@ -22,6 +22,7 @@ A Rust port of upstream agterm for macOS, Linux and Windows, with one GPUI front
 | `ngterm-term` | the toolkit-neutral pane core | any |
 | `ngterm-session` | the live-session server, its client and `SessionHost` | any |
 | `ngterm-app` | frontend-neutral app services | any |
+| `ngterm-update` | verified release downloads, staging and installation | any |
 | `ngterm-headless` | the core, control socket and live sessions with no window (an Attach Remote origin) | any |
 | `ngterm-wpe-sys` and kin, `ngterm-wpe` | WPE WebKit bindings and the HTML overlays' host | Linux |
 | `ngterm-gpui` → `ngterm` | the GPUI frontend | Linux, macOS, Windows |

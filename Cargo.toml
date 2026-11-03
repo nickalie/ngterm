@@ -22,10 +22,19 @@ ngterm-session = { path = "crates/ngterm-session" }
 ngterm-pty = { path = "crates/ngterm-pty" }
 ngterm-app = { path = "crates/ngterm-app" }
 ngterm-term = { path = "crates/ngterm-term" }
+ngterm-update = { path = "crates/ngterm-update" }
 ngterm-wpe-javascriptcore-sys = { path = "crates/ngterm-wpe-javascriptcore-sys" }
 ngterm-wpe-platform-sys = { path = "crates/ngterm-wpe-platform-sys" }
 ngterm-wpe-sys = { path = "crates/ngterm-wpe-sys" }
 ngterm-wpe = { path = "crates/ngterm-wpe" }
+# Release checks and streamed downloads run on a worker, with rustls TLS and bounded requests.
+ureq = "3.5.1"
+semver = "1"
+sha2 = "0.11"
+flate2 = "1"
+tar = "0.4"
+# Resolve launcher symlinks while keeping Windows paths usable by native installer tools.
+dunce = "1.0.5"
 async-channel = "2"
 # ngterm-gpui's main-loop consumer yields to GPUI's loop between tasks (`future::yield_now`); the futures-lite smol and
 # async-io already link.

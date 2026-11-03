@@ -131,6 +131,7 @@ jobs:
           PKG_CONFIG_PATH: ${{ env.NGTERM_RELEASE_WPE }}/lib/pkgconfig
           LD_LIBRARY_PATH: ${{ env.NGTERM_RELEASE_WPE }}/lib
         run: |
+          cargo test --locked -p ngterm-update
           cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
           scripts/stage.sh "$RUNNER_TEMP/stage" --profile release
           cargo test --locked --release -p ngterm-wpe --test headless --no-run --message-format=json > "$RUNNER_TEMP/wpe-test.json"
@@ -188,7 +189,9 @@ jobs:
           scripts/build-ghostty-vt.sh
           scripts/fetch-fonts.sh
       - name: Release binaries with HTML overlays
-        run: cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
+        run: |
+          cargo test --locked -p ngterm-update
+          cargo build --locked --release -p ngterm-gpui -p ngterm-ctl -p ngterm-session -p ngterm-headless
       - name: Stage and package
         run: |
           scripts/stage.sh "$RUNNER_TEMP/stage" --profile release

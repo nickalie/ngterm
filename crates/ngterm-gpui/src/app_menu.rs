@@ -233,6 +233,7 @@ pub enum MenuAction {
 /// The items no keymap action runs: the app's and Help's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppAction {
+    CheckForUpdates,
     Settings,
     ResetLiveSessions,
     Quit,
@@ -507,6 +508,7 @@ fn help() -> Vec<Entry> {
         app("install-skill", "Install Agent Skill…", AppAction::InstallSkill),
         Entry::Separator,
         app("about", "About Ngterm", AppAction::About),
+        app("check-for-updates", "Check for Updates…", AppAction::CheckForUpdates),
     ]
 }
 
@@ -627,6 +629,7 @@ pub fn perform(poster: &Poster, id: Uuid) -> Perform {
 fn run_app(action: AppAction, poster: &Poster, id: Uuid, window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
     match action {
+        AppAction::CheckForUpdates => crate::updater::check(window, cx),
         AppAction::Settings => post(poster, move |state: &mut AppState| {
             state.open_settings(id);
         }),

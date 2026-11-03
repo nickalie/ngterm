@@ -1106,6 +1106,7 @@ impl Render for Titlebar {
             })
             .when(hidden, |row| row.child(div().flex_1()))
             .child(div().pr(px(8.)).child(self.menu_button(&bar, glyph, cx)))
+            .children(crate::updater::button(colors, cx))
             .child(trailing)
     }
 }

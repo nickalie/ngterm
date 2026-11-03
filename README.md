@@ -76,6 +76,23 @@ Windows binaries are under `ngterm/bin`; the macOS binary archive has `bin` and 
 under `/opt/ngterm` and put all four commands on `PATH`. The macOS PKG installs `ngterm.app` into `/Applications`;
 the app's Help menu can install the CLI. Windows ZIPs include the same app-local VC++ runtime as the MSI.
 
+Official archives, AppImages, user-owned macOS app bundles (including DMG installs), and Windows MSI installs check GitHub
+for stable updates at launch and hourly. Updates download in the background and are verified against the release's
+`SHA256SUMS`. Choose **Restart to Update** in the titlebar, or **Help → Check for Updates…**, to install after the
+normal quit save and reopen ngterm. Ready updates also install on an ordinary quit, without reopening the app.
+Live sessions reconnect; other shells close and follow the configured restore
+mode. A failed archive replacement restores the previous installation. Windows MSI updates use Windows Installer
+without forcing other ngterm processes to close; busy files can require closing those processes and retrying.
+Interrupted downloads are cleaned up on a later launch or check. Backups needed for recovery are retained.
+Root-owned macOS PKG installations are updated manually with a newer PKG or DMG.
+
+Disable background checks and downloads in **Settings → General → Updates** (`autoUpdate: false` in `settings.json`);
+manual checks remain available. Archive installs must stay together in a dedicated directory named `ngterm`, with
+its parent writable by your user. For the macOS binary tarball, create that directory and extract `bin` and `share`
+inside it. Shared prefixes, source builds, and native Linux package installs are updated manually or through their
+package manager. Keep your state and configuration directories outside the installation. AppImages update their
+original file; manually extracted AppImages are updated manually.
+
 Linux packages target glibc 2.39+ and libstdc++ 13+ (Ubuntu 24.04 or newer and current Debian, Fedora, Arch, and
 openSUSE releases).
 WPE WebKit is built from source on Ubuntu 24.04 and bundled with its libraries and media plugins, keeping HTML

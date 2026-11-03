@@ -167,7 +167,10 @@ PY
       rm "$root/usr/bin/wpe-release-smoke"
       ((status == 0)) || die "packaged WPE page smoke test failed ($status)"
     fi
+    echo linux-archive > "$root/usr/share/ngterm/update-format"
     tar -C "$work" -czf "$dist/ngterm-$version-linux-$arch.tar.gz" ngterm
+    # Native package files remain owned exclusively by their package manager.
+    rm "$root/usr/share/ngterm/update-format"
     export PACKAGE_ROOT="$root" PACKAGE_VERSION="$version"
     case "$arch" in x86_64) PACKAGE_ARCH=amd64 ;; aarch64) PACKAGE_ARCH=arm64 ;; *) die "unsupported arch: $arch" ;; esac
     export PACKAGE_ARCH
@@ -202,8 +205,11 @@ PY
     [[ "$arch" != aarch64 ]] || arch=arm64
     app="$work/ngterm.app"
     "$NATIVE_ROOT/scripts/bundle-macos.sh" "$app" --staged "$stage"
+    echo macos-bundle > "$app/Contents/Resources/update-format"
+    codesign --force --deep --sign - "$app"
     codesign --verify --deep --strict "$app"
     "$app/Contents/MacOS/ngterm" --build-identity
+    echo macos-archive > "$stage/share/ngterm/update-format"
     tar -C "$stage" -czf "$dist/ngterm-$version-macos-$arch.tar.gz" bin share
     ditto -c -k --sequesterRsrc --keepParent "$app" "$dist/ngterm-$version-macos-$arch.app.zip"
     mkdir -p "$work/dmg"

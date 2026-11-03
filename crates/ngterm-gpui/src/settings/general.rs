@@ -22,6 +22,21 @@ pub fn sections(snapshot: &Snapshot) -> Vec<Section> {
     vec![
         Section::new("Mouse", mouse(snapshot)),
         Section::new("Sessions", sessions(snapshot)),
+        Section::new(
+            "Updates",
+            vec![
+                toggle(
+                    "settings-auto-update",
+                    "Automatically download updates",
+                    snapshot.settings.auto_update.unwrap_or(true),
+                    |on| change(GeneralChange::AutoUpdate(on)),
+                ),
+                Item::hint(
+                    "settings-auto-update-hint",
+                    "Official releases check at launch and hourly. Choose Restart to Update when a download is ready. Package manager installations use their package manager.",
+                ),
+            ],
+        ),
     ]
 }
 
