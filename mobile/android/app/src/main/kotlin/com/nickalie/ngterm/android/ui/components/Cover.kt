@@ -3,6 +3,7 @@ package com.nickalie.ngterm.android.ui.components
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -55,9 +56,11 @@ fun Cover(
             modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = VEIL_ALPHA))
-                .pointerInput(Unit) { swallowEveryPointer() }
                 .semantics { liveRegion = LiveRegionMode.Polite },
     ) {
+        // a layer behind the content takes the touches meant for the pane; a sibling, not the content's parent, so it
+        // never consumes the events of the content's own gestures (its scroll, its action's tap)
+        Box(Modifier.matchParentSize().pointerInput(Unit) { swallowEveryPointer() })
         // centered while it fits; in a pane too short for it (a large font scale) it scrolls, so the action stays
         // reachable
         Column(
@@ -105,7 +108,7 @@ fun Cover(
  */
 fun Modifier.underCover(covered: Boolean): Modifier = if (covered) clearAndSetSemantics {} else this
 
-// the veil's own children (its action) see each event first, in the main pass; whatever reaches the veil stops there
+// whatever lands on the layer stops there: the pane under the veil never sees it
 private suspend fun PointerInputScope.swallowEveryPointer() {
     awaitPointerEventScope {
         while (true) {

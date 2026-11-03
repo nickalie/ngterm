@@ -205,7 +205,8 @@ compact (< 600dp)        medium (600-839dp)              expanded (>= 840dp)
   is lost; the rail's open state and the destination are saveable.
 - **Back:** predictive back first narrows the open rail with the gesture and closes it on release; then a destination
   other than the first goes back to the first; only from the first does back leave the app (the system's predictive
-  back-to-home shows that). Opted in by the target SDK (36).
+  back-to-home shows that). The manifest opts in (`enableOnBackInvokedCallback`), so Android 14 and 15 get it too, not
+  only Android 16, where target SDK 36 makes it the default.
 
 Destinations today: Machines, Sessions (what is attached, across machines) and Settings.
 
