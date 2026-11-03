@@ -32,7 +32,8 @@ data class FakeCall(
  * - [connect] reports [MachineState.Connected] as a [MobileEvent.MachineState] when the machine was not connected
  *   (or was connected as another record: an edited machine connects anew); a connect that fails reports
  *   [MachineState.Unreachable] with the failure's reason before it throws [MobileException.Unreachable];
- *   [disconnect] reports nothing and forgets the machine's listing;
+ *   [disconnect] reports nothing and forgets the machine's listing; [useKey] puts the key in the record the machine
+ *   is connected with and keeps the connection, so a connect with that key is no edit;
  * - host keys, when the fake has [hosts] and [hostKeys] names the key a machine's host offers: a pinned key that
  *   matches connects; another pinned key reports [MobileEvent.HostKeyChanged] with both and fails ([HOST_KEY_CHANGED]);
  *   no pin reports [MobileEvent.HostKeyUnknown] and the connect waits for [answerHostKey], which pins the key through
@@ -230,6 +231,14 @@ class FakeMobileCore(
         record("disconnect", machineId)
         drop(machineId)
         questions.remove(machineId)?.answer?.complete(null)
+    }
+
+    override fun useKey(
+        machineId: String,
+        keyId: String,
+    ) {
+        record("useKey", machineId, keyId)
+        records[machineId]?.let { records[machineId] = it.copy(keyId = keyId) }
     }
 
     override suspend fun listSessions(machineId: String): List<RemoteSession> {

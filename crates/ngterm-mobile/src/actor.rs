@@ -65,6 +65,10 @@ pub(crate) enum Command {
     Disconnect {
         machine_id: String,
     },
+    UseKey {
+        machine_id: String,
+        key_id: String,
+    },
     AnswerHostKey {
         machine_id: String,
         fingerprint: String,
@@ -305,6 +309,7 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
         match command {
             Command::Connect { machine, reply } => connect(&state, machine, reply),
             Command::Disconnect { machine_id } => disconnect(&state, &machine_id),
+            Command::UseKey { machine_id, key_id } => use_key(&state, &machine_id, &key_id),
             Command::AnswerHostKey {
                 machine_id,
                 fingerprint,
@@ -418,6 +423,20 @@ fn known<T: Transport>(state: &State<T>, machine_id: &str) -> Option<Machine> {
         })
 }
 
+/// `machine_id`'s record, connected, being connected or set aside, takes the key `key_id` for its next attempt; its
+/// connection stays.
+fn use_key<T: Transport>(state: &State<T>, machine_id: &str, key_id: &str) {
+    if let Some(link) = state.connections.borrow_mut().get_mut(machine_id) {
+        key_id.clone_into(&mut link.machine.key_id);
+    }
+    if let Some(attempt) = state.attempts.borrow_mut().get_mut(machine_id) {
+        key_id.clone_into(&mut attempt.machine.key_id);
+    }
+    if let Some(set_aside) = state.suspended.borrow_mut().get_mut(machine_id) {
+        key_id.clone_into(&mut set_aside.machine.key_id);
+    }
+}
+
 /// Starts a connect of `machine` for `waiters`: a reconnect waits out its `retry`'s delay first, reported as
 /// [`MachineState::Reconnecting`].
 fn start_attempt<T: Transport>(state: &Rc<State<T>>, machine: Machine, waiters: Vec<Reply>, retry: Option<Retry>) {
@@ -455,12 +474,19 @@ fn is_attempt<T: Transport>(state: &State<T>, machine_id: &str, generation: u64)
         .is_some_and(|attempt| attempt.generation == generation)
 }
 
-/// The network part of a connect, after a reconnect's `delay`: aborted when the attempt is cancelled.
-async fn reach<T: Transport>(state: Rc<State<T>>, machine: Machine, generation: u64, delay: Duration) {
+/// The network part of a connect, after a reconnect's `delay`: aborted when the attempt is cancelled. The machine is
+/// reached with the attempt's record as it stands then, and kept or retried with it as it stands after ([`use_key`]
+/// may change it meanwhile).
+async fn reach<T: Transport>(state: Rc<State<T>>, mut machine: Machine, generation: u64, delay: Duration) {
     if !delay.is_zero() {
         tokio::time::sleep(delay).await;
-        if let Some(attempt) = state.attempts.borrow_mut().get_mut(&machine.id) {
+        let mut attempts = state.attempts.borrow_mut();
+        if let Some(attempt) = attempts
+            .get_mut(&machine.id)
+            .filter(|attempt| attempt.generation == generation)
+        {
             attempt.waiting = false;
+            machine.clone_from(&attempt.machine);
         }
     }
     let result = state.transport.connect(&machine).await;
@@ -474,6 +500,7 @@ async fn reach<T: Transport>(state: Rc<State<T>>, machine: Machine, generation: 
     let Some(attempt) = state.attempts.borrow_mut().remove(&machine.id) else {
         return;
     };
+    let machine = attempt.machine;
     let answer = match result {
         Ok(connection) => {
             connected(&state, machine, connection);

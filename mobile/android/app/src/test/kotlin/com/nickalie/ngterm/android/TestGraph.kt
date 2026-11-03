@@ -64,6 +64,9 @@ class FakeKeyMaker : KeyMaker {
     var lastImported: String? = null
         private set
 
+    /** When set, [import] waits for it to open first, as a slow passphrase derivation would. */
+    @Volatile var importGate: java.util.concurrent.CountDownLatch? = null
+
     override fun generate(comment: String): KeyPair {
         generated += 1
         return KeyPair("fake private key $generated".toByteArray(), FAKE_PUBLIC_KEY, FAKE_FINGERPRINT)
@@ -73,6 +76,7 @@ class FakeKeyMaker : KeyMaker {
         privateKey: ByteArray,
         passphrase: String?,
     ): KeyPair {
+        importGate?.await()
         val text = String(privateKey)
         lastImported = text
         if (!text.startsWith("-----BEGIN")) throw KeyException.Invalid("unknown key format")

@@ -24,7 +24,10 @@ enum class ThemeChoice { System, Light, Dark }
  */
 enum class ExtraKeysChoice { Fit, TwoLines, Hidden }
 
-/** The whole sp the terminal's text may be, and its size until the user picks another. */
+/**
+ * The whole sp the terminal's text may be, and its size until the user picks another: the one definition, which the
+ * terminal's `TerminalTextSizes` (pinch and Ctrl+=/-) and `TerminalTextSize` derive from.
+ */
 val TerminalTextSizeRange = 8..32
 const val DEFAULT_TEXT_SIZE = 13
 

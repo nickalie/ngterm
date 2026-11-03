@@ -7,12 +7,16 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.ENCRYPTED_FAKE_KEY
 import com.nickalie.ngterm.android.FAKE_PASSPHRASE
+import com.nickalie.ngterm.android.PLAIN_FAKE_KEY
 import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.data.AlertKind
 import com.nickalie.ngterm.android.data.ExtraKeysChoice
+import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.data.PaletteChoice
 import com.nickalie.ngterm.android.testMachine
 import com.nickalie.ngterm.android.ui.onboarding.ImportProblem
+import com.nickalie.ngterm.core.fake.FakeCall
+import com.nickalie.ngterm.core.fake.fakeSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -30,6 +34,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
+import java.util.concurrent.CountDownLatch
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
@@ -155,5 +160,42 @@ class SettingsViewModelTest {
         model.unreadable()
         model.startImport()
         assertNull(model.keyWork.value.importProblem)
+    }
+
+    @Test
+    fun reopeningTheImportWhileOneRunsLetsNoSecondOneStart() {
+        test.seedKey()
+        val gate = CountDownLatch(1)
+        test.maker.importGate = gate
+        val model = model()
+        model.import(PLAIN_FAKE_KEY.toByteArray(), null)
+        assertTrue(model.keyWork.value.importing)
+        // Back, then Import a key again, while the first import still runs
+        model.startImport()
+        assertTrue(model.keyWork.value.importing)
+        model.import(PLAIN_FAKE_KEY.toByteArray(), null)
+        gate.countDown()
+        eventually { !model.keyWork.value.importing }
+        assertEquals(2, model.ready { it.keys.size >= 2 }.keys.size)
+    }
+
+    @Test
+    fun switchingKeysReachesTheConnectedMachinesRecordAndKeepsItsConnection() {
+        val old = test.seedKey()
+        val machine = testMachine(keyId = old.id)
+        test.seedMachine(machine)
+        test.core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+        test.connections.connect(machine.toCore())
+        eventually { test.connections.trees.value["m1"] != null }
+        runBlocking { test.connections.attach("m1", "s1") }
+        val fresh = test.seedKey()
+        model().useEverywhere(fresh.id)
+        eventually { FakeCall("useKey", listOf("m1", fresh.id)) in test.core.calls }
+        // the record the machine is connected with carries the new key: a connect with it replaces nothing
+        test.connections.connect(machine.copy(keyId = fresh.id).toCore())
+        eventually { test.core.calls.count { it.method == "connect" } == 2 }
+        assertEquals(Link.Connected, test.connections.links.value["m1"])
+        assertEquals(setOf("s1"), test.connections.attached.value["m1"])
+        assertTrue(test.core.calls.none { it.method == "disconnect" || it.method == "detachSession" })
     }
 }

@@ -319,6 +319,18 @@ class Connections(
         attachedState.update { it - machineId }
     }
 
+    /**
+     * [machineId] signs in with the key [keyId] from its next connection attempt, a reconnect included; its connection
+     * and attached sessions stay.
+     */
+    fun useKey(
+        machineId: String,
+        keyId: String,
+    ) {
+        records[machineId]?.let { records[machineId] = it.copy(keyId = keyId) }
+        guarded { core.useKey(machineId, keyId) }
+    }
+
     /** The network came back or changed: a machine waiting to reconnect tries at once. */
     fun networkChanged() = guarded { core.networkChanged() }
 

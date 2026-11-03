@@ -479,3 +479,81 @@ fn a_disconnect_while_suspended_forgets_the_machine() {
         assert_eq!(actor.transport.connects().len(), 1);
     });
 }
+
+fn use_key(actor: &Actor, key_id: &str) {
+    actor.post(Command::UseKey {
+        machine_id: "m1".to_owned(),
+        key_id: key_id.to_owned(),
+    });
+}
+
+#[test]
+fn a_key_switch_keeps_the_connection_and_the_reconnect_signs_in_with_it() {
+    local(async {
+        let actor = Actor::start();
+        actor.transport.script(&tree_tail(), listing(Some(1)));
+        actor.connect().await;
+        actor.list().await;
+        actor.attach().await.unwrap();
+        let peer = actor.stream().await;
+        deliver(&peer, Vec::new()).await;
+        actor.sink.take();
+
+        use_key(&actor, "new");
+        settle().await;
+        assert!(actor.transport.closed().is_empty(), "the connection stays");
+        assert!(actor.sink.take().is_empty(), "and its stream");
+
+        actor.transport.drop_connections("m1");
+        advance(1000).await;
+        assert_eq!(
+            actor.transport.keys(),
+            ["key", "new"],
+            "the reconnect signs in with the new key"
+        );
+        assert_eq!(
+            machine_states(&actor.sink.take()),
+            [reconnecting(1000), MachineState::Connected]
+        );
+
+        // The record now carries the new key: a connect with it is no edit.
+        let (reply, answer) = oneshot::channel();
+        let machine = crate::api::Machine {
+            key_id: "new".to_owned(),
+            ..machine()
+        };
+        actor.post(Command::Connect { machine, reply });
+        answer.await.unwrap().unwrap();
+        assert!(actor.transport.closed().is_empty());
+        assert_eq!(actor.transport.connects().len(), 2);
+    });
+}
+
+#[test]
+fn a_key_switch_reaches_a_reconnect_waiting_out_its_delay() {
+    local(async {
+        let actor = Actor::start();
+        actor.connect().await;
+        actor.transport.drop_connections("m1");
+        settle().await;
+
+        use_key(&actor, "new");
+        advance(1000).await;
+        assert_eq!(actor.transport.keys(), ["key", "new"]);
+    });
+}
+
+#[test]
+fn a_key_switch_reaches_a_machine_set_aside_by_suspend() {
+    local(async {
+        let actor = Actor::start();
+        actor.connect().await;
+        actor.post(Command::Suspend);
+        settle().await;
+
+        use_key(&actor, "new");
+        actor.post(Command::Resume);
+        settle().await;
+        assert_eq!(actor.transport.keys(), ["key", "new"]);
+    });
+}

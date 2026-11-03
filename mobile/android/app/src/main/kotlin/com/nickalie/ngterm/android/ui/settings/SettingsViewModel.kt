@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -168,9 +169,9 @@ class SettingsViewModel(
         }
     }
 
-    /** Opens the import afresh: no problem from an earlier attempt. */
+    /** Opens the import afresh: no problem from an earlier attempt; an import still under way goes on. */
     fun startImport() {
-        work.value = work.value.copy(importing = false, importProblem = null)
+        work.value = work.value.copy(importProblem = null)
     }
 
     /** The chosen file could not be read. */
@@ -214,9 +215,17 @@ class SettingsViewModel(
         fresh.value = null
     }
 
-    /** Points every machine at the key [id], from their next connection. */
+    /**
+     * Points every machine at the key [id], from their next connection: the stored machines, and the records the core
+     * holds for the ones it connects (a reconnect signs in with it too), their connections staying.
+     */
     fun useEverywhere(id: String) {
-        viewModelScope.launch { graph.machines.useKey(id) }
+        viewModelScope.launch {
+            graph.machines.useKey(id)
+            graph.machines.machines
+                .first()
+                .forEach { graph.connections.useKey(it.id, id) }
+        }
     }
 }
 

@@ -317,11 +317,12 @@ terminal's ground, which is the chrome's ground in Copper and Drafting, so the t
   box drawing, blocks and the common symbols on the grid, and keeps its programming ligatures (`=>`, `!=`), as Ghostty
   does by default; they take the columns of the characters they join. CJK and emoji fall back to the platform's fonts,
   centered in their two cells or squeezed into them. No Nerd Font symbols in v1: the symbols font is 2.5 MB.
-- **Size:** 13 sp by default (`TerminalTextSize`), or what Settings sets: about 50 columns on a phone held upright,
-  110 in landscape. It follows the system font scale like any text (at 2.0, about 25 columns); a pinch changes one
-  pane's in whole sp steps between 8 and 32 (`TerminalTextSizes`), so the machine's pty is resized once per step, not
-  per frame. A size set in Settings resizes every shown pane, pinched or not. Settings can swap the font for the
-  device's monospace (`FontChoice`), which keeps the cell rules below.
+- **Size:** 13 sp by default (`DEFAULT_TEXT_SIZE`, which `TerminalTextSize` derives from), or what Settings sets:
+  about 50 columns on a phone held upright, 110 in landscape. It follows the system font scale like any text (at 2.0,
+  about 25 columns); a pinch changes one pane's in whole sp steps between 8 and 32 (`TerminalTextSizeRange`, which
+  `TerminalTextSizes` derives from), so the machine's pty is resized once per step, not per frame. A size set in
+  Settings resizes every shown pane, pinched or not. Settings can swap the font for the device's monospace
+  (`FontChoice`), which keeps the cell rules below.
 - **Cell:** the font's advance wide, unrounded, so runs of the font's own glyphs sit on the grid; ascent to descent
   tall, rounded up to whole pixels. The pane's grid is what fits, and it goes to the pane as its size on every
   change (rotation, multi-window, folding).
@@ -678,7 +679,9 @@ The plan, reviewed against the brief:
   spinner and "Making a key" while it works, the core's words under it when it fails) and Import a key (the first
   run's import screen, secure window and all). A key made or brought opens its public half (the first run's screen
   with Back) and under it "Then switch your machines": what to do first, and **Use for every machine**, after which it
-  says every machine signs in with this key. A private key is never shown or logged.
+  says every machine signs in with this key. A connected machine keeps its connection and attached sessions, and
+  signs in with the new key from its next connect or reconnect (`MobileCore.useKey`). A private key is never shown
+  or logged.
 - **About:** the app's name and the core's version in mono.
 - **States:** a spinner while the stores are read; the reason and Retry when they can't be.
 

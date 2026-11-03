@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.data.DEFAULT_TEXT_SIZE
 import com.nickalie.ngterm.android.data.FontChoice
 import com.nickalie.ngterm.android.data.PaneFrames
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
@@ -58,8 +59,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
 import kotlin.math.roundToInt
 
-/** The terminal's text size unless the user picks another: about 50 columns on a phone held upright. */
-val TerminalTextSize = 13.sp
+/** The terminal's text size until the user picks another ([DEFAULT_TEXT_SIZE]): about 50 columns on a phone upright. */
+val TerminalTextSize = DEFAULT_TEXT_SIZE.sp
 
 /**
  * A shown pane's screen as a [TerminalView] draws it, read from the pane's packed frames (`Pane.frame`).

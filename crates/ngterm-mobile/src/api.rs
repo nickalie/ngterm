@@ -330,6 +330,18 @@ impl MobileCore {
         self.actor.post(Command::Disconnect { machine_id })
     }
 
+    /// `machine_id` signs in with the key `key_id` from its next connection attempt (a reconnect included): a
+    /// connection it has stays, with its attached sessions, and a connect already reaching the machine goes on with
+    /// the key it started with. The machine's record is then the one with `key_id`, so a connect of it with that key
+    /// is no edit. Nothing happens for a machine the core doesn't hold.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn use_key(&self, machine_id: String, key_id: String) -> Result<(), MobileError> {
+        self.actor.post(Command::UseKey { machine_id, key_id })
+    }
+
     /// The user's answer about the unknown host key `fingerprint` of `machine_id` (a
     /// [`MobileEvent::HostKeyUnknown`]): `trust` pins it and the waiting connect goes on; a refusal, or an answer
     /// about a key other than the one on offer, ends that connect. An answer with no connect waiting changes

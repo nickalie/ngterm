@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
+import com.nickalie.ngterm.android.data.TerminalTextSizeRange
 import com.nickalie.ngterm.core.ffi.CellPoint
 import com.nickalie.ngterm.core.ffi.PaneInputException
 import com.nickalie.ngterm.core.ffi.PaneMouse
@@ -23,8 +24,8 @@ import kotlinx.coroutines.launch
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
-/** The text sizes a pinch keeps to, in sp. */
-val TerminalTextSizes = 8f..32f
+/** The text sizes a pinch keeps to, in sp: Settings' [TerminalTextSizeRange]. */
+val TerminalTextSizes = TerminalTextSizeRange.first.toFloat()..TerminalTextSizeRange.last.toFloat()
 
 // a pane with no terminal now (hidden, between attaches) or a full input queue drops pointer input: a pointer event
 // is not worth queueing

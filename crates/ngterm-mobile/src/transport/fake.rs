@@ -79,6 +79,8 @@ struct State {
     /// Each command's answers in turn; the last one answers every later run.
     scripts: HashMap<String, VecDeque<Script>>,
     connects: Vec<String>,
+    /// The key each connect signed in with, in order.
+    keys: Vec<String>,
     closed: Vec<String>,
     execs: Vec<Exec>,
     opened: VecDeque<Opened>,
@@ -187,6 +189,12 @@ impl FakeTransport {
         self.lock().connects.clone()
     }
 
+    /// The key ids the connects so far signed in with, in order, refused and held ones included.
+    #[must_use]
+    pub fn keys(&self) -> Vec<String> {
+        self.lock().keys.clone()
+    }
+
     /// The machine ids whose connections were closed, in order.
     #[must_use]
     pub fn closed(&self) -> Vec<String> {
@@ -235,6 +243,7 @@ impl Transport for FakeTransport {
     fn connect(&self, machine: &Machine) -> impl Future<Output = Result<FakeConnection, TransportError>> {
         let mut state = self.lock();
         state.connects.push(machine.id.clone());
+        state.keys.push(machine.key_id.clone());
         let connected = if let Some(refusal) = state.refusals.get(&machine.host) {
             Err(refusal.clone())
         } else {
