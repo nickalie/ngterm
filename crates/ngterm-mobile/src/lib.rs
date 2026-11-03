@@ -12,7 +12,8 @@
 //! `fakes` feature), [`keys`] (generating, importing and loading the app's ssh keys), [`sessions`] (a machine's session
 //! list, New Session and End Session), [`presentation`] (attached sessions' presentation streams and what they
 //! show), [`pane`] (shown panes: their attach, terminal, leadership, ends and clipboard reads), [`reconnect`] (keeping
-//! machines connected: lost connections, network changes, suspend and resume).
+//! machines connected: lost connections, network changes, suspend and resume), [`rows`] (the packed row buffer a pane
+//! is drawn from).
 
 uniffi::setup_scaffolding!();
 
@@ -22,6 +23,7 @@ pub mod keys;
 pub mod pane;
 pub mod presentation;
 pub mod reconnect;
+pub mod rows;
 pub mod sessions;
 pub mod transport;
 

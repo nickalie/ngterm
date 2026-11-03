@@ -480,6 +480,18 @@ impl Pane {
         Ok(self.slot.current()?.clear_selection()?)
     }
 
+    /// The rows to draw: the frame's rows changed after frame `since_seq` (0 for every row), with its cursor,
+    /// selection and grid, packed as [`crate::rows`] lays out. Pass the buffer's `seq` to the next call, and 0 after
+    /// [`crate::MobileEvent::PaneAttached`].
+    ///
+    /// # Errors
+    ///
+    /// [`PaneInputError::Closed`] while the pane has no terminal.
+    pub fn frame(&self, since_seq: u64) -> Result<Vec<u8>, PaneInputError> {
+        let snapshot = self.slot.current()?.frame();
+        Ok(crate::rows::pack(&snapshot.frame, since_seq, snapshot.stale))
+    }
+
     /// The selection's text as a copy takes it (each line's trailing blanks trimmed); `None` with none.
     #[must_use]
     pub fn selection_text(&self) -> Option<String> {

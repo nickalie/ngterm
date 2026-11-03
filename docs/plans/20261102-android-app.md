@@ -594,10 +594,16 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Create: `crates/ngterm-mobile/src/rows.rs`, `crates/ngterm-mobile/tests/fixtures/rows-golden.bin`
 
-- [ ] write tests first: feed known VT bytes and decode the buffer (text, colors, attributes, wide characters, cursor
+- [x] write tests first: feed known VT bytes and decode the buffer (text, colors, attributes, wide characters, cursor
       shapes, selection); only changed rows are sent since a `seq`; the golden fixture's layout is checked
-- [ ] implement the writer, and document the layout in the module docs (the Kotlin reader in Task 15 follows it)
-- [ ] run the tests; they must pass before Task 10
+- [x] implement the writer, and document the layout in the module docs (the Kotlin reader in Task 15 follows it)
+- [x] run the tests; they must pass before Task 10
+  - Notes: `Pane::frame(since_seq) -> Result<Vec<u8>, PaneInputError>` (`Closed` with no terminal) packs with
+    `rows::pack`; the layout (v1, magic `NGRB`) is in `rows`' module docs. The grid, seq, default colors and the cursor
+    are in a fixed 40-byte header; rows follow, then the selection of every row it crosses. Colors are `0xAARRGGBB`
+    with alpha 0 for the default; runs split at a width change and a multi-code-point cluster is a run of its own;
+    blank cells after a row's last drawn cell are left out. `since` 0 or past the frame's seq sends every row
+    (`FRAME_FULL`); after `PaneAttached` the reader passes 0. `UPDATE_GOLDEN=1` rewrites the golden fixture.
 
 ### Task 10: End-to-end test against a real ngterm-headless
 
