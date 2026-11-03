@@ -80,6 +80,8 @@ pub enum ClientEffect {
     Sound(PresentationSound),
     Connection(RemoteConnection),
     Context(Option<String>),
+    /// The origin's name for the session, which the row takes unless it was renamed here.
+    Name(String),
     Layout(PresentationLayout),
     Mode(PresentationMode),
     /// Shows an ask the origin handed over; the owner sends `ask.rejected` when it cannot.
@@ -289,12 +291,16 @@ impl PresentationClient {
                 effects.push(ClientEffect::SnapshotStatus(snapshot.status));
                 effects.push(ClientEffect::Hud(snapshot.hud));
                 effects.push(ClientEffect::Context(snapshot.context));
+                if let Some(name) = snapshot.name {
+                    effects.push(ClientEffect::Name(name));
+                }
                 if let Some(respawns) = snapshot.respawns {
                     effects.push(ClientEffect::Respawns(respawns, true));
                 }
             }
             Body::Status(status) => effects.push(ClientEffect::Status(status)),
             Body::Context(context) => effects.push(ClientEffect::Context(context)),
+            Body::Name(name) => effects.push(ClientEffect::Name(name)),
             Body::Layout(layout) => apply_layout(layout, effects),
             Body::Hud(hud) => effects.push(ClientEffect::Hud(hud)),
             Body::Notify(notify) => effects.push(ClientEffect::Notify(notify)),
@@ -809,10 +815,15 @@ mod tests {
         let snapshot = PresentationSnapshot {
             status: Some(blocked()),
             context: Some("release".to_owned()),
+            name: Some("Fix Linux".to_owned()),
             ..PresentationSnapshot::default()
         };
         harness.connect(snapshot, 7, PresentationMode::Mirror);
         harness.deliver(&line(Body::Status(None), 7, 2));
+        harness.deliver(&line(Body::Name("Auto Update".to_owned()), 7, 3));
+        for name in ["Fix Linux", "Auto Update"] {
+            assert!(harness.effects.contains(&ClientEffect::Name(name.to_owned())), "{name}");
+        }
         assert!(harness.effects.contains(&ClientEffect::SnapshotStatus(Some(blocked()))));
         assert!(
             harness

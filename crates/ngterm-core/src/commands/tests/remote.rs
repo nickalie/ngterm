@@ -269,6 +269,36 @@ fn publish_changes(live: &mut Live, viewer: &Viewer) {
 }
 
 #[test]
+fn a_rename_on_the_origin_reaches_its_viewers_once() {
+    let mut live = live();
+    let session = live.session;
+    let shown = live.fixture.store().session(session).unwrap().display_name();
+    let (serial, viewer) = subscribe(&mut live.fixture.core, session, "mirror");
+    assert_eq!(viewer.last("snapshot").unwrap()["snapshot"]["name"], json!(shown));
+    live.fixture.core.commit();
+    assert!(viewer.last("name").is_none(), "the snapshot already carried the name");
+    let rename = |live: &mut Live, name: &str| {
+        let sid = wire(live.session);
+        let renamed = live
+            .fixture
+            .session(SessionCmd::Rename, Some(&sid), args(|a| a.name = Some(name.to_owned())));
+        assert!(renamed.ok, "{renamed:?}");
+        live.fixture.core.commit();
+    };
+    rename(&mut live, "Fix Linux");
+    assert_eq!(viewer.last("name").unwrap()["name"], "Fix Linux");
+    let names = || viewer.kinds().iter().filter(|kind| *kind == "name").count();
+    assert_eq!(names(), 1);
+    rename(&mut live, "Fix Linux");
+    assert_eq!(names(), 1, "an unchanged name publishes nothing");
+    // a name of any length travels cut to a bound, at a character boundary, and the stream stays up
+    rename(&mut live, &"é".repeat(300_000));
+    assert_eq!(viewer.last("name").unwrap()["name"], json!("é".repeat(512)));
+    assert!(!viewer.closed());
+    live.fixture.core.presentation_closed(serial);
+}
+
+#[test]
 fn a_stream_that_does_not_open_with_hello_is_closed() {
     let mut live = live();
     let session = live.session;

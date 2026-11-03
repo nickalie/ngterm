@@ -2186,14 +2186,18 @@ shows in a timed HUD over the row, and each is asked of the machine once, never 
 
 A program in an attached session runs on the origin and talks to the origin's ngterm, so what it asks
 ngterm to draw would show there only. Every attach therefore also opens a presentation stream, and this
-Mac mirrors the origin session's status, its `session context`, its `notify` notifications, its HUD and
-the layout of panes already attached.
+Mac mirrors the origin session's status, its `session context`, its name, its `notify` notifications, its
+HUD and the layout of panes already attached.
 Nothing has to be set up beyond the `ngtermctl` PATH precondition above. What to expect:
 
 - The origin's context shows in this Mac's title bar and as the row's `context` in `tree`. A
   `session context` set on this Mac's row wins over it, and `--clear` here removes only that local value,
   so the origin's latest context shows again. It cannot blank the origin's. An origin running an ngterm
   that predates context mirroring still connects and mirrors status and HUD, with no context.
+- The attached row takes the name the origin shows, live: a rename there, and for a session never renamed there its
+  automatic name, which follows its folder (and its terminal title when the origin names sessions from titles).
+  Renaming the row on this Mac stops that, and the local name stays. Upstream has no such frame: an origin that predates it, or an older ngterm here, keeps the
+  name the row was attached with until it is attached again.
 
 - Two existing remote panes follow the origin's split axis, hide/show and swaps. Divider ratio and focus stay local.
   Opening a split on an attached remote row creates the split on the origin and attaches its daemon over ssh;

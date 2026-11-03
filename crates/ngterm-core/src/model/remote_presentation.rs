@@ -1,7 +1,7 @@
 //! What a viewer keeps about a session attached from another machine (upstream's `RemotePresentationState.swift` and
 //! the model half of `AppStore+RemotePresentation.swift`): which session it is on the origin, which local pane stands
 //! for each of the origin's panes, the presentation stream's state, and what the stream put on the row (a mirrored
-//! context, a bridged status, a bridged HUD).
+//! context, the origin's name, a bridged status, a bridged HUD).
 //!
 //! Both sides mint their own pane identities, so everything the origin says about a pane names the origin's identity
 //! and is routed through the [`RemoteBinding`]. Nothing here is ever persisted: a remote session never is.
@@ -12,6 +12,7 @@ use ngterm_proto::ControlLiveEndpoint;
 use ngterm_proto::tree::ControlPresentationNode;
 use uuid::Uuid;
 
+use super::naming::{sanitized, trimmed_or_none};
 use super::{AgentIndicator, AgentStatus, AppStore, OverlayPane, Session, StatusPane, validate_context};
 use crate::remote::frames::{PresentationLayout, PresentationMode, PresentationPane, PresentationStatus};
 
@@ -281,6 +282,36 @@ impl AppStore {
         }
     }
 
+    /// Takes the name the origin shows for the session, which a stream sends whenever it changes there (this build's
+    /// `name` frame, not upstream's): a rename, and for a session never renamed there its automatic name, the cwd's
+    /// folder or, with names from terminal titles on, the title. The row shows it unless it was renamed here, and the
+    /// binding keeps it either way, so a saved row reattaches under the origin's current name. A blank name changes
+    /// nothing.
+    pub fn apply_remote_name(&mut self, name: &str, id: Uuid) {
+        let Some(name) = trimmed_or_none(&sanitized(name)) else {
+            return;
+        };
+        let Some(session) = self.session_mut(id) else { return };
+        let Some(remote) = session.remote_presentation.as_mut() else {
+            return;
+        };
+        let mut saved = false;
+        if let Some(origin) = remote.binding.origin.as_mut()
+            && origin.session_name != name
+        {
+            origin.session_name.clone_from(&name);
+            saved = true;
+        }
+        let shown = !remote.name_overridden && session.custom_name.as_deref() != Some(name.as_str());
+        if shown {
+            session.custom_name = Some(name);
+            self.schedule_tree_changed();
+        }
+        if saved || shown {
+            self.schedule_save();
+        }
+    }
+
     /// Applies the origin's status, `None` for idle (upstream's `applyRemoteStatus`). It bypasses
     /// [`AppStore::apply_control_status`], which arbitrates between panes writing locally and would refuse a clear the
     /// origin already accepted.
@@ -531,12 +562,56 @@ mod tests {
     }
 
     #[test]
+    fn the_origins_name_shows_until_the_row_is_renamed_here() {
+        let (mut store, id, _) = attached();
+        let shown = |store: &AppStore| store.session(id).unwrap().display_name();
+        store.apply_remote_name("  Fix Linux  ", id);
+        assert_eq!(shown(&store), "Fix Linux");
+        store.apply_remote_name("   ", id);
+        assert_eq!(shown(&store), "Fix Linux", "a blank name changes nothing");
+        store.rename_session(id, "mine");
+        store.apply_remote_name("Auto Update", id);
+        assert_eq!(shown(&store), "mine", "a local rename wins");
+    }
+
+    #[test]
+    fn the_binding_follows_the_origins_name_even_under_a_local_one() {
+        let (mut store, id, _) = attached();
+        let origin = RemoteOrigin {
+            host: "box".to_owned(),
+            endpoint: ControlLiveEndpoint {
+                executable: "ngterm".to_owned(),
+                socket_directory: "/tmp".to_owned(),
+            },
+            session_name: "ngterm".to_owned(),
+        };
+        let local = store.session(id).unwrap().pane_identity;
+        store.bind_remote(
+            RemoteBinding::new(
+                "ORIGIN",
+                HashMap::from([(local, daemon_name(Uuid::new_v4()))]),
+                Some(1),
+                Some(origin),
+            ),
+            id,
+        );
+        store.rename_session(id, "mine");
+        store.apply_remote_name("Fix Linux", id);
+        let session = store.session(id).unwrap();
+        assert_eq!(session.display_name(), "mine");
+        let bound = session.remote_presentation().unwrap().binding.origin.as_ref().unwrap();
+        assert_eq!(bound.session_name, "Fix Linux");
+    }
+
+    #[test]
     fn a_mirrored_context_is_ignored_on_a_local_session() {
         let mut store = AppStore::new();
         let workspace = store.add_workspace("work");
         let id = store.add_session(workspace, NewSession::at_cwd("/tmp")).unwrap();
         store.apply_remote_context(Some("origin"), id);
         assert_eq!(store.session(id).unwrap().effective_context(), None);
+        store.apply_remote_name("origin", id);
+        assert_eq!(store.session(id).unwrap().display_name(), "tmp");
         store.apply_remote_status(Some(&status(None)), id);
         assert_eq!(store.session(id).unwrap().agent_indicator.status, AgentStatus::Idle);
     }

@@ -816,6 +816,9 @@ pub struct PresentationSnapshot {
     pub context: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<PresentationLayout>,
+    /// The session's name as the origin shows it; `None` from an origin that predates [`Body::Name`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// `None` from an origin that predates parent respawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub respawns: Option<PresentationRespawns>,
@@ -830,6 +833,9 @@ pub enum Body {
     Snapshot(PresentationSnapshot),
     Status(Option<PresentationStatus>),
     Context(Option<String>),
+    /// The session's name as the origin now shows it. This build's addition, not upstream's: a viewer that predates it
+    /// reads it as [`Body::Unknown`] and keeps the name it attached with.
+    Name(String),
     Layout(PresentationLayout),
     Hud(Option<PresentationHud>),
     Notify(PresentationNotify),
@@ -877,6 +883,7 @@ impl Body {
             Self::Snapshot(_) => "snapshot",
             Self::Status(_) => "status",
             Self::Context(_) => "context",
+            Self::Name(_) => "name",
             Self::Layout(_) => "layout",
             Self::Hud(_) => "hud",
             Self::Notify(_) => "notify",
@@ -912,6 +919,7 @@ impl Body {
             Self::Snapshot(snapshot) => entry("snapshot", serde_json::to_value(snapshot)),
             Self::Status(Some(status)) => entry("status", serde_json::to_value(status)),
             Self::Context(Some(context)) => entry("context", serde_json::to_value(context)),
+            Self::Name(name) => entry("name", serde_json::to_value(name)),
             Self::Layout(layout) => entry("layout", serde_json::to_value(layout)),
             Self::Hud(Some(hud)) => entry("hud", serde_json::to_value(hud)),
             Self::Notify(notify) => entry("notify", serde_json::to_value(notify)),
@@ -1053,6 +1061,7 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "snapshot" => Body::Snapshot(required(object, "snapshot")?),
         "status" => Body::Status(optional(object, "status")?),
         "context" => Body::Context(optional(object, "context")?),
+        "name" => Body::Name(required(object, "name")?),
         "layout" => Body::Layout(
             object
                 .get("layout")
@@ -1260,6 +1269,11 @@ mod tests {
             Body::Context(None),
             Body::Snapshot(PresentationSnapshot {
                 context: Some("PR #517".to_owned()),
+                ..PresentationSnapshot::default()
+            }),
+            Body::Name("Fix Linux".to_owned()),
+            Body::Snapshot(PresentationSnapshot {
+                name: Some("Fix Linux".to_owned()),
                 ..PresentationSnapshot::default()
             }),
             Body::Layout(PresentationLayout {
