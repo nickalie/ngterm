@@ -703,35 +703,103 @@ async fn copy_output(
 
 /// Copies the core's input to the machine until the channel closes or every writer is gone; a channel left with no
 /// reader and no writer is closed.
+///
+/// A write can wait long for ssh's window (a command that stops reading its input), so the core's next inputs are
+/// taken while it waits: a close, or the channel's reader and writers all going, cancels it.
 async fn copy_input(
     write: Rc<::russh::ChannelWriteHalf<Msg>>,
     mut input: mpsc::UnboundedReceiver<ChannelInput>,
     output: mpsc::Sender<ChannelOutput>,
     closing: oneshot::Sender<()>,
 ) {
-    while let Some(next) = input.recv().await {
-        let sent = match next {
-            ChannelInput::Data(bytes) => write.data_bytes(bytes).await,
-            ChannelInput::Resize(size) => {
-                let (width, height) = pixels(size);
-                write
-                    .window_change(size.cols.into(), size.rows.into(), width, height)
-                    .await
-            }
-            ChannelInput::Eof => write.eof().await,
-            ChannelInput::Close => {
-                let _ = write.close().await;
-                let _ = closing.send(());
-                return;
-            }
+    let mut queued = VecDeque::new();
+    let mut writers = true;
+    loop {
+        let next = match queued.pop_front() {
+            Some(next) => next,
+            None if writers => match input.recv().await {
+                Some(next) => next,
+                None => break,
+            },
+            None => break,
         };
-        if sent.is_err() {
+        let step = Step {
+            write: &write,
+            input: &mut input,
+            output: &output,
+            queued: &mut queued,
+            writers: &mut writers,
+        };
+        match step.run(next).await {
+            Sent::Done => {}
             // The channel or its connection is gone; the output side tells the reader how it ended.
-            return;
+            Sent::Failed => return,
+            Sent::Close => return close(&write, closing).await,
         }
     }
     // Every writer is gone: the reader still gets what comes, and the channel is closed once it is gone too.
     output.closed().await;
+    close(&write, closing).await;
+}
+
+/// How one input fared.
+enum Sent {
+    Done,
+    Failed,
+    /// The core closed the channel, or left it with no reader and no writer.
+    Close,
+}
+
+/// One input on its way to the machine, and what the core sends meanwhile.
+struct Step<'a> {
+    write: &'a ::russh::ChannelWriteHalf<Msg>,
+    input: &'a mut mpsc::UnboundedReceiver<ChannelInput>,
+    output: &'a mpsc::Sender<ChannelOutput>,
+    /// Inputs taken while a write waits, sent after it.
+    queued: &'a mut VecDeque<ChannelInput>,
+    /// Whether any writer is left.
+    writers: &'a mut bool,
+}
+
+impl Step<'_> {
+    async fn run(self, next: ChannelInput) -> Sent {
+        let sending = match next {
+            ChannelInput::Close => return Sent::Close,
+            other => send(self.write, other),
+        };
+        tokio::pin!(sending);
+        loop {
+            tokio::select! {
+                biased;
+                sent = &mut sending => return if sent.is_ok() { Sent::Done } else { Sent::Failed },
+                more = self.input.recv(), if *self.writers => match more {
+                    Some(ChannelInput::Close) => return Sent::Close,
+                    Some(other) => self.queued.push_back(other),
+                    None => *self.writers = false,
+                },
+                () = self.output.closed(), if !*self.writers => return Sent::Close,
+            }
+        }
+    }
+}
+
+/// Sends one input other than a close.
+async fn send(write: &::russh::ChannelWriteHalf<Msg>, input: ChannelInput) -> Result<(), ::russh::Error> {
+    match input {
+        ChannelInput::Data(bytes) => write.data_bytes(bytes).await,
+        ChannelInput::Resize(size) => {
+            let (width, height) = pixels(size);
+            write
+                .window_change(size.cols.into(), size.rows.into(), width, height)
+                .await
+        }
+        ChannelInput::Eof => write.eof().await,
+        ChannelInput::Close => write.close().await,
+    }
+}
+
+/// Closes the channel and tells the output side the core closed it.
+async fn close(write: &::russh::ChannelWriteHalf<Msg>, closing: oneshot::Sender<()>) {
     let _ = write.close().await;
     let _ = closing.send(());
 }

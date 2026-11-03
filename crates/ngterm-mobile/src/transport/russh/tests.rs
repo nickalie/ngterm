@@ -47,6 +47,8 @@ impl TestServer {
         let config = Arc::new(server::Config {
             keys: vec![host_key],
             auth_rejection_time: Duration::ZERO,
+            // Small, so a command that stops reading its input soon leaves the client waiting for the window.
+            window_size: 64 * 1024,
             auth_rejection_time_initial: Some(Duration::ZERO),
             ..server::Config::default()
         });
@@ -91,7 +93,7 @@ async fn serve(config: Arc<server::Config>, stream: tokio::net::TcpStream, handl
 /// One server connection. Its commands: `echo TEXT`, `chunks` (out, err, out, exit 3), `signal` (killed by TERM),
 /// `vanish` (closes with no status), `cat` (echoes input until EOF, then exits 0), `pty` (reports its pty, and each
 /// resize), `later` (`later` and exit 0, a moment after it starts), `flood` (twice [`OUTPUT_BUDGET`] as fast as it is
-/// taken), `hang`, `drop` (drops the whole connection) and `refuse` (refused).
+/// taken), `stall` (never reads its input), `hang`, `drop` (drops the whole connection) and `refuse` (refused).
 struct Handler {
     authorized: PublicKey,
     log: Log,
@@ -231,6 +233,10 @@ impl server::Handler for Handler {
     }
 
     async fn data(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
+        if self.commands.get(&channel).map(String::as_str) == Some("stall") {
+            // The connection stops here: no more input is taken, and the window is never opened again.
+            std::future::pending::<()>().await;
+        }
         session.data(channel, data.to_vec())
     }
 
@@ -868,6 +874,22 @@ fn closing_a_channel_ends_it() {
         let mut other = connection.exec("echo still", None).await.unwrap();
         assert_eq!(drain(&mut other).await.0, b"still");
         assert_eq!(server.log(), ["close"]);
+    });
+}
+
+#[test]
+fn closing_a_channel_cancels_a_write_waiting_for_the_window() {
+    run(async {
+        let fixture = fixture(quick());
+        let server = TestServer::start(&fixture.public).await;
+        let connection = connected(&fixture, &server).await;
+        let mut channel = connection.exec("stall", None).await.unwrap();
+
+        // Far more than the machine's window, which it never opens again.
+        assert!(channel.writer.write(&vec![b'x'; 1024 * 1024]));
+        assert!(channel.writer.close());
+
+        assert_eq!(drain(&mut channel).await.2, ChannelEnd::Lost(CHANNEL_CLOSED.to_owned()));
     });
 }
 
