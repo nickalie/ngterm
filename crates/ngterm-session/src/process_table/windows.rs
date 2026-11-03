@@ -190,8 +190,10 @@ fn read_environment(process: HANDLE, address: usize) -> Option<Vec<u16>> {
         bytes.extend_from_slice(&page);
         at += chunk;
         let units: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         if let Some(end) = units.windows(2).position(|pair| pair == [0, 0]) {
             return Some(units[..end + 2].to_vec());
