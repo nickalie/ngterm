@@ -1,0 +1,196 @@
+# The Android app (mobile/android) over the mobile core (crates/ngterm-mobile), on Ubuntu. The core's own Rust checks
+# (format, clippy, its unit tests on Linux, macOS and Windows) are cross-platform.yml's; this workflow builds and checks
+# what only an Android toolchain can.
+#
+# `app`: the toolchain at the build/pins.env pins (scripts/setup-android.sh, whose exports go to the job's
+# environment), the mobile core for arm64-v8a and x86_64 with its Kotlin bindings and then Gradle's `check` (Spotless,
+# detekt, Android Lint, the JVM unit tests and the Roborazzi screenshot tests, which a plain test run verifies against
+# the committed goldens) and the debug APK, all through scripts/build-android.sh; the APK is kept as the
+# `ngterm-android-debug` artifact. Then the core's end-to-end test against a staged ngterm-headless behind an
+# unprivileged sshd (scripts/test-mobile-e2e.sh; with CI set, a missing sshd fails it rather than skipping).
+#
+# `emulator`: the instrumented tests (connectedDebugAndroidTest) on the phone and then the tablet AVD
+# setup-android.sh creates (reactivecircus/android-emulator-runner on KVM, which reuses them: force-avd-creation off).
+# TerminalFrameTimeTest runs there too: it checks only that frames came, and its numbers (logcat, tag TerminalFrames)
+# are a software-rendered emulator's, for reading, not a gate.
+#
+# The SDK is not cached: its packages come from dl.google.com in a minute or two, and an NDK plus a system image would
+# crowd the vendor and cargo caches out of the repository's cache space. Gradle's caches go through setup-gradle's
+# basic (MIT, actions/cache) provider.
+#
+# Path-filtered to what the app builds from: the mobile core and the crates it builds on, mobile/, the scripts and
+# pins of its toolchain, and this file. Pushes to a `ci/**` branch run it too, as they do cross-platform.yml.
+name: android
+
+on:
+  pull_request:
+    paths: &paths
+      - crates/ngterm-mobile/**
+      - crates/ngterm-term/**
+      - crates/ngterm-core/**
+      - crates/ngterm-proto/**
+      - crates/ngterm-ghostty-vt/**
+      - crates/ngterm-ghostty-vt-sys/**
+      - mobile/**
+      - scripts/build-android.sh
+      - scripts/setup-android.sh
+      - scripts/build-ghostty-vt.sh
+      - scripts/test-mobile-e2e.sh
+      - build/pins.env
+      - .github/workflows/android.yml
+  push:
+    branches: [main, "ci/**"]
+    paths: *paths
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  app:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      # Gradle needs JDK 21; setup-android.sh finds it through JAVA_HOME
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # the libghostty-vt prefix, keyed like cross-platform.yml's Ubuntu leg's
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+      # sshd for the e2e test (setup-android.sh also reports it missing)
+      - name: system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openssh-server
+      - name: Android toolchain (build/pins.env)
+        run: scripts/setup-android.sh | sed 's/^export //; s/"//g' >> "$GITHUB_ENV"
+      - name: build and check (Spotless, detekt, Android Lint, unit and screenshot tests, debug APK)
+        run: scripts/build-android.sh check assembleDebug
+      - name: upload the debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ngterm-android-debug
+          path: mobile/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      # Gradle's reports and Roborazzi's comparison images when a check failed
+      - name: upload the reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-reports
+          path: |
+            mobile/android/*/build/reports/
+            mobile/android/*/build/outputs/roborazzi/
+          if-no-files-found: ignore
+      - name: mobile e2e (ngterm-headless behind sshd)
+        run: scripts/test-mobile-e2e.sh
+      # the failed run's scratch directory (headless.log, sshd/sshd.log), which the script keeps
+      - name: upload the e2e logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobile-e2e-logs
+          path: target/me2e.*/
+          if-no-files-found: ignore
+
+  emulator:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ngterm/vendor
+          key: vendor-ngterm-ubuntu-26.04-${{ runner.arch }}-${{ hashFiles('build/pins.env', 'build/patches/ghostty-vt/**', 'scripts/lib/native.sh') }}
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+      - name: enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # setup-android.sh checks for sshd too and fails the step without it
+      - name: system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openssh-server
+      - name: Android toolchain and AVDs (build/pins.env)
+        run: scripts/setup-android.sh | sed 's/^export //; s/"//g' >> "$GITHUB_ENV"
+      # the emulator runner's inputs, from the pinned system image and AVD names
+      - name: emulator pins
+        id: pins
+        run: |
+          source build/pins.env
+          IFS=';' read -r _ platform target arch <<<"$ANDROID_EMULATOR_IMAGE"
+          {
+            echo "api=${platform#android-}"
+            echo "target=$target"
+            echo "arch=$arch"
+            echo "phone=$ANDROID_AVD_PHONE"
+            echo "phone-device=$ANDROID_AVD_PHONE_DEVICE"
+            echo "tablet=$ANDROID_AVD_TABLET"
+            echo "tablet-device=$ANDROID_AVD_TABLET_DEVICE"
+          } >> "$GITHUB_OUTPUT"
+      - name: build the app and its instrumented tests
+        run: scripts/build-android.sh assembleDebug assembleDebugAndroidTest
+      - name: instrumented tests on the phone
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ steps.pins.outputs.api }}
+          target: ${{ steps.pins.outputs.target }}
+          arch: ${{ steps.pins.outputs.arch }}
+          avd-name: ${{ steps.pins.outputs.phone }}
+          profile: ${{ steps.pins.outputs.phone-device }}
+          force-avd-creation: false
+          working-directory: mobile/android
+          script: ./gradlew connectedDebugAndroidTest
+      - name: instrumented tests on the tablet
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ steps.pins.outputs.api }}
+          target: ${{ steps.pins.outputs.target }}
+          arch: ${{ steps.pins.outputs.arch }}
+          avd-name: ${{ steps.pins.outputs.tablet }}
+          profile: ${{ steps.pins.outputs.tablet-device }}
+          force-avd-creation: false
+          working-directory: mobile/android
+          script: ./gradlew connectedDebugAndroidTest
+      - name: upload the instrumented test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-instrumented-reports
+          path: |
+            mobile/android/app/build/reports/androidTests/
+            mobile/android/app/build/outputs/androidTest-results/
+          if-no-files-found: ignore

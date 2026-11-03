@@ -664,7 +664,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   too; the bash one runs the app's process tests with the overlays on first.
 - `cross-platform.yml`: the crates that build on all three OSes (`ngterm-session`, `ngterm-proto`, `ngterm-host`,
   `ngterm-core`, `ngterm-ghostty-vt-sys`, `ngterm-ghostty-vt`, `ngterm-pty`, `ngterm-term`, `ngterm-server`,
-  `ngterm-ctl`, `ngterm-app` and `ngterm-headless` so far), on Ubuntu, macOS and Windows runners: the libghostty-vt
+  `ngterm-ctl`, `ngterm-app`, `ngterm-headless` and `ngterm-mobile` so far), on Ubuntu, macOS and Windows runners: the libghostty-vt
   prefix with each runner's pinned Zig (cached with Zig's global cache), format,
   clippy and `cargo test` (`crates`, a matrix), then the sys crate cross-built for the Zig targets no runner runs
   natively (aarch64 Linux and x86_64 macOS on Ubuntu, aarch64 Windows on Windows). The macOS leg also checks the frontend with and without WKWebView HTML overlays. The Windows leg also runs the
@@ -674,6 +674,11 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
   live-any-shell`: the runner's login shell is Windows PowerShell), held by `rust-passing-windows.txt`; the report
   and the stage are kept as artifacts. It also runs on pushes to `ci/**` branches, to check a macOS or Windows form
   without a PR.
+- `android.yml` (path-filtered to the mobile core, the crates under it, `mobile/` and the Android scripts and pins;
+  also on `ci/**` pushes): `app` sets up the pinned toolchain (`scripts/setup-android.sh`), runs
+  `scripts/build-android.sh check assembleDebug` (Spotless, detekt, Android Lint, the JVM unit and Roborazzi screenshot
+  tests) and keeps the debug APK as the `ngterm-android-debug` artifact, then runs `scripts/test-mobile-e2e.sh` behind
+  the runner's `sshd`; `emulator` runs the instrumented tests on the phone and tablet AVDs (KVM).
 - `windows-installer.yml` (the same triggers, and by hand): the release build staged, the MSI built from it with the
   pinned WiX and one of the next patch version, then `scripts/check-msi.ps1` installs, checks, upgrades and
   uninstalls it on the runner; the MSI is kept as the `ngterm-msi` artifact.

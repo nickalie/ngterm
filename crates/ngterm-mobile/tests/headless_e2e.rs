@@ -11,6 +11,10 @@
 //! sessions are reaped through the private namespace's own session server.
 //!
 //! Without `sshd` the test skips with a reason, unless `CI` is set: there it fails.
+//!
+//! Linux only, as the script is: the support code is Unix (file modes, an unprivileged `sshd`), and the other hosts'
+//! CI legs build the crate's tests without it.
+#![cfg(target_os = "linux")]
 
 #[cfg(test)]
 #[path = "support/machine.rs"]
