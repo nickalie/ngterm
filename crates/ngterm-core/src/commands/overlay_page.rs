@@ -59,6 +59,8 @@ pub(crate) struct PageRuntime {
     /// Pages that left every slot since the frontend last took them.
     released: Vec<Uuid>,
     host: Option<Box<dyn HtmlHost>>,
+    /// A headless origin has no local page surface, even when its terminal holds the lead.
+    presenter_only: bool,
 }
 
 impl fmt::Debug for PageRuntime {
@@ -68,6 +70,7 @@ impl fmt::Debug for PageRuntime {
             .field("known", &self.known)
             .field("released", &self.released)
             .field("host", &self.host.is_some())
+            .field("presenter_only", &self.presenter_only)
             .finish()
     }
 }
@@ -323,6 +326,16 @@ pub(crate) fn page_result(core: &mut Core, page: Uuid) -> Outcome {
 // MARK: - the frontend's hooks
 
 impl Core {
+    /// Routes pages to the session's presenter regardless of terminal leadership. A headless origin's newly
+    /// created split leads locally until a viewer attaches it, but its page still belongs on that viewer.
+    pub fn set_page_presenter_only(&mut self) {
+        self.pages.presenter_only = true;
+    }
+
+    pub(crate) fn pages_presenter_only(&self) -> bool {
+        self.pages.presenter_only
+    }
+
     /// Installs the frontend's web views; without them a page that passed validation is refused.
     pub fn set_html_host(&mut self, host: Box<dyn HtmlHost>) {
         self.pages.host = Some(host);

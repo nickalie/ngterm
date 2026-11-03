@@ -1,7 +1,8 @@
 //! Pages handed to the viewer presenting a session, on the origin (upstream's `AppStore+RemotePage.swift` and the page
 //! arms of `ControlServer+SessionActions.swift`).
 //!
-//! A page opened on a session another machine presents goes to that machine under the program overlay placement rule:
+//! A page opened on a session another machine presents goes to that machine under the program overlay placement rule
+//! (always on a headless origin, which has no local page surface):
 //! the slot is reserved here (a [`RemotePage`] in its [`RemoteOverlaySlot`]), the page's outcome is registered pending
 //! and a `page.request` carries a single-use claim token. Nothing renders here. The presenter's `page.state` reports
 //! are mirrored into the read-back; hide, show, reload, history and resize are sequence-numbered `page.command`s; a
@@ -150,7 +151,7 @@ pub(crate) fn open_remote_page(
         Ok(identity) => identity,
         Err(refusal) => return refusal,
     };
-    if !core.follows_remotely(found, identity) {
+    if !core.pages_presenter_only() && !core.follows_remotely(found, identity) {
         return RemotePageOpen::Local;
     }
     // the presentation wire carries only a percent, so nothing is reserved or sent
@@ -235,7 +236,7 @@ pub(crate) struct RemotePagePlace {
 impl Core {
     /// Whether the placement rule hands a page in `pane`'s slot of `session` to the presenting machine (upstream's
     /// `pageBelongsRemote`): a presenter exists and the target pane, or every pane for the session-wide slot, follows
-    /// a remote lead. A local open is refused then: it would render where nobody looks.
+    /// a remote lead, or this is a headless origin. A local open is refused then: it would render where nobody looks.
     pub(crate) fn page_belongs_remote(&self, session: Uuid, pane: Option<OverlayPane>) -> bool {
         if !self.remote.hub.has_presenter(session) {
             return false;
@@ -243,7 +244,8 @@ impl Core {
         let Some(found) = self.presented_session(session) else {
             return false;
         };
-        slot_identity(found, pane).is_ok_and(|identity| self.follows_remotely(found, identity))
+        slot_identity(found, pane)
+            .is_ok_and(|identity| self.pages_presenter_only() || self.follows_remotely(found, identity))
     }
 
     /// The page in `pane`'s slot of `session` shown on the presenting machine, if one is.

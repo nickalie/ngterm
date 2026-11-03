@@ -9,13 +9,14 @@ use uuid::Uuid;
 
 use super::attach::{read_remote_tree, start_tree_read_within};
 use super::companions::{COMPANION_DEADLINE, PAUSE, READY_BUDGET, reply_of};
+use super::frames::PresentationPane;
 use super::ssh::{PaneLabel, attach_pane_command, control_command};
 use super::tree::TREE_DEADLINE;
 use super::viewer::{Answer, run_off_thread, take_answer};
 use crate::Core;
 use crate::command_restore::shell_quoted_line;
 use crate::live::lead::LeadAttachment;
-use crate::model::{PaneLaunch, Session, StatusPane};
+use crate::model::{PaneLaunch, Session, SplitAxis, StatusPane};
 
 pub(super) struct SplitRun {
     target: Target,
@@ -41,6 +42,81 @@ enum Stage {
 }
 
 impl Core {
+    /// An explicit page request may bring up a split the origin created after this row was attached. Ordinary
+    /// layout frames still never create panes. Only a pane in the latest shown layout can be attached here.
+    pub(super) fn ensure_replica_page_pane(&mut self, id: Uuid, remote: &PresentationPane) -> Result<(), &'static str> {
+        let missing = crate::commands::hud::PANE_NOT_VISIBLE;
+        let session = self.library().held_session(id).ok_or(missing)?;
+        let state = session.remote_presentation().ok_or(missing)?;
+        let reveal =
+            session.split.exists && !session.split.shown && state.layout.as_ref().is_some_and(|layout| layout.shown);
+        if session
+            .local_pane(Some(remote))
+            .is_some_and(|pane| session.renders_overlay_pane(pane))
+            && !reveal
+        {
+            return Ok(());
+        }
+        let PresentationPane::Identity(identity) = remote else {
+            return Err(missing);
+        };
+        let layout = state
+            .layout
+            .as_ref()
+            .filter(|layout| layout.shown && layout.panes.len() == 2 && layout.panes.contains(identity))
+            .ok_or(missing)?;
+        let axis = layout.axis.as_deref().and_then(SplitAxis::from_wire);
+        if session.local_pane(Some(remote)).is_some() {
+            self.library_mut()
+                .store_for_session_mut(id)
+                .ok_or(missing)?
+                .set_split_visibility(id, true, axis);
+            return Ok(());
+        }
+        // Never replace a viewer's own split or an attachment still in progress.
+        if session.split.exists || session.split_pane_identity.is_some() {
+            return Err(missing);
+        }
+        let primary = state.binding.remote_pane(session.pane_identity).ok_or(missing)?;
+        if !layout.panes.contains(&primary) || primary == *identity {
+            return Err(missing);
+        }
+        let origin = state.binding.origin.as_ref().ok_or(missing)?;
+        let focused = session.split.focused;
+        let lead = LeadAttachment::new(true);
+        let daemon = crate::live::daemon_name(*identity);
+        let command = attach_pane_command(
+            &origin.host,
+            &origin.endpoint,
+            &daemon,
+            PaneLabel {
+                session: &origin.session_name,
+                pane: "right",
+            },
+            Some(&lead),
+        )
+        .map_err(|_| missing)?;
+        let store = self.library_mut().store_for_session_mut(id).ok_or(missing)?;
+        store.set_split_visibility(id, true, axis);
+        let session = store.session_mut(id).ok_or(missing)?;
+        let pane = session.split_pane_identity.ok_or(missing)?;
+        session.split.focused = focused;
+        session.split_launch = PaneLaunch {
+            command: Some(command),
+            wait: true,
+            ..PaneLaunch::default()
+        };
+        session
+            .remote_presentation
+            .as_mut()
+            .ok_or(missing)?
+            .binding
+            .insert_pane(pane, daemon);
+        self.live.leads.begin(pane, lead, false);
+        self.remote.viewer.split_layouts.insert(pane, id);
+        Ok(())
+    }
+
     /// Holds an unconfigured remote pane's spawn until its origin daemon is attached. Existing attached panes keep
     /// their commands, including reconnect's replacement attachments.
     pub(crate) fn prepare_remote_pane(&mut self, id: Uuid, pane: Uuid) -> bool {
