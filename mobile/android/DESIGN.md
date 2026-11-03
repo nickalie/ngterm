@@ -158,9 +158,9 @@ Line icons drawn for the app in `res/drawable/ic_*.xml`: 24dp, 2dp strokes, roun
 | `BusBar` | the copper bar marking where you are |
 | `StatusGlyph`, `StatusBadge`, `AgentStatusBadge` | a status's glyph; glyph and word for an app tone; for an origin's status |
 | `MachineCard` | a machine: name, mono address, connection badge, and a summary slot for its sessions' status |
-| `SessionRow` | a session: name, context or companion line, status slot, Attached mark, the bus bar when on screen |
+| `SessionRow` | a session: name, context or companion line, status slot, Attached mark, the bus bar when on screen, and an optional menu at the end (Attach or Detach, End session) |
 | `SectionHeader` | a group's heading with an optional count and one text action |
-| `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it |
+| `MessagePanel` with `EmptyState`, `ErrorState`, `OfflineState` | what a screen shows instead of content: icon, title, what to do, and the one action that does it; at most one quieter text-button action under it, for a retry after the fix the main one points to |
 | `Banner` | a strip about the whole screen while it stays usable, with an optional action and dismiss; announced politely |
 | `ConfirmDialog` | the confirmation before what can't be undone; the button repeats the action's words, in the error color |
 | `KeyPlate`, `CopyButton` | text compared or pasted character by character (a key line, a fingerprint, a command): mono, selectable, wrapping anywhere, on a `surfaceContainerLow` plate with an optional label above and Copy or Share under it; Copy says "Copied" for 2 s |
@@ -210,7 +210,9 @@ compact (< 600dp)        medium (600-839dp)              expanded (>= 840dp)
   back-to-home shows that). The manifest opts in (`enableOnBackInvokedCallback`), so Android 14 and 15 get it too, not
   only Android 16, where target SDK 36 makes it the default.
 
-Destinations today: Machines, Sessions (what is attached, across machines) and Settings.
+Destinations today: Machines, Sessions (what is attached, across machines) and Settings. A machine's own session list
+lives under Machines (tap a machine); Sessions is the cross-machine view of what is attached, and fills in with the
+session view.
 
 ## Screens
 
@@ -236,8 +238,8 @@ reading, not a poster), the mark on top of the welcome.
   The card's badge is the connection; under the address, what the state means and the one action it calls for at
   the end of the line: Not connected / Connect, The connection dropped / Retry now (the badge counts down "in 4 s"),
   the core's reason / Retry, Host key changed / Review. Connected shows the sessions' status instead: a badge per
-  status the origin reports with how many have it ("2 working"), then "1 idle". Tapping a card edits the machine;
-  its More menu holds Connect or Disconnect, Edit and Remove (in the error color).
+  status the origin reports with how many have it ("2 working"), then "1 idle". Tapping a card opens the machine's
+  sessions; its More menu holds Connect or Disconnect, Edit and Remove (in the error color).
 - **States:** a spinner while the list is read; an error with Retry when it can't be; the empty state with Add
   machine; an offline banner over the list while the device has no network.
 - **Remove** asks nothing: the machine goes at once and a snackbar offers Undo, which puts it back where it was, with
@@ -254,6 +256,49 @@ reading, not a poster), the mark on top of the welcome.
   mean, the key trusted until now and the one offered now, and what to do. Back to machines is the filled button;
   Remove pinned key is outlined in the error color and confirms. Removing it connects again, which asks about the new
   key.
+
+### A machine's sessions (`ui/sessions/`)
+
+Stacked on the Machines destination above the home (Back returns to it), so the bar, rail or sidebar stays. The
+machine is the subject: the list is quiet rows on the ground, not cards, since a machine card already framed it.
+
+```
++--------------------------------------+
+| <-  build-01              + New session|
+|     nick@build-01.lan:22             |
+|  Attached 1                          |
+|  docs-site                         : |
+|  Rewrite the install guide           |
+|  <> Waiting for input                |
+|  On build-01 4                       |
+|  api-refactor                      : |
+|  o Working                           |
+|      api-refactor review           : |
+|      Companion of api-refactor       |
++--------------------------------------+
+```
+
+- **Top row:** Back, the machine's name as the heading with its mono address under it (wrapping at a large font scale
+  rather than losing its end), and New session at the end while connected.
+- **List:** 640dp at most, centered. "Attached" (what this app has attached) first, then "On build-01" (the rest);
+  each heading with its count, a group with nothing in it left out. A row is a `SessionRow`: the name, the context (or
+  the working directory when it has none), the agent's status badge, and a More menu with Attach or Detach and End
+  session (in the error color). Companions sit indented under their parent with "Companion of …" as their line.
+  Tapping a row attaches it (the session view opens from there). A row being ended says "Ending" with a small
+  spinner in place of its status. Pull to refresh lists again; on a machine not connected it connects.
+- **New session:** a dialog over the list: one optional Name field ("Optional: build-01 names it when blank"),
+  Create session and Cancel. While the machine creates and lists it (up to 20 s) the button says Creating with a
+  spinner and the field holds still; Cancel closes the dialog and the create goes on. A failure shows under the
+  field, in the core's words, and the name stays for another try.
+- **End session** confirms ("End docs-site?", "It stops on build-01, with everything running in it. This can't be
+  undone.", End session in the error color). A failed End or attach is a snackbar in the core's words.
+- **States**, each a `MessagePanel` in place of the list: connecting and reading are a spinner with what is under
+  way; not connected offers Connect; the device offline says so with Retry; a dropped connection counts down "Trying
+  again in 4 s" with Retry now; unreachable gives the core's reason with Retry; a changed host key offers Review
+  (the changed-key stop); no sessions invites New session; a listing that failed gives its reason with Retry. A
+  machine without `ngtermctl` (the far shell's "not found") says "ngtermctl isn't on build-01", what to install and
+  where, with Open the README (the server setup section) and Retry under it. A refresh that fails over a list keeps
+  the list under an error banner with Retry; the offline banner shows over it as on the home.
 
 ## Copy
 

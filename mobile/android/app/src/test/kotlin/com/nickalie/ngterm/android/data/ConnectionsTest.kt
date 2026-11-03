@@ -113,4 +113,61 @@ class ConnectionsTest {
             core.emit(MobileEvent.MachineState("m1", MachineState.Unreachable(HOST_KEY_CHANGED)))
             assertEquals(Link.Unreachable(HOST_KEY_CHANGED), connections.links.value["m1"])
         }
+
+    @Test
+    fun aFailedListingIsKeptUntilOneLands() =
+        runTest {
+            val connections = connections()
+            core.failNext("listSessions", MobileException.Remote("/bin/sh: 1: ngtermctl: not found"))
+            connections.connect(machine)
+            advanceUntilIdle()
+            assertEquals(Link.Connected, connections.links.value["m1"])
+            assertEquals("/bin/sh: 1: ngtermctl: not found", connections.treeFailures.value["m1"])
+            assertEquals(null, connections.trees.value["m1"])
+            connections.listSessions("m1")
+            assertEquals(null, connections.treeFailures.value["m1"])
+            assertEquals(emptyList<Any>(), connections.trees.value["m1"])
+            // a machine that isn't connected fails no listing: its link says why
+            connections.disconnect("m1")
+            connections.listSessions("m1")
+            assertEquals(null, connections.treeFailures.value["m1"])
+        }
+
+    @Test
+    fun anAttachedSessionIsLetGoWhenItEndsLeavesTheListingOrTheMachineDisconnects() =
+        runTest {
+            val connections = connections()
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"), fakeSession("s2"), fakeSession("s3"))
+            connections.connect(machine)
+            advanceUntilIdle()
+            connections.attach("m1", "s1")
+            connections.attach("m1", "s2")
+            assertEquals(setOf("s1", "s2"), connections.attached.value["m1"])
+            connections.endSession("m1", "s1")
+            assertEquals(setOf("s2"), connections.attached.value["m1"])
+            // ended elsewhere: the next listing doesn't have it
+            core.sessions["m1"]!!.removeAll { it.id == "s2" }
+            connections.listSessions("m1")
+            assertEquals(null, connections.attached.value["m1"])
+            val detached = core.calls.filter { it.method == "detachSession" }.map { it.args[1] }
+            assertEquals(listOf("s1", "s2"), detached)
+            connections.attach("m1", "s3")
+            connections.disconnect("m1")
+            assertEquals(null, connections.attached.value["m1"])
+        }
+
+    @Test
+    fun createAndEndAreTheCoresAndABlankNameIsNone() =
+        runTest {
+            val connections = connections()
+            connections.connect(machine)
+            advanceUntilIdle()
+            val created = connections.createSession("m1", "  ")
+            assertEquals(listOf(created), connections.trees.value["m1"])
+            assertEquals(null, core.calls.last { it.method == "createSession" }.args[1])
+            connections.createSession("m1", " api ")
+            assertEquals("api", core.calls.last { it.method == "createSession" }.args[1])
+            connections.endSession("m1", created.id)
+            assertEquals(listOf("api"), connections.trees.value["m1"]?.map { it.name })
+        }
 }

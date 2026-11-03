@@ -175,6 +175,7 @@ private fun Header(
 /** What the Machines home does with a machine, as [MachinesViewModel] and the route do it. */
 data class MachineActions(
     val onAdd: () -> Unit,
+    val onOpen: (String) -> Unit,
     val onEdit: (String) -> Unit,
     val onConnect: (String) -> Unit,
     val onDisconnect: (String) -> Unit,

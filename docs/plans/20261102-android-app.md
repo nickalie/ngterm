@@ -759,13 +759,30 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Create: `ui/sessions/`
 
-- [ ] invoke `frontend-design` for the sessions list
-- [ ] the list from `Tree`, with status badges, companions under their parent, an Attached group and pull to refresh;
+- [x] invoke `frontend-design` for the sessions list
+- [x] the list from `Tree`, with status badges, companions under their parent, an Attached group and pull to refresh;
       New Session with an optional name; End Session confirms
-- [ ] states: loading, empty (with New Session as the main action), unreachable with retry, and `ngtermctl` missing on
+- [x] states: loading, empty (with New Session as the main action), unreachable with retry, and `ngtermctl` missing on
       the server with a pointer to the README
-- [ ] write view-model tests, screenshots, and a UI test of create → appears → end → disappears (fake core)
-- [ ] run `./gradlew check` and the tests; all must pass before Task 15
+- [x] write view-model tests, screenshots, and a UI test of create → appears → end → disappears (fake core)
+- [x] run `./gradlew check` and the tests; all must pass before Task 15
+  - result (2026-11-03): `ui/sessions/` holds `SessionsRoute` (stacked on the Machines destination: tapping a machine
+    card opens it, Edit moved to the card's More menu), `SessionsScreen`, `SessionEntry`, `NewSessionDialog`,
+    `SessionsBody` (the body by link and listing, pure) and `SessionsViewModel`. `Connections` gained `treeFailures`
+    (why a machine's last listing failed, cleared by the next), `attached` (the sessions this app attached),
+    `listSessions`, `createSession` (blank name = none), `endSession`, `attach` and `detach`; an attached session
+    that ends or leaves the listing is detached, and a disconnect forgets the machine's. A missing `ngtermctl` is
+    recognized in the app from the far shell's words (`isMissingCli`: "ngtermctl" with "not found" or "No such
+    file"), since the core passes them on as `Remote`; it points to the README's "A server without a display"
+    (Open the README, with Retry). Tapping a row attaches it (Task 18 opens the session view from there); its More
+    menu has Attach/Detach and End session. The Sessions destination stays the cross-machine view of what is
+    attached, filled in with the session view (Task 18); a machine's own list lives under Machines. DESIGN.md gained
+    the screen, `SessionRow`'s menu slot and `MessagePanel`'s secondary action. Tests: `SessionsBodyTest`,
+    `SessionsViewModelTest`, three new `ConnectionsTest` cases, `SessionsFlowTest` (create → appears → end → gone,
+    the empty state and Back, the missing CLI and Retry, attach and detach) and 16 goldens (the list at the six
+    windows, nine states on a phone, the New session dialog). Robolectric never settles a text field in a dialog
+    under the phone qualifiers (a layout loop in its window transforms), so the flow test and the dialog's golden use
+    its default window
 
 ### Task 15: TerminalView rendering
 

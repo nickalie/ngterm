@@ -25,7 +25,8 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
  * A session in a machine's list: its [name], the note of what it is for ([context], one line), its agent's [status]
  * (an [AgentStatusBadge], or nothing for an idle one), and an Attached mark when this app has it attached. A page
  * companion ([companionOf], its parent's name) sits indented under its parent. [selected] puts the bus bar on the
- * session on screen, where a list is also the navigation (the expanded sidebar).
+ * session on screen, where a list is also the navigation (the expanded sidebar). [menu], when given, ends the row (an
+ * icon button opening the session's menu: Detach, End session).
  */
 @Composable
 fun SessionRow(
@@ -36,6 +37,7 @@ fun SessionRow(
     attached: Boolean = false,
     selected: Boolean = false,
     companionOf: String? = null,
+    menu: (@Composable () -> Unit)? = null,
     status: @Composable () -> Unit = {},
 ) {
     val spacing = NgtermTheme.spacing
@@ -46,7 +48,7 @@ fun SessionRow(
                 .heightIn(min = spacing.touchTarget + spacing.sm)
                 .clip(MaterialTheme.shapes.medium)
                 .selectable(selected = selected, role = Role.Button, onClick = onClick)
-                .padding(end = spacing.lg),
+                .padding(end = if (menu != null) spacing.xs else spacing.lg),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BusBar(active = selected)
@@ -73,6 +75,7 @@ fun SessionRow(
                 modifier = Modifier.padding(start = spacing.sm),
             )
         }
+        menu?.invoke()
     }
 }
 

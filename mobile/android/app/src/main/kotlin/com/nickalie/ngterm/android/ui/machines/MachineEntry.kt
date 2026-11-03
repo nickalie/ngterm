@@ -37,7 +37,7 @@ import kotlinx.coroutines.delay
 
 private const val SECOND_MS = 1000L
 
-/** One machine's card: its link as the badge, and under it what the link calls for. Tapping it edits the machine. */
+/** One machine's card: its link as the badge, and under it what the link calls for. Tapping it opens its sessions. */
 @Composable
 internal fun MachineEntry(
     item: MachineItem,
@@ -51,7 +51,7 @@ internal fun MachineEntry(
         label = item.machine.title,
         address = item.machine.address,
         connection = link.tone(),
-        onClick = { actions.onEdit(id) },
+        onClick = { actions.onOpen(id) },
         modifier = modifier,
         connectionLabel = connectionLabel(link, now),
         menu = { MachineMenu(item.machine.title, link, id, actions) },
@@ -97,9 +97,9 @@ private fun connectionLabel(
         }
     }
 
-// whole seconds left until [at], ticking once a second until it is reached
+/** Whole seconds left until [at] by [now], ticking once a second until it is reached. */
 @Composable
-private fun countdown(
+internal fun countdown(
     at: Long,
     now: () -> Long,
 ): Int {

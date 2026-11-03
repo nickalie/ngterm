@@ -56,9 +56,10 @@ private class WindowRule(
 }
 
 /**
- * Task 13's screens rendered by Robolectric and compared with their goldens (src/test/screenshots/screens): the first
- * run, the Machines home, the machine form, the host-key sheet and the changed-key stop, each on a phone (light, dark,
- * font scale 2.0), an unfolded foldable (light) and a landscape tablet (light, dark). The keys shown are made up.
+ * Task 13's and Task 14's screens rendered by Robolectric and compared with their goldens
+ * (src/test/screenshots/screens): the first run, the Machines home, a machine's sessions, the machine form, the
+ * host-key sheet and the changed-key stop, each on a phone (light, dark, font scale 2.0), an unfolded foldable (light)
+ * and a landscape tablet (light, dark). The keys shown are made up.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -101,6 +102,9 @@ class ScreensScreenshotTest(
 
     @Test
     fun machines() = capture("machines") { MachinesSample(MachinesUiState.Ready(SampleMachines, offline = false)) }
+
+    @Test
+    fun machineSessions() = capture("machine_sessions") { SessionsSample(SampleSessions) }
 
     @Test
     fun machineForm() {

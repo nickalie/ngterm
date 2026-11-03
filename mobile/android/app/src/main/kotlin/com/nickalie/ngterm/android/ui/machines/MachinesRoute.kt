@@ -28,6 +28,7 @@ import com.nickalie.ngterm.android.data.AppKey
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.ui.components.ScreenExit
 import com.nickalie.ngterm.android.ui.onboarding.PublicKeyScreen
+import com.nickalie.ngterm.android.ui.sessions.SessionsRoute
 
 /** A screen of the Machines destination, above the list. */
 private sealed interface MachinesPage {
@@ -41,6 +42,12 @@ private sealed interface MachinesPage {
         val id: String,
     ) : MachinesPage {
         override val route = "edit:$id"
+    }
+
+    data class Sessions(
+        val id: String,
+    ) : MachinesPage {
+        override val route = "sessions:$id"
     }
 
     data class HostKeyChanged(
@@ -61,6 +68,7 @@ private sealed interface MachinesPage {
             return when (route.substringBefore(':')) {
                 "add" -> Add
                 "edit" -> Edit(arg)
+                "sessions" -> Sessions(arg)
                 "changed" -> HostKeyChanged(arg)
                 "key" -> PublicKey(arg)
                 else -> null
@@ -70,9 +78,9 @@ private sealed interface MachinesPage {
 }
 
 /**
- * The Machines destination: the home and the screens it opens (Add and Edit machine, a key's public half, a changed
- * host key), stacked, with back returning down the stack, and the removal's Undo. The stack and each screen's
- * fields survive a configuration change and a trip up the stack and back.
+ * The Machines destination: the home and the screens it opens (a machine's sessions, Add and Edit machine, a key's
+ * public half, a changed host key), stacked, with back returning down the stack, and the removal's Undo. The stack
+ * and each screen's fields survive a configuration change and a trip up the stack and back.
  */
 @Composable
 fun MachinesRoute(
@@ -97,6 +105,7 @@ fun MachinesRoute(
     val actions =
         MachineActions(
             onAdd = { push(MachinesPage.Add) },
+            onOpen = { push(MachinesPage.Sessions(it)) },
             onEdit = { push(MachinesPage.Edit(it)) },
             onConnect = viewModel::connect,
             onDisconnect = viewModel::disconnect,
@@ -116,10 +125,10 @@ fun MachinesRoute(
         val top = routes.lastOrNull()
         holder.SaveableStateProvider(top ?: "home") {
             Page(
+                graph = graph,
                 page = top?.let(MachinesPage::of),
                 state = state,
                 actions = actions,
-                now = graph.connections.clock,
                 keys = keys,
                 pins = pins,
                 onSave = { draft, editing ->
@@ -140,10 +149,10 @@ fun MachinesRoute(
 
 @Composable
 private fun Page(
+    graph: AppGraph,
     page: MachinesPage?,
     state: MachinesUiState,
     actions: MachineActions,
-    now: () -> Long,
     keys: List<AppKey>,
     pins: Map<String, String>,
     onSave: (MachineDraft, String?) -> Unit,
@@ -156,7 +165,17 @@ private fun Page(
     val item = (state as? MachinesUiState.Ready)?.items?.firstOrNull { it.machine.id == machine }
     when (page) {
         null -> {
-            MachinesScreen(state, actions, now, modifier)
+            MachinesScreen(state, actions, graph.connections.clock, modifier)
+        }
+
+        is MachinesPage.Sessions -> {
+            SessionsRoute(
+                graph = graph,
+                machineId = page.id,
+                onBack = onPop,
+                onReviewHostKey = { actions.onReviewHostKey(page.id) },
+                modifier = modifier,
+            )
         }
 
         MachinesPage.Add -> {
@@ -190,24 +209,36 @@ private fun Page(
         }
 
         is MachinesPage.HostKeyChanged -> {
-            val changed = item?.link as? Link.HostKeyChanged
-            if (item == null || changed == null) {
-                Gone(state, onPop)
-            } else {
-                HostKeyChangedScreen(
-                    machine = item.machine.title,
-                    pinned = changed.pinned,
-                    offered = changed.offered,
-                    onBack = onPop,
-                    onRemovePin = { onRemovePin(item.machine.id) },
-                    modifier = modifier,
-                )
-            }
+            ChangedKeyPage(item, state, onRemovePin, onPop, modifier)
         }
 
         is MachinesPage.PublicKey -> {
             KeyPage(keys.firstOrNull { it.id == page.keyId }, state, onPop, modifier)
         }
+    }
+}
+
+// a changed host key's hard stop, while the machine's key is still the changed one
+@Composable
+private fun ChangedKeyPage(
+    item: MachineItem?,
+    state: MachinesUiState,
+    onRemovePin: (String) -> Unit,
+    onPop: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val changed = item?.link as? Link.HostKeyChanged
+    if (item == null || changed == null) {
+        Gone(state, onPop)
+    } else {
+        HostKeyChangedScreen(
+            machine = item.machine.title,
+            pinned = changed.pinned,
+            offered = changed.offered,
+            onBack = onPop,
+            onRemovePin = { onRemovePin(item.machine.id) },
+            modifier = modifier,
+        )
     }
 }
 

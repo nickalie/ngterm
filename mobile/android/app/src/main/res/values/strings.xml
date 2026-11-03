@@ -148,4 +148,39 @@
   <string name="hostkey_remove_pin">Remove pinned key</string>
   <string name="hostkey_remove_title">Remove the pinned key of %1$s?</string>
   <string name="hostkey_remove_body">The next connection asks you to trust whatever key %1$s offers then. Only do this if you know why its key changed.</string>
+
+  <!-- a machine's sessions -->
+  <string name="machine_sessions_new">New session</string>
+  <string name="machine_sessions_attached">Attached</string>
+  <string name="machine_sessions_others">On %1$s</string>
+  <string name="machine_sessions_connecting">Connecting to %1$s</string>
+  <string name="machine_sessions_reading">Reading the sessions on %1$s</string>
+  <string name="machine_sessions_ending">Ending</string>
+  <string name="machine_sessions_attach">Attach</string>
+  <string name="machine_sessions_detach">Detach</string>
+  <string name="machine_sessions_end">End session</string>
+  <string name="machine_sessions_end_title">End %1$s?</string>
+  <string name="machine_sessions_end_body">It stops on %1$s, with everything running in it. This can\'t be undone.</string>
+  <string name="machine_sessions_empty_title">No sessions on %1$s</string>
+  <string name="machine_sessions_empty_body">Start one here. It runs on %1$s and keeps running when you leave.</string>
+  <string name="machine_sessions_not_connected_title">%1$s isn\'t connected</string>
+  <string name="machine_sessions_not_connected_body">Connect to see its sessions and start new ones.</string>
+  <string name="machine_sessions_device_offline_title">You\'re offline</string>
+  <string name="machine_sessions_device_offline_body">%1$s\'s sessions show here once the device is back on a network.</string>
+  <string name="machine_sessions_dropped_title">The connection to %1$s dropped</string>
+  <string name="machine_sessions_dropped_body">Trying again in %1$d s.</string>
+  <string name="machine_sessions_dropped_now">Trying again now.</string>
+  <string name="machine_sessions_unreachable_title">Can\'t reach %1$s</string>
+  <string name="machine_sessions_key_changed_title">%1$s\'s host key changed</string>
+  <string name="machine_sessions_key_changed_body">Nothing connects to it until you review the change.</string>
+  <string name="machine_sessions_failed_title">Can\'t list the sessions on %1$s</string>
+  <string name="machine_sessions_failed_banner">The list may be out of date: %1$s</string>
+  <string name="machine_sessions_missing_cli_title">ngtermctl isn\'t on %1$s</string>
+  <string name="machine_sessions_missing_cli_body">Install ngterm there and make sure ngtermctl is on the PATH of ssh logins (~/.local/bin or /usr/local/bin). The README\'s “A server without a display” shows how.</string>
+  <string name="machine_sessions_open_readme">Open the README</string>
+  <string name="new_session_title">New session on %1$s</string>
+  <string name="new_session_name">Name</string>
+  <string name="new_session_name_hint">Optional: %1$s names it when blank</string>
+  <string name="new_session_create">Create session</string>
+  <string name="new_session_creating">Creating</string>
 </resources>

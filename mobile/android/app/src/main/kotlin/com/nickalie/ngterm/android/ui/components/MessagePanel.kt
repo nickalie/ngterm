@@ -3,6 +3,7 @@ package com.nickalie.ngterm.android.ui.components
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -14,6 +15,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,8 +30,9 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
  * What a screen shows instead of its content: an [icon] in [tint], a [title] saying what is the case, a [body] saying
- * what to do about it, and the one [action] that does it. Every empty, error and offline state is one of these, so no
- * screen is ever blank and none leaves the user without a next step. Use [EmptyState], [ErrorState] or
+ * what to do about it, and the one [action] that does it, with at most one quieter [secondary] one under it (a
+ * text button: Retry after the fix the main action points to). Every empty, error and offline state is one of these,
+ * so no screen is ever blank and none leaves the user without a next step. Use [EmptyState], [ErrorState] or
  * [OfflineState]. The panel scrolls itself when its window is too short for it, so don't put it in a vertical
  * scroller.
  */
@@ -41,6 +44,7 @@ fun MessagePanel(
     body: String,
     action: PanelAction,
     modifier: Modifier = Modifier,
+    secondary: PanelAction? = null,
 ) {
     val spacing = NgtermTheme.spacing
     Column(
@@ -70,13 +74,21 @@ fun MessagePanel(
             modifier = Modifier.padding(top = spacing.sm),
             contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
         ) {
-            if (action.icon != null) {
-                Icon(painterResource(action.icon), contentDescription = null, modifier = Modifier.size(18.dp))
-                Text(action.label, modifier = Modifier.padding(start = spacing.sm))
-            } else {
-                Text(action.label)
-            }
+            ActionLabel(action)
         }
+        if (secondary != null) {
+            TextButton(onClick = secondary.onClick) { ActionLabel(secondary) }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.ActionLabel(action: PanelAction) {
+    if (action.icon != null) {
+        Icon(painterResource(action.icon), contentDescription = null, modifier = Modifier.size(18.dp))
+        Text(action.label, modifier = Modifier.padding(start = NgtermTheme.spacing.sm))
+    } else {
+        Text(action.label)
     }
 }
 
@@ -99,15 +111,19 @@ fun EmptyState(
     MessagePanel(icon, MaterialTheme.colorScheme.primary, title, body, action, modifier)
 }
 
-/** Something failed: [body] says what and how to fix it, and [action] is the fix or a retry. */
+/**
+ * Something failed: [body] says what and how to fix it, [action] is the fix or a retry, and [secondary] a retry after
+ * the fix.
+ */
 @Composable
 fun ErrorState(
     title: String,
     body: String,
     action: PanelAction,
     modifier: Modifier = Modifier,
+    secondary: PanelAction? = null,
 ) {
-    MessagePanel(R.drawable.ic_alert, NgtermTheme.status.error, title, body, action, modifier)
+    MessagePanel(R.drawable.ic_alert, NgtermTheme.status.error, title, body, action, modifier, secondary)
 }
 
 /** The machine or the network is out of reach: [action] tries again now rather than at the next retry. */

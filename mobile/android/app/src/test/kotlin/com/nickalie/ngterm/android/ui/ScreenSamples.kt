@@ -18,6 +18,9 @@ import com.nickalie.ngterm.android.ui.machines.MachineActions
 import com.nickalie.ngterm.android.ui.machines.MachineItem
 import com.nickalie.ngterm.android.ui.machines.MachinesScreen
 import com.nickalie.ngterm.android.ui.machines.MachinesUiState
+import com.nickalie.ngterm.android.ui.sessions.MachineSessions
+import com.nickalie.ngterm.android.ui.sessions.SessionActions
+import com.nickalie.ngterm.android.ui.sessions.SessionsScreen
 import com.nickalie.ngterm.core.fake.fakeSession
 
 // The screens' content for the screenshot tests: real-looking machines and made-up keys (never a real one).
@@ -74,7 +77,7 @@ val SampleMachines =
         MachineItem(testMachine(id = "m6", label = "", host = "scratch.lan"), Link.Offline, null),
     )
 
-val NoMachineActions = MachineActions({}, {}, {}, {}, {}, {}, {})
+val NoMachineActions = MachineActions({}, {}, {}, {}, {}, {}, {}, {})
 
 /** [content] on the app's ground, as the first run's flow puts it. */
 @Composable
@@ -102,4 +105,40 @@ fun MachinesSample(
     modifier: Modifier = Modifier,
 ) {
     InScaffold(modifier) { MachinesScreen(state, NoMachineActions, now = { SAMPLE_NOW }) }
+}
+
+/** A machine's sessions: two agents at work (one attached), a companion, an idle shell, and one being ended. */
+val SampleSessions =
+    MachineSessions(
+        machine = testMachine(),
+        link = Link.Connected,
+        sessions =
+            listOf(
+                status("s1", "Working", "#5fbfaa", "circle").copy(
+                    name = "api-refactor",
+                    context = "Split the billing service into its own crate",
+                ),
+                fakeSession("s2", name = "api-refactor review", parent = "s1"),
+                status("s3", "Waiting for input", "#f0904f", "diamond").copy(
+                    name = "docs-site",
+                    context = "Rewrite the install guide",
+                ),
+                fakeSession("s4", name = "shell").copy(cwd = "/home/nick/src/ngterm"),
+                fakeSession("s5", name = "old-experiment").copy(cwd = "/tmp/scratch"),
+            ),
+        failure = null,
+        attached = setOf("s3"),
+        offline = false,
+        ending = setOf("s5"),
+    )
+
+val NoSessionActions = SessionActions({}, {}, {}, {}, {}, {}, {}, {}, {})
+
+/** A machine's sessions in [state], framed. */
+@Composable
+fun SessionsSample(
+    state: MachineSessions,
+    modifier: Modifier = Modifier,
+) {
+    InScaffold(modifier) { SessionsScreen(state, NoSessionActions, now = { SAMPLE_NOW }) }
 }
