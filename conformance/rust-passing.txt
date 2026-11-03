@@ -895,8 +895,10 @@ tests/ui/test_html_overlay.py::test_url_page_offers_to_copy_its_link
 tests/ui/test_live.py::test_a_pane_another_client_leads_is_covered
 tests/ui/test_settings.py::test_agent_status_tab
 tests/ui/test_settings.py::test_appearance_tab
+tests/ui/test_settings.py::test_general_tab
 tests/ui/test_settings.py::test_ignore_reduce_transparency_toggle_persists
 tests/ui/test_settings.py::test_interface_tab_toggles_title_bar_buttons
+tests/ui/test_settings.py::test_key_mapping_tab_reports_a_keymap_error_after_reload
 tests/ui/test_settings.py::test_notifications_tab_reads_the_seeded_toggles
 tests/ui/test_sidebar_rows.py::test_add_session_menu_opens_a_session
 tests/ui/test_sidebar_rows.py::test_agent_status_glyph_reads_the_session_status

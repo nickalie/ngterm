@@ -454,12 +454,13 @@ is suspected but not established. Custom app command menu rows also lack accessi
   row, so those predicates branch and `test_tinted_icon_names_its_tint` is unsupported on Linux (an open
   accessibility gap, recorded there). The Settings opener uses the app menu on Linux (no Settings chord there), and the
   Ctrl+Tab switcher test skips on AT-SPI (XTest releases Control after the chord, which ends the walk).
+- *Selectable text* (review fix): the Settings paths and diagnostics, read-only gpui-kit fields, publish as labels
+  (upstream's static text) through the field's role override, since no read-only flag reaches AccessKit and AT-SPI
+  read them as editable fields; `test_general_tab` and `test_key_mapping_tab_reports_a_keymap_error_after_reload` are
+  green and in the ratchet (`selectable` Rust test).
 
-⚠️ Still red on Linux, left out of the ratchet: `test_settings.py::test_general_tab` and
-`test_key_mapping_tab_reports_a_keymap_error_after_reload` (gpui-kit's read-only `Input` publishes an editable text
-input: no read-only flag reaches AccessKit, so the selectable path reads as a text field; needs a gpui-kit patch or a
-read-only builder), and `test_html_overlay.py::test_page_strip_hide_hides_its_own_pane` (the Hide button stays in the
-tree for over 10 s after the pane's page hides, cause not established).
+⚠️ Still red on Linux, left out of the ratchet: `test_html_overlay.py::test_page_strip_hide_hides_its_own_pane` (the
+Hide button stays in the tree for over 10 s after the pane's page hides, cause not established).
 
 ### Task 7: The UIA driver and the Windows ui layer
 

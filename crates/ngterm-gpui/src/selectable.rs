@@ -6,8 +6,13 @@
 
 use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Entity, Hsla, IntoElement, Pixels, SharedString, Styled as _, Window,
+    AnyElement, App, AppContext as _, Entity, Hsla, IntoElement, Pixels, Role, SharedString, Styled as _, Window,
 };
+
+/// What assistive technology reads it as: text, as upstream's selectable `Text` reads (static text), not the editable
+/// field gpui-kit's input publishes (GPUI sets no read-only state on an AccessKit node, so AT-SPI would call the field
+/// editable). Its value is its text, which AccessKit names a label after.
+const TEXT_ROLE: Role = Role::Label;
 
 /// The most lines a multi-line text grows to before it scrolls.
 const MAX_LINES: usize = 12;
@@ -66,6 +71,7 @@ impl Selectable {
                 let field = Input::new(state)
                     .readonly(true)
                     .appearance(false)
+                    .role(TEXT_ROLE)
                     .accessibility_id(id)
                     .p_0()
                     .text_size(size)
@@ -76,6 +82,7 @@ impl Selectable {
                 let field = Textarea::new(state)
                     .readonly(true)
                     .appearance(false)
+                    .role(TEXT_ROLE)
                     .accessibility_id(id)
                     .p_0()
                     .text_size(size)
@@ -85,3 +92,6 @@ impl Selectable {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
