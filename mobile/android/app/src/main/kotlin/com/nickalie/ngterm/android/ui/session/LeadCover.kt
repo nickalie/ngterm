@@ -16,7 +16,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -27,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.ui.components.Cover
 import com.nickalie.ngterm.android.ui.components.SectionAction
+import com.nickalie.ngterm.android.ui.components.swallowEveryPointer
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 
 /**
@@ -109,7 +109,7 @@ private fun Reconnecting(
             Modifier
                 .matchParentSize()
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = SCRIM_ALPHA))
-                .pointerInput(Unit) { swallow() },
+                .pointerInput(Unit) { swallowEveryPointer() },
         )
         Surface(
             modifier =
@@ -139,14 +139,6 @@ private fun Reconnecting(
                     )
                 }
             }
-        }
-    }
-}
-
-private suspend fun PointerInputScope.swallow() {
-    awaitPointerEventScope {
-        while (true) {
-            awaitPointerEvent().changes.forEach { it.consume() }
         }
     }
 }

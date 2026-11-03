@@ -19,8 +19,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.nickalie.ngterm.android.R
-import com.nickalie.ngterm.android.data.SessionKey
-import com.nickalie.ngterm.android.ui.components.ConfirmDialog
 import com.nickalie.ngterm.android.ui.components.EmptyState
 import com.nickalie.ngterm.android.ui.components.PanelAction
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
@@ -78,10 +76,9 @@ fun SessionsDestination(
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
     }
     confirmEnd?.let { session ->
-        ConfirmDialog(
-            title = stringResource(R.string.machine_sessions_end_title, session.name),
-            body = stringResource(R.string.machine_sessions_end_body, session.machine),
-            confirmLabel = stringResource(R.string.machine_sessions_end),
+        EndSessionDialog(
+            name = session.name,
+            machine = session.machine,
             onConfirm = {
                 confirmEnd = null
                 actions.onEnd(session.key)
@@ -111,8 +108,8 @@ private fun LiveSession(
                 onTakeLead = actions.onTakeLead,
                 onDetach = actions.onDetach,
                 onEnd = actions.onEnd,
-                onNextSession = { nextSession(sessions, key, forward = true)?.let(actions.onOpen) },
-                onPreviousSession = { nextSession(sessions, key, forward = false)?.let(actions.onOpen) },
+                onNextSession = { sessions.cyclicNeighbor(key, forward = true)?.let(actions.onOpen) },
+                onPreviousSession = { sessions.cyclicNeighbor(key, forward = false)?.let(actions.onOpen) },
             )
         }
     SessionScreen(open.session, open.focused, panes, failures, compact, view)
@@ -155,16 +152,4 @@ private fun Attached(
 @Composable
 private fun Centered(content: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.Center) { content() }
-}
-
-/** The session after (or before) [current] among [sessions], wrapping around; `null` when there is no other. */
-internal fun nextSession(
-    sessions: List<SessionKey>,
-    current: SessionKey,
-    forward: Boolean,
-): SessionKey? {
-    if (sessions.size < 2) return null
-    val at = sessions.indexOf(current).coerceAtLeast(0)
-    val step = if (forward) 1 else -1
-    return sessions[(at + step + sessions.size) % sessions.size]
 }

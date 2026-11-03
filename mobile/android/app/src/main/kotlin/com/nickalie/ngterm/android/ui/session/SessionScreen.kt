@@ -44,6 +44,7 @@ import com.nickalie.ngterm.android.ui.terminal.ExtraKeysRow
 import com.nickalie.ngterm.android.ui.terminal.TerminalKeyboard
 import com.nickalie.ngterm.android.ui.terminal.TerminalShortcuts
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
+import com.nickalie.ngterm.android.ui.terminal.hardwareKeyboardAttached
 import com.nickalie.ngterm.android.ui.terminal.rememberTerminalKeyboard
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.ffi.PaneRef
@@ -73,7 +74,7 @@ fun SessionScreen(
     val ids = live.layout?.panes.orEmpty()
     val spots = ids.map { id -> spot(key, id, panes, failures, session) }
     val focus by rememberUpdatedState({ id: String -> actions.onFocus(key, id) })
-    val move: (Boolean) -> Unit = { forward -> neighbor(ids, focused, forward)?.let(focus) }
+    val move: (Boolean) -> Unit = { forward -> ids.cyclicNeighbor(focused, forward)?.let(focus) }
     SessionKeyboard(keyboard, spots.firstOrNull { it.ref.paneId == focused }?.state, move, actions)
     Column(
         modifier
@@ -125,7 +126,8 @@ private fun Panes(
         layout != null && spots.isNotEmpty() -> {
             val ids = spots.map { it.ref.paneId }
             val requesters = remember(ids) { ids.associateWith { FocusRequester() } }
-            FollowFocus(focused, requesters)
+            val ready = spots.firstOrNull { it.ref.paneId == focused }?.state != null
+            FollowFocus(focused, ready, requesters)
             val slot: @Composable (PaneSpot, Modifier) -> Unit = { spot, slotModifier ->
                 val id = spot.ref.paneId
                 PaneSlot(
@@ -194,9 +196,8 @@ private fun SessionKeyboard(
     actions: SessionViewActions,
 ) {
     val moveNow by rememberUpdatedState(move)
-    SideEffect {
-        if (target != null) keyboard.target = target
-    }
+    // a focused pane with no state yet (on its way, or it couldn't be shown) takes the keys too: they go nowhere
+    SideEffect { keyboard.target = target }
     LaunchedEffect(keyboard, actions) {
         keyboard.shortcuts =
             TerminalShortcuts(
@@ -208,17 +209,19 @@ private fun SessionKeyboard(
     }
 }
 
-// while the soft keyboard is up, the pane the focus moves to takes it, so typing goes on there
+// while the soft keyboard is up or a hardware keyboard is attached, the pane the focus moves to takes it once its
+// terminal is there ([ready]), so typing goes on there
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FollowFocus(
     focused: String?,
+    ready: Boolean,
     requesters: Map<String, FocusRequester>,
 ) {
-    val typing = WindowInsets.isImeVisible
+    val typing = WindowInsets.isImeVisible || hardwareKeyboardAttached()
     val typingNow by rememberUpdatedState(typing)
-    LaunchedEffect(focused) {
-        if (!typingNow || focused == null) return@LaunchedEffect
+    LaunchedEffect(focused, ready) {
+        if (!typingNow || focused == null || !ready) return@LaunchedEffect
         // the pane's view joins the composition in this frame: its requester is attached in the next
         withFrameNanos { }
         try {
@@ -265,14 +268,16 @@ private fun spot(
     return PaneSpot(ref, panes[ref], session.live.panes[paneId], failures[ref])
 }
 
-/** The pane after (or before) [current] in [panes], wrapping around; `null` with fewer than two. */
-internal fun neighbor(
-    panes: List<String>,
-    current: String?,
+/**
+ * The item after (or before) [current], wrapping around (from the first when [current] isn't here); `null` with fewer
+ * than two: the next pane of a session, the next attached session.
+ */
+internal fun <T> List<T>.cyclicNeighbor(
+    current: T?,
     forward: Boolean,
-): String? {
-    if (panes.size < 2) return null
-    val at = panes.indexOf(current).coerceAtLeast(0)
+): T? {
+    if (size < 2) return null
+    val at = indexOf(current).coerceAtLeast(0)
     val step = if (forward) 1 else -1
-    return panes[(at + step + panes.size) % panes.size]
+    return this[(at + step + size) % size]
 }

@@ -15,8 +15,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -76,7 +74,7 @@ fun AttachedList(
                     name = session.name,
                     onClick = { onOpen(session.key) },
                     context = session.context,
-                    menu = { ListMenu(session.name, { onDetach(session.key) }, { onEnd(session.key) }) },
+                    menu = { SessionMenu(session.name, { onDetach(session.key) }, { onEnd(session.key) }) },
                 ) { Status(session) }
             }
         }
@@ -190,41 +188,6 @@ private fun Status(
     modifier: Modifier = Modifier,
 ) {
     session.status?.let { AgentStatusBadge(it.text, it.color, it.shape, modifier) }
-}
-
-@Composable
-private fun ListMenu(
-    name: String,
-    onDetach: () -> Unit,
-    onEnd: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var open by remember { mutableStateOf(false) }
-    Box(modifier = modifier) {
-        IconButton(onClick = { open = true }) {
-            Icon(
-                painterResource(R.drawable.ic_more),
-                contentDescription = stringResource(R.string.action_more, name),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.machine_sessions_detach)) },
-                onClick = {
-                    open = false
-                    onDetach()
-                },
-            )
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.machine_sessions_end), color = MaterialTheme.colorScheme.error) },
-                onClick = {
-                    open = false
-                    onEnd()
-                },
-            )
-        }
-    }
 }
 
 private val RailCell = 64.dp

@@ -222,14 +222,34 @@ class SessionViewModelTest {
     }
 
     @Test
-    fun theNextSessionWrapsAround() {
+    fun aPanesShowFailureGoesWithItsSessionsDetach() {
+        attached("s1")
+        val model = model()
+        val p1 = PaneRef("m1", "s1", "P1")
+        test.core.failNext("showPane", MobileException.Remote("no pane P1"))
+        model.show(p1, size)
+        eventually { model.paneFailures.value[p1] == "no pane P1" }
+        model.detach(key)
+        eventually { model.paneFailures.value.isEmpty() }
+        runBlocking { test.connections.attach("m1", "s1") }
+        eventually {
+            test.connections.attached.value["m1"]
+                ?.contains("s1") == true
+        }
+        assertTrue(model.paneFailures.value.isEmpty())
+    }
+
+    @Test
+    fun theNextSessionAndPaneWrapAroundBothWays() {
         val a = SessionKey("m1", "a")
         val b = SessionKey("m1", "b")
-        assertEquals(b, nextSession(listOf(a, b), a, forward = true))
-        assertEquals(b, nextSession(listOf(a, b), a, forward = false))
-        assertNull(nextSession(listOf(a), a, forward = true))
-        assertEquals("P2", neighbor(listOf("P1", "P2"), "P1", forward = true))
-        assertEquals("P2", neighbor(listOf("P1", "P2"), "P1", forward = false))
-        assertNull(neighbor(listOf("P1"), "P1", forward = true))
+        val c = SessionKey("m1", "c")
+        assertEquals(b, listOf(a, b, c).cyclicNeighbor(a, forward = true))
+        assertEquals(c, listOf(a, b, c).cyclicNeighbor(a, forward = false))
+        assertEquals(a, listOf(a, b, c).cyclicNeighbor(c, forward = true))
+        assertNull(listOf(a).cyclicNeighbor(a, forward = true))
+        assertEquals("P2", listOf("P1", "P2", "P3").cyclicNeighbor("P1", forward = true))
+        assertEquals("P3", listOf("P1", "P2", "P3").cyclicNeighbor("P1", forward = false))
+        assertEquals("P2", listOf("P1", "P2", "P3").cyclicNeighbor(null, forward = true))
     }
 }

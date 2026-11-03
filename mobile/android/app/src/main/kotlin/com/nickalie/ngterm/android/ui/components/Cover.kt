@@ -113,8 +113,8 @@ fun Cover(
  */
 fun Modifier.underCover(covered: Boolean): Modifier = if (covered) clearAndSetSemantics {} else this
 
-// whatever lands on the layer stops there: the pane under the veil never sees it
-private suspend fun PointerInputScope.swallowEveryPointer() {
+/** Whatever lands on the layer stops there: the pane under a veil or a scrim never sees it. */
+internal suspend fun PointerInputScope.swallowEveryPointer() {
     awaitPointerEventScope {
         while (true) {
             awaitPointerEvent().changes.forEach { it.consume() }

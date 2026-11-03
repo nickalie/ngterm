@@ -67,7 +67,8 @@ class SessionPanes(
                 // detached while it was on its way: the core hid it with the session
                 if (!attached(pane.session)) drop(pane)
             } catch (error: MobileException) {
-                failureState.update { it + (pane to error.reason()) }
+                // a session detached while it was on its way keeps no failure to block the show on re-attach
+                if (attached(pane.session)) failureState.update { it + (pane to error.reason()) }
             } finally {
                 showing -= pane
             }
@@ -101,11 +102,13 @@ class SessionPanes(
         failureState.update { it - pane }
     }
 
-    // a detached session's panes went with it; a pane its layout no longer has is hidden
+    // a detached session's panes went with it, and why they couldn't be shown; a pane its layout no longer has is
+    // hidden
     private fun prune(
         attached: Map<String, Set<String>>,
         sessions: Map<SessionKey, LiveSession>,
     ) {
+        failureState.update { failures -> failures.filterKeys { it.sessionId in attached[it.machineId].orEmpty() } }
         for (pane in shownState.value.keys) {
             val key = pane.session
             val layout = sessions[key]?.layout

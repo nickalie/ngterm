@@ -52,6 +52,7 @@ import com.nickalie.ngterm.android.ui.components.SectionAction
 import com.nickalie.ngterm.android.ui.components.SectionHeader
 import com.nickalie.ngterm.android.ui.currentNavLayout
 import com.nickalie.ngterm.android.ui.machines.countdown
+import com.nickalie.ngterm.android.ui.session.EndSessionDialog
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.StatusTone
 
@@ -85,10 +86,9 @@ fun SessionsScreen(
             Body(state, actions, asking, now)
         }
         state.sessions?.firstOrNull { it.id == confirming }?.let { session ->
-            ConfirmDialog(
-                title = stringResource(R.string.machine_sessions_end_title, session.name),
-                body = stringResource(R.string.machine_sessions_end_body, state.machine.title),
-                confirmLabel = stringResource(R.string.machine_sessions_end),
+            EndSessionDialog(
+                name = session.name,
+                machine = state.machine.title,
                 onConfirm = {
                     confirming = null
                     actions.onEnd(session.id)

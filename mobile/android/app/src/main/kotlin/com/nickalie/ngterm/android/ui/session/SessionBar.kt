@@ -2,7 +2,6 @@ package com.nickalie.ngterm.android.ui.session
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -13,8 +12,6 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -35,7 +32,6 @@ import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.Link
 import com.nickalie.ngterm.android.ui.components.AgentStatusBadge
-import com.nickalie.ngterm.android.ui.components.ConfirmDialog
 import com.nickalie.ngterm.android.ui.components.StatusBadge
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.StatusTone
@@ -98,10 +94,9 @@ fun SessionBar(
         SessionMenu(session.name, onDetach = onDetach, onEnd = { confirming = true })
     }
     if (confirming) {
-        ConfirmDialog(
-            title = stringResource(R.string.machine_sessions_end_title, session.name),
-            body = stringResource(R.string.machine_sessions_end_body, session.machine),
-            confirmLabel = stringResource(R.string.machine_sessions_end),
+        EndSessionDialog(
+            name = session.name,
+            machine = session.machine,
             onConfirm = {
                 confirming = false
                 onEnd()
@@ -157,41 +152,6 @@ private fun StateBadge(
 
         StreamState.Unsupported -> {
             StatusBadge(StatusTone.Error, modifier, stringResource(R.string.session_cant_stream))
-        }
-    }
-}
-
-@Composable
-private fun SessionMenu(
-    name: String,
-    onDetach: () -> Unit,
-    onEnd: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var open by rememberSaveable { mutableStateOf(false) }
-    Box(modifier = modifier) {
-        IconButton(onClick = { open = true }) {
-            Icon(
-                painterResource(R.drawable.ic_more),
-                contentDescription = stringResource(R.string.action_more, name),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.machine_sessions_detach)) },
-                onClick = {
-                    open = false
-                    onDetach()
-                },
-            )
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.machine_sessions_end), color = MaterialTheme.colorScheme.error) },
-                onClick = {
-                    open = false
-                    onEnd()
-                },
-            )
         }
     }
 }

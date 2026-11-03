@@ -50,5 +50,7 @@ sealed interface PaneCover {
     }
 }
 
-/** Whether [cover] hides the pane from TalkBack and takes its touches (all but [PaneCover.Reconnecting]'s strip). */
+/**
+ * Whether [cover] hides the pane from TalkBack (all but [PaneCover.Reconnecting], whose last screen stays readable).
+ */
 val PaneCover?.veils: Boolean get() = this != null && this != PaneCover.Reconnecting

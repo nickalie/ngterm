@@ -475,13 +475,14 @@ compact                            medium (rail open)               expanded
   the list (Back returns to it) and the bottom bar steps aside, so the terminal has the whole height; from the medium
   width up it is the content beside the rail or the sidebar, which list the attached sessions (below).
 - **The bar** (`surfaceContainer`, under the status bar): Back on a phone; the session's name (titleMedium) over its
-  agent status (`AgentStatusBadge`, or the stream's own state while it isn't live: Connecting, Offline) and its
+  agent status (`AgentStatusBadge`, or the stream's own state while it isn't live: Connecting, Reconnecting, or Can't stream) and its
   context in one line; the pane switcher; More. The bar is the one place the session's state shows; nothing in the
   terminal repeats it.
 - **The pane switcher** (`PaneSwitcher`): only with two panes. A tab per pane, numbered in the origin's order, 48dp
   square, the pane's title as its TalkBack label ("Pane 1 of 2, vim"). The pane on screen (a phone) or with the
   focus (a split) has the copper number and the bus bar under it. On a phone a swipe across the terminal pages
-  between the panes too (a drag in the terminal scrolls it; the pager takes a clear horizontal fling).
+  between the panes too: a mostly sideways drag of 64dp or more, or a fast sideways fling, goes to the next or
+  previous pane; other drags scroll the terminal.
 - **The split** (`SplitLayout`, medium and expanded): the origin's layout as it is, two panes side by side
   (`vertical`) or stacked (`horizontal`), halves split by a 1dp `outlineVariant` rule, since the terminal's ground is
   the chrome's. Each pane of a split keeps a 4dp gutter at its leading edge where the focused one shows the bus bar
@@ -510,7 +511,9 @@ compact                            medium (rail open)               expanded
   confirmed as on a machine's list).
 - **The keyboard:** one `TerminalKeyboard` for the view, shared by every pane and the extra-keys row, so a held Ctrl
   stays as the focus moves; the row sits under the panes over the soft keyboard. Ctrl+Shift+Left and Right go to the
-  previous and next pane, Ctrl+Shift+Up and Down to the previous and next attached session.
+  previous and next pane, Ctrl+Shift+Up and Down to the previous and next attached session. While the soft keyboard is
+  up or a hardware keyboard is attached, the pane switched to takes the focus once its terminal is there, so typing
+  goes on in it; until then (a pane on its way or one that couldn't be shown) the keys go nowhere.
 - **The attached sessions in the rail and the sidebar:** the sidebar groups them by machine (the machine's name as a
   `SectionHeader`, then a `SessionRow` each with its status, the bus bar on the one open). The rail, collapsed, gives
   each a 64dp cell, its status glyph over its name cut to fit; opened, the sidebar's rows. Either opens the session

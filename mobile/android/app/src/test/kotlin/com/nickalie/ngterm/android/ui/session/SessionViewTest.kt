@@ -1,18 +1,25 @@
 package com.nickalie.ngterm.android.ui.session
 
+import android.content.res.Configuration
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.test.withKeysDown
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.TestGraph
 import com.nickalie.ngterm.android.testMachine
@@ -24,6 +31,7 @@ import com.nickalie.ngterm.core.fake.FakeInput
 import com.nickalie.ngterm.core.fake.FakePane
 import com.nickalie.ngterm.core.fake.fakeSession
 import com.nickalie.ngterm.core.ffi.MobileEvent
+import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneClipboard
 import com.nickalie.ngterm.core.ffi.PaneEnd
 import com.nickalie.ngterm.core.ffi.PaneRef
@@ -133,15 +141,57 @@ class SessionViewTest {
     }
 
     @Test
-    fun aSwipeAcrossAPhonesTerminalMovesBetweenThePanes() {
+    fun theExtraKeysReachNoPaneWhileTheFocusedOneCantBeShown() {
         openSession()
-        compose.onNodeWithContentDescription("Terminal").performTouchInput { swipeLeft() }
+        waitFor { panes["P1"] != null }
+        panes.getValue("P1").inputs.clear()
+        test.core.failNext("showPane", MobileException.Remote("no pane P2"))
+        compose.onNodeWithContentDescription("Pane 2 of 2").performClick()
+        waitFor { shows("no pane P2") }
+        compose.onNodeWithContentDescription("Escape").performClick()
+        compose.waitForIdle()
+        assertTrue(panes.getValue("P1").inputs.none { it is FakeInput.Key })
+    }
+
+    @Test
+    @Config(qualifiers = "+qwerty")
+    fun aHardwareChordMovesTheKeyboardFocusToTheNextPane() {
+        // a hardware keyboard attached and open (Robolectric has no qualifier for it): the soft keyboard stays down
+        compose.activity.resources.configuration.hardKeyboardHidden = Configuration.HARDKEYBOARDHIDDEN_NO
+        openSession()
+        layout.value = NavLayout.Sidebar
+        waitFor { p2 in test.core.shownPanes && panes["P2"] != null }
+        compose.onAllNodesWithContentDescription("Terminal")[0].performClick()
+        compose.waitForIdle()
+        compose.onNode(isFocused()).performKeyInput {
+            withKeysDown(listOf(Key.CtrlLeft, Key.ShiftLeft)) { pressKey(Key.DirectionRight) }
+        }
         compose.waitForIdle()
         compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
+        panes.getValue("P1").inputs.clear()
+        compose.onNode(isFocused()).performKeyInput { pressKey(Key.A) }
+        waitFor { panes.getValue("P2").inputs.any { it is FakeInput.Key } }
+        assertTrue(panes.getValue("P1").inputs.none { it is FakeInput.Key })
+    }
+
+    @Test
+    fun aSwipeAcrossAPhonesTerminalMovesBetweenThePanes() {
+        openSession()
+        test.core.emit(
+            MobileEvent.SessionLayout("m1", "s1", RemoteLayout(listOf("P1", "P2", "P3"), "P1", "vertical", true)),
+        )
+        waitFor { described("Pane 3 of 3") }
+        // a swipe to the left goes forward, one to the right back, wrapping from the first to the last
+        compose.onNodeWithContentDescription("Terminal").performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Pane 2 of 3").assertIsSelected()
         waitFor { p2 in test.core.shownPanes }
         compose.onNodeWithContentDescription("Terminal").performTouchInput { swipeRight() }
         compose.waitForIdle()
-        compose.onNodeWithContentDescription("Pane 1 of 2").assertIsSelected()
+        compose.onNodeWithContentDescription("Pane 1 of 3").assertIsSelected()
+        compose.onNodeWithContentDescription("Terminal").performTouchInput { swipeRight() }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Pane 3 of 3").assertIsSelected()
     }
 
     @Test
@@ -169,7 +219,21 @@ class SessionViewTest {
     }
 
     @Test
-    fun detachClosesTheViewAndBackReturnsToTheList() {
+    fun backClosesTheViewAndKeepsTheSessionAttached() {
+        openSession()
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        waitFor { described("Escape").not() }
+        // the attached list, not Machines: the session is still there, with its menu
+        assertTrue(described("More options for docs-site"))
+        assertTrue(
+            "s1" in
+                test.connections.attached.value["m1"]
+                    .orEmpty(),
+        )
+    }
+
+    @Test
+    fun detachClosesTheViewAndHidesItsPanes() {
         openSession()
         compose.onNodeWithContentDescription("More options for docs-site").performClick()
         compose.onNodeWithText("Detach").performClick()
