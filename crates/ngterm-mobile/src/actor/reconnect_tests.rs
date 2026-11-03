@@ -1,6 +1,6 @@
 //! Reconnect and lifecycle on the actor, on tokio's paused clock: a lost connection retried on `retry_delay`,
 //! `network_changed` retrying at once, the attached sessions' streams kept across the loss on their own backoff and
-//! retried at once when the machine is back, and suspend/resume.
+//! retried at once when the machine is back, a refusal ending the retries, and suspend/resume.
 
 use std::time::Duration;
 
@@ -342,7 +342,108 @@ fn suspend_cancels_a_connect_in_flight_and_resume_connects_it() {
         settle().await;
         assert_eq!(
             machine_states(&actor.sink.take()),
-            [reconnecting(0), MachineState::Connected]
+            [MachineState::Connected],
+            "connected again as the first connect it was"
+        );
+    });
+}
+
+/// Suspends `actor` while a first connect of `box` is held, and makes `box` refuse connects from then on.
+async fn suspend_a_first_connect(actor: &Actor) {
+    actor.transport.hold("box");
+    let (reply, answer) = oneshot::channel();
+    actor.post(Command::Connect {
+        machine: machine(),
+        reply,
+    });
+    settle().await;
+    actor.post(Command::Suspend);
+    assert_eq!(answer.await.unwrap(), Err(MobileError::Cancelled));
+    actor.transport.release("box");
+    actor.transport.refuse("box", "no route to host");
+    settle().await;
+}
+
+fn unreachable(reason: &str) -> MachineState {
+    MachineState::Unreachable {
+        reason: reason.to_owned(),
+    }
+}
+
+#[test]
+fn a_first_connect_cancelled_by_suspend_fails_for_good_on_resume() {
+    local(async {
+        let actor = Actor::start();
+        suspend_a_first_connect(&actor).await;
+
+        actor.post(Command::Resume);
+        settle().await;
+        assert_eq!(machine_states(&actor.sink.take()), [unreachable("no route to host")]);
+        advance(600_000).await;
+        assert!(actor.sink.take().is_empty(), "and is not retried");
+        assert_eq!(actor.transport.connects().len(), 2);
+    });
+}
+
+#[test]
+fn a_connect_of_a_machine_set_aside_before_its_first_connect_fails_for_good() {
+    local(async {
+        let actor = Actor::start();
+        suspend_a_first_connect(&actor).await;
+
+        let (reply, answer) = oneshot::channel();
+        actor.post(Command::Connect {
+            machine: machine(),
+            reply,
+        });
+        assert_eq!(
+            answer.await.unwrap(),
+            Err(MobileError::Unreachable {
+                reason: "no route to host".to_owned()
+            })
+        );
+        assert_eq!(machine_states(&actor.sink.take()), [unreachable("no route to host")]);
+        advance(600_000).await;
+        assert_eq!(actor.transport.connects().len(), 2, "not retried");
+    });
+}
+
+#[test]
+fn a_reconnect_refused_for_good_stops_as_unreachable() {
+    local(async {
+        let actor = Actor::start();
+        actor.connect().await;
+        actor.sink.take();
+        actor.transport.refuse_for_good("box", "the host key changed");
+
+        actor.transport.drop_connections("m1");
+        advance(1000).await;
+        assert_eq!(
+            machine_states(&actor.sink.take()),
+            [reconnecting(1000), unreachable("the host key changed")]
+        );
+        advance(600_000).await;
+        assert!(actor.sink.take().is_empty(), "no retry after the refusal");
+        assert_eq!(actor.transport.connects().len(), 2);
+    });
+}
+
+#[test]
+fn a_resume_refused_for_good_stops_as_unreachable() {
+    local(async {
+        let actor = Actor::start();
+        actor.connect().await;
+        actor.post(Command::Suspend);
+        actor.transport.refuse_for_good("box", "the host key changed");
+        actor.post(Command::Resume);
+        settle().await;
+        assert_eq!(
+            machine_states(&actor.sink.take()),
+            [
+                MachineState::Connected,
+                reconnecting(0),
+                unreachable("the host key changed")
+            ]
         );
     });
 }

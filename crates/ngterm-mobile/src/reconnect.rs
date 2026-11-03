@@ -4,14 +4,18 @@
 //! - **A lost connection** ([`crate::transport::Connection::lost`] while it is still the machine's) is retried on the
 //!   schedule every remote link shares ([`retry_delay`]): one second after the loss, doubling to thirty seconds and
 //!   later five minutes, each wait reported as [`crate::MachineState::Reconnecting`]. A retry that fails waits the
-//!   next delay; one that succeeds reports `Connected`. The machine's attached sessions stay attached meanwhile:
-//!   their streams fail on their own backoff (a stream launched while the machine is down closes at once), and once
-//!   it is back each gets `retry_now` and reopens.
+//!   next delay; one that succeeds reports `Connected`; one refused for good
+//!   ([`crate::transport::TransportError::Refused`]: a changed host key, say) stops, reported as
+//!   [`crate::MachineState::Unreachable`] as a failed first connect is. The machine's attached sessions stay attached
+//!   meanwhile: their streams fail on their own backoff (a stream launched while the machine is down closes at once),
+//!   and once it is back each gets `retry_now` and reopens.
 //! - **`network_changed`** ends every reconnect's wait: the retry runs at once and its backoff starts over. A connect
 //!   of a machine being reconnected does the same and waits for that retry.
 //! - **`suspend`** closes every machine's connection and stops its streams without reporting an error state, and
-//!   cancels the connects in flight; **`resume`** reconnects each machine it set aside, at once and on the reconnect
-//!   schedule, and starts its streams again once it is back.
+//!   cancels the connects in flight; **`resume`** reconnects each machine it set aside that had been connected, at once
+//!   and on the reconnect schedule, connects again one whose first connect it cancelled (a failure is final, as that
+//!   connect's would have been), and starts the streams again once their machine is back. A connect of a machine set
+//!   aside does the same.
 //!
 //! A disconnect, or a connect of the machine as edited, ends all of it: its streams and its retries go.
 //!

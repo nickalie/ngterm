@@ -35,9 +35,13 @@ pub const PEER_GONE: &str = "the channel closed without an exit status";
 /// What reaching a machine or running a command on it failed with.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TransportError {
-    /// The machine could not be reached or refused us (resolution, connect, timeout, authentication).
+    /// The machine could not be reached (resolution, connect, timeout, a host key question left unanswered).
     #[error("{0}")]
     Unreachable(String),
+    /// The machine was refused, or refused us, for a reason a retry won't fix by itself: a changed host key, an
+    /// unknown one the user did not trust, a key it does not accept.
+    #[error("{0}")]
+    Refused(String),
     /// The connection is up but refused to open the channel.
     #[error("{0}")]
     Rejected(String),

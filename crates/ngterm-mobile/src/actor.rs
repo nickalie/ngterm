@@ -11,11 +11,13 @@
 //! is still the machine's and nothing newer about its sessions is known: no later listing landed and no session ended
 //! after it began.
 //!
-//! An attached session's presentation stream ([`crate::presentation`]) runs on its machine's connection as it was at
-//! the attach; its links report back to the actor as local tasks, and a ticker task runs the streams' one-second tick.
+//! An attached session's presentation stream ([`crate::presentation`]) runs on its machine's current connection (none
+//! while the machine is down); its links report back to the actor as local tasks, and a ticker task runs the streams'
+//! one-second tick.
 //!
 //! A connection the core holds is watched: lost by itself, it is retried on the reconnect schedule as a connect
-//! attempt that waits first ([`crate::reconnect`]), and the machine's sessions stay attached across it. Closing a
+//! attempt that waits first ([`crate::reconnect`]) until it is back or refused for good
+//! ([`crate::transport::TransportError::Refused`]), and the machine's sessions stay attached across it. Closing a
 //! machine's connection (a disconnect, a connect of the machine as edited) ends its sessions' streams and its retries;
 //! suspending closes every connection but keeps the streams to start again on resume.
 
@@ -43,7 +45,7 @@ use crate::api::{EventSink, Machine, MachineState, MobileError, MobileEvent};
 use crate::presentation::{self, AskReply, ChannelLinks, LinkEvent, Presentations, Reporter};
 use crate::reconnect::Retry;
 use crate::sessions::{self, RemoteSession};
-use crate::transport::{Connection, Transport};
+use crate::transport::{Connection, Transport, TransportError};
 
 /// The actor thread's name.
 pub const THREAD_NAME: &str = "ngterm-mobile";
@@ -168,7 +170,7 @@ struct State<T: Transport> {
     /// The attached sessions' presentation streams.
     presentations: RefCell<Presentations<T::Connection>>,
     /// The machines [`suspend`] set aside, to reconnect on [`resume`].
-    suspended: RefCell<HashMap<String, Machine>>,
+    suspended: RefCell<HashMap<String, SetAside>>,
 }
 
 /// What the actor knows of a connected machine's sessions.
@@ -179,6 +181,21 @@ struct Kept {
     tree: Option<ControlRemoteTree>,
     /// The ticket of the newest news: the listing kept, or the last end. A listing that began before it is stale.
     as_of: u64,
+}
+
+/// A machine [`suspend`] set aside.
+struct SetAside {
+    machine: Machine,
+    /// Whether it had been connected (connected or being reconnected then): it comes back as a reconnect, which keeps
+    /// retrying. One never connected comes back as the connect the app asked for, whose failure is final.
+    was_connected: bool,
+}
+
+impl SetAside {
+    /// How it is connected again: as a reconnect at once, or as a first connect.
+    fn retry(&self) -> Option<Retry> {
+        self.was_connected.then(Retry::at_once)
+    }
 }
 
 /// A live connection and the machine record it was made from: a connect of the machine as edited replaces it.
@@ -338,7 +355,7 @@ fn connect<T: Transport>(state: &Rc<State<T>>, machine: Machine, reply: Reply) {
     }
     drop(attempts);
     // A machine set aside by a suspend comes back as resume brings it.
-    let retry = state.suspended.borrow().contains_key(&machine.id).then(Retry::at_once);
+    let retry = state.suspended.borrow().get(&machine.id).and_then(SetAside::retry);
     start_attempt(state, machine, vec![reply], retry);
 }
 
@@ -354,7 +371,10 @@ fn known<T: Transport>(state: &State<T>, machine_id: &str) -> Option<Machine> {
             let attempts = state.attempts.borrow();
             attempts.get(machine_id).map(|attempt| attempt.machine.clone())
         })
-        .or_else(|| state.suspended.borrow().get(machine_id).cloned())
+        .or_else(|| {
+            let suspended = state.suspended.borrow();
+            suspended.get(machine_id).map(|set_aside| set_aside.machine.clone())
+        })
 }
 
 /// Starts a connect of `machine` for `waiters`: a reconnect waits out its `retry`'s delay first, reported as
@@ -420,7 +440,8 @@ async fn reach<T: Transport>(state: Rc<State<T>>, machine: Machine, generation: 
         }
         Err(error) => {
             let reason = error.to_string();
-            match attempt.retry {
+            // A refusal ends a reconnect too: retrying won't change the key, or the user's or the machine's answer.
+            match attempt.retry.filter(|_| !matches!(error, TransportError::Refused(_))) {
                 Some(retry) => start_attempt(&state, machine, Vec::new(), Some(retry.failed())),
                 None => state.emit(MobileEvent::MachineState {
                     machine_id: machine.id.clone(),
@@ -501,14 +522,22 @@ fn suspend<T: Transport>(state: &State<T>) {
     let mut set_aside = Vec::new();
     for (machine_id, link) in connections {
         link.connection.close();
-        set_aside.push((machine_id, link.machine));
+        let machine = SetAside {
+            machine: link.machine,
+            was_connected: true,
+        };
+        set_aside.push((machine_id, machine));
     }
     for (machine_id, attempt) in attempts {
         attempt.task.abort();
         for waiter in attempt.waiters {
             let _ = waiter.send(Err(MobileError::Cancelled));
         }
-        set_aside.push((machine_id, attempt.machine));
+        let machine = SetAside {
+            machine: attempt.machine,
+            was_connected: attempt.retry.is_some(),
+        };
+        set_aside.push((machine_id, machine));
     }
     for (machine_id, machine) in set_aside {
         state.presentations.borrow_mut().suspend_machine(&machine_id);
@@ -516,14 +545,16 @@ fn suspend<T: Transport>(state: &State<T>) {
     }
 }
 
-/// The app is back: each machine [`suspend`] set aside is reconnected at once, on the reconnect schedule.
+/// The app is back: each machine [`suspend`] set aside is connected again at once, one that had been connected as a
+/// reconnect (on the reconnect schedule), one never connected as the connect the app asked for.
 fn resume<T: Transport>(state: &Rc<State<T>>) {
-    let mut machines: Vec<Machine> = std::mem::take(&mut *state.suspended.borrow_mut())
+    let mut machines: Vec<SetAside> = std::mem::take(&mut *state.suspended.borrow_mut())
         .into_values()
         .collect();
-    machines.sort_by(|left, right| left.id.cmp(&right.id));
-    for machine in machines {
-        start_attempt(state, machine, Vec::new(), Some(Retry::at_once()));
+    machines.sort_by(|left, right| left.machine.id.cmp(&right.machine.id));
+    for set_aside in machines {
+        let retry = set_aside.retry();
+        start_attempt(state, set_aside.machine, Vec::new(), retry);
     }
 }
 

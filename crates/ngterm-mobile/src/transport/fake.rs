@@ -72,7 +72,7 @@ pub struct Exec {
 
 #[derive(Debug, Default)]
 struct State {
-    refusals: HashMap<String, String>,
+    refusals: HashMap<String, TransportError>,
     held: HashSet<String>,
     /// The connects waiting on a held host, by host.
     gates: Vec<(String, oneshot::Sender<()>)>,
@@ -126,9 +126,18 @@ impl FakeTransport {
         Self::default()
     }
 
-    /// Refuses every connect to `host` with `reason`.
+    /// Fails every connect to `host` as [`TransportError::Unreachable`] with `reason`.
     pub fn refuse(&self, host: &str, reason: &str) {
-        self.lock().refusals.insert(host.to_owned(), reason.to_owned());
+        self.lock()
+            .refusals
+            .insert(host.to_owned(), TransportError::Unreachable(reason.to_owned()));
+    }
+
+    /// Fails every connect to `host` as [`TransportError::Refused`] with `reason`, as a changed host key does.
+    pub fn refuse_for_good(&self, host: &str, reason: &str) {
+        self.lock()
+            .refusals
+            .insert(host.to_owned(), TransportError::Refused(reason.to_owned()));
     }
 
     /// Accepts connects to `host` again.
@@ -226,8 +235,8 @@ impl Transport for FakeTransport {
     fn connect(&self, machine: &Machine) -> impl Future<Output = Result<FakeConnection, TransportError>> {
         let mut state = self.lock();
         state.connects.push(machine.id.clone());
-        let connected = if let Some(reason) = state.refusals.get(&machine.host) {
-            Err(TransportError::Unreachable(reason.clone()))
+        let connected = if let Some(refusal) = state.refusals.get(&machine.host) {
+            Err(refusal.clone())
         } else {
             state.last_link += 1;
             let id = state.last_link;

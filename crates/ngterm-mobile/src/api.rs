@@ -40,11 +40,14 @@ pub struct Machine {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum MachineState {
     Connected,
-    /// Down, retried in `next_in_ms`.
+    /// Down after being connected, retried in `next_in_ms`: every failure of a reconnect but a refusal is reported so,
+    /// a changed host key arriving as [`MobileEvent::HostKeyChanged`] besides.
     Reconnecting {
         next_in_ms: u64,
     },
-    /// Down for a reason a retry won't fix by itself (refused, authentication, a changed host key).
+    /// Down until the app connects it again: a connect the app asked for that failed, or a reconnect refused for a
+    /// reason a retry won't fix by itself (a changed host key, an unknown one not trusted, a key the machine does not
+    /// accept).
     Unreachable {
         reason: String,
     },
@@ -396,8 +399,10 @@ impl MobileCore {
         self.actor.post(Command::Suspend)
     }
 
-    /// Brings back what [`MobileCore::suspend`] closed: each machine reconnects at once (and keeps retrying, reported
-    /// as [`MachineState::Reconnecting`]), and its attached sessions' streams start again once it is connected.
+    /// Brings back what [`MobileCore::suspend`] closed: each machine that had been connected reconnects at once (and
+    /// keeps retrying, reported as [`MachineState::Reconnecting`]), one whose first connect was cancelled is connected
+    /// again as that connect (its failure reported as [`MachineState::Unreachable`]), and the attached sessions' streams
+    /// start again once their machine is connected.
     ///
     /// # Errors
     ///

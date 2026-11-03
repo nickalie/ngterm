@@ -13,6 +13,9 @@
 //!   disconnect, an edit) ends it. An answer is a statement about a key for a machine, not about one attempt: it
 //!   settles whichever connect of that machine is waiting on that same key.
 //!
+//! A changed key, a key the user did not trust and a client key the machine does not accept fail the connect as
+//! [`TransportError::Refused`], which a retry won't fix; every other failure is [`TransportError::Unreachable`].
+//!
 //! [`HostKeyStore::pinned`] is the only authority on the pin: [`Machine::pinned_host_key`] is the app's copy for
 //! showing, so removing a pin from the store is never undone by a stale record.
 //!
@@ -376,12 +379,12 @@ struct Client {
     /// The connect's deadline, held off while the user is asked.
     deadline: Arc<Deadline>,
     /// Why the host key was refused, for the connect's error.
-    refusal: Arc<Mutex<Option<String>>>,
+    refusal: Arc<Mutex<Option<TransportError>>>,
 }
 
 impl Client {
-    fn refuse(&self, reason: &str) -> bool {
-        *self.refusal.lock().unwrap_or_else(PoisonError::into_inner) = Some(reason.to_owned());
+    fn refuse(&self, refusal: TransportError) -> bool {
+        *self.refusal.lock().unwrap_or_else(PoisonError::into_inner) = Some(refusal);
         false
     }
 
@@ -390,7 +393,7 @@ impl Client {
             .challenges
             .ask(&self.machine_id, self.token, &offered, &self.withdrawn)
         else {
-            return self.refuse(HOST_KEY_WITHDRAWN);
+            return self.refuse(TransportError::Unreachable(HOST_KEY_WITHDRAWN.to_owned()));
         };
         self.sink.on_event(MobileEvent::HostKeyUnknown {
             machine_id: self.machine_id.clone(),
@@ -403,9 +406,9 @@ impl Client {
                 self.hosts.pin(self.machine_id.clone(), offered);
                 true
             }
-            Ok(Ok(false)) => self.refuse(HOST_KEY_REFUSED),
-            Ok(Err(_)) => self.refuse(HOST_KEY_WITHDRAWN),
-            Err(_) => self.refuse(HOST_KEY_UNCONFIRMED),
+            Ok(Ok(false)) => self.refuse(TransportError::Refused(HOST_KEY_REFUSED.to_owned())),
+            Ok(Err(_)) => self.refuse(TransportError::Unreachable(HOST_KEY_WITHDRAWN.to_owned())),
+            Err(_) => self.refuse(TransportError::Unreachable(HOST_KEY_UNCONFIRMED.to_owned())),
         }
     }
 }
@@ -435,7 +438,7 @@ impl client::Handler for Client {
                     pinned,
                     offered,
                 });
-                self.refuse(HOST_KEY_CHANGED)
+                self.refuse(TransportError::Refused(HOST_KEY_CHANGED.to_owned()))
             }
             None => self.ask(offered).await,
         };
@@ -474,7 +477,7 @@ async fn authenticate(
         .map_err(|error| unreachable(machine, &error))?;
     match result {
         AuthResult::Success => Ok(()),
-        AuthResult::Failure { .. } => Err(TransportError::Unreachable(format!(
+        AuthResult::Failure { .. } => Err(TransportError::Refused(format!(
             "{}@{} did not accept the key",
             machine.user, machine.host
         ))),
@@ -490,11 +493,12 @@ fn unreachable(machine: &Machine, error: &dyn std::fmt::Display) -> TransportErr
 }
 
 /// A handshake that failed: the host key's refusal when that is why, else russh's error.
-fn refused(machine: &Machine, refusal: &Mutex<Option<String>>, error: &::russh::Error) -> TransportError {
-    match refusal.lock().unwrap_or_else(PoisonError::into_inner).take() {
-        Some(reason) => TransportError::Unreachable(reason),
-        None => unreachable(machine, error),
-    }
+fn refused(machine: &Machine, refusal: &Mutex<Option<TransportError>>, error: &::russh::Error) -> TransportError {
+    refusal
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+        .unwrap_or_else(|| unreachable(machine, error))
 }
 
 /// One machine's ssh connection.

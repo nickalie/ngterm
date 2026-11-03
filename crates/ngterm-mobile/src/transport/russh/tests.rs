@@ -513,7 +513,7 @@ fn a_refused_or_mismatched_answer_ends_the_connect_and_pins_nothing() {
 
             assert_eq!(
                 connected.err(),
-                Some(TransportError::Unreachable(HOST_KEY_REFUSED.to_owned()))
+                Some(TransportError::Refused(HOST_KEY_REFUSED.to_owned()))
             );
             assert!(fixture.hosts.pins().is_empty());
         }
@@ -568,7 +568,7 @@ fn a_changed_host_key_fails_with_both_fingerprints() {
 
         assert_eq!(
             connected.err(),
-            Some(TransportError::Unreachable(HOST_KEY_CHANGED.to_owned()))
+            Some(TransportError::Refused(HOST_KEY_CHANGED.to_owned()))
         );
         assert_eq!(
             fixture.events.try_recv().unwrap(),
@@ -616,7 +616,7 @@ fn a_key_the_machine_does_not_accept_fails_authentication() {
 
         assert_eq!(
             connected.err(),
-            Some(TransportError::Unreachable(format!(
+            Some(TransportError::Refused(format!(
                 "{USER}@127.0.0.1 did not accept the key"
             )))
         );
@@ -730,7 +730,10 @@ fn a_connect_already_dropped_asks_nothing() {
 
         assert!(!client.ask("SHA256:offered".to_owned()).await);
 
-        assert_eq!(*refusal.lock().unwrap(), Some(HOST_KEY_WITHDRAWN.to_owned()));
+        assert_eq!(
+            *refusal.lock().unwrap(),
+            Some(TransportError::Unreachable(HOST_KEY_WITHDRAWN.to_owned()))
+        );
         assert!(fixture.transport.challenges.lock().is_empty());
         assert!(fixture.events.try_recv().is_err(), "nothing is shown");
     });
