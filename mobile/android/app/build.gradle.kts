@@ -59,9 +59,14 @@ kotlin {
     }
 }
 
+// the Rust writer's golden row buffer, which RowBufferReaderTest decodes
+val rowsGolden = rootProject.file("../../crates/ngterm-mobile/tests/fixtures/rows-golden.bin")
+
 tasks.withType<Test>().configureEach {
     // Robolectric's SDK 36 sandbox reaches into java.base's FileDescriptor internals (its FileDescriptorInterceptor)
     jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED")
+    inputs.file(rowsGolden).withPropertyName("rowsGolden")
+    systemProperty("ngterm.rowsGolden", rowsGolden.absolutePath)
 }
 
 roborazzi {
@@ -100,6 +105,7 @@ dependencies {
     testImplementation(platform(libs.compose.bom))
     testImplementation(libs.compose.ui.test.junit4)
 
+    androidTestImplementation(testFixtures(project(":core")))
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)

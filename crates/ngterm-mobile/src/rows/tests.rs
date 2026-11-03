@@ -531,3 +531,55 @@ fn the_golden_fixtures_rows() {
     assert_eq!(summary(2), vec![(0, 12, 0, 0, 0, 0, text("wrapping pas"))]);
     assert_eq!(summary(3), vec![(0, 10, 0, 0, 0, 0, text("t the edge"))]);
 }
+
+/// What a full-screen `cat` of a large file costs the core per frame the view draws (plan > Task 15's frame budget):
+/// 2 MiB of 40–120-column lines with a color every few lines, fed in 64 KiB reads into a phone's 52 × 50 grid, a frame
+/// packed after each read since the one before (every row changes). Prints the frame and pack times; run with
+/// `cargo test --release -p ngterm-mobile --lib -- --ignored --nocapture packing_a_full_screen_cat`.
+#[test]
+#[ignore = "a profile, not a check: run it by hand with --release"]
+fn packing_a_full_screen_cat() {
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789 .,;:(){}";
+    let term = Term::new(52, 50);
+    let mut file = Vec::new();
+    let mut line = 0usize;
+    while file.len() < 2 << 20 {
+        let width = 40 + (line * 37) % 81;
+        if line.is_multiple_of(5) {
+            file.extend_from_slice(format!("\x1b[3{}m{line:>6}\x1b[0m ", 1 + line % 6).as_bytes());
+        }
+        file.extend((0..width).map(|i| ALPHABET[(line + i * 7) % ALPHABET.len()]));
+        file.extend_from_slice(b"\r\n");
+        line += 1;
+    }
+    let (mut frame_times, mut pack_times, mut bytes) = (Vec::new(), Vec::new(), 0usize);
+    let mut since = 0;
+    for chunk in file.chunks(64 << 10) {
+        term.feed(chunk);
+        let started = Instant::now();
+        let frame = term.frame();
+        frame_times.push(started.elapsed());
+        let packing = Instant::now();
+        bytes += pack(&frame, since, false).len();
+        pack_times.push(packing.elapsed());
+        since = frame.seq;
+    }
+    let percentiles = |times: &mut Vec<Duration>| {
+        times.sort();
+        let at = |p: usize| times[(times.len() - 1) * p / 100];
+        format!(
+            "p50 {:?}, p90 {:?}, p99 {:?}, max {:?}",
+            at(50),
+            at(90),
+            at(99),
+            at(100)
+        )
+    };
+    println!(
+        "{} frames of 52 x 50, {} bytes each on average\n  frame(): {}\n  pack():  {}",
+        frame_times.len(),
+        bytes / frame_times.len(),
+        percentiles(&mut frame_times),
+        percentiles(&mut pack_times),
+    );
+}

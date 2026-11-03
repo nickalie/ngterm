@@ -370,3 +370,16 @@ text, with each font's copyright line, is in mobile/android/licenses/.
 
 Copyright 2020-2024 The Atkinson Hyperlegible Next Project Authors
 Copyright 2020-2024 The Atkinson Hyperlegible Mono Project Authors
+
+
+JetBrains Mono
+--------------
+
+https://github.com/JetBrains/JetBrainsMono
+
+The Android app bundles JetBrains Mono 2.304, the terminal's font, unmodified: the static Regular, Bold, Italic and
+Bold Italic faces of the release Ghostty embeds (FONTS_JETBRAINS_MONO_* in build/pins.env), in
+mobile/android/app/src/main/res/font/. It is licensed under the SIL Open Font License, Version 1.1, whose full text,
+with the font's copyright line, is in mobile/android/licenses/OFL-jetbrains-mono.txt.
+
+Copyright 2020 The JetBrains Mono Project Authors

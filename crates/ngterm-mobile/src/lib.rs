@@ -29,8 +29,8 @@ pub mod transport;
 
 pub use api::{
     CellPoint, EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileError, MobileEvent, Pane,
-    PaneInputError, PaneKey, PaneKeyAction, PaneMouse, PaneMouseAction, PaneMouseButton, PaneSendOutcome, PaneSize,
-    PaneWheel, PaneWheelOutcome, VaultError,
+    PaneColors, PaneInputError, PaneKey, PaneKeyAction, PaneMouse, PaneMouseAction, PaneMouseButton, PaneSendOutcome,
+    PaneSize, PaneWheel, PaneWheelOutcome, VaultError,
 };
 pub use keys::{KeyError, KeyPair};
 pub use pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};

@@ -72,3 +72,55 @@ fn a_terminal_installed_after_a_resize_raced_its_build_takes_the_new_grid() {
     slot.install(Arc::new(terminal), resized);
     assert_eq!(out.next(Some(Duration::from_millis(50))).unwrap(), None);
 }
+
+#[test]
+fn the_views_theme_reaches_the_terminal_in_place_and_every_later_one() {
+    use crate::api::{Pane, PaneColors, PaneInputError};
+
+    let grid = GridSize {
+        cols: 10,
+        rows: 2,
+        cell_width: 9,
+        cell_height: 18,
+    };
+    let slot = Arc::new(PaneSlot::new(grid, Arc::new(|| {})));
+    let pane = Pane::new("pane".to_owned(), Arc::clone(&slot));
+    let colors = PaneColors {
+        foreground: 0xffe3_e8ea,
+        background: 0xff1b_2226,
+        cursor: Some(0xffe3_884f),
+        palette: vec![0xff2a_343a, 0xffe5_675c],
+    };
+    // with no terminal yet the theme is kept for the first one
+    pane.set_colors(colors.clone()).unwrap();
+    let (first, _feed, _out) = ngterm_term::Pane::stream(&config(grid, Arc::new(|| {}))).unwrap();
+    slot.install(Arc::new(first), grid);
+    let theme = |slot: &PaneSlot| slot.terminal().unwrap().frame().frame.colors.clone();
+    let drawn = theme(&slot);
+    assert_eq!(drawn.foreground, ngterm_term::Rgb::new(0xe3, 0xe8, 0xea));
+    assert_eq!(drawn.background, ngterm_term::Rgb::new(0x1b, 0x22, 0x26));
+    assert_eq!(drawn.cursor, Some(ngterm_term::Rgb::new(0xe3, 0x88, 0x4f)));
+    assert_eq!(drawn.palette[1], ngterm_term::Rgb::new(0xe5, 0x67, 0x5c));
+
+    // a change reaches the terminal in place, and a reattach's fresh terminal starts from it
+    let light = PaneColors {
+        background: 0xfff6_f8f8,
+        cursor: None,
+        ..colors
+    };
+    pane.set_colors(light).unwrap();
+    assert_eq!(theme(&slot).background, ngterm_term::Rgb::new(0xf6, 0xf8, 0xf8));
+    let (again, _feed, _out) = ngterm_term::Pane::stream(&config(grid, Arc::new(|| {}))).unwrap();
+    slot.install(Arc::new(again), grid);
+    let reattached = theme(&slot);
+    assert_eq!(reattached.background, ngterm_term::Rgb::new(0xf6, 0xf8, 0xf8));
+    assert_eq!(reattached.cursor, None);
+
+    let too_many = PaneColors {
+        foreground: 0,
+        background: 0,
+        cursor: None,
+        palette: vec![0; 257],
+    };
+    assert!(matches!(pane.set_colors(too_many), Err(PaneInputError::Refused { .. })));
+}

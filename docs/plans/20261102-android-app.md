@@ -790,14 +790,42 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 - Create: `ui/terminal/TerminalView.kt`, `ui/terminal/RowBufferReader.kt`, `ui/terminal/GlyphCache.kt`, a bundled
   font in `res/font/`
 
-- [ ] write a JVM test first: `RowBufferReader` decodes Task 9d's golden fixture
-- [ ] draw the changed rows on a Canvas with a bundled monospace font, the platform fallback for CJK and emoji, and a
+- [x] write a JVM test first: `RowBufferReader` decodes Task 9d's golden fixture
+- [x] draw the changed rows on a Canvas with a bundled monospace font, the platform fallback for CJK and emoji, and a
       cache of shaped runs per row
-- [ ] draw the cursor shapes and the selection; measure cells and report the grid size, which sends a pty resize
-- [ ] keep frames within budget: profile a full-screen `cat` of a large file and record the frame times here
-- [ ] write screenshots of known buffers (colors, attributes, wide characters, cursor shapes, selection), and a UI test
+- [x] draw the cursor shapes and the selection; measure cells and report the grid size, which sends a pty resize
+- [x] keep frames within budget: profile a full-screen `cat` of a large file and record the frame times here
+  - measured (2026-11-03), app side on the headless x86_64 `ngterm-phone` AVD (API 36, 1080 × 2400, SwiftShader:
+    the emulator has no host GPU), debug build, `TerminalFrameTimeTest`: a fake pane whose every frame scrolls the
+    whole 54 × 52 grid by 7 lines of a long file, read as fast as the display takes them. 596 frames in 10 s (60 fps,
+    one pane frame read per display frame), none with over 16.7 ms of app work. UI thread (measure, layout, draw):
+    p50 3.1 ms, p90 4.6 ms, p99 7.8 ms; render thread (sync, issue): p50 2.8 ms, p90 4.5 ms, p99 5.8 ms; GPU
+    (SwiftShader, the CPU): p50 8.9 ms, p99 24.3 ms; total pipeline latency p50 16.8 ms, p99 33.5 ms, the GPU's.
+    Core side on the dev box (x86_64, release), `rows/tests.rs`'s ignored `packing_a_full_screen_cat`: 2 MiB of
+    text in 64 KiB reads into 52 × 50, every row changed: `frame()` p50 148 µs, p99 192 µs; `pack()` p50 36 µs, p99
+    47 µs, 3.6 KB per frame. A real core on the emulator was not profiled: a pane needs an ssh attach, and the
+    emulator test has no server to reach; the two halves meet only at the packed buffer, measured on both sides
+- [x] write screenshots of known buffers (colors, attributes, wide characters, cursor shapes, selection), and a UI test
       of resizing through rotation
-- [ ] run `./gradlew check` and the tests; all must pass before Task 16
+- [x] run `./gradlew check` and the tests; all must pass before Task 16
+  - result (2026-11-03): `ui/terminal/` holds `RowBufferReader` (rows.rs's layout v1), `TerminalScreen` (the rows
+    held, replaced per frame; a full frame or a new grid starts blank), `GlyphCache` (`TerminalFont`: four paints and
+    the cell; a row's runs measured once per row record: a run of the font's own glyphs is one string on the grid, a
+    drifting run, a wide run and a cluster go glyph by glyph, centered or squeezed into their cells),
+    `TerminalPainter` and `TerminalDecorations` (grounds, selection, text, lines, cursor shapes; defaults resolved
+    from the header drawn) and `TerminalView` with `TerminalState` (one frame read per display frame on
+    `Dispatchers.Default`, since the held seq, 0 after `attached()`; stale frames asked again; a closed pane keeps
+    the last screen; the grid that fits goes to `Pane.resize`). The font is JetBrains Mono 2.304's four static faces,
+    the release Ghostty and desktop embed (OFL, `licenses/`, NOTICE). ➕ The palette reaches the terminal: the core
+    gained `Pane.set_colors(PaneColors)` (kept in the pane's slot and applied to every terminal a reattach installs;
+    Rust test in `pane/tests.rs`), which `TerminalView` calls with the theme's palette. The cursor never blinks and
+    the selection is the palette's tonal fill (DESIGN.md > The terminal). `core` test fixtures gained `FakePane` and
+    `RowBufferWriter` (it packs the golden screen byte for byte as Rust does). Tests: `RowBufferReaderTest`,
+    `TerminalScreenTest`, `TerminalViewTest` (turning the phone's size gives the grid that fits and draws it, frames
+    asked since/whole, closed, stale, palette), 12 goldens in `screenshots/terminal`, and the emulator's frame
+    profile. Rotation is the view's size turning in Robolectric: its `setQualifiers("+land")` does not resize a
+    running window. `scripts/build-android.sh --profile debug check connectedDebugAndroidTest` is green, as are
+    `cargo test`/`clippy --all-targets --all-features -D warnings`/`fmt` for `ngterm-mobile`
 
 ### Task 16: Touch, mouse and selection
 

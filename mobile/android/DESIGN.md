@@ -91,7 +91,9 @@ Defined in `ui/theme/Color.kt`. `ContrastTest` checks every promise below, light
   built-in 16 colors.
 
 The theme picks Copper or Drafting with the light or dark side; Settings may pin one later. Every palette's text is
-4.5:1 on its ground and on its selection, and its cursor 3:1.
+4.5:1 on its ground and on its selection, and its cursor 3:1. `TerminalView` hands the palette to the pane
+(`Pane.set_colors`), so the terminal resolves ANSI colors with it and every reattach starts from it; colors a program
+sets (OSC 4/10/11/12) win, as on desktop.
 
 ## Type
 
@@ -101,7 +103,7 @@ OFL (`licenses/`):
 - **Atkinson Hyperlegible Next** for the chrome. The Braille Institute drew it to tell similar letters apart, which
   is the job here: hostnames, session names and statuses read at a glance, at any font scale.
 - **Atkinson Hyperlegible Mono** for what is compared character by character: `user@host:port`, fingerprints, key
-  lines (`NgtermTheme.mono`). It is not the terminal's font; the terminal's is its own choice (TerminalView).
+  lines (`NgtermTheme.mono`). It is not the terminal's font: the terminal's is JetBrains Mono (The terminal, below).
 
 The scale is the classic one (11, 12, 14, 16, 18, 21, 24, 30, 36, 48 sp). The two largest display sizes are light,
 headlines medium, titles and labels semibold, body regular. Sentence case everywhere; no all-caps labels, no eyebrows
@@ -299,6 +301,36 @@ machine is the subject: the list is quiet rows on the ground, not cards, since a
   machine without `ngtermctl` (the far shell's "not found") says "ngtermctl isn't on build-01", what to install and
   where, with Open the README (the server setup section) and Retry under it. A refresh that fails over a list keeps
   the list under an error banner with Retry; the offline banner shows over it as on the home.
+
+### The terminal (`ui/terminal/`)
+
+`TerminalView` draws a shown pane's screen; the session view (Task 18) places it. The terminal is the hero, so it is
+plain: no frame, no padding of its own, no scrollbar, nothing over the text. The host gives it its room (gutters,
+insets); the view fills that with whole cells from the top left and paints the slack at the right and bottom in the
+terminal's ground, which is the chrome's ground in Copper and Drafting, so the two read as one surface.
+
+- **Font:** JetBrains Mono 2.304 (OFL, `licenses/`, NOTICE), the static Regular, Bold, Italic and Bold Italic faces,
+  the same release Ghostty and desktop ngterm embed: a session reads the same on the phone as on the desk. It covers
+  box drawing, blocks and the common symbols on the grid, and keeps its programming ligatures (`=>`, `!=`), as Ghostty
+  does by default; they take the columns of the characters they join. CJK and emoji fall back to the platform's fonts,
+  centered in their two cells or squeezed into them. No Nerd Font symbols in v1: the symbols font is 2.5 MB.
+- **Size:** 13 sp by default (`TerminalTextSize`): about 50 columns on a phone held upright, 110 in landscape. It
+  follows the system font scale like any text (at 2.0, about 25 columns); pinching changes it (Task 16).
+- **Cell:** the font's advance wide, unrounded, so runs of the font's own glyphs sit on the grid; ascent to descent
+  tall, rounded up to whole pixels. The pane's grid is what fits, and it goes to the pane as its size on every
+  change (rotation, multi-window, folding).
+- **Text:** bold and italic pick the face; faint is half alpha (Ghostty's `faint-opacity`); inverse swaps the colors;
+  invisible draws nothing; strikethrough, overline and five underlines (single, double, curly, dotted, dashed), in
+  the underline color when the program set one. Blinking text holds still.
+- **Cursor:** a block in the palette's cursor color (copper in Copper, rust in Drafting) with the character under it
+  in the ground's color; a bar, an underline, or a hollow block as the program asks. A terminal without focus shows a
+  hollow block. It never blinks: nothing on screen moves on its own (Motion). On a wide character it covers both
+  columns.
+- **Selection:** a tonal fill in the palette's selection color under the text, which keeps its own colors (not
+  Ghostty's inverse: an inverted block of copper text on a phone reads as an error).
+- **Before the first frame** and while the pane has no terminal (hidden, between attaches) the view keeps what it
+  last drew, on the ground; the covers for those states are the session view's (`Cover`).
+- **TalkBack:** the view is announced as "Terminal". Reading its text out is Task 17's, with the input connection.
 
 ## Copy
 

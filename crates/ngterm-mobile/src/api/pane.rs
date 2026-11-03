@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use ngterm_core::ghostty_config::binds::{KeyAction, Mods, PhysicalKey};
 use ngterm_term::{
     ClipboardLocation, GridPoint, GridSize, KeyInput, ModSides, MouseAction, MouseButton, MouseInput, Paste,
-    PasteSource, SelectionText, Wake, Wheel, WheelInput,
+    PasteSource, Rgb, SelectionText, ThemeColors, Wake, Wheel, WheelInput,
 };
 
 /// A pane's grid: cells and the pixel size of one cell (`ngterm-term`'s `GridSize`).
@@ -44,6 +44,44 @@ impl From<GridSize> for PaneSize {
             cell_width: size.cell_width,
             cell_height: size.cell_height,
         }
+    }
+}
+
+/// A pane's theme, the colors its terminal starts from and a reset restores (`ngterm-term`'s `ThemeColors`): the
+/// app's terminal palette. Colors are `0xAARRGGBB` (Android's color `Int`); the alpha is ignored.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct PaneColors {
+    pub foreground: u32,
+    pub background: u32,
+    /// `None` for a cursor that follows the cell's text.
+    pub cursor: Option<u32>,
+    /// The palette from slot 0 (the 16 ANSI colors, or more); the slots after it keep the built-in palette.
+    pub palette: Vec<u32>,
+}
+
+/// The most palette slots a terminal has.
+const PALETTE_SLOTS: usize = 256;
+
+fn rgb(argb: u32) -> Rgb {
+    let [_, r, g, b] = argb.to_be_bytes();
+    Rgb::new(r, g, b)
+}
+
+impl TryFrom<&PaneColors> for ThemeColors {
+    type Error = PaneInputError;
+
+    fn try_from(colors: &PaneColors) -> Result<Self, Self::Error> {
+        if colors.palette.len() > PALETTE_SLOTS {
+            return Err(PaneInputError::Refused {
+                reason: format!("a palette has at most {PALETTE_SLOTS} colors"),
+            });
+        }
+        Ok(Self {
+            foreground: rgb(colors.foreground),
+            background: rgb(colors.background),
+            cursor: colors.cursor.map(rgb),
+            palette: (0..=u8::MAX).zip(colors.palette.iter().copied().map(rgb)).collect(),
+        })
     }
 }
 
@@ -190,10 +228,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// What a [`Pane`] handle and the actor share: the pane's current terminal and its grid.
+/// What a [`Pane`] handle and the actor share: the pane's current terminal, its grid and its theme.
 pub(crate) struct PaneSlot {
     terminal: Mutex<Option<Arc<ngterm_term::Pane>>>,
     size: Mutex<GridSize>,
+    /// The theme the view gave ([`Pane::set_colors`]), which every terminal put in place starts from.
+    colors: Mutex<Option<ThemeColors>>,
     /// Tells the actor the view gave a grid while the slot held no terminal: a pane waiting for one attaches.
     sized: Wake,
 }
@@ -204,6 +244,7 @@ impl std::fmt::Debug for PaneSlot {
             .debug_struct("PaneSlot")
             .field("terminal", &self.terminal)
             .field("size", &self.size)
+            .field("colors", &self.colors)
             .finish_non_exhaustive()
     }
 }
@@ -214,6 +255,7 @@ impl PaneSlot {
         Self {
             terminal: Mutex::new(None),
             size: Mutex::new(size),
+            colors: Mutex::new(None),
             sized,
         }
     }
@@ -229,7 +271,8 @@ impl PaneSlot {
     }
 
     /// Puts `terminal`, built at `built`, in place of the current one, and sizes it to the grid the view gave since:
-    /// a [`Pane::resize`] that raced the build stored its size and resized the terminal this one replaces.
+    /// a [`Pane::resize`] that raced the build stored its size and resized the terminal this one replaces. It takes
+    /// the view's theme before any output reaches it.
     pub(crate) fn install(&self, terminal: Arc<ngterm_term::Pane>, built: GridSize) {
         let mut current = lock(&self.terminal);
         let size = self.size();
@@ -237,7 +280,21 @@ impl PaneSlot {
             // the stored size passed the zero check, so the terminal takes it
             let _ = terminal.resize(size);
         }
+        if let Some(colors) = lock(&self.colors).as_ref() {
+            // the terminal keeps its built-in colors when the library refuses these, as it would refuse them again
+            let _ = terminal.set_colors(colors);
+        }
         *current = Some(terminal);
+    }
+
+    /// Stores the view's theme and gives it to the current terminal. Stored first, then applied under the terminal's
+    /// lock, as [`Self::install`] reads it: a terminal put in place meanwhile ends with the latest theme either way.
+    fn set_colors(&self, colors: &ThemeColors) -> Result<(), PaneInputError> {
+        *lock(&self.colors) = Some(colors.clone());
+        match lock(&self.terminal).as_ref() {
+            Some(terminal) => Ok(terminal.set_colors(colors)?),
+            None => Ok(()),
+        }
     }
 
     /// The grid the view last gave the pane.
@@ -312,6 +369,20 @@ impl Pane {
         }
         (self.slot.sized)();
         Ok(())
+    }
+
+    /// The view's theme: the colors the terminal starts from and a reset restores, kept for every later attach.
+    /// Colors a program set (OSC 4/10/11/12) stay as it set them.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneInputError::Refused`] for a palette of more than 256 colors, or colors the terminal refuses.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "UniFFI passes the foreign side's arguments owned"
+    )]
+    pub fn set_colors(&self, colors: PaneColors) -> Result<(), PaneInputError> {
+        self.slot.set_colors(&ThemeColors::try_from(&colors)?)
     }
 
     /// Sends a key, encoded for the program's keyboard modes; whether anything was sent (a lone modifier sends

@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 
 pub(crate) use self::pane::PaneSlot;
 pub use self::pane::{
-    CellPoint, Pane, PaneInputError, PaneKey, PaneKeyAction, PaneMouse, PaneMouseAction, PaneMouseButton,
+    CellPoint, Pane, PaneColors, PaneInputError, PaneKey, PaneKeyAction, PaneMouse, PaneMouseAction, PaneMouseButton,
     PaneSendOutcome, PaneSize, PaneWheel, PaneWheelOutcome,
 };
 
