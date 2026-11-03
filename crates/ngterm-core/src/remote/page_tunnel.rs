@@ -10,6 +10,11 @@
 //!   loads before its server is reachable. Stopping the helper closes its stdin, which ends the forward.
 //! - The page's address on the presenter is the forwarded one ([`TunnelPlan::local_url`]); what the origin reads back
 //!   names its own address again ([`TunnelPlan::origin_address`]).
+//! - The forward listens on the origin's own port when this machine has it free and no other forward holds it
+//!   ([`forward_port`]), so the page sends a `Host` the origin's server takes for its own: a server guarding against
+//!   DNS rebinding answers only `127.0.0.1:PORT` or `localhost:PORT`. Only a port taken here falls back to another
+//!   one. The page loads at 127.0.0.1 even when the origin named `localhost`: the forward listens on IPv4 alone, and
+//!   `localhost` here may reach a server of this machine's own on `[::1]`.
 //! - The page loads in a browser store of its own, never the saved one: that store keys cookies by host alone, and
 //!   every forwarded page's host is 127.0.0.1. The origin's commands that arrive before the page is placed apply once
 //!   it is.
@@ -17,6 +22,9 @@
 //!   page.
 //! - The forward ending ends the page, as a file page's helper ending does.
 
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
+
+use socket2::{Domain, Protocol, Socket, Type};
 use url::Url;
 
 /// The capability a viewer's hello lists when it carries an origin's loopback pages over ssh. It names no frame body.
@@ -76,15 +84,50 @@ impl TunnelPlan {
     }
 }
 
-/// A free port of this machine's loopback, for a forward to listen on. Another program may take it before ssh binds
-/// it; the forward then fails and the page is refused.
+/// The port of this machine's loopback a forward to the origin's `target_port` listens on: that same port when no
+/// server of this machine's holds it ([`port_free`]) and no forward of `held` (this machine's other forwards, some of
+/// them not bound by ssh yet) has it, so the page's `Host` names the origin's own port; else any free one. Another
+/// program may take it before ssh binds it; the forward then fails and the page is refused.
 ///
 /// # Errors
 ///
 /// No port could be bound.
-pub fn free_local_port() -> std::io::Result<u16> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-    Ok(listener.local_addr()?.port())
+pub fn forward_port(target_port: u16, held: impl IntoIterator<Item = u16>) -> std::io::Result<u16> {
+    if target_port != 0 && !held.into_iter().any(|port| port == target_port) && port_free(target_port) {
+        return Ok(target_port);
+    }
+    Ok(TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?.local_addr()?.port())
+}
+
+/// Whether no server of this machine's listens on `port` where a connection to 127.0.0.1 would reach it. Binding
+/// 127.0.0.1 alone does not tell: macOS lets it sit beside a wildcard listener under the `SO_REUSEADDR` std and ssh
+/// set, and Windows beside one even without, so ssh would bind it too and take that server's loopback traffic. A bind
+/// of the wildcard itself collides with such a listener everywhere: `0.0.0.0`, and `[::]` in dual mode, which a
+/// dual-stack server holds (Windows' default is IPv6 alone, which never answers 127.0.0.1). The probes bind and never
+/// listen, so no firewall asks about a wildcard listener. A machine without IPv6 has no dual-stack server.
+fn port_free(port: u16) -> bool {
+    let v4 = [Ipv4Addr::LOCALHOST, Ipv4Addr::UNSPECIFIED]
+        .into_iter()
+        .all(|address| bind_alone(SocketAddr::from((address, port))).is_ok());
+    v4 && match bind_alone(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port))) {
+        Ok(()) => true,
+        Err(error) => !matches!(
+            error.kind(),
+            std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+        ),
+    }
+}
+
+/// Binds a TCP socket to `address` without listening, an IPv6 one in dual mode, with the `SO_REUSEADDR` std sets on
+/// Unix, so a connection a closed forward left in `TIME_WAIT` does not hold its port.
+fn bind_alone(address: SocketAddr) -> std::io::Result<()> {
+    let socket = Socket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP))?;
+    #[cfg(unix)]
+    socket.set_reuse_address(true)?;
+    if address.is_ipv6() {
+        socket.set_only_v6(false)?;
+    }
+    socket.bind(&address.into())
 }
 
 #[cfg(test)]
@@ -132,10 +175,79 @@ mod tests {
         );
     }
 
+    /// A port nothing holds right now.
+    fn unused_port() -> u16 {
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
     #[test]
-    fn a_free_port_is_on_the_loopback() {
-        let port = free_local_port().unwrap();
+    fn a_forward_takes_the_origins_port_when_it_is_free_here() {
+        let taken = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let busy = taken.local_addr().unwrap().port();
+        let port = forward_port(busy, []).unwrap();
         assert_ne!(port, 0);
-        assert!(std::net::TcpListener::bind(("127.0.0.1", port)).is_ok());
+        assert_ne!(port, busy, "a port taken here falls back to another");
+        drop(taken);
+        assert_eq!(forward_port(busy, []).unwrap(), busy, "a free port is the origin's own");
+        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok());
+    }
+
+    /// A server listening on a wildcard of `address`'s family, an IPv6 one in dual mode as Node and most dev servers
+    /// open it; `None` on a machine without that family.
+    fn wildcard_server(address: SocketAddr) -> Option<(Socket, u16)> {
+        let socket = Socket::new(Domain::for_address(address), Type::STREAM, Some(Protocol::TCP)).ok()?;
+        if address.is_ipv6() {
+            socket.set_only_v6(false).ok()?;
+        }
+        socket.bind(&address.into()).ok()?;
+        socket.listen(1).ok()?;
+        let port = socket.local_addr().ok()?.as_socket()?.port();
+        Some((socket, port))
+    }
+
+    #[test]
+    fn a_server_listening_on_a_wildcard_keeps_its_port() {
+        let (any_v4, port) = wildcard_server(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))).unwrap();
+        assert_ne!(forward_port(port, []).unwrap(), port, "0.0.0.0 answers 127.0.0.1 too");
+        drop(any_v4);
+        if let Some((_any, port)) = wildcard_server(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0))) {
+            assert_ne!(
+                forward_port(port, []).unwrap(),
+                port,
+                "a dual-stack [::] answers 127.0.0.1 too"
+            );
+        }
+    }
+
+    #[test]
+    fn a_port_another_forward_holds_is_not_taken_again() {
+        let free = unused_port();
+        let port = forward_port(free, [free]).unwrap();
+        assert_ne!(port, free, "a forward whose ssh has not bound yet still holds its port");
+        assert_ne!(port, 0);
+    }
+
+    #[test]
+    fn a_forwarded_page_sends_the_host_its_origin_serves() {
+        let plan = TunnelPlan::new("http://127.0.0.1:41163/", 41163).unwrap();
+        assert_eq!(plan.local_url.as_str(), "http://127.0.0.1:41163/");
+        assert_eq!(
+            plan.origin_address("http://127.0.0.1:41163/runs"),
+            "http://127.0.0.1:41163/runs"
+        );
+        let plan = TunnelPlan::new("http://localhost:41163/", 41163).unwrap();
+        assert_eq!(
+            plan.local_url.as_str(),
+            "http://127.0.0.1:41163/",
+            "loaded on the IPv4 forward, never a server of this machine's own on [::1]"
+        );
+        assert_eq!(
+            plan.origin_address("http://127.0.0.1:41163/"),
+            "http://localhost:41163/"
+        );
     }
 }

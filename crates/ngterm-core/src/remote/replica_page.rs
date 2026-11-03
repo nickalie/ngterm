@@ -34,7 +34,7 @@ use super::frames::{
     PresentationPageSource, PresentationPageState,
 };
 use super::page_channel::{ChannelEvent, ChannelLink, Permits, Pull, ReplicaChannel, RequestId};
-use super::page_tunnel::{READY_LINE, TunnelPlan, free_local_port};
+use super::page_tunnel::{READY_LINE, TunnelPlan, forward_port};
 use crate::Core;
 use crate::html::{HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlReloadTarget, HtmlSource, errors};
 use crate::model::{HtmlPageSlot, OverlayPane};
@@ -158,6 +158,15 @@ pub(crate) struct ReplicaPages {
     pending: HashMap<Uuid, PendingTunnel>,
     launcher: Option<Rc<dyn PageHelperLauncher>>,
     launches: u64,
+}
+
+impl ReplicaPages {
+    /// The ports this machine's forwards listen on, pending ones included: their ssh may not have bound yet.
+    fn forward_ports(&self) -> Vec<u16> {
+        let pending = self.pending.values().map(|pending| &pending.tunnel);
+        let live = self.records.values().filter_map(|record| record.tunnel.as_ref());
+        pending.chain(live).map(|tunnel| tunnel.plan.local_port).collect()
+    }
 }
 
 impl fmt::Debug for ReplicaPages {
@@ -402,7 +411,12 @@ impl Core {
         host: String,
         address: &str,
     ) -> Result<(), String> {
-        let port = free_local_port().map_err(|error| format!("no port for the page's forward: {error}"))?;
+        let target = url::Url::parse(address)
+            .ok()
+            .and_then(|url| url.port_or_known_default())
+            .ok_or(INVALID_URL)?;
+        let held = self.remote.viewer.pages.forward_ports();
+        let port = forward_port(target, held).map_err(|error| format!("no port for the page's forward: {error}"))?;
         let plan = TunnelPlan::new(address, port).ok_or(INVALID_URL)?;
         let argv = super::ssh::tunnel_command(&host, &plan).map_err(|_| ORIGIN_UNREACHABLE.to_owned())?;
         let pages = &mut self.remote.viewer.pages;

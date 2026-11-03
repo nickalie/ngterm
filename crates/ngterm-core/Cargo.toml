@@ -21,6 +21,8 @@ plist.workspace = true
 idna.workspace = true
 pulldown-cmark.workspace = true
 serde.workspace = true
+# whether a loopback page's forward may take the origin's port: binds that never listen (remote/page_tunnel.rs)
+socket2.workspace = true
 strum.workspace = true
 # the remote tree's ssh output capture: unlinked files nothing blocks reading
 tempfile.workspace = true

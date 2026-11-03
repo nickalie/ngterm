@@ -374,6 +374,41 @@ fn a_loopback_page_is_placed_once_its_forward_is_up_at_the_forwarded_address() {
     assert!(replica.rejections().is_empty());
 }
 
+/// The local port of forward `index`'s `-L 127.0.0.1:PORT:HOST:PORT`.
+fn forwarded_port(replica: &Replica, index: usize) -> u16 {
+    let argv = replica.launch(index).argv.clone();
+    let forward = &argv[argv.iter().position(|word| word == "-L").unwrap() + 1];
+    forward.split(':').nth(1).unwrap().parse().unwrap()
+}
+
+#[test]
+fn a_forward_listens_on_the_origins_port_unless_another_forward_holds_it() {
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut replica = Replica::new();
+    let first = replica.request_loopback(&format!("http://127.0.0.1:{port}/"));
+    assert_eq!(
+        forwarded_port(&replica, first),
+        port,
+        "the page sends the Host its origin serves"
+    );
+
+    let mut other = Replica::page(Replica::url(&format!("http://localhost:{port}/x")));
+    other["page"] = json!(wire(Uuid::new_v4()));
+    replica.request(other);
+    assert!(replica.rejections().is_empty(), "{:?}", replica.rejections());
+    let second = replica.launcher.launches.borrow().len() - 1;
+    assert_ne!(second, first);
+    assert_ne!(
+        forwarded_port(&replica, second),
+        port,
+        "the first forward's ssh has not bound yet, yet its port is held"
+    );
+}
+
 #[test]
 fn the_origin_reads_its_own_address_back_from_a_forwarded_page() {
     let mut replica = Replica::new();
@@ -388,7 +423,7 @@ fn the_origin_reads_its_own_address_back_from_a_forwarded_page() {
     core.set_html_page(
         local,
         Some(HtmlPageInfo {
-            page: format!("http://127.0.0.1:{}/runs/2", url.port().unwrap()),
+            page: url.join("/runs/2").unwrap().to_string(),
             title: Some("Runs".to_owned()),
             can_go_back: true,
             can_go_forward: false,
