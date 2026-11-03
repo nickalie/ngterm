@@ -1,0 +1,66 @@
+//! The mobile core against a real machine: a staged `ngterm-headless` behind an unprivileged `sshd`, driven through
+//! [`MobileCore`] as the app drives it. Ignored in plain runs; `scripts/test-mobile-e2e.sh` builds and stages the
+//! binaries and runs it with the stage in `MOBILE_E2E_STAGE` and a scratch directory in `MOBILE_E2E_WORK`.
+//!
+//! The instance is private and never the user's: `ngterm-headless`, `ngtermctl` and `ngterm-session` run with a cleared
+//! environment holding only a private `NGTERM_STATE_DIR` and `HOME` under the scratch directory (so the control socket
+//! is `<state>/ngterm.sock` and the live sessions' namespace is the one hashed from that state directory), every
+//! `ngtermctl` call names that socket with `--socket`, and the `sshd`'s forced command exports the same before it runs
+//! the client's command with the stage's binaries first on `PATH`. The test checks that before anything else: a marker
+//! session made through the private socket must be all that `live tree` over ssh lists. On every exit path the
+//! sessions are reaped through the private namespace's own session server.
+//!
+//! Without `sshd` the test skips with a reason, unless `CI` is set: there it fails.
+
+#[cfg(test)]
+#[path = "support/machine.rs"]
+mod machine;
+#[cfg(test)]
+#[path = "support/phone.rs"]
+mod phone;
+#[cfg(test)]
+#[path = "support/sshd.rs"]
+mod sshd;
+#[cfg(test)]
+#[path = "support/steps.rs"]
+mod steps;
+
+use self::machine::World;
+use self::phone::{Client, MACHINE_ID, block_on};
+use self::steps::{assert_isolated, create_and_read, leadership, reconnect};
+
+#[test]
+#[ignore = "needs a staged ngterm-headless and sshd: run scripts/test-mobile-e2e.sh"]
+fn the_mobile_core_drives_a_real_headless_machine_over_ssh() {
+    let Some(binary) = sshd::find_sshd() else {
+        assert!(
+            std::env::var_os("CI").is_none_or(|value| value.is_empty()),
+            "CI needs sshd for the mobile e2e test"
+        );
+        eprintln!("skipped: no sshd on this machine");
+        return;
+    };
+    let world = World::start(&binary);
+    let mut first = Client::new("first", &world);
+    first.connect(world.proxy.port());
+
+    let marker = assert_isolated(&world, &first);
+    let session = create_and_read(&mut first);
+    let pane = first.pane.clone().expect("a shown pane");
+
+    let mut second = Client::new("second", &world);
+    second.connect(world.sshd.port());
+    leadership(&mut first, &mut second, &session, &pane);
+
+    reconnect(&mut first, &world.proxy);
+
+    drop(second);
+    block_on(first.core.end_session(MACHINE_ID.to_owned(), session.clone())).expect("end the session");
+    let listed = first.list();
+    assert!(
+        listed.iter().all(|(id, _)| *id != session),
+        "the ended session is still listed: {listed:?}"
+    );
+    assert!(listed.iter().any(|(_, name)| *name == marker), "{listed:?}");
+    assert!(world.headless.tree().iter().all(|(id, _)| *id != session));
+}

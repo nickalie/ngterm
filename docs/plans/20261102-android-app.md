@@ -611,28 +611,44 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 
 **Files:**
 - Create: `crates/ngterm-mobile/tests/headless_e2e.rs`, `crates/ngterm-mobile/tests/support/sshd.rs`,
-  `scripts/test-mobile-e2e.sh`
+  `scripts/test-mobile-e2e.sh` (➕ `tests/support/{machine,phone,steps}.rs`)
 
-- [ ] write `scripts/test-mobile-e2e.sh`:
+- [x] write `scripts/test-mobile-e2e.sh`:
   - build `ngterm-headless`, `ngtermctl` and `ngterm-session`;
   - `scripts/stage.sh` them into a temporary stage;
   - run the test with `--ignored`, passing the stage path, with `NGTERM_*` stripped
-- [ ] in the test, start `ngterm-headless` from the stage in a private state dir (`NGTERM_STATE_DIR` and `HOME` under
+- [x] in the test, start `ngterm-headless` from the stage in a private state dir (`NGTERM_STATE_DIR` and `HOME` under
       a temp dir, with the session server through that dir)
-- [ ] start an unprivileged `sshd` on a random port with its own host key, `authorized_keys` and config. Its
+- [x] start an unprivileged `sshd` on a random port with its own host key, `authorized_keys` and config. Its
       `ForceCommand` wrapper exports the private `NGTERM_STATE_DIR` and `HOME` and `PATH=<stage>/bin:/usr/bin:/bin`,
       then runs `exec /bin/sh -c "$SSH_ORIGINAL_COMMAND"`.
-- [ ] **assert isolation first:** create a uniquely named marker session through the private instance's own socket
+- [x] **assert isolation first:** create a uniquely named marker session through the private instance's own socket
       (`ngtermctl --socket <private>`). `live tree` over the sshd must list exactly that marker, before any create
       or end runs through ssh.
-- [ ] then run, through `MobileCore`:
+- [x] then run, through `MobileCore`:
   - create a session, attach its pane, run `echo` and read it in the rows;
   - attach a second client and check that the roles are leader and follower, then take the lead;
   - kill the connection, reattach and find the same screen;
   - end the session, and the tree no longer lists it
-- [ ] reap through the private state dir's own server on every exit path; with `CI` set a missing `sshd` fails, and
+- [x] reap through the private state dir's own server on every exit path; with `CI` set a missing `sshd` fails, and
       locally it skips with a reason
-- [ ] run the script; it must pass before Task 11
+- [x] run the script; it must pass before Task 11
+  - Notes: the script (Linux, `--profile debug|release`, debug by default) strips `NGTERM_*`, builds and stages
+    into `<target>/me2e.XXXXXX` (`MOBILE_E2E_WORK_ROOT` overrides), and passes `MOBILE_E2E_STAGE` and
+    `MOBILE_E2E_WORK` (not `NGTERM_*`, which it strips); the scratch directory goes after a pass and stays after a
+    failure with `headless.log` and `sshd/sshd.log`. The private control socket lives under it, so the test refuses a
+    path over 103 bytes. Every process of the instance runs with a cleared environment (the private
+    `NGTERM_STATE_DIR` and `HOME`, the stage first on `PATH`, `SHELL=/bin/bash`); sessions' panes still run the
+    account's login shell (fish on the dev box), so the line typed is `printf 'e2e-%s\n' 42`, typed again until it
+    prints (a starting fish drops early input). The instance starts with a session of its own, so the isolation step
+    closes it through the private socket after making the marker, then requires `live tree` over ssh to list exactly
+    the marker. The machine's own headless terminal of a pane attaches first and leads, so a phone's pane starts as a
+    follower whose typing the session server drops: the test takes the lead before typing, then checks the second
+    phone follows, and that its Take control turns the roles round. The connection is killed by a TCP proxy in front of
+    `sshd` (`Proxy::sever`), so `sshd` and new connections carry on. Host keys are pinned up front (`HostKeyStore`
+    answering the `sshd` key's fingerprint). Reaping: SIGTERM to the instance's own child, then `ngterm-session kill
+    --force` of every session its namespace's server lists, waiting for that server's `server.sock` to go (polling
+    `list` would keep restarting its idle grace) and removing the namespace's directory. CI wiring is Task 21's.
 
 ### Task 11: Android project, build pipeline and lint gate
 
