@@ -96,13 +96,14 @@ not-yet-at-level, so an unsupported capability is a recorded divergence, not a g
 - `uia` (Windows): UI Automation over `UIAutomationCore` (comtypes), `SendInput` for keys, text and the pointer.
 
 An element's ui id is the app's accessibility author id (AccessKit's, read as AT-SPI's `AccessibleId` and UIA's
-`AutomationId`). Tests find elements by id (`find`, `all`, `count`, `absent`, with `name=`, a string or a compiled
-regex, and `enabled=` waits that dump the inventory on timeout) and act on snapshots:
+`AutomationId`). Tests find elements by id (`find`, `all`, `count`, `absent`; only `find` filters, by `role=`, `value=`,
+`enabled=` and `name=`, a string or a compiled regex; the waits dump the inventory on timeout) and act on snapshots:
 
 - `click` is the accessibility press; `press` posts key chords, `type_text` any printable text through the OS's text
   input; `text`, `set_text`, `focus`, `hover`, `menu`, `menu_item` and `tab` read, write and open what they name;
 - pointer input has its own names: `move`, `mouse_click` (`button="left"|"right"`), `mouse_double_click`, `drag`,
-  `drag_by`, `scroll`, each at an `offset` within the element; `frame` reads an element's screen rectangle and
+  `drag_by`, `scroll`; all but `scroll` (which acts at the element's center) take an `offset` within the element,
+  `drag` one per end (`src_offset`, `dst_offset`); `frame` reads an element's screen rectangle and
   `window` the app's first window, a target for points the protocol locates (a split divider);
 - a pointer action reads the element's bounds at action time and finds a stale element again once, by id and name
   (role and name without an id), else fails with `ElementNotFound`; nothing retries after input went out.
@@ -255,7 +256,8 @@ cargo-llvm-cov and the toolchain's `llvm-tools` component:
   per workspace crate and the total, `vendor/` and the `-sys` crates left out; `agterm_conformance/code_coverage.py`),
   its table in `report.md`. A run that left no profile, or a stage that is not the instrumented build's, exits 2.
 
-A coverage run judges no ratchet (instrumentation slows the app; the ids stay the normal run's). Its floors do:
+The runners still judge a coverage run's ratchet and exit with that verdict; the CI coverage jobs ignore its exit 1
+(instrumentation slows the app; the ids stay the normal run's) and judge the floors separately:
 `conformance/coverage-floor-linux.txt` and `coverage-floor-windows.txt` hold one `crate line%` per line, and
 
 ```sh
