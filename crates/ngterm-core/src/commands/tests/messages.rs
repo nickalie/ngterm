@@ -3,7 +3,7 @@
 
 use ngterm_host::fakes::FakeSurface;
 use ngterm_proto::command::MsgCmd;
-use ngterm_proto::{Args, Command, ControlResult, Request, Response};
+use ngterm_proto::{Args, Command, ControlEvent, ControlResult, EventKind, Request, Response};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -63,6 +63,55 @@ fn send(fixture: &mut Fixture, targets: Vec<String>) -> ControlResult {
 
 fn pending(fixture: &Fixture, panes: [Uuid; 3]) -> [usize; 3] {
     panes.map(|pane| fixture.core.library.messages.pending(pane))
+}
+
+fn mounted_remote(fixture: &mut Fixture) -> (Uuid, Uuid) {
+    let workspace = fixture.workspace;
+    let store = fixture.store_mut().unwrap();
+    let id = store
+        .add_session(
+            workspace,
+            NewSession {
+                remote_host: Some("host".into()),
+                ..NewSession::at_cwd("/r")
+            },
+        )
+        .unwrap();
+    let session = store.session_mut(id).unwrap();
+    let pane = session.pane_identity;
+    session.surface.replace(Box::new(FakeSurface::new(wire(pane))));
+    (id, pane)
+}
+
+fn mounted_other_window(fixture: &mut Fixture) -> (Uuid, Uuid, Uuid, Uuid) {
+    let window = fixture.core.library_mut().new_window(None);
+    let store = fixture.core.library_mut().store_mut(window).unwrap();
+    let id = store.selected_session_id().unwrap();
+    let workspace = store.workspace_for_session(id).unwrap().id();
+    let session = store.session_mut(id).unwrap();
+    let pane = session.pane_identity;
+    session.surface.replace(Box::new(FakeSurface::new(wire(pane))));
+    (window, workspace, id, pane)
+}
+
+fn message_events(fixture: &mut Fixture) -> Vec<ControlEvent> {
+    fixture.core.commit();
+    let run = wire(fixture.core.events().ring().run());
+    result(fixture.core.dispatch(&Request {
+        cmd: "events.read".parse().unwrap(),
+        target: None,
+        args: Some(Args {
+            after: Some("0".into()),
+            run: Some(run),
+            ..Args::default()
+        }),
+    }))
+    .events
+    .unwrap()
+    .items
+    .into_iter()
+    .filter(|event| event.kind == EventKind::Message)
+    .collect()
 }
 
 #[test]
@@ -287,30 +336,8 @@ fn read_ack_receipts_are_exact_and_ack_matches_ids_case_insensitively() {
 #[test]
 fn broadcast_spans_windows_excludes_sender_and_obeys_workspace_scope() {
     let (mut f, id, panes) = fixture();
-    let other_window = f.core.library_mut().new_window(None);
-    let other = f
-        .core
-        .library()
-        .store(other_window)
-        .unwrap()
-        .selected_session_id()
-        .unwrap();
-    let other_pane = f
-        .core
-        .library()
-        .store(other_window)
-        .unwrap()
-        .session(other)
-        .unwrap()
-        .pane_identity;
-    f.core
-        .library_mut()
-        .store_mut(other_window)
-        .unwrap()
-        .session_mut(other)
-        .unwrap()
-        .surface
-        .replace(Box::new(FakeSurface::new(wire(other_pane))));
+    let (_, _, other, other_pane) = mounted_other_window(&mut f);
+    let (remote, remote_pane) = mounted_remote(&mut f);
     let identity = address(id, panes[0]);
     let sent = result(dispatch(
         &mut f,
@@ -323,7 +350,11 @@ fn broadcast_spans_windows_excludes_sender_and_obeys_workspace_scope() {
             ..Args::default()
         },
     ));
-    assert_eq!(sent.delivered.unwrap().len(), 3);
+    let delivered = sent.delivered.unwrap();
+    assert_eq!(delivered.len(), 3);
+    assert!(delivered.contains(&address(other, other_pane)));
+    assert!(!delivered.contains(&address(remote, remote_pane)));
+    assert_eq!(f.core.library.messages.pending(remote_pane), 0);
     assert_eq!(pending(&f, panes), [0, 1, 1]);
     assert_eq!(
         f.core.library.messages.read(other_pane, 32, false).messages.unwrap()[0]
@@ -347,6 +378,84 @@ fn broadcast_spans_windows_excludes_sender_and_obeys_workspace_scope() {
     assert_eq!(sent.delivered.unwrap().len(), 3);
     assert_eq!(pending(&f, panes), [1, 2, 2]);
     assert_eq!(f.core.library.messages.pending(other_pane), 1);
+    assert_eq!(f.core.library.messages.pending(remote_pane), 0);
+}
+
+#[test]
+fn split_without_a_mounted_surface_is_neither_recipient_nor_identity() {
+    let mut f = Fixture::new(0);
+    let id = f.sessions[0];
+    f.store_mut().unwrap().set_split_visibility(id, true, None);
+    let split = f.store().session(id).unwrap().split_pane_identity.unwrap();
+    for shown in [true, false] {
+        f.store_mut().unwrap().set_split_visibility(id, shown, None);
+        let target = format!("{}:right", wire(id));
+        let sent = send(&mut f, vec![target.clone()]);
+        assert_eq!(sent.delivered, Some(vec![]));
+        assert_eq!(
+            serde_json::to_value(sent.rejected).unwrap(),
+            json!([{"address": target, "reason": "unknown pane"}])
+        );
+        for command in [MsgCmd::Send, MsgCmd::Read, MsgCmd::Ack] {
+            let response = dispatch(
+                &mut f,
+                command,
+                Args {
+                    body: Some("hi".into()),
+                    all: Some(true),
+                    identity: Some(address(id, split)),
+                    ids: Some(vec![wire(Uuid::new_v4())]),
+                    ..Args::default()
+                },
+            );
+            assert_eq!(
+                response.error,
+                Some(format!(
+                    "pane {} is not a live pane of session {}",
+                    wire(split),
+                    wire(id)
+                ))
+            );
+        }
+        assert_eq!(f.core.library.messages.pending(split), 0);
+    }
+}
+
+#[test]
+fn a_send_delivering_nothing_emits_no_message_event() {
+    let (mut f, id, _) = fixture();
+    let sent = send(&mut f, vec![address(id, Uuid::new_v4())]);
+    assert_eq!(sent.delivered, Some(vec![]));
+    assert_eq!(sent.rejected.unwrap().len(), 1);
+    assert!(message_events(&mut f).is_empty());
+}
+
+#[test]
+fn a_cross_window_send_emits_once_from_the_recipient_window() {
+    let (mut f, id, panes) = fixture();
+    let (window, workspace, recipient, pane) = mounted_other_window(&mut f);
+    let sender = address(id, panes[0]);
+    let sent = result(dispatch(
+        &mut f,
+        MsgCmd::Send,
+        Args {
+            body: Some("hi".into()),
+            recipients: Some(vec![address(recipient, pane)]),
+            identity: Some(sender.clone()),
+            ..Args::default()
+        },
+    ));
+    let events = message_events(&mut f);
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(
+        (&event.window, &event.workspace, &event.session),
+        (&Some(wire(window)), &Some(wire(workspace)), &Some(wire(recipient)))
+    );
+    assert_eq!(event.payload.message_id, sent.message_id);
+    assert_eq!(event.payload.pane_id, Some(wire(pane)));
+    assert_eq!(event.payload.from, Some(sender));
+    assert!(event.payload.body.is_none());
 }
 
 #[test]
@@ -381,24 +490,7 @@ fn only_realized_local_panes_qualify_including_hidden_splits_and_scratch() {
             .message_recipient(stranger, MessagePane::Role(StatusPane::Left))
             .is_none()
     );
-    let workspace = f.workspace;
-    let remote = f
-        .store_mut()
-        .unwrap()
-        .add_session(
-            workspace,
-            NewSession {
-                remote_host: Some("host".into()),
-                ..NewSession::at_cwd("/r")
-            },
-        )
-        .unwrap();
-    f.store_mut()
-        .unwrap()
-        .session_mut(remote)
-        .unwrap()
-        .surface
-        .replace(Box::new(FakeSurface::new(wire(Uuid::new_v4()))));
+    let (remote, _) = mounted_remote(&mut f);
     assert!(
         f.store()
             .message_recipient(remote, MessagePane::Role(StatusPane::Left))

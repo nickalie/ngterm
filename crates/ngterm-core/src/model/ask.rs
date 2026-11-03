@@ -414,8 +414,9 @@ impl AppStore {
         }
     }
 
-    /// What a session leaving the window drops at once (upstream's `releaseLeavingSession`): its pending ask ends
-    /// cancelled and the overlays it handed to a presenter close, so a soft close's undo brings back neither.
+    /// What a session leaving the window drops at once (upstream's `releaseLeavingSession`): its pane mailboxes are
+    /// disposed, its pending ask ends cancelled and the overlays it handed to a presenter close, so a soft close's
+    /// undo brings back none of them.
     pub(crate) fn release_leaving_session(&mut self, session: Uuid) {
         self.dispose_session_mailboxes(session);
         self.cancel_pending_ask(session);

@@ -52,14 +52,8 @@ impl AppStore {
 
     /// Leaving a visible tree drops mail even when a soft-close undo keeps the surfaces alive.
     pub(crate) fn dispose_session_mailboxes(&self, id: Uuid) {
-        if let Some(session) = self.session(id) {
-            self.messages.dispose(session.pane_identity);
-            if let Some(pane) = session.split_pane_identity {
-                self.messages.dispose(pane);
-            }
-            for role in [StatusPane::Left, StatusPane::Right, StatusPane::Scratch] {
-                self.dispose_pane_mailbox(id, role);
-            }
+        for role in [StatusPane::Left, StatusPane::Right, StatusPane::Scratch] {
+            self.dispose_pane_mailbox(id, role);
         }
     }
 

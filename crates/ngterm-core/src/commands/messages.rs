@@ -1,7 +1,7 @@
 //! `msg.*` validation and app-global addressing (`ControlDispatcher+Messages.swift`, `ControlServer+Messages.swift`).
 
 use std::collections::HashSet;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use ngterm_proto::command::MsgCmd;
 use ngterm_proto::{Args, ControlResult, MessageRejection, MessageRejectionReason, Request};
@@ -97,10 +97,7 @@ fn send(core: &mut Core, args: &Args) -> Outcome {
         (!all || sender.as_ref().is_none_or(|sender| target.pane != sender.pane)) && seen.insert(target.pane)
     });
     let from = sender.as_ref().map(|sender| sender.address.as_str());
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64();
+    let now = crate::projection::epoch_seconds(SystemTime::now());
     let mut result = core.library.messages.send(body, from, &targets, now)?;
     rejected.extend(result.rejected.take().unwrap_or_default());
     result.rejected = Some(rejected);
