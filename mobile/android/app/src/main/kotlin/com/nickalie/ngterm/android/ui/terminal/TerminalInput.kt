@@ -47,6 +47,9 @@ class TerminalInput internal constructor(
     /** The font the view draws with; the cells are its. */
     internal var font: TerminalFont? = null
 
+    /** Gives the view the focus, and opens the soft keyboard when asked to (a tap; a mouse click doesn't). */
+    internal var keyboardRequest: (show: Boolean) -> Unit = {}
+
     private var rowCarry = 0f
     private var wheelRows = 0f
     private var wheelColumns = 0f

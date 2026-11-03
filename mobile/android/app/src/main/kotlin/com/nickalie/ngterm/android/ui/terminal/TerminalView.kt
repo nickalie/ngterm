@@ -1,6 +1,8 @@
 package com.nickalie.ngterm.android.ui.terminal
 
 import android.content.Context
+import android.view.inputmethod.InputMethodManager
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.Composable
@@ -18,17 +20,21 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import com.nickalie.ngterm.android.R
@@ -37,6 +43,7 @@ import com.nickalie.ngterm.android.ui.theme.TerminalPalette
 import com.nickalie.ngterm.core.ffi.PaneColors
 import com.nickalie.ngterm.core.ffi.PaneInputException
 import com.nickalie.ngterm.core.ffi.PaneInterface
+import com.nickalie.ngterm.core.ffi.PaneKey
 import com.nickalie.ngterm.core.ffi.PaneSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -68,6 +75,10 @@ class TerminalState(
 ) {
     /** The text size the view draws at: a pinch changes it, in whole sp within [TerminalTextSizes]. */
     var textSize by mutableStateOf(textSize)
+
+    /** The input method's composition, drawn at the cursor until it commits; empty for none. */
+    var composing by mutableStateOf("")
+        internal set
 
     /** The rows read so far. Read and changed on the main thread only. */
     val screen = TerminalScreen()
@@ -134,6 +145,25 @@ class TerminalState(
         }
     }
 
+    /** Sends [key] to the program. */
+    internal fun key(key: PaneKey) {
+        sendInput { pane.key(key) }
+    }
+
+    /** Types [text] as the keyboard would. */
+    internal fun type(text: String) {
+        sendInput { pane.typeText(text) }
+    }
+
+    // a pane with no terminal now (hidden, between attaches) drops the key, as a closed terminal would; a full queue
+    // (the program reads nothing) drops it too, as the program would not see it for a while anyway
+    private inline fun sendInput(send: () -> Unit) {
+        try {
+            send()
+        } catch (_: PaneInputException) {
+        }
+    }
+
     /** Gives the pane [palette] as the colors its terminal starts from. */
     internal fun colors(palette: TerminalPalette) {
         try {
@@ -162,6 +192,8 @@ fun rememberTerminalState(pane: PaneInterface): TerminalState = remember(pane) {
  *
  * It takes the pointer as [terminalGestures] says: scrolling, selecting with handles and a toolbar, pinching the text
  * size, the mouse and its right-click menu, and clicks a program tracking the mouse asks for ([TerminalOverlays]).
+ * A tap gives it the focus and opens the soft keyboard (a mouse click only the focus): with the focus, the input
+ * method and a hardware keyboard type into it through [keyboard], and a composition waits at the cursor.
  */
 @Composable
 fun TerminalView(
@@ -169,6 +201,7 @@ fun TerminalView(
     modifier: Modifier = Modifier,
     palette: TerminalPalette = NgtermTheme.terminal,
     focused: Boolean = true,
+    keyboard: TerminalKeyboard = rememberTerminalKeyboard(),
 ) {
     val context = LocalContext.current
     val typefaces = remember(context) { terminalTypefaces(context) }
@@ -179,7 +212,14 @@ fun TerminalView(
     val scope = rememberCoroutineScope()
     val input = remember(state) { TerminalInput(state, scope) }
     val selection = remember(state) { TerminalSelection(state) }
-    SideEffect { input.font = font }
+    val focus = remember { FocusRequester() }
+    val keyboardRequest = rememberKeyboardRequest(focus)
+    val underline = with(density) { CompositionUnderline.toPx() }
+    val composition = remember(font, underline) { CompositionPainter(font, underline) }
+    SideEffect {
+        input.font = font
+        input.keyboardRequest = keyboardRequest
+    }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     LaunchedEffect(state) { state.run() }
     LaunchedEffect(state, palette) { state.colors(palette) }
@@ -197,12 +237,17 @@ fun TerminalView(
             Modifier
                 .matchParentSize()
                 .semantics { contentDescription = description }
+                .terminalTextInput(keyboard, state)
+                .focusRequester(focus)
+                .focusable()
                 .clipToBounds()
                 .drawBehind {
-                    // read here, so a new frame draws again without composing again
+                    // read here, so a new frame or composition draws again without composing again
                     state.drawn
                     drawRect(ground)
-                    painter.draw(drawContext.canvas.nativeCanvas, state.screen, size, look)
+                    val canvas = drawContext.canvas.nativeCanvas
+                    painter.draw(canvas, state.screen, size, look)
+                    composition.draw(canvas, state.composing, state, palette, size.width)
                 }.terminalGestures(
                     input = input,
                     selection = selection,
@@ -216,6 +261,18 @@ fun TerminalView(
                 ),
         )
         TerminalOverlays(state, selection, font, palette, viewSize.width)
+    }
+}
+
+/** Gives the focus to what [focus] is attached to and, when asked to, opens the soft keyboard on it. */
+@Composable
+private fun rememberKeyboardRequest(focus: FocusRequester): (show: Boolean) -> Unit {
+    val view = LocalView.current
+    return remember(focus, view) {
+        { show ->
+            focus.requestFocus()
+            if (show) view.context.getSystemService(InputMethodManager::class.java)?.showSoftInput(view, 0)
+        }
     }
 }
 
@@ -234,6 +291,9 @@ fun gridFor(
         cellHeight = font.cellHeight.toUInt(),
     )
 }
+
+/** The composition's underline at the cursor. */
+private val CompositionUnderline = 2.dp
 
 /** The most columns or rows a grid has (the pane's sizes are 16-bit). */
 private const val MAX_CELLS = 0xFFFF

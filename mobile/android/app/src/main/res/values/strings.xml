@@ -196,4 +196,26 @@
   <string name="clipboard_read_allow">Allow</string>
   <string name="clipboard_read_always">Always allow on %1$s</string>
   <string name="clipboard_read_deny">Deny</string>
+
+  <!-- ui/terminal: the extra-keys row, as TalkBack reads its keys -->
+  <string name="extra_keys_description">Extra keys</string>
+  <string name="key_escape">Escape</string>
+  <string name="key_tab">Tab</string>
+  <string name="key_ctrl">Control</string>
+  <string name="key_alt">Alt</string>
+  <string name="key_slash">Slash</string>
+  <string name="key_pipe">Vertical bar</string>
+  <string name="key_tilde">Tilde</string>
+  <string name="key_minus">Minus</string>
+  <string name="key_home">Home</string>
+  <string name="key_end">End</string>
+  <string name="key_page_up">Page up</string>
+  <string name="key_page_down">Page down</string>
+  <string name="key_left">Left arrow</string>
+  <string name="key_up">Up arrow</string>
+  <string name="key_down">Down arrow</string>
+  <string name="key_right">Right arrow</string>
+  <string name="sticky_off">Off</string>
+  <string name="sticky_once">On for the next key</string>
+  <string name="sticky_locked">Locked on</string>
 </resources>

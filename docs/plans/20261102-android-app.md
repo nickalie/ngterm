@@ -872,15 +872,37 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
 **Files:**
 - Create: `ui/terminal/TerminalInputConnection.kt`, `ui/terminal/ExtraKeysRow.kt`, `ui/terminal/KeyMapping.kt`
 
-- [ ] write a JVM test first: `KeyMapping` turns Android `KeyEvent`s into `ngterm-term`'s `KeyInput` (`PhysicalKey`,
+- [x] write a JVM test first: `KeyMapping` turns Android `KeyEvent`s into `ngterm-term`'s `KeyInput` (`PhysicalKey`,
       `Mods`, text) through the binding
-- [ ] an `InputConnection` with suggestions and autocorrect off, committing text and drawing IME composition at the
+- [x] an `InputConnection` with suggestions and autocorrect off, committing text and drawing IME composition at the
       cursor
-- [ ] invoke `frontend-design` for the extra-keys row: Esc, Tab, sticky Ctrl and Alt, arrows, Home/End, PgUp/PgDn,
+- [x] invoke `frontend-design` for the extra-keys row: Esc, Tab, sticky Ctrl and Alt, arrows, Home/End, PgUp/PgDn,
       `|`, `~`, `/`, with clear sticky states and haptics; hide it while a hardware keyboard is attached
-- [ ] hardware keyboard shortcuts: next and previous pane and session, and font size
-- [ ] write UI tests: type through the soft keyboard and the extra keys, and press a hardware chord
-- [ ] run `./gradlew check` and the tests; all must pass before Task 18
+- [x] hardware keyboard shortcuts: next and previous pane and session, and font size
+- [x] write UI tests: type through the soft keyboard and the extra keys, and press a hardware chord
+- [x] run `./gradlew check` and the tests; all must pass before Task 18
+  - result (2026-11-03): `ui/terminal/` gained `KeyMapping` (a key code as Ghostty's physical key name, the meta
+    state as the pane's bits, the text before Ctrl/Alt/Meta, the unshifted character, press/repeat/release, dead keys
+    as composing; a character as the US key that types it, for sticky modifiers; the app's chords),
+    `TerminalKeyboard` (the sticky Ctrl and Alt, off → once → locked → off; hardware and IME keys, commits with line
+    breaks as Enter, compositions; chords: Ctrl+=/Ctrl++/Ctrl+- step the text size, Ctrl+0 resets it,
+    Ctrl+Shift+arrows run `TerminalShortcuts`' pane and session callbacks, and a chord with no callback is the
+    program's),
+    `TerminalInputConnection` (a `BaseInputConnection` whose editable holds only the composition; the editor asks for
+    no suggestions, autocorrect, capitals, learning or fullscreen; the Compose node opens a platform text input
+    session while the terminal has focus and takes hardware keys; `CompositionPainter` draws the composition at the
+    cursor, underlined in the cursor's copper) and `ExtraKeysRow` (two lines of eight, or one of sixteen from 768dp;
+    keys act on press with a tick, the arrows and page keys repeat while held; sticky states by outline and fill and
+    TalkBack's state words; hidden while a hardware keyboard is attached). A tap on the terminal gives it the focus and
+    opens the soft keyboard; a mouse button gives only the focus. Every key the row and the chords need was already
+    expressible through `PaneKey`, so no Rust change. DESIGN.md gained a Keyboard section. Tests: `KeyMappingTest`
+    (Robolectric's key character map), `TerminalKeyboardTest` (the input method's connection and editor flags,
+    composition, extra keys, sticky Ctrl once and Alt locked, a held arrow repeating, hardware typing and chords, the
+    row standing aside), goldens `terminal/keys_typing_dark|light`, `keys_font2`, `keys_landscape`. `./gradlew check`
+    is green; the instrumented tests compile and were not rerun on the emulator (Robolectric drives every input here)
+  - ➕ Left for Task 18: the session view passes its `TerminalKeyboard` (one for all panes) to every `TerminalView`
+    and the `ExtraKeysRow`, sets `TerminalShortcuts` (next/previous pane and session), places the row over the IME
+    (`imePadding`), and makes the terminal's text readable by TalkBack
 
 ### Task 18: Session view, adaptive
 
@@ -898,6 +920,9 @@ Android app (Kotlin, Compose)                 ngterm-mobile (Rust, UniFFI)      
       ended" and "session gone" states; Detach and End in the session's menu
 - [ ] ➕ route the shown panes' events to their views (`PaneDirty`, `PaneAttached` to `TerminalState`), and apply a
       program's clipboard write (`ClipboardWrite`, OSC 52) to the device's clipboard
+- [ ] ➕ the keyboard (from Task 17): one `TerminalKeyboard` for every pane's `TerminalView` and the `ExtraKeysRow`
+      (over the IME), its `TerminalShortcuts` moving between panes and sessions, and the terminal's text read by
+      TalkBack
 - [ ] write screenshots at three widths for one pane, two panes on each axis, a hidden split, a follower and a
       reconnecting pane, plus a UI test where pane switching and a size-class change keep the focused pane
 - [ ] run `./gradlew check` and the tests; all must pass before Task 19

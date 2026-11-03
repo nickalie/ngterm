@@ -148,7 +148,8 @@ above headings.
 
 Line icons drawn for the app in `res/drawable/ic_*.xml`: 24dp, 2dp strokes, round ends, tinted by `Icon`. Machines
 (two racked servers), Sessions (a terminal window), Settings (sliders), Menu and Menu open, Add, Retry, Alert, Offline
-(a struck signal), Close, Lock, Back (mirrored right to left) and More (an item's menu). The status glyphs are 16dp filled or stroked shapes (`ic_status_*`). The mark
+(a struck signal), Close, Lock, Back (mirrored right to left), More (an item's menu) and the extra keys' arrow
+(`ic_key_arrow`, turned for each direction). The status glyphs are 16dp filled or stroked shapes (`ic_status_*`). The mark
 (`ic_ngterm_mark`) is the launcher's `>_` cut out of a copper tile. No icon font or icon library.
 
 ## Components
@@ -331,7 +332,8 @@ terminal's ground, which is the chrome's ground in Copper and Drafting, so the t
   Ghostty's inverse: an inverted block of copper text on a phone reads as an error).
 - **Before the first frame** and while the pane has no terminal (hidden, between attaches) the view keeps what it
   last drew, on the ground; the covers for those states are the session view's (`Cover`).
-- **TalkBack:** the view is announced as "Terminal". Reading its text out is Task 17's, with the input connection.
+- **TalkBack:** the view is announced as "Terminal". Reading its text out is the session view's (Task 18), which
+  knows which pane is on screen.
 
 ### Touch, mouse and selection (`ui/terminal/TerminalGestures.kt`, `TerminalMouse.kt`, `SelectionHandles.kt`)
 
@@ -344,7 +346,7 @@ learn, and nothing drawn until a gesture asks for it.
 | a long press | selects the word (a haptic tick), with handles and the toolbar; dragging on without lifting extends it |
 | a handle's drag | moves that end of the selection |
 | two fingers | pinch the text size |
-| a tap | a click for a program tracking the mouse; otherwise it lets a touch selection go (and Task 17's keyboard) |
+| a tap | a click for a program tracking the mouse; otherwise it lets a touch selection go; unless it let one go, it gives the terminal the focus and opens the soft keyboard (Keyboard, below) |
 | a mouse or trackpad | under mouse tracking its buttons, drags and moves go to the program (shift held selects instead); otherwise a click lets the selection go, a double click selects the word and a triple one the line, a drag selects; the wheel scrolls either way |
 | the right button | the menu: Copy (while there is a selection), Paste, Select all |
 
@@ -374,6 +376,59 @@ allow on build-01** (outlined) and **Deny**. Swiping the sheet away denies. Read
 the core gives up on (its pane hidden, detached, lost or exited) closes its sheet. "Always" is the app's to keep, per
 machine (`ClipboardTrust`, which Settings lists), and answers that machine's later reads at once. In the background
 Android lets no app read the clipboard, so an always-allowed read then gets an empty one.
+
+### Keyboard (`ui/terminal/KeyMapping.kt`, `TerminalKeyboard.kt`, `TerminalInputConnection.kt`, `ExtraKeysRow.kt`)
+
+Typing is the terminal's other half, and on a phone the soft keyboard is in charge of the screen. The row of extra
+keys is the one piece of chrome that stays while typing, so it is the plainest thing in the app: a strip of legends on
+the bar's tone, nothing drawn around a key until it holds something.
+
+The plan, reviewed against the brief:
+
+| First pass | Why it was generic | Revised to |
+|---|---|---|
+| Grey key caps with a shadow, ESC / CTRL / ALT in capitals | a skeuomorphic keyboard kit, and all-caps labels are a template tell | flat legends on `surfaceContainer`, sentence case (Esc, Ctrl, PgUp); a key's face appears only for a held modifier |
+| A colored dot on a held Ctrl | color alone carries the state | shape carries it: an outline holds for the next key, a fill locks; TalkBack reads "On for the next key" or "Locked on" |
+| Symbols in the chrome's mono | the chrome's mono draws `~` and `-` small and low, and they are what the terminal will show | the terminal's own face (JetBrains Mono) at 18 sp: the key shows the character as it will land |
+| A pop-up preview over each pressed key, as soft keyboards do | decoration a row of large keys doesn't need | the ripple and a keyboard tick |
+| Arrows as text glyphs | the chrome's font has none, and a fallback glyph breaks the icon set | the app's own line arrow (`ic_key_arrow`), turned |
+
+```
+phone, upright: two lines of eight
+
++-----+------+-----+-----+------+-----+-----+------+
+| Esc |  /   |  |  |  ~  | Home |  ↑  | End | PgUp |
+| Tab | Ctrl | Alt |  -  |  ←   |  ↓  |  →  | PgDn |
++-----+------+-----+-----+------+-----+-----+------+
+
+sideways or wider (48dp a key or more): one line of sixteen
+
+| Esc | Tab | Ctrl | Alt | / | | | ~ | - | Home | End | PgUp | PgDn | ← | ↑ | ↓ | → |
+```
+
+- **The soft keyboard:** a tap on the terminal gives it the focus and opens the keyboard. The terminal asks for plain
+  text with no suggestions, autocorrect, automatic capitals or learning (it types commands and passwords), and Enter
+  as a key. What the keyboard commits goes to the program at once; a composition (a CJK input method's, a dead key's,
+  a swiped word) waits at the cursor in the terminal's font, on its ground, underlined 2dp in the cursor's copper,
+  and goes when it commits. Backspace with nothing composed is the program's.
+- **The row** sits under the terminal, over the keyboard, whenever no hardware keyboard is attached (it shows with
+  the keyboard closed too: the arrows and Esc work a pager or a menu without it). Two lines of eight on a phone held
+  upright: Ctrl and Alt by Tab under the thumb, the arrows an inverted T with Home and End over Left and Right, the
+  page keys at the end. One line of sixteen once each key gets 48dp. A key is its whole cell (no gaps between keys,
+  45dp at the narrowest 360dp phone), 48dp tall.
+- **Legends:** words in Atkinson Hyperlegible Next semibold, all at one size, the widest's ("Home") fitted to its key
+  (so a large font scale grows them only as far as they fit); symbols in JetBrains Mono 18 sp; arrows the line icon.
+  `onSurface` on `surfaceContainer`.
+- **A key acts as it goes down**, with a keyboard tick; the arrows and the page keys repeat while held (after 400ms,
+  every 50ms). Esc, Tab and the symbols don't.
+- **Ctrl and Alt are sticky:** a tap holds it for the next key (a 2dp copper outline, copper legend, a toggle tick); a
+  second tap locks it (a copper face, `onPrimary` legend); a third lets it go. A held modifier joins the next key from
+  the row, the soft keyboard (the character's key on a US layout: Ctrl and a typed `c` is Ctrl+C) or a hardware key,
+  and a once-held one lets go after it.
+- **A hardware keyboard** types straight into the focused terminal, and the row stands aside. Its chords are
+  desktop's Linux ones: Ctrl+= (or Ctrl++) and Ctrl+- step the text size a whole sp (8-32), Ctrl+0 puts it back to
+  13 sp; Ctrl+Shift+Left and Right go to the previous and next pane, Ctrl+Shift+Up and Down to the previous and next
+  session (the session view's to wire; a chord with nowhere to go is the program's).
 
 ## Copy
 
