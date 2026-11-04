@@ -18,7 +18,8 @@ use crate::{Failure, TargetOptions, client, socket};
     about = "Print the slash commands and skills of a pane's agent, as JSON.",
     long_about = "Reads the pane's agent record and prints the agent's built-in slash commands, its user and project \
                   skills and custom commands, and its enabled plugins' ones, as one JSON array of {name, \
-                  description, kind, argument_hint}. A Codex skill is named as Codex mentions it ($name)."
+                  description, kind, argument_hint}, argument_hint present only when the command declares one. A \
+                  Codex skill is named as Codex mentions it ($name)."
 )]
 pub struct Commands {
     #[arg(long, help = "Which pane the agent runs in: left or right. Defaults to left.")]

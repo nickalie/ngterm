@@ -131,11 +131,16 @@ pub fn check_transcript(agent: AgentKind, transcript: &str) -> Result<(), String
     if config_dir(agent, Path::new(transcript)).is_some() {
         return Ok(());
     }
+    Err(outside_tree(agent, transcript))
+}
+
+/// [`check_transcript`]'s refusal of `transcript`.
+pub(super) fn outside_tree(agent: AgentKind, transcript: &str) -> String {
     let tree = match agent {
         AgentKind::Claude => "a Claude projects/",
         AgentKind::Codex => "a Codex sessions/",
     };
-    Err(format!("transcript path is outside {tree} tree: {transcript}"))
+    format!("transcript path is outside {tree} tree: {transcript}")
 }
 
 /// The agent's config directory a transcript lies in, which holds its skills and commands too: for Claude the

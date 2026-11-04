@@ -125,6 +125,108 @@ fn a_skill_is_named_by_its_frontmatter_else_its_directory() {
 }
 
 #[test]
+fn a_trailing_comment_is_not_part_of_a_frontmatter_value() {
+    let tree = tree();
+    let user = tree.config.join("skills");
+    skill(
+        &user,
+        "deploy",
+        "---\nname: \"deploy\" # public name\ndescription: Ship it # note\nargument-hint: issue#42\n---\n",
+    );
+    skill(
+        &user,
+        "quote",
+        "---\nname: 'it''s #1' # c\ndescription: \"say \\\"#2\\\"\"\t# c\n---\n",
+    );
+    skill(
+        &user,
+        "quiet",
+        "---\nname: quiet\nuser-invocable: false # model only\n---\n",
+    );
+    skill(&user, "empty", "---\nname: # none\ndescription: |\n  a # kept\n---\n");
+
+    let found = claude(&tree.config, None);
+    assert_eq!(names(&found), ["deploy", "empty", "it's #1"]);
+    assert_eq!(
+        entry(&found, "deploy"),
+        command("deploy", "Ship it", CommandKind::Skill, Some("issue#42"))
+    );
+    assert_eq!(entry(&found, "it's #1").description, "say \"#2\"");
+    // a block scalar's `#` is text
+    assert_eq!(entry(&found, "empty").description, "a # kept");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_commands_walk_ends_on_link_cycles_and_skips_special_files() {
+    use std::os::unix::fs::symlink;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let tree = tree();
+    let user = tree.config.join("commands");
+    write(&user.join("x.md"), "X.\n");
+    write(&user.join("sub/y.md"), "Y.\n");
+    for at in 0..20 {
+        symlink(".", user.join(format!("self{at}"))).unwrap();
+    }
+    // a second way into a directory walked already
+    symlink("sub", user.join("twin")).unwrap();
+    symlink("..", user.join("sub/up")).unwrap();
+    // a linked file is read; a FIFO, a link to one or a device is not
+    symlink("x.md", user.join("alias.md")).unwrap();
+    let fifo = user.join("wait.md");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    symlink(&fifo, user.join("fifo-link.md")).unwrap();
+    symlink("/dev/null", user.join("null.md")).unwrap();
+    let skills = tree.config.join("skills/blocked");
+    fs::create_dir_all(&skills).unwrap();
+    symlink(&fifo, skills.join("SKILL.md")).unwrap();
+
+    let config = tree.config.clone();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || sender.send(claude(&config, None)).unwrap());
+    let found = receiver
+        .recv_timeout(Duration::from_secs(20))
+        .expect("the catalog never returned");
+    assert_eq!(names(&found), ["alias", "sub:y", "x"]);
+}
+
+#[test]
+fn a_nested_command_keeps_a_name_a_plugin_also_makes() {
+    let tree = tree();
+    write(&tree.config.join("commands/tools/lint.md"), "My lint.\n");
+    let tools = tree.config.join("plugins/cache/market/tools/1.0.0");
+    skill(
+        &tools.join("skills"),
+        "lint",
+        "---\nname: lint\ndescription: Plugin lint\n---\n",
+    );
+    skill(&tools.join("skills"), "fmt", "---\nname: fmt\n---\n");
+    write(
+        &tree.config.join("settings.json"),
+        json!({"enabledPlugins": {"tools@market": true}}).to_string(),
+    );
+    write(
+        &tree.config.join("plugins/installed_plugins.json"),
+        json!({"version": 2, "plugins": {"tools@market": [{"scope": "user", "installPath": tools}]}}).to_string(),
+    );
+
+    let found = claude(&tree.config, None);
+    assert_eq!(names(&found), ["tools:lint", "tools:fmt"]);
+    assert_eq!(
+        entry(&found, "tools:lint"),
+        command("tools:lint", "My lint.", CommandKind::Command, None)
+    );
+}
+
+#[test]
 fn nested_custom_commands_are_named_by_their_path() {
     let tree = tree();
     let user = tree.config.join("commands");

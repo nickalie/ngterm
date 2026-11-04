@@ -16,11 +16,14 @@
 //! A skill's name and description come from its frontmatter, falling back to its directory's name and the body's first
 //! line; a command's name is its path (Claude names commands by file, not by frontmatter). A skill whose frontmatter
 //! says `user-invocable: false` is left out, and so is a file that cannot be read (not UTF-8, a directory) or whose
-//! frontmatter never closes: one bad file costs itself, not the list.
+//! frontmatter never closes: one bad file costs itself, not the list. Only regular files are read (a link is
+//! followed): a FIFO or a device would block. A `commands/` walk follows linked directories but walks each directory
+//! once and looks at no more than [`COMMAND_ENTRIES`] entries, so a link cycle or a link to `/` ends.
 //!
 //! **Duplicates** keep the first, in the order Claude Code documents for its skills: a built-in, then a personal
-//! skill over a project one, and a skill over a command of the same name. A plugin's names carry its prefix, so they
-//! never clash with the others.
+//! skill over a project one, and a skill over a command of the same name. A plugin's names carry its prefix
+//! (`plugin:name`), which a nested command can still make (`<config>/commands/plugin/name.md`): plugins come last, so
+//! the command keeps the name.
 
 use std::collections::HashSet;
 use std::fs;
@@ -31,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_with::skip_serializing_none;
 
-use super::hook::{check_transcript, config_dir};
+use super::hook::{config_dir, outside_tree};
 use super::{AgentKind, ClaudeParser, CodexParser, EventBody, TranscriptParser};
 
 /// The Claude Code version [`CLAUDE_BUILTINS`] was checked against (the fixtures' recording).
@@ -46,8 +49,11 @@ const FILE_CAP: u64 = 64 * 1024;
 /// The most bytes of a description.
 pub const DESCRIPTION_CAP: usize = 1024;
 
-/// How far below `commands/` subdirectories are read; a link cycle ends here.
+/// How far below `commands/` subdirectories are read.
 const COMMAND_DEPTH: usize = 8;
+
+/// The most entries one `commands/` walk looks at, files and directories alike.
+pub const COMMAND_ENTRIES: usize = 4096;
 
 /// The most of a transcript's head read for its cwd.
 const HEAD_CAP: u64 = 4 * 1024 * 1024;
@@ -232,11 +238,11 @@ pub const CODEX_BUILTINS: &[Builtin] = &[
 ///
 /// # Errors
 ///
-/// The path lies outside the agent's tree ([`check_transcript`]'s refusal).
+/// The path lies outside the agent's tree ([`check_transcript`](super::hook::check_transcript)'s refusal).
 pub fn catalog(agent: AgentKind, transcript: &Path) -> Result<Vec<SlashCommand>, String> {
-    let text = transcript.to_string_lossy();
-    check_transcript(agent, &text)?;
-    let config = config_dir(agent, transcript).ok_or_else(|| format!("no config dir for {text}"))?;
+    let Some(config) = config_dir(agent, transcript) else {
+        return Err(outside_tree(agent, &transcript.to_string_lossy()));
+    };
     Ok(match agent {
         AgentKind::Claude => claude(&config, transcript_cwd(agent, transcript).as_deref()),
         AgentKind::Codex => codex(&config),
@@ -345,22 +351,51 @@ fn skills(dir: &Path, prefix: &str, kind: CommandKind) -> Vec<SlashCommand> {
 
 /// The commands in `dir/**/*.md`, by name, each named `prefix` + its path below `dir`, `:` between the parts.
 fn commands(dir: &Path, prefix: &str, kind: CommandKind) -> Vec<SlashCommand> {
-    let mut found = Vec::new();
-    walk_commands(dir, prefix, kind, 0, &mut found);
-    found.sort_by(|a, b| a.name.cmp(&b.name));
-    found
+    let mut walk = Walk {
+        kind,
+        walked: HashSet::new(),
+        left: COMMAND_ENTRIES,
+        found: Vec::new(),
+    };
+    walk.dir(dir, prefix, 0);
+    walk.found.sort_by(|a, b| a.name.cmp(&b.name));
+    walk.found
 }
 
-fn walk_commands(dir: &Path, prefix: &str, kind: CommandKind, depth: usize, found: &mut Vec<SlashCommand>) {
-    for (name, path) in entries(dir) {
-        if path.is_dir() {
-            if depth < COMMAND_DEPTH {
-                walk_commands(&path, &format!("{prefix}{name}:"), kind, depth + 1, found);
+/// A `commands/` walk: the directories walked (canonical, so one reached again through a link is skipped) and how
+/// many more entries it may look at.
+struct Walk {
+    kind: CommandKind,
+    walked: HashSet<PathBuf>,
+    left: usize,
+    found: Vec<SlashCommand>,
+}
+
+impl Walk {
+    fn dir(&mut self, dir: &Path, prefix: &str, depth: usize) {
+        let Ok(real) = fs::canonicalize(dir) else {
+            return;
+        };
+        if self.left == 0 || !self.walked.insert(real) {
+            return;
+        }
+        for (name, path) in entries(dir) {
+            let Some(left) = self.left.checked_sub(1) else {
+                return;
+            };
+            self.left = left;
+            let Ok(meta) = fs::metadata(&path) else {
+                continue;
+            };
+            if meta.is_dir() {
+                if depth < COMMAND_DEPTH {
+                    self.dir(&path, &format!("{prefix}{name}:"), depth + 1);
+                }
+            } else if let Some(stem) = name.strip_suffix(".md").filter(|stem| !stem.is_empty())
+                && let Some(doc) = Doc::read(&path)
+            {
+                self.found.push(doc.command(format!("{prefix}{stem}"), self.kind));
             }
-        } else if let Some(stem) = name.strip_suffix(".md").filter(|stem| !stem.is_empty())
-            && let Some(doc) = Doc::read(&path)
-        {
-            found.push(doc.command(format!("{prefix}{stem}"), kind));
         }
     }
 }
@@ -426,7 +461,13 @@ fn install_path(entry: &Value, cwd: Option<&Path>) -> Option<PathBuf> {
 }
 
 fn json(path: &Path) -> Option<Value> {
+    regular(path)?;
     serde_json::from_slice(&fs::read(path).ok()?).ok()
+}
+
+/// `Some` when `path` is a regular file, a link followed: opening a FIFO, or reading one or a device, can block.
+fn regular(path: &Path) -> Option<()> {
+    fs::metadata(path).ok()?.is_file().then_some(())
 }
 
 /// A skill or command file: its frontmatter's fields and its body.
@@ -436,8 +477,10 @@ struct Doc {
 }
 
 impl Doc {
-    /// The file at `path`, or `None` when it cannot be read, is not UTF-8, or opens a frontmatter it never closes.
+    /// The file at `path`, or `None` when it is not a regular file, cannot be read, is not UTF-8, or opens a
+    /// frontmatter it never closes.
     fn read(path: &Path) -> Option<Self> {
+        regular(path)?;
         let mut bytes = Vec::new();
         fs::File::open(path).ok()?.take(FILE_CAP).read_to_end(&mut bytes).ok()?;
         let text = match String::from_utf8(bytes) {
@@ -513,14 +556,16 @@ fn first_line(body: &str) -> String {
 }
 
 /// The top-level `key: value` fields of a frontmatter, enough YAML for what skills and commands write: plain and
-/// quoted scalars, a block scalar (`|`, `>`) or a plain one continued on indented lines, joined with spaces into one
-/// line. Anything else (a list, a nested map) is kept as its text or skipped, and so is a comment.
+/// quoted scalars ([`scalar`], a trailing comment dropped), a block scalar (`|`, `>`, its lines as they stand) or a
+/// plain one continued on indented lines, joined with spaces into one line. Anything else (a list, a nested map) is
+/// kept as its text or skipped, and so is a comment line.
 fn frontmatter(lines: &[&str]) -> Vec<(String, String)> {
-    let mut fields: Vec<(String, String)> = Vec::new();
+    // key, value, whether a block scalar holds it
+    let mut fields: Vec<(String, String, bool)> = Vec::new();
     for line in lines {
         let more = line.trim();
         if line.starts_with([' ', '\t']) {
-            if let Some((_, value)) = fields.last_mut().filter(|_| !more.is_empty()) {
+            if let Some((_, value, _)) = fields.last_mut().filter(|_| !more.is_empty()) {
                 let gap = if value.is_empty() { "" } else { " " };
                 value.push_str(gap);
                 value.push_str(more);
@@ -534,19 +579,68 @@ fn frontmatter(lines: &[&str]) -> Vec<(String, String)> {
             continue;
         };
         let value = value.trim();
-        let value = if value.starts_with(['|', '>']) { "" } else { value };
-        fields.push((key.trim().to_owned(), value.to_owned()));
+        let block = value.starts_with(['|', '>']);
+        let value = if block { "" } else { value };
+        fields.push((key.trim().to_owned(), value.to_owned(), block));
     }
-    fields.into_iter().map(|(key, value)| (key, unquote(&value))).collect()
+    fields
+        .into_iter()
+        .map(|(key, value, block)| {
+            let value = if block { value } else { scalar(&value) };
+            (key, value)
+        })
+        .collect()
 }
 
-/// A scalar without its quotes: `"…"` with `\"` and `\\` unescaped, `'…'` with `''` as one quote.
-fn unquote(value: &str) -> String {
-    if let Some(inner) = value.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')) {
-        return inner.replace("\\\"", "\"").replace("\\\\", "\\");
+/// A flow scalar's value: a quoted one up to its closing quote (`"…"` with `\"` and `\\` unescaped, `'…'` with `''`
+/// as one quote), whatever follows being a comment; a plain one up to a comment (a `#` at its start or after a space).
+/// An unclosed quote is read as plain text.
+fn scalar(value: &str) -> String {
+    let quoted = if let Some(rest) = value.strip_prefix('"') {
+        double_quoted(rest)
+    } else if let Some(rest) = value.strip_prefix('\'') {
+        single_quoted(rest)
+    } else {
+        None
+    };
+    quoted.unwrap_or_else(|| plain(value))
+}
+
+fn double_quoted(rest: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(char) = chars.next() {
+        match char {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                escaped @ ('"' | '\\') => out.push(escaped),
+                other => {
+                    out.push('\\');
+                    out.push(other);
+                }
+            },
+            char => out.push(char),
+        }
     }
-    if let Some(inner) = value.strip_prefix('\'').and_then(|rest| rest.strip_suffix('\'')) {
-        return inner.replace("''", "'");
+    None
+}
+
+fn single_quoted(rest: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = rest.chars().peekable();
+    while let Some(char) = chars.next() {
+        if char == '\'' && chars.next_if_eq(&'\'').is_none() {
+            return Some(out);
+        }
+        out.push(char);
     }
-    value.to_owned()
+    None
+}
+
+fn plain(value: &str) -> String {
+    let end = value
+        .char_indices()
+        .find(|&(at, char)| char == '#' && (at == 0 || value[..at].ends_with([' ', '\t'])))
+        .map_or(value.len(), |(at, _)| at);
+    value[..end].trim_end().to_owned()
 }
