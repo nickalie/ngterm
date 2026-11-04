@@ -48,7 +48,10 @@ impl Pane {
     /// Ghostty's `reset`: a full reset of the terminal (RIS), the program untouched.
     pub fn reset(&self) {
         let shared = self.shared();
-        lock(&shared.vt).terminal.reset();
+        let mut vt = lock(&shared.vt);
+        vt.terminal.reset();
+        vt.changed();
+        drop(vt);
         shared.touch_capture();
         shared.wake();
     }
@@ -173,6 +176,7 @@ pub(crate) fn apply_clear(shared: &Shared, vt: &mut Vt) {
     if !std::mem::take(&mut vt.pending_clear) || vt.terminal.alternate_screen() {
         return;
     }
+    vt.changed();
     if let Err(err) = vt.terminal.clear_selection() {
         tracing::warn!(%err, "clearing the selection failed");
     }

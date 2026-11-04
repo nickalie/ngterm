@@ -408,13 +408,25 @@ fn answers_that_do_not_fit_their_questions_are_refused_before_anything_runs() {
     ));
 }
 
+/// The generation of `term`'s screen now.
+fn generation(term: &Term) -> u64 {
+    term.frame();
+    loop {
+        if let Some(generation) = term.pane.frame().generation {
+            return generation;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// What `keys` put on the wire from a terminal that took `setup`.
 fn wire(setup: &[u8], keys: &[Key]) -> Vec<u8> {
     let term = Term::new(80, 24);
     term.feed(setup);
     term.sent();
+    let shown = generation(&term);
     for key in keys {
-        key.send(&term.pane).unwrap();
+        assert_eq!(key.send_if(&term.pane, shown), Ok(true));
     }
     term.sent()
 }
@@ -442,12 +454,29 @@ fn the_keys_go_out_encoded_for_the_programs_modes() {
     // a paste the terminal can't frame safely is refused whole
     let term = Term::new(80, 24);
     assert_eq!(
-        Key::Paste("rm -rf x\n".to_owned()).send(&term.pane),
+        Key::Paste("rm -rf x\n".to_owned()).send_if(&term.pane, generation(&term)),
         Err(PaneInputError::Refused {
             reason: UNSAFE_PASTE.to_owned()
         })
     );
     assert!(term.sent().is_empty());
+}
+
+#[test]
+fn keys_go_only_to_the_screen_they_were_chosen_from() {
+    let capture = Capture::load("claude-44x36");
+    let term = capture.term();
+    term.feed(capture.at("idle"));
+    term.sent();
+    let shown = generation(&term);
+    // the agent draws a dialog after the screen was read: neither the Enter nor a paste goes
+    term.feed(&capture.bytes[capture.at("idle").len()..capture.at("permission").len()]);
+    assert_eq!(Key::Enter.send_if(&term.pane, shown), Ok(false));
+    assert_eq!(Key::Paste("hi".to_owned()).send_if(&term.pane, shown), Ok(false));
+    assert!(term.sent().is_empty());
+    // read again, it goes
+    assert_eq!(Key::Digit(1).send_if(&term.pane, generation(&term)), Ok(true));
+    assert_eq!(term.sent(), b"1");
 }
 
 #[test]
@@ -457,7 +486,10 @@ fn both_agents_screens_take_a_bracketed_paste() {
         let term = capture.term();
         term.feed(capture.at(state));
         term.sent();
-        Key::Paste("hi\nthere".to_owned()).send(&term.pane).unwrap();
+        assert_eq!(
+            Key::Paste("hi\nthere".to_owned()).send_if(&term.pane, generation(&term)),
+            Ok(true)
+        );
         assert_eq!(term.sent(), b"\x1b[200~hi\nthere\x1b[201~", "{name}");
     }
 }

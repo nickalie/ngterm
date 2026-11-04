@@ -12,7 +12,10 @@
 //!    action's [`Plan`] decides from it: the keys to send, or the outcome.
 //! 4. **Send.** The keys go into the same terminal the frame was read from, on the actor, with nothing awaited between
 //!    the read and the send: the role and the attach are checked again right before (the terminal's pending role
-//!    reports taken first), so a lead lost or an attach replaced meanwhile sends nothing.
+//!    reports taken first), so a lead lost or an attach replaced meanwhile sends nothing. Each key goes only while the
+//!    terminal still shows the screen the frame did, checked and sent under the terminal's lock
+//!    ([`ngterm_term::Pane::key_if`]): output or a resize that landed after the read sends nothing, and the screen is
+//!    settled and read again.
 //!
 //! A step that needs to see what its keys did (a paste before its Enter, each question of the picker, a toggle)
 //! settles and matches again before its next key, and a dialog's answer is checked once more after it: the dialog
@@ -176,17 +179,20 @@ impl From<OptionKey> for Key {
 }
 
 impl Key {
-    /// Sends the key into `terminal`, encoded for the program's modes.
+    /// Sends the key into `terminal`, encoded for the program's modes, while the terminal still shows the screen of
+    /// the frame captured at `generation` ([`ngterm_term::FrameSnapshot::generation`]); whether it went (`false`:
+    /// the screen changed since, nothing went).
     ///
     /// # Errors
     ///
     /// [`PaneInputError`] from the terminal; [`PaneInputError::Refused`] with [`UNSAFE_PASTE`] for a paste the
     /// terminal would not frame safely.
-    pub(crate) fn send(&self, terminal: &ngterm_term::Pane) -> Result<(), PaneInputError> {
-        let press = |name: &str, text: &str| -> Result<(), PaneInputError> {
+    pub(crate) fn send_if(&self, terminal: &ngterm_term::Pane, generation: u64) -> Result<bool, PaneInputError> {
+        let press = |name: &str, text: &str| -> Result<bool, PaneInputError> {
             let key = PhysicalKey::new(name).unwrap_or(PhysicalKey::UNIDENTIFIED);
-            terminal.key(&KeyInput::press(key, Mods::empty(), text))?;
-            Ok(())
+            Ok(terminal
+                .key_if(generation, &KeyInput::press(key, Mods::empty(), text))?
+                .is_some())
         };
         match self {
             Self::Digit(digit) => press(&format!("digit_{digit}"), &digit.to_string()),
@@ -195,9 +201,16 @@ impl Key {
             Self::Escape => press("escape", ""),
             Self::Tab => press("tab", ""),
             Self::Paste(text) => {
-                match terminal.paste(text, PasteSource::Clipboard, ClipboardLocation::Standard, false)? {
-                    Paste::Written | Paste::Empty => Ok(()),
-                    Paste::Unsafe => Err(PaneInputError::Refused {
+                match terminal.paste_if(
+                    generation,
+                    text,
+                    PasteSource::Clipboard,
+                    ClipboardLocation::Standard,
+                    false,
+                )? {
+                    Some(Paste::Written | Paste::Empty) => Ok(true),
+                    None => Ok(false),
+                    Some(Paste::Unsafe) => Err(PaneInputError::Refused {
                         reason: UNSAFE_PASTE.to_owned(),
                     }),
                 }

@@ -269,8 +269,9 @@ async fn settle<T: Transport>(
 }
 
 /// One look at the screen and what the plan makes of it, sent at once into the terminal read. Nothing is awaited
-/// here, so no output, role report or attach is handled between the read and the send but what the terminal took on
-/// its own threads.
+/// here, so no role report or attach is handled between the read and the send; output the terminal took on its own
+/// threads meanwhile (or a resize) makes the send a no-op ([`crate::chat::input::Key::send_if`]), the plan is put
+/// back as it was, and the screen is settled and read again.
 fn look<T: Transport>(
     state: &State<T>,
     on: &On,
@@ -285,20 +286,25 @@ fn look<T: Transport>(
     };
     let snapshot = terminal.frame();
     // a frame made while the program holds its output (mode 2026) is the screen before its update
-    if snapshot.stale || snapshot.frame.held {
+    let Some(generation) = snapshot.generation.filter(|_| !snapshot.stale && !snapshot.frame.held) else {
         return Ok(Looked::Busy);
-    }
+    };
+    let before = plan.clone();
     match plan.next(&agent.read(&snapshot.frame)) {
         Next::Done(outcome) => Ok(Looked::Done(outcome)),
         Next::Send { keys, look } => {
             for (at, key) in keys.iter().enumerate() {
-                if let Err(error) = key.send(terminal) {
+                match key.send_if(terminal, generation) {
+                    Ok(true) => {}
+                    // the screen changed after the read: nothing of this step went, so it is weighed again
+                    Ok(false) if at == 0 => {
+                        *plan = before;
+                        return Ok(Looked::Busy);
+                    }
+                    Ok(false) => return Ok(Looked::Done(AgentInputOutcome::Unconfirmed)),
                     // a key refused after others went leaves the screen unconfirmed; the first one, nothing sent
-                    return if plan.sent() || at > 0 {
-                        Ok(Looked::Done(AgentInputOutcome::Unconfirmed))
-                    } else {
-                        Err(error)
-                    };
+                    Err(_) if plan.sent() || at > 0 => return Ok(Looked::Done(AgentInputOutcome::Unconfirmed)),
+                    Err(error) => return Err(error),
                 }
             }
             plan.mark_sent();

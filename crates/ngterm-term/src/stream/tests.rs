@@ -290,3 +290,76 @@ fn a_reader_waiting_past_the_high_mark_is_released_when_the_pane_drops() {
     );
     drop(out);
 }
+
+/// The generation of the pane's screen now, from a fresh frame that is not held.
+fn generation(pane: &Pane) -> u64 {
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        if let Some(generation) = pane.frame().generation {
+            return generation;
+        }
+        assert!(Instant::now() < deadline, "no fresh frame");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn a_conditional_key_or_paste_goes_only_to_the_screen_its_frame_showed() {
+    use crate::{ClipboardLocation, KeyInput, Paste, PasteSource};
+    use ngterm_core::ghostty_config::binds::{Mods, PhysicalKey};
+
+    let fixture = stream(PaneConfig::new(SIZE));
+    let enter = KeyInput::press(PhysicalKey::new("enter").unwrap(), Mods::empty(), "");
+    let paste = |generation| {
+        fixture.pane.paste_if(
+            generation,
+            "hi",
+            PasteSource::Clipboard,
+            ClipboardLocation::Standard,
+            false,
+        )
+    };
+    assert!(fixture.feed.deliver(b"\x1b[?2004hprompt"));
+    fixture.screen_until("prompt");
+    let shown = generation(&fixture.pane);
+    assert_eq!(fixture.pane.key_if(shown, &enter), Ok(Some(true)));
+    // the pane's own input leaves the screen as it was
+    assert_eq!(paste(shown), Ok(Some(Paste::Written)));
+    assert_eq!(fixture.sent_until(b"\x1b[201~"), b"\r\x1b[200~hi\x1b[201~");
+
+    // the program wrote since (a status query, answered once the terminal took it): nothing goes
+    assert!(fixture.feed.deliver(b"\x1b[5n"));
+    assert_eq!(fixture.sent_until(b"\x1b[0n"), b"\x1b[0n");
+    assert_eq!(fixture.pane.key_if(shown, &enter), Ok(None));
+    assert_eq!(paste(shown), Ok(None));
+    assert_ne!(generation(&fixture.pane), shown);
+}
+
+#[test]
+fn a_resize_or_a_held_frame_sends_no_conditional_key() {
+    use crate::KeyInput;
+    use ngterm_core::ghostty_config::binds::{Mods, PhysicalKey};
+
+    let fixture = stream(PaneConfig::new(SIZE));
+    let enter = KeyInput::press(PhysicalKey::new("enter").unwrap(), Mods::empty(), "");
+    // resized since: nothing goes
+    let shown = generation(&fixture.pane);
+    let bigger = GridSize { cols: 40, ..SIZE };
+    fixture.pane.resize(bigger).unwrap();
+    assert_eq!(fixture.pane.key_if(shown, &enter), Ok(None));
+    assert_eq!(fixture.out.next(None), Ok(Some(Outgoing::Resize(bigger))));
+    assert_eq!(fixture.out.next(Some(Duration::from_millis(20))), Ok(None));
+
+    // a frame held by synchronized output is not the screen now: it names no generation
+    assert!(fixture.feed.deliver(b"\x1b[?2026hnext"));
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        let snapshot = fixture.pane.frame();
+        if snapshot.frame.held {
+            assert_eq!(snapshot.generation, None);
+            break;
+        }
+        assert!(Instant::now() < deadline, "never held");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}

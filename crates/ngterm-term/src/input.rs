@@ -366,7 +366,27 @@ impl Pane {
     /// [`PaneError::Terminal`] when encoding fails; [`PaneError::Backpressure`] or [`PaneError::Closed`] from the
     /// input queue.
     pub fn key(&self, input: &KeyInput<'_>) -> Result<bool, PaneError> {
-        let mut vt = lock(&self.shared().vt);
+        self.key_held(lock(&self.shared().vt), input)
+    }
+
+    /// [`Pane::key`], only while the terminal still shows the screen of a frame captured at `generation`
+    /// ([`crate::FrameSnapshot::generation`]): `None`, nothing sent, once the program's output, a resize, a reset or a
+    /// clear changed it since. The check and the send are one step under the terminal's lock, so nothing the program
+    /// writes lands between them: a key chosen from what a frame showed goes only to that screen.
+    ///
+    /// # Errors
+    ///
+    /// As [`Pane::key`].
+    pub fn key_if(&self, generation: u64, input: &KeyInput<'_>) -> Result<Option<bool>, PaneError> {
+        let vt = lock(&self.shared().vt);
+        if vt.generation != generation {
+            return Ok(None);
+        }
+        self.key_held(vt, input).map(Some)
+    }
+
+    /// [`Pane::key`] under the VT lock `vt`.
+    fn key_held(&self, mut vt: std::sync::MutexGuard<'_, Vt>, input: &KeyInput<'_>) -> Result<bool, PaneError> {
         let Vt {
             terminal, input: state, ..
         } = &mut *vt;
@@ -523,7 +543,39 @@ impl Pane {
         location: ClipboardLocation,
         allow_unsafe: bool,
     ) -> Result<Paste, PaneError> {
-        let mut vt = lock(&self.shared().vt);
+        self.paste_held(lock(&self.shared().vt), text, source, location, allow_unsafe)
+    }
+
+    /// [`Pane::paste`], only while the terminal still shows the screen of a frame captured at `generation`, as
+    /// [`Pane::key_if`] sends a key: `None`, nothing pasted, once it changed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Pane::paste`].
+    pub fn paste_if(
+        &self,
+        generation: u64,
+        text: &str,
+        source: PasteSource,
+        location: ClipboardLocation,
+        allow_unsafe: bool,
+    ) -> Result<Option<Paste>, PaneError> {
+        let vt = lock(&self.shared().vt);
+        if vt.generation != generation {
+            return Ok(None);
+        }
+        self.paste_held(vt, text, source, location, allow_unsafe).map(Some)
+    }
+
+    /// [`Pane::paste`] under the VT lock `vt`.
+    fn paste_held(
+        &self,
+        mut vt: std::sync::MutexGuard<'_, Vt>,
+        text: &str,
+        source: PasteSource,
+        location: ClipboardLocation,
+        allow_unsafe: bool,
+    ) -> Result<Paste, PaneError> {
         // the terminal writes the paste through its PTY callback; divert it into one piece of input, so a paste is
         // queued whole or refused whole
         *lock(&self.shared().divert) = Some(Vec::new());
