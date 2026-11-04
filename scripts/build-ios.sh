@@ -20,7 +20,8 @@
 #    - mobile/ios/Packages/NgtermCore/Generated/: NgtermCoreFFI.xcframework, NgtermCoreBindings/ (the bindings'
 #      Swift) and Fixtures/rows-golden.bin (crates/ngterm-mobile/tests/fixtures/, the row buffer's shared golden);
 #    - mobile/ios/Packages/NgtermDesign/Generated/Fonts/: the mono fonts shared with Android, from their one source,
-#      mobile/android/app/src/main/res/font/ (JetBrains Mono, Atkinson Hyperlegible Mono);
+#      mobile/android/app/src/main/res/font/ (JetBrains Mono, Atkinson Hyperlegible Mono), with their OFL texts from
+#      mobile/android/licenses/, so the app ships each font's license beside it;
 # 8. run the actions, in the order given (default: build):
 #    - lint: the suppression-reason check, SwiftLint (--strict), swift-format (`swift format lint --strict`, with
 #      mobile/ios/.swift-format), and SwiftLint's analyzer rules over a build log; the generated bindings are linted by
@@ -189,7 +190,9 @@ sync_dir "$STAGING/fixtures" "$CORE_GENERATED/Fixtures"
 rm -rf "$STAGING/fonts"
 mkdir -p "$STAGING/fonts"
 cp mobile/android/app/src/main/res/font/jetbrains_mono_*.ttf \
-  mobile/android/app/src/main/res/font/atkinson_hyperlegible_mono.ttf "$STAGING/fonts/"
+  mobile/android/app/src/main/res/font/atkinson_hyperlegible_mono.ttf \
+  mobile/android/licenses/OFL-jetbrains-mono.txt mobile/android/licenses/OFL-atkinson-hyperlegible-mono.txt \
+  "$STAGING/fonts/"
 sync_dir "$STAGING/fonts" "$DESIGN_GENERATED/Fonts"
 echo "build-ios.sh: the core and the shared inputs are in mobile/ios/Packages/*/Generated/" >&2
 
