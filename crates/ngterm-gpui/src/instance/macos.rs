@@ -109,7 +109,10 @@ mod tests {
         assert_eq!(std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777, 0o600);
         drop(primary);
         let _stale = UnixListener::bind(socket).unwrap();
-        assert!(registers_as_primary(root.path(), &send), "the stale socket is recovered");
+        assert!(
+            registers_as_primary(root.path(), &send),
+            "the stale socket is recovered"
+        );
     }
 
     /// Whether a launch becomes the primary within two seconds. Tests in this binary start shells on PTYs, which
