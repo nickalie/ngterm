@@ -17,8 +17,8 @@ use super::Command;
 use super::presentation_tests::{Actor, SESSION, local, received, settle};
 use crate::api::{MobileError, MobileEvent, PaneSize};
 use crate::chat::{
-    AgentCommand, AgentCommandKind, ChatBody, ChatEvent, ChatState, NOT_OPEN, NOT_SHOWN, OLDER_PAGE, Side, chat_tail,
-    commands_tail, page_tail,
+    AgentCommand, AgentCommandKind, ChatBody, ChatEvent, ChatState, Cursor, NOT_OPEN, NOT_SHOWN, OLDER_PAGE, Side,
+    chat_tail, commands_tail, page_tail,
 };
 use crate::pane::PaneRef;
 use crate::transport::fake::{Opened, Script};
@@ -83,6 +83,25 @@ fn assistant(id: &str, cursor: u64, text: &str) -> String {
     line(id, cursor, &serde_json::json!({"type": "assistant", "text": text}))
 }
 
+/// The `conversation` event that leads a backlog or a resume.
+fn conversation(id: &str, cursor: u64) -> String {
+    line(
+        "conversation",
+        cursor,
+        &serde_json::json!({"type": "conversation", "agent": "claude", "conversation_id": id}),
+    )
+}
+
+/// The chat channel resuming after `at` in conversation `id`.
+fn resumed(side: Side, at: u64, id: &str) -> String {
+    chat_tail(SESSION, side, Some(Cursor { at, conversation: id }))
+}
+
+/// An older page before `at` in conversation `id`.
+fn paging(at: u64, id: &str) -> String {
+    page_tail(SESSION, Side::Left, Cursor { at, conversation: id }, OLDER_PAGE)
+}
+
 fn live(cursor: u64) -> String {
     line("live", cursor, &serde_json::json!({"type": "live"}))
 }
@@ -98,6 +117,7 @@ fn texts(events: &[ChatEvent]) -> Vec<String> {
             ChatBody::Assistant { text } => format!("{}:{text}", event.id),
             ChatBody::Live => "live".to_owned(),
             ChatBody::Reset => "reset".to_owned(),
+            ChatBody::Conversation { conversation_id, .. } => format!("conversation:{conversation_id}"),
             other => format!("{other:?}"),
         })
         .collect()
@@ -361,12 +381,13 @@ fn older_pages_run_before_the_oldest_main_cursor_until_the_start() {
             5,
             &serde_json::json!({"type": "assistant", "text": "sub", "parent": "toolu_9"}),
         );
-        feed(&chat, &[assistant("line-100", 100, "b"), sub, live(200)]).await;
+        feed(
+            &chat,
+            &[conversation("c1", 100), assistant("line-100", 100, "b"), sub, live(200)],
+        )
+        .await;
         let page = format!("{}{}", assistant("line-0", 0, "a"), assistant("line-50", 50, "a2"));
-        fixture
-            .actor
-            .transport
-            .script(&page_tail(SESSION, Side::Left, 100, OLDER_PAGE), Script::ok(&page));
+        fixture.actor.transport.script(&paging(100, "c1"), Script::ok(&page));
 
         let older = fixture.older(LEFT).await.unwrap();
         assert_eq!(texts(&older), ["line-0:a", "line-50:a2"]);
@@ -378,7 +399,7 @@ fn older_pages_run_before_the_oldest_main_cursor_until_the_start() {
             .count();
         assert_eq!(pages, 1, "at the start no page is read");
         let (events, _) = fixture.reported();
-        assert_eq!(events.len(), 3, "a page is answered, not reported");
+        assert_eq!(events.len(), 4, "a page is answered, not reported");
     });
 }
 
@@ -388,7 +409,7 @@ fn a_severed_connection_resumes_after_the_newest_cursor_with_no_repeats_and_no_g
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
         let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
-        feed(&chat, &[assistant("line-0", 0, "a"), live(100)]).await;
+        feed(&chat, &[conversation("c1", 0), assistant("line-0", 0, "a"), live(100)]).await;
         feed(&chat, &[assistant("line-100", 100, "b")]).await;
         fixture.reported();
 
@@ -397,12 +418,13 @@ fn a_severed_connection_resumes_after_the_newest_cursor_with_no_repeats_and_no_g
         assert_eq!(fixture.reported().1, [ChatState::Reconnecting]);
         tokio::time::sleep(Duration::from_secs(2)).await;
         settle().await;
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, Some(100)));
+        let chat = fixture.chat(&resumed(Side::Left, 100, "c1"));
 
-        // the cursor's line again, unchanged, then changed, then what came while away
+        // the carried conversation and the cursor's line again, unchanged, then changed, then what came while away
         feed(
             &chat,
             &[
+                conversation("c1", 100),
                 assistant("line-100", 100, "b"),
                 assistant("line-100", 100, "b, more"),
                 assistant("line-200", 200, "c"),
@@ -422,7 +444,7 @@ fn a_failed_command_after_the_backlog_is_retried_on_its_backoff_from_the_newest_
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
         let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
-        feed(&chat, &[assistant("line-0", 0, "a"), live(40)]).await;
+        feed(&chat, &[conversation("c1", 0), assistant("line-0", 0, "a"), live(40)]).await;
         chat.end(ChannelEnd::Exit {
             code: Some(1),
             signal: None,
@@ -434,7 +456,7 @@ fn a_failed_command_after_the_backlog_is_retried_on_its_backoff_from_the_newest_
 
         tokio::time::sleep(Duration::from_secs(2)).await;
         settle().await;
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, Some(40)));
+        let chat = fixture.chat(&resumed(Side::Left, 40, "c1"));
         feed(&chat, &[live(40)]).await;
         assert_eq!(texts(&fixture.reported().0), ["live"]);
     });
@@ -604,12 +626,216 @@ fn a_pane_that_changes_sides_resumes_its_chat_on_the_new_side() {
         let mut fixture = Fixture::start().await;
         fixture.open(LEFT).await.unwrap();
         let mut chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
-        feed(&chat, &[assistant("line-0", 0, "a"), live(30)]).await;
+        feed(&chat, &[conversation("c1", 0), assistant("line-0", 0, "a"), live(30)]).await;
 
         fixture.send(Body::Layout(layout(RIGHT, LEFT))).await;
         assert!(closed(&mut chat).await);
-        let chat = fixture.chat(&chat_tail(SESSION, Side::Right, Some(30)));
+        let chat = fixture.chat(&resumed(Side::Right, 30, "c1"));
         feed(&chat, &[assistant("line-30", 30, "b"), live(60)]).await;
-        assert_eq!(texts(&fixture.reported().0), ["line-0:a", "live", "line-30:b", "live"]);
+        assert_eq!(
+            texts(&fixture.reported().0),
+            ["conversation:c1", "line-0:a", "live", "line-30:b", "live"]
+        );
+    });
+}
+
+const FAILED: ChannelEnd = ChannelEnd::Exit {
+    code: Some(1),
+    signal: None,
+};
+
+/// The pane moving to another conversation while the chat's channel is down is never read at the old cursor: each
+/// resume names the cursor's conversation, whether the origin's announcement of the new one came before the channel
+/// is back, after it or not at all, and the origin's `reset` (whatever the new file's size) starts the chat over:
+/// cursors, pages and later resumes all go by the new conversation.
+#[test]
+fn a_conversation_switched_while_away_resumes_by_the_cursors_conversation_and_starts_over() {
+    local(async {
+        let mut fixture = Fixture::start().await;
+        fixture.open(LEFT).await.unwrap();
+        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        feed(
+            &chat,
+            &[
+                conversation("c1", 0),
+                assistant("line-0", 0, "a"),
+                assistant("line-100", 100, "b"),
+                live(150),
+            ],
+        )
+        .await;
+        chat.end(FAILED).await;
+        settle().await;
+        fixture.reported();
+
+        // announced before the channel is back: the resume still names the cursor's conversation
+        fixture.send(agent_frame(LEFT, Some("c2"))).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        settle().await;
+        let chat = fixture.chat(&resumed(Side::Left, 150, "c1"));
+        // the origin's answer: the new conversation, a file longer than the cursor
+        feed(
+            &chat,
+            &[
+                reset(),
+                conversation("c2", 0),
+                assistant("line-0", 0, "x"),
+                assistant("line-500", 500, "y"),
+                live(600),
+            ],
+        )
+        .await;
+        let (events, states) = fixture.reported();
+        assert!(states.is_empty());
+        assert_eq!(
+            texts(&events),
+            ["reset", "conversation:c2", "line-0:x", "line-500:y", "live"],
+            "nothing of the old conversation counts as delivered"
+        );
+
+        // announced after it: nothing more
+        fixture.send(agent_frame(LEFT, Some("c2"))).await;
+        assert!(fixture.chats().is_empty());
+        assert_eq!(
+            fixture.older(LEFT).await,
+            Ok(Vec::new()),
+            "the new conversation's start"
+        );
+
+        // never announced, the file shorter than the cursor this time: the resume is in c2, and the reset says c3
+        chat.end(FAILED).await;
+        settle().await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        settle().await;
+        let chat = fixture.chat(&resumed(Side::Left, 600, "c2"));
+        feed(
+            &chat,
+            &[reset(), conversation("c3", 40), assistant("line-40", 40, "z"), live(80)],
+        )
+        .await;
+        assert_eq!(
+            texts(&fixture.reported().0),
+            ["reset", "conversation:c3", "line-40:z", "live"]
+        );
+        fixture
+            .actor
+            .transport
+            .script(&paging(40, "c3"), Script::ok(&assistant("line-0", 0, "w")));
+        assert_eq!(texts(&fixture.older(LEFT).await.unwrap()), ["line-0:w"]);
+        chat.end(FAILED).await;
+        settle().await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        settle().await;
+        fixture.chat(&resumed(Side::Left, 80, "c3"));
+    });
+}
+
+/// A chat whose events named no conversation (an agent before its first prompt) resumes with an empty one, which
+/// the origin never takes for the pane's, and has no older page to read.
+#[test]
+fn a_chat_that_named_no_conversation_resumes_with_none_and_pages_nothing() {
+    local(async {
+        let mut fixture = Fixture::start().await;
+        fixture.open(LEFT).await.unwrap();
+        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        feed(&chat, &[live(200)]).await;
+        assert_eq!(fixture.older(LEFT).await, Ok(Vec::new()));
+        assert!(
+            !fixture.chat_execs().iter().any(|command| command.contains("--before")),
+            "no page is read"
+        );
+        chat.end(FAILED).await;
+        settle().await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        settle().await;
+        fixture.chat(&resumed(Side::Left, 200, ""));
+    });
+}
+
+/// An older page is stale when the origin answers it with a `reset` (the pane is in another conversation now), and
+/// when the chat it was asked for closed, even if the pane's chat was opened again before the answer came: the
+/// caller is told `Cancelled` and the cursors stay as they were.
+#[test]
+fn a_page_of_another_conversation_or_of_a_closed_chat_is_cancelled() {
+    local(async {
+        let mut fixture = Fixture::start().await;
+        fixture.open(LEFT).await.unwrap();
+        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        feed(
+            &chat,
+            &[conversation("c1", 100), assistant("line-100", 100, "b"), live(200)],
+        )
+        .await;
+        fixture.actor.transport.script_sequence(
+            &paging(100, "c1"),
+            vec![Script::ok(&reset()), Script::ok(&assistant("line-50", 50, "a"))],
+        );
+        assert_eq!(fixture.older(LEFT).await, Err(MobileError::Cancelled));
+        assert_eq!(
+            texts(&fixture.older(LEFT).await.unwrap()),
+            ["line-50:a"],
+            "still from the same cursor"
+        );
+
+        // a page in flight across a close and an open
+        let (reply, answer) = oneshot::channel();
+        fixture.actor.post(Command::LoadOlder {
+            pane: reference(LEFT),
+            reply,
+        });
+        settle().await;
+        let page = fixture.chat(&paging(50, "c1"));
+        fixture.actor.post(Command::CloseChat(reference(LEFT)));
+        settle().await;
+        fixture.open(LEFT).await.unwrap();
+        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        feed(
+            &chat,
+            &[conversation("c1", 100), assistant("line-100", 100, "b"), live(200)],
+        )
+        .await;
+        assert!(page.data(assistant("line-0", 0, "z").into_bytes()).await);
+        page.end(ChannelEnd::Exit {
+            code: Some(0),
+            signal: None,
+        })
+        .await;
+        assert_eq!(answer.await.unwrap(), Err(MobileError::Cancelled));
+        fixture
+            .actor
+            .transport
+            .script(&paging(100, "c1"), Script::ok(&assistant("line-50", 50, "a")));
+        assert_eq!(
+            texts(&fixture.older(LEFT).await.unwrap()),
+            ["line-50:a"],
+            "the reopened chat pages from its own cursor"
+        );
+    });
+}
+
+/// Suspending reports nothing and so leaves nothing counted as reported: a channel that fails after the resume is
+/// reported reconnecting.
+#[test]
+fn a_chat_failing_after_a_resume_is_reported_reconnecting() {
+    local(async {
+        let mut fixture = Fixture::start().await;
+        fixture.open(LEFT).await.unwrap();
+        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        feed(&chat, &[conversation("c1", 0), assistant("line-0", 0, "a"), live(40)]).await;
+        fixture.reported();
+
+        fixture.actor.post(Command::Suspend);
+        settle().await;
+        assert_eq!(
+            fixture.reported(),
+            (Vec::new(), Vec::new()),
+            "suspending reports nothing"
+        );
+        fixture.actor.post(Command::Resume);
+        settle().await;
+        let chat = fixture.chat(&resumed(Side::Left, 40, "c1"));
+        chat.end(FAILED).await;
+        settle().await;
+        assert_eq!(fixture.reported().1, [ChatState::Reconnecting]);
     });
 }

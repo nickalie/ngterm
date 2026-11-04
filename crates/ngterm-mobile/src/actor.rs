@@ -851,14 +851,7 @@ async fn end_session<T: Transport>(
 /// Opens the presentation stream of `session_id`, a session of `machine_id`'s last listing, on the machine's
 /// connection.
 fn attach_session<T: Transport>(state: &Rc<State<T>>, machine_id: &str, session_id: &str) -> Result<(), MobileError> {
-    let connection = state
-        .connections
-        .borrow()
-        .get(machine_id)
-        .map(|link| Rc::clone(&link.connection))
-        .ok_or_else(|| MobileError::NotConnected {
-            machine_id: machine_id.to_owned(),
-        })?;
+    let connection = connection_of(state, machine_id)?;
     let version = state
         .listings
         .borrow()
@@ -963,14 +956,7 @@ fn pane_uuid(pane: &PaneRef) -> Option<Uuid> {
 
 /// Shows a pane of a session of the machine's last listing, on the machine's connection.
 fn show_pane<T: Transport>(state: &Rc<State<T>>, pane: &PaneRef, size: PaneSize) -> Result<Arc<Pane>, MobileError> {
-    let connection = state
-        .connections
-        .borrow()
-        .get(&pane.machine_id)
-        .map(|link| Rc::clone(&link.connection))
-        .ok_or_else(|| MobileError::NotConnected {
-            machine_id: pane.machine_id.clone(),
-        })?;
+    let connection = connection_of(state, &pane.machine_id)?;
     let target = {
         let listings = state.listings.borrow();
         let tree = listings.get(&pane.machine_id).and_then(|kept| kept.tree.as_ref());

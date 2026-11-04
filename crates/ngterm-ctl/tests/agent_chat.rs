@@ -390,6 +390,76 @@ fn a_new_record_path_resets_to_the_new_transcript() -> TestResult {
     Ok(())
 }
 
+/// A cursor of another conversation (the pane switched while the phone was away) is never read in the record's
+/// transcript: `--after` answers `reset`, the backlog and `live`, then follows; `--before` answers `reset` alone. The
+/// record's own conversation reads at the cursor as before.
+#[test]
+fn a_cursor_of_another_conversation_answers_reset() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    let bytes = transcript(MAIN)?;
+    let path = write_transcript(dir.path(), MAIN, slice(&bytes, 0, NEXT_CALL)?)?;
+    let _server = Scripted::serve(&socket, Some(record(&path, MAIN, None)?))?;
+    let golden = golden(MAIN)?;
+    // a cursor short of the file's end, and one past it: neither is read in this file
+    for after in [DENIED_RESULT.to_string(), (NEXT_CALL + 1).to_string()] {
+        for conversation in [OTHER, ""] {
+            let args = ["--target", "S", "--after", &after, "--conversation", conversation];
+            let chat = Chat::spawn(dir.path(), &socket, &args)?;
+            assert_eq!(chat.next()?, json!({"id": "reset", "cursor": 0, "type": "reset"}));
+            let mut backlog = chat.until("live")?;
+            assert_eq!(
+                backlog.pop(),
+                Some(json!({"id": "live", "cursor": NEXT_CALL, "type": "live"}))
+            );
+            assert_eq!(backlog[0]["conversation_id"], json!(MAIN), "--after {after}");
+            assert!(backlog.iter().all(|event| event["type"] != "reset"), "one reset");
+            assert!(
+                backlog
+                    .iter()
+                    .any(|event| event["cursor"].as_u64() < Some(DENIED_RESULT)),
+                "the backlog, not the lines after the cursor"
+            );
+        }
+    }
+
+    let after = DENIED_RESULT.to_string();
+    let chat = Chat::spawn(
+        dir.path(),
+        &socket,
+        &["--target", "S", "--after", &after, "--conversation", MAIN],
+    )?;
+    let events = chat.until("live")?;
+    assert_eq!(
+        (&events[0]["type"], &events[0]["cursor"]),
+        (&json!("conversation"), &json!(DENIED_RESULT)),
+        "the record's conversation resumes at the cursor"
+    );
+    assert_eq!(events[1..events.len() - 1], lines_in(&golden, DENIED_RESULT, NEXT_CALL));
+
+    let before = NEXT_PROMPT.to_string();
+    let mut chat = Chat::spawn(
+        dir.path(),
+        &socket,
+        &["--target", "S", "--before", &before, "--conversation", OTHER],
+    )?;
+    assert!(chat.exit_within(WAIT)?.success());
+    let page: Vec<String> = chat.lines.try_iter().collect();
+    assert_eq!(page.len(), 1, "{page:?}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&page[0])?,
+        json!({"id": "reset", "cursor": 0, "type": "reset"})
+    );
+    let mut chat = Chat::spawn(
+        dir.path(),
+        &socket,
+        &["--target", "S", "--before", &before, "--conversation", MAIN],
+    )?;
+    assert!(chat.exit_within(WAIT)?.success());
+    assert!(chat.lines.try_iter().count() >= 5, "the record's conversation pages");
+    Ok(())
+}
+
 /// The phone's ssh channel going away closes stdin: the process ends soon after, with a zero exit.
 #[test]
 fn stdin_closing_ends_the_process_within_a_bound() -> TestResult {

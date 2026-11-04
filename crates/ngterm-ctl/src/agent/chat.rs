@@ -4,6 +4,13 @@
 //!
 //! - **Modes:** the default prints the backlog, then `live`, and follows; `--before CURSOR` prints one older page and
 //!   exits; `--after CURSOR` prints everything from the cursor's line on, then `live`, and follows (a reconnect).
+//! - **The cursor's conversation** (`--conversation ID`): a cursor is an offset into one transcript, and the pane may
+//!   have moved to another conversation since the caller read it (a `/clear` or a resume while the phone was away).
+//!   Given the id the caller's `conversation` events named, a record naming another conversation answers `reset`:
+//!   `--after` then prints the new conversation's backlog and `live`, and follows; `--before` prints the `reset` alone.
+//!   An empty id (the caller saw none announced) never matches. The record's id is the transcript's own (both are
+//!   the agent's session id, and a resume appends to the same file), so a match means the cursor's file; an agent
+//!   whose ids differed would only start over at each reconnect, never read a cursor in the wrong file.
 //! - **The record** is read again about once a second ([`RECHECK`]): a new transcript (a `/clear`, a resume) is a
 //!   `reset` and its backlog; a cleared record (the agent ended) ends the stream with a zero exit; its live permission
 //!   prompt becomes `approval` and `approval_done` events ([`Approvals`]).
@@ -64,6 +71,14 @@ pub struct Chat {
     )]
     limit: Option<usize>,
 
+    #[arg(
+        long,
+        value_name = "ID",
+        help = "The conversation the --after or --before cursor belongs to. When the pane's agent is in another one, \
+                the answer starts with `reset`: --after then prints the new backlog, --before nothing else."
+    )]
+    conversation: Option<String>,
+
     #[command(flatten)]
     target: TargetOptions,
 
@@ -77,6 +92,9 @@ impl Chat {
         if self.limit == Some(0) {
             return Err("--limit must be at least 1".to_owned());
         }
+        if self.conversation.is_some() && self.after.is_none() && self.before.is_none() {
+            return Err("--conversation needs --after or --before".to_owned());
+        }
         Ok(())
     }
 
@@ -87,14 +105,24 @@ impl Chat {
         };
         let limit = self.limit.unwrap_or(BACKLOG);
         let mut follower = follower(&record)?;
+        // A cursor of another conversation is an offset into another file.
+        let moved = self
+            .conversation
+            .as_ref()
+            .is_some_and(|id| *id != record.conversation_id);
         if let Some(before) = self.before {
-            let page = follower.page(before, limit).map_err(|error| read_failure(&error))?;
+            let page = if moved {
+                vec![reset()]
+            } else {
+                follower.page(before, limit).map_err(|error| read_failure(&error))?
+            };
             let _ = write_events(&page);
             return Ok(());
         }
         let ended = watch_stdin()?;
         follower.expect(record.approval.as_ref());
         let first = match self.after {
+            Some(_) if moved => follower.backlog(limit).map(|backlog| [vec![reset()], backlog].concat()),
             Some(after) => follower.after(after),
             None => follower.backlog(limit),
         }
@@ -122,6 +150,16 @@ fn follower(record: &ControlAgent) -> Result<Follower, Failure> {
         .ok_or_else(|| Failure::Local(format!("unknown agent: {}", record.agent)))?;
     check_transcript(agent, &record.transcript_path).map_err(Failure::Local)?;
     Ok(Follower::new(agent, &record.transcript_path))
+}
+
+/// The event that tells the reader to drop what it shows: another conversation follows.
+fn reset() -> ChatEvent {
+    ChatEvent {
+        id: "reset".to_owned(),
+        cursor: 0,
+        parent: None,
+        body: EventBody::Reset,
+    }
 }
 
 fn read_failure(error: &io::Error) -> Failure {
@@ -216,12 +254,7 @@ impl Stream<'_> {
         }
         self.follower.expect(record.approval.as_ref());
         if moved {
-            let mut fresh = vec![ChatEvent {
-                id: "reset".to_owned(),
-                cursor: 0,
-                parent: None,
-                body: EventBody::Reset,
-            }];
+            let mut fresh = vec![reset()];
             fresh.extend(
                 self.follower
                     .backlog(self.limit)
@@ -290,6 +323,27 @@ mod tests {
         assert_eq!(parsed.validate(), Ok(()));
         let parsed = chat(&["--after", "7"]).unwrap();
         assert_eq!((parsed.target.target.as_str(), parsed.after), ("active", Some(7)));
+    }
+
+    #[test]
+    fn conversation_goes_with_a_cursor() {
+        for cursor in ["--after", "--before"] {
+            let parsed = chat(&[cursor, "7", "--conversation", "c1"]).unwrap();
+            assert_eq!(
+                (parsed.conversation.as_deref(), parsed.validate()),
+                (Some("c1"), Ok(()))
+            );
+        }
+        let parsed = chat(&["--after", "7", "--conversation", ""]).unwrap();
+        assert_eq!(
+            parsed.conversation.as_deref(),
+            Some(""),
+            "an empty id is one that never matches"
+        );
+        assert_eq!(
+            chat(&["--conversation", "c1"]).unwrap().validate(),
+            Err("--conversation needs --after or --before".to_owned())
+        );
     }
 
     #[test]

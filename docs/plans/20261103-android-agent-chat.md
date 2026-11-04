@@ -240,6 +240,10 @@ from a subagent's transcript, `parent` (the task tool's id):
 - `--after CURSOR`: everything from the line at the cursor on, then `live` and follow (used on reconnect). The
   cursor's own line is sent again, since the phone may have got its events in part; ids make that idempotent. A
   cursor past the end is a `reset` and a backlog.
+- `--conversation ID` (with `--after` or `--before`, added in Task 11's review): the conversation the cursor was read
+  in, as the stream's `conversation` events named it (empty when none was). When the pane's record names another
+  conversation (it moved while the phone was away), the cursor is not read in the new file: `--after` answers
+  `reset`, the backlog and `live`; `--before` answers `reset` alone. The phone always resumes and pages with it.
 - A subagent event's `cursor` is an offset in the subagent's own file, so the phone pages by the events without
   `parent` (Task 5). On `--after`, each subagent also sends its lines stamped (to the minute) no earlier than the last
   stamped main line before the cursor, so what it wrote while the phone was away is not lost. The ids a subagent's

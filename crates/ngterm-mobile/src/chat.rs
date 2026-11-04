@@ -17,10 +17,20 @@
 //!   the presentation stream's backoff ([`retry_delay`]) for a failed command, up to [`MAX_FAILURES`] in a row. The
 //!   origin sends the cursor's line again, and an event identical to one already delivered (its id, parent and body:
 //!   not its cursor, which a carried `conversation` changes) is dropped here, so the app sees no repeats and no gaps.
+//!   A cursor is an offset into one transcript, so it always goes with the conversation it was read in
+//!   (`--conversation`, the id the chat's last main `conversation` event named, empty when none came): the origin
+//!   weighs it against the pane's record when the command starts, and a pane that moved to another conversation
+//!   meanwhile (a `/clear` or a resume while the phone was away, the new file longer or shorter than the cursor)
+//!   answers a `reset` and the new backlog, which start the chat over as a `reset` on a live channel does. The
+//!   presentation stream's [`MobileEvent::PaneAgent`] plays no part in it: it may come before the channel is back,
+//!   after it or not at all.
 //! - **The end.** The command's exit 0 (the record cleared: the agent ended), its "no agent in this pane", a failure
 //!   before the first `live` (an origin without `ngtermctl agent chat`) or too many failures in a row end the chat:
 //!   [`ChatState::Ended`], with no error, and the app shows the terminal.
-//! - **Older pages** ([`Chats::older`]): `--before` the oldest cursor, once; a `reset` meanwhile makes the page stale.
+//! - **Older pages** ([`Chats::older`]): `--before` the oldest cursor, once, with its conversation; a `reset` meanwhile
+//!   (on the channel, or the page's own when the pane moved to another conversation) makes the page stale. Each chat
+//!   opened and each conversation it shows takes a new generation of one counter, so a page begun before a close and
+//!   answered after the pane's chat was opened again is stale too.
 //! - **The catalog** ([`Chats::commands`]): `ngtermctl agent commands` once per conversation, kept per pane until the
 //!   pane's announced conversation changes or its chat reads a `reset`. A failed fetch is not kept.
 //!
@@ -102,23 +112,40 @@ fn agent_words<'a>(subcommand: &'a str, session_id: &'a str, side: Side) -> Vec<
         .to_vec()
 }
 
-/// The chat channel's remote command: the backlog, or everything from the line at `after` on, then following.
+/// A cursor in the main transcript of the conversation it was read in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Cursor<'a> {
+    pub(crate) at: u64,
+    /// The conversation's id; empty when none was announced, which no conversation matches.
+    pub(crate) conversation: &'a str,
+}
+
+/// The chat channel's remote command: the backlog, or everything from the line at `after` on, then following (or a
+/// `reset` and the backlog when the pane is in another conversation now).
 #[must_use]
-pub(crate) fn chat_tail(session_id: &str, side: Side, after: Option<u64>) -> String {
+pub(crate) fn chat_tail(session_id: &str, side: Side, after: Option<Cursor<'_>>) -> String {
     let mut words = agent_words("chat", session_id, side);
     if let Some(after) = after {
-        words.extend(["--after".to_owned(), after.to_string()]);
+        words.extend([
+            "--after".to_owned(),
+            after.at.to_string(),
+            "--conversation".to_owned(),
+            after.conversation.to_owned(),
+        ]);
     }
     remote_cli_chain(&format!("exec {REMOTE_CLI} {}", shell_quoted_line(&words)))
 }
 
-/// An older page's remote command: about `limit` events before `before`.
+/// An older page's remote command: about `limit` events before `before` (or a `reset` alone when the pane is in
+/// another conversation now).
 #[must_use]
-pub(crate) fn page_tail(session_id: &str, side: Side, before: u64, limit: usize) -> String {
+pub(crate) fn page_tail(session_id: &str, side: Side, before: Cursor<'_>, limit: usize) -> String {
     let mut words = agent_words("chat", session_id, side);
     words.extend([
         "--before".to_owned(),
-        before.to_string(),
+        before.at.to_string(),
+        "--conversation".to_owned(),
+        before.conversation.to_owned(),
         "--limit".to_owned(),
         limit.to_string(),
     ]);
@@ -353,6 +380,8 @@ struct Chat<C> {
     resume: Option<u64>,
     /// The oldest: an older page ends there.
     oldest: Option<u64>,
+    /// The conversation the cursors are in: what the last main `conversation` event since the last `reset` named.
+    conversation: Option<String>,
     /// A `live` arrived: the origin runs the chat.
     started: bool,
     /// [`ChatState::Reconnecting`] was reported and no `live` has arrived since.
@@ -362,12 +391,13 @@ struct Chat<C> {
     retry_at: Option<Instant>,
     /// What was delivered of each id, hashed: an identical repeat is dropped.
     delivered: HashMap<String, u64>,
-    /// Counts the conversations shown (each `reset`): an older page of an earlier one is stale.
+    /// This chat's conversation shown now (a new one at each `reset`), from [`Chats`]' one counter: an older page
+    /// begun under another generation, of this chat or of an earlier chat of the pane, is stale.
     generation: u64,
 }
 
 impl<C: Connection> Chat<C> {
-    /// (Re)opens the channel, from where the chat stands.
+    /// (Re)opens the channel, from where the chat stands: after its newest cursor, in that cursor's conversation.
     fn launch(&mut self, last_launch: &mut u64) {
         self.retry_at = None;
         let Some(connection) = self.connection.clone() else {
@@ -377,22 +407,29 @@ impl<C: Connection> Chat<C> {
         *last_launch += 1;
         let launch = *last_launch;
         let (stop, stopped) = mpsc::unbounded_channel();
-        let command = chat_tail(&self.key.session_id, self.side, self.resume);
+        let after = self.resume.map(|at| Cursor {
+            at,
+            conversation: self.conversation.as_deref().unwrap_or_default(),
+        });
+        let command = chat_tail(&self.key.session_id, self.side, after);
         tokio::task::spawn_local(run_link(connection, command, launch, stopped, Rc::clone(&self.report)));
         self.link = Some(Link { launch, _stop: stop });
     }
 
-    /// The events of one read the app has not seen, and whether a `reset` was among them.
-    fn take(&mut self, events: Vec<wire::ChatEvent>) -> (Vec<ChatEvent>, bool) {
+    /// The events of one read the app has not seen, and whether a `reset` was among them; a `reset` takes the next
+    /// of `generations`.
+    fn take(&mut self, events: Vec<wire::ChatEvent>, generations: &mut u64) -> (Vec<ChatEvent>, bool) {
         let mut shown = Vec::with_capacity(events.len());
         let mut reset = false;
         for event in events {
-            match event.body {
+            match &event.body {
                 EventBody::Reset => {
                     reset = true;
-                    self.generation += 1;
+                    *generations += 1;
+                    self.generation = *generations;
                     self.resume = None;
                     self.oldest = None;
+                    self.conversation = None;
                     self.delivered.clear();
                 }
                 EventBody::Live => {
@@ -401,7 +438,10 @@ impl<C: Connection> Chat<C> {
                     self.failures = 0;
                     self.track(&event);
                 }
-                _ => {
+                body => {
+                    if let (EventBody::Conversation { conversation_id, .. }, None) = (body, &event.parent) {
+                        self.conversation = Some(conversation_id.clone());
+                    }
                     self.track(&event);
                     let print = fingerprint(&event);
                     if self.delivered.insert(event.id.clone(), print) == Some(print) {
@@ -440,6 +480,13 @@ impl<C: Connection> Chat<C> {
         }
         self.reconnect(events);
         false
+    }
+
+    /// The machine's connection went: the channel goes with it, and waits for the next one.
+    fn unlink(&mut self) {
+        self.connection = None;
+        self.link = None;
+        self.retry_at = None;
     }
 
     /// Reports [`ChatState::Reconnecting`], once until the next `live`.
@@ -496,6 +543,8 @@ pub(crate) struct Chats<C> {
     catalogs: HashMap<ChatKey, Catalog>,
     /// The last launch number handed out: unique among every chat's channels.
     last_launch: u64,
+    /// The last chat generation handed out: unique among every chat opened and every conversation each one showed.
+    last_generation: u64,
 }
 
 impl<C> Default for Chats<C> {
@@ -506,6 +555,7 @@ impl<C> Default for Chats<C> {
             announced: HashMap::new(),
             catalogs: HashMap::new(),
             last_launch: 0,
+            last_generation: 0,
         }
     }
 }
@@ -591,6 +641,7 @@ impl<C: Connection> Chats<C> {
         let side = self.side(&key).ok_or_else(|| MobileError::Remote {
             reason: UNKNOWN_PANE.to_owned(),
         })?;
+        self.last_generation += 1;
         let mut chat = Chat {
             key,
             side,
@@ -599,12 +650,13 @@ impl<C: Connection> Chats<C> {
             link: None,
             resume: None,
             oldest: None,
+            conversation: None,
             started: false,
             reconnecting: false,
             failures: 0,
             retry_at: None,
             delivered: HashMap::new(),
-            generation: 0,
+            generation: self.last_generation,
         };
         chat.launch(&mut self.last_launch);
         self.open.push(chat);
@@ -632,26 +684,31 @@ impl<C: Connection> Chats<C> {
         self.catalogs.retain(|key, _| key.machine_id != machine_id);
     }
 
-    /// Closes every chat.
+    /// Closes every chat. The counters go on, so nothing begun before is taken for a later chat's.
     pub(crate) fn clear(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            last_launch: self.last_launch,
+            last_generation: self.last_generation,
+            ..Self::default()
+        };
     }
 
     /// `machine_id`'s connection was lost: its chats' channels go, each reported reconnecting, and wait for it.
     pub(crate) fn machine_down(&mut self, machine_id: &str) -> Vec<MobileEvent> {
         let mut events = Vec::new();
         for chat in self.open.iter_mut().filter(|chat| chat.key.machine_id == machine_id) {
-            chat.connection = None;
-            chat.link = None;
-            chat.retry_at = None;
+            chat.unlink();
             chat.reconnect(&mut events);
         }
         events
     }
 
-    /// `machine_id`'s connection was closed to suspend: as [`Chats::machine_down`], reporting nothing.
+    /// `machine_id`'s connection was closed to suspend: as [`Chats::machine_down`], reporting nothing, so nothing
+    /// counts as reported either: a resume that does not go live reports [`ChatState::Reconnecting`] then.
     pub(crate) fn suspend_machine(&mut self, machine_id: &str) {
-        let _ = self.machine_down(machine_id);
+        for chat in self.open.iter_mut().filter(|chat| chat.key.machine_id == machine_id) {
+            chat.unlink();
+        }
     }
 
     /// `machine_id` is connected on `connection`: each of its chats with no channel resumes at once.
@@ -687,7 +744,7 @@ impl<C: Connection> Chats<C> {
         match report {
             LinkReport::Events(events) => {
                 let chat = &mut self.open[index];
-                let (events, reset) = chat.take(events);
+                let (events, reset) = chat.take(events, &mut self.last_generation);
                 let key = chat.key.clone();
                 if !events.is_empty() {
                     out.push(MobileEvent::Chat {
@@ -712,7 +769,8 @@ impl<C: Connection> Chats<C> {
         out
     }
 
-    /// The page before `key`'s oldest event to read, or `None` when there is nothing before it.
+    /// The page before `key`'s oldest event to read, in its conversation, or `None` when there is nothing before it
+    /// (or no conversation was announced, which leaves nothing to page).
     ///
     /// # Errors
     ///
@@ -728,9 +786,13 @@ impl<C: Connection> Chats<C> {
         let connection = chat.connection.clone().ok_or_else(|| MobileError::NotConnected {
             machine_id: key.machine_id.clone(),
         })?;
-        Ok(chat.oldest.filter(|oldest| *oldest > 0).map(|oldest| Job {
+        let before = chat
+            .oldest
+            .filter(|oldest| *oldest > 0)
+            .zip(chat.conversation.as_deref());
+        Ok(before.map(|(at, conversation)| Job {
             connection,
-            command: page_tail(&key.session_id, chat.side, oldest, OLDER_PAGE),
+            command: page_tail(&key.session_id, chat.side, Cursor { at, conversation }, OLDER_PAGE),
             generation: chat.generation,
         }))
     }
@@ -739,7 +801,8 @@ impl<C: Connection> Chats<C> {
     ///
     /// # Errors
     ///
-    /// [`MobileError::Cancelled`] when the chat closed or its conversation switched meanwhile.
+    /// [`MobileError::Cancelled`] when the chat closed (even if the pane's chat was opened again) or its
+    /// conversation switched meanwhile, here or on the origin (the page is a `reset`: the channel brings its own).
     pub(crate) fn paged(
         &mut self,
         key: &ChatKey,
@@ -751,6 +814,9 @@ impl<C: Connection> Chats<C> {
             .map(|index| &mut self.open[index])
             .filter(|chat| chat.generation == generation)
             .ok_or(MobileError::Cancelled)?;
+        if events.iter().any(|event| matches!(event.body, EventBody::Reset)) {
+            return Err(MobileError::Cancelled);
+        }
         for event in events.iter().filter(|event| event.parent.is_none()) {
             chat.oldest = Some(chat.oldest.map_or(event.cursor, |oldest| oldest.min(event.cursor)));
         }
