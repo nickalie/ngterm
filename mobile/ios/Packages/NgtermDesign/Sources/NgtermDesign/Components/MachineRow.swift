@@ -28,6 +28,7 @@ public struct MachineRow<Summary: View>: View {
             heading {
                 Text(name)
                     .font(Typography.machineName)
+                    .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
                 if !typeSize.isAccessibilitySize {
                     Spacer(minLength: 0)
@@ -36,7 +37,7 @@ public struct MachineRow<Summary: View>: View {
             }
             Text(verbatim: address)
                 .font(Typography.address)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Palette.secondaryText.color)
             if detail != nil || action != nil {
                 DetailLine(detail: detail, action: action)
             }

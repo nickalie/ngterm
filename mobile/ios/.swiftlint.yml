@@ -32,6 +32,9 @@ disabled_rules:
   - extension_access_modifier
   # contradicts opening_brace and swift-format, which keep a brace on its declaration's line
   - contrasted_opening_brace
+  # contradicts swift-format's UseLetInEveryBoundCaseVariable, which is kept: a pattern binding several associated
+  # values says `let` at each (`case .tree(let machineId, let sessions)`), where this rule wants one `case let`
+  - pattern_matching_keywords
   # the tests are Swift Testing and XCTest: Nimble and Quick are not dependencies, and prefer_nimble would refuse
   # every XCTest assertion of the UI tests
   - prefer_nimble

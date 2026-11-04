@@ -36,7 +36,7 @@ public struct Cover: View {
                     .accessibilityAddTraits(.isHeader)
                 Text(message)
                     .font(Typography.note)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Palette.secondaryText.color)
                     .multilineTextAlignment(.center)
                 if let action {
                     Button(action.title, action: action.perform)

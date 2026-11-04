@@ -15,6 +15,18 @@ public struct StatePanel: View {
 
     /// The body of the view.
     public var body: some View {
+        // at the largest text sizes the panel may not fit: it scrolls then, rather than clip (the system's panel takes
+        // whatever height it is offered, so it is offered at least the screen's and centers in it)
+        GeometryReader { proxy in
+            ScrollView {
+                panel
+                    .frame(minHeight: proxy.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
+    private var panel: some View {
         ContentUnavailableView {
             // the glyph and the title apart, not a Label: the title is then an element of its own, and the
             // accessibility audit measures its text, not the glyph's thin strokes beside it
@@ -35,7 +47,9 @@ public struct StatePanel: View {
             }
         } description: {
             if let message {
+                // the app's secondary text: the system's grey stays under 4.5:1 on a sidebar's ground
                 Text(message)
+                    .foregroundStyle(Palette.secondaryText.color)
             }
         } actions: {
             if let action {

@@ -69,6 +69,17 @@ public enum Palette {
         darkIncreased: "#bec7ca"
     )
 
+    /// Secondary text: a row's address and its line, a note, a plate's label, a form's hint.
+    ///
+    /// The system's secondary label stays under 4.5:1 on the grouped grounds, so the app's secondary text is this
+    /// grey, which reads on every ground as every text token does, and on an iPad sidebar's grey rows too.
+    public static let secondaryText = ColorToken(
+        light: "#58585e",
+        dark: "#a0a0a6",
+        lightIncreased: "#4a4a50",
+        darkIncreased: "#c8c8ce"
+    )
+
     /// The mark's copper (`resources/icons/ngterm.svg`): the app icon's fill only, never text.
     public static let brandCopper: RGB = "#cf6e31"
 

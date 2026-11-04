@@ -2,16 +2,22 @@ import NgtermDesign
 import NgtermFeatures
 import SwiftUI
 
-/// A main window: the app's frame over its own navigation.
+/// A main window: the app's frame over its own navigation, the first run over it while the app has no key, and the
+/// questions the machines' connects wait on.
 ///
-/// The columns hold placeholders until their features land.
+/// The sessions and session columns hold placeholders until their features land.
 internal struct RootView: View {
+    private let graph: AppGraph
     private let coreVersion: String
-    @State private var model: ScaffoldModel
+    @State private var scaffold: ScaffoldModel
+    @State private var machines: MachinesModel
+    @State private var onboarding: OnboardingModel
 
     internal var body: some View {
-        AppScaffold(model: model) {
-            MachinesPlaceholder()
+        AppScaffold(model: scaffold) {
+            MachinesView(model: machines, selection: scaffold.machine) { machineId in
+                scaffold.show(machine: machineId)
+            }
         } sessions: { _ in
             StatePanel.loading(String(localized: "Reading the machine's sessions"))
         } session: { _ in
@@ -19,12 +25,21 @@ internal struct RootView: View {
         } settings: {
             SettingsPlaceholder(coreVersion: coreVersion)
         } onboarding: {
-            EmptyView()
+            OnboardingView(model: onboarding) {
+                scaffold.isOnboardingPresented = false
+            }
+        }
+        .connectPrompts(machines)
+        .task {
+            graph.start()
         }
     }
 
-    internal init(coreVersion: String, windows: SessionWindows) {
+    internal init(graph: AppGraph, coreVersion: String, windows: SessionWindows) {
+        self.graph = graph
         self.coreVersion = coreVersion
-        _model = State(initialValue: ScaffoldModel(windows: windows))
+        _scaffold = State(initialValue: ScaffoldModel(windows: windows, needsOnboarding: graph.keys.keys.isEmpty))
+        _machines = State(initialValue: MachinesModel(graph: graph))
+        _onboarding = State(initialValue: OnboardingModel(keys: graph.keys))
     }
 }

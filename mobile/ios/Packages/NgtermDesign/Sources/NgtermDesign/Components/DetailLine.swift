@@ -23,7 +23,7 @@ internal struct DetailLine: View {
         if let detail {
             Text(detail)
                 .font(Typography.detail)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Palette.secondaryText.color)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }

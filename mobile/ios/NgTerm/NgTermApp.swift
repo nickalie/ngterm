@@ -10,7 +10,7 @@ internal struct NgTermApp: App {
 
     internal var body: some Scene {
         WindowGroup {
-            RootView(coreVersion: core.version, windows: windows)
+            RootView(graph: core.graph, coreVersion: core.version, windows: windows)
         }
         // one window per session: SwiftUI keeps a window per value, and opening a session that has one focuses it
         WindowGroup(for: SessionWindowID.self) { session in

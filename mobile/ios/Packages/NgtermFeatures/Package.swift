@@ -33,7 +33,10 @@ let package = Package(
             name: "NgtermFeaturesTests",
             dependencies: [
                 "NgtermFeatures",
+                .product(name: "NgtermCore", package: "NgtermCore"),
+                .product(name: "NgtermCoreFakes", package: "NgtermCore"),
                 .product(name: "NgtermDesign", package: "NgtermDesign"),
+                .product(name: "NgtermPlatform", package: "NgtermPlatform"),
                 .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
             ],
             exclude: ["__Snapshots__"],
