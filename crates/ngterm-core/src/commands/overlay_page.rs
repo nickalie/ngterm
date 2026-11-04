@@ -403,7 +403,10 @@ impl Core {
         for page in gone {
             self.pages.known.remove(&page);
             self.pages.outcomes.dismiss(page);
-            self.pages.released.push(page);
+            // only a frontend with web views takes the released pages; a headless origin's would pile up
+            if self.pages.host.is_some() {
+                self.pages.released.push(page);
+            }
             self.replica_page_released(page);
             self.end_companion_page_serving(page);
         }

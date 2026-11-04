@@ -223,6 +223,15 @@ impl Remote {
             .collect()
     }
 
+    /// Runs the remote tick `count` more times, letting finished ssh calls settle.
+    fn ticks(&mut self, count: usize) {
+        for _ in 0..count {
+            std::thread::sleep(Duration::from_millis(10));
+            self.fixture.core.remote_tick(Instant::now() + Duration::from_secs(60));
+            self.fixture.core.commit();
+        }
+    }
+
     /// Runs the remote tick until `done` or five seconds passed.
     fn tick_until(&mut self, mut done: impl FnMut(&Self) -> bool) {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -553,6 +562,80 @@ fn a_page_companion_of_a_remote_row_is_created_there_and_shown_here_through_its_
     assert_eq!(outcome.outcome, ControlHtmlPageOutcomeState::Pending);
 }
 
+/// The origin's handover of its page companion `CREATED` (a headless origin's `companion.page`).
+fn hand_over(remote: &mut Remote) {
+    let row = remote.row;
+    let companion = crate::remote::frames::PresentationCompanion {
+        session: CREATED.to_owned(),
+    };
+    remote.core().attach_handed_companion(row, &companion);
+}
+
+#[test]
+fn a_page_companion_its_origin_hands_over_attaches_under_the_row_once() {
+    let mut remote = Remote::new(vec![page_attach(CREATED)]);
+    let selected = remote.fixture.store().selected_session_id();
+
+    hand_over(&mut remote);
+    hand_over(&mut remote);
+    remote.tick_until(|remote| !remote.companions().is_empty());
+    hand_over(&mut remote);
+    remote.ticks(5);
+
+    let companions = remote.companions();
+    assert_eq!(companions.len(), 1, "one row, however often it is handed over");
+    let found = remote.fixture.store().session(companions[0]).unwrap();
+    assert_eq!(found.content(), SessionContent::Page);
+    assert_eq!(found.overlay.page().unwrap().replica_of, Uuid::parse_str(PAGE_ID).ok());
+    assert_eq!(found.remote_presentation().unwrap().binding.remote_session_id, CREATED);
+    assert_eq!(remote.runner.calls().len(), 1, "one attachment asked for");
+    assert!(remote.runner.line(0).contains("page-attach"));
+    assert_eq!(
+        remote.fixture.store().selected_session_id(),
+        selected,
+        "a handover never takes the selection"
+    );
+}
+
+#[test]
+fn a_handover_racing_this_machines_own_create_shows_one_row() {
+    let mut remote = Remote::new(vec![page_attach(CREATED)]);
+    hand_over(&mut remote);
+    // the handover's call takes its answer before this machine's create is scripted behind it
+    remote.tick_until(|remote| remote.runner.calls().len() == 1);
+    remote.script(vec![origin(), reply(CREATED), page_attach(CREATED)]);
+
+    let response = remote.page_companion(|a| {
+        page_file(a);
+        a.follow = Some(true);
+    });
+    let row = id_of(&response);
+    remote.ticks(10);
+
+    assert_eq!(remote.companions(), [row], "the later attach reuses the row");
+    assert_eq!(
+        remote.fixture.store().selected_session_id(),
+        Some(row),
+        "--follow still selects it"
+    );
+}
+
+#[test]
+fn a_handover_that_fails_is_reported_and_creates_nothing() {
+    let mut remote = Remote::new(vec![result(1, "", "no such session")]);
+    hand_over(&mut remote);
+    remote.tick_until(|remote| remote.runner.calls().len() == 1);
+    remote.ticks(10);
+    assert!(remote.companions().is_empty());
+    hand_over(&mut remote);
+    remote.tick_until(|remote| remote.runner.calls().len() == 2);
+    assert_eq!(
+        remote.runner.calls().len(),
+        2,
+        "a failed handover is not pending, so the next one asks again"
+    );
+}
+
 /// Creates a page companion of the row and returns its row and local page id.
 fn page_companion(remote: &mut Remote) -> (Uuid, Uuid) {
     let response = remote.page_companion(page_file);
@@ -705,6 +788,35 @@ fn a_listed_page_row_attaches_only_under_the_one_row_showing_its_parent() {
     bind(&mut remote, other);
     let ambiguous = attach(&mut remote);
     assert_eq!(error(&ambiguous), "more than one row here shows the page's parent");
+}
+
+/// Upstream's `attachRemotePage` adds a view on every `live attach` of a page row; only the handover and this
+/// machine's own create reuse a row already showing the companion.
+#[test]
+fn live_attach_of_a_page_shown_here_shows_it_again() {
+    let page_row = json!({"id": CREATED, "name": "report", "windowID": "w1", "windowName": "main",
+        "workspaceID": "ws1", "workspaceName": "work", "cwd": "/srv", "panes": [], "parent": ORIGIN,
+        "content": "page"});
+    let listing = || tree(&[session(ORIGIN), page_row.clone()]);
+    let mut remote = Remote::new(vec![page_attach(CREATED)]);
+    let endpoint: ngterm_proto::ControlLiveEndpoint = serde_json::from_value(endpoint()).unwrap();
+    let origin = RemoteOrigin {
+        host: "buildbox".to_owned(),
+        endpoint,
+        session_name: "c".to_owned(),
+    };
+    let row = remote.row;
+    let binding = RemoteBinding::new(ORIGIN, HashMap::new(), None, Some(origin));
+    remote.fixture.store_mut().unwrap().bind_remote(binding, row);
+    hand_over(&mut remote);
+    remote.tick_until(|remote| !remote.companions().is_empty());
+    remote.script(vec![listing(), page_attach(CREATED)]);
+
+    let host = args(|a| a.host = Some("buildbox".to_owned()));
+    let attached = remote.fixture.send(Command::Live(LiveCmd::Attach), Some(CREATED), host);
+
+    assert!(attached.ok, "{attached:?}");
+    assert_eq!(remote.companions().len(), 2, "a second view, each with its own channel");
 }
 
 #[test]

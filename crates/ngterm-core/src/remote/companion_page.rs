@@ -6,6 +6,9 @@
 //! ([`super::page_serve`]), and ending one ends nothing else: the page belongs to this machine until it closes here,
 //! which ends every channel and token serving it. A soft-closed page still serves, so undo brings it back with its
 //! viewers attached.
+//!
+//! A headless origin also tells the machine presenting a parent about each page companion created under it
+//! ([`Core::hand_companion_page_to_presenter`]), which attaches it as `live attach` would.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +16,7 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
-use super::frames::PresentationPage;
+use super::frames::{Body, PresentationCompanion, PresentationPage};
 use super::page::{PAGE_CLAIM_WINDOW, RemotePagePlace, presentation_source};
 use super::page_serve::PageServeStream;
 use crate::Core;
@@ -160,6 +163,19 @@ impl Core {
             if let Some(stream) = companions.streams.remove(&claim) {
                 stream.shutdown();
             }
+        }
+    }
+
+    /// Tells the machine presenting `parent` to show its new page companion `companion` (this build's
+    /// `companion.page`): on a headless origin nothing shows the page here, so without it the page would wait unseen
+    /// until a viewer attached the group again. A presenter that does not list the kind is told nothing, and a mirror
+    /// attaches it with `live attach`.
+    pub(crate) fn hand_companion_page_to_presenter(&mut self, parent: Uuid, companion: Uuid) {
+        let body = Body::CompanionPage(PresentationCompanion {
+            session: uuid_string(companion),
+        });
+        if !self.remote.hub.send_to_presenter(body, parent) {
+            tracing::info!(%parent, %companion, "no presenter takes the page companion; it waits for an attach");
         }
     }
 

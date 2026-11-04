@@ -15,12 +15,12 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::frames::{
-    self, Body, PresentationAsk, PresentationAskRef, PresentationFrame, PresentationHello, PresentationHud,
-    PresentationLayout, PresentationMode, PresentationNotify, PresentationOverlay, PresentationOverlayChange,
-    PresentationPage, PresentationPageChange, PresentationPageCommand, PresentationRespawns, PresentationSound,
-    PresentationStatus,
+    self, Body, PresentationAsk, PresentationAskRef, PresentationCompanion, PresentationFrame, PresentationHello,
+    PresentationHud, PresentationLayout, PresentationMode, PresentationNotify, PresentationOverlay,
+    PresentationOverlayChange, PresentationPage, PresentationPageChange, PresentationPageCommand, PresentationRespawns,
+    PresentationSound, PresentationStatus,
 };
-use super::hub::{PAGE_KINDS, SUPPORTED_KINDS};
+use super::hub::{COMPANION_PAGE_KIND, PAGE_KINDS, SUPPORTED_KINDS};
 use super::reconnect::retry_delay;
 use crate::model::RemoteConnection;
 
@@ -32,14 +32,18 @@ pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 
 /// The kinds this viewer's hello lists: every kind the build speaks, the page kinds only when it can show a handed-over
 /// page (`pages`: the web views are built in and can run), and with them the loopback forward
-/// ([`super::page_tunnel::TUNNEL_KIND`]), an extension of this build. Upstream's hello lists them all; an origin a viewer
+/// ([`super::page_tunnel::TUNNEL_KIND`]) and a headless origin's page companions ([`COMPANION_PAGE_KIND`]), extensions
+/// of this build. Upstream's hello lists them all; an origin a viewer
 /// leaves them out for hands it no page and keeps its own refusal, rather than handing over a page that is refused at
 /// once.
 #[must_use]
 pub fn viewer_kinds(pages: bool) -> Vec<String> {
     SUPPORTED_KINDS
         .iter()
-        .filter(|kind| pages || !(PAGE_KINDS.contains(kind) || **kind == super::page_tunnel::TUNNEL_KIND))
+        .filter(|kind| {
+            pages
+                || !(PAGE_KINDS.contains(kind) || [super::page_tunnel::TUNNEL_KIND, COMPANION_PAGE_KIND].contains(kind))
+        })
         .map(|kind| (*kind).to_owned())
         .collect()
 }
@@ -96,6 +100,8 @@ pub enum ClientEffect {
     PageRequest(PresentationPage),
     PageClose(PresentationPageChange),
     PageCommand(PresentationPageCommand),
+    /// Attaches a page companion the origin created under the session.
+    CompanionPage(PresentationCompanion),
     /// The origin's respawn counts; `true` for a snapshot's, which a first attach takes as its baseline.
     Respawns(PresentationRespawns, bool),
     Warn(String),
@@ -322,6 +328,7 @@ impl PresentationClient {
             Body::PageClose(change) => effects.push(ClientEffect::PageClose(change)),
             Body::PageCommand(command) => effects.push(ClientEffect::PageCommand(command)),
             Body::Respawn(respawns) => effects.push(ClientEffect::Respawns(respawns, false)),
+            Body::CompanionPage(companion) => effects.push(ClientEffect::CompanionPage(companion)),
             Body::Hello(_)
             | Body::Ack
             | Body::PresenterAcquire
@@ -860,6 +867,11 @@ mod tests {
         harness.connect(snapshot, 7, PresentationMode::Mirror);
         harness.deliver(&line(Body::Status(None), 7, 2));
         harness.deliver(&line(Body::Name("Auto Update".to_owned()), 7, 3));
+        let companion = PresentationCompanion {
+            session: "c1".to_owned(),
+        };
+        harness.deliver(&line(Body::CompanionPage(companion.clone()), 7, 4));
+        assert!(harness.effects.contains(&ClientEffect::CompanionPage(companion)));
         for name in ["Fix Linux", "Auto Update"] {
             assert!(harness.effects.contains(&ClientEffect::Name(name.to_owned())), "{name}");
         }

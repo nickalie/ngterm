@@ -859,6 +859,15 @@ impl<'de> Deserialize<'de> for PresentationLayout {
     }
 }
 
+/// A page companion the origin created under the presented session, for the presenter to show under its row. This
+/// build's addition: a headless origin shows no page itself, so its page companions are seen only through a viewer.
+/// Sent only to a presenter whose hello lists it ([`super::hub::COMPANION_PAGE_KIND`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresentationCompanion {
+    /// The companion's session id on the origin.
+    pub session: String,
+}
+
 /// How often the origin respawned each of a session's panes, by daemon name, in one origin app lifetime (upstream's
 /// `PresentationRespawns`): `epoch` changes on every launch, so a counter that restarted is never read as older.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -950,6 +959,8 @@ pub enum Body {
     PageClosed(PresentationPageChange),
     PageCommand(PresentationPageCommand),
     PageState(PresentationPageState),
+    /// A page companion the origin created under the session; the presenter attaches it under its row.
+    CompanionPage(PresentationCompanion),
     /// The origin respawned a pane's shell under the same daemon name; carries that pane's new count alone.
     Respawn(PresentationRespawns),
     /// A kind this build does not speak, kept with its place in the order.
@@ -991,6 +1002,7 @@ impl Body {
             Self::PageClosed(_) => "page.closed",
             Self::PageCommand(_) => "page.command",
             Self::PageState(_) => "page.state",
+            Self::CompanionPage(_) => super::hub::COMPANION_PAGE_KIND,
             Self::Respawn(_) => "pane.respawn",
             Self::Unknown(kind) => kind,
         }
@@ -1024,6 +1036,7 @@ impl Body {
             }
             Self::PageCommand(command) => entry("page", serde_json::to_value(command)),
             Self::PageState(state) => entry("page", serde_json::to_value(state)),
+            Self::CompanionPage(companion) => entry("companion", serde_json::to_value(companion)),
             Self::Respawn(respawns) => entry("respawn", serde_json::to_value(respawns)),
             Self::Status(None)
             | Self::Context(None)
@@ -1176,6 +1189,7 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "page.closed" => Body::PageClosed(required(object, "page")?),
         "page.command" => Body::PageCommand(required(object, "page")?),
         "page.state" => Body::PageState(required(object, "page")?),
+        super::hub::COMPANION_PAGE_KIND => Body::CompanionPage(required(object, "companion")?),
         "pane.respawn" => Body::Respawn(required(object, "respawn")?),
         other => Body::Unknown(other.to_owned()),
     })
@@ -1310,6 +1324,9 @@ mod tests {
                 ..PresentationSnapshot::default()
             }),
             Body::Respawn(respawns()),
+            Body::CompanionPage(PresentationCompanion {
+                session: "0E2B7C1A-5D4F-4E3B-9A61-7C2D8F0B1A23".to_owned(),
+            }),
             Body::Notify(PresentationNotify {
                 title: "build".to_owned(),
                 body: "done".to_owned(),

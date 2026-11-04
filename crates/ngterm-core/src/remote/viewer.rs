@@ -102,6 +102,8 @@ pub(crate) struct ViewerRuntime {
     pub(crate) companion_flows: Vec<super::companions::GuiCompanion>,
     /// The End Sessions waiting for their origin ([`super::origin_sessions`]).
     pub(crate) end_flows: Vec<super::origin_sessions::EndRun>,
+    /// Page companions their origin handed over, being attached ([`super::companions`]).
+    pub(crate) handed_companions: Vec<super::companions::PageAttach>,
     /// Page companions whose page ended on their origin, waiting for its outcome before their rows close.
     pub(crate) page_endings: Vec<super::companions::PageEnding>,
     /// The machines whose saved rows wait to attach again after a launch ([`super::relaunch`]).
@@ -209,6 +211,7 @@ impl Core {
         self.advance_attach_flows();
         self.tick_relaunch(now);
         self.advance_companion_flows(now);
+        self.advance_handed_companions();
         self.advance_end_flows();
         self.advance_remote_splits();
         self.settle_page_endings();
@@ -221,6 +224,7 @@ impl Core {
         if !viewer.probes.is_empty()
             || !viewer.attach_flows.is_empty()
             || !viewer.companion_flows.is_empty()
+            || !viewer.handed_companions.is_empty()
             || !viewer.end_flows.is_empty()
             || !viewer.split_flows.is_empty()
             || !viewer.queued_split_panes.is_empty()
@@ -478,6 +482,7 @@ impl Core {
             ClientEffect::PageClose(change) => self.close_replica_page(&change.page, session),
             ClientEffect::PageCommand(command) => self.apply_replica_page_command(&command, session),
             ClientEffect::Respawns(respawns, seed) => self.apply_remote_respawns(&respawns, seed, session),
+            ClientEffect::CompanionPage(companion) => self.attach_handed_companion(session, &companion),
             ClientEffect::Warn(reason) => {
                 tracing::warn!(%session, %reason, "presentation stream");
             }

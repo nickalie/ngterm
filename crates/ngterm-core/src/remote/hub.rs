@@ -124,11 +124,15 @@ impl PresenterGrant {
 /// A presenter accepts optional overlay width and height axes (upstream's `overlayPointsKind`).
 pub const OVERLAY_POINTS_KIND: &str = "overlay.points";
 
+/// A presenter attaches the page companions a headless origin creates under the session it presents
+/// ([`super::frames::Body::CompanionPage`]). This build's addition, listed with the page kinds.
+pub const COMPANION_PAGE_KIND: &str = "companion.page";
+
 /// The frame kinds this origin produces, in upstream's order; a hello's kinds are filtered through it. Work handed to a
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
 /// goes to every viewer whatever its hello listed, as upstream's.
-pub const SUPPORTED_KINDS: [&str; 17] = [
+pub const SUPPORTED_KINDS: [&str; 18] = [
     "status",
     "hud",
     "notify",
@@ -140,6 +144,7 @@ pub const SUPPORTED_KINDS: [&str; 17] = [
     ASK_OTHER_KIND,
     OVERLAY_POINTS_KIND,
     super::page_tunnel::TUNNEL_KIND,
+    COMPANION_PAGE_KIND,
     PAGE_KINDS[0],
     PAGE_KINDS[1],
     PAGE_KINDS[2],
@@ -828,7 +833,7 @@ mod tests {
 
     #[test]
     fn the_kinds_follow_upstreams_order() {
-        // upstream's, with this build's loopback forward before the page kinds, which close the list
+        // upstream's, with this build's loopback forward and companion pages before the page kinds, which close the list
         assert_eq!(
             SUPPORTED_KINDS,
             [
@@ -843,6 +848,7 @@ mod tests {
                 "ask.other",
                 "overlay.points",
                 "page.tunnel",
+                "companion.page",
                 "page.request",
                 "page.rejected",
                 "page.close",
