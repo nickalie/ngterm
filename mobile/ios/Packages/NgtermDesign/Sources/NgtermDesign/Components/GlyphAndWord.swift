@@ -11,7 +11,7 @@ internal struct GlyphAndWord: View {
             StatusGlyph(shape, color: color)
             Text(word)
                 .font(Typography.statusWord)
-                .foregroundStyle(color)
+                .rowForeground(color)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .ignore)

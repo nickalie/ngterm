@@ -30,6 +30,7 @@ internal final class TestGraph {
             settings: SettingsStore(directory: directory),
             keys: AppKeys(store: KeyStore(directory: directory), vault: vault, maker: maker, comment: "ngterm@test"),
             pins: pins,
+            attached: AttachedStore(directory: directory),
             core: core,
             pathSource: path,
             clock: clock.read

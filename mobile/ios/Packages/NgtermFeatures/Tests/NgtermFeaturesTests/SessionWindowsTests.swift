@@ -136,6 +136,24 @@ internal struct SessionWindowsTests {
         #expect(model.areMachinesHidden)
     }
 
+    @Test("a removed machine's sessions and session leave the window, and a compact stack goes back to the machines")
+    internal func forgetMachine() {
+        let windows = SessionWindows()
+        let model = ScaffoldModel(windows: windows)
+        let other = ScaffoldModel(windows: windows)
+        _ = other.open(docs)
+        _ = model.open(docs)
+        model.forget(machine: "nas")
+        #expect(model.session == docs)
+        #expect(other.shownSessionPlacement == .otherWindow)
+        model.forget(machine: "build-01")
+        #expect(model.machine == nil)
+        #expect(model.session == nil)
+        #expect(model.compactColumn == .sidebar)
+        // the window let the session go: the one that had it before shows it again
+        #expect(other.shownSessionPlacement == .here)
+    }
+
     @Test("opening a session shows it here and moves a compact stack to it")
     internal func openingShowsTheSessionHere() {
         let model = ScaffoldModel(windows: SessionWindows())

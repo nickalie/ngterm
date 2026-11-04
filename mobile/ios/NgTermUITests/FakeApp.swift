@@ -4,15 +4,21 @@ import XCTest
 internal enum FakeApp {
     // how long a screen may take to come
     private static let wait: TimeInterval = 30
+    // how long a list is watched for, at most, before an audit: this many reads, this far apart
+    private static let settleReads = 20
+    private static let settleBeat: TimeInterval = 0.25
 
     /// Launches the app on the fake core for `test`: on the first run, or past it with a key when `withKey`.
     ///
     /// An iPad turns on its side for the test, and upright again after it: the three columns then sit side by side,
     /// where upright the machines' column comes over the others as an overlay, and the audit would measure the dimmed
-    /// columns under it and the overlay while it slides in.
+    /// columns under it and the overlay while it slides in. It turns again once the app runs: on a simulator just
+    /// booted the app's first window stays upright on the turned device, and an audit then measures a sheet laid out
+    /// upright, its last rows off the screen.
     @MainActor
     internal static func launch(withKey: Bool, for test: XCTestCase) -> XCUIApplication {
-        if UIDevice.current.userInterfaceIdiom == .pad {
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+        if isPad {
             XCUIDevice.shared.orientation = .landscapeLeft
             test.addTeardownBlock { @MainActor in
                 XCUIDevice.shared.orientation = .portrait
@@ -21,7 +27,27 @@ internal enum FakeApp {
         let app = XCUIApplication()
         app.launchArguments = ["-ngterm-fake-core"] + (withKey ? ["-ngterm-fake-key"] : [])
         app.launch()
+        if isPad {
+            expectLandscape(app)
+        }
         return app
+    }
+
+    // turns the running app on its side, from upright, and waits until its window is wider than it is tall: a
+    // simulator just booted has the device on its side before the app's first window follows it
+    @MainActor
+    private static func expectLandscape(_ app: XCUIApplication) {
+        XCUIDevice.shared.orientation = .portrait
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let window = app.windows.firstMatch
+        for _ in 0..<Int(wait / settleBeat) {
+            let frame = window.frame
+            if frame.width > frame.height {
+                return
+            }
+            _ = XCTWaiter.wait(for: [XCTestExpectation(description: "a beat")], timeout: settleBeat)
+        }
+        XCTFail("the app's window stayed upright: \(window.frame)")
     }
 
     /// Waits for `element`, failing the test when it doesn't come.
@@ -65,13 +91,40 @@ internal enum FakeApp {
         // return closes the keyboard, so the audit sees the whole form
         userField.typeText(user + "\n")
         if audit {
-            // a scroll closes the keyboard (the form dismisses it so), so the audit sees the whole form
-            app.collectionViews["machine-form"].swipeUp()
-            // the scroll settles before the audit looks
-            _ = XCTWaiter.wait(for: [XCTestExpectation(description: "settled")], timeout: 1)
+            // a scroll closes the keyboard (the form dismisses it so), so the audit sees the whole form; an iPad's
+            // sheet holds the whole form, and a swipe there only bounces it, which the audit catches mid-move
+            let form = app.collectionViews["machine-form"]
+            if UIDevice.current.userInterfaceIdiom != .pad {
+                form.swipeUp()
+            }
+            settle(form, in: app)
             try auditForm(app)
         }
         app.buttons["machine-save"].tap()
+    }
+
+    /// Waits until the keyboard has gone and `list` has stopped moving, before an audit looks at it.
+    ///
+    /// An iPad's keyboard covers the form's last rows while it goes, and a list bounces back after a swipe: the audit
+    /// would measure the rows' text against the keyboard, or while it moves, and find it under 4.5:1 now and then.
+    @MainActor
+    internal static func settle(_ list: XCUIElement, in app: XCUIApplication) {
+        let keyboardGone = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "count == 0"),
+            object: app.keyboards
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [keyboardGone], timeout: wait), .completed, "the keyboard stayed")
+        // the last row's frame, read until two reads a beat apart agree
+        let last = list.cells.allElementsBoundByIndex.last
+        var before = last?.frame
+        for _ in 0..<settleReads {
+            _ = XCTWaiter.wait(for: [XCTestExpectation(description: "a beat")], timeout: settleBeat)
+            let now = last?.frame
+            if now == before {
+                return
+            }
+            before = now
+        }
     }
 
     /// Waits until the row of the machine titled `title` reads `badge` (its link's word).
@@ -134,8 +187,11 @@ internal enum FakeApp {
             return true
         }
         let element = issue.element.map { "\($0.elementType.rawValue) '\($0.label)' \($0.frame)" } ?? "none"
-        XCTContext.runActivity(named: "AUDIT \(issue.compactDescription): \(element)") { _ in
-            // the activity's name is the record
+        // the activity's name is the record, with the screen as the audit saw it
+        XCTContext.runActivity(named: "AUDIT \(issue.compactDescription): \(element)") { activity in
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.lifetime = .keepAlways
+            activity.add(shot)
         }
         return false
     }

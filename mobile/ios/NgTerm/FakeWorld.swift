@@ -45,6 +45,7 @@
                 settings: SettingsStore(directory: directory),
                 keys: AppKeys(store: keys, vault: MemoryPrivateKeys(), maker: CoreKeyMaker(), comment: "ngterm@fake"),
                 pins: pins,
+                attached: AttachedStore(directory: directory),
                 core: core
             )
         }

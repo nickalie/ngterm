@@ -5,7 +5,7 @@ import SwiftUI
 /// A main window: the app's frame over its own navigation, the first run over it while the app has no key, and the
 /// questions the machines' connects wait on.
 ///
-/// The sessions and session columns hold placeholders until their features land.
+/// The session column holds a placeholder until the session view lands.
 internal struct RootView: View {
     private let graph: AppGraph
     private let coreVersion: String
@@ -18,8 +18,9 @@ internal struct RootView: View {
             MachinesView(model: machines, selection: scaffold.machine) { machineId in
                 scaffold.show(machine: machineId)
             }
-        } sessions: { _ in
-            StatePanel.loading(String(localized: "Reading the machine's sessions"))
+        } sessions: { machineId in
+            SessionsColumn(graph: graph, machineId: machineId, scaffold: scaffold, machines: machines)
+                .id(machineId)
         } session: { _ in
             StatePanel.loading(String(localized: "Opening the session"))
         } settings: {

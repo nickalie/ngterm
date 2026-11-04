@@ -37,7 +37,7 @@ public struct MachineRow<Summary: View>: View {
             }
             Text(verbatim: address)
                 .font(Typography.address)
-                .foregroundStyle(Palette.secondaryText.color)
+                .rowForeground(Palette.secondaryText.color)
             if detail != nil || action != nil {
                 DetailLine(detail: detail, action: action)
             }

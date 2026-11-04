@@ -9,7 +9,9 @@ internal struct QuietButton: View {
 
     internal var body: some View {
         Button(action: action.perform) {
+            // the tint, or the row's own foreground in a selected row, whose ground is the tint
             Text(action.title)
+                .rowForeground(Palette.tint.color)
                 .frame(minHeight: Spacing.hitTarget)
                 .contentShape(Rectangle())
         }
