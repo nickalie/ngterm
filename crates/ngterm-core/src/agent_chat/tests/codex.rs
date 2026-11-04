@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde_json::json;
 
 use super::support::{self, last, parse_bytes, tool};
-use crate::agent_chat::event::MALFORMED;
+use crate::agent_chat::event::{MALFORMED, OUTPUT_CAP};
 use crate::agent_chat::{AgentKind, ChatEvent, CodexParser, EventBody, NoticeKind, ToolKind, ToolStatus};
 
 const MAIN: &str = "rollout-2026-11-03T23-01-46-01a1a300-e2e3-76a1-abcf-961cbbb2eb3c";
@@ -479,6 +479,56 @@ fn a_subagents_items_in_the_parent_fold_under_its_task() {
         !events.iter().any(|event| event.id == "m2"),
         "another thread's item is not this chat's"
     );
+}
+
+#[test]
+fn a_subagents_tool_item_in_the_parent_claims_none_of_the_parents_calls() {
+    let child_wc = command_item("exec-child-wc", "wc -l notes.txt", 0);
+    let child_sleep = command_item("exec-child-sleep", "sleep 5", 0);
+    let events = parse(&[
+        meta("main"),
+        turn_started("t1"),
+        spawn_call("c1", "t1"),
+        item_line(Some("main"), "t1", &spawn_item("th1")),
+        exec_call("c9", "t1", &shell("sleep 5")),
+        item_line(Some("th1"), "s1", &child_wc),
+        item_line(Some("th1"), "s1", &child_sleep),
+        item_line(Some("main"), "t1", &command_item("exec-own", "sleep 5", 0)),
+        exec_output("c9", "sleep 5 ran\n"),
+    ]);
+    for child in ["exec-child-wc", "exec-child-sleep"] {
+        let event = last(&events, child);
+        assert_eq!(event.parent.as_deref(), Some("c1"), "{child} folds under its task");
+        assert_eq!(tool(event).status, ToolStatus::Ok);
+    }
+    assert!(
+        events
+            .iter()
+            .filter(|event| event.id == "c9")
+            .all(|event| event.parent.is_none()),
+        "the parent's call stays the parent's"
+    );
+    assert_eq!(
+        history(&events, "c9"),
+        [(ToolStatus::Running, None), (ToolStatus::Ok, Some("sleep 5 ran\n"))],
+        "the parent's own item claims its call, whose output then adds nothing"
+    );
+    assert!(
+        !events.iter().any(|event| event.id == "exec-own"),
+        "the parent's item takes its call's place"
+    );
+}
+
+#[test]
+fn a_running_commands_clipped_output_is_marked_truncated() {
+    let mut running = command_item("exec-a", "yes", 0);
+    running["status"] = json!("in_progress");
+    running["aggregated_output"] = json!("y\n".repeat(OUTPUT_CAP));
+    let events = parse(&[turn_started("t1"), item_line(None, "t1", &running)]);
+    let shown = tool(&events[0]);
+    assert_eq!(shown.status, ToolStatus::Running);
+    assert_eq!(shown.output.as_ref().map(String::len), Some(OUTPUT_CAP));
+    assert_eq!(shown.truncated, Some(true));
 }
 
 #[test]

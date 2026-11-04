@@ -24,7 +24,7 @@
 //! A subagent writes its own rollout, which starts with the parent's history up to the spawn
 //! (`subagent_history_start_ordinal` on its `session_meta`); [`CodexParser::subagent`] skips that part and reads the
 //! rest under the task tool [`CodexParser::task_for_thread`] names. An item a subagent's thread completes inside the
-//! parent's rollout folds under the same tool.
+//! parent's rollout folds under the same tool; a tool item of its never takes the place of the parent's own calls.
 
 use std::collections::{HashMap, HashSet};
 
@@ -262,11 +262,14 @@ impl CodexParser {
     /// An `item_completed` event's item.
     fn item(&mut self, payload: &Value, out: &mut Out) {
         let item = payload.get("item").unwrap_or(&Value::Null);
-        match self.owner(str_at(payload, "/thread_id")) {
-            Owner::Own => {}
-            Owner::Agent(task) => out.parent = Some(task),
+        let own = match self.owner(str_at(payload, "/thread_id")) {
+            Owner::Own => true,
+            Owner::Agent(task) => {
+                out.parent = Some(task);
+                false
+            }
             Owner::Foreign => return,
-        }
+        };
         let id = str_at(item, "/id").map_or_else(|| line_id(out.cursor), str::to_owned);
         match str_at(item, "/type").unwrap_or_default() {
             "UserMessage" => user_message(item, id, out),
@@ -287,7 +290,9 @@ impl CodexParser {
                     out.push(format!("compaction-{key}"), compaction(None));
                 }
             }
-            "CommandExecution" | "FileChange" | "Extension" | "CollabAgentToolCall" => self.tool_item(item, id, out),
+            "CommandExecution" | "FileChange" | "Extension" | "CollabAgentToolCall" => {
+                self.tool_item(item, id, own, out);
+            }
             kind => out.push(
                 id,
                 EventBody::Unknown {
@@ -314,10 +319,16 @@ impl CodexParser {
         }
     }
 
-    /// A tool item: takes the place of the running call it completes, or shows alone.
-    fn tool_item(&mut self, item: &Value, id: String, out: &mut Out) {
+    /// A tool item: takes the place of the running call it completes, or shows alone. Only an item of this rollout's
+    /// own thread (`own`) completes a call: every running call is this thread's, and a subagent's item shows alone.
+    fn tool_item(&mut self, item: &Value, id: String, own: bool, out: &mut Out) {
         let (mut tool, command) = typed_tool(item);
-        let id = self.claim(tool.kind, command.as_deref()).unwrap_or(id);
+        let claimed = if own {
+            self.claim(tool.kind, command.as_deref())
+        } else {
+            None
+        };
+        let id = claimed.unwrap_or(id);
         if str_at(item, "/type") == Some("CollabAgentToolCall") {
             let spawned = self.spawned(item, &id);
             if spawned && str_at(item, "/tool") == Some("spawn_agent") && tool.status == ToolStatus::Ok {
@@ -765,7 +776,11 @@ fn typed_tool(item: &Value) -> (Tool, Option<String>) {
         tool.truncated = cut.then_some(true);
     }
     if status == ToolStatus::Running {
-        tool.output = (!output.is_empty()).then(|| cap(&output, OUTPUT_CAP).0);
+        let (output, cut) = cap(&output, OUTPUT_CAP);
+        tool.output = (!output.is_empty()).then_some(output);
+        if cut {
+            tool.truncated = Some(true);
+        }
     } else {
         finish(&mut tool, status, &output);
     }
