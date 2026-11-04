@@ -62,15 +62,19 @@ fn decode_line(line: &[u8], cursor: u64) -> Line {
     }
 }
 
-/// The id of an event a line makes when the line names no id of its own.
-fn line_id(cursor: u64) -> String {
-    format!("line-{cursor}")
+/// The id of an event a line makes when the line names no id of its own: `line-<cursor>`, or `<source>:line-<cursor>`
+/// for a subagent's file, whose offsets are its own while its events share one stream with the main transcript's.
+fn line_id(source: Option<&str>, cursor: u64) -> String {
+    match source {
+        Some(source) => format!("{source}:line-{cursor}"),
+        None => format!("line-{cursor}"),
+    }
 }
 
 /// An `unknown` event for the line at `cursor`.
 fn unknown(cursor: u64, entry: &str) -> ChatEvent {
     ChatEvent {
-        id: line_id(cursor),
+        id: line_id(None, cursor),
         cursor,
         parent: None,
         body: EventBody::Unknown {
@@ -97,16 +101,24 @@ fn title_line(text: &str) -> String {
 struct Out {
     cursor: u64,
     parent: Option<String>,
+    /// What names the line's file, for the ids [`Out::line_id`] makes.
+    source: Option<String>,
     events: Vec<ChatEvent>,
 }
 
 impl Out {
-    fn new(cursor: u64, parent: Option<String>) -> Self {
+    fn new(cursor: u64, parent: Option<String>, source: Option<String>) -> Self {
         Self {
             cursor,
             parent,
+            source,
             events: Vec::new(),
         }
+    }
+
+    /// The id of an event the line makes when it names no id of its own.
+    fn line_id(&self) -> String {
+        line_id(self.source.as_deref(), self.cursor)
     }
 
     fn push(&mut self, id: impl Into<String>, body: EventBody) {

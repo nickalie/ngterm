@@ -13,14 +13,21 @@
 //! - **After** ([`Follower::after`]): everything from the line at a cursor on, with [`CONTEXT`] bytes before it parsed
 //!   for pairing. That line is sent again: the phone may have got its events in part, and an event's id makes a
 //!   repeated one update the same item. A cursor past the file's end means the file shrank: a `reset` and a backlog.
+//! - A backlog and the events after a cursor start with the `conversation` the lines before them announced when their
+//!   own lines announce none (the parsers announce it once, and again only when the model changes); its cursor is the
+//!   first shown line's, so paging from the oldest cursor skips nothing.
 //! - **Following** ([`Follower::poll`]): each poll probes the size; growth is read and split into lines, a partial last
 //!   line buffered until its newline. A file that shrinks, or whose first bytes change (it was replaced), starts over
 //!   with a `reset` and a new backlog. A line over [`LINE_CAP`] becomes `unknown{oversized}` and is never held whole.
 //!   A file that does not exist yet (Claude writes its transcript at the first prompt) is read once it appears.
 //! - **Subagents** (`subagents`): their transcripts are followed as extra sources, their events under the task tool.
 //!   A subagent whose task is among the lines a window parsed is shown with a backlog of its own, one found while
-//!   following likewise; the others are followed from their end. A subagent event's `cursor` is an offset in its own
-//!   file: paging goes by the events without `parent`.
+//!   following likewise; the others are followed from their end. After a cursor, each subagent also sends every line
+//!   stamped (`timestamp`, compared to the minute) no earlier than the last stamped main line before the cursor: the
+//!   lines it wrote while the phone was away. Every subagent the conversation has is followed, Codex's too when its
+//!   spawn is older than the lines read (found by its rollout's `session_meta`). A subagent event's `cursor` is an
+//!   offset in its own file: paging goes by the events without `parent`, and the ids of its lines that name none are
+//!   prefixed with the file's name.
 //!
 //! A backlog and the events after a cursor end with a `live` event whose cursor is where following resumes. Following
 //! polls every [`POLL_INTERVAL`] by default, and looks for new subagents at most every [`DISCOVERY_INTERVAL`].
@@ -36,11 +43,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use lines::{BackScan, RawLine, Splitter};
+use serde::Deserialize;
+use subagents::Look;
 
 #[cfg(doc)]
 use super::event::LINE_CAP;
 use super::event::OVERSIZED;
-use super::{AgentKind, ChatEvent, ClaudeParser, CodexParser, EventBody, TranscriptParser, unknown};
+use super::{AgentKind, ChatEvent, ClaudeParser, CodexParser, EventBody, TranscriptParser, line_id, unknown};
 
 /// The events a backlog holds by default: the phone's first screenful and some.
 pub const BACKLOG: usize = 200;
@@ -184,12 +193,20 @@ impl<F: Files, C: Clock> Follower<F, C> {
             &self.path,
             Spec::main(self.agent),
             None,
-            Want::backlog(limit),
+            &Want::backlog(limit),
         )?;
         self.main = main;
         let shown = window.ids();
-        let mut events = window.events;
-        self.add_subagents(&|parent| shown.contains(parent), &mut events);
+        let mut events = window.shown();
+        let limit = self.limit;
+        let want = |parent: &str| {
+            if shown.contains(parent) {
+                Want::backlog(limit)
+            } else {
+                Want::END
+            }
+        };
+        self.add_subagents(&want, Look::Scan, &mut events);
         events.push(marker(EventBody::Live, self.main.lines.start()));
         Ok(events)
     }
@@ -201,21 +218,23 @@ impl<F: Files, C: Clock> Follower<F, C> {
     /// The transcript cannot be read.
     pub fn page(&self, cursor: u64, limit: usize) -> io::Result<Vec<ChatEvent>> {
         let spec = Spec::main(self.agent);
-        let (main, window) = Stream::start(&self.files, &self.path, spec, Some(cursor), Want::backlog(limit))?;
+        let (main, window) = Stream::start(&self.files, &self.path, spec, Some(cursor), &Want::backlog(limit))?;
         let shown = window.ids();
         let mut events = window.events;
-        let found = subagents::find(self.agent, &self.path, &main.parser.spawned(), &HashSet::new());
+        let spawned = main.parser.spawned();
+        let found = subagents::find(self.agent, &self.path, &spawned, &HashSet::new(), Look::Spawned);
         for found in found.into_iter().filter(|found| shown.contains(&found.parent)) {
-            let spec = Spec::subagent(self.agent, found.parent);
-            if let Ok((_, window)) = Stream::start(&self.files, &found.path, spec, None, Want::backlog(limit)) {
+            let spec = Spec::subagent(self.agent, found.parent, found.source);
+            if let Ok((_, window)) = Stream::start(&self.files, &found.path, spec, None, &Want::backlog(limit)) {
                 events.extend(window.events);
             }
         }
         Ok(events)
     }
 
-    /// Everything from the line at `cursor` on, the backlogs of the subagents among it, then `live`; following resumes
-    /// after it. A cursor past the end is a `reset` and a backlog.
+    /// Everything from the line at `cursor` on, the backlogs of the subagents among it and what every subagent wrote
+    /// since the line before `cursor`, then `live`; following resumes after it. A cursor past the end is a `reset`
+    /// and a backlog.
     ///
     /// # Errors
     /// The transcript cannot be read.
@@ -232,15 +251,26 @@ impl<F: Files, C: Clock> Follower<F, C> {
         let want = Want {
             limit: 0,
             context: CONTEXT,
+            since: None,
         };
-        let (main, window) = Stream::start(&self.files, &self.path, Spec::main(self.agent), Some(cursor), want)?;
+        let (main, window) = Stream::start(&self.files, &self.path, Spec::main(self.agent), Some(cursor), &want)?;
         self.main = main;
-        let Some(mut events) = self.main.poll(&self.files)? else {
+        let Some(new) = self.main.poll(&self.files)? else {
             return self.restart();
         };
         let mut shown = window.ids();
-        shown.extend(events.iter().map(|event| event.id.clone()));
-        self.add_subagents(&|parent| shown.contains(parent), &mut events);
+        shown.extend(new.iter().map(|event| event.id.clone()));
+        // The phone has every line before the cursor's: the subagents' lines since the last of them are new to it.
+        let since = window.stamp.clone().unwrap_or_default();
+        let mut events = window.shown();
+        events.extend(new);
+        let limit = self.limit;
+        let want = |parent: &str| Want {
+            limit: if shown.contains(parent) { limit } else { 0 },
+            context: CONTEXT,
+            since: Some(since.clone()),
+        };
+        self.add_subagents(&want, Look::Scan, &mut events);
         events.push(marker(EventBody::Live, self.main.lines.start()));
         Ok(events)
     }
@@ -262,7 +292,7 @@ impl<F: Files, C: Clock> Follower<F, C> {
                 Ok(None) => {
                     let spec = stream.spec.clone();
                     let want = Want::backlog(self.limit);
-                    if let Ok((fresh, window)) = Stream::start(&self.files, &stream.path, spec, None, want) {
+                    if let Ok((fresh, window)) = Stream::start(&self.files, &stream.path, spec, None, &want) {
                         *stream = fresh;
                         events.extend(window.events);
                     }
@@ -274,7 +304,8 @@ impl<F: Files, C: Clock> Follower<F, C> {
             .discovered_at
             .is_none_or(|at| now.saturating_duration_since(at) >= DISCOVERY_INTERVAL)
         {
-            self.add_subagents(&|_| true, &mut events);
+            let limit = self.limit;
+            self.add_subagents(&|_| Want::backlog(limit), Look::Spawned, &mut events);
         }
         Ok(events)
     }
@@ -321,18 +352,15 @@ impl<F: Files, C: Clock> Follower<F, C> {
         self.known.clear();
     }
 
-    /// Follows the subagents not followed yet: those whose task `show` names with a backlog, added to `events`, the
-    /// others from their end.
-    fn add_subagents(&mut self, show: &dyn Fn(&str) -> bool, events: &mut Vec<ChatEvent>) {
+    /// Follows the subagents not followed yet, looking for them as `look` says: each with the window `want` asks for
+    /// by its task tool's id, added to `events`.
+    fn add_subagents(&mut self, want: &dyn Fn(&str) -> Want, look: Look, events: &mut Vec<ChatEvent>) {
         self.discovered_at = Some(self.clock.now());
-        for found in subagents::find(self.agent, &self.path, &self.main.parser.spawned(), &self.known) {
-            let want = if show(&found.parent) {
-                Want::backlog(self.limit)
-            } else {
-                Want::END
-            };
-            let spec = Spec::subagent(self.agent, found.parent);
-            let Ok((stream, window)) = Stream::start(&self.files, &found.path, spec, None, want) else {
+        let spawned = self.main.parser.spawned();
+        for found in subagents::find(self.agent, &self.path, &spawned, &self.known, look) {
+            let want = want(&found.parent);
+            let spec = Spec::subagent(self.agent, found.parent, found.source);
+            let Ok((stream, window)) = Stream::start(&self.files, &found.path, spec, None, &want) else {
                 continue;
             };
             events.extend(window.events);
@@ -357,21 +385,28 @@ fn marker(body: EventBody, cursor: u64) -> ChatEvent {
     }
 }
 
-/// What a window asks for: about `limit` events, and `context` bytes of older lines parsed before them.
-#[derive(Debug, Clone, Copy)]
+/// What a window asks for: about `limit` events, every line stamped no earlier than `since` (to the minute; the
+/// unstamped lines among them too), and `context` bytes of older lines parsed before them.
+#[derive(Debug, Clone)]
 struct Want {
     limit: usize,
     context: u64,
+    since: Option<String>,
 }
 
 impl Want {
     /// No events and no context: only where following resumes.
-    const END: Self = Self { limit: 0, context: 0 };
+    const END: Self = Self {
+        limit: 0,
+        context: 0,
+        since: None,
+    };
 
     fn backlog(limit: usize) -> Self {
         Self {
             limit,
             context: CONTEXT,
+            since: None,
         }
     }
 }
@@ -382,17 +417,24 @@ struct Spec {
     agent: AgentKind,
     /// The task tool's id, for a subagent's transcript.
     parent: Option<String>,
+    /// What names a subagent's transcript, for the ids of its lines that name none.
+    source: Option<String>,
 }
 
 impl Spec {
     fn main(agent: AgentKind) -> Self {
-        Self { agent, parent: None }
+        Self {
+            agent,
+            parent: None,
+            source: None,
+        }
     }
 
-    fn subagent(agent: AgentKind, parent: String) -> Self {
+    fn subagent(agent: AgentKind, parent: String, source: String) -> Self {
         Self {
             agent,
             parent: Some(parent),
+            source: Some(source),
         }
     }
 
@@ -403,9 +445,15 @@ impl Spec {
             (AgentKind::Codex, None) => Kind::Codex(CodexParser::new()),
             (AgentKind::Codex, Some(parent)) => Kind::Codex(CodexParser::subagent(parent.clone())),
         };
+        let kind = match (kind, &self.source) {
+            (Kind::Claude(parser), Some(source)) => Kind::Claude(parser.source(source.clone())),
+            (Kind::Codex(parser), Some(source)) => Kind::Codex(parser.source(source.clone())),
+            (kind, None) => kind,
+        };
         Parser {
             kind,
             parent: self.parent.clone(),
+            source: self.source.clone(),
         }
     }
 
@@ -421,6 +469,7 @@ impl Spec {
 struct Parser {
     kind: Kind,
     parent: Option<String>,
+    source: Option<String>,
 }
 
 #[derive(Debug)]
@@ -433,6 +482,7 @@ impl Parser {
     fn parse(&mut self, line: &RawLine) -> Vec<ChatEvent> {
         let Some(bytes) = &line.bytes else {
             let mut event = unknown(line.cursor, OVERSIZED);
+            event.id = line_id(self.source.as_deref(), line.cursor);
             event.parent.clone_from(&self.parent);
             return vec![event];
         };
@@ -454,13 +504,14 @@ impl Parser {
     }
 }
 
-/// What a window read: the events of its newest lines, those of the older lines it parsed for context, and where
-/// following resumes.
+/// What a window read: the events of its newest lines, those of the older lines it parsed for context (the Codex
+/// rollout's first line's first), where following resumes, and the newest `timestamp` among the context lines.
 #[derive(Debug, Default)]
 struct Window {
     context: Vec<ChatEvent>,
     events: Vec<ChatEvent>,
     next: u64,
+    stamp: Option<String>,
 }
 
 impl Window {
@@ -472,10 +523,27 @@ impl Window {
             .map(|event| event.id.clone())
             .collect()
     }
+
+    /// The window's events, led by the `conversation` the context announced last when they announce none: a parser
+    /// announces it once, so it is usually on a line before the window. It takes the first event's cursor (where
+    /// following resumes when there is none), so paging from the oldest cursor shown skips no line.
+    fn shown(self) -> Vec<ChatEvent> {
+        let announces = |event: &ChatEvent| matches!(event.body, EventBody::Conversation { .. });
+        if self.events.iter().any(announces) {
+            return self.events;
+        }
+        let Some(mut conversation) = self.context.into_iter().rev().find(announces) else {
+            return self.events;
+        };
+        conversation.cursor = self.events.first().map_or(self.next, |event| event.cursor);
+        let mut events = vec![conversation];
+        events.extend(self.events);
+        events
+    }
 }
 
 /// The window of complete lines ending at or before `end`, and the parser after them.
-fn read_window<R: Read + Seek>(reader: &mut R, spec: &Spec, end: u64, want: Want) -> io::Result<(Window, Parser)> {
+fn read_window<R: Read + Seek>(reader: &mut R, spec: &Spec, end: u64, want: &Want) -> io::Result<(Window, Parser)> {
     let head = if spec.primed() { first_line(reader)? } else { None };
     let mut scan = BackScan::new(end);
     let mut step = want.context + STEP;
@@ -484,11 +552,13 @@ fn read_window<R: Read + Seek>(reader: &mut R, spec: &Spec, end: u64, want: Want
         let ready = scan.next().is_some() && scan.read_bytes() >= want.context;
         if ready || scan.done() {
             let mut parser = spec.parser();
-            if let Some(head) = head.as_ref().filter(|_| !scan.done()) {
-                parser.parse(head);
-            }
+            let head = match head.as_ref().filter(|_| !scan.done()) {
+                Some(head) => parser.parse(head),
+                None => Vec::new(),
+            };
             let parsed: Vec<Vec<ChatEvent>> = scan.lines().map(|line| parser.parse(line)).collect();
-            if let Some(window) = cut(parsed, &scan, want) {
+            if let Some(mut window) = cut(parsed, &scan, want) {
+                window.context.splice(0..0, head);
                 return Ok((window, parser));
             }
         }
@@ -497,27 +567,61 @@ fn read_window<R: Read + Seek>(reader: &mut R, spec: &Spec, end: u64, want: Want
 }
 
 /// Splits the lines' events (oldest first) into context and window: the window is the fewest newest lines making
-/// `want.limit` events, with `want.context` bytes of lines before it. `None` while the scan has not read enough.
-fn cut(mut parsed: Vec<Vec<ChatEvent>>, scan: &BackScan, want: Want) -> Option<Window> {
-    let cursors: Vec<u64> = scan.lines().map(|line| line.cursor).collect();
+/// `want.limit` events and holding every line since `want.since`, with `want.context` bytes of lines before it.
+/// `None` while the scan has not read enough.
+fn cut(mut parsed: Vec<Vec<ChatEvent>>, scan: &BackScan, want: &Want) -> Option<Window> {
+    let lines: Vec<&RawLine> = scan.lines().collect();
     let mut start = parsed.len();
     let mut count = 0;
     while start > 0 && count < want.limit {
         start -= 1;
         count += parsed[start].len();
     }
+    let (since_start, since_found) = want
+        .since
+        .as_deref()
+        .map_or((start, true), |since| since_start(&lines, since));
+    let start = start.min(since_start);
     let next = scan.next().unwrap_or(0);
-    let window_start = cursors.get(start).copied().unwrap_or(next);
-    let oldest = cursors.first().copied().unwrap_or(window_start);
-    if !scan.done() && (count < want.limit || window_start - oldest < want.context) {
+    let window_start = lines.get(start).map_or(next, |line| line.cursor);
+    let oldest = lines.first().map_or(window_start, |line| line.cursor);
+    if !scan.done() && (count < want.limit || !since_found || window_start - oldest < want.context) {
         return None;
     }
+    let stamp = lines[..start].iter().rev().find_map(|line| stamp(line));
     let events = parsed.split_off(start).into_iter().flatten().collect();
     Some(Window {
         context: parsed.into_iter().flatten().collect(),
         events,
         next,
+        stamp,
     })
+}
+
+/// Where the lines (oldest first) since `since` start, and whether a line stamped before it was found: the newest
+/// lines up to it, unstamped ones included.
+fn since_start(lines: &[&RawLine], since: &str) -> (usize, bool) {
+    let older = lines
+        .iter()
+        .rposition(|line| stamp(line).is_some_and(|stamp| minute(&stamp) < minute(since)));
+    older.map_or((0, false), |older| (older + 1, true))
+}
+
+/// A line's `timestamp`, when it is a JSON object with one.
+fn stamp(line: &RawLine) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Stamped {
+        timestamp: Option<String>,
+    }
+    let bytes = line.bytes.as_deref()?;
+    serde_json::from_slice::<Stamped>(bytes).ok()?.timestamp
+}
+
+/// A timestamp (`2026-11-03T20:01:46.725Z`, as both agents write it) cut to its minute: lines are compared to the
+/// minute, so a line written a little after its stamp is still sent again rather than lost.
+fn minute(stamp: &str) -> &str {
+    const MINUTE: usize = "2026-01-01T00:00".len();
+    stamp.get(..MINUTE).unwrap_or(stamp)
 }
 
 /// The file's first line, when it ends within [`HEAD_CAP`] bytes.
@@ -572,7 +676,13 @@ impl Stream {
     }
 
     /// Reads the window ending at `end` (the file's end when `None`, and never past it), following after it.
-    fn start<F: Files>(files: &F, path: &Path, spec: Spec, end: Option<u64>, want: Want) -> io::Result<(Self, Window)> {
+    fn start<F: Files>(
+        files: &F,
+        path: &Path,
+        spec: Spec,
+        end: Option<u64>,
+        want: &Want,
+    ) -> io::Result<(Self, Window)> {
         let opened = files.size(path).and_then(|size| Ok((size, files.open(path)?)));
         let (size, mut reader) = match opened {
             Ok(opened) => opened,

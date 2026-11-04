@@ -29,8 +29,8 @@ use serde_json::Value;
 use super::event::{DIFF_CAP, OUTPUT_CAP};
 use super::{
     AgentKind, ChatEvent, EventBody, Line, NoticeKind, Out, Question, QuestionItem, QuestionOption, Tool, ToolKind,
-    ToolStatus, TranscriptParser, cap, compaction, decode_line, finish, line_id, non_empty, notice, str_at, tag,
-    title_line, unified, untitled_tool,
+    ToolStatus, TranscriptParser, cap, compaction, decode_line, finish, non_empty, notice, str_at, tag, title_line,
+    unified, untitled_tool,
 };
 
 /// Line types the chat has no use for (Task 1's fixture README lists them).
@@ -74,6 +74,8 @@ const STOP_TARGETS: &[&str] = &["/task_id", "/shell_id", "/bash_id"];
 pub struct ClaudeParser {
     /// The task tool's id when this reads a subagent's file.
     parent: Option<String>,
+    /// What names the file, prefixing the ids of events whose line names none ([`ClaudeParser::source`]).
+    source: Option<String>,
     /// The conversation announced so far: its id and model.
     conversation: Option<(String, Option<String>)>,
     /// Calls with no result yet, and background tasks (whose tool a later notification updates), by tool use id.
@@ -106,6 +108,14 @@ impl ClaudeParser {
             ..Self::default()
         }
     }
+
+    /// Names the file read `source`: an event whose line names no id of its own is `<source>:line-<cursor>`, not
+    /// `line-<cursor>`, so a subagent's offsets do not collide with another file's in one stream.
+    #[must_use]
+    pub fn source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
 }
 
 /// The parent task's tool use id named by a subagent's `agent-<id>.meta.json` (`toolUseId`), if it names one.
@@ -117,10 +127,10 @@ pub fn subagent_parent(meta_json: &[u8]) -> Option<String> {
 
 impl TranscriptParser for ClaudeParser {
     fn parse_line(&mut self, line: &[u8], cursor: u64) -> Vec<ChatEvent> {
-        let mut out = Out::new(cursor, self.parent.clone());
+        let mut out = Out::new(cursor, self.parent.clone(), self.source.clone());
         match decode_line(line, cursor) {
             Line::Blank => {}
-            Line::Unknown(event) => out.push(event.id, event.body),
+            Line::Unknown(event) => out.push(out.line_id(), event.body),
             Line::Entry(entry) => self.entry(&entry, &mut out),
         }
         self.forget_prompt(&out.events);
@@ -136,11 +146,11 @@ impl ClaudeParser {
             "assistant" => self.assistant(entry, out),
             "system" => system(entry, out),
             "summary" => out.push(
-                line_id(out.cursor),
+                out.line_id(),
                 notice(NoticeKind::Summary, str_at(entry, "/summary").unwrap_or_default(), None),
             ),
             kind if IGNORED.contains(&kind) => {}
-            kind => out.push(line_id(out.cursor), EventBody::Unknown { entry: kind.to_owned() }),
+            kind => out.push(out.line_id(), EventBody::Unknown { entry: kind.to_owned() }),
         }
     }
 
@@ -200,7 +210,7 @@ impl ClaudeParser {
         if entry.get("isMeta").and_then(Value::as_bool) == Some(true) {
             return;
         }
-        let id = str_at(entry, "/uuid").map_or_else(|| line_id(out.cursor), str::to_owned);
+        let id = str_at(entry, "/uuid").map_or_else(|| out.line_id(), str::to_owned);
         let content = entry.pointer("/message/content").unwrap_or(&Value::Null);
         if entry.get("isCompactSummary").and_then(Value::as_bool) == Some(true) {
             // The summary follows its boundary: update the boundary's notice.
@@ -383,7 +393,7 @@ impl ClaudeParser {
 
     fn assistant(&mut self, entry: &Value, out: &mut Out) {
         self.conversation(entry, str_at(entry, "/message/model"), out);
-        let uuid = str_at(entry, "/uuid").map_or_else(|| line_id(out.cursor), str::to_owned);
+        let uuid = str_at(entry, "/uuid").map_or_else(|| out.line_id(), str::to_owned);
         let blocks = entry
             .pointer("/message/content")
             .and_then(Value::as_array)
@@ -452,7 +462,7 @@ impl ClaudeParser {
 }
 
 fn system(entry: &Value, out: &mut Out) {
-    let id = str_at(entry, "/uuid").map_or_else(|| line_id(out.cursor), str::to_owned);
+    let id = str_at(entry, "/uuid").map_or_else(|| out.line_id(), str::to_owned);
     match str_at(entry, "/subtype").unwrap_or_default() {
         "compact_boundary" => out.push(id, compaction(None)),
         "api_error" => {

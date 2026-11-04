@@ -238,7 +238,12 @@ from a subagent's transcript, `parent` (the task tool's id):
   cursor's own line is sent again, since the phone may have got its events in part; ids make that idempotent. A
   cursor past the end is a `reset` and a backlog.
 - A subagent event's `cursor` is an offset in the subagent's own file, so the phone pages by the events without
-  `parent` (Task 5).
+  `parent` (Task 5). On `--after`, each subagent also sends its lines stamped (to the minute) no earlier than the last
+  stamped main line before the cursor, so what it wrote while the phone was away is not lost. The ids a subagent's
+  lines get from their offset (`line-<n>`) are prefixed with the file's name (`agent-<id>:` or the Codex thread).
+- A backlog and `--after` lead with the `conversation` announced before their lines when those lines announce none.
+- A Codex subagent whose `spawn_agent` is older than the lines read is found by its rollout's `session_meta`
+  (`source.subagent.thread_spawn.parent_thread_id`) and shown under its thread id until its task is known.
 
 Following polls the file size every 250 ms and buffers a partial last line. A file that shrinks or is replaced means a
 `reset`. Subagent entries fold under their task tool's id. Claude writes them as separate files,
