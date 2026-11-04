@@ -4,8 +4,8 @@ import Observation
 /// The app's settings, kept as one JSON file in Application Support (`settings.json`).
 ///
 /// It reads the file as ``MachineStore`` reads its own: a file that no longer decodes reads as the defaults and is
-/// kept as `settings.json.bad`, and one that can't be read is left alone until a change can read it. A change is
-/// written whole and atomically before ``settings`` shows it.
+/// kept as `settings.json.bad`, and one that can't be read (or kept) is left alone until a change can read it (or keep
+/// it). A change is written whole and atomically before ``settings`` shows it.
 @preconcurrency
 @MainActor
 @Observable

@@ -4,10 +4,12 @@ import Observation
 /// Whether the device has a network, and a nudge to the core whenever a path comes up.
 ///
 /// ``isOnline`` says whether there is a network. The nudge comes for a new path (its preferred interface changed,
-/// Wi-Fi to cellular, say) or one regained after none; the core then retries at once what waits to reconnect.
+/// Wi-Fi to cellular, say, or its gateways did, one Wi-Fi to another) or one regained after none; the core then
+/// retries at once what waits to reconnect.
 ///
 /// Other updates (the same path turning expensive or constrained, an interface it doesn't prefer coming or going)
-/// nudge nothing, and neither does the first path, which is where the monitor starts from.
+/// nudge nothing, and neither does the first path, which is where the monitor starts from. A monitor stopped and
+/// started again (the app paused and resumed) compares the first path after with the last before.
 @preconcurrency
 @MainActor
 @Observable
@@ -34,14 +36,14 @@ public final class NetworkMonitor {
         }
     }
 
-    /// Starts following the device's network, for the app's lifetime.
+    /// Starts following the device's network, until ``stop()``; it can be started again after.
     public func start() {
         source.start { [weak self] path in
             self?.receive(path)
         }
     }
 
-    /// Stops following it.
+    /// Stops following it, until the next ``start()``.
     public func stop() {
         source.stop()
     }
@@ -53,7 +55,8 @@ public final class NetworkMonitor {
         guard let previous, path.isSatisfied else {
             return
         }
-        if !previous.isSatisfied || previous.interfaces.first != path.interfaces.first {
+        let isNewPath = previous.interfaces.first != path.interfaces.first || previous.gateways != path.gateways
+        if !previous.isSatisfied || isNewPath {
             onChange()
         }
     }

@@ -71,12 +71,24 @@ internal struct KeychainKeyVaultTests {
         #expect(attributes[kSecAttrService as String] as? String == probe.service)
     }
 
-    @Test("the app's vault and a test's keep their keys apart")
+    @Test("vaults on two services keep their keys apart: one neither loads, has nor deletes the other's")
     internal func servicesApart() throws {
-        defer { probe.removeAll() }
+        let otherProbe = KeychainProbe()
+        defer {
+            probe.removeAll()
+            otherProbe.removeAll()
+        }
+        let other = KeychainKeyVault(service: otherProbe.service)
         var handed = Self.key
-        try vault.store(keyId: "k-\(UUID().uuidString)", privateKey: &handed)
+        try vault.store(keyId: "k1", privateKey: &handed)
+        #expect(throws: VaultError.Missing(keyId: "k1")) {
+            try other.load(keyId: "k1")
+        }
+        #expect(try !other.has(keyId: "k1"))
+        try other.delete(keyId: "k1")
+        #expect(try vault.load(keyId: "k1") == Self.key)
+        #expect(probe.count() == 1)
+        #expect(otherProbe.count() == 0)
         #expect(KeychainKeyVault().service == KeychainKeyVault.appService)
-        #expect(vault.service != KeychainKeyVault.appService)
     }
 }

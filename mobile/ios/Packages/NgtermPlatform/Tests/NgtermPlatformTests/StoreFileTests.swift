@@ -35,6 +35,31 @@ internal struct StoreFileTests {
         #expect(try Data(contentsOf: directory.file("\(SettingsStore.fileName).bad")) == Self.corrupt)
     }
 
+    @Test("a corrupt file whose copy can't be written is left alone until it can be: no save writes over it")
+    internal func corruptWithoutCopy() throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        let file = directory.file(MachineStore.fileName)
+        let badCopy = directory.file("\(MachineStore.fileName).bad")
+        try Self.corrupt.write(to: file)
+        // a directory with something in it where the copy goes: nothing can be renamed over it
+        try FileManager.default.createDirectory(at: badCopy, withIntermediateDirectories: false)
+        try Data().write(to: badCopy.appending(path: "taken"))
+        let store = MachineStore(directory: directory.url)
+        #expect(store.machines.isEmpty)
+        #expect(throws: StoreError.self) {
+            try store.save(Self.box)
+        }
+        #expect(store.machines.isEmpty)
+        #expect(try Data(contentsOf: file) == Self.corrupt)
+        // once the copy can be written, the next change keeps the bytes first, then writes afresh
+        try FileManager.default.removeItem(at: badCopy)
+        try store.save(Self.box)
+        #expect(store.machines == [Self.box])
+        #expect(try Data(contentsOf: badCopy) == Self.corrupt)
+        #expect(MachineStore(directory: directory.url).machines == [Self.box])
+    }
+
     @Test("a write that can't finish leaves the old file whole: it is a new file renamed over the old one")
     internal func atomicWrite() throws {
         let directory = try TemporaryDirectory()
