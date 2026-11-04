@@ -555,10 +555,27 @@ fn entries(dir: &Path) -> Vec<OsString> {
     names
 }
 
-/// A prepared prefix needs no network, for any mapped target: Zig fetches packages only while it configures a build,
-/// so each target's libghostty-vt configuration is run with every proxy pointing at a closed port and an empty global
-/// cache (which would otherwise serve a package the tree lacks), and must find every package in the tree, which it
-/// leaves as it was.
+/// Whether this host configures Zig triple `zig`: any but an iOS one, which needs Xcode's SDK of it on a macOS host
+/// (`ios_sdk_present` in `scripts/build-ghostty-vt.sh`).
+fn configures_here(zig: &str) -> bool {
+    let sdk = if zig.ends_with("-ios-simulator") {
+        "iphonesimulator"
+    } else if zig.ends_with("-ios") {
+        "iphoneos"
+    } else {
+        return true;
+    };
+    cfg!(target_os = "macos")
+        && Command::new("xcrun")
+            .args(["--sdk", sdk, "--show-sdk-path"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+}
+
+/// A prepared prefix needs no network, for any mapped target this host configures (iOS ones only on a Mac with Xcode's
+/// iOS SDK): Zig fetches packages only while it configures a build, so each target's libghostty-vt configuration is
+/// run with every proxy pointing at a closed port and an empty global cache (which would otherwise serve a package the
+/// tree lacks), and must find every package in the tree, which it leaves as it was.
 #[test]
 fn the_prepared_prefix_configures_every_target_with_networking_off() {
     const CLOSED: &str = "http://127.0.0.1:9";
@@ -567,7 +584,10 @@ fn the_prepared_prefix_configures_every_target_with_networking_off() {
     let packages = prefix.join(zig_build::SOURCE).join("zig-pkg");
     let before = entries(&packages);
     let scratch = tempfile::tempdir().unwrap();
-    for (cargo, _) in zig_build::ZIG_TARGETS {
+    for (cargo, zig) in zig_build::ZIG_TARGETS {
+        if !configures_here(zig) {
+            continue;
+        }
         let target = zig_build::zig_target(cargo, None, None, None).unwrap();
         let mut command = Command::new(&stamp.zig);
         // an Android configuration only joins paths into the NDK, which must exist (build-ghostty-vt.sh)
