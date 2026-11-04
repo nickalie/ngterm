@@ -262,7 +262,10 @@ fn outside_tasks(work: Box<dyn FnOnce()>) {
 /// app is quitting inside GPUI's callbacks, and `WebView2`'s processes end with the app's.
 pub fn shutdown() {
     #[cfg(windows)]
-    super::outside::quit();
+    {
+        super::outside::quit();
+        super::native::forget_anchor();
+    }
     let (pages, buried) = with(|registry| {
         registry.failure = Some("the app is quitting".to_owned());
         (

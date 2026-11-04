@@ -14,7 +14,7 @@
 
 use std::cell::RefCell;
 use std::num::NonZeroIsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -232,6 +232,7 @@ impl Native {
         if let Some(script) = &spec.trusted_document_script {
             native.add_isolated_document_script(script)?;
         }
+        hold_profile(&spec.store, &native);
         Ok(native)
     }
 
@@ -943,19 +944,101 @@ fn serve_text(text: &Text, uri: &str) -> wry::http::Response<std::borrow::Cow<'s
 
 // MARK: - the saved store's clear
 
-/// Empties profile `profile` of `store`: a hidden web view on it in window `parent` asks `WebView2` to clear its
-/// browsing data; `done` gets the outcome, after which the web view goes. Pumps the window's messages while the web
-/// view is made (module docs). The environment it ran in, for the pages after it.
+/// Empties profile `profile` of `store` through its anchor, made when there is none (in its own window, not the GPUI
+/// window the registry names): `WebView2` clears the profile's browsing data and `done` gets the outcome. Pumps the
+/// window's messages while an anchor is made (module docs). The environment it ran in, for the pages after it.
 pub fn clear_profile(
-    parent: isize,
+    _parent: isize,
     store: Store,
     done: Box<dyn FnOnce(Result<(), String>)>,
 ) -> Option<ICoreWebView2Environment> {
-    let mut context = WebContext::new(Some(store.user_data));
+    let Store {
+        environment,
+        user_data,
+        profile,
+        ..
+    } = store;
+    let (webview, environment) = match anchor(&profile, &user_data, environment) {
+        Ok(anchor) => anchor,
+        Err(err) => {
+            done(Err(err));
+            return None;
+        }
+    };
+    let profile = webview
+        .cast::<ICoreWebView2_13>()
+        .and_then(|webview| {
+            // SAFETY: a COM call on the web view's own thread.
+            unsafe { webview.Profile() }
+        })
+        .and_then(|profile| profile.cast::<ICoreWebView2Profile2>());
+    match profile {
+        Ok(profile) => start_clear(&profile, done),
+        Err(err) => done(Err(err.to_string())),
+    }
+    Some(environment)
+}
+
+/// Starts the clear of `profile`.
+fn start_clear(profile: &ICoreWebView2Profile2, done: Box<dyn FnOnce(Result<(), String>)>) {
+    let answer = Rc::new(RefCell::new(Some(done)));
+    let answered = Rc::clone(&answer);
+    let handler = ClearBrowsingDataCompletedHandler::create(Box::new(move |result| {
+        if let Some(done) = answered.take() {
+            done(result.map_err(|err| err.to_string()));
+        }
+        Ok(())
+    }));
+    // SAFETY: a COM call on the web view's own thread; the anchor keeps the profile's web view.
+    let started = unsafe { profile.ClearBrowsingDataAll(&handler) };
+    if let Err(err) = started
+        && let Some(done) = answer.take()
+    {
+        done(Err(err.to_string()));
+    }
+}
+
+// MARK: - the saved store's anchor
+
+/// A hidden web view on the saved store's profile, kept for the rest of the run once a page or the clear used the
+/// profile. `WebView2` unloads a profile when its last web view closes and loads it again for the next one; a web view
+/// made while it unloads may find the profile's cookies not there yet, and a clear through it then empties nothing,
+/// the cookie coming back for the page after it (CI, `test_clear_empties_the_store_persistent_pages_share`). With the
+/// anchor the profile stays loaded, so every page and the clear see the one cookie store. It sits in a hidden window
+/// of its own ([`host_window`]), which no GPUI window's close takes with it.
+struct Anchor {
+    profile: String,
+    view: WebView,
+}
+
+thread_local! {
+    static ANCHOR: RefCell<Option<Anchor>> = const { RefCell::new(None) };
+    /// The anchor's hidden window, once made: it lives as long as the app.
+    static HOST: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+}
+
+/// The web view and environment of `profile`'s anchor (in `user_data`), made (in `environment`, the pages' own) when
+/// there is none for the profile. Pumps the window's messages while it is made.
+fn anchor(
+    profile: &str,
+    user_data: &Path,
+    environment: Option<ICoreWebView2Environment>,
+) -> Result<(ICoreWebView2, ICoreWebView2Environment), String> {
+    let kept = ANCHOR.with_borrow(|anchor| {
+        anchor
+            .as_ref()
+            .filter(|anchor| anchor.profile == profile)
+            .map(|anchor| (anchor.view.webview(), anchor.view.environment()))
+    });
+    if let Some(kept) = kept {
+        return Ok(kept);
+    }
+    let parent = host_window()?;
+    let mut context = WebContext::new(Some(user_data.to_path_buf()));
     let mut builder = WebViewBuilder::new_with_web_context(&mut context)
         .with_visible(false)
         .with_devtools(false)
-        .with_profile_name(store.profile)
+        .with_profile_name(profile)
         .with_bounds(
             Bounds {
                 x: 0.0,
@@ -965,53 +1048,73 @@ pub fn clear_profile(
             }
             .rect(),
         );
-    if let Some(environment) = store.environment {
+    if let Some(environment) = environment {
         builder = builder.with_environment(environment);
     }
-    let view = match builder.build_as_child(&Parent(parent)) {
-        Ok(view) => view,
-        Err(err) => {
-            done(Err(err.to_string()));
-            return None;
-        }
-    };
-    let environment = view.environment();
-    let profile = view
-        .webview()
-        .cast::<ICoreWebView2_13>()
-        .and_then(|webview| {
-            // SAFETY: a COM call on the web view's own thread.
-            unsafe { webview.Profile() }
-        })
-        .and_then(|profile| profile.cast::<ICoreWebView2Profile2>());
-    match profile {
-        Ok(profile) => start_clear(&profile, view, done),
-        Err(err) => done(Err(err.to_string())),
-    }
-    Some(environment)
+    let view = builder.build_as_child(&Parent(parent)).map_err(|err| err.to_string())?;
+    let made = (view.webview(), view.environment());
+    let replaced = ANCHOR.replace(Some(Anchor {
+        profile: profile.to_owned(),
+        view,
+    }));
+    drop(replaced);
+    Ok(made)
 }
 
-/// Starts the clear of `profile`, `view` kept until it is answered.
-fn start_clear(profile: &ICoreWebView2Profile2, view: WebView, done: Box<dyn FnOnce(Result<(), String>)>) {
-    let held = Rc::new(RefCell::new(Some(view)));
-    let answer = Rc::new(RefCell::new(Some(done)));
-    let (kept, answered) = (Rc::clone(&held), Rc::clone(&answer));
-    let handler = ClearBrowsingDataCompletedHandler::create(Box::new(move |result| {
-        // the hidden web view goes with the answer
-        kept.take();
-        if let Some(done) = answered.take() {
-            done(result.map_err(|err| err.to_string()));
-        }
-        Ok(())
-    }));
-    // SAFETY: a COM call on the web view's own thread; the handler keeps the web view until it is answered.
-    let started = unsafe { profile.ClearBrowsingDataAll(&handler) };
-    if let Err(err) = started {
-        held.take();
-        if let Some(done) = answer.take() {
-            done(Err(err.to_string()));
-        }
+/// The anchor's hidden top-level window on this (the main) thread, made on first use: a `STATIC` window, never shown
+/// and never in the taskbar, whose messages the main loop pumps with every other window's.
+fn host_window() -> Result<isize, String> {
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, WS_EX_TOOLWINDOW, WS_POPUP};
+
+    let made = HOST.get();
+    if made != 0 {
+        return Ok(made);
     }
+    let class: Vec<u16> = "STATIC".encode_utf16().chain([0]).collect();
+    // SAFETY: a null name asks for this executable's module, which lives as long as the process.
+    let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+    // SAFETY: a system class and its name alive for the call; a hidden window with no parent, menu or data.
+    let window = unsafe {
+        CreateWindowExW(
+            WS_EX_TOOLWINDOW,
+            class.as_ptr(),
+            std::ptr::null(),
+            WS_POPUP,
+            0,
+            0,
+            1,
+            1,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            instance,
+            std::ptr::null(),
+        )
+    };
+    if window.is_null() {
+        return Err(format!(
+            "the saved store's window was not made: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let window = window.expose_provenance().cast_signed();
+    HOST.set(window);
+    Ok(window)
+}
+
+/// Makes the saved store's anchor beside page web view `native`, when it has none.
+fn hold_profile(store: &Store, native: &Native) {
+    if store.private {
+        return;
+    }
+    if let Err(err) = anchor(&store.profile, &store.user_data, Some(native.environment())) {
+        tracing::warn!(err, "WebView2 could not make the saved store's anchor");
+    }
+}
+
+/// Lets the anchor go at the quit without closing it, as the pages' web views are (`registry::shutdown`).
+pub fn forget_anchor() {
+    std::mem::forget(ANCHOR.take());
 }
 
 #[cfg(test)]
