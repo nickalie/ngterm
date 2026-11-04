@@ -41,6 +41,13 @@
     },
     {
       "target" : {
+        "containerPath" : "container:Packages\/NgtermPlatform",
+        "identifier" : "NgtermPlatformTests",
+        "name" : "NgtermPlatformTests"
+      }
+    },
+    {
+      "target" : {
         "containerPath" : "container:Packages\/NgtermFeatures",
         "identifier" : "NgtermFeaturesTests",
         "name" : "NgtermFeaturesTests"
