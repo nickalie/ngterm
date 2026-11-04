@@ -168,6 +168,33 @@ impl Client {
         }
     }
 
+    /// Takes in the events already sent. A step drains before it reads a count of [`Seen`] or clears a value its wait
+    /// then looks at, so an event an earlier step caused cannot land after that and satisfy the wait.
+    pub(crate) fn drain(&mut self) {
+        while let Ok(event) = self.events.try_recv() {
+            self.seen.record(event);
+        }
+    }
+
+    /// Takes control of the shown pane and waits for that takeover's own report: its attach's role-less `PaneLead`,
+    /// then `Leader`. A role an earlier attach reported says nothing of this one, which replaces the pane's attach
+    /// even when it already leads; input typed before the new attach leads goes down the old one and is dropped once
+    /// the new one claims.
+    pub(crate) fn take_lead(&mut self, session: &str, pane: &str) {
+        self.drain();
+        let roles = self.seen.roles.len();
+        self.core
+            .take_lead(MACHINE_ID.to_owned(), session.to_owned(), pane.to_owned())
+            .unwrap_or_else(|error| panic!("{}: take the lead: {error:?}", self.label));
+        self.wait("the lead taken", |seen| {
+            let fresh = &seen.roles[roles..];
+            fresh
+                .iter()
+                .position(Option::is_none)
+                .is_some_and(|attached| fresh[attached..].contains(&Some(PaneRole::Leader)))
+        });
+    }
+
     /// Takes in the events that arrive within `wait`.
     pub(crate) fn settle(&mut self, wait: Duration) {
         let deadline = Instant::now() + wait;
@@ -197,9 +224,7 @@ impl Client {
         let mut screen = String::new();
         while Instant::now() < deadline {
             // events keep coming while the screen fills
-            while let Ok(event) = self.events.try_recv() {
-                self.seen.record(event);
-            }
+            self.drain();
             if let Some(buffer) = self.terminal.as_ref().and_then(|pane| pane.frame(0).ok()) {
                 screen = screen_text(&buffer);
                 if screen.contains(needle) {

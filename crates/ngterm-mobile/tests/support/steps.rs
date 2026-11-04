@@ -66,11 +66,7 @@ pub(crate) fn create_and_read(client: &mut Client) -> String {
     client.wait("a role", |seen| seen.role.is_some());
     // the machine's own terminal of the pane attached first and leads; a follower's typing is dropped
     if client.seen.role != Some(PaneRole::Leader) {
-        client
-            .core
-            .take_lead(MACHINE_ID.to_owned(), session.id.clone(), layout.primary.clone())
-            .expect("take the lead");
-        client.wait("the lead", |seen| seen.role == Some(PaneRole::Leader));
+        client.take_lead(&session.id, &layout.primary);
     }
     client.terminal = Some(pane);
     client.run_line();
@@ -104,18 +100,17 @@ pub(crate) fn leadership(first: &mut Client, second: &mut Client, session: &str,
     );
     assert_eq!(first.seen.role, Some(PaneRole::Leader));
 
-    second
-        .core
-        .take_lead(MACHINE_ID.to_owned(), session.to_owned(), pane.to_owned())
-        .expect("take the lead");
-    second.wait("the second client leading", |seen| seen.role == Some(PaneRole::Leader));
+    first.drain();
+    let roles = first.seen.roles.len();
+    second.take_lead(session, pane);
     first.wait("the first client following", |seen| {
-        seen.role == Some(PaneRole::Follower)
+        seen.roles[roles..].contains(&Some(PaneRole::Follower))
     });
 }
 
 /// The client's link drops under it; it reconnects on its own and draws the same screen in a fresh terminal.
 pub(crate) fn reconnect(client: &mut Client, proxy: &Proxy) {
+    client.drain();
     let (lost, attached) = (client.seen.lost, client.seen.attached);
     client.seen.states.clear();
     proxy.sever();

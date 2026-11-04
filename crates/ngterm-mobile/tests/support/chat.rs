@@ -63,12 +63,9 @@ impl Scene<'_> {
     /// `second` leads at the tablet's grid and starts the fake agent in the pane's shell; `first` follows at the
     /// phone's. The origin announces the agent to the phone.
     fn start(&mut self, agent: &FakeAgent) {
-        self.second
-            .core
-            .take_lead(MACHINE_ID.to_owned(), self.session.to_owned(), self.pane.to_owned())
-            .expect("take the lead");
-        self.second
-            .wait("the second client leading", |seen| seen.role == Some(PaneRole::Leader));
+        // the second client leads since the leadership step; the takeover attaches it again all the same, and what is
+        // typed waits for that attach to lead
+        self.second.take_lead(self.session, self.pane);
         let leader = self.second.terminal.clone().expect("the second client's pane");
         leader.resize(TABLET).expect("the tablet's grid");
         self.first
@@ -77,12 +74,18 @@ impl Scene<'_> {
             .expect("the phone's pane")
             .resize(PHONE)
             .expect("the phone's grid");
+        self.first.drain();
+        let agents = self.first.seen.agents.len();
         assert!(leader.type_text(agent.command_line()).expect("type"));
         assert!(leader.key(enter()).expect("press enter"));
         self.second.wait_screen(FOOTER);
-        let pane = self.pane.to_owned();
+        let announced = (
+            self.pane.to_owned(),
+            Some("claude".to_owned()),
+            Some(CONVERSATION.to_owned()),
+        );
         self.first.wait("the agent announced", |seen| {
-            seen.agents.last() == Some(&(pane.clone(), Some("claude".to_owned()), Some(CONVERSATION.to_owned())))
+            seen.agents[agents..].last() == Some(&announced)
         });
     }
 
@@ -151,6 +154,7 @@ impl Scene<'_> {
 
     /// The phone's link drops; what the agent writes meanwhile arrives once it is back, and nothing twice.
     fn resume(&mut self, agent: &FakeAgent) {
+        self.first.drain();
         let (attached, states) = (self.first.seen.attached, self.first.seen.chat_states.len());
         self.first.seen.states.clear();
         self.world.proxy.sever();
@@ -180,11 +184,15 @@ impl Scene<'_> {
     /// While `second` leads, the phone's prompt takes the lead, lays the agent out for the phone, pastes and sends:
     /// the agent shows it and writes it to the transcript, which the chat reads.
     fn prompt(&mut self) {
+        self.first.drain();
+        self.second.drain();
+        let (first, second) = (self.first.seen.roles.len(), self.second.seen.roles.len());
         assert_eq!(self.act(PROMPT), AgentInputOutcome::Sent);
-        self.first
-            .wait("the phone leading", |seen| seen.role == Some(PaneRole::Leader));
+        self.first.wait("the phone leading", |seen| {
+            seen.roles[first..].contains(&Some(PaneRole::Leader))
+        });
         self.second.wait("the second client following", |seen| {
-            seen.role == Some(PaneRole::Follower)
+            seen.roles[second..].contains(&Some(PaneRole::Follower))
         });
         self.first.wait_screen(&format!("> {PROMPT}"));
         self.first.wait("the prompt in the chat", |seen| {
@@ -230,13 +238,16 @@ impl Scene<'_> {
     /// The agent exits, leaving the shell in the foreground: the origin clears the record, the phone hears the pane
     /// runs no agent and the chat ends.
     fn end(&mut self) {
+        self.first.drain();
+        let (agents, states) = (self.first.seen.agents.len(), self.first.seen.chat_states.len());
         assert_eq!(self.act("/exit"), AgentInputOutcome::Sent);
-        let pane = self.pane.to_owned();
+        let cleared = (self.pane.to_owned(), None, None);
         self.first.wait("the agent cleared", |seen| {
-            seen.agents.last() == Some(&(pane.clone(), None, None))
+            seen.agents[agents..].last() == Some(&cleared)
         });
-        self.first
-            .wait("the chat ended", |seen| seen.chat_states.contains(&ChatState::Ended));
+        self.first.wait("the chat ended", |seen| {
+            seen.chat_states[states..].contains(&ChatState::Ended)
+        });
     }
 }
 
