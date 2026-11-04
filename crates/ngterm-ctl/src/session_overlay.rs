@@ -1222,7 +1222,7 @@ mod tests {
         assert_eq!(request["cmd"], "session.overlay.open");
         assert_eq!(
             request["args"],
-            json!({"image": cwd.join("shots/a.png").to_string_lossy(), "follow": true})
+            json!({"image": cwd.join("shots").join("a.png").to_string_lossy(), "follow": true})
         );
     }
 
@@ -1233,7 +1233,7 @@ mod tests {
         assert_eq!(value["cmd"], "session.overlay.open");
         assert_eq!(
             value["args"],
-            json!({"markdownFile": cwd.join("docs/r.md").to_string_lossy(), "sizePercent": 95})
+            json!({"markdownFile": cwd.join("docs").join("r.md").to_string_lossy(), "sizePercent": 95})
         );
         let encoded = serde_json::to_string(&value).unwrap();
         assert!(encoded.contains("\"markdownFile\":"));
