@@ -476,6 +476,8 @@ impl Core {
             ClientEffect::Warn(reason) => {
                 tracing::warn!(%session, %reason, "presentation stream");
             }
+            // desktop shows no agent chat, so its hello never lists the kind
+            ClientEffect::Agent(_) => {}
         }
     }
 

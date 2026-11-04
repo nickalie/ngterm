@@ -19,6 +19,7 @@ pub use self::pane::{
 };
 
 use crate::actor::{Actor, Command};
+use crate::chat::{AgentCommand, ChatEvent, ChatState};
 use crate::keys::{self, KeyError, KeyPair};
 use crate::pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};
 use crate::presentation::{
@@ -206,6 +207,23 @@ pub enum MobileEvent {
     /// A clipboard read was denied without the user's answer (the pane hidden, its link lost, its program ended):
     /// take its prompt down.
     ClipboardReadDismiss { pane: PaneRef, read_id: u64 },
+    /// What a pane of an attached session runs, as its origin announces it: `agent` (`claude`, `codex`, or a name a
+    /// newer origin knows) and its conversation, or `None` when the pane runs none. Every pane is announced when the
+    /// stream connects, then on each change; an origin that predates the chat view announces none. A pane with an
+    /// agent shows as a chat ([`MobileCore::open_chat`]) when the app's setting says so.
+    PaneAgent {
+        machine_id: String,
+        session_id: String,
+        /// The pane's identity, as the session's layout names it.
+        pane_id: String,
+        agent: Option<String>,
+        conversation_id: Option<String>,
+    },
+    /// Events of a pane's open chat ([`MobileCore::open_chat`]), in order: the backlog, `live`, then each new one.
+    /// A later event with an id already shown updates that item; a `reset` drops everything shown.
+    Chat { pane: PaneRef, events: Vec<ChatEvent> },
+    /// A pane's open chat is reconnecting, or ended for good (show the terminal).
+    ChatState { pane: PaneRef, state: ChatState },
 }
 
 /// Why a [`MobileCore`] call failed.
@@ -585,6 +603,91 @@ impl MobileCore {
             pane_id,
         };
         self.actor.post(Command::AnswerClipboardRead { pane, read_id, reply })
+    }
+}
+
+#[uniffi::export]
+impl MobileCore {
+    /// Opens the chat of a shown pane ([`MobileCore::show_pane`]) of an attached session, one the origin announced
+    /// an agent for ([`MobileEvent::PaneAgent`]): its events arrive as [`MobileEvent::Chat`], and what becomes of it
+    /// as [`MobileEvent::ChatState`]. Reading the chat claims nothing: the pane's own attach keeps its role. Opening an
+    /// open chat changes nothing; hiding the pane closes it.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::NotConnected`], [`MobileError::Remote`] when the pane is not shown or its session's layout
+    /// does not hold it, or [`MobileError::Stopped`].
+    pub async fn open_chat(&self, machine_id: String, session_id: String, pane_id: String) -> Result<(), MobileError> {
+        let (reply, answer) = oneshot::channel();
+        let pane = PaneRef {
+            machine_id,
+            session_id,
+            pane_id,
+        };
+        self.actor.post(Command::OpenChat { pane, reply })?;
+        answer.await.unwrap_or(Err(MobileError::Stopped))
+    }
+
+    /// Closes a pane's chat (the pane shows its terminal again, or leaves the screen), reporting nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Stopped`] when the core has stopped.
+    pub fn close_chat(&self, machine_id: String, session_id: String, pane_id: String) -> Result<(), MobileError> {
+        self.actor.post(Command::CloseChat(PaneRef {
+            machine_id,
+            session_id,
+            pane_id,
+        }))
+    }
+
+    /// The page of a pane's open chat before the oldest event it holds, oldest first: empty once the conversation's
+    /// start is reached. The page's events are not repeated as [`MobileEvent::Chat`].
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::Remote`] when the chat is not open or the origin failed to read the page,
+    /// [`MobileError::NotConnected`] while the machine is down, [`MobileError::Cancelled`] when the chat closed or its
+    /// conversation switched meanwhile, or [`MobileError::Stopped`].
+    pub async fn load_older(
+        &self,
+        machine_id: String,
+        session_id: String,
+        pane_id: String,
+    ) -> Result<Vec<ChatEvent>, MobileError> {
+        let (reply, answer) = oneshot::channel();
+        let pane = PaneRef {
+            machine_id,
+            session_id,
+            pane_id,
+        };
+        self.actor.post(Command::LoadOlder { pane, reply })?;
+        answer.await.unwrap_or(Err(MobileError::Stopped))
+    }
+
+    /// The slash commands and skills of a pane's agent, for the composer's `/` dropdown ([`filter_commands`]): read
+    /// once per conversation and kept until the pane's conversation changes or its chat reads a `reset`.
+    ///
+    /// [`filter_commands`]: crate::chat::filter_commands
+    ///
+    /// # Errors
+    ///
+    /// [`MobileError::NotConnected`], [`MobileError::Remote`] when the session's layout does not hold the pane or the
+    /// origin gave no catalog (it runs no agent there, or predates the command), or [`MobileError::Stopped`].
+    pub async fn agent_commands(
+        &self,
+        machine_id: String,
+        session_id: String,
+        pane_id: String,
+    ) -> Result<Vec<AgentCommand>, MobileError> {
+        let (reply, answer) = oneshot::channel();
+        let pane = PaneRef {
+            machine_id,
+            session_id,
+            pane_id,
+        };
+        self.actor.post(Command::AgentCommands { pane, reply })?;
+        answer.await.unwrap_or(Err(MobileError::Stopped))
     }
 }
 

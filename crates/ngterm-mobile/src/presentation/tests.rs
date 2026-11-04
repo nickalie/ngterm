@@ -15,6 +15,7 @@ use ngterm_core::remote::frames::{
     PresentationPage, PresentationPageChange, PresentationPageSource, PresentationRespawns, PresentationSnapshot,
     PresentationSound, PresentationStatus,
 };
+use ngterm_core::remote::hub::AGENT_KIND;
 use ngterm_core::remote::ssh::present_tail;
 use ngterm_proto::request::AskButton;
 use uuid::Uuid;
@@ -304,7 +305,7 @@ fn ask(id: &str, owner: i64) -> PresentationAsk {
 }
 
 #[test]
-fn attaching_opens_the_stream_with_a_hello_listing_no_page_kinds() {
+fn attaching_opens_the_stream_with_a_hello_listing_no_page_kinds_and_the_agent_kind() {
     local(async {
         let mut harness = Harness::attached(Some(1)).await;
 
@@ -313,11 +314,13 @@ fn attaching_opens_the_stream_with_a_hello_listing_no_page_kinds() {
             [role(PresentationRole::Mirror), connection(StreamState::Connecting)]
         );
         let received = harness.received().await;
+        let mut kinds = viewer_kinds(false);
+        kinds.push(AGENT_KIND.to_owned());
         assert_eq!(
             received.bodies,
             [Body::Hello(PresentationHello {
                 version: frames::VERSION,
-                kinds: viewer_kinds(false),
+                kinds,
                 mode: PresentationMode::Presenter,
             })]
         );

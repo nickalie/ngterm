@@ -15,6 +15,8 @@
 //! while the machine is down); its links report back to the actor as local tasks, and a ticker task runs the streams'
 //! one-second tick. A shown pane ([`crate::pane`]) runs its attach on the same connection; its threads report back as
 //! notes a local task hands to the panes, and the respawn counts a stream reports are handed to its session's panes.
+//! A shown pane's chat ([`crate::chat`]) runs on the same connection too, learning each session's layout and its panes'
+//! agents from what the streams report; hiding the pane or detaching its session closes it.
 //!
 //! A connection the core holds is watched: lost by itself, it is retried on the reconnect schedule as a connect
 //! attempt that waits first ([`crate::reconnect`]) until it is back or refused for good
@@ -22,6 +24,10 @@
 //! machine's connection (a disconnect, a connect of the machine as edited) ends its sessions' streams and its retries;
 //! suspending closes every connection but keeps the streams to start again on resume.
 
+mod chats;
+
+#[cfg(test)]
+mod chat_tests;
 #[cfg(test)]
 mod pane_tests;
 #[cfg(test)]
@@ -47,6 +53,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{AbortHandle, LocalSet};
 
 use crate::api::{EventSink, Machine, MachineState, MobileError, MobileEvent, Pane, PaneSize};
+use crate::chat::{AgentCommand, ChatEvent, ChatKey, Chats};
 use crate::pane::{self, ClipboardReply, GoneCheck, Note, PaneRef, Panes, Target};
 use crate::presentation::{self, AskReply, ChannelLinks, LinkEvent, Presentations, Reporter};
 use crate::reconnect::Retry;
@@ -116,6 +123,19 @@ pub(crate) enum Command {
         pane: PaneRef,
         read_id: u64,
         reply: ClipboardReply,
+    },
+    OpenChat {
+        pane: PaneRef,
+        reply: Reply,
+    },
+    CloseChat(PaneRef),
+    LoadOlder {
+        pane: PaneRef,
+        reply: oneshot::Sender<Result<Vec<ChatEvent>, MobileError>>,
+    },
+    AgentCommands {
+        pane: PaneRef,
+        reply: oneshot::Sender<Result<Vec<AgentCommand>, MobileError>>,
     },
     NetworkChanged,
     Suspend,
@@ -195,6 +215,8 @@ struct State<T: Transport> {
     presentations: RefCell<Presentations<T::Connection>>,
     /// The shown panes.
     panes: RefCell<Panes<T::Connection>>,
+    /// The open chats, and what they know of the attached sessions.
+    chats: RefCell<Chats<T::Connection>>,
     /// The machines [`suspend`] set aside, to reconnect on [`resume`].
     suspended: RefCell<HashMap<String, SetAside>>,
 }
@@ -258,6 +280,7 @@ impl<T: Transport> State<T> {
             tickets: Cell::new(0),
             presentations: RefCell::new(Presentations::default()),
             panes: RefCell::new(Panes::new(notes)),
+            chats: RefCell::new(Chats::default()),
             suspended: RefCell::new(HashMap::new()),
         }
     }
@@ -272,8 +295,12 @@ impl<T: Transport> State<T> {
         }
     }
 
-    /// Emits what the streams made, then hands the respawn counts they reported to their sessions' panes.
+    /// Emits what the streams made, which the chats learn from first, then hands the respawn counts they reported to
+    /// their sessions' panes.
     fn presented(&self, events: Vec<MobileEvent>) {
+        for event in &events {
+            self.chats.borrow_mut().observe(event);
+        }
         self.emit_all(events);
         let respawns = self.presentations.borrow_mut().take_respawns();
         for reported in respawns {
@@ -341,6 +368,7 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
             }
             Command::DetachSession { machine_id, session_id } => {
                 state.presentations.borrow_mut().detach(&machine_id, &session_id);
+                state.chats.borrow_mut().close_session(&machine_id, &session_id);
                 let events = state.panes.borrow_mut().hide_session(&machine_id, &session_id);
                 state.emit_all(events);
             }
@@ -358,12 +386,17 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
             Command::NetworkChanged => network_changed(&state),
             Command::Suspend => suspend(&state),
             Command::Resume => resume(&state),
+            command @ (Command::OpenChat { .. }
+            | Command::CloseChat(_)
+            | Command::LoadOlder { .. }
+            | Command::AgentCommands { .. }) => chats::command(&state, command),
             command => pane_command(&state, command),
         }
     }
     ticker.abort();
     pane_notes.abort();
     *state.presentations.borrow_mut() = Presentations::default();
+    state.chats.borrow_mut().clear();
     // Nobody is left to tell: the panes' threads stop and their channels close.
     state.panes.borrow_mut().clear();
     // Waiters dropped unanswered read as `Stopped`.
@@ -562,6 +595,7 @@ fn connected<T: Transport>(state: &Rc<State<T>>, machine: Machine, connection: T
     state.presented(events);
     let events = state.panes.borrow_mut().machine_up(&id, &connection);
     state.emit_all(events);
+    state.chats.borrow_mut().machine_up(&id, &connection);
 }
 
 /// Waits for `connection` to go; still the machine's then, it was lost, and the machine is reconnected.
@@ -575,6 +609,8 @@ async fn watch<T: Transport>(state: Rc<State<T>>, machine_id: String, connection
     };
     state.presentations.borrow_mut().machine_down(&machine_id);
     state.panes.borrow_mut().machine_down(&machine_id);
+    let events = state.chats.borrow_mut().machine_down(&machine_id);
+    state.emit_all(events);
     start_attempt(&state, link.machine, Vec::new(), Some(Retry::after_loss()));
 }
 
@@ -629,6 +665,7 @@ fn suspend<T: Transport>(state: &State<T>) {
     for (machine_id, machine) in set_aside {
         state.presentations.borrow_mut().suspend_machine(&machine_id);
         state.panes.borrow_mut().machine_down(&machine_id);
+        state.chats.borrow_mut().suspend_machine(&machine_id);
         state.suspended.borrow_mut().insert(machine_id, machine);
     }
 }
@@ -668,6 +705,7 @@ fn close<T: Transport>(state: &State<T>, machine_id: &str) {
     state.suspended.borrow_mut().remove(machine_id);
     state.listings.borrow_mut().remove(machine_id);
     state.presentations.borrow_mut().forget_machine(machine_id);
+    state.chats.borrow_mut().forget_machine(machine_id);
     let events = state.panes.borrow_mut().forget_machine(machine_id);
     state.emit_all(events);
     let link = state.connections.borrow_mut().remove(machine_id);
@@ -842,6 +880,18 @@ fn attach_session<T: Transport>(state: &Rc<State<T>>, machine_id: &str, session_
     Ok(())
 }
 
+/// `machine_id`'s connection.
+fn connection_of<T: Transport>(state: &State<T>, machine_id: &str) -> Result<Rc<T::Connection>, MobileError> {
+    state
+        .connections
+        .borrow()
+        .get(machine_id)
+        .map(|link| Rc::clone(&link.connection))
+        .ok_or_else(|| MobileError::NotConnected {
+            machine_id: machine_id.to_owned(),
+        })
+}
+
 /// Where the streams' links report: the actor's [`Presentations`], once the link's task has the report.
 fn reporter<T: Transport>(state: &Rc<State<T>>) -> Reporter {
     let state = Rc::downgrade(state);
@@ -861,6 +911,7 @@ async fn tick<T: Transport>(state: Weak<State<T>>) {
         let Some(state) = state.upgrade() else { return };
         let events = state.presentations.borrow_mut().tick(sessions::now());
         state.presented(events);
+        state.chats.borrow_mut().tick(sessions::now());
     }
 }
 
@@ -883,6 +934,9 @@ fn pane_command<T: Transport>(state: &Rc<State<T>>, command: Command) {
         }
         Command::HidePane(pane) => {
             let Some(id) = pane_uuid(&pane) else { return };
+            if let Ok(key) = ChatKey::of(&pane) {
+                state.chats.borrow_mut().close(&key);
+            }
             let events = state.panes.borrow_mut().hide(&pane.machine_id, &pane.session_id, id);
             state.emit_all(events);
         }

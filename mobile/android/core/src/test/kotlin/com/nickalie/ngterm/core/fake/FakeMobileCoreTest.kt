@@ -1,5 +1,9 @@
 package com.nickalie.ngterm.core.fake
 
+import com.nickalie.ngterm.core.ffi.AgentCommand
+import com.nickalie.ngterm.core.ffi.AgentCommandKind
+import com.nickalie.ngterm.core.ffi.ChatBody
+import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.EventSink
 import com.nickalie.ngterm.core.ffi.HostKeyStore
 import com.nickalie.ngterm.core.ffi.Machine
@@ -163,6 +167,33 @@ class FakeMobileCoreTest {
             core.showPane("m1", "s1", "P1", size)
             core.disconnect("m1")
             assertTrue(core.shownPanes.isEmpty())
+        }
+
+    @Test
+    fun aChatOpensOnlyOnAShownPaneAndClosesWithItsPage() =
+        runTest {
+            val core = FakeMobileCore()
+            core.paneFactory = { _, _, pane, _ -> FakePane(pane) }
+            core.connect(machine)
+            core.sessions["m1"] = mutableListOf(fakeSession("s1"))
+            core.listSessions("m1")
+            val pane = PaneRef("m1", "s1", "P1")
+            val refused = runCatching { core.openChat("m1", "s1", "P1") }.exceptionOrNull()
+            assertEquals(NOT_SHOWN, (refused as? MobileException.Remote)?.reason)
+            core.showPane("m1", "s1", "P1", PaneSize(80u, 24u, 10u, 20u))
+            core.openChat("m1", "s1", "P1")
+            assertEquals(setOf(pane), core.openChats)
+            val page = listOf(ChatEvent("line-0", 0u, null, ChatBody.Assistant("hi")))
+            core.olderPages[pane] = ArrayDeque(listOf(page))
+            assertEquals(page, core.loadOlder("m1", "s1", "P1"))
+            assertTrue(core.loadOlder("m1", "s1", "P1").isEmpty())
+            val commands = listOf(AgentCommand("compact", "Clear history", AgentCommandKind.BUILTIN, null))
+            core.catalogs[pane] = commands
+            assertEquals(commands, core.agentCommands("m1", "s1", "P1"))
+            core.hidePane("m1", "s1", "P1")
+            assertTrue(core.openChats.isEmpty())
+            val closed = runCatching { core.loadOlder("m1", "s1", "P1") }.exceptionOrNull()
+            assertEquals(NOT_OPEN, (closed as? MobileException.Remote)?.reason)
         }
 
     @Test

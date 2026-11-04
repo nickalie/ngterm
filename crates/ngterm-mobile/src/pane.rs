@@ -339,6 +339,11 @@ impl<C: Connection> Panes<C> {
         self.book.observe(mark, local, session, true);
     }
 
+    /// Whether the pane `pane` of `session_id` is shown.
+    pub(crate) fn is_shown(&self, machine_id: &str, session_id: &str, pane: Uuid) -> bool {
+        self.find(machine_id, session_id, pane).is_some()
+    }
+
     /// Hides a shown pane: its attach ends and its reads are denied; nothing more is reported about it.
     pub(crate) fn hide(&mut self, machine_id: &str, session_id: &str, pane: Uuid) -> Vec<MobileEvent> {
         match self.find(machine_id, session_id, pane) {

@@ -15,12 +15,12 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::frames::{
-    self, Body, PresentationAsk, PresentationAskRef, PresentationFrame, PresentationHello, PresentationHud,
-    PresentationLayout, PresentationMode, PresentationNotify, PresentationOverlay, PresentationOverlayChange,
-    PresentationPage, PresentationPageChange, PresentationPageCommand, PresentationRespawns, PresentationSound,
-    PresentationStatus,
+    self, Body, PresentationAgent, PresentationAsk, PresentationAskRef, PresentationFrame, PresentationHello,
+    PresentationHud, PresentationLayout, PresentationMode, PresentationNotify, PresentationOverlay,
+    PresentationOverlayChange, PresentationPage, PresentationPageChange, PresentationPageCommand, PresentationRespawns,
+    PresentationSound, PresentationStatus,
 };
-use super::hub::{PAGE_KINDS, SUPPORTED_KINDS};
+use super::hub::{AGENT_KIND, PAGE_KINDS, SUPPORTED_KINDS};
 use super::reconnect::retry_delay;
 use crate::model::RemoteConnection;
 
@@ -97,6 +97,9 @@ pub enum ClientEffect {
     PageCommand(PresentationPageCommand),
     /// The origin's respawn counts; `true` for a snapshot's, which a first attach takes as its baseline.
     Respawns(PresentationRespawns, bool),
+    /// What one pane runs ([`AGENT_KIND`]), only for a client that asked for it
+    /// ([`PresentationClient::set_shows_agents`]).
+    Agent(PresentationAgent),
     Warn(String),
 }
 
@@ -122,6 +125,8 @@ pub struct PresentationClient {
     mode: Option<PresentationMode>,
     /// The hello lists the page kinds ([`viewer_kinds`]).
     shows_pages: bool,
+    /// The hello lists [`AGENT_KIND`] too, and its frames are reported.
+    shows_agents: bool,
 }
 
 impl std::fmt::Debug for PresentationClient {
@@ -157,12 +162,28 @@ impl PresentationClient {
             connection: None,
             mode: None,
             shows_pages: false,
+            shows_agents: false,
         }
     }
 
     /// Whether this machine shows handed-over pages, which the next hello says.
     pub fn set_shows_pages(&mut self, shows_pages: bool) {
         self.shows_pages = shows_pages;
+    }
+
+    /// Whether this viewer shows what each pane runs (the Android chat view): the next hello lists [`AGENT_KIND`], an
+    /// opt-in kind of this build that desktop never lists, and its frames are reported as [`ClientEffect::Agent`].
+    pub fn set_shows_agents(&mut self, shows_agents: bool) {
+        self.shows_agents = shows_agents;
+    }
+
+    /// The kinds the next hello lists.
+    fn hello_kinds(&self) -> Vec<String> {
+        let mut kinds = viewer_kinds(self.shows_pages);
+        if self.shows_agents {
+            kinds.push(AGENT_KIND.to_owned());
+        }
+        kinds
     }
 
     /// The client's unique id, which its links' keys carry.
@@ -319,6 +340,7 @@ impl PresentationClient {
             Body::PageClose(change) => effects.push(ClientEffect::PageClose(change)),
             Body::PageCommand(command) => effects.push(ClientEffect::PageCommand(command)),
             Body::Respawn(respawns) => effects.push(ClientEffect::Respawns(respawns, false)),
+            Body::Agent(agent) if self.shows_agents => effects.push(ClientEffect::Agent(agent)),
             Body::Hello(_)
             | Body::Ack
             | Body::PresenterAcquire
@@ -329,7 +351,7 @@ impl PresentationClient {
             | Body::PageRejected(_)
             | Body::PageClosed(_)
             | Body::PageState(_)
-            // never listed in this viewer's hello, so never sent to it
+            // listed only when this viewer shows agents, so never sent to another
             | Body::Agent(_)
             | Body::Unknown(_) => {}
         }
@@ -350,7 +372,7 @@ impl PresentationClient {
         let link = transport.open(&self.argv, key);
         let hello = PresentationHello {
             version: frames::VERSION,
-            kinds: viewer_kinds(self.shows_pages),
+            kinds: self.hello_kinds(),
             mode: PresentationMode::Presenter,
         };
         self.send(Body::Hello(hello), link.as_ref());
@@ -629,6 +651,47 @@ mod tests {
             );
         }
         assert_eq!(harness.connections(), [RemoteConnection::Connecting]);
+    }
+
+    #[test]
+    fn a_viewer_showing_agents_lists_the_kind_and_reports_its_frames_and_any_other_drops_them() {
+        let agent = || {
+            Body::Agent(PresentationAgent {
+                pane: frames::PresentationPane::Identity(Uuid::from_u128(7)),
+                agent: Some("claude".to_owned()),
+                conversation_id: Some("c1".to_owned()),
+            })
+        };
+        let reported = |harness: &Harness| {
+            harness
+                .effects
+                .iter()
+                .filter(|effect| matches!(effect, ClientEffect::Agent(_)))
+                .count()
+        };
+
+        let mut harness = Harness::started();
+        harness.connect(PresentationSnapshot::default(), 7, PresentationMode::Mirror);
+        harness.deliver(&line(agent(), 7, 2));
+        assert_eq!(reported(&harness), 0, "a viewer that did not ask drops the frame");
+
+        let mut harness = Harness::new(Some(1));
+        harness.client.set_shows_agents(true);
+        harness.start();
+        let hello = harness.transport.link(0).0.borrow().sent[0].body.clone();
+        let Body::Hello(hello) = hello else {
+            panic!("the first frame is the hello")
+        };
+        let mut kinds = viewer_kinds(false);
+        kinds.push(crate::remote::hub::AGENT_KIND.to_owned());
+        assert_eq!(hello.kinds, kinds, "the opt-in kind follows the build's own");
+        harness.connect(PresentationSnapshot::default(), 7, PresentationMode::Mirror);
+        harness.deliver(&line(agent(), 7, 2));
+        assert_eq!(reported(&harness), 1);
+        let Some(ClientEffect::Agent(frame)) = harness.effects.last() else {
+            panic!("the frame is reported")
+        };
+        assert_eq!(frame.agent.as_deref(), Some("claude"));
     }
 
     #[test]

@@ -14,7 +14,10 @@
 //!   desktop's viewer applies them (`viewer.rs::apply_client_effect`), re-derived for a phone:
 //!   - a snapshot's status is no change on the origin ([`MobileEvent::SessionStatus`]'s `changed` is false), so the
 //!     app notifies nothing for it;
-//!   - the hello lists `viewer_kinds(false)`: no page kinds, as the app shows no handed-over pages;
+//!   - the hello lists `viewer_kinds(false)`: no page kinds, as the app shows no handed-over pages; and the opt-in
+//!     `agent` kind, whose frames become [`MobileEvent::PaneAgent`] for the chat view ([`crate::chat`]). They are not
+//!     cleared when the stream leaves `connected`: the origin announces every pane again when it reconnects, and a
+//!     chat follows its own channel meanwhile;
 //!   - an ask for an attached session is always accepted (the app shows it as a dialog when the session is on screen,
 //!     otherwise as a notification) and its answer echoes the request's `owner`, kept here;
 //!   - an overlay is refused with `overlay.rejected`, and a page with `page.rejected` ([`PAGES_UNSUPPORTED`]);
@@ -40,9 +43,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use ngterm_core::model::RemoteConnection;
+use ngterm_core::pane_env::uuid_string;
 use ngterm_core::remote::client::{ClientEffect, PAGES_UNSUPPORTED, PresentationClient};
 use ngterm_core::remote::frames::{
-    Body, MAX_FRAME_BYTES, PresentationAskAnswer, PresentationOverlayChange, PresentationPageChange,
+    Body, MAX_FRAME_BYTES, PresentationAskAnswer, PresentationOverlayChange, PresentationPageChange, PresentationPane,
     PresentationRespawns,
 };
 use ngterm_core::remote::ssh::present_tail;
@@ -307,7 +311,8 @@ impl<C: Connection> Presentations<C> {
         let session = Uuid::parse_str(session_id).map_err(|_| invalid())?;
         let tail = present_tail(session_id).map_err(|_| invalid())?;
         self.last_client += 1;
-        let client = PresentationClient::new(session, self.last_client, vec![tail], version);
+        let mut client = PresentationClient::new(session, self.last_client, vec![tail], version);
+        client.set_shows_agents(true);
         let mut attached = Attached {
             machine_id: machine_id.to_owned(),
             session_id: session_id.to_owned(),
@@ -520,6 +525,19 @@ impl<C> Attached<C> {
                 }
             }
             ClientEffect::Respawns(respawns, seed) => return self.respawns.push((respawns, seed)),
+            ClientEffect::Agent(agent) => {
+                // the scratch pane keeps no agent record
+                let PresentationPane::Identity(pane) = agent.pane else {
+                    return;
+                };
+                MobileEvent::PaneAgent {
+                    machine_id,
+                    session_id,
+                    pane_id: uuid_string(pane),
+                    agent: agent.agent,
+                    conversation_id: agent.conversation_id,
+                }
+            }
             other => return self.refuse(other),
         };
         events.push(event);

@@ -1,6 +1,8 @@
 package com.nickalie.ngterm.core.fake
 
+import com.nickalie.ngterm.core.ffi.AgentCommand
 import com.nickalie.ngterm.core.ffi.AskReply
+import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.ClipboardReply
 import com.nickalie.ngterm.core.ffi.EventSink
 import com.nickalie.ngterm.core.ffi.HostKeyStore
@@ -56,6 +58,12 @@ data class FakeCall(
  *
  * - [showPane] hands back the same handle for a pane already shown; [hidePane], [detachSession] (its session's
  *   panes) and [disconnect] (its machine's) hide panes, and [shownPanes] lists those still shown.
+ *
+ * - [openChat] takes only a shown pane ([MobileException.Remote] with [NOT_SHOWN] otherwise) and [openChats] lists the
+ *   chats open; [closeChat] and hiding the pane close one. [loadOlder] answers a chat's next page of [olderPages]
+ *   (empty once none is left; [MobileException.Remote] with [NOT_OPEN] for a chat not open), and [agentCommands] the
+ *   pane's [catalogs] entry ([MobileException.Remote] for a pane with none, as an origin without a catalog answers).
+ *   Chat events themselves are what a test [emit]s.
  *
  * [showPane] returns what [paneFactory] makes; the default is a `Pane(NoHandle)`, a placeholder whose methods must not
  * be called (they would reach the native library): a test that drives a pane subclasses it.
@@ -129,6 +137,17 @@ class FakeMobileCore(
 
     /** The panes shown and not hidden since, as (machine, session, pane). */
     val shownPanes: Set<PaneRef> get() = synchronized(shown) { shown.keys.toSet() }
+
+    private val chats = mutableSetOf<PaneRef>()
+
+    /** The chats open and not closed since, as (machine, session, pane). */
+    val openChats: Set<PaneRef> get() = synchronized(chats) { chats.toSet() }
+
+    /** Each pane's older pages, newest first, which [loadOlder] hands out in turn. */
+    val olderPages: MutableMap<PaneRef, ArrayDeque<List<ChatEvent>>> = mutableMapOf()
+
+    /** Each pane's agent commands, which [agentCommands] answers. */
+    val catalogs: MutableMap<PaneRef, List<AgentCommand>> = mutableMapOf()
 
     /** What [showPane] returns. */
     var paneFactory: (machineId: String, sessionId: String, paneId: String, size: PaneSize) -> Pane =
@@ -264,6 +283,7 @@ class FakeMobileCore(
 
     private fun drop(machineId: String) {
         synchronized(shown) { shown.keys.removeAll { it.machineId == machineId } }
+        synchronized(chats) { chats.removeAll { it.machineId == machineId } }
         connected -= machineId
         records -= machineId
         listings -= machineId
@@ -327,6 +347,7 @@ class FakeMobileCore(
     ) {
         record("detachSession", machineId, sessionId)
         synchronized(shown) { shown.keys.removeAll { it.machineId == machineId && it.sessionId == sessionId } }
+        synchronized(chats) { chats.removeAll { it.machineId == machineId && it.sessionId == sessionId } }
     }
 
     override suspend fun showPane(
@@ -354,6 +375,49 @@ class FakeMobileCore(
     ) {
         record("hidePane", machineId, sessionId, paneId)
         synchronized(shown) { shown.keys.remove(PaneRef(machineId, sessionId, paneId)) }
+        synchronized(chats) { chats.remove(PaneRef(machineId, sessionId, paneId)) }
+    }
+
+    override suspend fun openChat(
+        machineId: String,
+        sessionId: String,
+        paneId: String,
+    ) {
+        recordHeld("openChat", machineId, sessionId, paneId)
+        sessionsOf(machineId)
+        val ref = PaneRef(machineId, sessionId, paneId)
+        if (ref !in shownPanes) throw MobileException.Remote(NOT_SHOWN)
+        synchronized(chats) { chats += ref }
+    }
+
+    override fun closeChat(
+        machineId: String,
+        sessionId: String,
+        paneId: String,
+    ) {
+        record("closeChat", machineId, sessionId, paneId)
+        synchronized(chats) { chats.remove(PaneRef(machineId, sessionId, paneId)) }
+    }
+
+    override suspend fun loadOlder(
+        machineId: String,
+        sessionId: String,
+        paneId: String,
+    ): List<ChatEvent> {
+        recordHeld("loadOlder", machineId, sessionId, paneId)
+        val ref = PaneRef(machineId, sessionId, paneId)
+        if (ref !in openChats) throw MobileException.Remote(NOT_OPEN)
+        return olderPages[ref]?.removeFirstOrNull().orEmpty()
+    }
+
+    override suspend fun agentCommands(
+        machineId: String,
+        sessionId: String,
+        paneId: String,
+    ): List<AgentCommand> {
+        recordHeld("agentCommands", machineId, sessionId, paneId)
+        sessionsOf(machineId)
+        return catalogs[PaneRef(machineId, sessionId, paneId)] ?: throw MobileException.Remote("no agent in this pane")
     }
 
     override fun takeLead(
@@ -400,6 +464,12 @@ const val HOST_KEY_CHANGED = "the host key changed"
 
 /** The core's reason for a pane its session's listing doesn't have (pane.rs's `UNKNOWN_PANE`). */
 const val UNKNOWN_PANE = "the session has no such pane"
+
+/** The core's reason for a chat opened on a pane not shown (chat.rs's `NOT_SHOWN`). */
+const val NOT_SHOWN = "the pane is not shown"
+
+/** The core's reason for a page of a chat not open (chat.rs's `NOT_OPEN`). */
+const val NOT_OPEN = "the pane's chat is not open"
 
 /** The core's reason for a connect whose unknown host key was not trusted (`HOST_KEY_REFUSED`). */
 const val HOST_KEY_REFUSED = "the host key was not trusted"

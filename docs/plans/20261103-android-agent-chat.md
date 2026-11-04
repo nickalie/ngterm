@@ -525,8 +525,18 @@ with no output yet is a running call (Task 1's fixture README).
 **Files:**
 - Create: `crates/ngterm-mobile/src/chat.rs`, `crates/ngterm-mobile/src/chat/{records,tests}.rs`
 - Modify: `crates/ngterm-mobile/src/{lib,api,actor,presentation}.rs`, and the fake transport
+- Created as well: `crates/ngterm-mobile/src/actor/{chats,chat_tests}.rs` (the chat commands on the actor and their
+  tests on the scripted fake). Modified as well: `crates/ngterm-core/src/remote/{client,viewer}.rs` (the client's
+  opt-in `set_shows_agents`, which lists `agent` in the hello and reports `ClientEffect::Agent`; desktop never sets
+  it), `crates/ngterm-mobile/src/pane.rs` (`Panes::is_shown`). The fake transport needed no change.
+- As built: `MobileEvent::PaneAgent { machine_id, session_id, pane_id, agent, conversation_id }` names the pane by its
+  identity (as `show_pane` and `PaneRef` do; Task 7); the core maps identity to `--pane left|right` through the
+  session's last layout. Chat events arrive as `MobileEvent::Chat { pane, events }` (a batch per read) and
+  `MobileEvent::ChatState { pane, Reconnecting | Ended }`. `open_chat`, `close_chat`, `load_older` and
+  `agent_commands` take `(machine_id, session_id, pane_id)` like the other pane calls; `open_chat` requires a shown
+  pane, and `load_older` pages from the oldest cursor the core keeps.
 
-- [ ] write tests first on the scripted fake transport:
+- [x] write tests first on the scripted fake transport:
   - the hello lists `agent`, and an agent frame becomes a `MobileEvent::PaneAgent { session, role, agent,
     conversation_id }`;
   - opening a chat channel delivers `ChatEvent`s in order, and a later line updates the same `id`;
@@ -538,13 +548,14 @@ with no output yet is a running call (Task 1's fixture README).
     surfaced;
   - chat channels exist only for panes shown in chat mode and close on hide, so the channel count stays bounded;
   - the catalog is fetched once per conversation and refetched after `reset`.
-- [ ] add the UniFFI surface:
+- [x] add the UniFFI surface:
   - `open_chat(pane)` returns a `ChatEvent` stream through `EventSink`;
   - `load_older`;
   - `close_chat`;
   - `agent_commands(pane)`;
   - a pure `filter_commands(query, items)` that calls `ngterm_core::fuzzy::fuzzy_rank` as the palettes do.
-- [ ] `cargo test -p ngterm-mobile` and `scripts/build-android.sh check` must pass (new UniFFI records reach Kotlin)
+- [x] `cargo test -p ngterm-mobile` and `scripts/build-android.sh check` must pass (new UniFFI records reach Kotlin;
+      the Kotlin `FakeMobileCore` gained the four calls, with a test)
 
 ### Task 12: `ngterm-mobile`: leadership, screen matchers and verified input
 

@@ -13,7 +13,8 @@
 //! list, New Session and End Session), [`presentation`] (attached sessions' presentation streams and what they
 //! show), [`pane`] (shown panes: their attach, terminal, leadership, ends and clipboard reads), [`reconnect`] (keeping
 //! machines connected: lost connections, network changes, suspend and resume), [`rows`] (the packed row buffer a pane
-//! is drawn from).
+//! is drawn from), [`chat`] (the agent chat view: what each pane runs, the chat channels of the panes shown as a chat,
+//! their older pages and the agents' slash-command catalogs).
 //!
 //! Threading model:
 //! - One [`actor`] thread per [`MobileCore`] runs a current-thread tokio runtime and a `LocalSet`. It owns the
@@ -37,6 +38,7 @@ uniffi::setup_scaffolding!();
 
 pub mod actor;
 pub mod api;
+pub mod chat;
 pub mod keys;
 pub mod pane;
 pub mod presentation;
@@ -49,6 +51,10 @@ pub use api::{
     CellPoint, EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileError, MobileEvent, Pane,
     PaneColors, PaneInputError, PaneKey, PaneKeyAction, PaneMouse, PaneMouseAction, PaneMouseButton, PaneSendOutcome,
     PaneSize, PaneWheel, PaneWheelOutcome, VaultError,
+};
+pub use chat::{
+    AgentCommand, AgentCommandKind, ChatApproval, ChatBody, ChatEvent, ChatNoticeKind, ChatQuestion, ChatQuestionItem,
+    ChatQuestionOption, ChatState, ChatTool, ChatToolKind, ChatToolStatus, filter_commands,
 };
 pub use keys::{KeyError, KeyPair};
 pub use pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};
