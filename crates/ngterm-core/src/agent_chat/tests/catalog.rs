@@ -308,6 +308,56 @@ fn only_enabled_plugins_are_listed_with_their_prefix() {
 }
 
 #[test]
+fn project_and_local_settings_enable_and_disable_plugins_over_the_users() {
+    let tree = tree();
+    let cache = tree.config.join("plugins/cache/market");
+    let mut installs = serde_json::Map::new();
+    for plugin in ["mine", "team", "muted", "unmuted"] {
+        let root = cache.join(plugin).join("1.0.0");
+        skill(
+            &root.join("skills"),
+            "go",
+            &format!("---\nname: go\ndescription: {plugin}\n---\n"),
+        );
+        installs.insert(
+            format!("{plugin}@market"),
+            json!([{"scope": "user", "installPath": root}]),
+        );
+    }
+    // installed with --scope project: enabled in the project's settings, its install naming the project
+    installs.insert(
+        "team@market".to_owned(),
+        json!([{"scope": "project", "projectPath": tree.project, "installPath": cache.join("team/1.0.0")}]),
+    );
+    write(
+        &tree.config.join("plugins/installed_plugins.json"),
+        json!({"version": 2, "plugins": installs}).to_string(),
+    );
+    write(
+        &tree.config.join("settings.json"),
+        json!({"enabledPlugins": {"mine@market": true, "muted@market": true, "unmuted@market": false}}).to_string(),
+    );
+    write(
+        &tree.project.join(".claude/settings.json"),
+        json!({"enabledPlugins": {"team@market": true, "unmuted@market": true}}).to_string(),
+    );
+    write(
+        &tree.project.join(".claude/settings.local.json"),
+        json!({"enabledPlugins": {"muted@market": false}}).to_string(),
+    );
+
+    let found = claude(&tree.config, Some(&tree.project));
+    assert_eq!(names(&found), ["mine:go", "team:go", "unmuted:go"]);
+    // with no cwd only the user's settings count, and the project's install is not this project's
+    assert_eq!(names(&claude(&tree.config, None)), ["mine:go", "muted:go"]);
+
+    // no user settings at all: the project's still enable
+    fs::remove_file(tree.config.join("settings.json")).unwrap();
+    let found = claude(&tree.config, Some(&tree.project));
+    assert_eq!(names(&found), ["team:go", "unmuted:go"]);
+}
+
+#[test]
 fn codex_lists_its_skills_as_mentions_and_no_prompts() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("codex-home");

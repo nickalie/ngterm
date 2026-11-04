@@ -7,8 +7,9 @@
 //! - **Claude Code** ([`claude`]): the curated built-ins ([`CLAUDE_BUILTINS`]); the user's skills
 //!   (`<config>/skills/*/SKILL.md`) and the project's (`<cwd>/.claude/skills`), the cwd being the one the transcript
 //!   names ([`transcript_cwd`]); custom commands (`<config>/commands/**/*.md`, then `<cwd>/.claude/commands`), a
-//!   subdirectory adding a `dir:` prefix; and the skills and commands of each plugin `<config>/settings.json` enables
-//!   (`enabledPlugins`), found through `<config>/plugins/installed_plugins.json`, as `plugin:name`.
+//!   subdirectory adding a `dir:` prefix; and the skills and commands of each enabled plugin (`enabledPlugins` in
+//!   `<config>/settings.json`, overridden key by key by the project's `.claude/settings.json`, then its
+//!   `.claude/settings.local.json`), found through `<config>/plugins/installed_plugins.json`, as `plugin:name`.
 //! - **Codex** ([`codex`]): the curated built-ins ([`CODEX_BUILTINS`]) and the skills in `<home>/skills/*/SKILL.md`,
 //!   named `$name`, the mention Codex invokes a skill with. Codex 0.166 offers no custom prompts.
 //!
@@ -25,7 +26,7 @@
 //! (`plugin:name`), which a nested command can still make (`<config>/commands/plugin/name.md`): plugins come last, so
 //! the command keeps the name.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -414,23 +415,16 @@ fn entries(dir: &Path) -> Vec<(String, PathBuf)> {
     entries
 }
 
-/// The enabled plugins' names and install directories: `enabledPlugins` in `<config>/settings.json` (`name@market:
-/// true`), looked up in `<config>/plugins/installed_plugins.json`. An install scoped to a project counts only for
+/// The enabled plugins' names and install directories, looked up in `<config>/plugins/installed_plugins.json`: the
+/// `enabledPlugins` keys (`name@market`) [`enabled_plugins`] leaves on. An install scoped to a project counts only for
 /// that project (`cwd`).
 fn plugins(config: &Path, cwd: Option<&Path>) -> Vec<(String, PathBuf)> {
-    let (Some(settings), Some(installed)) = (
-        json(&config.join("settings.json")),
-        json(&config.join("plugins/installed_plugins.json")),
-    ) else {
+    let Some(installed) = json(&config.join("plugins/installed_plugins.json")) else {
         return Vec::new();
     };
-    let Some(enabled) = settings.get("enabledPlugins").and_then(Value::as_object) else {
-        return Vec::new();
-    };
-    let mut found: Vec<(String, PathBuf)> = enabled
+    let mut found: Vec<(String, PathBuf)> = enabled_plugins(config, cwd)
         .iter()
-        .filter(|(_, on)| on.as_bool() == Some(true))
-        .filter_map(|(key, _)| {
+        .filter_map(|key| {
             let name = key.split('@').next().filter(|name| !name.is_empty())?;
             let root = install_path(installed.pointer("/plugins")?.get(key)?, cwd)?;
             Some((name.to_owned(), config.join("plugins").join(root)))
@@ -438,6 +432,28 @@ fn plugins(config: &Path, cwd: Option<&Path>) -> Vec<(String, PathBuf)> {
         .collect();
     found.sort();
     found
+}
+
+/// The `enabledPlugins` keys whose last word is `true`, across the settings files Claude Code layers:
+/// `<config>/settings.json` (user scope), then `<cwd>/.claude/settings.json` (project) and
+/// `<cwd>/.claude/settings.local.json` (local), a later file overriding an earlier one key by key, as
+/// `claude plugin enable|disable --scope` writes them. A missing or unreadable file adds nothing.
+fn enabled_plugins(config: &Path, cwd: Option<&Path>) -> Vec<String> {
+    let mut files = vec![config.join("settings.json")];
+    if let Some(cwd) = cwd {
+        let project = cwd.join(".claude");
+        files.extend([project.join("settings.json"), project.join("settings.local.json")]);
+    }
+    let mut enabled: BTreeMap<String, bool> = BTreeMap::new();
+    for settings in files.iter().filter_map(|file| json(file)) {
+        let Some(keys) = settings.get("enabledPlugins").and_then(Value::as_object) else {
+            continue;
+        };
+        for (key, on) in keys {
+            enabled.insert(key.clone(), on.as_bool() == Some(true));
+        }
+    }
+    enabled.into_iter().filter(|(_, on)| *on).map(|(key, _)| key).collect()
 }
 
 /// An `installed_plugins.json` entry's install directory: one install (version 1) or a list of them (version 2), the

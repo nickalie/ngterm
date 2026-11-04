@@ -263,7 +263,8 @@ with no output yet is a running call (Task 1's fixture README).
     whose frontmatter says `user-invocable: false`;
   - project skills from `<cwd>/.claude/skills`;
   - custom commands from `<config>/commands/**/*.md` and `<cwd>/.claude/commands`, with subdirectories as `a:b`;
-  - the skills and commands of each plugin enabled in `<config>/settings.json` (`enabledPlugins`), found through
+  - the skills and commands of each plugin enabled in `enabledPlugins` (`<config>/settings.json`, overridden key by
+    key by `<cwd>/.claude/settings.json`, then `<cwd>/.claude/settings.local.json`), found through
     `<config>/plugins/installed_plugins.json`, named `plugin:name`.
 - **Codex:**
   - the curated built-ins;
