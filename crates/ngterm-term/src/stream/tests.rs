@@ -291,206 +291,212 @@ fn a_reader_waiting_past_the_high_mark_is_released_when_the_pane_drops() {
     drop(out);
 }
 
-/// The program's screen now, once it is not held.
-fn active(pane: &Pane) -> crate::ActiveScreen {
-    let deadline = Instant::now() + DEADLINE;
-    loop {
-        if let Some(screen) = pane.active_screen().unwrap() {
-            return screen;
-        }
-        assert!(Instant::now() < deadline, "the screen stays held");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
+/// The `screen-read` feature's reads and conditional sends.
+#[cfg(feature = "screen-read")]
+mod screen_read {
+    use super::*;
 
-/// The generation of the pane's screen now.
-fn generation(pane: &Pane) -> u64 {
-    active(pane).generation
-}
-
-/// The view's frame once its first row reads `first`.
-fn view_until(pane: &Pane, first: &str) -> Arc<crate::Frame> {
-    let deadline = Instant::now() + DEADLINE;
-    loop {
-        let shown = pane.frame();
-        if !shown.stale && rows(&shown.frame)[0] == first {
-            return shown.frame;
-        }
-        assert!(Instant::now() < deadline, "the view never showed {first:?}");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// What a frame's rows read, trailing blanks dropped.
-fn rows(frame: &crate::Frame) -> Vec<String> {
-    frame.lines().iter().map(|line| line.trim_end().to_owned()).collect()
-}
-
-#[test]
-fn a_conditional_key_or_paste_goes_only_to_the_screen_it_was_read_from() {
-    use crate::{ClipboardLocation, KeyInput, Paste, PasteSource};
-    use ngterm_core::ghostty_config::binds::{Mods, PhysicalKey};
-
-    let fixture = stream(PaneConfig::new(SIZE));
-    let enter = KeyInput::press(PhysicalKey::new("enter").unwrap(), Mods::empty(), "");
-    let paste = |generation| {
-        fixture.pane.paste_if(
-            generation,
-            "hi",
-            PasteSource::Clipboard,
-            ClipboardLocation::Standard,
-            false,
-        )
-    };
-    assert!(fixture.feed.deliver(b"\x1b[?2004hprompt"));
-    fixture.screen_until("prompt");
-    let shown = generation(&fixture.pane);
-    assert_eq!(fixture.pane.key_if(shown, &enter), Ok(Some(true)));
-    // the pane's own input leaves the screen as it was
-    assert_eq!(paste(shown), Ok(Some(Paste::Written)));
-    assert_eq!(fixture.sent_until(b"\x1b[201~"), b"\r\x1b[200~hi\x1b[201~");
-
-    // the program wrote since (a status query, answered once the terminal took it): nothing goes
-    assert!(fixture.feed.deliver(b"\x1b[5n"));
-    assert_eq!(fixture.sent_until(b"\x1b[0n"), b"\x1b[0n");
-    assert_eq!(fixture.pane.key_if(shown, &enter), Ok(None));
-    assert_eq!(paste(shown), Ok(None));
-    assert_ne!(generation(&fixture.pane), shown);
-}
-
-#[test]
-fn the_active_screen_is_the_programs_whatever_the_view_shows() {
-    use crate::{KeyInput, Scroll};
-    use ngterm_core::ghostty_config::binds::{Mods, PhysicalKey};
-
-    let fixture = stream(PaneConfig::new(SIZE));
-    // an old dialog scrolled into the history, the live screen below it
-    assert!(
-        fixture
-            .feed
-            .deliver(b"1. Yes\r\n2. No\r\nEsc to cancel\r\n\r\n\r\n\r\n\r\n> \x1b[2mtype\x1b[0m")
-    );
-    fixture.screen_until("type");
-    let live = active(&fixture.pane);
-    assert_eq!(rows(&live.frame), ["", "", "", "> type"]);
-    assert!(!live.reflowed);
-    let faint = live.frame.rows[3].cells()[2];
-    assert!(faint.flags.contains(crate::CellFlags::FAINT), "styles are read too");
-    let cursor = live.frame.cursor.position.unwrap();
-    assert_eq!((cursor.column, cursor.row), (6, 3));
-
-    // the view scrolled back onto the old dialog, everything selected: the program's screen is the same one
-    fixture.pane.scroll(Scroll::Top);
-    assert!(fixture.pane.select_all().unwrap());
-    let shown = view_until(&fixture.pane, "1. Yes");
-    assert_eq!(shown.cursor.position, None, "the view shows history");
-    let read = active(&fixture.pane);
-    assert_eq!(
-        read.generation, live.generation,
-        "a scroll or a selection is no change of the screen"
-    );
-    assert_eq!(rows(&read.frame), rows(&live.frame));
-    assert!(read.frame.rows.iter().all(|row| row.selection().is_none()));
-
-    // a key sent under it reaches that screen, and brings the view back to it
-    let enter = KeyInput::press(PhysicalKey::new("enter").unwrap(), Mods::empty(), "");
-    assert_eq!(fixture.pane.key_if(read.generation, &enter), Ok(Some(true)));
-    assert_eq!(fixture.sent_until(b"\r"), b"\r");
-    assert_eq!(rows(&fixture.pane.frame().frame), rows(&live.frame));
-}
-
-#[test]
-fn a_resize_or_a_held_screen_sends_no_conditional_key() {
-    use crate::KeyInput;
-    use ngterm_core::ghostty_config::binds::{Mods, PhysicalKey};
-
-    let fixture = stream(PaneConfig::new(SIZE));
-    let enter = KeyInput::press(PhysicalKey::new("enter").unwrap(), Mods::empty(), "");
-    // resized since: nothing goes, and the screen is the VT's reflow until the program draws again
-    let shown = generation(&fixture.pane);
-    let bigger = GridSize { cols: 40, ..SIZE };
-    fixture.pane.resize(bigger).unwrap();
-    assert_eq!(fixture.pane.key_if(shown, &enter), Ok(None));
-    assert_eq!(fixture.out.next(None), Ok(Some(Outgoing::Resize(bigger))));
-    assert_eq!(fixture.out.next(Some(Duration::from_millis(20))), Ok(None));
-    let reflowed = active(&fixture.pane);
-    assert!(reflowed.reflowed);
-    assert_eq!(reflowed.frame.cols, 40);
-    assert!(fixture.feed.deliver(b"redrawn"));
-    fixture.screen_until("redrawn");
-    assert!(!active(&fixture.pane).reflowed);
-
-    // the program holds its output (synchronized output): its screen is not read until it lets go
-    assert!(fixture.feed.deliver(b"\x1b[?2026hnext"));
-    let deadline = Instant::now() + DEADLINE;
-    while fixture.pane.active_screen().unwrap().is_some() {
-        assert!(Instant::now() < deadline, "never held");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert!(fixture.feed.deliver(b"\x1b[?2026l"));
-    let deadline = Instant::now() + DEADLINE;
-    loop {
-        if let Some(screen) = fixture.pane.active_screen().unwrap() {
-            assert_eq!(rows(&screen.frame)[0], "redrawnnext");
-            break;
-        }
-        assert!(Instant::now() < deadline, "never let go");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-#[test]
-fn only_a_new_column_or_row_count_leaves_the_screen_reflowed() {
-    let fixture = stream(PaneConfig::new(SIZE));
-    assert!(fixture.feed.deliver(b"idle"));
-    fixture.screen_until("idle");
-    let drawn = active(&fixture.pane);
-    assert!(!drawn.reflowed);
-
-    // the view measures the same grid again: nothing reflows, the screen and its generation stay as they were
-    fixture.pane.resize(SIZE).unwrap();
-    let same = active(&fixture.pane);
-    assert!(!same.reflowed, "an unchanged grid reflows nothing");
-    assert_eq!(same.generation, drawn.generation);
-    assert_eq!(rows(&same.frame)[0], "idle");
-
-    // a new cell size alone moves no cell
-    let denser = GridSize {
-        cell_width: SIZE.cell_width + 2,
-        cell_height: SIZE.cell_height + 4,
-        ..SIZE
-    };
-    fixture.pane.resize(denser).unwrap();
-    let resized = active(&fixture.pane);
-    assert!(!resized.reflowed, "a cell size alone reflows nothing");
-    assert_eq!(rows(&resized.frame)[0], "idle");
-
-    // a new column count, then a new row count: each waits for the program to draw again, the same grid again too
-    for size in [GridSize { cols: 30, ..denser }, GridSize { rows: 6, ..denser }] {
-        fixture.pane.resize(size).unwrap();
-        assert!(active(&fixture.pane).reflowed, "{size:?} reflows");
-        fixture.pane.resize(size).unwrap();
-        assert!(active(&fixture.pane).reflowed, "{size:?} again still waits");
-        assert!(fixture.feed.deliver(b"\r\nredrawn"));
+    /// The program's screen now, once it is not held.
+    fn active(pane: &Pane) -> crate::ActiveScreen {
         let deadline = Instant::now() + DEADLINE;
-        while active(&fixture.pane).reflowed {
-            assert!(Instant::now() < deadline, "never redrawn");
+        loop {
+            if let Some(screen) = pane.active_screen().unwrap() {
+                return screen;
+            }
+            assert!(Instant::now() < deadline, "the screen stays held");
             std::thread::sleep(Duration::from_millis(5));
         }
     }
-}
 
-#[test]
-fn a_hold_the_program_never_ends_expires_and_its_screen_is_read() {
-    let fixture = stream(PaneConfig::new(SIZE));
-    assert!(fixture.feed.deliver(b"\x1b[?2026hstuck"));
-    let deadline = Instant::now() + DEADLINE;
-    while fixture.pane.active_screen().unwrap().is_some() {
-        assert!(Instant::now() < deadline, "never held");
-        std::thread::sleep(Duration::from_millis(5));
+    /// The generation of the pane's screen now.
+    fn generation(pane: &Pane) -> u64 {
+        active(pane).generation
     }
-    // the program prints nothing more and never lets go: the hold ends at its timeout, as a paint would end it
-    let screen = active(&fixture.pane);
-    assert_eq!(rows(&screen.frame)[0], "stuck");
-    assert!(!screen.reflowed);
+
+    /// The view's frame once its first row reads `first`.
+    fn view_until(pane: &Pane, first: &str) -> Arc<crate::Frame> {
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            let shown = pane.frame();
+            if !shown.stale && rows(&shown.frame)[0] == first {
+                return shown.frame;
+            }
+            assert!(Instant::now() < deadline, "the view never showed {first:?}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// What a frame's rows read, trailing blanks dropped.
+    fn rows(frame: &crate::Frame) -> Vec<String> {
+        frame.lines().iter().map(|line| line.trim_end().to_owned()).collect()
+    }
+
+    #[test]
+    fn a_conditional_key_or_paste_goes_only_to_the_screen_it_was_read_from() {
+        use crate::{ClipboardLocation, KeyInput, Paste, PasteSource};
+        use ngterm_core::ghostty_config::binds::{Mods, PhysicalKey};
+
+        let fixture = stream(PaneConfig::new(SIZE));
+        let enter = KeyInput::press(PhysicalKey::new("enter").unwrap(), Mods::empty(), "");
+        let paste = |generation| {
+            fixture.pane.paste_if(
+                generation,
+                "hi",
+                PasteSource::Clipboard,
+                ClipboardLocation::Standard,
+                false,
+            )
+        };
+        assert!(fixture.feed.deliver(b"\x1b[?2004hprompt"));
+        fixture.screen_until("prompt");
+        let shown = generation(&fixture.pane);
+        assert_eq!(fixture.pane.key_if(shown, &enter), Ok(Some(true)));
+        // the pane's own input leaves the screen as it was
+        assert_eq!(paste(shown), Ok(Some(Paste::Written)));
+        assert_eq!(fixture.sent_until(b"\x1b[201~"), b"\r\x1b[200~hi\x1b[201~");
+
+        // the program wrote since (a status query, answered once the terminal took it): nothing goes
+        assert!(fixture.feed.deliver(b"\x1b[5n"));
+        assert_eq!(fixture.sent_until(b"\x1b[0n"), b"\x1b[0n");
+        assert_eq!(fixture.pane.key_if(shown, &enter), Ok(None));
+        assert_eq!(paste(shown), Ok(None));
+        assert_ne!(generation(&fixture.pane), shown);
+    }
+
+    #[test]
+    fn the_active_screen_is_the_programs_whatever_the_view_shows() {
+        use crate::{KeyInput, Scroll};
+        use ngterm_core::ghostty_config::binds::{Mods, PhysicalKey};
+
+        let fixture = stream(PaneConfig::new(SIZE));
+        // an old dialog scrolled into the history, the live screen below it
+        assert!(
+            fixture
+                .feed
+                .deliver(b"1. Yes\r\n2. No\r\nEsc to cancel\r\n\r\n\r\n\r\n\r\n> \x1b[2mtype\x1b[0m")
+        );
+        fixture.screen_until("type");
+        let live = active(&fixture.pane);
+        assert_eq!(rows(&live.frame), ["", "", "", "> type"]);
+        assert!(!live.reflowed);
+        let faint = live.frame.rows[3].cells()[2];
+        assert!(faint.flags.contains(crate::CellFlags::FAINT), "styles are read too");
+        let cursor = live.frame.cursor.position.unwrap();
+        assert_eq!((cursor.column, cursor.row), (6, 3));
+
+        // the view scrolled back onto the old dialog, everything selected: the program's screen is the same one
+        fixture.pane.scroll(Scroll::Top);
+        assert!(fixture.pane.select_all().unwrap());
+        let shown = view_until(&fixture.pane, "1. Yes");
+        assert_eq!(shown.cursor.position, None, "the view shows history");
+        let read = active(&fixture.pane);
+        assert_eq!(
+            read.generation, live.generation,
+            "a scroll or a selection is no change of the screen"
+        );
+        assert_eq!(rows(&read.frame), rows(&live.frame));
+        assert!(read.frame.rows.iter().all(|row| row.selection().is_none()));
+
+        // a key sent under it reaches that screen, and brings the view back to it
+        let enter = KeyInput::press(PhysicalKey::new("enter").unwrap(), Mods::empty(), "");
+        assert_eq!(fixture.pane.key_if(read.generation, &enter), Ok(Some(true)));
+        assert_eq!(fixture.sent_until(b"\r"), b"\r");
+        assert_eq!(rows(&fixture.pane.frame().frame), rows(&live.frame));
+    }
+
+    #[test]
+    fn a_resize_or_a_held_screen_sends_no_conditional_key() {
+        use crate::KeyInput;
+        use ngterm_core::ghostty_config::binds::{Mods, PhysicalKey};
+
+        let fixture = stream(PaneConfig::new(SIZE));
+        let enter = KeyInput::press(PhysicalKey::new("enter").unwrap(), Mods::empty(), "");
+        // resized since: nothing goes, and the screen is the VT's reflow until the program draws again
+        let shown = generation(&fixture.pane);
+        let bigger = GridSize { cols: 40, ..SIZE };
+        fixture.pane.resize(bigger).unwrap();
+        assert_eq!(fixture.pane.key_if(shown, &enter), Ok(None));
+        assert_eq!(fixture.out.next(None), Ok(Some(Outgoing::Resize(bigger))));
+        assert_eq!(fixture.out.next(Some(Duration::from_millis(20))), Ok(None));
+        let reflowed = active(&fixture.pane);
+        assert!(reflowed.reflowed);
+        assert_eq!(reflowed.frame.cols, 40);
+        assert!(fixture.feed.deliver(b"redrawn"));
+        fixture.screen_until("redrawn");
+        assert!(!active(&fixture.pane).reflowed);
+
+        // the program holds its output (synchronized output): its screen is not read until it lets go
+        assert!(fixture.feed.deliver(b"\x1b[?2026hnext"));
+        let deadline = Instant::now() + DEADLINE;
+        while fixture.pane.active_screen().unwrap().is_some() {
+            assert!(Instant::now() < deadline, "never held");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(fixture.feed.deliver(b"\x1b[?2026l"));
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            if let Some(screen) = fixture.pane.active_screen().unwrap() {
+                assert_eq!(rows(&screen.frame)[0], "redrawnnext");
+                break;
+            }
+            assert!(Instant::now() < deadline, "never let go");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn only_a_new_column_or_row_count_leaves_the_screen_reflowed() {
+        let fixture = stream(PaneConfig::new(SIZE));
+        assert!(fixture.feed.deliver(b"idle"));
+        fixture.screen_until("idle");
+        let drawn = active(&fixture.pane);
+        assert!(!drawn.reflowed);
+
+        // the view measures the same grid again: nothing reflows, the screen and its generation stay as they were
+        fixture.pane.resize(SIZE).unwrap();
+        let same = active(&fixture.pane);
+        assert!(!same.reflowed, "an unchanged grid reflows nothing");
+        assert_eq!(same.generation, drawn.generation);
+        assert_eq!(rows(&same.frame)[0], "idle");
+
+        // a new cell size alone moves no cell
+        let denser = GridSize {
+            cell_width: SIZE.cell_width + 2,
+            cell_height: SIZE.cell_height + 4,
+            ..SIZE
+        };
+        fixture.pane.resize(denser).unwrap();
+        let resized = active(&fixture.pane);
+        assert!(!resized.reflowed, "a cell size alone reflows nothing");
+        assert_eq!(rows(&resized.frame)[0], "idle");
+
+        // a new column count, then a new row count: each waits for the program to draw again, the same grid again too
+        for size in [GridSize { cols: 30, ..denser }, GridSize { rows: 6, ..denser }] {
+            fixture.pane.resize(size).unwrap();
+            assert!(active(&fixture.pane).reflowed, "{size:?} reflows");
+            fixture.pane.resize(size).unwrap();
+            assert!(active(&fixture.pane).reflowed, "{size:?} again still waits");
+            assert!(fixture.feed.deliver(b"\r\nredrawn"));
+            let deadline = Instant::now() + DEADLINE;
+            while active(&fixture.pane).reflowed {
+                assert!(Instant::now() < deadline, "never redrawn");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    #[test]
+    fn a_hold_the_program_never_ends_expires_and_its_screen_is_read() {
+        let fixture = stream(PaneConfig::new(SIZE));
+        assert!(fixture.feed.deliver(b"\x1b[?2026hstuck"));
+        let deadline = Instant::now() + DEADLINE;
+        while fixture.pane.active_screen().unwrap().is_some() {
+            assert!(Instant::now() < deadline, "never held");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // the program prints nothing more and never lets go: the hold ends at its timeout, as a paint would end it
+        let screen = active(&fixture.pane);
+        assert_eq!(rows(&screen.frame)[0], "stuck");
+        assert!(!screen.reflowed);
+    }
 }

@@ -685,6 +685,7 @@ fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 2
 
 /// A [`Row`] of a row read by its points ([`crate::ActiveScreen`]): its cells, text and wrap, colors resolved against
 /// `palette`; no selection and no Kitty placeholders.
+#[cfg(feature = "screen-read")]
 pub(crate) fn grid_row(row: vt::GridRow, seq: u64, palette: &[Rgb; 256]) -> Row {
     let resolve = |color: vt::StyleColor| match color {
         vt::StyleColor::None => None,

@@ -27,9 +27,10 @@
 //!   [`Pane::focus`], [`Pane::paste`], [`Pane::scroll`].
 //! - Selection and read-back: [`Pane::select`], [`Pane::select_word`],
 //!   [`Pane::select_line`], [`Pane::select_all`], [`Pane::selection_text`], [`Pane::read_text`],
-//!   [`Pane::cursor_column`]; a frame's rows carry their selected columns. [`Pane::active_screen`] reads the
-//!   program's screen itself (the active area, whatever the viewport shows) with the screen generation that
-//!   [`Pane::key_if`] and [`Pane::paste_if`] send under, so a key chosen from it reaches only that screen.
+//!   [`Pane::cursor_column`]; a frame's rows carry their selected columns. With the `screen-read` feature,
+//!   `Pane::active_screen` reads the program's screen itself (the active area, whatever the viewport shows) with
+//!   the screen generation that `Pane::key_if` and `Pane::paste_if` send under, so a key chosen from it reaches
+//!   only that screen.
 //! - The pointer: [`Pane::gesture`] runs Ghostty's selection gesture (click counts, drags, autoscroll),
 //!   [`Pane::cell_at`] and [`Pane::hyperlink`] say what lies under it.
 //! - Search: [`Pane::search`], [`Pane::navigate_search`], [`Pane::search_state`], with
@@ -48,6 +49,7 @@
 //! `tracing`); every pane's constructor calls it, so a frontend need not.
 
 mod actions;
+#[cfg(feature = "screen-read")]
 mod active;
 #[cfg(test)]
 #[cfg(feature = "local")]
@@ -79,6 +81,7 @@ mod text;
 mod wheel;
 
 pub use actions::{FormatRegion, SelectionAdjust, TextFormat};
+#[cfg(feature = "screen-read")]
 pub use active::ActiveScreen;
 pub use effects::{
     ClipboardAnswer, ClipboardContent, ClipboardLocation, ClipboardReadRequest, ClipboardWrite, ColorScheme,

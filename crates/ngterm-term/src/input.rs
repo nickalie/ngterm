@@ -378,6 +378,7 @@ impl Pane {
     /// # Errors
     ///
     /// As [`Pane::key`].
+    #[cfg(feature = "screen-read")]
     pub fn key_if(&self, generation: u64, input: &KeyInput<'_>) -> Result<Option<bool>, PaneError> {
         let vt = lock(&self.shared().vt);
         if vt.generation != generation {
@@ -553,6 +554,7 @@ impl Pane {
     /// # Errors
     ///
     /// As [`Pane::paste`].
+    #[cfg(feature = "screen-read")]
     pub fn paste_if(
         &self,
         generation: u64,

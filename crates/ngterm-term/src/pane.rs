@@ -193,11 +193,11 @@ pub(crate) struct Vt {
     pub(crate) kitty: crate::kitty::Prefetch,
     /// Grows with every change of the program's screen: its output, a resize, a reset, a clear; not with the
     /// viewport's scroll, the selection or a search, which leave the screen as it was. An active-area read carries
-    /// the generation it was made at ([`crate::ActiveScreen::generation`]).
+    /// the generation it was made at (`ActiveScreen::generation`, with the `screen-read` feature).
     pub(crate) generation: u64,
     /// The VT was resized to a new column or row count and the program has written nothing since: the screen is the
-    /// VT's reflow of the last one the program drew ([`crate::ActiveScreen::reflowed`]). The same grid again, or a new
-    /// cell size alone, reflows nothing and leaves it as it was.
+    /// VT's reflow of the last one the program drew (`ActiveScreen::reflowed`). The same grid again, or a new cell
+    /// size alone, reflows nothing and leaves it as it was.
     pub(crate) reflowed: bool,
 }
 
@@ -988,6 +988,7 @@ fn capture(shared: &Shared) -> Option<Arc<Frame>> {
     Some(Arc::clone(&published))
 }
 
+#[cfg(feature = "screen-read")]
 impl Shared {
     /// Whether the program holds its output now (synchronized output, mode 2026), a hold past its timeout ended first
     /// as a paint ends it; the caller holds the VT lock (VT → capture).

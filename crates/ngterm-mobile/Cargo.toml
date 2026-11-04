@@ -26,7 +26,7 @@ bindgen = ["uniffi/cli"]
 [dependencies]
 # the panes' terminals, fed by their ssh channels (`Pane::stream`); no `local`: no PTY or session server here. By
 # path, since the workspace entry keeps the default features its other users rely on and a member can't drop them.
-ngterm-term = { path = "../ngterm-term", default-features = false }
+ngterm-term = { path = "../ngterm-term", default-features = false, features = ["screen-read"] }
 # the remote command lines desktop's Attach Remote runs (`remote::ssh`'s tails) and what the far `ngtermctl` answers
 # to them (`remote::origin_replies`), with their strings
 ngterm-core.workspace = true

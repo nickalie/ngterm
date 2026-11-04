@@ -14,6 +14,9 @@ default = ["local"]
 # (`Pane::stream`), with no PTY, session server or process table in its graph: a remote-only frontend's (Android,
 # where ngterm-session does not build).
 local = ["dep:ngterm-host", "dep:ngterm-pty", "dep:ngterm-session"]
+# Reading the program's screen itself and sending only to the screen read (`Pane::active_screen`, `Pane::key_if`,
+# `Pane::paste_if`): what a remote viewer answering an agent's dialog needs (ngterm-mobile), and no frontend else.
+screen-read = []
 
 [dependencies]
 ngterm-core.workspace = true

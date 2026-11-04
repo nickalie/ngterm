@@ -829,7 +829,10 @@ with no output yet is a running call (Task 1's fixture README).
   what it saw); and, departing from "No conformance ids" above, the `agent.*` group got a Rust-only capability,
   `agent-chat` (claimed by `ngterm-gpui`'s `app.rs` on every OS, the one desktop file this change touches, with no
   UI), whose `conformance/tests/cli/test_agent_chat.py` drives `ngtermctl agent hook|chat|commands` and `agent.get`
-  against the staged app over Task 1's recordings, on Linux and Windows, with `--must-pass agent-chat`.
+  against the staged app over Task 1's recordings, on Linux and Windows, with `--must-pass agent-chat`. The second
+  round left Windows' `ngterm-term` 0.78 pt short whenever main's wheel test flaked there (its scroll, under
+  instrumentation): the phone-only screen reads and conditional sends (`Pane::active_screen`, `key_if`, `paste_if`)
+  are now `ngterm-term`'s `screen-read` feature, which only `ngterm-mobile` enables, so no desktop binary carries them.
 - Each Overview point, and the tests that prove it (no device: unit, Robolectric/Roborazzi and the headless e2e):
   - **Chat in place of the terminal, the TUI unchanged underneath:** `SessionViewTest`
     (`aPaneInChatViewDrawsItsChatInTheTerminalsPlaceAtTheSameGrid`), `ChatModeTest`
