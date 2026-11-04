@@ -1254,12 +1254,13 @@ impl Deck {
 
     /// The divider's grab band of `session`'s page.
     fn divider(session: Uuid, axis: ngterm_core::model::SplitAxis, cx: &mut Context<Self>) -> impl IntoElement {
-        let cursor = match axis {
-            ngterm_core::model::SplitAxis::LeftRight => CursorStyle::ResizeLeftRight,
-            ngterm_core::model::SplitAxis::TopBottom => CursorStyle::ResizeUpDown,
+        let (cursor, selector) = match axis {
+            ngterm_core::model::SplitAxis::LeftRight => (CursorStyle::ResizeLeftRight, "split-divider-left-right"),
+            ngterm_core::model::SplitAxis::TopBottom => (CursorStyle::ResizeUpDown, "split-divider-top-bottom"),
         };
         div()
             .id(SharedString::from(format!("split-divider-{session}")))
+            .debug_selector(move || selector.to_owned())
             .size_full()
             .cursor(cursor)
             .on_mouse_down(

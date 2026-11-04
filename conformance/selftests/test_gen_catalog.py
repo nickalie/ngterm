@@ -571,8 +571,8 @@ def test_reads_the_tag_with_git_archive_without_touching_the_checkout(
 
 def test_the_committed_catalog_parses_and_names_its_tag() -> None:
     data = yaml.safe_load((TOOLS.parent / "catalog.yaml").read_text())
-    assert data["upstream"] == "v0.39.1"
-    assert len(data["commands"]) == 126
+    assert data["upstream"] == "v0.40.0"
+    assert len(data["commands"]) == 131
     assert data["cli"]["session wait"] == {"status": "uncovered", "uses": ["events.read", "window.list", "tree"]}
     assert data["cli"]["session new"] == {
         "status": "uncovered",
@@ -824,8 +824,8 @@ def test_ui_ids_path_can_be_given(mini: Path, tmp_path: Path) -> None:
 
 def test_the_committed_ui_ids_parse_and_name_their_tag() -> None:
     data = yaml.safe_load((TOOLS.parent / "ui-ids.yaml").read_text())
-    assert data["upstream"] == "v0.39.1"
-    assert len(data["ids"]) == 112
+    assert data["upstream"] == "v0.40.0"
+    assert len(data["ids"]) == 114
     assert len(data["manual"]) == 15
     assert data["ids"]["ask-choice-{id}"]["at"] == ["agterm/Views/AskFormViews.swift:435"]
     assert all(entry["site"].startswith("agterm/") for entry in data["manual"].values())

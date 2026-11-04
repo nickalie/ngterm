@@ -9,6 +9,7 @@ tests/behaviors/test_hooks.py::test_hooks_file_is_read_at_launch
 tests/behaviors/test_keymap.py::test_an_edit_takes_effect_only_on_reload
 tests/behaviors/test_keymap.py::test_keymap_file_is_read_at_launch
 tests/behaviors/test_recent_closed.py::test_a_companion_whose_parent_is_nowhere_is_refused_by_name
+tests/behaviors/test_relaunch.py::test_a_live_session_with_a_hidden_split_stays_attachable_across_the_relaunch
 tests/behaviors/test_relaunch.py::test_a_page_companion_is_not_restored_after_relaunch
 tests/behaviors/test_relaunch.py::test_flagged_order_survives_relaunch
 tests/behaviors/test_relaunch.py::test_fresh_shells_do_not_run_the_pin
@@ -67,6 +68,7 @@ tests/cli/test_cli_output.py::test_hud_sticky_and_no_frame
 tests/cli/test_cli_output.py::test_keymap
 tests/cli/test_cli_output.py::test_live_group_commands_refused_before_acting
 tests/cli/test_cli_output.py::test_live_group_reads_outside_live_mode
+tests/cli/test_cli_output.py::test_live_present_bridges_the_stream
 tests/cli/test_cli_output.py::test_notify_raises_the_unseen_count
 tests/cli/test_cli_output.py::test_overlay_page_blocks_until_submitted
 tests/cli/test_cli_output.py::test_overlay_page_dismissed_exits_2
@@ -112,6 +114,10 @@ tests/cli/test_cli_output.py::test_workspace_flag
 tests/cli/test_cli_output.py::test_workspace_focus_and_filter
 tests/cli/test_cli_output.py::test_workspace_go_and_move
 tests/cli/test_cli_output.py::test_workspace_lifecycle
+tests/cli/test_document_pages_cli.py::test_cli_document_sources_reject_incompatible_flags_before_connecting[--image]
+tests/cli/test_document_pages_cli.py::test_cli_document_sources_reject_incompatible_flags_before_connecting[--markdown]
+tests/cli/test_document_pages_cli.py::test_cli_document_sources_resolve_relative_paths[image]
+tests/cli/test_document_pages_cli.py::test_cli_document_sources_resolve_relative_paths[markdown]
 tests/cli/test_socket_resolution.py::test_agterm_socket_variable_is_not_read
 tests/cli/test_socket_resolution.py::test_socket_option_wins_over_the_state_dir
 tests/cli/test_socket_resolution.py::test_state_dir_names_the_socket
@@ -237,6 +243,20 @@ tests/protocol/test_config_browser.py::test_links_refuses_an_unknown_mode[bogus]
 tests/protocol/test_config_browser.py::test_links_sets_and_reads_the_link_open_mode
 tests/protocol/test_config_browser.py::test_links_takes_the_sized_overlay_modes
 tests/protocol/test_config_browser.py::test_reload_applies_the_edited_config_to_open_and_new_sessions
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[bool]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[color]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[config-file]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[duration]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[enum]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[flags]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[float]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[integer]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[keybind]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[padding]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[palette]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[string]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[theme]
+tests/protocol/test_config_diagnostics.py::test_reload_counts_each_line_the_config_loader_refuses[unknown-key]
 tests/protocol/test_dashboard_quick.py::test_dashboard_and_terminal_zoom_replace_each_other
 tests/protocol/test_dashboard_quick.py::test_dashboard_font_modes
 tests/protocol/test_dashboard_quick.py::test_dashboard_mru_takes_the_recent_sessions
@@ -260,6 +280,11 @@ tests/protocol/test_dashboard_quick.py::test_quick_input_validation
 tests/protocol/test_dashboard_quick.py::test_quick_show_hide_toggle
 tests/protocol/test_dashboard_quick.py::test_quick_type_then_read_the_marker_back
 tests/protocol/test_dashboard_quick.py::test_quick_zoom_ends_with_the_panel
+tests/protocol/test_document_pages.py::test_document_open_refusals[image]
+tests/protocol/test_document_pages.py::test_document_open_refusals[markdownFile]
+tests/protocol/test_document_pages.py::test_image_page_reads_back_its_source
+tests/protocol/test_document_pages.py::test_local_document_pages_are_not_remote_pages
+tests/protocol/test_document_pages.py::test_markdown_page_reads_back_its_source
 tests/protocol/test_events.py::test_cursor_expires_past_the_ring_capacity
 tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[ahead]
 tests/protocol/test_events.py::test_cursor_failure_carries_the_anchor[other-run]
@@ -393,6 +418,8 @@ tests/protocol/test_live_any_shell.py::test_a_live_pane_in_the_login_shell_repor
 tests/protocol/test_live_any_shell.py::test_a_live_pane_keeps_the_configs_xdg_data_dirs
 tests/protocol/test_live_any_shell.py::test_an_ended_live_command_closes_its_pane
 tests/protocol/test_live_any_shell.py::test_an_interrupted_live_restart_command_leaves_the_login_shell_prompt
+tests/protocol/test_live_sessions.py::test_a_respawned_live_parent_publishes_its_respawn_to_a_presenter
+tests/protocol/test_live_sessions.py::test_kill_ends_the_daemon_and_closes_its_pane
 tests/protocol/test_live_sessions.py::test_kill_refuses_a_daemon_that_is_not_running
 tests/protocol/test_live_sessions.py::test_kill_rejects[active]
 tests/protocol/test_live_sessions.py::test_kill_rejects[no-force]
@@ -401,10 +428,13 @@ tests/protocol/test_live_sessions.py::test_kill_rejects[no-split]
 tests/protocol/test_live_sessions.py::test_kill_rejects[no-target]
 tests/protocol/test_live_sessions.py::test_kill_rejects[scratch]
 tests/protocol/test_live_sessions.py::test_kill_rejects[unknown]
+tests/protocol/test_live_sessions.py::test_lead_on_a_pane_that_already_leads
 tests/protocol/test_live_sessions.py::test_lead_rejects[no-split]
 tests/protocol/test_live_sessions.py::test_lead_rejects[not-live]
 tests/protocol/test_live_sessions.py::test_lead_rejects[scratch]
 tests/protocol/test_live_sessions.py::test_list_joins_each_pane_claim
+tests/protocol/test_live_sessions.py::test_live_panes_run_in_claimed_daemons
+tests/protocol/test_live_sessions.py::test_present_mirrors_a_live_session
 tests/protocol/test_live_sessions.py::test_present_refuses_without_a_session
 tests/protocol/test_live_sessions.py::test_prune_finds_no_orphans
 tests/protocol/test_live_sessions.py::test_reset_requires_force
@@ -426,7 +456,12 @@ tests/protocol/test_live_sessions.py::test_stream_commands_refuse_before_streami
 tests/protocol/test_live_sessions.py::test_stream_commands_refuse_before_streaming[page-no-token]
 tests/protocol/test_live_sessions.py::test_stream_commands_refuse_before_streaming[page-unknown]
 tests/protocol/test_live_sessions.py::test_stream_commands_refuse_before_streaming[present-not-live]
+tests/protocol/test_live_sessions.py::test_tree_lists_a_page_companion_without_panes_under_its_listed_parent
+tests/protocol/test_live_sessions.py::test_tree_parent_membership_lists_companions_in_sidebar_order
+tests/protocol/test_live_sessions.py::test_tree_rows_carry_the_session_status
 tests/protocol/test_live_sessions.py::test_tree_without_a_host_lists_no_attachable_session_outside_live
+tests/protocol/test_notify.py::test_a_programs_desktop_notification_raises_the_badge[osc-777]
+tests/protocol/test_notify.py::test_a_programs_desktop_notification_raises_the_badge[osc-9]
 tests/protocol/test_notify.py::test_notify_raises_the_badge_and_emits_the_event
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args0-notify requires a body]
 tests/protocol/test_notify.py::test_notify_refusals_post_nothing[background-args1-notify requires a body]
@@ -862,6 +897,7 @@ tests/ui/test_dialogs.py::test_ask_form_fields_answer_with_their_input
 tests/ui/test_dialogs.py::test_command_palette_opens_from_the_menu_and_escape_closes_it
 tests/ui/test_dialogs.py::test_pick_palette_returns_the_chosen_row
 tests/ui/test_dialogs.py::test_the_view_menu_opens_each_membership_editor_with_its_hint
+tests/ui/test_html_overlay.py::test_a_markdown_file_renders_and_the_tree_names_its_source
 tests/ui/test_html_overlay.py::test_a_page_that_fails_to_load_is_covered
 tests/ui/test_html_overlay.py::test_file_page_strip_names_the_page_and_closes_it
 tests/ui/test_html_overlay.py::test_page_strip_hide_hides_its_own_pane
@@ -893,6 +929,13 @@ tests/ui/test_sidebar_rows.py::test_rename_session_edits_the_row_in_place
 tests/ui/test_sidebar_rows.py::test_rows_carry_the_names_the_tree_reads
 tests/ui/test_sidebar_rows.py::test_the_empty_flagged_view_link_opens_the_session_editor
 tests/ui/test_sidebar_rows.py::test_workspace_add_session_opens_a_session_in_its_workspace
+tests/ui/test_terminal_bindings.py::test_adjust_selection_moves_the_selections_end
+tests/ui/test_terminal_bindings.py::test_clear_screen_drops_the_rows_above_the_cursor
+tests/ui/test_terminal_bindings.py::test_reset_clears_the_terminal_and_keeps_the_program
+tests/ui/test_terminal_bindings.py::test_scroll_actions_move_the_viewport
+tests/ui/test_terminal_bindings.py::test_text_types_its_decoded_bytes_into_the_program
+tests/ui/test_terminal_bindings.py::test_write_screen_file_pastes_the_path_of_the_screens_text
+tests/ui/test_terminal_bindings.py::test_write_selection_file_pastes_the_path_of_the_selected_text
 tests/ui/test_titlebar.py::test_attention_button_lists_the_blocked_session
 tests/ui/test_titlebar.py::test_custom_commands_popover_lists_the_keymap_commands
 tests/ui/test_titlebar.py::test_dashboard_button_opens_the_grid_and_exit_closes_it

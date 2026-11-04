@@ -31,7 +31,7 @@ use crate::model::{
     PaneOverlayOpenFailure, Session, is_valid_color_hex,
 };
 use crate::overlay_jobs::{EXPIRY_SLACK, LAUNCH_WINDOW, OverlayJobFrame, OverlayJobOutcome, OverlayJobs, START_WINDOW};
-use crate::remote::{RemoteOverlayOpen, RemoteProgram, VIEWER_GONE};
+use crate::remote::{RemoteOverlayOpen, RemoteOverlayResize, RemoteProgram, VIEWER_GONE};
 use crate::resolve::{ACTIVE, Resolver, trimmed};
 
 // MARK: - messages
@@ -144,6 +144,54 @@ pub(crate) fn dispatch(core: &mut Core, cmd: SessionCmd, request: &Request) -> O
     }
 }
 
+/// A local document's path and flags, before resolving any target (upstream imageContent/markdownContent).
+fn document_content(path: &str, args: &Args, image: bool) -> Result<OverlayContent, ControlError> {
+    let kind = if image { "image" } else { "markdown" };
+    if args.cwd.is_some()
+        || [
+            args.wait,
+            args.navigation,
+            args.javascript,
+            args.chromeless,
+            args.persistent,
+            args.browse,
+        ]
+        .contains(&Some(true))
+    {
+        return Err(ControlError::rejected(format!(
+            "session.overlay.open: --{kind} takes no --wait, --cwd, --navigation, --js, --chromeless, --persistent or --browse"
+        )));
+    }
+    if !html::is_absolute(path) {
+        return Err(ControlError::rejected(format!(
+            "session.overlay.open: --{kind} must be an absolute path"
+        )));
+    }
+    let path = html::normalize_path(path);
+    let extension = std::path::Path::new(&path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let allowed = if image {
+        crate::link_policy::IMAGE_EXTENSIONS.contains(&extension.as_str())
+    } else {
+        crate::link_policy::MARKDOWN_EXTENSIONS.contains(&extension.as_str())
+    };
+    if !allowed {
+        return Err(ControlError::rejected(if image {
+            "session.overlay.open: --image must be a png, jpg, jpeg, gif or webp file"
+        } else {
+            "session.overlay.open: --markdown must be a .md or .markdown file"
+        }));
+    }
+    Ok(OverlayContent::Page(if image {
+        HtmlSource::Image { path }
+    } else {
+        HtmlSource::Markdown { path }
+    }))
+}
+
 /// The `session.overlay.*` pane selector (upstream's `parseOverlayPane`): absent keeps the session-wide slot, the
 /// pane aliases scope to one pane, anything else (the scratch included) is refused.
 fn parse_overlay_pane(raw: Option<&str>) -> Result<Option<OverlayPane>, ControlError> {
@@ -164,6 +212,18 @@ pub(super) enum OverlayContent {
 pub(super) fn overlay_content(command: &str, args: &Args, home: Option<&str>) -> Result<OverlayContent, ControlError> {
     let reject = |message: &str| Err(ControlError::rejected(message));
     let set = |flag: Option<bool>| flag == Some(true);
+    if let Some(path) = args.image.as_deref() {
+        if !command.is_empty() || args.html.is_some() || args.url.is_some() || args.markdown_file.is_some() {
+            return reject("session.overlay.open takes one of a command, --html, --url, --image or --markdown");
+        }
+        return document_content(path, args, true);
+    }
+    if let Some(path) = args.markdown_file.as_deref() {
+        if !command.is_empty() || args.html.is_some() || args.url.is_some() {
+            return reject("session.overlay.open takes one of a command, --html, --url, --image or --markdown");
+        }
+        return document_content(path, args, false);
+    }
     match (args.html.as_deref(), args.url.as_deref()) {
         (None, None) => {
             if set(args.navigation) {
@@ -301,9 +361,6 @@ fn open(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         RemoteOverlayOpen::SlotTaken => return Err(taken()),
         RemoteOverlayOpen::PaneMissing => return Err(ControlError::rejected(PANE_NOT_VISIBLE)),
         RemoteOverlayOpen::TooLarge => return Err(ControlError::rejected(TOO_LARGE)),
-        RemoteOverlayOpen::PointsUnsupported => {
-            return Err(ControlError::rejected(OverlayPointResizeFailure::Remote.message()));
-        }
         RemoteOverlayOpen::Opened => return Ok(with_id(resolved.session)),
     }
     let (store, id) = session_store(core, target, args.window.as_deref())?;
@@ -464,10 +521,8 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
     }
     let size = args.size_percent;
     let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
-    match core.resize_remote_overlay(resolved.session, size) {
-        Some(true) => return Ok(with_id(resolved.session)),
-        Some(false) => return Err(ControlError::rejected(VIEWER_GONE)),
-        None => {}
+    if let Some(result) = remote_resize(core, resolved.session, size, OverlayPointSize::default()) {
+        return result;
     }
     let (store, id) = session_store(core, target, args.window.as_deref())?;
     let slot = store.session(id).map(|session| &session.overlay);
@@ -493,9 +548,12 @@ fn resize(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
 
 /// `session.overlay.resize` with `--width`/`--height` (upstream's `resizeSessionOverlay` `points`): with a percent the
 /// panel re-sizes from it keeping exactly those axes, alone they change only their axes of a panel already floating.
-/// Nothing goes to a presenter: its wire carries only a percent, so a slot shown on or for another machine refuses.
+/// An origin resolves its remote slot first; a local replica still refuses point changes.
 fn resize_in_points(core: &mut Core, target: Option<&str>, args: &Args, points: OverlayPointSize) -> Outcome {
     let resolved = Resolver::new(core.library()).session(target, args.window.as_deref())?;
+    if let Some(result) = remote_resize(core, resolved.session, args.size_percent, points) {
+        return result;
+    }
     if core.shows_replica_overlay(resolved.session) {
         return Err(ControlError::rejected(OverlayPointResizeFailure::Remote.message()));
     }
@@ -504,6 +562,16 @@ fn resize_in_points(core: &mut Core, target: Option<&str>, args: &Args, points: 
         .resize_overlay_in_points(id, args.size_percent, points)
         .map_err(|failure| ControlError::rejected(failure.message()))?;
     Ok(with_id(id))
+}
+
+/// Maps an origin reservation's resize result without confusing a local replica with its origin.
+fn remote_resize(core: &mut Core, session: Uuid, percent: Option<i64>, points: OverlayPointSize) -> Option<Outcome> {
+    core.resize_remote_overlay(session, percent, points)
+        .map(|result| match result {
+            RemoteOverlayResize::Sent => Ok(with_id(session)),
+            RemoteOverlayResize::ViewerGone => Err(ControlError::rejected(VIEWER_GONE)),
+            RemoteOverlayResize::NotFloating => Err(ControlError::rejected(crate::model::POINTS_NOT_FLOATING)),
+        })
 }
 
 // MARK: - result and the page commands

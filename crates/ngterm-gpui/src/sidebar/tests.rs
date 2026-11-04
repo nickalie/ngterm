@@ -194,6 +194,8 @@ fn session_row(id: Uuid, selected: bool) -> SidebarRow {
             split: None,
             flagged: false,
         },
+        icon_visible: true,
+        info: Vec::new(),
         status: None,
         icon_tooltip: None,
         tint: None,
@@ -1237,4 +1239,166 @@ fn the_notify_badge_reads_as_text_valued_with_the_count() {
     let mut node = Node::new(Role::Label);
     badge.write_a11y_info(&mut node);
     assert_eq!(node.value(), Some("2"));
+}
+
+fn put_info(h: &mut Harness, id: Uuid, source: Option<&str>) {
+    h.store_mut().set_info(
+        source.map(|text| ngterm_core::session_info::SessionInfo::make(text, true, 30.).unwrap()),
+        id,
+    );
+}
+
+fn row_bounds(h: &Harness, id: Uuid, cx: &mut VisualTestContext) -> Bounds<Pixels> {
+    let label = h
+        .view
+        .read_with(cx, |sidebar, _| sidebar.row(id).unwrap().label.clone());
+    cx.debug_bounds(Box::leak(format!("row:{label}").into_boxed_str()))
+        .unwrap()
+}
+
+#[gpui_kit::test]
+fn info_add_clear_and_display_changes_resize_live_rows_without_discarding_runtime_info(cx: &mut TestAppContext) {
+    use ngterm_core::persist::settings::SessionInfoDisplay;
+    use ngterm_core::settings_model::{InterfaceChange, SettingsChange};
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let srv = h.id_of("srv", cx);
+    let plain = row_bounds(&h, srv, cx);
+    put_info(&mut h, srv, Some("**3** agents"));
+    h.settle(cx);
+    let grown = row_bounds(&h, srv, cx);
+    let line = bounds(cx, "session-info");
+    assert!(grown.size.height > plain.size.height);
+    assert_eq!(line.origin.y, plain.origin.y + plain.size.height - px(6.));
+    assert!(line.bottom() <= grown.bottom());
+    h.state
+        .core
+        .change_settings(SettingsChange::Interface(InterfaceChange::SessionInfoDisplay(
+            SessionInfoDisplay::Off,
+        )));
+    h.settle(cx);
+    assert_eq!(row_bounds(&h, srv, cx).size.height, plain.size.height);
+    assert!(cx.debug_bounds("session-info").is_none());
+    let retained = h.store().session(srv).unwrap().effective_info().unwrap();
+    assert_eq!(retained.source, "**3** agents");
+    assert!((retained.hide_after - 30.).abs() < f64::EPSILON);
+    h.state
+        .core
+        .change_settings(SettingsChange::Interface(InterfaceChange::SessionInfoDisplay(
+            SessionInfoDisplay::Always,
+        )));
+    h.settle(cx);
+    assert_eq!(row_bounds(&h, srv, cx).size.height, grown.size.height);
+    put_info(&mut h, srv, None);
+    h.settle(cx);
+    assert_eq!(row_bounds(&h, srv, cx).size.height, plain.size.height);
+}
+
+#[gpui_kit::test]
+fn flagged_info_means_the_flagged_view_and_updates_while_a_rename_is_active(cx: &mut TestAppContext) {
+    let (library, _) = library();
+    let settings = AppSettings {
+        session_info_display: Some("flagged".to_owned()),
+        ..AppSettings::default()
+    };
+    let (mut h, cx) = harness(cx, library, settings);
+    let srv = h.id_of("srv", cx);
+    let other = h.id_of("u", cx);
+    h.store_mut().session_mut(srv).unwrap().flagged = true;
+    put_info(&mut h, srv, Some("running"));
+    h.settle(cx);
+    assert!(
+        cx.debug_bounds("session-info").is_none(),
+        "flagging alone keeps tree rows plain"
+    );
+    h.store_mut().set_sidebar_mode(SidebarMode::Flagged);
+    h.settle(cx);
+    assert!(cx.debug_bounds("session-info").is_some());
+    h.store_mut().set_sidebar_mode(SidebarMode::Tree);
+    h.state
+        .core
+        .change_settings(ngterm_core::settings_model::SettingsChange::Interface(
+            ngterm_core::settings_model::InterfaceChange::SessionInfoDisplay(
+                ngterm_core::persist::settings::SessionInfoDisplay::Always,
+            ),
+        ));
+    h.settle(cx);
+    h.view
+        .update_in(cx, |sidebar, window, cx| sidebar.begin_rename(other, window, cx));
+    put_info(&mut h, srv, None);
+    h.settle(cx);
+    assert_eq!(h.view.read_with(cx, |sidebar, _| sidebar.editing()), Some(other));
+    assert!(cx.debug_bounds("session-info").is_none());
+    cx.simulate_keystrokes("escape");
+    h.settle(cx);
+    assert!(h.view.read_with(cx, |sidebar, _| sidebar.editing()).is_none());
+    assert!(cx.debug_bounds("session-info").is_none());
+}
+
+#[gpui_kit::test]
+fn hiding_each_row_icon_reclaims_its_slot_and_gap_on_live_rows(cx: &mut TestAppContext) {
+    use ngterm_core::persist::settings::InterfaceElement;
+    use ngterm_core::settings_model::{InterfaceChange, SettingsChange};
+    let (library, _) = library();
+    let (mut h, cx) = harness(cx, library, AppSettings::default());
+    let srv = h.id_of("srv", cx);
+    put_info(&mut h, srv, Some("running"));
+    h.settle(cx);
+    let shown = bounds(cx, "session-info");
+    for (element, hidden) in [
+        (InterfaceElement::SessionIcons, true),
+        (InterfaceElement::SessionIcons, false),
+        (InterfaceElement::WorkspaceIcons, true),
+    ] {
+        h.state
+            .core
+            .change_settings(SettingsChange::Interface(InterfaceChange::ElementVisible {
+                element,
+                visible: !hidden,
+            }));
+        h.settle(cx);
+        let line = bounds(cx, "session-info");
+        if element == InterfaceElement::SessionIcons && hidden {
+            assert_eq!(shown.origin.x - line.origin.x, px(crate::row_icon::SLOT + look::GAP));
+            assert_eq!(
+                line.size.width - shown.size.width,
+                px(crate::row_icon::SLOT + look::GAP)
+            );
+        } else {
+            assert_eq!(line.origin.x, shown.origin.x);
+        }
+        h.view.read_with(cx, |sidebar, _| {
+            for row in sidebar.rows() {
+                assert_eq!(
+                    row.icon_visible,
+                    !(hidden && (row.is_workspace() == (element == InterfaceElement::WorkspaceIcons)))
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn hidden_remote_icon_moves_only_its_connection_notice_to_the_name() {
+    let mut row = session_row(Uuid::new_v4(), false);
+    row.label = "api".to_owned();
+    for (icon_visible, truncated, notice, expected) in [
+        (true, false, Some("Lost connection"), None),
+        (true, true, Some("Lost connection"), Some("api")),
+        (false, false, Some("Lost connection"), Some("Lost connection")),
+        (false, true, Some("Lost connection"), Some("api\nLost connection")),
+        // Reconnecting clears the notice for both visible and hidden icons.
+        (true, false, None, None),
+        (true, true, None, Some("api")),
+        (false, false, None, None),
+        (false, true, None, Some("api")),
+    ] {
+        row.icon_visible = icon_visible;
+        row.icon_tooltip = notice.map(str::to_owned);
+        assert_eq!(
+            view::name_tooltip(&row, truncated).as_deref(),
+            expected,
+            "icon_visible={icon_visible}, truncated={truncated}, notice={notice:?}"
+        );
+    }
 }

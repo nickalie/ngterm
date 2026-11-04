@@ -183,6 +183,7 @@ fn a_slot_reserved_for_a_viewer_is_shown_on_another_mac() {
     let mut fixture = Fixture::new(0);
     let id = fixture.sessions[0];
     let slot = RemoteOverlaySlot {
+        points: crate::model::OverlayPointSize::default(),
         job: "job".to_owned(),
         pane: None,
         owner: 1,

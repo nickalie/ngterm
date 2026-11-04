@@ -12,7 +12,7 @@
 //! of the XDG Base Directory spec, instead of an admin-owned `/usr/local/bin`. The
 //! agents' own configs live where upstream puts them.
 //!
-//! The payloads under the repository's `resources/` are upstream v0.39.1's `agterm/Resources/agent-status` and
+//! The payloads under the repository's `resources/` are upstream v0.40.0's `agterm/Resources/agent-status` and
 //! `plugins/agterm/skills/agterm` (MIT, `resources/LICENSE.upstream`), at `resources/agent-status` and
 //! `resources/skills/ngterm` (the skill's directory renamed with the skill), with these deviations:
 //!
@@ -69,9 +69,12 @@
 //!   `show-image.ps1`, which shows the image in a page overlay (`0008-show-image-windows.patch`), and where v0.39's
 //!   text names macOS behavior this build has otherwise it says what ngterm does (the row tints and the link browser
 //!   chord on Linux and Windows, the companion items in the File menu, no Windows far side for a remote attach, and
-//!   links with `mouse-reporting = false`: `0009-other-platforms.patch`), and its Live `--command` text says the
-//!   pane ends with the command, as upstream's #840 made it and its own skill text still predates
-//!   (`0010-live-creation-ends-pane.patch`): all are patches over upstream's tree (`build/patches/skill-ngterm`).
+//!   links with `mouse-reporting = false`: `0009-other-platforms.patch`), and its Live `--command` text keeps
+//!   this build's single create-and-attach operation and returning replay semantics, beyond v0.40.0's corrected
+//!   pane-exit text (`0010-live-creation-ends-pane.patch`). Live remote-row name mirroring is also patched
+//!   (`0016-remote-name-mirroring.patch`), preserving the prior bundled documentation. All are patches over
+//!   upstream's tree (`build/patches/skill-ngterm`). Markdown renderer assets are synchronized separately by
+//!   `scripts/sync-markdown-resources.py` into `resources/markdown`.
 
 pub mod cli;
 pub mod files;

@@ -158,6 +158,7 @@ impl AppStore {
     /// restore state, its local live-session daemon finalized. Whether the split was shown; `None` for an unknown
     /// session. Neither emits nor saves.
     fn discard_split_pane(&mut self, id: Uuid) -> Option<bool> {
+        self.dispose_pane_mailbox(id, StatusPane::Right);
         let split_identity = self.session(id).and_then(|session| session.split_pane_identity);
         self.close_hud_owned_by(id, split_identity);
         self.cancel_ask_owned_by(id, split_identity);
@@ -211,6 +212,7 @@ impl AppStore {
             self.close_session(id);
             return PrimaryPaneExit::Closed;
         }
+        self.dispose_pane_mailbox(id, StatusPane::Left);
         let primary_identity = self.session(id).map(|session| session.pane_identity);
         self.close_hud_owned_by(id, primary_identity);
         self.cancel_ask_owned_by(id, primary_identity);
@@ -277,6 +279,7 @@ impl AppStore {
     /// never reruns its command. The pane keeps its identity; the moved [`Session::primary_respawns`] tells the
     /// frontend to mount a fresh terminal in the empty primary slot.
     fn respawn_primary_pane(&mut self, id: Uuid, now: Instant) {
+        self.dispose_pane_mailbox(id, StatusPane::Left);
         let identity = self.session(id).map(|session| session.pane_identity);
         self.close_hud_owned_by(id, identity);
         self.cancel_ask_owned_by(id, identity);
@@ -319,6 +322,7 @@ impl AppStore {
     /// Closes the scratch terminal: hides it and tears its terminal down, so the next show starts fresh (upstream's
     /// `closeScratch`). False without a scratch terminal.
     pub fn close_scratch(&mut self, id: Uuid, emit: bool) -> bool {
+        self.dispose_pane_mailbox(id, StatusPane::Scratch);
         let Some(session) = self.session_mut(id) else {
             return false;
         };

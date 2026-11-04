@@ -344,24 +344,16 @@ pub trait ProcessTable {
     /// The foreground process group of the terminal process `pid` controls (`tpgid`): how a live pane's foreground is
     /// read through its daemon's shell, whose terminal the pane's own surface does not hold. `None` when the process
     /// is gone, has no controlling terminal, or cannot be read.
-    fn terminal_foreground(&self, _pid: i32) -> Option<i32> {
-        None
-    }
+    fn terminal_foreground(&self, pid: i32) -> Option<i32>;
 
     /// The working directory of process `pid`; `None` when it cannot be read (another user's process).
-    fn working_directory(&self, _pid: i32) -> Option<String> {
-        None
-    }
+    fn working_directory(&self, pid: i32) -> Option<String>;
 
     /// The absolute path of process `pid`'s image; `None` when it cannot be read or the file is gone (an upgrade
     /// removed it).
-    fn executable_path(&self, _pid: i32) -> Option<String> {
-        None
-    }
+    fn executable_path(&self, pid: i32) -> Option<String>;
 
     /// Process `pid`'s own `PATH` (`Path` on Windows, any case); `None` when its environment cannot be read or has
     /// none.
-    fn search_path(&self, _pid: i32) -> Option<String> {
-        None
-    }
+    fn search_path(&self, pid: i32) -> Option<String>;
 }

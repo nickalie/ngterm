@@ -179,3 +179,23 @@ def test_a_page_that_fails_to_load_is_covered(ctl, ui):
     finally:
         ctl.request("session.overlay.close", sid)
         ctl.request("session.close", sid)
+
+
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("ui:htmlOverlay.page", "field:tree.session.htmlOverlays")
+def test_a_markdown_file_renders_and_the_tree_names_its_source(ctl, ui):
+    sid = _new(ctl)
+    doc = ctl.instance.root / "notes.md"
+    doc.write_text("# Rendered Heading\n\nsome *text*\n", encoding="utf-8")
+    try:
+        assert_ok(ctl.request("session.overlay.open", sid, markdownFile=str(doc)))
+        _state(ctl, sid, "loaded")
+        page, = find_session(ctl.tree(), sid)["htmlOverlays"]
+        assert page["markdown"] == str(doc)
+        assert "file" not in page and "image" not in page and page["javascript"] is False
+        ui.find("htmlOverlay.page")
+        assert ui.text("htmlOverlay.identity") == "notes.md"
+        ui.click(ui.find("htmlOverlay.close", role="button"))
+        _closed(ctl, sid)
+    finally:
+        ctl.request("session.close", sid)

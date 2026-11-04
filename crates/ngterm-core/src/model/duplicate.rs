@@ -9,6 +9,10 @@ use super::SplitAxis;
 use super::companions::CompanionRefusal;
 use super::session::Session;
 use super::store::{AppStore, NewSession};
+use crate::duplicate_replay::rebind_arguments;
+use crate::live::daemon_name;
+use crate::pane_env::uuid_string;
+use crate::restore::spawn_plan::ORDINARY_DIALECT;
 
 /// One pane of a Duplicate as Companion copy: where it starts, and the creation command it ends with (`None` for a
 /// plain shell) with the argv that command quotes ([`super::PaneLaunch::argv`]).
@@ -17,6 +21,29 @@ pub struct PaneCopy {
     pub cwd: String,
     pub command: Option<String>,
     pub argv: Option<Vec<String>>,
+}
+
+impl PaneCopy {
+    /// The planner validated the argv before creating any row; substituting UUIDs and daemon names preserves its
+    /// quotability. Recompute the stored line from that argv so both representations name the copy's identities.
+    fn rebind(&mut self, ids: &[(String, String)]) {
+        if let Some(argv) = &mut self.argv {
+            rebind_arguments(argv, ids);
+            self.command = ORDINARY_DIALECT.line(argv);
+        }
+    }
+}
+
+/// Every source identity that copied arguments may carry (upstream's `identityRebinding`).
+fn identity_rebinding(source: &Session, copy: &Session) -> Vec<(String, String)> {
+    let mut ids = vec![(uuid_string(source.id()), uuid_string(copy.id()))];
+    let panes = std::iter::once((source.pane_identity, copy.pane_identity))
+        .chain(source.split_pane_identity.zip(copy.split_pane_identity));
+    for (from, to) in panes {
+        ids.push((uuid_string(from), uuid_string(to)));
+        ids.push((daemon_name(from), daemon_name(to)));
+    }
+    ids
 }
 
 /// What Duplicate as Companion creates: the left pane, the right one for a split source with its axis and ratio.
@@ -63,7 +90,8 @@ impl AppStore {
 
     /// Creates `copy` as a companion of `source`, after its group (a sibling of a companion source): each pane runs its
     /// command and closes when it exits, and a split copy keeps the source's axis and ratio with the left pane focused
-    /// (#842).
+    /// (#842). Session, pane and daemon identities in raw arguments are rebound to the copy before quoting and saving
+    /// its commands (#843).
     ///
     /// # Errors
     ///
@@ -71,12 +99,11 @@ impl AppStore {
     pub fn duplicate_as_companion(
         &mut self,
         source: Uuid,
-        copy: CompanionCopy,
+        mut copy: CompanionCopy,
         home: &str,
     ) -> Result<Uuid, CompanionRefusal> {
-        let slot = self.companion_slot(source, Some(copy.left.cwd), home)?;
+        let slot = self.companion_slot(source, Some(copy.left.cwd.clone()), home)?;
         let spec = NewSession {
-            command: copy.left.command,
             at: Some(slot.index),
             select: copy.select,
             parent: Some(slot.parent),
@@ -85,14 +112,9 @@ impl AppStore {
         let id = self
             .add_session(slot.workspace, spec)
             .ok_or(CompanionRefusal::NoSuchSession)?;
-        if let Some(session) = self.session_mut(id) {
-            session.launch.argv = copy.left.argv;
-        }
-        if let Some(right) = copy.right {
+        if let Some(right) = &copy.right {
             if let Some(session) = self.session_mut(id) {
-                session.initial_split_cwd = Some(right.cwd);
-                session.split_launch.command = right.command;
-                session.split_launch.argv = right.argv;
+                session.initial_split_cwd = Some(right.cwd.clone());
             }
             self.set_split_visibility(id, true, Some(copy.axis));
             self.set_split_focus(id, false);
@@ -100,6 +122,25 @@ impl AppStore {
                 self.apply_split_ratio(ratio, id);
             }
         }
+        // Both destination pane identities now exist; surfaces spawn only after the model has finished this copy.
+        let ids = self
+            .session(source)
+            .zip(self.session(id))
+            .map(|(source, copy)| identity_rebinding(source, copy))
+            .ok_or(CompanionRefusal::NoSuchSession)?;
+        copy.left.rebind(&ids);
+        if let Some(right) = &mut copy.right {
+            right.rebind(&ids);
+        }
+        if let Some(session) = self.session_mut(id) {
+            session.launch.command = copy.left.command;
+            session.launch.argv = copy.left.argv;
+            if let Some(right) = copy.right {
+                session.split_launch.command = right.command;
+                session.split_launch.argv = right.argv;
+            }
+        }
+        self.save();
         Ok(id)
     }
 }

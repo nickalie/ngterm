@@ -234,6 +234,10 @@ pub struct Session {
     pub context: Option<String>,
     /// The context mirrored from a remote origin; a local one wins over it. Ephemeral.
     pub mirrored_context: Option<String>,
+    /// Caller-set and origin-mirrored sidebar activity; runtime-only, local wins.
+    pub info: Option<crate::session_info::SessionInfo>,
+    pub mirrored_info: Option<crate::session_info::SessionInfo>,
+    pub(crate) info_revision: Option<Uuid>,
     /// The split layout.
     pub split: SplitLayout,
     /// The primary pane's creation command.
@@ -342,6 +346,9 @@ impl Session {
             content: seed.content,
             context: None,
             mirrored_context: None,
+            info: None,
+            mirrored_info: None,
+            info_revision: None,
             split: SplitLayout::default(),
             launch: PaneLaunch::default(),
             split_launch: PaneLaunch::default(),
@@ -443,6 +450,18 @@ impl Session {
         std::iter::once(self.pane_identity)
             .chain(self.split_pane_identity)
             .collect()
+    }
+
+    /// The local info line wins over its origin's mirror.
+    #[must_use]
+    pub fn effective_info(&self) -> Option<&crate::session_info::SessionInfo> {
+        self.info.as_ref().or(self.mirrored_info.as_ref())
+    }
+
+    /// Invalidates any expiry and drops the local value; overlay teardown never calls this.
+    pub fn discard_info(&mut self) {
+        self.info = None;
+        self.info_revision = None;
     }
 
     /// The local context, else the mirrored one.
@@ -662,6 +681,7 @@ impl Session {
 
     /// Frees every terminal the session holds, the overlay slots' included (a HUD body file goes with it).
     pub fn teardown_surfaces(&mut self) {
+        self.discard_info();
         self.overlay.close();
         self.pane_overlays.teardown_all();
         self.surface.teardown();

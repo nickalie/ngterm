@@ -886,8 +886,9 @@ fn clipboard_read<C>(shown: &mut Shown<C>, id: u64, request: ClipboardReadReques
 pub(crate) struct Tail(Vec<u8>);
 
 impl Tail {
-    // the line, and room for the attach client's RESTORE (RIS and three OSC resets, ngterm-session's
-    // `cli/attach.rs`) and a few more sequences
+    // The line and CRLF plus the attach client's 94-byte MANAGED_RESTORE (SGR, input-report DECRSTs and
+    // OSC 110/111/112, ngterm-session's `cli/attach.rs`) fit in 188 bytes, with 62 bytes for more sequences.
+    // Older remote clients' 23-byte RESTORE (RIS and the same OSC resets) fits too.
     const KEEP: usize = 2 * SESSION_GONE.len() + 128;
 
     pub(crate) fn push(&mut self, bytes: &[u8]) {

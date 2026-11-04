@@ -84,6 +84,7 @@ fn size() -> HudPanelSize {
 
 fn slot(job: &str, pane: Option<OverlayPane>, wait: bool) -> RemoteOverlaySlot {
     RemoteOverlaySlot {
+        points: crate::model::OverlayPointSize::default(),
         job: job.to_owned(),
         pane,
         owner: 1,
@@ -263,7 +264,12 @@ fn a_remote_overlay_invalidates_the_tree_when_its_slot_is_taken_and_freed() {
         1
     );
     assert_eq!(
-        tree_changes(&mut store, |s| s.resize_remote_overlay(id, "j", Some(40))),
+        tree_changes(&mut store, |s| s.resize_remote_overlay(
+            id,
+            "j",
+            Some(40),
+            crate::model::OverlayPointSize::default()
+        )),
         0
     );
     assert_eq!(

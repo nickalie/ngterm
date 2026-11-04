@@ -1,11 +1,13 @@
 //! The `session` subcommands that set per-session metadata rather than drive a surface
-//! (`agtermctlKit/SessionMetadataCommands.swift`, `Session.Seen`): `status`, `flag`, `context` and `seen`.
+//! (`agtermctlKit/SessionMetadataCommands.swift`, `Session.Seen`): `status`, `flag`, `context`, `info` and `seen`.
 
-use ngterm_core::model::{StatusShape, is_valid_color_hex};
+use ngterm_core::hud::HudSpec;
+use ngterm_core::model::{StatusShape, TintColor, is_valid_color_hex};
 use ngterm_proto::command::SessionCmd;
 use ngterm_proto::{Args, Request};
 
 use crate::session::session_request;
+use crate::session_hud::validate_hide_after;
 use crate::session_io::validate_pane;
 use crate::{BasicOptions, ClientOptions, RequestCommand, TargetOptions};
 
@@ -221,6 +223,78 @@ impl RequestCommand for Context {
         };
         session_request(
             SessionCmd::Context,
+            Some(self.target.target.clone()),
+            Some(args),
+            &self.options,
+        )
+    }
+}
+
+/// `ngtermctl session info`: ephemeral sidebar activity.
+#[derive(Debug, clap::Args)]
+#[command(
+    about = "Set or clear the info line drawn under a session's sidebar row.",
+    long_about = format!(
+        "The line shows current activity, such as a status or a count. Each set replaces the whole \
+         line: omitting --markdown sends plain text and omitting --hide-after cancels an earlier \
+         expiry. It is not kept across a relaunch. Settings > Interface > Session info picks where it \
+         shows: Always (default), Flagged (the flagged view only) or Off; that hides it, never clears it.\n\
+         Markdown example: '**3** agents ^[running](color: \"green\") ^[idle](dim: true)'. Colors: \
+         {}; the value must be quoted.",
+        TintColor::valid_names_list()
+    )
+)]
+pub struct Info {
+    #[arg(help = "The line (omit with --clear); max 512 UTF-8 bytes, one visible line.")]
+    text: Option<String>,
+    #[arg(long, help = "Remove the line.")]
+    clear: bool,
+    #[arg(
+        long,
+        help = "Read TEXT as inline markdown with ^[text](color: \"NAME\") and ^[text](dim: true)."
+    )]
+    markdown: bool,
+    #[arg(
+        long,
+        allow_hyphen_values = true,
+        help = format!(
+            "Clear the line by itself after SECONDS, 0...{:.0}, 0 for never; each set \
+             restarts it. Use a positive value and refresh activity lines so they expire if the caller stops.",
+            HudSpec::MAX_HIDE_AFTER
+        )
+    )]
+    hide_after: Option<f64>,
+    #[command(flatten)]
+    target: TargetOptions,
+    #[command(flatten)]
+    options: ClientOptions,
+}
+
+impl RequestCommand for Info {
+    fn options(&self) -> &BasicOptions {
+        &self.options.basic
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.text.is_some() == self.clear {
+            return Err("provide exactly one of a TEXT or --clear".to_owned());
+        }
+        if self.clear && (self.markdown || self.hide_after.is_some()) {
+            return Err("--clear takes no --markdown or --hide-after".to_owned());
+        }
+        validate_hide_after(self.hide_after)
+    }
+
+    fn make_request(&self) -> Request {
+        let args = Args {
+            text: self.text.clone(),
+            mode: Some(if self.clear { "clear" } else { "set" }.to_owned()),
+            markdown: self.markdown.then_some(true),
+            hide_after: self.hide_after,
+            ..Args::default()
+        };
+        session_request(
+            SessionCmd::Info,
             Some(self.target.target.clone()),
             Some(args),
             &self.options,
@@ -446,5 +520,41 @@ mod tests {
             request(&["seen", "--target", "x", "--window", "win"]),
             json!({"cmd": "session.seen", "target": "x", "args": {"window": "win"}})
         );
+    }
+    #[test]
+    fn info_carries_optional_markup_and_expiry_and_rejects_invalid_clear_forms() {
+        assert_eq!(
+            request(&[
+                "info",
+                "**busy**",
+                "--markdown",
+                "--hide-after",
+                "1.5",
+                "--target",
+                "s",
+                "--window",
+                "w"
+            ]),
+            json!({"cmd":"session.info","target":"s","args":{"text":"**busy**","mode":"set","markdown":true,"hideAfter":1.5,"window":"w"}})
+        );
+        assert_eq!(
+            request(&["info", "literal"]),
+            json!({"cmd":"session.info","target":"active","args":{"text":"literal","mode":"set"}})
+        );
+        assert_eq!(
+            request(&["info", "--clear"]),
+            json!({"cmd":"session.info","target":"active","args":{"mode":"clear"}})
+        );
+        assert_eq!(refusal(&["info"]), "provide exactly one of a TEXT or --clear");
+        assert_eq!(
+            refusal(&["info", "--clear", "--markdown"]),
+            "--clear takes no --markdown or --hide-after"
+        );
+        for seconds in ["-1", "NaN", "inf", "86401"] {
+            assert_eq!(
+                refusal(&["info", "text", "--hide-after", seconds]),
+                "hide-after must be 0...86400 seconds"
+            );
+        }
     }
 }

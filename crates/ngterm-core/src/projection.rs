@@ -103,6 +103,16 @@ fn workspace_node(
             .iter()
             .map(|session| {
                 let mut node = session_node(session, selected == Some(session.id()));
+                if let Some(surfaces) = &mut node.surfaces {
+                    for surface in surfaces {
+                        let count = surface
+                            .pane_id
+                            .as_deref()
+                            .and_then(|id| Uuid::parse_str(id).ok())
+                            .map_or(0, |pane| store.messages.pending(pane));
+                        surface.pending_messages = (count > 0).then_some(count);
+                    }
+                }
                 // a page companion has no shell of its own: it reports where its parent stands
                 if session.content() == SessionContent::Page
                     && let Some(parent) = store.parent_of(session)
@@ -130,6 +140,11 @@ pub fn session_node(session: &Session, active: bool) -> ControlSessionNode {
     node.scratch = session.scratch_active;
     node.flagged = session.flagged;
     node.context = session.effective_context().map(str::to_owned);
+    if let Some(info) = session.effective_info() {
+        node.info = Some(info.source.clone());
+        node.info_markdown = Some(info.markdown);
+        node.info_hide_after = Some(info.hide_after);
+    }
     node.remote_host = session.remote_host().map(str::to_owned);
     node.presentation = session.remote_presentation().map(RemotePresentationState::node);
     node.unseen = (session.unseen_count > 0).then(|| i64::try_from(session.unseen_count).unwrap_or(i64::MAX));
@@ -226,10 +241,12 @@ fn html_overlay_nodes(session: &Session) -> Option<Vec<ControlHtmlOverlayNode>> 
 /// that opened it, with no grant), the load state, what the web view shows once it reported, and the flags; the zoom
 /// is the app's, set by the tree.
 fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverlayNode {
-    let (file, cwd, url) = match &page.source {
-        HtmlSource::File { path, grant_root } => (Some(path.clone()), grant_root.clone(), None),
-        HtmlSource::Url(address) => (None, None, Some(address.as_str().to_owned())),
-        HtmlSource::Replica { path } => (Some(path.clone()), None, None),
+    let (file, cwd, url, image, markdown) = match &page.source {
+        HtmlSource::File { path, grant_root } => (Some(path.clone()), grant_root.clone(), None, None, None),
+        HtmlSource::Url(address) => (None, None, Some(address.as_str().to_owned()), None, None),
+        HtmlSource::Replica { path } => (Some(path.clone()), None, None, None, None),
+        HtmlSource::Image { path } => (None, None, None, Some(path.clone()), None),
+        HtmlSource::Markdown { path } => (None, None, None, None, Some(path.clone())),
     };
     let current = page.current.as_ref();
     ControlHtmlOverlayNode {
@@ -237,6 +254,8 @@ fn html_overlay_node(slot: Option<&str>, page: &HtmlOverlay) -> ControlHtmlOverl
         file,
         cwd,
         url,
+        image,
+        markdown,
         state: page.load_state.wire_name().to_owned(),
         error: page.load_error.clone(),
         page: current.map(|current| current.page.clone()),
@@ -374,6 +393,7 @@ fn surface_nodes(session: &Session) -> Vec<ControlSurfaceNode> {
                 lead: None,
                 reconnect: None,
                 pane_id: pane_token(slot),
+                pending_messages: None,
             }
         })
         .collect()

@@ -2,10 +2,10 @@ Attached rows come back after a relaunch: each window's file lists them and the 
 where upstream never writes them. Applied after 0013-loopback-page-forward.patch.
 
 diff --git a/SKILL.md b/SKILL.md
-index 5095b29f..a1c240cd 100644
+index 9938fbd..4c88795 100644
 --- a/SKILL.md
 +++ b/SKILL.md
-@@ -272,7 +272,7 @@ entries in `surfaces` report their own Boolean, while scratch and overlays omit
+@@ -273,7 +273,7 @@ entries in `surfaces` report their own Boolean, while scratch and overlays omit
  `liveAttribution` and `splitLiveAttribution` (local Live pane attribution, including hidden splits;
  [values and omission rules](reference.md#tree)),
  `remoteHost` (the machine an attached session came from, the read side of `live attach`; omitted for a local
@@ -14,23 +14,25 @@ index 5095b29f..a1c240cd 100644
  `presentation` (attached session only: the mirroring stream's `state` - `connecting`, `connected`,
  `unsupported`, or `failed` with `error` - not the ssh connection's - plus `mode`, `presenter` while its stream holds that role, else `mirror`),
  `presenters` (origin session: `mirrors`, the streams mirroring it without presenting, and `presenter: true`
-@@ -742,8 +742,9 @@ HOST SESSION [--window W]` - open one of them here, marked remote and carrying i
+@@ -757,9 +757,10 @@ HOST SESSION [--window W]` - open one of them here, marked remote and carrying i
  chosen open local window's current workspace (default: frontmost after discovery). A background target
  keeps the frontmost window unchanged; an invalid or closed target fails. Takes the ID from that
  listing, not the name, and resolves the remote again first, so a session that has gone fails instead of
 -handing back a fresh shell wearing its name. Closing it here ends only this side's connection and it is
--never restored after a relaunch. The attached row mirrors the origin session's status, context, `notify`
+-never restored after a relaunch. Add `--companions` to attach the group; see
+-[details](reference.md#restore). The attached row mirrors the origin session's status, context, `notify`
 +handing back a fresh shell wearing its name. Closing it here ends only this side's connection and forgets the
 +row; a row still open at quit is attached again on the next launch, where it stood, once that machine answers.
++Add `--companions` to attach the group; see [details](reference.md#restore).
 +The attached row mirrors the origin session's status, context, `notify`
  notifications, HUD and the layout of attached panes over a stream that reconnects by itself
  ([details](reference.md#restore)); read
  `presentation.state` in `tree`, and expect mirrored status, context and HUD to clear while it is down. One
 diff --git a/reference.md b/reference.md
-index 91803ce1..cb564c79 100644
+index d00c4d0..d4850ee 100644
 --- a/reference.md
 +++ b/reference.md
-@@ -166,7 +166,7 @@ dead responsible process, and `unknown` an unavailable reading or an unrelated l
+@@ -170,7 +170,7 @@ dead responsible process, and `unknown` an unavailable reading or an unrelated l
  omitted for non-Live and remote panes; the split field includes hidden splits and is omitted without a
  split; these describe attribution, not permission grants),
  `remoteHost` (the machine an attached session came from — the read side of `live attach`; omitted for a
@@ -39,9 +41,9 @@ index 91803ce1..cb564c79 100644
  `presentation` (on an attached session only: `state` is `connecting`, `connected`, `unsupported` for an
  origin too old to stream, or `failed` with the reason in `error`, and `mode` is `presenter` when this
  row's stream holds the presenter role (see Remote sessions) or `mirror` when it does not; it says whether the stream is up,
-@@ -2266,8 +2266,14 @@ bridges it to stdio as newline-delimited JSON. ngterm runs it over ssh on the or
+@@ -2382,8 +2382,14 @@ bridges it to stdio as newline-delimited JSON. ngterm runs it over ssh on the or
  be typed.
- 
+
  Closing a remote session here ends only this side's connection: the far-side processes keep running, and only End
 -Session on HOST… in the row's menu ends them from this end. It is never written to disk, so it does not come back
 -after a relaunch whatever the restore mode is.
@@ -53,6 +55,6 @@ index 91803ce1..cb564c79 100644
 +after, until it has failed for a week in a row, an hour of it in the current run. A session gone there, or one that
 +cannot be attached, is dropped and named in a banner, and a row whose workspace was closed meanwhile is dropped.
 +Attaching the session by hand meanwhile takes the saved row over; closing the row is what forgets it.
- 
+
  The pane reports the far side's working directory, and the local launches that would inherit it pick
  their start directory by one rule: the reported path when it exists here as a directory, else local

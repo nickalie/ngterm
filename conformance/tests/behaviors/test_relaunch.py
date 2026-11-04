@@ -36,6 +36,13 @@ PROGRAM_ARGUMENTS = (
 LIVE = pytest.mark.requires(
     "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
 )
+# A Live test that types no line of a particular shell, so it holds in the Rust build's bash and PowerShell Live too.
+LIVE_IN_ANY_SHELL = pytest.mark.requires(
+    "live-sessions",
+    "live-any-shell",
+    any=True,
+    reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell",
+)
 
 
 def _new(ctl, **args):
@@ -345,7 +352,7 @@ def test_live_session_survives_the_relaunch(launch):
     ctl.wait_text(sid, rf"(?m)^{marker}$", all=True)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("behavior:restore.live-session-survives-relaunch", "live.tree", "field:result.remote")
 def test_a_live_session_with_a_hidden_split_stays_attachable_across_the_relaunch(launch):
     """A split hidden across the relaunch builds no terminal until shown, yet its daemon runs on claimed: the session

@@ -587,3 +587,76 @@ fn a_url_attachment_has_a_channel_and_no_bridge() {
         })
     );
 }
+
+// MARK: - a headless origin
+
+/// A headless origin (no web views, pages always the presenter's) whose session a viewer listing `kinds` presents.
+fn headless(kinds: &[&str]) -> super::remote_page::Origin {
+    let mut origin = super::remote_page::Origin::build(false, kinds, false);
+    origin.fixture().core.set_page_presenter_only();
+    origin
+}
+
+fn headless_page(origin: &mut super::remote_page::Origin, edit: impl FnOnce(&mut Args)) -> Response {
+    let parent = origin.session();
+    companion_page(origin.fixture(), parent, edit)
+}
+
+#[test]
+fn a_headless_origin_creates_a_page_companion_and_hands_it_to_the_presenter() {
+    let mut origin = headless(&crate::remote::hub::SUPPORTED_KINDS);
+    let parent = origin.session();
+
+    let response = headless_page(&mut origin, |a| a.url = Some("https://example.com/".to_owned()));
+
+    let id = answered_id(&response).expect("created without web views here");
+    assert_eq!(result_field(&response, "parent"), json!(wire(parent)));
+    let row = origin.fixture().store().session(id).unwrap();
+    assert_eq!(row.content(), SessionContent::Page);
+    let page = row.overlay.page().unwrap().id;
+    let handed = origin.presenter.last("companion.page").expect("the presenter is told");
+    assert_eq!(handed["companion"]["session"], json!(wire(id)));
+    let attachment = attach(origin.fixture(), id);
+    assert_eq!(attachment["page"], json!(wire(page)), "a viewer can attach it");
+
+    let closed = origin
+        .fixture()
+        .session(SessionCmd::OverlayClose, Some(&wire(id)), Args::default());
+    assert!(closed.ok, "{closed:?}");
+    origin.fixture().core.commit();
+    assert!(
+        origin.fixture().store().session(id).is_none(),
+        "the page and its row ended"
+    );
+    assert!(
+        origin.fixture().core.take_released_pages().is_empty(),
+        "nothing is queued for web views a headless origin does not have"
+    );
+}
+
+#[test]
+fn a_headless_origin_keeps_a_page_companion_no_presenter_can_take() {
+    let mut origin = headless(&super::remote::OLDER_KINDS);
+    let response = headless_page(&mut origin, |a| a.url = Some("https://example.com/".to_owned()));
+    assert!(answered_id(&response).is_some(), "{response:?}");
+    assert!(
+        origin.presenter.last("companion.page").is_none(),
+        "a presenter that does not list the kind is told nothing"
+    );
+}
+
+#[test]
+fn a_headless_origin_refuses_a_loopback_page_companion() {
+    let mut origin = headless(&crate::remote::hub::SUPPORTED_KINDS);
+    let before = origin.fixture().store().sessions().count();
+    let response = headless_page(&mut origin, |a| a.url = Some("http://127.0.0.1:8765/".to_owned()));
+    assert_eq!(
+        response.error.as_deref(),
+        Some(
+            "a loopback page companion would load on the viewing Mac, not here: open it with --pane or session-wide \
+             instead"
+        )
+    );
+    assert_eq!(origin.fixture().store().sessions().count(), before);
+    assert!(origin.presenter.last("companion.page").is_none());
+}

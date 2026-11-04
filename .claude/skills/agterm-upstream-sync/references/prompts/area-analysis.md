@@ -12,7 +12,7 @@ anything and you do NOT edit, create or commit files: read, grep and run read-on
 (build, test, clippy): the gates share target/ and are running or about to. Your answer is a draft plan task.
 
 Repository: <ROOT> (ngterm). Upstream clone (read-only): <UPSTREAM>, range <OLD>..<NEW>.
-Read applicable AGENTS.md instructions and <ROOT>/CLAUDE.md first (crate map, reference rule, porting order).
+Read <ROOT>/AGENTS.md and any more specific directory instructions first (crate map, reference rule, porting order).
 The cluster: <cluster title>
 Upstream commits: <hash subject, one per line>
 Changelog text: <the matching changelog bullets, verbatim>
@@ -34,7 +34,7 @@ Do this:
    are in `conformance/rust-passing.txt`, and the tests still missing (propose file, function name, `covers` keys,
    and what each asserts). A UI-only behavior has no suite test on Linux: propose its UI item
    (the GPUI form) instead.
-4. Platforms (CLAUDE.md > Platforms): for a behavior upstream builds on a macOS API, name its mechanism on macOS,
+4. Platforms (AGENTS.md > Platforms): for a behavior upstream builds on a macOS API, name its mechanism on macOS,
    Linux and Windows, or why an OS has no counterpart. Upstream's `SessionHostRuntime` maps to
    `ngterm-session`/`ngterm-pty`.
 5. Decide STATUS per behavior: `absent` (no Rust code); `partial` (part of it missing, or the code is there but no

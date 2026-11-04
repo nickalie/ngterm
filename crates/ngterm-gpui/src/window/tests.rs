@@ -14,6 +14,23 @@ use crate::pane::PaneContext;
 use crate::terminal::TerminalConfig;
 
 #[test]
+fn the_custom_header_owns_the_titlebar_drag_region() {
+    let options = custom_header_options();
+    assert!(
+        options.app_owns_titlebar_drag,
+        "AppKit must leave dragging to the app's held-press handler"
+    );
+    assert!(matches!(
+        options.window_decorations,
+        Some(gpui_kit::WindowDecorations::Client)
+    ));
+    assert!(
+        options.titlebar.is_some(),
+        "the custom header still supplies the window title"
+    );
+}
+
+#[test]
 fn the_title_is_the_active_session_then_the_custom_window_name() {
     let mut library = WindowLibrary::seeded("/home/u");
     let window = library.active_window_id().unwrap();

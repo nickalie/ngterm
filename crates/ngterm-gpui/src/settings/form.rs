@@ -28,6 +28,8 @@ pub struct Section {
     pub columns: usize,
     /// Rows after a two-column section's pairs, one per row (upstream's `twoColumnSection` `trailing`).
     pub trailing: Vec<Item>,
+    /// Fills the final empty half of an odd two-column grid.
+    pub fill: Option<Item>,
 }
 
 impl Section {
@@ -38,6 +40,7 @@ impl Section {
             items,
             columns: 1,
             trailing: Vec::new(),
+            fill: None,
         }
     }
 
@@ -49,6 +52,7 @@ impl Section {
             items,
             columns: 1,
             trailing: Vec::new(),
+            fill: None,
         }
     }
 
@@ -56,6 +60,13 @@ impl Section {
     #[must_use]
     pub fn two_columns(mut self) -> Self {
         self.columns = 2;
+        self
+    }
+
+    /// Places a control in the final empty grid half.
+    #[must_use]
+    pub fn fill(mut self, item: Item) -> Self {
+        self.fill = Some(item);
         self
     }
 
@@ -68,12 +79,12 @@ impl Section {
 
     /// Every row, the trailing ones last.
     pub fn rows(&self) -> impl Iterator<Item = &Item> {
-        self.items.iter().chain(&self.trailing)
+        self.items.iter().chain(self.fill.iter()).chain(&self.trailing)
     }
 
     /// Every row, the trailing ones last, taken.
     pub fn into_rows(self) -> impl Iterator<Item = Item> {
-        self.items.into_iter().chain(self.trailing)
+        self.items.into_iter().chain(self.fill).chain(self.trailing)
     }
 }
 

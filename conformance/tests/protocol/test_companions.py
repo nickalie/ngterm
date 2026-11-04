@@ -4,6 +4,7 @@ parent's respawn also runs on an instance of its own under Live sessions."""
 
 import itertools
 import os
+import shlex
 
 import pytest
 from agterm_conformance.match import (
@@ -187,17 +188,17 @@ def _left_pane_id(ctl, sid):
     return next(s for s in find_session(ctl.tree(), sid)["surfaces"] if s["kind"] == "left")["paneID"]
 
 
-def _prints(ctl, sid):
-    """Types a marker line into `sid` until its shell prints it: between an exit and the fresh shell the pane has no
-    terminal to type into, and a line typed into the exiting one is lost with it."""
+def _prints(ctl, sid, **pane):
+    """Types a marker line into `sid` (its `pane=` one) until its shell prints it: between an exit and the fresh shell
+    the pane has no terminal to type into, and a line typed into the exiting one is lost with it."""
     marker = f"CMARK{next(_markers)}"
 
     def printed():
-        typed = ctl.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:5]} {marker[5:]}\n")
+        typed = ctl.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:5]} {marker[5:]}\n", **pane)
         if not typed.ok:
             return False
         try:
-            return ctl.wait_text(sid, rf"(?m)^{marker}$", timeout=1)
+            return ctl.wait_text(sid, rf"(?m)^{marker}$", timeout=1, **pane)
         except AssertionError:
             return False
 
@@ -429,6 +430,13 @@ def test_duplicate_as_companion_copies_the_split_and_runs_each_program(ctl):
     assert_ok(ctl.request("session.split", parent, mode="on", axis="horizontal"))
     ctl.wait_mounted(parent, "right")
     assert_ok(ctl.request("session.resize", parent, ratio=0.3))
+    # both shells at their prompts, after the resize: the right pane copies as a plain shell only then (one still
+    # starting runs what its profile runs, which reads as the pane's program where nothing tells it from one: a Windows
+    # console has no foreground group, and Git for Windows' profile runs `git --exec-path`), and Git for Windows' bash
+    # may drop the first key of the line typed after its pane was resized (`ee copied.txt` on CI), which `_prints`
+    # types again
+    for pane in ("left", "right"):
+        _prints(ctl, parent, pane=pane)
     assert_ok(ctl.request("session.type", parent, pane="left", text="tee copied.txt\n"))
     _runs(ctl, parent, "tee")
 
@@ -446,6 +454,80 @@ def test_duplicate_as_companion_copies_the_split_and_runs_each_program(ctl):
     copied = work / "copied.txt"
     wait_until(lambda: copied.exists() and copied.read_text() == "from the copy\n")
     assert_ok(ctl.request("workspace.delete", wid))
+
+
+@POSIX_SHELL
+@pytest.mark.since("0.40.0")
+@pytest.mark.parametrize("shells", ["plain", pytest.param("live", marks=LIVE)], indirect=True)
+@pytest.mark.covers("session.companion.duplicate", "field:tree.session.foreground", "field:tree.session.splitForeground")
+def test_duplicate_as_companion_rebinds_session_and_pane_ids(shells):
+    """Both copied programs receive their own session/pane IDs and daemon names, even inside arguments (#843)."""
+    ctl = shells
+    work = _work(ctl)
+    wid = assert_ok(ctl.request("workspace.new"))["id"]
+
+    def mixed(identity):
+        letters = itertools.cycle((str.lower, str.upper))
+        return "".join(next(letters)(char) if char.isalpha() else char for char in identity)
+
+    def arguments(session, left, right, *, source, originals=None):
+        original_session, original_left, original_right = originals or (session, left, right)
+
+        def rebound(identity, spelling):
+            # Zero-letter and one-letter UUIDs need not produce any uppercase letter in mixed().
+            return identity.lower() if spelling == spelling.lower() else identity.upper()
+
+        session_upper = session.upper() if source else rebound(session, original_session.upper())
+        left_upper = left.upper() if source else rebound(left, original_left.upper())
+        right_upper = right.upper() if source else rebound(right, original_right.upper())
+        daemon = lambda pane: ctl.vocabulary.daemon_prefix + pane.replace("-", "").lower()
+        return [
+            f"session={session_upper}",
+            f"embedded=before{session.lower()}after",
+            f"mixed={mixed(session) if source else rebound(session, mixed(original_session))}",
+            f"repeat={session_upper}:{session_upper}",
+            f"panes={left_upper}:{right_upper}",
+            f"pane-lower={left.lower()}",
+            f"pane-mixed={mixed(right) if source else rebound(right, mixed(original_right))}",
+            f"daemons={daemon(left)}:{daemon(right)}",
+            "unrelated=CCCCCCCC-1234-5678-9ABC-0123456789AB",
+            "roles=left:right",
+            "-",
+        ]
+
+    try:
+        parent = assert_ok(ctl.request("session.new", workspace=wid, cwd=str(work)))["id"]
+        ctl.wait_mounted(parent, "left")
+        assert_ok(ctl.request("session.split", parent, mode="on"))
+        source = find_session(ctl.wait_mounted(parent, "right"), parent)
+        panes = {surface["kind"]: surface["paneID"] for surface in source["surfaces"]}
+        original = arguments(parent, panes["left"], panes["right"], source=True)
+        # These deliberately absent filenames carry arbitrary argv. After reporting them, cat's final '-' reads
+        # terminal stdin indefinitely, so neither a scripting runtime nor files named after future IDs are needed.
+        for pane, field in (("left", "foreground"), ("right", "splitForeground")):
+            assert_ok(ctl.request("session.type", parent, pane=pane, text=shlex.join(["cat", *original]) + "\n"))
+            assert program_argv(_runs(ctl, parent, "cat", field))[1:] == original
+
+        copy = _duplicate(ctl, parent)["id"]
+        copied = find_session(ctl.wait_mounted(copy, "left", "right"), copy)
+        copied_panes = {surface["kind"]: surface["paneID"] for surface in copied["surfaces"]}
+        assert {copy, copied_panes["left"], copied_panes["right"]}.isdisjoint(
+            {parent, panes["left"], panes["right"]}
+        )
+        expected = arguments(
+            copy,
+            copied_panes["left"],
+            copied_panes["right"],
+            source=False,
+            originals=(parent, panes["left"], panes["right"]),
+        )
+        for field in ("foreground", "splitForeground"):
+            assert program_argv(_runs(ctl, copy, "cat", field))[1:] == expected
+        copied = find_session(ctl.tree(), copy)
+        assert os.path.realpath(copied["cwd"]) == os.path.realpath(work)
+        assert os.path.realpath(copied["splitCwd"]) == os.path.realpath(work)
+    finally:
+        assert_ok(ctl.request("workspace.delete", wid))
 
 
 @POSIX_SHELL

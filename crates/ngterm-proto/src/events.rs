@@ -45,6 +45,8 @@ pub enum EventKind {
     RemoteClosed,
     #[strum(serialize = "app.launched")]
     AppLaunched,
+    #[strum(serialize = "message")]
+    Message,
 }
 
 impl EventKind {
@@ -104,6 +106,11 @@ pub struct EventPayload {
     /// `session.created`: a companion's parent id; absent for a top-level session.
     #[serde(default)]
     pub parent: Option<String>,
+    /// Sender address of a message event; its body is never included.
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default, rename = "messageID")]
+    pub message_id: Option<String>,
 }
 
 /// One immutable ring entry (upstream's `ControlEvent`). The identities are upper-case UUIDs, absent when the event
@@ -303,6 +310,7 @@ mod tests {
                 "remote.opened",
                 "remote.closed",
                 "app.launched",
+                "message",
             ]
         );
     }

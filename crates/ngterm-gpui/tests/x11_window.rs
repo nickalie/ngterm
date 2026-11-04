@@ -1,4 +1,4 @@
-//! The ngterm window on a private Xvfb (GPUI's X11 backend, no window manager; CLAUDE.md > Never touch the user's
+//! The ngterm window on a private Xvfb (GPUI's X11 backend, no window manager; AGENTS.md > Never touch the user's
 //! running ngterm): `window.list` reads its minimized state back from `_NET_WM_STATE_HIDDEN` as a window manager sets
 //! it (GPUI patch `gpui-pre-linux` 0003, the GTK build's GDK read-back) and its frame is saved maximized while it is
 //! minimized maximized, the frame it had at the quit comes back at the next launch (upstream's `TitleProbeView`;

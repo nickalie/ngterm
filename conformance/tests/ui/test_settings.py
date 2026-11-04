@@ -280,3 +280,57 @@ def test_key_mapping_tab_reports_a_keymap_error_after_reload(seeded, ui_for):
     finally:
         keymap.write_text("")
         assert_ok(seeded.request("keymap.reload"))
+
+
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("ui:settings-session-info-display")
+def test_session_info_display_picker_persists(seeded, ui_for, adapter):
+    ui = ui_for(seeded)
+    _open(ui, "Interface")
+    for element in ("overlayToggle", "workspaceIcons", "sessionIcons"):
+        ui.find(ui.ui_ids.expand("settings-interface-{element}", element=element), role="checkbox")
+    ui.find("settings-quick-terminal-size", role="popup")
+    # AT-SPI exposes no string value on popup controls; read the state through persistence there.
+    def value(text):
+        return {"value": text} if adapter.has("ui-string-values") else {}
+
+    assert "sessionInfoDisplay" not in _settings(seeded)
+    picker = ui.find("settings-session-info-display", role="popup", **value("Always"))
+    ui.click(picker)
+    ui.click(ui.menu_item("Flagged"))
+    try:
+        wait_until(lambda: _settings(seeded).get("sessionInfoDisplay") == "flagged")
+        ui.find("settings-session-info-display", role="popup", **value("Flagged"))
+        ui.click(ui.find("settings-session-info-display", role="popup"))
+        ui.click(ui.menu_item("Off"))
+        wait_until(lambda: _settings(seeded).get("sessionInfoDisplay") == "off")
+        ui.find("settings-session-info-display", role="popup", **value("Off"))
+    finally:
+        ui.click(ui.find("settings-session-info-display", role="popup"))
+        ui.click(ui.menu_item("Always"))
+    wait_until(lambda: "sessionInfoDisplay" not in _settings(seeded))
+
+
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("ui:settings-interface-{element}", "ui:session-icon", "ui:workspace-icon")
+def test_row_icons_hide_independently(seeded, ui_for):
+    """Each row-icon control hides its own image and leaves the other rows and their names visible."""
+    ui = ui_for(seeded)
+    _open(ui, "Interface")
+    for element, icon, other in (
+        ("sessionIcons", "session-icon", "workspace-icon"),
+        ("workspaceIcons", "workspace-icon", "session-icon"),
+    ):
+        toggle = ui.ui_ids.expand("settings-interface-{element}", element=element)
+        assert ui.all(icon) and ui.all(other)
+        ui.click(ui.find(toggle, role="checkbox", value=1))
+        try:
+            wait_until(lambda: element in _settings(seeded).get("hiddenInterfaceElements", []))
+            ui.absent(icon)
+            assert ui.all(other)
+            assert ui.all("session-row") and ui.all("workspace-row")
+        finally:
+            ui.click(ui.find(toggle, role="checkbox", value=0))
+        wait_until(lambda: element not in _settings(seeded).get("hiddenInterfaceElements", []))
+        ui.find(icon)
+        ui.find(other)

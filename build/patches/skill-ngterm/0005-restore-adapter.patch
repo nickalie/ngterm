@@ -4,10 +4,10 @@ hand-write that hook for Claude Code (a second hook pinning the same pane fights
 hand-written recipe for other agents and lines. Applied after 0004-ngterm-identity.patch.
 
 diff --git a/SKILL.md b/SKILL.md
-index 995b16a..b5ebef4 100644
+index 864d91c..1c6e135 100644
 --- a/SKILL.md
 +++ b/SKILL.md
-@@ -456,7 +456,8 @@ omitted when expanded).
+@@ -489,7 +489,8 @@ omitted when expanded).
    `claude --resume … --fork-session` (which mints a new session on every restart), a Claude Code
    `SessionStart` hook rewrites the override to the live id on every start so the next restart reattaches
    instead of forking. The pinned value is shell code stored in the state file and readable via `tree`, so
@@ -18,13 +18,13 @@ index 995b16a..b5ebef4 100644
    `session background text <text> [--color #rrggbb] [--opacity F] [--fit ...] [--position ...]` ·
    `session background color <#rrggbb>` · `session background clear`, each `[--pane left|right|scratch]` — composite an
 diff --git a/examples.md b/examples.md
-index 175583a..0d2043f 100644
+index 0517a9a..673a762 100644
 --- a/examples.md
 +++ b/examples.md
 @@ -137,6 +137,14 @@ safely-interpolated values (a UUID-shaped session id) belong in it.
- 
+
  ## Keep a forking agent session reattaching across restarts (a SessionStart hook)
- 
+
 +ngterm already does this for Claude Code: Help ▸ Install Agent Status Hooks installs a restore adapter
 +(`~/.config/ngterm/agent-status/ngterm-agent-restore.sh`) on its `SessionStart` and `SessionEnd` hooks. On every
 +start it pins `claude --resume <id> || claude` for the pane, so after /clear, /resume or a fork the next restart

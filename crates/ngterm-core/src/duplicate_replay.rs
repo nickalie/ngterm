@@ -51,6 +51,36 @@ impl Plan {
             Self::Program { argv, .. } => Some(argv),
         }
     }
+
+    /// Replaces identity substrings in every program argument (upstream's `Plan.rebinding`), preserving wholly
+    /// lowercase occurrences. Shells and working directories keep their original values.
+    #[must_use]
+    pub fn rebinding(&self, ids: &[(String, String)]) -> Self {
+        let mut rebound = self.clone();
+        if let Self::Program { argv, .. } = &mut rebound {
+            rebind_arguments(argv, ids);
+        }
+        rebound
+    }
+}
+
+/// Applies the duplicate's ASCII UUID/daemon-name mappings to its raw arguments before shell quoting.
+pub(crate) fn rebind_arguments(argv: &mut [String], ids: &[(String, String)]) {
+    for argument in argv {
+        for (from, to) in ids {
+            let lowercase = argument.replace(&from.to_ascii_lowercase(), &to.to_ascii_lowercase());
+            let folded = lowercase.to_ascii_lowercase();
+            let mut rebound = String::with_capacity(lowercase.len());
+            let mut start = 0;
+            for (index, matched) in folded.match_indices(&from.to_ascii_lowercase()) {
+                rebound.push_str(&lowercase[start..index]);
+                rebound.push_str(to);
+                start = index + matched.len();
+            }
+            rebound.push_str(&lowercase[start..]);
+            *argument = rebound;
+        }
+    }
 }
 
 /// Why a pane cannot be copied.

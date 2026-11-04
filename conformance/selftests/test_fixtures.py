@@ -213,6 +213,48 @@ def test_skip_reason_says_why_this_host_lacks_a_capability(pytester: pytest.Pyte
     assert skip_reason(item, adapter) == f"unsupported: upstream lacks live-sessions on this host: {why} (needs live sessions)"
 
 
+@pytest.mark.parametrize(
+    ("capabilities", "expected"),
+    [
+        ({"live-sessions"}, None),
+        ({"live-any-shell"}, None),
+        ({"live-sessions", "live-any-shell"}, None),
+        (set(), "unsupported: rust lacks live-sessions and live-any-shell (needs live sessions)"),
+        ({"posix-shell"}, "unsupported: rust lacks live-sessions and live-any-shell (needs live sessions)"),
+    ],
+)
+def test_skip_reason_of_an_any_requirement_needs_one_capability(
+    pytester: pytest.Pytester, capabilities: set[str], expected: str | None
+) -> None:
+    item = pytester.getitem(
+        """
+        import pytest
+
+        @pytest.mark.requires("live-sessions", "live-any-shell", any=True, reason="needs live sessions")
+        def test_live():
+            pass
+        """,
+        "test_live",
+    )
+    adapter = SimpleNamespace(available=True, name="rust", profile=Profile("0.40.0", frozenset(capabilities), {}))
+    assert skip_reason(item, adapter) == expected
+
+
+def test_skip_reason_of_an_all_requirement_names_the_first_missing_capability(pytester: pytest.Pytester) -> None:
+    item = pytester.getitem(
+        """
+        import pytest
+
+        @pytest.mark.requires("posix-shell", "live-sessions")
+        def test_both():
+            pass
+        """,
+        "test_both",
+    )
+    adapter = SimpleNamespace(available=True, name="rust", profile=Profile("0.40.0", frozenset({"posix-shell"}), {}))
+    assert skip_reason(item, adapter) == "unsupported: rust lacks live-sessions"
+
+
 def test_level_is_checked_before_capabilities(pytester: pytest.Pytester, roots: list[Path], fake_bin: Path) -> None:
     pytester.makepyfile(
         """

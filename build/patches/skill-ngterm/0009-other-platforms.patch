@@ -9,9 +9,33 @@ with `mouse-reporting = false`, holds for libghostty's own link detection only: 
 follows that setting (`crates/ngterm-gpui/src/terminal/mouse.rs`), so the text keeps "always-on selection and links".
 Applied after 0008-show-image-windows.patch.
 
+diff --git a/SKILL.md b/SKILL.md
+index 2b46b86..0812083 100644
+--- a/SKILL.md
++++ b/SKILL.md
+@@ -810,7 +810,7 @@ ngtermctl session overlay open --markdown /path/to/plan.md --size-percent 95 --t
+ ```
+
+ Pictures kept in the file's own folder show; other pictures show their alt text, raw HTML stays text, and a web
+-link opens in the browser after the user confirms. The user gets the same view by ⌘-clicking the file's path, so
++link opens in the browser after the user confirms. The user gets the same view by ⌘-clicking (ctrl-clicking on Linux and Windows) the file's path, so
+ printing the absolute path of a plan or report you wrote is often enough. Read back `markdown` in `htmlOverlays`.
+
+ ## Displaying an image inline
+@@ -822,7 +822,7 @@ Show a png, jpg, gif or webp picture with `--image`; the panel takes the picture
+ ngtermctl session overlay open --image /tmp/shot.png --target "$NGTERM_SESSION_ID"
+ ```
+
+-The user can open the same view by ⌘-clicking a picture's path in the terminal, so printing the absolute
++The user can open the same view by ⌘-clicking (ctrl-clicking on Linux and Windows) a picture's path in the terminal, so printing the absolute
+ path of an image you produced is often enough. When `--image` is rejected, by an older CLI as an unknown
+ option or by an older app, fall back to the script below.
+
+diff --git a/reference.md b/reference.md
+index c0b0ec7..0349209 100644
 --- a/reference.md
 +++ b/reference.md
-@@ -528,7 +528,7 @@
+@@ -533,7 +533,7 @@ buys nothing. A caller with no tree uses `version`.
    `--command` comes back as a plain shell); a shell that exits within 2 seconds of such a restart closes the group
    instead, so a broken shell cannot restart forever. A parent without companions closes on exit as before. A row attached
    from another Mac whose parent respawned there attaches to the new shell instead of stopping at its exit line. The GUI
@@ -20,7 +44,7 @@ Applied after 0008-show-image-windows.patch.
    the keyless `new_companion` keymap action. Read back from the tree session node's `parent` field.
    A page companion shows an HTML page instead of a terminal and never starts a shell; it is created with
    `session overlay open --html FILE --companion` or `--url URL --companion` (see that entry).
-@@ -550,7 +550,7 @@
+@@ -555,7 +555,7 @@ buys nothing. A caller with no tree uses `version`.
    own session under its own policy, and the copy attaches here as for `session new --parent`.
    `--no-select` (with `--companion`) creates it without selecting it. A pipeline or shell job is copied as its foreground process only; name, status,
    flag, overlays, scratch and background are not copied. Wire command `session.companion.duplicate`; returns
@@ -29,8 +53,8 @@ Applied after 0008-show-image-windows.patch.
    menu, a palette row, and the keyless `duplicate_companion` action.
  - `session duplicate [--target] [--window W]` — create a fresh session in the SAME workspace as the
    target, inserted directly AFTER it, rooted at the target's focused-pane working directory (the live
-@@ -845,7 +845,8 @@
-   ▸ Interface ▸ Title Bar ▸ "Session context" hides it without clearing it.
+@@ -880,7 +880,8 @@ error keeps those names for compatibility.
+   ```
  - `session tint <COLOR|clear> [--on PARTS] [--target] [--window W]` - color the session's sidebar row so it
    stands out at a glance (red for production, green for dev). COLOR is `red|orange|yellow|green|blue|purple|gray`,
 -  macOS system colors that follow light and dark. `--on` is `icon`, `name` or `icon,name`; omitted, a recolor keeps
@@ -39,7 +63,31 @@ Applied after 0008-show-image-windows.patch.
    the row's placement and an untinted row starts on the icon. `clear` removes the tint and refuses `--on`; the
    socket form (`mode` `set|clear`, `tint`, `tintOn` array) refuses a clear carrying either. Returns the session
    id. Persisted across a relaunch; a duplicated session starts untinted. Local to this Mac: an attached row does
-@@ -1950,7 +1951,7 @@
+@@ -1121,7 +1122,7 @@ error keeps those names for compatibility.
+   `session overlay close`, or, with `--js`, its own `window.close()` where the web view accepts it.
+   A loopback port can forward another machine's content, so open only a server you trust.
+ - `session overlay open --image FILE [--size-percent N [--width PT] [--height PT]] [--background-color #rrggbb] [--follow] [--pane left|right] [--target] [--window W]`
+-  - show a png, jpg, gif or webp picture in the overlay slot, the view a user's ⌘-click on its path opens.
++  - show a png, jpg, gif or webp picture in the overlay slot, the view a user's ⌘-click (ctrl-click on Linux and Windows) on its path opens.
+   Without a size the panel takes the picture's shape: its natural size on this display, scaled up to 240
+   points wide when narrower and down to fit 80% of the session when larger, the picture filling it. The page
+   embeds the file: no script, no other file access, no bridge. Refuses a COMMAND, `--html`, `--url`, the page
+@@ -1132,12 +1133,12 @@ error keeps those names for compatibility.
+   storage stalls the app until it is read. An image page is local-only: when placement would send the page to the Mac presenting
+   the session, the open is refused. Read back `image` in `htmlOverlays`.
+ - `session overlay open --markdown FILE [--size-percent N [--width PT] [--height PT]] [--background-color #rrggbb] [--follow] [--pane left|right] [--target] [--window W]`
+-  - render a `.md` or `.markdown` file as a page in the terminal theme, the view a user's ⌘-click on its path opens
++  - render a `.md` or `.markdown` file as a page in the terminal theme, the view a user's ⌘-click (ctrl-click on Linux and Windows) on its path opens
+   (at the link-open size, 95% when links open in the browser). Code is highlighted, task lists show boxes, and
+   headings get GitHub-style anchors. Pictures in the file's own folder are embedded, symlinks resolved first;
+   any other picture, and any past the first 256, shows its alt text and nothing is fetched. Raw HTML stays text and the page runs no script
+   of its own; a web link opens in the browser after the confirmation, a `#heading` link scrolls, any other link
+-  is plain text. No bridge; Open in Browser and Show in Finder are refused. Refuses a COMMAND, `--html`,
++  is plain text. No bridge; Open in Browser and revealing the file in the file manager are refused. Refuses a COMMAND, `--html`,
+   `--url`, `--image`, the page flags, `--cwd`, `--wait`, `--block` and `--companion`; a relative FILE resolves
+   against the caller's directory. Refused: a path that is not a regular readable file (`unreadable markdown
+   file`) and a file over 4 MB (`markdown file too large`). The wire field is `markdownFile`, apart from the
+@@ -2050,7 +2051,7 @@ opens, or with no mode print the current one. `browser` (default) hands the link
  `overlay` opens it in a full session web overlay as `session overlay open --url URL --browse --js
  --navigation --persistent` would, without selecting the session; `overlay95`, `overlay75` and `overlay50` add
  `--size-percent 95`, `75` or `50`. The link still goes to the browser when
@@ -48,7 +96,7 @@ Applied after 0008-show-image-windows.patch.
  session's window has a zoomed terminal, when the session-wide overlay slot is taken, when the saved
  browser store cannot be used, or when the overlay cannot be opened. A plain `http` link uses the overlay
  only for a host the page could load: an unqualified name such as `localhost`, a `.local` name, or an IP
-@@ -2146,7 +2147,9 @@
+@@ -2247,7 +2248,9 @@ listed; it attaches only under a row already attached from its parent. An empty
  pane, and be new enough to answer `live tree` at all; an older one is refused by name rather than
  half-attached. It also needs `ngtermctl` installed by the Help action: the remote call runs it on the ssh `PATH` plus
  `~/.local/bin` and `/usr/local/bin`. A machine merely running ngterm has no CLI an ssh command can find, and the read
@@ -56,12 +104,14 @@ Applied after 0008-show-image-windows.patch.
 +fails with exit 127. A Windows machine cannot be the far side yet: every remote call is a POSIX `/bin/sh -c`
 +line, which its sshd does not run, so its sessions cannot be listed or attached elsewhere and no remote companion
 +can be created there.
- 
+
  `ngtermctl live attach HOST SESSION [--window W]` opens one of those sessions here, marked remote, in
  the destination window's current workspace, selected, with the remote session's split when it has one.
+diff --git a/troubleshooting.md b/troubleshooting.md
+index 8ae4400..1a17f3c 100644
 --- a/troubleshooting.md
 +++ b/troubleshooting.md
-@@ -383,8 +383,8 @@
+@@ -383,8 +383,8 @@ and only inside that program. Ghostty.app behaves the same. It is per-program, n
  that never enables mouse reporting keeps links working. Workaround: hold shift too (⌘⇧-hover, ⌘⇧-click).
  A program can claim shift via `XTSHIFTESCAPE`, so `mouse-shift-capture = never` in
  `~/.config/ngterm/ghostty.conf` makes shift always win; `mouse-reporting = false` there turns reporting
@@ -69,6 +119,6 @@ Applied after 0008-show-image-windows.patch.
 -there: link detection follows the program's mouse request, not that setting.
 +off for every program, trading in-program mouse support for always-on selection and links: ngterm finds links itself and follows that
 +setting, so ⌘ alone (ctrl on Linux and Windows) opens them again.
- 
+
  ## Reporting: decide bug vs unsupported FIRST
- 
+

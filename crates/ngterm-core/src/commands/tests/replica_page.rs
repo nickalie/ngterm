@@ -1178,6 +1178,119 @@ fn resize_reaches_only_the_session_wide_slot() {
     );
 }
 
+/// Upstream's `aHandedOverPageTakesTheOriginsPointSizesAndItsResizes`.
+#[test]
+fn a_handed_over_page_installs_and_replaces_the_origins_point_axes() {
+    use crate::model::OverlayPointSize;
+
+    let mut replica = Replica::new();
+    let mut page = Replica::page(Replica::url("https://example.com/"));
+    page["sizePercent"] = json!(70);
+    page["width"] = json!(320);
+    page["height"] = json!(240);
+    replica.request(page);
+    assert!(replica.rejections().is_empty());
+    assert_eq!(replica.session().overlay.size_percent, Some(70));
+    assert_eq!(
+        replica.session().overlay.points,
+        OverlayPointSize {
+            width: Some(320),
+            height: Some(240)
+        }
+    );
+
+    // The origin already resolved merges: each command replaces the presenter's complete point state.
+    let resizes = [
+        (json!({"sizePercent": 60, "height": 120}), Some(60), None, Some(120)),
+        (json!({"sizePercent": 50, "width": 200}), Some(50), Some(200), None),
+        (json!({"sizePercent": 80}), Some(80), None, None),
+        (json!({}), None, None, None),
+    ];
+    for (seq, (mut payload, percent, width, height)) in (1..).zip(resizes) {
+        payload["page"] = json!(ORIGIN);
+        payload["seq"] = json!(seq);
+        payload["action"] = json!("resize");
+        replica.origin_frame("page.command", payload);
+        assert_eq!(replica.session().overlay.size_percent, percent, "seq {seq}");
+        assert_eq!(
+            replica.session().overlay.points,
+            OverlayPointSize { width, height },
+            "seq {seq}"
+        );
+        assert_eq!(replica.states().last().unwrap()["appliedSeq"], seq);
+    }
+}
+
+#[test]
+fn replica_page_points_use_local_detail_bounds_and_local_point_resize_is_refused() {
+    use crate::hud::{HudPaneFrame, HudPaneFrames};
+    use crate::model::{OverlayPointSize, POINTS_REMOTE};
+
+    let mut replica = Replica::new();
+    let mut page = Replica::page(Replica::url("https://example.com/"));
+    page["sizePercent"] = json!(70);
+    page["width"] = json!(5_000);
+    page["height"] = json!(5_000);
+    replica.request(page);
+    let id = replica.id();
+    replica.viewer.fixture.core.report_hud_frames(
+        id,
+        &HudPaneFrames {
+            detail: Some(HudPaneFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 500.0,
+                height: 300.0,
+            }),
+            ..HudPaneFrames::default()
+        },
+    );
+    let node = crate::projection::session_node(replica.session(), true);
+    assert_eq!(node.overlay_width, Some(400.0));
+    let chrome = replica.session().overlay.page().unwrap().chrome();
+    assert_eq!(node.overlay_height, Some(240.0 - chrome));
+    assert_eq!(
+        replica.session().overlay.points,
+        OverlayPointSize {
+            width: Some(5_000),
+            height: Some(5_000)
+        }
+    );
+    let before = replica.session().overlay.points;
+    let refused = replica.viewer.fixture.session(
+        SessionCmd::OverlayResize,
+        Some(&wire(id)),
+        args(|a| a.height = Some(120)),
+    );
+    assert_eq!(refused, failure(POINTS_REMOTE));
+    assert_eq!(replica.session().overlay.points, before);
+}
+
+#[test]
+fn loopback_page_forwarding_preserves_origin_points_until_the_page_is_installed() {
+    use crate::model::OverlayPointSize;
+
+    let mut replica = Replica::new();
+    let mut page = Replica::page(Replica::url("http://127.0.0.1:47231/board"));
+    page["sizePercent"] = json!(65);
+    page["width"] = json!(360);
+    page["height"] = json!(240);
+    replica.request(page);
+    assert!(replica.session().overlay.page().is_none());
+    assert!(replica.rejections().is_empty());
+    replica.tunnel_line(0, "ngterm-tunnel-ready");
+    assert!(replica.session().overlay.page().is_some());
+    assert!(replica.rejections().is_empty());
+    assert_eq!(replica.session().overlay.size_percent, Some(65));
+    assert_eq!(
+        replica.session().overlay.points,
+        OverlayPointSize {
+            width: Some(360),
+            height: Some(240)
+        }
+    );
+}
+
 #[test]
 fn reload_and_history_commands_reach_the_page() {
     let mut replica = Replica::new();

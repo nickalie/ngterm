@@ -2,7 +2,7 @@
 //!
 //! A [`Command`] is two-level: a [`Group`] (the first dotted component of the wire name) and, unless the group's
 //! only command is the bare group name (`tree`, `dashboard`, `notify`, `version`), the group's own enum. Wire names
-//! come from the `strum` derives on the group enums, so parsing is a 23-arm match on the group followed by the group
+//! come from the `strum` derives on the group enums, so parsing is a match on the group followed by the group
 //! enum's derived parser.
 
 use std::collections::BTreeSet;
@@ -27,6 +27,7 @@ pub enum Group {
     Font,
     Hooks,
     Keymap,
+    Msg,
     Notify,
     Pick,
     Quick,
@@ -99,6 +100,11 @@ group_commands!(
 );
 
 group_commands!(
+    /// `msg.*`: pane mailboxes.
+    MsgCmd { Send = "msg.send", Read = "msg.read", Ack = "msg.ack" }
+);
+
+group_commands!(
     /// `pick.*`: the fuzzy picker.
     PickCmd { Open = "pick.open", Result = "pick.result", Cancel = "pick.cancel" }
 );
@@ -133,6 +139,7 @@ group_commands!(
         Status = "session.status",
         Flag = "session.flag",
         Context = "session.context",
+        Info = "session.info",
         Tint = "session.tint",
         Seen = "session.seen",
         Restore = "session.restore",
@@ -245,6 +252,7 @@ group_commands!(
         Reset = "live.reset",
         Tree = "live.tree",
         Attach = "live.attach",
+        AttachGroup = "live.attach.group",
         Present = "live.present",
         Screen = "live.screen",
     }
@@ -268,6 +276,7 @@ pub enum Command {
     Font(FontCmd),
     Hooks(HooksCmd),
     Keymap(KeymapCmd),
+    Msg(MsgCmd),
     Notify,
     Pick(PickCmd),
     Quick(QuickCmd),
@@ -299,6 +308,7 @@ impl Command {
             Self::Font(c) => c.into(),
             Self::Hooks(c) => c.into(),
             Self::Keymap(c) => c.into(),
+            Self::Msg(c) => c.into(),
             Self::Notify => "notify",
             Self::Pick(c) => c.into(),
             Self::Quick(c) => c.into(),
@@ -330,6 +340,7 @@ impl Command {
             Self::Font(_) => Group::Font,
             Self::Hooks(_) => Group::Hooks,
             Self::Keymap(_) => Group::Keymap,
+            Self::Msg(_) => Group::Msg,
             Self::Notify => Group::Notify,
             Self::Pick(_) => Group::Pick,
             Self::Quick(_) => Group::Quick,
@@ -360,6 +371,7 @@ impl Command {
         all.extend(FontCmd::iter().map(Self::Font));
         all.extend(HooksCmd::iter().map(Self::Hooks));
         all.extend(KeymapCmd::iter().map(Self::Keymap));
+        all.extend(MsgCmd::iter().map(Self::Msg));
         all.extend(PickCmd::iter().map(Self::Pick));
         all.extend(QuickCmd::iter().map(Self::Quick));
         all.extend(RecentCmd::iter().map(Self::Recent));
@@ -436,6 +448,7 @@ impl FromStr for Command {
             Group::Font => FontCmd::from_str(name).ok().map(Self::Font),
             Group::Hooks => HooksCmd::from_str(name).ok().map(Self::Hooks),
             Group::Keymap => KeymapCmd::from_str(name).ok().map(Self::Keymap),
+            Group::Msg => MsgCmd::from_str(name).ok().map(Self::Msg),
             Group::Notify => unit(name, group, Self::Notify),
             Group::Pick => PickCmd::from_str(name).ok().map(Self::Pick),
             Group::Quick => QuickCmd::from_str(name).ok().map(Self::Quick),
@@ -540,7 +553,7 @@ mod tests {
     #[test]
     fn every_command_round_trips_through_its_wire_name() {
         let all = Command::all();
-        assert_eq!(all.len(), 128);
+        assert_eq!(all.len(), 133);
         for command in all {
             assert_eq!(command.wire_name().parse(), Ok(command));
             assert_eq!(
@@ -606,8 +619,8 @@ mod tests {
     }
 
     #[test]
-    fn has_twenty_four_groups() {
-        assert_eq!(Group::iter().count(), 24);
+    fn has_twenty_five_groups() {
+        assert_eq!(Group::iter().count(), 25);
     }
 
     #[test]

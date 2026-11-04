@@ -5,7 +5,8 @@
 //! exactly as it attaches a desktop instance's: `ngtermctl live tree` over ssh lists them, each pane an ssh into its
 //! live session, the presentation (status, layout, HUD, notifications) streamed over `ngtermctl live present`, and
 //! asks, program overlays and pages shown on the viewer.
-//! Pages always use the presenter, including a new split whose terminal still leads on this headless origin.
+//! Pages always use the presenter, including a new split whose terminal still leads on this headless origin, and a page
+//! companion is created without web views and handed to the machine presenting its parent.
 //!
 //! - Live sessions always: every launch runs in restore mode `live` whatever the settings hold, which keep the user's
 //!   own mode for an app on the same state dir ([`Core::force_restore_mode`]), and refuses to start when the live

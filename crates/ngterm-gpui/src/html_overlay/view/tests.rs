@@ -238,6 +238,21 @@ fn the_page_and_its_strip_carry_upstreams_accessibility_ids(cx: &mut TestAppCont
     // upstream's `.textSelection(.enabled)`: the error is text a click focuses and Ctrl+A, Ctrl+C copy
     let shown = harness.element.read_with(cx, PageView::error_shown);
     assert_eq!(shown.as_deref(), Some("not found"));
+    // a short error is as wide as its text and centered under the heading, not one character wide
+    let card = cx.debug_bounds("htmlOverlay.error").expect("the failure is drawn");
+    let text = cx
+        .debug_bounds("htmlOverlay.error-text-box")
+        .expect("the error is drawn");
+    assert!(
+        text.size.width > px(20.) && text.size.width < card.size.width / 2.,
+        "{text:?} in {card:?}"
+    );
+    assert!(
+        (text.center().x - card.center().x).abs() < px(2.),
+        "centered: {text:?} in {card:?}"
+    );
+    let one_line = text.size.height;
+    assert!(one_line < px(40.), "on one line: {text:?}");
     let at = cx
         .debug_bounds("html-failure-error")
         .expect("the error is drawn")
@@ -248,6 +263,20 @@ fn the_page_and_its_strip_carry_upstreams_accessibility_ids(cx: &mut TestAppCont
         cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
         Some("not found")
     );
+
+    // a long one wraps at the card's width, inside its padding
+    failed.load_error = Some("Error receiving data: Connection reset by peer. ".repeat(6));
+    cx.update(|_, cx| registry::apply(&failed, true, cx));
+    harness.root.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let text = cx
+        .debug_bounds("htmlOverlay.error-text-box")
+        .expect("the error is drawn");
+    assert!(
+        (text.size.width - (card.size.width - px(48.))).abs() < px(1.),
+        "capped at the card: {text:?} in {card:?}"
+    );
+    assert!(text.size.height > one_line, "wrapped onto more lines: {text:?}");
 }
 
 #[gpui_kit::test]

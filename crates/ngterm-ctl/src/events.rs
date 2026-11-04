@@ -396,6 +396,12 @@ fn format_human(event: &ControlEvent, zone: Zone) -> String {
             parts.extend(payload.shape.as_ref().map(|shape| format!("shape={shape}")));
             parts.join(" ")
         }
+        EventKind::Message => format!(
+            "{time} {kind} {name} pane-id={} from={} id={}",
+            payload.pane_id.as_deref().unwrap_or("-"),
+            payload.from.as_deref().unwrap_or("-"),
+            payload.message_id.as_deref().unwrap_or("-")
+        ),
         EventKind::Notify => format!(
             "{time} {kind} {name} {}: {}",
             payload.title.as_deref().unwrap_or(name),
@@ -861,6 +867,20 @@ mod tests {
             (
                 json!({"kind": "pane.focused", "payload": {"name": "api", "pane": "left"}}),
                 "00:00:00 pane.focused api left pane-id=-",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn message_human_form_reports_identity_and_id_without_body() {
+        assert_human_forms([
+            (
+                json!({"kind":"message","payload":{"name":"api","paneID":"P","from":"S:Q","messageID":"M"}}),
+                "00:00:00 message api pane-id=P from=S:Q id=M",
+            ),
+            (
+                json!({"kind":"message","window":"win"}),
+                "00:00:00 message win pane-id=- from=- id=-",
             ),
         ]);
     }

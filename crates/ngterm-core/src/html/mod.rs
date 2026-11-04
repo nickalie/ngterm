@@ -6,6 +6,8 @@
 //! of their own.
 
 pub mod bridge;
+pub mod image_page;
+pub mod markdown_page;
 pub mod navigation;
 pub mod outcomes;
 pub mod profile;
@@ -71,6 +73,23 @@ pub fn is_absolute(path: &str) -> bool {
     } else {
         path.starts_with('/')
     }
+}
+
+/// Dot-normalizes an absolute document path without probing the filesystem or changing name casing.
+#[must_use]
+pub fn normalize_path(path: &str) -> String {
+    use std::path::{Component, Path, PathBuf};
+    let mut normalized = PathBuf::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized.to_string_lossy().into_owned()
 }
 
 /// The components of an absolute path as Foundation's `standardizedFileURL.pathComponents` gives them: the root, then
@@ -202,6 +221,10 @@ pub enum HtmlSource {
     File { path: String, grant_root: Option<String> },
     /// A web page, pinned to its origin by the navigation policy.
     Url(Url),
+    /// A bounded raster image embedded without a file grant or page bridge.
+    Image { path: String },
+    /// A bounded local Markdown document, rendered by the trusted helper without authored scripts.
+    Markdown { path: String },
     /// A file page another machine opened, shown here from `ngterm-page://<page id>/` (upstream's `.replica`): `path`
     /// is its path on that machine, whose own grant decides what else may be fetched.
     Replica { path: String },
@@ -256,7 +279,9 @@ impl HtmlSource {
     #[must_use]
     pub fn text(&self) -> String {
         match self {
-            Self::File { path, .. } | Self::Replica { path } => path.clone(),
+            Self::File { path, .. } | Self::Replica { path } | Self::Image { path } | Self::Markdown { path } => {
+                path.clone()
+            }
             Self::Url(url) => url.as_str().to_owned(),
         }
     }
@@ -416,18 +441,34 @@ impl HtmlOverlay {
         }
     }
 
-    /// Whether ngterm themes the page and gives it the bridge: a file page, here or shown for another machine
-    /// (upstream's `themed`).
+    /// Whether ngterm themes the page: a file page, replica or Markdown document (upstream's `themed`).
     #[must_use]
     pub fn themed(&self) -> bool {
+        matches!(
+            self.source,
+            HtmlSource::File { .. } | HtmlSource::Replica { .. } | HtmlSource::Markdown { .. }
+        )
+    }
+
+    /// Whether the source receives the control bridge; document renderers never do.
+    #[must_use]
+    pub fn bridged(&self) -> bool {
         matches!(self.source, HtmlSource::File { .. } | HtmlSource::Replica { .. })
     }
 
-    /// Whether the page is loaded from its file's text: a file page without a grant, which sits at `about:blank`
-    /// and cannot navigate (upstream's `textLoaded`).
+    /// Whether this is a local document with no browser/file access.
+    #[must_use]
+    pub fn document(&self) -> bool {
+        matches!(self.source, HtmlSource::Image { .. } | HtmlSource::Markdown { .. })
+    }
+
+    /// Whether a page is loaded from generated or file text without a file grant (upstream's `textLoaded`).
     #[must_use]
     pub fn text_loaded(&self) -> bool {
-        matches!(self.source, HtmlSource::File { grant_root: None, .. })
+        matches!(
+            self.source,
+            HtmlSource::File { grant_root: None, .. } | HtmlSource::Image { .. } | HtmlSource::Markdown { .. }
+        )
     }
 
     /// What the panel names the page by, from what the app loaded and never from the page's title, which the page
@@ -436,6 +477,7 @@ impl HtmlOverlay {
     #[must_use]
     pub fn identity(&self) -> String {
         match &self.source {
+            HtmlSource::Image { path } | HtmlSource::Markdown { path } => last_path_component(path),
             HtmlSource::File { path, .. } | HtmlSource::Replica { path } => {
                 let shown = self
                     .current
@@ -489,6 +531,30 @@ fn last_path_component(path: &str) -> String {
 /// The frontend's web views, as the dispatcher reaches them (upstream's `HtmlOverlayRegistry` calls in
 /// `ControlServer+SessionActions.swift`). A build without one refuses pages.
 pub trait HtmlHost {
+    /// Reads a bounded raster image before the control path takes an overlay slot.
+    ///
+    /// # Errors
+    /// The upstream image probe failure when the path cannot be read safely.
+    fn probe_image(&self, _path: &str) -> Result<image_page::ImageData, String> {
+        Err("could not read image".to_owned())
+    }
+
+    /// Checks a Markdown source descriptor before taking a slot; rendering reads it afresh.
+    ///
+    /// # Errors
+    /// The upstream Markdown probe failure when the descriptor is not a bounded regular file.
+    fn check_markdown(&self, _path: &str) -> Result<(), String> {
+        Err("could not read markdown file".to_owned())
+    }
+
+    /// The current page zoom and the backing scale of the window opening a natural-sized picture.
+    fn page_zoom(&self) -> f64 {
+        1.0
+    }
+    fn display_scale(&self, _window: uuid::Uuid) -> f64 {
+        1.0
+    }
+
     /// Why no web view can run here, `None` when one can; asked before any page is accepted, so a web engine that
     /// cannot start is refused to the caller rather than met when the page mounts. Upstream has no such case: its web
     /// views always run.
@@ -554,6 +620,7 @@ pub mod errors {
     /// The page has not been shown yet, so there is no web view to drive.
     pub const NOT_REALIZED: &str = "html overlay not realized";
     pub const NO_BROWSER: &str = "no default web browser to open the page in";
+    pub const MARKDOWN_IN_OVERLAY: &str = "a markdown page opens only in its overlay";
     pub const FINDER_REQUIRES_FILE: &str = "show in Finder requires a file page";
     pub const PERSISTENT_UNAVAILABLE: &str = "persistent browser storage is not available";
     /// The saved store is being emptied: neither a second clear nor a persistent page may use it (upstream's

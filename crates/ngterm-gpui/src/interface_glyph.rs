@@ -66,12 +66,12 @@ pub fn of(element: InterfaceElement) -> Option<ElementGlyph> {
         InterfaceElement::Split => Pane(SPLIT),
         InterfaceElement::OverlayToggle => Icon(OVERLAY_TOGGLE),
         InterfaceElement::Dashboard => Icon(DASHBOARD),
-        InterfaceElement::QuickTerminal => Icon(QUICK_TERMINAL),
+        InterfaceElement::QuickTerminal | InterfaceElement::SessionIcons => Icon(QUICK_TERMINAL),
         InterfaceElement::CustomCommands => Icon(CUSTOM_COMMANDS),
         InterfaceElement::NewWorkspace => Row(NEW_WORKSPACE),
         InterfaceElement::NewSession => Row(NEW_SESSION),
         InterfaceElement::FlaggedView => Row(FLAGGED_VIEW),
-        InterfaceElement::FocusFilter => Row(FOCUS_FILTER),
+        InterfaceElement::FocusFilter | InterfaceElement::WorkspaceIcons => Row(FOCUS_FILTER),
         InterfaceElement::WorkspaceAddSession => Row(WORKSPACE_ADD_SESSION),
     })
 }
@@ -100,11 +100,22 @@ mod tests {
         for element in InterfaceElement::ALL {
             let glyph = of(*element);
             assert_eq!(glyph.is_none(), element.text_only(), "{element:?}");
-            if let Some(glyph) = glyph {
+            if let Some(glyph) = glyph
+                && !matches!(
+                    element,
+                    InterfaceElement::WorkspaceIcons | InterfaceElement::SessionIcons
+                )
+            {
                 assert!(!glyphs.contains(&glyph), "{element:?} repeats {glyph:?}");
                 glyphs.push(glyph);
             }
         }
+    }
+
+    #[test]
+    fn row_icon_controls_share_the_reference_glyphs() {
+        assert_eq!(of(InterfaceElement::SessionIcons), of(InterfaceElement::QuickTerminal));
+        assert_eq!(of(InterfaceElement::WorkspaceIcons), of(InterfaceElement::FocusFilter));
     }
 
     /// Upstream's `testEveryInterfaceElementSymbolResolves`: a Lucide glyph is served by the app's assets, a traced one

@@ -1,4 +1,4 @@
-//! A sandbox per test, isolated from the user's desktop and live ngterm (CLAUDE.md > Never touch the user's running
+//! A sandbox per test, isolated from the user's desktop and live ngterm (AGENTS.md > Never touch the user's running
 //! ngterm): a fresh root under `/tmp`, a private session bus and a private "system" bus (`DBUS_SYSTEM_BUS_ADDRESS`, so
 //! the app's `NetworkManager` and logind sources never reach the machine's), its own state dir, socket and application
 //! id, and

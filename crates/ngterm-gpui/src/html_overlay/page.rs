@@ -125,6 +125,7 @@ pub(super) struct Page {
     /// The input method's composition in progress (its text and caret), given again to an engine page made after it
     /// began.
     preedit: RefCell<Option<(String, u32)>>,
+    document_generation: super::documents::Generation,
     me: Weak<Page>,
 }
 
@@ -170,6 +171,7 @@ impl Page {
             geometry: Cell::new(None),
             focused: Cell::new(false),
             preedit: RefCell::new(None),
+            document_generation: super::documents::Generation::default(),
             me: me.clone(),
         })
     }
@@ -332,7 +334,7 @@ impl Page {
             session,
             settings: Settings::overlay(overlay.flags.javascript),
             scripts: self.scripts(&overlay),
-            message_handlers: if themed {
+            message_handlers: if overlay.bridged() {
                 vec![MessageHandler {
                     name: HANDLER_NAME.to_owned(),
                     world: Some(WORLD.to_owned()),
@@ -343,7 +345,7 @@ impl Page {
             zoom,
             // a file page's unstyled canvas shows the themed panel behind it while authored backgrounds still paint;
             // a URL page keeps the browser's opaque canvas, which a web app styled against it relies on
-            background: themed.then_some(Rgba::TRANSPARENT),
+            background: (themed || matches!(overlay.source, HtmlSource::Image { .. })).then_some(Rgba::TRANSPARENT),
             geometry: self.geometry.get().unwrap_or(FIRST_GEOMETRY),
         };
         let view = web.create_view(spec);
@@ -362,6 +364,9 @@ impl Page {
 
     /// The theme, and on a file page the bridge's scripts (upstream's `installScripts`).
     fn scripts(&self, overlay: &HtmlOverlay) -> Vec<UserScript> {
+        if matches!(overlay.source, HtmlSource::Image { .. }) {
+            return Vec::new();
+        }
         let themed = overlay.themed();
         let script = |source: &str, time: InjectionTime, world: Option<&str>| UserScript {
             source: source.to_owned(),
@@ -373,7 +378,15 @@ impl Page {
             InjectionTime::Start,
             Some(THEME_WORLD),
         )];
-        if !themed {
+        if matches!(overlay.source, HtmlSource::Markdown { .. }) {
+            scripts.push(script(
+                &super::documents::script(),
+                InjectionTime::End,
+                Some(super::documents::WORLD),
+            ));
+            return scripts;
+        }
+        if !overlay.bridged() {
             return scripts;
         }
         if overlay.flags.javascript {
@@ -397,6 +410,9 @@ impl Page {
         let colors = PanelColors::resolve(terminal, self.background.as_deref());
         self.colors.replace(colors.clone());
         self.refresh(cx);
+        if matches!(overlay.source, HtmlSource::Image { .. }) {
+            return;
+        }
         let next = colors.theme();
         let change = policy::theme_change(&self.theme.borrow(), &next, overlay.themed());
         if change == ThemeChange::Unchanged {
@@ -645,6 +661,7 @@ impl Page {
     /// Loads the page's source (upstream's `loadOriginal`): a URL as is, a granted file through the grant's scheme, a
     /// file without a grant from its text at `about:blank`; a page without its store loads nothing and fails.
     fn load_original(&self) {
+        let generation = self.document_generation.next();
         let source = {
             let mut state = self.state.borrow_mut();
             if let Some(failure) = state.storage_failure.clone() {
@@ -656,6 +673,10 @@ impl Page {
             state.overlay.source.clone()
         };
         let load = match source {
+            source @ (HtmlSource::Image { .. } | HtmlSource::Markdown { .. }) => {
+                registry::read_document(self.id, generation, source);
+                return;
+            }
             HtmlSource::Url(url) => Load::Uri(url.as_str().to_owned()),
             HtmlSource::File {
                 path,
@@ -679,6 +700,20 @@ impl Page {
         };
         if let (Some(web), Some(view)) = (self.web(), self.view.get()) {
             web.load(view, load);
+        }
+    }
+
+    pub(super) fn document_loaded(&self, generation: u64, result: Result<String, String>) {
+        if !self.active() || !self.document_generation.current(generation) {
+            return;
+        }
+        match result {
+            Ok(html) => {
+                if let (Some(web), Some(view)) = (self.web(), self.view.get()) {
+                    web.load(view, Load::Html { html, base_uri: None });
+                }
+            }
+            Err(failure) => self.fail(failure),
         }
     }
 
@@ -713,6 +748,9 @@ impl Page {
                 web.go_forward(view);
             }
             HtmlNavigation::Browser => {
+                if matches!(self.overlay().source, HtmlSource::Markdown { .. }) {
+                    return Err(errors::MARKDOWN_IN_OVERLAY.to_owned());
+                }
                 let opened = self
                     .browser_url()
                     .is_some_and(|url| registry::open_in_browser(url.as_str()));
@@ -721,7 +759,7 @@ impl Page {
                 }
             }
             HtmlNavigation::Finder => {
-                if !self.overlay().themed() {
+                if !matches!(self.overlay().source, HtmlSource::File { .. }) {
                     return Err(errors::FINDER_REQUIRES_FILE.to_owned());
                 }
                 if let Some(path) = self.page_path() {
@@ -951,6 +989,7 @@ impl Page {
     pub(super) fn close(&self, cx: &mut App) {
         self.end_prompt(cx);
         self.state.borrow_mut().life = Life::Released;
+        self.document_generation.next();
         if let (Some(web), Some(view)) = (self.web(), self.view.take()) {
             web.close_view(view);
         }
@@ -971,5 +1010,92 @@ mod tests {
         for scheme in [GRANT_SCHEME, REPLICA_SCHEME] {
             assert!(MEDIA_SCRIPT.contains(&format!("'{scheme}:'")), "{scheme} is missing");
         }
+    }
+}
+
+#[cfg(test)]
+mod document_tests {
+    use super::{Life, Page, Storage};
+    use crate::html_overlay::{
+        engine::Web,
+        panel::{PanelColors, TerminalColors},
+        testing::{Call, Recorder},
+    };
+    use ngterm_core::html::{HtmlOverlay, HtmlPageFlags, HtmlSource};
+    use ngterm_wpe::{Load, SessionId, Settings};
+    use std::rc::Rc;
+
+    fn page(source: HtmlSource) -> Rc<Page> {
+        Page::new(
+            &HtmlOverlay::new(source, HtmlPageFlags::default()),
+            None,
+            PanelColors::resolve(&TerminalColors::default(), None),
+            Storage::Ephemeral,
+            &crate::state::detached_poster(),
+        )
+    }
+
+    #[test]
+    fn markdown_renderer_is_isolated_without_authored_scripts_bridge_or_file_access() {
+        let page = page(HtmlSource::Markdown {
+            path: "/not-read.md".to_owned(),
+        });
+        let recorder = Rc::new(Recorder::default());
+        let web: Rc<dyn Web> = recorder.clone();
+        page.realize(&web, Some(SessionId::from_raw(1)), 1.0);
+        let specs = recorder.specs.borrow();
+        let spec = &specs[0];
+        assert!(!spec.settings.intersects(
+            Settings::JAVASCRIPT_MARKUP
+                | Settings::FILE_ACCESS_FROM_FILE_URLS
+                | Settings::UNIVERSAL_ACCESS_FROM_FILE_URLS
+        ));
+        assert!(spec.message_handlers.is_empty());
+        assert_eq!(spec.scripts.len(), 2);
+        assert_eq!(
+            spec.scripts[1].world.as_deref(),
+            Some(crate::html_overlay::documents::WORLD)
+        );
+        assert_eq!(spec.scripts[1].time, ngterm_wpe::InjectionTime::End);
+    }
+
+    #[test]
+    fn image_pages_have_no_scripts_or_bridge() {
+        let page = page(HtmlSource::Image {
+            path: "/not-read.png".to_owned(),
+        });
+        let recorder = Rc::new(Recorder::default());
+        let web: Rc<dyn Web> = recorder.clone();
+        page.realize(&web, Some(SessionId::from_raw(1)), 1.0);
+        let specs = recorder.specs.borrow();
+        assert!(specs[0].scripts.is_empty());
+        assert!(specs[0].message_handlers.is_empty());
+        assert!(!specs[0].settings.contains(Settings::JAVASCRIPT_MARKUP));
+    }
+
+    #[test]
+    fn loads_finishing_after_a_newer_load_or_close_never_reach_the_engine() {
+        let page = page(HtmlSource::Image {
+            path: "/not-read.png".to_owned(),
+        });
+        let recorder = Rc::new(Recorder::default());
+        let web: Rc<dyn Web> = recorder.clone();
+        page.realize(&web, Some(SessionId::from_raw(1)), 1.0);
+        recorder.take();
+        let stale = page.document_generation.next();
+        let latest = page.document_generation.next();
+        page.document_loaded(stale, Ok("old".to_owned()));
+        assert!(recorder.take().is_empty());
+        page.document_loaded(latest, Ok("new".to_owned()));
+        assert_eq!(
+            recorder.take(),
+            vec![Call::Load(Load::Html {
+                html: "new".to_owned(),
+                base_uri: None
+            })]
+        );
+        page.state.borrow_mut().life = Life::Released;
+        page.document_loaded(latest, Ok("after close".to_owned()));
+        assert!(recorder.take().is_empty());
     }
 }

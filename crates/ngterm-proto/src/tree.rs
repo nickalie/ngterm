@@ -159,6 +159,12 @@ pub struct ControlSessionNode {
     #[serde(default)]
     pub context: Option<String>,
     #[serde(default)]
+    pub info: Option<String>,
+    #[serde(default)]
+    pub info_markdown: Option<bool>,
+    #[serde(default)]
+    pub info_hide_after: Option<f64>,
+    #[serde(default)]
     pub command_wait: Option<bool>,
     #[serde(default)]
     pub split_command_wait: Option<bool>,
@@ -269,6 +275,9 @@ impl ControlSessionNode {
             scratch: false,
             flagged: false,
             context: None,
+            info: None,
+            info_markdown: None,
+            info_hide_after: None,
             command_wait: None,
             split_command_wait: None,
             foreground: None,
@@ -328,6 +337,9 @@ pub struct ControlSurfaceNode {
     /// The token `--pane-id` resolves.
     #[serde(default, rename = "paneID")]
     pub pane_id: Option<String>,
+    /// Unacknowledged messages, omitted when zero by the projection.
+    #[serde(default)]
+    pub pending_messages: Option<usize>,
 }
 
 /// A remote pane waiting to be attached again.
@@ -404,6 +416,10 @@ pub struct ControlHtmlOverlayNode {
     pub cwd: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub markdown: Option<String>,
     /// `loading`, `loaded` or `failed`.
     pub state: String,
     #[serde(default)]

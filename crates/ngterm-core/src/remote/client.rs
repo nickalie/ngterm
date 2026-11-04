@@ -15,12 +15,12 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::frames::{
-    self, Body, PresentationAgent, PresentationAsk, PresentationAskRef, PresentationFrame, PresentationHello,
-    PresentationHud, PresentationLayout, PresentationMode, PresentationNotify, PresentationOverlay,
+    self, Body, PresentationAgent, PresentationAsk, PresentationAskRef, PresentationCompanion, PresentationFrame,
+    PresentationHello, PresentationHud, PresentationLayout, PresentationMode, PresentationNotify, PresentationOverlay,
     PresentationOverlayChange, PresentationPage, PresentationPageChange, PresentationPageCommand, PresentationRespawns,
     PresentationSound, PresentationStatus,
 };
-use super::hub::{AGENT_KIND, PAGE_KINDS, SUPPORTED_KINDS};
+use super::hub::{AGENT_KIND, COMPANION_PAGE_KIND, PAGE_KINDS, SUPPORTED_KINDS};
 use super::reconnect::retry_delay;
 use crate::model::RemoteConnection;
 
@@ -32,14 +32,18 @@ pub const PAGES_UNSUPPORTED: &str = "pages are not shown on this Mac";
 
 /// The kinds this viewer's hello lists: every kind the build speaks, the page kinds only when it can show a handed-over
 /// page (`pages`: the web views are built in and can run), and with them the loopback forward
-/// ([`super::page_tunnel::TUNNEL_KIND`]), an extension of this build. Upstream's hello lists them all; an origin a viewer
+/// ([`super::page_tunnel::TUNNEL_KIND`]) and a headless origin's page companions ([`COMPANION_PAGE_KIND`]), extensions
+/// of this build. Upstream's hello lists them all; an origin a viewer
 /// leaves them out for hands it no page and keeps its own refusal, rather than handing over a page that is refused at
 /// once.
 #[must_use]
 pub fn viewer_kinds(pages: bool) -> Vec<String> {
     SUPPORTED_KINDS
         .iter()
-        .filter(|kind| pages || !(PAGE_KINDS.contains(kind) || **kind == super::page_tunnel::TUNNEL_KIND))
+        .filter(|kind| {
+            pages
+                || !(PAGE_KINDS.contains(kind) || [super::page_tunnel::TUNNEL_KIND, COMPANION_PAGE_KIND].contains(kind))
+        })
         .map(|kind| (*kind).to_owned())
         .collect()
 }
@@ -80,6 +84,7 @@ pub enum ClientEffect {
     Sound(PresentationSound),
     Connection(RemoteConnection),
     Context(Option<String>),
+    Info(Option<super::frames::PresentationInfo>),
     /// The origin's name for the session, which the row takes unless it was renamed here.
     Name(String),
     Layout(PresentationLayout),
@@ -95,6 +100,8 @@ pub enum ClientEffect {
     PageRequest(PresentationPage),
     PageClose(PresentationPageChange),
     PageCommand(PresentationPageCommand),
+    /// Attaches a page companion the origin created under the session.
+    CompanionPage(PresentationCompanion),
     /// The origin's respawn counts; `true` for a snapshot's, which a first attach takes as its baseline.
     Respawns(PresentationRespawns, bool),
     /// What one pane runs ([`AGENT_KIND`]), only for a client that asked for it
@@ -312,6 +319,7 @@ impl PresentationClient {
                 effects.push(ClientEffect::SnapshotStatus(snapshot.status));
                 effects.push(ClientEffect::Hud(snapshot.hud));
                 effects.push(ClientEffect::Context(snapshot.context));
+                effects.push(ClientEffect::Info(snapshot.info));
                 if let Some(name) = snapshot.name {
                     effects.push(ClientEffect::Name(name));
                 }
@@ -321,6 +329,7 @@ impl PresentationClient {
             }
             Body::Status(status) => effects.push(ClientEffect::Status(status)),
             Body::Context(context) => effects.push(ClientEffect::Context(context)),
+            Body::Info(info) => effects.push(ClientEffect::Info(info)),
             Body::Name(name) => effects.push(ClientEffect::Name(name)),
             Body::Layout(layout) => apply_layout(layout, effects),
             Body::Hud(hud) => effects.push(ClientEffect::Hud(hud)),
@@ -340,6 +349,7 @@ impl PresentationClient {
             Body::PageClose(change) => effects.push(ClientEffect::PageClose(change)),
             Body::PageCommand(command) => effects.push(ClientEffect::PageCommand(command)),
             Body::Respawn(respawns) => effects.push(ClientEffect::Respawns(respawns, false)),
+            Body::CompanionPage(companion) => effects.push(ClientEffect::CompanionPage(companion)),
             Body::Agent(agent) if self.shows_agents => effects.push(ClientEffect::Agent(agent)),
             Body::Hello(_)
             | Body::Ack
@@ -728,6 +738,8 @@ mod tests {
         assert_eq!(hello.kinds, SUPPORTED_KINDS.map(str::to_owned));
         harness.connect(PresentationSnapshot::default(), 7, PresentationMode::Presenter);
         let request = PresentationPage {
+            width: None,
+            height: None,
             page: "p1".to_owned(),
             token: "t1".to_owned(),
             source: PresentationPageSource::Url {
@@ -745,6 +757,8 @@ mod tests {
             follow: false,
         };
         let command = PresentationPageCommand {
+            width: None,
+            height: None,
             page: "p1".to_owned(),
             seq: 3,
             action: PresentationPageAction::Hide,
@@ -883,6 +897,38 @@ mod tests {
     }
 
     #[test]
+    fn info_is_forwarded_from_snapshots_deltas_and_clears() {
+        let mut harness = Harness::started();
+        let info = super::super::frames::PresentationInfo {
+            source: "**3**".to_owned(),
+            markdown: true,
+            hide_after: 30.0,
+        };
+        harness.connect(
+            PresentationSnapshot {
+                info: Some(info.clone()),
+                ..PresentationSnapshot::default()
+            },
+            7,
+            PresentationMode::Mirror,
+        );
+        harness.deliver(&line(Body::Info(None), 7, 2));
+        harness.deliver(&line(Body::Info(Some(info.clone())), 7, 3));
+        let infos: Vec<_> = harness
+            .effects
+            .iter()
+            .filter_map(|effect| {
+                if let ClientEffect::Info(info) = effect {
+                    Some(info.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(infos, vec![Some(info.clone()), None, Some(info)]);
+    }
+
+    #[test]
     fn the_snapshot_marks_the_stream_connected_and_its_status_is_reported_apart_from_a_delta() {
         let mut harness = Harness::started();
         let snapshot = PresentationSnapshot {
@@ -894,6 +940,11 @@ mod tests {
         harness.connect(snapshot, 7, PresentationMode::Mirror);
         harness.deliver(&line(Body::Status(None), 7, 2));
         harness.deliver(&line(Body::Name("Auto Update".to_owned()), 7, 3));
+        let companion = PresentationCompanion {
+            session: "c1".to_owned(),
+        };
+        harness.deliver(&line(Body::CompanionPage(companion.clone()), 7, 4));
+        assert!(harness.effects.contains(&ClientEffect::CompanionPage(companion)));
         for name in ["Fix Linux", "Auto Update"] {
             assert!(harness.effects.contains(&ClientEffect::Name(name.to_owned())), "{name}");
         }

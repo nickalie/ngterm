@@ -325,7 +325,8 @@ fn a_pane_events_report_what_the_gtk_build_routed() {
         report(
             &TerminalEvent::OpenUrl {
                 url: "https://x.dev".to_owned(),
-                browser: true
+                browser: true,
+                kind: LinkKind::Osc8
             },
             shell,
             "box",
@@ -334,7 +335,8 @@ fn a_pane_events_report_what_the_gtk_build_routed() {
         ),
         [Report::OpenUrl {
             url: "https://x.dev".to_owned(),
-            browser: true
+            browser: true,
+            kind: LinkKind::Osc8
         }]
     );
     assert!(report(&TerminalEvent::Pane(PaneEvent::Bell), shell, "box", 12.0, false).is_empty());

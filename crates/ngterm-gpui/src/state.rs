@@ -37,6 +37,29 @@ use crate::instance::Activation;
 use crate::keymap_dispatch::{Fired, KeyOrigin};
 use crate::main_loop::GpuiMainLoop;
 
+// Ghostty's resolvePathForOpening: only a detected relative path with an OSC 7 pwd and an existing target.
+// Apply the link policy first, before even an existence query could mount a network or device path.
+fn detected_relative_path(raw: &str, cwd: &str) -> Option<String> {
+    if raw.is_empty()
+        || link_policy::is_bare_path(raw)
+        || raw.contains(':')
+        || raw.chars().any(char::is_control)
+        || !ngterm_core::html::is_absolute(cwd)
+    {
+        return None;
+    }
+    let candidate = std::path::Path::new(cwd).join(raw);
+    let (link_policy::LinkDisposition::Reveal(path)
+    | link_policy::LinkDisposition::Image(path)
+    | link_policy::LinkDisposition::Markdown(path)) = link_policy::disposition(&candidate.to_string_lossy())
+    else {
+        return None;
+    };
+    path.try_exists()
+        .is_ok_and(|exists| exists)
+        .then(|| path.to_string_lossy().into_owned())
+}
+
 /// What a window's activation that may be the window manager's own doing knows of it ([`AppState::window_activated`]):
 /// a new window's first one, the focus the window manager grants on mapping it, or the answer to a command's raise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,6 +271,8 @@ pub struct AppState {
     remote_tick_armed: bool,
     /// Panes the core seeded at their ask, waiting for the frontend to hand them the seed.
     seeded: Vec<PaneSpawn>,
+    /// Trusted OSC7 directories by live pane token, including local scratch terminals.
+    link_directories: std::collections::HashMap<(Uuid, String), String>,
     /// The terminal theme's side as last applied, and the desktop's (`appearance.rs`).
     pub(crate) appearance: crate::appearance::Appearance,
     /// The directories the core asked to reveal (`session.reveal`, Reveal in Files), for the frontend.
@@ -306,6 +331,7 @@ impl AppState {
             heartbeat_armed: false,
             remote_tick_armed: false,
             seeded: Vec::new(),
+            link_directories: std::collections::HashMap::new(),
             appearance: crate::appearance::Appearance::default(),
             remotes_watcher: None,
         }
@@ -464,10 +490,94 @@ impl AppState {
                     self.frontend.open_urls.push(url);
                 }
             }
+            Route::Image { path, session } => self.open_document_link(path, session, None, true),
+            Route::Markdown {
+                path,
+                session,
+                size_percent,
+            } => self.open_document_link(path, session, size_percent, false),
             Route::Browser(url) => self.frontend.open_urls.push(url),
             Route::Reveal(path) => self.frontend.reveals.push(path),
             Route::Ignore => tracing::debug!(raw, "link click ignored by the link policy"),
         }
+    }
+
+    /// Resolves only detected relative paths with an existing target and a still-live local pane's OSC 7 cwd.
+    /// OSC 8 URIs are passed through verbatim, as Ghostty's `processLinks` does.
+    pub fn follow_pane_link(
+        &mut self,
+        raw: &str,
+        session: Uuid,
+        token: &str,
+        browser: bool,
+        kind: crate::terminal::LinkKind,
+    ) {
+        let Some(found) = self
+            .core
+            .library()
+            .store_for_session(session)
+            .and_then(|store| store.session(session))
+        else {
+            return;
+        };
+        let Some(role) = found.pane_role_for_token(token) else {
+            return;
+        };
+        let scratch = role == ngterm_core::model::StatusPane::Scratch;
+        let remote = !scratch && found.remote_host().is_some();
+        let origin = if scratch {
+            ClickOrigin::Scratch(session)
+        } else if remote {
+            ClickOrigin::RemotePane(session)
+        } else {
+            ClickOrigin::Pane(session)
+        };
+        let resolved = if !remote && kind == crate::terminal::LinkKind::Url {
+            self.link_directories
+                .get(&(session, token.to_owned()))
+                .and_then(|cwd| detected_relative_path(raw, cwd))
+        } else {
+            None
+        };
+        self.follow_link(resolved.as_deref().unwrap_or(raw), origin, browser);
+    }
+
+    fn open_document_link(&mut self, path: std::path::PathBuf, session: Uuid, size_percent: Option<i64>, image: bool) {
+        if !self.core.can_show_link_overlay(session) {
+            self.frontend.reveals.push(path);
+            return;
+        }
+        let poster = self.poster.clone();
+        std::thread::spawn(move || {
+            let checked = if image {
+                ngterm_app::documents::probe_image(&path).map(Some)
+            } else {
+                ngterm_app::documents::check_markdown(&path).map(|()| None)
+            };
+            post(&poster, move |state| {
+                if state.quitting {
+                    return;
+                }
+                let source = if image {
+                    ngterm_core::html::HtmlSource::Image {
+                        path: path.to_string_lossy().into_owned(),
+                    }
+                } else {
+                    ngterm_core::html::HtmlSource::Markdown {
+                        path: path.to_string_lossy().into_owned(),
+                    }
+                };
+                let shown = match checked {
+                    Ok(probe) => state.core.open_document_link(source, session, size_percent, probe),
+                    Err(_) => false,
+                };
+                if shown {
+                    state.settle();
+                } else {
+                    state.frontend.reveals.push(path);
+                }
+            });
+        });
     }
 
     /// A key the user pressed in the pane carrying `token` (the GTK build's `connect_keystroke`): the session saw
@@ -515,6 +625,13 @@ impl AppState {
             return;
         }
         let timers = self.core.commit();
+        self.link_directories.retain(|(session, token), _| {
+            self.core
+                .library()
+                .held_session(*session)
+                .and_then(|found| found.pane_role_for_token(token))
+                .is_some()
+        });
         if let Some(main_loop) = self.poster.upgrade() {
             arm_commit(&*main_loop, &timers, &APP_TIMERS);
         }
@@ -529,6 +646,7 @@ impl AppState {
         // the window requests and pane focus requests wait for the windows' sync after the task (`windows.rs`)
         self.arm_auto_follow();
         self.arm_hud_timers();
+        self.arm_info_timers();
         self.arm_job_expiries();
         self.arm_page_claim_expiries();
         self.arm_remote_tick();
@@ -589,6 +707,24 @@ impl AppState {
         if !self.quitting {
             self.core.retry_remote_links_now(Instant::now());
             self.settle();
+        }
+    }
+
+    /// Arms the info expiries the core asked for since the last arm; each lands in [`Core::fire_info_hide`].
+    fn arm_info_timers(&mut self) {
+        let timers = self.core.take_info_timers();
+        let Some(main_loop) = self.poster.upgrade() else {
+            return;
+        };
+        for timer in timers {
+            let task = Box::new(move |state: &mut Self| {
+                if !state.quitting && state.core.fire_info_hide(timer) {
+                    state.settle();
+                }
+            });
+            if main_loop.post_after(timer.delay, task).is_err() {
+                tracing::debug!("info auto-hide dropped: the loop is closed");
+            }
         }
     }
 
@@ -1123,6 +1259,20 @@ impl AppState {
     /// `applyPwd`/`applyTitle`): in a window's tree, or held by a pending soft close whose terminal still runs. Nothing
     /// is saved, as upstream.
     pub fn report_pane(&mut self, session: Uuid, token: &str, report: &PaneReport) {
+        if self.quitting {
+            return;
+        }
+        if let PaneReport::Pwd(path) = report
+            && self
+                .core
+                .library()
+                .held_session(session)
+                .and_then(|found| found.pane_role_for_token(token))
+                .is_some()
+        {
+            self.link_directories.insert((session, token.to_owned()), path.clone());
+        }
+
         if self.core.report_pane(session, token, report) {
             self.settle();
         }

@@ -21,5 +21,5 @@ Seen on main runs 41489621619, 41504258836, 41512502156 and 41549054401 (one to 
 `clippy::chunks_exact` ("using `chunks_exact` with a constant chunk size") in `ngterm-session`.
 
 Task 7 did not fix them: they are outside the ui layer and predate it. Each flaky ratchet id is a build or test bug
-(CLAUDE.md > What CI enforces); the companion ones need a Windows run with the instance logs the job uploads
+(AGENTS.md > What CI enforces); the companion ones need a Windows run with the instance logs the job uploads
 (`rust-windows-conformance/instances`).

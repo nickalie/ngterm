@@ -1,11 +1,11 @@
 # ngterm — review profile
 
-Source of truth: `CLAUDE.md` (rules), `README.md` (commands, gates), `conformance/README.md`,
+Source of truth: `AGENTS.md` (rules), `README.md` (commands, gates), `conformance/README.md`,
 `conformance/docs/rust-build.md`. Where this file and those disagree, they win.
 
 ## What the software is
 
-- ngterm: a Rust port of upstream macOS agterm (`umputun/agterm` v0.39.1), a terminal for running coding agents
+- ngterm: a Rust port of upstream macOS agterm (`umputun/agterm` v0.40.0), a terminal for running coding agents
   in sessions/workspaces/windows, driven by the `ngtermctl` CLI over a control socket.
 - One frontend, GPUI (`ngterm-gpui`), rendering libghostty-vt itself. Toolkit-neutral logic lives in
   `ngterm-core` (model, dispatcher, palette, keymap, persistence) and `ngterm-term` (pane core over a PTY).

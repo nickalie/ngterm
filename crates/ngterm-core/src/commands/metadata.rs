@@ -48,6 +48,12 @@ pub(crate) fn dispatch(
             store.set_context(context, id);
             Ok(Some(with_id(id)))
         }
+        SessionCmd::Info => {
+            let info = parse_info(args)?;
+            let (_, id) = session_store(core, target, window)?;
+            core.set_session_info(info, id);
+            Ok(Some(with_id(id)))
+        }
         SessionCmd::Seen => {
             let (store, id) = session_store(core, target, window)?;
             store.clear_unseen(id);
@@ -256,5 +262,29 @@ fn parse_context(args: &Args) -> Result<Option<String>, ControlError> {
         mode => Err(ControlError::rejected(format!(
             "invalid context mode: {mode} (set|clear)"
         ))),
+    }
+}
+
+/// The whole info value is validated before target resolution or timer mutation.
+fn parse_info(args: &Args) -> Result<Option<crate::session_info::SessionInfo>, ControlError> {
+    match args.mode.as_deref().unwrap_or("") {
+        "set" => {
+            let source = args
+                .text
+                .as_deref()
+                .ok_or_else(|| ControlError::rejected("session.info set requires text"))?;
+            crate::session_info::SessionInfo::make(
+                source,
+                args.markdown.unwrap_or(false),
+                args.hide_after.unwrap_or(0.0),
+            )
+            .map(Some)
+            .map_err(|error| ControlError::rejected(format!("session.info: {error}")))
+        }
+        "clear" if args.text.is_some() || args.markdown.is_some() || args.hide_after.is_some() => Err(
+            ControlError::rejected("session.info clear takes no text, markdown or hide-after"),
+        ),
+        "clear" => Ok(None),
+        mode => Err(ControlError::rejected(format!("invalid info mode: {mode} (set|clear)"))),
     }
 }

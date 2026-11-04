@@ -791,7 +791,7 @@ fn a_ctrl_click_on_a_link_opens_it_through_the_link_route(cx: &mut TestAppContex
     assert_eq!(copied.as_deref(), Some("https://osc8.test/x"));
     f.click(5, 1, Modifiers::control());
     f.cx.run_until_parked();
-    assert!(f.events.borrow().contains(&open_url("https://osc8.test/x", false)));
+    assert!(f.events.borrow().contains(&open_osc8("https://osc8.test/x", false)));
     // a detected URL, the same way
     f.cx.simulate_mouse_move(Fixture::at(20, 1), None, Modifiers::control());
     f.click(20, 1, Modifiers::control());
@@ -991,6 +991,15 @@ fn open_url(url: &str, browser: bool) -> TerminalEvent {
     TerminalEvent::OpenUrl {
         url: url.to_owned(),
         browser,
+        kind: LinkKind::Url,
+    }
+}
+
+fn open_osc8(url: &str, browser: bool) -> TerminalEvent {
+    TerminalEvent::OpenUrl {
+        url: url.to_owned(),
+        browser,
+        kind: LinkKind::Osc8,
     }
 }
 
@@ -1073,7 +1082,7 @@ fn the_chord_opens_a_detected_url_or_an_osc8_link_in_the_browser(cx: &mut TestAp
             opened_links(&f),
             [
                 open_url("https://example.com/p", true),
-                open_url("https://osc8.test/x", true)
+                open_osc8("https://osc8.test/x", true)
             ],
             "{mode:?}"
         );

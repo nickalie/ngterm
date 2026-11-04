@@ -1996,7 +1996,11 @@ fn a_waiting_companion_whose_workspace_closed_stays_away_from_its_parent_attache
     attach.wait_for_runs(1);
     attach.fixture.store_mut().unwrap().remove_workspace(closing);
 
-    let listed = [numbered_session("one", 1, None), numbered_session("logs", 3, Some(1))];
+    // The explicit picker attach asks for the parent only. Its new group behavior is tested separately;
+    // here the saved companion from the closed workspace must never be relaunched beside it.
+    let mut parent = numbered_session("one", 1, None);
+    parent["companions"] = json!([]);
+    let listed = [parent, numbered_session("logs", 3, Some(1))];
     let picker = attach.open_session_picker(1, &listed);
     let one = picker.items.iter().position(|item| item.label == "one").unwrap();
     attach.resolve(&picker, picker.picked(one).unwrap());
@@ -2009,4 +2013,79 @@ fn a_waiting_companion_whose_workspace_closed_stays_away_from_its_parent_attache
         attach.fixture.store().saved_remote_rows().is_empty()
     });
     assert_eq!(attach.remote_rows(), ["one"]);
+}
+
+#[test]
+fn choosing_a_parent_rediscovers_its_group_even_when_the_picker_said_empty() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let mut old = numbered_session("one", 1, None);
+    old["companions"] = json!([]);
+    let picker = attach.open_session_picker(0, &[old]);
+    attach.resolve(&picker, picker.picked(0).unwrap());
+    attach.wait_for_runs(2);
+    let mut fresh = numbered_session("one", 1, None);
+    fresh["companions"] = json!([{ "id": Uuid::from_u128(3).to_string().to_uppercase(), "name": "logs" }]);
+    attach
+        .runner
+        .answer(1, listing(&[fresh, numbered_session("logs", 3, Some(1))]));
+    attach.drive("the discovered group attaches", |attach| {
+        attach.remote_rows().len() == 2
+    });
+    assert_eq!(attach.remote_rows(), ["one", "logs"]);
+    let store = attach.fixture.store();
+    let parent = store.sessions().find(|row| row.display_name() == "one").unwrap();
+    let child = store.sessions().find(|row| row.display_name() == "logs").unwrap();
+    assert_eq!(child.parent_id(), Some(parent.id()));
+    assert_eq!(store.selected_session_id(), Some(parent.id()));
+    assert_eq!(attach.runner.hosts().len(), 2);
+}
+
+#[test]
+fn choosing_a_companion_attaches_it_alone_with_a_hierarchical_picker_label() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let listed = [numbered_session("one", 1, None), numbered_session("logs", 3, Some(1))];
+    let picker = attach.open_session_picker(0, &listed);
+    assert_eq!(picker.items[1].label, "one › logs");
+    attach.resolve(&picker, picker.picked(1).unwrap());
+    attach.wait_for_runs(2);
+    attach.runner.answer(1, listing(&listed));
+    attach.drive("only the companion attaches", |attach| attach.remote_rows().len() == 1);
+    assert_eq!(attach.remote_rows(), ["logs"]);
+    let row = attach
+        .fixture
+        .store()
+        .sessions()
+        .find(|row| row.display_name() == "logs")
+        .unwrap();
+    assert_eq!(row.parent_id(), None);
+}
+
+#[test]
+fn a_partial_picked_group_moves_its_error_hud_to_the_attached_parent() {
+    let mut attach = Attach::new(Some("studio\n"));
+    let mut parent = numbered_session("one", 1, None);
+    parent["companions"] = json!([{ "id": "missing", "name": "logs" }]);
+    let picker = attach.open_session_picker(0, &[parent.clone()]);
+    attach.resolve(&picker, picker.picked(0).unwrap());
+    attach.wait_for_runs(2);
+    attach.runner.answer(1, listing(&[parent]));
+    attach.drive("the group error moves to the new row", |attach| {
+        attach
+            .fixture
+            .store()
+            .sessions()
+            .any(|row| row.remote_host().is_some() && row.overlay.effective_hud_spec().is_some())
+    });
+    assert_eq!(attach.hud(), None);
+    let row = attach
+        .fixture
+        .store()
+        .sessions()
+        .find(|row| row.remote_host().is_some())
+        .unwrap();
+    let expected = format!(
+        "kept one ({}) and 0 companion(s); not attached: logs (unavailable on studio)",
+        crate::pane_env::uuid_string(row.id())
+    );
+    assert_eq!(row.overlay.effective_hud_spec(), Some(failure(&expected)));
 }

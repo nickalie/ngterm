@@ -2,9 +2,9 @@
 //! and the sessions it attached from other machines (the viewer side).
 //!
 //! - [`tree`]: `live.tree`, the attachable sessions here or, over ssh, on another host;
-//! - [`frames`] and [`hub`]: the `live.present` stream that carries a session's presentation (status, context, name,
-//!   layout, HUD, notifications) to its viewers, and decides which one viewer is the session's sole presenter; what
-//!   each pane runs goes only to a viewer that asks for it ([`agents`]);
+//! - [`frames`] and [`hub`]: the `live.present` stream that carries a session's presentation (status, context, info,
+//!   name, layout, HUD, notifications) to its viewers, and decides which one viewer is the session's sole presenter;
+//!   what each pane runs goes only to a viewer that asks for it ([`agents`]);
 //! - [`remotes`]: `remotes.conf`, the hosts offered for an attach;
 //! - the viewer side: `live.attach` and File ▸ Attach Remote ([`attach`]), the ssh lines it runs ([`ssh`]), each
 //!   attached row's presentation client ([`client`]) and what its frames put on the row ([`viewer`], [`layout`]), and
@@ -34,6 +34,8 @@ pub mod clipboard;
 mod companion_page;
 pub(crate) mod companions;
 pub mod frames;
+/// One parent and its freshly discovered companion group.
+pub(crate) mod group_attach;
 mod handoff;
 pub mod hub;
 mod layout;
@@ -70,7 +72,7 @@ use self::frames::{
 };
 pub use self::handoff::PRESENTATION_LOST;
 pub(crate) use self::handoff::{
-    AskPlacement, RemoteOverlayOpen, RemoteProgram, open_remote_overlay, present_ask_remotely,
+    AskPlacement, RemoteOverlayOpen, RemoteOverlayResize, RemoteProgram, open_remote_overlay, present_ask_remotely,
 };
 use self::hub::{CloseReason, HubEvent, PresentationHub, PresentationSink, SubscriberId};
 pub use self::page::PAGE_CLAIM_WINDOW;
@@ -143,6 +145,7 @@ struct Stream {
 struct Published {
     status: Option<PresentationStatus>,
     context: Option<String>,
+    info: Option<frames::PresentationInfo>,
     name: Option<String>,
     /// Each pane's agent frame, as the viewers listing the agent kind last got it.
     agents: agents::AgentFrames,
@@ -415,6 +418,7 @@ impl Core {
             status: presentation_status(found),
             hud: self.remote.hud(found, Instant::now()),
             context: found.context.clone(),
+            info: found.info.as_ref().map(frames::PresentationInfo::from),
             layout: presentation_layout(found),
             name: Some(presentation_name(found)),
             respawns,
@@ -506,6 +510,7 @@ impl Core {
         self.remote.published.entry(session).or_insert_with(|| Published {
             status: snapshot.status.clone(),
             context: snapshot.context.clone(),
+            info: snapshot.info.clone(),
             name: snapshot.name.clone(),
             agents: agents::AgentFrames::new(),
         });
@@ -671,8 +676,8 @@ impl Core {
     }
 
     /// Brings the viewers in line with the model after a mutation, on every commit: the remote overlays the model
-    /// closed and the jobs that ended, a withdrawn HUD, and each watched session's status, context, name, layout and
-    /// (for the viewers that list it) each pane's agent where they changed since its viewers last got them.
+    /// closed and the jobs that ended, a withdrawn HUD, and each watched session's status, context, info, name, layout
+    /// and (for the viewers that list it) each pane's agent where they changed since its viewers last got them.
     pub(crate) fn sync_presentation(&mut self) {
         self.settle_remote_overlays();
         self.drop_orphaned_presentation_streams();
@@ -715,24 +720,30 @@ impl Core {
         let Some(found) = self.presented_session(session) else {
             return;
         };
-        let (status, context, name, layout) = (
+        let (status, context, info, name, layout) = (
             presentation_status(found),
             found.context.clone(),
+            found.info.as_ref().map(frames::PresentationInfo::from),
             presentation_name(found),
             presentation_layout(found),
         );
         let published = self.remote.published.entry(session).or_default();
         let status_changed = published.status != status;
         let context_changed = published.context != context;
+        let info_changed = published.info != info;
         let name_changed = published.name.as_ref() != Some(&name);
         published.status.clone_from(&status);
         published.context.clone_from(&context);
+        published.info.clone_from(&info);
         published.name = Some(name.clone());
         if status_changed {
             self.remote.hub.publish(&Body::Status(status), session);
         }
         if context_changed {
             self.remote.hub.publish(&Body::Context(context), session);
+        }
+        if info_changed {
+            self.remote.hub.publish(&Body::Info(info), session);
         }
         if name_changed {
             self.remote.hub.publish(&Body::Name(name), session);

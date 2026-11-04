@@ -184,6 +184,12 @@ fn glyph(name: IconName, ink: Hsla, size: Pixels) -> impl IntoElement {
 /// The shown page, scrolling.
 fn page(view: &SettingsView, look: &Look) -> Stateful<Div> {
     let sections = view.sections();
+    // The Interface grid adds a fourth Sidebar pair. Keep its controls and Size visible in the fixed panel.
+    let (padding, gap) = if view.tab() == Tab::Interface {
+        (8., 10.)
+    } else {
+        (16., 18.)
+    };
     div()
         .id("settings-page")
         .debug_selector(|| "settings-page".to_owned())
@@ -192,12 +198,12 @@ fn page(view: &SettingsView, look: &Look) -> Stateful<Div> {
         .overflow_y_scroll()
         .track_scroll(&view.scroll)
         .px(px(20.))
-        .py(px(16.))
+        .py(px(padding))
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(18.))
+                .gap(px(gap))
                 .children(sections.into_iter().map(|section| render_section(section, view, look))),
         )
 }
@@ -209,9 +215,10 @@ fn render_section(section: Section, view: &SettingsView, look: &Look) -> AnyElem
         items,
         columns,
         trailing,
+        fill,
     } = section;
     let rows: Vec<AnyElement> = if columns > 1 {
-        let mut rows = paired(items, view, look);
+        let mut rows = paired(items, fill, view, look);
         for item in trailing {
             let line = !rows.is_empty();
             rows.push(separated(line, row(item, view, look), look));
@@ -258,12 +265,12 @@ fn separated(line: bool, row: AnyElement, look: &Look) -> AnyElement {
         .into_any_element()
 }
 
-/// The rows two per row around a divider, an odd last one beside an empty half (upstream's `twoColumnSection`).
-fn paired(items: Vec<Item>, view: &SettingsView, look: &Look) -> Vec<AnyElement> {
+/// Two controls per row around a divider; an odd last item pairs with the optional fill (upstream's `twoColumnSection`).
+fn paired(items: Vec<Item>, mut fill: Option<Item>, view: &SettingsView, look: &Look) -> Vec<AnyElement> {
     let mut items = items.into_iter();
     let mut rows = Vec::new();
     while let Some(first) = items.next() {
-        let second = items.next();
+        let second = items.next().or_else(|| fill.take());
         let line = !rows.is_empty();
         let pair = div()
             .flex()

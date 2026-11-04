@@ -115,7 +115,7 @@ def test_nonexistent_path(pytester: pytest.Pytester, tmp_path: Path, flag: str) 
 
 def test_markers_registered(pytester: pytest.Pytester) -> None:
     result = pytester.runpytest("--markers")
-    result.stdout.fnmatch_lines(["@pytest.mark.since(version):*", "@pytest.mark.requires(capability, reason=...):*"])
+    result.stdout.fnmatch_lines(["@pytest.mark.since(version):*", "@pytest.mark.requires(*capabilities, reason=..., any=False):*"])
     result.stdout.fnmatch_lines(["@pytest.mark.covers(*items, streams=()):*"])
 
 
@@ -223,6 +223,47 @@ def test_must_pass_needs_a_collected_test_for_each_capability(pytester: pytest.P
     assert result.ret == pytest.ExitCode.TESTS_FAILED
     result.stdout.fnmatch_lines(["*no collected test requires posix-shell*"])
     result.stdout.no_fnmatch_line("*no collected test requires live-sessions*")
+
+
+@pytest.mark.parametrize("capability", ["live-sessions", "live-any-shell"])
+def test_must_pass_counts_an_any_requirement_for_each_capability_it_names(
+    pytester: pytest.Pytester, capability: str
+) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.requires("live-sessions", "live-any-shell", any=True)
+        def test_live():
+            assert False
+        """
+    )
+    result = pytester.runpytest("--must-pass", capability)
+    assert result.ret == pytest.ExitCode.TESTS_FAILED
+    result.stdout.fnmatch_lines([f"*--must-pass {capability}: not passed*", "*test_live*"])
+    result.stdout.no_fnmatch_line("*no collected test requires*")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error"),
+    [
+        ("any=True, why='x'", "requires takes no why"),
+        ("any='yes'", "requires' any is True or False"),
+    ],
+)
+def test_requires_refuses_unknown_options(pytester: pytest.Pytester, kwargs: str, error: str) -> None:
+    pytester.makepyfile(
+        f"""
+        import pytest
+
+        @pytest.mark.requires("live-sessions", "live-any-shell", {kwargs})
+        def test_live():
+            pass
+        """
+    )
+    result = pytester.runpytest()
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines([f"*{error}*"])
 
 
 def test_must_pass_refuses_an_unknown_capability(pytester: pytest.Pytester) -> None:

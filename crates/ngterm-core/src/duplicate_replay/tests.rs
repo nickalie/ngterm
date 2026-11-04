@@ -11,6 +11,44 @@ fn strings(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|part| (*part).to_owned()).collect()
 }
 
+/// Upstream's `rebindingReplacesEachIdInEveryArgumentAndKeepsLowercaseLowercase`.
+#[test]
+fn rebinding_replaces_each_id_in_every_argument_and_keeps_lowercase_lowercase() {
+    let ids = vec![(
+        "AAAAAAAA-0000-0000-0000-000000000001".to_owned(),
+        "BBBBBBBB-0000-0000-0000-000000000002".to_owned(),
+    )];
+    let source = Plan::Program {
+        argv: strings(&[
+            "tool",
+            "--id=AAAAAAAA-0000-0000-0000-000000000001",
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            "aaaaAAAA-0000-0000-0000-000000000001",
+            "CCCCCCCC-0000-0000-0000-000000000003",
+            "éAAAAAAAA-0000-0000-0000-000000000001/aaaaaaaa-0000-0000-0000-000000000001",
+        ]),
+        working_directory: "/AAAAAAAA-0000-0000-0000-000000000001".to_owned(),
+    };
+    assert_eq!(
+        source.rebinding(&ids),
+        Plan::Program {
+            argv: strings(&[
+                "tool",
+                "--id=BBBBBBBB-0000-0000-0000-000000000002",
+                "bbbbbbbb-0000-0000-0000-000000000002",
+                "BBBBBBBB-0000-0000-0000-000000000002",
+                "CCCCCCCC-0000-0000-0000-000000000003",
+                "éBBBBBBBB-0000-0000-0000-000000000002/bbbbbbbb-0000-0000-0000-000000000002",
+            ]),
+            working_directory: "/AAAAAAAA-0000-0000-0000-000000000001".to_owned(),
+        }
+    );
+    let shell = Plan::Shell {
+        working_directory: "/work".to_owned(),
+    };
+    assert_eq!(shell.rebinding(&ids), shell);
+}
+
 fn program(parts: &[&str]) -> PaneForeground {
     PaneForeground::Program(strings(parts))
 }

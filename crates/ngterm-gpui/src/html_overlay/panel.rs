@@ -418,7 +418,10 @@ pub fn failure(overlay: &HtmlOverlay, colors: &PanelColors, error: Option<AnyEle
                 column.child(
                     div()
                         .debug_selector(|| "html-failure-error".to_owned())
-                        .max_w_full()
+                        // the error's own box is as wide as its text and wraps at this width, centered in it
+                        .w_full()
+                        .flex()
+                        .justify_center()
                         .text_size(px(12.))
                         .text_center()
                         .child(error),

@@ -9,6 +9,7 @@ import json
 import os
 import re
 import uuid
+from pathlib import Path
 
 import pytest
 from agterm_conformance import cli_format
@@ -1446,6 +1447,13 @@ def test_page_serve_refused_claim_exits_1(cli, ctl):
 LIVE = pytest.mark.requires(
     "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
 )
+# A Live test that types no line of a particular shell, so it holds in the Rust build's bash and PowerShell Live too.
+LIVE_IN_ANY_SHELL = pytest.mark.requires(
+    "live-sessions",
+    "live-any-shell",
+    any=True,
+    reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell",
+)
 PRESENTATION_HELLO = {
     "kind": "hello",
     "gen": 0,
@@ -1529,7 +1537,7 @@ def test_live_pane_commands(cli, live):
     )
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("cli:live present")
 def test_live_present_bridges_the_stream(cli, live):
     cli = cli.on(live.instance)
@@ -1579,6 +1587,56 @@ def test_live_run_job_runs_the_handed_over_program(cli, live):
     assert_ok(live.request("session.close", sid))
 
 
+@LIVE
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("cli:session overlay run-job")
+@pytest.mark.parametrize("terminfo", [None, ""], ids=["absent", "empty"])
+def test_live_run_job_uses_bundled_terminfo(cli, live, adapter, monkeypatch, terminfo):
+    """Run the actual job helper with no inherited database and inspect the child program's environment."""
+    cli = cli.on(live.instance)
+    monkeypatch.setitem(live.instance.env, "TERM", "xterm-ghostty")
+    if terminfo is None:
+        monkeypatch.delitem(live.instance.env, "TERMINFO", raising=False)
+    else:
+        monkeypatch.setitem(live.instance.env, "TERMINFO", terminfo)
+    # The resolved CLI is in <prefix>/bin or Contents/MacOS. The reference's bundle uses Resources.
+    prefix = cli.ctl_path.resolve().parent.parent
+    candidates = [prefix / "share" / "terminfo", prefix / "Resources" / "terminfo"]
+    bundled = next(
+        (path for path in candidates if any((path / layout / "xterm-ghostty").is_file() for layout in ("x", "78"))),
+        None,
+    )
+    output = live.instance.root / f"{_name('helper-env')}.txt"
+    lines = CommandLines.of(adapter, "overlay helper environment")
+    command = lines.write(output, lines.var("TERM"), lines.var("TERMINFO"))
+    sid = _live_session(live)
+    try:
+        endpoint = assert_ok(live.request(live.vocabulary.command("live.tree")))["remote"]["endpoint"]
+        daemon = _live_rows(live, sid)["left"]["daemon"]
+        with live.vocabulary.leading_client(live.instance, endpoint, daemon):
+            live.wait_tree(
+                lambda tree: next(s for s in find_session(tree, sid)["surfaces"] if s["kind"] == "left").get("lead") == "follower"
+            )
+            with live.stream(live.vocabulary.command("live.present"), sid) as presenter:
+                presenter.send({**PRESENTATION_HELLO, "hello": {**PRESENTATION_HELLO["hello"], "mode": "presenter"}})
+                gen = wait_frame(presenter.read, "hello", presenter.send)["gen"]
+                presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
+                wait_frame(presenter.read, "presenter.granted", presenter.send)
+                assert_ok(live.request("session.overlay.open", sid, command=command))
+                job = wait_frame(presenter.read, "overlay.request", presenter.send)["overlay"]["job"]
+                ran = cli("session", "overlay", "run-job", job)
+                assert ran.returncode == 0, (ran.stdout, ran.stderr)
+                term, actual = output.read_text().split("|", 1)
+                assert term == "xterm-ghostty"
+                if bundled is None:
+                    assert actual == ("%TERMINFO%" if lines.cmd else ""), "missing database must leave TERMINFO unset"
+                else:
+                    assert Path(actual).resolve() == bundled.resolve()
+                live.wait_tree(lambda tree: "remoteOverlays" not in find_session(tree, sid))
+    finally:
+        assert_ok(live.request("session.close", sid))
+
+
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("cli:session overlay page-attach")
 def test_page_attach_hands_out_one_attachment_of_a_page_companion(cli, ctl):
@@ -1594,3 +1652,23 @@ def test_page_attach_hands_out_one_attachment_of_a_page_companion(cli, ctl):
     assert handed["token"]
     _refused(cli("session", "overlay", "page-attach", "--target", parent), "not a page companion")
     assert_ok(ctl.request("session.close", parent))
+
+
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("cli:session info")
+def test_session_info_sets_and_clears(cli, ctl):
+    sid = _new(ctl)
+    source = "**busy**"
+    try:
+        _ok(cli("session", "info", source, "--markdown", "--hide-after", "600", "--target", sid), "ok\n")
+        assert_subset(_node(ctl, sid), {"info": source, "infoMarkdown": True, "infoHideAfter": 600})
+        _ok(cli("session", "info", "plain **stars**", "--target", sid), "ok\n")
+        assert_subset(_node(ctl, sid), {"info": "plain **stars**", "infoMarkdown": False, "infoHideAfter": 0})
+        _ok(cli("session", "info", "--clear", "--target", sid), "ok\n")
+        assert_absent(_node(ctl, sid), "info", "infoMarkdown", "infoHideAfter")
+        _usage(cli("session", "info", "--clear", "--markdown"), "--clear takes no --markdown or --hide-after")
+        _usage(cli("session", "info", "--clear", "--hide-after", "0"), "--clear takes no --markdown or --hide-after")
+        _usage(cli("session", "info"), "provide exactly one of a TEXT or --clear")
+        _usage(cli("session", "info", "x", "--hide-after", "-1"), "hide-after must be 0...86400 seconds")
+    finally:
+        assert_ok(ctl.request("session.close", sid))

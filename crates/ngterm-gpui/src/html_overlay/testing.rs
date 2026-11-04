@@ -41,6 +41,7 @@ pub(crate) struct Recorder {
     calls: RefCell<Vec<Call>>,
     presented: Arc<Mutex<Vec<BufferId>>>,
     next: Cell<u64>,
+    pub(crate) specs: RefCell<Vec<ViewSpec>>,
 }
 
 impl Recorder {
@@ -80,6 +81,7 @@ impl Web for Recorder {
     fn drop_session(&self, _: SessionId) {}
     fn clear_session(&self, _: SessionId) {}
     fn create_view(&self, spec: ViewSpec) -> ViewId {
+        self.specs.borrow_mut().push(spec.clone());
         self.record(Call::CreateView {
             handlers: spec.message_handlers.len(),
             transparent: spec.background == Some(ngterm_wpe::Rgba::TRANSPARENT),

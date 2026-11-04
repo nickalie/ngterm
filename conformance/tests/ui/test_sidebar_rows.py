@@ -208,3 +208,25 @@ def test_idle_ms_starts_with_a_gui_keystroke(app, ctl, ui):
     tree = ctl.wait_tree(lambda tree: "idleMs" in tree["tree"])
     assert isinstance(tree["tree"]["idleMs"], int) and tree["tree"]["idleMs"] >= 0
     ctl.wait_text(sid, "q")
+
+
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("ui:session-info")
+def test_session_info_renders_visible_text_below_its_row(ctl, ui):
+    sid = _new(ctl)
+    try:
+        assert_ok(ctl.request("session.rename", sid, name="ui-info-session"))
+        assert_ok(ctl.request("session.info", sid, mode="set", text="**3** agents", markdown=True))
+        line = ui.find("session-info", role="text", value="3 agents")
+        row = next(row for row in ui.all("session-row") if ui.text(row) == "ui-info-session")
+        assert ui.frame(line)[1] > ui.frame(row)[1], "info is below its session name"
+        assert_ok(ctl.request("session.info", sid, mode="set", text="updated"))
+        ui.find("session-info", role="text", value="updated")
+        assert_ok(ctl.request("session.info", sid, mode="clear"))
+        ui.absent("session-info")
+        assert_ok(ctl.request("session.info", sid, mode="set", text="expires", hideAfter=1))
+        ui.find("session-info", role="text", value="expires")
+        ui.absent("session-info")
+        assert "info" not in find_session(ctl.tree(), sid)
+    finally:
+        assert_ok(ctl.request("session.close", sid))

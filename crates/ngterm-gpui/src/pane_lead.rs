@@ -4,8 +4,8 @@
 //! pane over in a fresh terminal. A click on the cover gives the pane the keyboard, so the next press can take it over.
 //!
 //! The core decides what a cover says ([`Core::pane_lead_cover`]). A remote pane waiting to be attached again holds
-//! the keyboard too (a key press retries now) and shows what ssh said on its last failed probe, uncovered (upstream's
-//! `RemoteReconnectNote`). The cover takes the terminal's colors, as upstream's (`resolvedTerminalColor`,
+//! the keyboard too (a key press retries now) and shows what ssh said on its last failed probe, how many failed and
+//! when the next runs, uncovered (upstream's `RemoteReconnectNote`). The cover takes the terminal's colors, as upstream's (`resolvedTerminalColor`,
 //! `resolvedChromeText`).
 
 use gpui_kit::prelude::FluentBuilder as _;
@@ -29,7 +29,7 @@ pub struct PaneCover {
     pub cover: Option<LeadCover>,
     /// Key presses go to the core rather than the terminal: covered, or waiting to be attached again.
     pub holds_keys: bool,
-    /// What ssh said on the last failed reconnect probe.
+    /// What ssh said on the last failed reconnect probe, the failed probes so far and when the next one runs.
     pub note: Option<String>,
 }
 
@@ -46,7 +46,7 @@ impl PaneCover {
 pub fn cover(core: &Core, token: &str) -> PaneCover {
     let cover = core.pane_lead_cover(token);
     let holds_keys = cover.is_some() || core.reconnect_waiting(token);
-    let note = core.pane_reconnect_note(token);
+    let note = core.pane_reconnect_note(token, std::time::Instant::now());
     PaneCover {
         cover,
         holds_keys,
@@ -156,8 +156,9 @@ fn icon(foreground: Rgb) -> impl IntoElement {
     .h(px(24.))
 }
 
-/// What ssh said, in a strip along the pane's bottom (upstream's `RemoteReconnectNote`): never takes the pointer.
-fn reconnect_note(reason: &str, slot: Slot) -> impl IntoElement {
+/// The core's reconnect note, in a strip along the pane's bottom (upstream's `RemoteReconnectNote`): never takes the
+/// pointer.
+fn reconnect_note(note: &str, slot: Slot) -> impl IntoElement {
     div().absolute().left_0().right_0().bottom_0().child(
         div()
             .id(SharedString::from(format!("remote-reconnect-note-{}", role(slot))))
@@ -173,7 +174,7 @@ fn reconnect_note(reason: &str, slot: Slot) -> impl IntoElement {
             .whitespace_nowrap()
             .overflow_hidden()
             .text_ellipsis()
-            .child(format!("ssh: {reason}")),
+            .child(note.to_owned()),
     )
 }
 

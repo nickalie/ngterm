@@ -14,7 +14,7 @@
 //! otherwise; once ready, the server this call started must report itself detached ([`super::CAPABILITY_DETACHED`]) or
 //! it is stopped and the start fails, since it would end with its launcher; the child's environment drops the variables
 //! of the live session the launcher may run in (`NGTERM_*`; an outer upstream agterm's `AGTERM_*` and its zmx's
-//! `ZMX_*`; the isolation rule of CLAUDE.md > Never touch the user's running ngterm); and the spawn itself is per OS
+//! `ZMX_*`; the isolation rule of AGENTS.md > Never touch the user's running ngterm); and the spawn itself is per OS
 //! (the `linux`, `macos` and `windows` modules).
 //!
 //! # Builds

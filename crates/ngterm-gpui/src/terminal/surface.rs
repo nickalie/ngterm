@@ -329,6 +329,7 @@ impl Actions<'_> {
             WriteAction::Open => self.queue(Effect::Emit(TerminalEvent::OpenUrl {
                 url: path,
                 browser: false,
+                kind: super::links::LinkKind::Url,
             })),
             WriteAction::Paste => {
                 if !self.shared.is_readonly() && pane.write(path.as_bytes()).is_err() {

@@ -23,7 +23,7 @@ beside it (`agtermctl`, the Rust build's `ngtermctl`: the adapter's `ctl_name`).
 
 ```sh
 # upstream macOS release (a bundle or its executable); fetch_reference.py downloads and caches it by tag
-bundle=$(.venv/bin/python conformance/tools/fetch_reference.py --tag v0.39.1 | sed -n 's/^bundle=//p')
+bundle=$(.venv/bin/python conformance/tools/fetch_reference.py --tag v0.40.0 | sed -n 's/^bundle=//p')
 .venv/bin/python -m pytest conformance/tests --impl swift-macos --bin "$bundle"
 
 # the Rust build; without --bin every test skips and parity reads 0%
@@ -66,8 +66,10 @@ vocabulary) is in [docs/rust-build.md](docs/rust-build.md).
 
 ## Markers
 
-- `since("0.39.1")`: skipped as `not-yet-at-level` when the build's parity level is lower.
+- `since("0.40.0")`: skipped as `not-yet-at-level` when the build's parity level is lower.
 - `requires("capability", reason=...)`: skipped as `unsupported` when the build lacks it.
+  `requires("a", "b", any=True)` is skipped only when the build lacks both (Live sessions in the login shell, from
+  upstream's `live-sessions` or the Rust build's `live-any-shell`); `--must-pass` on either counts it.
   A test that branches instead asks `adapter.has("capability")`.
   Both refuse names outside the vocabulary in `impls/base.py`.
 - `covers("item", ..., streams=(...))`: the catalog keys a test covers; a stream-mode command counts only when
@@ -140,9 +142,10 @@ full error text directly.
 
 The Rust build is held to upstream's contract, its capability branches included: it claims the capabilities listed
 in [docs/rust-build.md](docs/rust-build.md) > Rust target profile, and where a test branches on a capability it
-takes upstream's branch unless that list says otherwise. Once a sync has landed, its parity level
-(docs/rust-build.md > `version` extension) is the catalog's release, so no `since` test skips on it as
-`not-yet-at-level`.
+takes upstream's branch unless that list says otherwise. The Rust claim is v0.40.0
+(docs/rust-build.md > `version` extension), so tests introduced through that release are eligible. The catalog's
+reference release and the implementation claim are independent: updating the catalog alone never unlocks `since`
+tests. Host capability skips remain recorded separately from passing coverage.
 The Rust build's progress is held by a ratchet: `conformance/rust-passing.txt` lists the ids that went green, and
 `run-linux.sh` fails when one of them goes red again (see rust-build.md > Ratchet).
 A Rust-only extension (today `live-any-shell`, Live sessions in bash and PowerShell login shells) is a
@@ -160,6 +163,9 @@ beside `git`, else Git's default install directory) in place of `/bin/sh`, with 
 Git's `usr\bin` (the POSIX tools a command line's `cmd.exe` finds there, as `/bin/sh -c` finds them in `/usr/bin`). A
 foreground argv names its program by the path its parent started it with there (an MSYS shell gives the image's full
 path), so the tests compare it by the program's name (`match.program_argv`).
+Before the suite (not under `--coverage`) `tools/warm_webview2.py` opens one page in an instance of the stage: the
+first web view after a boot pays the WebView2 runtime's cold start (seconds past a test's read-back wait on a runner),
+and would charge it to whichever test opens the suite's first page.
 The rest of this section describes the Linux runner.
 
 `tools/run-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` into
@@ -226,7 +232,7 @@ PR and push to main. A partial run finds newly passing ids only among what it se
 from an upstream tag:
 
 ```sh
-.venv/bin/python conformance/tools/gen_catalog.py --tag v0.39.1 --repo ../agterm   # or --source <extracted tree>
+.venv/bin/python conformance/tools/gen_catalog.py --tag v0.40.0 --repo ../agterm   # or --source <extracted tree>
 ```
 
 Generated sections are replaced and statuses survive; `behaviors` and `exemptions` are hand-maintained.
@@ -252,8 +258,11 @@ cargo-llvm-cov and the toolchain's `llvm-tools` component:
   start) writes a profile pooled per binary into `target/llvm-cov-target` (`agterm_conformance/llvm_profiles.py`); one
   the harness had to end past its exit (a kill, a SIGTERM without a quit, the Windows job's close) writes none and is
   listed in `DIR/lost-profiles.txt`, so a drop can be told from lost data;
-- report: `cargo llvm-cov report` into `DIR/coverage/` (`lcov.info`, `html/`, `summary.md`: line, region and function %
-  per workspace crate and the total, `vendor/` and the `-sys` crates left out; `agterm_conformance/code_coverage.py`),
+- report: the profiles merged and read against each staged program on its own, then joined: a line, region or
+  function counts as run when any program ran it (llvm-cov given several programs at once keeps the first record of a
+  function it meets, often a program's unused one, and drops the run's counts). Into `DIR/coverage/` (`lcov.info`,
+  `html/` from `cargo llvm-cov report` as a browsing aid only, `summary.md`: line, region and function % per workspace
+  crate and the total, `vendor/` and the `-sys` crates left out; `agterm_conformance/code_coverage.py`),
   its table in `report.md`. A run that left no profile, or a stage that is not the instrumented build's, exits 2.
 
 The runners still judge a coverage run's ratchet and exit with that verdict; the CI coverage jobs ignore its exit 1
@@ -332,9 +341,9 @@ that could reach it:
   the WPE crates and the app with its HTML overlays; then the staged build under the suite in the same Arch container,
   on the distribution's lavapipe, held by the ratchet, once per login shell (`conformance`, a matrix, every layer, the
   ui layer through `atspi`), each with `--must-pass live-any-shell`: bash, fish and zsh (the last two with
-  `--must-pass live-sessions` too); the matrix's `coverage` entry runs the bash leg's suite on the instrumented build
-  (`--coverage`) and judges `coverage-floor-linux.txt` only, its report and `coverage/` uploaded as
-  `rust-linux-coverage-conformance`.
+  `--must-pass live-sessions` too); the matrix's `coverage` entry runs the zsh leg's suite (the widest: the bash leg's
+  tests and the live ones) on the instrumented build (`--coverage`) and judges `coverage-floor-linux.txt` only, its
+  report and `coverage/` uploaded as `rust-linux-coverage-conformance`.
 - `cross-platform`'s `windows` job (`windows-2025`): the harness's Windows self-tests (the pipe transport, the client,
   the launch and stop, the UIA driver's mappings), then `tools/run-windows.sh` with `--must-pass live-any-shell` (the
   login shell is Windows PowerShell): protocol, cli, behaviors and ui (UI Automation and `SendInput`,

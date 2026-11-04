@@ -121,6 +121,27 @@ pub struct ControlResult {
     /// as `ControlLiveInventory::live_reset` does.
     #[serde(default)]
     pub companion_page: Option<serde_json::Value>,
+    /// `msg.send`: the id shared by every delivered copy.
+    #[serde(default, rename = "messageID")]
+    pub message_id: Option<String>,
+    /// `msg.send`: the recipient addresses that received a copy.
+    #[serde(default)]
+    pub delivered: Option<Vec<String>>,
+    /// `msg.send`: the rejected recipients and their reasons.
+    #[serde(default)]
+    pub rejected: Option<Vec<MessageRejection>>,
+    /// `msg.read`: the oldest messages in the reader's mailbox.
+    #[serde(default)]
+    pub messages: Option<Vec<BusMessage>>,
+    /// `msg.read`: how many pending messages were left out of this batch.
+    #[serde(default)]
+    pub remaining: Option<usize>,
+    /// `msg.ack`/`msg.read --ack`: the removed message ids, empty included.
+    #[serde(default)]
+    pub acked: Option<Vec<String>>,
+    /// `live.attach.group`: the membership discovery and companion attach outcomes.
+    #[serde(default)]
+    pub remote_group: Option<ControlRemoteGroup>,
     /// `agent.get` (ngterm's own): the pane's agent record.
     #[serde(default)]
     pub agent: Option<ControlAgent>,
@@ -243,6 +264,13 @@ pub struct ControlRemotePane {
     pub foreground: Option<Vec<String>>,
 }
 
+/// A parent's companion membership entry, whether or not that row is attachable (upstream's `ControlRemoteMember`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlRemoteMember {
+    pub id: String,
+    pub name: String,
+}
+
 /// A session whose every pane resolves to a live daemon (upstream's `ControlRemoteSession`); one whose panes did not
 /// all resolve is absent rather than partial.
 #[skip_serializing_none]
@@ -278,6 +306,9 @@ pub struct ControlRemoteSession {
     /// `page` for a page companion, which has no panes and attaches only under its parent's row.
     #[serde(default)]
     pub content: Option<String>,
+    /// Complete sidebar-ordered membership on parent rows; absent on companions or origins predating groups.
+    #[serde(default)]
+    pub companions: Option<Vec<ControlRemoteMember>>,
 }
 
 /// `live.tree [HOST]` (upstream's `ControlRemoteTree`): every open window's attachable sessions and the one endpoint
@@ -609,6 +640,53 @@ pub struct ControlWindowNode {
     pub zoomed: Option<bool>,
     #[serde(default)]
     pub minimized: Option<bool>,
+}
+
+/// A message queued in a pane's mailbox (upstream's `BusMessage` in `MessageBus.swift`).
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BusMessage {
+    pub id: String,
+    #[serde(default)]
+    pub from: Option<String>,
+    pub to: String,
+    pub ts: f64,
+    pub body: String,
+}
+
+/// A recipient a send could not reach (upstream's `MessageRejection` in `MessageBus.swift`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageRejection {
+    pub address: String,
+    pub reason: MessageRejectionReason,
+}
+
+/// A failed recipient's reason (upstream's `MessageRejection.Reason` in `MessageBus.swift`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MessageRejectionReason {
+    #[serde(rename = "mailbox full")]
+    MailboxFull,
+    #[serde(rename = "unknown pane")]
+    UnknownPane,
+}
+
+/// `live.attach.group`'s receipt (upstream's `ControlRemoteGroup` in `ControlPayloads.swift`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlRemoteGroup {
+    pub membership_known: bool,
+    pub companions: Vec<ControlRemoteGroupMember>,
+}
+
+/// One companion's attach outcome (upstream's `ControlRemoteGroupMember` in `ControlPayloads.swift`).
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlRemoteGroupMember {
+    pub origin: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[cfg(test)]

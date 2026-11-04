@@ -28,7 +28,15 @@ pub struct Gpu {
 
 pub type Case = fn(&mut Fixture, &Gpu) -> Result<(), String>;
 
-pub const CASES: [(&str, Case); 25] = [
+pub const CASES: [(&str, Case); 27] = [
+    (
+        "an_image_document_renders_and_current_reload_rereads_the_source",
+        image_document,
+    ),
+    (
+        "a_markdown_document_renders_inert_markup_and_embedded_pictures",
+        markdown_document,
+    ),
     ("the_engine_renders_on_the_renderers_gpu_in_its_mode", mode),
     ("a_page_loads_and_its_frames_reach_the_screen", loads),
     ("a_page_moved_to_another_window_draws_there", moved),
@@ -1506,4 +1514,57 @@ fn granted_unreadable_reloaded(fixture: &mut Fixture, _: &Gpu) -> Result<(), Str
     check(close(seen, GREEN), || {
         "the play after the reload was rejected as already unreadable".to_owned()
     })
+}
+
+/// Real document loaders feed the engine text without granting its file/network access.
+fn image_document(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let path = fixture.scratch.path().join("document.png");
+    let write = |rgba: [u8; 4]| {
+        image::RgbaImage::from_pixel(320, 240, image::Rgba(rgba))
+            .save(&path)
+            .map_err(|error| error.to_string())
+    };
+    write(RED)?;
+    let mut overlay = HtmlOverlay::new(
+        HtmlSource::Image {
+            path: path.to_string_lossy().into_owned(),
+        },
+        HtmlPageFlags::default(),
+    );
+    let element = fixture.mount(&overlay, 320.0, 240.0)?;
+    fixture.until("the bounded image document", &element, |_, width, pixels| {
+        close(pixel(pixels, width, 160, 130), RED)
+    })?;
+    let blue = [0x30, 0x30, 0xc0, 0xff];
+    write(blue)?;
+    overlay.reload_revision += 1;
+    overlay.reload_target = ngterm_core::html::HtmlReloadTarget::Current;
+    fixture.cx.update(|cx| html_overlay::apply(&overlay, true, cx));
+    fixture.until(
+        "current image reload rereads the source",
+        &element,
+        |_, width, pixels| close(pixel(pixels, width, 160, 130), blue),
+    )
+}
+
+fn markdown_document(fixture: &mut Fixture, _: &Gpu) -> Result<(), String> {
+    let picture = fixture.scratch.path().join("embedded.png");
+    image::RgbaImage::from_pixel(300, 180, image::Rgba(RED))
+        .save(&picture)
+        .map_err(|error| error.to_string())?;
+    let path = fixture.scratch.path().join("document.md");
+    std::fs::write(&path, "![embedded](embedded.png)\n\n<style>img{display:none}</style>\n<script>document.body.style.background='blue'</script>")
+        .map_err(|error| error.to_string())?;
+    let overlay = HtmlOverlay::new(
+        HtmlSource::Markdown {
+            path: path.to_string_lossy().into_owned(),
+        },
+        HtmlPageFlags::default(),
+    );
+    let element = fixture.mount(&overlay, 320.0, 300.0)?;
+    fixture.until(
+        "isolated Markdown renderer and embedded image",
+        &element,
+        |_, width, pixels| close(pixel(pixels, width, 160, 130), RED),
+    )
 }

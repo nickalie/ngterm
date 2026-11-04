@@ -7,7 +7,9 @@
 //! persisted, never archived, closing with its page. A remote row's page companion is its origin's to create
 //! ([`remote_page`], [`crate::remote::companions`]), refused here first when its URL is this machine's loopback or this
 //! machine could not show it. The web views are the frontend's ([`crate::html::HtmlHost`]): a build or a host without
-//! them refuses the page as `session.overlay.open` does, a remote row's page included (a Rust-only refusal).
+//! them refuses the page as `session.overlay.open` does, a remote row's page included (a Rust-only refusal). A headless
+//! origin has no web views and creates the companion all the same: the machine presenting the parent is told to show it
+//! ([`Core::hand_companion_page_to_presenter`]), and any viewer can attach it as for a desktop origin's.
 
 use std::borrow::Cow;
 
@@ -33,6 +35,10 @@ pub(crate) const FULL_SIZE: &str =
 const NOT_CREATED: &str = "could not create page companion";
 const REMOTE_PARENT: &str = "companions of a remote session are not supported yet";
 const REMOTE_LOOPBACK: &str = "a loopback page cannot be a companion of a remote session";
+/// A headless origin's refusal of a loopback page companion: it would load on the viewing machine, whose loopback is
+/// not this machine's. A `--pane` page carries such a page over a forward instead.
+const HEADLESS_LOOPBACK: &str =
+    "a loopback page companion would load on the viewing Mac, not here: open it with --pane or session-wide instead";
 /// The page refusals of a build or host without web views, under this command's name.
 const PAGES_UNAVAILABLE: &str = "session.companion.page: html overlays are not available in this build";
 const PAGES_UNAVAILABLE_HERE: &str = "session.companion.page: html overlays are not available here";
@@ -73,7 +79,9 @@ pub(crate) fn page(core: &mut Core, target: Option<&str>, args: &Args) -> Outcom
 fn validated_source(args: &Args, home: Option<&str>) -> Result<HtmlSource, ControlError> {
     let command = args.command.as_deref().unwrap_or_default();
     let source = match overlay_content(command, args, home)? {
-        OverlayContent::Program => return Err(ControlError::rejected(NEEDS_PAGE)),
+        OverlayContent::Program | OverlayContent::Page(HtmlSource::Image { .. } | HtmlSource::Markdown { .. }) => {
+            return Err(ControlError::rejected(NEEDS_PAGE));
+        }
         OverlayContent::Page(source) => source,
     };
     if args.pane.is_some() || args.size_percent.is_some() || args.width.is_some() || args.height.is_some() {
@@ -175,7 +183,17 @@ fn create(core: &mut Core, target: Option<&str>, args: &Args, source: HtmlSource
         }
         return Err(ControlError::rejected(REMOTE_PARENT));
     }
-    shows_pages(core, opening.flags.persistent)?;
+    // a headless origin shows its page companions only through the machines viewing the parent
+    let presenter_only = core.pages_presenter_only();
+    if presenter_only {
+        if let HtmlSource::Url(url) = &opening.source
+            && html::is_loopback(url.as_str())
+        {
+            return Err(ControlError::rejected(HEADLESS_LOOPBACK));
+        }
+    } else {
+        shows_pages(core, opening.flags.persistent)?;
+    }
     let overlay = HtmlOverlay::new(opening.source, opening.flags);
     let page_id = overlay.id;
     let home = core.library().home().to_owned();
@@ -194,6 +212,9 @@ fn create(core: &mut Core, target: Option<&str>, args: &Args, source: HtmlSource
     let parent = store.session(companion).and_then(Session::parent_id);
     core.register_page_outcome(page_id);
     core.track_page(page_id);
+    if presenter_only && let Some(parent) = parent {
+        core.hand_companion_page_to_presenter(parent, companion);
+    }
     Ok(ControlResult {
         page_id: Some(uuid_string(page_id)),
         parent: parent.map(uuid_string),

@@ -148,7 +148,7 @@ impl Drop for Namespace {
     }
 }
 
-/// This process's environment without the variables of a live session it may run in (CLAUDE.md: never reach the
+/// This process's environment without the variables of a live session it may run in (AGENTS.md: never reach the
 /// user's running ngterm).
 fn scrubbed_environment() -> Vec<(OsString, OsString)> {
     std::env::vars_os()

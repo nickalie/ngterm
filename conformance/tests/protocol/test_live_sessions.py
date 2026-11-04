@@ -6,7 +6,8 @@ Every group command, result key, tree key and error text goes through the instan
 The module's shared instance runs without Live, so its daemons are only claimed, never observed: the inventory,
 prune, the hostless `live.tree` and every refusal are checked there. The Live tests share one instance launched with
 `restoreMode: live` seeded; a pane in it runs the account's zsh or fish inside a live session (a session of the Rust
-build's server, a daemon of its own upstream), so a line typed there only prints a marker. Each test ends the sessions
+build's server, a daemon of its own upstream), so a line typed there only prints a marker. The tests that type no such
+line (`LIVE_IN_ANY_SHELL`) also run where the Rust build wraps a bash or PowerShell login shell (`live-any-shell`). Each test ends the sessions
 it opens, which ends their daemons; the harness's stop then finds no process left in the instance's namespace (under the
 vocabulary's directory variable, or the session server of the namespace).
 
@@ -18,6 +19,7 @@ import contextlib
 import itertools
 import json
 import os
+import shlex
 
 import pytest
 from agterm_conformance.client import NoResponse
@@ -28,6 +30,14 @@ from agterm_conformance.wait import wait_frame, wait_until
 UNKNOWN = "zzz"
 LIVE = pytest.mark.requires(
     "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
+)
+# A Live test that types no line of a particular shell: it holds in any login shell Live wraps, upstream's zsh and fish
+# and the Rust build's bash and PowerShell too (`live-any-shell`).
+LIVE_IN_ANY_SHELL = pytest.mark.requires(
+    "live-sessions",
+    "live-any-shell",
+    any=True,
+    reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell",
 )
 ATTRIBUTIONS = ("supervisor", "app", "orphaned", "unknown")
 PRESENTATION_VERSION = 1
@@ -266,7 +276,7 @@ def _gone(live, daemon):
     live.wait_response(live.vocabulary.command("live.list"), None, gone)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers(
     "live.list",
     "field:result.live",
@@ -310,7 +320,7 @@ def test_screen_reads_the_daemon_grid(live):
     _gone(live, daemon)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("session.lead")
 def test_lead_on_a_pane_that_already_leads(live):
     sid = _live_session(live)
@@ -451,6 +461,34 @@ def test_a_live_command_session_closes_when_its_command_exits_and_holds_with_wai
 
 
 @LIVE
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("session.new", "session.text", "field:result.text")
+def test_a_wait_command_keeps_scrollback_after_attached_exit(live, tmp_path):
+    """An attached Live client keeps both scrollback and the final screen when its command exits (#859)."""
+    release = tmp_path / "release-scrollback"
+    script = (
+        "printf 'pane-attached-marker\\n'; "
+        f"while [ ! -e {shlex.quote(str(release))} ]; do sleep 0.05; done; "
+        "printf 'first-held-line\\n'; seq 1 300; "
+        "printf '\\033[?1000h\\033[?1006h\\033[?2004h'; printf 'last-held-line\\n'"
+    )
+    sid = assert_ok(live.request("session.new", command=f"sh -c {shlex.quote(script)}", wait=True))["id"]
+    try:
+        live.wait_mounted(sid, "left")
+        # Seeing the marker through session.text proves the pane's client has attached before the exit payload runs.
+        live.wait_text(sid, r"(?m)^pane-attached-marker$")
+        release.touch()
+        live.wait_text(sid, HELD_PROMPT)
+        text = assert_ok(live.request("session.text", sid, all=True))["text"]
+        expected = "\n".join(["first-held-line", *map(str, range(1, 301)), "last-held-line"])
+        assert expected in text, text
+        assert "pane-attached-marker" in text, text
+        assert sid in session_ids(live.tree())
+    finally:
+        assert_ok(live.request("session.close", sid))
+
+
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("live.kill", "field:result.pane")
 def test_kill_ends_the_daemon_and_closes_its_pane(live):
     sid = _live_session(live, split=True)
@@ -516,7 +554,7 @@ def _presenters(live, sid, expected):
     live.wait_tree(counted)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("live.present", "field:tree.session.presenters", streams=("live.present",))
 def test_present_mirrors_a_live_session(live):
     sid = _live_session(live)
@@ -568,37 +606,99 @@ def test_job_run_serves_an_overlay_a_presenter_shows(live):
     assert_ok(live.request("session.close", sid))
 
 
-POINTS_REMOTE = "--width/--height are not supported for an overlay shown on another Mac"
-
-
 @LIVE
 @pytest.mark.covers("session.overlay.open", "session.overlay.resize", "field:tree.session.remoteOverlays")
 def test_points_are_refused_for_an_overlay_a_presenter_shows(live):
-    """The presentation wire carries only a percent, so point sizes are refused before a reservation or a send."""
-    sid = _live_session(live)
-    endpoint = assert_ok(live.request(live.vocabulary.command("live.tree")))["remote"]["endpoint"]
-    daemon = _entries(live, sid)["left"]["daemon"]
-    with live.vocabulary.leading_client(live.instance, endpoint, daemon) as viewer:
-        live.wait_tree(lambda tree: _follows(tree, sid, viewer))
-        presenter, gen = _subscribed(live, sid, "presenter")
-        with presenter:
-            presenter.send({"kind": "presenter.acquire", "gen": gen, "rev": 1})
-            wait_frame(presenter.read, "presenter.granted", presenter.send)
-            _presenters(live, sid, {"mirrors": 0, "presenter": True})
-            refused = live.request("session.overlay.open", sid, command="true", sizePercent=60, height=240)
-            assert_error(refused, POINTS_REMOTE)
-            node = find_session(live.tree(), sid)
-            assert "remoteOverlays" not in node and node["overlay"] is False
-            assert assert_ok(live.request("session.overlay.open", sid, command="true", sizePercent=60))["id"] == sid
-            wait_frame(presenter.read, "overlay.request", presenter.send)
-            live.wait_tree(lambda tree: find_session(tree, sid).get("remoteOverlays") == [{"sizePercent": 60}])
-            resized = live.request("session.overlay.resize", sid, sizePercent=40, height=240)
-            assert_error(resized, POINTS_REMOTE)
-            assert find_session(live.tree(), sid)["remoteOverlays"] == [{"sizePercent": 60}]
-            assert_ok(live.request("session.overlay.close", sid))
-            wait_frame(presenter.read, "overlay.close", presenter.send)
-    _presenters(live, sid, None)
-    assert_ok(live.request("session.close", sid))
+    """Historical ratchet ID: an older presenter now gets percent-only origin requests, including point resizes.
+
+    A local replica's refusal is covered by core presenter tests: creating one here would require successful SSH.
+    """
+    with _page_presenter(live) as (sid, presenter, _):
+        assert_ok(live.request("session.overlay.open", sid, command="true", sizePercent=60, height=240))
+        opened = wait_frame(presenter.read, "overlay.request", presenter.send)["overlay"]
+        assert opened["sizePercent"] == 60
+        assert_absent(opened, "width", "height")
+        resized = live.request("session.overlay.resize", sid, sizePercent=40, height=360)
+        assert_ok(resized)
+        change = wait_frame(presenter.read, "overlay.resize", presenter.send)["overlay"]
+        assert change["sizePercent"] == 40
+        assert_absent(change, "width", "height")
+        assert find_session(live.tree(), sid)["remoteOverlays"] == [{"sizePercent": 40}]
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "overlay.close", presenter.send)
+
+
+@LIVE
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("session.overlay.open", "session.overlay.resize", "field:tree.session.remoteOverlays")
+def test_remote_overlay_points_reach_capable_presenters(live):
+    with _page_presenter(live, [*PAGE_PRESENTER_KINDS, "overlay.points"]) as (sid, presenter, _):
+        assert_ok(live.request("session.overlay.open", sid, command="true", sizePercent=60, width=320, height=240))
+        opened = wait_frame(presenter.read, "overlay.request", presenter.send)["overlay"]
+        assert_subset(opened, {"sizePercent": 60, "width": 320, "height": 240})
+        # Points merge axes; percent plus points replaces them; percent alone and full clear them.
+        for args, expected, omitted in [
+            ({"height": 360}, {"sizePercent": 60, "width": 320, "height": 360}, ()),
+            ({"sizePercent": 40, "width": 420}, {"sizePercent": 40, "width": 420}, ("height",)),
+            ({"sizePercent": 30}, {"sizePercent": 30}, ("width", "height")),
+            ({"full": True}, {}, ("sizePercent", "width", "height")),
+        ]:
+            assert_ok(live.request("session.overlay.resize", sid, **args))
+            change = wait_frame(presenter.read, "overlay.resize", presenter.send)["overlay"]
+            assert_subset(change, expected)
+            assert_absent(change, *omitted)
+            percent = expected.get("sizePercent")
+            assert find_session(live.tree(), sid)["remoteOverlays"] == ([{}] if percent is None else [{"sizePercent": percent}])
+        assert_error(
+            live.request("session.overlay.resize", sid, height=240),
+            "session.overlay.resize: --width/--height need a floating overlay; pass --size-percent too",
+        )
+        assert find_session(live.tree(), sid)["remoteOverlays"] == [{}]
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "overlay.close", presenter.send)
+
+
+@LIVE
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("live.present", "session.overlay.open", "session.overlay.resize", streams=("live.present",))
+@pytest.mark.parametrize("source", [{"command": "true"}, {"url": "https://example.com/points"}], ids=["program", "page"])
+def test_older_presenter_gets_percent_without_points(live, source):
+    with _page_presenter(live) as (sid, presenter, _):
+        assert_ok(live.request("session.overlay.open", sid, **source, sizePercent=60, width=320, height=240))
+        page = "url" in source
+        body = "page" if page else "overlay"
+        opened = wait_frame(presenter.read, "page.request" if page else "overlay.request", presenter.send)[body]
+        assert opened["sizePercent"] == 60
+        assert_absent(opened, "width", "height")
+        assert_ok(live.request("session.overlay.resize", sid, height=360))
+        resized = wait_frame(presenter.read, "page.command" if page else "overlay.resize", presenter.send)[body]
+        assert resized["sizePercent"] == 60
+        assert_absent(resized, "width", "height")
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "page.close" if page else "overlay.close", presenter.send)
+
+
+@LIVE
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("live.present", "session.overlay.open", "session.overlay.resize", streams=("live.present",))
+def test_remote_page_points_and_resizes_reach_presenter(live):
+    with _page_presenter(live, [*PAGE_PRESENTER_KINDS, "overlay.points"]) as (sid, presenter, _):
+        page_id, opened = _handed_over(
+            live, sid, presenter, url="https://example.com/points", sizePercent=70, width=320, height=240
+        )
+        assert_subset(opened, {"width": 320, "height": 240, "sizePercent": 70})
+        for seq, (args, expected, omitted) in enumerate([
+            ({"height": 360}, {"sizePercent": 70, "width": 320, "height": 360}, ()),
+            ({"sizePercent": 40, "width": 420}, {"sizePercent": 40, "width": 420}, ("height",)),
+            ({"sizePercent": 30}, {"sizePercent": 30}, ("width", "height")),
+            ({"full": True}, {}, ("sizePercent", "width", "height")),
+        ], start=1):
+            assert_ok(live.request("session.overlay.resize", sid, **args))
+            changed = wait_frame(presenter.read, "page.command", presenter.send)["page"]
+            assert_subset(changed, {"page": page_id, "seq": seq, "action": "resize", **expected})
+            assert_absent(changed, *omitted)
+        assert_ok(live.request("session.overlay.close", sid))
+        wait_frame(presenter.read, "page.close", presenter.send)
 
 
 def _acquired(live, sid, kinds):
@@ -659,7 +759,7 @@ def test_status_sound_goes_to_a_following_presenter(live):
     assert_ok(live.request("session.close", sid))
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("live.tree", "field:result.remote", "session.status")
 def test_tree_rows_carry_the_session_status(live):
     sid = _live_session(live)
@@ -677,7 +777,7 @@ def test_tree_rows_carry_the_session_status(live):
     assert_ok(live.request("session.close", sid))
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("live.tree", "field:result.remote", "session.companion.page", "session.companion.new")
 def test_tree_lists_a_page_companion_without_panes_under_its_listed_parent(live, tmp_path):
@@ -704,7 +804,7 @@ def test_tree_lists_a_page_companion_without_panes_under_its_listed_parent(live,
     live.wait_tree(lambda tree: not {sid, page, companion} & set(session_ids(tree)))
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("live.present", "session.companion.new", streams=("live.present",))
 def test_a_respawned_live_parent_publishes_its_respawn_to_a_presenter(live):
@@ -1003,3 +1103,39 @@ def test_losing_the_page_helper_ends_only_the_page(live, tmp_path):
         assert _outcome(live, page_id) == {"pageID": page_id, "outcome": "dismissed"}
         _presenters(live, sid, {"mirrors": 0, "presenter": True})
 
+
+
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("live.attach.group")
+def test_group_attach_validates_before_remote_discovery(ctl):
+    command = ctl.vocabulary.command("live.attach.group")
+    assert_error(ctl.request(command), f"{command} requires a host")
+    assert_error(ctl.request(command, host="  "), f"{command} requires a host")
+    assert_error(ctl.request(command, host="unused.invalid"), f"{command} requires a remote session")
+    assert_error(ctl.request(command, "bad\nname", host="unused.invalid"), "invalid remote session")
+
+
+@LIVE_IN_ANY_SHELL
+@pytest.mark.since("0.40.0")
+@pytest.mark.covers("live.tree", "field:result.remote", "session.companion.page", "session.companion.new")
+def test_tree_parent_membership_lists_companions_in_sidebar_order(live, tmp_path):
+    sid = _live_session(live)
+    page_path = tmp_path / "membership.html"
+    page_path.write_text("<!doctype html><title>membership</title>")
+    page = assert_ok(live.request("session.companion.page", sid, html=str(page_path)))["id"]
+    companion = assert_ok(live.request("session.companion.new", sid, noSelect=True))["id"]
+    tree_cmd = live.vocabulary.command("live.tree")
+
+    def rows(response):
+        return {row["id"]: row for row in assert_ok(response)["remote"]["sessions"]}
+
+    listed = rows(live.wait_response(tree_cmd, None, lambda r: {sid, page, companion} <= rows(r).keys()))
+    members = listed[sid]["companions"]
+    assert {member["id"] for member in members} == {page, companion}
+    assert all(member["name"] == listed[member["id"]]["name"] for member in members)
+    assert [member["id"] for member in members] == [
+        row for row in session_ids(live.tree()) if row in {page, companion}
+    ]
+    assert_absent(listed[page], "companions")
+    assert_absent(listed[companion], "companions")
+    assert_ok(live.request("session.close", sid))

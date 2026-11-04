@@ -663,6 +663,34 @@ fn a_program_ignoring_the_hangup_survives_a_plain_kill_and_not_a_forced_one() ->
     Ok(())
 }
 
+/// What a session whose shell `shell` never started its job shows and runs: its listing, its screen, and the process
+/// table's records of the shell and of its children, with each one's state on Unix (`ps`), so a failure tells a shell
+/// that ended, one that never read the line, one stopped and a job the table did not report apart.
+fn shell_state(api: &mut Api, name: &str, shell: i32) -> TestResult<String> {
+    let listed = api.list()?.into_iter().find(|record| record.name == name);
+    let screen = api.screen(name, true)?.map(|screen| screen.text);
+    let records: Vec<_> = ngterm_session::job::read_table()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|entry| entry.record.pid == shell || entry.parent == shell)
+        .collect();
+    let states = if cfg!(unix) && !records.is_empty() {
+        let pids: Vec<String> = records.iter().map(|entry| entry.record.pid.to_string()).collect();
+        std::process::Command::new("ps")
+            .args(["-o", "pid=,ppid=,pgid=,tpgid=,stat=,command=", "-p", &pids.join(",")])
+            .output()
+            .map_or_else(
+                |err| err.to_string(),
+                |out| String::from_utf8_lossy(&out.stdout).into_owned(),
+            )
+    } else {
+        String::new()
+    };
+    Ok(format!(
+        "listed: {listed:?}\nscreen: {screen:?}\nthe shell and its children: {records:#?}\nps:\n{states}"
+    ))
+}
+
 /// An interactive shell's foreground job: on Unix the shell's job control puts it in a process group of its own, which
 /// becomes the terminal's foreground; on Windows the shell's descendants.
 #[test]
@@ -691,7 +719,11 @@ fn a_shells_foreground_job_is_read_waited_for_and_ended() -> TestResult {
             Ok(ApiResponse::ForegroundJob(_)) => {}
             other => return Err(format!("no foreground job: {other:?}").into()),
         }
-        assert!(Instant::now() < deadline, "the job never started");
+        assert!(
+            Instant::now() < deadline,
+            "the job never started\n{}",
+            shell_state(&mut api, "jobs", shell)?
+        );
         thread::sleep(Duration::from_millis(50));
     };
     assert!(job.iter().all(|process| process.pid != shell), "{job:?}");

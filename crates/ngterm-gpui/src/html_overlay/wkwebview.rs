@@ -26,8 +26,8 @@ mod runtime {
     }
 }
 pub use registry::{
-    answer, apply, init, install, key_down, mount, page_holds_keyboard, refresh_themes, reject, set_covered, settle,
-    shutdown,
+    answer, apply, init, install, key_down, mount, page_holds_keyboard, refresh_themes, reject, set_covered,
+    set_window_scale, settle, shutdown,
 };
 pub(super) use registry::{copy_link, navigate};
 pub use view::PageView;

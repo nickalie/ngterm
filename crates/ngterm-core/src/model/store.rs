@@ -176,6 +176,8 @@ pub struct SessionLocation {
 /// One window's workspace tree, selection and sidebar state.
 #[derive(Debug, Default)]
 pub struct AppStore {
+    /// The app-run bus, shared with the window library. Never persisted.
+    pub(crate) messages: crate::messages::MessageBus,
     pub(crate) workspaces: Vec<Workspace>,
     pub(crate) selected_session_id: Option<Uuid>,
     /// True while a reload runs: a reload is not a selection, so it emits no `session.selected`.
@@ -509,6 +511,7 @@ impl AppStore {
         let sessions: Vec<Uuid> = self.sessions().map(Session::id).collect();
         for session in sessions {
             self.release_remote_overlays(session);
+            self.dispose_session_mailboxes(session);
         }
         let closing: Vec<(Uuid, Uuid, EventPayload, Option<EventPayload>)> = self
             .workspaces

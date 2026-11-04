@@ -109,7 +109,7 @@ impl PageView {
         let colors = self.page.colors();
         self.error
             .as_ref()
-            .map(|shown| shown.element("htmlOverlay.error-text", colors.ink(1.0), px(12.), false))
+            .map(|shown| shown.centered_element("htmlOverlay.error-text", colors.ink(1.0), px(12.), window, cx))
     }
 }
 

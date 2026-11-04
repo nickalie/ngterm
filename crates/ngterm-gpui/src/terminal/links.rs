@@ -9,7 +9,8 @@
 //! URLs and paths are found with Ghostty's default matcher (`src/config/url.zig` at `LIBGHOSTTY_VT_REV`, MIT: its
 //! scheme URL branch, its rooted or dot-relative path branch and its bare relative path branch) over the soft-wrapped
 //! line under the pointer, in the frame's rows (within [`REACH`] of the pointer). A path is underlined under the pointer as libghostty underlines it;
-//! its click goes to the link policy, which ignores a link with no scheme, as upstream's `LinkPolicy` does. An OSC 8
+//! its click goes through the owning pane, which resolves a relative path against its reported local cwd before
+//! the link policy classifies it. Remote primary/split pane paths stay remote. An OSC 8
 //! link covers the run of hyperlinked cells around the pointer on its row.
 
 use std::sync::LazyLock;
@@ -103,7 +104,7 @@ static URL: LazyLock<Option<Regex>> = LazyLock::new(|| {
 pub enum LinkKind {
     /// An OSC 8 hyperlink.
     Osc8,
-    /// A URL found in the text.
+    /// A URL or path detected in the text.
     Url,
 }
 
@@ -364,7 +365,7 @@ pub fn wants_browser(mods: Mods, origin: Option<ClickOrigin>, captured: bool, cx
 pub fn follow_link(raw: &str, mode: LinkOpenMode, origin: ClickOrigin, cx: &App) {
     match link_policy::route(raw, mode, origin) {
         Route::Browser(url) | Route::Overlay { url, .. } => cx.open_url(&url),
-        Route::Reveal(path) => cx.reveal_path(&path),
+        Route::Reveal(path) | Route::Image { path, .. } | Route::Markdown { path, .. } => cx.reveal_path(&path),
         Route::Ignore => tracing::debug!(raw, "link click ignored by the link policy"),
     }
 }

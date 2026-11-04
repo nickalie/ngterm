@@ -1,5 +1,5 @@
-//! ngterm's scripts in a `WebView2` page and what they post back. `WebView2` has no script worlds and no message
-//! handler with a reply (`WebKit`'s `messageHandlers`), so ngterm's scripts run in the page's own world from one
+//! ngterm's ordinary control scripts in a `WebView2` page and what they post back. Its document-created-script API
+//! has no named worlds or reply-capable message handlers (`WebKit`'s `messageHandlers`), so the bridge runs in the page's own world from one
 //! closure that holds what the page must not reach:
 //!
 //! - separate random credentials for posts and replies. Page-world replies may be observable by page code on
@@ -20,9 +20,10 @@
 //! choosers and the File System Access pickers, and files pasted onto a page (dropped ones are refused natively,
 //! `native.rs`). `WebView2` offers no native refusal of a file chooser: no event before one opens (webview2-com
 //! 0.39.1's API has `SaveAsUIShowing`, the page's own Save As, and `PermissionRequested`'s `FILE_READ_WRITE`, which
-//! comes after a File System Access picker, not before), no setting that turns them off, and no isolated world to
-//! run the guard in (a browser extension's content script would be one, and would see no more of a page's events).
-//! So the guard is defence in depth in the page's own world, not a boundary: it takes what it calls before any page
+//! comes after a File System Access picker, not before), and no setting that turns them off. The guard runs in the
+//! page world to replace the APIs authored code calls; an isolated context would see no more of a page's events.
+//! Markdown alone uses the separate CDP named-world renderer (`native::add_isolated_document_script`), with no bridge.
+//! The guard is defence in depth in the page's own world, not a boundary: it takes what it calls before any page
 //! script runs, but a page can still open a chooser through a realm it did not run in (a same-origin frame
 //! `WebView2` injects no script into, such as a fresh `about:blank` one, whose own `HTMLElement.prototype.click`
 //! clicks a detached file input), and a user's click on a file input inside a closed shadow root escapes it when the

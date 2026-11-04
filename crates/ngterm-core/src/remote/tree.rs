@@ -13,8 +13,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ngterm_proto::{
-    ControlLiveInventory, ControlRemotePane, ControlRemoteSession, ControlRemoteTree, ControlResult,
-    ControlSessionNode, ControlWorkspaceNode, Response,
+    ControlLiveInventory, ControlRemoteMember, ControlRemotePane, ControlRemoteSession, ControlRemoteTree,
+    ControlResult, ControlSessionNode, ControlWorkspaceNode, Response,
 };
 
 use super::frames;
@@ -352,6 +352,7 @@ pub fn candidates(
                 status_shape: None,
                 parent: Some(parent.to_owned()),
                 content: Some("page".to_owned()),
+                companions: None,
             })
         })
         .collect();
@@ -413,6 +414,18 @@ fn remote_session(
         status_shape: node.status_shape.clone(),
         parent: node.parent.clone(),
         content: None,
+        // Membership comes from the unfiltered workspace, including rows that cannot attach.
+        companions: node.parent.is_none().then(|| {
+            workspace
+                .sessions
+                .iter()
+                .filter(|member| member.parent.as_deref() == Some(node.id.as_str()))
+                .map(|member| ControlRemoteMember {
+                    id: member.id.clone(),
+                    name: member.name.clone(),
+                })
+                .collect()
+        }),
     })
 }
 
@@ -569,6 +582,67 @@ mod tests {
         assert_eq!(tree.sessions[0].parent, None);
     }
 
+    /// Upstream's `RemoteTreeTests.aParentListsEveryCompanionInSidebarOrderAttachableOrNot`.
+    #[test]
+    fn a_parent_lists_every_companion_in_sidebar_order_attachable_or_not() {
+        let member = |id: &str, name: &str, backed, content| {
+            let mut member = node(id, name, "/repo", false, backed);
+            member.parent = Some("s1".to_owned());
+            member.content = content;
+            member
+        };
+        let windows = [window(
+            "w",
+            "main",
+            vec![workspace(
+                "ws",
+                "work",
+                vec![
+                    node("s1", "build", "/repo", false, Some(true)),
+                    member("c1", "logs", Some(true), None),
+                    member("pg", "report", None, Some("page".to_owned())),
+                    member("c2", "watch", Some(false), None),
+                    node("s2", "other", "/x", false, Some(true)),
+                ],
+            )],
+        )];
+        let daemons: Vec<_> = (0..3).map(|_| daemon_name(Uuid::new_v4())).collect();
+        let entries = [
+            running("s1", "left", &daemons[0]),
+            running("c1", "left", &daemons[1]),
+            running("s2", "left", &daemons[2]),
+        ];
+        let tree = candidates(&windows, &inventory(&entries, true)).unwrap();
+        assert_eq!(
+            tree.sessions
+                .iter()
+                .map(|session| session.id.as_str())
+                .collect::<Vec<_>>(),
+            ["s1", "c1", "s2", "pg"]
+        );
+        let session = |id| tree.sessions.iter().find(|session| session.id == id).unwrap();
+        assert_eq!(
+            session("s1").companions,
+            Some(vec![
+                ControlRemoteMember {
+                    id: "c1".to_owned(),
+                    name: "logs".to_owned()
+                },
+                ControlRemoteMember {
+                    id: "pg".to_owned(),
+                    name: "report".to_owned()
+                },
+                ControlRemoteMember {
+                    id: "c2".to_owned(),
+                    name: "watch".to_owned()
+                },
+            ])
+        );
+        assert_eq!(session("s2").companions, Some(vec![]));
+        assert_eq!(session("c1").companions, None);
+        assert_eq!(session("pg").companions, None);
+    }
+
     /// Upstream's `RemoteTreeTests.aSessionCarriesItsAgentStatusAndAnIdleOneCarriesNone`.
     #[test]
     fn a_session_carries_its_agent_status_and_an_idle_one_carries_none() {
@@ -617,6 +691,7 @@ mod tests {
             (session.status, session.status_color, session.status_shape),
             (None, None, None)
         );
+        assert!(session.companions.is_none(), "old origin membership stays unknown");
     }
 
     #[test]
@@ -813,6 +888,7 @@ mod tests {
                 status_shape: Some("star".to_owned()),
                 parent: None,
                 content: None,
+                companions: None,
             }],
             presentation: Some(1),
         };

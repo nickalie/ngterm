@@ -16,7 +16,8 @@ use std::collections::{HashMap, HashSet};
 
 use ngterm_core::model::{AppStore, Session, SidebarMode, SidebarTint, Workspace};
 use ngterm_core::persist::AppSettings;
-use ngterm_core::persist::settings::FlaggedViewLayout;
+use ngterm_core::persist::settings::{FlaggedViewLayout, InterfaceElement, SessionInfoDisplay};
+use ngterm_core::session_info::SessionInfoSpan;
 use uuid::Uuid;
 
 use crate::row_icon::Glyph;
@@ -33,6 +34,10 @@ pub struct SidebarRow {
     pub badge: usize,
     /// The leading glyph.
     pub icon: Glyph,
+    /// Whether the leading icon occupies space.
+    pub icon_visible: bool,
+    /// Visible runtime info, gated by the display setting and sidebar view.
+    pub info: Vec<SessionInfoSpan>,
     /// The agent-status glyph; `None` hides it (idle, and every workspace row).
     pub status: Option<GlyphLook>,
     /// The leading glyph's tooltip: what a remote row's presentation stream is missing, `None` otherwise.
@@ -221,6 +226,14 @@ struct RowBuilder<'a> {
 }
 
 impl RowBuilder<'_> {
+    fn shows_info(&self) -> bool {
+        match self.settings.settings.effective_session_info_display() {
+            SessionInfoDisplay::Always => true,
+            SessionInfoDisplay::Flagged => self.store.sidebar().mode == SidebarMode::Flagged,
+            SessionInfoDisplay::Off => false,
+        }
+    }
+
     fn badge(&self, count: usize) -> usize {
         if self.settings.badges() { count } else { 0 }
     }
@@ -240,6 +253,11 @@ impl RowBuilder<'_> {
             icon: Glyph::Workspace {
                 focus_member: self.store.focus().ids().contains(&workspace.id()),
             },
+            icon_visible: !self
+                .settings
+                .settings
+                .is_interface_element_hidden(InterfaceElement::WorkspaceIcons),
+            info: Vec::new(),
             status: None,
             icon_tooltip: None,
             tint: workspace.tint,
@@ -317,6 +335,17 @@ impl RowBuilder<'_> {
             label,
             badge: self.badge(session.unseen_count),
             icon: session_icon(session, self.store.sidebar().mode == SidebarMode::Tree),
+            icon_visible: !self
+                .settings
+                .settings
+                .is_interface_element_hidden(InterfaceElement::SessionIcons),
+            info: if self.shows_info() {
+                session
+                    .effective_info()
+                    .map_or_else(Vec::new, |info| info.spans.clone())
+            } else {
+                Vec::new()
+            },
             status: status_glyph::resolve(&session.agent_indicator, self.settings.settings),
             icon_tooltip: session.presentation_notice(),
             tint: session.tint,
@@ -1039,5 +1068,43 @@ mod tests {
         expansion.apply_requests(&mut g.store);
         let rows = built(&g.store, &mut expansion, &settings);
         assert!(rows.iter().any(|row| row.id == g.second));
+    }
+
+    #[test]
+    fn icon_and_info_settings_apply_to_companions_and_every_flagged_layout() {
+        let mut g = group();
+        for id in [g.parent, g.first] {
+            g.store.session_mut(id).unwrap().flagged = true;
+            g.store.set_info(
+                Some(ngterm_core::session_info::SessionInfo::make("running", false, 0.).unwrap()),
+                id,
+            );
+        }
+        for layout in [
+            FlaggedViewLayout::Flat,
+            FlaggedViewLayout::Plain,
+            FlaggedViewLayout::Tree,
+        ] {
+            for flagged in [false, true] {
+                g.store.set_sidebar_mode(if flagged {
+                    SidebarMode::Flagged
+                } else {
+                    SidebarMode::Tree
+                });
+                let settings = AppSettings {
+                    flagged_view_layout: Some(layout.raw().to_owned()),
+                    session_info_display: Some("flagged".to_owned()),
+                    hidden_interface_elements: Some(vec!["sessionIcons".to_owned()]),
+                    ..AppSettings::default()
+                };
+                let rows = built(&g.store, &mut Expansion::default(), &settings);
+                for id in [g.parent, g.first] {
+                    let row = row(&rows, id);
+                    assert!(!row.icon_visible);
+                    assert_eq!(!row.info.is_empty(), flagged);
+                }
+                assert!(rows.iter().filter(|row| row.is_workspace()).all(|row| row.icon_visible));
+            }
+        }
     }
 }

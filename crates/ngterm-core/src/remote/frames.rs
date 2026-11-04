@@ -548,9 +548,24 @@ pub struct PresentationOverlay {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_percent: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_color: Option<String>,
     pub follow: bool,
     pub wait: bool,
+}
+
+impl PresentationOverlay {
+    /// The point axes sent by the origin; an older frame carries neither.
+    #[must_use]
+    pub fn points(&self) -> crate::model::OverlayPointSize {
+        crate::model::OverlayPointSize {
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 /// Names one remote overlay job, with a size for a resize.
@@ -560,6 +575,21 @@ pub struct PresentationOverlayChange {
     pub job: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_percent: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
+}
+
+impl PresentationOverlayChange {
+    /// The point axes sent by the origin; an older frame carries neither.
+    #[must_use]
+    pub fn points(&self) -> crate::model::OverlayPointSize {
+        crate::model::OverlayPointSize {
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 impl PresentationOverlayChange {
@@ -568,6 +598,8 @@ impl PresentationOverlayChange {
         Self {
             job: job.into(),
             size_percent: None,
+            width: None,
+            height: None,
         }
     }
 }
@@ -615,7 +647,22 @@ pub struct PresentationPage {
     pub pane: Option<PresentationPane>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_percent: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
     pub follow: bool,
+}
+
+impl PresentationPage {
+    /// The point axes sent by the origin; an older frame carries neither.
+    #[must_use]
+    pub fn points(&self) -> crate::model::OverlayPointSize {
+        crate::model::OverlayPointSize {
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 /// Names one handed-over page by the origin's id, with the presenter's reason when it refuses the page (upstream's
@@ -661,6 +708,21 @@ pub struct PresentationPageCommand {
     pub action: PresentationPageAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_percent: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
+}
+
+impl PresentationPageCommand {
+    /// The point axes sent by the origin; an older frame carries neither.
+    #[must_use]
+    pub fn points(&self) -> crate::model::OverlayPointSize {
+        crate::model::OverlayPointSize {
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 /// What a handed-over page shows on the presenter (upstream's `PresentationPageState`). `address` is the origin's
@@ -812,12 +874,40 @@ impl<'de> Deserialize<'de> for PresentationLayout {
     }
 }
 
+/// A page companion the origin created under the presented session, for the presenter to show under its row. This
+/// build's addition: a headless origin shows no page itself, so its page companions are seen only through a viewer.
+/// Sent only to a presenter whose hello lists it ([`super::hub::COMPANION_PAGE_KIND`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresentationCompanion {
+    /// The companion's session id on the origin.
+    pub session: String,
+}
+
 /// How often the origin respawned each of a session's panes, by daemon name, in one origin app lifetime (upstream's
 /// `PresentationRespawns`): `epoch` changes on every launch, so a counter that restarted is never read as older.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PresentationRespawns {
     pub epoch: String,
     pub generations: std::collections::BTreeMap<String, i64>,
+}
+
+/// The origin's local info; viewers parse it but run no expiry timer (upstream `PresentationInfo`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentationInfo {
+    pub source: String,
+    pub markdown: bool,
+    pub hide_after: f64,
+}
+
+impl From<&crate::session_info::SessionInfo> for PresentationInfo {
+    fn from(info: &crate::session_info::SessionInfo) -> Self {
+        Self {
+            source: info.source.clone(),
+            markdown: info.markdown,
+            hide_after: info.hide_after,
+        }
+    }
 }
 
 /// The replaceable state a subscriber starts from.
@@ -829,6 +919,8 @@ pub struct PresentationSnapshot {
     pub hud: Option<PresentationHud>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info: Option<PresentationInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<PresentationLayout>,
     /// The session's name as the origin shows it; `None` from an origin that predates [`Body::Name`].
@@ -848,6 +940,7 @@ pub enum Body {
     Snapshot(PresentationSnapshot),
     Status(Option<PresentationStatus>),
     Context(Option<String>),
+    Info(Option<PresentationInfo>),
     /// The session's name as the origin now shows it. This build's addition, not upstream's: a viewer that predates it
     /// reads it as [`Body::Unknown`] and keeps the name it attached with.
     Name(String),
@@ -881,6 +974,8 @@ pub enum Body {
     PageClosed(PresentationPageChange),
     PageCommand(PresentationPageCommand),
     PageState(PresentationPageState),
+    /// A page companion the origin created under the session; the presenter attaches it under its row.
+    CompanionPage(PresentationCompanion),
     /// The origin respawned a pane's shell under the same daemon name; carries that pane's new count alone.
     Respawn(PresentationRespawns),
     /// What one pane runs now; sent only to a viewer whose hello lists it.
@@ -900,6 +995,7 @@ impl Body {
             Self::Snapshot(_) => "snapshot",
             Self::Status(_) => "status",
             Self::Context(_) => "context",
+            Self::Info(_) => "info",
             Self::Name(_) => "name",
             Self::Layout(_) => "layout",
             Self::Hud(_) => "hud",
@@ -923,6 +1019,7 @@ impl Body {
             Self::PageClosed(_) => "page.closed",
             Self::PageCommand(_) => "page.command",
             Self::PageState(_) => "page.state",
+            Self::CompanionPage(_) => super::hub::COMPANION_PAGE_KIND,
             Self::Respawn(_) => "pane.respawn",
             Self::Agent(_) => super::hub::AGENT_KIND,
             Self::Unknown(kind) => kind,
@@ -937,6 +1034,7 @@ impl Body {
             Self::Snapshot(snapshot) => entry("snapshot", serde_json::to_value(snapshot)),
             Self::Status(Some(status)) => entry("status", serde_json::to_value(status)),
             Self::Context(Some(context)) => entry("context", serde_json::to_value(context)),
+            Self::Info(Some(info)) => entry("info", serde_json::to_value(info)),
             Self::Name(name) => entry("name", serde_json::to_value(name)),
             Self::Layout(layout) => entry("layout", serde_json::to_value(layout)),
             Self::Hud(Some(hud)) => entry("hud", serde_json::to_value(hud)),
@@ -956,10 +1054,12 @@ impl Body {
             }
             Self::PageCommand(command) => entry("page", serde_json::to_value(command)),
             Self::PageState(state) => entry("page", serde_json::to_value(state)),
+            Self::CompanionPage(companion) => entry("companion", serde_json::to_value(companion)),
             Self::Respawn(respawns) => entry("respawn", serde_json::to_value(respawns)),
             Self::Agent(agent) => entry("agent", serde_json::to_value(agent)),
             Self::Status(None)
             | Self::Context(None)
+            | Self::Info(None)
             | Self::Hud(None)
             | Self::Ping
             | Self::Ack
@@ -1080,6 +1180,7 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "snapshot" => Body::Snapshot(required(object, "snapshot")?),
         "status" => Body::Status(optional(object, "status")?),
         "context" => Body::Context(optional(object, "context")?),
+        "info" => Body::Info(optional(object, "info")?),
         "name" => Body::Name(required(object, "name")?),
         "layout" => Body::Layout(
             object
@@ -1107,6 +1208,7 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "page.closed" => Body::PageClosed(required(object, "page")?),
         "page.command" => Body::PageCommand(required(object, "page")?),
         "page.state" => Body::PageState(required(object, "page")?),
+        super::hub::COMPANION_PAGE_KIND => Body::CompanionPage(required(object, "companion")?),
         "pane.respawn" => Body::Respawn(required(object, "respawn")?),
         "agent" => Body::Agent(required(object, "agent")?),
         other => Body::Unknown(other.to_owned()),
@@ -1183,6 +1285,8 @@ mod tests {
 
     fn change(size: Option<i64>) -> PresentationOverlayChange {
         PresentationOverlayChange {
+            width: None,
+            height: None,
             job: "j1".to_owned(),
             size_percent: size,
         }
@@ -1242,6 +1346,9 @@ mod tests {
             Body::Respawn(respawns()),
             Body::Agent(agent(Some("claude"))),
             Body::Agent(agent(None)),
+            Body::CompanionPage(PresentationCompanion {
+                session: "0E2B7C1A-5D4F-4E3B-9A61-7C2D8F0B1A23".to_owned(),
+            }),
             Body::Notify(PresentationNotify {
                 title: "build".to_owned(),
                 body: "done".to_owned(),
@@ -1268,6 +1375,8 @@ mod tests {
             Body::AskRejected(reference()),
             Body::AskDismiss(reference()),
             Body::OverlayRequest(PresentationOverlay {
+                width: None,
+                height: None,
                 job: "j1".to_owned(),
                 pane: Some(pane()),
                 size_percent: Some(60),
@@ -1276,6 +1385,8 @@ mod tests {
                 wait: true,
             }),
             Body::OverlayRequest(PresentationOverlay {
+                width: None,
+                height: None,
                 job: "j1".to_owned(),
                 pane: None,
                 size_percent: None,
@@ -1332,6 +1443,8 @@ mod tests {
 
     fn page_request(id: &str, source: PresentationPageSource, pane: Option<PresentationPane>) -> PresentationPage {
         PresentationPage {
+            width: None,
+            height: None,
             page: id.to_owned(),
             token: format!("t-{id}"),
             source,
@@ -1391,6 +1504,8 @@ mod tests {
         };
         let command = |seq: i64, action: PresentationPageAction, size_percent: Option<i64>| {
             Body::PageCommand(PresentationPageCommand {
+                width: None,
+                height: None,
                 page: "p1".to_owned(),
                 seq,
                 action,
@@ -1493,6 +1608,88 @@ mod tests {
         "\"".repeat(AskInputForm::MAX_TEXT_BYTES)
     }
 
+    fn sized_frames() -> [(&'static str, &'static str, Value); 4] {
+        [
+            (
+                "overlay.request",
+                "overlay",
+                json!({"job": "j1", "sizePercent": 60, "follow": false, "wait": false}),
+            ),
+            ("overlay.resize", "overlay", json!({"job": "j1", "sizePercent": 60})),
+            (
+                "page.request",
+                "page",
+                json!({"page": "p1", "token": "t1", "source": {"url": {"_0": "https://example.com/"}},
+                "identity": "example.com", "chromeless": false, "javascript": false, "navigation": true,
+                "browse": false, "persistent": false, "sizePercent": 60, "follow": false}),
+            ),
+            (
+                "page.command",
+                "page",
+                json!({"page": "p1", "seq": 1, "action": "resize", "sizePercent": 60}),
+            ),
+        ]
+    }
+
+    fn sized_frame_points(body: &Body) -> crate::model::OverlayPointSize {
+        match body {
+            Body::OverlayRequest(frame) => frame.points(),
+            Body::OverlayResize(frame) => frame.points(),
+            Body::PageRequest(frame) => frame.points(),
+            Body::PageCommand(frame) => frame.points(),
+            other => panic!("not a sized frame: {other:?}"),
+        }
+    }
+
+    /// Upstream's `aSizedFrameFromAnOriginWithoutPointSizesDecodesWithNone`, for each sized wire shape.
+    #[test]
+    fn old_sized_frames_decode_without_points_and_omit_absent_axes() {
+        for (kind, key, payload) in sized_frames() {
+            let mut value = json!({"kind": kind, "gen": 1, "rev": 2});
+            value[key] = payload;
+            let frame = decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert_eq!(
+                sized_frame_points(&frame.body),
+                crate::model::OverlayPointSize::default(),
+                "{kind}"
+            );
+            let encoded: Value = serde_json::from_slice(&encode(&frame).unwrap()).unwrap();
+            assert!(encoded[key].get("width").is_none(), "{kind}");
+            assert!(encoded[key].get("height").is_none(), "{kind}");
+        }
+    }
+
+    #[test]
+    fn sized_frames_round_trip_each_point_axis_and_both() {
+        for (kind, key, payload) in sized_frames() {
+            for (width, height) in [(Some(320), None), (None, Some(240)), (Some(320), Some(240))] {
+                let mut value = json!({"kind": kind, "gen": 1, "rev": 2});
+                value[key] = payload.clone();
+                value[key]["width"] = json!(width);
+                value[key]["height"] = json!(height);
+                let frame = decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+                assert_eq!(
+                    sized_frame_points(&frame.body),
+                    crate::model::OverlayPointSize { width, height },
+                    "{kind}"
+                );
+                let bytes = encode(&frame).unwrap();
+                let encoded: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(
+                    encoded[key].get("width"),
+                    width.as_ref().map(|_| &value[key]["width"]),
+                    "{kind}"
+                );
+                assert_eq!(
+                    encoded[key].get("height"),
+                    height.as_ref().map(|_| &value[key]["height"]),
+                    "{kind}"
+                );
+                assert_eq!(decode(&bytes[..bytes.len() - 1]).unwrap(), frame, "{kind}");
+            }
+        }
+    }
+
     #[test]
     fn every_frame_survives_a_round_trip() {
         for (rev, body) in (0..).zip(bodies()) {
@@ -1540,6 +1737,8 @@ mod tests {
         assert_eq!(request["page"]["pane"], "11111111-2222-3333-4444-555555555555");
         assert_eq!(request["page"]["backgroundColor"], "#102030");
         let command = encoded(Body::PageCommand(PresentationPageCommand {
+            width: None,
+            height: None,
             page: "p1".to_owned(),
             seq: 3,
             action: PresentationPageAction::ReloadOriginal,
@@ -1871,6 +2070,32 @@ mod tests {
                 body: Body::Unknown("future.kind".to_owned())
             }
         );
+    }
+
+    #[test]
+    fn info_snapshot_and_delta_are_backward_compatible() {
+        let old = decode(br#"{"kind":"snapshot","gen":1,"rev":1,"snapshot":{}}"#).unwrap();
+        assert_eq!(old.body, Body::Snapshot(PresentationSnapshot::default()));
+        let info = PresentationInfo {
+            source: "**3** agents".to_owned(),
+            markdown: true,
+            hide_after: 1.5,
+        };
+        for body in [
+            Body::Info(Some(info.clone())),
+            Body::Info(None),
+            Body::Snapshot(PresentationSnapshot {
+                info: Some(info),
+                ..PresentationSnapshot::default()
+            }),
+        ] {
+            let frame = PresentationFrame {
+                generation: 1,
+                rev: 2,
+                body,
+            };
+            assert_eq!(decode(&encode(&frame).unwrap()).unwrap(), frame);
+        }
     }
 
     #[test]

@@ -70,6 +70,7 @@ struct Registry {
     engine: EngineState,
     /// The page zoom every page shows at; `None` before the first settle (actual size).
     zoom: Option<f64>,
+    scales: HashMap<Uuid, f64>,
     /// Where the browser profile and the saved store live.
     state_dir: Option<PathBuf>,
     /// The saved store's directories once the profile is read, and the store once the engine made it.
@@ -89,6 +90,7 @@ struct Registry {
     poster: Option<Poster>,
     /// Where the engine's start goes from its thread: the pump [`init`] spawned.
     pump: Option<async_channel::Sender<Started>>,
+    documents: Option<async_channel::Sender<DocumentLoad>>,
     /// How the pages shown here for another machine reach it: the core's page channels, or a test's stand-in.
     replica: Option<Rc<dyn ReplicaLink>>,
 }
@@ -100,6 +102,7 @@ impl Default for Registry {
             by_view: HashMap::new(),
             engine: EngineState::Idle,
             zoom: None,
+            scales: HashMap::new(),
             state_dir: None,
             saved_dirs: None,
             saved: None,
@@ -111,6 +114,7 @@ impl Default for Registry {
             colors: TerminalColors::default(),
             poster: None,
             pump: None,
+            documents: None,
             replica: None,
         }
     }
@@ -124,8 +128,33 @@ fn with<R>(change: impl FnOnce(&mut Registry) -> R) -> R {
     REGISTRY.with(|registry| change(&mut registry.borrow_mut()))
 }
 
+/// The window's actual display scale, recorded before any document page is opened.
+pub fn set_window_scale(window: Uuid, scale: f64) {
+    if scale.is_finite() && scale > 0.0 {
+        with(|registry| registry.scales.insert(window, scale));
+    }
+}
+
 fn page(id: Uuid) -> Option<Rc<Page>> {
     with(|registry| registry.pages.get(&id).cloned())
+}
+
+type DocumentLoad = (Uuid, u64, Result<String, String>);
+
+pub(super) fn read_document(id: Uuid, generation: u64, source: HtmlSource) {
+    let Some(sender) = with(|registry| registry.documents.clone()) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let result = super::documents::read(&source);
+        let _ = sender.send_blocking((id, generation, result));
+    });
+}
+
+pub(super) fn document_loaded(id: Uuid, generation: u64, result: Result<String, String>) {
+    if let Some(page) = page(id) {
+        page.document_loaded(generation, result);
+    }
 }
 
 fn page_of_view(view: ViewId) -> Option<Rc<Page>> {
@@ -141,6 +170,22 @@ struct PageHost;
 impl HtmlHost for PageHost {
     fn web_views_unavailable(&self) -> Option<String> {
         super::sandbox::failure().or_else(|| with(|registry| engine_failure(registry)))
+    }
+
+    fn probe_image(&self, path: &str) -> Result<ngterm_core::html::image_page::ImageData, String> {
+        ngterm_app::documents::probe_image(std::path::Path::new(path))
+    }
+
+    fn check_markdown(&self, path: &str) -> Result<(), String> {
+        ngterm_app::documents::check_markdown(std::path::Path::new(path))
+    }
+
+    fn page_zoom(&self) -> f64 {
+        with(|registry| registry.zoom.unwrap_or(1.0))
+    }
+
+    fn display_scale(&self, window: Uuid) -> f64 {
+        with(|registry| registry.scales.get(&window).copied().unwrap_or(1.0))
     }
 
     fn persistent_store_failure(&self) -> Option<String> {
@@ -190,6 +235,14 @@ pub fn install(core: &mut Core, state_dir: PathBuf, poster: Poster) {
 /// Spawns the pump: it takes the engine's start from the start thread ([`engine`]), then dispatches the engine's events
 /// on the main thread, and fails every page when the engine ends while the app runs.
 pub fn init(cx: &mut App) {
+    let (documents, queue) = async_channel::unbounded::<DocumentLoad>();
+    with(|registry| registry.documents = Some(documents));
+    cx.spawn(async move |cx| {
+        while let Ok((id, generation, result)) = queue.recv().await {
+            cx.update(|_| document_loaded(id, generation, result));
+        }
+    })
+    .detach();
     let (pump, starts) = async_channel::bounded::<Started>(1);
     with(|registry| registry.pump = Some(pump));
     cx.spawn(async move |cx| {

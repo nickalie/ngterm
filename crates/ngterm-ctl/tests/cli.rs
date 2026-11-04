@@ -24,6 +24,9 @@ type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 const NGTERMCTL: &str = env!("CARGO_BIN_EXE_ngtermctl");
 const NOT_RUNNING: &str = "ngterm may be stopped or unable to accept connections";
 
+#[path = "cli/remote_group.rs"]
+mod remote_group;
+
 /// A short temp dir: socket paths must stay under 104 bytes whatever `TMPDIR` is. Windows has no such limit (the
 /// pipe's name is derived from the path), and no `/tmp`.
 fn short_dir() -> io::Result<TempDir> {
@@ -551,6 +554,7 @@ SUBCOMMANDS:
   sidebar                 Sidebar visibility and view mode.
   notify                  Post a desktop notification (default: the active
                           session of the frontmost window).
+  msg                     Send, read and acknowledge messages between panes.
   font                    Font size commands.
   keymap                  Keymap commands.
   hooks                   Event hook commands.
@@ -1352,6 +1356,8 @@ SUBCOMMANDS:
                           (on|off|toggle|clear|move).
   context                 Set or clear what a session is about, shown in the
                           title bar.
+  info                    Set or clear the info line drawn under a session's
+                          sidebar row.
   tint                    Tint a session's sidebar row (a color, or clear).
   seen                    Clear a session's unseen-notification badge without
                           changing the selection or focus (idempotent).
@@ -3855,8 +3861,8 @@ OPTIONS:
 
 SUBCOMMANDS:
   open                    Open an overlay running COMMAND (it closes when
-                          COMMAND exits), or showing a page with --html or
-                          --url.
+                          COMMAND exits), or showing a page with --html, --url,
+                          --image or --markdown.
   close                   Close the overlay terminal (destroys it; for one
                           shown on another Mac, requests its cancel).
   hide                    Hide the session's overlays without closing them.

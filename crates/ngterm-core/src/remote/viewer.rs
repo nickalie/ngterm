@@ -1,8 +1,8 @@
 //! Remote sessions, viewer side (upstream's `ControlServer+RemotePresentation.swift`,
 //! `ControlServer+RemoteReconnect.swift`, the app half of `AppStore+RemotePresentation.swift` and the remote half of
 //! `Ghostty/PaneLead.swift`): the presentation client of every attached row, what its frames put on the row (status,
-//! context, name, HUD, notifications, the replicas of asks and overlays the origin hands over, the layout), and the panes
-//! whose ssh lost the connection waiting to be attached again.
+//! context, info, name, HUD, notifications, the replicas of asks and overlays the origin hands over, the layout), and the
+//! panes whose ssh lost the connection waiting to be attached again.
 //!
 //! The frontend installs the [`PresentationTransport`] that runs each bridge and reports its lines and its end, and
 //! runs [`Core::remote_tick`] whenever [`Core::remote_wake`] asks; everything else happens here.
@@ -102,6 +102,8 @@ pub(crate) struct ViewerRuntime {
     pub(crate) companion_flows: Vec<super::companions::GuiCompanion>,
     /// The End Sessions waiting for their origin ([`super::origin_sessions`]).
     pub(crate) end_flows: Vec<super::origin_sessions::EndRun>,
+    /// Page companions their origin handed over, being attached ([`super::companions`]).
+    pub(crate) handed_companions: Vec<super::companions::PageAttach>,
     /// Page companions whose page ended on their origin, waiting for its outcome before their rows close.
     pub(crate) page_endings: Vec<super::companions::PageEnding>,
     /// The machines whose saved rows wait to attach again after a launch ([`super::relaunch`]).
@@ -209,6 +211,7 @@ impl Core {
         self.advance_attach_flows();
         self.tick_relaunch(now);
         self.advance_companion_flows(now);
+        self.advance_handed_companions();
         self.advance_end_flows();
         self.advance_remote_splits();
         self.settle_page_endings();
@@ -221,6 +224,7 @@ impl Core {
         if !viewer.probes.is_empty()
             || !viewer.attach_flows.is_empty()
             || !viewer.companion_flows.is_empty()
+            || !viewer.handed_companions.is_empty()
             || !viewer.end_flows.is_empty()
             || !viewer.split_flows.is_empty()
             || !viewer.queued_split_panes.is_empty()
@@ -264,12 +268,12 @@ impl Core {
         Uuid::parse_str(token).is_ok_and(|pane| self.remote.viewer.reconnects.waiting(pane))
     }
 
-    /// What ssh said on the last failed probe of the pane carrying `token` (upstream's `RemoteReconnectNote`), never
-    /// the outcome of the attach after a probe that answered.
+    /// The reconnect strip of the pane carrying `token` at `now` (upstream's `RemoteReconnectNote`, with the failed
+    /// probes and the next one's countdown): see [`ReconnectBook::note`].
     #[must_use]
-    pub fn pane_reconnect_note(&self, token: &str) -> Option<String> {
+    pub fn pane_reconnect_note(&self, token: &str, now: Instant) -> Option<String> {
         let pane = Uuid::parse_str(token).ok()?;
-        self.remote.viewer.reconnects.readback(pane)?.reason
+        self.remote.viewer.reconnects.note(pane, now)
     }
 
     /// The `reconnect` read-back of the pane `pane`.
@@ -415,6 +419,11 @@ impl Core {
                     store.apply_remote_snapshot_status(status.as_ref(), session);
                 }
             }
+            ClientEffect::Info(info) => {
+                if let Some(store) = self.library_mut().store_for_session_mut(session) {
+                    store.apply_remote_info(info.as_ref(), session);
+                }
+            }
             ClientEffect::Context(context) => {
                 if let Some(store) = self.library_mut().store_for_session_mut(session) {
                     store.apply_remote_context(context.as_deref(), session);
@@ -473,6 +482,7 @@ impl Core {
             ClientEffect::PageClose(change) => self.close_replica_page(&change.page, session),
             ClientEffect::PageCommand(command) => self.apply_replica_page_command(&command, session),
             ClientEffect::Respawns(respawns, seed) => self.apply_remote_respawns(&respawns, seed, session),
+            ClientEffect::CompanionPage(companion) => self.attach_handed_companion(session, &companion),
             ClientEffect::Warn(reason) => {
                 tracing::warn!(%session, %reason, "presentation stream");
             }
@@ -719,6 +729,7 @@ impl Core {
             command: shell_quoted_line(&argv),
             wait: overlay.wait,
             size_percent: overlay.size_percent,
+            points: overlay.points(),
             background_color: overlay.background_color.clone(),
             ..OverlayProgram::default()
         };
@@ -806,7 +817,7 @@ impl Core {
             return;
         };
         if generation.is_some() && store.session(session).map(|found| found.overlay.generation) == generation {
-            store.resize_overlay(session, change.size_percent);
+            store.resize_overlay_with_points(session, change.size_percent, change.points());
         }
     }
 

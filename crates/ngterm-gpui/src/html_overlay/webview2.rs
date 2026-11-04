@@ -34,6 +34,7 @@ mod bridge;
 mod browser;
 mod keys;
 mod native;
+mod outside;
 mod page;
 mod registry;
 mod runtime;
@@ -42,8 +43,8 @@ mod store;
 mod view;
 
 pub use registry::{
-    answer, apply, init, install, key_down, mount, page_holds_keyboard, refresh_themes, reject, set_covered, settle,
-    shutdown,
+    answer, apply, init, install, key_down, mount, page_holds_keyboard, refresh_themes, reject, set_covered,
+    set_window_scale, settle, shutdown,
 };
 pub(super) use registry::{copy_link, navigate};
 pub use view::PageView;

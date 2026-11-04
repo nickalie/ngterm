@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
-use super::{AppStore, OverlayPane, Session};
+use super::{AppStore, OverlayPane, OverlayPointSize, Session};
 use crate::html::{HtmlOverlay, HtmlPageInfo};
 use crate::remote::frames::{PresentationPageAction, PresentationPageCommand, PresentationPageState};
 
@@ -25,6 +25,8 @@ pub struct RemoteOverlaySlot {
     pub owner: i64,
     /// The size requested for a session-wide overlay, `None` for full. What the viewer applied is not known.
     pub size_percent: Option<i64>,
+    /// Requested point axes retained even when an older presenter cannot apply them.
+    pub points: OverlayPointSize,
     /// The viewer's surface stays up after the program ends (`--wait`), which keeps the slot held until it closes.
     pub wait: bool,
     /// The program ended, its result recorded, while a held surface keeps the slot.
@@ -189,9 +191,10 @@ impl RemoteOverlays {
         }
     }
 
-    pub(crate) fn resize(&mut self, job: &str, size_percent: Option<i64>) {
+    pub(crate) fn resize(&mut self, job: &str, size_percent: Option<i64>, points: OverlayPointSize) {
         if let Some(slot) = self.slots.iter_mut().find(|slot| slot.job == job) {
             slot.size_percent = size_percent;
+            slot.points = points;
         }
     }
 
@@ -396,9 +399,15 @@ impl AppStore {
     }
 
     /// Records the size asked of a session-wide remote overlay.
-    pub fn resize_remote_overlay(&mut self, session: Uuid, job: &str, size_percent: Option<i64>) {
+    pub fn resize_remote_overlay(
+        &mut self,
+        session: Uuid,
+        job: &str,
+        size_percent: Option<i64>,
+        points: OverlayPointSize,
+    ) {
         if let Some(found) = self.session_mut(session) {
-            found.remote_overlays.resize(job, size_percent);
+            found.remote_overlays.resize(job, size_percent, points);
         }
     }
 
@@ -495,6 +504,7 @@ mod tests {
 
     fn slot(job: &str, pane: Option<OverlayPane>, wait: bool) -> RemoteOverlaySlot {
         RemoteOverlaySlot {
+            points: crate::model::OverlayPointSize::default(),
             job: job.to_owned(),
             pane,
             owner: 1,

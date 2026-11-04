@@ -1,7 +1,7 @@
 //! A selectable text as assistive technology reads it.
 
 use gpui_kit::base::test_support::snapshots;
-use gpui_kit::{Context, ParentElement as _, Render, TestAppContext, div, px};
+use gpui_kit::{Context, Render, TestAppContext, div, px};
 
 use super::*;
 

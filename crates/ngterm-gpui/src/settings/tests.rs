@@ -163,6 +163,7 @@ fn every_upstream_control_id_names_a_row() {
         "settings-inactive-pane-mute",
         "settings-auto-hide-inactive-sidebars",
         "settings-quick-terminal-size",
+        "settings-session-info-display",
         "settings-notifications",
         "settings-notification-badges",
         "settings-dock-bounce",
@@ -197,7 +198,11 @@ fn every_upstream_control_id_names_a_row() {
     for id in &ids {
         assert!(has(&shown, id), "{id}");
     }
-    // the buttons of the path rows
+}
+
+#[test]
+fn path_rows_offer_the_upstream_choose_and_default_buttons() {
+    let shown = snapshot(everything_shown());
     let items = every_item(&shown);
     let buttons = |id: &str| -> Vec<&'static str> {
         match &item(&items, id).control {
@@ -261,6 +266,15 @@ fn the_interface_tab_offers_the_overlays_button_off_and_ends_the_sidebar_with_mu
             .iter()
             .all(|item| item.id.starts_with("settings-interface-"))
     );
+    assert_eq!(
+        sidebar.items.len(),
+        7,
+        "the final half is available for the info picker"
+    );
+    assert_eq!(
+        sidebar.fill.as_ref().map(|item| item.id.as_str()),
+        Some("settings-session-info-display")
+    );
     let trailing: Vec<&str> = sidebar.trailing.iter().map(|item| item.id.as_str()).collect();
     assert_eq!(
         trailing,
@@ -285,7 +299,7 @@ fn the_interface_tab_offers_the_overlays_button_off_and_ends_the_sidebar_with_mu
 }
 
 /// #810: each Interface toggle leads with its control's glyph, the text-only title-bar elements first with an empty
-/// slot; no other row has a slot.
+/// slot; the Session info picker also keeps an empty slot to align with the Sidebar toggles.
 #[test]
 fn interface_toggles_lead_with_their_controls_glyph_text_only_first() {
     use ngterm_core::persist::settings::InterfaceElement;
@@ -324,7 +338,8 @@ fn interface_toggles_lead_with_their_controls_glyph_text_only_first() {
         .into_iter()
         .filter(|(_, item)| !item.id.starts_with("settings-interface-"));
     for (tab, item) in others {
-        assert!(item.leading.is_none(), "{tab:?} {}", item.id);
+        let expected = (item.id == "settings-session-info-display").then_some(GlyphSlot(None));
+        assert_eq!(item.leading, expected, "{tab:?} {}", item.id);
     }
 }
 
@@ -1376,5 +1391,57 @@ fn the_paths_and_diagnostics_are_selectable_text(cx: &mut TestAppContext) {
     assert_eq!(
         shown(&h, cx, "settings-hooks-diagnostics").as_deref(),
         Some(lines.join("\n").as_str())
+    );
+}
+
+/// The upstream Interface layout keeps both new icon toggles, the info picker and Size on screen.
+#[gpui_kit::test]
+fn the_interface_grid_keeps_the_info_picker_and_quick_terminal_size_visible(cx: &mut TestAppContext) {
+    let (mut h, cx) = harness(cx, AppSettings::default());
+    h.tab(cx, Tab::Interface);
+    let page = bounds(cx, "settings-page");
+    for id in [
+        "settings-interface-workspaceIcons",
+        "settings-interface-sessionIcons",
+        "settings-session-info-display",
+        "settings-quick-terminal-size",
+    ] {
+        let control = bounds(cx, id);
+        assert!(
+            control.origin.y >= page.origin.y && control.bottom() <= page.bottom(),
+            "{id} fits: {control:?} in {page:?}"
+        );
+    }
+    let size_before_scroll = bounds(cx, "settings-quick-terminal-size");
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: size_before_scroll.center(),
+        delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0., -12.)),
+        ..gpui_kit::ScrollWheelEvent::default()
+    });
+    h.settle(cx);
+    assert_eq!(
+        bounds(cx, "settings-quick-terminal-size"),
+        size_before_scroll,
+        "Interface fits without scrolling"
+    );
+    let icons = bounds(cx, "settings-interface-sessionIcons");
+    let picker = bounds(cx, "settings-session-info-display");
+    assert_eq!(icons.center().y, picker.center().y, "picker fills the odd grid half");
+    assert!(picker.origin.x > icons.origin.x);
+    click(cx, "settings-session-info-display");
+    h.settle(cx);
+    cx.simulate_keystrokes("down down enter");
+    h.settle(cx);
+    assert_eq!(h.stored().session_info_display.as_deref(), Some("flagged"));
+    assert_eq!(h.item(cx, "settings-session-info-display"), Some(Shown::Row(Some(1))));
+    click(cx, "settings-interface-sessionIcons");
+    h.settle(cx);
+    assert!(
+        h.stored()
+            .is_interface_element_hidden(ngterm_core::persist::settings::InterfaceElement::SessionIcons)
+    );
+    assert!(
+        !h.stored()
+            .is_interface_element_hidden(ngterm_core::persist::settings::InterfaceElement::WorkspaceIcons)
     );
 }

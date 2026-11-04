@@ -1,4 +1,4 @@
-//! keymap.conf's `global-hotkey` end to end, on the sandbox's own displays and bus (CLAUDE.md > Never touch the
+//! keymap.conf's `global-hotkey` end to end, on the sandbox's own displays and bus (AGENTS.md > Never touch the
 //! user's running ngterm): on a private Xvfb the chord's key is grabbed on the root window and a press from the X
 //! server (XTEST, as any other client's keyboard) toggles the quick terminal, a keymap reload moving the grab; on a
 //! headless weston the chord is bound through a fake global shortcuts portal on the private bus, as its preferred

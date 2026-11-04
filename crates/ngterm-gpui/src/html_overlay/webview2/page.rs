@@ -144,6 +144,7 @@ pub struct Page {
     native_focused: Cell<bool>,
     /// A file page reloads once its replaced theme script is in place.
     reload_after_theme: Cell<bool>,
+    document_generation: super::super::documents::Generation,
     me: Weak<Page>,
 }
 
@@ -194,6 +195,7 @@ impl Page {
             applied: Cell::new(Placement::default()),
             native_focused: Cell::new(false),
             reload_after_theme: Cell::new(false),
+            document_generation: super::super::documents::Generation::default(),
             me: me.clone(),
         })
     }
@@ -423,7 +425,7 @@ impl Page {
     /// The scripts after the theme, in load order: the guard, the page script, and a `--js` file page's helper.
     pub fn scripts(&self) -> Vec<String> {
         let overlay = self.overlay();
-        let themed = overlay.themed();
+        let themed = overlay.bridged();
         let mut scripts = vec![
             bridge::GUARD_SCRIPT.to_owned(),
             bridge::page_script(&self.nonce, themed, overlay.flags.javascript),
@@ -445,6 +447,9 @@ impl Page {
         let colors = PanelColors::resolve(terminal, self.background.as_deref());
         self.colors.replace(colors.clone());
         self.refresh(cx);
+        if matches!(self.overlay().source, HtmlSource::Image { .. }) {
+            return;
+        }
         let next = colors.theme();
         let change = policy::theme_change(&self.theme.borrow(), &next, themed);
         if change == ThemeChange::Unchanged {
@@ -940,6 +945,7 @@ impl Page {
     /// file without a grant from its text (read again each time) through the text protocol, a replica's file through
     /// its own protocol; a page without its store loads nothing and fails.
     fn load_original(&self) {
+        let generation = self.document_generation.next();
         let source = {
             let mut state = self.state.borrow_mut();
             if let Some(failure) = state.storage_failure.clone() {
@@ -952,6 +958,10 @@ impl Page {
         };
         let Some(native) = self.native() else { return };
         let address = match source {
+            source @ (HtmlSource::Image { .. } | HtmlSource::Markdown { .. }) => {
+                registry::read_document(self.id, generation, source);
+                return;
+            }
             HtmlSource::Url(url) => url.as_str().to_owned(),
             HtmlSource::File {
                 path,
@@ -985,6 +995,22 @@ impl Page {
         native.load_url(&scheme::text_address(self.id));
     }
 
+    pub(super) fn document_loaded(&self, generation: u64, result: Result<String, String>) {
+        if !self.active() || !self.document_generation.current(generation) {
+            return;
+        }
+        match result {
+            Ok(html) => {
+                if let Some(native) = self.native() {
+                    self.text.lock().unwrap_or_else(PoisonError::into_inner).replace(html);
+                    self.state.borrow_mut().text_pending = true;
+                    native.load_url(&scheme::text_address(self.id));
+                }
+            }
+            Err(failure) => self.fail(failure),
+        }
+    }
+
     pub fn set_zoom(&self, zoom: f64) {
         if let Some(native) = self.native() {
             native.set_zoom(zoom);
@@ -1016,13 +1042,16 @@ impl Page {
                 native.go_forward();
             }
             HtmlNavigation::Browser => {
+                if matches!(self.overlay().source, HtmlSource::Markdown { .. }) {
+                    return Err(errors::MARKDOWN_IN_OVERLAY.to_owned());
+                }
                 let opened = self.browser_url().is_some_and(|url| super::browser::open(url.as_str()));
                 if !opened {
                     return Err(errors::NO_BROWSER.to_owned());
                 }
             }
             HtmlNavigation::Finder => {
-                if !self.overlay().themed() {
+                if !matches!(self.overlay().source, HtmlSource::File { .. }) {
                     return Err(errors::FINDER_REQUIRES_FILE.to_owned());
                 }
                 if let Some(path) = self.page_path() {
@@ -1133,6 +1162,7 @@ impl Page {
     pub fn close(&self, cx: &mut App) {
         self.end_prompt(cx);
         self.state.borrow_mut().life = Life::Released;
+        self.document_generation.next();
         if let Some(native) = self.native.take() {
             registry::bury(native, self.private_folder());
         }

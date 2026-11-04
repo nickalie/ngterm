@@ -12,6 +12,7 @@
 
 mod context;
 mod drag;
+mod info;
 mod look;
 mod menu;
 mod rows;

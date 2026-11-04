@@ -86,6 +86,9 @@ impl AppStore {
     /// selected panes without a `pane.focused`, and it asks for no save of its own: only the closing repair of a
     /// hidden selection writes.
     pub fn restore(&mut self, snapshot: &Snapshot, launch_restore: bool) {
+        for session in self.sessions() {
+            self.dispose_session_mailboxes(session.id());
+        }
         self.restoring_selection = true;
         self.fresh_workspace_id = None;
         for session in self

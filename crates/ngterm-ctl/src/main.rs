@@ -16,6 +16,7 @@ mod hooks;
 mod keymap;
 mod live;
 mod local;
+mod messages;
 mod modal;
 mod notify;
 mod output;
@@ -89,6 +90,7 @@ enum Command {
     Quick(quick::Quick),
     Sidebar(sidebar::Sidebar),
     Notify(notify::Notify),
+    Msg(messages::Msg),
     Font(font::Font),
     Keymap(keymap::Keymap),
     Hooks(hooks::Hooks),
@@ -120,6 +122,7 @@ impl Command {
             Self::Quick(command) => command.check(),
             Self::Sidebar(command) => command.check(),
             Self::Notify(command) => command.validate(),
+            Self::Msg(command) => command.check(),
             Self::Font(command) => command.check(),
             Self::Keymap(command) => command.check(),
             Self::Hooks(command) => command.check(),
@@ -148,6 +151,7 @@ impl Command {
             Self::Quick(command) => command.execute(env),
             Self::Sidebar(command) => command.execute(env),
             Self::Notify(command) => command.default_run(env),
+            Self::Msg(command) => command.run(env),
             Self::Font(command) => command.execute(env),
             Self::Keymap(command) => command.execute(env),
             Self::Hooks(command) => command.execute(env),

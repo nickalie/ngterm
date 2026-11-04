@@ -2,6 +2,7 @@
 //! a frontend keeps only its widget glue over them.
 //!
 //! - [`coverage`]: the coverage profile of an instrumented build, written before an exit that skips its handlers.
+//! - [`documents`]: bounded local image and Markdown reads for document overlays.
 //! - [`hook_runner`]: the [`ngterm_host::ProcessLauncher`] for hooks and custom commands.
 //! - [`process_table`]: this OS's [`ngterm_host::ProcessTable`], `ngterm-session`'s.
 //! - [`restore_launch`]: the restore decision a launch takes before its first terminal.
@@ -12,6 +13,7 @@
 //! - [`page_channel`]: the helper carrying a handed-over page's channel to its origin as a child process.
 
 pub mod coverage;
+pub mod documents;
 pub mod hook_runner;
 pub mod integrations;
 pub mod logging;

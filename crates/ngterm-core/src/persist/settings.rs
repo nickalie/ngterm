@@ -131,6 +131,23 @@ impl Default for FlaggedViewLayout {
 }
 
 raw_enum! {
+    /// When the sidebar shows a session's info line; unset and unknown values mean always.
+    SessionInfoDisplay { Always => "always", Flagged => "flagged", Off => "off" }
+}
+
+impl SessionInfoDisplay {
+    /// The Interface picker's label.
+    #[must_use]
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Always => "Always",
+            Self::Flagged => "Flagged",
+            Self::Off => "Off",
+        }
+    }
+}
+
+raw_enum! {
     /// Where a clicked web link from terminal output opens: the desktop's browser, or a session web overlay at full
     /// size (`overlay`), 95%, 75% or 50%.
     LinkOpenMode {
@@ -221,6 +238,8 @@ raw_enum! {
         FlaggedView => "flaggedView",
         FocusFilter => "focusFilter",
         WorkspaceAddSession => "workspaceAddSession",
+        WorkspaceIcons => "workspaceIcons",
+        SessionIcons => "sessionIcons",
     }
 }
 
@@ -347,6 +366,9 @@ pub struct AppSettings {
     pub auto_hide_sidebar_inactive_windows: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flagged_view_layout: Option<String>,
+    /// Sidebar info-line visibility; a GUI-only setting, never a Ghostty config key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_info_display: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_open_mode: Option<String>,
     /// The keyboard layout held while a terminal has the keyboard, `None` for off (Settings ▸ Key Mapping ▸ "Lock in
@@ -447,6 +469,14 @@ impl AppSettings {
             .as_deref()
             .and_then(FlaggedViewLayout::from_raw)
             .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn effective_session_info_display(&self) -> SessionInfoDisplay {
+        self.session_info_display
+            .as_deref()
+            .and_then(SessionInfoDisplay::from_raw)
+            .unwrap_or(SessionInfoDisplay::Always)
     }
 
     #[must_use]
@@ -756,6 +786,34 @@ mod tests {
         );
         assert_eq!(AutoFollowAttention::tolerant(Some("s7")), AutoFollowAttention::Off);
         assert_eq!(AutoFollowAttention::M5.timeout_secs(), Some(300));
+    }
+
+    /// Upstream's `sessionInfoDisplayDefaultsToAlwaysResolvesTolerantlyAndIsNotAGhosttyKey`.
+    #[test]
+    fn session_info_display_defaults_to_always_resolves_tolerantly_and_is_not_a_ghostty_key() {
+        let defaults = AppSettings::default();
+        assert_eq!(defaults.session_info_display, None);
+        assert_eq!(defaults.effective_session_info_display(), SessionInfoDisplay::Always);
+        for display in SessionInfoDisplay::ALL {
+            let settings = AppSettings {
+                session_info_display: Some(display.raw().to_owned()),
+                ..AppSettings::default()
+            };
+            let decoded: AppSettings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(decoded.effective_session_info_display(), *display);
+            assert_eq!(settings.ghostty_config_lines(), defaults.ghostty_config_lines());
+        }
+        for raw in [r#"{"sessionInfoDisplay":"sometimes"}"#, r#"{"fontSize":16}"#] {
+            let decoded: AppSettings = serde_json::from_str(raw).unwrap();
+            assert_eq!(decoded.effective_session_info_display(), SessionInfoDisplay::Always);
+        }
+        assert_eq!(
+            SessionInfoDisplay::ALL
+                .iter()
+                .map(|display| display.display_name())
+                .collect::<Vec<_>>(),
+            ["Always", "Flagged", "Off"]
+        );
     }
 
     /// Upstream's `linkOpenModeDefaultsToBrowserResolvesTolerantlyAndIsNotAGhosttyKey`.

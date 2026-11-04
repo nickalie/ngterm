@@ -21,7 +21,7 @@ use super::hub::PAGE_KINDS;
 use crate::Core;
 use crate::commands::overlay_page::PageOpening;
 use crate::html::{self, HtmlNavigation, HtmlOverlay, HtmlSource, errors};
-use crate::model::{OverlayPane, RemoteOverlaySlot, RemotePage, Session};
+use crate::model::{OverlayPane, OverlayPointSize, OverlaySize, RemoteOverlaySlot, RemotePage, Session};
 use crate::pane_env::uuid_string;
 
 /// How long a handed-over file page waits for its channel to be claimed (upstream's `pageClaimWindow`).
@@ -55,8 +55,6 @@ pub(crate) enum RemotePageOpen {
     Loopback,
     /// The request would not fit one presentation frame.
     TooLarge,
-    /// The open carries point sizes, which the presenting machine does not take.
-    PointsUnsupported,
     Opened,
 }
 
@@ -79,7 +77,7 @@ pub(super) fn presentation_source(source: &HtmlSource) -> Option<PresentationPag
         HtmlSource::Url(url) => Some(PresentationPageSource::Url {
             address: url.as_str().to_owned(),
         }),
-        HtmlSource::Replica { .. } => None,
+        HtmlSource::Replica { .. } | HtmlSource::Image { .. } | HtmlSource::Markdown { .. } => None,
     }
 }
 
@@ -103,10 +101,12 @@ fn page_request(
     source: PresentationPageSource,
     identity: Option<Uuid>,
     token: String,
-    size_percent: Option<i64>,
+    size: OverlaySize,
 ) -> PresentationPage {
     let flags = overlay.flags;
     PresentationPage {
+        width: size.points.width,
+        height: size.points.height,
         page: uuid_string(overlay.id),
         token,
         source,
@@ -118,9 +118,23 @@ fn page_request(
         persistent: flags.persistent,
         background_color: opening.background_color.clone(),
         pane: identity.map(PresentationPane::Identity),
-        size_percent,
+        size_percent: size.percent,
         follow: opening.follow,
     }
+}
+
+/// A pane page is full; point axes only apply to a floating session-wide page.
+fn page_size(opening: &PageOpening) -> OverlaySize {
+    let percent = opening
+        .size_percent
+        .filter(|_| opening.pane.is_none())
+        .map(|percent| percent.clamp(1, 100));
+    let points = if percent.is_some() {
+        opening.points
+    } else {
+        OverlayPointSize::default()
+    };
+    OverlaySize { percent, points }
 }
 
 /// Hands `overlay` to the viewer presenting `session` under the program overlay placement rule (upstream's
@@ -154,10 +168,6 @@ pub(crate) fn open_remote_page(
     if !core.pages_presenter_only() && !core.follows_remotely(found, identity) {
         return RemotePageOpen::Local;
     }
-    // the presentation wire carries only a percent, so nothing is reserved or sent
-    if !opening.points.is_empty() {
-        return RemotePageOpen::PointsUnsupported;
-    }
     if !PAGE_KINDS
         .iter()
         .all(|kind| core.remote.hub.presenter_supports(kind, session))
@@ -168,12 +178,12 @@ pub(crate) fn open_remote_page(
         return RemotePageOpen::Loopback;
     }
     let token = uuid_string(Uuid::new_v4());
-    let size = if slot.is_none() {
-        opening.size_percent.map(|percent| percent.clamp(1, 100))
-    } else {
-        None
+    let size = page_size(opening);
+    let sent = OverlaySize {
+        points: core.presentable_points(session, size.points),
+        ..size
     };
-    let request = Body::PageRequest(page_request(overlay, opening, source, identity, token.clone(), size));
+    let request = Body::PageRequest(page_request(overlay, opening, source, identity, token.clone(), sent));
     let probe = PresentationFrame {
         generation: i64::MAX,
         rev: i64::MAX,
@@ -194,10 +204,11 @@ pub(crate) fn open_remote_page(
     store.reserve_remote_overlay(
         session,
         RemoteOverlaySlot {
+            points: size.points,
             job: uuid_string(overlay.id),
             pane: slot,
             owner,
-            size_percent: size,
+            size_percent: size.percent,
             wait: false,
             ended: false,
             page: Some(reserved),
@@ -265,6 +276,7 @@ impl Core {
         pane: Option<OverlayPane>,
         action: PresentationPageAction,
         size_percent: Option<i64>,
+        points: OverlayPointSize,
     ) -> bool {
         let owned = self
             .presented_session(session)
@@ -281,6 +293,8 @@ impl Core {
             return false;
         };
         let command = PresentationPageCommand {
+            width: points.width,
+            height: points.height,
             page: job,
             seq,
             action,
@@ -336,7 +350,7 @@ impl Core {
         pane: Option<OverlayPane>,
         action: PresentationPageAction,
     ) -> RemotePageCommand {
-        if self.send_remote_page_command(session, pane, action, None) {
+        if self.send_remote_page_command(session, pane, action, None, OverlayPointSize::default()) {
             RemotePageCommand::Sent
         } else {
             RemotePageCommand::Refused(VIEWER_GONE)
@@ -501,5 +515,23 @@ impl Core {
     /// Runs the claim expiry, at a deadline the frontend armed from [`Core::take_page_claim_expiries`].
     pub fn expire_remote_page_claims(&mut self) {
         self.expire_remote_page_claims_at(Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod document_tests {
+    use super::*;
+    #[test]
+    fn local_documents_have_no_remote_form() {
+        for source in [
+            HtmlSource::Image {
+                path: "/tmp/x.png".to_owned(),
+            },
+            HtmlSource::Markdown {
+                path: "/tmp/x.md".to_owned(),
+            },
+        ] {
+            assert!(presentation_source(&source).is_none());
+        }
     }
 }

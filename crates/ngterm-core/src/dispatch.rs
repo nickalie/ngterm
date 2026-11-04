@@ -150,6 +150,8 @@ pub struct Core {
     pub(crate) auto_follow: crate::auto_follow::AutoFollow,
     /// The HUD commands' inputs and armed auto-hides ([`commands::hud`]).
     pub(crate) hud: commands::hud::HudRuntime,
+    /// Queued independent sidebar info expiries.
+    pub(crate) info_timers: Vec<crate::session_info::InfoHideTimer>,
     /// The desktop notifications commands and terminals asked for, in order, until the frontend takes them
     /// ([`commands::notify`]).
     pub(crate) notifications: Vec<commands::notify::NotificationEffect>,
@@ -245,6 +247,7 @@ impl Core {
             dashboards: commands::dashboard::Dashboards::default(),
             auto_follow: crate::auto_follow::AutoFollow::default(),
             hud: commands::hud::HudRuntime::default(),
+            info_timers: Vec::new(),
             notifications: Vec::new(),
             modals: crate::modal::Modals::default(),
             jobs: commands::overlay::JobRuntime::default(),
@@ -801,8 +804,8 @@ impl Core {
         }
     }
 
-    /// `tree`'s answer: the `--window` window's tree, else the frontmost one's.
-    fn tree_response(&self, request: &Request) -> Result<Response, ControlError> {
+    /// Projects the window a tree request names.
+    fn requested_tree(&self, request: &Request) -> Result<Response, ControlError> {
         let window = request.args.as_ref().and_then(|args| args.window.as_deref());
         result_of(&TreeResult {
             tree: self.tree(window)?,
@@ -813,7 +816,11 @@ impl Core {
     fn route(&mut self, request: &Request) -> Result<Response, ControlError> {
         match request.cmd {
             Command::Session(
-                cmd @ (SessionCmd::Status | SessionCmd::Flag | SessionCmd::Context | SessionCmd::Seen),
+                cmd @ (SessionCmd::Status
+                | SessionCmd::Flag
+                | SessionCmd::Context
+                | SessionCmd::Info
+                | SessionCmd::Seen),
             ) => match commands::metadata::dispatch(self, cmd, request)? {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
@@ -838,6 +845,7 @@ impl Core {
                 | SessionCmd::OverlayPageServe),
             ) => result_of(&commands::overlay::dispatch(self, cmd, request)?),
             Command::Notify => result_of(&commands::notify::dispatch(self, request)?),
+            Command::Msg(cmd) => result_of(&commands::messages::dispatch(self, cmd, request)?),
             Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
             Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd, request)?),
             Command::Workspace(cmd) => match commands::workspace::dispatch(self, cmd, request)? {
@@ -868,7 +876,7 @@ impl Core {
             Command::Hooks(cmd) => result_of(&commands::hooks::dispatch(self, cmd, request)?),
             Command::Events(EventsCmd::Read) => self.read_events(request.args.as_ref()),
             Command::Version => result_of(&self.version()),
-            Command::Tree => self.tree_response(request),
+            Command::Tree => self.requested_tree(request),
             Command::Restore(cmd) => match commands::restore::dispatch_group(self, cmd, request)? {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
@@ -947,7 +955,7 @@ mod tests {
             serde_json::to_value(response).unwrap(),
             json!({"ok": true, "result": {
                 "app": {"version": "0.1.0", "commit": "abc1234"},
-                "conformance": {"parityLevel": "0.39.1", "capabilities": ["posix-shell"]}
+                "conformance": {"parityLevel": "0.40.0", "capabilities": ["posix-shell"]}
             }})
         );
     }

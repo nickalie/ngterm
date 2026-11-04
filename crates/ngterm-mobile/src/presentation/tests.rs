@@ -374,6 +374,7 @@ fn the_snapshot_connects_and_its_status_is_no_change() {
             status: Some(blocked()),
             hud: Some(hud()),
             context: Some("fixing the build".to_owned()),
+            info: None,
             layout: Some(layout()),
             name: None,
             respawns: Some(PresentationRespawns {
@@ -608,6 +609,8 @@ fn an_overlay_is_refused_and_its_closes_change_nothing() {
 
         harness
             .deliver(Body::OverlayRequest(PresentationOverlay {
+                width: None,
+                height: None,
                 job: "j1".to_owned(),
                 pane: None,
                 size_percent: None,
@@ -618,6 +621,8 @@ fn an_overlay_is_refused_and_its_closes_change_nothing() {
             .await;
         harness
             .deliver(Body::OverlayResize(PresentationOverlayChange {
+                width: None,
+                height: None,
                 job: "j1".to_owned(),
                 size_percent: Some(50),
             }))
@@ -646,6 +651,8 @@ fn a_page_is_refused_as_unsupported_and_its_closes_change_nothing() {
 
         harness
             .deliver(Body::PageRequest(PresentationPage {
+                width: None,
+                height: None,
                 page: "p1".to_owned(),
                 token: "t".to_owned(),
                 source: PresentationPageSource::Url {

@@ -23,8 +23,8 @@ use crate::error::ControlError;
 use crate::live::lead::LeadRole;
 use crate::modal::AskOwner;
 use crate::model::{
-    AskAnchor, AskStyle, EndedAsk, OverlayPane, OverlayProgram, PendingAsk, RemoteOverlayChange, RemoteOverlayOutcome,
-    RemoteOverlaySlot, Session, StatusPane,
+    AskAnchor, AskStyle, EndedAsk, OverlayPane, OverlayPointSize, OverlayProgram, PendingAsk, RemoteOverlayChange,
+    RemoteOverlayOutcome, RemoteOverlaySlot, Session, StatusPane,
 };
 use crate::overlay_capture::OverlayLaunchContext;
 use crate::overlay_jobs::{OverlayJobFrame, OverlayJobOutcome, OverlayJobState};
@@ -44,9 +44,15 @@ pub(crate) enum RemoteOverlayOpen {
     PaneMissing,
     /// The launch context is larger than the helper reads in one frame.
     TooLarge,
-    /// The open carries point sizes, which the presenting machine does not take.
-    PointsUnsupported,
     Opened,
+}
+
+/// Result of resizing an origin's reserved slot (upstream's `RemoteOverlayResize`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoteOverlayResize {
+    Sent,
+    ViewerGone,
+    NotFloating,
 }
 
 impl Core {
@@ -259,10 +265,14 @@ impl Core {
         }
     }
 
-    /// Asks the presenter to resize session `session`'s session-wide remote overlay and records the size (upstream's
-    /// `resizeRemoteOverlay`). `None` when no viewer holds the slot; false when the stream the job was handed to is
-    /// gone, even if another presents now.
-    pub(crate) fn resize_remote_overlay(&mut self, session: Uuid, size_percent: Option<i64>) -> Option<bool> {
+    /// Resolves a session-wide remote resize against its stored axes, then sends the whole result
+    /// (upstream's `resizeRemoteOverlay`). A stale presenter is refused before any state changes.
+    pub(crate) fn resize_remote_overlay(
+        &mut self,
+        session: Uuid,
+        size_percent: Option<i64>,
+        points: OverlayPointSize,
+    ) -> Option<RemoteOverlayResize> {
         let slot = self
             .library()
             .store_for_session(session)
@@ -270,20 +280,53 @@ impl Core {
             .and_then(|found| found.remote_overlays().slot(None).cloned())?;
         let hub = &self.remote.hub;
         if !hub.has_presenter(session) || hub.presenter_generation(session) != slot.owner {
-            return Some(false);
+            return Some(RemoteOverlayResize::ViewerGone);
         }
-        let size = size_percent.map(|percent| percent.clamp(1, 100));
+        let (size, merged) = if let Some(percent) = size_percent {
+            (Some(percent.clamp(1, 100)), points)
+        } else if points.is_empty() {
+            (None, OverlayPointSize::default())
+        } else {
+            let Some(percent) = slot.size_percent else {
+                return Some(RemoteOverlayResize::NotFloating);
+            };
+            (Some(percent), slot.points.merging(points))
+        };
         if let Some(store) = self.library_mut().store_for_session_mut(session) {
-            store.resize_remote_overlay(session, &slot.job, size);
+            store.resize_remote_overlay(session, &slot.job, size, merged);
         }
-        if slot.page.is_some() {
-            return Some(self.send_remote_page_command(session, None, PresentationPageAction::Resize, size));
+        let sent = self.presentable_points(session, merged);
+        let delivered = if slot.page.is_some() {
+            self.send_remote_page_command(session, None, PresentationPageAction::Resize, size, sent)
+        } else {
+            self.remote.hub.send_to_presenter(
+                Body::OverlayResize(PresentationOverlayChange {
+                    job: slot.job,
+                    size_percent: size,
+                    width: sent.width,
+                    height: sent.height,
+                }),
+                session,
+            )
+        };
+        Some(if delivered {
+            RemoteOverlayResize::Sent
+        } else {
+            RemoteOverlayResize::ViewerGone
+        })
+    }
+
+    /// Older presenters receive the percent alone; requested axes stay in the origin's slot.
+    pub(super) fn presentable_points(&self, session: Uuid, points: OverlayPointSize) -> OverlayPointSize {
+        if self
+            .remote
+            .hub
+            .presenter_supports(super::hub::OVERLAY_POINTS_KIND, session)
+        {
+            points
+        } else {
+            OverlayPointSize::default()
         }
-        let body = Body::OverlayResize(PresentationOverlayChange {
-            job: slot.job,
-            size_percent: size,
-        });
-        Some(self.remote.hub.send_to_presenter(body, session))
     }
 }
 
@@ -388,10 +431,6 @@ pub(crate) fn open_remote_overlay(
     if !core.follows_remotely(found, identity) {
         return RemoteOverlayOpen::NotPresented;
     }
-    // the presentation wire carries only a percent, so nothing is reserved or sent
-    if !request.program.points.is_empty() {
-        return RemoteOverlayOpen::PointsUnsupported;
-    }
     let context = launch_context(core, window, found, request.program);
     let fits = OverlayJobFrame::Context {
         context: context.clone(),
@@ -417,10 +456,16 @@ pub(crate) fn open_remote_overlay(
     } else {
         None
     };
+    let points = if size.is_some() {
+        request.program.points
+    } else {
+        OverlayPointSize::default()
+    };
     if let Some(store) = core.library_mut().store_mut(window) {
         store.reserve_remote_overlay(
             session,
             RemoteOverlaySlot {
+                points,
                 job: job.clone(),
                 pane,
                 owner,
@@ -431,7 +476,10 @@ pub(crate) fn open_remote_overlay(
             },
         );
     }
+    let sent = core.presentable_points(session, points);
     let overlay = PresentationOverlay {
+        width: sent.width,
+        height: sent.height,
         job,
         pane: identity.map(PresentationPane::Identity),
         size_percent: size,

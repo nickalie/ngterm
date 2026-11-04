@@ -1,9 +1,11 @@
-//! The store half of Duplicate as Companion: upstream's three `AppStoreCompanionsTests.duplicateAsCompanion*` cases.
+//! The store half of Duplicate as Companion: upstream's `AppStoreCompanionsTests.duplicateAsCompanion*` cases.
 
 use uuid::Uuid;
 
 use super::support::{add, ids};
 use crate::model::{AppStore, CompanionCopy, CompanionOptions, CompanionRefusal, PaneCopy, Session, SplitAxis};
+use crate::pane_env::uuid_string;
+use crate::restore::spawn_plan::ORDINARY_DIALECT;
 
 const HOME: &str = "/home/u";
 
@@ -47,12 +49,12 @@ impl Group {
     }
 }
 
-/// A copied pane in `cwd` running `argv` (its POSIX line the creation command), a plain shell without one.
+/// A copied pane in `cwd` running `argv` (its ordinary-shell line the creation command), a plain shell without one.
 fn pane(cwd: &str, argv: Option<&[&str]>) -> PaneCopy {
     let argv: Option<Vec<String>> = argv.map(|argv| argv.iter().map(|word| (*word).to_owned()).collect());
     PaneCopy {
         cwd: cwd.to_owned(),
-        command: argv.as_deref().map(crate::command_restore::shell_quoted_line),
+        command: argv.as_deref().map(|argv| ORDINARY_DIALECT.line(argv).unwrap()),
         argv,
     }
 }
@@ -81,7 +83,10 @@ fn duplicate_as_companion_copies_the_layout_and_runs_each_program_as_its_command
     let session = g.session(copied);
     assert_eq!(session.parent_id(), Some(g.parent));
     assert_eq!(session.initial_cwd(), "/srv");
-    assert_eq!(session.launch.command.as_deref(), Some("'htop' '-d' '5'"));
+    assert_eq!(
+        session.launch.command,
+        ORDINARY_DIALECT.line(&["htop".to_owned(), "-d".to_owned(), "5".to_owned()])
+    );
     assert_eq!(
         session.launch.argv,
         Some(vec!["htop".to_owned(), "-d".to_owned(), "5".to_owned()])
@@ -126,4 +131,148 @@ fn duplicate_as_companion_of_a_single_pane_makes_no_split() {
         .store
         .duplicate_as_companion(Uuid::new_v4(), copy(pane("/srv", None), None), HOME);
     assert_eq!(unknown, Err(CompanionRefusal::NoSuchSession));
+}
+
+/// One foreground program carrying identities in whole arguments, an embedded assignment and a daemon name.
+fn identity_arguments(session: &str, pane: &str, peer: &str, daemon: &str, unrelated: &str) -> Vec<String> {
+    vec![
+        "tool".to_owned(),
+        format!("set.NGTERM_SESSION_ID=\"{session}\""),
+        format!("--pane={pane}"),
+        "--peer".to_owned(),
+        peer.to_owned(),
+        daemon.to_owned(),
+        unrelated.to_owned(),
+        "left:right".to_owned(),
+    ]
+}
+
+fn program(cwd: &str, argv: Vec<String>) -> PaneCopy {
+    PaneCopy {
+        cwd: cwd.to_owned(),
+        command: ORDINARY_DIALECT.line(&argv),
+        argv: Some(argv),
+    }
+}
+
+fn assert_persisted_pane(command: Option<&str>, argv: Option<&[String]>, expected: &[String]) {
+    assert_eq!(argv, Some(expected));
+    assert_eq!(command, ORDINARY_DIALECT.line(expected).as_deref());
+}
+
+/// An all-digit UUID also has a wholly lowercase spelling; random fixtures need not contain any letters.
+fn rebound_identity(spelling: &str, destination: Uuid) -> String {
+    let destination = uuid_string(destination);
+    if spelling == spelling.to_ascii_lowercase() {
+        destination.to_ascii_lowercase()
+    } else {
+        destination
+    }
+}
+
+/// Upstream's `duplicateAsCompanionRebindsTheSourcesIdentitiesInBothPanes`, including both persisted argv copies.
+#[test]
+fn duplicate_as_companion_rebinds_the_sources_identities_in_both_panes() {
+    let mut g = Group::new();
+    g.store.set_split_visibility(g.first, true, None);
+    let source = g.session(g.first);
+    let source_id = uuid_string(g.first);
+    let primary = uuid_string(source.pane_identity);
+    let split_id = source.split_pane_identity.unwrap();
+    let split = uuid_string(split_id);
+    let unrelated = uuid_string(g.after);
+    let mixed = source_id[..8].to_ascii_lowercase() + &source_id[8..];
+    let left = identity_arguments(
+        &source_id,
+        &primary,
+        &split.to_ascii_lowercase(),
+        &crate::live::daemon_name(source.pane_identity),
+        &unrelated,
+    );
+    let right = identity_arguments(
+        &mixed,
+        &split,
+        &primary.to_ascii_lowercase(),
+        &crate::live::daemon_name(split_id),
+        &unrelated,
+    );
+    let spec = copy(program("/srv", left), Some(program("/var/log", right)));
+    let copied = g.store.duplicate_as_companion(g.first, spec, HOME).unwrap();
+    let session = g.session(copied);
+    let copied_split = session.split_pane_identity.unwrap();
+    let expected_left = identity_arguments(
+        &rebound_identity(&source_id, copied),
+        &rebound_identity(&primary, session.pane_identity),
+        &uuid_string(copied_split).to_ascii_lowercase(),
+        &crate::live::daemon_name(session.pane_identity),
+        &unrelated,
+    );
+    let expected_right = identity_arguments(
+        &rebound_identity(&mixed, copied),
+        &rebound_identity(&split, copied_split),
+        &uuid_string(session.pane_identity).to_ascii_lowercase(),
+        &crate::live::daemon_name(copied_split),
+        &unrelated,
+    );
+    assert_persisted_pane(
+        session.launch.command.as_deref(),
+        session.launch.argv.as_deref(),
+        &expected_left,
+    );
+    assert_persisted_pane(
+        session.split_launch.command.as_deref(),
+        session.split_launch.argv.as_deref(),
+        &expected_right,
+    );
+    assert_eq!(session.initial_cwd(), "/srv");
+    assert_eq!(session.initial_split_cwd.as_deref(), Some("/var/log"));
+    let snapshot = g.store.snapshot();
+    let saved = snapshot.workspaces[0]
+        .sessions
+        .iter()
+        .find(|saved| saved.id == copied)
+        .unwrap();
+    assert_persisted_pane(
+        saved.initial_command.as_deref(),
+        saved.initial_argv.as_deref(),
+        &expected_left,
+    );
+    assert_persisted_pane(
+        saved.split_initial_command.as_deref(),
+        saved.split_initial_argv.as_deref(),
+        &expected_right,
+    );
+}
+
+/// Upstream's `duplicateAsCompanionPersistsTheReboundCommandOfASinglePane` also keeps its matching raw argv.
+#[test]
+fn duplicate_as_companion_persists_the_rebound_command_of_a_single_pane() {
+    let mut g = Group::new();
+    let spec = copy(
+        program(
+            "/srv",
+            vec!["tool".to_owned(), "--session".to_owned(), uuid_string(g.parent)],
+        ),
+        None,
+    );
+    let copied = g.store.duplicate_as_companion(g.parent, spec, HOME).unwrap();
+    let expected = vec![
+        "tool".to_owned(),
+        "--session".to_owned(),
+        rebound_identity(&uuid_string(g.parent), copied),
+    ];
+    let snapshot = g.store.snapshot();
+    let saved = snapshot.workspaces[0]
+        .sessions
+        .iter()
+        .find(|saved| saved.id == copied)
+        .unwrap();
+    assert_persisted_pane(
+        saved.initial_command.as_deref(),
+        saved.initial_argv.as_deref(),
+        &expected,
+    );
+    assert_eq!(saved.split_initial_command, None);
+    assert_eq!(saved.split_initial_argv, None);
+    assert_eq!(saved.cwd, "/srv");
 }

@@ -2,7 +2,7 @@
 
 `classify-diff.py` sorts each changed upstream file into one of these areas. This file says what the area means for
 the port, where its Rust counterpart lives, and how it turns into plan work. Paths on the left are upstream's (in
-`.upstream/agterm`), on the right this repository's. The crate map is in `CLAUDE.md`; when this table and the code
+`.upstream/agterm`), on the right this repository's. The crate map is in `AGENTS.md`; when this table and the code
 disagree, the code wins: check with `ls`/`grep` before naming a Rust file in the plan.
 
 ## Contents
@@ -57,7 +57,7 @@ that group's change touches. The per-commit block in the classify report ("Commi
 
 ## Platforms
 
-Upstream is macOS only; ngterm targets all three OSes (CLAUDE.md > Platforms). A behavior upstream builds on a macOS
+Upstream is macOS only; ngterm targets all three OSes (AGENTS.md > Platforms). A behavior upstream builds on a macOS
 API (keyboard layouts, the Command key, pasteboard, Notification Center, dock, Finder) gets a counterpart per OS, or a
 recorded reason why an OS has none (a Homebrew cask fix, an AppKit bug workaround). Put OS-specific logic in an `any`
 crate where it can live, since CI builds only those on macOS and Windows.
@@ -91,6 +91,7 @@ and zmx patches have no copy here: `pins-delta.sh` reports their moves for the p
 | upstream | copy here | notes |
 |---|---|---|
 | `agterm/Resources/agent-status/` | `resources/agent-status/` | upstream's tree plus `build/patches/agent-status/`: the Linux glue (the Codex adapter reads JSON with python3/jq; the Pi and OpenCode plugins call the wrapper in `~/.config/ngterm/agent-status`), then this build's `ngterm-*` file names and `NGTERM_*` variables; a conflict names the patch to refresh, keeping both |
+| `agterm/Resources/markdown/` | `resources/markdown/` | renderer scripts, styles and licenses; refresh with `scripts/sync-markdown-resources.py` (adapts the app's names), then verify with `scripts/sync-markdown-resources.py --check`; the upstream checkout is local, so this check belongs to the sync procedure rather than CI |
 | `plugins/agterm/skills/agterm/` | `resources/skills/ngterm/` | the agent skill the app installs, as `ngterm`: upstream's tree plus `build/patches/skill-ngterm/` (the `live` names, this build's names: its frontmatter `name` and description, and every command it runs is `ngtermctl`, the far side of a remote attach included, then the attach contract's `NGTERM_LIVE_*` variables), rebuilt whole on every sync; a `conflict` names the patch to refresh against the new tree (regenerate it as `diff -u` of upstream's files and the hand-merged copy), and `sync-resources.sh --check TAG TAG` verifies the copy. An upstream change that brings new `agtermctl` calls is renamed the same way in the names patch |
 | `agterm/Resources/hud/` | none | `hud.sh`, upstream's panel painter, is ported to Rust (`crates/ngterm-core/src/hud/painter.rs`, painted in process by `ngterm-term`, no shell on any OS); `classify-diff.py` files a change to it under `core`, ported as code with the painter's byte-for-byte tests |
 | `agterm/Resources/custom-themes/` | none | upstream's own `agterm` theme, its seeded default; this build ships no theme of its own (Ghostty's catalog only) and seeds none, so a change here is no-port |

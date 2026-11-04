@@ -48,6 +48,9 @@ impl Core {
     pub fn pane_exited_at(&mut self, session: Uuid, token: &str, now: Instant) -> bool {
         // a restart ended this shell on purpose and rebuilds the pane
         if self.live.claimed_exits.contains(token) {
+            if let Some(exit) = self.live.pending_kill_exits.get_mut(token) {
+                exit.get_or_insert((session, now));
+            }
             return false;
         }
         let Some(store) = self.library_mut().store_for_session_mut(session) else {

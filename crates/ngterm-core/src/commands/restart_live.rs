@@ -9,7 +9,10 @@
 //! killed, and only once it is gone does the new terminal start, so it cannot meet a held port or lock. The pane's exit
 //! is claimed from the kill on, so the dying client cannot close the pane the restart rebuilds.
 
+use std::collections::HashSet;
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use ngterm_host::{KillOutcome, ProcessRecord, Surface};
@@ -21,7 +24,7 @@ use crate::Core;
 use crate::command_restore::shell_quoted_line;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
-use crate::live::lead::LeadAttachment;
+use crate::live::lead::{LeadAttachment, LeadState};
 use crate::live::support::{Creation, attach_line, live_attach};
 use crate::model::StatusPane;
 use crate::pane_env::uuid_string;
@@ -81,10 +84,65 @@ fn listed_shell(core: &Core, daemon: &str, other_than: Option<i32>) -> Option<i3
 }
 
 fn find_old_shell(core: &mut Core, job: Job, deadline: Instant) -> Dispatched {
-    match listed_shell(core, &job.daemon, None) {
-        Some(old) => end_old_shell(core, job, old),
+    // The frontend releases the old terminal's exit claim before the first restart finishes observing its new shell.
+    // Serialize through that final observation too, so its polls cannot release a later restart's claim.
+    let busy = core
+        .live
+        .restarting
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(&job.token);
+    let old = if busy || core.live.claimed_exits.contains(&job.token) {
+        None
+    } else {
+        listed_shell(core, &job.daemon, None)
+    };
+    match old {
+        Some(old) => {
+            let guard = RestartGuard::new(core, job.token.clone());
+            hold_restart(end_old_shell(core, job, old), guard)
+        }
         None if Instant::now() < deadline => later(move |core| find_old_shell(core, job, deadline)),
         None => failure("the pane's shell is not running"),
+    }
+}
+
+/// Owns the serialization through every pending phase; even a dropped callback releases it.
+struct RestartGuard {
+    token: String,
+    active: Arc<Mutex<HashSet<String>>>,
+}
+
+impl RestartGuard {
+    fn new(core: &Core, token: String) -> Self {
+        let active = Arc::clone(&core.live.restarting);
+        active
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(token.clone());
+        Self { token, active }
+    }
+}
+
+impl Drop for RestartGuard {
+    fn drop(&mut self) {
+        self.active
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.token);
+    }
+}
+
+fn hold_restart(dispatched: Dispatched, guard: RestartGuard) -> Dispatched {
+    match dispatched {
+        Dispatched::Done(response) => {
+            drop(guard);
+            Dispatched::Done(response)
+        }
+        Dispatched::Pending { after, resume } => Dispatched::Pending {
+            after,
+            resume: Box::new(move |core| hold_restart(resume(core), guard)),
+        },
     }
 }
 
@@ -118,26 +176,67 @@ fn end_old_shell(core: &mut Core, job: Job, old: i32) -> Dispatched {
             "the process table cannot be read, so the old program could not be tracked; nothing was changed",
         );
     };
-    match host.kill(&job.daemon, true) {
-        KillOutcome::Killed => {}
-        KillOutcome::StaleSocket => {
-            return failure(format!("{} did not confirm the kill; nothing was started", job.daemon));
-        }
-        KillOutcome::Failed(reason) => {
-            return failure(format!("could not end the pane's shell: {reason}; nothing was started"));
-        }
-    }
-    // the dying client's exit would close the pane, and its `unowned` report would reattach to a daemon that is gone
+    // The host waits for the old process to end. Its HUP handler may make a control request, so the kill must
+    // not hold the main loop. Claim before starting it: the dying attachment can exit before the first poll.
     core.live.claimed_exits.insert(job.token.clone());
+    core.live.pending_kill_exits.insert(job.token.clone(), None);
+    // Its unowned report can arrive during the kill too; do not let that start a competing attachment.
+    let previous = core.live.leads.snapshot(job.identity);
     core.live.leads.forget(job.identity);
-    core.live.leaders.borrow_mut().note_lifecycle_change();
+    let (answer, result) = mpsc::channel();
+    let daemon = job.daemon.clone();
+    let started = std::thread::Builder::new()
+        .name("ngterm.restart-kill".to_owned())
+        .spawn(move || {
+            let _ = answer.send(host.kill(&daemon, true));
+        });
+    if let Err(reason) = started {
+        core.live.claimed_exits.remove(&job.token);
+        core.live.pending_kill_exits.remove(&job.token);
+        core.live.leads.restore(job.identity, previous);
+        return failure(format!("could not end the pane's shell: {reason}; nothing was started"));
+    }
     let ending = Ending {
         old,
         program,
         replay,
-        deadline: Instant::now() + HANGUP_GRACE,
+        deadline: Instant::now(),
         killed: false,
     };
+    poll_kill(core, job, ending, result, previous)
+}
+
+/// Waits without holding the main loop, including while the old program reports its last activity over the socket.
+fn poll_kill(
+    core: &mut Core,
+    job: Job,
+    mut ending: Ending,
+    answer: Receiver<KillOutcome>,
+    previous: Option<LeadState>,
+) -> Dispatched {
+    let outcome = match answer.try_recv() {
+        Ok(outcome) => outcome,
+        Err(TryRecvError::Empty) => return later(move |core| poll_kill(core, job, ending, answer, previous)),
+        Err(TryRecvError::Disconnected) => KillOutcome::Failed("the session host kill worker ended".to_owned()),
+    };
+    let exited = core.live.pending_kill_exits.remove(&job.token).flatten();
+    let error = match outcome {
+        KillOutcome::Killed => None,
+        KillOutcome::StaleSocket => Some(format!("{} did not confirm the kill; nothing was started", job.daemon)),
+        KillOutcome::Failed(reason) => Some(format!("could not end the pane's shell: {reason}; nothing was started")),
+    };
+    if let Some(error) = error {
+        core.live.claimed_exits.remove(&job.token);
+        core.live.leads.restore(job.identity, previous);
+        // Before the kill became asynchronous this callback ran after a failed kill returned, without a claim.
+        // Resolve the token's current location: a swap or soft close can happen while the worker waits.
+        if let Some((session, now)) = exited {
+            core.pane_exited_at(session, &job.token, now);
+        }
+        return failure(error);
+    }
+    core.live.leaders.borrow_mut().note_lifecycle_change();
+    ending.deadline = Instant::now() + HANGUP_GRACE;
     await_program_end(core, job, ending)
 }
 
@@ -195,6 +294,8 @@ fn rebuild(core: &mut Core, job: Job, ending: &Ending) -> Dispatched {
             "the old shell ended (pid {old}) and the pane changed during the restart; nothing was started"
         ));
     };
+    // The old program has finished its shutdown: discard mail immediately before its replacement.
+    store.dispose_pane_mailbox(job.session, job.pane);
     store.clear_pane_owned_state(job.session, job.pane);
     let cwd = store
         .session(job.session)
@@ -321,5 +422,42 @@ fn close_ended_pane(core: &mut Core, job: &Job) {
         && let Some(store) = library.store_mut(window)
     {
         store.finalize_pending_close_of_session(job.session);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CoreConfig, CoreState};
+
+    fn job() -> Job {
+        Job {
+            session: Uuid::nil(),
+            pane: StatusPane::Left,
+            token: Uuid::nil().to_string(),
+            identity: Uuid::nil(),
+            daemon: "missing".to_owned(),
+            command: Some("exit".to_owned()),
+        }
+    }
+
+    #[test]
+    fn restart_timeouts_release_only_their_own_serialization() {
+        let mut core = Core::new(
+            CoreConfig {
+                app: ngterm_proto::AppIdentity::from_recorded("0.1.0", None),
+                capabilities: Vec::new(),
+            },
+            CoreState::default(),
+        );
+        let guard = RestartGuard::new(&core, job().token);
+        let expired = Instant::now();
+        let waiter = find_old_shell(&mut core, job(), expired);
+        assert!(!waiter.finish_now(&mut core).ok);
+        assert!(core.live.restarting.lock().unwrap().contains(&job().token));
+        let observed = await_new_shell(&mut core, job(), 100, None, expired);
+        let observed = hold_restart(observed, guard);
+        assert!(!observed.finish_now(&mut core).ok);
+        assert!(core.live.restarting.lock().unwrap().is_empty());
     }
 }

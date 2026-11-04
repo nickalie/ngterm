@@ -1,0 +1,4 @@
+{"kind": "run", "partial": true, "mode": "partial", "catalog": "/home/nick/develop/projects/my/ngterm/conformance/catalog.yaml", "ui_ids": "/home/nick/develop/projects/my/ngterm/conformance/ui-ids.yaml"}
+{"kind": "test", "nodeid": "tests/protocol/test_live_sessions.py::test_restart_replaces_the_pane_shell", "outcome": "passed", "skip": null, "reason": null, "covers": ["session.restart", "field:result.restart", "field:result.pane"]}
+{"kind": "test", "nodeid": "tests/protocol/test_live_sessions.py::test_restart_without_a_command_replays_the_foreground_program", "outcome": "passed", "skip": null, "reason": null, "covers": ["session.restart", "field:result.restart"]}
+{"kind": "test", "nodeid": "tests/protocol/test_messages.py::test_restart_drops_mail_sent_during_shutdown", "outcome": "passed", "skip": null, "reason": null, "covers": ["msg.send", "msg.read", "session.restart"]}

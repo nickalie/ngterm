@@ -99,6 +99,14 @@ pub fn decide(action: &HtmlNavigationAction, overlay: &HtmlOverlay) -> HtmlNavig
         return Allow;
     }
     match &overlay.source {
+        HtmlSource::Image { .. } => Cancel,
+        HtmlSource::Markdown { .. } => {
+            if web {
+                offer
+            } else {
+                Cancel
+            }
+        }
         HtmlSource::File { grant_root, .. } => {
             if web {
                 return offer;

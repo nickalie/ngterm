@@ -79,7 +79,7 @@ impl WaitDependencies for LiveWait {
 /// Ends a wait at its deadline even while a socket call is blocked, which the poll loop's own deadline check cannot
 /// reach: the client has no receive timeout and the app may never answer (upstream's `SessionWaitWatchdog`). A
 /// dedicated thread, so nothing else can starve it.
-struct Watchdog {
+pub(crate) struct Watchdog {
     /// Dropping it wakes the thread without firing.
     cancel: Option<mpsc::Sender<()>>,
     thread: Option<JoinHandle<()>>,
@@ -87,7 +87,7 @@ struct Watchdog {
 
 impl Watchdog {
     /// Runs `fire` once `after` has passed, unless [`Self::cancel`] comes first.
-    fn start(after: Duration, fire: impl FnOnce() + Send + 'static) -> Self {
+    pub(crate) fn start(after: Duration, fire: impl FnOnce() + Send + 'static) -> Self {
         let (cancel, cancelled) = mpsc::channel::<()>();
         let thread = std::thread::spawn(move || {
             if matches!(cancelled.recv_timeout(after), Err(RecvTimeoutError::Timeout)) {
@@ -101,7 +101,7 @@ impl Watchdog {
     }
 
     /// Stops the timer; once this returns, `fire` has not run and never will, or has already finished.
-    fn cancel(mut self) {
+    pub(crate) fn cancel(mut self) {
         drop(self.cancel.take());
         if let Some(thread) = self.thread.take() {
             // the thread only waits and fires; a panic in `fire` is the caller's and already reported

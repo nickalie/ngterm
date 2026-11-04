@@ -28,9 +28,7 @@ use crate::html::{
     HtmlHost, HtmlLoadState, HtmlNavigation, HtmlOverlay, HtmlPageFlags, HtmlPageInfo, HtmlPageOutcomes,
     HtmlReloadTarget, HtmlSource, errors, zoom,
 };
-use crate::model::{
-    HtmlOverlayOpenFailure, HtmlPageSlot, OverlayPane, OverlayPointSize, OverlaySize, POINTS_REMOTE, StatusPane,
-};
+use crate::model::{HtmlOverlayOpenFailure, HtmlPageSlot, OverlayPane, OverlayPointSize, OverlaySize, StatusPane};
 use crate::pane_env::uuid_string;
 use crate::remote::{REMOTE_LOOPBACK, REMOTE_TOO_LARGE, RemotePageCommand, RemotePageOpen};
 
@@ -114,11 +112,23 @@ impl PageOpening {
     }
 }
 
-/// `session.overlay.open --html|--url` once validated (upstream's `openHtmlOverlay`): the page takes its slot with the
-/// slot rules of a program and answers with its id, the one `session.overlay.result --page` reads. A page the
-/// placement rule hands to the presenting machine is reserved for it before any local check: nothing renders here, so
-/// neither the web views, the saved store nor `--follow` are this machine's concern.
+/// `session.overlay.open --html|--url|--image|--markdown` once validated (upstream's `openHtmlOverlay`): a local
+/// document's descriptor is probed and an image's natural size resolved before the page takes its slot. It follows
+/// a program's slot rules and answers with its id, the one `session.overlay.result --page` reads. A page the
+/// placement rule hands to the presenting machine is reserved for it before any local check: nothing renders here,
+/// so neither the web views, the saved store nor `--follow` are this machine's concern.
 pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, opening: PageOpening) -> Outcome {
+    open_checked(core, target, window, opening, None, false)
+}
+
+fn open_checked(
+    core: &mut Core,
+    target: Option<&str>,
+    window: Option<&str>,
+    mut opening: PageOpening,
+    image: Option<crate::html::image_page::ImageData>,
+    checked: bool,
+) -> Outcome {
     let resolved = crate::resolve::Resolver::new(core.library()).session(target, window)?;
     super::overlay::refuse_hidden_slot(core, resolved.window, resolved.session, opening.pane)?;
     let already_open = if opening.pane.is_none() {
@@ -141,7 +151,6 @@ pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, 
         RemotePageOpen::Unsupported => Some(PRESENTER),
         RemotePageOpen::Loopback => Some(REMOTE_LOOPBACK),
         RemotePageOpen::TooLarge => Some(REMOTE_TOO_LARGE),
-        RemotePageOpen::PointsUnsupported => Some(POINTS_REMOTE),
     };
     if let Some(refusal) = refusal {
         return Err(ControlError::rejected(refusal));
@@ -164,6 +173,7 @@ pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, 
     {
         return Err(ControlError::rejected(format!("session.overlay.open: {failure}")));
     }
+    prepare_document(core, host.as_ref(), resolved, &mut opening, image, checked)?;
     // the store's own guard (upstream's `openHtmlOverlay`): a page placed on the presenting machine never renders here
     if core.page_belongs_remote(id, opening.pane) {
         return Err(ControlError::rejected(PRESENTER));
@@ -190,6 +200,42 @@ pub(crate) fn open(core: &mut Core, target: Option<&str>, window: Option<&str>, 
         page_id: Some(uuid_string(page_id)),
         ..with_id(id)
     })
+}
+
+/// Checks the local descriptor and resolves a natural image size before the slot is taken.
+fn prepare_document(
+    core: &Core,
+    host: &dyn HtmlHost,
+    target: crate::resolve::SessionTarget,
+    opening: &mut PageOpening,
+    image: Option<crate::html::image_page::ImageData>,
+    checked: bool,
+) -> Result<(), ControlError> {
+    match &opening.source {
+        HtmlSource::Image { path } => {
+            let probe = image
+                .map_or_else(|| host.probe_image(path), Ok)
+                .map_err(|error| ControlError::rejected(format!("session.overlay.open: {error}")))?;
+            if opening.pane.is_none() && opening.size_percent.is_none() && opening.points.is_empty() {
+                let bounds = core
+                    .library()
+                    .store(target.window)
+                    .and_then(|store| store.session(target.session))
+                    .and_then(|session| session.hud_frames.detail);
+                opening.points = crate::html::image_page::points(
+                    probe.natural(host.display_scale(target.window)),
+                    host.page_zoom(),
+                    bounds,
+                );
+                opening.size_percent = Some(crate::html::image_page::BASE_PERCENT);
+            }
+        }
+        HtmlSource::Markdown { path } if !checked => host
+            .check_markdown(path)
+            .map_err(|error| ControlError::rejected(format!("session.overlay.open: {error}")))?,
+        _ => {}
+    }
+    Ok(())
 }
 
 /// The error of a refused page open (upstream's `HtmlOverlayOpenFailure.message(pane:)`).
@@ -289,6 +335,9 @@ pub(crate) fn navigate(
     if let Some(refusal) = crate::remote::replica_page::replica_navigation_refusal(shown, navigation) {
         return Err(ControlError::rejected(refusal));
     }
+    if matches!(shown.source, HtmlSource::Markdown { .. }) && navigation == HtmlNavigation::Browser {
+        return Err(ControlError::rejected(errors::MARKDOWN_IN_OVERLAY));
+    }
     let page_id = shown.id;
     let host = core
         .pages
@@ -354,7 +403,10 @@ impl Core {
         for page in gone {
             self.pages.known.remove(&page);
             self.pages.outcomes.dismiss(page);
-            self.pages.released.push(page);
+            // only a frontend with web views takes the released pages; a headless origin's would pile up
+            if self.pages.host.is_some() {
+                self.pages.released.push(page);
+            }
             self.replica_page_released(page);
             self.end_companion_page_serving(page);
         }
@@ -516,11 +568,9 @@ impl Core {
         bridge::request(body, &page).map_err(|error| error.message)
     }
 
-    /// Shows a clicked link as a browsing page over its session (upstream's `openLinkOverlay`), at `size_percent` of
-    /// it (`None`: full size, as `--size-percent` takes it), and says whether it did; the caller opens the link in the
-    /// browser otherwise. A HUD on the session and a zoomed terminal in its window refuse it up front: the page would
-    /// close the HUD for good, or show nowhere.
-    pub fn open_link_overlay(&mut self, url: Url, session: Uuid, size_percent: Option<i64>) -> bool {
+    /// The clicked-link eligibility check: a live session with neither a HUD nor a zoomed window.
+    #[must_use]
+    pub fn can_show_link_overlay(&self, session: Uuid) -> bool {
         let Some(found) = self
             .library()
             .store_for_session(session)
@@ -536,6 +586,37 @@ impl Core {
             .window_id_for_session(session)
             .is_some_and(|window| self.zoom_target(window).is_some())
         {
+            return false;
+        }
+        true
+    }
+
+    /// Opens a local document after an off-main probe; slot eligibility is checked again here.
+    pub fn open_document_link(
+        &mut self,
+        source: HtmlSource,
+        session: Uuid,
+        size_percent: Option<i64>,
+        image: Option<crate::html::image_page::ImageData>,
+    ) -> bool {
+        if !self.can_show_link_overlay(session) {
+            return false;
+        }
+        let opening = PageOpening {
+            source,
+            flags: HtmlPageFlags::default(),
+            pane: None,
+            size_percent,
+            points: OverlayPointSize::default(),
+            background_color: None,
+            follow: false,
+        };
+        open_checked(self, Some(&uuid_string(session)), None, opening, image, true).is_ok()
+    }
+
+    /// Opens a clicked web link as a browsing overlay without selecting its session; false uses the browser.
+    pub fn open_link_overlay(&mut self, url: Url, session: Uuid, size_percent: Option<i64>) -> bool {
+        if !self.can_show_link_overlay(session) {
             return false;
         }
         let opening = PageOpening {

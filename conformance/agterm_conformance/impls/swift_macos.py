@@ -36,7 +36,7 @@ from agterm_conformance.wait import WaitTimeout, wait_until
 if TYPE_CHECKING:
     from agterm_conformance.pty_process import LiveInstance, PtyProcess
 
-PARITY_LEVEL = "0.39.1"
+PARITY_LEVEL = "0.40.0"
 BASE_CAPABILITIES = frozenset(
     {
         "posix-shell", "posix-command-line", "untitled-panes", "window-geometry", "window-minimize",
@@ -119,6 +119,9 @@ ZMX_TEXTS: Mapping[str, str] = {
     f"{GROUP}.reset requires --force": "zmx.reset requires --force",
     f"{GROUP}.present requires a session": "zmx.present requires a session",
     f"{GROUP}.attach requires a host": "zmx.attach requires a host",
+    f"{GROUP}.attach requires a remote session": "zmx.attach requires a remote session",
+    f"{GROUP}.attach.group requires a host": "zmx.attach.group requires a host",
+    f"{GROUP}.attach.group requires a remote session": "zmx.attach.group requires a remote session",
     "could not read the live session screen of {name}": "could not read the zmx screen of {name}",
     "could not read the live session list": "could not read the zmx session list",
     "live sessions are unavailable in this instance": "zmx is unavailable in this instance",
@@ -128,7 +131,18 @@ ZMX_TEXTS: Mapping[str, str] = {
 }
 # ngterm's texts that name the app, in upstream's name.
 NAME_TEXTS: Mapping[str, str] = {
+    "outside ngterm": "outside agterm",
+    "incomplete pane identity: NGTERM_SESSION_ID and NGTERM_PANE_ID must both be set; pass --as SESSION:PANE-ID": (
+        "incomplete pane identity: AGTERM_SESSION_ID and AGTERM_PANE_ID must both be set; pass --as SESSION:PANE-ID"
+    ),
     "restart ngterm to apply the configured mode": "restart agterm to apply the configured mode",
+}
+
+# Platform-neutral replica ownership wording, where upstream names its two Macs.
+PLATFORM_TEXTS: Mapping[str, str] = {
+    "--width/--height are not supported for an overlay this computer shows for another computer; resize it on that computer": (
+        "--width/--height are not supported for an overlay this Mac shows for another Mac; resize it on that Mac"
+    ),
 }
 
 UPSTREAM = Vocabulary(
@@ -142,7 +156,7 @@ UPSTREAM = Vocabulary(
     variable_prefix="ZMX_",
     # `ZmxSupport.namePrefix`
     daemon_prefix="agterm-",
-    texts={**ZMX_TEXTS, **NAME_TEXTS},
+    texts={**ZMX_TEXTS, **NAME_TEXTS, **PLATFORM_TEXTS},
     socket_directory=upstream_socket_directory,
     leading_client=leading_client,
     # zmx's daemons and the macOS session host

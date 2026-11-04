@@ -388,11 +388,14 @@ impl Core {
         overlay.replica_of = Some(origin);
         let local = overlay.id;
         store
-            .open_html_overlay(
+            .open_html_overlay_sized(
                 session,
                 pane,
                 overlay,
-                request.size_percent,
+                crate::model::OverlaySize {
+                    percent: request.size_percent,
+                    points: request.points(),
+                },
                 request.background_color.clone(),
             )
             .map_err(|failure| crate::commands::overlay_page::open_failure(failure, pane))?;
@@ -707,7 +710,7 @@ impl Core {
                 if pane.is_none()
                     && let Some(store) = self.library_mut().store_for_session_mut(session)
                 {
-                    store.resize_overlay(session, command.size_percent);
+                    store.resize_overlay_with_points(session, command.size_percent, command.points());
                 }
                 None
             }
