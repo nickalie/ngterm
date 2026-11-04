@@ -725,6 +725,32 @@ if "--html" in args:
 """
 
 
+# `llvm-profdata merge` and `llvm-cov export` (the report's own, `LLVM_PROFDATA` / `LLVM_COV`): both demand show-env's
+# marker; the export reads one ngterm-core file of 8 lines, regions and functions, 2 of each run.
+FAKE_LLVM = """
+import json
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+if os.environ.get("FAKE_LLVM_COV_ENV") != "1":
+    sys.exit("llvm tool outside show-env")
+if args[0] == "merge":
+    Path(args[args.index("-o") + 1]).write_bytes(b"merged")
+    sys.exit(0)
+assert args[0] == "export", args
+source = str(Path.cwd() / "crates/ngterm-core/src/lib.rs")
+if "-format=lcov" in args:
+    lines = [f"DA:{line},{1 if line <= 2 else 0}" for line in range(1, 9)]
+    print("\\n".join([f"SF:{source}", *lines, "end_of_record"]))
+else:
+    functions = [{"name": f"f{line}", "count": 1 if line <= 2 else 0, "filenames": [source],
+                  "regions": [[line, 1, line, 9, 1 if line <= 2 else 0, 0, 0, 0]]} for line in range(1, 9)]
+    print(json.dumps({"data": [{"functions": functions}]}))
+"""
+
+
 @pytest.fixture
 def fake_cargo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     directory = tmp_path / "cargo-bin"
@@ -732,6 +758,11 @@ def fake_cargo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     cargo = directory / "cargo"
     cargo.write_text(f"#!{sys.executable}\n{FAKE_CARGO}")
     cargo.chmod(0o755)
+    for tool in ("llvm-cov", "llvm-profdata"):
+        fake = directory / tool
+        fake.write_text(f"#!{sys.executable}\n{FAKE_LLVM}")
+        fake.chmod(0o755)
+        monkeypatch.setenv(tool.upper().replace("-", "_"), str(fake))
     monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
     return cargo
 
