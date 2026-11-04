@@ -172,6 +172,29 @@ class ChatModeTest {
     }
 
     @Test
+    fun aChatEndingAfterThePaneMovedOnOpensTheNextConversationsChat() {
+        bed.attach("p1")
+        bed.show("p1")
+        bed.agent("p1", conversation = "c1")
+        eventually { bed.chat("p1") != null }
+        val first = bed.chat("p1")
+        val closed = closes("p1")
+
+        // /clear: the next conversation is announced before the old one's chat reports its end
+        bed.agent("p1", conversation = "c2")
+        bed.test.core.emit(MobileEvent.ChatState(bed.ref("p1"), ChatState.ENDED))
+        eventually { bed.chat("p1") != null && bed.chat("p1") !== first }
+        // no terminal held for the new conversation: the pane shows its chat, opened afresh
+        assertEquals(PaneView.Chat, bed.view("p1"))
+        assertEquals(closed + 1, closes("p1"))
+        assertEquals(setOf(bed.ref("p1")), openChats())
+
+        // the new chat ending in the conversation it followed holds the terminal for it, as before
+        bed.test.core.emit(MobileEvent.ChatState(bed.ref("p1"), ChatState.ENDED))
+        eventually { bed.view("p1") == PaneView.Terminal && bed.chat("p1") == null }
+    }
+
+    @Test
     fun aChatTheOriginCantOpenLeavesTheTerminalWithNoError() {
         bed.attach("p1")
         bed.show("p1")

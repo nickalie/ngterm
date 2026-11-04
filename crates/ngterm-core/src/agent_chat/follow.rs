@@ -1,8 +1,9 @@
 //! Following an agent's transcript for `ngtermctl agent chat`: the backlog read backward from the end, an older page,
 //! everything after a cursor, then new lines as the agent writes them.
 //!
-//! [`Follower`] reads through [`Files`] (a file opened as `Read + Seek`, and a size probe) and waits through
-//! [`Clock`], so the same code runs on every OS, and the tests count the bytes it reads and drive its time.
+//! [`Follower`] reads through [`Files`] (a file opened as `Read + Seek`, and a size probe) and tells the time by
+//! [`Clock`], so the same code runs on every OS, and the tests count the bytes it reads and drive its time. It does
+//! not wait: its caller polls it (`ngtermctl agent chat` every [`POLL_INTERVAL`], until its reader goes).
 //!
 //! - **Backlog** ([`Follower::backlog`]): the file is read backward from its end, each step doubling what was read,
 //!   until its newest complete lines make the asked number of events, with [`CONTEXT`] bytes of older lines before
@@ -41,8 +42,7 @@
 //! does each poll that read anything, after its main transcript's events and its subagents': a reader that got the
 //! `live` has every line of the transcripts up to it, so `--after` its cursor is where a reconnect resumes (the main
 //! line before it was read no later than any subagent line not sent yet was written, which the minute stamps then
-//! send again). Following polls every [`POLL_INTERVAL`] by default, and looks for new subagents at most every
-//! [`DISCOVERY_INTERVAL`].
+//! send again). A poll looks for new subagents at most every [`DISCOVERY_INTERVAL`].
 
 mod lines;
 mod subagents;
@@ -50,7 +50,6 @@ mod subagents;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom};
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -68,7 +67,7 @@ use super::{AgentKind, Approval, ChatEvent, ClaudeParser, CodexParser, EventBody
 /// The events a backlog holds by default: the phone's first screenful and some.
 pub const BACKLOG: usize = 200;
 
-/// How often following probes the transcript by default.
+/// How often `ngtermctl agent chat` polls its follower.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// How often following looks for new subagents at most.
@@ -127,10 +126,9 @@ impl Files for Disk {
     }
 }
 
-/// The time a follower polls by.
+/// The time a follower's polls are told by.
 pub trait Clock {
     fn now(&self) -> Instant;
-    fn sleep(&self, duration: Duration);
 }
 
 /// The system's clock.
@@ -141,10 +139,6 @@ impl Clock for SystemClock {
     fn now(&self) -> Instant {
         Instant::now()
     }
-
-    fn sleep(&self, duration: Duration) {
-        std::thread::sleep(duration);
-    }
 }
 
 /// Reads one conversation's transcript, and its subagents', as chat events.
@@ -152,7 +146,6 @@ impl Clock for SystemClock {
 pub struct Follower<F: Files = Disk, C: Clock = SystemClock> {
     files: F,
     clock: C,
-    interval: Duration,
     agent: AgentKind,
     path: PathBuf,
     /// The backlog size, kept for the backlog after a `reset`.
@@ -161,7 +154,6 @@ pub struct Follower<F: Files = Disk, C: Clock = SystemClock> {
     subagents: Vec<Stream>,
     /// The subagents followed, by [`subagents::Found::key`].
     known: HashSet<String>,
-    polled_at: Option<Instant>,
     discovered_at: Option<Instant>,
     /// The permission prompt the record holds, which a window reads back for.
     prompt: Option<Approval>,
@@ -177,31 +169,22 @@ impl Follower {
 }
 
 impl<F: Files, C: Clock> Follower<F, C> {
-    /// A follower reading through `files` and waiting by `clock`. Nothing is read until the first call.
+    /// A follower reading through `files` and telling the time by `clock`. Nothing is read until the first call.
     pub fn with(files: F, clock: C, agent: AgentKind, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         Self {
             files,
             clock,
-            interval: POLL_INTERVAL,
             agent,
             limit: BACKLOG,
             main: Stream::absent(&path, Spec::main(agent)),
             path,
             subagents: Vec::new(),
             known: HashSet::new(),
-            polled_at: None,
             discovered_at: None,
             prompt: None,
             unshown: Vec::new(),
         }
-    }
-
-    /// Polls every `interval` instead of [`POLL_INTERVAL`].
-    #[must_use]
-    pub fn interval(mut self, interval: Duration) -> Self {
-        self.interval = interval;
-        self
     }
 
     /// The permission prompt the pane's record holds now, if any: the windows read from here on read back for its
@@ -325,7 +308,6 @@ impl<F: Files, C: Clock> Follower<F, C> {
     /// The transcript cannot be read. A subagent's transcript that cannot be read is skipped.
     pub fn poll(&mut self) -> io::Result<Vec<ChatEvent>> {
         let now = self.clock.now();
-        self.polled_at = Some(now);
         let Some(mut events) = self.main.poll(&self.files, true)? else {
             return self.restart();
         };
@@ -356,30 +338,6 @@ impl<F: Files, C: Clock> Follower<F, C> {
             events.push(marker(EventBody::Live, self.main.lines.start()));
         }
         Ok(events)
-    }
-
-    /// Sleeps until the next poll is due.
-    pub fn wait(&self) {
-        let now = self.clock.now();
-        let due = self.polled_at.map_or(now, |at| at + self.interval);
-        let left = due.saturating_duration_since(now);
-        if !left.is_zero() {
-            self.clock.sleep(left);
-        }
-    }
-
-    /// Polls and hands each poll's events (none, often) to `emit` until it breaks.
-    ///
-    /// # Errors
-    /// A poll's, or `emit`'s.
-    pub fn follow(&mut self, mut emit: impl FnMut(Vec<ChatEvent>) -> io::Result<ControlFlow<()>>) -> io::Result<()> {
-        loop {
-            let events = self.poll()?;
-            if emit(events)?.is_break() {
-                return Ok(());
-            }
-            self.wait();
-        }
     }
 
     /// The bytes held for the main transcript's partial last line.

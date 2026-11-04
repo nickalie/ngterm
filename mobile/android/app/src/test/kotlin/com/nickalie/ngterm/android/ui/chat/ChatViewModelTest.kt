@@ -292,7 +292,8 @@ class ChatViewModelTest {
         // answered here
         emit(event("approval-2", ChatBody.Approval(approval)))
         chat.answerApproval("Yes")
-        assertEquals(FakeAction.Approval("Yes"), pane.actions.last())
+        // with the card's prompt: the core answers only the dialog that asks about it
+        assertEquals(FakeAction.Approval(approval, "Yes"), pane.actions.last())
         assertNull(state().approval)
         assertNull(state().problem)
     }

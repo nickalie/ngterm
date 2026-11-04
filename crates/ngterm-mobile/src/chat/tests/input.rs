@@ -2,11 +2,11 @@
 //! bracketed paste and Enter (a slash command the same way), Stop's Escape, each dialog's option keys and the picker's
 //! digits, Tab and Enter.
 
-use super::matchers::{Capture, Term, marked_drafts, tricky_drafts, with_draft};
+use super::matchers::{Capture, Term, approval_of, asked, marked_drafts, tricky_drafts, with_draft};
 use crate::api::PaneInputError;
 use crate::chat::input::{Action, AgentInputOutcome, Key, Next, Plan, QuestionAnswer, UNSAFE_PASTE};
 use crate::chat::matchers::{Agent, Picker, Screen};
-use crate::chat::{ChatQuestionItem, ChatQuestionOption};
+use crate::chat::{ChatApproval, ChatQuestionItem, ChatQuestionOption};
 
 fn screen(name: &str, agent: Agent, state: &str) -> Screen {
     let capture = Capture::load(name);
@@ -167,8 +167,9 @@ fn stop_is_escape_and_only_while_a_turn_runs() {
 #[test]
 fn an_approval_sends_its_options_key_and_looks_that_the_dialog_went() {
     let claude = screen("claude-100x40", Agent::Claude, "permission");
+    let card = asked("claude-100x40");
     for (label, key) in [("Yes", Key::Digit(1)), ("No", Key::Digit(4))] {
-        let mut plan = Plan::new(Action::Approval(label.to_owned()));
+        let mut plan = Plan::new(Action::Approval(card.clone(), label.to_owned()));
         assert_eq!(step(&mut plan, &claude), send(key, true), "{label}");
         assert_eq!(step(&mut plan, &WORKING), Next::Done(AgentInputOutcome::Sent));
     }
@@ -181,20 +182,74 @@ fn an_approval_sends_its_options_key_and_looks_that_the_dialog_went() {
         ),
         ("No, and tell Codex what to do differently", Key::Escape),
     ] {
-        let mut plan = Plan::new(Action::Approval(label.to_owned()));
+        let mut plan = Plan::new(Action::Approval(asked("codex-160x48"), label.to_owned()));
         assert_eq!(step(&mut plan, &codex), send(key, true), "{label}");
     }
 
     // the same dialog still up after the key: pending (the key is not sent again), then gone
-    let mut plan = Plan::new(Action::Approval("Yes".to_owned()));
+    let mut plan = Plan::new(Action::Approval(card.clone(), "Yes".to_owned()));
     step(&mut plan, &claude);
     assert_eq!(step(&mut plan, &claude), Next::Wait);
     assert_eq!(step(&mut plan, &claude), Next::Wait);
     assert_eq!(step(&mut plan, &IDLE), Next::Done(AgentInputOutcome::Sent));
     // no such option, or no dialog: nothing goes
     for screen in [&claude, &IDLE, &Screen::Unknown] {
-        let mut plan = Plan::new(Action::Approval("Maybe".to_owned()));
+        let mut plan = Plan::new(Action::Approval(card.clone(), "Maybe".to_owned()));
         assert_eq!(step(&mut plan, screen), Next::Done(AgentInputOutcome::NotOnScreen));
+    }
+}
+
+#[test]
+fn an_approval_goes_only_to_the_dialog_that_asks_about_the_cards_call() {
+    // the card answered elsewhere and the agent asking about another call: no label of the card answers the dialog
+    // up now, its own or the agent's usual ones (the card's buttons when the screen could not be read)
+    for (name, agent) in [
+        ("claude-44x36", Agent::Claude),
+        ("claude-100x40", Agent::Claude),
+        ("claude-160x48", Agent::Claude),
+        ("codex-44x36", Agent::Codex),
+        ("codex-100x40", Agent::Codex),
+        ("codex-160x48", Agent::Codex),
+    ] {
+        let dialog = screen(name, agent, "permission");
+        let Screen::Permission(shown) = &dialog else {
+            panic!("{name}: not a dialog");
+        };
+        let mut labels: Vec<String> = shown.options.iter().map(|option| option.label.clone()).collect();
+        labels.extend(agent.fallback_labels());
+        let own = asked(name);
+        let others = [
+            approval_of("rm -rf build"),
+            approval_of(if name.ends_with("160x48") {
+                "touch picked.txt"
+            } else {
+                "touch allowed.txt"
+            }),
+            approval_of(if name.ends_with("160x48") {
+                "curl -sI https://example.net"
+            } else {
+                "curl -sI https://example.com"
+            }),
+            // a card whose call can't be confirmed on screen: no command, path or URL to look for
+            ChatApproval {
+                detail: None,
+                ..own.clone()
+            },
+        ];
+        for label in &labels {
+            for card in &others {
+                let mut plan = Plan::new(Action::Approval(card.clone(), label.clone()));
+                assert_eq!(
+                    step(&mut plan, &dialog),
+                    Next::Done(AgentInputOutcome::NotOnScreen),
+                    "{name}: {card:?} {label}"
+                );
+                assert!(!plan.sent(), "{name}: nothing went");
+            }
+        }
+        // the card's own call: its option's key goes
+        let mut plan = Plan::new(Action::Approval(own, labels[0].clone()));
+        assert!(matches!(step(&mut plan, &dialog), Next::Send { .. }), "{name}");
     }
 }
 

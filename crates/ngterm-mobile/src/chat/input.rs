@@ -39,7 +39,11 @@
 //!   (Claude's `[Pasted text #1 +12 lines]`, Codex's `[Pasted Content 1200 chars]`), and nothing else; if it does not
 //!   by the confirm deadline, the paste is left unsent ([`AgentInputOutcome::Unconfirmed`]).
 //! - **Stop**: Escape, while a turn is running.
-//! - **Approval**: the option whose label is the card's, by its key: Claude's digit, Codex's letter or Escape.
+//! - **Approval**: the option whose label is the card's, by its key: Claude's digit, Codex's letter or Escape; only to
+//!   the dialog that asks about the card's call ([`Dialog::asks`](super::matchers::Dialog::asks): the command, path or
+//!   URL the hook reported, read in the rows above its options). A dialog about another call (the card's answered
+//!   elsewhere and the agent asks the next) or a card that names no command, path or URL is
+//!   [`AgentInputOutcome::NotOnScreen`]: a label alone (Claude's `Yes`) would answer any dialog.
 //! - **Question**: per question, its tab confirmed by its text and options; a digit picks a single-select option (the
 //!   picker moves on), digits toggle a multi-select question's boxes to the answer and Tab moves on; free text goes
 //!   through `Type something.` (its digit, then a paste, then Enter or Tab: the row must hold the text, after the
@@ -51,8 +55,8 @@ use std::time::Duration;
 use ngterm_core::ghostty_config::binds::{Mods, PhysicalKey};
 use ngterm_term::{ClipboardLocation, KeyInput, Paste, PasteSource};
 
-use super::ChatQuestionItem;
 use super::matchers::{Agent, OptionKey, Picker, Screen, fits, squeeze};
+use super::{ChatApproval, ChatQuestionItem};
 use crate::api::PaneInputError;
 
 /// Why an action was refused: the text is empty.
@@ -128,7 +132,8 @@ impl Default for InputTiming {
 pub(crate) enum Action {
     Prompt(String),
     Interrupt,
-    Approval(String),
+    /// The card's prompt and the label of the option picked.
+    Approval(ChatApproval, String),
     Question(Vec<ChatQuestionItem>, Vec<QuestionAnswer>),
 }
 
@@ -327,7 +332,10 @@ impl Plan {
         match &self.action {
             Action::Prompt(text) => self.prompt(text.clone(), screen),
             Action::Interrupt => interrupt(screen),
-            Action::Approval(label) => self.approval(&label.clone(), screen),
+            Action::Approval(card, label) => {
+                let (card, label) = (card.clone(), label.clone());
+                self.approval(&card, &label, screen)
+            }
             Action::Question(items, answers) => {
                 let (items, answers) = (items.clone(), answers.clone());
                 self.question(&items, &answers, screen)
@@ -369,10 +377,11 @@ impl Plan {
         }
     }
 
-    fn approval(&mut self, label: &str, screen: &Screen) -> Next {
+    fn approval(&mut self, card: &ChatApproval, label: &str, screen: &Screen) -> Next {
         match (&self.step, screen) {
             (Step::Start, Screen::Permission(dialog)) => match dialog.option(label) {
-                Some(option) => {
+                // the dialog asks about the card's call, not the next one the agent asked after it
+                Some(option) if card.detail.as_deref().is_some_and(|detail| dialog.asks(detail)) => {
                     let key = option.key.into();
                     self.step = Step::Answered(dialog.clone());
                     Next::Send {
@@ -380,7 +389,7 @@ impl Plan {
                         look: true,
                     }
                 }
-                None => self.not_on_screen(),
+                _ => self.not_on_screen(),
             },
             // the dialog the key went to, still up
             (Step::Answered(answered), Screen::Permission(dialog)) if dialog == answered => Next::Wait,

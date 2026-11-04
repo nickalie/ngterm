@@ -2,6 +2,7 @@ package com.nickalie.ngterm.core.fake
 
 import com.nickalie.ngterm.core.ffi.AgentInputOutcome
 import com.nickalie.ngterm.core.ffi.CellPoint
+import com.nickalie.ngterm.core.ffi.ChatApproval
 import com.nickalie.ngterm.core.ffi.ChatQuestion
 import com.nickalie.ngterm.core.ffi.NoHandle
 import com.nickalie.ngterm.core.ffi.Pane
@@ -72,6 +73,7 @@ sealed interface FakeAction {
     data object Interrupt : FakeAction
 
     data class Approval(
+        val approval: ChatApproval,
         val label: String,
     ) : FakeAction
 
@@ -247,7 +249,10 @@ open class FakePane(
 
     override suspend fun interrupt(): AgentInputOutcome = act(FakeAction.Interrupt)
 
-    override suspend fun answerApproval(label: String): AgentInputOutcome = act(FakeAction.Approval(label))
+    override suspend fun answerApproval(
+        approval: ChatApproval,
+        label: String,
+    ): AgentInputOutcome = act(FakeAction.Approval(approval, label))
 
     override suspend fun answerQuestion(
         question: ChatQuestion,

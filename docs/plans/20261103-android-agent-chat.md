@@ -410,7 +410,8 @@ with no output yet is a running call (Task 1's fixture README).
   - a line over 8 MiB becomes `unknown{oversized}` without being buffered whole;
   - extra subagent sources, if Task 1 found separate files.
 - [x] implement a toolkit-neutral `Follower` over `Read + Seek` plus a size probe, with an injectable clock and poll
-      interval (250 ms by default), the same code on every OS
+      interval (250 ms by default), the same code on every OS (as built: the follower only polls; its caller,
+      `ngtermctl agent chat`, polls it every `POLL_INTERVAL` until its reader goes, so there is one loop)
 - [x] `cargo test -p ngterm-core agent_chat` must pass
 
 ### Task 6: The origin's agent record, `agent.report` and `agent.get`
@@ -576,13 +577,16 @@ with no output yet is a running call (Task 1's fixture README).
   sequence tests through the whole core over the fake transport; `chat/tests/input.rs` holds the plans and their key
   bytes). Modified as well: `src/{actor,api,chat,lib}.rs`, the Kotlin `FakePane` (+ `FakePaneTest`).
 - As built:
-  - `Pane::send_prompt(text)`, `interrupt()`, `answer_approval(label)`, `answer_question(question: ChatQuestion,
-    answers: Vec<QuestionAnswer { picked, other }>)` are `suspend` calls answering `AgentInputOutcome`: `Sent`,
+  - `Pane::send_prompt(text)`, `interrupt()`, `answer_approval(approval, label)`,
+    `answer_question(question: ChatQuestion, answers: Vec<QuestionAnswer { picked, other }>)` are `suspend` calls answering `AgentInputOutcome`: `Sent`,
     `NotOnScreen`, `DialogOpen`, `LeadRefused`, and `Unconfirmed` (keys went, then the screen was not as expected:
     the dialog stayed up, a step's result did not show, the lead went). Every other outcome means nothing was sent.
   - `Pane::approval_labels()` gives the card its buttons: the dialog's labels read from the screen now (no claim), or
     the agent's own set (Claude `Yes`/`No`; Codex `Yes, proceed`/`No, and tell Codex what to do differently`).
-    `answer_approval` matches a label whitespace aside, so a label read at another width still finds its option.
+    `answer_approval` matches a label whitespace aside, so a label read at another width still finds its option, and
+    sends only to the dialog that asks about the card's `approval`: its `detail` (the command, path or URL) must read
+    as a run of the dialog's rows above its options (Claude's under its top rule, Codex's from `Would you like to`);
+    another call's dialog, or a card with no detail, is `NotOnScreen`.
   - The agent comes from the presentation stream's announcement; a pane with none the core knows is refused.
   - Keys: Claude's options by digit; Codex's by the key its option names (`y`, `p`, Escape for `(esc)`); a multi-select
     question's boxes are toggled to the answer, each at most once, then Tab; "Type something." is its digit, a paste,

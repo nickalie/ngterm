@@ -1,6 +1,7 @@
 package com.nickalie.ngterm.core.fake
 
 import com.nickalie.ngterm.core.ffi.AgentInputOutcome
+import com.nickalie.ngterm.core.ffi.ChatApproval
 import com.nickalie.ngterm.core.ffi.ChatQuestion
 import com.nickalie.ngterm.core.ffi.ChatQuestionItem
 import com.nickalie.ngterm.core.ffi.ChatQuestionOption
@@ -36,17 +37,18 @@ class FakePaneTest {
                     output = null,
                 )
             val answers = listOf(QuestionAnswer(picked = listOf("Red"), other = null))
+            val approval = ChatApproval("Bash", "touch picked.txt", "touch picked.txt", null)
 
             assertEquals(AgentInputOutcome.SENT, pane.sendPrompt("/compact keep it short"))
             assertEquals(AgentInputOutcome.SENT, pane.interrupt())
             pane.outcome = AgentInputOutcome.NOT_ON_SCREEN
-            assertEquals(AgentInputOutcome.NOT_ON_SCREEN, pane.answerApproval("Yes"))
+            assertEquals(AgentInputOutcome.NOT_ON_SCREEN, pane.answerApproval(approval, "Yes"))
             assertEquals(AgentInputOutcome.NOT_ON_SCREEN, pane.answerQuestion(question, answers))
             assertEquals(
                 listOf(
                     FakeAction.Prompt("/compact keep it short"),
                     FakeAction.Interrupt,
-                    FakeAction.Approval("Yes"),
+                    FakeAction.Approval(approval, "Yes"),
                     FakeAction.Question(question, answers),
                 ),
                 pane.actions,

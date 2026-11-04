@@ -24,7 +24,7 @@ use super::pane_tests::{
 use crate::api::{MobileEvent, Pane, PaneInputError, PaneSize, PaneWheel, PaneWheelOutcome};
 use crate::chat::input::{ACTION_IN_FLIGHT, AgentInputOutcome, InputTiming, NO_AGENT_TO_DRIVE, QuestionAnswer};
 use crate::chat::matchers::{Agent, Screen};
-use crate::chat::tests::matchers::{Capture, draft_drawn, into_prompt};
+use crate::chat::tests::matchers::{Capture, approval_of, asked, draft_drawn, into_prompt};
 use crate::chat::{ChatQuestion, ChatQuestionItem, ChatQuestionOption, ChatToolStatus};
 use crate::chat::{Side, commands_tail};
 use crate::pane::{PaneRole, without_escapes};
@@ -207,7 +207,7 @@ fn a_follower_claims_the_lead_waits_for_the_redraw_then_answers() {
     let mut agents = Agents::start("claude", "claude-44x36");
     agents.first_is("follower");
     agents.show(&agents.first.peer, "permission");
-    let answer = agents.act(|pane| block_on(pane.answer_approval("No".to_owned())));
+    let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "No".to_owned())));
 
     let mut claim = claimed(&mut agents, "permission");
     let (bytes, _) = inputs_until(&mut claim.peer, |bytes, _| without_escapes(bytes).contains(&b'4'));
@@ -230,7 +230,7 @@ fn a_leader_skips_the_claim() {
     let mut agents = Agents::start("codex", "codex-44x36");
     agents.first_is("leader");
     agents.show(&agents.first.peer, "permission");
-    let answer = agents.act(|pane| block_on(pane.answer_approval("Yes, proceed".to_owned())));
+    let answer = agents.act(|pane| block_on(pane.answer_approval(asked("codex-44x36"), "Yes, proceed".to_owned())));
     let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
         without_escapes(bytes).contains(&b'y')
     });
@@ -244,7 +244,7 @@ fn a_leader_skips_the_claim() {
 fn a_claim_refused_or_unanswered_sends_nothing() {
     let mut agents = Agents::start("claude", "claude-44x36");
     agents.first_is("follower");
-    let answer = agents.act(|pane| block_on(pane.answer_approval("Yes".to_owned())));
+    let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "Yes".to_owned())));
     let mut claim = agents.fixture.attach();
     let lead = lead_of(&claim.command);
     agents.show(&claim.peer, "permission");
@@ -254,7 +254,7 @@ fn a_claim_refused_or_unanswered_sends_nothing() {
     assert!(typed(&mut claim.peer).is_empty());
 
     // a claim whose attach never reports
-    let answer = agents.act(|pane| block_on(pane.answer_approval("Yes".to_owned())));
+    let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "Yes".to_owned())));
     let mut silent = agents.fixture.attach();
     agents.show(&silent.peer, "permission");
     assert_eq!(outcome(&answer), Ok(AgentInputOutcome::LeadRefused));
@@ -266,11 +266,29 @@ fn a_dialog_gone_by_the_time_the_claim_lands_gets_nothing() {
     let mut agents = Agents::start("claude", "claude-44x36");
     agents.first_is("follower");
     agents.show(&agents.first.peer, "permission");
-    let answer = agents.act(|pane| block_on(pane.answer_approval("Yes".to_owned())));
+    let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "Yes".to_owned())));
     // answered at the desktop while the claim was on its way: the leader's grid shows the prompt again
     let mut claim = claimed(&mut agents, "idle");
     assert_eq!(outcome(&answer), Ok(AgentInputOutcome::NotOnScreen));
     assert!(typed(&mut claim.peer).is_empty());
+}
+
+#[test]
+fn a_card_answered_elsewhere_never_answers_the_next_dialog() {
+    // the card's call was answered at the desktop and the agent asks about another: the card's `Yes` (its own
+    // label, or the agent's usual one) finds that dialog's `Yes`, and still nothing goes
+    for (name, capture, label) in [
+        ("claude", "claude-44x36", "Yes"),
+        ("codex", "codex-44x36", "Yes, proceed"),
+    ] {
+        let mut agents = Agents::start(name, capture);
+        agents.first_is("leader");
+        agents.show(&agents.first.peer, "permission");
+        let card = approval_of("rm -rf build");
+        let answer = agents.act(move |pane| block_on(pane.answer_approval(card, label.to_owned())));
+        assert_eq!(outcome(&answer), Ok(AgentInputOutcome::NotOnScreen), "{capture}");
+        assert!(typed(&mut agents.first.peer).is_empty(), "{capture}: no key");
+    }
 }
 
 #[test]
@@ -324,7 +342,7 @@ fn a_slow_round_trip_holds_the_next_key_until_the_screen_answers_and_never_repea
     let mut agents = Agents::start("claude", "claude-44x36");
     agents.first_is("leader");
     agents.show(&agents.first.peer, "permission");
-    let answer = agents.act(|pane| block_on(pane.answer_approval("No".to_owned())));
+    let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "No".to_owned())));
     inputs_until(&mut agents.first.peer, |bytes, _| {
         without_escapes(bytes).contains(&b'4')
     });
@@ -432,7 +450,7 @@ fn a_handle_whose_pane_was_hidden_is_closed_even_once_the_pane_is_shown_again() 
 
     // the retired handle reaches nothing, though the pane it named is shown again with the dialog up
     assert_eq!(
-        block_on(agents.pane.answer_approval("Yes".to_owned())),
+        block_on(agents.pane.answer_approval(asked("claude-44x36"), "Yes".to_owned())),
         Err(PaneInputError::Closed)
     );
     assert_eq!(block_on(agents.pane.approval_labels()), Err(PaneInputError::Closed));
@@ -442,7 +460,9 @@ fn a_handle_whose_pane_was_hidden_is_closed_even_once_the_pane_is_shown_again() 
     let answer = {
         let (done, outcome) = mpsc::channel();
         thread::spawn(move || {
-            let _ = done.send(block_on(shown_again.answer_approval("Yes".to_owned())));
+            let _ = done.send(block_on(
+                shown_again.answer_approval(asked("claude-44x36"), "Yes".to_owned()),
+            ));
         });
         outcome
     };
@@ -664,7 +684,7 @@ fn an_approval_answers_the_live_dialog_never_one_scrolled_back_to() {
         let mut agents = scrolled(agent, capture, ("permission", is_dialog), ("idle", is_idle));
         assert_eq!(block_on(agents.pane.approval_labels()), Ok(agent.fallback_labels()));
         assert_eq!(
-            block_on(agents.pane.answer_approval(answer.to_owned())),
+            block_on(agents.pane.answer_approval(asked(capture), answer.to_owned())),
             Ok(AgentInputOutcome::NotOnScreen),
             "{capture}"
         );
@@ -684,7 +704,7 @@ fn an_approval_answers_the_live_dialog_never_one_scrolled_back_to() {
     let labels = block_on(agents.pane.approval_labels()).unwrap();
     assert_ne!(labels, Agent::Codex.fallback_labels(), "read from the live dialog");
     assert_eq!(labels[0], "Yes, proceed");
-    let answer = agents.act(|pane| block_on(pane.answer_approval("Yes, proceed".to_owned())));
+    let answer = agents.act(|pane| block_on(pane.answer_approval(asked("codex-44x36"), "Yes, proceed".to_owned())));
     let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
         without_escapes(bytes).contains(&b'y')
     });
@@ -698,7 +718,7 @@ fn an_approval_answers_the_live_dialog_never_one_scrolled_back_to() {
         ("idle", is_idle),
         ("permission", is_dialog),
     );
-    let answer = agents.act(|pane| block_on(pane.answer_approval("No".to_owned())));
+    let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "No".to_owned())));
     let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
         without_escapes(bytes).contains(&b'4')
     });
@@ -819,7 +839,7 @@ fn a_screen_resized_and_not_redrawn_yet_gets_no_key() {
     let tablet = Capture::load("claude-100x40");
     agents.pane.resize(grid(&tablet)).unwrap();
     assert_eq!(
-        block_on(agents.pane.answer_approval("No".to_owned())),
+        block_on(agents.pane.answer_approval(asked("claude-44x36"), "No".to_owned())),
         Ok(AgentInputOutcome::NotOnScreen)
     );
     assert!(typed(&mut agents.first.peer).is_empty());
@@ -828,7 +848,7 @@ fn a_screen_resized_and_not_redrawn_yet_gets_no_key() {
     let mut redrawn = b"\x1b[0m\x1b[H\x1b[2J".to_vec();
     redrawn.extend(tablet.at("permission"));
     send(&agents.first.peer, &redrawn);
-    let answer = agents.act(|pane| block_on(pane.answer_approval("No".to_owned())));
+    let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "No".to_owned())));
     let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
         without_escapes(bytes).contains(&b'4')
     });
@@ -854,13 +874,13 @@ fn a_screen_resized_and_not_redrawn_yet_gets_no_key() {
         "the reflow reads as the dialog"
     );
     assert_eq!(
-        block_on(agents.pane.answer_approval("No".to_owned())),
+        block_on(agents.pane.answer_approval(asked("claude-44x36"), "No".to_owned())),
         Ok(AgentInputOutcome::NotOnScreen)
     );
     assert!(typed(&mut agents.first.peer).is_empty());
     // the program writes again: its key goes
     send(&agents.first.peer, b"\x1b[0m");
-    let answer = agents.act(|pane| block_on(pane.answer_approval("No".to_owned())));
+    let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "No".to_owned())));
     let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
         without_escapes(bytes).contains(&b'4')
     });
@@ -893,7 +913,7 @@ fn a_grid_measured_again_or_new_cells_alone_leave_an_idle_screen_readable() {
         agents.reads(Agent::Claude, is_dialog, "permission");
         agents.pane.resize(size).unwrap();
         agents.pane.resize(size).unwrap();
-        let answer = agents.act(|pane| block_on(pane.answer_approval("No".to_owned())));
+        let answer = agents.act(|pane| block_on(pane.answer_approval(asked("claude-44x36"), "No".to_owned())));
         let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
             without_escapes(bytes).contains(&b'4')
         });
@@ -930,7 +950,7 @@ fn a_grid_measured_again_or_new_cells_alone_leave_an_idle_screen_readable() {
     };
     agents.pane.resize(wider).unwrap();
     assert_eq!(
-        block_on(agents.pane.answer_approval("No".to_owned())),
+        block_on(agents.pane.answer_approval(asked("claude-44x36"), "No".to_owned())),
         Ok(AgentInputOutcome::NotOnScreen)
     );
     assert!(typed(&mut agents.first.peer).is_empty());

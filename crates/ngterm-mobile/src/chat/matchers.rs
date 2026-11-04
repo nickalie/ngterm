@@ -6,9 +6,10 @@
 //! - **Claude's prompt**: a rule the screen's whole width, the input rows (the first one opening with `❯`), another
 //!   rule, then the footer; working while the footer says `esc to interrupt` or a spinner line (`✶ Pontificating…`)
 //!   sits right above the box.
-//! - **Claude's permission dialog**: under a full-width rule, a question ending with `?`, the numbered options (the
-//!   picked one marked `❯`, a long label wrapped onto indented rows) and, as the screen's last line,
-//!   `Esc to cancel · Tab to amend`. A digit picks an option.
+//! - **Claude's permission dialog**: under a full-width rule, what it asks about (the tool, the call's description,
+//!   and its command between dashed rules), a question ending with `?`, the numbered options (the picked one marked
+//!   `❯`, a long label wrapped onto indented rows) and, as the screen's last line, `Esc to cancel · Tab to amend`. A
+//!   digit picks an option.
 //! - **Claude's `AskUserQuestion` picker**: a full-width rule over the tab row (`☐ Color`, or `←  ☐ Style  ☐ Languages
 //!   ✔ Submit  →`), the question, its numbered options (each with its description on the rows under it; a
 //!   multi-select one boxed `[ ]` or `[✔]`), `Type something.`, a rule, `Chat about this` and the footer
@@ -22,7 +23,8 @@
 //! - **What a prompt holds**: the text of its input rows after the mark, faint cells left out. Both TUIs draw the
 //!   placeholder of an empty prompt faint (Claude's `Try "…"`, Codex's `Ask Codex to do anything`) and typed or
 //!   pasted text in a plain style, so an empty prompt holds nothing and a draft left at the terminal shows.
-//! - **Codex's approval**: the numbered options (`›` marks the picked one), each ending with its key in parentheses
+//! - **Codex's approval**: what it asks about (`Would you like to run the following command?`, the reason, then the
+//!   command as `$ curl …`), the numbered options (`›` marks the picked one), each ending with its key in parentheses
 //!   (`(y)`, `(p)`, `(esc)`), and as the last line `Press enter to confirm or esc to cancel`.
 //!
 //! Anything else is [`Screen::Unknown`]: a dialog half drawn, scrolled away or quoted in a shell's output, another
@@ -97,10 +99,43 @@ pub(crate) struct DialogOption {
 /// A permission dialog on screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Dialog {
+    /// The rows that say what the dialog asks about, each trimmed: Claude's from under its top rule to its question
+    /// (the tool, the call's description, its command), Codex's from its `Would you like to …` to its options (the
+    /// reason, the command as `$ …`). Empty when the dialog shows no such rows.
+    pub(crate) subject: Vec<String>,
     pub(crate) options: Vec<DialogOption>,
 }
 
 impl Dialog {
+    /// Whether the dialog asks about the call `detail` names (its command, path or URL, as the agent's hook reported
+    /// it): some run of the subject's rows reads as `detail`, whitespace aside (the screen wraps it where it likes; a
+    /// command's leading `$ ` not counted), or as its start cut short with `…`. A run is whole rows, so a row that
+    /// says more than `detail` (another command that starts the same, a sentence that quotes it) is not a match.
+    pub(crate) fn asks(&self, detail: &str) -> bool {
+        let wanted = squeeze(detail);
+        if wanted.is_empty() {
+            return false;
+        }
+        (0..self.subject.len()).any(|from| {
+            let mut run = String::new();
+            for (at, row) in self.subject.iter().enumerate().skip(from) {
+                let row = if at == from {
+                    row.strip_prefix("$ ").unwrap_or(row)
+                } else {
+                    row
+                };
+                run.push_str(&squeeze(row));
+                if !run.is_empty() && fits(&run, &wanted) {
+                    return true;
+                }
+                if run.len() > wanted.len() + '…'.len_utf8() {
+                    return false;
+                }
+            }
+            false
+        })
+    }
+
     /// The option whose label is `label`, whitespace aside (a label read at another width wraps elsewhere).
     pub(crate) fn option(&self, label: &str) -> Option<&DialogOption> {
         let wanted = squeeze(label);
@@ -393,7 +428,7 @@ fn claude_permission(rows: &Rows) -> Option<Dialog> {
         return None;
     }
     // the dialog's top: a full-width rule over its title
-    (0..question).rev().find(|index| rows.rule(*index))?;
+    let top = (0..question).rev().find(|index| rows.rule(*index))?;
     let options = blocks
         .into_iter()
         .map(|block| {
@@ -403,7 +438,10 @@ fn claude_permission(rows: &Rows) -> Option<Dialog> {
             })
         })
         .collect::<Option<Vec<_>>>()?;
-    (options.len() >= 2).then_some(Dialog { options })
+    let subject = (top + 1..question)
+        .map(|index| rows.get(index).trim().to_owned())
+        .collect();
+    (options.len() >= 2).then_some(Dialog { subject, options })
 }
 
 /// The picker's tab row: the question tabs, or `☐ Color` for a lone question.
@@ -570,7 +608,14 @@ fn codex_approval(rows: &Rows) -> Option<Dialog> {
             Some(DialogOption { label, key })
         })
         .collect::<Option<Vec<_>>>()?;
-    (options.len() >= 2).then_some(Dialog { options })
+    // what it asks about: from its `Would you like to …` down to its options, none when that row is not near
+    let subject = (start.saturating_sub(ABOVE)..start)
+        .rev()
+        .find(|index| rows.get(*index).trim_start().starts_with("Would you like to"))
+        .map_or_else(Vec::new, |from| {
+            (from..start).map(|index| rows.get(index).trim().to_owned()).collect()
+        });
+    (options.len() >= 2).then_some(Dialog { subject, options })
 }
 
 /// A Codex option's label and the key its `(…)` names: a letter, or `esc`.

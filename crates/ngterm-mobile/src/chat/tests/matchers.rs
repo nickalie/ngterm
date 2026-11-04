@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use ngterm_term::{Frame, GridSize, Outgoing, StreamFeed, StreamOut};
 
+use crate::chat::ChatApproval;
 use crate::chat::matchers::{Agent, Dialog, DialogOption, OptionKey, Picker, Screen, squeeze};
 
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -814,4 +815,76 @@ fn a_dialogs_words_around_the_prompt_still_keep_it_from_being_read() {
             }
         }
     }
+}
+
+/// The command each capture's permission dialog asks to run, as the agent's hook reports it
+/// (`crates/ngterm-core/tests/fixtures/agent_chat`: Claude's `33-PermissionRequest`, Codex's `25-PermissionRequest`
+/// for the desktop grid; the phone and tablet recordings asked the commands their prompts gave).
+fn command_of(capture: &str) -> &'static str {
+    match capture {
+        "claude-44x36" | "claude-100x40" => "touch picked.txt",
+        "claude-160x48" => "touch allowed.txt",
+        "codex-44x36" | "codex-100x40" => "curl -sI https://example.net",
+        "codex-160x48" => "curl -sI https://example.com",
+        other => panic!("no permission dialog in {other}"),
+    }
+}
+
+/// The approval card for the permission dialog `capture` shows, as the chat has it from the agent's hook.
+pub(crate) fn asked(capture: &str) -> ChatApproval {
+    approval_of(command_of(capture))
+}
+
+/// An approval card for a shell call running `command`.
+pub(crate) fn approval_of(command: &str) -> ChatApproval {
+    ChatApproval {
+        tool: "Bash".to_owned(),
+        title: command.to_owned(),
+        detail: Some(command.to_owned()),
+        tool_use_id: None,
+    }
+}
+
+#[test]
+fn a_dialog_asks_about_its_own_call_and_no_other() {
+    for agent in ["claude", "codex"] {
+        for (name, capture) in captures(agent) {
+            let screen = capture.read(Agent::of(agent).unwrap(), "permission");
+            let dialog = dialog(&screen);
+            let command = command_of(&name);
+            assert!(dialog.asks(command), "{name}: {:?}", dialog.subject);
+            // wrapped or spaced otherwise, it is the same call
+            assert!(dialog.asks(&command.replace(' ', "\n  ")), "{name}");
+            // another command, one that starts the same or says more, or a part of the command's row
+            let others = [
+                "touch picked.txt",
+                "touch allowed.txt",
+                "curl -sI https://example.net",
+                "curl -sI https://example.com",
+                "rm -rf build",
+            ];
+            for other in others.iter().filter(|other| **other != command) {
+                assert!(!dialog.asks(other), "{name}: {other}");
+            }
+            let (start, end) = command.split_at(command.len() - 2);
+            for part in [
+                start,
+                end,
+                &command[6..],
+                &format!("{command} && rm -rf build"),
+                "",
+                " ",
+            ] {
+                assert!(!dialog.asks(part), "{name}: {part:?}");
+            }
+        }
+    }
+    // the rows above a Claude dialog's top rule or a Codex dialog's `Would you like to …` (the transcript, which may
+    // quote any command) are not what it asks about
+    let screen = Capture::load("claude-44x36").read(Agent::Claude, "permission");
+    assert!(!dialog(&screen).asks("touch picked.txt First call"));
+    assert!(dialog(&screen).subject.iter().all(|row| !row.starts_with('●')));
+    let screen = Capture::load("codex-44x36").read(Agent::Codex, "permission");
+    assert!(dialog(&screen).subject[0].starts_with("Would you like to run"));
+    assert!(!dialog(&screen).asks("Running curl -sI https://example.net"));
 }

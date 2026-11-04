@@ -161,18 +161,52 @@ class PaneChats(
         made.values.forEach(ChatViewModel::open)
     }
 
-    private fun chat(pane: PaneRef): ChatViewModel =
-        ChatViewModel(
-            pane = pane,
-            core = connections.core,
-            handle = { shown.value[pane]?.pane },
-            connects = connects,
-            working = sessions.map { it[pane.session].works(pane.paneId) }.distinctUntilChanged(),
-            filter = filter,
-            scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext.job)),
-            // a chat that ended, or never opened, leaves its terminal on screen until the next conversation
-            onEnded = { hold(pane) },
-        )
+    private fun chat(pane: PaneRef): ChatViewModel {
+        // the conversation the pane announced as its chat opened
+        val opened =
+            sessions.value[pane.session]
+                ?.agents
+                ?.get(pane.paneId)
+                ?.conversation
+        lateinit var chat: ChatViewModel
+        chat =
+            ChatViewModel(
+                pane = pane,
+                core = connections.core,
+                handle = { shown.value[pane]?.pane },
+                connects = connects,
+                working = sessions.map { it[pane.session].works(pane.paneId) }.distinctUntilChanged(),
+                filter = filter,
+                scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext.job)),
+                // ends on the core's thread, or the chat's own: the views are the main thread's
+                onEnded = { scope.launch { ended(chat, opened) } },
+            )
+        return chat
+    }
+
+    // a chat that ended, or never opened, leaves its terminal on screen until the next conversation: the one it
+    // followed (its events named, or the pane announced as it opened). The pane may have moved on meanwhile (/clear
+    // ends the old conversation's chat in the moment its record is cleared, and the next is announced right after):
+    // then the chat goes and, the pane still in chat view, opens again for the conversation announced now
+    private fun ended(
+        chat: ChatViewModel,
+        opened: String?,
+    ) {
+        val pane = chat.pane
+        // an agent that left holds nothing: the pane leaves chat view, and its next agent starts in it
+        val agent = sessions.value[pane.session]?.agents?.get(pane.paneId)
+        if (chatState.value[pane] !== chat || agent == null) return
+        val followed =
+            chat.state.value.conversation
+                ?.conversationId ?: opened
+        if (followed == null || agent.conversation == followed) {
+            holds.update { it + (pane to Hold(agent.conversation)) }
+        } else {
+            chat.close()
+            chatState.value -= pane
+            sync(viewState.value, shown.value.keys)
+        }
+    }
 }
 
 // whether the session's agent status says the agent in pane [paneId] works on a turn: the status is the session's,

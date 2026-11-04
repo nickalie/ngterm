@@ -89,9 +89,11 @@ pub const OLDER_PAGE: usize = 100;
 /// The most an older page or the catalog takes, the command's start included.
 pub const FETCH_DEADLINE: Duration = Duration::from_secs(15);
 
-/// The longest chat line read. The origin caps what an event carries (a tool's output at 4 KiB, a diff at 64 KiB), so
-/// a line past this is not one; it is skipped to its newline.
-pub const EVENT_LINE_CAP: usize = 1024 * 1024;
+/// The longest chat line read: the longest event the origin sends. It caps a tool's output (4 KiB) and a diff (64 KiB),
+/// but sends a message's text whole (a prompt, a reply, a compaction's summary) from a transcript line of up to
+/// [`LINE_CAP`](ngterm_core::agent_chat::event::LINE_CAP), escaped no longer than that line had it (both are JSON
+/// and escape the same characters); the rest is the event's id, cursor and fields. A line past this is not one: it is skipped to its newline.
+pub const EVENT_LINE_CAP: usize = ngterm_core::agent_chat::event::LINE_CAP + 64 * 1024;
 
 /// The failures in a row (each one retried on its backoff) after which a chat ends.
 pub const MAX_FAILURES: u32 = 5;

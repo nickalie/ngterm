@@ -23,8 +23,8 @@ use ngterm_term::{
 };
 
 use crate::actor::Command;
-use crate::chat::ChatQuestion;
 use crate::chat::input::{Action, AgentInputOutcome, QuestionAnswer};
+use crate::chat::{ChatApproval, ChatQuestion};
 use crate::pane::PaneRef;
 
 /// A pane's grid: cells and the pixel size of one cell (`ngterm-term`'s `GridSize`).
@@ -648,13 +648,19 @@ impl Pane {
     }
 
     /// Answers the permission dialog on screen with its option labelled `label` (one of [`Pane::approval_labels`]):
-    /// that option's key, then a look that the dialog went.
+    /// that option's key, then a look that the dialog went. Only a dialog that asks about `approval`'s call (the
+    /// card's: its command, path or URL shows in the dialog) is answered; a dialog about another call, or an
+    /// `approval` that names none, is [`AgentInputOutcome::NotOnScreen`].
     ///
     /// # Errors
     ///
     /// As [`Pane::send_prompt`].
-    pub async fn answer_approval(&self, label: String) -> Result<AgentInputOutcome, PaneInputError> {
-        self.act(Action::Approval(label)).await
+    pub async fn answer_approval(
+        &self,
+        approval: ChatApproval,
+        label: String,
+    ) -> Result<AgentInputOutcome, PaneInputError> {
+        self.act(Action::Approval(approval, label)).await
     }
 
     /// Answers Claude's `AskUserQuestion` picker for `question` (the chat's question card): one answer per question,

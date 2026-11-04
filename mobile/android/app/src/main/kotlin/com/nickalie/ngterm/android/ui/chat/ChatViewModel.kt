@@ -284,10 +284,13 @@ class ChatViewModel internal constructor(
         }
     }
 
-    /** Answers the approval card with its button [label]. */
+    /**
+     * Answers the approval card with its button [label]: only the dialog that asks about the card's call, so a card
+     * answered elsewhere never answers the agent's next prompt.
+     */
     fun answerApproval(label: String) {
         val card = chat.value.approval ?: return
-        act(card.id) { it.answerApproval(label) }
+        act(card.id) { it.answerApproval(card.approval, label) }
     }
 
     /** Answers the question card with [answers], one per question. */

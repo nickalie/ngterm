@@ -104,6 +104,22 @@ fn a_line_past_the_cap_is_skipped_to_its_newline_and_reading_goes_on() {
 }
 
 #[test]
+fn a_message_as_long_as_the_origin_reads_is_read_across_many_reads() {
+    // a reply of several MiB, under the transcript line cap: the origin sends it whole, and so it is read
+    let text = "y".repeat(wire::event::LINE_CAP - 4096);
+    let line = format!("{{\"id\":\"a1\",\"cursor\":9,\"type\":\"assistant\",\"text\":\"{text}\"}}\n");
+    assert!(line.len() > 1024 * 1024 && line.len() <= EVENT_LINE_CAP);
+    let mut lines = Lines::default();
+    let mut events = Vec::new();
+    for chunk in line.as_bytes().chunks(32 * 1024) {
+        events.extend(lines.take(chunk));
+    }
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].cursor, 9);
+    assert!(matches!(&events[0].body, EventBody::Assistant { text: shown } if *shown == text));
+}
+
+#[test]
 fn the_catalog_keeps_each_entry_it_reads_and_refuses_what_is_not_a_list() {
     let catalog = r#"[{"name":"compact","description":"Clear","kind":"builtin","argument_hint":"[x]"},
                       {"name":"$deploy","description":"","kind":"skill"},

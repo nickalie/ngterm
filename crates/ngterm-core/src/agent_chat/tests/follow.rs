@@ -1,9 +1,8 @@
 //! The follower on temp files, read through a byte-counting reader and timed by a fake clock.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -56,30 +55,27 @@ impl Files for Counting {
     }
 }
 
-/// A clock that moves only when slept on.
+/// A clock that moves only when the test moves it.
 #[derive(Debug, Clone)]
 struct FakeClock {
     now: Rc<Cell<Instant>>,
-    sleeps: Rc<RefCell<Vec<Duration>>>,
 }
 
 impl FakeClock {
     fn new() -> Self {
         Self {
             now: Rc::new(Cell::new(Instant::now())),
-            sleeps: Rc::default(),
         }
+    }
+
+    fn advance(&self, duration: Duration) {
+        self.now.set(self.now.get() + duration);
     }
 }
 
 impl Clock for FakeClock {
     fn now(&self) -> Instant {
         self.now.get()
-    }
-
-    fn sleep(&self, duration: Duration) {
-        self.sleeps.borrow_mut().push(duration);
-        self.now.set(self.now.get() + duration);
     }
 }
 
@@ -433,32 +429,22 @@ fn a_missing_transcript_is_read_once_it_appears() {
 }
 
 #[test]
-fn following_polls_on_the_interval() {
+fn polls_on_the_callers_time_read_what_was_written_since_the_last() {
+    // as `ngtermctl agent chat` polls: every POLL_INTERVAL, the follower itself never waiting
     let dir = TempDir::new().unwrap();
     let path = transcript(&dir);
     prompts(&path, 2);
-    let (follower, _, clock) = claude(&path);
-    let mut follower = follower.interval(Duration::from_millis(100));
+    let (mut follower, _, clock) = claude(&path);
     follower.backlog(10).unwrap();
-    let mut polls = 0;
     let mut seen = Vec::new();
-    follower
-        .follow(|events| {
-            polls += 1;
-            seen.extend(events);
-            if polls == 1 {
-                append(&path, format!("{}\n", user("later")).as_bytes());
-            }
-            Ok(if polls == 3 {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
-            })
-        })
-        .unwrap();
+    for poll in 0..3 {
+        seen.extend(follower.poll().unwrap());
+        if poll == 0 {
+            append(&path, format!("{}\n", user("later")).as_bytes());
+        }
+        clock.advance(POLL_INTERVAL);
+    }
     assert_eq!(texts(&seen), ["later"]);
-    assert_eq!(*clock.sleeps.borrow(), [Duration::from_millis(100); 2]);
-    assert_eq!(POLL_INTERVAL, Duration::from_millis(250), "the default");
 }
 
 #[test]
@@ -547,7 +533,7 @@ fn a_claude_subagent_written_later_is_found_on_a_later_look() {
     follower.backlog(BACKLOG).unwrap();
     copy_tree(&source.join(CLAUDE_MAIN), &dir.path().join(CLAUDE_MAIN));
     assert!(follower.poll().unwrap().is_empty(), "not looked for again yet");
-    clock.sleep(DISCOVERY_INTERVAL);
+    clock.advance(DISCOVERY_INTERVAL);
     let mut events = follower.poll().unwrap();
     let end = fs::metadata(&path).unwrap().len();
     assert!(is_live(&events.pop().unwrap(), end));
