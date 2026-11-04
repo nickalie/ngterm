@@ -238,6 +238,8 @@ jobs:
   # - zsh and fish: upstream wraps a pane in zmx only for one of these login shells, so the build claims
   #   `live-sessions` too and the live tests run: `--must-pass live-sessions` (every test upstream holds to Live
   #   sessions) and `--must-pass live-any-shell`.
+  # - bash, zsh and fish: `--must-pass agent-chat` too (the Rust-only agent record and `ngtermctl agent` behind the
+  #   Android chat view).
 # - coverage: the zsh entry again on an instrumented build (run-linux.sh --coverage: cargo-llvm-cov and the toolchain's
 #   llvm-tools), every layer, judged by conformance/coverage-floor-linux.txt (tools/check_coverage.py: line % per
 #   workspace crate) and nothing else: instrumentation slows the app, so the ratchet stays the entries above. zsh, as
@@ -253,13 +255,13 @@ jobs:
         include:
           - shell: bash
             out: rust-linux
-            must-pass: --must-pass live-any-shell
+            must-pass: --must-pass live-any-shell --must-pass agent-chat
           - shell: zsh
             out: rust-linux-zsh
-            must-pass: --must-pass live-sessions --must-pass live-any-shell
+            must-pass: --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat
           - shell: fish
             out: rust-linux-fish
-            must-pass: --must-pass live-sessions --must-pass live-any-shell
+            must-pass: --must-pass live-sessions --must-pass live-any-shell --must-pass agent-chat
           - shell: zsh
             out: rust-linux-coverage
             coverage: true

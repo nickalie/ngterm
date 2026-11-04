@@ -4,10 +4,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::path::Path;
 
-use ngterm_proto::command::{RUST_ONLY_CLI, RUST_ONLY_COMMANDS, check_rust_only};
+use ngterm_proto::command::{RUST_ONLY_CLI, RUST_ONLY_COMMANDS};
 use ngterm_proto::{Command, EventKind};
 use serde::Deserialize;
 use strum::IntoEnumIterator;
+
+// the check is built for tests only (the crate's `catalog-check` feature), so this test takes its file as a module
+#[path = "../src/rust_only.rs"]
+mod rust_only;
+
+use rust_only::check_rust_only;
 
 #[derive(Deserialize)]
 struct Catalog {

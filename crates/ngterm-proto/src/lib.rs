@@ -8,6 +8,8 @@ pub mod recent;
 pub mod request;
 pub mod response;
 pub mod result;
+#[cfg(any(test, feature = "catalog-check"))]
+pub mod rust_only;
 pub mod tree;
 pub mod version;
 

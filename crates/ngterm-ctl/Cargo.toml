@@ -44,6 +44,7 @@ windows-sys = { workspace = true, features = [
 
 [dev-dependencies]
 ngterm-host ={ workspace = true, features = ["fakes"] }
+ngterm-proto = { workspace = true, features = ["catalog-check"] }
 serde_norway.workspace = true
 tempfile.workspace = true
 

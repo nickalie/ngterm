@@ -432,7 +432,7 @@ mod tests {
         // plus this build's Rust-only subcommands (conformance/docs/rust-build.md > Rust-only extensions)
         let rust_only = ngterm_proto::command::RUST_ONLY_CLI;
         assert_eq!(
-            ngterm_proto::command::check_rust_only(&ours, &expected, rust_only),
+            ngterm_proto::rust_only::check_rust_only(&ours, &expected, rust_only),
             Ok(())
         );
         assert!(ours.iter().all(|name| !name.contains("zmx")), "{ours:?}");

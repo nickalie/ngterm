@@ -820,6 +820,16 @@ with no output yet is a running call (Task 1's fixture README).
   `companion.page` presentation kinds (18 supported kinds plus the opt-in `agent`), and both sections of
   `rust-build.md`. The merge took `Core::route` one line past clippy's 80, so its eight "result or a bare success"
   arms share `result_or_success`. `sanitize.py` no longer hard-codes the recorder's time zone (it is a `--map` pair).
+- CI's first round (PR #9) broke only the conformance coverage floors: the new phone-facing code is lines the
+  instrumented suite never ran (Linux `ngterm-proto` and `ngterm-term`, Windows `ngterm-core`, `ngterm-ctl` and
+  `ngterm-proto`; the covered counts were unchanged). The floors stay as they are (their file says raised, never
+  lowered; settled with Codex): `check_rust_only` moved to `ngterm-proto`'s `rust_only` module, built for tests only
+  (feature `catalog-check`, which `ngterm-ctl`'s dev-dependency enables); main's
+  `test_the_wheel_scrolls_the_viewport` timed out under instrumentation only (`_scrollback` now waits 30 s and says
+  what it saw); and, departing from "No conformance ids" above, the `agent.*` group got a Rust-only capability,
+  `agent-chat` (claimed by `ngterm-gpui`'s `app.rs` on every OS, the one desktop file this change touches, with no
+  UI), whose `conformance/tests/cli/test_agent_chat.py` drives `ngtermctl agent hook|chat|commands` and `agent.get`
+  against the staged app over Task 1's recordings, on Linux and Windows, with `--must-pass agent-chat`.
 - Each Overview point, and the tests that prove it (no device: unit, Robolectric/Roborazzi and the headless e2e):
   - **Chat in place of the terminal, the TUI unchanged underneath:** `SessionViewTest`
     (`aPaneInChatViewDrawsItsChatInTheTerminalsPlaceAtTheSameGrid`), `ChatModeTest`
@@ -865,9 +875,9 @@ with no output yet is a running call (Task 1's fixture README).
   - **Mobile-only (the desktop unchanged):** the catalog tests (`command_wire_names_equal_catalog_commands`,
     `the_command_tree_is_the_catalogs_cli`, with `RUST_ONLY_*`), `hub.rs` (`an_opt_in_kind_reaches_only_a_viewer_that_listed_it`),
     `client.rs` (`a_viewer_showing_agents_lists_the_kind_and_reports_its_frames_and_any_other_drops_them`),
-    `commands/tests/agent.rs` (`the_record_never_reaches_the_snapshot_or_the_tree`); the branch touches no
-    `ngterm-gpui` file.
-  - **Platforms:** the hooks' POSIX and PowerShell forms (`ngterm-app`'s `adapter_tests.rs`, e.g.
+    `commands/tests/agent.rs` (`the_record_never_reaches_the_snapshot_or_the_tree`); in `ngterm-gpui` the branch
+    only adds the `agent-chat` capability claim.
+  - **Platforms:** `test_agent_chat.py` in the conformance suite on Linux and Windows; the hooks' POSIX and PowerShell forms (`ngterm-app`'s `adapter_tests.rs`, e.g.
     `a_prompt_and_a_permission_request_pipe_their_payload_to_agent_hook`,
     `codex_start_prompt_and_permission_request_pipe_their_payload_to_agent_hook`), the follower and the catalog run in
     CI on Linux, macOS and Windows.

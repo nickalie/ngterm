@@ -7,6 +7,10 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+# The catalog tests' Rust-only check (`rust_only`), for another crate's tests: never in a release binary.
+catalog-check = []
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

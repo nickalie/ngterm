@@ -178,6 +178,9 @@ CAPABILITIES: Mapping[str, str] = {
     "live-any-shell": "Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, "
     "each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the "
     "password-database login shell is one of them and ngterm-session is staged",
+    "agent-chat": "Rust-only: the agent record behind the Android chat view: `ngtermctl agent hook` keeps a pane's "
+    "Claude Code or Codex conversation from its hook payload, `agent.get` reads it back, `ngtermctl agent chat` "
+    "streams its transcript as chat events and `ngtermctl agent commands` lists the agent's slash commands",
     "window-geometry": "window x/y position is settable through `window.move`, read back as `geometry` and restored",
     "window-minimize": "`window.minimize` and `window.new --minimized` take effect and read back as `minimized`",
     "sidebar-min-width": "`sidebar.width` narrows the sidebar down to the 160-point floor and reads that back",

@@ -149,10 +149,18 @@ def _all_lines(ctl, sid):
 def _scrollback(ctl, sid):
     """`ROWS` numbered lines typed into `cat` at once, each echoed and printed again: a screen many viewports tall.
     The copies may interleave (the terminal echoes what `cat` has not read yet), so only the last line's count is
-    waited on. Returns that line."""
+    waited on, for up to 30 s: the instrumented build (`--coverage`) echoes the 400 lines slower than the default
+    wait. Returns that line."""
     lines = [f"row-{index:03}" for index in range(ROWS)]
     assert_ok(ctl.request("session.type", sid, text="".join(f"{line}\n" for line in lines)))
-    wait_until(lambda: _text(ctl, sid).count(lines[-1]) == 2)
+
+    def echoed():
+        text = _text(ctl, sid)
+        seen = text.count(lines[-1])
+        assert seen == 2, f"{lines[-1]!r} seen {seen} times, the text ends {text[-80:]!r}"
+        return True
+
+    wait_until(echoed, timeout=30)
     return lines[-1]
 
 

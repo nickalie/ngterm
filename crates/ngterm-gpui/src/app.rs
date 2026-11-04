@@ -34,13 +34,15 @@ use crate::windows::{ConfigHost, Windows};
 /// `untitled-panes` (the console host titles each pane with its program's path); it claims `cmd-command-line`, a
 /// hook's, a custom command's, an overlay program's and a scratch command's line run as `cmd`'s command text, and
 /// `windows-shells`, a pane running PowerShell or `cmd.exe` gets a rerun's replay quoted for it
-/// (`ngterm_core::shell_dialect`).
+/// (`ngterm_core::shell_dialect`). Every OS claims `agent-chat`, the Rust-only agent record and `ngtermctl agent`
+/// behind the Android chat view, which serve no UI.
 #[cfg(not(windows))]
 pub const CAPABILITIES: &[&str] = &[
     "posix-shell",
     "hidden-split-holds-focus",
     "posix-command-line",
     "untitled-panes",
+    "agent-chat",
 ];
 /// The capabilities of the Rust target profile this build implements on Windows (see the other OSes' above).
 #[cfg(windows)]
@@ -49,6 +51,7 @@ pub const CAPABILITIES: &[&str] = &[
     "hidden-split-holds-focus",
     "cmd-command-line",
     "windows-shells",
+    "agent-chat",
 ];
 
 /// The capabilities this host claims: the profile's, and the `live` ones by host

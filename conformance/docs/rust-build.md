@@ -114,6 +114,7 @@ share is asserted directly, with no capability.
 | `posix-shell` | yes | panes run /bin/sh, so `session type` + `session.text` round-trips are deterministic |
 | `live-sessions` | host | restoreMode live keeps panes in live sessions that outlive the app (upstream's per-session daemons; the Rust build's one session server per instance, ngterm-session) |
 | `live-any-shell` |  | Rust-only: Live sessions in a bash or PowerShell login shell as well as upstream's zsh and fish, each started with its shell integration (Ghostty's, ngterm's own for PowerShell); claimed where the password-database login shell is one of them and ngterm-session is staged |
+| `agent-chat` |  | Rust-only: the agent record behind the Android chat view: `ngtermctl agent hook` keeps a pane's Claude Code or Codex conversation from its hook payload, `agent.get` reads it back, `ngtermctl agent chat` streams its transcript as chat events and `ngtermctl agent commands` lists the agent's slash commands |
 | `window-geometry` | yes | window x/y position is settable through `window.move`, read back as `geometry` and restored |
 | `window-minimize` | yes | `window.minimize` and `window.new --minimized` take effect and read back as `minimized` |
 | `sidebar-min-width` | yes | `sidebar.width` narrows the sidebar down to the 160-point floor and reads that back |
@@ -140,8 +141,10 @@ never ahead of it. It claims (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`, plus t
   replay quoted for that shell (`ngterm-core`'s `shell_dialect`; the harness picks the shell with
   `launch(pane_shell=...)`), where upstream types a POSIX line into any shell;
 - `live-sessions`: by host, where the login shell is zsh or fish (upstream's two) and `ngterm-session` is staged;
-- `live-any-shell`: by host, live sessions for bash and PowerShell login shells too, the one Rust-only extension
-  (below): claimed together with `live-sessions` for a zsh or fish login shell, alone for the others.
+- `live-any-shell`: by host, live sessions for bash and PowerShell login shells too, a Rust-only extension
+  (below): claimed together with `live-sessions` for a zsh or fish login shell, alone for the others;
+- `agent-chat`: on every OS, the `agent.*` group and `ngtermctl agent` behind the Android chat view, a Rust-only
+  extension (below).
 
 It does not claim:
 
@@ -186,7 +189,7 @@ ghostty config sets `copy-on-select = false`.
 A Rust-only extension is a capability the reference does not claim, so its tests (`requires` on it) skip as
 `unsupported` on the reference and the reference discipline holds them to nothing there: the Rust CI validates them
 instead, with `--must-pass` on the capability in every job whose host can claim it.
-Today there is one, `live-any-shell`: a Live pane runs the password database's login shell in its live session, zsh
+Today there are two. `live-any-shell`: a Live pane runs the password database's login shell in its live session, zsh
 and fish as upstream, bash and PowerShell as well, each started with its shell integration the way libghostty starts a
 shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's
 root merged in front of the pane's own value as upstream; ngterm's own script for PowerShell, which Ghostty does not
@@ -206,6 +209,15 @@ suite, the same workflow runs `ngterm-session`'s PowerShell session tests (`test
 and working directory, the foreground read, a replay) on Linux, macOS and Windows, and `ngterm-core`'s replay round
 trip through a real `pwsh` where one is installed.
 
+`agent-chat`: the origin's per-pane agent record behind the Android chat view and its commands (Commands below).
+Its tests are in `tests/cli/test_agent_chat.py`: they pipe the recorded hook payloads of `ngterm-core`'s parser
+tests (`crates/ngterm-core/tests/fixtures/agent_chat`) to `ngtermctl agent hook` for a pane running `sleep`, read
+the record with `agent.get`, stream the recorded Claude and Codex transcripts (subagents included) with `ngtermctl
+agent chat` (its backlog, following, an older page, a resume, a cursor of another conversation, the end once the
+pane is back at its shell) and list a config tree's skills, commands and plugins with `ngtermctl agent commands`.
+The build claims it on every OS (`CAPABILITIES` in `ngterm-gpui`'s `app.rs`), and every conformance job that judges
+the ratchet runs with `--must-pass agent-chat`: the three Linux legs and Windows' `windows` job.
+
 ### Commands
 
 A Rust-only command is a control command, or an `ngtermctl` subcommand, that upstream's protocol and `agtermctl` do
@@ -220,8 +232,8 @@ hold the build to the catalog plus that list (`check_rust_only`):
 - a name the build has that neither the catalog nor the list names fails, so no extension lands unlisted;
 - a listed name the build lacks fails, and so does a name listed twice.
 
-A Rust-only command has no conformance id: the suite tests upstream's protocol, so the Rust crates' own tests cover
-it. Today the `agent.*` group is: `agent.report` and `agent.get`, the origin's per-pane agent record that the
+A Rust-only command is not in the catalog, so it has no catalog item to cover; the Rust crates' own tests cover it,
+and so does its capability's tests in the suite (`agent-chat` above). Today the `agent.*` group is: `agent.report` and `agent.get`, the origin's per-pane agent record that the
 agent-status hooks fill and the Android chat view reads (`ngterm-core`'s `commands::agent`). Its CLI side is
 `ngtermctl agent hook`, which the hooks run with the payload on stdin (`ngterm-ctl`'s `agent.rs`), and
 `ngtermctl agent chat`, which the phone runs on the origin to read the record's transcript as NDJSON chat events
