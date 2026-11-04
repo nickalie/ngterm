@@ -208,8 +208,11 @@ AgentRecord { agent: claude|codex, transcript: PathBuf, conversation_id, updated
 - `agent.get`: the pane's record and whether an approval is live, after the lazy foreground check; or `no agent in
   this pane`.
 
-**The presentation `agent` kind:** per pane role, `{ role, agent, conversation_id }` or `{ role, agent: null }`. It is
-sent at attach, on every record change, and when the lazy check clears a record.
+**The presentation `agent` kind:** per pane, `{ pane, agent, conversationId }` or `{ pane, agent: null }`, the pane by
+its identity as every other frame names one (the phone maps it to `left`/`right` through the `layout` frame, primary
+first), so a swap republishes nothing (Task 7). It is sent at attach (one frame per pane, right after the snapshot), on
+every record change, and when the lazy check clears a record; the check runs as the frames are built, on attach, on
+each commit and on each heartbeat, and only for sessions a viewer listing `agent` watches.
 
 **Chat events** (NDJSON, one per line, `type` naming the event; `ngterm-core::agent_chat::event`). Each has `id`
 (stable, so a later line updates the same item), `cursor` (the byte offset of its source line) and, for an event read
@@ -430,15 +433,16 @@ with no output yet is a running call (Task 1's fixture README).
 
 **Files:**
 - Modify: `crates/ngterm-core/src/remote/{frames,client}.rs` and the origin side that builds presentation frames
-- Modify: the matching tests under `crates/ngterm-core/src/remote/`
+  (`remote/{hub,mod}.rs`, `commands/agent.rs`; created `remote/agents.rs`)
+- Modify: the matching tests under `crates/ngterm-core/src/remote/` (created `commands/tests/remote_agent.rs`)
 
-- [ ] write tests first:
+- [x] write tests first:
   - a viewer whose hello lists `agent` gets the per-pane agent frame at attach and on each record change, including a
     clear by the lazy foreground check (made when the frame is built);
   - a viewer that does not list it (desktop Attach Remote) gets the same frames as before, byte for byte;
   - `ngtermctl tree` output is unchanged.
-- [ ] implement the kind; desktop's own viewer does not list it
-- [ ] `cargo test -p ngterm-core remote` must pass
+- [x] implement the kind; desktop's own viewer does not list it
+- [x] `cargo test -p ngterm-core remote` must pass
 
 ### Task 8: `ngtermctl agent hook` and the hook scripts
 

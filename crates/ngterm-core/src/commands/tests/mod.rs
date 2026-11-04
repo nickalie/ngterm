@@ -36,6 +36,7 @@ mod pick;
 mod quick;
 mod recent;
 mod remote;
+mod remote_agent;
 mod remote_ask_form;
 mod remote_companions;
 mod remote_page;

@@ -66,9 +66,9 @@ pub enum HubEvent {
 struct Subscriber {
     session: Uuid,
     sink: Box<dyn PresentationSink>,
-    /// The [`SUPPORTED_KINDS`] its hello listed. Work handed to it as the presenter
+    /// The [`SUPPORTED_KINDS`] and [`OPT_IN_KINDS`] its hello listed. Work handed to it as the presenter
     /// ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed there but missing here; published
-    /// state goes to every viewer whatever its hello listed.
+    /// state goes to every viewer whatever its hello listed, but for an opt-in kind.
     kinds: Vec<String>,
     revision: i64,
     last_ack: Instant,
@@ -124,7 +124,7 @@ impl PresenterGrant {
 /// The frame kinds this origin produces, in upstream's order; a hello's kinds are filtered through it. Work handed to a
 /// presenter ([`PresentationHub::send_to_presenter`]) is refused when its kind is listed here but missing from that
 /// presenter's hello, so an older presenter leaves that work on the origin. Published state ([`PresentationHub::publish`])
-/// goes to every viewer whatever its hello listed, as upstream's.
+/// goes to every viewer whatever its hello listed, as upstream's; this build's [`OPT_IN_KINDS`] are the exception.
 pub const SUPPORTED_KINDS: [&str; 15] = [
     "status",
     "hud",
@@ -152,6 +152,19 @@ pub const PAGE_KINDS: [&str; 6] = [
     "page.command",
     "page.state",
 ];
+
+/// What each pane runs ([`Body::Agent`]), this build's addition for the Android chat view.
+pub const AGENT_KIND: &str = "agent";
+
+/// The kinds this build adds that go only to a viewer whose hello lists them, published state included, so a viewer
+/// that predates them (desktop Attach Remote, upstream's) gets the stream it always got. A viewer's hello lists them
+/// beside [`SUPPORTED_KINDS`], and the hub's answer echoes them back when both sides speak them.
+pub const OPT_IN_KINDS: [&str; 1] = [AGENT_KIND];
+
+/// Whether a hello's kinds decide whether `kind` reaches that viewer.
+fn negotiated(kind: &str) -> bool {
+    SUPPORTED_KINDS.contains(&kind) || OPT_IN_KINDS.contains(&kind)
+}
 
 /// The capability of drawing an ask's text field, choice list and cancel role (upstream's `askFormKind`). It names no
 /// frame body: an ask needing it travels as an ordinary `ask.request`, sent only to a presenter listing it.
@@ -218,6 +231,7 @@ impl PresentationHub {
         let now = (self.now)();
         let kinds: Vec<String> = SUPPORTED_KINDS
             .iter()
+            .chain(OPT_IN_KINDS.iter())
             .filter(|kind| hello.kinds.iter().any(|theirs| theirs == *kind))
             .map(|kind| (*kind).to_owned())
             .collect();
@@ -264,19 +278,39 @@ impl PresentationHub {
     }
 
     /// Sends `body` to `session`'s presenter alone. False when there is none, it stalled and was dropped, or `body` is
-    /// a negotiated kind ([`SUPPORTED_KINDS`]) its hello did not list, which an older presenter would skip.
+    /// a negotiated kind ([`SUPPORTED_KINDS`], [`OPT_IN_KINDS`]) its hello did not list, which an older presenter would
+    /// skip.
     pub fn send_to_presenter(&mut self, body: Body, session: Uuid) -> bool {
         let Some(holder) = self.grant.holder(session) else {
             return false;
         };
-        if SUPPORTED_KINDS.contains(&body.kind()) && !self.holder_supports(holder, body.kind()) {
+        if negotiated(body.kind()) && !self.holder_supports(holder, body.kind()) {
             return false;
         }
         self.send(body, holder)
     }
 
+    /// Sends `body` to subscriber `id` alone, unless it is an opt-in kind ([`OPT_IN_KINDS`]) its hello did not list.
+    /// False when it was not sent, or the subscriber stalled and was dropped.
+    pub fn send_to(&mut self, body: Body, id: SubscriberId) -> bool {
+        self.takes(id, body.kind()) && self.send(body, id)
+    }
+
+    /// Whether some viewer of `session` listed `kind` in its hello.
+    #[must_use]
+    pub fn watched_for(&self, kind: &str, session: Uuid) -> bool {
+        self.subscribers
+            .values()
+            .any(|subscriber| subscriber.session == session && subscriber.kinds.iter().any(|listed| listed == kind))
+    }
+
+    /// Whether subscriber `id` takes a frame of `kind`: every kind but an opt-in one its hello did not list.
+    fn takes(&self, id: SubscriberId, kind: &str) -> bool {
+        !OPT_IN_KINDS.contains(&kind) || self.holder_supports(id, kind)
+    }
+
     /// Whether `session` has a presenter whose hello listed `kind` (upstream's `presenterSupports`). A hello's kinds
-    /// are filtered through [`SUPPORTED_KINDS`], so a kind outside it always answers false.
+    /// are filtered through [`SUPPORTED_KINDS`] and [`OPT_IN_KINDS`], so a kind outside them always answers false.
     #[must_use]
     pub fn presenter_supports(&self, kind: &str, session: Uuid) -> bool {
         self.grant
@@ -299,13 +333,15 @@ impl PresentationHub {
         self.publish(&Body::Layout(layout), session);
     }
 
-    /// Sends `body` to every viewer of `session`; one still taking its snapshot gets it after.
+    /// Sends `body` to every viewer of `session`, or of an opt-in kind ([`OPT_IN_KINDS`]) to those whose hello listed
+    /// it; one still taking its snapshot gets it after.
     pub fn publish(&mut self, body: &Body, session: Uuid) {
         let ids: Vec<SubscriberId> = self
             .subscribers
             .iter()
             .filter(|(_, subscriber)| subscriber.session == session)
             .map(|(id, _)| *id)
+            .filter(|id| self.takes(*id, body.kind()))
             .collect();
         for id in ids {
             if let Some(held) = self
@@ -843,6 +879,56 @@ mod tests {
                 "page.command",
                 "page.state"
             ]
+        );
+    }
+
+    /// An opt-in kind is published, held and sent only to a viewer whose hello listed it, and the answer echoes it.
+    #[test]
+    fn an_opt_in_kind_reaches_only_a_viewer_that_listed_it() {
+        let (mut hub, _) = hub();
+        let session = Uuid::new_v4();
+        let (older, older_seen) = subscribe(&mut hub, session, PresentationMode::Mirror);
+        assert!(!hub.watched_for(AGENT_KIND, session));
+        let agent = Body::Agent(crate::remote::frames::PresentationAgent {
+            pane: crate::remote::frames::PresentationPane::Scratch,
+            agent: None,
+            conversation_id: None,
+        });
+        let (sink, seen) = sink();
+        let asked = PresentationHello {
+            version: 1,
+            kinds: vec![AGENT_KIND.to_owned(), "status".to_owned()],
+            mode: PresentationMode::Mirror,
+        };
+        let published = agent.clone();
+        let id = hub
+            .subscribe(session, &asked, sink, move |hub| {
+                // published while the snapshot is taken: held for the viewer that listed it alone
+                hub.publish(&published, session);
+                PresentationSnapshot::default()
+            })
+            .unwrap();
+        assert!(hub.watched_for(AGENT_KIND, session));
+        assert!(!hub.watched_for(AGENT_KIND, Uuid::new_v4()));
+        assert_eq!(
+            bodies(&seen),
+            vec![
+                Body::Hello(PresentationHello {
+                    kinds: vec!["status".to_owned(), AGENT_KIND.to_owned()],
+                    ..asked
+                }),
+                Body::Snapshot(PresentationSnapshot::default()),
+                agent.clone(),
+            ]
+        );
+        hub.publish(&agent, session);
+        assert!(hub.send_to(agent.clone(), id));
+        assert!(!hub.send_to(agent.clone(), older), "not listed");
+        assert!(hub.send_to(Body::Status(None), older), "a kind that is not opt-in");
+        assert_eq!(bodies(&seen).len(), 5);
+        assert_eq!(
+            bodies(&older_seen).iter().map(Body::kind).collect::<Vec<_>>(),
+            ["hello", "snapshot", "status"]
         );
     }
 

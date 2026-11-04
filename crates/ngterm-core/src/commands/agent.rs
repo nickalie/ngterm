@@ -26,7 +26,8 @@
 //! open: a call the guardian denies runs no tool, so a turn that ends at once with a question finds it still there.
 //!
 //! Whether the agent still runs is read lazily: `agent.get` on a pane whose foreground is back to a shell clears the
-//! record, since no event fires when the program exits. A PowerShell on Linux or macOS settles nothing: it has no job
+//! record, since no event fires when the program exits, and so does building the presentation stream's `agent` frame
+//! ([`Core::presented_agent`], `remote::agents`). A PowerShell on Linux or macOS settles nothing: it has no job
 //! control, so its group reads as the shell while the programs it started run in it (`restore::capture`).
 
 use std::collections::HashMap;
@@ -417,6 +418,21 @@ impl Core {
         if let Some(record) = writer.and_then(|identity| self.agents.by_pane.get_mut(&identity)) {
             record.note_status_write(status);
         }
+    }
+
+    /// The agent and conversation of the pane `identity` names, after the lazy foreground check `agent.get` makes: a
+    /// pane back at its shell loses its record. `None` when it holds none. The presentation stream's `agent` frames
+    /// are built from it (`remote::agents`); a pane with no record costs no process read.
+    pub(crate) fn presented_agent(&mut self, identity: Uuid) -> Option<(AgentKind, String)> {
+        let record = self.agents.by_pane.get(&identity)?;
+        let present = (record.agent, record.conversation.clone());
+        let exited = locate(self.library(), identity)
+            .is_some_and(|(session, role)| agent_exited(self.pane_foreground(session, role).as_ref(), cfg!(windows)));
+        if exited {
+            self.agents.by_pane.remove(&identity);
+            return None;
+        }
+        Some(present)
     }
 
     /// How many panes hold an agent record (tests).

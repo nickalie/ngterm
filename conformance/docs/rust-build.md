@@ -221,6 +221,14 @@ A Rust-only command has no conformance id: the suite tests upstream's protocol, 
 it. Today the `agent.*` group is: `agent.report` and `agent.get`, the origin's per-pane agent record that the
 agent-status hooks fill and the Android chat view reads (`ngterm-core`'s `commands::agent`).
 
+### Presentation kinds
+
+A Rust-only presentation kind is a `live.present` frame kind upstream's stream does not have. It is opt-in
+(`OPT_IN_KINDS` in `ngterm-core`'s `remote/hub.rs`): sent, published state included, only to a viewer whose hello lists
+it, so desktop Attach Remote and upstream's viewers, which do not, get the stream they always got. Today there is one,
+`agent`: what each pane runs (`{pane, agent, conversationId}`, `agent` null for none), from the agent record above, for
+the Android chat view (`remote::agents`).
+
 ## The `live` group
 
 The Rust build answers upstream's control-protocol group `zmx.*` as `live.*`, a deliberate deviation from upstream: no

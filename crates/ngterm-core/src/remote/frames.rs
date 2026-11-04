@@ -717,6 +717,21 @@ impl PresentationPageState {
     }
 }
 
+/// What one pane of the origin session runs, as the origin's agent record has it (`commands::agent`). This build's
+/// addition for the Android chat view, not upstream's: it is published only to a viewer whose hello lists
+/// [`super::hub::AGENT_KIND`], so a viewer that predates it never sees one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentationAgent {
+    pub pane: PresentationPane,
+    /// The agent by name (`claude`, `codex`); `null` when the pane runs none. A string, so a viewer reads an agent a
+    /// newer origin names without failing the frame.
+    pub agent: Option<String>,
+    /// The agent's conversation; a new one means the chat switched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+}
+
 /// The origin's complete pane membership and arrangement, independent of surface realization (upstream's
 /// `PresentationLayout`). It decodes lossily: a bad layout reads as [`PresentationLayout::invalid`] rather than
 /// discarding the rest of a snapshot or disconnecting its stream.
@@ -868,6 +883,8 @@ pub enum Body {
     PageState(PresentationPageState),
     /// The origin respawned a pane's shell under the same daemon name; carries that pane's new count alone.
     Respawn(PresentationRespawns),
+    /// What one pane runs now; sent only to a viewer whose hello lists it.
+    Agent(PresentationAgent),
     /// A kind this build does not speak, kept with its place in the order.
     Unknown(String),
 }
@@ -907,6 +924,7 @@ impl Body {
             Self::PageCommand(_) => "page.command",
             Self::PageState(_) => "page.state",
             Self::Respawn(_) => "pane.respawn",
+            Self::Agent(_) => super::hub::AGENT_KIND,
             Self::Unknown(kind) => kind,
         }
     }
@@ -939,6 +957,7 @@ impl Body {
             Self::PageCommand(command) => entry("page", serde_json::to_value(command)),
             Self::PageState(state) => entry("page", serde_json::to_value(state)),
             Self::Respawn(respawns) => entry("respawn", serde_json::to_value(respawns)),
+            Self::Agent(agent) => entry("agent", serde_json::to_value(agent)),
             Self::Status(None)
             | Self::Context(None)
             | Self::Hud(None)
@@ -1089,6 +1108,7 @@ fn body(kind: &str, object: &mut Map<String, Value>) -> Result<Body, FrameError>
         "page.command" => Body::PageCommand(required(object, "page")?),
         "page.state" => Body::PageState(required(object, "page")?),
         "pane.respawn" => Body::Respawn(required(object, "respawn")?),
+        "agent" => Body::Agent(required(object, "agent")?),
         other => Body::Unknown(other.to_owned()),
     })
 }
@@ -1220,6 +1240,8 @@ mod tests {
                 ..PresentationSnapshot::default()
             }),
             Body::Respawn(respawns()),
+            Body::Agent(agent(Some("claude"))),
+            Body::Agent(agent(None)),
             Body::Notify(PresentationNotify {
                 title: "build".to_owned(),
                 body: "done".to_owned(),
@@ -1323,6 +1345,15 @@ mod tests {
             pane,
             size_percent: pane.is_none().then_some(80),
             follow: pane.is_none(),
+        }
+    }
+
+    /// The main pane running `name`, or nothing.
+    fn agent(name: Option<&str>) -> PresentationAgent {
+        PresentationAgent {
+            pane: pane(),
+            agent: name.map(str::to_owned),
+            conversation_id: name.map(|_| "aaaa".to_owned()),
         }
     }
 
@@ -1526,6 +1557,43 @@ mod tests {
         );
         let rejected = encoded(Body::PageRejected(PresentationPageChange::page("p1")));
         assert_eq!(rejected["page"], json!({"page": "p1"}));
+    }
+
+    /// The agent frame: the pane by identity, a pane running nothing as an explicit `null`.
+    #[test]
+    fn the_agent_frame_names_the_pane_and_its_agent() {
+        let encoded = |body: Body| -> Value {
+            let line = encode(&PresentationFrame {
+                generation: 1,
+                rev: 1,
+                body,
+            })
+            .unwrap();
+            serde_json::from_slice(&line).unwrap()
+        };
+        assert_eq!(
+            encoded(Body::Agent(agent(Some("codex")))),
+            json!({"kind": "agent", "gen": 1, "rev": 1, "agent": {"pane": "11111111-2222-3333-4444-555555555555",
+                "agent": "codex", "conversationId": "aaaa"}})
+        );
+        assert_eq!(
+            encoded(Body::Agent(agent(None)))["agent"],
+            json!({"pane": "11111111-2222-3333-4444-555555555555", "agent": null})
+        );
+        // an agent a newer origin names still decodes; a frame without its payload is malformed
+        let newer = br#"{"kind":"agent","gen":1,"rev":2,"agent":{"pane":"scratch","agent":"gemini"}}"#;
+        assert_eq!(
+            decode(newer).unwrap().body,
+            Body::Agent(PresentationAgent {
+                pane: PresentationPane::Scratch,
+                agent: Some("gemini".to_owned()),
+                conversation_id: None,
+            })
+        );
+        assert!(matches!(
+            decode(br#"{"kind":"agent","gen":1,"rev":2}"#),
+            Err(FrameError::Malformed(_))
+        ));
     }
 
     /// Upstream's `PresentationFramesTests.pageStateBoundsThePagesOwnStrings`.

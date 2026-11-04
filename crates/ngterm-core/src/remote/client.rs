@@ -329,6 +329,8 @@ impl PresentationClient {
             | Body::PageRejected(_)
             | Body::PageClosed(_)
             | Body::PageState(_)
+            // never listed in this viewer's hello, so never sent to it
+            | Body::Agent(_)
             | Body::Unknown(_) => {}
         }
     }
@@ -618,6 +620,14 @@ mod tests {
             viewer_kinds(false).iter().all(|kind| !kind.starts_with("page.")),
             "no page kind while this build shows no pages"
         );
+        // desktop Attach Remote shows no agent chat, so it never asks for the agent kind
+        for pages in [false, true] {
+            assert!(
+                !viewer_kinds(pages)
+                    .iter()
+                    .any(|kind| kind == crate::remote::hub::AGENT_KIND)
+            );
+        }
         assert_eq!(harness.connections(), [RemoteConnection::Connecting]);
     }
 

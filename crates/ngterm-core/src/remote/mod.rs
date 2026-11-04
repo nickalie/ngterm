@@ -3,7 +3,8 @@
 //!
 //! - [`tree`]: `live.tree`, the attachable sessions here or, over ssh, on another host;
 //! - [`frames`] and [`hub`]: the `live.present` stream that carries a session's presentation (status, context, name,
-//!   layout, HUD, notifications) to its viewers, and decides which one viewer is the session's sole presenter;
+//!   layout, HUD, notifications) to its viewers, and decides which one viewer is the session's sole presenter; what
+//!   each pane runs goes only to a viewer that asks for it ([`agents`]);
 //! - [`remotes`]: `remotes.conf`, the hosts offered for an attach;
 //! - the viewer side: `live.attach` and File ▸ Attach Remote ([`attach`]), the ssh lines it runs ([`ssh`]), each
 //!   attached row's presentation client ([`client`]) and what its frames put on the row ([`viewer`], [`layout`]), and
@@ -26,6 +27,7 @@
 //! `ControlServer+Presentation.swift`). State frames are published by comparing each watched session with what its
 //! viewers last got, on every commit; a notification and a HUD publication are sent when they happen.
 
+mod agents;
 pub(crate) mod attach;
 pub mod client;
 pub mod clipboard;
@@ -142,6 +144,8 @@ struct Published {
     status: Option<PresentationStatus>,
     context: Option<String>,
     name: Option<String>,
+    /// Each pane's agent frame, as the viewers listing the agent kind last got it.
+    agents: agents::AgentFrames,
 }
 
 /// A session's HUD as published to viewers (upstream's `hudPublishGeneration`, `hudExpiresAt` and `onHudWithdrawn`).
@@ -503,12 +507,17 @@ impl Core {
             status: snapshot.status.clone(),
             context: snapshot.context.clone(),
             name: snapshot.name.clone(),
+            agents: agents::AgentFrames::new(),
         });
+        let agents = self.attach_agents(session, &hello.kinds);
         let sink = Box::new(ChannelSink(Rc::clone(&channel)));
         match self.remote.hub.subscribe(session, &hello, sink, move |_| snapshot) {
             Ok(id) => {
                 if let Some(stream) = self.remote.streams.get_mut(&serial) {
                     stream.subscriber = Some(id);
+                }
+                if let Some(frames) = agents {
+                    self.send_attached_agents(frames, id);
                 }
             }
             Err(error) => {
@@ -545,10 +554,14 @@ impl Core {
     }
 
     /// The heartbeat (upstream's `startPresentationHeartbeat` body): streams whose session left every open window are
-    /// closed, stale viewers dropped and the rest pinged. Whether any stream is still up, so the frontend keeps its
-    /// timer only while one is.
+    /// closed, each pane's agent checked for the viewers that list it ([`agents`]), stale viewers dropped and the rest
+    /// pinged. Whether any stream is still up, so the frontend keeps its timer only while one is.
     pub fn presentation_heartbeat(&mut self) -> bool {
         self.drop_orphaned_presentation_streams();
+        // an agent that exited back to its shell fires no event, so its pane is checked here as well as on commit
+        for session in self.remote.watched() {
+            self.publish_agents(session);
+        }
         self.remote.hub.heartbeat();
         self.run_hub_events();
         !self.remote.streams.is_empty()
@@ -658,14 +671,15 @@ impl Core {
     }
 
     /// Brings the viewers in line with the model after a mutation, on every commit: the remote overlays the model
-    /// closed and the jobs that ended, a withdrawn HUD, and each watched session's status, context, name and layout
-    /// where they changed since its viewers last got them.
+    /// closed and the jobs that ended, a withdrawn HUD, and each watched session's status, context, name, layout and
+    /// (for the viewers that list it) each pane's agent where they changed since its viewers last got them.
     pub(crate) fn sync_presentation(&mut self) {
         self.settle_remote_overlays();
         self.drop_orphaned_presentation_streams();
         self.withdraw_huds();
         for session in self.remote.watched() {
             self.publish_state(session);
+            self.publish_agents(session);
         }
         self.run_hub_events();
     }
