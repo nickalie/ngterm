@@ -883,15 +883,18 @@ fn a_banner_without_a_link_changes_nothing() {
 #[test]
 fn a_link_the_machine_does_not_wait_on_asks_nothing() {
     run(async {
+        // quick()'s connect deadline, not signing_in()'s 300 ms: the handshake before the banner counts against it,
+        // and a debug build's on a busy simulator can take that long; this test is about the grace alone
         let mut fixture = fixture(Timing {
             sign_in_grace: Duration::from_millis(500),
-            ..signing_in()
+            ..quick()
         });
         let banner = "Authorized use only: see https://example.com/policy.\n";
         let server = TestServer::start_holding_auth(&fixture.public, banner, Duration::from_millis(100)).await;
         fixture.hosts.pin("m1".to_owned(), server.fingerprint());
 
-        assert!(fixture.transport.connect(&machine(server.port)).await.is_ok());
+        let connected = fixture.transport.connect(&machine(server.port)).await;
+        assert!(connected.is_ok(), "{:?}", connected.err());
         tokio::time::sleep(Duration::from_millis(600)).await;
         assert!(
             fixture.events.try_recv().is_err(),
