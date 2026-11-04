@@ -1,0 +1,222 @@
+package com.nickalie.ngterm.android.ui.chat
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.nickalie.ngterm.android.R
+import com.nickalie.ngterm.android.ui.components.Banner
+import com.nickalie.ngterm.android.ui.components.EmptyState
+import com.nickalie.ngterm.android.ui.components.PanelAction
+import com.nickalie.ngterm.android.ui.components.SectionAction
+import com.nickalie.ngterm.android.ui.theme.NgtermTheme
+import com.nickalie.ngterm.android.ui.theme.StatusTone
+
+/** A pane's open [chat], live, read from [machine]; [onShowTerminal] shows the pane's terminal instead. */
+@Composable
+fun ChatPane(
+    chat: ChatViewModel,
+    machine: String,
+    onShowTerminal: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val state by chat.state.collectAsStateWithLifecycle()
+    val actions =
+        remember(chat, onShowTerminal) {
+            ChatActions(
+                onLoadOlder = chat::loadOlder,
+                onAnswerApproval = chat::answerApproval,
+                onAnswerQuestion = chat::answerQuestion,
+                onProblemShown = chat::problemShown,
+                onShowTerminal = onShowTerminal,
+            )
+        }
+    ChatScreen(state, machine, actions, modifier)
+}
+
+/**
+ * A pane's chat ([state]), read from [machine]: its rows ([ChatList]), or what stands in for them (the backlog on its
+ * way, nothing said yet, the chat ended), a strip over the rows while its link is back on its way, and pinned at its
+ * foot the last action's problem and the card the agent waits on (an approval before a question). TalkBack names it
+ * "Chat with" the agent.
+ */
+@Composable
+fun ChatScreen(
+    state: ChatUiState,
+    machine: String,
+    actions: ChatActions,
+    modifier: Modifier = Modifier,
+) {
+    val agent = state.conversation?.agent
+    val name = stringResource(agentName(agent))
+    val description = stringResource(R.string.chat_description, name)
+    BoxWithConstraints(
+        modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .semantics { contentDescription = description },
+    ) {
+        val cardHeight = maxHeight * CARD_SHARE
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                ChatContent(state, machine, name, actions)
+                if (state.phase == ChatPhase.Reconnecting) {
+                    ReconnectingStrip(
+                        machine,
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(NgtermTheme.spacing.sm)
+                            .widthIn(max = NgtermTheme.spacing.readableWidth),
+                    )
+                }
+            }
+            if (state.phase != ChatPhase.Ended) Pinned(state, actions, cardHeight)
+        }
+    }
+}
+
+// the most of the chat's height a card takes before it scrolls inside: the rows above it stay in sight
+private const val CARD_SHARE = 0.6f
+
+@Composable
+private fun ChatContent(
+    state: ChatUiState,
+    machine: String,
+    name: String,
+    actions: ChatActions,
+    modifier: Modifier = Modifier,
+) {
+    val waiting = state.phase == ChatPhase.Loading || state.phase == ChatPhase.Reconnecting
+    val terminal = PanelAction(stringResource(R.string.session_show_terminal), onClick = actions.onShowTerminal)
+    when {
+        state.phase == ChatPhase.Ended -> {
+            Centered(modifier) {
+                EmptyState(
+                    icon = R.drawable.ic_chat,
+                    title = stringResource(R.string.chat_ended_title),
+                    body = stringResource(R.string.chat_ended_body, name, machine),
+                    action = terminal,
+                )
+            }
+        }
+
+        state.log.isEmpty && !state.log.switched && waiting -> {
+            Centered(modifier) { ChatLoading(machine) }
+        }
+
+        state.log.isEmpty && !state.log.switched -> {
+            Centered(modifier) {
+                EmptyState(
+                    icon = R.drawable.ic_chat,
+                    title = stringResource(R.string.chat_empty_title),
+                    body = stringResource(R.string.chat_empty_body, name),
+                    action = terminal,
+                )
+            }
+        }
+
+        else -> {
+            ChatList(state, actions, modifier)
+        }
+    }
+}
+
+@Composable
+private fun Centered(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { content() }
+}
+
+// what waits at the chat's foot: the last action's problem, then the card (no taller than [cardHeight])
+@Composable
+private fun Pinned(
+    state: ChatUiState,
+    actions: ChatActions,
+    cardHeight: Dp,
+    modifier: Modifier = Modifier,
+) {
+    val agent = state.conversation?.agent
+    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
+        Column(
+            modifier = Modifier.widthIn(max = NgtermTheme.spacing.readableWidth).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(NgtermTheme.spacing.sm),
+        ) {
+            state.problem?.let { problem ->
+                ProblemBanner(problem, actions, Modifier.padding(NgtermTheme.spacing.sm))
+            }
+            val card = Modifier.heightIn(max = cardHeight)
+            val approval = state.approval
+            val question = state.question
+            when {
+                approval != null -> {
+                    ApprovalCardView(approval, agent, state.busy, actions.onAnswerApproval, card)
+                }
+
+                question != null -> {
+                    QuestionCardView(question, agent, state.busy, actions.onAnswerQuestion, card)
+                }
+            }
+        }
+    }
+}
+
+// why the last action did nothing, or not all it meant to, and Answer in terminal when the terminal is the way on
+@Composable
+private fun ProblemBanner(
+    problem: ChatProblem,
+    actions: ChatActions,
+    modifier: Modifier = Modifier,
+) {
+    val terminal =
+        if (problem.offersTerminal) {
+            SectionAction(stringResource(R.string.chat_answer_in_terminal), actions.onShowTerminal)
+        } else {
+            null
+        }
+    Banner(
+        tone = problem.tone,
+        message = problem.message(),
+        modifier = modifier,
+        action = terminal,
+        onDismiss = actions.onProblemShown,
+    )
+}
+
+// a problem the user can act on is Needs you; one that only reports is Failed
+private val ChatProblem.tone: StatusTone
+    get() =
+        when (this) {
+            ChatProblem.NotOnScreen, ChatProblem.DialogOpen, ChatProblem.Unconfirmed -> StatusTone.Attention
+            else -> StatusTone.Error
+        }
+
+@Composable
+private fun ChatProblem.message(): String =
+    when (this) {
+        ChatProblem.NotOnScreen -> stringResource(R.string.chat_problem_not_on_screen)
+        ChatProblem.DialogOpen -> stringResource(R.string.chat_problem_dialog_open)
+        ChatProblem.LeadRefused -> stringResource(R.string.chat_problem_lead_refused)
+        ChatProblem.Unconfirmed -> stringResource(R.string.chat_problem_unconfirmed)
+        ChatProblem.NotReading -> stringResource(R.string.chat_problem_not_reading)
+        ChatProblem.Closed -> stringResource(R.string.chat_problem_closed)
+        is ChatProblem.Refused -> stringResource(R.string.chat_problem_refused, reason)
+    }

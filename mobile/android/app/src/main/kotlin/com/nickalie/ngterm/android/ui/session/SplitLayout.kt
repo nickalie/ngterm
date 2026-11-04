@@ -20,16 +20,23 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.data.FontChoice
 import com.nickalie.ngterm.android.data.PaneLive
+import com.nickalie.ngterm.android.ui.chat.ChatLoading
+import com.nickalie.ngterm.android.ui.chat.ChatPane
+import com.nickalie.ngterm.android.ui.chat.ChatViewModel
 import com.nickalie.ngterm.android.ui.components.BusBar
 import com.nickalie.ngterm.android.ui.components.underCover
 import com.nickalie.ngterm.android.ui.terminal.TerminalKeyboard
@@ -44,20 +51,23 @@ import com.nickalie.ngterm.core.ffi.PaneSize
 
 /**
  * One pane of a session as the view places it: its [ref], its view's [state] once it is shown, what its events say
- * ([live]), and why it could not be shown ([failure]).
+ * ([live]), and why it could not be shown ([failure]); [chatView] when it shows as a chat, with its [chat] once that
+ * is open.
  */
 data class PaneSpot(
     val ref: PaneRef,
     val state: TerminalState?,
     val live: PaneLive?,
     val failure: String?,
+    val chatView: Boolean = false,
+    val chat: ChatViewModel? = null,
 )
 
 /**
  * What a pane's slot does: [keyboard] is the one every pane types through; [onShow] shows a pane at the grid its
  * slot first has room for, and [onRetry] tries one that could not be shown again; [onFocus] selects the pane a touch
  * or the input focus landed on; [onTakeLead] is Take control; [onDetach] lets the session go (an exited program's
- * cover offers it); [machine] names where the panes live.
+ * cover offers it); [onShowTerminal] shows a chat's terminal in its place; [machine] names where the panes live.
  */
 data class PaneActions(
     val keyboard: TerminalKeyboard,
@@ -67,11 +77,15 @@ data class PaneActions(
     val onFocus: (String) -> Unit,
     val onTakeLead: (PaneRef) -> Unit,
     val onDetach: () -> Unit,
+    val onShowTerminal: (PaneRef) -> Unit = {},
 )
 
 /**
  * A pane's slot: its terminal (once shown; the slot's first size shows it), with its cover when it can't be used as
- * it is. [focused] draws its cursor as it is (the others' go hollow); [readAloud] lets TalkBack read its text;
+ * it is; or, in chat view, its chat ([ChatPane]) in the terminal's place, the terminal still attached behind it at the
+ * grid the slot gives it less [reserve] (the extra keys' room, while they step aside for the chat), under no cover
+ * but a failed show's (reading a chat never takes control).
+ * [focused] draws its cursor as it is (the others' go hollow); [readAloud] lets TalkBack read its text;
  * [onSwipe] takes a sideways swipe (a phone's next or previous pane). Every touch on it, even on a pane that has the
  * input focus already, and a focus taken inside it select it ([PaneActions.onFocus]); [onHoldsFocus] says whether the
  * input focus is inside it.
@@ -86,17 +100,19 @@ fun PaneSlot(
     readAloud: Boolean = false,
     onSwipe: ((forward: Boolean) -> Unit)? = null,
     onHoldsFocus: (Boolean) -> Unit = {},
+    reserve: Dp = 0.dp,
 ) {
     var size by remember { mutableStateOf(IntSize.Zero) }
     val font =
         rememberTerminalFont(spot.state?.textSize ?: TerminalTextSize, spot.state?.face ?: FontChoice.JetBrainsMono)
-    val grid = gridFor(size, font)
+    val kept = if (spot.chatView) with(LocalDensity.current) { reserve.roundToPx() } else 0
+    val grid = gridFor(IntSize(size.width, (size.height - kept).coerceAtLeast(0)), font)
     val show by rememberUpdatedState(actions.onShow)
     val waiting = spot.state == null && spot.failure == null
     LaunchedEffect(spot.ref, grid, waiting) {
         if (waiting && grid != null) show(spot.ref, grid)
     }
-    val cover = PaneCover.of(spot.live, spot.state != null, spot.failure)
+    val cover = spot.cover()
     val paneId = spot.ref.paneId
     val select by rememberUpdatedState { actions.onFocus(paneId) }
     val holds by rememberUpdatedState(onHoldsFocus)
@@ -115,16 +131,20 @@ fun PaneSlot(
                 if (it.hasFocus) select()
             },
     ) {
-        spot.state?.let { state ->
-            TerminalView(
-                state = state,
-                modifier = Modifier.fillMaxSize().underCover(cover.veils),
-                focused = focused,
-                keyboard = actions.keyboard,
-                focusRequester = focusRequester,
-                readAloud = readAloud && !cover.veils,
-                onSwipe = onSwipe,
-            )
+        if (spot.chatView) {
+            ChatSlot(spot, grid, actions, Modifier.fillMaxSize().underCover(cover.veils))
+        } else {
+            spot.state?.let { state ->
+                TerminalView(
+                    state = state,
+                    modifier = Modifier.fillMaxSize().underCover(cover.veils),
+                    focused = focused,
+                    keyboard = actions.keyboard,
+                    focusRequester = focusRequester,
+                    readAloud = readAloud && !cover.veils,
+                    onSwipe = onSwipe,
+                )
+            }
         }
         if (cover != null) {
             LeadCover(
@@ -134,6 +154,37 @@ fun PaneSlot(
                 onDetach = actions.onDetach,
                 onRetry = { grid?.let { actions.onRetry(spot.ref, it) } },
             )
+        }
+    }
+}
+
+// what covers the slot: a chat only a failed show's, since reading a chat never takes control
+private fun PaneSpot.cover(): PaneCover? =
+    PaneCover.of(live, state != null, failure)?.takeIf { !chatView || it is PaneCover.Failed }
+
+// a pane in chat view: its chat once open (the backlog's wait until then), and its terminal, not drawn, still given the
+// grid the slot would draw it at, so a chat action that takes control lays the program out for this device. A grid
+// that holds for a frame (the extra keys stepping aside: the room they leave is counted before the slot has grown
+// into it) is not given
+@Composable
+private fun ChatSlot(
+    spot: PaneSpot,
+    grid: PaneSize?,
+    actions: PaneActions,
+    modifier: Modifier = Modifier,
+) {
+    val state = spot.state
+    LaunchedEffect(state, grid) {
+        if (state == null || grid == null) return@LaunchedEffect
+        withFrameNanos { }
+        state.resize(grid)
+    }
+    val chat = spot.chat
+    if (chat != null) {
+        ChatPane(chat, actions.machine, onShowTerminal = { actions.onShowTerminal(spot.ref) }, modifier = modifier)
+    } else {
+        Box(modifier.background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
+            ChatLoading(actions.machine)
         }
     }
 }

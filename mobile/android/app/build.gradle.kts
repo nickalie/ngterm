@@ -92,6 +92,7 @@ dependencies {
     implementation(libs.compose.material3.adaptive.layout)
     implementation(libs.compose.material3.adaptive.navigation)
     implementation(libs.compose.material3.adaptive.navigation.suite)
+    implementation(libs.markdown.renderer.m3)
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 

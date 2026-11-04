@@ -127,8 +127,10 @@ private fun OtherRow(
     }
 }
 
+// a choice's row: its marker in a touch target's room, then its label; the whole row takes the tap (the chat's
+// question card shares it)
 @Composable
-private fun ChoiceRow(
+internal fun ChoiceRow(
     multiple: Boolean,
     checked: Boolean,
     onToggle: () -> Unit,
@@ -158,7 +160,7 @@ private fun ChoiceRow(
 
 // a radio button or a checkbox; with no onClick its row takes the tap
 @Composable
-private fun Marker(
+internal fun Marker(
     multiple: Boolean,
     checked: Boolean,
     enabled: Boolean,

@@ -677,8 +677,26 @@ with no output yet is a running call (Task 1's fixture README).
   `ui/chat/NeedsYouCard.kt`
 - Modify: `mobile/android/DESIGN.md`, `gradle/libs.versions.toml` (mikepenz `multiplatform-markdown-renderer`), the
   screenshot tests under `app/src/test/screenshots/`
+- Created as well: `ui/chat/{ChatList,ChatStates,ChatStyle,QuestionCard,QuestionDraft,ReplyText}.kt` (detekt's
+  eleven functions a file), `res/drawable/ic_tool_{shell,edit,read,search,web,task,other,stop,compact}.xml` and
+  `ic_thinking.xml`; tests `ui/chat/{ChatSamples,ChatPartsTest,ChatScreenTest,ChatScreenshotTest}.kt` and
+  `SessionViewTest` (+1). Modified as well: `app/build.gradle.kts`, `ui/theme/Type.kt` (`TerminalFamily`),
+  `ui/asks/AskForm.kt` (`ChoiceRow` and `Marker` shared with the question card), `ui/session/{SessionScreen,
+  SplitLayout,SessionsDestination}.kt`, `ui/NgtermApp.kt`, `ui/terminal/ExtraKeysRow.kt` (`extraKeysHeight`),
+  `res/values/strings.xml`.
+- As built:
+  - A pane in chat view draws `ChatPane` in its slot instead of `TerminalView`, with no cover but a failed show's.
+    Its terminal stays attached and is given the slot's grid (one frame settled), so switching never resizes it.
+  - The extra keys type into no chat: the keyboard's target is no chat pane, and the row steps aside while every pane
+    on screen is a chat; the terminal's grid then still leaves the row's room (`extraKeysHeight`, halved for stacked
+    halves), so the row going does not resize the pane either.
+  - Older pages: the list's first row asks once it is on screen (checked a frame after a page went in, so a page does
+    not chain into the next); `ChatUiState.anchor` scrolls the row that was on top back there while the header is
+    first. The list opens at the end and follows a new or changed last row while it is there.
+  - Approval buttons are the matcher's labels, or until they are read the agent's own answers (`genericApprovalLabels`,
+    mirroring the core's `fallback_labels`).
 
-- [ ] invoke `frontend-design` for the chat. Extend `DESIGN.md` with the chat's components:
+- [x] invoke `frontend-design` for the chat. Extend `DESIGN.md` with the chat's components:
   - prompt bubbles, right-aligned on a container tone;
   - full-width Markdown replies with no bubble, and mono code blocks with no highlighting;
   - one-line tool rows (kind glyph, mono title, status glyph and word, tap to expand);
@@ -686,14 +704,14 @@ with no output yet is a running call (Task 1's fixture README).
   - collapsed thinking and subagents;
   - Needs-you cards built from the `ui/asks/` vocabulary ("An agent asks") in the Attention tone, pinned above the
     composer.
-- [ ] build the screen with its empty, loading (backlog), reconnecting and "agent ended" states, and loading older
+- [x] build the screen with its empty, loading (backlog), reconnecting and "agent ended" states, and loading older
       items on scroll
-- [ ] approval cards: the tool, its command or diff, and the buttons (labels from the matcher, or the generic set when
+- [x] approval cards: the tool, its command or diff, and the buttons (labels from the matcher, or the generic set when
       the rows can't be read yet). Question cards: radio buttons or checkboxes plus a "Type an answer" field.
-- [ ] Roborazzi goldens at three widths, light and dark, and at font scale 2.0, covering a long conversation, an open
+- [x] Roborazzi goldens at three widths, light and dark, and at font scale 2.0, covering a long conversation, an open
       approval, a multi-select question, an expanded diff, and the empty and error states. Add TalkBack labels and a
       test for them.
-- [ ] `scripts/build-android.sh check` must pass
+- [x] `scripts/build-android.sh check` must pass
 
 ### Task 15: Android: the composer and the `/` dropdown
 

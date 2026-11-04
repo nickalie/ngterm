@@ -112,7 +112,9 @@ OFL (`licenses/`):
 - **Atkinson Hyperlegible Next** for the chrome. The Braille Institute drew it to tell similar letters apart, which
   is the job here: hostnames, session names and statuses read at a glance, at any font scale.
 - **Atkinson Hyperlegible Mono** for what is compared character by character: `user@host:port`, fingerprints, key
-  lines (`NgtermTheme.mono`). It is not the terminal's font: the terminal's is JetBrains Mono (The terminal, below).
+  lines (`NgtermTheme.mono`). It is not the terminal's font: the terminal's is JetBrains Mono (The terminal, below),
+  which the chat also uses for what the terminal holds (`TerminalFamily`, `ChatType`: a tool's title at 13 sp, code at
+  13 sp, output and diffs at 12 sp).
 
 The scale is the classic one (11, 12, 14, 16, 18, 21, 24, 30, 36, 48 sp). The two largest display sizes are light,
 headlines medium, titles and labels semibold, body regular. Sentence case everywhere; no all-caps labels, no eyebrows
@@ -159,7 +161,10 @@ Line icons drawn for the app in `res/drawable/ic_*.xml`: 24dp, 2dp strokes, roun
 (two racked servers), Sessions (a terminal window), Settings (sliders), Menu and Menu open, Add, Retry, Alert, Offline
 (a struck signal), Close, Lock, Back (mirrored right to left), More (an item's menu), Chat (a speech bubble with two
 lines, `ic_chat`) and the extra keys' arrow
-(`ic_key_arrow`, turned for each direction). The status bar's small icon (`ic_notification`) is the mark's `>_` alone,
+(`ic_key_arrow`, turned for each direction). The chat's lines have a glyph per tool kind (`ic_tool_*`): shell (a `>_`
+prompt), edit (a pencil), read (a page with a folded corner), search (a magnifier), web (a globe), task (a branch,
+a subagent), other (four tiles); and per notice: stop (a square, an interrupt), compact (two arrows meeting at a line);
+thinking is three filled dots (`ic_thinking`). The status bar's small icon (`ic_notification`) is the mark's `>_` alone,
 white on nothing, as Android masks it. The status glyphs are 16dp filled or stroked shapes (`ic_status_*`). The mark
 (`ic_ngterm_mark`) is the launcher's `>_` cut out of a copper tile. No icon font or icon library.
 
@@ -518,7 +523,7 @@ compact                            medium (rail open)               expanded
   lifts it. When the agent ends, or its chat ends or can't open (an origin without the chat view), the pane shows its
   terminal and the switch offers the chat back while the agent is still announced. A pane without an agent, or every
   pane with the setting off, has no switch. Switching never resizes the pane or moves its lead: the terminal stays
-  attached at its grid behind the chat, and only a chat action takes control. The chat itself is `ui/chat/`.
+  attached at its grid behind the chat, and only a chat action takes control. The chat itself is The chat, below.
 - **The split** (`SplitLayout`, medium and expanded): the origin's layout as it is, two panes side by side
   (`vertical`) or stacked (`horizontal`), halves split by a 1dp `outlineVariant` rule, since the terminal's ground is
   the chrome's. Each pane of a split keeps a 4dp gutter at its leading edge where the focused one shows the bus bar
@@ -552,7 +557,8 @@ compact                            medium (rail open)               expanded
 - **More:** Detach (at once: it goes on running there, and the view closes) and End session (in the error color,
   confirmed as on a machine's list).
 - **The keyboard:** one `TerminalKeyboard` for the view, shared by every pane and the extra-keys row, so a held Ctrl
-  stays as the selection moves; the row sits under the panes over the soft keyboard. Ctrl+Shift+Left and Right go to
+  stays as the selection moves; the row sits under the panes over the soft keyboard, and steps aside while every pane
+  on screen shows its chat (The chat, below). Ctrl+Shift+Left and Right go to
   the previous and next pane, Ctrl+Shift+Up and Down to the previous and next attached session.
 - **One selected pane:** each session has one selected pane, the one a tab, a swipe, a chord or a touch on a pane
   picked, and everything typed goes to it alone: the soft keyboard's text, the extra keys and a hardware keyboard's
@@ -618,6 +624,113 @@ The plan, reviewed against the brief:
   elsewhere, ended there, its stream gone) closes its sheet; one answered here goes once.
 - **Not here:** the origin's style (terminal or GUI), button alignment, width and hotkeys are desktop's; the sheet is
   the app's one look, and its buttons stack at every width.
+
+### The chat (`ui/chat/`)
+
+A pane running Claude Code or Codex, read as a conversation (The view switch, above). Underneath it is still the
+agent's TUI in the pane, so the chat is a second reading of the terminal, not a messenger: everything the agent typed
+or ran is in the terminal's own face (JetBrains Mono, `ChatType`), and only what people and the agent wrote as prose is
+in the chrome's.
+
+The plan, reviewed against the brief:
+
+| First pass | Why it was generic | Revised to |
+|---|---|---|
+| Bubbles on both sides, avatars, a time under each | the messenger kit; a reply is a document, often with code, and a bubble squeezes it | only the prompt is a bubble (at the end of the line, `surfaceContainerHigh`); a reply is full-width Markdown on the ground; no avatars, no times |
+| Each tool call a card with a header, a chevron and a shadow | the card kit, and thirty cards bury the replies | one 48dp line on the ground: the kind's glyph, the title in the terminal's face, the status's glyph and word at the end; a tap opens what it holds on a plate under it |
+| Code in a syntax-highlighting theme | a second palette fighting the app's, and color carrying meaning | the terminal's face in one color on a `surfaceContainerLow` plate; a diff is the only colored text: verdigris added, oxide removed, each line keeping its `+` or `-` |
+| A spinner on every running tool | motion nobody asked for, scattered down the list | the Connecting ring and "Running"; nothing in the list moves on its own |
+| The permission prompt as a dialog over the chat | hides the conversation the question is about | a Needs-you card pinned at the chat's foot, in the ask sheet's shape and order (`ui/asks/`) |
+
+```
++--------------------------------------+
+|  Start of the conversation           |
+|  ~/docs-site                         |
+|           +------------------------+ |
+|           | Fix the install guide. | |
+|           +------------------------+ |
+|  ... Thinking                        |
+|  I'll look at the installer first.   |
+|  >_ grep -n PATH install.sh   o Done |
+|  /  docs/install.md           o Done |
+|  Y  Look for which in ...     o Done |
+|     2 steps                          |
+|  >_ npm run build          O Running |
+|+------------------------------------+|
+|| <>                                 ||
+|| Allow Bash?                        ||
+|| rm -rf build && npm run build      ||
+|| [             Yes                ] ||
+|| ( Yes, and don't ask again ...   ) ||
+|| ( No, and tell Claude what to do ) ||
+|+------------------------------------+|
++--------------------------------------+
+```
+
+- **Where:** in the pane's slot, in its terminal's place. The terminal stays attached behind it and keeps the grid the
+  slot gives it, so switching never resizes the pane, and a chat action that takes control lays the program out for
+  this device. No cover goes over a chat (reading never takes control) except a pane that couldn't be shown, whose
+  Retry stays. The extra keys type into no chat: they step aside while every pane on screen is a chat, and the
+  terminal's grid still leaves them their room.
+- **The list** (`ChatList`): oldest at the top, one column 640dp at most, centered, with the phone's 16dp gutter. It
+  opens at the newest row and follows new ones while it is at the end; scrolling away lets it be. Which rows are open
+  survives scrolling and rotation.
+- **Prompts** (`PromptBubble`): at the end of the line on `surfaceContainerHigh`, 12dp corners, bodyLarge, no wider
+  than 480dp, with "With 2 images" under them when they carried any. TalkBack reads "You: …".
+- **Replies** (`ReplyText`, mikepenz multiplatform-markdown-renderer): full width on the ground, paragraphs and lists
+  in bodyLarge, headings at the title sizes (never the display ones: a reply is not a page), links copper and
+  underlined, quotes in `onSurfaceVariant`. Code blocks are the terminal's face at 13 sp on a `surfaceContainerLow`
+  plate with 6dp corners, scrolling sideways, never highlighted; inline code the same face on `surfaceContainerHigh`.
+  Images aren't fetched. A reply is parsed as it is first drawn, so its row has its height at once.
+- **Tool lines** (`ToolRow`, on `ChatLine`): the kind's glyph (18dp, `onSurfaceVariant`, read as its word: Command,
+  Edit, Read, Search, Web, Subagent, Tool), the title in the terminal's face at 13 sp on one line (the tool's name
+  when the title isn't known), and the status at the end: Running on the Connecting ring, Done on the Online circle,
+  Failed on the Error triangle. A line that holds something is a 48dp target: a tap opens its diff, its output (the
+  terminal's face at 12 sp on a plate, scrolling sideways) and "Cut short here: the terminal has the rest." when the
+  origin cut them, indented to the title; the title then shows whole.
+- **Diffs** (`DiffView`): the file's header lines and the hunks' `@@` lines quiet (`onSurfaceVariant`, the headers
+  bold), added lines verdigris, removed lines oxide, kept lines `onSurface`; at most 400 lines, then how many more.
+- **Thinking:** one quiet line, the three-dot glyph and "Thinking" (Claude) or Codex's summary title in bodyMedium
+  `onSurfaceVariant`; a tap shows a long title whole.
+- **Subagents:** the task's line says "2 steps" under its title; a tap shows the steps (every kind of row) behind a 2dp
+  `outlineVariant` rule. Steps whose task is older than what was read sit under "A subagent's earlier task" until the
+  task comes.
+- **Questions** in the conversation: a line with the Chat glyph, the first question, and Needs you (the attention
+  diamond) while it waits, then Answered; a tap shows the questions and the answer the agent got.
+- **Notices:** a quiet line with its glyph: an interrupt (a square), a compaction (two arrows meeting at a line; a tap
+  shows its summary), an API error (the alert glyph, in oxide), a summary (the page).
+- **A new conversation** (the origin's reset): "New conversation" (labelMedium, a heading) and a rule; what came
+  before is gone.
+- **Earlier messages:** the list's first row asks for the page before as soon as it is on screen: "Loading earlier
+  messages" with a 16dp spinner, then the page goes in above and the row that was on top stays where it was. At the
+  start it says "Start of the conversation" over the working directory in mono; a page that failed gives the core's
+  reason in oxide and Retry.
+- **Needs-you cards** (`NeedsYouCard`), pinned under the list, an approval before a question: the ask sheet's tone
+  (`surfaceContainerHigh`) and 20dp top corners, rising from the chat's foot as the sheet does from the screen's; the
+  attention diamond over the title (titleMedium, a heading). It takes at most 60% of the chat's height and scrolls
+  inside.
+  - *Approval* (`ApprovalCardView`): "Allow Bash?", the call's title in the terminal's face, its detail (a command, or
+    a diff as `DiffView`) on a plate up to 160dp tall, then the dialog's options in its order, one per line, full
+    width: the first, the dialog's own default, filled; the rest outlined. Until the pane's screen is read the agent's
+    own answers stand in (Yes and No for Claude Code; "Yes, proceed" and "No, and tell Codex what to do differently"),
+    worded as its dialogs word them, so a tap still finds its option.
+  - *Question* (`QuestionCardView`): "Claude Code asks", then each question: its header (labelMedium), the question
+    (titleSmall), the ask sheet's rows (`ChoiceRow`: radio buttons for one pick, checkboxes for several, the label over
+    its description), and the "Type an answer" row (its marker, then the field; typing picks it, and in a radio list
+    takes the pick over). **Send answers** (filled) once every question has an answer.
+  - While an answer is on its way the buttons hold still and "Sending" with a 16dp spinner shows under them.
+- **Problems:** what the last action couldn't do, as a `Banner` over the card: in the Attention tone when the user can
+  act on it (the pane doesn't show the prompt any more, a dialog is open, the keys went but the screen didn't confirm
+  them), in the Error tone when it only reports (another device kept control, the program isn't reading, the pane is
+  gone, the core refused). When the terminal is the way on it offers **Answer in terminal**; it can be dismissed.
+- **States:** the backlog on its way with nothing yet: a spinner and "Reading the conversation from build-01"; nothing
+  said yet: the Chat glyph, "Nothing said yet", what will show, and Show terminal; the link reconnecting: a strip over
+  the top of the rows (`surfaceContainerHigh`, 6dp corners, a 16dp spinner, "Reconnecting to build-01", "What's here
+  stays; new messages follow once it's back."), the rows readable under it; the chat ended (the agent left, or the
+  origin can't share its conversation): "This chat ended" and Show terminal, which the pane then does by itself.
+- **TalkBack:** the chat is "Chat with Claude Code"; a prompt reads "You: …"; a line reads its kind, its title and its
+  status, says Expanded or Collapsed, and names its tap (Show output, Hide steps, Show summary); the cards' titles are
+  headings; the reconnecting strip, Sending and the problems are polite live regions.
 
 ### Notifications (`platform/Notifications.kt`, `data/Alerts.kt`)
 

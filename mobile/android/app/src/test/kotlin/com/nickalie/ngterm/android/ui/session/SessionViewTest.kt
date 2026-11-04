@@ -34,6 +34,8 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.fake.FakeInput
 import com.nickalie.ngterm.core.fake.FakePane
 import com.nickalie.ngterm.core.fake.fakeSession
+import com.nickalie.ngterm.core.ffi.ChatBody
+import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneClipboard
@@ -373,6 +375,33 @@ class SessionViewTest {
         compose.onNodeWithContentDescription("Show chat").performClick()
         waitFor { described("Show terminal") }
         assertEquals(setOf(p1), test.core.openChats)
+    }
+
+    @Test
+    fun aPaneInChatViewDrawsItsChatInTheTerminalsPlaceAtTheSameGrid() {
+        openSession()
+        waitFor { panes["P1"]?.sizes?.isNotEmpty() == true }
+        val sized = panes.getValue("P1").sizes.toList()
+        assertTrue(described("Escape"))
+
+        test.core.emit(MobileEvent.PaneAgent("m1", "s1", "P1", "claude", "c1"))
+        waitFor { described("Chat with The agent") }
+        // the chat stands in the terminal's place, and the extra keys step aside
+        assertTrue(described("Terminal").not() && described("Escape").not())
+        val events =
+            listOf(
+                ChatEvent("c", 0u, null, ChatBody.Conversation("claude", "c1", null, null)),
+                ChatEvent("u1", 0u, null, ChatBody.User("Fix the install guide", 0u)),
+                ChatEvent("live", 0u, null, ChatBody.Live),
+            )
+        test.core.emit(MobileEvent.Chat(p1, events))
+        waitFor { described("You: Fix the install guide") }
+        compose.onNodeWithContentDescription("Chat with Claude Code").assertExists()
+
+        compose.onNodeWithContentDescription("Show terminal").performClick()
+        waitFor { described("Terminal") && described("Escape") }
+        // switching the view never resized the pane: its terminal kept its grid behind the chat
+        assertEquals(sized, panes.getValue("P1").sizes.toList())
     }
 
     @Test

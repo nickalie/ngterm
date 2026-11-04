@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- a pencil, a file edited: a 24dp line icon, 2dp strokes with round ends; Icon tints it -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <path
+      android:pathData="M4,20l1,-4l11,-11a2.12,2.12 0 0 1 3,3l-11,11z"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+  <path
+      android:pathData="M14,7l3,3"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+</vector>

@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.ExtraKeysChoice
+import com.nickalie.ngterm.android.ui.chat.ChatViewModel
 import com.nickalie.ngterm.android.ui.components.EmptyState
 import com.nickalie.ngterm.android.ui.components.PanelAction
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
@@ -31,7 +32,8 @@ import com.nickalie.ngterm.core.ffi.PaneSize
  * The Sessions destination: the open session's view ([SessionScreen]), the gone state of one that ended while open,
  * or with none open the attached sessions by machine ([AttachedList]), or the empty state pointing to Machines. Back
  * closes an open session. [compact] (a phone) shows one pane at a time and a Back of its own; [notice] is a failure
- * to show once in a snackbar; [extraKeys] lays out the open session's extra keys.
+ * to show once in a snackbar; [extraKeys] lays out the open session's extra keys; [chats] are the open chats of the
+ * panes shown in chat view, by pane.
  */
 @Composable
 fun SessionsDestination(
@@ -43,6 +45,7 @@ fun SessionsDestination(
     actions: AttachedActions,
     modifier: Modifier = Modifier,
     extraKeys: ExtraKeysChoice = ExtraKeysChoice.Fit,
+    chats: Map<PaneRef, ChatViewModel> = emptyMap(),
 ) {
     val open = state.open
     BackHandler(enabled = open != null) { actions.onClose() }
@@ -57,7 +60,7 @@ fun SessionsDestination(
     Box(modifier.fillMaxSize()) {
         when (open) {
             is OpenSession.Live -> {
-                LiveSession(state, open, panes, failures, compact, actions, extraKeys)
+                LiveSession(state, open, panes, failures, compact, actions, extraKeys, chats)
             }
 
             is OpenSession.Gone -> {
@@ -99,6 +102,7 @@ private fun LiveSession(
     compact: Boolean,
     actions: AttachedActions,
     extraKeys: ExtraKeysChoice,
+    chats: Map<PaneRef, ChatViewModel>,
 ) {
     val sessions by rememberUpdatedState(state.sessions.map { it.key })
     val key = open.key
@@ -117,7 +121,17 @@ private fun LiveSession(
                 onView = actions.onView,
             )
         }
-    SessionScreen(open.session, open.focused, panes, failures, compact, view, extraKeys = extraKeys, views = open.views)
+    SessionScreen(
+        session = open.session,
+        focused = open.focused,
+        panes = panes,
+        failures = failures,
+        compact = compact,
+        actions = view,
+        extraKeys = extraKeys,
+        views = open.views,
+        chats = chats,
+    )
 }
 
 @Composable

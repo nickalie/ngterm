@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nickalie.ngterm.android.R
@@ -211,7 +212,7 @@ fun ExtraKeysRow(
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .semantics { paneTitle = description },
     ) {
-        val rows = if (layout == ExtraKeysChoice.Fit && maxWidth >= OneRowWidth) listOf(OneRow) else TwoRows
+        val rows = if (oneLine(layout, maxWidth)) listOf(OneRow) else TwoRows
         // every word at one size: the widest legend's, shrunk only as far as its key needs (a large font scale)
         val room = with(density) { (maxWidth / rows[0].size - (KeyInset + LegendPadding) * 2).toPx() }
         val widest =
@@ -233,6 +234,25 @@ fun ExtraKeysRow(
         }
     }
 }
+
+/**
+ * How tall [ExtraKeysRow] is across [width] as Settings' [layout] lays it out: nothing while it is hidden or a hardware
+ * keyboard is attached.
+ */
+@Composable
+fun extraKeysHeight(
+    layout: ExtraKeysChoice,
+    width: Dp,
+): Dp {
+    if (layout == ExtraKeysChoice.Hidden || hardwareKeyboardAttached()) return 0.dp
+    return if (oneLine(layout, width)) KeyHeight else KeyHeight * TwoRows.size
+}
+
+// one line of sixteen once the width gives each key a touch target, unless Settings keeps two lines
+private fun oneLine(
+    layout: ExtraKeysChoice,
+    width: Dp,
+) = layout == ExtraKeysChoice.Fit && width >= OneRowWidth
 
 /** The legends' type: words in the chrome's face, at one size across the row; symbols in mono. */
 private class Legends(

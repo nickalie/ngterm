@@ -31,6 +31,7 @@ import com.nickalie.ngterm.android.data.OpenTarget
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.ui.asks.AskPrompt
 import com.nickalie.ngterm.android.ui.asks.NotificationPermissionPrompt
+import com.nickalie.ngterm.android.ui.chat.ChatViewModel
 import com.nickalie.ngterm.android.ui.machines.HostKeySheet
 import com.nickalie.ngterm.android.ui.machines.MachinesRoute
 import com.nickalie.ngterm.android.ui.machines.MachinesUiState
@@ -78,6 +79,7 @@ private class SessionsUi(
     val panes: Map<PaneRef, TerminalState>,
     val failures: Map<PaneRef, String>,
     val notice: String?,
+    val chats: Map<PaneRef, ChatViewModel>,
 )
 
 /**
@@ -111,6 +113,7 @@ fun NgtermApp(
             val panes by sessions.panes.collectAsStateWithLifecycle()
             val failures by sessions.paneFailures.collectAsStateWithLifecycle()
             val notice by sessions.notice.collectAsStateWithLifecycle()
+            val chats by sessions.chats.collectAsStateWithLifecycle()
             val actions = remember(sessions) { AttachedActions.of(sessions, onOpenMachines = { selected = MACHINES }) }
             val target by graph.opens.pending.collectAsStateWithLifecycle()
             LaunchedEffect(target) {
@@ -126,7 +129,7 @@ fun NgtermApp(
                 layout = layout,
                 selected = selected,
                 onSelect = { selected = it },
-                sessions = SessionsUi(attached, panes, failures, notice),
+                sessions = SessionsUi(attached, panes, failures, notice, chats),
                 actions = actions,
                 modifier = modifier,
             )
@@ -264,6 +267,7 @@ private fun Frame(
                         notice = sessions.notice,
                         actions = actions,
                         extraKeys = settings.extraKeys,
+                        chats = sessions.chats,
                     )
                 }
 

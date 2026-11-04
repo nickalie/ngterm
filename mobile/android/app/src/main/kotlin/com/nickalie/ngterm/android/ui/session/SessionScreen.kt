@@ -40,10 +40,12 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.ExtraKeysChoice
 import com.nickalie.ngterm.android.data.SessionKey
+import com.nickalie.ngterm.android.ui.chat.ChatViewModel
 import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.android.ui.components.ErrorState
 import com.nickalie.ngterm.android.ui.components.PanelAction
@@ -51,11 +53,13 @@ import com.nickalie.ngterm.android.ui.terminal.ExtraKeysRow
 import com.nickalie.ngterm.android.ui.terminal.TerminalKeyboard
 import com.nickalie.ngterm.android.ui.terminal.TerminalShortcuts
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
+import com.nickalie.ngterm.android.ui.terminal.extraKeysHeight
 import com.nickalie.ngterm.android.ui.terminal.hardwareKeyboardAttached
 import com.nickalie.ngterm.android.ui.terminal.rememberTerminalKeyboard
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
+import com.nickalie.ngterm.core.ffi.RemoteLayout
 import com.nickalie.ngterm.core.ffi.StreamState
 
 /**
@@ -64,7 +68,10 @@ import com.nickalie.ngterm.core.ffi.StreamState
  * alone and a swipe across it moves to the next or previous one; wider windows show the origin's split. The shown
  * panes' states are [panes] (by pane), and why one could not be shown [failures]. One [keyboard] serves every pane
  * and the extra keys, laid out as Settings' [extraKeys] says; its chords move between the panes and the sessions.
- * [views] says how each pane running an agent shows (by pane id), and the bar switches the selected one's.
+ * [views] says how each pane running an agent shows (by pane id), and the bar switches the selected one's; a pane in
+ * chat view draws its open chat from [chats] (by pane) in its terminal's place. The extra keys type into no chat, and
+ * step aside while every pane on screen is one; its terminal's grid then still leaves them their room, so switching
+ * between the chat and the terminal never resizes the pane.
  *
  * The [focused] pane is the selected one, the only one anything typed reaches: a tab, a swipe, a chord and a touch
  * on a pane ask [SessionViewActions.onFocus] to select it, and the keyboard's target and the input focus follow the
@@ -82,15 +89,22 @@ fun SessionScreen(
     keyboard: TerminalKeyboard = rememberTerminalKeyboard(),
     extraKeys: ExtraKeysChoice = ExtraKeysChoice.Fit,
     views: Map<String, PaneView> = emptyMap(),
+    chats: Map<PaneRef, ChatViewModel> = emptyMap(),
 ) {
     val key = session.key
     val live = session.live
     val ids = live.layout?.panes.orEmpty()
-    val spots = ids.map { id -> spot(key, id, panes, failures, session) }
+    val spots = ids.map { id -> spot(key, id, panes, failures, session).inView(views[id], chats) }
     val focus by rememberUpdatedState({ id: String -> actions.onFocus(key, id) })
     val move: (Boolean) -> Unit = { forward -> ids.cyclicNeighbor(focused, forward)?.let(focus) }
     val selected = focused?.let { PaneRef(key.machineId, key.sessionId, it) }
-    SessionKeyboard(keyboard, selected?.let(panes::get), move, actions)
+    // the keys type into the selected pane's terminal, not into a chat
+    val typed = selected?.takeIf { views[it.paneId] != PaneView.Chat }
+    SessionKeyboard(keyboard, typed?.let(panes::get), move, actions)
+    val chatsOnly =
+        visiblePanes(live.layout, focused, compact).let { shown ->
+            shown.isNotEmpty() && shown.all { views[it] == PaneView.Chat }
+        }
     BoxWithConstraints(
         modifier
             .fillMaxSize()
@@ -101,6 +115,7 @@ fun SessionScreen(
     ) {
         // a short window (a phone on its side with the soft keyboard up) keeps its rows for the terminal
         val roomy = maxHeight >= HudRoom
+        val reserve = if (chatsOnly) extraKeysHeight(extraKeys, maxWidth) else 0.dp
         Column(Modifier.fillMaxSize()) {
             SessionBar(
                 session = session,
@@ -124,14 +139,18 @@ fun SessionScreen(
                             onFocus = { actions.onFocus(key, it) },
                             onTakeLead = actions.onTakeLead,
                             onDetach = { actions.onDetach(key) },
+                            onShowTerminal = { actions.onView(it, PaneView.Terminal) },
                         )
                     }
-                Panes(session, spots, focused, compact, paneActions, move)
+                Panes(session, spots, focused, compact, paneActions, move, reserve)
             }
-            ExtraKeysRow(keyboard, layout = extraKeys)
+            if (!chatsOnly) ExtraKeysRow(keyboard, layout = extraKeys)
         }
     }
 }
+
+// the origin's axis of two panes one over the other: the divider runs horizontally
+private const val STACKED = "horizontal"
 
 // the least height the session view shows the origin's HUD in: below it the HUD would take the terminal's last rows
 private val HudRoom = 320.dp
@@ -145,6 +164,7 @@ private fun Panes(
     compact: Boolean,
     actions: PaneActions,
     move: (Boolean) -> Unit,
+    reserve: Dp,
 ) {
     val layout = session.live.layout
     when {
@@ -155,6 +175,9 @@ private fun Panes(
             // the pane that has the input focus, which may still be one the selection has left
             var holder by remember { mutableStateOf<String?>(null) }
             FollowFocus(focused, ready, holder, requesters)
+            // stacked halves share the extra keys' room between them
+            val stacked = !compact && spots.size == 2 && layout.shown && layout.axis == STACKED
+            val slotReserve = if (stacked) reserve / 2 else reserve
             val slot: @Composable (PaneSpot, Modifier) -> Unit = { spot, slotModifier ->
                 val id = spot.ref.paneId
                 PaneSlot(
@@ -165,6 +188,7 @@ private fun Panes(
                     focusRequester = requesters[id],
                     readAloud = id == focused,
                     onSwipe = if (compact && spots.size > 1) move else null,
+                    reserve = slotReserve,
                     onHoldsFocus = { holds ->
                         if (holds) {
                             holder = id
@@ -325,6 +349,23 @@ private fun spot(
     val ref = PaneRef(key.machineId, key.sessionId, paneId)
     return PaneSpot(ref, panes[ref], session.live.panes[paneId], failures[ref])
 }
+
+// the panes on screen: both halves of a split a wider window shows, else the selected one (or the first)
+private fun visiblePanes(
+    layout: RemoteLayout?,
+    focused: String?,
+    compact: Boolean,
+): List<String> {
+    val ids = layout?.panes.orEmpty()
+    val split = !compact && ids.size == 2 && layout?.shown == true && layout.axis != null
+    return if (split) ids else listOfNotNull(focused?.takeIf { it in ids } ?: ids.firstOrNull())
+}
+
+// the spot as its view shows it: a chat in chat view, with the chat once it is open
+private fun PaneSpot.inView(
+    view: PaneView?,
+    chats: Map<PaneRef, ChatViewModel>,
+): PaneSpot = if (view == PaneView.Chat) copy(chatView = true, chat = chats[ref]) else this
 
 /**
  * The item after (or before) [current], wrapping around (from the first when [current] isn't here); `null` with fewer

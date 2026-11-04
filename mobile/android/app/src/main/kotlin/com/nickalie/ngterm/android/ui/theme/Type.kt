@@ -5,6 +5,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
@@ -28,6 +29,18 @@ val Atkinson = FontFamily(weights.map { variable(R.font.atkinson_hyperlegible_ne
 
 /** The family for what is compared character by character. */
 val AtkinsonMono = FontFamily(weights.map { variable(R.font.atkinson_hyperlegible_mono, it) })
+
+/**
+ * The terminal's face, JetBrains Mono, for what the chat shows of the terminal's own text: commands, paths, code,
+ * output and diffs read as the pane draws them.
+ */
+val TerminalFamily =
+    FontFamily(
+        Font(R.font.jetbrains_mono_regular),
+        Font(R.font.jetbrains_mono_bold, FontWeight.Bold),
+        Font(R.font.jetbrains_mono_italic, FontWeight.Normal, FontStyle.Italic),
+        Font(R.font.jetbrains_mono_bold_italic, FontWeight.Bold, FontStyle.Italic),
+    )
 
 private fun style(
     size: Int,

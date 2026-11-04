@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- a globe, a fetch or a web search: a 24dp line icon, 2dp strokes with round ends; Icon tints it -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <path
+      android:pathData="M12,3a9,9 0 1 0 0,18a9,9 0 1 0 0,-18z"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+  <path
+      android:pathData="M12,3c-2.4,2.5 -3.5,5.5 -3.5,9s1.1,6.5 3.5,9c2.4,-2.5 3.5,-5.5 3.5,-9s-1.1,-6.5 -3.5,-9z"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+  <path
+      android:pathData="M3,12h18"
+      android:strokeColor="#FF000000"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:strokeWidth="2" />
+</vector>
