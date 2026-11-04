@@ -269,8 +269,8 @@ with no output yet is a running call (Task 1's fixture README).
   - the curated built-ins;
   - skills from `<codex home>/skills/*/SKILL.md`, as `$name`, the mention Codex invokes them with (Task 1);
   - no custom prompts: Codex 0.166 no longer offers `<codex home>/prompts/*.md` (Task 1).
-- A name and description come from the file's frontmatter, falling back to the file name and its first line. One
-  unreadable file is skipped with no error.
+- A name and description come from the file's frontmatter, falling back to the file name and its first line (a
+  command's name is always its path, as Claude Code names commands). One unreadable file is skipped with no error.
 
 **Phone actions** (`ngterm-mobile`). Each is lead, then settle, then match, then send:
 
@@ -505,8 +505,9 @@ with no output yet is a running call (Task 1's fixture README).
 **Files:**
 - Create: `crates/ngterm-core/src/agent_chat/catalog.rs`, `crates/ngterm-core/src/agent_chat/tests/catalog.rs`
 - Modify: `crates/ngterm-ctl/src/agent.rs`
+- Created as well: `crates/ngterm-ctl/src/agent/commands.rs` (the subcommand), `crates/ngterm-ctl/tests/agent_commands.rs`
 
-- [ ] write tests first on temp config trees:
+- [x] write tests first on temp config trees:
   - user and project skills, with a directory missing `SKILL.md` skipped and `user-invocable: false` hidden;
   - nested custom commands become `a:b`;
   - enabled versus disabled plugins;
@@ -514,9 +515,9 @@ with no output yet is a running call (Task 1's fixture README).
   - the config dir derived from `transcript_path` (a custom `CLAUDE_CONFIG_DIR` or `CODEX_HOME`);
   - an unreadable or malformed file is skipped;
   - a duplicate name resolves the way the agent resolves it (per Task 1).
-- [ ] add the curated built-in lists for both agents, citing the versions from Task 1
-- [ ] implement the catalog and `ngtermctl agent commands --target SESSION [--pane …]` (JSON)
-- [ ] `cargo test -p ngterm-core agent_chat -p ngterm-ctl agent` must pass
+- [x] add the curated built-in lists for both agents, citing the versions from Task 1
+- [x] implement the catalog and `ngtermctl agent commands --target SESSION [--pane …]` (JSON)
+- [x] `cargo test -p ngterm-core agent_chat -p ngterm-ctl agent` must pass
 
 ### Task 11: `ngterm-mobile`: agent discovery, the chat channel and the catalog
 
@@ -632,7 +633,7 @@ with no output yet is a running call (Task 1's fixture README).
   - a `/` at the start of the field opens the menu with the full catalog;
   - each keystroke narrows it through `filter_commands`;
   - a space or deleting the `/` closes it;
-  - picking an item inserts `/name ` and keeps the keyboard up;
+  - picking an item inserts `/name ` (a Codex skill's `$name ` as it stands, Task 10) and keeps the keyboard up;
   - an empty catalog (an older origin, or a fetch still running) shows a quiet loading row, never an error.
 - [ ] build the composer: a multi-line field, Send, Stop while the status is working, and disabled with a reason while
       a dialog is open

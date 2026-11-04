@@ -139,6 +139,10 @@ Where these differ from the plan, the plan was updated.
   Codex 0.166 no longer offers `<codex home>/prompts/*.md` in the `/` popup; saved presets (`/presets`,
   `[tui.presets]` in `config.toml`) took their place.
 - The interrupt key is Esc in both (Ctrl+C at an empty Codex prompt quits).
+- The `/` catalog (`agent_chat::catalog`, Task 10): Claude Code's command table at 2.1.317 and Codex 0.166's command
+  list (read from the installed binaries) give the curated built-ins. Duplicates were not recorded; the catalog follows
+  Claude Code's documented order (a personal skill over a project one, a skill over a command of the same name) and
+  keeps a built-in over a user entry. A command is named by its path (`dir:name`), not by frontmatter.
 - `AskUserQuestion` picker: digits pick an option of a single-select question (which moves to the next question,
   or submits when it is the only one); in a multi-select question digits toggle `[ ]`/`[✔]`; Tab or → moves to the
   next tab; the last tab, "Submit", reviews the answers with `1. Submit answers` (Enter). The option after the

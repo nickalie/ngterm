@@ -8,19 +8,23 @@
 //! reads as a block (exit 2 is Claude Code's and Codex's).
 //!
 //! `chat` ([`chat`]) is what the Android app runs on the origin under its ssh: the pane's conversation as NDJSON chat
-//! events, read from the transcript the record names.
+//! events, read from the transcript the record names. `commands` ([`commands`]) is what it runs for the composer's `/`
+//! dropdown: the agent's slash commands and skills, once, as JSON.
 
 mod chat;
+mod commands;
 
 use std::io::{self, IsTerminal, Read};
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use ngterm_core::agent_chat::AgentKind;
 use ngterm_core::agent_chat::hook::{HookEvent, report};
+use ngterm_core::agent_chat::{AgentKind, NO_AGENT};
+use ngterm_core::pane_env::StatusPane;
 use ngterm_core::paths::Env;
 use ngterm_proto::command::AgentCmd;
-use ngterm_proto::{AgentReport, Args, Command, Request};
+use ngterm_proto::{AgentReport, Args, Command, ControlAgent, Request};
 
 use crate::session_io::validate_pane;
 use crate::{BasicOptions, Failure, TargetOptions, client, output};
@@ -34,6 +38,9 @@ const PAYLOAD_CAP: u64 = 64 * 1024 * 1024;
 /// holding the agent up; one that is responsive answers in milliseconds. The server's own per-request deadlines are
 /// as long.
 const REPORT_DEADLINE: Duration = Duration::from_secs(5);
+
+/// The most one `agent.get` waits, its reply included: a stalled app fails the command rather than holding it.
+const GET_DEADLINE: Duration = Duration::from_secs(5);
 
 /// `ngtermctl agent <subcommand>`.
 #[derive(Debug, clap::Args)]
@@ -51,6 +58,7 @@ pub struct Agent {
 enum AgentCommand {
     Hook(Hook),
     Chat(chat::Chat),
+    Commands(commands::Commands),
 }
 
 impl Agent {
@@ -59,6 +67,7 @@ impl Agent {
         match &self.command {
             AgentCommand::Hook(command) => command.validate(),
             AgentCommand::Chat(command) => command.validate(),
+            AgentCommand::Commands(command) => command.validate(),
         }
     }
 
@@ -67,6 +76,7 @@ impl Agent {
         match &self.command {
             AgentCommand::Hook(command) => command.run(env),
             AgentCommand::Chat(command) => command.run(env),
+            AgentCommand::Commands(command) => command.run(env),
         }
     }
 }
@@ -145,6 +155,43 @@ impl Hook {
             }),
         }
     }
+}
+
+/// The pane's agent record (`agent.get`), or `None` when it has none. Any other refusal is printed and fails.
+fn look(socket: &Path, target: &str, pane: Option<&str>) -> Result<Option<ControlAgent>, Failure> {
+    let request = Request {
+        cmd: Command::Agent(AgentCmd::Get),
+        target: Some(target.to_owned()),
+        args: Some(Args {
+            pane: pane.map(str::to_owned),
+            ..Args::default()
+        }),
+    };
+    let reply = client::send_within(socket, &request, GET_DEADLINE)?;
+    if !reply.response.ok {
+        if reply.response.error.as_deref() == Some(NO_AGENT) {
+            return Ok(None);
+        }
+        output::print_response(&reply, false, false);
+        return Err(Failure::Exit(ExitCode::FAILURE));
+    }
+    let agent = reply
+        .response
+        .result
+        .and_then(|mut result| result.get_mut("agent").map(serde_json::Value::take))
+        .and_then(|agent| serde_json::from_value::<ControlAgent>(agent).ok());
+    agent
+        .map(Some)
+        .ok_or_else(|| Failure::Local("the app's reply has no agent record".to_owned()))
+}
+
+/// A `--pane` of the commands that read a record: an agent runs in the left or the right pane.
+fn validate_pane_side(pane: Option<&str>) -> Result<(), String> {
+    let pane = pane.map(StatusPane::from_control_name);
+    if matches!(pane, Some(None | Some(StatusPane::Scratch))) {
+        return Err("--pane must be left or right".to_owned());
+    }
+    Ok(())
 }
 
 fn parse_agent(name: &str) -> Result<AgentKind, String> {

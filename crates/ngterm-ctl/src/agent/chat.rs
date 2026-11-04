@@ -12,8 +12,7 @@
 //!   is seen within a poll on every OS.
 
 use std::io::{self, ErrorKind, Read, Write};
-use std::path::PathBuf;
-use std::process::ExitCode;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -22,18 +21,13 @@ use ngterm_core::agent_chat::approvals::Approvals;
 use ngterm_core::agent_chat::follow::{BACKLOG, POLL_INTERVAL};
 use ngterm_core::agent_chat::hook::check_transcript;
 use ngterm_core::agent_chat::{AgentKind, ChatEvent, EventBody, Follower, NO_AGENT};
-use ngterm_core::pane_env::StatusPane;
 use ngterm_core::paths::Env;
-use ngterm_proto::command::AgentCmd;
-use ngterm_proto::{Args, Command, ControlAgent, Request};
+use ngterm_proto::ControlAgent;
 
-use crate::{Failure, TargetOptions, client, output, socket};
+use crate::{Failure, TargetOptions, client, socket};
 
 /// How often the record is read again.
 const RECHECK: Duration = Duration::from_secs(1);
-
-/// The most one `agent.get` waits, its reply included: a stalled app ends the stream rather than holding it.
-const GET_DEADLINE: Duration = Duration::from_secs(5);
 
 /// `ngtermctl agent chat`: the pane's agent conversation, as NDJSON chat events.
 #[derive(Debug, clap::Args)]
@@ -79,10 +73,7 @@ pub struct Chat {
 
 impl Chat {
     pub(super) fn validate(&self) -> Result<(), String> {
-        let pane = self.pane.as_deref().map(StatusPane::from_control_name);
-        if matches!(pane, Some(None | Some(StatusPane::Scratch))) {
-            return Err("--pane must be left or right".to_owned());
-        }
+        super::validate_pane_side(self.pane.as_deref())?;
         if self.limit == Some(0) {
             return Err("--limit must be at least 1".to_owned());
         }
@@ -119,32 +110,9 @@ impl Chat {
         stream.run(first, &ended)
     }
 
-    /// The pane's record, or `None` when it has none. Any other refusal is printed and fails.
-    fn look(&self, socket: &std::path::Path) -> Result<Option<ControlAgent>, Failure> {
-        let request = Request {
-            cmd: Command::Agent(AgentCmd::Get),
-            target: Some(self.target.target.clone()),
-            args: Some(Args {
-                pane: self.pane.clone(),
-                ..Args::default()
-            }),
-        };
-        let reply = client::send_within(socket, &request, GET_DEADLINE)?;
-        if !reply.response.ok {
-            if reply.response.error.as_deref() == Some(NO_AGENT) {
-                return Ok(None);
-            }
-            output::print_response(&reply, false, false);
-            return Err(Failure::Exit(ExitCode::FAILURE));
-        }
-        let agent = reply
-            .response
-            .result
-            .and_then(|mut result| result.get_mut("agent").map(serde_json::Value::take))
-            .and_then(|agent| serde_json::from_value::<ControlAgent>(agent).ok());
-        agent
-            .map(Some)
-            .ok_or_else(|| Failure::Local("the app's reply has no agent record".to_owned()))
+    /// The pane's record, or `None` when it has none.
+    fn look(&self, socket: &Path) -> Result<Option<ControlAgent>, Failure> {
+        super::look(socket, &self.target.target, self.pane.as_deref())
     }
 }
 

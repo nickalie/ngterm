@@ -222,7 +222,8 @@ it. Today the `agent.*` group is: `agent.report` and `agent.get`, the origin's p
 agent-status hooks fill and the Android chat view reads (`ngterm-core`'s `commands::agent`). Its CLI side is
 `ngtermctl agent hook`, which the hooks run with the payload on stdin (`ngterm-ctl`'s `agent.rs`), and
 `ngtermctl agent chat`, which the phone runs on the origin to read the record's transcript as NDJSON chat events
-(`agent/chat.rs`).
+(`agent/chat.rs`), and `ngtermctl agent commands`, which prints the agent's slash commands and skills for the chat
+composer's `/` dropdown (`agent/commands.rs`, over `ngterm-core`'s `agent_chat::catalog`).
 
 ### Presentation kinds
 

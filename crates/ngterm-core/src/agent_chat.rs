@@ -7,6 +7,7 @@
 //! - [`follow`]: reading a transcript file for the chat: the backlog, older pages and following.
 //! - [`hook`]: an agent's hook payload, read for the origin's per-pane agent record (`agent.report`).
 //! - [`approvals`]: the permission prompts the chat interleaves with a transcript's events.
+//! - [`catalog`]: the agent's slash commands and skills, for the composer's `/` dropdown.
 //!
 //! A parser reads one line at a time through [`TranscriptParser`], keeping what pairs a later line with an earlier
 //! one (a tool's result with its call). The formats are undocumented and drift between agent versions, so a line a
@@ -14,6 +15,7 @@
 //! `tests/fixtures/agent_chat/` record the versions read and what was found about each format.
 
 pub mod approvals;
+pub mod catalog;
 pub mod claude;
 pub mod codex;
 pub mod event;
@@ -203,6 +205,7 @@ fn non_empty<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     mod approvals;
+    mod catalog;
     mod claude;
     mod codex;
     mod follow;
