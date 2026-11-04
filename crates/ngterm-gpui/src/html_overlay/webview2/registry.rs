@@ -407,11 +407,9 @@ fn spec(page: &Rc<Page>) -> Result<Spec, String> {
         zoom: with(|registry| registry.zoom.unwrap_or(1.0)),
         bounds: placement.bounds,
         visible: false,
-        theme: if matches!(overlay.source, HtmlSource::Image { .. }) {
-            String::new()
-        } else {
-            super::bridge::theme_script(&page.theme().script(overlay.themed()))
-        },
+        // an image wears no theme, and an empty script would fail the page (`Spec::theme`)
+        theme: (!matches!(overlay.source, HtmlSource::Image { .. }))
+            .then(|| super::bridge::theme_script(&page.theme().script(overlay.themed()))),
         scripts: page.scripts(),
         trusted_document_script: matches!(overlay.source, HtmlSource::Markdown { .. })
             .then(super::super::documents::document_start_script),

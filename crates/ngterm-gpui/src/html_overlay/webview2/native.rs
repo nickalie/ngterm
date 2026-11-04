@@ -168,8 +168,9 @@ pub struct Spec {
     pub zoom: f64,
     pub bounds: Option<Bounds>,
     pub visible: bool,
-    /// The scripts in load order: the theme first (replaced by [`Native::set_theme`]), then the rest.
-    pub theme: String,
+    /// The scripts in load order: the theme first (replaced by [`Native::set_theme`]), then the rest. `None` for a
+    /// page that wears no theme (an image): `WebView2` refuses an empty script with `E_INVALIDARG`.
+    pub theme: Option<String>,
     pub scripts: Vec<String>,
     /// App-owned document renderer, installed in its own content world with authored scripts still disabled.
     pub trusted_document_script: Option<String>,
@@ -221,8 +222,10 @@ impl Native {
         wire_focus(&native.view.controller(), &spec.post).map_err(|err| err.to_string())?;
         wire_keys(&native.view.controller(), &spec.take_key, &spec.post).map_err(|err| err.to_string())?;
         // each script is in place before the first load starts: `WebView2` adds them asynchronously
-        let theme = native.add_script_now(&spec.theme)?;
-        native.theme.replace(Some(theme));
+        if let Some(theme) = &spec.theme {
+            let theme = native.add_script_now(theme)?;
+            native.theme.replace(Some(theme));
+        }
         for script in &spec.scripts {
             native.add_script_now(script)?;
         }

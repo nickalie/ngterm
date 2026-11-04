@@ -142,8 +142,9 @@ pub struct Spec {
     pub zoom: f64,
     pub bounds: Option<Bounds>,
     pub visible: bool,
-    /// The scripts in load order: the theme first (replaced by [`Native::set_theme`]), then the rest.
-    pub theme: String,
+    /// The scripts in load order: the theme first (replaced by [`Native::set_theme`]), then the rest. `None` for a
+    /// page that wears no theme (an image).
+    pub theme: Option<String>,
     pub scripts: Vec<String>,
     /// App-owned document renderer, installed in its own content world with authored scripts still disabled.
     pub trusted_document_script: Option<String>,
@@ -422,7 +423,9 @@ fn build(spec: &Spec) -> Result<WebView, String> {
     if let Some(bounds) = spec.bounds {
         builder = builder.with_bounds(bounds.rect());
     }
-    builder = builder.with_initialization_script(format!("/* ngterm-theme */\n{}", spec.theme));
+    if let Some(theme) = &spec.theme {
+        builder = builder.with_initialization_script(format!("/* ngterm-theme */\n{theme}"));
+    }
     for script in &spec.scripts {
         builder =
             builder.with_initialization_script_for_main_only(script.clone(), script != super::bridge::GUARD_SCRIPT);
