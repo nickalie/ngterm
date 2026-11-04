@@ -435,4 +435,20 @@
   <string name="chat_problem_not_reading">The program isn\'t reading its input. Nothing was sent; try again in a moment.</string>
   <string name="chat_problem_closed">This pane isn\'t on screen any more, so nothing was sent.</string>
   <string name="chat_problem_refused">Not sent: %1$s</string>
+  <string name="chat_prompt_hint">Prompt, or / for commands</string>
+  <string name="chat_send">Send</string>
+  <string name="chat_stop">Stop</string>
+  <string name="chat_composer_held">Answer the card above first: a prompt now would go to its dialog.</string>
+  <string name="chat_command_insert">Insert</string>
+  <string name="chat_command_builtin">Built-in</string>
+  <string name="chat_command_skill">Skill</string>
+  <string name="chat_command_custom">Command</string>
+  <string name="chat_command_plugin">Plugin</string>
+  <plurals name="chat_commands_count">
+    <item quantity="one">%1$d command</item>
+    <item quantity="other">%1$d commands</item>
+  </plurals>
+  <string name="chat_commands_none_match">No command matches %1$s. It goes as typed.</string>
+  <string name="chat_commands_loading">Loading %1$s\'s commands</string>
+  <string name="chat_commands_unlisted">%1$s\'s commands aren\'t listed here. Type the command out.</string>
 </resources>

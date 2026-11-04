@@ -159,7 +159,8 @@ above headings.
 
 Line icons drawn for the app in `res/drawable/ic_*.xml`: 24dp, 2dp strokes, round ends, tinted by `Icon`. Machines
 (two racked servers), Sessions (a terminal window), Settings (sliders), Menu and Menu open, Add, Retry, Alert, Offline
-(a struck signal), Close, Lock, Back (mirrored right to left), More (an item's menu), Chat (a speech bubble with two
+(a struck signal), Close, Lock, Back (mirrored right to left), More (an item's menu), Send (the return key's arrow,
+mirrored right to left, `ic_send`), Chat (a speech bubble with two
 lines, `ic_chat`) and the extra keys' arrow
 (`ic_key_arrow`, turned for each direction). The chat's lines have a glyph per tool kind (`ic_tool_*`): shell (a `>_`
 prompt), edit (a pencil), read (a page with a folded corner), search (a magnifier), web (a globe), task (a branch,
@@ -641,6 +642,8 @@ The plan, reviewed against the brief:
 | Code in a syntax-highlighting theme | a second palette fighting the app's, and color carrying meaning | the terminal's face in one color on a `surfaceContainerLow` plate; a diff is the only colored text: verdigris added, oxide removed, each line keeping its `+` or `-` |
 | A spinner on every running tool | motion nobody asked for, scattered down the list | the Connecting ring and "Running"; nothing in the list moves on its own |
 | The permission prompt as a dialog over the chat | hides the conversation the question is about | a Needs-you card pinned at the chat's foot, in the ask sheet's shape and order (`ui/asks/`) |
+| A paper-plane Send beside an attach clip and an emoji face | the messenger kit's glyphs, for things the agent's prompt doesn't take | Send is the return key's arrow (`ic_send`) in a filled copper circle, as a prompt goes in with Enter in the terminal; beside it only Stop, while the agent works |
+| The `/` menu as a popup with an icon per command and the matched letters in bold | a second set of glyphs for a list read by name, and a highlight that fights the terminal's face | a plate (`surfaceContainerHigh`, 12dp corners) rising from the composer over the foot of the rows; each row the command as it will go in, in the terminal's face, a line of what it does, and where it comes from as a word |
 
 ```
 +--------------------------------------+
@@ -733,9 +736,53 @@ The plan, reviewed against the brief:
   the top of the rows (`surfaceContainerHigh`, 6dp corners, a 16dp spinner, "Reconnecting to build-01", "What's here
   stays; new messages follow once it's back."), the rows readable under it; the chat ended (the agent left, or the
   origin can't share its conversation): "This chat ended" and Show terminal, which the pane then does by itself.
+- **The composer** (`Composer`), under the cards on the bar's tone (`surfaceContainer`), in the reading width: an
+  outlined field (12dp corners, bodyLarge, "Prompt, or / for commands") that grows to six lines and then scrolls inside,
+  so a long prompt leaves the conversation in sight; Stop (the interrupt's square, outlined round) while the agent's
+  status says it works on a turn; Send (filled copper round, `ic_send`). The field takes line breaks as the clipboard
+  brings them and refuses an edit that adds any other control character. Send takes the text with its ends trimmed;
+  the field lets it go once the agent has it and keeps it when nothing was sent. While an action is on its way the
+  field holds still and Send turns to a 16dp spinner ("Sending"), so a second tap sends nothing. While a card waits,
+  "Answer the card above first: a prompt now would go to its dialog." stands over the field, and Send and Stop hold;
+  the field still takes a draft. A draft survives the app being put away, and comes back only to its pane and
+  conversation. The chat's input focus is the field's: the session view moving the focus to a chat pane while typing
+  lands in it, and a touch in a field of the chat keeps the focus where it put it.
+
+  ```
+  +--------------------------------------+
+  |  ... the rows ...                    |
+  | +----------------------------------+ |
+  | | /compact [instructions]  Built-in| |
+  | | Clear history but keep a summ... | |
+  | | /context                 Built-in| |
+  | | Show how the context window i... | |
+  | | 2 commands                       | |
+  | +----------------------------------+ |
+  | +---------------------------+ [] (<-)|
+  | | /co                       |        |
+  | +---------------------------+        |
+  +--------------------------------------+
+  ```
+
+- **The `/` menu** (`SlashCommandMenu`): a `/` at the start of the field, with no space or line break after it, opens
+  it over the foot of the rows and cards; what follows the `/` narrows it as it is typed (the IME's unfinished word
+  included), ranked by the core's `filter_commands`, the palettes' ranking. A space, a line break or deleting the `/`
+  closes it, and so do Escape and Back until the text changes. Rows (56dp): the command as it goes in (`/compact`, a
+  Codex skill's `$name`) in the terminal's face at 13 sp with its argument hint quiet after it, a line of what it does
+  (bodySmall, one line), and its kind at the end (labelMedium: Built-in, Skill, Command, Plugin). About six show, the
+  rest a scroll away; the highlighted row, the one Enter or Tab picks, is on `surfaceContainerHighest`. Picking one
+  puts it in the field with a space after it, the cursor at the end, and the field keeps the focus and the keyboard.
+  Under the rows a quiet line says how many match or that none does ("No command matches /deploy. It goes as
+  typed."); with no catalog yet it says the commands are on their way, with a 16dp spinner, and an origin that lists
+  none (an older one, or a link that went) says they aren't listed here. Never an error: the prompt goes as typed.
+- **A hardware keyboard:** Ctrl+Enter sends; while the menu lists commands, Up and Down move its highlight and Enter or
+  Tab picks it; Escape closes the menu. Enter alone is a line break.
 - **TalkBack:** the chat is "Chat with Claude Code"; a prompt reads "You: …"; a line reads its kind, its title and its
   status, says Expanded or Collapsed, and names its tap (Show output, Hide steps, Show summary); the cards' titles are
-  headings; the reconnecting strip, Sending and the problems are polite live regions.
+  headings; the reconnecting strip, Sending and the problems are polite live regions. Send and Stop are named for what
+  they do ("Sending" while on its way); the line over the field and the menu's count are polite live regions; a menu
+  row reads whole (the command, its hint, what it does, its kind), says Selected when highlighted, and names its tap
+  Insert. The rows take no input focus, so a hardware keyboard stays in the field.
 
 ### Notifications (`platform/Notifications.kt`, `data/Alerts.kt`)
 

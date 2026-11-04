@@ -107,8 +107,9 @@ fun genericApprovalLabels(agent: String?): List<String> =
 
 /**
  * What a chat does: [onLoadOlder] asks for the page before what it shows, [onAnswerApproval] and [onAnswerQuestion]
- * answer its cards, [onProblemShown] dismisses the last action's problem, and [onShowTerminal] shows the pane's
- * terminal in its place (the bar's Show terminal, and Answer in terminal).
+ * answer its cards, [onProblemShown] dismisses the last action's problem, [onShowTerminal] shows the pane's terminal
+ * in its place (the bar's Show terminal, and Answer in terminal), [onSend] sends the composer's prompt and [onStop]
+ * interrupts the agent's turn.
  */
 data class ChatActions(
     val onLoadOlder: () -> Unit = {},
@@ -116,6 +117,8 @@ data class ChatActions(
     val onAnswerQuestion: (List<QuestionAnswer>) -> Unit = {},
     val onProblemShown: () -> Unit = {},
     val onShowTerminal: () -> Unit = {},
+    val onSend: () -> Unit = {},
+    val onStop: () -> Unit = {},
 )
 
 /** How a line that opens names its tap for TalkBack: what opening it shows, and what closing it hides. */

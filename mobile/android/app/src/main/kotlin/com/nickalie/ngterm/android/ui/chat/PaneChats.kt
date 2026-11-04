@@ -7,9 +7,12 @@ import com.nickalie.ngterm.android.data.LiveSessions
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.data.session
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
+import com.nickalie.ngterm.android.ui.theme.AgentState
+import com.nickalie.ngterm.core.ffi.AgentCommand
 import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.PaneRef
+import com.nickalie.ngterm.core.ffi.filterCommands
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
@@ -37,7 +40,9 @@ enum class PaneView { Terminal, Chat }
  * [views] has every pane with an agent while the setting is on. A pane in chat view that is shown ([shown]) has its
  * chat open in [chats], one [ChatViewModel] each, so the core's chat channels stay as few as the panes on screen; a
  * pane leaving chat view (or the screen) closes its chat, and the pane's own attach stays open behind it all along.
- * Events arrive on the core's thread; the flows take them from any. Used on the main thread.
+ * Events arrive on the core's thread; the flows take them from any. Used on the main thread. A chat's `/` menu ranks
+ * the agent's commands with [filter] (the core's `filter_commands`; the app's tests, which run without the native
+ * library, give their own).
  */
 class PaneChats(
     private val scope: CoroutineScope,
@@ -45,6 +50,7 @@ class PaneChats(
     live: LiveSessions,
     private val shown: StateFlow<Map<PaneRef, TerminalState>>,
     settings: Flow<AppSettings>,
+    private val filter: (String, List<AgentCommand>) -> List<AgentCommand> = ::filterCommands,
 ) {
     // the panes whose terminal was picked, with the conversation it holds for (`null`: the one still to be named)
     private val holds = MutableStateFlow<Map<PaneRef, Hold>>(emptyMap())
@@ -153,10 +159,19 @@ class PaneChats(
             core = connections.core,
             handle = { shown.value[pane]?.pane },
             connects = connects,
+            working = sessions.map { it[pane.session].works(pane.paneId) }.distinctUntilChanged(),
+            filter = filter,
             scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext.job)),
             // a chat that ended, or never opened, leaves its terminal on screen until the next conversation
             onEnded = { hold(pane) },
         )
+}
+
+// whether the session's agent status says the agent in pane [paneId] works on a turn: the status is the session's,
+// naming the pane it came from (none: an origin that doesn't say, taken as the pane's)
+private fun LiveSession?.works(paneId: String): Boolean {
+    val status = this?.status ?: return false
+    return AgentState.fromWire(status.status) == AgentState.Active && (status.pane == null || status.pane == paneId)
 }
 
 // a pane's terminal, picked for [conversation]

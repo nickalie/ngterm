@@ -718,20 +718,43 @@ with no output yet is a running call (Task 1's fixture README).
 **Files:**
 - Create: `ui/chat/Composer.kt`, `ui/chat/SlashCommandMenu.kt`, and their tests
 - Modify: `ui/chat/ChatViewModel.kt`, `mobile/android/DESIGN.md`
+- Created as well: `ui/chat/ChatComposer.kt` (the composer's state: the draft, the catalog, the menu),
+  `res/drawable/ic_send.xml`; tests `ui/chat/{ChatComposerTest,ComposerScreenTest}.kt`, `RankCommands.kt` (the
+  tests' stand-in for the native `filter_commands`), 21 goldens in `src/test/screenshots/chat/menu*`. Modified as
+  well: `ui/chat/{ChatScreen,ChatStyle,PaneChats}.kt`, `ui/session/{SplitLayout,SessionScreen}.kt`,
+  `res/values/strings.xml`, the tests `TestGraph`, `ChatSamples`, `ChatScreenshotTest`, `ChatViewModelTest`, and the
+  core's `FakePane` (an action gate).
+- As built:
+  - `ChatViewModel.composer` (`ChatComposer`, main thread only) holds the draft as a `TextFieldValue` in snapshot
+    state, so the field takes each edit in its frame (the IME's composition included), and the menu: open while the
+    text is `/` and one word; the catalog asked for as the menu first opens (again after a failure when it next opens,
+    and at once after a `reset` while it is open, an earlier answer dropped); ranked through `filter_commands`, given
+    to `PaneChats` (`TestGraph` gives `rankCommands`, as the app's tests have no native library). A failed or empty
+    catalog is a quiet "not listed here" row, a fetch on its way a quiet loading row.
+  - `send()` sends the draft trimmed, once at a time (busy), never while a card waits; the draft goes only on `Sent`.
+    `stop()` likewise. `ChatUiState.working` is the session's agent status (`active`) for the pane (or with no pane).
+  - "Disabled with a reason while a dialog is open": while an approval or question card waits, a line over the field
+    says to answer it first and Send and Stop hold (the field still takes a draft); a `DialogOpen` outcome keeps its
+    banner and leaves Send for a retry.
+  - The pane's focus goes to the composer's field (the chat slot hands it on), and the session view leaves the focus
+    where a touch put it inside the selected pane.
+  - A draft survives process death (`KeepDraft`, saved state keyed by the pane and validated on restore, put back
+    only into its conversation and an empty field; a draft over 16,384 characters isn't kept).
 
-- [ ] write the view-model tests first:
+- [x] write the view-model tests first:
   - a `/` at the start of the field opens the menu with the full catalog;
   - each keystroke narrows it through `filter_commands`;
   - a space or deleting the `/` closes it;
   - picking an item inserts `/name ` (a Codex skill's `$name ` as it stands, Task 10) and keeps the keyboard up;
   - an empty catalog (an older origin, or a fetch still running) shows a quiet loading row, never an error.
-- [ ] build the composer: a multi-line field, Send, Stop while the status is working, and disabled with a reason while
+- [x] build the composer: a multi-line field, Send, Stop while the status is working, and disabled with a reason while
       a dialog is open
-- [ ] build the dropdown above the composer (frontend-design, recorded in `DESIGN.md`): each row has the name, a
+- [x] build the dropdown above the composer (frontend-design, recorded in `DESIGN.md`): each row has the name, a
       one-line description and a kind label (built-in, skill, plugin, command); it shows at most about 6 rows and
       scrolls; it works with the keyboard and with TalkBack
-- [ ] goldens of the open menu, a filtered menu and a menu with no match, at the same widths, themes and font scale
-- [ ] `scripts/build-android.sh check` must pass
+- [x] goldens of the open menu, a filtered menu and a menu with no match, at the same widths, themes and font scale
+- [x] `scripts/build-android.sh check` must pass (run as the same `gradle check` through a helper that strips
+      `NGTERM_*`, as the sandbox refuses the script's inline eval)
 
 ### Task 16: Android: notifications open the chat
 

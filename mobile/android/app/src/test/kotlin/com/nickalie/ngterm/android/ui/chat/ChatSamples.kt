@@ -1,5 +1,10 @@
 package com.nickalie.ngterm.android.ui.chat
 
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import com.nickalie.ngterm.android.rankCommands
+import com.nickalie.ngterm.core.ffi.AgentCommand
+import com.nickalie.ngterm.core.ffi.AgentCommandKind
 import com.nickalie.ngterm.core.ffi.ChatApproval
 import com.nickalie.ngterm.core.ffi.ChatBody
 import com.nickalie.ngterm.core.ffi.ChatEvent
@@ -10,6 +15,9 @@ import com.nickalie.ngterm.core.ffi.ChatQuestionOption
 import com.nickalie.ngterm.core.ffi.ChatTool
 import com.nickalie.ngterm.core.ffi.ChatToolKind
 import com.nickalie.ngterm.core.ffi.ChatToolStatus
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 
 /** Chats to draw: a Claude Code conversation about a fix to an install guide, and the cards it waits on. */
 object ChatSamples {
@@ -128,6 +136,46 @@ object ChatSamples {
             ChatToolStatus.RUNNING,
             null,
         )
+
+    /** Claude Code's commands and skills, as an origin lists them. */
+    val commands =
+        listOf(
+            AgentCommand("add-dir", "Add a new working directory", AgentCommandKind.BUILTIN, "<path>"),
+            AgentCommand("clear", "Clear the conversation history and free up context", AgentCommandKind.BUILTIN, null),
+            AgentCommand(
+                "compact",
+                "Clear history but keep a summary in context, with optional instructions for it",
+                AgentCommandKind.BUILTIN,
+                "[instructions]",
+            ),
+            AgentCommand("context", "Show how the context window is used", AgentCommandKind.BUILTIN, null),
+            AgentCommand("cost", "Show the session's cost and duration", AgentCommandKind.BUILTIN, null),
+            AgentCommand(
+                "docs:release-notes",
+                "Draft the release notes from the merged PRs",
+                AgentCommandKind.COMMAND,
+                null,
+            ),
+            AgentCommand(
+                "frontend-design:frontend-design",
+                "Design a distinctive interface",
+                AgentCommandKind.PLUGIN,
+                null,
+            ),
+            AgentCommand("review", "Review the current branch against main", AgentCommandKind.SKILL, null),
+        )
+
+    /** A composer holding [text], its catalog [commands] (none: still on its way), ranked by the tests' ranking. */
+    fun composer(
+        text: String,
+        commands: List<AgentCommand>? = this.commands,
+    ): ChatComposer {
+        val gate = CompletableDeferred<List<AgentCommand>>()
+        commands?.let(gate::complete)
+        val composer = ChatComposer(CoroutineScope(Dispatchers.Unconfined), { gate.await() }, ::rankCommands)
+        composer.edit(TextFieldValue(text, TextRange(text.length)))
+        return composer
+    }
 
     /** A chat of [events], live, in [conversation]. */
     fun state(

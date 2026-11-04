@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -29,13 +30,17 @@ import com.nickalie.ngterm.android.ui.components.SectionAction
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.android.ui.theme.StatusTone
 
-/** A pane's open [chat], live, read from [machine]; [onShowTerminal] shows the pane's terminal instead. */
+/**
+ * A pane's open [chat], live, read from [machine]; [onShowTerminal] shows the pane's terminal instead. Its prompt field
+ * takes the input focus through [focusRequester]; its draft is kept while the app is put away ([KeepDraft]).
+ */
 @Composable
 fun ChatPane(
     chat: ChatViewModel,
     machine: String,
     onShowTerminal: () -> Unit,
     modifier: Modifier = Modifier,
+    focusRequester: FocusRequester = remember { FocusRequester() },
 ) {
     val state by chat.state.collectAsStateWithLifecycle()
     val actions =
@@ -46,16 +51,20 @@ fun ChatPane(
                 onAnswerQuestion = chat::answerQuestion,
                 onProblemShown = chat::problemShown,
                 onShowTerminal = onShowTerminal,
+                onSend = chat::send,
+                onStop = chat::stop,
             )
         }
-    ChatScreen(state, machine, actions, modifier)
+    KeepDraft(chat.pane, chat.composer, state.conversation?.conversationId, chat::restoreDraft)
+    ChatScreen(state, machine, actions, modifier, chat.composer, focusRequester)
 }
 
 /**
  * A pane's chat ([state]), read from [machine]: its rows ([ChatList]), or what stands in for them (the backlog on its
- * way, nothing said yet, the chat ended), a strip over the rows while its link is back on its way, and pinned at its
- * foot the last action's problem and the card the agent waits on (an approval before a question). TalkBack names it
- * "Chat with" the agent.
+ * way, nothing said yet, the chat ended), a strip over the rows while its link is back on its way, pinned at its foot
+ * the last action's problem and the card the agent waits on (an approval before a question), and under them the
+ * [composer] (none: the chat only reads), whose `/` menu opens over the foot of the rows and cards. The prompt field
+ * takes the input focus through [focusRequester]. TalkBack names it "Chat with" the agent.
  */
 @Composable
 fun ChatScreen(
@@ -63,6 +72,8 @@ fun ChatScreen(
     machine: String,
     actions: ChatActions,
     modifier: Modifier = Modifier,
+    composer: ChatComposer? = null,
+    focusRequester: FocusRequester = remember { FocusRequester() },
 ) {
     val agent = state.conversation?.agent
     val name = stringResource(agentName(agent))
@@ -74,20 +85,42 @@ fun ChatScreen(
             .semantics { contentDescription = description },
     ) {
         val cardHeight = maxHeight * CARD_SHARE
+        val writing = composer?.takeIf { state.phase != ChatPhase.Ended }
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                ChatContent(state, machine, name, actions)
-                if (state.phase == ChatPhase.Reconnecting) {
-                    ReconnectingStrip(
-                        machine,
-                        Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(NgtermTheme.spacing.sm)
-                            .widthIn(max = NgtermTheme.spacing.readableWidth),
+                Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        ChatContent(state, machine, name, actions)
+                        if (state.phase == ChatPhase.Reconnecting) {
+                            ReconnectingStrip(
+                                machine,
+                                Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(NgtermTheme.spacing.sm)
+                                    .widthIn(max = NgtermTheme.spacing.readableWidth),
+                            )
+                        }
+                    }
+                    if (state.phase != ChatPhase.Ended) Pinned(state, actions, cardHeight)
+                }
+                writing?.menu?.let { menu ->
+                    SlashCommandMenu(
+                        menu = menu,
+                        agent = agent,
+                        onPick = { command ->
+                            writing.pick(command)
+                            // the field keeps the input focus, and the keyboard with it
+                            focusRequester.requestFocus()
+                        },
+                        modifier =
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .widthIn(max = NgtermTheme.spacing.readableWidth)
+                                .padding(horizontal = NgtermTheme.spacing.sm, vertical = NgtermTheme.spacing.xs),
                     )
                 }
             }
-            if (state.phase != ChatPhase.Ended) Pinned(state, actions, cardHeight)
+            writing?.let { Composer(it, state, actions, focusRequester) }
         }
     }
 }

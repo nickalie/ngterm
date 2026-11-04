@@ -1,6 +1,7 @@
 package com.nickalie.ngterm.android.ui.chat
 
 import com.nickalie.ngterm.android.data.reason
+import com.nickalie.ngterm.core.ffi.AgentCommand
 import com.nickalie.ngterm.core.ffi.AgentInputOutcome
 import com.nickalie.ngterm.core.ffi.ChatApproval
 import com.nickalie.ngterm.core.ffi.ChatBody
@@ -14,10 +15,12 @@ import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.QuestionAnswer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -99,8 +102,8 @@ sealed interface ChatProblem {
  * What a pane's chat shows: its rows ([items], from [log]), where it stands ([phase]), the [conversation] its origin
  * named, whether older pages remain ([older]), the row the list keeps in place after a page went in above it
  * ([anchor], the top row of those shown before that the page left in place), the cards pinned above the composer
- * ([approval], [question]), whether an action is on its way ([busy]), and why the last one did nothing ([problem],
- * until shown).
+ * ([approval], [question]), whether an action is on its way ([busy]), why the last one did nothing ([problem],
+ * until shown), and whether the agent is working on a turn ([working], its status at the origin), which Stop needs.
  */
 data class ChatUiState(
     val log: ChatLog = ChatLog(),
@@ -112,18 +115,24 @@ data class ChatUiState(
     val question: OpenQuestion? = null,
     val busy: Boolean = false,
     val problem: ChatProblem? = null,
+    val working: Boolean = false,
     // the questions whose picker was found answered or gone: their card stays down until the event says so
     internal val dismissed: Set<String> = emptySet(),
     // bumped by each reset, so a page asked for before it is dropped
     internal val epoch: Int = 0,
 ) {
     val items: List<ChatItem> get() = log.items
+
+    /** Whether a card waits on an answer, so a prompt or Stop would land in its dialog: the composer holds them. */
+    val awaitsCard: Boolean get() = approval != null || question != null
 }
 
 /**
  * A shown pane's chat, from the moment [PaneChats] opens it until it closes: the events the core streams fold into
  * [state], older pages come in on [loadOlder], and the actions ([send], [stop], [answerApproval], [answerQuestion])
  * go through the pane's handle ([handle]), each claiming the lead first as the core does. Reading never claims it.
+ * The prompt being written is the [composer]'s, its `/` menu listing the agent's commands ranked by [filter]; whether
+ * the agent works on a turn comes from [working].
  *
  * - An approval card comes up with the `approval` event and goes with its `approval_done`; a question card comes up
  *   with a question still running and goes once it is answered. Either goes too when this device answered it, or
@@ -132,13 +141,15 @@ data class ChatUiState(
  *
  * Events arrive on the core's thread; [state] takes them from any. Its work runs in [scope], which [close] ends.
  */
-@Suppress("TooManyFunctions") // the chat's events and each of its actions
+@Suppress("TooManyFunctions", "LongParameterList") // the chat's events and each of its actions; what it reads
 class ChatViewModel internal constructor(
     val pane: PaneRef,
     private val core: MobileCoreInterface,
     private val handle: () -> PaneInterface?,
     // how many times each machine's link has come up (MachineState.Connected), by id
     private val connects: StateFlow<Map<String, Long>>,
+    private val working: Flow<Boolean>,
+    filter: (String, List<AgentCommand>) -> List<AgentCommand>,
     private val scope: CoroutineScope,
     private val onEnded: () -> Unit,
 ) {
@@ -147,12 +158,17 @@ class ChatViewModel internal constructor(
     /** The chat as the screen shows it. */
     val state: StateFlow<ChatUiState> = chat.asStateFlow()
 
+    /** The prompt being written and its `/` menu. Main thread only. */
+    val composer =
+        ChatComposer(scope, fetch = { core.agentCommands(pane.machineId, pane.sessionId, pane.paneId) }, filter)
+
     /**
      * Opens the pane's chat at the core. While the machine's link is down it is [ChatPhase.Reconnecting] and opens
      * once the link is back; one that can't be opened otherwise (the origin offers no chat) ends, so the pane shows
      * its terminal.
      */
     internal fun open() {
+        scope.launch { working.collect { on -> chat.update { it.copy(working = on) } } }
         scope.launch {
             var opened = false
             while (!opened) {
@@ -191,6 +207,8 @@ class ChatViewModel internal constructor(
         chat.update { it.taking(events) }
         val card = chat.value.approval
         if (card != null && card.id != before) readLabels(card.id)
+        // the composer is the main thread's: its catalog goes there
+        if (events.any { it.body == ChatBody.Reset }) scope.launch { composer.newConversation() }
     }
 
     /** Takes what became of the chat's link. */
@@ -234,13 +252,34 @@ class ChatViewModel internal constructor(
         }
     }
 
-    /** Sends [text] as a prompt. */
-    fun send(text: String) {
-        if (text.isNotBlank()) act(null) { it.sendPrompt(text) }
+    /**
+     * Sends the composer's text as a prompt, its ends trimmed, once at a time and not while a card waits; the field
+     * lets it go once the agent has it, and keeps it when it was not sent.
+     */
+    fun send() {
+        val text = composer.draft.text.trim()
+        if (text.isEmpty() || chat.value.awaitsCard) return
+        act(null, onSent = { composer.sent(text) }) { it.sendPrompt(text) }
     }
 
-    /** Stop: interrupts the agent's turn. */
-    fun stop() = act(null) { it.interrupt() }
+    /** Stop: interrupts the agent's turn (Escape), not while a card waits, as Escape would answer its dialog. */
+    fun stop() {
+        if (!chat.value.awaitsCard) act(null) { it.interrupt() }
+    }
+
+    /**
+     * Puts back a draft ([text]) kept from before the app was put away, once the chat names its conversation: only
+     * into the [conversation] it was written for, and only into an empty field.
+     */
+    internal fun restoreDraft(
+        conversation: String,
+        text: String,
+    ) {
+        scope.launch {
+            val now = chat.mapNotNull { it.conversation?.conversationId }.first()
+            if (now == conversation) composer.restore(text)
+        }
+    }
 
     /** Answers the approval card with its button [label]. */
     fun answerApproval(label: String) {
@@ -262,6 +301,7 @@ class ChatViewModel internal constructor(
     // one action at a time; [card] is the card it answers, which goes once answered or found gone
     private fun act(
         card: String?,
+        onSent: () -> Unit = {},
         call: suspend (PaneInterface) -> AgentInputOutcome,
     ) {
         if (chat.value.busy) return
@@ -278,6 +318,7 @@ class ChatViewModel internal constructor(
                 } catch (error: PaneInputException) {
                     problem(error)
                 }
+            if (problem == null) onSent()
             chat.update { now ->
                 val answered = card != null && (problem == null || problem == ChatProblem.NotOnScreen)
                 val after = if (answered) now.without(card) else now
@@ -335,6 +376,7 @@ private fun ChatUiState.meta(event: ChatEvent): ChatUiState =
                 phase = phase,
                 busy = busy,
                 problem = problem,
+                working = working,
                 epoch = epoch + 1,
             )
         }

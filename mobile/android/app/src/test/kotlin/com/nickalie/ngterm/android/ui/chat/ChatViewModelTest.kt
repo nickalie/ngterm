@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.ui.chat
 
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.core.fake.FakeAction
 import com.nickalie.ngterm.core.ffi.AgentInputOutcome
@@ -61,6 +62,12 @@ class ChatViewModelTest {
     private fun emit(vararg events: ChatEvent) = bed.emit("p1", *events)
 
     private fun state() = chat.state.value
+
+    // the composer's text, sent
+    private fun send(text: String) {
+        chat.composer.edit(TextFieldValue(text))
+        chat.send()
+    }
 
     // the rows as (id or placeholder key, children's ids)
     private fun rows(items: List<ChatItem> = state().items): List<String> =
@@ -337,8 +344,8 @@ class ChatViewModelTest {
 
     @Test
     fun sendAndStopReachThePane() {
-        chat.send("fix the build")
-        chat.send("   ")
+        send("fix the build")
+        send("   ")
         chat.stop()
         assertEquals(listOf(FakeAction.Prompt("fix the build"), FakeAction.Interrupt), pane.actions.toList())
         assertFalse(state().busy)
@@ -356,7 +363,7 @@ class ChatViewModelTest {
             )
         for ((outcome, problem) in outcomes) {
             pane.outcome = outcome
-            chat.send("hi")
+            send("hi")
             assertEquals(problem, state().problem)
         }
         assertFalse(ChatProblem.DialogOpen.offersTerminal)
@@ -380,7 +387,7 @@ class ChatViewModelTest {
         // a pane no longer shown has no handle to act through
         pane.actionError = null
         bed.test.panes.hide(bed.ref("p1"))
-        chat.send("hi")
+        send("hi")
         assertEquals(ChatProblem.Closed, state().problem)
     }
 

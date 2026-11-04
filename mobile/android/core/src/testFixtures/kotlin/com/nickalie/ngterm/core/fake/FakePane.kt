@@ -14,6 +14,7 @@ import com.nickalie.ngterm.core.ffi.PaneSize
 import com.nickalie.ngterm.core.ffi.PaneWheel
 import com.nickalie.ngterm.core.ffi.PaneWheelOutcome
 import com.nickalie.ngterm.core.ffi.QuestionAnswer
+import kotlinx.coroutines.CompletableDeferred
 import java.util.Collections
 
 /** One input call a [FakePane] took, with its arguments. */
@@ -134,6 +135,9 @@ open class FakePane(
     /** What [approvalLabels] answers. */
     @Volatile var labels: List<String> = emptyList()
 
+    /** A gate the next chat action waits at once taken, until the test completes it (an action on its way). */
+    @Volatile var gate: CompletableDeferred<Unit>? = null
+
     /** The chat actions taken, in order. */
     val actions: MutableList<FakeAction> = Collections.synchronizedList(mutableListOf())
 
@@ -231,10 +235,11 @@ open class FakePane(
 
     override fun selectionText(): String? = selection
 
-    private fun act(action: FakeAction): AgentInputOutcome {
+    private suspend fun act(action: FakeAction): AgentInputOutcome {
         if (frames == null) throw PaneInputException.Closed()
         actionError?.let { throw it }
         actions += action
+        gate?.also { gate = null }?.await()
         return outcome
     }
 

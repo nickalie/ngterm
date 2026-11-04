@@ -116,7 +116,7 @@ fun testStore(
  * The app's graph over fakes in [dir]: the [core] a [FakeMobileCore] pinning through the real [PinnedHostKeys], the
  * stores real DataStores, the vault sealing with a [SoftwareWrapper], the clock [now], the network [online] and the
  * clipboard's text [clipboard] set by the test. [scope] runs the connections' calls (the main thread's in UI tests);
- * [close] stops it.
+ * [close] stops it. The chats rank their `/` menus with [rankCommands] (the native `filter_commands` isn't loaded).
  */
 class TestGraph(
     dir: File,
@@ -144,7 +144,14 @@ class TestGraph(
     // the panes' frames are read on the main thread, where the UI tests' clock drives them
     val settings = SettingsStore(testStore(dir, "settings"))
     val panes = SessionPanes(scope, connections, live, EmptyCoroutineContext, settings.settings)
-    val chats = PaneChats(scope, connections, live, panes.shown, settings.settings)
+
+    /** The queries the chats' `/` menus ranked the catalog for, oldest first. */
+    val filtered: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
+    val chats =
+        PaneChats(scope, connections, live, panes.shown, settings.settings) { query, items ->
+            filtered += query
+            rankCommands(query, items)
+        }
     val asks = Asks(scope, connections)
 
     // the notification permission counts as asked unless the test is about its question

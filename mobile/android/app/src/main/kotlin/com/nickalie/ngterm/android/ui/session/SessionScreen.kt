@@ -296,6 +296,8 @@ private fun FollowFocus(
         withFrameNanos { }
         val facts = now
         val left = facts.holder != null && facts.holder != focused
+        // the focus is in the pane already (a touch put it in a field there): it stays where the touch put it
+        if (facts.holder == focused) return@LaunchedEffect
         if (ready && facts.typing) {
             try {
                 requesters[focused]?.requestFocus()

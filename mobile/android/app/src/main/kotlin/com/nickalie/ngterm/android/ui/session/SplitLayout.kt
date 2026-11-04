@@ -163,16 +163,27 @@ fun PaneSlot(
     }
 }
 
-// a chat takes the input focus in its terminal's place (the session view moves it to the selected pane), and of a
-// hardware keyboard's keys only the chords that move between panes and sessions, ahead of a field typed in: the rest
-// are the field's
+// a chat takes the input focus in its terminal's place (the session view moves it to the selected pane) and hands it
+// on to its prompt field ([field]) when it has one; of a hardware keyboard's keys it takes only the chords that move
+// between panes and sessions, ahead of a field typed in: the rest are the field's
 private fun Modifier.chatKeys(
     keyboard: TerminalKeyboard,
     requester: FocusRequester?,
+    field: FocusRequester,
 ): Modifier =
     onPreviewKeyEvent { keyboard.move(it.nativeKeyEvent) }
         .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
+        .onFocusChanged { if (it.isFocused) field.requestIfShown() }
         .focusTarget()
+
+// focuses the field if it is in the composition: a chat that ended, or isn't open yet, has none, and keeps the focus
+private fun FocusRequester.requestIfShown() {
+    try {
+        requestFocus()
+    } catch (_: IllegalStateException) {
+        // no prompt field: the chat itself holds the focus
+    }
+}
 
 // what covers the slot: a chat only a failed show's, since reading a chat never takes control
 private fun PaneSpot.cover(): PaneCover? =
@@ -197,7 +208,8 @@ private fun ChatSlot(
         state.resize(grid)
     }
     val chat = spot.chat
-    Box(modifier.chatKeys(actions.keyboard, focusRequester)) {
+    val field = remember { FocusRequester() }
+    Box(modifier.chatKeys(actions.keyboard, focusRequester, field)) {
         if (chat != null) {
             // keyed by the pane: a slot that shows another pane (a split laid out anew, or the app brought back after
             // it was put away) gives that pane's chat none of this one's state, live or saved
@@ -207,6 +219,7 @@ private fun ChatSlot(
                     actions.machine,
                     onShowTerminal = { actions.onShowTerminal(spot.ref) },
                     modifier = Modifier.fillMaxSize(),
+                    focusRequester = field,
                 )
             }
         } else {

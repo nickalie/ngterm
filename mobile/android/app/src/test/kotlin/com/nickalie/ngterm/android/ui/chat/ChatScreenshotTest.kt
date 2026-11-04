@@ -21,8 +21,9 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * The chat (src/test/screenshots/chat) on a phone (light, dark, font scale 2.0), an unfolded foldable and a landscape
- * tablet (light and dark): a long conversation, an open approval, a multi-select question, an expanded diff, and the
- * empty and error states.
+ * tablet (light and dark): a long conversation, an open approval, a multi-select question, an expanded diff, the
+ * empty and error states, and the composer's `/` menu open on every command, narrowed (the agent working, so Stop
+ * shows), and matching nothing.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -37,11 +38,18 @@ class ChatScreenshotTest(
     private fun capture(
         scene: String,
         state: ChatUiState,
+        composer: ChatComposer? = null,
         then: (() -> Unit)? = null,
     ) {
         compose.setContent {
             NgtermTheme(darkTheme = window.name.endsWith("dark")) {
-                ChatScreen(state, "build-01", ChatActions(), Modifier.fillMaxSize().safeDrawingPadding())
+                ChatScreen(
+                    state,
+                    "build-01",
+                    ChatActions(),
+                    Modifier.fillMaxSize().safeDrawingPadding(),
+                    composer = composer,
+                )
             }
         }
         compose.waitForIdle()
@@ -82,6 +90,21 @@ class ChatScreenshotTest(
                     older = OlderPages.Failed("the connection to build-01 was lost"),
                 ).copy(problem = ChatProblem.NotOnScreen),
         )
+
+    @Test
+    fun openMenu() = capture("menu", ChatSamples.state(ChatSamples.long), ChatSamples.composer("/"))
+
+    @Test
+    fun filteredMenu() =
+        capture(
+            "menu_filtered",
+            ChatSamples.state(ChatSamples.long).copy(working = true),
+            ChatSamples.composer("/co"),
+        )
+
+    @Test
+    fun menuWithNoMatch() =
+        capture("menu_no_match", ChatSamples.state(ChatSamples.long), ChatSamples.composer("/deploy"))
 
     companion object {
         @JvmStatic
