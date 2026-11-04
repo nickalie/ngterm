@@ -191,7 +191,9 @@ and fish as upstream, bash and PowerShell as well, each started with its shell i
 shell it spawns itself (`ZDOTDIR` for zsh, `ENV` in POSIX mode for bash, `XDG_DATA_DIRS` for fish, the integration's
 root merged in front of the pane's own value as upstream; ngterm's own script for PowerShell, which Ghostty does not
 integrate).
-Its tests are in `tests/protocol/test_live_any_shell.py`; a test that branches on Live being active
+Its tests are in `tests/protocol/test_live_any_shell.py`; the upstream Live tests that type no line of a particular
+shell (`LIVE_IN_ANY_SHELL`: the inventory, lead, kill, presentation and tree reads) require either capability
+(`requires(..., any=True)`), so they hold for bash and PowerShell too; a test that branches on Live being active
 (`test_restore.py::test_seeded_live_mode_is_requested_at_launch`) takes the fallback branch only when the build has
 neither `live-sessions` nor `live-any-shell`.
 The `conformance` job of `.github/workflows/linux.yml` is a matrix over three login shells, each leg with

@@ -68,6 +68,8 @@ vocabulary) is in [docs/rust-build.md](docs/rust-build.md).
 
 - `since("0.40.0")`: skipped as `not-yet-at-level` when the build's parity level is lower.
 - `requires("capability", reason=...)`: skipped as `unsupported` when the build lacks it.
+  `requires("a", "b", any=True)` is skipped only when the build lacks both (Live sessions in the login shell, from
+  upstream's `live-sessions` or the Rust build's `live-any-shell`); `--must-pass` on either counts it.
   A test that branches instead asks `adapter.has("capability")`.
   Both refuse names outside the vocabulary in `impls/base.py`.
 - `covers("item", ..., streams=(...))`: the catalog keys a test covers; a stream-mode command counts only when

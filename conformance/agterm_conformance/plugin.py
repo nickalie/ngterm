@@ -50,13 +50,17 @@ MARKERS = (
         "since(version): upstream version that introduced the behavior; "
         "skipped as not-yet-at-level above the adapter's parity_level"
     ),
-    "requires(capability, reason=...): skipped as unsupported when the adapter lacks the capability",
+    (
+        "requires(*capabilities, reason=..., any=False): skipped as unsupported when the adapter lacks a capability "
+        "(with any=True, when it lacks every one of them)"
+    ),
     (
         "covers(*items, streams=()): catalog items this test covers, read by the coverage gate; a stream-mode "
         "command counts only when also named in streams, by a test that drives the stream after the ok"
     ),
 )
 COVERS_KWARGS = frozenset({"streams"})
+REQUIRES_KWARGS = frozenset({"reason", "any"})
 
 
 def scrub_environ(environ: MutableMapping[str, str]) -> list[str]:
@@ -465,6 +469,11 @@ def check_markers(item: pytest.Item) -> None:
     for marker in item.iter_markers("requires"):
         if not marker.args:
             raise pytest.UsageError(f"{item.nodeid}: requires names no capability")
+        unknown = set(marker.kwargs) - REQUIRES_KWARGS
+        if unknown:
+            raise pytest.UsageError(f"{item.nodeid}: requires takes no {', '.join(sorted(unknown))}")
+        if not isinstance(marker.kwargs.get("any", False), bool):
+            raise pytest.UsageError(f"{item.nodeid}: requires' any is True or False")
         for capability in marker.args:
             if capability not in CAPABILITIES:
                 raise pytest.UsageError(
@@ -546,15 +555,19 @@ def skip_reason(item: pytest.Item, adapter: Adapter) -> str | None:
     if since is not None and not profile.at_level(since.args[0]):
         return f"{NOT_YET_AT_LEVEL}: since {since.args[0]}, {adapter.name} is at {profile.parity_level}"
     for marker in item.iter_markers("requires"):
-        for capability in marker.args:
-            if capability not in profile.capabilities:
-                why = marker.kwargs.get("reason")
-                here = profile.absent.get(capability)
-                return (
-                    f"{UNSUPPORTED}: {adapter.name} lacks {capability}"
-                    + (f" on this host: {here}" if here else "")
-                    + (f" ({why})" if why else "")
-                )
+        missing = [capability for capability in marker.args if capability not in profile.capabilities]
+        if not missing or (marker.kwargs.get("any") and len(missing) < len(marker.args)):
+            continue
+        why = marker.kwargs.get("reason")
+        if len(missing) > 1 and marker.kwargs.get("any"):
+            # the first name leads, as a single capability's does (`tools/check_ratchet.py` reads it)
+            return f"{UNSUPPORTED}: {adapter.name} lacks {' and '.join(missing)}" + (f" ({why})" if why else "")
+        here = profile.absent.get(missing[0])
+        return (
+            f"{UNSUPPORTED}: {adapter.name} lacks {missing[0]}"
+            + (f" on this host: {here}" if here else "")
+            + (f" ({why})" if why else "")
+        )
     return None
 
 

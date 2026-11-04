@@ -1447,6 +1447,13 @@ def test_page_serve_refused_claim_exits_1(cli, ctl):
 LIVE = pytest.mark.requires(
     "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
 )
+# A Live test that types no line of a particular shell, so it holds in the Rust build's bash and PowerShell Live too.
+LIVE_IN_ANY_SHELL = pytest.mark.requires(
+    "live-sessions",
+    "live-any-shell",
+    any=True,
+    reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell",
+)
 PRESENTATION_HELLO = {
     "kind": "hello",
     "gen": 0,
@@ -1530,7 +1537,7 @@ def test_live_pane_commands(cli, live):
     )
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("cli:live present")
 def test_live_present_bridges_the_stream(cli, live):
     cli = cli.on(live.instance)

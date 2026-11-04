@@ -6,7 +6,8 @@ Every group command, result key, tree key and error text goes through the instan
 The module's shared instance runs without Live, so its daemons are only claimed, never observed: the inventory,
 prune, the hostless `live.tree` and every refusal are checked there. The Live tests share one instance launched with
 `restoreMode: live` seeded; a pane in it runs the account's zsh or fish inside a live session (a session of the Rust
-build's server, a daemon of its own upstream), so a line typed there only prints a marker. Each test ends the sessions
+build's server, a daemon of its own upstream), so a line typed there only prints a marker. The tests that type no such
+line (`LIVE_IN_ANY_SHELL`) also run where the Rust build wraps a bash or PowerShell login shell (`live-any-shell`). Each test ends the sessions
 it opens, which ends their daemons; the harness's stop then finds no process left in the instance's namespace (under the
 vocabulary's directory variable, or the session server of the namespace).
 
@@ -29,6 +30,14 @@ from agterm_conformance.wait import wait_frame, wait_until
 UNKNOWN = "zzz"
 LIVE = pytest.mark.requires(
     "live-sessions", reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell"
+)
+# A Live test that types no line of a particular shell: it holds in any login shell Live wraps, upstream's zsh and fish
+# and the Rust build's bash and PowerShell too (`live-any-shell`).
+LIVE_IN_ANY_SHELL = pytest.mark.requires(
+    "live-sessions",
+    "live-any-shell",
+    any=True,
+    reason="needs panes in live sessions, which upstream creates only for a zsh or fish login shell",
 )
 ATTRIBUTIONS = ("supervisor", "app", "orphaned", "unknown")
 PRESENTATION_VERSION = 1
@@ -267,7 +276,7 @@ def _gone(live, daemon):
     live.wait_response(live.vocabulary.command("live.list"), None, gone)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers(
     "live.list",
     "field:result.live",
@@ -311,7 +320,7 @@ def test_screen_reads_the_daemon_grid(live):
     _gone(live, daemon)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("session.lead")
 def test_lead_on_a_pane_that_already_leads(live):
     sid = _live_session(live)
@@ -479,7 +488,7 @@ def test_a_wait_command_keeps_scrollback_after_attached_exit(live, tmp_path):
         assert_ok(live.request("session.close", sid))
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("live.kill", "field:result.pane")
 def test_kill_ends_the_daemon_and_closes_its_pane(live):
     sid = _live_session(live, split=True)
@@ -545,7 +554,7 @@ def _presenters(live, sid, expected):
     live.wait_tree(counted)
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("live.present", "field:tree.session.presenters", streams=("live.present",))
 def test_present_mirrors_a_live_session(live):
     sid = _live_session(live)
@@ -750,7 +759,7 @@ def test_status_sound_goes_to_a_following_presenter(live):
     assert_ok(live.request("session.close", sid))
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.covers("live.tree", "field:result.remote", "session.status")
 def test_tree_rows_carry_the_session_status(live):
     sid = _live_session(live)
@@ -768,7 +777,7 @@ def test_tree_rows_carry_the_session_status(live):
     assert_ok(live.request("session.close", sid))
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("live.tree", "field:result.remote", "session.companion.page", "session.companion.new")
 def test_tree_lists_a_page_companion_without_panes_under_its_listed_parent(live, tmp_path):
@@ -795,7 +804,7 @@ def test_tree_lists_a_page_companion_without_panes_under_its_listed_parent(live,
     live.wait_tree(lambda tree: not {sid, page, companion} & set(session_ids(tree)))
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.39.1")
 @pytest.mark.covers("live.present", "session.companion.new", streams=("live.present",))
 def test_a_respawned_live_parent_publishes_its_respawn_to_a_presenter(live):
@@ -1106,7 +1115,7 @@ def test_group_attach_validates_before_remote_discovery(ctl):
     assert_error(ctl.request(command, "bad\nname", host="unused.invalid"), "invalid remote session")
 
 
-@LIVE
+@LIVE_IN_ANY_SHELL
 @pytest.mark.since("0.40.0")
 @pytest.mark.covers("live.tree", "field:result.remote", "session.companion.page", "session.companion.new")
 def test_tree_parent_membership_lists_companions_in_sidebar_order(live, tmp_path):
