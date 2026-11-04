@@ -7,7 +7,8 @@
 //!   pane's wake does; a note of an attach since replaced is dropped. A stopped writer sends what is still queued (a
 //!   denied clipboard read's reply) and closes the channel once the queue has been quiet for [`WRITER_POLL`].
 //! - **Leadership.** The attach tail carries a `LeadAttachment`: the first attach and every automatic one claim
-//!   nothing (they lead only a session nobody leads), [`crate::MobileCore::take_lead`] claims. The attach client's
+//!   nothing (they lead only a session nobody leads), [`crate::MobileCore::take_lead`] claims, as does a chat action
+//!   on a pane that does not lead ([`crate::chat::input`], which weighs [`Panes::standing`]). The attach client's
 //!   role reports arrive as titles under `LeadNotice::PREFIX`: filtered through the pane's `LeadState` into
 //!   [`MobileEvent::PaneLead`], never shown as a title. A follower is covered; an unowned pane attaches again.
 //! - **How an attach ends** ([`PaneEnd`]): a *lost* link covers the pane, and it attaches again into a fresh terminal
@@ -104,6 +105,23 @@ pub(crate) struct GoneCheck {
     pub(crate) key: u64,
     pub(crate) machine_id: String,
     pub(crate) session_id: String,
+}
+
+/// Where a shown pane's attach stands ([`Panes::standing`]).
+pub(crate) struct Standing {
+    /// The current attach's key: another attach replaced the one an action weighed when it differs.
+    pub(crate) key: u64,
+    /// Its role as its attach last reported it.
+    pub(crate) role: Option<LeadRole>,
+    /// Its attach claims the lead and has not reported yet.
+    pub(crate) claiming: bool,
+    /// Its program exited, or its session is gone.
+    pub(crate) ended: bool,
+    /// Its channel is open.
+    pub(crate) live: bool,
+    pub(crate) terminal: Option<Arc<ngterm_term::Pane>>,
+    /// The grid the view gave.
+    pub(crate) size: GridSize,
 }
 
 /// What handling a note made: events, and a listing the actor is to read ([`Panes::gone_checked`]).
@@ -342,6 +360,38 @@ impl<C: Connection> Panes<C> {
     /// Whether the pane `pane` of `session_id` is shown.
     pub(crate) fn is_shown(&self, machine_id: &str, session_id: &str, pane: Uuid) -> bool {
         self.find(machine_id, session_id, pane).is_some()
+    }
+
+    /// Where a shown pane's attach stands now, for a chat action ([`crate::chat::input`]); `None` when it is not
+    /// shown.
+    pub(crate) fn standing(&self, machine_id: &str, session_id: &str, pane: Uuid) -> Option<Standing> {
+        let shown = &self.shown[self.find(machine_id, session_id, pane)?];
+        let lead = shown.lead.as_ref();
+        Some(Standing {
+            key: shown.key,
+            role: lead.and_then(LeadState::role),
+            claiming: lead.is_some_and(|lead| lead.reattaching() && lead.attachment().claim),
+            ended: matches!(shown.phase, Phase::Checking | Phase::Exited | Phase::Gone),
+            live: shown.phase == Phase::Live,
+            terminal: shown.slot.terminal(),
+            size: shown.slot.size(),
+        })
+    }
+
+    /// Handles a shown pane's pending terminal events now, as its wake would: its role reports are applied before an
+    /// action weighs its lead. Nothing is reported when none was pending.
+    pub(crate) fn drain(&mut self, machine_id: &str, session_id: &str, pane: Uuid) -> Vec<MobileEvent> {
+        let Some(index) = self.find(machine_id, session_id, pane) else {
+            return Vec::new();
+        };
+        let Some(terminal) = self.shown[index].slot.terminal() else {
+            return Vec::new();
+        };
+        let taken = terminal.take_events();
+        if taken.is_empty() {
+            return Vec::new();
+        }
+        self.handle(index, taken)
     }
 
     /// Hides a shown pane: its attach ends and its reads are denied; nothing more is reported about it.
@@ -754,8 +804,13 @@ impl<C: Connection> Panes<C> {
         let Some(terminal) = self.shown[index].slot.terminal() else {
             return Vec::new();
         };
+        self.handle(index, terminal.take_events())
+    }
+
+    /// The terminal events `taken` of the pane at `index`, then that it has a frame to draw.
+    fn handle(&mut self, index: usize, taken: Vec<PaneEvent>) -> Vec<MobileEvent> {
         let mut events = Vec::new();
-        for event in terminal.take_events() {
+        for event in taken {
             if let Some(unowned) = self.pane_event(index, event, &mut events)
                 && unowned
             {
@@ -848,7 +903,7 @@ impl Tail {
 
 /// `bytes` without their escape sequences: CSI (to its final byte), OSC, DCS, SOS, PM and APC (to BEL or ST), and
 /// two-byte ones (`ESC c`). An unfinished sequence at the end is dropped too.
-fn without_escapes(bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn without_escapes(bytes: &[u8]) -> Vec<u8> {
     const ESC: u8 = 0x1b;
     const BEL: u8 = 0x07;
     let mut out = Vec::with_capacity(bytes.len());

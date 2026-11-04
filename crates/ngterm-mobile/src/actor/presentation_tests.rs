@@ -86,7 +86,11 @@ impl Actor {
         let sink = Arc::new(Recorder::default());
         let (commands, queue) = mpsc::unbounded_channel();
         let events: Arc<dyn EventSink> = Arc::clone(&sink) as Arc<dyn EventSink>;
-        tokio::task::spawn_local(run(transport.clone(), events, queue));
+        let wiring = super::Wiring {
+            commands: commands.downgrade(),
+            timing: crate::chat::input::InputTiming::default(),
+        };
+        tokio::task::spawn_local(run(transport.clone(), events, queue, wiring));
         Self {
             commands,
             transport,

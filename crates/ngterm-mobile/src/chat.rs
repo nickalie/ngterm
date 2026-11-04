@@ -45,10 +45,18 @@
 //!   pane's announced conversation changes or its chat reads a `reset`. A failed fetch is not kept.
 //!
 //! The composer's dropdown narrows the catalog with [`filter_commands`], the native picker's ranking.
+//!
+//! **Answering the agent** happens in its pane, not over the chat channel: [`input`] sends a prompt, Stop, an
+//! approval's or a question's answer as keys into the pane's terminal ([`crate::api::Pane::send_prompt`] and the
+//! others), after taking the lead and checking the screen with the agent's matcher ([`matchers`]); the pane's attach
+//! stays open behind the chat for it, at the grid the terminal view gave, so opening, reading or closing a chat never
+//! resizes or claims anything.
 
+pub mod input;
+pub(crate) mod matchers;
 mod records;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -633,6 +641,11 @@ impl<C: Connection> Chats<C> {
         }
         self.layouts
             .insert((machine_id.to_owned(), session_id.to_owned()), layout);
+    }
+
+    /// The agent `key`'s pane was last announced to run, if any.
+    pub(crate) fn agent(&self, key: &ChatKey) -> Option<&str> {
+        self.announced.get(key).and_then(|(agent, _)| agent.as_deref())
     }
 
     /// The side `key`'s pane is on, as its session's last layout has it.

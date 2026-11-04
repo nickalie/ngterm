@@ -580,6 +580,7 @@ fn a_listing_read_on_a_replaced_connection_answers_but_is_neither_kept_nor_repor
         transport.clone(),
         Arc::clone(&sink) as Arc<dyn EventSink>,
         tokio::sync::mpsc::unbounded_channel().0,
+        super::Wiring::detached(),
     );
     let machine = machine("m1", "box");
     let old = std::rc::Rc::new(block_on(transport.connect(&machine)).expect("connected"));
@@ -631,6 +632,7 @@ fn a_listing_overtaken_by_a_later_one_is_neither_kept_nor_reported() {
         transport.clone(),
         Arc::clone(&sink) as Arc<dyn EventSink>,
         tokio::sync::mpsc::unbounded_channel().0,
+        super::Wiring::detached(),
     );
     let machine = machine("m1", "box");
     let connection = std::rc::Rc::new(block_on(transport.connect(&machine)).expect("connected"));

@@ -1,6 +1,8 @@
 package com.nickalie.ngterm.core.fake
 
+import com.nickalie.ngterm.core.ffi.AgentInputOutcome
 import com.nickalie.ngterm.core.ffi.CellPoint
+import com.nickalie.ngterm.core.ffi.ChatQuestion
 import com.nickalie.ngterm.core.ffi.NoHandle
 import com.nickalie.ngterm.core.ffi.Pane
 import com.nickalie.ngterm.core.ffi.PaneColors
@@ -11,6 +13,7 @@ import com.nickalie.ngterm.core.ffi.PaneSendOutcome
 import com.nickalie.ngterm.core.ffi.PaneSize
 import com.nickalie.ngterm.core.ffi.PaneWheel
 import com.nickalie.ngterm.core.ffi.PaneWheelOutcome
+import com.nickalie.ngterm.core.ffi.QuestionAnswer
 import java.util.Collections
 
 /** One input call a [FakePane] took, with its arguments. */
@@ -59,6 +62,24 @@ sealed interface FakeInput {
     data object ClearSelection : FakeInput
 }
 
+/** One chat action a [FakePane] took, with its arguments. */
+sealed interface FakeAction {
+    data class Prompt(
+        val text: String,
+    ) : FakeAction
+
+    data object Interrupt : FakeAction
+
+    data class Approval(
+        val label: String,
+    ) : FakeAction
+
+    data class Question(
+        val question: ChatQuestion,
+        val answers: List<QuestionAnswer>,
+    ) : FakeAction
+}
+
 /**
  * A [Pane] with no native library behind it, for the views' tests: [frame] answers with what [frames] packs (a
  * [RowBufferWriter]'s bytes) for the seq asked, and throws [PaneInputException.Closed] while it is `null`; [resize]
@@ -70,6 +91,10 @@ sealed interface FakeInput {
  * [tracking] (the program asked for the mouse); [wheel] answers [wheelOutcome]; [paste] refuses text with a line
  * break unless allowed ([PaneSendOutcome.Unsafe], as Ghostty's paste protection does) and writes nothing for empty
  * text; [selectionText] is [selection]. Input to a pane with no [frames] throws [PaneInputException.Closed].
+ *
+ * The chat's actions ([sendPrompt], [interrupt], [answerApproval], [answerQuestion]) are recorded in [actions] and
+ * answer [outcome], or throw [actionError] when set; [approvalLabels] answers [labels]. A pane with no [frames] throws
+ * [PaneInputException.Closed] for them too, as a hidden pane does.
  */
 @Suppress("TooManyFunctions") // the real handle's methods, each faked
 open class FakePane(
@@ -99,6 +124,18 @@ open class FakePane(
 
     /** The input taken, in order. */
     val inputs: MutableList<FakeInput> = Collections.synchronizedList(mutableListOf())
+
+    /** What a chat action answers. */
+    @Volatile var outcome: AgentInputOutcome = AgentInputOutcome.SENT
+
+    /** What a chat action throws instead, when set (a refusal, say). */
+    @Volatile var actionError: PaneInputException? = null
+
+    /** What [approvalLabels] answers. */
+    @Volatile var labels: List<String> = emptyList()
+
+    /** The chat actions taken, in order. */
+    val actions: MutableList<FakeAction> = Collections.synchronizedList(mutableListOf())
 
     override fun id(): String = paneId
 
@@ -193,4 +230,27 @@ open class FakePane(
     override fun clearSelection() = selected(FakeInput.ClearSelection)
 
     override fun selectionText(): String? = selection
+
+    private fun act(action: FakeAction): AgentInputOutcome {
+        if (frames == null) throw PaneInputException.Closed()
+        actionError?.let { throw it }
+        actions += action
+        return outcome
+    }
+
+    override suspend fun sendPrompt(text: String): AgentInputOutcome = act(FakeAction.Prompt(text))
+
+    override suspend fun interrupt(): AgentInputOutcome = act(FakeAction.Interrupt)
+
+    override suspend fun answerApproval(label: String): AgentInputOutcome = act(FakeAction.Approval(label))
+
+    override suspend fun answerQuestion(
+        question: ChatQuestion,
+        answers: List<QuestionAnswer>,
+    ): AgentInputOutcome = act(FakeAction.Question(question, answers))
+
+    override suspend fun approvalLabels(): List<String> {
+        if (frames == null) throw PaneInputException.Closed()
+        return labels
+    }
 }

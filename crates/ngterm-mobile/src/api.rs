@@ -19,6 +19,7 @@ pub use self::pane::{
 };
 
 use crate::actor::{Actor, Command};
+use crate::chat::input::InputTiming;
 use crate::chat::{AgentCommand, ChatEvent, ChatState};
 use crate::keys::{self, KeyError, KeyPair};
 use crate::pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};
@@ -331,8 +332,20 @@ impl MobileCore {
     where
         T: Transport + Send,
     {
+        Self::with_timing(transport, sink, InputTiming::default())
+    }
+
+    /// A core over `transport` whose chat actions settle, wait and look as `timing` says (the tests' shorter waits).
+    pub(crate) fn with_timing<T>(
+        transport: T,
+        sink: Arc<dyn EventSink>,
+        timing: InputTiming,
+    ) -> Result<Arc<Self>, MobileError>
+    where
+        T: Transport + Send,
+    {
         Ok(Arc::new(Self {
-            actor: Actor::spawn(transport, sink)?,
+            actor: Actor::spawn(transport, sink, timing)?,
         }))
     }
 }

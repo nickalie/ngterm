@@ -1,9 +1,13 @@
 //! The chat's pure parts: the remote command lines, reading the channel's lines, the catalog and the dropdown's
-//! ranking.
+//! ranking; the screen matchers on the recorded agent screens ([`matchers`]) and the actions' plans and keys
+//! ([`input`]).
 
 use ngterm_core::agent_chat::{self as wire, EventBody, Tool, ToolKind, ToolStatus};
 
 use super::*;
+
+mod input;
+pub(crate) mod matchers;
 
 fn command(name: &str, description: &str) -> AgentCommand {
     AgentCommand {

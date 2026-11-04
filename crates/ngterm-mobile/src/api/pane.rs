@@ -7,14 +7,25 @@
 //! The terminal behind a handle changes when the pane is attached again (after a lost link, a respawn, a takeover):
 //! the handle always reaches the current one, and calls with none (a pane hidden) fail with
 //! [`PaneInputError::Closed`].
+//!
+//! The chat's actions on the pane's agent ([`Pane::send_prompt`], [`Pane::interrupt`], [`Pane::answer_approval`],
+//! [`Pane::answer_question`]) are the exception: each takes the lead, waits for the screen to settle and checks it
+//! before any key goes, so it runs on the actor ([`crate::chat::input`]) and the call waits for its outcome.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use tokio::sync::{mpsc, oneshot};
 
 use ngterm_core::ghostty_config::binds::{KeyAction, Mods, PhysicalKey};
 use ngterm_term::{
     ClipboardLocation, GridPoint, GridSize, KeyInput, ModSides, MouseAction, MouseButton, MouseInput, Paste,
     PasteSource, Rgb, SelectionText, ThemeColors, Wake, Wheel, WheelInput,
 };
+
+use crate::actor::Command;
+use crate::chat::ChatQuestion;
+use crate::chat::input::{Action, AgentInputOutcome, QuestionAnswer};
+use crate::pane::PaneRef;
 
 /// A pane's grid: cells and the pixel size of one cell (`ngterm-term`'s `GridSize`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
@@ -318,11 +329,44 @@ impl PaneSlot {
 pub struct Pane {
     id: String,
     slot: Arc<PaneSlot>,
+    /// Where its chat actions go: the pane as the core names it, and the actor's queue (held weakly: a handle the app
+    /// keeps never keeps the core running). `None` for a handle with no core behind it (the tests').
+    actions: Option<(PaneRef, mpsc::WeakUnboundedSender<Command>)>,
 }
 
 impl Pane {
     pub(crate) fn new(id: String, slot: Arc<PaneSlot>) -> Self {
-        Self { id, slot }
+        Self {
+            id,
+            slot,
+            actions: None,
+        }
+    }
+
+    /// The handle with its chat actions going to the actor's `commands`, for the pane `reference`.
+    pub(crate) fn acting(mut self, reference: PaneRef, commands: mpsc::WeakUnboundedSender<Command>) -> Self {
+        self.actions = Some((reference, commands));
+        self
+    }
+
+    /// Posts the command `make` builds for this pane to the actor, and waits for its answer.
+    async fn ask<R>(
+        &self,
+        make: impl FnOnce(PaneRef, oneshot::Sender<Result<R, PaneInputError>>) -> Command,
+    ) -> Result<R, PaneInputError> {
+        let (reference, commands) = self.actions.as_ref().ok_or(PaneInputError::Closed)?;
+        let commands = commands.upgrade().ok_or(PaneInputError::Closed)?;
+        let (reply, answer) = oneshot::channel();
+        commands
+            .send(make(reference.clone(), reply))
+            .map_err(|_| PaneInputError::Closed)?;
+        drop(commands);
+        answer.await.unwrap_or(Err(PaneInputError::Closed))
+    }
+
+    async fn act(&self, action: Action) -> Result<AgentInputOutcome, PaneInputError> {
+        action.check()?;
+        self.ask(|pane, reply| Command::PaneInput { pane, action, reply }).await
     }
 
     /// The terminal behind the handle now (the tests read its screen).
@@ -567,5 +611,68 @@ impl Pane {
     #[must_use]
     pub fn selection_text(&self) -> Option<String> {
         self.slot.terminal()?.selection_text(SelectionText::Copy)
+    }
+}
+
+/// The chat's actions on the pane's agent (the agent its session's origin announced for it,
+/// [`crate::MobileEvent::PaneAgent`]). Each one takes the lead when this pane does not hold it, waits for the screen
+/// to settle and checks it before it sends a key ([`crate::chat::input`]); reading the chat never does. One action
+/// runs on a pane at a time.
+#[uniffi::export]
+impl Pane {
+    /// Sends `text` as a prompt: a bracketed paste of all of it (a `/command args` or a Codex `$skill` too), then
+    /// Enter, while the agent's prompt is on screen.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneInputError::Refused`] for empty text, a pane that runs no agent the chat can answer, an action already on
+    /// its way, or text that can't be pasted safely; [`PaneInputError::Closed`] for a hidden pane or a stopped core.
+    pub async fn send_prompt(&self, text: String) -> Result<AgentInputOutcome, PaneInputError> {
+        self.act(Action::Prompt(text)).await
+    }
+
+    /// Stop: Escape, while the agent works on a turn.
+    ///
+    /// # Errors
+    ///
+    /// As [`Pane::send_prompt`].
+    pub async fn interrupt(&self) -> Result<AgentInputOutcome, PaneInputError> {
+        self.act(Action::Interrupt).await
+    }
+
+    /// Answers the permission dialog on screen with its option labelled `label` (one of [`Pane::approval_labels`]):
+    /// that option's key, then a look that the dialog went.
+    ///
+    /// # Errors
+    ///
+    /// As [`Pane::send_prompt`].
+    pub async fn answer_approval(&self, label: String) -> Result<AgentInputOutcome, PaneInputError> {
+        self.act(Action::Approval(label)).await
+    }
+
+    /// Answers Claude's `AskUserQuestion` picker for `question` (the chat's question card): one answer per question,
+    /// in order, each tab confirmed on screen before its keys go, then the answers submitted.
+    ///
+    /// # Errors
+    ///
+    /// As [`Pane::send_prompt`]; [`PaneInputError::Refused`] as well for answers that don't fit the questions (a
+    /// label they don't offer, not exactly one pick for a single-select question, empty text).
+    pub async fn answer_question(
+        &self,
+        question: ChatQuestion,
+        answers: Vec<QuestionAnswer>,
+    ) -> Result<AgentInputOutcome, PaneInputError> {
+        self.act(Action::Question(question.questions, answers)).await
+    }
+
+    /// The labels an approval card offers: the options of the permission dialog on the pane's screen now, or, when
+    /// none can be read there (a follower's screen is laid out for another grid), the ones every dialog of the agent
+    /// has; empty for a pane that runs no agent the chat can answer. Reading claims nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`PaneInputError::Closed`] for a hidden pane or a stopped core.
+    pub async fn approval_labels(&self) -> Result<Vec<String>, PaneInputError> {
+        self.ask(|pane, reply| Command::ApprovalLabels { pane, reply }).await
     }
 }

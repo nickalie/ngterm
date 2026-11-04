@@ -25,9 +25,12 @@
 //! suspending closes every connection but keeps the streams to start again on resume.
 
 mod chats;
+mod inputs;
 
 #[cfg(test)]
 mod chat_tests;
+#[cfg(test)]
+mod input_tests;
 #[cfg(test)]
 mod pane_tests;
 #[cfg(test)]
@@ -38,7 +41,7 @@ mod reconnect_tests;
 mod tests;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle, ThreadId};
@@ -52,7 +55,9 @@ use tokio::runtime::Builder;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{AbortHandle, LocalSet};
 
+use crate::api::PaneInputError;
 use crate::api::{EventSink, Machine, MachineState, MobileError, MobileEvent, Pane, PaneSize};
+use crate::chat::input::{Action, AgentInputOutcome, InputTiming};
 use crate::chat::{AgentCommand, ChatEvent, ChatKey, Chats};
 use crate::pane::{self, ClipboardReply, GoneCheck, Note, PaneRef, Panes, Target};
 use crate::presentation::{self, AskReply, ChannelLinks, LinkEvent, Presentations, Reporter};
@@ -137,6 +142,17 @@ pub(crate) enum Command {
         pane: PaneRef,
         reply: oneshot::Sender<Result<Vec<AgentCommand>, MobileError>>,
     },
+    /// A chat action on a shown pane's agent ([`crate::chat::input`]).
+    PaneInput {
+        pane: PaneRef,
+        action: Action,
+        reply: oneshot::Sender<Result<AgentInputOutcome, PaneInputError>>,
+    },
+    /// The labels an approval card offers for a shown pane's dialog.
+    ApprovalLabels {
+        pane: PaneRef,
+        reply: oneshot::Sender<Result<Vec<String>, PaneInputError>>,
+    },
     NetworkChanged,
     Suspend,
     Resume,
@@ -150,8 +166,8 @@ pub(crate) struct Actor {
 }
 
 impl Actor {
-    /// Starts the actor over `transport`, reporting to `sink`.
-    pub(crate) fn spawn<T>(transport: T, sink: Arc<dyn EventSink>) -> Result<Self, MobileError>
+    /// Starts the actor over `transport`, reporting to `sink`, its chat actions waiting as `timing` says.
+    pub(crate) fn spawn<T>(transport: T, sink: Arc<dyn EventSink>, timing: InputTiming) -> Result<Self, MobileError>
     where
         T: Transport + Send,
     {
@@ -161,11 +177,15 @@ impl Actor {
             .build()
             .map_err(|_| MobileError::Stopped)?;
         let (commands, queue) = mpsc::unbounded_channel();
+        let wiring = Wiring {
+            commands: commands.downgrade(),
+            timing,
+        };
         let thread = thread::Builder::new()
             .name(THREAD_NAME.to_owned())
             .spawn(move || {
                 let local = LocalSet::new();
-                local.block_on(&runtime, run(transport, sink, queue));
+                local.block_on(&runtime, run(transport, sink, queue, wiring));
             })
             .map_err(|_| MobileError::Stopped)?;
         let thread_id = thread.thread().id();
@@ -196,9 +216,31 @@ impl Drop for Actor {
     }
 }
 
+/// What the actor hands out besides its state: its own queue, for the pane handles it makes (held weakly, so a handle
+/// left in the app never keeps the actor running), and its chat actions' timing.
+pub(crate) struct Wiring {
+    pub(crate) commands: mpsc::WeakUnboundedSender<Command>,
+    pub(crate) timing: InputTiming,
+}
+
+#[cfg(test)]
+impl Wiring {
+    /// Wiring to no actor's queue, at the default timing (state built by a test, with no loop).
+    pub(crate) fn detached() -> Self {
+        Self {
+            commands: mpsc::unbounded_channel().0.downgrade(),
+            timing: InputTiming::default(),
+        }
+    }
+}
+
 /// The actor's state, shared by its loop and its local tasks. No borrow is held across an await.
 struct State<T: Transport> {
     transport: T,
+    /// The actor's queue and its chat actions' timing.
+    wiring: Wiring,
+    /// The panes a chat action is running on: one at a time each.
+    acting: RefCell<HashSet<ChatKey>>,
     sink: Arc<dyn EventSink>,
     /// The live connections, each with the machine record it was made from.
     connections: RefCell<HashMap<String, Link<T::Connection>>>,
@@ -269,9 +311,11 @@ struct Attempt {
 type Reply = oneshot::Sender<Result<(), MobileError>>;
 
 impl<T: Transport> State<T> {
-    fn new(transport: T, sink: Arc<dyn EventSink>, notes: pane::Notes) -> Self {
+    fn new(transport: T, sink: Arc<dyn EventSink>, notes: pane::Notes, wiring: Wiring) -> Self {
         Self {
             transport,
+            wiring,
+            acting: RefCell::new(HashSet::new()),
             sink,
             connections: RefCell::new(HashMap::new()),
             attempts: RefCell::new(HashMap::new()),
@@ -327,9 +371,14 @@ impl<T: Transport> State<T> {
     }
 }
 
-async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mpsc::UnboundedReceiver<Command>) {
+async fn run<T: Transport>(
+    transport: T,
+    sink: Arc<dyn EventSink>,
+    mut queue: mpsc::UnboundedReceiver<Command>,
+    wiring: Wiring,
+) {
     let (notes, inbox) = mpsc::unbounded_channel();
-    let state = Rc::new(State::new(transport, sink, notes));
+    let state = Rc::new(State::new(transport, sink, notes, wiring));
     let ticker = tokio::task::spawn_local(tick(Rc::downgrade(&state))).abort_handle();
     let pane_notes = tokio::task::spawn_local(pane_notes(Rc::downgrade(&state), inbox)).abort_handle();
     while let Some(command) = queue.recv().await {
@@ -390,6 +439,7 @@ async fn run<T: Transport>(transport: T, sink: Arc<dyn EventSink>, mut queue: mp
             | Command::CloseChat(_)
             | Command::LoadOlder { .. }
             | Command::AgentCommands { .. }) => chats::command(&state, command),
+            command @ (Command::PaneInput { .. } | Command::ApprovalLabels { .. }) => inputs::command(&state, command),
             command => pane_command(&state, command),
         }
     }
@@ -986,7 +1036,8 @@ fn show_pane<T: Transport>(state: &Rc<State<T>>, pane: &PaneRef, size: PaneSize)
     };
     let (slot, events) = state.panes.borrow_mut().show(target, connection, size.into())?;
     state.emit_all(events);
-    Ok(Arc::new(Pane::new(pane.pane_id.to_uppercase(), slot)))
+    let handle = Pane::new(pane.pane_id.to_uppercase(), slot).acting(pane.clone(), state.wiring.commands.clone());
+    Ok(Arc::new(handle))
 }
 
 /// Hands each note of the panes' threads and tasks to the panes, while the actor runs.

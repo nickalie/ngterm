@@ -17,24 +17,25 @@ use ngterm_proto::ControlLiveEndpoint;
 use uuid::Uuid;
 
 use crate::api::{EventSink, Machine, MachineState, MobileCore, MobileEvent, Pane, PaneInputError, PaneSize};
+use crate::chat::input::InputTiming;
 use crate::pane::{ClipboardReply, PaneClipboard, PaneEnd, PaneRef, PaneRole};
 use crate::transport::fake::{FakeTransport, Opened, Script};
 use crate::transport::russh::CONNECTION_LOST;
 use crate::transport::{ChannelEnd, ChannelInput, ChannelPeer};
 
-const WAIT: Duration = Duration::from_secs(10);
-const QUIET: Duration = Duration::from_millis(300);
-const MACHINE: &str = "m1";
-const SESSION: &str = "00000000-0000-0000-0000-0000000000A1";
-const PANE: &str = "00000000-0000-0000-0000-0000000000B1";
-const SIZE: PaneSize = PaneSize {
+pub(super) const WAIT: Duration = Duration::from_secs(10);
+pub(super) const QUIET: Duration = Duration::from_millis(300);
+pub(super) const MACHINE: &str = "m1";
+pub(super) const SESSION: &str = "00000000-0000-0000-0000-0000000000A1";
+pub(super) const PANE: &str = "00000000-0000-0000-0000-0000000000B1";
+pub(super) const SIZE: PaneSize = PaneSize {
     cols: 80,
     rows: 24,
     cell_width: 9,
     cell_height: 18,
 };
 
-struct Recorder(Mutex<Sender<MobileEvent>>);
+pub(super) struct Recorder(Mutex<Sender<MobileEvent>>);
 
 impl EventSink for Recorder {
     fn on_event(&self, event: MobileEvent) {
@@ -42,15 +43,15 @@ impl EventSink for Recorder {
     }
 }
 
-fn pane_uuid() -> Uuid {
+pub(super) fn pane_uuid() -> Uuid {
     Uuid::parse_str(PANE).unwrap()
 }
 
-fn daemon() -> String {
+pub(super) fn daemon() -> String {
     daemon_name(pane_uuid())
 }
 
-fn endpoint() -> ControlLiveEndpoint {
+pub(super) fn endpoint() -> ControlLiveEndpoint {
     ControlLiveEndpoint {
         executable: "/ngterm-session".to_owned(),
         socket_directory: "/tmp/ngterm-live-x".to_owned(),
@@ -58,7 +59,7 @@ fn endpoint() -> ControlLiveEndpoint {
 }
 
 /// The machine's listing, holding the session with its one pane or not.
-fn listing(with_session: bool) -> Script {
+pub(super) fn listing(with_session: bool) -> Script {
     let sessions = if with_session {
         serde_json::json!([{
             "id": SESSION, "name": "main", "windowID": "w1", "windowName": "main", "workspaceID": "ws1",
@@ -75,7 +76,7 @@ fn listing(with_session: bool) -> Script {
     Script::ok(&serde_json::json!({"ok": true, "result": {"remote": remote}}).to_string())
 }
 
-fn reference() -> PaneRef {
+pub(super) fn reference() -> PaneRef {
     PaneRef {
         machine_id: MACHINE.to_owned(),
         session_id: SESSION.to_owned(),
@@ -84,7 +85,7 @@ fn reference() -> PaneRef {
 }
 
 /// The lead words of an attach command: its nonce, and whether it claims.
-fn lead_of(command: &str) -> LeadAttachment {
+pub(super) fn lead_of(command: &str) -> LeadAttachment {
     let at = command.find("NGTERM_LIVE_MANAGED=").unwrap() + "NGTERM_LIVE_MANAGED=".len();
     let nonce: String = command[at..].chars().take_while(char::is_ascii_hexdigit).collect();
     LeadAttachment {
@@ -94,30 +95,35 @@ fn lead_of(command: &str) -> LeadAttachment {
 }
 
 /// A role report as the attach client titles it.
-fn role_title(nonce: &str, role: &str, generation: u32) -> Vec<u8> {
+pub(super) fn role_title(nonce: &str, role: &str, generation: u32) -> Vec<u8> {
     format!("\x1b]2;{}{nonce}:{role}:{generation}\x07", LeadNotice::PREFIX).into_bytes()
 }
 
-struct Fixture {
-    core: Arc<MobileCore>,
-    transport: FakeTransport,
-    events: Receiver<MobileEvent>,
+pub(super) struct Fixture {
+    pub(super) core: Arc<MobileCore>,
+    pub(super) transport: FakeTransport,
+    pub(super) events: Receiver<MobileEvent>,
     /// Channels opened and not yet taken by a test.
     stash: Vec<Opened>,
 }
 
 impl Fixture {
     /// A core connected to the machine, its listing read.
-    fn connected() -> Self {
+    pub(super) fn connected() -> Self {
         Self::connected_with(vec![listing(true)])
     }
 
-    fn connected_with(listings: Vec<Script>) -> Self {
+    pub(super) fn connected_with(listings: Vec<Script>) -> Self {
+        Self::connected_timed(listings, InputTiming::default())
+    }
+
+    /// A core connected to the machine, its listing read from `listings`, its chat actions timed by `timing`.
+    pub(super) fn connected_timed(listings: Vec<Script>, timing: InputTiming) -> Self {
         let transport = FakeTransport::new();
         transport.script_sequence(&tree_tail(), listings);
         let (events, received) = mpsc::channel();
         let sink: Arc<dyn EventSink> = Arc::new(Recorder(Mutex::new(events)));
-        let core = MobileCore::with_transport(transport.clone(), sink).unwrap();
+        let core = MobileCore::with_timing(transport.clone(), sink, timing).unwrap();
         let machine = Machine {
             id: MACHINE.to_owned(),
             label: "box".to_owned(),
@@ -138,7 +144,7 @@ impl Fixture {
         }
     }
 
-    fn show(&self) -> Arc<Pane> {
+    pub(super) fn show(&self) -> Arc<Pane> {
         block_on(
             self.core
                 .show_pane(MACHINE.to_owned(), SESSION.to_owned(), PANE.to_owned(), SIZE),
@@ -147,7 +153,7 @@ impl Fixture {
     }
 
     /// The next channel opened that `matches`, waiting for it.
-    fn opened(&mut self, matches: impl Fn(&Opened) -> bool) -> Opened {
+    pub(super) fn opened(&mut self, matches: impl Fn(&Opened) -> bool) -> Opened {
         let deadline = Instant::now() + WAIT;
         loop {
             self.stash.extend(self.transport.take_opened());
@@ -160,19 +166,19 @@ impl Fixture {
     }
 
     /// The next pane attach opened.
-    fn attach(&mut self) -> Opened {
+    pub(super) fn attach(&mut self) -> Opened {
         self.opened(|opened| opened.pty.is_some())
     }
 
     /// Whether a pane attach opens within [`QUIET`].
-    fn attaches_soon(&mut self) -> bool {
+    pub(super) fn attaches_soon(&mut self) -> bool {
         thread::sleep(QUIET);
         self.stash.extend(self.transport.take_opened());
         self.stash.iter().any(|opened| opened.pty.is_some())
     }
 
     /// The next event `matches` takes, skipping the others.
-    fn next<T>(&self, matches: impl Fn(MobileEvent) -> Option<T>) -> T {
+    pub(super) fn next<T>(&self, matches: impl Fn(MobileEvent) -> Option<T>) -> T {
         let deadline = Instant::now() + WAIT;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -188,7 +194,7 @@ impl Fixture {
     }
 
     /// Every event that arrives within [`QUIET`].
-    fn quiet(&self) -> Vec<MobileEvent> {
+    pub(super) fn quiet(&self) -> Vec<MobileEvent> {
         thread::sleep(QUIET);
         self.events.try_iter().collect()
     }
@@ -200,28 +206,31 @@ impl Fixture {
         })
     }
 
-    fn lead(&self) -> (Option<PaneRole>, bool) {
+    pub(super) fn lead(&self) -> (Option<PaneRole>, bool) {
         self.next(|event| match event {
             MobileEvent::PaneLead { pane, role, covered } if pane == reference() => Some((role, covered)),
             _ => None,
         })
     }
 
-    fn attached(&self) {
+    pub(super) fn attached(&self) {
         self.next(|event| matches!(event, MobileEvent::PaneAttached { pane } if pane == reference()).then_some(()));
     }
 
-    fn dirty(&self) {
+    pub(super) fn dirty(&self) {
         self.next(|event| matches!(event, MobileEvent::PaneDirty { .. }).then_some(()));
     }
 }
 
-fn send(peer: &ChannelPeer, bytes: &[u8]) {
+pub(super) fn send(peer: &ChannelPeer, bytes: &[u8]) {
     assert!(block_on(peer.data(bytes.to_vec())), "the feeder reads the channel");
 }
 
 /// What the core sent down `peer` until `done` holds for it: the bytes, and the other inputs in order.
-fn inputs_until(peer: &mut ChannelPeer, done: impl Fn(&[u8], &[ChannelInput]) -> bool) -> (Vec<u8>, Vec<ChannelInput>) {
+pub(super) fn inputs_until(
+    peer: &mut ChannelPeer,
+    done: impl Fn(&[u8], &[ChannelInput]) -> bool,
+) -> (Vec<u8>, Vec<ChannelInput>) {
     let deadline = Instant::now() + WAIT;
     let (mut bytes, mut others) = (Vec::new(), Vec::new());
     while !done(&bytes, &others) {
@@ -241,7 +250,7 @@ fn inputs_until(peer: &mut ChannelPeer, done: impl Fn(&[u8], &[ChannelInput]) ->
     (bytes, others)
 }
 
-fn contains(bytes: &[u8], needle: &[u8]) -> bool {
+pub(super) fn contains(bytes: &[u8], needle: &[u8]) -> bool {
     bytes.windows(needle.len()).any(|window| window == needle)
 }
 

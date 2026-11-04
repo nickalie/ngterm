@@ -572,27 +572,46 @@ with no output yet is a running call (Task 1's fixture README).
 **Files:**
 - Create: `crates/ngterm-mobile/src/chat/{matchers,input}.rs`, `crates/ngterm-mobile/src/chat/tests/{matchers,input}.rs`
 - Modify: `crates/ngterm-mobile/src/api/pane.rs`, `crates/ngterm-mobile/src/pane.rs`
+- Created as well: `crates/ngterm-mobile/src/actor/{inputs,input_tests}.rs` (the actions on the actor, and the
+  sequence tests through the whole core over the fake transport; `chat/tests/input.rs` holds the plans and their key
+  bytes). Modified as well: `src/{actor,api,chat,lib}.rs`, the Kotlin `FakePane` (+ `FakePaneTest`).
+- As built:
+  - `Pane::send_prompt(text)`, `interrupt()`, `answer_approval(label)`, `answer_question(question: ChatQuestion,
+    answers: Vec<QuestionAnswer { picked, other }>)` are `suspend` calls answering `AgentInputOutcome`: `Sent`,
+    `NotOnScreen`, `DialogOpen`, `LeadRefused`, and `Unconfirmed` (keys went, then the screen was not as expected:
+    the dialog stayed up, a step's result did not show, the lead went). Every other outcome means nothing was sent.
+  - `Pane::approval_labels()` gives the card its buttons: the dialog's labels read from the screen now (no claim), or
+    the agent's own set (Claude `Yes`/`No`; Codex `Yes, proceed`/`No, and tell Codex what to do differently`).
+    `answer_approval` matches a label whitespace aside, so a label read at another width still finds its option.
+  - The agent comes from the presentation stream's announcement; a pane with none the core knows is refused.
+  - Keys: Claude's options by digit; Codex's by the key its option names (`y`, `p`, Escape for `(esc)`); a multi-select
+    question's boxes are toggled to the answer, each at most once, then Tab; "Type something." is its digit, a paste,
+    then Enter (single) or Tab (multi), each step checked on screen; the review tab's Enter only on
+    `❯ 1. Submit answers`. Paste and Enter, and the multi-select free-text path, were not recorded in Task 1: the
+    post-step checks turn a different behavior into `Unconfirmed` rather than a wrong key.
+  - Settled: a role report of `Leader` for the claim's attach (10 s at most), then no new bytes, frame (a frame held by
+    synchronized output counts as not settled) or grid for 150 ms, or 1 s at most (a spinner never goes quiet).
 
-- [ ] write matcher tests first on Task 1's PTY captures, replayed through libghostty-vt into rows at each recorded
+- [x] write matcher tests first on Task 1's PTY captures, replayed through libghostty-vt into rows at each recorded
       width:
   - each agent's permission dialog yields its option labels and keys;
   - the picker yields its questions and options;
   - the idle prompt and a working turn are recognized;
   - negatives: a dialog that has scrolled away, a half-drawn frame, a user's shell output that quotes a dialog, and
     another agent's dialog.
-- [ ] write the sequence tests first on the fake:
+- [x] write the sequence tests first on the fake:
   - a follower claims the lead, waits for `Leader` and the settled redraw, re-matches, then sends;
   - a lead claim that fails or times out sends nothing;
   - the dialog vanishing during the claim gives `NotOnScreen`;
   - a leader skips the claim;
   - opening or reading the chat never claims the lead.
-- [ ] implement the per-agent matchers and `Pane::send_prompt`, `interrupt`, `answer_approval(label)` and
+- [x] implement the per-agent matchers and `Pane::send_prompt`, `interrupt`, `answer_approval(label)` and
       `answer_question(selection, other)`, with the outcomes `NotOnScreen`, `DialogOpen` and `LeadRefused`
-- [ ] test the key sequences each call sends (bracketed paste and Enter; the slash-command form per Task 1; the
+- [x] test the key sequences each call sends (bracketed paste and Enter; the slash-command form per Task 1; the
       interrupt key; option keys; picker keys)
-- [ ] the hidden pane in chat mode keeps the grid the terminal view would have, so a claim lays the TUI out for the
+- [x] the hidden pane in chat mode keeps the grid the terminal view would have, so a claim lays the TUI out for the
       phone. Test that switching Chat ↔ Terminal does not resize.
-- [ ] `cargo test -p ngterm-mobile` must pass
+- [x] `cargo test -p ngterm-mobile` must pass
 
 ### Task 13: Android: chat data, view model, Settings and mode switching
 

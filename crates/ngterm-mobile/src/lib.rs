@@ -14,7 +14,8 @@
 //! show), [`pane`] (shown panes: their attach, terminal, leadership, ends and clipboard reads), [`reconnect`] (keeping
 //! machines connected: lost connections, network changes, suspend and resume), [`rows`] (the packed row buffer a pane
 //! is drawn from), [`chat`] (the agent chat view: what each pane runs, the chat channels of the panes shown as a chat,
-//! their older pages and the agents' slash-command catalogs).
+//! their older pages and the agents' slash-command catalogs; the screen matchers and the actions that take the lead and
+//! answer the agent in its pane, [`chat::input`]).
 //!
 //! Threading model:
 //! - One [`actor`] thread per [`MobileCore`] runs a current-thread tokio runtime and a `LocalSet`. It owns the
@@ -52,6 +53,7 @@ pub use api::{
     PaneColors, PaneInputError, PaneKey, PaneKeyAction, PaneMouse, PaneMouseAction, PaneMouseButton, PaneSendOutcome,
     PaneSize, PaneWheel, PaneWheelOutcome, VaultError,
 };
+pub use chat::input::{AgentInputOutcome, QuestionAnswer};
 pub use chat::{
     AgentCommand, AgentCommandKind, ChatApproval, ChatBody, ChatEvent, ChatNoticeKind, ChatQuestion, ChatQuestionItem,
     ChatQuestionOption, ChatState, ChatTool, ChatToolKind, ChatToolStatus, filter_commands,
