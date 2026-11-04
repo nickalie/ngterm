@@ -19,7 +19,7 @@
 # basic (MIT, actions/cache) provider.
 #
 # Path-filtered to what the app builds from: the mobile core and the crates it builds on, the crates the e2e test
-# stages, the workspace manifest, lock file and toolchain, mobile/, the scripts, patches and
+# stages, the workspace manifest, lock file and toolchain, mobile/android/, the scripts, patches and
 # pins of its toolchain, and this file. Pushes to a `ci/**` branch run it too, as they do cross-platform.yml, and it
 # can be run by hand (a `ci/**` branch made at a commit another branch already holds changes no file, so no path
 # filter matches it).
@@ -50,7 +50,7 @@ on:
       - Cargo.lock
       - rust-toolchain.toml
       - .cargo/**
-      - mobile/**
+      - mobile/android/**
       - scripts/build-android.sh
       - scripts/setup-android.sh
       - scripts/build-ghostty-vt.sh

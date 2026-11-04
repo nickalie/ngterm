@@ -1,0 +1,30 @@
+{
+  "configurations" : [
+    {
+      "id" : "0E4C7B1A-3F25-4C8D-A6B9-5D2E1F0C7B02",
+      "name" : "Default",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "language" : "en",
+    "region" : "US",
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:NgTerm.xcodeproj",
+      "identifier" : "4E0000000000000000000010",
+      "name" : "NgTerm"
+    }
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:NgTerm.xcodeproj",
+        "identifier" : "4E0000000000000000000012",
+        "name" : "NgTermUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

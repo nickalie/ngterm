@@ -1,0 +1,44 @@
+{
+  "configurations" : [
+    {
+      "id" : "6B1F3C52-6E1A-4D0B-9C1E-2A7D5E8F9A01",
+      "name" : "Default",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "language" : "en",
+    "region" : "US",
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:NgTerm.xcodeproj",
+      "identifier" : "4E0000000000000000000010",
+      "name" : "NgTerm"
+    }
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:NgTerm.xcodeproj",
+        "identifier" : "4E0000000000000000000011",
+        "name" : "NgTermTests"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:Packages\/NgtermCore",
+        "identifier" : "NgtermCoreTests",
+        "name" : "NgtermCoreTests"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:Packages\/NgtermDesign",
+        "identifier" : "NgtermDesignTests",
+        "name" : "NgtermDesignTests"
+      }
+    }
+  ],
+  "version" : 1
+}
