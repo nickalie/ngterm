@@ -7,7 +7,9 @@
 //! it makes each page's web view, moves, shows and focuses them, closes released ones and clears the saved store, all
 //! outside GPUI's callbacks (making a web view pumps the window's messages, a focus change sends the window messages
 //! at once, either of which would reach GPUI while its state is borrowed), and hands each web view's reports to its
-//! page inside one. The runtime is checked at the start ([`install`], `runtime`); without it every page is refused.
+//! page inside one. On Windows the pump hands the work that waits on `WebView2` (making a web view, the clear's hidden
+//! one) to the main loop (`outside`), where GPUI's tasks, the control socket's included, keep running meanwhile. The
+//! runtime is checked at the start ([`install`], `runtime`); without it every page is refused.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -214,7 +216,7 @@ pub fn init(cx: &mut App) {
 /// One of the pump's jobs: the web views' work outside GPUI's callbacks, the pages' inside one.
 fn run(job: Job, cx: &mut AsyncApp) {
     match job {
-        Job::Build(id) => build(id),
+        Job::Build(id) => outside_tasks(Box::new(move || build(id))),
         Job::DocumentLoaded(id, generation, result) => cx.update(|_| document_loaded(id, generation, result)),
         Job::Sync(id) => {
             if let Some(page) = page(id) {
@@ -236,7 +238,7 @@ fn run(job: Job, cx: &mut AsyncApp) {
                 }
             }
         }
-        Job::Clear => clear(),
+        Job::Clear => outside_tasks(Box::new(clear)),
         Job::Cleared(result) => with(|registry| {
             registry.clearing = false;
             if let Err(err) = &result {
@@ -247,9 +249,20 @@ fn run(job: Job, cx: &mut AsyncApp) {
     }
 }
 
+/// Runs `work`, which waits on `WebView2`, where GPUI's tasks keep running meanwhile: from the main loop on Windows
+/// (`outside`), in place where making a web view waits for nothing.
+fn outside_tasks(work: Box<dyn FnOnce()>) {
+    #[cfg(windows)]
+    super::outside::run(work);
+    #[cfg(not(windows))]
+    work();
+}
+
 /// Ends the pages at the quit. Their web views are let go, not closed: a close sends the window messages while the
 /// app is quitting inside GPUI's callbacks, and `WebView2`'s processes end with the app's.
 pub fn shutdown() {
+    #[cfg(windows)]
+    super::outside::quit();
     let (pages, buried) = with(|registry| {
         registry.failure = Some("the app is quitting".to_owned());
         (

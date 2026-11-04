@@ -10,7 +10,7 @@
 //! permissions, downloads, dropped files, devtools and the browser's own accelerator keys (upstream's pages are not
 //! inspectable either), and the context menu's items that would save, print, share, inspect or open a window. Making
 //! a web view pumps the window's messages until `WebView2` answers, so it never runs inside one of GPUI's callbacks
-//! (`registry`'s pump makes them).
+//! or tasks (`registry`'s pump hands it to the main loop, `outside`).
 
 use std::cell::RefCell;
 use std::num::NonZeroIsize;
