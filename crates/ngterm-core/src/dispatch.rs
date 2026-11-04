@@ -224,6 +224,11 @@ fn result_of(value: &impl Serialize) -> Result<Response, ControlError> {
         .map_err(|_| ControlError::Encode)
 }
 
+/// The response carrying `value` as its result, or a bare success for a command that answers none.
+fn result_or_success(value: Option<impl Serialize>) -> Result<Response, ControlError> {
+    value.map_or_else(|| Ok(Response::success()), |value| result_of(&value))
+}
+
 impl Core {
     /// A core over `state`.
     #[must_use]
@@ -821,10 +826,7 @@ impl Core {
                 | SessionCmd::Context
                 | SessionCmd::Info
                 | SessionCmd::Seen),
-            ) => match commands::metadata::dispatch(self, cmd, request)? {
-                Some(result) => result_of(&result),
-                None => Ok(Response::success()),
-            },
+            ) => result_or_success(commands::metadata::dispatch(self, cmd, request)?),
             Command::Session(cmd @ (SessionCmd::HudOpen | SessionCmd::HudUpdate | SessionCmd::HudClose)) => {
                 result_of(&commands::hud::dispatch(self, cmd, request)?)
             }
@@ -848,26 +850,11 @@ impl Core {
             Command::Msg(cmd) => result_of(&commands::messages::dispatch(self, cmd, request)?),
             Command::Session(cmd) => result_of(&commands::session::dispatch(self, cmd, request)?),
             Command::Window(cmd) => result_of(&commands::window::dispatch(self, cmd, request)?),
-            Command::Workspace(cmd) => match commands::workspace::dispatch(self, cmd, request)? {
-                Some(result) => result_of(&result),
-                None => Ok(Response::success()),
-            },
-            Command::Surface(cmd) => match commands::surface_target::dispatch(self, cmd, request)? {
-                Some(result) => result_of(&result),
-                None => Ok(Response::success()),
-            },
-            Command::Quick(cmd) => match commands::quick::dispatch(self, cmd, request)? {
-                Some(result) => result_of(&result),
-                None => Ok(Response::success()),
-            },
-            Command::Dashboard => match commands::dashboard::dispatch(self, request)? {
-                Some(result) => result_of(&result),
-                None => Ok(Response::success()),
-            },
-            Command::Sidebar(cmd) => match commands::sidebar::dispatch(self, cmd, request)? {
-                Some(result) => result_of(&result),
-                None => Ok(Response::success()),
-            },
+            Command::Workspace(cmd) => result_or_success(commands::workspace::dispatch(self, cmd, request)?),
+            Command::Surface(cmd) => result_or_success(commands::surface_target::dispatch(self, cmd, request)?),
+            Command::Quick(cmd) => result_or_success(commands::quick::dispatch(self, cmd, request)?),
+            Command::Dashboard => result_or_success(commands::dashboard::dispatch(self, request)?),
+            Command::Sidebar(cmd) => result_or_success(commands::sidebar::dispatch(self, cmd, request)?),
             Command::Ask(cmd) => result_of(&commands::ask::dispatch(self, cmd, request)?),
             Command::Font(cmd) => result_of(&commands::font::dispatch(self, cmd, request)?),
             Command::Theme(cmd) => result_of(&commands::theme::dispatch(self, cmd, request)?),
@@ -877,19 +864,13 @@ impl Core {
             Command::Events(EventsCmd::Read) => self.read_events(request.args.as_ref()),
             Command::Version => result_of(&self.version()),
             Command::Tree => self.requested_tree(request),
-            Command::Restore(cmd) => match commands::restore::dispatch_group(self, cmd, request)? {
-                Some(result) => result_of(&result),
-                None => Ok(Response::success()),
-            },
+            Command::Restore(cmd) => result_or_success(commands::restore::dispatch_group(self, cmd, request)?),
             Command::Browser(BrowserCmd::Links) => result_of(&commands::browser::links(self, request)?),
             Command::Debug(DebugCmd::Appearance) => result_of(&commands::debug::appearance(self, request)?),
             Command::Live(cmd) if commands::live::answers(cmd) => {
                 result_of(&commands::live::dispatch(self, cmd, request)?)
             }
-            Command::Recent(cmd) => match commands::recent::dispatch(self, cmd, request)? {
-                Some(result) => result_of(&result),
-                None => Ok(Response::success()),
-            },
+            Command::Recent(cmd) => result_or_success(commands::recent::dispatch(self, cmd, request)?),
             Command::Agent(cmd) => result_of(&commands::agent::dispatch(self, cmd, request)?),
             // `browser.clear` and `config.reload` start through `deferred`
             cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_)) => {

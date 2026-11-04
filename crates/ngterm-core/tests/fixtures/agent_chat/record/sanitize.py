@@ -6,7 +6,8 @@
     sanitize.py env IN OUT --map OLD=NEW ... [--user NAME]     # a hook's KEY=VALUE environment
     sanitize.py bin IN OUT --map OLD=NEW ... [--user NAME]     # a PTY capture: same-length swaps only
 
-`--map` pairs apply in order to every string (put the longest paths first). `--user NAME` then
+`--map` pairs apply in order to every string (put the longest paths first; a recording carries the
+recorder's time zone too, so map its name to a neutral one of the same length). `--user NAME` then
 rewrites the word NAME to `user`. A capture keeps its byte offsets (its marks point into it), so
 `bin` takes only same-length pairs and refuses others.
 
@@ -35,16 +36,12 @@ class Rewriter:
     def __init__(self, pairs, user):
         self.pairs = pairs
         self.user = re.compile(rf"\b{re.escape(user)}\b") if user else None
-        # Recordings carry the recorder's time zone; swap it for a neutral one of the same length.
-        self.tz = [("Europe/Istanbul", "Europe/Brussels"), ("Istanbul", "Brussels")]
 
     def text(self, s):
         for old, new in self.pairs:
             s = s.replace(old, new)
         if self.user:
             s = self.user.sub("user", s)
-        for old, new in self.tz:
-            s = s.replace(old, new)
         return s
 
     def value(self, v, key=None):
@@ -147,7 +144,7 @@ def env(args, rw):
 def binary(args, rw):
     with open(args.inp, "rb") as f:
         data = f.read()
-    pairs = [(o.encode(), n.encode()) for o, n in rw.pairs + rw.tz]
+    pairs = [(o.encode(), n.encode()) for o, n in rw.pairs]
     for old, new in pairs:
         if len(old) != len(new):
             sys.exit(f"bin: {old!r} -> {new!r} changes the length")

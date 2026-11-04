@@ -814,17 +814,77 @@ with no output yet is a running call (Task 1's fixture README).
 
 ### Task 18: Verify acceptance criteria
 
-- [ ] every Overview point works:
+- As built: `origin/main` had moved on by 54 commits (the agterm v0.40.0 sync: the `msg` group, `session.info`,
+  companion pages), and a PR in conflict runs no CI, so `origin/main` was merged into the branch (a merge commit, no
+  rebase or force). Both sides were kept: 25 groups and 133 commands (`agent` beside `msg`), the `agent` and
+  `companion.page` presentation kinds (18 supported kinds plus the opt-in `agent`), and both sections of
+  `rust-build.md`. The merge took `Core::route` one line past clippy's 80, so its eight "result or a bare success"
+  arms share `result_or_success`. `sanitize.py` no longer hard-codes the recorder's time zone (it is a `--map` pair).
+- Each Overview point, and the tests that prove it (no device: unit, Robolectric/Roborazzi and the headless e2e):
+  - **Chat in place of the terminal, the TUI unchanged underneath:** `SessionViewTest`
+    (`aPaneInChatViewDrawsItsChatInTheTerminalsPlaceAtTheSameGrid`), `ChatModeTest`
+    (`aShownPaneWhoseOriginAnnouncesAnAgentSwitchesToItsChat`: the pane's own attach stays), the e2e
+    (`headless_e2e.rs`, `Scene::agent_chat`: the tablet keeps the TUI as its leader, then as a follower).
+  - **The full loop:** reading: the parsers' goldens (`agent_chat/tests/{claude,codex}.rs`), the follower
+    (`agent_chat/tests/follow.rs`), `chat_tests.rs` (in order, by id, paging, resume with no repeats or gaps, reset),
+    `ChatViewModelTest`, and the e2e (backlog, following, paging to the start, resume after a severed link). Prompts:
+    `chat/tests/input.rs` (`a_prompt_is_pasted_whole_then_entered_once_the_prompt_shows_it`), `input_tests.rs`
+    (`a_prompt_is_pasted_then_entered_and_a_second_action_waits_its_turn`), `ChatComposerTest`
+    (`sendTakesTheDraftAndLetsItGoOnceSent`), the e2e (`send_prompt` reaches the pane's rows and the transcript).
+    Approvals: `commands/tests/agent.rs` (`a_candidate_is_an_approval_only_while_the_pane_is_blocked_and_done_once_it_leaves`),
+    `chat/tests/input.rs` (`an_approval_sends_its_options_key_and_looks_that_the_dialog_went`), `input_tests.rs`
+    (`an_approval_answers_the_live_dialog_never_one_scrolled_back_to`), `ChatScreenTest`
+    (`anApprovalCardIsAHeadingWithTheDialogsOptions`), `ChatViewModelTest`
+    (`anApprovalCardComesWithItsLabelsAndGoesWhenAnsweredAnywhere`), the e2e (a reported `PermissionRequest` while
+    `blocked` is an `Approval`, `active` is its `ApprovalDone`). `AskUserQuestion`: `chat/tests/input.rs`
+    (`a_lone_question_is_answered_by_its_digit_or_by_typed_text`,
+    `two_questions_go_tab_by_tab_toggling_boxes_then_submit_on_the_review`), `ChatScreenTest`
+    (`aQuestionCardSendsOnceEveryQuestionIsAnswered`), `ChatViewModelTest`
+    (`aQuestionCardComesUpWhileItRunsAndGoesOnceAnswered`). Stop is Esc: `chat/tests/input.rs`
+    (`stop_is_escape_and_only_while_a_turn_runs`), `input_tests.rs` (`stop_sends_escape_to_a_working_turn_and_nothing_to_an_idle_one`).
+  - **The `/` dropdown narrowing as you type:** `chat/tests.rs` (`the_dropdown_ranks_by_name_as_the_picker_does`,
+    through `fuzzy_rank`), `ChatComposerTest` (`aSlashAtTheStartOpensTheMenuWithTheWholeCatalog`,
+    `eachKeystrokeNarrowsItThroughFilterCommands`, `pickingACommandPutsItInTheFieldWithASpace`), `ComposerScreenTest`
+    (`typingASlashOpensTheMenuAndARowGoesInWithTheFieldKeepingTheFocus`), the catalog's own tests on temp config
+    trees (`agent_chat/tests/catalog.rs`), and the `menu*` goldens.
+  - **The Settings toggle, and the toolbar switch with its sticky Terminal choice:** `StoresTest` (on by default,
+    kept), `SettingsAgentChatTest` (new here: the Settings row is on, a tap stores it off and on again),
+    `ChatModeTest` (`withTheSettingOffEveryPaneShowsItsTerminal`, `pickingTheTerminalHoldsUntilThePanesNextConversation`,
+    `theAgentEndingReturnsThePaneToItsTerminal`), `SessionViewTest`
+    (`theBarSwitchesAPaneRunningAnAgentBetweenItsChatAndItsTerminal`).
+  - **Lead taken only on action:** `input_tests.rs` (`a_follower_claims_the_lead_waits_for_the_redraw_then_answers`,
+    `a_leader_skips_the_claim`, `a_claim_refused_or_unanswered_sends_nothing`,
+    `reading_the_chat_and_switching_it_with_the_terminal_never_claim_or_resize`), `ChatModeTest` (opening a chat calls
+    no `takeLead`), the e2e (the phone follows while it reads, and `send_prompt` from the follower makes it the
+    leader at its grid and the tablet a follower).
+  - **An older origin falling back to the terminal:** `chat_tests.rs`
+    (`an_origin_without_the_chat_command_degrades_to_the_terminal_with_no_error`,
+    `an_origin_that_never_announces_an_agent_reports_none`), `ChatModeTest`
+    (`aChatTheOriginCantOpenLeavesTheTerminalWithNoError`), `ChatComposerTest`
+    (`anEmptyCatalogShowsAQuietRowNeverAnError`).
+  - **Mobile-only (the desktop unchanged):** the catalog tests (`command_wire_names_equal_catalog_commands`,
+    `the_command_tree_is_the_catalogs_cli`, with `RUST_ONLY_*`), `hub.rs` (`an_opt_in_kind_reaches_only_a_viewer_that_listed_it`),
+    `client.rs` (`a_viewer_showing_agents_lists_the_kind_and_reports_its_frames_and_any_other_drops_them`),
+    `commands/tests/agent.rs` (`the_record_never_reaches_the_snapshot_or_the_tree`); the branch touches no
+    `ngterm-gpui` file.
+  - **Platforms:** the hooks' POSIX and PowerShell forms (`ngterm-app`'s `adapter_tests.rs`, e.g.
+    `a_prompt_and_a_permission_request_pipe_their_payload_to_agent_hook`,
+    `codex_start_prompt_and_permission_request_pipe_their_payload_to_agent_hook`), the follower and the catalog run in
+    CI on Linux, macOS and Windows.
+
+- [x] every Overview point works:
   - chat in place of the terminal, and the full loop;
   - the `/` dropdown narrowing as you type;
   - the Settings toggle, and the toolbar switch with its sticky Terminal choice;
   - lead taken only on action;
   - an older origin falling back to the terminal.
-- [ ] the desktop is unchanged: `cargo test -p ngterm-core -p ngterm-server -p ngterm-ctl -p ngterm-app`, scoped to
+- [x] the desktop is unchanged: `cargo test -p ngterm-core -p ngterm-server -p ngterm-ctl -p ngterm-app`, scoped to
       the touched crates, with the catalog tests green
-- [ ] `cargo test -p ngterm-mobile`, `scripts/test-mobile-e2e.sh` and `scripts/build-android.sh check`
+- [x] `cargo test -p ngterm-mobile`, `scripts/test-mobile-e2e.sh` and `scripts/build-android.sh check` (the check run
+      as the same `gradle spotlessApply check` through a helper that strips `NGTERM_*`)
 - [ ] strict clippy on the touched crates; CI green on Linux, macOS and Windows
-- [ ] a revmux round over the whole change, with its verified findings fixed
+- [x] a revmux round over the whole change, with its verified findings fixed (run by the orchestrator as Task 18's
+      review; see progress.txt)
 
 ### Task 19: [Final] Update documentation
 
