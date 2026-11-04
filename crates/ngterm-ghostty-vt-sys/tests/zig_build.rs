@@ -37,6 +37,7 @@ fn plan(out_dir: &Path, target: &str, macos: Option<&str>) -> Build {
         out_dir,
         target,
         macos_deployment_target: macos,
+        ios_deployment_target: None,
         android_platform: None,
         android_ndk: None,
         jobs: Some("10"),
@@ -52,7 +53,7 @@ fn after<'a>(args: &'a [OsString], flag: &str) -> &'a Path {
 
 #[test]
 fn the_map_targets_linux_at_the_glibc_floor_and_macos_at_its_deployment_target() {
-    let target = |cargo, macos| zig_build::zig_target(cargo, macos, None).unwrap();
+    let target = |cargo, macos| zig_build::zig_target(cargo, macos, None, None).unwrap();
     assert_eq!(target("x86_64-unknown-linux-gnu", None), "x86_64-linux-gnu.2.39");
     assert_eq!(target("aarch64-unknown-linux-gnu", None), "aarch64-linux-gnu.2.39");
     assert_eq!(target("x86_64-unknown-linux-musl", None), "x86_64-linux-musl");
@@ -66,7 +67,7 @@ fn the_map_targets_linux_at_the_glibc_floor_and_macos_at_its_deployment_target()
     assert_eq!(target("aarch64-apple-darwin", Some("13.0.0")), "aarch64-macos.13.0.0");
     assert_eq!(target("aarch64-apple-darwin", Some(" ")), "aarch64-macos.13.0");
     for refused in ["11.0", "12.7.6", "13.x"] {
-        let error = zig_build::zig_target("aarch64-apple-darwin", Some(refused), None).unwrap_err();
+        let error = zig_build::zig_target("aarch64-apple-darwin", Some(refused), None, None).unwrap_err();
         assert!(
             error.contains(&format!("MACOSX_DEPLOYMENT_TARGET={refused}")),
             "{error}"
@@ -75,19 +76,19 @@ fn the_map_targets_linux_at_the_glibc_floor_and_macos_at_its_deployment_target()
     }
     assert_eq!(target("x86_64-pc-windows-msvc", None), "x86_64-windows-msvc");
     assert_eq!(target("aarch64-pc-windows-msvc", None), "aarch64-windows-msvc");
-    let unmapped = zig_build::zig_target("riscv64gc-unknown-linux-gnu", None, None).unwrap_err();
+    let unmapped = zig_build::zig_target("riscv64gc-unknown-linux-gnu", None, None, None).unwrap_err();
     assert!(unmapped.contains("riscv64gc-unknown-linux-gnu"), "{unmapped}");
 }
 
 #[test]
 fn android_builds_for_cargo_ndks_api_level_and_its_ndk() {
-    let target = |cargo, level| zig_build::zig_target(cargo, None, level).unwrap();
+    let target = |cargo, level| zig_build::zig_target(cargo, None, None, level).unwrap();
     assert_eq!(target("aarch64-linux-android", None), "aarch64-linux-android.24");
     assert_eq!(target("x86_64-linux-android", Some("26")), "x86_64-linux-android.26");
     assert_eq!(target("aarch64-linux-android", Some(" ")), "aarch64-linux-android.24");
     // cargo-ndk's default --platform among them: Zig's std calls preadv64, which bionic has from API 24 on
     for refused in ["21", "23", "x"] {
-        let error = zig_build::zig_target("aarch64-linux-android", None, Some(refused)).unwrap_err();
+        let error = zig_build::zig_target("aarch64-linux-android", None, None, Some(refused)).unwrap_err();
         assert!(error.contains(&format!("ANDROID_PLATFORM={refused}")), "{error}");
     }
     let sysroot = "/sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/sysroot";
@@ -108,6 +109,7 @@ fn android_builds_for_cargo_ndks_api_level_and_its_ndk() {
         out_dir: Path::new("/out"),
         target,
         macos_deployment_target: None,
+        ios_deployment_target: None,
         android_platform: Some("24"),
         android_ndk: Some(ndk),
         jobs: None,
@@ -129,6 +131,140 @@ fn android_builds_for_cargo_ndks_api_level_and_its_ndk() {
             .env
             .is_empty()
     );
+}
+
+/// iOS builds for `IPHONEOS_DEPLOYMENT_TARGET` (`.cargo/config.toml`), else Ghostty's libghostty-vt floor, never below
+/// it; the version goes on the OS part, before the simulator's ABI. Each links a copy of its archive alone, as macOS.
+#[test]
+fn ios_builds_for_its_deployment_target_on_device_and_simulator() {
+    let target = |cargo, ios| zig_build::zig_target(cargo, None, ios, None).unwrap();
+    assert_eq!(target("aarch64-apple-ios", Some("26.0")), "aarch64-ios.26.0");
+    assert_eq!(
+        target("aarch64-apple-ios-sim", Some("26.0")),
+        "aarch64-ios.26.0-simulator"
+    );
+    assert_eq!(target("aarch64-apple-ios", None), "aarch64-ios.13.0");
+    assert_eq!(target("aarch64-apple-ios-sim", Some(" ")), "aarch64-ios.13.0-simulator");
+    assert_eq!(target("aarch64-apple-ios", Some("13")), "aarch64-ios.13");
+    // the macOS deployment target is not the iOS one, nor the other way round
+    assert_eq!(
+        zig_build::zig_target("aarch64-apple-ios", Some("15.0"), Some("26.0"), None).unwrap(),
+        "aarch64-ios.26.0"
+    );
+    assert_eq!(
+        zig_build::zig_target("aarch64-apple-darwin", None, Some("26.0"), None).unwrap(),
+        "aarch64-macos.13.0"
+    );
+    for cargo in ["aarch64-apple-ios", "aarch64-apple-ios-sim"] {
+        for refused in ["12.4", "9", "26.x"] {
+            let error = zig_build::zig_target(cargo, None, Some(refused), None).unwrap_err();
+            assert!(
+                error.contains(&format!("IPHONEOS_DEPLOYMENT_TARGET={refused}")),
+                "{error}"
+            );
+            assert!(error.contains("iOS 13.0 or newer"), "{error}");
+        }
+    }
+    let stamp = stamp();
+    for (cargo, zig_target) in [
+        ("aarch64-apple-ios", "aarch64-ios.26.0"),
+        ("aarch64-apple-ios-sim", "aarch64-ios.26.0-simulator"),
+    ] {
+        let build = zig_build::plan(&Inputs {
+            prefix: Path::new("/vendor/ghostty-vt-0123456789abcdef"),
+            stamp: &stamp,
+            out_dir: Path::new("/out"),
+            target: cargo,
+            macos_deployment_target: Some("13.0"),
+            ios_deployment_target: Some("26.0"),
+            android_platform: None,
+            android_ndk: None,
+            jobs: None,
+        })
+        .unwrap();
+        assert!(build.args.contains(&OsString::from(format!("-Dtarget={zig_target}"))));
+        assert_eq!(build.zig_target, zig_target);
+        assert_eq!(build.archive, Path::new("/out/zig-out/lib/libghostty-vt.a"));
+        assert_eq!(build.link_dir, Path::new("/out/lib"));
+        assert_eq!(build.link_name, "ghostty-vt");
+        assert!(build.env.is_empty());
+    }
+}
+
+/// `otool -l` of an archive with a member per `(name, platform, minos)`, each with a segment before its build version;
+/// a `None` platform leaves the member without one.
+fn otool(members: &[(&str, Option<&str>, &str)]) -> String {
+    let mut text = "Archive : /out/lib/libghostty-vt.a\n".to_owned();
+    for (name, platform, minos) in members {
+        text.push_str(&format!(
+            "/out/lib/libghostty-vt.a({name}):\nLoad command 0\n      cmd LC_SEGMENT_64\n  cmdsize 1032\n"
+        ));
+        if let Some(platform) = platform {
+            text.push_str(&format!(
+                "Load command 1\n      cmd LC_BUILD_VERSION\n  cmdsize 24\n platform {platform}\n    minos {minos}\n      \
+                 sdk n/a\n   ntools 0\n"
+            ));
+        }
+    }
+    text
+}
+
+/// What an iOS archive is checked against on the host (no test can run `otool` inside the simulator): the platform of
+/// its target and the version of its `-Dtarget`. Every member must carry that platform and be built for that iOS or an
+/// older one.
+#[test]
+fn an_ios_archive_is_checked_for_its_platform_and_minimum_ios() {
+    assert_eq!(
+        zig_build::ios_build_version("aarch64-apple-ios", "aarch64-ios.26.0"),
+        Some((2, "26.0".to_owned()))
+    );
+    assert_eq!(
+        zig_build::ios_build_version("aarch64-apple-ios-sim", "aarch64-ios.26.0-simulator"),
+        Some((7, "26.0".to_owned()))
+    );
+    assert_eq!(
+        zig_build::ios_build_version("aarch64-apple-darwin", "aarch64-macos.13.0"),
+        None
+    );
+    assert_eq!(
+        zig_build::ios_build_version("x86_64-unknown-linux-gnu", "x86_64-linux-gnu.2.39"),
+        None
+    );
+
+    let check = zig_build::check_ios_archive;
+    let good = otool(&[("a.o", Some("7"), "26.0"), ("b.o", Some("7"), "13.0")]);
+    assert_eq!(check(&good, 7, "26.0"), Ok(()));
+    // a platform printed by its name is read as its number
+    assert_eq!(
+        check(&otool(&[("a.o", Some("IOSSIMULATOR"), "26.0")]), 7, "26.0"),
+        Ok(())
+    );
+    assert_eq!(check(&otool(&[("a.o", Some("IOS"), "26")]), 2, "26.0"), Ok(()));
+
+    let device_on_sim = check(
+        &otool(&[("a.o", Some("7"), "26.0"), ("b.o", Some("2"), "26.0")]),
+        7,
+        "26.0",
+    );
+    let error = device_on_sim.unwrap_err();
+    assert!(error.contains("b.o") && error.contains("platform 2"), "{error}");
+    let newer = check(
+        &otool(&[("a.o", Some("2"), "26.0"), ("c.o", Some("2"), "26.1")]),
+        2,
+        "26.0",
+    )
+    .unwrap_err();
+    assert!(
+        newer.contains("c.o") && newer.contains("iOS 26.1") && newer.contains("26.0"),
+        "{newer}"
+    );
+    let missing = check(&otool(&[("a.o", Some("2"), "26.0"), ("d.o", None, "")]), 2, "26.0").unwrap_err();
+    assert!(
+        missing.contains("d.o") && missing.contains("LC_BUILD_VERSION"),
+        "{missing}"
+    );
+    let empty = check("Archive : /out/lib/libghostty-vt.a\n", 2, "26.0").unwrap_err();
+    assert!(empty.contains("no member"), "{empty}");
 }
 
 #[test]
@@ -288,6 +424,7 @@ fn a_pin_or_patch_change_reruns_the_build_script() {
         "NGTERM_VENDOR",
         "HOME",
         "MACOSX_DEPLOYMENT_TARGET",
+        "IPHONEOS_DEPLOYMENT_TARGET",
         "ANDROID_PLATFORM",
         "ANDROID_NDK_HOME",
         "CARGO_NDK_SYSROOT_PATH",
@@ -431,7 +568,7 @@ fn the_prepared_prefix_configures_every_target_with_networking_off() {
     let before = entries(&packages);
     let scratch = tempfile::tempdir().unwrap();
     for (cargo, _) in zig_build::ZIG_TARGETS {
-        let target = zig_build::zig_target(cargo, None, None).unwrap();
+        let target = zig_build::zig_target(cargo, None, None, None).unwrap();
         let mut command = Command::new(&stamp.zig);
         // an Android configuration only joins paths into the NDK, which must exist (build-ghostty-vt.sh)
         command.env("ANDROID_NDK_HOME", scratch.path());

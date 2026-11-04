@@ -6,6 +6,11 @@
 # crates/ngterm-ghostty-vt-sys/zig_build.rs): rustc's default (11.0 on aarch64) would link an archive built for a
 # newer macOS than the binary claims. Other targets ignore it. An exported MACOSX_DEPLOYMENT_TARGET wins, and below
 # the floor the libghostty-vt build refuses it.
+#
+# iOS builds (device and simulator) link for iOS 26.0, the iOS app's minimum, for the same reason: rustc's own iOS
+# default would link an archive built for a newer iOS than the binary claims, and the libghostty-vt build builds its
+# archive for this version (it refuses one below Ghostty's lib-vt floor, `IOS_FLOOR`). Other targets ignore it.
 [env]
 PKG_CONFIG = { value = "scripts/pkg-config.sh", relative = true }
 MACOSX_DEPLOYMENT_TARGET = "13.0"
+IPHONEOS_DEPLOYMENT_TARGET = "26.0"

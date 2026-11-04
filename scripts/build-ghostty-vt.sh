@@ -51,7 +51,8 @@ PATCHES="$NATIVE_ROOT/build/patches/ghostty-vt"
 # The Zig triples of ngterm-ghostty-vt-sys's target map (crates/ngterm-ghostty-vt-sys/zig_build.rs ZIG_TARGETS, which a
 # test keeps equal to this list), without their OS version suffixes: the packages each one's build needs are fetched.
 ZIG_TARGETS=(x86_64-linux-gnu aarch64-linux-gnu x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos
-  x86_64-windows-msvc aarch64-windows-msvc aarch64-linux-android x86_64-linux-android)
+  x86_64-windows-msvc aarch64-windows-msvc aarch64-linux-android x86_64-linux-android
+  aarch64-ios aarch64-ios-simulator)
 
 case "${1:-}" in
   --print-prefix)
