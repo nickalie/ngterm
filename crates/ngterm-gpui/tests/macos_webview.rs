@@ -42,7 +42,7 @@ mod smoke {
         ) -> *mut c_void;
         fn ngterm_web_detach(delegate: *mut c_void);
         fn ngterm_web_reply(view: *mut c_void, json: *const c_char);
-        fn ngterm_web_document_script(view: *mut c_void, script: *const c_char);
+        fn ngterm_web_document_script(view: *mut c_void, script: *const c_char, world: *const c_char);
     }
     extern "C" fn allow(_: *mut c_void, _: *const c_char, _: bool, _: bool, _: bool, _: u64) -> bool {
         true
@@ -97,8 +97,9 @@ mod smoke {
             .unwrap();
         let pointer = Retained::as_ptr(&view.webview()).cast_mut().cast();
         let script = CString::new("window.helperOnly=true; document.body.dataset.renderer='isolated'").unwrap();
+        let world = CString::new("ngterm-markdown").unwrap();
         // SAFETY: the live main-thread web view copies the helper script into its isolated content world.
-        unsafe { ngterm_web_document_script(pointer, script.as_ptr()) };
+        unsafe { ngterm_web_document_script(pointer, script.as_ptr(), world.as_ptr()) };
         view.load_html("<body><script>window.authored=true</script></body>")
             .unwrap();
         let checked = std::sync::Arc::new(AtomicBool::new(false));

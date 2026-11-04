@@ -585,14 +585,15 @@ void ngterm_web_reply(void *pointer, const char *json) {
 }
 // Markdown's renderer gets a separate global namespace; authored content
 // remains disabled.
-void ngterm_web_document_script(void *pointer, const char *script) {
+void ngterm_web_document_script(void *pointer, const char *script,
+                                const char *world) {
   WKUserContentController *controller =
       [(__bridge WKWebView *)pointer configuration].userContentController;
   WKUserScript *renderer = [[WKUserScript alloc]
         initWithSource:@(script)
          injectionTime:WKUserScriptInjectionTimeAtDocumentEnd
       forMainFrameOnly:YES
-        inContentWorld:[WKContentWorld worldWithName:@"ngterm-markdown"]];
+        inContentWorld:[WKContentWorld worldWithName:@(world)]];
   [controller addUserScript:renderer];
 }
 
