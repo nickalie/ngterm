@@ -8,12 +8,17 @@
 //!    out, so the screen read next is laid out for this pane.
 //! 2. **Settle.** No new output, no new frame and no new grid for [`InputTiming::quiet`] (the redraw after the claim's
 //!    resize has landed), or [`InputTiming::settle_max`] at most: a working agent's spinner never goes quiet.
-//! 3. **Match.** The agent's screen matcher ([`crate::chat::matchers`]) reads the terminal's current frame, and the
-//!    action's [`Plan`] decides from it: the keys to send, or the outcome.
-//! 4. **Send.** The keys go into the same terminal the frame was read from, on the actor, with nothing awaited between
-//!    the read and the send: the role and the attach are checked again right before (the terminal's pending role
-//!    reports taken first), so a lead lost or an attach replaced meanwhile sends nothing. Each key goes only while the
-//!    terminal still shows the screen the frame did, checked and sent under the terminal's lock
+//! 3. **Match.** The agent's screen matcher ([`crate::chat::matchers`]) reads the program's screen itself
+//!    ([`ngterm_term::Pane::active_screen`]: the terminal's active area with its screen generation), never what the
+//!    terminal view shows: a view scrolled back (onto an old copy of a dialog, say), a selection, a search's
+//!    highlights or anything the app draws over the view play no part. A screen the program holds (synchronized
+//!    output), the VT's reflow after a resize the program has not redrawn for yet, or a grid the view gave that the
+//!    terminal has not taken yet is not read: the action settles and looks again. The action's [`Plan`] decides from
+//!    the screen read: the keys to send, or the outcome.
+//! 4. **Send.** The keys go into the same terminal the screen was read from, on the actor, with nothing awaited
+//!    between the read and the send: the role and the attach are checked again right before (the terminal's pending
+//!    role reports taken first), so a lead lost or an attach replaced meanwhile sends nothing. Each key goes only
+//!    while the program's screen is still the one read, checked and sent under the terminal's lock
 //!    ([`ngterm_term::Pane::key_if`]): output or a resize that landed after the read sends nothing, and the screen is
 //!    settled and read again.
 //! 5. **Confirm.** A step that needs to see what its keys did (a paste before its Enter, each question of the picker, a
@@ -184,9 +189,9 @@ impl From<OptionKey> for Key {
 }
 
 impl Key {
-    /// Sends the key into `terminal`, encoded for the program's modes, while the terminal still shows the screen of
-    /// the frame captured at `generation` ([`ngterm_term::FrameSnapshot::generation`]); whether it went (`false`:
-    /// the screen changed since, nothing went).
+    /// Sends the key into `terminal`, encoded for the program's modes, while the program's screen is still the one
+    /// read at `generation` ([`ngterm_term::ActiveScreen::generation`]); whether it went (`false`: the screen changed
+    /// since, nothing went).
     ///
     /// # Errors
     ///

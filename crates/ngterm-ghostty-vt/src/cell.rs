@@ -75,7 +75,7 @@ const SGR_UNDERLINE_DOTTED: i32 = 4;
 const SGR_UNDERLINE_DASHED: i32 = 5;
 
 impl Style {
-    fn from_raw(raw: &ffi::GhosttyStyle) -> Self {
+    pub(crate) fn from_raw(raw: &ffi::GhosttyStyle) -> Self {
         let mut flags = StyleFlags::empty();
         for (on, flag) in [
             (raw.bold, StyleFlags::BOLD),

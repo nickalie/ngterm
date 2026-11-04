@@ -595,6 +595,11 @@ with no output yet is a running call (Task 1's fixture README).
     until the screen shows what they did, or 5 s pass (`Unconfirmed`); any other screen is pending meanwhile, the
     screen the keys went to (no output since) above all, and no key is sent twice. Codex's composer is read from its
     footer up, so blank lines and `1. …` lines in a pasted text stay the composer's.
+  - Read: the program's screen itself, `ngterm_term::Pane::active_screen` (the active area read cell by cell with the
+    screen generation, under one VT lock), never the view's frame: a view scrolled back onto an old copy of a dialog,
+    a selection, a search or anything the app draws over the view plays no part, and `key_if`/`paste_if` send under
+    that generation. A screen held by synchronized output, the VT's reflow after a resize the program has not drawn
+    since, or a grid the view gave that the terminal has not taken yet is busy (settle and look again).
 
 - [x] write matcher tests first on Task 1's PTY captures, replayed through libghostty-vt into rows at each recorded
       width:

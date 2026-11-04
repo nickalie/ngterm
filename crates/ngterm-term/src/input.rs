@@ -369,10 +369,11 @@ impl Pane {
         self.key_held(lock(&self.shared().vt), input)
     }
 
-    /// [`Pane::key`], only while the terminal still shows the screen of a frame captured at `generation`
-    /// ([`crate::FrameSnapshot::generation`]): `None`, nothing sent, once the program's output, a resize, a reset or a
+    /// [`Pane::key`], only while the program's screen is still the one read at `generation`
+    /// ([`crate::ActiveScreen::generation`]): `None`, nothing sent, once the program's output, a resize, a reset or a
     /// clear changed it since. The check and the send are one step under the terminal's lock, so nothing the program
-    /// writes lands between them: a key chosen from what a frame showed goes only to that screen.
+    /// writes lands between them: a key chosen from what [`Pane::active_screen`] read goes only to that screen. The
+    /// viewport's scroll, a selection and a search are no part of that screen and change nothing here.
     ///
     /// # Errors
     ///
@@ -546,8 +547,8 @@ impl Pane {
         self.paste_held(lock(&self.shared().vt), text, source, location, allow_unsafe)
     }
 
-    /// [`Pane::paste`], only while the terminal still shows the screen of a frame captured at `generation`, as
-    /// [`Pane::key_if`] sends a key: `None`, nothing pasted, once it changed.
+    /// [`Pane::paste`], only while the program's screen is still the one read at `generation`, as [`Pane::key_if`]
+    /// sends a key: `None`, nothing pasted, once it changed.
     ///
     /// # Errors
     ///

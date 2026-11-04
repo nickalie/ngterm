@@ -145,9 +145,6 @@ impl std::fmt::Debug for PaneConfig {
 pub struct FrameSnapshot {
     pub frame: Arc<Frame>,
     pub stale: bool,
-    /// The terminal's screen generation the frame shows ([`Pane::key_if`], [`Pane::paste_if`]); `None` when it is not
-    /// the terminal's screen now (a stale frame, or one held by synchronized output) or capturing it failed.
-    pub generation: Option<u64>,
 }
 
 /// Counters of the read path and the VT lock (profiling and the lock-latency check).
@@ -194,9 +191,13 @@ pub(crate) struct Vt {
     pub(crate) pending_clear: bool,
     /// The placed Kitty images' pixels, copied on the IO thread after each batch (`kitty::Prefetch`).
     pub(crate) kitty: crate::kitty::Prefetch,
-    /// Grows with every change of the program's screen: its output, a resize, a reset, a clear. A frame carries the
-    /// generation it was captured at ([`FrameSnapshot::generation`]).
+    /// Grows with every change of the program's screen: its output, a resize, a reset, a clear; not with the
+    /// viewport's scroll, the selection or a search, which leave the screen as it was. An active-area read carries
+    /// the generation it was made at ([`crate::ActiveScreen::generation`]).
     pub(crate) generation: u64,
+    /// The VT was resized and the program has written nothing since: the screen is the VT's reflow of the last one
+    /// the program drew ([`crate::ActiveScreen::reflowed`]).
+    pub(crate) reflowed: bool,
 }
 
 impl Vt {
@@ -224,6 +225,7 @@ impl Vt {
 /// point ([`crate::actions`]).
 fn write_slice(shared: &Shared, vt: &mut Vt, slice: &[u8]) {
     vt.changed();
+    vt.reflowed = false;
     if !vt.pending_clear {
         vt.terminal.vt_write(slice);
         return;
@@ -638,6 +640,7 @@ impl Pane {
             .map_err(PaneError::terminal)?;
         vt.size = size;
         vt.changed();
+        vt.reflowed = true;
         drop(vt);
         match &self.io {
             #[cfg(feature = "local")]
@@ -883,6 +886,7 @@ fn shared(config: &PaneConfig, events: Sender<PaneEvent>, mailbox: Arc<Mailbox>)
             pending_clear: false,
             kitty: crate::kitty::Prefetch::default(),
             generation: 0,
+            reflowed: false,
         }),
         capture,
         published: Mutex::new(Arc::new(Frame::default())),
@@ -940,33 +944,24 @@ fn frame(shared: &Shared) -> FrameSnapshot {
         }
     }
     match capture(shared) {
-        Some((frame, generation)) => FrameSnapshot {
-            frame,
-            stale: false,
-            generation,
-        },
+        Some(frame) => FrameSnapshot { frame, stale: false },
         None => FrameSnapshot {
             frame: Arc::clone(&lock(&shared.published)),
             stale: true,
-            generation: None,
         },
     }
 }
 
-/// The paint-side capture: the frame to draw (new or unchanged) and the screen generation it shows (`None` while the
-/// frame is held or when capturing failed), or `None` when a lock was busy.
-fn capture(shared: &Shared) -> Option<(Arc<Frame>, Option<u64>)> {
+/// The paint-side capture: the frame to draw (new or unchanged), or `None` when a lock was busy.
+fn capture(shared: &Shared) -> Option<Arc<Frame>> {
     let mut vt = try_lock(&shared.vt)?;
     // VT → capture; on a busy capture the VT guard drops on return
     let mut capture = try_lock(&shared.capture)?;
     end_expired_hold(&mut vt, &mut capture);
     let mouse_shape = MouseShape::from_engine(vt.terminal.mouse_shape());
-    let mut generation = None;
     if capture.held() {
         drop(vt);
     } else {
-        // read with the state, under the same lock
-        generation = Some(vt.generation);
         // the Kitty view is read while the terminal is held, with the state
         let held = &mut *vt;
         capture.capture_kitty(held.terminal.kitty_graphics(), &held.kitty);
@@ -975,19 +970,25 @@ fn capture(shared: &Shared) -> Option<(Arc<Frame>, Option<u64>)> {
         drop(vt);
         if let Err(err) = pending.and_then(vt::PendingUpdate::end) {
             tracing::warn!(%err, "capturing the terminal failed");
-            generation = None;
         }
     }
     let mut published = lock(&shared.published);
     match capture.convert(&published, mouse_shape) {
         Ok(Some(frame)) => *published = Arc::new(frame),
         Ok(None) => {}
-        Err(err) => {
-            tracing::warn!(%err, "converting the capture failed");
-            generation = None;
-        }
+        Err(err) => tracing::warn!(%err, "converting the capture failed"),
     }
-    Some((Arc::clone(&published), generation))
+    Some(Arc::clone(&published))
+}
+
+impl Shared {
+    /// Whether the program holds its output now (synchronized output, mode 2026), a hold past its timeout ended first
+    /// as a paint ends it; the caller holds the VT lock (VT → capture).
+    pub(crate) fn holding(&self, vt: &mut Vt) -> bool {
+        let mut capture = lock(&self.capture);
+        end_expired_hold(vt, &mut capture);
+        capture.held()
+    }
 }
 
 /// End a synchronized-output hold that lasted past its timeout (a program that never ends its hold must not freeze

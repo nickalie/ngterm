@@ -683,6 +683,42 @@ fn build_row(row: &mut vt::RowRef<'_>, id: [u64; 2], seq: u64, palette: &[Rgb; 2
     })
 }
 
+/// A [`Row`] of a row read by its points ([`crate::ActiveScreen`]): its cells, text and wrap, colors resolved against
+/// `palette`; no selection and no Kitty placeholders.
+pub(crate) fn grid_row(row: vt::GridRow, seq: u64, palette: &[Rgb; 256]) -> Row {
+    let resolve = |color: vt::StyleColor| match color {
+        vt::StyleColor::None => None,
+        vt::StyleColor::Palette(index) => Some(palette[usize::from(index)]),
+        vt::StyleColor::Rgb(color) => Some(rgb(color)),
+    };
+    let mut text = String::new();
+    let mut cells = Vec::with_capacity(row.cells.len());
+    for cell in row.cells {
+        let start = text.len();
+        text.push_str(&cell.text);
+        let mut built = Cell {
+            width: width(cell.width),
+            foreground: resolve(cell.style.foreground),
+            background: resolve(cell.style.background),
+            text_start: u32::try_from(start).unwrap_or(u32::MAX),
+            text_len: u32::try_from(text.len() - start).unwrap_or(0),
+            ..Cell::default()
+        };
+        apply_style(&mut built, cell.style, palette);
+        built.flags.set(CellFlags::HYPERLINK, cell.hyperlink);
+        cells.push(built);
+    }
+    Row {
+        changed: seq,
+        id: [0; 2],
+        cells,
+        text,
+        selection: None,
+        wrapped: row.wrapped,
+        placeholders: Vec::new(),
+    }
+}
+
 /// U+10EEEE in UTF-8, what a placeholder cell's grapheme starts with.
 const PLACEHOLDER_UTF8: &[u8] = "\u{10EEEE}".as_bytes();
 

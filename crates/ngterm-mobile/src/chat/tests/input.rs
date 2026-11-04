@@ -472,8 +472,8 @@ fn answers_that_do_not_fit_their_questions_are_refused_before_anything_runs() {
 fn generation(term: &Term) -> u64 {
     term.frame();
     loop {
-        if let Some(generation) = term.pane.frame().generation {
-            return generation;
+        if let Some(screen) = term.pane.active_screen().unwrap() {
+            return screen.generation;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }

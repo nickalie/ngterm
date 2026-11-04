@@ -1,11 +1,13 @@
 //! The chat's actions on the actor ([`crate::chat::input`]): each runs as a local task that takes the pane's lead,
 //! settles, reads the screen and sends its plan's keys, one action per pane at a time; and the approval card's labels,
-//! read from the screen as it stands.
+//! read from the screen as it stands. The screen is always the program's own ([`readable`]), never what the terminal
+//! view shows of it.
 
 use std::rc::Rc;
 use std::sync::Arc;
 
 use ngterm_core::live::lead::LeadRole;
+use ngterm_term::{ActiveScreen, GridSize};
 use tokio::time::Instant;
 
 use super::{Command, State};
@@ -88,10 +90,23 @@ fn labels<T: Transport>(
     };
     let screen = standing
         .terminal
-        .map_or(crate::chat::matchers::Screen::Unknown, |terminal| {
-            agent.read(&terminal.frame().frame)
+        .and_then(|terminal| readable(&terminal, standing.size))
+        .map_or(crate::chat::matchers::Screen::Unknown, |screen| {
+            agent.read(&screen.frame)
         });
     Ok(approval_labels(agent, &screen))
+}
+
+/// The program's screen in `terminal` (its active area, with the generation it was read at), when it is one the
+/// program drew for `size`, the grid the view gave: `None` while the program holds its output (synchronized output),
+/// while the screen is the terminal's reflow after a resize the program has not drawn since, while the view's grid
+/// has not reached the terminal yet, or when it could not be read. What the terminal view shows plays no part: the
+/// view scrolled back (onto an old copy of a dialog, say), a selection, a search's highlights and whatever the app
+/// draws over the view leave the active area as it is, and change no generation.
+fn readable(terminal: &ngterm_term::Pane, size: GridSize) -> Option<ActiveScreen> {
+    let screen = terminal.active_screen().ok().flatten()?;
+    let drawn = !screen.reflowed && screen.frame.cols == size.cols && screen.frame.rows.len() == usize::from(size.rows);
+    drawn.then_some(screen)
 }
 
 /// Holds a pane for one action; dropping it lets the next one in.
@@ -285,11 +300,12 @@ async fn settle<T: Transport>(
     }
 }
 
-/// One look at the screen and what the plan makes of it, sent at once into the terminal read. Nothing is awaited
-/// here, so no role report or attach is handled between the read and the send; output the terminal took on its own
-/// threads meanwhile (or a resize) makes the send a no-op ([`crate::chat::input::Key::send_if`]), the plan is put
-/// back as it was, and the screen is settled and read again. The screen the last keys were sent to, with no output
-/// since, is pending: what they did has not come back yet.
+/// One look at the program's screen ([`readable`]) and what the plan makes of it, sent at once into the terminal
+/// read. Nothing is awaited here, so no role report or attach is handled between the read and the send; output the
+/// terminal took on its own threads meanwhile (or a resize) makes the send a no-op
+/// ([`crate::chat::input::Key::send_if`]), the plan is put back as it was, and the screen is settled and read again.
+/// A screen that can't be read now is busy. The screen the last keys were sent to, with no output since, is pending:
+/// what they did has not come back yet.
 fn look<T: Transport>(
     state: &State<T>,
     on: &On,
@@ -302,16 +318,15 @@ fn look<T: Transport>(
     let Some(terminal) = now.terminal.as_ref().filter(|_| leads(&now, attach)) else {
         return Ok(Looked::Done(plan.stopped(AgentInputOutcome::LeadRefused)));
     };
-    let snapshot = terminal.frame();
-    // a frame made while the program holds its output (mode 2026) is the screen before its update
-    let Some(generation) = snapshot.generation.filter(|_| !snapshot.stale && !snapshot.frame.held) else {
+    let Some(screen) = readable(terminal, now.size) else {
         return Ok(Looked::Busy);
     };
+    let generation = screen.generation;
     if sent.is_some_and(|went| went.generation == generation) {
         return Ok(Looked::Pending);
     }
     let before = plan.clone();
-    match plan.next(&agent.read(&snapshot.frame)) {
+    match plan.next(&agent.read(&screen.frame)) {
         Next::Done(outcome) => Ok(Looked::Done(outcome)),
         Next::Wait => Ok(Looked::Pending),
         Next::Send { keys, look } => {

@@ -2,7 +2,9 @@
 //! agent screen, its role reports, and the keys that come back down the channel. Leadership first (a follower claims,
 //! a leader doesn't, a claim refused or unanswered sends nothing, a dialog gone by the time the claim lands sends
 //! nothing), then each action's keys, the lead lost between a paste and its Enter, a handle whose pane was hidden,
-//! and reading the chat or switching it with the terminal never claiming or resizing.
+//! and reading the chat or switching it with the terminal never claiming or resizing. Last, every action with the
+//! terminal view scrolled back onto an old, complete copy of another state in the history: the program's live screen
+//! is what is read, and no key goes to the state the view shows.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
@@ -19,10 +21,11 @@ use ngterm_core::remote::ssh::present_tail;
 use super::pane_tests::{
     Fixture, MACHINE, PANE, SESSION, contains, inputs_until, lead_of, listing, pane_uuid, role_title, send,
 };
-use crate::api::{MobileEvent, Pane, PaneInputError, PaneSize};
-use crate::chat::input::{ACTION_IN_FLIGHT, AgentInputOutcome, InputTiming, NO_AGENT_TO_DRIVE};
-use crate::chat::matchers::Agent;
+use crate::api::{MobileEvent, Pane, PaneInputError, PaneSize, PaneWheel, PaneWheelOutcome};
+use crate::chat::input::{ACTION_IN_FLIGHT, AgentInputOutcome, InputTiming, NO_AGENT_TO_DRIVE, QuestionAnswer};
+use crate::chat::matchers::{Agent, Screen};
 use crate::chat::tests::matchers::{Capture, draft_drawn, into_prompt};
+use crate::chat::{ChatQuestion, ChatQuestionItem, ChatQuestionOption, ChatToolStatus};
 use crate::chat::{Side, commands_tail};
 use crate::pane::{PaneRole, without_escapes};
 use crate::transport::fake::{Opened, Script};
@@ -535,4 +538,333 @@ fn approval_labels_fall_back_to_the_agents_own_when_the_screen_has_none() {
             "No, and tell Codex what to do differently".to_owned()
         ])
     );
+}
+
+/// The program's screen and what the terminal view shows apart: an old, complete copy of one state in the history,
+/// another drawn live below it, and the view scrolled back the way a swipe in the terminal view scrolls it.
+impl Agents {
+    /// Feeds `peer` the capture's `old` state, pushes its screen whole into the history, then draws the capture's
+    /// `live` state from a clean screen below it; waits until the program's screen reads as `is_live`. The recorded
+    /// TUIs draw on the alternate screen with mouse reporting on, where the view neither keeps a history nor scrolls
+    /// on a swipe; both run inline as well, which this replays: the same draws on the primary screen, the mouse left
+    /// to the view.
+    fn over_history(&self, peer: &ChannelPeer, agent: Agent, (old, live): (&str, &str), is_live: fn(&Screen) -> bool) {
+        let mut bytes = inline(self.capture.at(old));
+        bytes.extend(format!("\x1b[0m\x1b[{};1H", self.capture.rows).as_bytes());
+        bytes.extend(std::iter::repeat_n(b'\n', usize::from(self.capture.rows)));
+        bytes.extend(b"\x1b[H");
+        bytes.extend(inline(self.capture.at(live)));
+        send(peer, &bytes);
+        self.reads(agent, is_live, live);
+    }
+
+    /// Waits until the program's screen reads as `is_state`.
+    fn reads(&self, agent: Agent, is_state: fn(&Screen) -> bool, state: &str) {
+        let terminal = self.pane.terminal().expect("the pane's terminal");
+        for _ in 0..1000 {
+            if let Some(screen) = terminal.active_screen().unwrap()
+                && is_state(&agent.read(&screen.frame))
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the program's screen never showed {state}");
+    }
+
+    /// Scrolls the terminal view back a row at a time through the phone's wheel until it shows a screen `agent` reads
+    /// as `is_old`, then checks the program's own screen still reads as `is_live`.
+    fn scroll_back_to(&self, agent: Agent, is_old: fn(&Screen) -> bool, is_live: fn(&Screen) -> bool) {
+        let terminal = self.pane.terminal().expect("the pane's terminal");
+        let up = PaneWheel {
+            rows: 1,
+            columns: 0,
+            mods: 0,
+            x: 0.0,
+            y: 0.0,
+        };
+        let mut found = false;
+        for _ in 0..usize::from(self.capture.rows) * 4 {
+            assert_eq!(self.pane.wheel(up), Ok(PaneWheelOutcome::Scrolled), "the view scrolls");
+            if is_old(&agent.read(&terminal.frame().frame)) {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "the view never showed the old copy");
+        let live = terminal.active_screen().unwrap().expect("not held");
+        assert!(
+            is_live(&agent.read(&live.frame)),
+            "the program's screen is the live one"
+        );
+    }
+}
+
+/// `bytes` with the alternate screen and mouse reporting never turned on.
+fn inline(bytes: &[u8]) -> Vec<u8> {
+    const LEFT_OUT: [&[u8]; 5] = [
+        b"\x1b[?1049h",
+        b"\x1b[?1000h",
+        b"\x1b[?1002h",
+        b"\x1b[?1003h",
+        b"\x1b[?1006h",
+    ];
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if let Some(mode) = LEFT_OUT.iter().find(|mode| bytes[at..].starts_with(mode)) {
+            at += mode.len();
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    out
+}
+
+fn is_dialog(screen: &Screen) -> bool {
+    matches!(screen, Screen::Permission(_))
+}
+
+fn is_idle(screen: &Screen) -> bool {
+    matches!(screen, Screen::Prompt { working: false, composer } if composer.is_empty())
+}
+
+fn is_working(screen: &Screen) -> bool {
+    matches!(screen, Screen::Prompt { working: true, .. })
+}
+
+fn is_question(screen: &Screen) -> bool {
+    matches!(screen, Screen::Question(_))
+}
+
+/// One state of a capture, and how its screen reads.
+type State = (&'static str, fn(&Screen) -> bool);
+
+/// A leader showing the capture's `live` state under an old copy of its `old` state, the view scrolled back onto it.
+fn scrolled(agent: Agent, capture: &str, old: State, live: State) -> Agents {
+    let name = match agent {
+        Agent::Claude => "claude",
+        Agent::Codex => "codex",
+    };
+    let mut agents = Agents::start(name, capture);
+    agents.first_is("leader");
+    agents.over_history(&agents.first.peer, agent, (old.0, live.0), live.1);
+    agents.scroll_back_to(agent, old.1, live.1);
+    agents
+}
+
+#[test]
+fn an_approval_answers_the_live_dialog_never_one_scrolled_back_to() {
+    // an old dialog in view, the prompt live: nothing goes, and the card's labels are the agent's own
+    for (agent, capture, answer) in [
+        (Agent::Claude, "claude-44x36", "No"),
+        (Agent::Codex, "codex-44x36", "Yes, proceed"),
+    ] {
+        let mut agents = scrolled(agent, capture, ("permission", is_dialog), ("idle", is_idle));
+        assert_eq!(block_on(agents.pane.approval_labels()), Ok(agent.fallback_labels()));
+        assert_eq!(
+            block_on(agents.pane.answer_approval(answer.to_owned())),
+            Ok(AgentInputOutcome::NotOnScreen),
+            "{capture}"
+        );
+        assert!(
+            typed(&mut agents.first.peer).is_empty(),
+            "no key into the prompt: {capture}"
+        );
+    }
+
+    // the dialog live, an old prompt in view: the dialog's own labels, and its key goes
+    let mut agents = scrolled(
+        Agent::Codex,
+        "codex-44x36",
+        ("idle", is_idle),
+        ("permission", is_dialog),
+    );
+    let labels = block_on(agents.pane.approval_labels()).unwrap();
+    assert_ne!(labels, Agent::Codex.fallback_labels(), "read from the live dialog");
+    assert_eq!(labels[0], "Yes, proceed");
+    let answer = agents.act(|pane| block_on(pane.answer_approval("Yes, proceed".to_owned())));
+    let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
+        without_escapes(bytes).contains(&b'y')
+    });
+    assert_eq!(without_escapes(&bytes), b"y");
+    send(&agents.first.peer, b"\x1b[2J\x1b[H");
+    assert_eq!(outcome(&answer), Ok(AgentInputOutcome::Sent));
+
+    let mut agents = scrolled(
+        Agent::Claude,
+        "claude-44x36",
+        ("idle", is_idle),
+        ("permission", is_dialog),
+    );
+    let answer = agents.act(|pane| block_on(pane.answer_approval("No".to_owned())));
+    let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
+        without_escapes(bytes).contains(&b'4')
+    });
+    assert_eq!(without_escapes(&bytes), b"4");
+    send(&agents.first.peer, b"\x1b[2J\x1b[H");
+    assert_eq!(outcome(&answer), Ok(AgentInputOutcome::Sent));
+}
+
+#[test]
+fn a_prompt_goes_to_the_live_prompt_never_one_scrolled_back_to() {
+    // an old prompt in view, a dialog live: nothing is pasted into the dialog
+    let mut agents = scrolled(
+        Agent::Claude,
+        "claude-44x36",
+        ("idle", is_idle),
+        ("permission", is_dialog),
+    );
+    assert_eq!(
+        block_on(agents.pane.send_prompt("hello".to_owned())),
+        Ok(AgentInputOutcome::DialogOpen)
+    );
+    assert!(typed(&mut agents.first.peer).is_empty());
+
+    // an old dialog in view, the prompt live: the paste goes, then its Enter once the prompt shows it
+    let mut agents = scrolled(
+        Agent::Codex,
+        "codex-44x36",
+        ("permission", is_dialog),
+        ("idle", is_idle),
+    );
+    let prompt = agents.act(|pane| block_on(pane.send_prompt("hello".to_owned())));
+    let (pasted, _) = inputs_until(&mut agents.first.peer, |bytes, _| contains(bytes, b"\x1b[201~"));
+    assert!(pasted.ends_with(b"\x1b[200~hello\x1b[201~"));
+    agents.show_typed(&agents.first.peer, Agent::Codex, "idle", "hello");
+    let (entered, _) = inputs_until(&mut agents.first.peer, |bytes, _| bytes.ends_with(b"\r"));
+    assert_eq!(without_escapes(&entered), b"\r");
+    assert_eq!(outcome(&prompt), Ok(AgentInputOutcome::Sent));
+}
+
+#[test]
+fn stop_goes_to_the_live_turn_never_one_scrolled_back_to() {
+    // an old working turn in view, the prompt idle: no Escape
+    let mut agents = scrolled(Agent::Codex, "codex-44x36", ("working", is_working), ("idle", is_idle));
+    assert_eq!(block_on(agents.pane.interrupt()), Ok(AgentInputOutcome::NotOnScreen));
+    assert!(typed(&mut agents.first.peer).is_empty());
+
+    // an old idle prompt in view, a turn working: the Escape goes
+    let mut agents = scrolled(Agent::Codex, "codex-44x36", ("idle", is_idle), ("working", is_working));
+    let stop = agents.act(|pane| block_on(pane.interrupt()));
+    inputs_until(&mut agents.first.peer, |bytes, _| contains(bytes, b"\x1b[27u"));
+    assert_eq!(outcome(&stop), Ok(AgentInputOutcome::Sent));
+}
+
+#[test]
+fn a_question_is_answered_on_the_live_picker_never_one_scrolled_back_to() {
+    let question = ChatQuestion {
+        questions: vec![ChatQuestionItem {
+            question: "Pick a color".to_owned(),
+            header: None,
+            multi_select: false,
+            options: ["Red", "Green"]
+                .into_iter()
+                .map(|label| ChatQuestionOption {
+                    label: label.to_owned(),
+                    description: Some(label.to_owned()),
+                })
+                .collect(),
+        }],
+        status: ChatToolStatus::Running,
+        output: None,
+    };
+    let green = || {
+        vec![QuestionAnswer {
+            picked: vec!["Green".to_owned()],
+            other: None,
+        }]
+    };
+    // an old picker in view, the prompt live: no digit
+    let mut agents = scrolled(
+        Agent::Claude,
+        "claude-44x36",
+        ("question", is_question),
+        ("idle", is_idle),
+    );
+    assert_eq!(
+        block_on(agents.pane.answer_question(question.clone(), green())),
+        Ok(AgentInputOutcome::NotOnScreen)
+    );
+    assert!(typed(&mut agents.first.peer).is_empty());
+
+    // an old prompt in view, the picker live: Green's digit goes, once
+    let mut agents = scrolled(
+        Agent::Claude,
+        "claude-44x36",
+        ("idle", is_idle),
+        ("question", is_question),
+    );
+    let answer = agents.act(move |pane| block_on(pane.answer_question(question, green())));
+    let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
+        without_escapes(bytes).contains(&b'2')
+    });
+    assert_eq!(without_escapes(&bytes), b"2");
+    // the picker goes, the turn goes on
+    let mut working = b"\x1b[0m\x1b[H\x1b[2J".to_vec();
+    working.extend(agents.capture.at("working"));
+    send(&agents.first.peer, &working);
+    assert_eq!(outcome(&answer), Ok(AgentInputOutcome::Sent));
+    assert!(typed(&mut agents.first.peer).is_empty(), "nothing more");
+}
+
+#[test]
+fn a_screen_resized_and_not_redrawn_yet_gets_no_key() {
+    let mut agents = Agents::start("claude", "claude-44x36");
+    agents.first_is("leader");
+    agents.show(&agents.first.peer, "permission");
+    agents.reads(Agent::Claude, is_dialog, "permission");
+    // the view gives a new grid: the terminal reflows the dialog, the program has not drawn for it yet
+    let tablet = Capture::load("claude-100x40");
+    agents.pane.resize(grid(&tablet)).unwrap();
+    assert_eq!(
+        block_on(agents.pane.answer_approval("No".to_owned())),
+        Ok(AgentInputOutcome::NotOnScreen)
+    );
+    assert!(typed(&mut agents.first.peer).is_empty());
+
+    // the program draws the dialog for the new grid: its key goes
+    let mut redrawn = b"\x1b[0m\x1b[H\x1b[2J".to_vec();
+    redrawn.extend(tablet.at("permission"));
+    send(&agents.first.peer, &redrawn);
+    let answer = agents.act(|pane| block_on(pane.answer_approval("No".to_owned())));
+    let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
+        without_escapes(bytes).contains(&b'4')
+    });
+    assert_eq!(without_escapes(&bytes), b"4");
+    send(&agents.first.peer, b"\x1b[2J\x1b[H");
+    assert_eq!(outcome(&answer), Ok(AgentInputOutcome::Sent));
+
+    // inline, a grid two rows shorter: the reflow still shows the whole dialog, and still gets no key
+    let mut agents = Agents::start("claude", "claude-44x36");
+    agents.first_is("leader");
+    send(&agents.first.peer, &inline(agents.capture.at("permission")));
+    agents.reads(Agent::Claude, is_dialog, "permission");
+    let shorter = PaneSize {
+        rows: agents.capture.rows - 2,
+        ..grid(&agents.capture)
+    };
+    agents.pane.resize(shorter).unwrap();
+    let terminal = agents.pane.terminal().unwrap();
+    let reflowed = terminal.active_screen().unwrap().unwrap();
+    assert!(reflowed.reflowed);
+    assert!(
+        is_dialog(&Agent::Claude.read(&reflowed.frame)),
+        "the reflow reads as the dialog"
+    );
+    assert_eq!(
+        block_on(agents.pane.answer_approval("No".to_owned())),
+        Ok(AgentInputOutcome::NotOnScreen)
+    );
+    assert!(typed(&mut agents.first.peer).is_empty());
+    // the program writes again: its key goes
+    send(&agents.first.peer, b"\x1b[0m");
+    let answer = agents.act(|pane| block_on(pane.answer_approval("No".to_owned())));
+    let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
+        without_escapes(bytes).contains(&b'4')
+    });
+    assert_eq!(without_escapes(&bytes), b"4");
+    send(&agents.first.peer, b"\x1b[2J\x1b[H");
+    assert_eq!(outcome(&answer), Ok(AgentInputOutcome::Sent));
 }

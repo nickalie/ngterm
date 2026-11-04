@@ -14,6 +14,7 @@
 //!   [`Terminal::paste`] frames a paste (bracketed or not, unsafe text refused until confirmed).
 //! - Selection and read-back: [`Point`]s, the terminal's [`Selection`] (cell ranges, word, line, everything) and
 //!   [`Terminal::format`], which reads a region or the selection back as text.
+//! - [`Terminal::active_row`]: a row of the active area cell by cell ([`GridRow`]), whatever the viewport shows.
 //! - [`SelectionGesture`]: Ghostty's pointer selection state machine (click counts, drags, autoscroll).
 //! - [`Search`]: scrollback search, its terminal-touching calls serialized with the terminal, its ticks free of it.
 //! - [`KittyGraphics`]: the stored Kitty images and their placements.
@@ -62,6 +63,7 @@ mod continuation;
 mod effects;
 mod format;
 mod gesture;
+mod grid;
 mod key;
 mod kitty;
 mod mouse;
@@ -87,6 +89,7 @@ pub use gesture::{
     Autoscroll, GestureBehavior, GestureDrag, GestureGeometry, GestureInput, GesturePress, GestureState, GestureTick,
     SelectionGesture,
 };
+pub use grid::{GridCell, GridRow};
 pub use key::{Key, KeyAction, KeyEncoder, KeyEvent, KeyMods, encode_focus};
 pub use kitty::{
     KittyFormat, KittyGraphics, KittyIdNamespace, KittyImage, KittyLayer, KittyParent, KittyPlacement,
