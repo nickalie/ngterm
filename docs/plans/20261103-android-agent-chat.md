@@ -631,9 +631,30 @@ with no output yet is a running call (Task 1's fixture README).
 - Modify: `data/SettingsStore.kt`, `ui/settings/SettingsSections.kt`, `ui/session/SessionViewModel.kt`,
   `ui/session/SessionBar.kt`
 - Create: matching tests under `app/src/test/…/ui/chat/`
+- Created as well: `ui/chat/PaneChats.kt` (`PaneView` and the process-level owner of each pane's view and open chat,
+  in `AppGraph.chats`), `res/drawable/ic_chat.xml`; tests `ui/chat/{ChatBed,ChatModeTest,ChatViewModelTest}.kt`.
+  Modified as well: `data/LiveSessions.kt` (`LiveSession.agents` from `MobileEvent.PaneAgent`), `AppGraph`,
+  `NgtermApplication`, `ui/settings/SettingsScreen.kt`, `ui/session/{SessionScreen,SessionsDestination,
+  AttachedActions,SessionViewActions}.kt`, `DESIGN.md` (the view switch, the Agents setting, the Chat icon), and the
+  tests `TestGraph`, `StoresTest`, `SessionViewTest`.
+- As built:
+  - `PaneChats` (process-level, as the shown panes are) decides each pane's view: Chat while the setting is on and
+    the origin announces an agent, unless the terminal is held for the pane's current conversation (picked by hand,
+    or set when its chat ended or could not open); a hold lapses on the next conversation id or when the agent
+    leaves. It opens a chat (`MobileCore.open_chat`) for exactly the panes shown in chat view and closes it when the
+    pane leaves chat view or the screen, and routes `MobileEvent.Chat` / `ChatState` to that pane's `ChatViewModel`.
+  - `ChatViewModel` is a plain state holder per open chat (its own coroutine scope, ended by `PaneChats`), not an
+    androidx `ViewModel`: its life is the chat channel's, not a screen's. `ChatLog` (`ChatItems.kt`) folds events
+    into rows; a `reset` drops the rows and puts a divider on top. `ChatUiState.anchor` is the key of the row that was
+    on top before an older page went in above it. Cards drop on `approval_done` / an answered question, on `Sent`,
+    and on `NotOnScreen` (the prompt went elsewhere); every non-`Sent` outcome, `Unconfirmed` included, and the
+    `Pane` errors (`Closed`, `Backpressure`, `Refused`) become a `ChatProblem`, with `offersTerminal` for
+    `NotOnScreen` and `Unconfirmed`.
+  - The bar's switch is one icon button for the focused pane, named for what a tap does ("Show terminal" /
+    "Show chat"). Until Task 14 a pane in chat view still draws its terminal under the switch.
 
-- [ ] add the **Agent chat view** setting (on by default) to `SettingsStore` and the Settings screen
-- [ ] write `ChatViewModel` tests first:
+- [x] add the **Agent chat view** setting (on by default) to `SettingsStore` and the Settings screen
+- [x] write `ChatViewModel` tests first:
   - events upsert by `id`, and tool results fold into their calls and subagents under their task;
   - loading older items keeps the scroll anchor;
   - `reset` starts a new conversation divider;
@@ -641,13 +662,13 @@ with no output yet is a running call (Task 1's fixture README).
     matcher miss on the next check);
   - send and stop, and the outcomes `NotOnScreen`, `DialogOpen` and `LeadRefused`, which show "Answer in terminal" or
     the reason.
-- [ ] write the mode tests first:
+- [x] write the mode tests first:
   - a `PaneAgent` event for a shown pane with the setting on switches it to Chat;
   - the setting off always shows Terminal;
   - picking Terminal by hand holds until the pane's next conversation id;
   - the agent ending returns to Terminal.
-- [ ] implement both, plus the Chat/Terminal switch in `SessionBar`
-- [ ] `scripts/build-android.sh check` must pass
+- [x] implement both, plus the Chat/Terminal switch in `SessionBar`
+- [x] `scripts/build-android.sh check` must pass
 
 ### Task 14: Android: the chat screen (frontend-design)
 

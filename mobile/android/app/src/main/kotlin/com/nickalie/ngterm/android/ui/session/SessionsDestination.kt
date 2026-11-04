@@ -114,9 +114,10 @@ private fun LiveSession(
                 onEnd = actions.onEnd,
                 onNextSession = { sessions.cyclicNeighbor(key, forward = true)?.let(actions.onOpen) },
                 onPreviousSession = { sessions.cyclicNeighbor(key, forward = false)?.let(actions.onOpen) },
+                onView = actions.onView,
             )
         }
-    SessionScreen(open.session, open.focused, panes, failures, compact, view, extraKeys = extraKeys)
+    SessionScreen(open.session, open.focused, panes, failures, compact, view, extraKeys = extraKeys, views = open.views)
 }
 
 @Composable

@@ -1,13 +1,15 @@
 package com.nickalie.ngterm.android.ui.session
 
 import com.nickalie.ngterm.android.data.SessionKey
+import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.core.ffi.PaneRef
 import com.nickalie.ngterm.core.ffi.PaneSize
 
 /**
  * What the Sessions destination does, over its [SessionViewModel]: open and close a session's view, give a pane the
  * focus, show a pane (and try one again), Take control, Detach, End session, go to the Machines destination
- * ([onOpenMachines]), and say the snackbar was shown ([onNoticeShown]).
+ * ([onOpenMachines]), say the snackbar was shown ([onNoticeShown]), and show a pane as its chat or its terminal
+ * ([onView]).
  */
 data class AttachedActions(
     val onOpen: (SessionKey) -> Unit,
@@ -20,6 +22,7 @@ data class AttachedActions(
     val onEnd: (SessionKey) -> Unit,
     val onOpenMachines: () -> Unit,
     val onNoticeShown: () -> Unit,
+    val onView: (PaneRef, PaneView) -> Unit = { _, _ -> },
 ) {
     companion object {
         /** The actions of [viewModel], with [onOpenMachines] going to Machines. */
@@ -37,6 +40,7 @@ data class AttachedActions(
             onEnd = viewModel::end,
             onOpenMachines = onOpenMachines,
             onNoticeShown = viewModel::noticeShown,
+            onView = viewModel::pickView,
         )
     }
 }

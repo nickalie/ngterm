@@ -355,6 +355,27 @@ class SessionViewTest {
     }
 
     @Test
+    fun theBarSwitchesAPaneRunningAnAgentBetweenItsChatAndItsTerminal() {
+        openSession()
+        // no agent, no switch
+        assertTrue(described("Show terminal").not() && described("Show chat").not())
+        // an agent in the other pane: the switch is the focused pane's
+        test.core.emit(MobileEvent.PaneAgent("m1", "s1", "P2", "codex", "t1"))
+        compose.waitForIdle()
+        assertTrue(described("Show terminal").not() && described("Show chat").not())
+
+        test.core.emit(MobileEvent.PaneAgent("m1", "s1", "P1", "claude", "c1"))
+        waitFor { described("Show terminal") }
+        assertEquals(setOf(p1), test.core.openChats)
+        compose.onNodeWithContentDescription("Show terminal").performClick()
+        waitFor { described("Show chat") }
+        assertTrue(test.core.openChats.isEmpty())
+        compose.onNodeWithContentDescription("Show chat").performClick()
+        waitFor { described("Show terminal") }
+        assertEquals(setOf(p1), test.core.openChats)
+    }
+
+    @Test
     fun backClosesTheViewAndKeepsTheSessionAttached() {
         openSession()
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }

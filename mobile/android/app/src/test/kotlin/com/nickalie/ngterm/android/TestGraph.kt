@@ -19,6 +19,7 @@ import com.nickalie.ngterm.android.data.StoredMachine
 import com.nickalie.ngterm.android.platform.KeyWrapper
 import com.nickalie.ngterm.android.platform.KeystoreKeyVault
 import com.nickalie.ngterm.android.platform.PinnedHostKeys
+import com.nickalie.ngterm.android.ui.chat.PaneChats
 import com.nickalie.ngterm.android.ui.session.SessionPanes
 import com.nickalie.ngterm.core.fake.FakeMobileCore
 import com.nickalie.ngterm.core.ffi.KeyException
@@ -143,6 +144,7 @@ class TestGraph(
     // the panes' frames are read on the main thread, where the UI tests' clock drives them
     val settings = SettingsStore(testStore(dir, "settings"))
     val panes = SessionPanes(scope, connections, live, EmptyCoroutineContext, settings.settings)
+    val chats = PaneChats(scope, connections, live, panes.shown, settings.settings)
     val asks = Asks(scope, connections)
 
     // the notification permission counts as asked unless the test is about its question
@@ -159,6 +161,7 @@ class TestGraph(
             connections = connections,
             clipboardReads = clipboardReads,
             panes = panes,
+            chats = chats,
             asks = asks,
             notificationPrefs = notificationPrefs,
             settings = settings,

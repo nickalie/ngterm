@@ -39,8 +39,19 @@ data class PaneLive(
 )
 
 /**
+ * The agent a pane runs, as its origin announces it: [agent] (`claude`, `codex`, or a name a newer origin knows) and
+ * its [conversation] (`null` until the origin knows it).
+ */
+data class PaneAgent(
+    val agent: String,
+    val conversation: String?,
+)
+
+/**
  * An attached session as its presentation stream left it: the stream's [connection], the agent's [status], its
- * [context], its panes' [layout] (`null` before the first), the [hud] over it, and its shown [panes] by id. Whether
+ * [context], its panes' [layout] (`null` before the first), the [hud] over it, its shown [panes] by id, and the
+ * [agents] its panes run (every pane's, shown or not, by id; an origin that predates the chat view announces none,
+ * and a stream that drops keeps them, as the origin announces them all again when it is back). Whether
  * the stream has said a status or context yet is [statusSaid] and [contextSaid]: once it has, its `null` is a clear,
  * not a gap the machine's listing fills.
  */
@@ -51,6 +62,7 @@ data class LiveSession(
     val layout: RemoteLayout? = null,
     val hud: RemoteHud? = null,
     val panes: Map<String, PaneLive> = emptyMap(),
+    val agents: Map<String, PaneAgent> = emptyMap(),
     val statusSaid: Boolean = false,
     val contextSaid: Boolean = false,
 )
@@ -71,7 +83,8 @@ fun interface ClipboardSink {
 
 /**
  * What the core tells the app about the attached sessions and their shown panes, kept per session in [sessions]: the
- * stream's state, status, context, layout and HUD, and each pane's role, cover, end and title. A shown pane's frames
+ * stream's state, status, context, layout and HUD, each pane's role, cover, end and title, and the agents the panes
+ * run. A shown pane's frames
  * go to the [PaneFrames] [route]d to it, and a program's write to the standard clipboard goes to [clipboard] (in
  * [scope]); Android has no selection or primary clipboard, so a write to either is dropped. A detached session's
  * state is let go. A stream that fails before the session was ever shown has the machine listed again, so a session
@@ -167,6 +180,10 @@ class LiveSessions(
                 clipboardWrite(event.clipboard, event.text)
             }
 
+            is MobileEvent.PaneAgent -> {
+                agent(event)
+            }
+
             else -> {}
         }
     }
@@ -175,6 +192,13 @@ class LiveSessions(
     private fun attached(pane: PaneRef) {
         pane(pane) { copy(end = null) }
         frames[pane]?.attached()
+    }
+
+    private fun agent(event: MobileEvent.PaneAgent) {
+        val agent = event.agent?.let { PaneAgent(it, event.conversationId) }
+        session(event.machineId, event.sessionId) {
+            copy(agents = if (agent == null) agents - event.paneId else agents + (event.paneId to agent))
+        }
     }
 
     private fun clipboardWrite(

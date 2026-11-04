@@ -1,0 +1,182 @@
+package com.nickalie.ngterm.android.ui.chat
+
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.nickalie.ngterm.android.ui.session.OpenSession
+import com.nickalie.ngterm.android.ui.session.SessionViewModel
+import com.nickalie.ngterm.core.fake.FakeCall
+import com.nickalie.ngterm.core.ffi.ChatState
+import com.nickalie.ngterm.core.ffi.MobileEvent
+import com.nickalie.ngterm.core.ffi.MobileException
+import com.nickalie.ngterm.core.ffi.RemoteLayout
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+
+/** Which view a pane running an agent shows, and the chats that follow from it ([PaneChats], [SessionViewModel]). */
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(AndroidJUnit4::class)
+class ChatModeTest {
+    @get:Rule
+    val dir = TemporaryFolder()
+
+    private lateinit var bed: ChatBed
+    private val models = ViewModelStore()
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        bed = ChatBed(dir.root)
+    }
+
+    @After
+    fun tearDown() {
+        models.clear()
+        bed.close()
+        Dispatchers.resetMain()
+    }
+
+    private fun model(): SessionViewModel =
+        ViewModelProvider(models, viewModelFactory { initializer { SessionViewModel(bed.test.graph) } })[
+            SessionViewModel::class.java,
+        ]
+
+    private fun openChats() = bed.test.core.openChats
+
+    private fun closes(id: String) =
+        bed.test.core.calls
+            .count { it == FakeCall("closeChat", listOf("m1", "s1", id)) }
+
+    private fun setChatView(on: Boolean) = runBlocking { bed.test.settings.update { it.copy(agentChat = on) } }
+
+    @Test
+    fun aShownPaneWhoseOriginAnnouncesAnAgentSwitchesToItsChat() {
+        bed.attach("p1", "p2")
+        val model = model()
+        model.open(bed.key)
+        bed.show("p1")
+        assertTrue(openChats().isEmpty())
+        bed.agent("p1")
+        eventually { (model.state.value.open as? OpenSession.Live)?.views == mapOf("p1" to PaneView.Chat) }
+        assertEquals(setOf(bed.ref("p1")), openChats())
+        assertEquals(bed.ref("p1"), bed.chat("p1")?.pane)
+        // the chat reads; it claims nothing, and the pane's own attach stays
+        assertTrue(
+            bed.test.core.calls
+                .none { it.method == "takeLead" || it.method == "hidePane" },
+        )
+        assertTrue(bed.ref("p1") in bed.test.panes.shown.value)
+    }
+
+    @Test
+    fun aPaneOffScreenGetsItsViewButNoChatUntilItIsShown() {
+        bed.attach("p1", "p2")
+        bed.show("p1")
+        bed.agent("p2", conversation = "c9")
+        eventually { bed.view("p2") == PaneView.Chat }
+        assertTrue(openChats().isEmpty())
+        bed.show("p2")
+        eventually { openChats() == setOf(bed.ref("p2")) }
+        // hidden (its session's layout dropped it), it closes
+        bed.test.core.emit(MobileEvent.SessionLayout("m1", "s1", RemoteLayout(listOf("p1"), "p1", "vertical", true)))
+        eventually { openChats().isEmpty() && bed.chat("p2") == null }
+    }
+
+    @Test
+    fun withTheSettingOffEveryPaneShowsItsTerminal() {
+        setChatView(false)
+        bed.attach("p1")
+        bed.show("p1")
+        bed.agent("p1")
+        eventually {
+            bed.test.live.sessions.value[bed.key]
+                ?.agents
+                ?.isNotEmpty() == true
+        }
+        assertNull(bed.view("p1"))
+        assertTrue(openChats().isEmpty())
+
+        setChatView(true)
+        eventually { bed.view("p1") == PaneView.Chat && openChats() == setOf(bed.ref("p1")) }
+        val closed = closes("p1")
+
+        setChatView(false)
+        eventually { bed.view("p1") == null && openChats().isEmpty() }
+        assertEquals(closed + 1, closes("p1"))
+    }
+
+    @Test
+    fun pickingTheTerminalHoldsUntilThePanesNextConversation() {
+        bed.attach("p1")
+        val model = model()
+        model.open(bed.key)
+        bed.show("p1")
+        bed.agent("p1", conversation = "c1")
+        eventually { bed.view("p1") == PaneView.Chat }
+
+        model.pickView(bed.ref("p1"), PaneView.Terminal)
+        eventually { (model.state.value.open as? OpenSession.Live)?.views == mapOf("p1" to PaneView.Terminal) }
+        assertTrue(openChats().isEmpty())
+        assertEquals(1, closes("p1"))
+        // the origin asserts the same conversation again (a prompt, a restart): the terminal holds
+        bed.agent("p1", conversation = "c1")
+        assertEquals(PaneView.Terminal, bed.view("p1"))
+        // the chat picked by hand comes back, and the terminal again
+        model.pickView(bed.ref("p1"), PaneView.Chat)
+        eventually { bed.view("p1") == PaneView.Chat && openChats().isNotEmpty() }
+        model.pickView(bed.ref("p1"), PaneView.Terminal)
+        eventually { bed.view("p1") == PaneView.Terminal && openChats().isEmpty() }
+
+        // the next conversation starts in its chat
+        bed.agent("p1", conversation = "c2")
+        eventually { bed.view("p1") == PaneView.Chat && openChats() == setOf(bed.ref("p1")) }
+    }
+
+    @Test
+    fun theAgentEndingReturnsThePaneToItsTerminal() {
+        bed.attach("p1")
+        bed.show("p1")
+        bed.agent("p1", conversation = "c1")
+        eventually { bed.chat("p1") != null }
+
+        bed.agent("p1", agent = null)
+        eventually { bed.view("p1") == null && openChats().isEmpty() && bed.chat("p1") == null }
+
+        // the next agent opens in its chat
+        bed.agent("p1", conversation = "c2")
+        eventually { bed.view("p1") == PaneView.Chat && openChats().isNotEmpty() }
+
+        // a chat the origin ends while it still announces the agent leaves the terminal for that conversation
+        bed.test.core.emit(MobileEvent.ChatState(bed.ref("p1"), ChatState.ENDED))
+        eventually { bed.view("p1") == PaneView.Terminal && bed.chat("p1") == null }
+        bed.agent("p1", conversation = "c2")
+        assertEquals(PaneView.Terminal, bed.view("p1"))
+        bed.agent("p1", conversation = "c3")
+        eventually { bed.view("p1") == PaneView.Chat && bed.chat("p1") != null }
+    }
+
+    @Test
+    fun aChatTheOriginCantOpenLeavesTheTerminalWithNoError() {
+        bed.attach("p1")
+        bed.show("p1")
+        bed.test.core.failNext("openChat", MobileException.Remote("unknown command agent"))
+        bed.agent("p1")
+        eventually { bed.view("p1") == PaneView.Terminal && bed.chat("p1") == null }
+        assertTrue(openChats().isEmpty())
+    }
+}

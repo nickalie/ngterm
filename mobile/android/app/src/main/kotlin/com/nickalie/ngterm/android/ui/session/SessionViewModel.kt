@@ -8,6 +8,7 @@ import com.nickalie.ngterm.android.data.LiveSession
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.data.StoredMachine
 import com.nickalie.ngterm.android.data.reason
+import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneEnd
 import com.nickalie.ngterm.core.ffi.PaneRef
@@ -57,11 +58,13 @@ sealed interface OpenSession {
 
     /**
      * Attached: [session], with the pane selected ([focused]; `null` before its layout arrives), the one every key
-     * goes to.
+     * goes to, and how each of its panes running an agent shows ([views], by pane id; a pane not there shows its
+     * terminal, with no switch).
      */
     data class Live(
         val session: AttachedSession,
         val focused: String?,
+        val views: Map<String, PaneView> = emptyMap(),
     ) : OpenSession {
         override val key: SessionKey get() = session.key
     }
@@ -86,8 +89,10 @@ data class AttachedUiState(
 /**
  * The attached sessions across machines and the session view: which session is open, which of its panes has the
  * focus (kept per session, so a trip elsewhere and back, or a new window size, finds the same pane), showing its
- * panes, Take control, Detach and End session. [notice] carries what failed out of sight (an End) for a snackbar.
+ * panes, each pane's chat or terminal view and its chat, Take control, Detach and End session. [notice] carries what
+ * failed out of sight (an End) for a snackbar.
  */
+@Suppress("TooManyFunctions") // a function per thing the session view does
 class SessionViewModel(
     private val graph: AppGraph,
 ) : ViewModel() {
@@ -111,9 +116,15 @@ class SessionViewModel(
 
     /** The destination's state. */
     val state: StateFlow<AttachedUiState> =
-        combine(listed, graph.panes.live.sessions, openKey, focus) { listed, live, open, focus ->
+        combine(
+            listed,
+            graph.panes.live.sessions,
+            openKey,
+            focus,
+            graph.chats.views,
+        ) { listed, live, open, focus, views ->
             val groups = groups(listed, live, seen)
-            AttachedUiState(groups, open?.let { open(it, listed, groups, focus) })
+            AttachedUiState(groups, open?.let { open(it, listed, groups, focus, views) })
         }.catch { emit(AttachedUiState()) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, AttachedUiState())
 
@@ -122,6 +133,9 @@ class SessionViewModel(
 
     /** Why a pane could not be shown, by pane. */
     val paneFailures = graph.panes.failures
+
+    /** The open chats of the panes shown in chat view, by pane. */
+    val chats = graph.chats.chats
 
     /** What the view should say once in a snackbar, until [noticeShown]. */
     val notice: StateFlow<String?> = notices.asStateFlow()
@@ -133,6 +147,7 @@ class SessionViewModel(
         listed: Listed,
         groups: List<AttachedGroup>,
         focus: Map<SessionKey, String>,
+        views: Map<PaneRef, PaneView>,
     ): OpenSession? {
         val session = groups.firstOrNull { it.machineId == key.machineId }?.sessions?.firstOrNull { it.key == key }
         val tree = listed.trees[key.machineId]
@@ -147,7 +162,8 @@ class SessionViewModel(
                         ?.panes
                         .orEmpty()
                 val focused = focus[key]?.takeIf { it in panes } ?: session.live.layout?.primary
-                OpenSession.Live(session, focused)
+                val shown = views.filterKeys { it.machineId == key.machineId && it.sessionId == key.sessionId }
+                OpenSession.Live(session, focused, shown.mapKeys { it.key.paneId })
             }
 
             session != null || (tree != null && tree.none { it.id == key.sessionId }) -> {
@@ -189,6 +205,12 @@ class SessionViewModel(
         pane: PaneRef,
         size: PaneSize,
     ) = graph.panes.retry(pane, size)
+
+    /** Shows [pane] as [view]: its chat, or its terminal until the pane's next conversation. */
+    fun pickView(
+        pane: PaneRef,
+        view: PaneView,
+    ) = graph.chats.pick(pane, view)
 
     /** Take control of [pane]. */
     fun takeLead(pane: PaneRef) = graph.panes.takeLead(pane)

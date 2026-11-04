@@ -55,6 +55,8 @@ class StoresTest {
         runBlocking {
             val store = SettingsStore(testStore(dir.root, "settings"))
             assertEquals(AppSettings(), store.settings.first())
+            // the chat view is on until turned off
+            assertTrue(store.settings.first().agentChat)
             store.update {
                 it.copy(
                     textSize = 40,
@@ -64,6 +66,7 @@ class StoresTest {
                     wallpaperColors = true,
                     extraKeys = ExtraKeysChoice.Hidden,
                     keepScreenOn = true,
+                    agentChat = false,
                 )
             }
             val again = store.settings.first()
@@ -75,6 +78,7 @@ class StoresTest {
             assertTrue(again.wallpaperColors)
             assertEquals(ExtraKeysChoice.Hidden, again.extraKeys)
             assertTrue(again.keepScreenOn)
+            assertFalse(again.agentChat)
         }
 
     @Test

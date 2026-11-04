@@ -27,6 +27,7 @@ import com.nickalie.ngterm.android.platform.PinnedHostKeys
 import com.nickalie.ngterm.android.service.IdleKeeper
 import com.nickalie.ngterm.android.service.LinkKeeper
 import com.nickalie.ngterm.android.service.LinkService
+import com.nickalie.ngterm.android.ui.chat.PaneChats
 import com.nickalie.ngterm.android.ui.session.SessionPanes
 import com.nickalie.ngterm.core.ffi.MobileCore
 import kotlinx.coroutines.CoroutineScope
@@ -65,6 +66,7 @@ class NgtermApplication :
         val settings = SettingsStore(PreferenceDataStoreFactory.create { file("settings") })
         val machines = MachineStore(PreferenceDataStoreFactory.create { file("machines") })
         val asks = Asks(scope, connections)
+        val panes = SessionPanes(scope, connections, live, settings = settings.settings)
         val prefs = NotificationPrefs(PreferenceDataStoreFactory.create { file("notifications") })
         Alerts(scope, connections, asks, machines.machines, prefs.enabled, Notifications(this))
         LinkKeeper(scope, connections.attached) { LinkService.start(this) }
@@ -94,7 +96,8 @@ class NgtermApplication :
                     trust = ClipboardTrust(PreferenceDataStoreFactory.create { file("clipboard") }),
                     clipboard = clipboard,
                 ),
-            panes = SessionPanes(scope, connections, live, settings = settings.settings),
+            panes = panes,
+            chats = PaneChats(scope, connections, live, panes.shown, settings.settings),
             asks = asks,
             notificationPrefs = prefs,
             settings = settings,

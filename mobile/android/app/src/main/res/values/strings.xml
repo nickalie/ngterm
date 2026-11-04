@@ -241,6 +241,8 @@
   <string name="session_close">Close</string>
   <string name="session_pane">Pane %1$d of %2$d</string>
   <string name="session_pane_titled">Pane %1$d of %2$d, %3$s</string>
+  <string name="session_show_chat">Show chat</string>
+  <string name="session_show_terminal">Show terminal</string>
   <string name="session_follower_title">Another device is driving this pane</string>
   <string name="session_follower_body">Its size and keys are the other device\'s. Take control to type here; the other device follows.</string>
   <string name="session_take_control">Take control</string>
@@ -320,6 +322,9 @@
   <string name="settings_keys_two_note">Wider keys on a tablet or held sideways</string>
   <string name="settings_keys_hidden">Hidden</string>
   <string name="settings_keys_hidden_note">Only the soft keyboard. A hardware keyboard always hides the row.</string>
+  <string name="settings_agents">Agents</string>
+  <string name="settings_agent_chat">Agent chat view</string>
+  <string name="settings_agent_chat_note">Show a pane running Claude Code or Codex as a chat. The session\'s bar switches it to the terminal and back.</string>
   <string name="settings_notifications">Notifications</string>
   <string name="settings_notifications_off">ngterm can\'t post notifications. Turn them on to hear about agents while you\'re away.</string>
   <string name="settings_notifications_turn_on">Turn on</string>

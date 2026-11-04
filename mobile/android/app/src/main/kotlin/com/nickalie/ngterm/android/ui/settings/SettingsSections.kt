@@ -81,6 +81,25 @@ internal fun NotificationsSection(
     }
 }
 
+/**
+ * How a pane running Claude Code or Codex shows: as a chat ([chatOn]) or as its terminal, with the switch in the
+ * session's bar either way.
+ */
+@Composable
+internal fun AgentsSection(
+    chatOn: Boolean,
+    onChatOn: (Boolean) -> Unit,
+) {
+    SettingsSection(stringResource(R.string.settings_agents)) {
+        SwitchRow(
+            label = stringResource(R.string.settings_agent_chat),
+            note = stringResource(R.string.settings_agent_chat_note),
+            checked = chatOn,
+            onCheckedChange = onChatOn,
+        )
+    }
+}
+
 /** The machines whose programs read the clipboard unasked, each with Ask again; or that every machine asks. */
 @Composable
 internal fun ClipboardSection(

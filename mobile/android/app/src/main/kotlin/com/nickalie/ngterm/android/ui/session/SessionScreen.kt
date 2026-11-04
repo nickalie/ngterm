@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.ExtraKeysChoice
 import com.nickalie.ngterm.android.data.SessionKey
+import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.android.ui.components.ErrorState
 import com.nickalie.ngterm.android.ui.components.PanelAction
 import com.nickalie.ngterm.android.ui.terminal.ExtraKeysRow
@@ -63,6 +64,7 @@ import com.nickalie.ngterm.core.ffi.StreamState
  * alone and a swipe across it moves to the next or previous one; wider windows show the origin's split. The shown
  * panes' states are [panes] (by pane), and why one could not be shown [failures]. One [keyboard] serves every pane
  * and the extra keys, laid out as Settings' [extraKeys] says; its chords move between the panes and the sessions.
+ * [views] says how each pane running an agent shows (by pane id), and the bar switches the selected one's.
  *
  * The [focused] pane is the selected one, the only one anything typed reaches: a tab, a swipe, a chord and a touch
  * on a pane ask [SessionViewActions.onFocus] to select it, and the keyboard's target and the input focus follow the
@@ -79,6 +81,7 @@ fun SessionScreen(
     modifier: Modifier = Modifier,
     keyboard: TerminalKeyboard = rememberTerminalKeyboard(),
     extraKeys: ExtraKeysChoice = ExtraKeysChoice.Fit,
+    views: Map<String, PaneView> = emptyMap(),
 ) {
     val key = session.key
     val live = session.live
@@ -106,6 +109,8 @@ fun SessionScreen(
                 onSelectPane = focus,
                 onDetach = { actions.onDetach(key) },
                 onEnd = { actions.onEnd(key) },
+                view = focused?.let(views::get),
+                onView = { view -> selected?.let { actions.onView(it, view) } },
             )
             live.hud?.takeIf { roomy }?.let { HudBanner(it, Modifier.padding(NgtermTheme.spacing.sm)) }
             Box(Modifier.weight(1f).fillMaxWidth()) {

@@ -157,7 +157,8 @@ above headings.
 
 Line icons drawn for the app in `res/drawable/ic_*.xml`: 24dp, 2dp strokes, round ends, tinted by `Icon`. Machines
 (two racked servers), Sessions (a terminal window), Settings (sliders), Menu and Menu open, Add, Retry, Alert, Offline
-(a struck signal), Close, Lock, Back (mirrored right to left), More (an item's menu) and the extra keys' arrow
+(a struck signal), Close, Lock, Back (mirrored right to left), More (an item's menu), Chat (a speech bubble with two
+lines, `ic_chat`) and the extra keys' arrow
 (`ic_key_arrow`, turned for each direction). The status bar's small icon (`ic_notification`) is the mark's `>_` alone,
 white on nothing, as Android masks it. The status glyphs are 16dp filled or stroked shapes (`ic_status_*`). The mark
 (`ic_ngterm_mark`) is the launcher's `>_` cut out of a copper tile. No icon font or icon library.
@@ -478,6 +479,7 @@ The plan, reviewed against the brief:
 | A tinted frame or an accent border around the focused pane of a split | a second loud mark, and a frame costs the terminal its edge cells | the bus bar again, in a 4dp gutter at the focused pane's leading edge; the other pane's cursor goes hollow |
 | The HUD as a floating toast in the origin's colors | an overlay over the text, colored by someone else | a `Banner`-shaped strip under the bar, on `surfaceContainerHigh`, the origin's words and its spinner |
 | One full veil for every reason a pane can't be used | hides the screen the user is trying to keep their place in | the full `Cover` where the pane can't be trusted (another device drives it, it is attaching, its program ended); a light scrim and a strip while it reconnects, so the last screen stays readable |
+| A Chat / Terminal segmented control for a pane running an agent | 96dp and two labels in a bar that already holds the name, the pane tabs and More; it truncates at font scale 2.0, and its selected half would be a second "you are here" mark beside the bus bar | one 48dp icon button named for what a tap does: "Show terminal" (the Sessions glyph) over a chat, "Show chat" (`ic_chat`) over a terminal, and only while the focused pane runs an agent |
 
 ```
 compact                            medium (rail open)               expanded
@@ -501,13 +503,22 @@ compact                            medium (rail open)               expanded
   width up it is the content beside the rail or the sidebar, which list the attached sessions (below).
 - **The bar** (`surfaceContainer`, under the status bar): Back on a phone; the session's name (titleMedium) over its
   agent status (`AgentStatusBadge`, or the stream's own state while it isn't live: Connecting, Reconnecting, or Can't stream) and its
-  context in one line; the pane switcher; More. The bar is the one place the session's state shows; nothing in the
-  terminal repeats it.
+  context in one line; the pane switcher; the view switch; More. The bar is the one place the session's state shows;
+  nothing in the terminal repeats it.
 - **The pane switcher** (`PaneSwitcher`): only with two panes. A tab per pane, numbered in the origin's order, 48dp
   square, the pane's title as its TalkBack label ("Pane 1 of 2, vim"). The pane on screen (a phone) or with the
   focus (a split) has the copper number and the bus bar under it. On a phone a swipe across the terminal pages
   between the panes too: a mostly sideways drag of 64dp or more, or a fast sideways fling, goes to the next or
   previous pane; other drags scroll the terminal.
+- **The view switch** (`SessionBar`, `ui/chat/PaneChats.kt`): while the focused pane runs Claude Code or Codex (its
+  origin announces the agent) and Settings' Agent chat view is on, the pane shows as a chat and the bar has one more
+  48dp icon button, between the pane switcher and More. It names what a tap does: "Show terminal" with the Sessions
+  glyph over a chat, "Show chat" with `ic_chat` over the terminal; TalkBack reads those words. Picking the terminal
+  holds for that pane until its agent starts its next conversation (or another agent starts there); picking the chat
+  lifts it. When the agent ends, or its chat ends or can't open (an origin without the chat view), the pane shows its
+  terminal and the switch offers the chat back while the agent is still announced. A pane without an agent, or every
+  pane with the setting off, has no switch. Switching never resizes the pane or moves its lead: the terminal stays
+  attached at its grid behind the chat, and only a chat action takes control. The chat itself is `ui/chat/`.
 - **The split** (`SplitLayout`, medium and expanded): the origin's layout as it is, two panes side by side
   (`vertical`) or stacked (`horizontal`), halves split by a 1dp `outlineVariant` rule, since the terminal's ground is
   the chrome's. Each pane of a split keeps a 4dp gutter at its leading edge where the focused one shows the bus bar
@@ -555,9 +566,9 @@ compact                            medium (rail open)               expanded
   `SectionHeader`, then a `SessionRow` each with its status, the bus bar on the one open). The rail, collapsed, gives
   each a 64dp cell, its status glyph over its name cut to fit; opened, the sidebar's rows. Either opens the session
   under Sessions.
-- **State:** the open session, the focused pane of each session and the shown panes live in the app's process, not
-  the screen, so rotation, folding, a size-class change or a trip to another destination keeps them, and a pane keeps
-  its lead.
+- **State:** the open session, the focused pane of each session, the shown panes, each pane's view and its open chat
+  live in the app's process, not the screen, so rotation, folding, a size-class change or a trip to another
+  destination keeps them, and a pane keeps its lead.
 - **Clipboard:** a program's OSC 52 write sets the device's clipboard (Android shows its own notice); a write to the
   selection or primary clipboard, which Android lacks, is dropped.
 
@@ -676,7 +687,8 @@ The plan, reviewed against the brief:
 | Font   (o) JetBrains Mono            |
 | Colors (o) Match the theme  [######] |
 | Keep the screen on              [on] |
-| Appearance  Extra keys  Notifications|
+| Appearance  Extra keys  Agents       |
+| Notifications                        |
 | Clipboard  Keys  About               |
 +--------------------------------------+
 ```
@@ -691,6 +703,9 @@ The plan, reviewed against the brief:
   follow the side picked.
 - **Extra keys:** Fit to the width (as Keyboard above), Always two lines, or Hidden (only the soft keyboard; a
   hardware keyboard hides the row whatever is picked).
+- **Agents:** Agent chat view, a switch, on by default: a pane running Claude Code or Codex shows as a chat, with the
+  terminal one tap away in the session's bar (The view switch, above). Off, every pane shows its terminal and the bar
+  has no switch.
 - **Notifications:** a switch per kind (Waiting for you, Finished, Agent notifications, Lost machines), and the line
   that questions always notify. While the system lets the app post none (the permission refused, Not now, or turned
   off), a `Banner` with the attention diamond says so, and Turn on opens the system's notification settings for the

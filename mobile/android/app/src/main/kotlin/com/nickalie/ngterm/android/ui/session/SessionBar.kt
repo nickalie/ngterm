@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.data.Link
+import com.nickalie.ngterm.android.ui.chat.PaneView
 import com.nickalie.ngterm.android.ui.components.AgentStatusBadge
 import com.nickalie.ngterm.android.ui.components.StatusBadge
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
@@ -40,7 +41,8 @@ import com.nickalie.ngterm.core.ffi.StreamState
 /**
  * The session view's one bar, under the status bar: Back ([onBack], a phone's), the session's name over its state
  * (the agent's status while the stream is live, the stream's own state while it isn't) and its context, the pane
- * switcher ([onSelectPane]; [focused] marked), and More: Detach ([onDetach], at once) and End session ([onEnd], once
+ * switcher ([onSelectPane]; [focused] marked), the view switch while the focused pane runs an agent ([view], how it
+ * shows now; [onView] asks for the other), and More: Detach ([onDetach], at once) and End session ([onEnd], once
  * confirmed).
  */
 @Composable
@@ -52,6 +54,8 @@ fun SessionBar(
     onDetach: () -> Unit,
     onEnd: () -> Unit,
     modifier: Modifier = Modifier,
+    view: PaneView? = null,
+    onView: (PaneView) -> Unit = {},
 ) {
     val spacing = NgtermTheme.spacing
     var confirming by rememberSaveable { mutableStateOf(false) }
@@ -91,6 +95,7 @@ fun SessionBar(
             titles = live.panes.mapValues { it.value.title },
             onSelect = onSelectPane,
         )
+        view?.let { ViewSwitch(it, onView) }
         SessionMenu(session.name, onDetach = onDetach, onEnd = { confirming = true })
     }
     if (confirming) {
@@ -103,6 +108,24 @@ fun SessionBar(
             },
             onDismiss = { confirming = false },
         )
+    }
+}
+
+// the focused pane's other view, named for what a tap does: Show terminal over a chat, Show chat over a terminal
+@Composable
+private fun ViewSwitch(
+    view: PaneView,
+    onView: (PaneView) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val other = if (view == PaneView.Chat) PaneView.Terminal else PaneView.Chat
+    val (icon, label) =
+        when (other) {
+            PaneView.Terminal -> R.drawable.ic_sessions to R.string.session_show_terminal
+            PaneView.Chat -> R.drawable.ic_chat to R.string.session_show_chat
+        }
+    IconButton(onClick = { onView(other) }, modifier = modifier) {
+        Icon(painterResource(icon), contentDescription = stringResource(label))
     }
 }
 

@@ -42,6 +42,8 @@ data class AppSettings(
     val extraKeys: ExtraKeysChoice = ExtraKeysChoice.Fit,
     /** Keeps the screen on while an attached session is open. */
     val keepScreenOn: Boolean = false,
+    /** Shows a pane running Claude Code or Codex as a chat (`ui/chat/`), with the terminal one switch away. */
+    val agentChat: Boolean = true,
 )
 
 /**
@@ -65,6 +67,7 @@ class SettingsStore(
             prefs[WALLPAPER] = now.wallpaperColors
             prefs[EXTRA_KEYS] = now.extraKeys.name
             prefs[SCREEN_ON] = now.keepScreenOn
+            prefs[AGENT_CHAT] = now.agentChat
         }
     }
 
@@ -76,6 +79,7 @@ class SettingsStore(
         val WALLPAPER = booleanPreferencesKey("wallpaper_colors")
         val EXTRA_KEYS = stringPreferencesKey("extra_keys")
         val SCREEN_ON = booleanPreferencesKey("keep_screen_on")
+        val AGENT_CHAT = booleanPreferencesKey("agent_chat")
 
         fun decode(prefs: Preferences): AppSettings {
             val defaults = AppSettings()
@@ -87,6 +91,7 @@ class SettingsStore(
                 wallpaperColors = prefs[WALLPAPER] ?: defaults.wallpaperColors,
                 extraKeys = prefs[EXTRA_KEYS].toEnum(defaults.extraKeys),
                 keepScreenOn = prefs[SCREEN_ON] ?: defaults.keepScreenOn,
+                agentChat = prefs[AGENT_CHAT] ?: defaults.agentChat,
             )
         }
 
