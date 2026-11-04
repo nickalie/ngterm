@@ -327,7 +327,9 @@ fn chrome_elements_split_between_title_bar_and_sidebar() {
             "New session",
             "Flagged view",
             "Workspace filter",
-            "Workspace add-session"
+            "Workspace add-session",
+            "Workspace icons",
+            "Session icons"
         ]
     );
     assert_eq!(
@@ -685,4 +687,55 @@ fn a_chosen_directory_is_stored_exactly_and_a_blank_one_is_the_default() {
         SettingsChange::ConfigDirectory(Some(String::new())),
     ]);
     assert_eq!(blank, AppSettings::default());
+}
+
+/// Upstream's `rowIconElementsAreShownByDefaultAndHideIndependently` and `SettingsModel`'s raw storage.
+#[test]
+fn row_icon_elements_are_shown_by_default_and_hide_independently() {
+    for (element, name, other) in [
+        (
+            InterfaceElement::SessionIcons,
+            "Session icons",
+            InterfaceElement::WorkspaceIcons,
+        ),
+        (
+            InterfaceElement::WorkspaceIcons,
+            "Workspace icons",
+            InterfaceElement::SessionIcons,
+        ),
+    ] {
+        assert!(!element.in_title_bar());
+        assert_eq!(element.display_name(), name);
+        assert!(!element.hidden_by_default());
+        let mut settings = AppSettings::default();
+        assert!(!settings.is_interface_element_hidden(element));
+        settings.set_interface_element_visible(element, false);
+        assert!(settings.is_interface_element_hidden(element));
+        assert!(!settings.is_interface_element_hidden(other));
+        assert_eq!(settings.hidden_interface_elements, Some(vec![element.raw().to_owned()]));
+        settings.set_interface_element_visible(element, true);
+        assert_eq!(settings.hidden_interface_elements, None);
+    }
+}
+
+#[test]
+fn session_info_display_is_live_persists_and_removes_its_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut core = persisted_core(dir.path());
+    for display in SessionInfoDisplay::ALL {
+        let edit = SettingsChange::Interface(InterfaceChange::SessionInfoDisplay(*display));
+        let mut settings = AppSettings::default();
+        assert_eq!(edit.clone().apply_to(&mut settings), Effect::Live);
+        core.change_settings(edit);
+        let stored = SettingsStore::new(dir.path()).load();
+        assert_eq!(stored.effective_session_info_display(), *display);
+        assert_eq!(
+            stored.session_info_display.as_deref(),
+            (*display != SessionInfoDisplay::Always).then(|| display.raw())
+        );
+    }
+    core.change_settings(SettingsChange::Interface(InterfaceChange::SessionInfoDisplay(
+        SessionInfoDisplay::Always,
+    )));
+    assert_eq!(SettingsStore::new(dir.path()).load().session_info_display, None);
 }

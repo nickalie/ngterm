@@ -215,9 +215,18 @@ def test_idle_ms_starts_with_a_gui_keystroke(app, ctl, ui):
 def test_session_info_renders_visible_text_below_its_row(ctl, ui):
     sid = _new(ctl)
     try:
+        assert_ok(ctl.request("session.rename", sid, name="ui-info-session"))
         assert_ok(ctl.request("session.info", sid, mode="set", text="**3** agents", markdown=True))
-        ui.find("session-info", role="text", value="3 agents")
+        line = ui.find("session-info", role="text", value="3 agents")
+        row = next(row for row in ui.all("session-row") if ui.text(row) == "ui-info-session")
+        assert ui.frame(line)[1] > ui.frame(row)[1], "info is below its session name"
+        assert_ok(ctl.request("session.info", sid, mode="set", text="updated"))
+        ui.find("session-info", role="text", value="updated")
         assert_ok(ctl.request("session.info", sid, mode="clear"))
         ui.absent("session-info")
+        assert_ok(ctl.request("session.info", sid, mode="set", text="expires", hideAfter=1))
+        ui.find("session-info", role="text", value="expires")
+        ui.absent("session-info")
+        assert "info" not in find_session(ctl.tree(), sid)
     finally:
         assert_ok(ctl.request("session.close", sid))

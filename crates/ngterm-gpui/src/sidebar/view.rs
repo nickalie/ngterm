@@ -34,12 +34,12 @@ use super::look::{
     FOOTER_BUTTON, FOOTER_GAP, FOOTER_PADDING, GAP, Look, NESTED_INDENT, PILL_INSET_X, PILL_INSET_Y, PILL_RADIUS,
     color,
 };
-use super::menu;
 use super::rows::badge_text;
 use super::{
     DividerDrag, EMPTY_FLAGGED, EMPTY_FLAGGED_ADD, FooterAction, RowDrag, RowGroup, RowKind, Sidebar, SidebarRow,
     context,
 };
+use super::{info, menu};
 use crate::interface_glyph;
 use crate::row_icon::{self, Glyph, SLOT};
 use crate::status_glyph;
@@ -153,17 +153,34 @@ impl Sidebar {
         let look = self.look;
         let selected = matches!(row.kind, RowKind::Session { selected: true, .. });
         let workspace = row.is_workspace();
+        #[expect(clippy::cast_possible_truncation, reason = "sidebar width is at most 560 points")]
+        let info_width = self.width() as f32 - 2. * CONTENT_INSET - row_lead(row) - icon_width(row);
         let mut element = div()
             .id(ElementId::Uuid(id))
             .debug_selector(|| format!("row:{}", row.label))
             .relative()
             .flex_none()
             .w_full()
-            .h(px(look.row_height()))
+            .h(px(look.row_height()
+                + if row.info.is_empty() {
+                    0.
+                } else {
+                    info::line_height(look, window)
+                }))
             .px(px(CONTENT_INSET))
             .text_color(look.text(selected))
             .when(selected, |element| element.child(pill(look.pill(key))))
             .child(self.row_content(row, selected, window, cx))
+            .when(!row.info.is_empty(), |element| {
+                element.child(
+                    div()
+                        .absolute()
+                        .top(px(look.row_height() - 6.))
+                        .left(px(CONTENT_INSET + row_lead(row) + icon_width(row)))
+                        .right(px(CONTENT_INSET))
+                        .child(info::element(&row.info, look, selected, info_width, window)),
+                )
+            })
             .children(self.drop_marker(index))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if event.standard_click() {
@@ -224,8 +241,14 @@ impl Sidebar {
         let trailing = trailing_width(window, row, status.is_some(), shows_add);
         let lead = row_lead(row);
         #[expect(clippy::cast_possible_truncation, reason = "a sidebar width is a few hundred points")]
-        let available = self.width() as f32 - 2.0 * CONTENT_INSET - lead - SLOT - GAP - trailing;
-        let content = div().flex().flex_row().items_center().size_full().min_w(px(0.));
+        let available = self.width() as f32 - 2.0 * CONTENT_INSET - lead - icon_width(row) - trailing;
+        let content = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .w_full()
+            .h(px(look.row_height()))
+            .min_w(px(0.));
         let content = match (row.kind, row.group()) {
             (RowKind::Workspace { expanded }, _) => content
                 .child(Self::disclosure(row.id, expanded, &look, selected, cx))
@@ -237,8 +260,11 @@ impl Sidebar {
             _ => content.pl(px(lead)),
         };
         content
-            .child(leading_icon(row, glyph_ink))
-            .child(div().flex_none().w(px(GAP)))
+            .when(row.icon_visible, |content| {
+                content
+                    .child(leading_icon(row, glyph_ink))
+                    .child(div().flex_none().w(px(GAP)))
+            })
             .child(self.name(row, name_ink, available, window, cx))
             .child(div().flex_none().w(px(GAP)))
             .when(shows_add, |content| {
@@ -292,6 +318,7 @@ impl Sidebar {
         let row_id = if workspace { "workspace-row" } else { "session-row" };
         // a companion's name is the row's value, so its role goes in the label (upstream's accessibility label)
         let companion = matches!(row.group(), RowGroup::Companion { .. });
+        let tooltip = name_tooltip(row, truncated);
         div()
             .id(row_id)
             .accessibility_id(row_id)
@@ -310,8 +337,8 @@ impl Sidebar {
             .font_weight(weight)
             .text_color(ink)
             .child(label.clone())
-            .when(truncated, |name| {
-                name.tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
+            .when_some(tooltip, |name, text| {
+                name.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
             })
             .into_any_element()
     }
@@ -745,4 +772,18 @@ impl Render for DragPreview {
             .whitespace_nowrap()
             .child(self.label.clone())
     }
+}
+
+/// Hidden icons give both their slot and spacing to the name/info.
+fn icon_width(row: &SidebarRow) -> f32 {
+    if row.icon_visible { SLOT + GAP } else { 0. }
+}
+
+pub(super) fn name_tooltip(row: &SidebarRow, truncated: bool) -> Option<SharedString> {
+    if !row.icon_visible
+        && let Some(notice) = &row.icon_tooltip
+    {
+        return Some(notice.clone().into());
+    }
+    truncated.then(|| row.label.clone().into())
 }

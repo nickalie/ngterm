@@ -48,6 +48,8 @@ thiserror.workspace = true
 tiny-skia.workspace = true
 tracing.workspace = true
 url.workspace = true
+unicode-properties.workspace = true
+unicode-segmentation.workspace = true
 uuid.workspace = true
 
 # `_exit` after the orderly shutdown (`main.rs`), the SIGTERM quit (`signals.rs`)

@@ -20,6 +20,16 @@ fn only_a_held_press_moves_the_window() {
     let mut pressed = true;
     assert!(starts_move(&mut pressed, Some(MouseButton::Left)));
     assert!(!pressed, "the move takes the press");
+    assert!(
+        !starts_move(&mut pressed, Some(MouseButton::Left)),
+        "further movement during the held press starts no second drag"
+    );
+    let mut pressed = true;
+    assert!(
+        !starts_move(&mut pressed, Some(MouseButton::Right)),
+        "only the primary button can drag the header"
+    );
+    assert!(!pressed);
     // a press whose release landed past the bar: the next hover ends it rather than moving the window
     let mut pressed = true;
     assert!(!starts_move(&mut pressed, None));

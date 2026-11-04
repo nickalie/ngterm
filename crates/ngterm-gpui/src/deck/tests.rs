@@ -526,6 +526,130 @@ fn a_shown_split_lays_both_panes_out_at_the_ratio_and_focus_follows_the_model(cx
     h.until("the lone pane's grid again", |h| h.cols(session, &primary) == 79);
 }
 
+/// Two mounted splits with distinct axes and divider positions, as upstream's offscreen cursor regressions require.
+fn two_split_sessions(cx: &mut TestAppContext) -> (Harness<'_>, [Uuid; 2]) {
+    let (library, window, ids) = three_sessions();
+    let mut h = harness(cx, core_of(library), window);
+    let sessions = [ids[0], ids[1]];
+    for (session, axis, ratio) in [(sessions[0], "vertical", 0.25), (sessions[1], "horizontal", 0.7)] {
+        h.dispatch(Command::Session(SessionCmd::Split), session, |args| {
+            args.axis = Some(axis.to_owned());
+        });
+        h.state.set_split_ratio(session, ratio);
+    }
+    h.until("both split sessions to start", |h| {
+        sessions
+            .iter()
+            .all(|id| h.realized(*id, StatusPane::Left) && h.realized(*id, StatusPane::Right))
+    });
+    (h, sessions)
+}
+
+/// Dispatch a real pointer drag, observing which page's press handler ran before the gesture ends.
+fn drag_split_at(h: &mut Harness<'_>, session: Uuid, from: (f32, f32), to: (f32, f32)) -> bool {
+    use gpui_kit::{Modifiers, MouseButton, point};
+    let from = point(px(from.0), px(from.1));
+    let to = point(px(to.0), px(to.1));
+    h.cx.simulate_mouse_move(from, None, Modifiers::default());
+    h.cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::default());
+    h.cx.run_until_parked();
+    let grabbed = h
+        .deck
+        .read_with(h.cx, |deck, _| deck.page(session).unwrap().state.dragging());
+    h.cx.simulate_mouse_move(to, MouseButton::Left, Modifiers::default());
+    h.cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
+    h.turn();
+    grabbed
+}
+
+fn assert_only_divider_painted(h: &mut Harness<'_>, shown: &'static str, hidden: &'static str) {
+    assert!(h.cx.debug_bounds(shown).is_some());
+    assert!(h.cx.debug_bounds(hidden).is_none());
+}
+
+/// A hidden Div exits before painting its children: the missing marker also proves the cursor-bearing divider
+/// never paints and therefore cannot install a resize cursor. Pointer events exercise the actual GPUI hit testing.
+#[gpui_kit::test]
+fn hidden_split_dividers_install_no_cursor_or_drag_handler_and_return_when_selected(cx: &mut TestAppContext) {
+    let (mut h, [first, second]) = two_split_sessions(cx);
+    assert_only_divider_painted(&mut h, "split-divider-left-right", "split-divider-top-bottom");
+    assert!(!drag_split_at(&mut h, second, (100., 420.), (100., 480.)));
+    assert_eq!(h.session(second).split.ratio, Some(0.7));
+    assert_eq!(h.session(first).split.ratio, Some(0.25));
+    assert!(drag_split_at(&mut h, first, (201., 100.), (281., 100.)));
+    let first_ratio = h.session(first).split.ratio.unwrap();
+    assert!(first_ratio > 0.3, "the visible split still receives its drag");
+    assert_eq!(h.session(second).split.ratio, Some(0.7));
+
+    h.store().select_session(Some(second));
+    h.state.settle();
+    h.turn();
+    assert_only_divider_painted(&mut h, "split-divider-top-bottom", "split-divider-left-right");
+    assert!(!drag_split_at(&mut h, first, (281., 100.), (341., 100.)));
+    assert_eq!(h.session(first).split.ratio, Some(first_ratio));
+    assert!(drag_split_at(&mut h, second, (100., 420.), (100., 480.)));
+    assert!(h.session(second).split.ratio.unwrap() > 0.75);
+
+    h.store().select_session(Some(first));
+    h.state.settle();
+    h.turn();
+    assert_only_divider_painted(&mut h, "split-divider-left-right", "split-divider-top-bottom");
+    assert!(drag_split_at(&mut h, first, (281., 100.), (321., 100.)));
+    assert!(h.session(first).split.ratio.unwrap() > first_ratio);
+}
+
+#[gpui_kit::test]
+fn a_session_ask_suppresses_divider_input_until_dismissed(cx: &mut TestAppContext) {
+    let (mut h, [first, second]) = two_split_sessions(cx);
+    open_terminal_ask_over(&mut h, first, None);
+    h.turn();
+    assert!(ask_focused(&mut h, first));
+    assert!(!drag_split_at(&mut h, first, (201., 100.), (281., 100.)));
+    assert_eq!(h.session(first).split.ratio, Some(0.25));
+    assert_eq!(h.session(second).split.ratio, Some(0.7));
+    h.cx.simulate_keystrokes("escape");
+    h.turn();
+    assert!(h.session(first).ask().is_none());
+    assert!(drag_split_at(&mut h, first, (201., 100.), (281., 100.)));
+    assert!(h.session(first).split.ratio.unwrap() > 0.3);
+}
+
+#[gpui_kit::test]
+fn resizing_and_removing_a_hidden_split_preserves_the_stored_ratios_and_shown_divider(cx: &mut TestAppContext) {
+    let (mut h, [first, second]) = two_split_sessions(cx);
+    for (width, height) in [(403., 300.), (803., 600.)] {
+        h.cx.simulate_resize(size(px(width), px(height)));
+        h.turn();
+        assert_eq!(h.session(first).split.ratio, Some(0.25));
+        assert_eq!(
+            h.session(second).split.ratio,
+            Some(0.7),
+            "offscreen layout cannot capture a new ratio"
+        );
+    }
+    h.store().select_session(Some(second));
+    h.state.settle();
+    h.turn();
+    let restored = h.cx.debug_bounds("split-divider-top-bottom").unwrap();
+    assert!(
+        (f32::from(restored.center().y) - 420.).abs() < 2.,
+        "the offscreen ratio is restored on selection"
+    );
+    h.store().select_session(Some(first));
+    h.store().close_session(second);
+    h.state.settle();
+    h.turn();
+    h.deck.read_with(h.cx, |deck, _| assert!(deck.page(second).is_none()));
+    assert!(
+        h.cx.debug_bounds("split-divider-top-bottom").is_none(),
+        "a detached page has no cursor-bearing element"
+    );
+    assert!(
+        drag_split_at(&mut h, first, (201., 100.), (281., 100.)),
+        "removing one split leaves the other interactive"
+    );
+}
+
 #[gpui_kit::test]
 fn queued_focus_moves_settle_on_the_last_one(cx: &mut TestAppContext) {
     let (library, window, ids) = three_sessions();

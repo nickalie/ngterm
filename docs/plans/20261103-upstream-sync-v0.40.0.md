@@ -491,29 +491,30 @@ offscreen/detach cases in `SplitRatioAccessorTests.swift`. Header drag change ha
 cover ui:session-info, ui:settings-session-info-display, ui:settings-interface-{element}, ui:session-icon,
 ui:workspace-icon. Cursor/header tests belong in GPUI/platform tests where driver cannot observe cursor/window manager.
 
-- [ ] Persist optional raw sessionInfoDisplay, tolerant default always, values always/flagged/off and labels
+- [x] Persist optional raw sessionInfoDisplay, tolerant default always, values always/flagged/off and labels
   Always/Flagged/Off; no Ghostty key. Add Interface Sidebar picker, visible within the settings window.
-- [ ] Render info below name, info size base minus 1.5 points (minimum 9), dynamic row height and accessibility
+- [x] Render info below name, info size base minus 1.5 points (minimum 9), dynamic row height and accessibility
   session-info. Refresh on value/expiry/setting/rename completion. Preserve explicit colors on selected rows,
   selection foreground for uncolored spans, bold/italic/code/dim, subdued normal state and upstream emoji sizing
   (0.7 info size, VS16 versus VS15). Row tint does not affect info. Flagged mode means flagged sidebar view,
   not merely a flagged session in normal tree. Off changes layout only, keeping value/tree/timer.
-- [ ] Add shown-by-default InterfaceElement workspaceIcons/sessionIcons in hiddenInterfaceElements, independent
+- [x] Add shown-by-default InterfaceElement workspaceIcons/sessionIcons in hiddenInterfaceElements, independent
   toggles for all normal/companion/flagged row forms. Reclaim icon width/gap, hide icon state cues; only remote
   connection notice moves to name tooltip and clears after reconnect. Port all settings/layout Swift cases.
-- [ ] Hidden splits are GPUI content, not NSSplitView: Deck wraps inactive pages with invisible; vendored Div
+- [x] Hidden splits are GPUI content, not NSSplitView: Deck wraps inactive pages with invisible; vendored Div
   skips painting/event installation for hidden elements (`vendor/gpui-pre/src/elements/div.rs:2560`). Add a
   meaningful two-split-session/session-ask regression, showing hidden divider cannot supply resize cursor or
   consume input and visibility restores it. Fix only if exposed; do not copy AppKit class swizzling. Cover
   macOS/Linux/Windows through shared GPUI behavior.
-- [ ] Header already calls start_window_move once per held press, tested by
+- [x] Header already calls start_window_move once per held press, tested by
   `titlebar/tests.rs::only_a_held_press_moves_the_window`, but `window.rs` leaves app_owns_titlebar_drag at its
   false default. Review/enable the existing WindowOptions mechanism for the custom header so macOS window
   server does not concurrently initiate native drag. GPUI macOS backend already implements
   `_opaqueRectForWindowMoveWhenInTitlebar`; use that supported option, no vendor edit unless evidence requires it.
-  Linux uses compositor window move and Windows its existing window mechanism; SwiftUI contentShape is not
+  macOS display-edge drag observation skipped here (requires VM/CI); supported-option and held-press tests pass
+  headlessly. Linux uses compositor window move and Windows its existing window mechanism; SwiftUI contentShape is not
   a mechanism to copy. Add option/gesture regression and record the macOS display-edge drag check for VM/CI.
-- [ ] Port reference UI cases, keep added controls visible, run headless GPUI tests and scoped checks; new
+- [x] Port reference UI cases, keep added controls visible, run headless GPUI tests and scoped checks; new
   since-gated IDs join the ratchet only after actually passing.
 
 ### Task 11: Claim v0.40.0 parity and update the docs

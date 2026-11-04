@@ -18,7 +18,7 @@ use crate::model::{AgentStatus, StatusReset, StatusShape};
 use crate::persist::RestoreMode;
 use crate::persist::settings::{
     AppSettings, AutoFollowAttention, CursorStyle, DockBounce, FlaggedViewLayout, InterfaceElement, LinkOpenMode,
-    NewSessionDirectory, NewSessionPlacementSetting, ToolbarMode,
+    NewSessionDirectory, NewSessionPlacementSetting, SessionInfoDisplay, ToolbarMode,
 };
 use crate::quick_metrics::SIZE_PERCENT_CHOICES;
 use crate::theme::DEFAULT_LIGHT_THEME;
@@ -123,6 +123,7 @@ pub enum InterfaceChange {
         visible: bool,
     },
     AutoHideSidebarInactiveWindows(bool),
+    SessionInfoDisplay(SessionInfoDisplay),
     /// A percentage of [`SIZE_PERCENT_CHOICES`], `None` for the built-in size.
     QuickTerminalSizePercent(Option<i64>),
 }
@@ -349,6 +350,10 @@ impl InterfaceChange {
             Self::AutoHideSidebarInactiveWindows(on) => {
                 settings.auto_hide_sidebar_inactive_windows = default_off(on);
                 return Effect::HideInactiveSidebars;
+            }
+            Self::SessionInfoDisplay(display) => {
+                settings.session_info_display =
+                    unless_default(display, SessionInfoDisplay::Always).map(|display| display.raw().to_owned());
             }
             Self::QuickTerminalSizePercent(percent) => {
                 settings.quick_terminal_size_percent = percent.filter(|percent| SIZE_PERCENT_CHOICES.contains(percent));
@@ -610,7 +615,13 @@ impl InterfaceElement {
     pub fn in_title_bar(self) -> bool {
         !matches!(
             self,
-            Self::NewWorkspace | Self::NewSession | Self::FlaggedView | Self::FocusFilter | Self::WorkspaceAddSession
+            Self::NewWorkspace
+                | Self::NewSession
+                | Self::FlaggedView
+                | Self::FocusFilter
+                | Self::WorkspaceAddSession
+                | Self::WorkspaceIcons
+                | Self::SessionIcons
         )
     }
 
@@ -663,6 +674,8 @@ impl InterfaceElement {
             Self::FlaggedView => "Flagged view",
             Self::FocusFilter => "Workspace filter",
             Self::WorkspaceAddSession => "Workspace add-session",
+            Self::WorkspaceIcons => "Workspace icons",
+            Self::SessionIcons => "Session icons",
         }
     }
 }

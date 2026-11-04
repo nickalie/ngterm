@@ -3,12 +3,12 @@
 //! `InterfaceSettingsView`). Each element's toggle leads with its control's glyph at rest ([`crate::interface_glyph`]),
 //! the text-only elements' slot left empty and listed first ([`InterfaceElement::settings_order`], #810).
 
-use ngterm_core::persist::settings::InterfaceElement;
+use ngterm_core::persist::settings::{InterfaceElement, SessionInfoDisplay};
 use ngterm_core::quick_metrics::SIZE_PERCENT_CHOICES;
 use ngterm_core::settings_model::{InterfaceChange, SettingsChange};
 
 use super::Snapshot;
-use super::form::{Control, Item, Picker, Section, toggle};
+use super::form::{Control, Item, Picker, Section, picker, toggle};
 
 fn change(change: InterfaceChange) -> SettingsChange {
     SettingsChange::Interface(change)
@@ -21,9 +21,19 @@ pub fn sections(snapshot: &Snapshot) -> Vec<Section> {
     vec![
         Section::new("Title Bar", elements(snapshot, true)).two_columns(),
         // the multi-window toggle rides the Sidebar section, as upstream's, which keeps the tab short enough to show
-        // the quick terminal's Size without scrolling there
+        // the quick terminal's Size without scrolling there. The info picker fills the odd grid's empty half.
         Section::new("Sidebar", elements(snapshot, false))
             .two_columns()
+            .fill(picker(
+                "settings-session-info-display",
+                "Session info",
+                &SessionInfoDisplay::ALL
+                    .iter()
+                    .map(|display| (display.display_name(), *display))
+                    .collect::<Vec<_>>(),
+                &settings.effective_session_info_display(),
+                |display| change(InterfaceChange::SessionInfoDisplay(display)),
+            ))
             .trailing(vec![toggle(
                 "settings-auto-hide-inactive-sidebars",
                 "Show sidebar only in the active window",

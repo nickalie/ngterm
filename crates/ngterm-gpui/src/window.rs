@@ -1286,6 +1286,23 @@ fn initial_bounds(frame: Option<crate::window_frames::Frame>, cx: &App) -> gpui_
     }
 }
 
+/// The app draws the header and initiates each drag itself. On macOS this also tells `AppKit` to leave the native
+/// titlebar drag region to us; Linux and Windows keep using GPUI's platform window-move operation.
+fn custom_header_options() -> gpui_kit::WindowOptions {
+    gpui_kit::WindowOptions {
+        titlebar: Some(gpui_kit::TitlebarOptions {
+            title: Some(UNTITLED.into()),
+            // Windows hides its own title bar for the app's (`titlebar.rs`), which draws the window controls there
+            appears_transparent: cfg!(windows),
+            ..gpui_kit::TitlebarOptions::default()
+        }),
+        app_owns_titlebar_drag: true,
+        // The compositor may still require server decorations (including X11 without a compositing manager).
+        window_decorations: Some(gpui_kit::WindowDecorations::Client),
+        ..gpui_kit::WindowOptions::default()
+    }
+}
+
 /// Opens the window of model window `id` with `app_id` as its Wayland app id / X11 class, when the core's frontmost
 /// takes stand at `frontmost_takes`, at its saved `frame` (already constrained to the displays) or upstream's default
 /// size; its handle, `None` (logged) when the platform could not open one.
@@ -1301,20 +1318,11 @@ pub fn open(
     #[expect(clippy::cast_possible_truncation, reason = "a window's logical size fits an f32")]
     let min_size = size(px(min.width as f32), px(min.height as f32));
     let options = gpui_kit::WindowOptions {
-        titlebar: Some(gpui_kit::TitlebarOptions {
-            title: Some(UNTITLED.into()),
-            // Windows hides its own title bar for the app's (`titlebar.rs`), which draws the window controls there
-            appears_transparent: cfg!(windows),
-            ..gpui_kit::TitlebarOptions::default()
-        }),
         window_bounds: Some(initial_bounds(frame, cx)),
         window_min_size: Some(min_size),
         app_id: Some(app_id.to_owned()),
-        // the title bar is the app's own (`titlebar.rs`): the window manager's decorations only where the compositor
-        // insists (GPUI falls back to them on X11 without a compositing manager, and a Wayland compositor may refuse)
-        window_decorations: Some(gpui_kit::WindowDecorations::Client),
         icon: crate::app_icon::window_icon(),
-        ..gpui_kit::WindowOptions::default()
+        ..custom_header_options()
     };
     let env = Rc::clone(env);
     let poster = env.poster.clone();
