@@ -177,12 +177,11 @@ fn poll_kill(
     };
     if let Some(error) = error {
         core.live.claimed_exits.remove(&job.token);
-        if pane_unchanged(core, &job) {
-            core.live.leads.restore(job.identity, previous);
-            // Before the kill became asynchronous this callback ran after a failed kill returned, without a claim.
-            if let Some((session, now)) = exited {
-                core.pane_exited_at(session, &job.token, now);
-            }
+        core.live.leads.restore(job.identity, previous);
+        // Before the kill became asynchronous this callback ran after a failed kill returned, without a claim.
+        // Resolve the token's current location: a swap or soft close can happen while the worker waits.
+        if let Some((session, now)) = exited {
+            core.pane_exited_at(session, &job.token, now);
         }
         return failure(error);
     }

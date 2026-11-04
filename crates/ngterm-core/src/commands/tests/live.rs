@@ -1291,6 +1291,72 @@ fn an_exit_observed_during_a_failed_restart_kill_is_processed_after_the_failure(
 }
 
 #[test]
+fn a_failed_restart_kill_replays_a_swapped_panes_exit_at_its_current_location() {
+    for outcome in [KillOutcome::StaleSocket, KillOutcome::Failed("busy".to_owned())] {
+        let mut live = live();
+        let survivor = live.split();
+        let (wait, release) = block_kills(&mut live);
+        let session = live.session;
+        let token = wire(live.left);
+        live.host.set_kill_outcome(&daemon_name(live.left), Some(outcome));
+        let dispatched = begin_restart(&mut live);
+        wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(!live.core().pane_exited(session, &token));
+        assert!(
+            live.fixture
+                .session(SessionCmd::Swap, Some(&wire(session)), Args::default())
+                .ok
+        );
+        release.send(()).unwrap();
+        assert!(!dispatched.finish_now(live.core()).ok);
+        let found = live.fixture.store().session(session).unwrap();
+        assert_eq!(found.pane_identity, survivor);
+        assert!(!found.split.exists);
+        assert!(live.core().live.claimed_exits.is_empty());
+        assert!(live.core().live.pending_kill_exits.is_empty());
+    }
+}
+
+#[test]
+fn a_failed_restart_kill_restores_the_lead_after_a_swap_or_soft_close() {
+    for soft_close in [false, true] {
+        let mut live = live();
+        live.split();
+        let (wait, release) = block_kills(&mut live);
+        let session = live.session;
+        let token = wire(live.left);
+        let nonce = spawn_live(&mut live);
+        assert!(report(&mut live, &token, &nonce, "leader", 1));
+        live.host
+            .set_kill_outcome(&daemon_name(live.left), Some(KillOutcome::StaleSocket));
+        let dispatched = begin_restart(&mut live);
+        wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        if soft_close {
+            assert!(live.fixture.store_mut().unwrap().soft_close_session(session));
+            assert!(!live.core().pane_exited(session, &token));
+        } else {
+            assert!(
+                live.fixture
+                    .session(SessionCmd::Swap, Some(&wire(session)), Args::default())
+                    .ok
+            );
+        }
+        release.send(()).unwrap();
+        assert!(!dispatched.finish_now(live.core()).ok);
+        let identity = live.left;
+        assert!(live.core().live.leads.snapshot(identity).is_some());
+        if soft_close {
+            assert!(live.fixture.store().pending_close_session(session).is_some());
+        } else {
+            assert_eq!(live.core().pane_lead(&token), Some("leader"));
+        }
+        assert!(live.core().live.claimed_exits.is_empty());
+        assert!(live.core().live.pending_kill_exits.is_empty());
+        assert!(live.core().take_pane_replacements().is_empty());
+    }
+}
+
+#[test]
 fn a_failed_restart_kill_releases_its_exit_claim_and_keeps_the_pane() {
     for (outcome, error) in [
         (

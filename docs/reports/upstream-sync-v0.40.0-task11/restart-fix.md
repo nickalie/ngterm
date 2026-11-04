@@ -14,13 +14,14 @@ never reaches the new program. The validation order, confirmed-kill requirement 
 The asynchronous interval needs three safeguards:
 
 - Claim the old attachment's exit and temporarily forget its lead before starting the worker. An `unowned` report
-  cannot start a competing attachment. An unconfirmed kill restores the previous lead on an unchanged pane.
+  cannot start a competing attachment. An unconfirmed kill restores the previous lead by pane identity, including
+  after a swap or soft close while the worker waits.
 - While that claim is held, another restart of the same pane follows the existing five-second shell wait and
   100 ms polling interval. It can then restart the first replacement, without sharing or clearing another kill's
   claim. The existing timeout response is preserved.
 - A map active only during the pending host kill records the first suppressed exit's session and timestamp.
   Success discards it; failure releases the claim and replays the recorded exit through normal pane-exit handling
-  on the unchanged pane. Thus an unconfirmed kill cannot swallow the only exit event and leave a dead pane.
+  at the token's current location. Thus an unconfirmed kill cannot swallow the only exit event and leave a dead pane.
   Spawn failure clears the map immediately. Other claimed-exit lifetimes are unchanged. A pane soft-closed during
   the kill is finalized without rebuilding it or restoring a dead pane through undo.
 
@@ -42,3 +43,8 @@ Validation:
   Both ignores are existing `argv_recorder` child entrypoints used by shell argument and PowerShell replay tests.
 - Scoped rustfmt and `git diff --check` pass. Final downstream strict clippy and the rebuilt black-box conformance
   result are recorded with the task's other validation artifacts.
+
+Review correction: blocked-kill regressions now swap a pane before both stale and failed kill results, verify its
+recorded exit closes the correct pane, and check lead restoration after a swap or soft close. The live module passes
+54 tests, including these two new cases; scoped strict core clippy passes. These checks follow the full runtime
+verification above; no full-suite runtime rerun is claimed for this correction.
