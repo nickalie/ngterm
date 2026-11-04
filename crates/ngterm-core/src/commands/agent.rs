@@ -15,7 +15,9 @@
 //!   the CLI exits, earlier runs' included.
 //!
 //! A candidate is an approval only while the pane's status is `blocked`, which the existing adapters set and clear;
-//! once it was seen blocked, the status leaving `blocked` ends it. A `session.status` write from the pane that is not
+//! once its pane was seen holding the block, the status leaving `blocked` ends it. The other pane's block taking the
+//! session's one status over ends nothing: it only hides the candidate until its own pane writes `blocked` again (the
+//! status is shared, so its clearing then is the other pane's). A `session.status` write from the pane that is not
 //! `blocked` ends it too, shown or not ([`Core::note_agent_status_write`]): the agent moved on, so no dialog of its
 //! is open. That ends a call Codex's Auto Review approved, which fires `PermissionRequest` but never sets `blocked`
 //! (the watcher reports `blocked` only for a prompt on screen): the command's `PostToolUse` writes `active` before a
@@ -74,8 +76,9 @@ struct Candidate {
     approval: AgentApproval,
     /// When the hook reported it.
     since: SystemTime,
-    /// The pane's status was seen `blocked` since: the dialog is (or was) on screen.
-    shown: bool,
+    /// The pane held the session's `blocked` status when last seen: its dialog is on screen, so the status leaving
+    /// `blocked` answered it.
+    held: bool,
 }
 
 impl AgentRecord {
@@ -83,14 +86,15 @@ impl AgentRecord {
         self.agent == agent && self.transcript == transcript && self.conversation == conversation
     }
 
-    /// The candidate against the pane's status now: seen once `blocked`, it ends when the status leaves `blocked`.
-    fn observe(&mut self, blocked: bool) {
+    /// The candidate against the pane's status now: held while its pane holds the block, it ends when the status
+    /// leaves `blocked` from there; the other pane's block only hides it.
+    fn observe(&mut self, block: Block) {
         let ended = match self.candidate.as_mut() {
-            Some(candidate) if blocked => {
-                candidate.shown = true;
-                false
+            Some(candidate) => {
+                let ended = candidate.held && block == Block::None;
+                candidate.held = block == Block::This;
+                ended
             }
-            Some(candidate) => candidate.shown,
             None => false,
         };
         if ended {
@@ -118,14 +122,33 @@ struct Addressed {
     role: StatusPane,
 }
 
-/// Whether `role`'s pane of `session` owns a `blocked` status (an untagged one is the main pane's).
-fn pane_blocked(session: &Session, role: StatusPane) -> bool {
+/// Which pane of a session holds its `blocked` status, as one pane sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Block {
+    This,
+    Other,
+    None,
+}
+
+/// Which pane of `session` holds a `blocked` status, seen from `role`'s (an untagged one is the main pane's).
+fn block_of(session: &Session, role: StatusPane) -> Block {
     let indicator = &session.agent_indicator;
-    indicator.status == AgentStatus::Blocked
-        && indicator
-            .normalized_pane(session.split.exists)
-            .unwrap_or(StatusPane::Left)
-            == role
+    if indicator.status != AgentStatus::Blocked {
+        Block::None
+    } else if indicator
+        .normalized_pane(session.split.exists)
+        .unwrap_or(StatusPane::Left)
+        == role
+    {
+        Block::This
+    } else {
+        Block::Other
+    }
+}
+
+/// Whether `role`'s pane of `session` owns a `blocked` status.
+fn pane_blocked(session: &Session, role: StatusPane) -> bool {
+    block_of(session, role) == Block::This
 }
 
 /// The identity of `session`'s pane a status tag names, as [`AgentIndicator::normalized_pane`] folds it (an untagged
@@ -275,7 +298,7 @@ fn report(core: &mut Core, request: &Request) -> Outcome {
                 record.candidate = Some(Candidate {
                     approval,
                     since: now,
-                    shown: blocked,
+                    held: blocked,
                 });
             }
         }
@@ -369,7 +392,7 @@ impl Core {
             .by_pane
             .retain(|identity, record| match locate(library, *identity) {
                 Some((session, role)) => {
-                    record.observe(pane_blocked(session, role));
+                    record.observe(block_of(session, role));
                     true
                 }
                 None => false,

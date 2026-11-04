@@ -289,6 +289,31 @@ fn another_panes_block_is_not_this_panes_approval() {
 }
 
 #[test]
+fn the_other_panes_block_hides_a_candidate_without_ending_it() {
+    let (mut fixture, session, left_token) = one_pane();
+    let _ = split(&mut fixture, session);
+    let left = || pane_args(&left_token, "left");
+    assert!(send_report(&mut fixture, session, left(), start(CLAUDE_A, "aaaa")).ok);
+    assert!(send_report(&mut fixture, session, left(), permission("Bash", "ls")).ok);
+    status(&mut fixture, session, "blocked", "left");
+    assert_eq!(
+        agent_of(&get(&mut fixture, session, left()))["approval"]["detail"],
+        "ls"
+    );
+    // the split's agent blocks too: its block takes the session's one status over, then clears
+    status(&mut fixture, session, "blocked", "right");
+    assert_eq!(agent_of(&get(&mut fixture, session, left())).get("approval"), None);
+    status(&mut fixture, session, "active", "right");
+    let _ = fixture.core.commit();
+    // the left dialog, still open, blocks again
+    status(&mut fixture, session, "blocked", "left");
+    assert_eq!(
+        agent_of(&get(&mut fixture, session, left()))["approval"]["detail"],
+        "ls"
+    );
+}
+
+#[test]
 fn an_ask_user_question_makes_no_approval_beside_its_question() {
     let (mut fixture, session, token) = one_pane();
     let left = || pane_args(&token, "left");
