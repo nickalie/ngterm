@@ -23,17 +23,18 @@
 # when nothing is in flight), so a Stop that would post `completed` posts `active --blink` instead and
 # the row keeps pulsing until a Stop with nothing in flight, or the SessionEnd hook the installer adds
 # when the agent quits first. Upstream's stock Stop goes green at once and covers this case only in its
-# truthful-agent-lights cookbook recipe. Only a `completed` call reads
-# stdin, where Claude Code writes the payload as JSON; a key quoted inside a string value is escaped
-# (`\"background_tasks\"`), so the match cannot hit the last assistant message.
+# truthful-agent-lights cookbook recipe. A `completed` call reads stdin, where Claude Code writes the
+# payload as JSON, for this check (an `active` or `blocked` call reads it for the chat view below); a
+# key quoted inside a string value is escaped (`\"background_tasks\"`), so the match cannot hit the
+# last assistant message.
 #
 # ngterm's chat view (an ngterm extension): `UserPromptSubmit` and `PermissionRequest` also report to the pane's agent
 # record, piping the payload to `ngtermctl agent hook claude <event>` ahead of the status. Their state does not name
 # the event (`PostToolUse` posts `active` too), so an `active` or `blocked` call reads the payload's head for its
-# `hook_event_name`, and only those two events read the rest: a `PostToolUse` payload, which can hold a whole tool
-# output, stays unread. Only the interactive CLI reports (a `claude -p` worker runs with CLAUDE_CODE_ENTRYPOINT
-# `sdk-cli`, besides the walk above), and a subagent's prompt (`agent_id`) never does; a subagent's permission prompt
-# does, and `agent hook` keeps only the prompt of it.
+# `hook_event_name`, and only those two events read the rest, with `cat`, since bash's `read` takes a pipe a byte at a
+# time: a `PostToolUse` payload, which can hold a whole tool output, stays unread. Only the interactive CLI reports (a
+# `claude -p` worker runs with CLAUDE_CODE_ENTRYPOINT `sdk-cli`, besides the walk above), and a subagent's prompt
+# (`agent_id`) never does; a subagent's permission prompt does, and `agent hook` keeps only the prompt of it.
 set -u
 
 [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
@@ -115,8 +116,7 @@ case "${1:-}" in
       subagent_re='(^|[^\\])"agent_id"[[:space:]]*:[[:space:]]*"[^"]'
       if [[ $payload =~ $record_re ]]; then
         event=${BASH_REMATCH[1]}
-        rest=
-        IFS= read -r -d '' -t 5 rest || true
+        rest=$(cat) # the payload ends in its closing brace, so dropping trailing newlines loses nothing
         payload=$payload$rest
         if [ "$event" = PermissionRequest ] || ! [[ $payload =~ $subagent_re ]]; then
           report_agent "$event"

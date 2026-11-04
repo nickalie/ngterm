@@ -74,7 +74,7 @@ pub struct Hook {
 
     #[arg(
         long,
-        help = "Which pane the agent runs in: primary/left/top or split/right/bottom. Defaults to primary."
+        help = "Which pane the agent runs in: primary/left/top, split/right/bottom, or scratch. Defaults to primary."
     )]
     pane: Option<String>,
 

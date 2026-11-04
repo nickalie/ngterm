@@ -327,6 +327,31 @@ fn a_prompt_and_a_permission_request_pipe_their_payload_to_agent_hook() {
     assert_eq!(call.argv, agent_hook("claude", "UserPromptSubmit", &[]));
 }
 
+/// A pasted prompt of several MiB, which Claude Code writes through a pipe, reaches `agent hook` whole: bash's `read`
+/// takes a pipe a byte at a time, so reading the rest with it gave up at its timeout with a fraction of the payload.
+#[cfg(unix)]
+#[test]
+fn a_multi_megabyte_prompt_through_a_pipe_reaches_agent_hook_whole() {
+    let launch = r#"(while kill -0 $$ 2>/dev/null; do :; done; cat "$PAYLOAD" | bash "$0" "$@" >/dev/null 2>&1) &"#;
+    let prompt = format!(
+        r#"{{"session_id":"s","transcript_path":"/home/u/.claude/projects/-p/s.jsonl","cwd":"/p","hook_event_name":"UserPromptSubmit","prompt":"{}"}}"#,
+        "x".repeat(8 << 20)
+    );
+    let stub = Stub::new();
+    let mut command = Command::new("sh");
+    command.args(["-c", launch]);
+    let run = claude_orphan(&stub, command, &["active", "--blink"], &prompt, &pane_vars(&[CLI]))
+        .expect("the adapter never called the wrapper");
+    let call = run.agent.expect("no agent hook call");
+    assert_eq!(call.argv, agent_hook("claude", "UserPromptSubmit", &CLAUDE_TAIL));
+    assert!(
+        call.stdin == prompt,
+        "the payload arrived cut to {} of {} bytes",
+        call.stdin.len(),
+        prompt.len()
+    );
+}
+
 /// `PostToolUse` posts `active` as `UserPromptSubmit` does and `Notification` posts `blocked` as `PermissionRequest`
 /// does; neither, nor `Stop`, nor a `SessionEnd`, reaches the agent record through this adapter.
 #[test]

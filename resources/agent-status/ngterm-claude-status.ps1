@@ -15,8 +15,9 @@
 # adapter, while a false silence is a bug with no symptom. The argv is forwarded to the shared wrapper verbatim, with
 # one exception: a Stop whose payload lists work still in flight in `background_tasks` posts `active --blink` instead
 # of `completed`, so the row keeps pulsing until a Stop with nothing in flight, or the SessionEnd hook the installer
-# adds. Only a `completed` call reads stdin, where Claude Code writes the payload as JSON; a key quoted inside a string
-# value is escaped (`\"background_tasks\"`), so the match cannot hit the last assistant message.
+# adds. A `completed` call reads stdin, where Claude Code writes the payload as JSON, for this check (an `active` or
+# `blocked` call reads it for the chat view below); a key quoted inside a string value is escaped
+# (`\"background_tasks\"`), so the match cannot hit the last assistant message.
 #
 # ngterm's chat view (an ngterm extension, as in the POSIX form): `UserPromptSubmit` and `PermissionRequest` also
 # report to the pane's agent record, piping the payload to `ngtermctl agent hook claude <event>` ahead of the status.
