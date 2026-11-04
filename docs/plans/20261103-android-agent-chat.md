@@ -230,7 +230,7 @@ from a subagent's transcript, `parent` (the task tool's id):
 | `notice` | kind (compaction, interrupt, API error, summary), text, and a detail (a compaction's summary) |
 | `unknown` | the raw entry type, `malformed` for a line that is not a JSON object, or `oversized` for a line over the cap (8 MiB) |
 | `reset` | the conversation switched |
-| `live` | the backlog is done and following has started |
+| `live` | the backlog is done and following has started; repeated after each poll's new events while following, its cursor where `--after` resumes |
 
 **`agent chat` modes:**
 
@@ -240,6 +240,12 @@ from a subagent's transcript, `parent` (the task tool's id):
 - `--after CURSOR`: everything from the line at the cursor on, then `live` and follow (used on reconnect). The
   cursor's own line is sent again, since the phone may have got its events in part; ids make that idempotent. A
   cursor past the end is a `reset` and a backlog.
+- While following, each poll that read anything writes its main-transcript events, then its subagents', then a
+  `live` whose cursor is where following resumes (added in Task 11's review). The phone's resume cursor moves only
+  by a `live` (or a catch-up's first main event when it began with none), so a channel lost within a poll's batch,
+  after its main lines and before its subagent lines, resumes where the batch before ended and the subagent lines
+  are sent again, even when the main line before the lost ones is stamped a minute later. The phone passes on only
+  the `live` that ends a catch-up.
 - `--conversation ID` (with `--after` or `--before`, added in Task 11's review): the conversation the cursor was read
   in, as the stream's `conversation` events named it (empty when none was). When the pane's record names another
   conversation (it moved while the phone was away), the cursor is not read in the new file: `--after` answers

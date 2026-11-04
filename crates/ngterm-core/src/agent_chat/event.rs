@@ -117,7 +117,8 @@ pub enum EventBody {
     },
     /// The conversation switched: drop what was shown.
     Reset,
-    /// The backlog is done and following has started.
+    /// The backlog is done and following has started; while following, each poll's batch ends with one too. Its cursor
+    /// is where following resumes.
     Live,
 }
 

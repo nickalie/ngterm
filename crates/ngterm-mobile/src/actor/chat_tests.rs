@@ -1,8 +1,12 @@
 //! The agent chat view through the actor, over the scripted fake transport on tokio's paused clock: the presentation
 //! stream's agent frames, a shown pane's chat channel and its resumes, older pages, the catalog, and how a chat ends.
 
+use std::io::Write as _;
+use std::path::Path;
 use std::time::Duration;
 
+use ngterm_core::agent_chat::follow::BACKLOG;
+use ngterm_core::agent_chat::{AgentKind, Follower};
 use ngterm_core::live::daemon_name;
 use ngterm_core::remote::frames::{
     self, Body, PresentationAgent, PresentationFrame, PresentationHello, PresentationLayout, PresentationMode,
@@ -777,9 +781,10 @@ fn a_channel_lost_before_live_resumes_where_its_catch_up_began() {
         feed(&chat, &[first.as_slice(), &again].concat()).await;
         assert_eq!(texts(&fixture.reported().0), ["sub-1:early", "live"]);
 
-        // following moves the cursor by each main event
+        // while following, each poll's `live` moves the cursor, and is not passed on; its main events do not
+        feed(&chat, &[assistant("line-150", 150, "b2"), live(200)]).await;
         feed(&chat, &[assistant("line-200", 200, "c")]).await;
-        assert_eq!(texts(&fixture.reported().0), ["line-200:c"]);
+        assert_eq!(texts(&fixture.reported().0), ["line-150:b2", "line-200:c"]);
         retried(chat, FAILED).await;
         let chat = fixture.chat(&resumed(Side::Left, 200, "c1"));
 
@@ -821,6 +826,83 @@ fn a_channel_lost_before_live_resumes_where_its_catch_up_began() {
         let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
         feed(&chat, &[conversation("c3", 0), assistant("line-0", 0, "z"), live(60)]).await;
         assert_eq!(texts(&fixture.reported().0), ["conversation:c3", "line-0:z", "live"]);
+    });
+}
+
+/// A Claude `user` line of conversation `c1`, stamped `at`.
+fn stamped(text: &str, at: &str) -> String {
+    let line = serde_json::json!({"type": "user", "uuid": text, "sessionId": "c1", "timestamp": at,
+        "message": {"content": text}});
+    format!("{line}\n")
+}
+
+fn ndjson(events: &[ngterm_core::agent_chat::ChatEvent]) -> Vec<String> {
+    events.iter().map(|event| event.to_ndjson() + "\n").collect()
+}
+
+fn append(path: &Path, text: &str) {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(text.as_bytes()).unwrap();
+}
+
+/// A channel lost within a poll's batch, after its main lines and before its subagent's, a minute boundary between
+/// them: the chat resumes from the `live` that ended the batch before, and the origin (its follower, on real files)
+/// sends the subagent's line again. Resumed from the lost batch's last main line, the origin would read the subagent
+/// only from the main line before it, stamped the next minute, on, and the line would be lost for good.
+#[test]
+fn a_channel_lost_between_a_polls_main_and_subagent_lines_loses_nothing() {
+    local(async {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("c1.jsonl");
+        std::fs::write(&path, stamped("prompt", "2026-11-03T20:09:00.000Z")).unwrap();
+        let subagents = dir.path().join("c1/subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        std::fs::write(subagents.join("agent-x.meta.json"), r#"{"toolUseId":"toolu_x"}"#).unwrap();
+        let sub = subagents.join("agent-x.jsonl");
+        std::fs::write(&sub, stamped("old", "2026-11-03T20:05:00.000Z")).unwrap();
+        let mut origin = Follower::new(AgentKind::Claude, &path);
+        let backlog = origin.backlog(BACKLOG).unwrap();
+
+        let mut fixture = Fixture::start().await;
+        fixture.open(LEFT).await.unwrap();
+        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        feed(&chat, &ndjson(&backlog)).await;
+        fixture.reported();
+
+        // the task's spawn is not among the main lines, so the subagent is followed from its end
+        append(&sub, &stamped("late", "2026-11-03T20:09:59.950Z"));
+        let main_lines = [
+            stamped("first", "2026-11-03T20:10:00.010Z"),
+            stamped("second", "2026-11-03T20:10:00.050Z"),
+        ];
+        append(&path, &main_lines.concat());
+        let polled = origin.poll().unwrap();
+        let main = polled.iter().take_while(|event| event.parent.is_none()).count();
+        assert_eq!(main, 2, "{polled:?}");
+        feed(&chat, &ndjson(&polled[..main])).await;
+        assert_eq!(fixture.reported().0.len(), 2, "the poll's main lines are shown");
+        retried(chat, lost()).await;
+        assert_eq!(fixture.reported().1, [ChatState::Reconnecting]);
+
+        let checkpoint = backlog.last().unwrap().cursor;
+        let chat = fixture.chat(&resumed(Side::Left, checkpoint, "c1"));
+        let again = Follower::new(AgentKind::Claude, &path).after(checkpoint).unwrap();
+        feed(&chat, &ndjson(&again)).await;
+        let shown: Vec<(Option<String>, ChatBody)> = fixture
+            .reported()
+            .0
+            .into_iter()
+            .map(|event| (event.parent, event.body))
+            .collect();
+        let late = ChatBody::User {
+            text: "late".to_owned(),
+            images: 0,
+        };
+        assert_eq!(
+            shown,
+            [(Some("toolu_x".to_owned()), late), (None, ChatBody::Live)],
+            "the subagent's line arrives, and the main lines already shown do not again"
+        );
     });
 }
 

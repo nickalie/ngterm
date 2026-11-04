@@ -37,8 +37,12 @@
 //!   call or a prompt of the user's (or about [`REACH`] bytes were read); those older lines are only kept unshown, so
 //!   the lines shown, and which subagents get a backlog, stay the same.
 //!
-//! A backlog and the events after a cursor end with a `live` event whose cursor is where following resumes. Following
-//! polls every [`POLL_INTERVAL`] by default, and looks for new subagents at most every [`DISCOVERY_INTERVAL`].
+//! A backlog and the events after a cursor end with a `live` event whose cursor is where following resumes, and so
+//! does each poll that read anything, after its main transcript's events and its subagents': a reader that got the
+//! `live` has every line of the transcripts up to it, so `--after` its cursor is where a reconnect resumes (the main
+//! line before it was read no later than any subagent line not sent yet was written, which the minute stamps then
+//! send again). Following polls every [`POLL_INTERVAL`] by default, and looks for new subagents at most every
+//! [`DISCOVERY_INTERVAL`].
 
 mod lines;
 mod subagents;
@@ -314,8 +318,8 @@ impl<F: Files, C: Clock> Follower<F, C> {
         Ok(events)
     }
 
-    /// The events the transcripts' new lines make since the last read. A shrunk or replaced transcript makes a
-    /// `reset`, a new backlog and `live`.
+    /// The events the transcripts' new lines make since the last read, then `live` where following resumes; nothing
+    /// when there were none. A shrunk or replaced transcript makes a `reset`, a new backlog and `live`.
     ///
     /// # Errors
     /// The transcript cannot be read. A subagent's transcript that cannot be read is skipped.
@@ -347,6 +351,9 @@ impl<F: Files, C: Clock> Follower<F, C> {
         if discover {
             let limit = self.limit;
             self.add_subagents(&|_| Want::backlog(limit), Look::Spawned, &mut events);
+        }
+        if !events.is_empty() {
+            events.push(marker(EventBody::Live, self.main.lines.start()));
         }
         Ok(events)
     }

@@ -409,9 +409,11 @@ fn a_line_over_the_cap_is_unknown_and_never_held_whole() {
     assert_eq!(follower.buffered(), 0, "the line's bytes were dropped at the cap");
     append(&path, format!("\n{}\n", user("after")).as_bytes());
     let events = follower.poll().unwrap();
-    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events.len(), 3, "{events:?}");
     assert!(is_oversized(&events[0], cursors[1]));
     assert_eq!(texts(&events), ["after"]);
+    let end = fs::metadata(&path).unwrap().len();
+    assert!(is_live(&events[2], end), "the poll ends with where following resumes");
     let backward = claude(&path).0.backlog(10).unwrap();
     assert_eq!(texts(&backward), ["prompt 0", "after"]);
     assert!(is_oversized(&backward[1], cursors[1]), "read backward too");
@@ -546,7 +548,9 @@ fn a_claude_subagent_written_later_is_found_on_a_later_look() {
     copy_tree(&source.join(CLAUDE_MAIN), &dir.path().join(CLAUDE_MAIN));
     assert!(follower.poll().unwrap().is_empty(), "not looked for again yet");
     clock.sleep(DISCOVERY_INTERVAL);
-    let events = follower.poll().unwrap();
+    let mut events = follower.poll().unwrap();
+    let end = fs::metadata(&path).unwrap().len();
+    assert!(is_live(&events.pop().unwrap(), end));
     assert_eq!(events, golden(&source.join(format!("{CLAUDE_SUBAGENT}.golden.ndjson"))));
 }
 
@@ -777,6 +781,47 @@ fn after_a_cursor_a_subagent_sends_what_it_wrote_since() {
         "what the subagent wrote since the line before the cursor (to the minute), though its task is not shown"
     );
     assert!(sub.iter().all(|event| event.parent.as_deref() == Some("toolu_x")));
+}
+
+/// A poll's batch ends with `live` after its subagents' lines, so a reader that resumes from the last `live` it got
+/// gets again what a channel lost between a poll's main and subagent lines left unsent, across a minute boundary too.
+#[test]
+fn each_poll_ends_with_live_after_its_subagents_lines() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("main.jsonl");
+    let lines: Vec<String> = (0..3)
+        .map(|index| stamped(&prompt(index), "2026-11-03T20:09:00.000Z"))
+        .collect();
+    fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let subagents = dir.path().join("main/subagents");
+    fs::create_dir_all(&subagents).unwrap();
+    fs::write(subagents.join("agent-x.meta.json"), r#"{"toolUseId":"toolu_x"}"#).unwrap();
+    let sub = subagents.join("agent-x.jsonl");
+    fs::write(&sub, stamped("old", "2026-11-03T20:05:00.000Z") + "\n").unwrap();
+    let (mut follower, ..) = claude(&path);
+    let backlog = follower.backlog(BACKLOG).unwrap();
+    let checkpoint = backlog.last().unwrap().cursor;
+    assert!(follower.poll().unwrap().is_empty(), "an empty poll sends no live");
+
+    append(&sub, (stamped("late", "2026-11-03T20:09:59.950Z") + "\n").as_bytes());
+    let main = [
+        stamped("first", "2026-11-03T20:10:00.010Z"),
+        stamped("second", "2026-11-03T20:10:00.050Z"),
+    ];
+    append(&path, (main.join("\n") + "\n").as_bytes());
+    let events = follower.poll().unwrap();
+    let end = fs::metadata(&path).unwrap().len();
+    assert_eq!(texts(&events), ["first", "second", "late"]);
+    assert!(is_live(events.last().unwrap(), end));
+
+    let resumed = claude(&path).0.after(checkpoint).unwrap();
+    let (_, sub): (Vec<_>, Vec<_>) = resumed.into_iter().partition(|event| event.parent.is_none());
+    assert_eq!(texts(&sub), ["late"], "the subagent's line the lost poll did not send");
+    let past = claude(&path).0.after(events[1].cursor).unwrap();
+    assert!(
+        past.iter().all(|event| event.parent.is_none()),
+        "resumed from a main line of the lost poll, the line stamped a minute before it is skipped"
+    );
 }
 
 #[test]

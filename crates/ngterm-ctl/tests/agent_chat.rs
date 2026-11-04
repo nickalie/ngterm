@@ -183,11 +183,6 @@ impl Chat {
         Ok(serde_json::from_str(&line)?)
     }
 
-    /// The next `count` events.
-    fn take(&self, count: usize) -> TestResult<Vec<Value>> {
-        (0..count).map(|_| self.next()).collect()
-    }
-
     /// The events up to the first of type `kind`, which is the last.
     fn until(&self, kind: &str) -> TestResult<Vec<Value>> {
         let mut events = Vec::new();
@@ -199,6 +194,23 @@ impl Chat {
                 return Ok(events);
             }
         }
+    }
+
+    /// The next `count` events following prints, without the `live` that ends each poll's batch, and the `live` that
+    /// ends the batch of the last of them (a write the process reads in two polls makes two batches).
+    fn followed(&self, count: usize) -> TestResult<(Vec<Value>, Value)> {
+        let mut events = Vec::new();
+        while events.len() < count {
+            let event = self.next()?;
+            if event["type"] != "live" {
+                events.push(event);
+            }
+        }
+        let end = self.next()?;
+        if end["type"] != "live" {
+            return Err(format!("the batch ends with {end}, not live").into());
+        }
+        Ok((events, end))
     }
 
     /// Whether no line comes for `quiet`.
@@ -272,7 +284,14 @@ fn the_backlog_then_live_then_appended_lines_until_the_record_is_cleared() -> Te
 
     append(&path, slice(&bytes, NEXT_PROMPT, u64::MAX)?)?;
     let rest = lines_in(&golden, NEXT_PROMPT, u64::MAX);
-    assert_eq!(chat.take(rest.len())?, rest);
+    let (followed, live) = chat.followed(rest.len())?;
+    assert_eq!(followed, rest);
+    let end = fs::metadata(&path)?.len();
+    assert_eq!(
+        live,
+        json!({"id": "live", "cursor": end, "type": "live"}),
+        "each poll's batch ends with where following resumes"
+    );
 
     assert!(request(&socket, &report("SessionEnd"))?.ok);
     let mut chat = chat;
@@ -365,7 +384,7 @@ fn after_resends_the_cursors_line_and_follows() -> TestResult {
 
     append(&path, slice(&bytes, NEXT_CALL, u64::MAX)?)?;
     let rest = lines_in(&golden, NEXT_CALL, u64::MAX);
-    assert_eq!(chat.take(rest.len())?, rest);
+    assert_eq!(chat.followed(rest.len())?.0, rest);
     Ok(())
 }
 
@@ -496,22 +515,24 @@ fn approvals_are_interleaved_and_end_by_the_transcript_or_the_record() -> TestRe
     let answered = lines_in(&golden, DENIED_RESULT, NEXT_PROMPT);
     let mut done = json!({"id": "approval-100", "cursor": DENIED_RESULT, "type": "approval_done"});
     merge(&mut done, &approval);
-    assert_eq!(chat.next()?, answered[0], "the denied call's result");
-    assert_eq!(chat.next()?, done, "ends the prompt right after it");
-    assert_eq!(chat.take(answered.len() - 1)?, answered[1..]);
+    let (followed, _) = chat.followed(answered.len() + 1)?;
+    assert_eq!(followed[0], answered[0], "the denied call's result");
+    assert_eq!(followed[1], done, "ends the prompt right after it");
+    assert_eq!(followed[2..], answered[1..]);
 
     // the record keeps the answered candidate for a while: it never shows again
     assert!(chat.silent_for(Duration::from_millis(1500)));
     append(&path, slice(&bytes, NEXT_PROMPT, NEXT_CALL)?)?;
     let prompt = lines_in(&golden, NEXT_PROMPT, NEXT_CALL);
-    assert_eq!(chat.take(prompt.len())?, prompt);
+    assert_eq!(chat.followed(prompt.len())?.0, prompt);
 
     let interrupted = json!({"tool": "Bash", "title": "Create empty file interrupted.txt", "detail": "touch interrupted.txt", "since": 200.5});
     server.set(Some(record(&path, MAIN, Some(interrupted))?))?;
     let next = chat.next()?;
     assert_eq!(
         (&next["type"], &next["id"], &next["cursor"]),
-        (&json!("approval"), &json!("approval-200.5"), &json!(NEXT_PROMPT))
+        (&json!("approval"), &json!("approval-200.5"), &json!(NEXT_CALL)),
+        "where the stream stands: the last poll's `live`"
     );
     server.set(Some(record(&path, MAIN, None)?))?;
     let next = chat.next()?;
@@ -544,7 +565,7 @@ fn a_prompt_the_transcript_answered_before_the_record_was_read_is_never_shown() 
     chat.until("live")?;
     append(&path, slice(&bytes, DENIED_RESULT, NEXT_PROMPT)?)?;
     let answered = lines_in(&golden(MAIN)?, DENIED_RESULT, NEXT_PROMPT);
-    assert_eq!(chat.take(answered.len())?, answered);
+    assert_eq!(chat.followed(answered.len())?.0, answered);
     server.set(Some(record(&path, MAIN, Some(denied_txt(100.0)))?))?;
     assert!(chat.silent_for(Duration::from_millis(1500)));
     Ok(())

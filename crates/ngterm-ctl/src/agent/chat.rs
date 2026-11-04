@@ -4,6 +4,9 @@
 //!
 //! - **Modes:** the default prints the backlog, then `live`, and follows; `--before CURSOR` prints one older page and
 //!   exits; `--after CURSOR` prints everything from the cursor's line on, then `live`, and follows (a reconnect).
+//!   Following, each poll that read anything prints its events (the main transcript's, then the subagents') and a
+//!   `live` after them ([`Follower::poll`]): a caller resumes `--after` the last `live` it got, never a main event's
+//!   cursor, so a channel lost within a poll's batch leaves no subagent line behind.
 //! - **The cursor's conversation** (`--conversation ID`): a cursor is an offset into one transcript, and the pane may
 //!   have moved to another conversation since the caller read it (a `/clear` or a resume while the phone was away).
 //!   Given the id the caller's `conversation` events named, a record naming another conversation answers `reset`:
@@ -41,7 +44,8 @@ const RECHECK: Duration = Duration::from_secs(1);
 #[command(
     about = "Print a pane's agent conversation as NDJSON chat events, following it.",
     long_about = "Reads the pane's agent record and prints the conversation its transcript holds as NDJSON chat \
-                  events: about the last --limit events, then `live`, then each new event as the agent writes it. \
+                  events: about the last --limit events, then `live`, then each poll's new events as the agent \
+                  writes them, each poll's ended by a `live` whose cursor is where --after resumes. \
                   A new conversation in the pane is a `reset` and its backlog; the record clearing ends the stream. \
                   Ends when standard input reaches its end."
 )]

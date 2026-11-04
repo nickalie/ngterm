@@ -24,18 +24,16 @@
 //!   answers a `reset` and the new backlog, which start the chat over as a `reset` on a live channel does. The
 //!   presentation stream's [`MobileEvent::PaneAgent`] plays no part in it: it may come before the channel is back,
 //!   after it or not at all.
-//! - **The resume cursor.** Each launch, and each `reset`, starts a catch-up that its `live` ends: the main
-//!   transcript's lines, then the subagents' (the backlogs of those among them, and what every subagent wrote since
-//!   the main line before the cursor, by its stamp to the minute), then `live`. Until the `live` the cursor stays
-//!   where the launch began, so a channel lost in a catch-up resumes there again and the origin sends every
-//!   subagent's lines since then again: moved to a main event already delivered, the resume would read the subagents
-//!   only from that event's stamp on and skip what they wrote before it and had not sent yet. A catch-up that began
-//!   with no cursor (the first launch, a `reset`) takes its first main event's: resuming from what the app holds
-//!   first sends all of it again, never less, where a plain backlog may start later and leave a gap. The `live`
-//!   sets the cursor to where the origin follows from; while following, each main event moves it on. The origin
-//!   writes each poll's lines at once (a poll interval apart), the main transcript's first, so a channel lost within
-//!   one write may leave that poll's subagent lines unsent: they were written after the poll before, and are sent
-//!   again unless the main line before the cursor, read in the same poll, is stamped a minute later.
+//! - **The resume cursor.** The origin ends each batch it writes with a `live`: a launch's catch-up (the main
+//!   transcript's lines, then the subagents': the backlogs of those among them, and what every subagent wrote since
+//!   the main line before the cursor, by its stamp to the minute), a `reset`'s backlog, and each poll's new lines
+//!   while following (the main transcript's, then the subagents'). The `live`'s cursor is where the origin follows
+//!   from, and only a `live` moves the resume cursor: a channel lost within a batch resumes where the last one ended,
+//!   and the origin sends that batch's subagent lines again. Moved to a main event of the lost batch, the resume would
+//!   read the subagents only from that event's stamp on and skip what they wrote before it and had not sent yet. A
+//!   catch-up that began with no cursor (the first launch, a `reset`) takes its first main event's: resuming from what
+//!   the app holds first sends all of it again, never less, where a plain backlog may start later and leave a gap.
+//!   The app sees the `live` that ends a catch-up; the ones that end a poll's batch are not passed on.
 //! - **The end.** The command's exit 0 (the record cleared: the agent ended), its "no agent in this pane", a failure
 //!   before the first `live` (an origin without `ngtermctl agent chat`) or too many failures in a row end the chat:
 //!   [`ChatState::Ended`], with no error, and the app shows the terminal.
@@ -388,10 +386,10 @@ struct Chat<C> {
     /// `None` while the machine's connection is down.
     connection: Option<Rc<C>>,
     link: Option<Link>,
-    /// Where a reconnect resumes (the module docs): while catching up, where the launch began (or its first main
-    /// event, when it began with none); then the `live`'s, and the newest main event's since.
+    /// Where a reconnect resumes (the module docs): the last `live`'s, or the first main event's of a catch-up that
+    /// began with none.
     resume: Option<u64>,
-    /// Between a launch (or a `reset`) and its `live`: the origin is still sending what it caught up on.
+    /// Between a launch (or a `reset`) and its `live`, which the app is shown; the later ones end a poll's batch.
     catching_up: bool,
     /// The oldest: an older page ends there.
     oldest: Option<u64>,
@@ -454,7 +452,9 @@ impl<C: Connection> Chat<C> {
                     self.reconnecting = false;
                     self.failures = 0;
                     self.track(&event);
-                    self.catching_up = false;
+                    if !std::mem::replace(&mut self.catching_up, false) {
+                        continue;
+                    }
                 }
                 body => {
                     if let (EventBody::Conversation { conversation_id, .. }, None) = (body, &event.parent) {
@@ -481,8 +481,7 @@ impl<C: Connection> Chat<C> {
         self.oldest = Some(self.oldest.map_or(at, |oldest| oldest.min(at)));
         self.resume = Some(match (&event.body, self.resume) {
             (EventBody::Live, _) | (_, None) => at,
-            (_, Some(resume)) if self.catching_up => resume,
-            (_, Some(resume)) => resume.max(at),
+            (_, Some(resume)) => resume,
         });
     }
 
