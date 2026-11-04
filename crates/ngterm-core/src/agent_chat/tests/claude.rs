@@ -401,6 +401,20 @@ fn subagent_events_fold_under_their_task() {
 }
 
 #[test]
+fn a_subagents_unreadable_lines_still_fold_under_its_task() {
+    let mut oversized = vec![b' '; LINE_CAP + 1];
+    oversized[0] = b'{';
+    let mut parser = ClaudeParser::subagent(AGENT_TOOL);
+    let mut events = parser.parse_line(br#"{"type""#, 0);
+    events.extend(parser.parse_line(&oversized, 8));
+    assert_eq!(events.len(), 2, "{events:#?}");
+    assert!(
+        events.iter().all(|event| event.parent.as_deref() == Some(AGENT_TOOL)),
+        "{events:#?}"
+    );
+}
+
+#[test]
 fn a_meta_file_without_a_tool_use_id_names_no_parent() {
     assert_eq!(subagent_parent(br#"{"agentType":"general-purpose"}"#), None);
     assert_eq!(subagent_parent(b"not json"), None);
@@ -412,6 +426,71 @@ fn a_meta_file_without_a_tool_use_id_names_no_parent() {
 
 fn parse_lines(lines: &[&str]) -> Vec<ChatEvent> {
     parse_bytes(&mut ClaudeParser::new(), lines.join("\n").as_bytes())
+}
+
+fn parse_owned(lines: &[String]) -> Vec<ChatEvent> {
+    parse_lines(&lines.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// A `user` line whose content is `text`.
+fn user_line(uuid: &str, text: &str) -> String {
+    serde_json::json!({"type": "user", "uuid": uuid, "message": {"content": text}}).to_string()
+}
+
+/// The `<command-name>` line Claude Code writes when `/name args` runs.
+fn command(uuid: &str, name: &str, args: &str) -> String {
+    let text = format!(
+        "<command-name>/{name}</command-name>\n            <command-message>{name}</command-message>\n            \
+         <command-args>{args}</command-args>"
+    );
+    user_line(uuid, &text)
+}
+
+#[test]
+fn a_command_repeats_only_the_prompt_just_before() {
+    let reply = r#"{"type":"assistant","uuid":"r","message":{"content":[{"type":"text","text":"done"}]}}"#;
+    let events = parse_owned(&[
+        user_line("p1", "/compact keep it short  "),
+        r#"{"type":"system","subtype":"compact_boundary","uuid":"b"}"#.to_owned(),
+        command("c1", "compact", "keep it short"),
+        command("c2", "cost", ""),
+        command("c3", "cost", ""),
+        user_line("p2", "/review"),
+        reply.to_owned(),
+        command("c4", "review", ""),
+    ]);
+    assert_eq!(
+        user_texts(&events),
+        ["/compact keep it short  ", "/cost", "/cost", "/review", "/review"],
+        "only /compact's own command line repeats the prompt before it"
+    );
+}
+
+#[test]
+fn a_prompt_quoting_command_markup_stays_a_prompt() {
+    let quoted = "Explain why <command-name>/compact</command-name> appears here";
+    let message_first = "<command-message>compact</command-message>\n<command-name>/compact</command-name>";
+    let events = parse_owned(&[user_line("p", quoted), user_line("c", message_first)]);
+    assert_eq!(user_texts(&events), [quoted, "/compact"]);
+}
+
+#[test]
+fn a_resumed_task_keeps_its_tool_on_its_next_notification() {
+    let call = r#"{"type":"assistant","uuid":"a","message":{"content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"description":"Count lines"}}]}}"#;
+    let notification = |result: &str| {
+        let text = format!(
+            "<task-notification>\n<tool-use-id>t1</tool-use-id>\n<status>completed</status>\n\
+             <result>{result}</result>\n</task-notification>"
+        );
+        user_line("n", &text)
+    };
+    let events = parse_owned(&[call.to_owned(), notification("first"), notification("second")]);
+    let done = tool(last(&events, "t1"));
+    assert_eq!(
+        (done.name.as_str(), done.title.as_str(), done.kind),
+        ("Agent", "Count lines", ToolKind::Task)
+    );
+    assert_eq!((done.status, done.output.as_deref()), (ToolStatus::Ok, Some("second")));
 }
 
 #[test]
@@ -486,12 +565,13 @@ fn call_and_result(output: &str) -> String {
 
 #[test]
 fn oversized_output_is_capped_on_a_char_boundary() {
-    let output = "é".repeat(OUTPUT_CAP);
+    // One ASCII byte first puts the cap inside a two-byte `é`.
+    let output = format!("a{}", "é".repeat(OUTPUT_CAP));
     let events = parse_bytes(&mut ClaudeParser::new(), call_and_result(&output).as_bytes());
     let done = tool(&events[1]);
     assert_eq!(done.title, "cat big", "a title is one line");
     let capped = done.output.as_deref().unwrap();
-    assert_eq!(capped.len(), OUTPUT_CAP);
+    assert_eq!(capped.len(), OUTPUT_CAP - 1);
     assert!(output.starts_with(capped));
     assert_eq!(done.truncated, Some(true));
     let short = parse_bytes(&mut ClaudeParser::new(), call_and_result("fine").as_bytes());

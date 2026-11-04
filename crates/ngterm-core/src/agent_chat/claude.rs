@@ -3,8 +3,9 @@
 //!
 //! - `user` lines carry the prompt (a string, or text and image blocks) or `tool_result` blocks. `isMeta` lines,
 //!   local command output and command caveats are Claude's own context and make no event; a `<command-name>` line
-//!   shows as the `/command` it ran unless the prompt just before already said so; a `<task-notification>` completes
-//!   its background task's tool; `[Request interrupted by user…]` is an interrupt notice; `isCompactSummary` holds a
+//!   shows as the `/command` it ran unless the prompt just before already said so (`/compact` writes both, with only
+//!   its compaction between); a `<task-notification>` completes its background task's tool, and a later one for the
+//!   same task updates it; `[Request interrupted by user…]` is an interrupt notice; `isCompactSummary` holds a
 //!   compaction's summary.
 //! - `assistant` lines carry one content block each: `text`, `thinking` (written empty) or `tool_use`. A
 //!   `tool_use` is a running tool until the `tool_result` with its id, except `AskUserQuestion`, which is a question.
@@ -62,9 +63,10 @@ pub struct ClaudeParser {
     parent: Option<String>,
     /// The conversation announced so far: its id and model.
     conversation: Option<(String, Option<String>)>,
-    /// Calls with no result yet (and background tasks with no notification yet), by tool use id.
+    /// Calls with no result yet, and background tasks (whose tool a later notification updates), by tool use id.
     pending: HashMap<String, EventBody>,
-    /// The last prompt shown, so a `<command-name>` line repeating it makes no second bubble.
+    /// The prompt just shown, trimmed, so a `<command-name>` line repeating it makes no second bubble. Anything else
+    /// shown after it but its compaction clears it.
     last_prompt: Option<String>,
 }
 
@@ -95,32 +97,53 @@ pub fn subagent_parent(meta_json: &[u8]) -> Option<String> {
 
 impl TranscriptParser for ClaudeParser {
     fn parse_line(&mut self, line: &[u8], cursor: u64) -> Vec<ChatEvent> {
-        let entry = match decode_line(line, cursor) {
-            Line::Blank => return Vec::new(),
-            Line::Unknown(event) => return vec![event],
-            Line::Entry(entry) => entry,
-        };
         let mut out = Out {
             cursor,
             parent: self.parent.clone(),
             events: Vec::new(),
         };
-        match str_at(&entry, "/type").unwrap_or_default() {
-            "user" => self.user(&entry, &mut out),
-            "assistant" => self.assistant(&entry, &mut out),
-            "system" => system(&entry, &mut out),
+        match decode_line(line, cursor) {
+            Line::Blank => {}
+            Line::Unknown(event) => out.push(event.id, event.body),
+            Line::Entry(entry) => self.entry(&entry, &mut out),
+        }
+        self.forget_prompt(&out.events);
+        out.events
+    }
+}
+
+impl ClaudeParser {
+    /// The events a decoded line makes, by its `type`.
+    fn entry(&mut self, entry: &Value, out: &mut Out) {
+        match str_at(entry, "/type").unwrap_or_default() {
+            "user" => self.user(entry, out),
+            "assistant" => self.assistant(entry, out),
+            "system" => system(entry, out),
             "summary" => out.push(
-                line_id(cursor),
-                notice(
-                    NoticeKind::Summary,
-                    str_at(&entry, "/summary").unwrap_or_default(),
-                    None,
-                ),
+                line_id(out.cursor),
+                notice(NoticeKind::Summary, str_at(entry, "/summary").unwrap_or_default(), None),
             ),
             kind if IGNORED.contains(&kind) => {}
-            kind => out.push(line_id(cursor), EventBody::Unknown { entry: kind.to_owned() }),
+            kind => out.push(line_id(out.cursor), EventBody::Unknown { entry: kind.to_owned() }),
         }
-        out.events
+    }
+
+    /// Forgets the last prompt once a line shows something after it: only the prompt just before a `<command-name>`
+    /// line (with its compaction between, for `/compact`) can repeat it.
+    fn forget_prompt(&mut self, events: &[ChatEvent]) {
+        let shown = events.iter().rev().find(|event| {
+            !matches!(
+                event.body,
+                EventBody::Conversation { .. }
+                    | EventBody::Notice {
+                        kind: NoticeKind::Compaction,
+                        ..
+                    }
+            )
+        });
+        if shown.is_some_and(|event| !matches!(event.body, EventBody::User { .. })) {
+            self.last_prompt = None;
+        }
     }
 }
 
@@ -236,12 +259,15 @@ impl ClaudeParser {
         if trimmed.starts_with("<local-command-") {
             return;
         }
-        let shown = match command_line(trimmed) {
-            Some(command) if self.last_prompt.as_deref() == Some(command.as_str()) => return,
-            Some(command) => command,
-            None => text.to_owned(),
+        let shown = if let Some(command) = command_line(trimmed) {
+            if self.last_prompt.take().as_deref() == Some(command.as_str()) {
+                return;
+            }
+            command
+        } else {
+            self.last_prompt = Some(trimmed.to_owned());
+            text.to_owned()
         };
-        self.last_prompt = Some(shown.clone());
         out.push(
             id,
             EventBody::User {
@@ -251,7 +277,8 @@ impl ClaudeParser {
         );
     }
 
-    /// A background task's `<task-notification>`: completes its tool with the task's result.
+    /// A background task's `<task-notification>`: completes its tool with the task's result. The tool stays known, as
+    /// a resumed task notifies again.
     fn task_notification(&mut self, text: &str, out: &mut Out) {
         let Some(id) = tag(text, "tool-use-id") else { return };
         let status = if tag(text, "status") == Some("completed") {
@@ -259,8 +286,8 @@ impl ClaudeParser {
         } else {
             ToolStatus::Error
         };
-        let mut tool = match self.pending.remove(id) {
-            Some(EventBody::Tool(tool)) => tool,
+        let mut tool = match self.pending.get(id) {
+            Some(EventBody::Tool(tool)) => tool.clone(),
             _ => Tool {
                 name: String::new(),
                 kind: ToolKind::Task,
@@ -272,6 +299,7 @@ impl ClaudeParser {
             },
         };
         finish(&mut tool, status, tag(text, "result").unwrap_or_default());
+        self.pending.insert(id.to_owned(), EventBody::Tool(tool.clone()));
         out.push(id, EventBody::Tool(tool));
     }
 
@@ -555,8 +583,12 @@ fn content_text(content: &Value) -> String {
     }
 }
 
-/// `/name args` from a `<command-name>` line, or `None` for any other text.
+/// `/name args` from a `<command-name>` line, or `None` for any other text (a prompt quoting the markup among its
+/// words is a prompt). Some Claude Code versions write `<command-message>` first.
 fn command_line(text: &str) -> Option<String> {
+    if !text.starts_with("<command-name>") && !text.starts_with("<command-message>") {
+        return None;
+    }
     let name = tag(text, "command-name")?;
     let args = tag(text, "command-args").unwrap_or_default().trim();
     Some(if args.is_empty() {

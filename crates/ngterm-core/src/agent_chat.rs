@@ -78,10 +78,7 @@ fn cap(text: &str, cap: usize) -> (String, bool) {
     if text.len() <= cap {
         return (text.to_owned(), false);
     }
-    let mut end = cap;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = text.floor_char_boundary(cap);
     (text[..end].to_owned(), true)
 }
 
