@@ -895,7 +895,11 @@ with no output yet is a running call (Task 1's fixture README).
       the touched crates, with the catalog tests green
 - [x] `cargo test -p ngterm-mobile`, `scripts/test-mobile-e2e.sh` and `scripts/build-android.sh check` (the check run
       as the same `gradle spotlessApply check` through a helper that strips `NGTERM_*`)
-- [ ] strict clippy on the touched crates; CI green on Linux, macOS and Windows
+- [x] strict clippy on the touched crates; CI green on Linux, macOS and Windows (PR #9 at 90e55e30: linux, its four
+      conformance legs and the coverage floors, cross-platform's macOS, Windows and Linux crates, the Windows suite
+      and its coverage, android, windows-installer and conformance-gate all green; reference-macos, which runs the
+      Swift reference app, skips `agent-chat` as unsupported and fails only main's own tests against the reference,
+      as on main)
 - [x] a revmux round over the whole change, with its verified findings fixed (run by the orchestrator as Task 18's
       review; see progress.txt)
 
