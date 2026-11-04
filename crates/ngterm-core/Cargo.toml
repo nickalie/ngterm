@@ -21,6 +21,10 @@ plist.workspace = true
 idna.workspace = true
 pulldown-cmark.workspace = true
 serde.workspace = true
+# the chat events' `skip_serializing_none` NDJSON form (agent_chat/event.rs)
+serde_with.workspace = true
+# the unified diff an agent's edit tool input shows as (agent_chat/claude.rs)
+similar.workspace = true
 # whether a loopback page's forward may take the origin's port: binds that never listen (remote/page_tunnel.rs)
 socket2.workspace = true
 strum.workspace = true

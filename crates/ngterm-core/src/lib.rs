@@ -8,6 +8,7 @@
 //!
 //! Work that needs a live terminal, widget, daemon or process goes through the `ngterm-host` traits.
 
+pub mod agent_chat;
 pub mod app_actions;
 pub mod auto_follow;
 pub mod chrome;

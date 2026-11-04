@@ -29,6 +29,10 @@ codex/hooks/auto-review/…                a separate session run with Auto Revi
 record/                                  the tools that made all this
 ```
 
+Beside each transcript, `<name>.golden.ndjson` holds the chat events `ngterm-core::agent_chat` makes of it; the
+parser's tests compare against it, and `UPDATE_GOLDEN=1 cargo test -p ngterm-core agent_chat` rewrites it after a
+deliberate parser change (review the diff).
+
 Paths are rewritten: the project is `/home/user/project`, Claude's config dir `/home/user/.claude`, `CODEX_HOME`
 `/home/user/.codex` and the user `user`. Bulk the chat never shows is replaced by `<redacted>` or a stub that keeps
 the line's `type` (system prompts, tool schemas, API request logs, attachments, encrypted reasoning, thinking

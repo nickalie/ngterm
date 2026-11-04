@@ -211,8 +211,9 @@ AgentRecord { agent: claude|codex, transcript: PathBuf, conversation_id, updated
 **The presentation `agent` kind:** per pane role, `{ role, agent, conversation_id }` or `{ role, agent: null }`. It is
 sent at attach, on every record change, and when the lazy check clears a record.
 
-**Chat events** (NDJSON, one per line). Each has `id` (stable, so a later line updates the same item) and `cursor` (the
-byte offset of its source line):
+**Chat events** (NDJSON, one per line, `type` naming the event; `ngterm-core::agent_chat::event`). Each has `id`
+(stable, so a later line updates the same item), `cursor` (the byte offset of its source line) and, for an event read
+from a subagent's transcript, `parent` (the task tool's id):
 
 | event | fields |
 |---|---|
@@ -220,11 +221,11 @@ byte offset of its source line):
 | `user` | text, image count |
 | `assistant` | Markdown text |
 | `thinking` | text (shown collapsed; Claude writes it empty, Codex writes a summary title) |
-| `tool` | kind (shell, edit, read, search, web, task, other), one-line title, status (running, ok, error), output excerpt capped at 4 KiB, unified diff for edits, parent task id for subagent entries |
-| `question` | `AskUserQuestion`: each question, its options (label, description), and whether several can be picked |
+| `tool` | the agent's tool name, kind (shell, edit, read, search, web, task, other), one-line title, status (running, ok, error), output excerpt capped at 4 KiB, unified diff for edits (capped at 64 KiB), `truncated` when either was cut. A result whose call is outside the window has an empty name and title |
+| `question` | `AskUserQuestion`: each question (header, options with label and description, whether several can be picked), status (running until answered) and the answer the agent got |
 | `approval`, `approval_done` | tool, title, detail, tool use id when known |
-| `notice` | compaction, interrupt, API error, with text |
-| `unknown` | the raw entry type, or `oversized` for a line over the cap (8 MiB) |
+| `notice` | kind (compaction, interrupt, API error, summary), text, and a detail (a compaction's summary) |
+| `unknown` | the raw entry type, `malformed` for a line that is not a JSON object, or `oversized` for a line over the cap (8 MiB) |
 | `reset` | the conversation switched |
 | `live` | the backlog is done and following has started |
 
@@ -334,21 +335,23 @@ with no output yet is a running call (Task 1's fixture README).
 
 **Files:**
 - Create: `crates/ngterm-core/src/agent_chat.rs`, `crates/ngterm-core/src/agent_chat/{event,claude}.rs`,
-  `crates/ngterm-core/src/agent_chat/tests/claude.rs`
-- Modify: `crates/ngterm-core/src/lib.rs`
+  `crates/ngterm-core/src/agent_chat/tests/claude.rs`, the goldens
+  `crates/ngterm-core/tests/fixtures/agent_chat/claude/projects/…/*.golden.ndjson`
+- Modify: `crates/ngterm-core/src/lib.rs`, `Cargo.toml` and `crates/ngterm-core/Cargo.toml` (`similar` for the edit
+  diffs, `serde_with`)
 
-- [ ] write golden tests first: each Claude fixture produces its expected event list (`serde_json` goldens next to the
+- [x] write golden tests first: each Claude fixture produces its expected event list (`serde_json` goldens next to the
       fixture)
-- [ ] define `ChatEvent` and its NDJSON form (serde, `skip_serializing_none`) as in Technical Details
-- [ ] implement the Claude line parser:
+- [x] define `ChatEvent` and its NDJSON form (serde, `skip_serializing_none`) as in Technical Details
+- [x] implement the Claude line parser:
   - `user`, `assistant` text, thinking, and `tool_use` paired with `tool_result` by id;
   - edit diffs from the edit tools' inputs;
   - `AskUserQuestion` becomes `question`;
   - subagent entries are parented to their task, as Task 1 found;
   - summary and compaction entries become `notice`.
-- [ ] test the error and edge cases: a malformed line, an unknown type (becomes `unknown`), a `tool_result` with no
+- [x] test the error and edge cases: a malformed line, an unknown type (becomes `unknown`), a `tool_result` with no
       `tool_use` in the window, oversized output (capped), and non-UTF-8 output
-- [ ] `cargo test -p ngterm-core agent_chat` must pass
+- [x] `cargo test -p ngterm-core agent_chat` must pass
 
 ### Task 4: The Codex parser
 

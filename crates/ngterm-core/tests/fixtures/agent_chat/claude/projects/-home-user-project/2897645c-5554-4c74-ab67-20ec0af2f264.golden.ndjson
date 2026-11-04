@@ -1,0 +1,5 @@
+{"id":"conversation","cursor":506,"type":"conversation","agent":"claude","conversation_id":"2897645c-5554-4c74-ab67-20ec0af2f264","cwd":"/home/user/project"}
+{"id":"110a685f-3d75-4024-9fec-09b99f39c377","cursor":1073,"type":"user","text":"/clear"}
+{"id":"8547ced7-dd8b-4781-bfca-c134b3ac227a","cursor":2301,"type":"user","text":"Reply with just: ok"}
+{"id":"conversation","cursor":8831,"type":"conversation","agent":"claude","conversation_id":"2897645c-5554-4c74-ab67-20ec0af2f264","cwd":"/home/user/project","model":"claude-sonnet-5-5"}
+{"id":"749165c4-5ac3-4732-8804-9953f31022dd","cursor":8831,"type":"assistant","text":"ok"}

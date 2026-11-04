@@ -1,0 +1,4 @@
+{"id":"conversation","cursor":507,"type":"conversation","agent":"claude","conversation_id":"17d240d5-8dc2-4980-9a49-0c5015321537","cwd":"/home/user/project"}
+{"id":"6388e431-abfd-48e9-bf91-7424312f1be4","cursor":507,"type":"user","text":"Reply with the single word hi"}
+{"id":"conversation","cursor":7123,"type":"conversation","agent":"claude","conversation_id":"17d240d5-8dc2-4980-9a49-0c5015321537","cwd":"/home/user/project","model":"claude-haiku-5-5"}
+{"id":"3505cf0c-2e03-401f-a5a7-f52db92532cc","cursor":7123,"type":"assistant","text":"hi"}

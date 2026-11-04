@@ -102,6 +102,7 @@ interprocess = "2.4"
 # `fields` order) instead of sorting them.
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 serde_with = { version = "3", default-features = false, features = ["macros"] }
+similar = "3.2"
 # A loopback port probed by binds that never listen (`ngterm-core`'s `remote::page_tunnel`), one of them a dual-mode
 # IPv6 socket, which std cannot set up before it binds.
 socket2 = "0.6"
