@@ -9,8 +9,9 @@ internal struct FormField: View {
     internal let problem: FieldProblem?
     internal var focus: FocusState<MachineField?>.Binding
     internal var isMono = false
-    // a field that wraps (a name, a host) rather than scroll its text out of sight at large text sizes; a newline
-    // typed in it reads as the space problem
+    // a field that wraps (a name, a host) rather than scroll its text out of sight at large text sizes; Return types
+    // a newline in it, which the draft trims from either end (as Android's trim()), and one inside a host reads as the
+    // space problem
     internal var wraps = false
 
     internal var body: some View {

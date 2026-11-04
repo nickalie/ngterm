@@ -20,20 +20,6 @@ public final class OnboardingModel {
         step = keys.keys.isEmpty ? .start : .done
     }
 
-    // what went wrong, in words
-    private static func describe(_ error: any Error) -> String {
-        switch error {
-        case let error as KeyError:
-            error.reason
-
-        case let error as CustomStringConvertible:
-            error.description
-
-        default:
-            error.localizedDescription
-        }
-    }
-
     /// Makes a new key on the device; nothing happens unless the welcome is up and idle.
     public func create() async {
         guard case .welcome(false, _) = step else {
@@ -43,7 +29,7 @@ public final class OnboardingModel {
         do {
             step = .keyReady(try await keys.generate())
         } catch {
-            step = .welcome(isBusy: false, failure: Self.describe(error))
+            step = .welcome(isBusy: false, failure: ErrorWords.of(error))
         }
     }
 
@@ -77,7 +63,7 @@ public final class OnboardingModel {
         } catch let error as KeyError {
             step = .importing(isBusy: false, problem: ImportProblem(error))
         } catch {
-            step = .importing(isBusy: false, problem: .notStored(reason: Self.describe(error)))
+            step = .importing(isBusy: false, problem: .notStored(reason: ErrorWords.of(error)))
         }
     }
 

@@ -258,8 +258,8 @@ The first column: an inset grouped `List` of `MachineRow`s, its selection the ma
 
 - **Each row** reads its link: Connected (and its sessions' statuses: a badge per status with its count, then the
   idle count, or "No sessions"), Connecting, Offline with **Connect**, Reconnecting in *n* s (counting down each
-  second) with **Retry now**, Unreachable with the core's reason and **Retry**, "Needs you" while a host key or a
-  sign-in waits on its sheet, and "Host key changed" with **Review**.
+  second) with **Retry now**, Unreachable with the core's reason and **Retry**, "Needs you" while a host key waits on
+  its sheet, "Waiting for sign-in" while a sign-in does, and "Host key changed" with **Review**.
 - **Add machine** is the toolbar's `+`. A row's context menu has Connect or Disconnect, Edit, and Remove; swiping it
   removes it at once, and a banner at the list's end offers **Undo** for 10 s (the machine comes back where it was,
   with its pinned key). Removing doesn't confirm: Undo is the safety.

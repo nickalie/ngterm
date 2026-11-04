@@ -40,6 +40,11 @@ internal struct MachinesSnapshotTests {
         for machine in machines {
             try test.seed(machine)
         }
+        // the core tells only of machines the app connects (the connections drop the rest); the connects themselves
+        // never run before the golden is taken
+        for machine in machines where machine.id != "offline" {
+            connections.connect(machine.core).cancel()
+        }
         connections.receive(.machineState(machineId: "connected", state: .connected))
         connections.receive(.tree(machineId: "connected", sessions: Self.sessions))
         connections.receive(.machineState(machineId: "idle", state: .connected))
@@ -82,7 +87,10 @@ internal struct MachinesSnapshotTests {
         try test.seed(machine("asking", "studio", host: "studio.lan"))
         try test.seed(machine("signing", "signin", host: "signin.lan"))
         let model = MachinesModel(graph: test.graph)
-        test.connections.connect(machine("connecting", "build-01", host: "build-01.lan").core).cancel()
+        // the core tells only of machines the app connects; the connects never run before the golden is taken
+        for machine in test.graph.machines.machines {
+            test.connections.connect(machine.core).cancel()
+        }
         test.connections.receive(.hostKeyUnknown(machineId: "asking", fingerprint: "SHA256:new"))
         let tailscale = FakeSignIn.tailscale
         test.connections.receive(.signInRequested(machineId: "signing", message: tailscale.message, url: tailscale.url))

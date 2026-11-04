@@ -126,4 +126,27 @@ internal struct StoreFileTests {
             #expect(values.fileProtection == .completeUntilFirstUserAuthentication, "\(name)")
         }
     }
+
+    @Test("no store file leaves the device in a backup, written again or set aside")
+    internal func excludedFromBackup() throws {
+        let directory = try TemporaryDirectory()
+        defer { directory.remove() }
+        try Self.corrupt.write(to: directory.file(SettingsStore.fileName))
+        let settings = SettingsStore(directory: directory.url)
+        let machines = MachineStore(directory: directory.url)
+        for port: UInt16 in [22, 2_222] {
+            var machine = Self.box
+            machine.port = port
+            try machines.save(machine)
+            try settings.update { $0.keepScreenOn.toggle() }
+        }
+        try KeyStore(directory: directory.url)
+            .add(AppKey(id: "k1", authorizedKey: "ssh-ed25519 AAAA", fingerprint: "SHA256:k1", isImported: false))
+        let names = [MachineStore.fileName, SettingsStore.fileName, "\(SettingsStore.fileName).bad", KeyStore.fileName]
+        #expect(try directory.names() == names.sorted())
+        for name in names {
+            let values = try directory.file(name).resourceValues(forKeys: [.isExcludedFromBackupKey])
+            #expect(values.isExcludedFromBackup == true, "\(name)")
+        }
+    }
 }

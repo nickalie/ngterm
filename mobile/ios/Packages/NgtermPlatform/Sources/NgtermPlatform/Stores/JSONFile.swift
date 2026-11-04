@@ -4,6 +4,10 @@ import Foundation
 /// the old value or the new, never part of one) under the file protection `completeUntilFirstUserAuthentication`:
 /// readable from the device's first unlock on, so a background refresh with the phone locked can read it.
 ///
+/// Nothing a store keeps leaves the device (mobile/android's data extraction rules): each file is excluded from
+/// backups, as the keys' private halves and the pins sit in this device's Keychain only, and a restore onto another
+/// device that brought the files without them would list keys it can't sign in with and skip the first run.
+///
 /// A file that no longer decodes reads as none once its bytes are kept beside it as `<name>.bad`; until they can be
 /// kept, it reads as one that can't be read, so nothing writes over it.
 internal struct JSONFile<Value: Codable>: Sendable {
@@ -18,6 +22,15 @@ internal struct JSONFile<Value: Codable>: Sendable {
     /// The file `name` in `directory`.
     internal init(directory: URL, name: String) {
         url = directory.appending(path: name, directoryHint: .notDirectory)
+    }
+
+    // an atomic write replaces the file, and the mark with it, so every write marks the new one; a mark that doesn't
+    // take fails nothing (the value is written) and the next write tries again
+    private static func excludeFromBackup(_ url: URL) {
+        var file = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? file.setResourceValues(values)
     }
 
     /// The value in the file: `nil` when there is no file, or when it no longer decodes, in which case its bytes move
@@ -59,6 +72,7 @@ internal struct JSONFile<Value: Codable>: Sendable {
         } catch {
             throw .unwritable(reason: error.localizedDescription)
         }
+        Self.excludeFromBackup(url)
     }
 
     // keeps the bytes of a file that no longer decodes, then removes it; when they can't be kept the file stays and
@@ -69,6 +83,7 @@ internal struct JSONFile<Value: Codable>: Sendable {
         } catch {
             throw .unreadable(reason: "it no longer decodes and could not be set aside: \(error.localizedDescription)")
         }
+        Self.excludeFromBackup(badCopy)
         do {
             try FileManager.default.removeItem(at: url)
         } catch {

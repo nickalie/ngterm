@@ -93,6 +93,10 @@ internal struct MachineStoreTests {
         #expect(machine.port == StoredMachine.sshPort)
         #expect(machine.title == "box.example")
         #expect(machine.address == "me@box.example:22")
+        // a label of blank lines (an older draft's Return) is none too
+        var blank = machine
+        blank.label = " \n"
+        #expect(blank.title == "box.example")
     }
 
     @Test("the core's record carries the title as its label")

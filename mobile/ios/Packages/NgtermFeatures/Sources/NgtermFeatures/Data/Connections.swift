@@ -73,6 +73,21 @@ public final class Connections {
         return renamed == after
     }
 
+    // the machine an event about a connection is about: its state, its questions, its listing
+    private static func machineId(of event: MobileEvent) -> String? {
+        switch event {
+        case .machineState(let machineId, _),
+            .hostKeyUnknown(let machineId, _),
+            .hostKeyChanged(let machineId, _, _),
+            .signInRequested(let machineId, _, _),
+            .tree(let machineId, _):
+            machineId
+
+        default:
+            nil
+        }
+    }
+
     /// The link of `machineId`.
     public func link(of machineId: String) -> Link {
         links[machineId] ?? .offline
@@ -179,7 +194,16 @@ public final class Connections {
     }
 
     /// Takes `event` from the core, in the order the core told it.
+    ///
+    /// An event about a machine with no record is dropped: it was told before a ``disconnect(machineId:)`` that the
+    /// stream delivers after it (a Connected that would show a closed connection, a question about a cancelled
+    /// connect). ``connect(_:)`` keeps the record before it calls the core, and a suspend keeps it, so every other
+    /// event finds one.
     internal func receive(_ event: MobileEvent) {
+        defer { handledEvents += 1 }
+        if let machineId = Self.machineId(of: event), records[machineId] == nil {
+            return
+        }
         switch event {
         case .machineState(let machineId, let state):
             machineState(machineId, state)
@@ -202,7 +226,6 @@ public final class Connections {
         default:
             break
         }
-        handledEvents += 1
     }
 
     private func connecting(_ machine: Machine) async {
