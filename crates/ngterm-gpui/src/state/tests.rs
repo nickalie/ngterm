@@ -1037,7 +1037,7 @@ fn pane_relative_links_use_their_own_reported_local_directory() {
         &PaneReport::Pwd(directory.path().to_string_lossy().into_owned()),
     );
     state.follow_pane_link(
-        "./name%20?# with spaces.txt",
+        &format!("./{name}"),
         session,
         "T",
         false,
