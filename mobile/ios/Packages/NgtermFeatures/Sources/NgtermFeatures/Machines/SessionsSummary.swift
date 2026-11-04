@@ -16,7 +16,7 @@ internal struct SessionsSummary: View {
         if sessions.isEmpty {
             Text("No sessions")
                 .font(Typography.detail)
-                .foregroundStyle(Palette.secondaryText.color)
+                .rowForeground(Palette.secondaryText.color)
         } else {
             let layout =
                 typeSize.isAccessibilitySize

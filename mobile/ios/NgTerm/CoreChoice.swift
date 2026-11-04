@@ -56,6 +56,7 @@ internal struct CoreChoice {
             settings: SettingsStore(),
             keys: AppKeys(store: KeyStore(), vault: KeychainKeyVault(), maker: CoreKeyMaker(), comment: keyComment),
             pins: pins,
+            attached: AttachedStore(),
             core: core
         )
     }

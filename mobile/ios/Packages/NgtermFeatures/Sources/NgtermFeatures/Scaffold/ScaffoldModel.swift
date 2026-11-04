@@ -58,6 +58,17 @@ public final class ScaffoldModel {
         compactColumn = .content
     }
 
+    /// The machine `machine` was removed: its sessions and its session no longer show here, and a compact stack goes
+    /// back to the machines.
+    public func forget(machine: String) {
+        guard self.machine == machine else {
+            return
+        }
+        self.machine = nil
+        session = nil
+        compactColumn = .sidebar
+    }
+
     /// Opens `session` here, taking it from another main window that shows it, or says it has its own window: the
     /// caller then brings that window forward.
     public func open(_ session: SessionWindowID) -> SessionPlacement {

@@ -21,7 +21,15 @@ public final class Connections {
     /// Why a machine's last listing failed (the core's words), by id, until a listing lands.
     public private(set) var treeFailures: [String: String] = [:]
     /// The sessions this app has attached, by machine id: each machine's session ids.
-    public internal(set) var attached: [String: Set<String>] = [:]
+    public internal(set) var attached: [String: Set<String>] = [:] {
+        didSet {
+            if attached != oldValue {
+                for watcher in attachedWatchers {
+                    watcher(attached)
+                }
+            }
+        }
+    }
 
     /// The core, for what this class doesn't wrap.
     @ObservationIgnored public let core: any MobileCoreClient
@@ -38,6 +46,9 @@ public final class Connections {
     // resume's) is listed when it reports Connected; whoever takes a machine out lists it, so it is listed once
     @ObservationIgnored private var unlisted: Set<String> = []
     @ObservationIgnored private var consumer: Task<Void, Never>?
+    // the app's other parts that take the core's events (the live sessions), and those that follow the attached set
+    @ObservationIgnored private var listeners: [@MainActor (MobileEvent) -> Void] = []
+    @ObservationIgnored private var attachedWatchers: [@MainActor ([String: Set<String>]) -> Void] = []
     /// How many of the core's events have been taken so far (for the tests, which wait for the stream to drain).
     @ObservationIgnored internal private(set) var handledEvents = 0
 
@@ -91,6 +102,19 @@ public final class Connections {
     /// The link of `machineId`.
     public func link(of machineId: String) -> Link {
         links[machineId] ?? .offline
+    }
+
+    /// Hands `listener` every event of the core from now on, after this class has taken it, on the main actor; an
+    /// event this class drops as stale (about a machine disconnected since) goes to no one.
+    @preconcurrency
+    public func listen(_ listener: @escaping @MainActor (MobileEvent) -> Void) {
+        listeners.append(listener)
+    }
+
+    /// Hands `watcher` ``attached`` after each change from now on.
+    @preconcurrency
+    public func watchAttached(_ watcher: @escaping @MainActor ([String: Set<String>]) -> Void) {
+        attachedWatchers.append(watcher)
     }
 
     /// Connects `machine` (or retries it at once), then lists its sessions for ``trees``.
@@ -225,6 +249,9 @@ public final class Connections {
 
         default:
             break
+        }
+        for listener in listeners {
+            listener(event)
         }
     }
 

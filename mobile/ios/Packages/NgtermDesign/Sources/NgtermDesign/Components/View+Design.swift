@@ -12,6 +12,12 @@ extension View {
             .foregroundStyle(Palette.onTint.color)
     }
 
+    /// The view in `color`, or in the row's own foreground when its row is selected (an iPad's sidebar draws the
+    /// selection in the tint, on which the app's colors don't read).
+    public func rowForeground(_ color: Color) -> some View {
+        modifier(RowForeground(color: color))
+    }
+
     /// The view under `cover` when there is one: hidden from VoiceOver, which reads the cover instead.
     public func covered(by cover: Cover?) -> some View {
         accessibilityHidden(cover != nil)

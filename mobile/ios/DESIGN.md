@@ -198,6 +198,9 @@ Rules the components hold to:
 - An action keeps its name through the flow: "End session" is confirmed by "End session".
 - VoiceOver: decorative glyphs are hidden and the word next to them is read; a badge reads as its words; a row reads
   as one element; titles are headings.
+- A selected row (an iPad's sidebar draws the selection in the tint) draws its colored text, glyphs and actions in
+  the row's own foreground (`rowForeground`), since the app's colors don't read on the tint; a status keeps its glyph
+  and word there.
 
 ## Frame: `AppScaffold`
 
@@ -287,6 +290,36 @@ build-01.lan, port 22"), what it means, then its plates and actions.
 - **build-01's host key changed** (from the row's Review): what that can mean, both fingerprints, the advice, **Back to
   machines** as the prominent action and **Remove pinned key** as the destructive one, behind
   `confirmingDestructive`.
+
+### A machine's sessions (`Sessions/`)
+
+The second column: an inset grouped `List` of `SessionRow`s, its selection the session this window shows. The title is
+inline: the machine's name over its mono address, read by VoiceOver as one heading with the address in words. **New
+session** is the toolbar's `+` while the machine is connected.
+
+- **Groups:** the families with a session this app has attached under "Attached", then the others under "On
+  build-01", each a parent with its companions right under it (indented, "Companion of …"). The headers are the app's
+  `FormHint` headings, not the system's grey. A row's line is the context, else the working directory; its status is
+  the `AgentStatusBadge`; while its End runs it says "Ending" with a spinner. The Attached mark stays off the rows: the
+  group's heading says it.
+- **Actions:** a tap attaches the session and opens it. The context menu has Attach or Detach and **End session**; the
+  swipe actions (VoiceOver's row actions) End session and, when attached, Detach. End session confirms
+  (`confirmingDestructive`: "End api?", "It stops on build-01, with everything running in it. This can't be undone.");
+  Detach doesn't. The swipe's End has no destructive role, so the row stays until the machine's listing lets it go.
+- **Pull to refresh** lists the machine again; on a machine that isn't connected it connects.
+- **States,** each with the one action that moves on: connecting and reading (`StatePanel.loading`), empty ("No
+  sessions on build-01" with **New session**), not connected (**Connect**), offline (**Retry**), dropped ("Trying
+  again in 4 s", counting down, **Retry now**), unreachable (the core's reason, **Retry**), host key changed
+  (**Review**, the changed key's sheet), `ngtermctl` missing (the shell's words read as such: **Open the README** in
+  Safari's view, **Retry** under it), and a first listing that failed (**Retry**). Over the list or the empty state, a
+  banner says the device is offline, and another that the list may be out of date (with Retry). An End or an attach
+  that failed is a dismissible failed banner at the list's end.
+- **New session** is a sheet with a `Form`: the name (mono, optional: "build-01 names it when blank"), Cancel and
+  Create in the toolbar. While the create runs, Create gives way to a spinner and the field holds still; Cancel closes
+  the sheet and the create goes on (its failure then comes as the banner). What went wrong shows under the field,
+  which keeps its text. The field isn't focused on its own: a field being edited reports only its text's height to
+  the accessibility audit, under 44 pt.
+- **A machine removed** while its sessions show takes the window back to the machines.
 
 ## App icon and launch screen
 

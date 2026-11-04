@@ -6,7 +6,7 @@ internal struct AttachedMark: View {
         Label(String(localized: "Attached", bundle: .module), systemImage: "link")
             .labelStyle(.titleAndIcon)
             .font(Typography.statusWord)
-            .foregroundStyle(Palette.healthy.color)
+            .rowForeground(Palette.healthy.color)
             .lineLimit(1)
             .fixedSize()
     }

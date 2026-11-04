@@ -12,7 +12,7 @@ public struct StatusGlyph: View {
         Image(systemName: shape.symbolName)
             .font(Typography.statusWord)
             .imageScale(.small)
-            .foregroundStyle(color)
+            .rowForeground(color)
             .accessibilityHidden(true)
     }
 
