@@ -545,6 +545,184 @@ fn a_notification_for_a_finished_call_makes_no_event() {
     assert_eq!((done.name.as_str(), done.output.as_deref()), ("Bash", Some("done")));
 }
 
+/// A stop call `s1` of `name`, whose input names task `b1` under `field`.
+fn stop_call(name: &str, field: &str) -> String {
+    serde_json::json!({
+        "type": "assistant", "uuid": "s",
+        "message": {"content": [{"type": "tool_use", "id": "s1", "name": name, "input": {field: "b1"}}]},
+    })
+    .to_string()
+}
+
+/// The result Claude Code writes when `TaskStop` stops task `b1`.
+fn stop_result() -> String {
+    serde_json::json!({
+        "type": "user", "uuid": "sr",
+        "message": {"content": [{"type": "tool_result", "tool_use_id": "s1",
+            "content": r#"{"message":"Successfully stopped task: b1 (sleep 60)","task_id":"b1"}"#}]},
+        "toolUseResult": {"message": "Successfully stopped task: b1 (sleep 60)", "task_id": "b1",
+            "task_type": "local_bash", "command": "sleep 60"},
+    })
+    .to_string()
+}
+
+/// The result of a stop that failed.
+fn failed_stop_result() -> String {
+    serde_json::json!({
+        "type": "user", "uuid": "sr",
+        "message": {"content": [{"type": "tool_result", "tool_use_id": "s1", "is_error": true,
+            "content": "<tool_use_error>No task found with ID: b1</tool_use_error>"}]},
+        "toolUseResult": "Error: No task found with ID: b1",
+    })
+    .to_string()
+}
+
+const STOPPED: &str = "Successfully stopped task: b1 (sleep 60)";
+
+#[test]
+fn a_stopped_background_command_finishes_without_a_notification() {
+    let [call, receipt] = background_bash();
+    let events = parse_owned(&[call, receipt, stop_call("TaskStop", "task_id"), stop_result()]);
+    let stop = last(&events, "s1");
+    assert_eq!(tool(stop).status, ToolStatus::Ok);
+    let stopped = last(&events, "t1");
+    assert_eq!((stopped.cursor, stopped.parent.as_deref()), (stop.cursor, None));
+    let stopped = tool(stopped);
+    assert_eq!(
+        (stopped.name.as_str(), stopped.title.as_str(), stopped.kind),
+        ("Bash", "sleep 60", ToolKind::Shell)
+    );
+    assert_eq!(
+        (stopped.status, stopped.output.as_deref()),
+        (ToolStatus::Error, Some(STOPPED))
+    );
+}
+
+#[test]
+fn a_stopped_background_agent_finishes_without_a_notification() {
+    let call = r#"{"type":"assistant","uuid":"a","message":{"content":[{"type":"tool_use","id":"t1","name":"Agent","input":{"description":"Count lines","run_in_background":true}}]}}"#;
+    let receipt = serde_json::json!({
+        "type": "user", "uuid": "u",
+        "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
+            "content": [{"type": "text", "text": "Async agent launched successfully."}]}]},
+        "toolUseResult": {"isAsync": true, "status": "async_launched", "agentId": "b1"},
+    });
+    let events = parse_owned(&[
+        call.to_owned(),
+        receipt.to_string(),
+        stop_call("TaskStop", "task_id"),
+        stop_result(),
+    ]);
+    let stopped = tool(last(&events, "t1"));
+    assert_eq!(
+        (stopped.name.as_str(), stopped.title.as_str(), stopped.kind),
+        ("Agent", "Count lines", ToolKind::Task)
+    );
+    assert_eq!(
+        (stopped.status, stopped.output.as_deref()),
+        (ToolStatus::Error, Some(STOPPED))
+    );
+}
+
+#[test]
+fn a_failed_stop_leaves_its_task_running() {
+    let [call, receipt] = background_bash();
+    let events = parse_owned(&[call, receipt, stop_call("TaskStop", "task_id"), failed_stop_result()]);
+    assert_eq!(tool(last(&events, "s1")).status, ToolStatus::Error);
+    assert_eq!(tool(last(&events, "t1")).status, ToolStatus::Running);
+}
+
+#[test]
+fn a_stop_after_the_task_finished_keeps_its_result() {
+    let [call, receipt] = background_bash();
+    let events = parse_owned(&[
+        call,
+        receipt,
+        bash_notification("completed"),
+        stop_call("TaskStop", "task_id"),
+        stop_result(),
+    ]);
+    let done = tool(last(&events, "t1"));
+    assert_eq!(
+        (done.status, done.output.as_deref()),
+        (
+            ToolStatus::Ok,
+            Some("Background command \"sleep 60\" completed (exit code 0)")
+        )
+    );
+    assert_eq!(events.iter().filter(|event| event.id == "t1").count(), 2);
+}
+
+#[test]
+fn a_repeated_stop_changes_nothing() {
+    let [call, receipt] = background_bash();
+    let again = stop_result().replace("\"s1\"", "\"s2\"");
+    let events = parse_owned(&[call, receipt, stop_call("TaskStop", "task_id"), stop_result(), again]);
+    assert_eq!(events.iter().filter(|event| event.id == "t1").count(), 2);
+    assert_eq!(tool(last(&events, "t1")).output.as_deref(), Some(STOPPED));
+}
+
+#[test]
+fn a_notification_after_a_stop_keeps_the_tool() {
+    let [call, receipt] = background_bash();
+    let events = parse_owned(&[
+        call,
+        receipt,
+        stop_call("TaskStop", "task_id"),
+        stop_result(),
+        bash_notification("killed"),
+    ]);
+    let done = tool(last(&events, "t1"));
+    assert_eq!(
+        (done.name.as_str(), done.title.as_str(), done.kind),
+        ("Bash", "sleep 60", ToolKind::Shell)
+    );
+    assert_eq!(
+        (done.status, done.output.as_deref()),
+        (
+            ToolStatus::Error,
+            Some("Background command \"sleep 60\" killed (exit code 0)")
+        )
+    );
+}
+
+#[test]
+fn a_stop_whose_call_is_not_in_the_window_still_stops_its_task() {
+    let [call, receipt] = background_bash();
+    let events = parse_owned(&[call, receipt, stop_result()]);
+    let stopped = tool(last(&events, "t1"));
+    assert_eq!((stopped.name.as_str(), stopped.status), ("Bash", ToolStatus::Error));
+    assert_eq!(stopped.output.as_deref(), Some(STOPPED));
+}
+
+#[test]
+fn a_result_naming_a_task_stops_nothing_unless_its_call_is_a_stop() {
+    let [call, receipt] = background_bash();
+    let other = r#"{"type":"assistant","uuid":"s","message":{"content":[{"type":"tool_use","id":"s1","name":"TaskOutput","input":{"task_id":"b1"}}]}}"#;
+    let events = parse_owned(&[call, receipt, other.to_owned(), stop_result()]);
+    assert_eq!(tool(last(&events, "t1")).status, ToolStatus::Running);
+}
+
+#[test]
+fn kill_shell_and_kill_bash_stop_the_task_their_input_names() {
+    for (name, field) in [("KillShell", "shell_id"), ("KillBash", "bash_id")] {
+        let [call, receipt] = background_bash();
+        let result = serde_json::json!({
+            "type": "user", "uuid": "sr",
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "s1",
+                "content": "Successfully killed shell: b1 (sleep 60)"}]},
+            "toolUseResult": {"message": "Successfully killed shell: b1 (sleep 60)"},
+        });
+        let events = parse_owned(&[call, receipt, stop_call(name, field), result.to_string()]);
+        let stopped = tool(last(&events, "t1"));
+        assert_eq!(
+            (stopped.status, stopped.output.as_deref()),
+            (ToolStatus::Error, Some("Successfully killed shell: b1 (sleep 60)")),
+            "{name}"
+        );
+    }
+}
+
 #[test]
 fn a_notification_with_no_call_in_the_window_still_shows() {
     let events = parse_owned(&[bash_notification("failed")]);

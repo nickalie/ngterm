@@ -11,6 +11,11 @@
 //! - `assistant` lines carry one content block each: `text`, `thinking` (written empty) or `tool_use`. A
 //!   `tool_use` is a running tool until the `tool_result` with its id, except `AskUserQuestion`, which is a question.
 //!   An `isApiErrorMessage` line is an API error notice.
+//! - A background task's launch receipt (`toolUseResult.isAsync` with its `agentId` for an `Agent`,
+//!   `toolUseResult.backgroundTaskId` for a `Bash` command) keeps its tool running. Stopping the task (`TaskStop`,
+//!   `KillShell` or `KillBash`) usually writes no notification, so a successful stop's result finishes the stopped
+//!   task's tool, if still running, as an error with the stop's message; the result names the task in
+//!   `toolUseResult.task_id` (or `shell_id`, `bash_id`), else the stop call's input does.
 //! - `system` lines: `compact_boundary` is a compaction notice, `api_error` an API error notice; the others are
 //!   bookkeeping, as are the line types in [`IGNORED`].
 //!
@@ -57,6 +62,12 @@ const CONVERSATION_ID: &str = "conversation";
 /// The tool Claude asks the user questions with.
 const ASK_USER_QUESTION: &str = "AskUserQuestion";
 
+/// The tools that stop a background task.
+const STOP_TOOLS: &[&str] = &["TaskStop", "KillShell", "KillBash"];
+
+/// Where a stop call's input, or its result's `toolUseResult`, names the task it stops.
+const STOP_TARGETS: &[&str] = &["/task_id", "/shell_id", "/bash_id"];
+
 /// Reads a Claude Code transcript, one line at a time.
 #[derive(Debug, Default)]
 pub struct ClaudeParser {
@@ -68,6 +79,11 @@ pub struct ClaudeParser {
     pending: HashMap<String, EventBody>,
     /// Every call shown so far, by tool use id, so a notification for one no longer pending does not blank it.
     called: HashSet<String>,
+    /// Background tasks launched, by task id (a `Bash` command's `backgroundTaskId`, an `Agent`'s `agentId`): the
+    /// tool use id of the call that launched each.
+    tasks: HashMap<String, String>,
+    /// Stop calls with no result yet, by tool use id: the task id each stops.
+    stops: HashMap<String, String>,
     /// The prompt just shown, trimmed, so a `<command-name>` line repeating it makes no second bubble. Anything else
     /// shown after it but its compaction clears it.
     last_prompt: Option<String>,
@@ -311,29 +327,45 @@ impl ClaudeParser {
         out.push(id, EventBody::Tool(tool));
     }
 
-    /// A `tool_result` block: completes its call, or shows alone when the call is not in the window.
+    /// A `tool_result` block: completes its call, or shows alone when the call is not in the window. A successful
+    /// stop's result also finishes the task it stopped.
     fn tool_result(&mut self, entry: &Value, block: &Value, out: &mut Out) {
         let Some(id) = str_at(block, "/tool_use_id") else {
             return;
         };
         let is_error = block.get("is_error").and_then(Value::as_bool) == Some(true);
-        let status = if is_error { ToolStatus::Error } else { ToolStatus::Ok };
         let output = content_text(block.get("content").unwrap_or(&Value::Null));
+        let stopped = self.stop_target(id, entry);
+        self.complete(entry, id, is_error, &output, out);
+        if let Some(task) = stopped.filter(|_| !is_error) {
+            let message = str_at(entry, "/toolUseResult/message").unwrap_or(&output);
+            self.stop_task(&task, message, out);
+        }
+    }
+
+    /// Completes call `id` with its result.
+    fn complete(&mut self, entry: &Value, id: &str, is_error: bool, output: &str, out: &mut Out) {
+        let status = if is_error { ToolStatus::Error } else { ToolStatus::Ok };
         let launched = entry.pointer("/toolUseResult/isAsync").and_then(Value::as_bool) == Some(true)
-            || str_at(entry, "/toolUseResult/backgroundTaskId").is_some_and(|task| !task.is_empty());
+            || non_empty(entry, "/toolUseResult/backgroundTaskId").is_some();
         match self.pending.remove(id) {
             // A background task's launch receipt (an `Agent`'s `isAsync`, a `Bash` command's `backgroundTaskId`): the
-            // task runs on until its notification.
+            // task runs on until its notification, or until a stop call stops it.
             Some(body) if launched && !is_error => {
+                let task = non_empty(entry, "/toolUseResult/backgroundTaskId")
+                    .or_else(|| non_empty(entry, "/toolUseResult/agentId"));
+                if let Some(task) = task {
+                    self.tasks.insert(task.to_owned(), id.to_owned());
+                }
                 self.pending.insert(id.to_owned(), body);
             }
             Some(EventBody::Question(mut question)) => {
                 question.status = status;
-                question.output = Some(cap(&output, OUTPUT_CAP).0);
+                question.output = Some(cap(output, OUTPUT_CAP).0);
                 out.push(id, EventBody::Question(question));
             }
             Some(EventBody::Tool(mut tool)) => {
-                finish(&mut tool, status, &output);
+                finish(&mut tool, status, output);
                 out.push(id, EventBody::Tool(tool));
             }
             _ => {
@@ -346,10 +378,44 @@ impl ClaudeParser {
                     diff: None,
                     truncated: None,
                 };
-                finish(&mut tool, status, &output);
+                finish(&mut tool, status, output);
                 out.push(id, EventBody::Tool(tool));
             }
         }
+    }
+
+    /// The task a stop call's result stops: the one its `toolUseResult` names, else the one its input named. A
+    /// result whose call is not in the window counts when its `toolUseResult` names a task; one of a shown call that
+    /// is no stop does not.
+    fn stop_target(&mut self, id: &str, entry: &Value) -> Option<String> {
+        let remembered = self.stops.remove(id);
+        if remembered.is_none() && self.called.contains(id) {
+            return None;
+        }
+        let receipt = entry.get("toolUseResult").unwrap_or(&Value::Null);
+        STOP_TARGETS
+            .iter()
+            .find_map(|pointer| non_empty(receipt, pointer))
+            .map(str::to_owned)
+            .or(remembered)
+    }
+
+    /// Finishes the call that launched background task `task`, if it is still running, as stopped: an error whose
+    /// output is the stop's `message`. The call stays known, so a notification that still comes updates it.
+    fn stop_task(&mut self, task: &str, message: &str, out: &mut Out) {
+        let Some(id) = self.tasks.get(task) else { return };
+        let Some(EventBody::Tool(tool)) = self.pending.get(id) else {
+            return;
+        };
+        if tool.status != ToolStatus::Running {
+            return;
+        }
+        let mut tool = tool.clone();
+        let id = id.clone();
+        finish(&mut tool, ToolStatus::Error, message);
+        self.tasks.remove(task);
+        self.pending.insert(id.clone(), EventBody::Tool(tool.clone()));
+        out.push(id, EventBody::Tool(tool));
     }
 
     fn assistant(&mut self, entry: &Value, out: &mut Out) {
@@ -411,6 +477,11 @@ impl ClaudeParser {
         } else {
             EventBody::Tool(running_tool(name, input))
         };
+        if STOP_TOOLS.contains(&name)
+            && let Some(task) = STOP_TARGETS.iter().find_map(|pointer| non_empty(input, pointer))
+        {
+            self.stops.insert(id.to_owned(), task.to_owned());
+        }
         self.pending.insert(id.to_owned(), body.clone());
         self.called.insert(id.to_owned());
         out.push(id, body);
@@ -618,4 +689,9 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
 
 fn str_at<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
     value.pointer(pointer).and_then(Value::as_str)
+}
+
+/// The string at `pointer`, unless it is missing or empty.
+fn non_empty<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
+    str_at(value, pointer).filter(|text| !text.is_empty())
 }
