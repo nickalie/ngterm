@@ -452,6 +452,34 @@ fn approvals_are_interleaved_and_end_by_the_transcript_or_the_record() -> TestRe
     Ok(())
 }
 
+/// The transcript answering a prompt before the record is looked at: the denial already in the backlog (a connect,
+/// or a reconnect with `--after`) or read by a poll before the record shows the candidate. The record still holds
+/// the candidate (the status has not left `blocked`), and it is never shown.
+#[test]
+fn a_prompt_the_transcript_answered_before_the_record_was_read_is_never_shown() -> TestResult {
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    let bytes = transcript(MAIN)?;
+    let path = write_transcript(dir.path(), MAIN, slice(&bytes, 0, NEXT_PROMPT)?)?;
+    let server = Scripted::serve(&socket, Some(record(&path, MAIN, Some(denied_txt(100.0)))?))?;
+    for args in [&["--target", "S"][..], &["--target", "S", "--after", "0"]] {
+        let chat = Chat::spawn(dir.path(), &socket, args)?;
+        chat.until("live")?;
+        assert!(chat.silent_for(Duration::from_millis(1500)), "{args:?}");
+    }
+
+    fs::write(&path, slice(&bytes, 0, DENIED_RESULT)?)?;
+    server.set(Some(record(&path, MAIN, None)?))?;
+    let chat = Chat::spawn(dir.path(), &socket, &["--target", "S"])?;
+    chat.until("live")?;
+    append(&path, slice(&bytes, DENIED_RESULT, NEXT_PROMPT)?)?;
+    let answered = lines_in(&golden(MAIN)?, DENIED_RESULT, NEXT_PROMPT);
+    assert_eq!(chat.take(answered.len())?, answered);
+    server.set(Some(record(&path, MAIN, Some(denied_txt(100.0)))?))?;
+    assert!(chat.silent_for(Duration::from_millis(1500)));
+    Ok(())
+}
+
 fn merge(into: &mut Value, from: &Value) {
     if let (Some(into), Some(from)) = (into.as_object_mut(), from.as_object()) {
         into.extend(from.iter().map(|(key, value)| (key.clone(), value.clone())));

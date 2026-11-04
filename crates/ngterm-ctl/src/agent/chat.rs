@@ -205,6 +205,8 @@ struct Stream<'a> {
 
 impl Stream<'_> {
     /// Prints `first` and the record's prompt, then follows until stdin ends, the record clears or the reader goes.
+    /// The record is read before the transcript it is weighed against, so a prompt's call is in what was read when
+    /// the record shows the prompt ([`Approvals`]).
     fn run(&mut self, first: Vec<ChatEvent>, ended: &Receiver<()>) -> Result<(), Failure> {
         let mut events = self.interleave(first);
         events.extend(self.approvals.observe(self.record.approval.as_ref()));
@@ -217,15 +219,21 @@ impl Stream<'_> {
                 Err(RecvTimeoutError::Timeout) => {}
                 Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
             }
+            let looked = if checked.elapsed() >= RECHECK {
+                checked = Instant::now();
+                Some(self.chat.look(&self.socket)?)
+            } else {
+                None
+            };
             let polled = self.follower.poll().map_err(|error| read_failure(&error))?;
             events = self.interleave(polled);
-            if checked.elapsed() >= RECHECK {
-                checked = Instant::now();
-                let Some(record) = self.chat.look(&self.socket)? else {
+            match looked {
+                Some(Some(record)) => events.extend(self.recheck(record)?),
+                Some(None) => {
                     let _ = write_events(&events);
                     return Ok(());
-                };
-                events.extend(self.recheck(record)?);
+                }
+                None => {}
             }
         }
     }

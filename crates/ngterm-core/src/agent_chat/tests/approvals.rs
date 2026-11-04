@@ -130,9 +130,14 @@ fn the_transcript_writing_the_calls_result_answers_it_and_the_same_candidate_nev
     // the status has not left `blocked` yet: the record still holds the answered candidate
     assert!(approvals.observe(Some(&approval)).is_empty());
     assert!(approvals.observe(None).is_empty());
-    // a new candidate is news
+    // a new candidate for the same call is news once the transcript holds the call asked about
+    assert!(approvals.observe(Some(&denied_txt(6.0))).is_empty());
+    read(
+        &mut approvals,
+        &[bash("toolu_2", 1100, "touch denied.txt", ToolStatus::Running)],
+    );
     let next = approvals.observe(Some(&denied_txt(6.0)));
-    assert_eq!(types(&next), [("approval", "approval-6", 1000)]);
+    assert_eq!(types(&next), [("approval", "approval-6", 1100)]);
 }
 
 #[test]
@@ -227,5 +232,125 @@ fn a_subagents_events_do_not_move_the_position() {
     assert_eq!(
         types(&approvals.observe(Some(&denied_txt(1.0)))),
         [("approval", "approval-1", 100)]
+    );
+}
+
+fn interrupt(id: &str, cursor: u64) -> ChatEvent {
+    event(
+        id,
+        cursor,
+        EventBody::Notice {
+            kind: NoticeKind::Interrupt,
+            text: "Request interrupted by user for tool use".to_owned(),
+            detail: None,
+        },
+    )
+}
+
+fn under(parent: &str, mut event: ChatEvent) -> ChatEvent {
+    event.parent = Some(parent.to_owned());
+    event
+}
+
+#[test]
+fn a_candidate_the_transcript_answered_before_it_was_shown_never_shows() {
+    let mut approvals = Approvals::new();
+    // the backlog (or a poll) holds the denial before the record is looked at
+    read(
+        &mut approvals,
+        &[
+            bash("toolu_1", 700, "touch denied.txt", ToolStatus::Running),
+            bash("toolu_1", 800, "touch denied.txt", ToolStatus::Error),
+            live(900),
+        ],
+    );
+    let approval = denied_txt(5.0);
+    assert!(approvals.observe(Some(&approval)).is_empty());
+    assert!(approvals.observe(Some(&approval)).is_empty());
+    assert!(approvals.observe(None).is_empty());
+    // by its tool use id alike
+    let by_id = ControlAgentApproval {
+        tool_use_id: Some("toolu_1".to_owned()),
+        ..denied_txt(7.0)
+    };
+    assert!(approvals.observe(Some(&by_id)).is_empty());
+}
+
+#[test]
+fn an_interrupt_read_before_the_candidate_was_shown_answers_it() {
+    let mut approvals = Approvals::new();
+    read(
+        &mut approvals,
+        &[
+            bash("exec-1", 700, "touch denied.txt", ToolStatus::Running),
+            interrupt("n1", 800),
+        ],
+    );
+    assert!(approvals.observe(Some(&denied_txt(5.0))).is_empty());
+}
+
+#[test]
+fn the_main_agents_next_prompt_forgets_the_finished_calls() {
+    let mut approvals = Approvals::new();
+    let prompt = event(
+        "u1",
+        900,
+        EventBody::User {
+            text: "again".to_owned(),
+            images: None,
+        },
+    );
+    read(
+        &mut approvals,
+        &[bash("toolu_1", 800, "touch denied.txt", ToolStatus::Error), prompt],
+    );
+    assert_eq!(
+        types(&approvals.observe(Some(&denied_txt(5.0)))),
+        [("approval", "approval-5", 900)]
+    );
+}
+
+#[test]
+fn a_subagents_call_with_the_same_title_does_not_answer_the_main_agents_prompt() {
+    let mut approvals = Approvals::new();
+    read(
+        &mut approvals,
+        &[bash("toolu_1", 700, "touch denied.txt", ToolStatus::Running), live(800)],
+    );
+    assert_eq!(approvals.observe(Some(&denied_txt(5.0))).len(), 1);
+    let sub = |status| under("toolu_task", bash("toolu_s1", 10, "touch denied.txt", status));
+    assert_eq!(
+        read(&mut approvals, &[sub(ToolStatus::Running), sub(ToolStatus::Ok)]),
+        None
+    );
+    assert!(approvals.observe(Some(&denied_txt(5.0))).is_empty(), "still shown");
+    assert!(
+        read(
+            &mut approvals,
+            &[bash("toolu_1", 900, "touch denied.txt", ToolStatus::Error)]
+        )
+        .is_some()
+    );
+}
+
+#[test]
+fn a_subagents_prompt_is_answered_by_its_own_result() {
+    let mut approvals = Approvals::new();
+    read(&mut approvals, &[live(800)]);
+    assert_eq!(approvals.observe(Some(&denied_txt(5.0))).len(), 1);
+    // its call shows up after the prompt: the subagent owns it, and the main agent's same call finishing answers nothing
+    let sub = |status| under("toolu_task", bash("toolu_s1", 10, "touch denied.txt", status));
+    read(&mut approvals, &[sub(ToolStatus::Running)]);
+    assert_eq!(
+        read(
+            &mut approvals,
+            &[bash("toolu_9", 850, "touch denied.txt", ToolStatus::Ok)]
+        ),
+        None
+    );
+    let done = read(&mut approvals, &[sub(ToolStatus::Error)]);
+    assert_eq!(
+        done.as_ref().map(|done| types(std::slice::from_ref(done))),
+        Some(vec![("approval_done", "approval-5", 850)])
     );
 }
