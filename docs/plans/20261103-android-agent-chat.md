@@ -591,6 +591,10 @@ with no output yet is a running call (Task 1's fixture README).
     post-step checks turn a different behavior into `Unconfirmed` rather than a wrong key.
   - Settled: a role report of `Leader` for the claim's attach (10 s at most), then no new bytes, frame (a frame held by
     synchronized output counts as not settled) or grid for 150 ms, or 1 s at most (a spinner never goes quiet).
+  - Confirmed: after a step's keys (the paste, an option's key, each picker key) the action settles and looks again
+    until the screen shows what they did, or 5 s pass (`Unconfirmed`); any other screen is pending meanwhile, the
+    screen the keys went to (no output since) above all, and no key is sent twice. Codex's composer is read from its
+    footer up, so blank lines and `1. …` lines in a pasted text stay the composer's.
 
 - [x] write matcher tests first on Task 1's PTY captures, replayed through libghostty-vt into rows at each recorded
       width:

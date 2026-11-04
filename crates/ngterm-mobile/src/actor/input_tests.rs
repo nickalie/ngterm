@@ -22,17 +22,18 @@ use super::pane_tests::{
 use crate::api::{MobileEvent, Pane, PaneInputError, PaneSize};
 use crate::chat::input::{ACTION_IN_FLIGHT, AgentInputOutcome, InputTiming, NO_AGENT_TO_DRIVE};
 use crate::chat::matchers::Agent;
-use crate::chat::tests::matchers::{Capture, into_prompt};
+use crate::chat::tests::matchers::{Capture, draft_drawn, into_prompt};
 use crate::chat::{Side, commands_tail};
 use crate::pane::{PaneRole, without_escapes};
 use crate::transport::fake::{Opened, Script};
 use crate::transport::{ChannelInput, ChannelPeer};
 
-/// Short waits, so a refused claim times out quickly.
+/// Short waits, so a refused claim times out quickly and a step that never shows gives up soon.
 fn timing() -> InputTiming {
     InputTiming {
         quiet: Duration::from_millis(150),
         settle_max: Duration::from_secs(1),
+        confirm: Duration::from_millis(1500),
         lead_timeout: Duration::from_millis(800),
         poll: Duration::from_millis(10),
     }
@@ -293,6 +294,42 @@ fn a_prompt_is_pasted_then_entered_and_a_second_action_waits_its_turn() {
     let (entered, _) = inputs_until(&mut agents.first.peer, |bytes, _| bytes.ends_with(b"\r"));
     assert_eq!(without_escapes(&entered), b"\r", "Enter alone");
     assert_eq!(outcome(&prompt), Ok(AgentInputOutcome::Sent));
+}
+
+/// Longer than a few quiet periods and shorter than the confirm deadline: a round trip on a slow link.
+const ROUND_TRIP: Duration = Duration::from_millis(700);
+
+#[test]
+fn a_slow_round_trip_holds_the_next_key_until_the_screen_answers_and_never_repeats_one() {
+    // a prompt: the screen before the paste stays up a while, then the TUI shows the paste (a blank line in it)
+    let mut agents = Agents::start("codex", "codex-44x36");
+    agents.first_is("leader");
+    agents.show(&agents.first.peer, "idle");
+    let text = "Fix the parser.\n\nThen add tests.";
+    let prompt = agents.act(move |pane| block_on(pane.send_prompt(text.to_owned())));
+    inputs_until(&mut agents.first.peer, |bytes, _| contains(bytes, b"\x1b[201~"));
+    thread::sleep(ROUND_TRIP);
+    assert!(prompt.try_recv().is_err(), "still waiting for the paste to show");
+    assert!(typed(&mut agents.first.peer).is_empty(), "no Enter, no second paste");
+    let (drawn, _) = draft_drawn(&agents.capture, Agent::Codex, "idle", text);
+    send(&agents.first.peer, &drawn);
+    let (entered, _) = inputs_until(&mut agents.first.peer, |bytes, _| bytes.ends_with(b"\r"));
+    assert_eq!(without_escapes(&entered), b"\r", "Enter alone");
+    assert_eq!(outcome(&prompt), Ok(AgentInputOutcome::Sent));
+
+    // an approval: the dialog stays up a while after its key, then goes
+    let mut agents = Agents::start("claude", "claude-44x36");
+    agents.first_is("leader");
+    agents.show(&agents.first.peer, "permission");
+    let answer = agents.act(|pane| block_on(pane.answer_approval("No".to_owned())));
+    inputs_until(&mut agents.first.peer, |bytes, _| {
+        without_escapes(bytes).contains(&b'4')
+    });
+    thread::sleep(ROUND_TRIP);
+    assert!(answer.try_recv().is_err(), "still waiting for the dialog to go");
+    assert!(typed(&mut agents.first.peer).is_empty(), "the key is not sent again");
+    send(&agents.first.peer, b"\x1b[2J\x1b[H");
+    assert_eq!(outcome(&answer), Ok(AgentInputOutcome::Sent));
 }
 
 #[test]

@@ -14,8 +14,11 @@
 //!   multi-select one boxed `[ ]` or `[✔]`), `Type something.`, a rule, `Chat about this` and the footer
 //!   `Enter to select · …`. Its review tab asks `Ready to submit your answers?` over `1. Submit answers` and
 //!   `2. Cancel`.
-//! - **Codex's composer**: a row opening with `›` between blank rows, its footer under it; working while a line above
-//!   it says `esc to interrupt` (`• Working (0s • esc to interrupt)`).
+//! - **Codex's composer**: a row opening with `›` under a blank row, the rows its text wraps onto (indented, or blank
+//!   for an empty line of a pasted text), then a blank row over the footer; read from the footer up, so a blank line
+//!   or a `1. …` line in the text is still the composer's. Working while a line above it says `esc to interrupt`
+//!   (`• Working (0s • esc to interrupt)`).
+//! - **Claude's input rows** are the rows between the box's rules, whatever they hold (blank lines, `1. …`).
 //! - **What a prompt holds**: the text of its input rows after the mark, faint cells left out. Both TUIs draw the
 //!   placeholder of an empty prompt faint (Claude's `Try "…"`, Codex's `Ask Codex to do anything`) and typed or
 //!   pasted text in a plain style, so an empty prompt holds nothing and a draft left at the terminal shows.
@@ -570,30 +573,48 @@ fn key_hint(text: &str) -> Option<(String, OptionKey)> {
 
 /// Codex's composer: whether a turn is running and what it holds, or `None` when it is not on screen.
 fn codex_prompt(rows: &Rows) -> Option<(bool, String)> {
-    let last = rows.last()?;
-    // the composer: a `›` row (not an option), the rows its text wraps onto, a blank row, then the footer
-    let composer = (0..=last).rev().find(|index| {
-        let line = rows.get(*index);
-        line.starts_with(CODEX_CURSOR) && option_row(line, CODEX_CURSOR).is_none()
-    })?;
-    if composer > 0 && !rows.blank(composer - 1) {
-        return None;
-    }
-    let mut below = composer + 1;
-    while below <= last && rows.get(below).starts_with("  ") && !rows.blank(below) {
-        below += 1;
-    }
-    if below > last || !rows.blank(below) || last - below > FOOTER_ROWS {
-        return None;
-    }
+    let (composer, below) = codex_composer(rows)?;
     if rows.marked(composer.saturating_sub(ABOVE), rows.lines.len()) {
         return None;
     }
+    // an option row with the cursor on it is a dialog's, unless it is the composer's own text (`› 1. Fix the bug`,
+    // or `  › 2. …` further down a paste)
     let options_near = (composer.saturating_sub(ABOVE)..rows.lines.len())
+        .filter(|index| !(composer..below).contains(index))
         .any(|index| option_row(rows.get(index), CODEX_CURSOR).is_some_and(|row| row.cursor));
     if options_near {
         return None;
     }
+    // a composer row shaped like an option is only text while nothing in it names a dialog's key: `(y)`, `(esc)`
+    let keyed = option_row(rows.get(composer), CODEX_CURSOR).is_some()
+        && (composer..below).any(|index| key_hint(rows.get(index).trim()).is_some());
+    if keyed {
+        return None;
+    }
     let working = (composer.saturating_sub(NEAR)..composer).any(|index| rows.get(index).contains("esc to interrupt"));
     Some((working, rows.typed(composer, below)))
+}
+
+/// Where Codex's composer is: its `›` row and the blank row under its text, above the footer. Read from the bottom:
+/// the footer (the rows with text at the screen's bottom, no `›` among them), the blank row over it, then up through
+/// the composer's rows (wrapped text indented, or a blank line inside a pasted text) to the `›` row, which has a blank
+/// row above it. The `›` row may read as an option (`› 1. Fix the bug`): it is still the composer's.
+fn codex_composer(rows: &Rows) -> Option<(usize, usize)> {
+    let last = rows.last()?;
+    let mut top = last;
+    while top > 0 && !rows.blank(top - 1) {
+        top -= 1;
+    }
+    let below = top.checked_sub(1)?;
+    if last - below > FOOTER_ROWS || (top..=last).any(|index| rows.get(index).starts_with(CODEX_CURSOR)) {
+        return None;
+    }
+    let composer = (0..below).rev().find(|index| {
+        let line = rows.get(*index);
+        line.starts_with(CODEX_CURSOR) || !(rows.blank(*index) || line.starts_with("  "))
+    })?;
+    if !rows.get(composer).starts_with(CODEX_CURSOR) || (composer > 0 && !rows.blank(composer - 1)) {
+        return None;
+    }
+    Some((composer, below))
 }

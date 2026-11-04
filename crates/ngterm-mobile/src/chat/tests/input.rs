@@ -2,7 +2,7 @@
 //! bracketed paste and Enter (a slash command the same way), Stop's Escape, each dialog's option keys and the picker's
 //! digits, Tab and Enter.
 
-use super::matchers::{Capture, Term};
+use super::matchers::{Capture, Term, tricky_drafts, with_draft};
 use crate::api::PaneInputError;
 use crate::chat::input::{Action, AgentInputOutcome, Key, Next, Plan, QuestionAnswer, UNSAFE_PASTE};
 use crate::chat::matchers::{Agent, Picker, Screen};
@@ -80,10 +80,37 @@ fn a_prompt_is_pasted_whole_then_entered_once_the_prompt_shows_it() {
         Next::Done(AgentInputOutcome::NotOnScreen)
     );
 
-    // a dialog that came up over the pasted text: no Enter, which would answer it
+    // a dialog that came up over the pasted text: no Enter, which would answer it (the actor ends the action
+    // Unconfirmed once the confirm deadline passes)
     let mut plan = Plan::new(Action::Prompt("hi".to_owned()));
     step(&mut plan, &IDLE);
-    assert_eq!(step(&mut plan, &dialog), Next::Done(AgentInputOutcome::Unconfirmed));
+    assert_eq!(step(&mut plan, &dialog), Next::Wait);
+    assert_eq!(
+        plan.stopped(AgentInputOutcome::NotOnScreen),
+        AgentInputOutcome::Unconfirmed
+    );
+}
+
+#[test]
+fn a_paste_with_blank_lines_option_shaped_lines_or_long_lines_is_entered_once_shown() {
+    for (agent, name) in [
+        (Agent::Claude, "claude-44x36"),
+        (Agent::Claude, "claude-160x48"),
+        (Agent::Codex, "codex-44x36"),
+        (Agent::Codex, "codex-160x48"),
+    ] {
+        let capture = Capture::load(name);
+        for draft in tricky_drafts() {
+            let mut plan = Plan::new(Action::Prompt(draft.clone()));
+            assert_eq!(step(&mut plan, &IDLE), send(Key::Paste(draft.clone()), true));
+            let (term, _) = with_draft(&capture, agent, "idle", &draft);
+            assert_eq!(
+                step(&mut plan, &agent.read(&term.frame())),
+                send(Key::Enter, false),
+                "{name} {draft:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -100,7 +127,8 @@ fn a_draft_in_the_prompt_gets_nothing_and_a_paste_that_did_not_land_gets_no_ente
             assert!(!plan.sent());
         }
     }
-    // after the paste: dropped, landed after something else, cut short, or a stand-in next to other text
+    // after the paste: not shown yet (or dropped), landed after something else, cut short (or half drawn), or a
+    // stand-in next to other text; pending, never an Enter
     for shown in [
         "",
         "draft new prompt",
@@ -110,9 +138,11 @@ fn a_draft_in_the_prompt_gets_nothing_and_a_paste_that_did_not_land_gets_no_ente
     ] {
         let mut plan = Plan::new(Action::Prompt("new prompt".to_owned()));
         step(&mut plan, &IDLE);
+        assert_eq!(step(&mut plan, &holding(shown, false)), Next::Wait, "{shown:?}");
+        // the paste shows at last: the Enter goes, once
         assert_eq!(
-            step(&mut plan, &holding(shown, false)),
-            Next::Done(AgentInputOutcome::Unconfirmed),
+            step(&mut plan, &holding("new prompt", false)),
+            send(Key::Enter, false),
             "{shown:?}"
         );
     }
@@ -154,10 +184,12 @@ fn an_approval_sends_its_options_key_and_looks_that_the_dialog_went() {
         assert_eq!(step(&mut plan, &codex), send(key, true), "{label}");
     }
 
-    // the same dialog still up after the key
+    // the same dialog still up after the key: pending (the key is not sent again), then gone
     let mut plan = Plan::new(Action::Approval("Yes".to_owned()));
     step(&mut plan, &claude);
-    assert_eq!(step(&mut plan, &claude), Next::Done(AgentInputOutcome::Unconfirmed));
+    assert_eq!(step(&mut plan, &claude), Next::Wait);
+    assert_eq!(step(&mut plan, &claude), Next::Wait);
+    assert_eq!(step(&mut plan, &IDLE), Next::Done(AgentInputOutcome::Sent));
     // no such option, or no dialog: nothing goes
     for screen in [&claude, &IDLE, &Screen::Unknown] {
         let mut plan = Plan::new(Action::Approval("Maybe".to_owned()));
@@ -261,15 +293,23 @@ fn a_lone_question_is_answered_by_its_digit_or_by_typed_text() {
     let typed = varied(&picker, Some(3), &[], Some(Typed::After("Blue")));
     assert_eq!(step(&mut plan, &typed), send(Key::Enter, true));
     assert_eq!(step(&mut plan, &IDLE), Next::Done(AgentInputOutcome::Sent));
-    // the text did not show in the row: no Enter
+    // the text not shown in the row yet: no Enter until it is
     let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]));
     step(&mut plan, &picker);
     step(&mut plan, &focused);
-    assert_eq!(step(&mut plan, &focused), Next::Done(AgentInputOutcome::Unconfirmed));
-    // the row was not focused: no paste
+    assert_eq!(step(&mut plan, &focused), Next::Wait);
+    assert_eq!(step(&mut plan, &typed), send(Key::Enter, true));
+    // the row not focused yet: no paste until it is
     let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]));
     step(&mut plan, &picker);
-    assert_eq!(step(&mut plan, &picker), Next::Done(AgentInputOutcome::Unconfirmed));
+    assert_eq!(step(&mut plan, &picker), Next::Wait);
+    assert_eq!(step(&mut plan, &focused), send(Key::Paste("Blue".to_owned()), true));
+    // the picked option's digit went, the picker still up: pending, the digit not sent again
+    let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&["Green"], None)]));
+    step(&mut plan, &picker);
+    assert_eq!(step(&mut plan, &picker), Next::Wait);
+    assert_eq!(step(&mut plan, &Screen::Unknown), Next::Wait);
+    assert_eq!(step(&mut plan, &WORKING), Next::Done(AgentInputOutcome::Sent));
 }
 
 #[test]
@@ -289,16 +329,35 @@ fn two_questions_go_tab_by_tab_toggling_boxes_then_submit_on_the_review() {
     assert_eq!(step(&mut plan, &both), send(Key::Tab, true));
     assert_eq!(step(&mut plan, &review), send(Key::Enter, true));
     assert_eq!(step(&mut plan, &WORKING), Next::Done(AgentInputOutcome::Sent));
+}
 
-    // a box that does not tick is not toggled again
+#[test]
+fn each_question_step_waits_for_its_screen_and_never_sends_a_key_twice() {
+    let first = screen("claude-160x48", Agent::Claude, "question");
+    let multi = screen("claude-160x48", Agent::Claude, "question_multi");
+    let review = screen("claude-160x48", Agent::Claude, "question_submit");
+    // a box that has not ticked yet is not toggled again: pending until it shows
     let mut plan = Plan::new(Action::Question(vec![languages()], vec![answer(&["French"], None)]));
     assert_eq!(step(&mut plan, &multi), send(Key::Digit(2), true));
-    assert_eq!(step(&mut plan, &multi), Next::Done(AgentInputOutcome::Unconfirmed));
-    // the review still up after its Enter
+    assert_eq!(step(&mut plan, &multi), Next::Wait);
+    assert_eq!(step(&mut plan, &multi), Next::Wait);
+    let french = varied(&multi, None, &[false, true, false], None);
+    assert_eq!(step(&mut plan, &french), send(Key::Tab, true));
+    // the first tab still up after its digit: the next tab is waited for, not answered on the old one
+    let mut plan = Plan::new(Action::Question(
+        vec![style(), languages()],
+        vec![answer(&["Casual"], None), answer(&["Spanish"], None)],
+    ));
+    assert_eq!(step(&mut plan, &first), send(Key::Digit(2), true));
+    assert_eq!(step(&mut plan, &first), Next::Wait);
+    assert_eq!(step(&mut plan, &multi), send(Key::Digit(1), true));
+    // the review not up yet after the last Tab, then the review still up after its Enter: pending
     let mut plan = Plan::new(Action::Question(vec![languages()], vec![answer(&[], None)]));
     assert_eq!(step(&mut plan, &multi), send(Key::Tab, true));
-    step(&mut plan, &review);
-    assert_eq!(step(&mut plan, &review), Next::Done(AgentInputOutcome::Unconfirmed));
+    assert_eq!(step(&mut plan, &multi), Next::Wait);
+    assert_eq!(step(&mut plan, &review), send(Key::Enter, true));
+    assert_eq!(step(&mut plan, &review), Next::Wait);
+    assert_eq!(step(&mut plan, &WORKING), Next::Done(AgentInputOutcome::Sent));
 }
 
 #[test]
@@ -314,13 +373,13 @@ fn typed_text_may_follow_the_placeholder_or_take_its_place_and_a_draft_there_get
         assert_eq!(step(&mut plan, &typed), send(Key::Enter, true));
         assert_eq!(step(&mut plan, &IDLE), Next::Done(AgentInputOutcome::Sent));
     }
-    // something else in the row after the paste: no Enter
+    // something else in the row after the paste (or the paste half shown): no Enter
     let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]));
     step(&mut plan, &picker);
     step(&mut plan, &focused);
     assert_eq!(
         step(&mut plan, &varied(&picker, Some(3), &[], Some(Typed::Instead("Bl")))),
-        Next::Done(AgentInputOutcome::Unconfirmed)
+        Next::Wait
     );
     // a draft typed into the row at the terminal, after the placeholder or in its place: nothing goes
     for draft in [Typed::After("Gre"), Typed::Instead("Gre")] {

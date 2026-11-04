@@ -118,7 +118,8 @@ impl<T: Transport> Drop for Acting<T> {
     }
 }
 
-/// Runs `action` on the pane: lead, then settle, look and send until its plan is done.
+/// Runs `action` on the pane: lead, then settle, look and send until its plan is done; after keys went, settle and
+/// look until the screen shows what they did or [`InputTiming::confirm`] has gone by.
 async fn act<T: Transport>(
     state: &Rc<State<T>>,
     reference: &PaneRef,
@@ -134,16 +135,23 @@ async fn act<T: Transport>(
         return Ok(AgentInputOutcome::LeadRefused);
     };
     let mut plan = Plan::new(action);
+    let mut sent: Option<Went> = None;
     let mut busy = 0;
     loop {
         let step = match settle(state, &on, attach, timing).await {
-            Ok(true) => look(state, &on, attach, agent, &mut plan),
+            Ok(true) => look(state, &on, attach, agent, (&mut plan, &mut sent)),
             Ok(false) => Ok(Looked::Done(plan.stopped(AgentInputOutcome::LeadRefused))),
             Err(error) => Err(error),
         };
         match step {
             Ok(Looked::Done(outcome)) => return Ok(outcome),
             Ok(Looked::Again) => busy = 0,
+            Ok(Looked::Pending) => {
+                busy = 0;
+                if sent.is_none_or(|went| went.at.elapsed() >= timing.confirm) {
+                    return Ok(plan.stopped(AgentInputOutcome::NotOnScreen));
+                }
+            }
             Ok(Looked::Busy) => {
                 busy += 1;
                 if busy >= BUSY_LOOKS {
@@ -166,8 +174,17 @@ enum Looked {
     Done(AgentInputOutcome),
     /// Keys went: settle and look again.
     Again,
+    /// The screen does not show yet what the last keys did: settle and look again, until [`InputTiming::confirm`].
+    Pending,
     /// The frame could not be read now: settle and look again.
     Busy,
+}
+
+/// The last keys that went: the screen generation they were sent to, and when.
+#[derive(Debug, Clone, Copy)]
+struct Went {
+    generation: u64,
+    at: Instant,
 }
 
 /// Whether `standing` is still the attach `attach`, leading.
@@ -271,13 +288,14 @@ async fn settle<T: Transport>(
 /// One look at the screen and what the plan makes of it, sent at once into the terminal read. Nothing is awaited
 /// here, so no role report or attach is handled between the read and the send; output the terminal took on its own
 /// threads meanwhile (or a resize) makes the send a no-op ([`crate::chat::input::Key::send_if`]), the plan is put
-/// back as it was, and the screen is settled and read again.
+/// back as it was, and the screen is settled and read again. The screen the last keys were sent to, with no output
+/// since, is pending: what they did has not come back yet.
 fn look<T: Transport>(
     state: &State<T>,
     on: &On,
     attach: u64,
     agent: Agent,
-    plan: &mut Plan,
+    (plan, sent): (&mut Plan, &mut Option<Went>),
 ) -> Result<Looked, PaneInputError> {
     drain(state, &on.key);
     let now = standing(state, on).ok_or(PaneInputError::Closed)?;
@@ -289,9 +307,13 @@ fn look<T: Transport>(
     let Some(generation) = snapshot.generation.filter(|_| !snapshot.stale && !snapshot.frame.held) else {
         return Ok(Looked::Busy);
     };
+    if sent.is_some_and(|went| went.generation == generation) {
+        return Ok(Looked::Pending);
+    }
     let before = plan.clone();
     match plan.next(&agent.read(&snapshot.frame)) {
         Next::Done(outcome) => Ok(Looked::Done(outcome)),
+        Next::Wait => Ok(Looked::Pending),
         Next::Send { keys, look } => {
             for (at, key) in keys.iter().enumerate() {
                 match key.send_if(terminal, generation) {
@@ -308,6 +330,10 @@ fn look<T: Transport>(
                 }
             }
             plan.mark_sent();
+            *sent = Some(Went {
+                generation,
+                at: Instant::now(),
+            });
             Ok(if look {
                 Looked::Again
             } else {

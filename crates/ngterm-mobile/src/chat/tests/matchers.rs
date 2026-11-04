@@ -4,6 +4,7 @@
 //! dialog scrolled away, one half drawn, one quoted by a shell, another agent's.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -512,5 +513,142 @@ fn a_half_drawn_dialog_is_never_read_as_a_prompt_or_a_partial_dialog() {
                 }
             }
         }
+    }
+}
+
+/// Drafts whose rows trip a naive reading of a prompt: a blank line inside, a first line shaped like an option, an
+/// option-shaped line (with Codex's cursor) further down, a single line long enough to wrap at every width, and
+/// several blank lines with one at the end.
+pub(crate) fn tricky_drafts() -> Vec<String> {
+    vec![
+        "Fix the parser.\n\nThen add tests.".to_owned(),
+        "1. Fix the bug\n2. Add tests".to_owned(),
+        "Do these in order:\n1. Fix the bug\n\n2. Add tests\n› 3. Ship it".to_owned(),
+        "Please refactor the parser module so that it handles nested quotes ".repeat(4),
+        "First paragraph.\n\n\nThird, after two blank lines.\n".to_owned(),
+    ]
+}
+
+/// The rows a TUI lays `text` out on in a prompt `cols` wide: each line wrapped at a word (a word longer than a row
+/// cut), an empty line an empty row.
+fn wrapped(text: &str, cols: u16) -> Vec<String> {
+    let width = usize::from(cols) - 3;
+    let mut rows = Vec::new();
+    for line in text.split('\n') {
+        let mut row = String::new();
+        for word in line.split(' ') {
+            let mut word = word.to_owned();
+            while word.chars().count() > width {
+                let rest = word.split_off(word.char_indices().nth(width).unwrap().0);
+                rows.push(std::mem::replace(&mut word, rest));
+            }
+            if !row.is_empty() && row.chars().count() + 1 + word.chars().count() > width {
+                rows.push(std::mem::take(&mut row));
+            } else if !row.is_empty() {
+                row.push(' ');
+            }
+            row.push_str(&word);
+        }
+        rows.push(row);
+    }
+    rows
+}
+
+/// Puts `text` on `row` (0-based) of the screen, cleared first, in the plain style.
+fn put(bytes: &mut String, row: usize, text: &str) {
+    write!(bytes, "\x1b[{};1H\x1b[0m\x1b[2K{text}", row + 1).unwrap();
+}
+
+/// A terminal showing the capture's `state` with `text` in `agent`'s prompt ([`draft_drawn`]), and what the prompt
+/// then holds as the matcher reads it.
+pub(crate) fn with_draft(capture: &Capture, agent: Agent, state: &str, text: &str) -> (Term, String) {
+    let term = capture.term();
+    term.feed(capture.at(state));
+    let (bytes, held) = draft_drawn(capture, agent, state, text);
+    term.feed(&bytes);
+    (term, held)
+}
+
+/// The bytes that draw `text` in `agent`'s prompt over the capture's `state`, laid out as the TUI grows it: Codex's
+/// composer upward from its row over the footer (the status line kept as far above it), Claude's box upward from its
+/// lower rule (the two rows above it moved up with it). And what the prompt then holds as the matcher reads it: the
+/// rows with text, trimmed.
+pub(crate) fn draft_drawn(capture: &Capture, agent: Agent, state: &str, text: &str) -> (Vec<u8>, String) {
+    let term = capture.term();
+    term.feed(capture.at(state));
+    let lines = term.frame().lines();
+    let rows = wrapped(text, capture.cols);
+    let mut bytes = String::new();
+    if agent == Agent::Codex {
+        let composer = lines.iter().rposition(|line| line.starts_with('›')).unwrap();
+        let status = lines[..composer]
+            .iter()
+            .rposition(|line| line.contains("esc to interrupt"))
+            .filter(|_| state == "working");
+        let gap = status.map_or(1, |status| composer - status);
+        let top = composer + 1 - rows.len();
+        for row in top - gap - 1..=composer {
+            put(&mut bytes, row, "");
+        }
+        if let Some(status) = status {
+            put(&mut bytes, top - gap, &lines[status]);
+        }
+        for (at, row) in rows.iter().enumerate() {
+            let mark = if at == 0 { "› " } else { "  " };
+            put(&mut bytes, top + at, &format!("{mark}{row}"));
+        }
+    } else {
+        let rule = "─".repeat(usize::from(capture.cols));
+        let lower = lines.iter().rposition(|line| *line == rule).unwrap();
+        let upper = lines[..lower].iter().rposition(|line| *line == rule).unwrap();
+        let top = lower - rows.len() - 1;
+        for row in top - 2..lower {
+            put(&mut bytes, row, "");
+        }
+        put(&mut bytes, top - 2, &lines[upper - 2]);
+        put(&mut bytes, top - 1, &lines[upper - 1]);
+        put(&mut bytes, top, &rule);
+        for (at, row) in rows.iter().enumerate() {
+            let mark = if at == 0 { "❯ " } else { "  " };
+            put(&mut bytes, top + 1 + at, &format!("{mark}{row}"));
+        }
+    }
+    let held: Vec<&str> = rows
+        .iter()
+        .map(|row| row.trim())
+        .filter(|row| !row.is_empty())
+        .collect();
+    (bytes.into_bytes(), held.join("\n"))
+}
+
+#[test]
+fn a_draft_with_blank_lines_option_shaped_lines_or_long_wrapped_lines_is_read_whole() {
+    for (agent, name) in AGENTS {
+        for (capture_name, capture) in captures(name) {
+            for (state, working) in [("idle", false), ("working", true)] {
+                for draft in tricky_drafts() {
+                    let (term, held) = with_draft(&capture, agent, state, &draft);
+                    assert_eq!(
+                        agent.read(&term.frame()),
+                        Screen::Prompt {
+                            working,
+                            composer: held.clone()
+                        },
+                        "{capture_name} {state} {draft:?}:\n{}",
+                        term.frame().lines().join("\n")
+                    );
+                    assert_eq!(squeeze(&held), squeeze(&draft), "{capture_name} {draft:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_codex_composer_shaped_like_its_approval_is_not_read() {
+    // option rows naming a dialog's keys: an approval drawn into the composer's place, not a prompt
+    for (capture_name, capture) in captures("codex") {
+        let (term, _) = with_draft(&capture, Agent::Codex, "idle", "1. Yes, proceed (y)\n2. No (esc)");
+        assert_eq!(Agent::Codex.read(&term.frame()), Screen::Unknown, "{capture_name}");
     }
 }

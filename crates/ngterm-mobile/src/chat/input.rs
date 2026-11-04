@@ -16,11 +16,13 @@
 //!    terminal still shows the screen the frame did, checked and sent under the terminal's lock
 //!    ([`ngterm_term::Pane::key_if`]): output or a resize that landed after the read sends nothing, and the screen is
 //!    settled and read again.
+//! 5. **Confirm.** A step that needs to see what its keys did (a paste before its Enter, each question of the picker, a
+//!    toggle, a dialog's answer) settles and matches again, until the screen shows what the keys were to do or
+//!    [`InputTiming::confirm`] has gone by since they went. Until then any other screen is pending ([`Next::Wait`]),
+//!    the screen they were sent to above all (no output since: its reply is still on the network); no key is sent
+//!    again. At the deadline the action is [`AgentInputOutcome::Unconfirmed`].
 //!
-//! A step that needs to see what its keys did (a paste before its Enter, each question of the picker, a toggle)
-//! settles and matches again before its next key, and a dialog's answer is checked once more after it: the dialog
-//! still up is [`AgentInputOutcome::Unconfirmed`]. Every outcome but [`AgentInputOutcome::Sent`] and
-//! [`AgentInputOutcome::Unconfirmed`] means nothing was sent.
+//! Every outcome but [`AgentInputOutcome::Sent`] and [`AgentInputOutcome::Unconfirmed`] means nothing was sent.
 //!
 //! The keys (Task 1's recordings, `crates/ngterm-core/tests/fixtures/agent_chat/README.md`):
 //!
@@ -28,8 +30,8 @@
 //!   since both TUIs run a pasted command. It needs the prompt on screen, empty (a draft left in it at the terminal
 //!   would be sent along: [`AgentInputOutcome::NotOnScreen`]), and no dialog ([`AgentInputOutcome::DialogOpen`]).
 //!   The Enter goes only once the prompt holds the text pasted, or the stand-in a TUI shows for a long paste
-//!   (Claude's `[Pasted text #1 +12 lines]`, Codex's `[Pasted Content 1200 chars]`), and nothing else; otherwise the
-//!   paste is left unsent ([`AgentInputOutcome::Unconfirmed`]).
+//!   (Claude's `[Pasted text #1 +12 lines]`, Codex's `[Pasted Content 1200 chars]`), and nothing else; if it does not
+//!   by the confirm deadline, the paste is left unsent ([`AgentInputOutcome::Unconfirmed`]).
 //! - **Stop**: Escape, while a turn is running.
 //! - **Approval**: the option whose label is the card's, by its key: Claude's digit, Codex's letter or Escape.
 //! - **Question**: per question, its tab confirmed by its text and options; a digit picks a single-select option (the
@@ -76,7 +78,7 @@ pub enum AgentInputOutcome {
     /// was sent.
     LeadRefused,
     /// Keys were sent, but then the screen was not what the action expected (the dialog stayed up, a step's result
-    /// did not show, the lead went): look at the terminal.
+    /// did not show in time, the lead went): look at the terminal.
     Unconfirmed,
 }
 
@@ -95,6 +97,8 @@ pub(crate) struct InputTiming {
     pub(crate) quiet: Duration,
     /// The longest a settle waits for quiet before reading what is there.
     pub(crate) settle_max: Duration,
+    /// The longest an action waits, after its keys went, for the screen to show what they did.
+    pub(crate) confirm: Duration,
     /// The longest a claim waits for the attach's role report.
     pub(crate) lead_timeout: Duration,
     /// How often the waits look.
@@ -106,6 +110,7 @@ impl Default for InputTiming {
         Self {
             quiet: Duration::from_millis(150),
             settle_max: Duration::from_secs(1),
+            confirm: Duration::from_secs(5),
             lead_timeout: Duration::from_secs(10),
             poll: Duration::from_millis(20),
         }
@@ -224,6 +229,9 @@ impl Key {
 pub(crate) enum Next {
     /// Send these keys; then, when `look`, settle and look again, otherwise the action is [`AgentInputOutcome::Sent`].
     Send { keys: Vec<Key>, look: bool },
+    /// The screen does not show yet what the keys sent did: settle and look again, sending nothing, until
+    /// [`InputTiming::confirm`] has gone by since they went ([`AgentInputOutcome::Unconfirmed`] then).
+    Wait,
     /// The action is over.
     Done(AgentInputOutcome),
 }
@@ -330,6 +338,12 @@ impl Plan {
         Next::Done(self.stopped(AgentInputOutcome::NotOnScreen))
     }
 
+    /// A screen that is not what the step needs: before any key went, nothing is sent; after, it is pending (what the
+    /// keys did may not have shown yet).
+    fn unmet(&self) -> Next {
+        if self.sent { Next::Wait } else { self.not_on_screen() }
+    }
+
     fn prompt(&mut self, text: String, screen: &Screen) -> Next {
         match (&self.step, screen) {
             (Step::Start, Screen::Prompt { composer, .. }) if composer.is_empty() => {
@@ -344,7 +358,8 @@ impl Plan {
                 keys: vec![Key::Enter],
                 look: false,
             },
-            _ => self.not_on_screen(),
+            // before the paste: a draft in the prompt, or no prompt; after it: the paste not (all) shown yet
+            _ => self.unmet(),
         }
     }
 
@@ -361,9 +376,8 @@ impl Plan {
                 }
                 None => self.not_on_screen(),
             },
-            (Step::Answered(answered), Screen::Permission(dialog)) if dialog == answered => {
-                Next::Done(AgentInputOutcome::Unconfirmed)
-            }
+            // the dialog the key went to, still up
+            (Step::Answered(answered), Screen::Permission(dialog)) if dialog == answered => Next::Wait,
             (Step::Answered(_), _) => Next::Done(AgentInputOutcome::Sent),
             _ => self.not_on_screen(),
         }
@@ -377,11 +391,11 @@ impl Plan {
             }
             Step::Asking(asked) => {
                 let Screen::Question(picker) = screen else {
-                    return self.not_on_screen();
+                    return self.unmet();
                 };
                 let other = answers[asked.index].other.as_deref().map(str::trim);
                 if !shows(picker, &items[asked.index], asked.asking, other) {
-                    return self.not_on_screen();
+                    return self.unmet();
                 }
                 self.ask(items, answers, picker, asked)
             }
@@ -393,13 +407,11 @@ impl Plan {
                         look: true,
                     }
                 }
-                Screen::Review { .. } | Screen::Question(_) | Screen::Unknown => self.not_on_screen(),
+                Screen::Review { .. } | Screen::Question(_) | Screen::Unknown => self.unmet(),
                 _ => Next::Done(AgentInputOutcome::Sent),
             },
             Step::Submitted => match screen {
-                Screen::Review { .. } | Screen::Question(_) | Screen::Unknown => {
-                    Next::Done(AgentInputOutcome::Unconfirmed)
-                }
+                Screen::Review { .. } | Screen::Question(_) | Screen::Unknown => Next::Wait,
                 _ => Next::Done(AgentInputOutcome::Sent),
             },
             Step::Pasted | Step::Answered(_) => self.not_on_screen(),
@@ -422,7 +434,7 @@ impl Plan {
                 Some(text) if typing.is_some_and(|option| option.cursor) => {
                     self.go(asked.at(Asking::Typed), Key::Paste(text.to_owned()))
                 }
-                _ => self.not_on_screen(),
+                _ => self.unmet(),
             },
             // [`shows`] found the text in its row
             Asking::Typed => {
@@ -446,10 +458,11 @@ impl Plan {
             if picker.options[at].checked == Some(wanted) {
                 continue;
             }
-            if std::mem::replace(&mut asked.toggled[at], true) {
-                // toggled once already and still not as wanted
-                return Next::Done(AgentInputOutcome::Unconfirmed);
+            if asked.toggled[at] {
+                // toggled once already and not shown yet: never toggled again
+                return Next::Wait;
             }
+            asked.toggled[at] = true;
             return self.go(asked, Key::Digit(digit_of(item, &option.label)));
         }
         if answer.other.is_some() {
