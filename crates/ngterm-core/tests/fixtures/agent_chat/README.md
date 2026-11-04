@@ -159,8 +159,10 @@ offset at which each state was on screen. Replaying `bin[..mark]` into a termina
 | `permission` | a `Bash` permission dialog | a command approval |
 
 `claude-160x48` also marks `question_multi` (the multi-select question after the first answer) and
-`question_submit` (the review tab). The captures keep the recorder's scratch path (with the user name swapped for
-`user`, same length, so offsets hold); the 44- and 100-column Claude dialogs wrap it.
+`question_submit` (the review tab). The recorder ran in a scratch dir; the captures show it as
+`/tmp/claude-1000/-home-user-projects-example-workspace/00000000-0000-0000-0000-000000000000/scratchpad/rec/project`,
+rewritten with same-length `sanitize.py bin --map` pairs (including the pieces a wrap or a partial redraw splits it
+into) so the marks still hold. The 44- and 100-column Claude dialogs wrap it.
 
 ## Recording again
 
