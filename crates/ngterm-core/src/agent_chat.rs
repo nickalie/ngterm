@@ -5,6 +5,7 @@
 //! - [`claude`]: Claude Code's transcript lines.
 //! - [`codex`]: Codex's rollout lines.
 //! - [`follow`]: reading a transcript file for the chat: the backlog, older pages and following.
+//! - [`hook`]: an agent's hook payload, read for the origin's per-pane agent record (`agent.report`).
 //!
 //! A parser reads one line at a time through [`TranscriptParser`], keeping what pairs a later line with an earlier
 //! one (a tool's result with its call). The formats are undocumented and drift between agent versions, so a line a
@@ -15,6 +16,7 @@ pub mod claude;
 pub mod codex;
 pub mod event;
 pub mod follow;
+pub mod hook;
 
 pub use claude::ClaudeParser;
 pub use codex::CodexParser;
@@ -198,5 +200,6 @@ mod tests {
     mod claude;
     mod codex;
     mod follow;
+    mod hook;
     mod support;
 }

@@ -218,7 +218,8 @@ hold the build to the catalog plus that list (`check_rust_only`):
 - a listed name the build lacks fails, and so does a name listed twice.
 
 A Rust-only command has no conformance id: the suite tests upstream's protocol, so the Rust crates' own tests cover
-it. No command is Rust-only yet.
+it. Today the `agent.*` group is: `agent.report` and `agent.get`, the origin's per-pane agent record that the
+agent-status hooks fill and the Android chat view reads (`ngterm-core`'s `commands::agent`).
 
 ## The `live` group
 

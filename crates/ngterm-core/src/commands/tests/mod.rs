@@ -2,6 +2,7 @@
 //! strings are asserted in full, dynamic parts included.
 
 mod actions;
+mod agent;
 mod ask;
 mod ask_form;
 mod attach_remote;

@@ -18,13 +18,13 @@ pub use keymap::{
     ControlKeymapMenuItem,
 };
 pub use recent::{ControlRecentItem, ControlRecentOpen};
-pub use request::{Args, AskButton, AskChoice, MAX_REQUEST_LINE_BYTES, PickItem, Request};
+pub use request::{AgentApproval, AgentReport, Args, AskButton, AskChoice, MAX_REQUEST_LINE_BYTES, PickItem, Request};
 pub use response::Response;
 pub use result::{
-    ControlAskOutcome, ControlAskResult, ControlCursor, ControlHtmlPageOutcome, ControlHtmlPageOutcomeState,
-    ControlLiveEndpoint, ControlLiveEntry, ControlLiveInventory, ControlLiveResetStatus, ControlPickOutcome,
-    ControlPickResult, ControlRemotePane, ControlRemoteSession, ControlRemoteTree, ControlRestartReceipt,
-    ControlRestoreStatus, ControlResult, ControlWindowFrame, ControlWindowNode,
+    ControlAgent, ControlAgentApproval, ControlAskOutcome, ControlAskResult, ControlCursor, ControlHtmlPageOutcome,
+    ControlHtmlPageOutcomeState, ControlLiveEndpoint, ControlLiveEntry, ControlLiveInventory, ControlLiveResetStatus,
+    ControlPickOutcome, ControlPickResult, ControlRemotePane, ControlRemoteSession, ControlRemoteTree,
+    ControlRestartReceipt, ControlRestoreStatus, ControlResult, ControlWindowFrame, ControlWindowNode,
 };
 pub use tree::{ControlSessionNode, ControlSurfaceNode, ControlTree, ControlWorkspaceNode};
 pub use version::{AppIdentity, ConformanceProfile, PARITY_LEVEL, VersionResult};

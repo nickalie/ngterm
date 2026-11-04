@@ -485,6 +485,18 @@ impl Core {
         }
     }
 
+    /// What holds the foreground of `session`'s pane `role` now, read as the `tree`'s foreground fields are; `None`
+    /// when no process table is installed, the pane has no terminal, or nothing can be read.
+    pub(crate) fn pane_foreground(&self, session: &Session, role: StatusPane) -> Option<PaneForeground> {
+        let table = self.restore.table()?;
+        let live = |token: &str| live_foreground_group(&self.live, table, token);
+        let reader = reader_with_live(table, self.restore.shell(), &live);
+        session
+            .pane_slot(role)
+            .get()
+            .and_then(|surface| reader.running_in(surface))
+    }
+
     fn find_session(&self, id: Uuid) -> Option<&Session> {
         let window = self.library().window_holding_session(id)?;
         self.library().store(window)?.session(id)

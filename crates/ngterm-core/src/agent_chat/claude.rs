@@ -503,7 +503,7 @@ fn running_tool(name: &str, input: &Value) -> Tool {
     }
 }
 
-fn tool_kind(name: &str) -> ToolKind {
+pub(crate) fn tool_kind(name: &str) -> ToolKind {
     match name {
         "Bash" | "BashOutput" | "KillShell" | "KillBash" | "PowerShell" => ToolKind::Shell,
         "Edit" | "MultiEdit" | "Write" | "NotebookEdit" => ToolKind::Edit,
@@ -516,7 +516,12 @@ fn tool_kind(name: &str) -> ToolKind {
 }
 
 /// A call's one-line title: the input field that says what it does, or the tool's name.
-fn tool_title(kind: ToolKind, name: &str, input: &Value) -> String {
+pub(crate) fn tool_title(kind: ToolKind, name: &str, input: &Value) -> String {
+    title_line(tool_subject(kind, input).unwrap_or(name))
+}
+
+/// The input field that says what a call does: its command, path, pattern, URL or query, in full.
+pub(crate) fn tool_subject(kind: ToolKind, input: &Value) -> Option<&str> {
     let fields: &[&str] = match kind {
         ToolKind::Shell => &["command", "bash_id", "shell_id"],
         ToolKind::Edit | ToolKind::Read => &["file_path", "notebook_path"],
@@ -525,10 +530,9 @@ fn tool_title(kind: ToolKind, name: &str, input: &Value) -> String {
         ToolKind::Task => &["description", "prompt"],
         ToolKind::Other => &[],
     };
-    let field = fields
+    fields
         .iter()
-        .find_map(|field| input.get(*field).and_then(Value::as_str));
-    title_line(field.unwrap_or(name))
+        .find_map(|field| input.get(*field).and_then(Value::as_str))
 }
 
 /// The unified diff an edit tool's input describes. Hunk line numbers count from the edited text, not the file: the

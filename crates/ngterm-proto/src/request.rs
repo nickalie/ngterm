@@ -50,7 +50,15 @@ macro_rules! object_only_serde {
     )+};
 }
 
-object_only_serde!(Request, Args, PickItem, AskButton, AskChoice);
+object_only_serde!(
+    Request,
+    Args,
+    PickItem,
+    AskButton,
+    AskChoice,
+    AgentReport,
+    AgentApproval
+);
 
 /// One control request. A request that is not a JSON object, whose `cmd` is unknown, or whose fields carry a wrong
 /// JSON type fails to decode as a whole; unknown keys are ignored.
@@ -195,6 +203,9 @@ pub struct Args {
     /// ngterm's own, not upstream's: the drive (`D:`) or share of a Windows `ngtermctl`'s directory, sent with a page
     /// companion whose `--html` or `--cwd` is rooted with no drive (`\srv\r.html`), which a local row puts on it.
     pub caller_drive: Option<String>,
+    /// ngterm's own (Rust-only): `agent.report`'s hook payload, parsed by `ngtermctl agent hook`. Boxed, so the bag
+    /// every request carries stays small.
+    pub report: Option<Box<AgentReport>>,
 }
 
 /// One caller-provided choice for `pick.open` (upstream's `ControlPickItem`).
@@ -237,6 +248,40 @@ pub struct AskChoice {
     pub label: String,
     /// An optional description drawn dimmed under the label; it may span lines.
     pub subtitle: Option<String>,
+}
+
+/// What an agent's hook reported, for `agent.report` (ngterm's own): the hook payload's fields the origin's per-pane
+/// agent record keeps. The agent and the event travel as strings the core checks, as `session.status` does its status.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self", rename_all = "camelCase")]
+pub struct AgentReport {
+    /// `claude` or `codex`.
+    pub agent: String,
+    /// The hook event: `SessionStart`, `UserPromptSubmit`, `PermissionRequest` or `SessionEnd`.
+    pub event: String,
+    /// The conversation's transcript (Claude's `projects/…/<id>.jsonl`, Codex's rollout); absent for a subagent's
+    /// permission request, whose payload names the subagent's.
+    pub transcript_path: Option<String>,
+    /// The conversation's id (the payload's `session_id`).
+    pub conversation_id: Option<String>,
+    /// `PermissionRequest`: the permission prompt the agent asks for.
+    pub approval: Option<AgentApproval>,
+}
+
+/// A permission prompt as a hook reported it: a candidate the agent may show as a dialog.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(remote = "Self", rename_all = "camelCase")]
+pub struct AgentApproval {
+    /// The agent's tool name, e.g. `Bash`.
+    pub tool: String,
+    /// One line: the agent's own description of the call, else its command, path or URL.
+    pub title: String,
+    /// The command, path or URL in full.
+    pub detail: Option<String>,
+    /// The tool use the prompt is for, when the payload names it.
+    pub tool_use_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -426,6 +471,31 @@ mod tests {
         let keys: Vec<&str> = map.keys().map(String::as_str).collect();
         assert_eq!(keys, ["targets", "undoable", "collapsed", "tint", "tintOn", "mode"]);
         assert_eq!(serde_json::to_string(&Args::default()).unwrap(), "{}");
+    }
+
+    #[test]
+    fn an_agent_report_round_trips_as_an_object() {
+        let wire = json!({
+            "cmd": "agent.report",
+            "target": "S",
+            "args": {"paneID": "P", "report": {"agent": "claude", "event": "PermissionRequest",
+                     "transcriptPath": "/c/projects/p/x.jsonl", "conversationId": "x",
+                     "approval": {"tool": "Bash", "title": "List", "detail": "ls", "toolUseId": "t1"}}}
+        });
+        let request: Request = serde_json::from_value(wire.clone()).unwrap();
+        let report = request.args.as_ref().and_then(|args| args.report.clone()).unwrap();
+        assert_eq!(
+            report.approval.as_ref().map(|approval| approval.tool.as_str()),
+            Some("Bash")
+        );
+        assert_eq!(serde_json::to_value(&request).unwrap(), wire);
+        for line in [
+            r#"{"cmd":"agent.report","args":{"report":["claude","SessionStart"]}}"#,
+            r#"{"cmd":"agent.report","args":{"report":{"agent":"claude","event":"x","approval":["Bash","t"]}}}"#,
+            r#"{"cmd":"agent.report","args":{"report":{"event":"SessionStart"}}}"#,
+        ] {
+            assert!(serde_json::from_str::<Request>(line).is_err(), "{line}");
+        }
     }
 
     #[test]

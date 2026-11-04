@@ -121,6 +121,43 @@ pub struct ControlResult {
     /// as `ControlLiveInventory::live_reset` does.
     #[serde(default)]
     pub companion_page: Option<serde_json::Value>,
+    /// `agent.get` (ngterm's own): the pane's agent record.
+    #[serde(default)]
+    pub agent: Option<ControlAgent>,
+}
+
+/// The agent a pane runs, as its hooks reported it (`agent.get`, ngterm's own): what the Android chat view follows.
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlAgent {
+    /// `claude` or `codex`.
+    pub agent: String,
+    /// The pane's role now: `left` or `right`.
+    pub pane: String,
+    /// The conversation's transcript file.
+    pub transcript_path: String,
+    pub conversation_id: String,
+    /// When the record last changed, epoch seconds.
+    pub updated_at: f64,
+    /// The permission prompt the agent shows now; absent when none is live.
+    #[serde(default)]
+    pub approval: Option<ControlAgentApproval>,
+}
+
+/// A live permission prompt of [`ControlAgent`].
+#[skip_serializing_none]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlAgentApproval {
+    pub tool: String,
+    pub title: String,
+    #[serde(default)]
+    pub detail: Option<String>,
+    #[serde(default)]
+    pub tool_use_id: Option<String>,
+    /// When the hook reported it, epoch seconds.
+    pub since: f64,
 }
 
 /// The restore-mode policy `restore.mode` reads (upstream's `ControlRestoreStatus`). The modes travel as raw strings,

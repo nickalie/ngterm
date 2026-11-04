@@ -41,6 +41,7 @@ pub enum Group {
     Window,
     Workspace,
     Live,
+    Agent,
 }
 
 /// Declares one group's command enum, each variant with its full dotted wire name.
@@ -249,6 +250,11 @@ group_commands!(
     }
 );
 
+group_commands!(
+    /// `agent.*` (Rust-only): the per-pane agent record the agent-status hooks fill, which the Android chat view reads.
+    AgentCmd { Report = "agent.report", Get = "agent.get" }
+);
+
 /// A control command. Groups with a single command named after the group (`tree`, `dashboard`, `notify`,
 /// `version`) are unit variants; every other group carries its own enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]
@@ -276,6 +282,7 @@ pub enum Command {
     Window(WindowCmd),
     Workspace(WorkspaceCmd),
     Live(LiveCmd),
+    Agent(AgentCmd),
 }
 
 impl Command {
@@ -306,6 +313,7 @@ impl Command {
             Self::Window(c) => c.into(),
             Self::Workspace(c) => c.into(),
             Self::Live(c) => c.into(),
+            Self::Agent(c) => c.into(),
         }
     }
 
@@ -336,6 +344,7 @@ impl Command {
             Self::Window(_) => Group::Window,
             Self::Workspace(_) => Group::Workspace,
             Self::Live(_) => Group::Live,
+            Self::Agent(_) => Group::Agent,
         }
     }
 
@@ -362,6 +371,7 @@ impl Command {
         all.extend(WindowCmd::iter().map(Self::Window));
         all.extend(WorkspaceCmd::iter().map(Self::Workspace));
         all.extend(LiveCmd::iter().map(Self::Live));
+        all.extend(AgentCmd::iter().map(Self::Agent));
         all
     }
 }
@@ -369,7 +379,7 @@ impl Command {
 /// Wire names of the commands this build serves beyond upstream's protocol: its Rust-only extensions
 /// (`conformance/docs/rust-build.md` > Rust-only extensions). The conformance catalog is generated from upstream and
 /// never lists them, so the catalog tests hold [`Command::all`] to the catalog plus this list ([`check_rust_only`]).
-pub const RUST_ONLY_COMMANDS: &[&str] = &[];
+pub const RUST_ONLY_COMMANDS: &[&str] = &["agent.report", "agent.get"];
 
 /// `ngtermctl` subcommand paths (`"live tree"`, as the catalog's `cli` keys them) beyond upstream's `agtermctl`: the
 /// CLI side of [`RUST_ONLY_COMMANDS`], held to the catalog the same way.
@@ -440,6 +450,7 @@ impl FromStr for Command {
             Group::Window => WindowCmd::from_str(name).ok().map(Self::Window),
             Group::Workspace => WorkspaceCmd::from_str(name).ok().map(Self::Workspace),
             Group::Live => LiveCmd::from_str(name).ok().map(Self::Live),
+            Group::Agent => AgentCmd::from_str(name).ok().map(Self::Agent),
         };
         command.ok_or_else(|| UnknownCommand(name.to_owned()))
     }
@@ -498,6 +509,8 @@ mod tests {
             Ok(Command::Session(SessionCmd::CompanionPageAttach))
         );
         assert_eq!("workspace.tint".parse(), Ok(Command::Workspace(WorkspaceCmd::Tint)));
+        assert_eq!("agent.report".parse(), Ok(Command::Agent(AgentCmd::Report)));
+        assert_eq!("agent.get".parse(), Ok(Command::Agent(AgentCmd::Get)));
     }
 
     #[test]
@@ -527,7 +540,7 @@ mod tests {
     #[test]
     fn every_command_round_trips_through_its_wire_name() {
         let all = Command::all();
-        assert_eq!(all.len(), 126);
+        assert_eq!(all.len(), 128);
         for command in all {
             assert_eq!(command.wire_name().parse(), Ok(command));
             assert_eq!(
@@ -593,8 +606,8 @@ mod tests {
     }
 
     #[test]
-    fn has_twenty_three_groups() {
-        assert_eq!(Group::iter().count(), 23);
+    fn has_twenty_four_groups() {
+        assert_eq!(Group::iter().count(), 24);
     }
 
     #[test]

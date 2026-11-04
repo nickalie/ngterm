@@ -49,6 +49,25 @@ pub enum AgentKind {
     Codex,
 }
 
+impl AgentKind {
+    /// The wire spelling: `claude` or `codex`.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+
+    /// Parses the wire spelling; `None` for anything else.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        [Self::Claude, Self::Codex]
+            .into_iter()
+            .find(|agent| agent.name() == name)
+    }
+}
+
 /// What an event says; `type` on the wire.
 #[skip_serializing_none]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -181,6 +181,8 @@ pub struct Core {
     pub(crate) live: commands::live::LiveRuntime,
     /// The presentation streams of attached viewers and their hub ([`crate::remote`]).
     pub(crate) remote: crate::remote::PresentationRuntime,
+    /// Every pane's agent record ([`commands::agent`]).
+    pub(crate) agents: commands::agent::AgentRecords,
 }
 
 /// The `tree` result: `{"tree": {...}}`.
@@ -258,6 +260,7 @@ impl Core {
             palette: crate::palette::PaletteRuntime::default(),
             live: commands::live::LiveRuntime::default(),
             remote: crate::remote::PresentationRuntime::default(),
+            agents: commands::agent::AgentRecords::default(),
         };
         core.sync_session_naming();
         core.sync_flagged_layout();
@@ -605,6 +608,7 @@ impl Core {
             )
         };
         self.finalize_panes(finalized);
+        self.sync_agent_records();
         let rows = crate::remote::row_changes(&events);
         let tree_changed = self.events.record(events);
         self.follow_remote_rows(rows);
@@ -797,6 +801,14 @@ impl Core {
         }
     }
 
+    /// `tree`'s answer: the `--window` window's tree, else the frontmost one's.
+    fn tree_response(&self, request: &Request) -> Result<Response, ControlError> {
+        let window = request.args.as_ref().and_then(|args| args.window.as_deref());
+        result_of(&TreeResult {
+            tree: self.tree(window)?,
+        })
+    }
+
     /// One arm per group, routing to the group's handler; groups without one yet are refused by name.
     fn route(&mut self, request: &Request) -> Result<Response, ControlError> {
         match request.cmd {
@@ -856,12 +868,7 @@ impl Core {
             Command::Hooks(cmd) => result_of(&commands::hooks::dispatch(self, cmd, request)?),
             Command::Events(EventsCmd::Read) => self.read_events(request.args.as_ref()),
             Command::Version => result_of(&self.version()),
-            Command::Tree => {
-                let window = request.args.as_ref().and_then(|args| args.window.as_deref());
-                result_of(&TreeResult {
-                    tree: self.tree(window)?,
-                })
-            }
+            Command::Tree => self.tree_response(request),
             Command::Restore(cmd) => match commands::restore::dispatch_group(self, cmd, request)? {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
@@ -875,6 +882,7 @@ impl Core {
                 Some(result) => result_of(&result),
                 None => Ok(Response::success()),
             },
+            Command::Agent(cmd) => result_of(&commands::agent::dispatch(self, cmd, request)?),
             // `browser.clear` and `config.reload` start through `deferred`
             cmd @ (Command::Browser(BrowserCmd::Clear) | Command::Config(_) | Command::Live(_)) => {
                 Err(ControlError::NotSupported(cmd))

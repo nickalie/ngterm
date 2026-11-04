@@ -231,6 +231,8 @@ pub(crate) fn refusal(core: &Core, request: &Request) -> Option<ControlError> {
         Command::Surface(SurfaceCmd::Zoom) => {
             args.and_then(|args| args.mode.as_deref()) != Some("hide") && names_a_surface(request)
         }
+        // a page has no terminal for an agent to run in
+        Command::Agent(_) => true,
         _ => false,
     };
     if !refused {

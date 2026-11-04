@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ngterm_proto::command::{AskCmd, SessionCmd, SurfaceCmd};
+use ngterm_proto::command::{AgentCmd, AskCmd, SessionCmd, SurfaceCmd};
 use ngterm_proto::{Args, Command, Request, Response};
 use serde_json::json;
 use uuid::Uuid;
@@ -330,6 +330,9 @@ fn a_page_companion_refuses_terminal_commands_and_keeps_ordinary_ones() {
             a.size_percent = Some(50);
         }),
         request(Command::Ask(AskCmd::Open), Some(&id), |_| {}),
+        // ngterm's own: a page runs no agent
+        request(Command::Agent(AgentCmd::Report), Some(&id), |_| {}),
+        request(Command::Agent(AgentCmd::Get), Some(&id), |_| {}),
     ] {
         let error = refusal(&fixture.core, &refused).map(|error| Response::from(error).error.unwrap_or_default());
         assert_eq!(

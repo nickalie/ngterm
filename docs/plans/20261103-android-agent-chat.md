@@ -409,22 +409,22 @@ with no output yet is a running call (Task 1's fixture README).
 - Modify: `crates/ngterm-core/src/commands/mod.rs`, and the core state that holds per-pane runtime data (in memory,
   never in the snapshot)
 
-- [ ] write payload tests first on Task 1's payloads:
+- [x] write payload tests first on Task 1's payloads:
   - each event's transcript path, conversation id, permission tool and detail (command, file path) for both agents;
   - Codex's null-`transcript_path` memory thread is ignored;
   - a payload missing fields is rejected with a message;
   - a transcript path outside a `projects/` or `sessions/` tree is refused.
-- [ ] write dispatcher tests first on the `ngterm-host` fakes:
+- [x] write dispatcher tests first on the `ngterm-host` fakes:
   - report, then re-assert (no change), then a new path (a new conversation), then clear;
   - an approval candidate is live only while the pane's status is `blocked`, and done when the status changes;
   - an `AskUserQuestion` that triggered `PermissionRequest` makes no duplicate (Task 1 found that it does fire);
   - an unknown pane identity;
   - a record dropped when its pane identity leaves the model;
   - the record never appears in the snapshot.
-- [ ] write the lazy foreground tests first, through the fake process table: `agent.get` on a pane whose foreground is
+- [x] write the lazy foreground tests first, through the fake process table: `agent.get` on a pane whose foreground is
       back to a shell clears the record and answers `no agent in this pane`
-- [ ] implement `agent.report` and `agent.get` keyed by pane identity
-- [ ] `cargo test -p ngterm-proto -p ngterm-core` must pass
+- [x] implement `agent.report` and `agent.get` keyed by pane identity
+- [x] `cargo test -p ngterm-proto -p ngterm-core` must pass
 
 ### Task 7: The presentation stream's `agent` kind
 
