@@ -162,6 +162,49 @@ internal struct FakeMobileCoreTests {
         gate.open()
     }
 
+    @Test("a call whose task was cancelled before it is not recorded, and leaves its failure and gate to the next")
+    internal func callCancelledBeforeItIsNotMade() async throws {
+        let core = FakeMobileCore()
+        core.failNext("connect", with: .Unreachable(reason: "no route"))
+        let gate = core.hold("connect")
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await core.connect(machine: Self.machine)
+        }
+        await #expect(throws: CancellationError.self) {
+            try await cancelled.value
+        }
+        #expect(core.calls.isEmpty)
+        let connecting = Task {
+            try await core.connect(machine: Self.machine)
+        }
+        await gate.reached()
+        gate.open()
+        await #expect(throws: MobileError.Unreachable(reason: "no route")) {
+            try await connecting.value
+        }
+        #expect(core.calls == [FakeCall("connect", [Self.machine])])
+    }
+
+    @Test("a cancelled call is made before what its caller does next")
+    @MainActor
+    internal func cancelledCallComesBeforeTheNextOne() async throws {
+        let core = FakeMobileCore()
+        try await core.connect(machine: Self.machine)
+        let gate = core.hold("showPane")
+        // runs on the main actor up to its first suspension: the wait at the gate
+        let showing = Task.immediate { @MainActor in
+            try await core.showPane(machineId: "m1", sessionId: "s1", paneId: "p1", size: Self.size)
+        }
+        showing.cancel()
+        try core.hidePane(machineId: "m1", sessionId: "s1", paneId: "p1")
+        await #expect(throws: CancellationError.self) {
+            try await showing.value
+        }
+        #expect(core.calls.map(\.method) == ["connect", "showPane", "hidePane"])
+        gate.open()
+    }
+
     @Test("a shown pane is handed back as it is until hidden, and a detach or a disconnect hides it")
     internal func shownPanesAreKeptUntilHidden() async throws {
         let core = FakeMobileCore()

@@ -107,6 +107,44 @@ internal struct FakeMobileCoreConnectTests {
         #expect(core.waitingForHostKey.isEmpty)
     }
 
+    @Test("a disconnect cancels a connect in flight that waits on no user, and the machine stays disconnected")
+    internal func disconnectCancelsAHeldConnect() async throws {
+        let core = FakeMobileCore()
+        let gate = core.hold("connect")
+        let connecting = Task {
+            try await core.connect(machine: Self.machine)
+        }
+        await gate.reached()
+        try core.disconnect(machineId: "m1")
+        gate.open()
+        await #expect(throws: MobileError.Cancelled) {
+            try await connecting.value
+        }
+        #expect(core.connected.isEmpty)
+        #expect(core.emitted.isEmpty)
+        // a connect after the disconnect goes on
+        try await core.connect(machine: Self.machine)
+        #expect(core.connected == ["m1"])
+    }
+
+    @Test("a cancelled connect is made before the disconnect its caller makes next")
+    @MainActor
+    internal func cancelledConnectComesBeforeTheDisconnect() async throws {
+        let core = FakeMobileCore()
+        let gate = core.hold("connect")
+        // runs on the main actor up to its first suspension: the wait at the gate
+        let connecting = Task.immediate { @MainActor in
+            try await core.connect(machine: Self.machine)
+        }
+        connecting.cancel()
+        try core.disconnect(machineId: "m1")
+        await #expect(throws: CancellationError.self) {
+            try await connecting.value
+        }
+        #expect(core.calls == [FakeCall("connect", [Self.machine]), FakeCall("disconnect", ["m1"])])
+        gate.open()
+    }
+
     @Test("a changed host key reports both keys and fails")
     internal func changedHostKeyFails() async {
         let pins = MemoryHostKeys(["m1": "SHA256:old"])

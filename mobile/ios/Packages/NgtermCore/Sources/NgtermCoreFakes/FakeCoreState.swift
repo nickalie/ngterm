@@ -23,6 +23,8 @@
         internal var emitted: [MobileEvent] = []
         internal var failures: [String: MobileError] = [:]
         internal var holds: [String: FakeGate<Void>] = [:]
+        // each machine's disconnects so far: a connect made before the latest one is cancelled
+        internal var attempts: [String: UInt64] = [:]
         // each machine's record as connected, by id
         internal var records: [String: Machine] = [:]
         internal var connected: Set<String> = []
@@ -40,6 +42,12 @@
         internal var listedPanes: [String: [String: Set<String>]] = [:]
         internal var shown: [PaneRef: any PaneClient] = [:]
         internal var paneFactory: FakeMobileCore.PaneFactory
+
+        /// Records an async call, taking its queued failure and its gate for ``FakeHeldCall/pass()``.
+        internal mutating func recordHeld(_ method: String, _ args: [any Hashable & Sendable]) -> FakeHeldCall {
+            recorded.append(FakeCall(method, args))
+            return FakeHeldCall(failure: failures.removeValue(forKey: method), hold: holds.removeValue(forKey: method))
+        }
 
         /// The sessions of `machineId`, which must be connected.
         internal func sessionsOf(_ machineId: String) throws(MobileError) -> [RemoteSession] {

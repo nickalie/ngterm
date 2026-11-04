@@ -22,7 +22,7 @@ public final class LiveMobileCore: MobileCoreClient {
     }
 
     /// Connects `machine` (api.rs's `connect`).
-    public func connect(machine: Machine) async throws {
+    nonisolated(nonsending) public func connect(machine: Machine) async throws {
         try await abandoningOnCancel { [core] in try await core.connect(machine: machine) }
     }
 
@@ -42,24 +42,24 @@ public final class LiveMobileCore: MobileCoreClient {
     }
 
     /// Lists the sessions of `machineId` (api.rs's `list_sessions`).
-    public func listSessions(machineId: String) async throws -> [RemoteSession] {
+    nonisolated(nonsending) public func listSessions(machineId: String) async throws -> [RemoteSession] {
         try await abandoningOnCancel { [core] in try await core.listSessions(machineId: machineId) }
     }
 
     /// Creates a session on `machineId` (api.rs's `create_session`).
-    public func createSession(machineId: String, name: String?) async throws -> RemoteSession {
+    nonisolated(nonsending) public func createSession(machineId: String, name: String?) async throws -> RemoteSession {
         try await abandoningOnCancel { [core] in try await core.createSession(machineId: machineId, name: name) }
     }
 
     /// Ends a session of `machineId` (api.rs's `end_session`).
-    public func endSession(machineId: String, sessionId: String) async throws {
+    nonisolated(nonsending) public func endSession(machineId: String, sessionId: String) async throws {
         try await abandoningOnCancel { [core] in
             try await core.endSession(machineId: machineId, sessionId: sessionId)
         }
     }
 
     /// Attaches a session of `machineId` (api.rs's `attach_session`).
-    public func attachSession(machineId: String, sessionId: String) async throws {
+    nonisolated(nonsending) public func attachSession(machineId: String, sessionId: String) async throws {
         try await abandoningOnCancel { [core] in
             try await core.attachSession(machineId: machineId, sessionId: sessionId)
         }
@@ -91,7 +91,7 @@ public final class LiveMobileCore: MobileCoreClient {
     }
 
     /// Shows a pane of an attached session (api.rs's `show_pane`).
-    public func showPane(
+    nonisolated(nonsending) public func showPane(
         machineId: String,
         sessionId: String,
         paneId: String,

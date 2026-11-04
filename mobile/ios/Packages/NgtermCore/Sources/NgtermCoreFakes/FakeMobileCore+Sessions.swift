@@ -4,18 +4,21 @@
     // The fake core's sessions and panes, and the calls it only records.
     extension FakeMobileCore {
         /// Answers the machine's sessions, kept as its listing and delivered as a tree.
-        public func listSessions(machineId: String) async throws -> [RemoteSession] {
-            let call = recordHeld("listSessions", [machineId])
-            return try await abandoningOnCancel { [self] in
+        nonisolated(nonsending) public func listSessions(machineId: String) async throws -> [RemoteSession] {
+            try await abandoningOnCancel { [self] in
+                let call = recordHeld("listSessions", [machineId])
                 try await call.pass()
                 return try keepListing(machineId)
             }
         }
 
         /// Adds a session named `name` (a blank name is none), answered once the listing that has it is delivered.
-        public func createSession(machineId: String, name: String?) async throws -> RemoteSession {
-            let call = recordHeld("createSession", [machineId, name])
-            return try await abandoningOnCancel { [self] in
+        nonisolated(nonsending) public func createSession(
+            machineId: String,
+            name: String?
+        ) async throws -> RemoteSession {
+            try await abandoningOnCancel { [self] in
+                let call = recordHeld("createSession", [machineId, name])
                 try await call.pass()
                 let session = try state.withLock { state throws(MobileError) in
                     _ = try state.sessionsOf(machineId)
@@ -32,9 +35,9 @@
         }
 
         /// Ends a session of ``sessions``, delivering the kept listing without it, if one is kept.
-        public func endSession(machineId: String, sessionId: String) async throws {
-            let call = recordHeld("endSession", [machineId, sessionId])
+        nonisolated(nonsending) public func endSession(machineId: String, sessionId: String) async throws {
             try await abandoningOnCancel { [self] in
+                let call = recordHeld("endSession", [machineId, sessionId])
                 try await call.pass()
                 let (listed, tree) = try state.withLock { state throws(MobileError) in
                     let sessions = try state.sessionsOf(machineId)
@@ -56,9 +59,9 @@
         }
 
         /// Attaches a session of the machine's last listing.
-        public func attachSession(machineId: String, sessionId: String) async throws {
-            let call = recordHeld("attachSession", [machineId, sessionId])
+        nonisolated(nonsending) public func attachSession(machineId: String, sessionId: String) async throws {
             try await abandoningOnCancel { [self] in
+                let call = recordHeld("attachSession", [machineId, sessionId])
                 try await call.pass()
                 _ = try state.withLock { state throws(MobileError) in try state.listed(machineId, sessionId) }
             }
@@ -73,14 +76,14 @@
         }
 
         /// Shows a pane of a session of the machine's last listing: the one shown already, or the factory's.
-        public func showPane(
+        nonisolated(nonsending) public func showPane(
             machineId: String,
             sessionId: String,
             paneId: String,
             size: PaneSize
         ) async throws -> any PaneClient {
-            let call = recordHeld("showPane", [machineId, sessionId, paneId, size])
-            return try await abandoningOnCancel { [self] in
+            try await abandoningOnCancel { [self] in
+                let call = recordHeld("showPane", [machineId, sessionId, paneId, size])
                 try await call.pass()
                 let ref = PaneRef(machineId: machineId, sessionId: sessionId, paneId: paneId)
                 let (shown, factory) = try state.withLock { state throws(MobileError) in
