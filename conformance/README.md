@@ -140,9 +140,10 @@ full error text directly.
 
 The Rust build is held to upstream's contract, its capability branches included: it claims the capabilities listed
 in [docs/rust-build.md](docs/rust-build.md) > Rust target profile, and where a test branches on a capability it
-takes upstream's branch unless that list says otherwise. Once a sync has landed, its parity level
-(docs/rust-build.md > `version` extension) is the catalog's release, so no `since` test skips on it as
-`not-yet-at-level`.
+takes upstream's branch unless that list says otherwise. The Rust claim is v0.40.0
+(docs/rust-build.md > `version` extension), so tests introduced through that release are eligible. The catalog's
+reference release and the implementation claim are independent: updating the catalog alone never unlocks `since`
+tests. Host capability skips remain recorded separately from passing coverage.
 The Rust build's progress is held by a ratchet: `conformance/rust-passing.txt` lists the ids that went green, and
 `run-linux.sh` fails when one of them goes red again (see rust-build.md > Ratchet).
 A Rust-only extension (today `live-any-shell`, Live sessions in bash and PowerShell login shells) is a

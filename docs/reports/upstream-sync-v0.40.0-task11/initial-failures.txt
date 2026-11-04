@@ -1,0 +1,100 @@
+=================================== FAILURES ===================================
+_________________ test_restart_drops_mail_sent_during_shutdown _________________
+
+launch = <agterm_conformance.plugin.Launcher object at 0x7f50424a8e20>
+cli = <agterm_conformance.plugin.Cli object at 0x7f5042423e00>
+
+    @pytest.mark.requires("live-sessions", "posix-command-line", reason="needs an old live program's HUP handler")
+    @pytest.mark.covers("msg.send", "msg.read", "session.restart")
+    def test_restart_drops_mail_sent_during_shutdown(launch, cli):
+        """The ending program sends its own last message; it must not reach its replacement."""
+        import json
+        import shlex
+        from agterm_conformance.wait import wait_until
+    
+        ctl = launch(settings={"restoreMode": "live"})
+        sid, pid = _pane(ctl)
+        address = f"{sid}:{pid}"
+        receipt = ctl.instance.root / "shutdown-message.json"
+        ready = ctl.instance.root / "old-program-ready"
+        quote = shlex.quote
+        send = (
+            f"{quote(str(cli.ctl_path))} msg send shutdown --to {quote(address)} --as {quote(address)} "
+            f"--json --socket {quote(str(ctl.instance.socket))} > {quote(str(receipt))}; exit 0"
+        )
+        script = f"trap {quote(send)} HUP; printf ready > {quote(str(ready))}; while :; do sleep 60; done"
+        try:
+            assert_ok(ctl.request("session.restart", sid, paneID=pid, command=f"sh -c {quote(script)}"))
+            wait_until(lambda: ready.exists() and ready.read_text() == "ready")
+            assert_ok(ctl.request("msg.send", body="before shutdown", recipients=[address]))
+            assert_ok(ctl.request("session.restart", sid, paneID=pid, command="cat"))
+>           assert assert_ok(json.loads(receipt.read_text()))["delivered"] == [address]
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+conformance/tests/protocol/test_messages.py:203: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/lib/python3.14/json/__init__.py:352: in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.14/json/decoder.py:345: in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <json.decoder.JSONDecoder object at 0x7f504418d400>, s = '', idx = 0
+
+    def raw_decode(self, s, idx=0):
+        """Decode a JSON document from ``s`` (a ``str`` beginning with
+        a JSON document) and return a 2-tuple of the Python
+        representation and the index in ``s`` where the document ended.
+    
+        This can be used to decode a JSON document from a string that may
+        have extraneous data at the end.
+    
+        """
+        try:
+            obj, end = self.scan_once(s, idx)
+        except StopIteration as err:
+>           raise JSONDecodeError("Expecting value", s, err.value) from None
+E           json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+/usr/lib/python3.14/json/decoder.py:363: JSONDecodeError
+__________________ test_session_info_display_picker_persists ___________________
+
+seeded = <agterm_conformance.plugin.Ctl object at 0x7f50412ad450>
+ui_for = <function ui_for.<locals>.driver at 0x7f5040635fe0>
+
+    @pytest.mark.since("0.40.0")
+    @pytest.mark.covers("ui:settings-session-info-display")
+    def test_session_info_display_picker_persists(seeded, ui_for):
+        ui = ui_for(seeded)
+        _open(ui, "Interface")
+        for element in ("overlayToggle", "workspaceIcons", "sessionIcons"):
+            ui.find(ui.ui_ids.expand("settings-interface-{element}", element=element), role="checkbox")
+        ui.find("settings-quick-terminal-size", role="popup")
+>       picker = ui.find("settings-session-info-display", role="popup", value="Always")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+conformance/tests/ui/test_settings.py:293: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+conformance/agterm_conformance/drivers/trace.py:53: in wrapped
+    result = method(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+conformance/agterm_conformance/drivers/base.py:193: in find
+    return self._wait(check, wanted, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <agterm_conformance.drivers.atspi.AtspiDriver object at 0x7f50405908c0>
+check = <function Driver.find.<locals>.check at 0x7f5040635900>
+wanted = "settings-session-info-display {'role': 'popup', 'value': 'Always'}"
+timeout = None
+
+    def _wait(self, check: Callable[[], T], wanted: str, timeout: float | None) -> T:
+        try:
+            return wait_until(check, self.timeout if timeout is None else timeout)
+        except WaitTimeout as error:
+>           raise ElementNotFound(f"{self.name}: no {wanted} in pid {self.pid}: {error}; {self._present()}") from None
+E           agterm_conformance.drivers.base.ElementNotFound: atspi: no settings-session-info-display {'role': 'popup', 'value': 'Always'} in pid 3019298: Driver.find.<locals>.check did not hold within 10.0s; identified now: sidebar-toggle-button(button name='Toggle Sidebar (Shift+Ctrl+S)'), recent-sessions-button(button name='Recent sessions (Ctrl+Tab)' disabled), attention-button(button name='No sessions need attention (Shift+Ctrl+I)' disabled), scratch-toggle(button name='Show scratch terminal (Shift+Ctrl+J)'), split-toggle(button name='Split right (Shift+Ctrl+D)'), dashboard-toggle-button(button name='Dashboard (Shift+Ctrl+M)'), quick-terminal-toggle(button name='Quick Terminal (Ctrl+`)'), app-menu-button(menu-button name='Main Menu'), workspace-icon(image name='Workspace'), workspace-row(row name='workspace 1'), session-icon(image name='Session'), session-row(row name='home'), new-workspace(button name='New Workspace'), add-session(menu-button name='Add session'), focus-filter-toggle(button name='Toggle Workspace Filter' disabled), flagged-view-toggle(button name='Toggle Flagged View' disabled), settings(window name='Settings'), settings-close(button name='Close'), settings-tab-general(radio name='General' value=0), settings-tab-appearance(radio name='Appearance' value=0), settings-tab-interface(radio name='Interface' value=1), settings-tab-notifications(radio name='Notifications' value=0), settings-tab-agent-status(radio name='Agent Status' value=0), settings-tab-key-mapping(radio name='Key Mapping' value=0), settings-interface-workspaceName(checkbox name='Workspace name' value=0), settings-interface-sessionName(checkbox name='Session name' value=1), settings-interface-windowName(checkbox name='Window name' value=1), settings-interface-sessionContext(checkbox name='Session context' value=1), settings-interface-sidebarToggle(checkbox name='Sidebar toggle' value=1), settings-interface-remoteHost(checkbox name='Remote host' value=1), settings-interface-recentSessions(checkbox name='Recent sessions' value=1), settings-interface-scratch(checkbox name='Scratch terminal' value=1), settings-interface-split(checkbox name='Split view' value=1), settings-interface-overlayToggle(checkbox name='Hide overlays' value=0), settings-interface-dashboard(checkbox name='Dashboard' value=1), settings-interface-quickTerminal(checkbox name='Quick terminal' value=1), settings-interface-customCommands(checkbox name='Custom commands' value=0), settings-interface-newWorkspace(checkbox name='New workspace' value=1), settings-interface-newSession(checkbox name='New session' value=1), settings-interface-flaggedView(checkbox name='Flagged view' value=1), settings-interface-focusFilter(checkbox name='Workspace filter' value=1), settings-interface-workspaceAddSession(checkbox name='Workspace add-session' value=1), settings-interface-workspaceIcons(checkbox name='Workspace icons' value=1), settings-interface-sessionIcons(checkbox name='Session icons' value=1), settings-session-info-display(popup name='Session info'), settings-auto-hide-inactive-sidebars(checkbox name='Show sidebar only in the active window' value=0), settings-quick-terminal-size(popup name='Size')
+
+conformance/agterm_conformance/drivers/base.py:480: ElementNotFound

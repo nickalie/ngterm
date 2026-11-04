@@ -129,8 +129,8 @@ in `packaging/release/pins.env`; update the WPE source checksum and relocation p
 
 ## Parity
 
-The build claims the behavior of the upstream release `version` reports as `conformance.parityLevel`
-([rust-build.md](conformance/docs/rust-build.md) names it). What upstream brought from v0.37.0 up to that release,
+The build claims upstream v0.40.0 behavior, reported by `version` as `conformance.parityLevel`
+([rust-build.md](conformance/docs/rust-build.md) defines the claim). What upstream brought from v0.37.0 up to that release,
 and how this build does it where the OS matters:
 
 - Commands: `recent list|open|clear` (File ▸ Open Recent: the last 20 closed sessions and workspaces), `session wait
@@ -173,7 +173,8 @@ and how this build does it where the OS matters:
   flat lists label a companion `parent › child`. `session overlay open --companion` opens a page as a companion row
   (WPE WebKit on Linux, WKWebView on macOS, WebView2 on Windows). `session duplicate --companion` re-runs the source pane's foreground
   program, read from the process table: `/proc/<pid>/exe` and `environ` on Linux, `proc_pidpath` and `KERN_PROCARGS2`
-  on macOS, `QueryFullProcessImageNameW` and the process's environment block on Windows. A companion of a session
+  on macOS, `QueryFullProcessImageNameW` and the process's environment block on Windows. Recognized identity
+  arguments in a duplicated command are rebound to its new session and panes. A companion of a session
   attached from another machine is made on that machine over ssh (a Windows machine is never that far side).
 - Row tints (v0.39): `session tint`/`workspace tint` and `--tint`/`--tint-on` on both `new`s color a row's icon
   and/or name (tree `tint`/`tintOn`), with a Tint submenu on the row menu and Tint Session rows in the palette; the
@@ -189,6 +190,31 @@ and how this build does it where the OS matters:
   effects switch, `UISettings.AdvancedEffectsEnabled`; Linux has no such rule), the `linkOpenMode` values `overlay95`, `overlay75` and
   `overlay50` (a link in an overlay of that size, Ctrl+Shift-click sending one to the browser instead where upstream
   has ⌘⇧-click), and the Ghostty config key `split-divider-color` for the split divider.
+- Pane messages (v0.40): `ngtermctl msg send|read|ack` delivers to stable `SESSION:PANE-ID` addresses or role
+  aliases, or broadcasts with `--all` and optional `--workspace`. Only realized local panes receive mail.
+  `--as` overrides the pane's complete
+  `NGTERM_SESSION_ID`/`NGTERM_PANE_ID` pair. Mail stays with its pane through swaps, is not saved, and is discarded
+  when that pane closes or restarts. Reads repeat until acknowledged; `read --ack` consumes one bounded batch,
+  `read --wait --timeout SEC` exits 124 on timeout. The tree reports nonzero `pendingMessages`; `message` events omit bodies.
+- Session info (v0.40): `ngtermctl session info TEXT [--markdown] [--hide-after SEC]` draws an activity line below
+  the sidebar row; `--clear` removes it. Inline bold, italic, code, `^[text](color: "green")` and
+  `^[text](dim: true)` are supported. A positive expiry restarts on every successful set, even with identical text;
+  omitting `--hide-after` cancels an earlier expiry. The line is never saved or duplicated. Attached sessions mirror
+  the origin's line unless a local line overrides it. Settings ▸ Interface ▸ Session info chooses Always, Flagged or
+  Off without clearing the value; Workspace Icons and Session Icons independently control the two row icon kinds.
+- Local document pages (v0.40): `session overlay open --image FILE` embeds PNG, JPEG, GIF or WebP with natural
+  aspect sizing; `--markdown FILE` renders Markdown with highlighted code, task lists and heading anchors. Markdown
+  embeds eligible pictures from its own folder and fetches nothing from the network; raw HTML displays as text.
+  These pages have no bridge, refuse companion placement and stay local. Ctrl-clicking a document path opens the
+  same page on Linux and Windows (⌘-click on macOS); other files are revealed by the platform's file manager.
+- Remote groups (v0.40): `ngtermctl live attach HOST ID --companions` attaches a parent with its companions in
+  origin order, retaining successful attachments and reporting individual failures in `remoteGroup`; Attach Remote
+  offers the same group action. Attaching one companion joins its already attached parent. Remote program overlays
+  and HTML pages retain origin-requested `--width`/`--height` on presenters advertising `overlay.points`; an older
+  presenter receives percent sizes. Point resizing is requested on the origin, rather than its replica.
+- Managed Live attach exit (v0.40) preserves the final screen and scrollback while resetting terminal input modes,
+  styles and colors. A completed creation command is not restarted as a replacement login shell; `--wait` keeps
+  its output visible.
 - Selecting text stays off the system clipboard ([The selection clipboard](#the-selection-clipboard)).
 
 ## Prerequisites

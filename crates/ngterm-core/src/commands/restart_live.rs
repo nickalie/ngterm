@@ -10,6 +10,7 @@
 //! is claimed from the kill on, so the dying client cannot close the pane the restart rebuilds.
 
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 use ngterm_host::{KillOutcome, ProcessRecord, Surface};
@@ -21,7 +22,7 @@ use crate::Core;
 use crate::command_restore::shell_quoted_line;
 use crate::dispatch::Dispatched;
 use crate::error::ControlError;
-use crate::live::lead::LeadAttachment;
+use crate::live::lead::{LeadAttachment, LeadState};
 use crate::live::support::{Creation, attach_line, live_attach};
 use crate::model::StatusPane;
 use crate::pane_env::uuid_string;
@@ -81,7 +82,14 @@ fn listed_shell(core: &Core, daemon: &str, other_than: Option<i32>) -> Option<i3
 }
 
 fn find_old_shell(core: &mut Core, job: Job, deadline: Instant) -> Dispatched {
-    match listed_shell(core, &job.daemon, None) {
+    // A pending kill still lists the old daemon. A second restart waits for the first one's replacement instead
+    // of killing that same daemon and sharing its exit claim (upstream's synchronous kill excludes that overlap).
+    let old = if core.live.claimed_exits.contains(&job.token) {
+        None
+    } else {
+        listed_shell(core, &job.daemon, None)
+    };
+    match old {
         Some(old) => end_old_shell(core, job, old),
         None if Instant::now() < deadline => later(move |core| find_old_shell(core, job, deadline)),
         None => failure("the pane's shell is not running"),
@@ -118,26 +126,68 @@ fn end_old_shell(core: &mut Core, job: Job, old: i32) -> Dispatched {
             "the process table cannot be read, so the old program could not be tracked; nothing was changed",
         );
     };
-    match host.kill(&job.daemon, true) {
-        KillOutcome::Killed => {}
-        KillOutcome::StaleSocket => {
-            return failure(format!("{} did not confirm the kill; nothing was started", job.daemon));
-        }
-        KillOutcome::Failed(reason) => {
-            return failure(format!("could not end the pane's shell: {reason}; nothing was started"));
-        }
-    }
-    // the dying client's exit would close the pane, and its `unowned` report would reattach to a daemon that is gone
+    // The host waits for the old process to end. Its HUP handler may make a control request, so the kill must
+    // not hold the main loop. Claim before starting it: the dying attachment can exit before the first poll.
     core.live.claimed_exits.insert(job.token.clone());
+    core.live.pending_kill_exits.insert(job.token.clone(), None);
+    // Its unowned report can arrive during the kill too; do not let that start a competing attachment.
+    let previous = core.live.leads.snapshot(job.identity);
     core.live.leads.forget(job.identity);
-    core.live.leaders.borrow_mut().note_lifecycle_change();
+    let (answer, result) = mpsc::channel();
+    let daemon = job.daemon.clone();
+    let started = std::thread::Builder::new()
+        .name("ngterm.restart-kill".to_owned())
+        .spawn(move || {
+            let _ = answer.send(host.kill(&daemon, true));
+        });
+    if let Err(reason) = started {
+        core.live.claimed_exits.remove(&job.token);
+        core.live.pending_kill_exits.remove(&job.token);
+        core.live.leads.restore(job.identity, previous);
+        return failure(format!("could not end the pane's shell: {reason}; nothing was started"));
+    }
     let ending = Ending {
         old,
         program,
         replay,
-        deadline: Instant::now() + HANGUP_GRACE,
+        deadline: Instant::now(),
         killed: false,
     };
+    poll_kill(core, job, ending, result, previous)
+}
+
+/// Waits without holding the main loop, including while the old program reports its last activity over the socket.
+fn poll_kill(
+    core: &mut Core,
+    job: Job,
+    mut ending: Ending,
+    answer: Receiver<KillOutcome>,
+    previous: Option<LeadState>,
+) -> Dispatched {
+    let outcome = match answer.try_recv() {
+        Ok(outcome) => outcome,
+        Err(TryRecvError::Empty) => return later(move |core| poll_kill(core, job, ending, answer, previous)),
+        Err(TryRecvError::Disconnected) => KillOutcome::Failed("the session host kill worker ended".to_owned()),
+    };
+    let exited = core.live.pending_kill_exits.remove(&job.token).flatten();
+    let error = match outcome {
+        KillOutcome::Killed => None,
+        KillOutcome::StaleSocket => Some(format!("{} did not confirm the kill; nothing was started", job.daemon)),
+        KillOutcome::Failed(reason) => Some(format!("could not end the pane's shell: {reason}; nothing was started")),
+    };
+    if let Some(error) = error {
+        core.live.claimed_exits.remove(&job.token);
+        if pane_unchanged(core, &job) {
+            core.live.leads.restore(job.identity, previous);
+            // Before the kill became asynchronous this callback ran after a failed kill returned, without a claim.
+            if let Some((session, now)) = exited {
+                core.pane_exited_at(session, &job.token, now);
+            }
+        }
+        return failure(error);
+    }
+    core.live.leaders.borrow_mut().note_lifecycle_change();
+    ending.deadline = Instant::now() + HANGUP_GRACE;
     await_program_end(core, job, ending)
 }
 

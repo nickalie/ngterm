@@ -9,7 +9,7 @@ Rust build reports, and no other key (`assert_version_result` in `agterm_conform
 ```json
 {"app": {"version": "0.1.0", "commit": "abc1234"},
  "installed": {"version": "0.1.0", "commit": "abc1234"},
- "conformance": {"parityLevel": "0.39.1", "capabilities": ["posix-shell", "live-sessions"]}}
+ "conformance": {"parityLevel": "0.40.0", "capabilities": ["posix-shell", "live-sessions"]}}
 ```
 
 - `app.version`: a non-empty string; `app.commit` is optional, and the CLI's `version` prints `version (commit)`.
@@ -22,8 +22,9 @@ Rust build reports, and no other key (`assert_version_result` in `agterm_conform
 - `conformance.parityLevel`: the upstream version whose behavior the build claims, a dotted version with an optional
   `v` (no suffix such as `-beta`).
   A test marked `since(V)` above it skips as `not-yet-at-level`.
-  The Rust build claims `0.39.1` (`PARITY_LEVEL` in `ngterm-proto`), the release the catalog describes: it was
-  raised once the port of the v0.39 releases had landed, never ahead of it, so every `since` test runs against it.
+  The Rust build claims `0.40.0` (`PARITY_LEVEL` in `ngterm-proto`), raised after the release's feature ports.
+  The catalog independently names the reference release: a mechanical catalog bump does not raise the Rust claim.
+  Tests through v0.40.0 are eligible at this level; capabilities and host requirements still govern execution.
 - `conformance.capabilities`: names from the vocabulary below; a test whose `requires` names one missing skips as
   `unsupported`.
   Names outside the vocabulary match nothing.
@@ -147,7 +148,7 @@ It does not claim:
 - `window-geometry`, `window-minimize`: Wayland gives a client no window position and no minimized read-back; their
   tests branch, and the Rust build passes the other branch, on Windows too, where it claims neither;
 - `sidebar-min-width`: the GPUI frontend does not claim it; its test takes the other branch.
-- `ui-string-values`: AccessKit's AT-SPI mapping exposes no string value on a button, an image or a row, so on Linux
+- `ui-string-values`: AccessKit's AT-SPI mapping exposes no string value on a button, a popup, an image or a row, so on Linux
   the ui tests take the other branch: they find the element and read its state back through the protocol. The
   Linux branch leaves that state unread by assistive technology there: it is an open accessibility gap, not a parity
   claim. UIA and AX do read a string value (ValuePattern, AXValue) where the app publishes one (the overlays
@@ -203,6 +204,32 @@ suite, the same workflow runs `ngterm-session`'s PowerShell session tests (`test
 and working directory, the foreground read, a replay) on Linux, macOS and Windows, and `ngterm-core`'s replay round
 trip through a real `pwsh` where one is installed.
 
+## Release behavior at v0.40.0
+
+The [README parity notes](../../README.md#parity) describe the user-facing additions. Their observable contracts are:
+
+- `msg.send/read/ack`: process-local pane mailboxes, one delivery per resolved pane, reader-scoped acknowledgement,
+  bounded atomic read-and-ack and body-free `message` events. The tree omits `pendingMessages` at zero. Mail follows
+  pane identity and is discarded on close, respawn and restart; persistence and undo never restore it.
+- `session.info`: ephemeral `info`, `infoMarkdown` and `infoHideAfter`, all omitted when clear. A successful positive
+  expiry refreshes its deadline; leaving it out cancels an old deadline. Rejections preserve the previous line and
+  deadline. A local line takes precedence over mirrored remote info; origin expiry removes only the mirrored line.
+  `sessionInfoDisplay` chooses `always`, `flagged` or `off`, defaulting to always; hiding a line leaves the data.
+  The independent `workspaceIcons` and `sessionIcons` interface settings govern row icons.
+- Image and Markdown pages: `session.overlay.open` accepts `image` or `markdownFile`; tree `htmlOverlays` reports
+  `image` or `markdown`. Both are local document views with no bridge or companion placement. Files are bounded
+  before opening (images: 64 MiB and 100 megapixels; Markdown: 4 MiB); Markdown embeds at most 256 eligible images
+  from its own folder, with no network fetches. Platform web engines render the generated pages; native WKWebView
+  and WebView2 runtime checks remain the platform runners' responsibility.
+- `live.attach.group` (`live attach --companions`): ordered group discovery, individual companion outcomes and
+  retained successful attachments in `result.remoteGroup`. Network-free conformance checks cover validation;
+  successful receipts are narrowly exempted from the catalog gate and covered by core fake-runner tests.
+- Origin-requested remote overlay point axes survive presentation when the viewer advertises `overlay.points`;
+  older viewers receive percent-only sizes. A replica refuses local point resizing (the platform-adapted text below).
+- Managed attach cleanup preserves screen and scrollback, resetting reports, SGR and colors; a creation command
+  that has ended is never replaced by a new login shell. Linux runtime conformance covers the held output; Windows
+  ConPTY and native macOS rendering remain platform checks.
+
 ## Pane messaging identity
 
 `msg send/read/ack` use `NGTERM_SESSION_ID` and `NGTERM_PANE_ID` as a complete pair; `--as` replaces both.
@@ -223,7 +250,7 @@ Remote overlays and pages retain origin-requested point axes and send them to pr
 
 | upstream | Rust build |
 |---|---|
-| `zmx.list`, `zmx.prune`, `zmx.kill`, `zmx.reset`, `zmx.tree`, `zmx.attach`, `zmx.present`, `zmx.screen` | `live.list`, `live.prune`, `live.kill`, `live.reset`, `live.tree`, `live.attach`, `live.present`, `live.screen` |
+| `zmx.list`, `zmx.prune`, `zmx.kill`, `zmx.reset`, `zmx.tree`, `zmx.attach`, `zmx.attach.group`, `zmx.present`, `zmx.screen` | `live.list`, `live.prune`, `live.kill`, `live.reset`, `live.tree`, `live.attach`, `live.attach.group`, `live.present`, `live.screen` |
 | `agtermctl zmx <subcommand>` | `ngtermctl live <subcommand>` |
 | `result.zmx` (the inventory) | `result.live` |
 | `tree.session.backedByZmx`, `surfaces[].backedByZmx` | `backedByLive` |
@@ -238,6 +265,7 @@ Every other field, every semantic and every error string that names no zmx is up
 | `zmx.reset requires --force`, `… requires Live sessions mode both configured and active for this launch`, `… could not read the live session list`, `… refused: the pane inventory is incomplete`, `… found no live session to reset` | the same under `live.reset` (and `live.reset is not supported on this platform`, the build's own) |
 | `zmx.present requires a session` | `live.present requires a session` |
 | `zmx.attach requires a host`, `zmx.attach requires a remote session` | the same under `live.attach` |
+| `zmx.attach.group requires a host`, `zmx.attach.group requires a remote session` | the same under `live.attach.group` |
 | `zmx is unavailable in this instance` | `live sessions are unavailable in this instance` |
 | `could not read the zmx session list` | `could not read the live session list` |
 | `could not re-read the zmx session list before pruning` | `could not re-read the live session list before pruning` |

@@ -525,15 +525,18 @@ ui:workspace-icon. Cursor/header tests belong in GPUI/platform tests where drive
 `conformance/docs/rust-build.md`, README.md, conformance/README.md; ratchet lists only from actual reports.
 **Conformance:** every new ID in prior tasks, unchanged existing ratchet IDs, and both catalog checks.
 
-- [ ] Only after all prior tasks pass, bump PARITY_LEVEL and every claim mirror to 0.40.0; use
+- [x] Only after all prior tasks pass, bump PARITY_LEVEL and every claim mirror to 0.40.0; use
   `tag-mentions.sh v0.39.1` to distinguish claim/reference/history. Swift reference already targets 0.40.0.
   Correct rust-build.md's temporary statement that claimed release equals catalog release.
-- [ ] Describe messaging, info/expiry/settings, local document pages, remote group/points and exit behavior.
+- [x] Describe messaging, info/expiry/settings, local document pages, remote group/points and exit behavior.
   Document new platform-adapted strings and reference vocabulary, including new live.attach.group refusals.
   Preserve minimum-version annotations, dependency versions and attribution history.
-- [ ] Run the newly unlocked conformance cases and the existing ratchet; no skips counted as implemented.
+- [x] Run the newly unlocked conformance cases and the existing ratchet; no skips counted as implemented.
   Recheck catalog tests, host-free selftests, coverage gate and appropriate build/clippy checks. Add newly
   passing IDs from actual nodeid reports to the correct OS ratchet, never remove old ones to hide failures.
-- [ ] Manual (user): push branch, run reference-macos.yml against it to verify new tests on v0.40.0, then open
-  PR for cross-platform jobs/full suite. Resolve any resulting verified mismatch before merge. Commits stay local
+- [x] Manual (user; not run, handoff): push branch, run reference-macos.yml against it to verify new tests on
+  v0.40.0, then open a PR for cross-platform jobs/full suite. Resolve any resulting verified mismatch before merge. Commits stay local
   during this plan; remote workflow execution and PR creation belong to the user.
+
+  Local execution did not push, dispatch the reference workflow or create a PR. Native platform/reference
+  verification remains the user handoff; this checkbox records that handoff, not a successful external check.

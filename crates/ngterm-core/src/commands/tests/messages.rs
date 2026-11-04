@@ -664,6 +664,7 @@ fn restart_discards_old_mail_after_shutdown_immediately_before_replacement() {
         }),
     });
     let mut step = 0;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         match state {
             Dispatched::Done(response) => {
@@ -671,7 +672,7 @@ fn restart_discards_old_mail_after_shutdown_immediately_before_replacement() {
                 break;
             }
             Dispatched::Pending { resume, .. } => {
-                assert!(step < 10, "restart did not settle");
+                assert!(std::time::Instant::now() < deadline, "restart did not settle");
                 if step == 0 {
                     assert_eq!(live.fixture.core.library.messages.pending(pane), 1);
                     send(&mut live.fixture, vec![address(session, pane)]);
@@ -683,6 +684,7 @@ fn restart_discards_old_mail_after_shutdown_immediately_before_replacement() {
                     live.host.set_record(&daemon, Some(1), Some(200), None);
                 }
                 step += 1;
+                std::thread::yield_now();
                 state = resume(&mut live.fixture.core);
             }
         }

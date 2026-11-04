@@ -3,10 +3,12 @@
 //! `ControlServer+Zmx`, `ZmxLaunch`, `PaneLead`, `ControlServer+Restart` and `LiveResetCoordinator` behaviors).
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
 
 use ngterm_host::fakes::{FakeProcessTable, FakeSessionHost, FakeSurface, FakeSurfaceProbe};
-use ngterm_host::{KillOutcome, ProcessRecord, ProcessStat, SessionHost, Surface};
+use ngterm_host::{
+    HostError, KillOutcome, LiveScreen, LiveSessionRecord, ProcessRecord, ProcessStat, SessionHost, Surface,
+};
 use ngterm_proto::command::{LiveCmd, SessionCmd};
 use ngterm_proto::{Args, Command, ControlLiveEndpoint, Request, Response};
 use serde_json::{Value, json};
@@ -41,7 +43,7 @@ fn resources() -> tempfile::TempDir {
     dir
 }
 
-fn install(core: &mut Core, host: &Arc<FakeSessionHost>, resources: &Path, mode: RestoreMode) {
+fn install<H: SessionHost + 'static>(core: &mut Core, host: &Arc<H>, resources: &Path, mode: RestoreMode) {
     core.set_restore_launch(RestoreLaunchDecision::new(mode, None));
     core.install_live_sessions(LiveInstall {
         host: Arc::clone(host) as Arc<dyn SessionHost>,
@@ -1079,6 +1081,248 @@ fn a_restart_ends_the_old_shell_and_rebuilds_the_pane_on_its_daemon() {
     assert!(live.core().live.claimed_exits.is_empty());
 }
 
+/// A host whose kill waits for the test to release it, as a real HUP handler can wait for the app's control reply.
+struct BlockedKillHost {
+    inner: Arc<FakeSessionHost>,
+    entered: mpsc::SyncSender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+impl SessionHost for BlockedKillHost {
+    fn is_available(&self) -> bool {
+        self.inner.is_available()
+    }
+
+    fn list(&self) -> Result<Vec<LiveSessionRecord>, HostError> {
+        self.inner.list()
+    }
+
+    fn kill(&self, name: &str, force: bool) -> KillOutcome {
+        self.entered.send(()).unwrap();
+        self.release
+            .lock()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        self.inner.kill(name, force)
+    }
+
+    fn screen(&self, name: &str, all: bool) -> Result<LiveScreen, HostError> {
+        self.inner.screen(name, all)
+    }
+
+    fn type_input(&self, name: &str, bytes: &[u8]) -> Result<(), HostError> {
+        self.inner.type_input(name, bytes)
+    }
+}
+
+fn block_kills(live: &mut Live) -> (mpsc::Receiver<()>, mpsc::SyncSender<()>) {
+    let (entered, wait) = mpsc::sync_channel(1);
+    let (release, released) = mpsc::sync_channel(1);
+    let blocked = Arc::new(BlockedKillHost {
+        inner: Arc::clone(&live.host),
+        entered,
+        release: Mutex::new(released),
+    });
+    install(
+        &mut live.fixture.core,
+        &blocked,
+        live.resources.path(),
+        RestoreMode::Live,
+    );
+    (wait, release)
+}
+
+#[test]
+fn a_restart_serves_shutdown_mail_while_the_session_host_kill_is_waiting() {
+    use ngterm_proto::command::MsgCmd;
+    let mut live = live();
+    let (wait, release) = block_kills(&mut live);
+    let pane = live.left;
+    let token = wire(pane);
+    let session = live.session;
+    let address = format!("{}:{token}", wire(session));
+    let nonce = spawn_live(&mut live);
+    assert!(report(&mut live, &token, &nonce, "leader", 1));
+    let dispatched = begin_restart(&mut live);
+    wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert!(live.core().live.claimed_exits.contains(&token));
+    assert!(
+        !live.core().pane_exited(session, &token),
+        "the dying attachment closed the pane"
+    );
+    assert!(!report(&mut live, &token, &nonce, "unowned", 2));
+    assert!(live.core().take_pane_replacements().is_empty());
+    let response = live.fixture.send(
+        Command::Msg(MsgCmd::Send),
+        None,
+        args(|a| {
+            a.body = Some("sent while the old program ends".to_owned());
+            a.recipients = Some(vec![address.clone()]);
+        }),
+    );
+    assert_eq!(result(&response)["delivered"], json!([address]));
+    assert_eq!(live.core().library.messages.pending(pane), 1);
+    release.send(()).unwrap();
+    let host = Arc::clone(&live.host);
+    let daemon = daemon_name(live.left);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let response = drive(live.core(), dispatched, |core, _| {
+        assert!(std::time::Instant::now() < deadline, "restart did not settle");
+        if !core.take_pane_replacements().is_empty() {
+            assert_eq!(core.library.messages.pending(pane), 0);
+            host.set_record(&daemon, Some(1), Some(200), None);
+        }
+        std::thread::yield_now();
+    });
+    assert!(response.ok, "{response:?}");
+    assert_eq!(live.core().library.messages.pending(pane), 0);
+    assert!(live.core().live.claimed_exits.is_empty());
+    assert!(live.core().live.pending_kill_exits.is_empty());
+}
+
+#[test]
+fn overlapping_restarts_wait_for_the_previous_kill_and_replacement() {
+    let mut live = live();
+    let (wait, release) = block_kills(&mut live);
+    let token = wire(live.left);
+    let nonce = spawn_live(&mut live);
+    assert!(report(&mut live, &token, &nonce, "leader", 1));
+    let first = begin_restart(&mut live);
+    wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    let request = Request {
+        cmd: Command::Session(SessionCmd::Restart),
+        target: Some(wire(live.session)),
+        args: Some(args(|a| {
+            (a.pane, a.command) = (Some("left".to_owned()), Some("cat".to_owned()));
+        })),
+    };
+    let second = live.core().begin(&request);
+    let Dispatched::Pending { resume, .. } = second else {
+        panic!("the second restart did not wait")
+    };
+    let second = resume(live.core());
+    assert!(
+        matches!(wait.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "a second kill started"
+    );
+    assert!(live.core().live.claimed_exits.contains(&token));
+    assert!(!report(&mut live, &token, &nonce, "unowned", 2));
+    assert!(live.core().take_pane_replacements().is_empty());
+    release.send(()).unwrap();
+    let first = finish_restart_as(&mut live, first, 200);
+    assert_eq!(result(&first)["restart"]["oldPid"], 100);
+    assert_eq!(result(&first)["restart"]["newPid"], 200);
+    let Dispatched::Pending { resume, .. } = second else {
+        panic!("the second restart stopped waiting")
+    };
+    let second = resume(live.core());
+    wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert!(live.core().live.claimed_exits.contains(&token));
+    release.send(()).unwrap();
+    let second = finish_restart_as(&mut live, second, 300);
+    assert_eq!(result(&second)["restart"]["oldPid"], 200);
+    assert_eq!(result(&second)["restart"]["newPid"], 300);
+    assert_eq!(
+        live.host.kills(),
+        [(daemon_name(live.left), true), (daemon_name(live.left), true)]
+    );
+    assert!(live.core().live.claimed_exits.is_empty());
+}
+
+/// The frontend installs each replacement and its new leader, while pending worker results arrive independently.
+fn finish_restart_as(live: &mut Live, dispatched: Dispatched, leader: i32) -> Response {
+    let host = Arc::clone(&live.host);
+    let daemon = daemon_name(live.left);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    drive(live.core(), dispatched, |core, _| {
+        assert!(std::time::Instant::now() < deadline, "restart did not settle");
+        if !core.take_pane_replacements().is_empty() {
+            host.set_record(&daemon, Some(1), Some(leader), None);
+        }
+        std::thread::yield_now();
+    })
+}
+
+#[test]
+fn a_pane_soft_closed_while_the_restart_kill_waits_is_not_rebuilt_or_undoable() {
+    let mut live = live();
+    let (wait, release) = block_kills(&mut live);
+    let session = live.session;
+    let dispatched = begin_restart(&mut live);
+    wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert!(live.fixture.store_mut().unwrap().soft_close_session(session));
+    release.send(()).unwrap();
+    let response = dispatched.finish_now(live.core());
+    assert_eq!(
+        response,
+        failure("the old shell ended (pid 100) and the pane changed during the restart; nothing was started")
+    );
+    assert!(live.fixture.store().pending_close_session(session).is_none());
+    assert!(live.core().live.claimed_exits.is_empty());
+    assert!(live.core().take_pane_replacements().is_empty());
+}
+
+#[test]
+fn an_exit_observed_during_a_failed_restart_kill_is_processed_after_the_failure() {
+    for outcome in [KillOutcome::StaleSocket, KillOutcome::Failed("busy".to_owned())] {
+        let mut live = live();
+        let (wait, release) = block_kills(&mut live);
+        let session = live.session;
+        let token = wire(live.left);
+        live.host.set_kill_outcome(&daemon_name(live.left), Some(outcome));
+        let dispatched = begin_restart(&mut live);
+        wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let exited_at = std::time::Instant::now();
+        assert!(!live.core().pane_exited_at(session, &token, exited_at));
+        assert_eq!(live.core().live.pending_kill_exits[&token], Some((session, exited_at)));
+        assert!(live.fixture.store().session(session).is_some());
+        release.send(()).unwrap();
+        let response = dispatched.finish_now(live.core());
+        assert!(!response.ok, "{response:?}");
+        assert!(
+            live.fixture.store().session(session).is_none(),
+            "the recorded exit left a dead pane"
+        );
+        assert!(live.core().live.claimed_exits.is_empty());
+        assert!(live.core().live.pending_kill_exits.is_empty());
+        assert!(live.core().take_pane_replacements().is_empty());
+    }
+}
+
+#[test]
+fn a_failed_restart_kill_releases_its_exit_claim_and_keeps_the_pane() {
+    for (outcome, error) in [
+        (
+            KillOutcome::StaleSocket,
+            "did not confirm the kill; nothing was started",
+        ),
+        (
+            KillOutcome::Failed("busy".to_owned()),
+            "could not end the pane's shell: busy; nothing was started",
+        ),
+    ] {
+        let mut live = live();
+        let daemon = daemon_name(live.left);
+        live.host.set_kill_outcome(&daemon, Some(outcome.clone()));
+        let token = wire(live.left);
+        let nonce = spawn_live(&mut live);
+        assert!(report(&mut live, &token, &nonce, "leader", 1));
+        let dispatched = begin_restart(&mut live);
+        let response = dispatched.finish_now(live.core());
+        let error = if outcome == KillOutcome::StaleSocket {
+            format!("{daemon} {error}")
+        } else {
+            error.to_owned()
+        };
+        assert_eq!(response, failure(&error));
+        assert!(live.core().live.claimed_exits.is_empty());
+        assert_eq!(live.core().pane_lead(&token), Some("leader"));
+        assert!(live.fixture.store().session(live.session).is_some());
+        assert!(live.core().take_pane_replacements().is_empty());
+    }
+}
+
 /// Starts a restart of the live pane with `--command exit`, whose old shell (leader 100) has no job.
 fn begin_restart(live: &mut Live) -> Dispatched {
     live.host.set_record(&daemon_name(live.left), Some(1), Some(100), None);
@@ -1131,10 +1375,10 @@ fn an_installed_replacement_s_exit_closes_the_pane_before_the_first_probe() {
     let token = uuid_string(live.left);
     let session = live.session;
     let dispatched = begin_restart(&mut live);
-    let response = drive(live.core(), dispatched, |core, step| {
-        if step == 0 {
-            // the settle after the rebuild installs the replacement; its attach exits before the restart probes again
-            let replacements = core.take_pane_replacements();
+    let response = drive(live.core(), dispatched, |core, _| {
+        let replacements = core.take_pane_replacements();
+        if !replacements.is_empty() {
+            // The settle after the rebuild installs the replacement; its attach exits before the next probe.
             assert_eq!(replacements.len(), 1);
             core.pane_replaced(&replacements[0]);
             assert!(

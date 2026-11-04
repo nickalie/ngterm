@@ -284,22 +284,27 @@ def test_key_mapping_tab_reports_a_keymap_error_after_reload(seeded, ui_for):
 
 @pytest.mark.since("0.40.0")
 @pytest.mark.covers("ui:settings-session-info-display")
-def test_session_info_display_picker_persists(seeded, ui_for):
+def test_session_info_display_picker_persists(seeded, ui_for, adapter):
     ui = ui_for(seeded)
     _open(ui, "Interface")
     for element in ("overlayToggle", "workspaceIcons", "sessionIcons"):
         ui.find(ui.ui_ids.expand("settings-interface-{element}", element=element), role="checkbox")
     ui.find("settings-quick-terminal-size", role="popup")
-    picker = ui.find("settings-session-info-display", role="popup", value="Always")
+    # AT-SPI exposes no string value on popup controls; read the state through persistence there.
+    def value(text):
+        return {"value": text} if adapter.has("ui-string-values") else {}
+
+    assert "sessionInfoDisplay" not in _settings(seeded)
+    picker = ui.find("settings-session-info-display", role="popup", **value("Always"))
     ui.click(picker)
     ui.click(ui.menu_item("Flagged"))
     try:
         wait_until(lambda: _settings(seeded).get("sessionInfoDisplay") == "flagged")
-        ui.find("settings-session-info-display", role="popup", value="Flagged")
+        ui.find("settings-session-info-display", role="popup", **value("Flagged"))
         ui.click(ui.find("settings-session-info-display", role="popup"))
         ui.click(ui.menu_item("Off"))
         wait_until(lambda: _settings(seeded).get("sessionInfoDisplay") == "off")
-        ui.find("settings-session-info-display", role="popup", value="Off")
+        ui.find("settings-session-info-display", role="popup", **value("Off"))
     finally:
         ui.click(ui.find("settings-session-info-display", role="popup"))
         ui.click(ui.menu_item("Always"))

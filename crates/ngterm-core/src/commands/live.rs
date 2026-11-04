@@ -24,6 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use ngterm_host::SessionHost;
 use ngterm_proto::command::LiveCmd;
@@ -103,6 +104,8 @@ pub(crate) struct LiveRuntime {
     already_finalized: HashSet<Uuid>,
     /// Pane tokens whose shell exit a restart claimed: the dying client must not close the pane it rebuilds.
     pub(crate) claimed_exits: HashSet<String>,
+    /// Only while a restart's host kill runs: the first claimed exit, replayed if the kill is not confirmed.
+    pub(crate) pending_kill_exits: HashMap<String, Option<(Uuid, Instant)>>,
     /// Pane terminals commands asked the frontend to replace, in order.
     replacements: Vec<PaneReplacement>,
     /// The lead state each pane in a replacement had before it, by pane token, until the frontend reports the

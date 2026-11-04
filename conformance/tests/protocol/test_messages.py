@@ -180,8 +180,8 @@ def test_mailbox_lifecycle(ctl):
 @pytest.mark.covers("msg.send", "msg.read", "session.restart")
 def test_restart_drops_mail_sent_during_shutdown(launch, cli):
     """The ending program sends its own last message; it must not reach its replacement."""
-    import json
     import shlex
+    from agterm_conformance.client import decode_response
     from agterm_conformance.wait import wait_until
 
     ctl = launch(settings={"restoreMode": "live"})
@@ -190,7 +190,10 @@ def test_restart_drops_mail_sent_during_shutdown(launch, cli):
     receipt = ctl.instance.root / "shutdown-message.json"
     ready = ctl.instance.root / "old-program-ready"
     quote = shlex.quote
+    # Session teardown hangs up both the PTY's group and its session members.
+    # Ignore another HUP once this one shutdown send has started.
     send = (
+        "trap '' HUP; "
         f"{quote(str(cli.ctl_path))} msg send shutdown --to {quote(address)} --as {quote(address)} "
         f"--json --socket {quote(str(ctl.instance.socket))} > {quote(str(receipt))}; exit 0"
     )
@@ -200,7 +203,7 @@ def test_restart_drops_mail_sent_during_shutdown(launch, cli):
         wait_until(lambda: ready.exists() and ready.read_text() == "ready")
         assert_ok(ctl.request("msg.send", body="before shutdown", recipients=[address]))
         assert_ok(ctl.request("session.restart", sid, paneID=pid, command="cat"))
-        assert assert_ok(json.loads(receipt.read_text()))["delivered"] == [address]
+        assert assert_ok(decode_response(receipt.read_bytes()))["delivered"] == [address]
         assert assert_ok(ctl.request("msg.read", identity=address))["messages"] == []
     finally:
         assert_ok(ctl.request("session.close", sid))
