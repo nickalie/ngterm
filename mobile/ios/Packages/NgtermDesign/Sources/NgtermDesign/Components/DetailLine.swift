@@ -30,10 +30,10 @@ internal struct DetailLine: View {
 
     @ViewBuilder private var button: some View {
         if let action {
-            Button(action.title, action: action.perform)
+            // the row reads as one element and offers the action as its custom action, so VoiceOver skips this one
+            QuietButton(action: action)
                 .font(Typography.detail.weight(.semibold))
-                .buttonStyle(.borderless)
-                .frame(minHeight: Spacing.hitTarget)
+                .accessibilityHidden(true)
         }
     }
 }

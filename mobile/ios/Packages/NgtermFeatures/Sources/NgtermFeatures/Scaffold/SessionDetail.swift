@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The detail column: the session this window shows, or why it shows none.
 ///
-/// Nothing is picked yet, or the session has a window of its own, which this brings forward.
+/// Nothing is picked yet, the session has a window of its own, which this brings forward, or another main window took
+/// it over, and this takes it back.
 internal struct SessionDetail<Session: View>: View {
     @Environment(\.openWindow)
     private var openWindow
@@ -13,7 +14,8 @@ internal struct SessionDetail<Session: View>: View {
 
     internal var body: some View {
         if let shown = model.session {
-            if model.shownSessionPlacement == .ownWindow {
+            switch model.shownSessionPlacement {
+            case .ownWindow:
                 StatePanel(
                     title: String(localized: "Open in its own window"),
                     systemImage: "macwindow",
@@ -22,7 +24,18 @@ internal struct SessionDetail<Session: View>: View {
                         openWindow(value: shown)
                     }
                 )
-            } else {
+
+            case .otherWindow:
+                StatePanel(
+                    title: String(localized: "Open in another window"),
+                    systemImage: "macwindow.on.rectangle",
+                    message: String(localized: "Another window shows this session, so it doesn't show here."),
+                    action: RowAction(String(localized: "Show here")) {
+                        _ = model.open(shown)
+                    }
+                )
+
+            case .here, nil:
                 session(shown)
             }
         } else {
