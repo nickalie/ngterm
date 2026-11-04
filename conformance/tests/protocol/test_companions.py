@@ -188,17 +188,17 @@ def _left_pane_id(ctl, sid):
     return next(s for s in find_session(ctl.tree(), sid)["surfaces"] if s["kind"] == "left")["paneID"]
 
 
-def _prints(ctl, sid):
-    """Types a marker line into `sid` until its shell prints it: between an exit and the fresh shell the pane has no
-    terminal to type into, and a line typed into the exiting one is lost with it."""
+def _prints(ctl, sid, **pane):
+    """Types a marker line into `sid` (its `pane=` one) until its shell prints it: between an exit and the fresh shell
+    the pane has no terminal to type into, and a line typed into the exiting one is lost with it."""
     marker = f"CMARK{next(_markers)}"
 
     def printed():
-        typed = ctl.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:5]} {marker[5:]}\n")
+        typed = ctl.request("session.type", sid, text=f"printf '%s%s\\n' {marker[:5]} {marker[5:]}\n", **pane)
         if not typed.ok:
             return False
         try:
-            return ctl.wait_text(sid, rf"(?m)^{marker}$", timeout=1)
+            return ctl.wait_text(sid, rf"(?m)^{marker}$", timeout=1, **pane)
         except AssertionError:
             return False
 
@@ -430,6 +430,13 @@ def test_duplicate_as_companion_copies_the_split_and_runs_each_program(ctl):
     assert_ok(ctl.request("session.split", parent, mode="on", axis="horizontal"))
     ctl.wait_mounted(parent, "right")
     assert_ok(ctl.request("session.resize", parent, ratio=0.3))
+    # both shells at their prompts, after the resize: the right pane copies as a plain shell only then (one still
+    # starting runs what its profile runs, which reads as the pane's program where nothing tells it from one: a Windows
+    # console has no foreground group, and Git for Windows' profile runs `git --exec-path`), and Git for Windows' bash
+    # may drop the first key of the line typed after its pane was resized (`ee copied.txt` on CI), which `_prints`
+    # types again
+    for pane in ("left", "right"):
+        _prints(ctl, parent, pane=pane)
     assert_ok(ctl.request("session.type", parent, pane="left", text="tee copied.txt\n"))
     _runs(ctl, parent, "tee")
 
