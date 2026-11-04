@@ -16,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -198,12 +199,16 @@ private fun ChatSlot(
     val chat = spot.chat
     Box(modifier.chatKeys(actions.keyboard, focusRequester)) {
         if (chat != null) {
-            ChatPane(
-                chat,
-                actions.machine,
-                onShowTerminal = { actions.onShowTerminal(spot.ref) },
-                modifier = Modifier.fillMaxSize(),
-            )
+            // keyed by the pane: a slot that shows another pane (a split laid out anew, or the app brought back after
+            // it was put away) gives that pane's chat none of this one's state, live or saved
+            key(spot.ref) {
+                ChatPane(
+                    chat,
+                    actions.machine,
+                    onShowTerminal = { actions.onShowTerminal(spot.ref) },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         } else {
             Box(
                 Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),

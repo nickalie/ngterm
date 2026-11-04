@@ -72,6 +72,20 @@ data class QuestionDraft(
             QuestionAnswer(picked = picked[index], other = text)
         }
 
+    /**
+     * Whether the draft can stand for [question]: one slot for each of its questions, each pick one of that question's
+     * options. A draft saved for another question doesn't, and is let go rather than read out of its bounds.
+     */
+    fun fits(question: ChatQuestion): Boolean {
+        val items = question.questions
+        val sized = picked.size == items.size && other.size == items.size && otherPicked.size == items.size
+        return sized &&
+            items.indices.all { index ->
+                val labels = items[index].options.map { it.label }
+                picked[index].all { it in labels }
+            }
+    }
+
     companion object {
         /** An empty draft for [question]. */
         fun of(question: ChatQuestion): QuestionDraft {

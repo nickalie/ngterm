@@ -39,7 +39,8 @@ internal const val OLDER_KEY = "older"
  * A chat's rows, oldest first, in one column no wider than a reading width: the [OlderHeader] on top, which asks for
  * the page before ([ChatActions.onLoadOlder]) as soon as it shows, then each row. The list opens at the newest row and
  * follows new ones while it is at the end; a page that goes in above keeps the row that was on top in place
- * ([ChatUiState.anchor]). Which rows are open (a tool's output, a subagent's steps) survives scrolling and rotation.
+ * ([ChatUiState.anchor]). Which rows are open (a tool's output, a subagent's steps) survives scrolling and rotation,
+ * within their conversation ([OpenRows]).
  */
 @Composable
 fun ChatList(
@@ -49,8 +50,10 @@ fun ChatList(
 ) {
     val listState = rememberLazyListState()
     val items = state.items
-    var expanded by rememberSaveable(stateSaver = ExpandedSaver) { mutableStateOf(emptySet<String>()) }
-    val toggle: (String) -> Unit = { key -> expanded = if (key in expanded) expanded - key else expanded + key }
+    val conversation = state.conversation?.conversationId
+    var open by rememberSaveable(stateSaver = OpenRowsSaver) { mutableStateOf(OpenRows(conversation, emptySet())) }
+    val expanded = open.of(conversation)
+    val toggle: (String) -> Unit = { key -> open = open.toggled(conversation, key) }
     val readable = NgtermTheme.spacing.readableWidth
     FollowEnd(listState, items)
     KeepAnchor(listState, state.anchor, items)
@@ -228,9 +231,31 @@ private val ChatItem.contentType: String
             }
         }
 
-// the open rows' keys, as saved state
-private val ExpandedSaver =
-    Saver<Set<String>, ArrayList<String>>(
-        save = { ArrayList(it) },
-        restore = { it.toSet() },
+/**
+ * The open rows' [keys], with the [conversation] they were opened in: a row's key (a transcript line's offset) may
+ * come again in another conversation, so they open nothing there (after a reset, or saved state brought back into a
+ * pane that has moved on).
+ */
+internal data class OpenRows(
+    val conversation: String?,
+    val keys: Set<String>,
+) {
+    /** The keys open in [current]. */
+    fun of(current: String?): Set<String> = if (conversation == current) keys else emptySet()
+
+    /** The rows of [current] with [key] opened, or closed when it is open. */
+    fun toggled(
+        current: String?,
+        key: String,
+    ): OpenRows {
+        val now = of(current)
+        return OpenRows(current, if (key in now) now - key else now + key)
+    }
+}
+
+// the open rows as saved state: the conversation (empty while unnamed), then the keys
+private val OpenRowsSaver =
+    Saver<OpenRows, ArrayList<String>>(
+        save = { ArrayList(listOf(it.conversation.orEmpty()) + it.keys) },
+        restore = { OpenRows(it.firstOrNull()?.takeIf(String::isNotEmpty), it.drop(1).toSet()) },
     )

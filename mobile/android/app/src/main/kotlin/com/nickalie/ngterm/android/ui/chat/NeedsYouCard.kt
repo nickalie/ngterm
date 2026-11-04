@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -82,15 +83,18 @@ fun ApprovalCardView(
 ) {
     val approval = card.approval
     val labels = card.labels.ifEmpty { genericApprovalLabels(agent) }
-    NeedsYouCard(stringResource(R.string.chat_approval_title, approval.tool), modifier) {
-        approval.title.takeIf { it.isNotBlank() }?.let {
-            Text(it, style = ChatType.code, color = MaterialTheme.colorScheme.onSurface)
+    // keyed by the prompt: another prompt's scroll positions, live or saved, stay its own
+    key(card.id) {
+        NeedsYouCard(stringResource(R.string.chat_approval_title, approval.tool), modifier) {
+            approval.title.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = ChatType.code, color = MaterialTheme.colorScheme.onSurface)
+            }
+            approval.detail?.takeIf { it.isNotBlank() && it != approval.title }?.let { detail ->
+                val plate = Modifier.heightIn(max = DetailHeight).verticalScroll(rememberScrollState())
+                if (detail.looksLikeDiff()) DiffView(detail, plate) else OutputPlate(detail, plate)
+            }
+            CardButtons(labels, busy, onAnswer)
         }
-        approval.detail?.takeIf { it.isNotBlank() && it != approval.title }?.let { detail ->
-            val plate = Modifier.heightIn(max = DetailHeight).verticalScroll(rememberScrollState())
-            if (detail.looksLikeDiff()) DiffView(detail, plate) else OutputPlate(detail, plate)
-        }
-        CardButtons(labels, busy, onAnswer)
     }
 }
 

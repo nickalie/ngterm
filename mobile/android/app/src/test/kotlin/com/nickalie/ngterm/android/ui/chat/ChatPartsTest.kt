@@ -6,7 +6,9 @@ import com.nickalie.ngterm.core.ffi.ChatQuestionOption
 import com.nickalie.ngterm.core.ffi.ChatToolStatus
 import com.nickalie.ngterm.core.ffi.QuestionAnswer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** The chat screen's pure parts: a diff's lines, a question card's draft, and the approval card's stand-in answers. */
@@ -157,6 +159,19 @@ class ChatPartsTest {
         // an empty typed row takes no tap
         val empty = QuestionDraft.of(question)
         assertEquals(empty, empty.toggleOther(0, multi))
+    }
+
+    @Test
+    fun aDraftFitsOnlyAQuestionOfItsShapeWhosePicksItOffers() {
+        val draft = QuestionDraft.of(both).toggle(0, single, "SQLite").toggle(1, multi, "fish")
+        assertTrue(draft.fits(both))
+        // another count of questions
+        assertFalse(draft.fits(ChatSamples.shells))
+        assertFalse(QuestionDraft.of(ChatSamples.shells).fits(both))
+        // the same count, but a pick the question doesn't offer
+        val swapped = ChatQuestion(listOf(multi, single), ChatToolStatus.RUNNING, null)
+        assertFalse(draft.fits(swapped))
+        assertTrue(QuestionDraft.of(swapped).fits(swapped))
     }
 
     @Test

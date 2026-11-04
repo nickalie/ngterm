@@ -12,7 +12,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -31,7 +33,9 @@ import com.nickalie.ngterm.core.ffi.QuestionAnswer
 /**
  * Claude's `AskUserQuestion`, waiting: "Claude Code asks", then each question (its header over it, radio rows for a
  * single pick, checkbox rows for several, each option's label over its description, then the "Type an answer" row),
- * and **Send answers** once every question has an answer. The draft lives with the card's question, and goes with it.
+ * and **Send answers** once every question has an answer. The draft lives with the card's question, and goes with it:
+ * another question starts its own, even one in the same place after the app was put away, and a saved draft that
+ * doesn't fit the question in front of it is let go.
  */
 @Composable
 fun QuestionCardView(
@@ -41,19 +45,23 @@ fun QuestionCardView(
     onAnswer: (List<QuestionAnswer>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var draft by rememberSaveable(card.id, saver = draftSaver) { mutableStateOf(QuestionDraft.of(card.question)) }
-    val title = stringResource(R.string.chat_asks, stringResource(agentName(agent)))
-    NeedsYouCard(title, modifier) {
-        card.question.questions.forEachIndexed { index, item ->
-            QuestionItem(item, index, draft, onDraft = { draft = it })
+    // keyed by the question, so state saved for another one sits under another key and is never read back here
+    key(card.id) {
+        val saver = remember(card) { draftSaver(card) }
+        var draft by rememberSaveable(card.id, saver = saver) { mutableStateOf(QuestionDraft.of(card.question)) }
+        val title = stringResource(R.string.chat_asks, stringResource(agentName(agent)))
+        NeedsYouCard(title, modifier) {
+            card.question.questions.forEachIndexed { index, item ->
+                QuestionItem(item, index, draft, onDraft = { draft = it })
+            }
+            val answers = draft.answers(card.question)
+            CardButtons(
+                labels = listOf(stringResource(R.string.chat_send_answers)),
+                busy = busy,
+                onPress = { answers?.let(onAnswer) },
+                enabled = answers != null,
+            )
         }
-        val answers = draft.answers(card.question)
-        CardButtons(
-            labels = listOf(stringResource(R.string.chat_send_answers)),
-            busy = busy,
-            onPress = { answers?.let(onAnswer) },
-            enabled = answers != null,
-        )
     }
 }
 
@@ -128,25 +136,44 @@ private fun TypedRow(
     }
 }
 
-// the draft as saved state: each question's picks, typed text and whether that is picked
-private val draftSaver =
+// the draft as saved state: the question's id, then each question's picks, typed text and whether that is picked. A
+// draft comes back only for the same question ([card]) and only when it fits it, else the card starts afresh
+private fun draftSaver(card: OpenQuestion) =
     listSaver<MutableState<QuestionDraft>, Any>(
         save = { state ->
             val draft = state.value
             listOf(
+                card.id,
                 ArrayList(draft.picked.map { ArrayList(it) }),
                 ArrayList(draft.other),
                 ArrayList(draft.otherPicked),
             )
         },
         restore = { saved ->
-            @Suppress("UNCHECKED_CAST") // the lists save wrote, in its order
-            mutableStateOf(
-                QuestionDraft(
-                    picked = (saved[0] as List<List<String>>),
-                    other = saved[1] as List<String>,
-                    otherPicked = saved[2] as List<Boolean>,
-                ),
-            )
+            savedDraft(saved)?.takeIf { saved[0] == card.id && it.fits(card.question) }?.let(::mutableStateOf)
         },
     )
+
+// the draft [draftSaver] wrote, or null when [saved] is not in its shape (a slot that isn't is left out, so the draft
+// fits no question)
+private fun savedDraft(saved: List<Any>): QuestionDraft? {
+    val picked = saved.getOrNull(SAVED_PICKED).listOfOnly<List<*>>()?.mapNotNull { it.listOfOnly<String>() }
+    val other = saved.getOrNull(SAVED_OTHER).listOfOnly<String>()
+    val otherPicked = saved.getOrNull(SAVED_OTHER_PICKED).listOfOnly<Boolean>()
+    return if (picked != null && other != null &&
+        otherPicked != null
+    ) {
+        QuestionDraft(picked, other, otherPicked)
+    } else {
+        null
+    }
+}
+
+// this as a list of [T] alone, or null
+private inline fun <reified T> Any?.listOfOnly(): List<T>? =
+    (this as? List<*>)?.takeIf { list -> list.all { it is T } }?.filterIsInstance<T>()
+
+// where the saved draft's lists sit, after the question's id
+private const val SAVED_PICKED = 1
+private const val SAVED_OTHER = 2
+private const val SAVED_OTHER_PICKED = 3
