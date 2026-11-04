@@ -4,7 +4,8 @@ import Foundation
 /// the old value or the new, never part of one) under the file protection `completeUntilFirstUserAuthentication`:
 /// readable from the device's first unlock on, so a background refresh with the phone locked can read it.
 ///
-/// A file that no longer decodes reads as none, and its bytes are kept beside it as `<name>.bad`.
+/// A file that no longer decodes reads as none once its bytes are kept beside it as `<name>.bad`; until they can be
+/// kept, it reads as one that can't be read, so nothing writes over it.
 internal struct JSONFile<Value: Codable>: Sendable {
     /// The file.
     internal let url: URL
@@ -22,7 +23,8 @@ internal struct JSONFile<Value: Codable>: Sendable {
     /// The value in the file: `nil` when there is no file, or when it no longer decodes, in which case its bytes move
     /// to ``badCopy`` (replacing an earlier one) and the file goes.
     ///
-    /// - Throws: ``StoreError/unreadable(reason:)`` when the file is there but can't be read; it is left as it is.
+    /// - Throws: ``StoreError/unreadable(reason:)`` when the file is there but can't be read, or no longer decodes and
+    ///   its bytes can't be copied to ``badCopy``; either way it is left as it is.
     internal func read() throws(StoreError) -> Value? {
         let data: Data
         do {
@@ -35,7 +37,7 @@ internal struct JSONFile<Value: Codable>: Sendable {
         do {
             return try JSONDecoder().decode(Value.self, from: data)
         } catch {
-            setAside(data)
+            try setAside(data)
             return nil
         }
     }
@@ -59,13 +61,18 @@ internal struct JSONFile<Value: Codable>: Sendable {
         }
     }
 
-    // keeps the bytes of a file that no longer decodes, then removes it; when they can't be kept the file stays
-    private func setAside(_ data: Data) {
+    // keeps the bytes of a file that no longer decodes, then removes it; when they can't be kept the file stays and
+    // reads as unreadable, so that no write replaces it before they are
+    private func setAside(_ data: Data) throws(StoreError) {
         do {
             try data.write(to: badCopy, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } catch {
+            throw .unreadable(reason: "it no longer decodes and could not be set aside: \(error.localizedDescription)")
+        }
+        do {
             try FileManager.default.removeItem(at: url)
         } catch {
-            // the bytes stay where they were: the file reads as none all the same
+            // the bytes are kept in the copy: the file reads as none, and the next write replaces it
         }
     }
 }

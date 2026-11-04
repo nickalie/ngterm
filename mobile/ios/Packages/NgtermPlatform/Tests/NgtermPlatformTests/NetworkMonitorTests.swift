@@ -6,9 +6,12 @@ import Testing
 @MainActor
 @Suite("the network monitor")
 internal struct NetworkMonitorTests {
-    private static let wifi = NetworkPath(isSatisfied: true, interfaces: ["en0"])
-    private static let wifiAndCellular = NetworkPath(isSatisfied: true, interfaces: ["en0", "pdp_ip0"])
-    private static let cellular = NetworkPath(isSatisfied: true, interfaces: ["pdp_ip0"])
+    private static let wifi = NetworkPath(isSatisfied: true, interfaces: ["en0"], gateways: ["192.168.1.1:0"])
+    private static let wifiAndCellular = NetworkPath(
+        isSatisfied: true, interfaces: ["en0", "pdp_ip0"], gateways: ["192.168.1.1:0"]
+    )
+    private static let otherWifi = NetworkPath(isSatisfied: true, interfaces: ["en0"], gateways: ["10.0.0.1:0"])
+    private static let cellular = NetworkPath(isSatisfied: true, interfaces: ["pdp_ip0"], gateways: ["10.64.0.1:0"])
     private static let offline = NetworkPath(isSatisfied: false, interfaces: [])
 
     private let core = FakeMobileCore()
@@ -67,6 +70,17 @@ internal struct NetworkMonitorTests {
         #expect(monitor.isOnline)
     }
 
+    @Test("another network behind the same interface nudges the core: one Wi-Fi straight to another")
+    internal func otherNetworkSameInterface() {
+        let monitor = startedMonitor()
+        source.send(Self.wifi)
+        source.send(Self.otherWifi)
+        #expect(nudges == 1)
+        source.send(Self.otherWifi)
+        #expect(nudges == 1)
+        #expect(monitor.isOnline)
+    }
+
     @Test("updates of the same path nudge nothing: repeats, and an interface it doesn't prefer coming or going")
     internal func sameTimesMany() {
         let monitor = startedMonitor()
@@ -86,6 +100,23 @@ internal struct NetworkMonitorTests {
         #expect(!source.isStarted)
         source.send(Self.wifi)
         #expect(nudges == 0)
+        #expect(!monitor.isOnline)
+    }
+
+    @Test("a monitor started again follows the network again, from the last path it had")
+    internal func restart() {
+        let monitor = startedMonitor()
+        source.send(Self.wifi)
+        monitor.stop()
+        monitor.start()
+        #expect(source.isStarted)
+        source.send(Self.wifi)
+        #expect(nudges == 0)
+        source.send(Self.cellular)
+        #expect(nudges == 1)
+        monitor.stop()
+        monitor.start()
+        source.send(Self.offline)
         #expect(!monitor.isOnline)
     }
 

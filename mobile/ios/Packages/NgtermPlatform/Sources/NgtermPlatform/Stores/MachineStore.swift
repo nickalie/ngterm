@@ -5,8 +5,9 @@ import Observation
 /// (`machines.json`).
 ///
 /// It reads the file once, as it starts. A file that no longer decodes reads as no machines and is kept as
-/// `machines.json.bad`. A file that can't be read (before the device's first unlock) reads as no machines too, but is
-/// left alone: the next change reads it again, and fails rather than write over it while it still can't be read.
+/// `machines.json.bad`. A file that can't be read (before the device's first unlock), or a corrupt one whose copy
+/// can't be written, reads as no machines too, but is left alone: the next change reads it again, and fails rather
+/// than write over it while it still can't be read or kept.
 /// A change is written whole and atomically before ``machines`` shows it.
 @preconcurrency
 @MainActor
