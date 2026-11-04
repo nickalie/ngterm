@@ -281,7 +281,8 @@ impl Sidebar {
     }
 
     /// The name, or the rename field while this row is renamed; the full name shows on hover only while the row is too
-    /// narrow for it (upstream's `updateNameTooltip`).
+    /// narrow for it; a hidden icon's connection notice also shows when the name fits (upstream's
+    /// `updateNameTooltip`).
     fn name(
         &self,
         row: &SidebarRow,
@@ -780,10 +781,12 @@ fn icon_width(row: &SidebarRow) -> f32 {
 }
 
 pub(super) fn name_tooltip(row: &SidebarRow, truncated: bool) -> Option<SharedString> {
-    if !row.icon_visible
-        && let Some(notice) = &row.icon_tooltip
-    {
-        return Some(notice.clone().into());
-    }
-    truncated.then(|| row.label.clone().into())
+    let parts: Vec<&str> = [
+        truncated.then_some(row.label.as_str()),
+        row.icon_tooltip.as_deref().filter(|_| !row.icon_visible),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| parts.join("\n").into())
 }

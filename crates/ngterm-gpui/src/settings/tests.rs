@@ -299,7 +299,7 @@ fn the_interface_tab_offers_the_overlays_button_off_and_ends_the_sidebar_with_mu
 }
 
 /// #810: each Interface toggle leads with its control's glyph, the text-only title-bar elements first with an empty
-/// slot; no other row has a slot.
+/// slot; the Session info picker also keeps an empty slot to align with the Sidebar toggles.
 #[test]
 fn interface_toggles_lead_with_their_controls_glyph_text_only_first() {
     use ngterm_core::persist::settings::InterfaceElement;
@@ -338,7 +338,8 @@ fn interface_toggles_lead_with_their_controls_glyph_text_only_first() {
         .into_iter()
         .filter(|(_, item)| !item.id.starts_with("settings-interface-"));
     for (tab, item) in others {
-        assert!(item.leading.is_none(), "{tab:?} {}", item.id);
+        let expected = (item.id == "settings-session-info-display").then_some(GlyphSlot(None));
+        assert_eq!(item.leading, expected, "{tab:?} {}", item.id);
     }
 }
 

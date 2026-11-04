@@ -1382,11 +1382,23 @@ fn hiding_each_row_icon_reclaims_its_slot_and_gap_on_live_rows(cx: &mut TestAppC
 fn hidden_remote_icon_moves_only_its_connection_notice_to_the_name() {
     let mut row = session_row(Uuid::new_v4(), false);
     row.label = "api".to_owned();
-    row.icon_tooltip = Some("Lost connection".to_owned());
-    assert!(view::name_tooltip(&row, false).is_none());
-    row.icon_visible = false;
-    assert_eq!(view::name_tooltip(&row, true).as_deref(), Some("Lost connection"));
-    row.icon_tooltip = None;
-    assert!(view::name_tooltip(&row, false).is_none());
-    assert_eq!(view::name_tooltip(&row, true).as_deref(), Some("api"));
+    for (icon_visible, truncated, notice, expected) in [
+        (true, false, Some("Lost connection"), None),
+        (true, true, Some("Lost connection"), Some("api")),
+        (false, false, Some("Lost connection"), Some("Lost connection")),
+        (false, true, Some("Lost connection"), Some("api\nLost connection")),
+        // Reconnecting clears the notice for both visible and hidden icons.
+        (true, false, None, None),
+        (true, true, None, Some("api")),
+        (false, false, None, None),
+        (false, true, None, Some("api")),
+    ] {
+        row.icon_visible = icon_visible;
+        row.icon_tooltip = notice.map(str::to_owned);
+        assert_eq!(
+            view::name_tooltip(&row, truncated).as_deref(),
+            expected,
+            "icon_visible={icon_visible}, truncated={truncated}, notice={notice:?}"
+        );
+    }
 }

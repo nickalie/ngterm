@@ -24,16 +24,19 @@ pub fn sections(snapshot: &Snapshot) -> Vec<Section> {
         // the quick terminal's Size without scrolling there. The info picker fills the odd grid's empty half.
         Section::new("Sidebar", elements(snapshot, false))
             .two_columns()
-            .fill(picker(
-                "settings-session-info-display",
-                "Session info",
-                &SessionInfoDisplay::ALL
-                    .iter()
-                    .map(|display| (display.display_name(), *display))
-                    .collect::<Vec<_>>(),
-                &settings.effective_session_info_display(),
-                |display| change(InterfaceChange::SessionInfoDisplay(display)),
-            ))
+            .fill(
+                picker(
+                    "settings-session-info-display",
+                    "Session info",
+                    &SessionInfoDisplay::ALL
+                        .iter()
+                        .map(|display| (display.display_name(), *display))
+                        .collect::<Vec<_>>(),
+                    &settings.effective_session_info_display(),
+                    |display| change(InterfaceChange::SessionInfoDisplay(display)),
+                )
+                .leading(None),
+            )
             .trailing(vec![toggle(
                 "settings-auto-hide-inactive-sidebars",
                 "Show sidebar only in the active window",
