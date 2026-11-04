@@ -36,11 +36,10 @@ fn load_image(path: &Path, max_bytes: usize) -> Result<ImageData, String> {
         "image/webp" => ImageFormat::WebP,
         _ => return Err(not_image()),
     };
-    if format == ImageFormat::WebP && !webp_chunks_are_bounded(&bytes) {
-        return Err(not_image());
-    }
     let (width, height, orientation) = if format == ImageFormat::WebP {
-        let mut decoder = webp_header_decoder(&bytes, bytes.len()).map_err(|_| not_image())?;
+        // the decoder reads the RIFF container alone; bytes after it are ignored, as libwebp ignores them
+        let riff = webp_riff_end(&bytes).map(|end| &bytes[..end]).ok_or_else(not_image)?;
+        let mut decoder = webp_header_decoder(riff, riff.len()).map_err(|_| not_image())?;
         let (width, height) = checked_dimensions(decoder.dimensions(), path)?;
         let orientation = decoder
             .exif_metadata()
@@ -88,40 +87,33 @@ fn webp_header_decoder(
     Ok(decoder)
 }
 
-fn webp_chunks_are_bounded(bytes: &[u8]) -> bool {
+/// Where the RIFF container ends when every chunk in it, padding included, lies within it and it lies within `bytes`;
+/// `None` otherwise. Bytes after the container are allowed, as libwebp (and upstream's `ImageIO`) allow them.
+fn webp_riff_end(bytes: &[u8]) -> Option<usize> {
     // Keep the complete outer RIFF container within the accepted input, independently of the decoder's
     // metadata allocation budget (which also covers ranges it indexes from animation frame subchunks).
-    let Some(header) = bytes.get(..12) else {
-        return false;
-    };
+    let header = bytes.get(..12)?;
     if &header[..4] != b"RIFF" || &header[8..] != b"WEBP" {
-        return false;
+        return None;
     }
     let size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
-    let Some(end) = usize::try_from(size).ok().and_then(|size| size.checked_add(8)) else {
-        return false;
-    };
-    if end != bytes.len() {
-        return false;
+    let end = usize::try_from(size).ok()?.checked_add(8)?;
+    if end > bytes.len() {
+        return None;
     }
     let mut offset = 12;
     while offset < end {
-        let Some(header) = bytes.get(offset..).and_then(|tail| tail.get(..8)) else {
-            return false;
-        };
+        let header = bytes.get(offset..end)?.get(..8)?;
         let size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
-        let Some(next) = usize::try_from(size)
+        let next = usize::try_from(size)
             .ok()
-            .and_then(|size| offset.checked_add(8)?.checked_add(size)?.checked_add(size & 1))
-        else {
-            return false;
-        };
+            .and_then(|size| offset.checked_add(8)?.checked_add(size)?.checked_add(size & 1))?;
         if next > end {
-            return false;
+            return None;
         }
         offset = next;
     }
-    offset == end
+    (offset == end).then_some(end)
 }
 
 fn header_decoder(

@@ -203,36 +203,51 @@ fn webp_chunk_validation_handles_lengths_padding_and_preserves_valid_exif() {
         let mut bytes = webp_with_exif(orientation);
         append_riff_chunk(&mut bytes, *b"XMP ", b"x");
         update_riff_length(&mut bytes);
-        assert!(webp_chunks_are_bounded(&bytes), "odd chunks include their padding");
+        assert!(webp_riff_end(&bytes).is_some(), "odd chunks include their padding");
         let probe = probe_image(&write(dir.path(), "rotate.webp", &bytes)).unwrap();
         assert_eq!((probe.width, probe.height, probe.orientation), (2, 3, orientation));
         bytes.pop();
         update_riff_length(&mut bytes);
-        assert!(!webp_chunks_are_bounded(&bytes), "missing odd padding");
+        assert!(webp_riff_end(&bytes).is_none(), "missing odd padding");
     }
     let valid = webp_with_exif(1);
     for prefix in 0..valid.len() {
-        assert!(!webp_chunks_are_bounded(&valid[..prefix]), "truncated at {prefix}");
+        assert!(webp_riff_end(&valid[..prefix]).is_none(), "truncated at {prefix}");
     }
     for length in [0, 1, 3, u32::MAX - 1, u32::MAX] {
         let mut bytes = valid.clone();
         bytes[4..8].copy_from_slice(&length.to_le_bytes());
-        assert!(!webp_chunks_are_bounded(&bytes), "invalid RIFF length {length}");
+        assert!(webp_riff_end(&bytes).is_none(), "invalid RIFF length {length}");
         bytes = valid.clone();
         bytes[16..20].copy_from_slice(&length.to_le_bytes());
-        assert!(!webp_chunks_are_bounded(&bytes), "invalid first chunk length {length}");
+        assert!(webp_riff_end(&bytes).is_none(), "invalid first chunk length {length}");
     }
     for size in [u32::MAX - 1, u32::MAX] {
         let mut bytes = valid.clone();
         let exif = bytes.windows(4).position(|kind| kind == b"EXIF").unwrap();
         bytes[exif + 4..exif + 8].copy_from_slice(&size.to_le_bytes());
-        assert!(!webp_chunks_are_bounded(&bytes), "oversized metadata length {size}");
+        assert!(webp_riff_end(&bytes).is_none(), "oversized metadata length {size}");
     }
     for tail in [b"X".as_slice(), b"XMP \0\0\0".as_slice()] {
         let mut bytes = valid.clone();
         bytes.extend(tail);
         update_riff_length(&mut bytes);
-        assert!(!webp_chunks_are_bounded(&bytes), "truncated chunk header");
+        assert!(webp_riff_end(&bytes).is_none(), "truncated chunk header");
+    }
+}
+
+/// Bytes after the RIFF container are outside it and ignored, as libwebp and upstream's `ImageIO` ignore them; the page
+/// still gets the file as read.
+#[test]
+fn webp_bytes_after_the_riff_container_are_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let valid = webp_with_exif(1);
+    for tail in [b"X".as_slice(), b"trailing data".as_slice()] {
+        let mut bytes = valid.clone();
+        bytes.extend(tail);
+        assert_eq!(webp_riff_end(&bytes), Some(valid.len()), "trailing {tail:?}");
+        let probe = probe_image(&write(dir.path(), "trailing.webp", &bytes)).unwrap();
+        assert_eq!((probe.width, probe.height, probe.bytes.len()), (2, 3, bytes.len()));
     }
 }
 
