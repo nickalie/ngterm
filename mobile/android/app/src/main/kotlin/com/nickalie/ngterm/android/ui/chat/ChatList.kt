@@ -38,7 +38,8 @@ internal const val OLDER_KEY = "older"
 /**
  * A chat's rows, oldest first, in one column no wider than a reading width: the [OlderHeader] on top, which asks for
  * the page before ([ChatActions.onLoadOlder]) as soon as it shows, then each row. The list opens at the newest row and
- * follows new ones while it is at the end; a page that goes in above keeps the row that was on top in place
+ * follows new ones while it is at the end, and goes back there to follow again when asked ([ChatUiState.toEnd]: a
+ * notification's tap); a page that goes in above keeps the row that was on top in place
  * ([ChatUiState.anchor]). Which rows are open (a tool's output, a subagent's steps) survives scrolling and rotation,
  * within their conversation ([OpenRows]).
  */
@@ -55,7 +56,7 @@ fun ChatList(
     val expanded = open.of(conversation)
     val toggle: (String) -> Unit = { key -> open = open.toggled(conversation, key) }
     val readable = NgtermTheme.spacing.readableWidth
-    FollowEnd(listState, items)
+    FollowEnd(listState, items, state.toEnd, actions.onEndShown)
     KeepAnchor(listState, state.anchor, items)
     AskOlder(listState, state.older, state.log.isEmpty, actions.onLoadOlder)
     LazyColumn(
@@ -104,13 +105,24 @@ private fun AskOlder(
 }
 
 // while the list is at its end (where it opens), a new or changed last row keeps it there; a finger on the list lets
-// it be at once (a new row mid-fling doesn't pull it back), and where a scroll stops says whether it follows again
+// it be at once (a new row mid-fling doesn't pull it back), and where a scroll stops says whether it follows again.
+// Asked to ([toEnd]), it goes to its end and follows again, wherever it was, and says so ([onReachEnd])
 @Composable
 private fun FollowEnd(
     listState: LazyListState,
     items: List<ChatItem>,
+    toEnd: Boolean,
+    onReachEnd: () -> Unit,
 ) {
     var following by remember { mutableStateOf(true) }
+    val rows by rememberUpdatedState(items)
+    val shown by rememberUpdatedState(onReachEnd)
+    LaunchedEffect(toEnd) {
+        if (!toEnd) return@LaunchedEffect
+        listState.scrollToItem(rows.size, END_OFFSET)
+        following = true
+        shown()
+    }
     LaunchedEffect(listState) {
         listState.interactionSource.interactions
             .filterIsInstance<DragInteraction.Start>()

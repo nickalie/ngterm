@@ -210,4 +210,28 @@ class ChatModeTest {
                 ?.phase,
         )
     }
+
+    @Test
+    fun aNotificationsTapBringsThePanesOpenChatToItsEndAndNoOtherPanes() {
+        bed.attach("p1", "p2")
+        val model = model()
+        model.open(bed.key)
+        bed.show("p1")
+        bed.agent("p1")
+        eventually { bed.chat("p1") != null }
+        val chat = bed.chat("p1")!!
+        // a pane with no chat open (no agent, or not shown) has nothing to move
+        model.reveal(bed.ref("p2"))
+        model.reveal(bed.ref("gone"))
+        assertEquals(false, chat.state.value.toEnd)
+
+        model.reveal(bed.ref("p1"))
+        assertTrue(chat.state.value.toEnd)
+        // a new conversation keeps the ask: the list hasn't gone there yet
+        bed.emit("p1", reset)
+        eventually { chat.state.value.log.switched }
+        assertTrue(chat.state.value.toEnd)
+        chat.endShown()
+        assertEquals(false, chat.state.value.toEnd)
+    }
 }

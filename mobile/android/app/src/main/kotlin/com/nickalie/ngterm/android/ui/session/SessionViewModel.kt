@@ -212,6 +212,9 @@ class SessionViewModel(
         view: PaneView,
     ) = graph.chats.pick(pane, view)
 
+    /** Brings [pane]'s chat, if it shows one, to its newest row and the card it waits on (a notification's tap). */
+    fun reveal(pane: PaneRef) = graph.chats.reveal(pane)
+
     /** Take control of [pane]. */
     fun takeLead(pane: PaneRef) = graph.panes.takeLead(pane)
 

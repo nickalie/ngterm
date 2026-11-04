@@ -103,7 +103,9 @@ sealed interface ChatProblem {
  * named, whether older pages remain ([older]), the row the list keeps in place after a page went in above it
  * ([anchor], the top row of those shown before that the page left in place), the cards pinned above the composer
  * ([approval], [question]), whether an action is on its way ([busy]), why the last one did nothing ([problem],
- * until shown), and whether the agent is working on a turn ([working], its status at the origin), which Stop needs.
+ * until shown), whether the agent is working on a turn ([working], its status at the origin), which Stop needs, and
+ * whether the list is to go to its newest row and follow from there ([toEnd]: a notification's tap opened the chat to
+ * the card at its foot), until it has.
  */
 data class ChatUiState(
     val log: ChatLog = ChatLog(),
@@ -116,6 +118,7 @@ data class ChatUiState(
     val busy: Boolean = false,
     val problem: ChatProblem? = null,
     val working: Boolean = false,
+    val toEnd: Boolean = false,
     // the questions whose picker was found answered or gone: their card stays down until the event says so
     internal val dismissed: Set<String> = emptySet(),
     // bumped by each reset, so a page asked for before it is dropped
@@ -293,6 +296,16 @@ class ChatViewModel internal constructor(
         act(card.id) { it.answerQuestion(card.question, answers) }
     }
 
+    /** Brings the list to its newest row, the card at its foot under it, the next time it is on screen. */
+    internal fun showEnd() {
+        chat.update { it.copy(toEnd = true) }
+    }
+
+    /** The list has gone to its newest row ([ChatUiState.toEnd]). */
+    fun endShown() {
+        chat.update { it.copy(toEnd = false) }
+    }
+
     /** The [ChatUiState.problem] has been shown. */
     fun problemShown() {
         chat.update { it.copy(problem = null) }
@@ -377,6 +390,7 @@ private fun ChatUiState.meta(event: ChatEvent): ChatUiState =
                 busy = busy,
                 problem = problem,
                 working = working,
+                toEnd = toEnd,
                 epoch = epoch + 1,
             )
         }

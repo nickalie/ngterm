@@ -761,11 +761,23 @@ with no output yet is a running call (Task 1's fixture README).
 **Files:**
 - Modify: `mobile/android/app/src/main/kotlin/com/nickalie/ngterm/android/data/Alerts.kt`, the notification's open
   request handling, and their tests
+- As built: `Alerts.kt` is unchanged (its targets already name the pane). Modified: `ui/NgtermApp.kt` (`goTo`),
+  `ui/session/SessionViewModel.kt` (`reveal`), `ui/chat/{PaneChats,ChatViewModel,ChatList,ChatScreen,ChatStyle}.kt`,
+  `DESIGN.md` (Notifications); tests `ui/chat/ChatNotificationTest.kt` (new), `ChatModeTest`, `ChatScreenTest`.
+  - A tap's target (its pane named) focuses the pane as before and asks that pane's open chat, if any, to go to its
+    newest row: `ChatUiState.toEnd`, kept across a reset and cleared by the list once it has scrolled there
+    (`ChatActions.onEndShown`), so a list not yet on screen goes there when it is and a rotation repeats nothing. The
+    list then follows again, wherever a finger had left it. The card is pinned at the chat's foot, so it is in sight.
+  - A pane with no chat open has nothing to move: in its terminal (setting off, terminal picked, an origin with no
+    chat) it opens as its terminal; a chat not open yet opens at its end. A target pane its session no longer has
+    focuses the primary pane, and no chat moves; a session no longer attached (or a process the system ended) goes to
+    Machines, as before.
 
-- [ ] write a test first: a "needs you" notification for a pane in chat mode opens the chat scrolled to its card,
+- [x] write a test first: a "needs you" notification for a pane in chat mode opens the chat scrolled to its card,
       and with the setting off it opens the terminal
-- [ ] implement the deep link
-- [ ] `scripts/build-android.sh check` must pass
+- [x] implement the deep link
+- [x] `scripts/build-android.sh check` must pass (run as the same `gradle spotlessApply check` through a helper that
+      strips `NGTERM_*`, as the sandbox refuses the script's inline eval)
 
 ### Task 17: End to end against `ngterm-headless`
 

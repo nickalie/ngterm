@@ -98,6 +98,14 @@ class PaneChats(
         }
     }
 
+    /**
+     * Brings [pane]'s open chat to its newest row, the card it waits on pinned under it (a notification's tap opened
+     * the pane). A pane with no chat open has nothing to move: it shows its terminal, or its chat opens at its end.
+     */
+    fun reveal(pane: PaneRef) {
+        chatState.value[pane]?.showEnd()
+    }
+
     // a pane whose agent left holds nothing: its next agent starts in chat view
     private fun hold(pane: PaneRef) {
         val agent = sessions.value[pane.session]?.agents?.get(pane.paneId) ?: return

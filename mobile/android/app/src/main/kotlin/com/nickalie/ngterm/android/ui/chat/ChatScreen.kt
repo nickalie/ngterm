@@ -55,6 +55,7 @@ fun ChatPane(
                 onShowTerminal = onShowTerminal,
                 onSend = chat::send,
                 onStop = chat::stop,
+                onEndShown = chat::endShown,
             )
         }
     KeepDraft(chat.pane, chat.composer, state.conversation?.conversationId, chat::restoreDraft)

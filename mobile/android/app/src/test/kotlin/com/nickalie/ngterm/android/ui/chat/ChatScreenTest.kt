@@ -11,6 +11,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -54,6 +55,7 @@ class ChatScreenTest {
     private var olderAsked = 0
     private var terminalShown = 0
     private var problemsShown = 0
+    private var endsShown = 0
 
     private fun show() {
         val actions =
@@ -63,6 +65,10 @@ class ChatScreenTest {
                 onAnswerQuestion = { answers += it },
                 onProblemShown = { problemsShown++ },
                 onShowTerminal = { terminalShown++ },
+                onEndShown = {
+                    endsShown++
+                    state.value = state.value.copy(toEnd = false)
+                },
             )
         compose.setContent { NgtermTheme { ChatScreen(state.value, "build-01", actions) } }
         compose.waitForIdle()
@@ -215,6 +221,15 @@ class ChatScreenTest {
     }
 
     // whether a node with [text] is on screen now (a row out of sight isn't composed, or isn't placed)
+    // a prompt bubble is read as one line ("You: …"), its text no node of its own
+    private fun prompted(text: String) =
+        try {
+            compose.onNodeWithContentDescription("You: $text").assertIsDisplayed()
+            true
+        } catch (_: AssertionError) {
+            false
+        }
+
     private fun onScreen(text: String) =
         try {
             compose.onNodeWithText(text).assertIsDisplayed()
@@ -335,6 +350,27 @@ class ChatScreenTest {
         compose.mainClock.autoAdvance = true
         compose.waitForIdle()
         assertTrue("the fling was pulled back to the end", !onScreen("The newest reply"))
+    }
+
+    @Test
+    fun aNotificationsTapBringsAListScrolledAwayBackToItsEndToFollowAgain() {
+        val rows = (0 until 30).map { event("p$it", user("prompt $it")) }
+        state.value = ChatSamples.state(rows).copy(approval = ChatSamples.approval)
+        show()
+        compose.onNode(hasScrollToIndexAction()).performTouchInput { swipeDown(durationMillis = 600) }
+        compose.waitForIdle()
+        assertTrue("the swipe left the end in sight", !prompted("prompt 29"))
+
+        state.value = state.value.copy(toEnd = true)
+        compose.waitForIdle()
+        assertEquals(1, endsShown)
+        assertTrue("the list did not go to its end", prompted("prompt 29"))
+        compose.onNode(hasText("Allow Bash?") and isHeading()).assertIsDisplayed()
+        // it follows again: a new row keeps it at the end
+        state.value = state.value.copy(log = state.value.log.append(listOf(event("new", reply("The newest reply")))))
+        compose.waitForIdle()
+        assertTrue("the list stopped following", onScreen("The newest reply"))
+        assertEquals(1, endsShown)
     }
 
     private companion object {

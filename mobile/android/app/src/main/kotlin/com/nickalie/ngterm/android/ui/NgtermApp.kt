@@ -180,7 +180,9 @@ private fun ConnectPrompts(
 }
 
 // opens a notification's target: its session (and pane) under Sessions while it is attached ([attached]); Machines for
-// a machine's, or for a session no longer attached (detached since, or gone with a process the system ended)
+// a machine's, or for a session no longer attached (detached since, or gone with a process the system ended). A pane
+// shown as its chat goes to its newest row, where the card the agent waits on is pinned; one in its terminal (the
+// setting off, its terminal picked, or an origin with no chat) shows its terminal
 private fun goTo(
     target: OpenTarget,
     sessions: SessionViewModel,
@@ -189,7 +191,10 @@ private fun goTo(
     val session = target.sessionId?.takeIf { it in attached[target.machineId].orEmpty() } ?: return MACHINES
     val key = SessionKey(target.machineId, session)
     sessions.open(key)
-    target.paneId?.let { sessions.focus(key, it) }
+    target.paneId?.let { pane ->
+        sessions.focus(key, pane)
+        sessions.reveal(PaneRef(key.machineId, key.sessionId, pane))
+    }
     return SESSIONS
 }
 

@@ -790,7 +790,9 @@ The plan, reviewed against the brief:
 Each machine has its own channel, named after it ("Questions, notifications and agent status from build-01"), so
 the system's settings can quiet one machine. Notifications use the small `>_` and the brand copper as accent; a tap
 opens the session and the pane it is about (through the session view's selection, never the keyboard's focus), or
-Machines when that session is no longer attached.
+Machines when that session is no longer attached. A pane shown as its chat opens at its newest row, following again
+wherever it was scrolled to, with the card the agent waits on pinned at its foot; a pane showing its terminal (Agent
+chat view off, its terminal picked, or an origin with no chat) opens as its terminal.
 
 | What | Title / text | Lasts |
 |---|---|---|
