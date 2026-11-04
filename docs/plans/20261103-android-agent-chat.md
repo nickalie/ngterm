@@ -784,10 +784,24 @@ with no output yet is a running call (Task 1's fixture README).
 **Files:**
 - Modify: `crates/ngterm-mobile/tests/headless_e2e.rs`, `tests/support/*`, `scripts/test-mobile-e2e.sh` (if it needs
   the fixtures staged)
+- As built: `tests/support/fake_agent.py` (the fake agent, run by the system's `python3`; the script stages nothing,
+  only its header and README > Android name the need), `tests/support/agent.rs` (its transcript, payloads and config),
+  `tests/support/chat.rs` (the steps, as `Scene::agent_chat` after the reconnect step), `phone.rs` (`Seen` keeps
+  `PaneAgent`, chat events and chat states), `machine.rs` (`World::work`, `Headless::ctl_fed` for a hook's stdin).
+  - The fake agent replays the Claude capture recorded at the pane's grid (the tablet's 100x40 while the other client
+    leads, the phone's 44x36 once the phone claims), on start and on every resize, and draws the composer where the
+    capture parks the cursor: a bracketed paste or typed text goes there plainly over the faint placeholder, Enter
+    appends the prompt to the transcript as a Claude user line and shows `> text` above the box, `/exit` restores the
+    screen and exits with no SessionEnd. Query replies, focus and mouse reports are read and dropped.
+  - The transcript is the recorded `f559ab9f` conversation plus 100 generated turns copied from its last turn (more
+    events than a backlog, so the phone pages back to the start); the test appends further turns itself, while the
+    chat follows and while its link is severed. The approval is the recorded `Bash` PermissionRequest with its command
+    changed (no call of the transcript answers it), reported by the test through `ngtermctl agent hook` and
+    `session status blocked`, then `active`, on the private socket.
 
-- [ ] add a fake-agent program. It stays in the pane's foreground, replays Task 1's recorded idle-screen capture,
+- [x] add a fake-agent program. It stays in the pane's foreground, replays Task 1's recorded idle-screen capture,
       writes a fixture transcript, and pipes a fixture payload to `ngtermctl agent hook` under the private socket.
-- [ ] through `MobileCore`:
+- [x] through `MobileCore`:
   - the presentation stream announces the agent;
   - open the chat and see the backlog;
   - append lines and see them;
@@ -796,7 +810,7 @@ with no output yet is a running call (Task 1's fixture README).
   - with another client leading, `send_prompt` claims the lead and the text appears in the pane's rows;
   - set a `blocked` status plus a candidate and see the approval;
   - end the fake agent (the foreground goes back to the shell) and see the agent cleared and the stream end.
-- [ ] run `scripts/test-mobile-e2e.sh`; it must pass
+- [x] run `scripts/test-mobile-e2e.sh`; it must pass
 
 ### Task 18: Verify acceptance criteria
 

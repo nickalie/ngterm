@@ -599,7 +599,7 @@ scripts/setup-android.sh [--check]    # the pinned toolchain (Android toolchain)
 scripts/build-android.sh [--profile release|debug] [--no-gradle] [GRADLE_TASK...]   # default: assembleDebug
 scripts/build-android.sh check assembleDebug   # the lint gate and JVM tests, as CI runs it
 scripts/build-android.sh installDebug          # onto the device or emulator adb sees
-scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-headless behind a private sshd (Linux)
+scripts/test-mobile-e2e.sh            # the mobile core against a real ngterm-headless behind a private sshd (Linux; python3 runs its fake agent)
 ```
 
 `build-android.sh` builds `libngterm_mobile.so` for arm64-v8a and x86_64 through cargo-ndk, generates the Kotlin

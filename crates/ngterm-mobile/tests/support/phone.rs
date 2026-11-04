@@ -7,8 +7,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ngterm_mobile::{
-    EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileEvent, Pane, PaneEnd, PaneKey,
-    PaneKeyAction, PaneRole, PaneSize, RemoteLayout, VaultError,
+    ChatEvent, ChatState, EventSink, HostKeyStore, KeyVault, Machine, MachineState, MobileCore, MobileEvent, Pane,
+    PaneEnd, PaneKey, PaneKeyAction, PaneRole, PaneSize, RemoteLayout, VaultError,
 };
 
 use crate::machine::{World, account};
@@ -29,7 +29,7 @@ pub(crate) const TYPED: &str = "printf 'e2e-%s\\n' 42";
 pub(crate) const PRINTED: &str = "e2e-42";
 
 /// What a client's events said so far.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct Seen {
     pub(crate) layout: Option<RemoteLayout>,
     pub(crate) role: Option<PaneRole>,
@@ -38,6 +38,31 @@ pub(crate) struct Seen {
     pub(crate) attached: usize,
     pub(crate) lost: usize,
     pub(crate) states: Vec<MachineState>,
+    /// Every `PaneAgent`, in order: the pane, its agent and its conversation.
+    pub(crate) agents: Vec<(String, Option<String>, Option<String>)>,
+    /// Every chat event, in order, of every batch.
+    pub(crate) chat: Vec<ChatEvent>,
+    pub(crate) chat_states: Vec<ChatState>,
+}
+
+impl std::fmt::Debug for Seen {
+    /// The chat as its count and last few events: a failure's message stays readable with a backlog seen.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let recent = &self.chat[self.chat.len().saturating_sub(4)..];
+        formatter
+            .debug_struct("Seen")
+            .field("layout", &self.layout)
+            .field("role", &self.role)
+            .field("roles", &self.roles)
+            .field("attached", &self.attached)
+            .field("lost", &self.lost)
+            .field("states", &self.states)
+            .field("agents", &self.agents)
+            .field("chat_events", &self.chat.len())
+            .field("chat_recent", &recent)
+            .field("chat_states", &self.chat_states)
+            .finish()
+    }
 }
 
 impl Seen {
@@ -54,8 +79,26 @@ impl Seen {
                 ..
             } => self.lost += 1,
             MobileEvent::MachineState { state, .. } => self.states.push(state),
+            MobileEvent::PaneAgent {
+                pane_id,
+                agent,
+                conversation_id,
+                ..
+            } => self.agents.push((pane_id, agent, conversation_id)),
+            MobileEvent::Chat { events, .. } => self.chat.extend(events),
+            MobileEvent::ChatState { state, .. } => self.chat_states.push(state),
             _ => {}
         }
+    }
+
+    /// Where the chat's last event with `id` is.
+    pub(crate) fn chat_at(&self, id: &str) -> Option<usize> {
+        self.chat.iter().rposition(|event| event.id == id)
+    }
+
+    /// Whether the chat holds an event with each of `ids`.
+    pub(crate) fn chat_holds(&self, ids: &[String]) -> bool {
+        ids.iter().all(|id| self.chat_at(id).is_some())
     }
 }
 

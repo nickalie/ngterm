@@ -2,6 +2,7 @@
 //! `ngterm-session` calls against it, and the `sshd` and proxy in front of it ([`World`]).
 
 use std::fs;
+use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -28,6 +29,8 @@ pub(crate) struct World {
     pub(crate) headless: Headless,
     pub(crate) key: KeyPair,
     pub(crate) host_fingerprint: String,
+    /// The run's scratch directory ([`WORK_VARIABLE`]).
+    pub(crate) work: PathBuf,
 }
 
 impl World {
@@ -57,6 +60,7 @@ impl World {
             headless,
             key,
             host_fingerprint: host.fingerprint,
+            work,
         }
     }
 }
@@ -144,15 +148,27 @@ impl Headless {
 
     /// `ngtermctl ARGUMENTS --socket <private socket>`: what it printed, or why it failed.
     pub(crate) fn ctl(&self, arguments: &[&str]) -> Result<String, String> {
-        let output = self
+        self.ctl_fed(arguments, None)
+    }
+
+    /// [`Headless::ctl`] with `input` on its standard input (a hook's payload), or none.
+    pub(crate) fn ctl_fed(&self, arguments: &[&str], input: Option<&[u8]>) -> Result<String, String> {
+        let mut child = self
             .private
             .command(&self.private.stage.join("bin/ngtermctl"))
             .args(arguments)
             .arg("--socket")
             .arg(self.socket())
-            .stdin(Stdio::null())
-            .output()
+            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|error| error.to_string())?;
+        if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+            // dropped at the end of the block: the command reads to its end
+            stdin.write_all(input).map_err(|error| error.to_string())?;
+        }
+        let output = child.wait_with_output().map_err(|error| error.to_string())?;
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         if output.status.success() {
             Ok(stdout)

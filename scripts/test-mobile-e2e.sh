@@ -6,7 +6,8 @@
 # 127.0.0.1, and reaps it when it returns or panics. When it dies without unwinding (Ctrl-C, a timeout's signal), this
 # script's exit trap reaps the same private namespace through that namespace's own session server and stops the
 # instance and sshd by the pids they recorded. The scratch directory is removed after a pass or a skip and kept after a
-# failure (its logs: headless.log, sshd/sshd.log).
+# failure (its logs: headless.log, sshd/sshd.log). Its agent chat case runs a fake agent on the system's python3
+# (crates/ngterm-mobile/tests/support/fake_agent.py), its files under agent/ there.
 #
 # The build and stage keep the caller's NGTERM_* build overrides (NGTERM_VENDOR, NGTERM_GHOSTTY_VT_PREFIX); the test,
 # and so the instance and sshd it starts, runs with every NGTERM_* stripped, so nothing it starts can reach an ngterm

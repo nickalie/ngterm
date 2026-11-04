@@ -10,12 +10,25 @@
 //! session made through the private socket must be all that `live tree` over ssh lists. On every exit path the
 //! sessions are reaped through the private namespace's own session server.
 //!
+//! Once the phone has read, led and reconnected, a fake agent (`support/fake_agent.py`, a stand-in Claude Code run
+//! by the system's `python3`) takes the pane's foreground: it replays Task 1's recorded idle screen, writes a
+//! transcript made from the recorded session and reports its `SessionStart` through `ngtermctl agent hook` on the private
+//! socket. The phone hears the agent announced, reads its chat, follows, pages back and resumes it after a severed
+//! link, sends a prompt while the other client leads, sees an approval, and sees the agent cleared once it exits
+//! ([`chat`]).
+//!
 //! Without `sshd` the test skips with a reason, unless `CI` is set: there it fails.
 //!
 //! Linux only, as the script is: the support code is Unix (file modes, an unprivileged `sshd`), and the other hosts'
 //! CI legs build the crate's tests without it.
 #![cfg(target_os = "linux")]
 
+#[cfg(test)]
+#[path = "support/agent.rs"]
+mod agent;
+#[cfg(test)]
+#[path = "support/chat.rs"]
+mod chat;
 #[cfg(test)]
 #[path = "support/machine.rs"]
 mod machine;
@@ -29,6 +42,7 @@ mod sshd;
 #[path = "support/steps.rs"]
 mod steps;
 
+use self::chat::Scene;
 use self::machine::World;
 use self::phone::{Client, MACHINE_ID, block_on};
 use self::steps::{assert_isolated, create_and_read, leadership, reconnect};
@@ -61,6 +75,15 @@ fn the_mobile_core_drives_a_real_headless_machine_over_ssh() {
     leadership(&mut first, &mut second, &session, &pane);
 
     reconnect(&mut first, &world.proxy);
+
+    Scene {
+        world: &world,
+        first: &mut first,
+        second: &mut second,
+        session: &session,
+        pane: &pane,
+    }
+    .agent_chat();
 
     drop(second);
     block_on(first.core.end_session(MACHINE_ID.to_owned(), session.clone())).expect("end the session");
