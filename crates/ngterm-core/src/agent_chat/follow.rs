@@ -18,7 +18,8 @@
 //!   first shown line's, so paging from the oldest cursor skips nothing.
 //! - **Following** ([`Follower::poll`]): each poll probes the size; growth is read and split into lines, a partial last
 //!   line buffered until its newline. A file that shrinks, or whose first bytes change (it was replaced), starts over
-//!   with a `reset` and a new backlog. A line over [`LINE_CAP`] becomes `unknown{oversized}` and is never held whole.
+//!   with a `reset` and a new backlog. The first bytes are compared even when the size did not change, on every poll
+//!   for the main transcript and at most every [`DISCOVERY_INTERVAL`] for a subagent's. A line over [`LINE_CAP`] becomes `unknown{oversized}` and is never held whole.
 //!   A file that does not exist yet (Claude writes its transcript at the first prompt) is read once it appears.
 //! - **Subagents** (`subagents`): their transcripts are followed as extra sources, their events under the task tool.
 //!   A subagent whose task is among the lines a window parsed is shown with a backlog of its own, one found while
@@ -255,7 +256,7 @@ impl<F: Files, C: Clock> Follower<F, C> {
         };
         let (main, window) = Stream::start(&self.files, &self.path, Spec::main(self.agent), Some(cursor), &want)?;
         self.main = main;
-        let Some(new) = self.main.poll(&self.files)? else {
+        let Some(new) = self.main.poll(&self.files, true)? else {
             return self.restart();
         };
         let mut shown = window.ids();
@@ -283,11 +284,14 @@ impl<F: Files, C: Clock> Follower<F, C> {
     pub fn poll(&mut self) -> io::Result<Vec<ChatEvent>> {
         let now = self.clock.now();
         self.polled_at = Some(now);
-        let Some(mut events) = self.main.poll(&self.files)? else {
+        let Some(mut events) = self.main.poll(&self.files, true)? else {
             return self.restart();
         };
+        let discover = self
+            .discovered_at
+            .is_none_or(|at| now.saturating_duration_since(at) >= DISCOVERY_INTERVAL);
         for stream in &mut self.subagents {
-            match stream.poll(&self.files) {
+            match stream.poll(&self.files, discover) {
                 Ok(Some(new)) => events.extend(new),
                 Ok(None) => {
                     let spec = stream.spec.clone();
@@ -300,10 +304,7 @@ impl<F: Files, C: Clock> Follower<F, C> {
                 Err(_) => {}
             }
         }
-        if self
-            .discovered_at
-            .is_none_or(|at| now.saturating_duration_since(at) >= DISCOVERY_INTERVAL)
-        {
+        if discover {
             let limit = self.limit;
             self.add_subagents(&|_| Want::backlog(limit), Look::Spawned, &mut events);
         }
@@ -706,17 +707,19 @@ impl Stream {
     }
 
     /// The events of the lines written since the last read; `None` when the file shrank or was replaced.
-    fn poll<F: Files>(&mut self, files: &F) -> io::Result<Option<Vec<ChatEvent>>> {
+    /// A file whose size did not change is opened only when `recheck` asks for its first bytes to be compared: a file
+    /// replaced by one of the same size is caught only then.
+    fn poll<F: Files>(&mut self, files: &F, recheck: bool) -> io::Result<Option<Vec<ChatEvent>>> {
         let size = match files.size(&self.path) {
             Ok(size) => size,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Some(Vec::new())),
             Err(error) => return Err(error),
         };
-        if size == self.size {
-            return Ok(Some(Vec::new()));
-        }
         if size < self.size || size < self.lines.offset() {
             return Ok(None);
+        }
+        if size == self.size && !recheck {
+            return Ok(Some(Vec::new()));
         }
         let mut reader = match files.open(&self.path) {
             Ok(reader) => reader,
@@ -725,6 +728,9 @@ impl Stream {
         };
         if self.replaced(&mut reader, size)? {
             return Ok(None);
+        }
+        if size == self.size {
+            return Ok(Some(Vec::new()));
         }
         self.size = size;
         self.read_to(&mut reader, size).map(Some)

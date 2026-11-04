@@ -334,6 +334,26 @@ fn a_replaced_transcript_resets() {
 }
 
 #[test]
+fn a_transcript_replaced_by_one_of_the_same_size_resets() {
+    let dir = TempDir::new().unwrap();
+    let path = transcript(&dir);
+    prompts(&path, 10);
+    let (mut follower, ..) = claude(&path);
+    follower.backlog(BACKLOG).unwrap();
+    assert!(follower.poll().unwrap().is_empty());
+    let other = dir.path().join("other.jsonl");
+    let lines: Vec<String> = (0..10).map(|index| user(&format!("tpmorp {index}"))).collect();
+    fs::write(&other, lines.join("\n") + "\n").unwrap();
+    assert_eq!(fs::metadata(&other).unwrap().len(), fs::metadata(&path).unwrap().len());
+    fs::rename(&other, &path).unwrap();
+    let events = follower.poll().unwrap();
+    assert_eq!(events[0].body, EventBody::Reset, "{events:?}");
+    assert_eq!(texts(&events).len(), 10);
+    assert_eq!(texts(&events)[0], "tpmorp 0");
+    assert!(follower.poll().unwrap().is_empty(), "an unchanged file stays quiet");
+}
+
+#[test]
 fn a_50_mb_transcript_costs_only_its_window() {
     let dir = TempDir::new().unwrap();
     let path = transcript(&dir);
