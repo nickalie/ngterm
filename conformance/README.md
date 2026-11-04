@@ -163,6 +163,9 @@ beside `git`, else Git's default install directory) in place of `/bin/sh`, with 
 Git's `usr\bin` (the POSIX tools a command line's `cmd.exe` finds there, as `/bin/sh -c` finds them in `/usr/bin`). A
 foreground argv names its program by the path its parent started it with there (an MSYS shell gives the image's full
 path), so the tests compare it by the program's name (`match.program_argv`).
+Before the suite (not under `--coverage`) `tools/warm_webview2.py` opens one page in an instance of the stage: the
+first web view after a boot pays the WebView2 runtime's cold start (seconds past a test's read-back wait on a runner),
+and would charge it to whichever test opens the suite's first page.
 The rest of this section describes the Linux runner.
 
 `tools/run-linux.sh` builds the workspace (release), stages it with `scripts/stage.sh` into
