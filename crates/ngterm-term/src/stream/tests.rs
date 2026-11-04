@@ -438,3 +438,59 @@ fn a_resize_or_a_held_screen_sends_no_conditional_key() {
         std::thread::sleep(Duration::from_millis(5));
     }
 }
+
+#[test]
+fn only_a_new_column_or_row_count_leaves_the_screen_reflowed() {
+    let fixture = stream(PaneConfig::new(SIZE));
+    assert!(fixture.feed.deliver(b"idle"));
+    fixture.screen_until("idle");
+    let drawn = active(&fixture.pane);
+    assert!(!drawn.reflowed);
+
+    // the view measures the same grid again: nothing reflows, the screen and its generation stay as they were
+    fixture.pane.resize(SIZE).unwrap();
+    let same = active(&fixture.pane);
+    assert!(!same.reflowed, "an unchanged grid reflows nothing");
+    assert_eq!(same.generation, drawn.generation);
+    assert_eq!(rows(&same.frame)[0], "idle");
+
+    // a new cell size alone moves no cell
+    let denser = GridSize {
+        cell_width: SIZE.cell_width + 2,
+        cell_height: SIZE.cell_height + 4,
+        ..SIZE
+    };
+    fixture.pane.resize(denser).unwrap();
+    let resized = active(&fixture.pane);
+    assert!(!resized.reflowed, "a cell size alone reflows nothing");
+    assert_eq!(rows(&resized.frame)[0], "idle");
+
+    // a new column count, then a new row count: each waits for the program to draw again, the same grid again too
+    for size in [GridSize { cols: 30, ..denser }, GridSize { rows: 6, ..denser }] {
+        fixture.pane.resize(size).unwrap();
+        assert!(active(&fixture.pane).reflowed, "{size:?} reflows");
+        fixture.pane.resize(size).unwrap();
+        assert!(active(&fixture.pane).reflowed, "{size:?} again still waits");
+        assert!(fixture.feed.deliver(b"\r\nredrawn"));
+        let deadline = Instant::now() + DEADLINE;
+        while active(&fixture.pane).reflowed {
+            assert!(Instant::now() < deadline, "never redrawn");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+#[test]
+fn a_hold_the_program_never_ends_expires_and_its_screen_is_read() {
+    let fixture = stream(PaneConfig::new(SIZE));
+    assert!(fixture.feed.deliver(b"\x1b[?2026hstuck"));
+    let deadline = Instant::now() + DEADLINE;
+    while fixture.pane.active_screen().unwrap().is_some() {
+        assert!(Instant::now() < deadline, "never held");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // the program prints nothing more and never lets go: the hold ends at its timeout, as a paint would end it
+    let screen = active(&fixture.pane);
+    assert_eq!(rows(&screen.frame)[0], "stuck");
+    assert!(!screen.reflowed);
+}

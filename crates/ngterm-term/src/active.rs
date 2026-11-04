@@ -28,8 +28,9 @@ pub struct ActiveScreen {
     /// screen is still this one. Neither scrolling the viewport nor a selection or a search changes it; the program's
     /// output, a resize, a reset or a clear does.
     pub generation: u64,
-    /// The pane was resized and the program has written nothing since: the rows are the VT's reflow of the last
-    /// screen the program drew, not one it drew for this grid.
+    /// The pane was resized to a new column or row count and the program has written nothing since: the rows are the
+    /// VT's reflow of the last screen the program drew, not one it drew for this grid. The same grid again, or a new
+    /// cell size alone, leaves this as it was.
     pub reflowed: bool,
 }
 

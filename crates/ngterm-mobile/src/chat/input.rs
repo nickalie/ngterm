@@ -12,9 +12,10 @@
 //!    ([`ngterm_term::Pane::active_screen`]: the terminal's active area with its screen generation), never what the
 //!    terminal view shows: a view scrolled back (onto an old copy of a dialog, say), a selection, a search's
 //!    highlights or anything the app draws over the view play no part. A screen the program holds (synchronized
-//!    output), the VT's reflow after a resize the program has not redrawn for yet, or a grid the view gave that the
-//!    terminal has not taken yet is not read: the action settles and looks again. The action's [`Plan`] decides from
-//!    the screen read: the keys to send, or the outcome.
+//!    output, until the hold's timeout ends it) or the VT's reflow after a new column or row count the program has
+//!    not redrawn for yet is not read: the action settles and looks again. The same grid again or a new cell size
+//!    alone reflows nothing, so an idle screen stays readable. The action's [`Plan`] decides from the screen read:
+//!    the keys to send, or the outcome.
 //! 4. **Send.** The keys go into the same terminal the screen was read from, on the actor, with nothing awaited
 //!    between the read and the send: the role and the attach are checked again right before (the terminal's pending
 //!    role reports taken first), so a lead lost or an attach replaced meanwhile sends nothing. Each key goes only

@@ -598,8 +598,9 @@ with no output yet is a running call (Task 1's fixture README).
   - Read: the program's screen itself, `ngterm_term::Pane::active_screen` (the active area read cell by cell with the
     screen generation, under one VT lock), never the view's frame: a view scrolled back onto an old copy of a dialog,
     a selection, a search or anything the app draws over the view plays no part, and `key_if`/`paste_if` send under
-    that generation. A screen held by synchronized output, the VT's reflow after a resize the program has not drawn
-    since, or a grid the view gave that the terminal has not taken yet is busy (settle and look again).
+    that generation. A screen held by synchronized output (until the hold's 1 s timeout ends it) or the VT's reflow
+    after a new column or row count the program has not drawn since is busy (settle and look again); the same grid
+    again or a new cell size alone reflows nothing and leaves an idle screen readable.
 
 - [x] write matcher tests first on Task 1's PTY captures, replayed through libghostty-vt into rows at each recorded
       width:

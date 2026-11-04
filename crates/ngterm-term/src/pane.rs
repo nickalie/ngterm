@@ -195,8 +195,9 @@ pub(crate) struct Vt {
     /// viewport's scroll, the selection or a search, which leave the screen as it was. An active-area read carries
     /// the generation it was made at ([`crate::ActiveScreen::generation`]).
     pub(crate) generation: u64,
-    /// The VT was resized and the program has written nothing since: the screen is the VT's reflow of the last one
-    /// the program drew ([`crate::ActiveScreen::reflowed`]).
+    /// The VT was resized to a new column or row count and the program has written nothing since: the screen is the
+    /// VT's reflow of the last one the program drew ([`crate::ActiveScreen::reflowed`]). The same grid again, or a new
+    /// cell size alone, reflows nothing and leaves it as it was.
     pub(crate) reflowed: bool,
 }
 
@@ -628,7 +629,7 @@ impl Pane {
 
     /// Resize the VT (reflowing the primary screen) and then the PTY (the child gets `SIGWINCH`; on Windows the
     /// pseudoconsole resizes its buffer); a live pane sends its grid (the session takes it while the pane leads) and a
-    /// cell size that changed.
+    /// cell size that changed. The same size again leaves the program's screen and its generation as they were.
     ///
     /// # Errors
     ///
@@ -638,9 +639,15 @@ impl Pane {
         vt.terminal
             .resize(size.cols, size.rows, size.cell_width, size.cell_height)
             .map_err(PaneError::terminal)?;
-        vt.size = size;
-        vt.changed();
-        vt.reflowed = true;
+        let before = std::mem::replace(&mut vt.size, size);
+        // the same grid again changes nothing on screen; only a new column or row count reflows it (the program
+        // draws for it once its SIGWINCH lands), a new cell size alone leaves every cell where it was
+        if before != size {
+            vt.changed();
+        }
+        if (before.cols, before.rows) != (size.cols, size.rows) {
+            vt.reflowed = true;
+        }
         drop(vt);
         match &self.io {
             #[cfg(feature = "local")]

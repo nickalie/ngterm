@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use ngterm_core::live::lead::LeadRole;
-use ngterm_term::{ActiveScreen, GridSize};
+use ngterm_term::ActiveScreen;
 use tokio::time::Instant;
 
 use super::{Command, State};
@@ -90,7 +90,7 @@ fn labels<T: Transport>(
     };
     let screen = standing
         .terminal
-        .and_then(|terminal| readable(&terminal, standing.size))
+        .and_then(|terminal| readable(&terminal))
         .map_or(crate::chat::matchers::Screen::Unknown, |screen| {
             agent.read(&screen.frame)
         });
@@ -98,15 +98,21 @@ fn labels<T: Transport>(
 }
 
 /// The program's screen in `terminal` (its active area, with the generation it was read at), when it is one the
-/// program drew for `size`, the grid the view gave: `None` while the program holds its output (synchronized output),
-/// while the screen is the terminal's reflow after a resize the program has not drawn since, while the view's grid
-/// has not reached the terminal yet, or when it could not be read. What the terminal view shows plays no part: the
-/// view scrolled back (onto an old copy of a dialog, say), a selection, a search's highlights and whatever the app
-/// draws over the view leave the active area as it is, and change no generation.
-fn readable(terminal: &ngterm_term::Pane, size: GridSize) -> Option<ActiveScreen> {
-    let screen = terminal.active_screen().ok().flatten()?;
-    let drawn = !screen.reflowed && screen.frame.cols == size.cols && screen.frame.rows.len() == usize::from(size.rows);
-    drawn.then_some(screen)
+/// program drew for the terminal's grid: `None` while the program holds its output (synchronized output; a hold past
+/// its timeout is ended first, as a paint ends it), while the screen is the terminal's reflow after a new column or
+/// row count the program has not drawn since, or when it could not be read. The same grid again or a new cell size
+/// alone reflows nothing and leaves an idle screen readable. A grid the view gives that the terminal has not taken
+/// yet is no reason to wait: the screen read is still the terminal's and the program's, and a resize landing after
+/// the read voids the send ([`crate::chat::input::Key::send_if`]); one the terminal refused never lands, and waiting
+/// for it would leave the pane busy for good. What the terminal view shows plays no part: the view scrolled back
+/// (onto an old copy of a dialog, say), a selection, a search's highlights and whatever the app draws over the view
+/// leave the active area as it is, and change no generation.
+fn readable(terminal: &ngterm_term::Pane) -> Option<ActiveScreen> {
+    terminal
+        .active_screen()
+        .ok()
+        .flatten()
+        .filter(|screen| !screen.reflowed)
 }
 
 /// Holds a pane for one action; dropping it lets the next one in.
@@ -318,7 +324,7 @@ fn look<T: Transport>(
     let Some(terminal) = now.terminal.as_ref().filter(|_| leads(&now, attach)) else {
         return Ok(Looked::Done(plan.stopped(AgentInputOutcome::LeadRefused)));
     };
-    let Some(screen) = readable(terminal, now.size) else {
+    let Some(screen) = readable(terminal) else {
         return Ok(Looked::Busy);
     };
     let generation = screen.generation;

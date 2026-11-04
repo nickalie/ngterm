@@ -868,3 +868,70 @@ fn a_screen_resized_and_not_redrawn_yet_gets_no_key() {
     send(&agents.first.peer, b"\x1b[2J\x1b[H");
     assert_eq!(outcome(&answer), Ok(AgentInputOutcome::Sent));
 }
+
+/// The grid the view measured again, or with only its cells' pixel size new: the pane's columns and rows as they are.
+fn unchanged_grids(capture: &Capture) -> [PaneSize; 2] {
+    let same = grid(capture);
+    [
+        same,
+        PaneSize {
+            cell_width: same.cell_width + 3,
+            cell_height: same.cell_height + 5,
+            ..same
+        },
+    ]
+}
+
+#[test]
+fn a_grid_measured_again_or_new_cells_alone_leave_an_idle_screen_readable() {
+    for (at, size) in unchanged_grids(&Capture::load("claude-44x36")).into_iter().enumerate() {
+        // the dialog is drawn, then the view measures its grid (a new terminal view does, once it lays out); the
+        // program, its pty unchanged, prints nothing more
+        let mut agents = Agents::start("claude", "claude-44x36");
+        agents.first_is("leader");
+        agents.show(&agents.first.peer, "permission");
+        agents.reads(Agent::Claude, is_dialog, "permission");
+        agents.pane.resize(size).unwrap();
+        agents.pane.resize(size).unwrap();
+        let answer = agents.act(|pane| block_on(pane.answer_approval("No".to_owned())));
+        let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| {
+            without_escapes(bytes).contains(&b'4')
+        });
+        assert_eq!(without_escapes(&bytes), b"4", "grid {at}: the dialog's key goes");
+        send(&agents.first.peer, b"\x1b[2J\x1b[H");
+        assert_eq!(outcome(&answer), Ok(AgentInputOutcome::Sent));
+
+        // the idle prompt likewise: pasted, then entered once shown
+        let mut agents = Agents::start("codex", "codex-44x36");
+        agents.first_is("leader");
+        agents.show(&agents.first.peer, "idle");
+        agents.reads(Agent::Codex, is_idle, "idle");
+        agents.pane.resize(size).unwrap();
+        let prompt = agents.act(|pane| block_on(pane.send_prompt("hello".to_owned())));
+        let (pasted, _) = inputs_until(&mut agents.first.peer, |bytes, _| contains(bytes, b"\x1b[201~"));
+        assert!(
+            pasted.ends_with(b"\x1b[200~hello\x1b[201~"),
+            "grid {at}: the prompt is pasted: {:?}",
+            String::from_utf8_lossy(&pasted)
+        );
+        agents.show_typed(&agents.first.peer, Agent::Codex, "idle", "hello");
+        inputs_until(&mut agents.first.peer, |bytes, _| bytes.ends_with(b"\r"));
+        assert_eq!(outcome(&prompt), Ok(AgentInputOutcome::Sent));
+    }
+
+    // a new column count alone still waits for the program to draw for it
+    let mut agents = Agents::start("claude", "claude-44x36");
+    agents.first_is("leader");
+    agents.show(&agents.first.peer, "permission");
+    agents.reads(Agent::Claude, is_dialog, "permission");
+    let wider = PaneSize {
+        cols: agents.capture.cols + 4,
+        ..grid(&agents.capture)
+    };
+    agents.pane.resize(wider).unwrap();
+    assert_eq!(
+        block_on(agents.pane.answer_approval("No".to_owned())),
+        Ok(AgentInputOutcome::NotOnScreen)
+    );
+    assert!(typed(&mut agents.first.peer).is_empty());
+}
