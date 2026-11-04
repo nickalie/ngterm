@@ -5,7 +5,8 @@
 //! A record is keyed by pane identity (`NGTERM_PANE_ID`), so it follows its pane through a swap or a promotion. It
 //! holds the agent, its conversation (the transcript and the id) and the last permission prompt the agent asked for,
 //! as a candidate. It lives in memory only: never in the snapshot or the `tree`, and dropped once its pane identity
-//! leaves the model ([`Core::sync_agent_records`], run on each commit).
+//! leaves the model ([`Core::sync_agent_records`], run on each commit). A pane an undoable close holds has not left
+//! it: an undo puts back the same pane, so its record is dropped only once the close is final.
 //!
 //! - `SessionStart` and `UserPromptSubmit` set the conversation, or re-assert it unchanged (an origin restarted under
 //!   a running agent learns it on the next prompt). Either drops a candidate: no permission dialog is open then.
@@ -43,7 +44,7 @@ use crate::agent_chat::hook::{HookEvent, check_transcript};
 use crate::command_restore::PaneForeground;
 use crate::error::{ControlError, Noun};
 use crate::live::shell_integration::is_powershell;
-use crate::model::{AgentStatus, Session, StatusPane, WindowLibrary};
+use crate::model::{AgentStatus, AppStore, Session, StatusPane, WindowLibrary};
 use crate::projection::epoch_seconds;
 use crate::resolve::{ACTIVE, Resolver};
 
@@ -184,6 +185,17 @@ fn locate(library: &WindowLibrary, identity: Uuid) -> Option<(&Session, StatusPa
             None
         }
     })
+}
+
+/// Whether an undoable close holds the pane `identity` names: out of the tree for the grace, its terminal alive and put
+/// back by an undo, so its record waits for the close to become final.
+fn held_by_pending_close(library: &WindowLibrary, identity: Uuid) -> bool {
+    library
+        .open_ids()
+        .into_iter()
+        .filter_map(|id| library.store(id))
+        .flat_map(AppStore::pending_close_members)
+        .any(|member| member.session.pane_identity == identity || member.session.split_pane_identity == Some(identity))
 }
 
 /// The role of `session`'s pane whose identity `token` spells (its `NGTERM_PANE_ID`).
@@ -395,7 +407,7 @@ impl Core {
                     record.observe(block_of(session, role));
                     true
                 }
-                None => false,
+                None => held_by_pending_close(library, *identity),
             });
     }
 

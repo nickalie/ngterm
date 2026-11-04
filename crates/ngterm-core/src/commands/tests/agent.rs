@@ -486,6 +486,37 @@ fn a_record_is_dropped_once_its_pane_identity_leaves_the_model() {
 }
 
 #[test]
+fn an_undoable_close_keeps_the_record_until_it_is_final() {
+    let mut fixture = Fixture::new(1);
+    let closing = fixture.sessions[1];
+    let token = wire(fixture.store().session(closing).expect("a session").pane_identity);
+    assert!(
+        send_report(
+            &mut fixture,
+            closing,
+            pane_args(&token, "left"),
+            start(CLAUDE_A, "aaaa")
+        )
+        .ok
+    );
+    let soft = args(|a| a.undoable = Some(true));
+    let response = fixture.session(SessionCmd::Close, Some(&wire(closing)), soft.clone());
+    assert!(response.ok, "{response:?}");
+    assert!(fixture.store().pending_close_session(closing).is_some(), "a soft close");
+    let _ = fixture.core.commit();
+    assert_eq!(fixture.core.agent_record_count(), 1, "the grace still holds the pane");
+    assert!(fixture.store_mut().unwrap().undo_pending_close(None));
+    let _ = fixture.core.commit();
+    let agent = agent_of(&get(&mut fixture, closing, pane_args(&token, "left")));
+    assert_eq!(agent["conversationId"], "aaaa");
+    let response = fixture.session(SessionCmd::Close, Some(&wire(closing)), soft);
+    assert!(response.ok, "{response:?}");
+    assert!(fixture.store_mut().unwrap().finalize_pending_close_of_session(closing));
+    let _ = fixture.core.commit();
+    assert_eq!(fixture.core.agent_record_count(), 0, "a final close drops it");
+}
+
+#[test]
 fn the_record_never_reaches_the_snapshot_or_the_tree() {
     let dir = short_tempdir();
     let mut persistence = LibraryPersistence::new(dir.path());
