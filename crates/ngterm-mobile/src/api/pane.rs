@@ -349,16 +349,17 @@ impl Pane {
         self
     }
 
-    /// Posts the command `make` builds for this pane to the actor, and waits for its answer.
+    /// Posts the command `make` builds for this pane (as the core names it, and this handle's slot, which tells the
+    /// pane shown now from one hidden since) to the actor, and waits for its answer.
     async fn ask<R>(
         &self,
-        make: impl FnOnce(PaneRef, oneshot::Sender<Result<R, PaneInputError>>) -> Command,
+        make: impl FnOnce(PaneRef, Arc<PaneSlot>, oneshot::Sender<Result<R, PaneInputError>>) -> Command,
     ) -> Result<R, PaneInputError> {
         let (reference, commands) = self.actions.as_ref().ok_or(PaneInputError::Closed)?;
         let commands = commands.upgrade().ok_or(PaneInputError::Closed)?;
         let (reply, answer) = oneshot::channel();
         commands
-            .send(make(reference.clone(), reply))
+            .send(make(reference.clone(), Arc::clone(&self.slot), reply))
             .map_err(|_| PaneInputError::Closed)?;
         drop(commands);
         answer.await.unwrap_or(Err(PaneInputError::Closed))
@@ -366,7 +367,13 @@ impl Pane {
 
     async fn act(&self, action: Action) -> Result<AgentInputOutcome, PaneInputError> {
         action.check()?;
-        self.ask(|pane, reply| Command::PaneInput { pane, action, reply }).await
+        self.ask(|pane, slot, reply| Command::PaneInput {
+            pane,
+            slot,
+            action,
+            reply,
+        })
+        .await
     }
 
     /// The terminal behind the handle now (the tests read its screen).
@@ -673,6 +680,7 @@ impl Pane {
     ///
     /// [`PaneInputError::Closed`] for a hidden pane or a stopped core.
     pub async fn approval_labels(&self) -> Result<Vec<String>, PaneInputError> {
-        self.ask(|pane, reply| Command::ApprovalLabels { pane, reply }).await
+        self.ask(|pane, slot, reply| Command::ApprovalLabels { pane, slot, reply })
+            .await
     }
 }

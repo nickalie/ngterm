@@ -28,21 +28,45 @@ fn send(key: Key, look: bool) -> Next {
     Next::Send { keys: vec![key], look }
 }
 
-const IDLE: Screen = Screen::Prompt { working: false };
-const WORKING: Screen = Screen::Prompt { working: true };
+const IDLE: Screen = Screen::Prompt {
+    working: false,
+    composer: String::new(),
+};
+const WORKING: Screen = Screen::Prompt {
+    working: true,
+    composer: String::new(),
+};
+
+/// The prompt holding `composer`.
+fn holding(composer: &str, working: bool) -> Screen {
+    Screen::Prompt {
+        working,
+        composer: composer.to_owned(),
+    }
+}
 
 #[test]
-fn a_prompt_is_pasted_whole_then_entered_once_the_prompt_still_shows() {
+fn a_prompt_is_pasted_whole_then_entered_once_the_prompt_shows_it() {
     let dialog = screen("claude-44x36", Agent::Claude, "permission");
-    for text in [
-        "hello there",
-        "/compact keep it short",
-        "$greet-check please",
-        "two\nlines",
+    let (lines, chars) = ("x\n".repeat(40), "y".repeat(1200));
+    for (text, shown) in [
+        ("hello there", "hello there"),
+        ("/compact keep it short", "/compact keep it short"),
+        ("$greet-check please", "$greet-check please"),
+        ("two\nlines", "two\nlines"),
+        // wrapped where the screen likes
+        ("a long line of text", "a long line\nof text"),
+        // a long paste's stand-in, Claude's and Codex's
+        (lines.as_str(), "[Pasted text #1 +40 lines]"),
+        (chars.as_str(), "[Pasted Content 1200 chars]"),
     ] {
         let mut plan = Plan::new(Action::Prompt(text.to_owned()));
         assert_eq!(step(&mut plan, &IDLE), send(Key::Paste(text.to_owned()), true));
-        assert_eq!(step(&mut plan, &WORKING), send(Key::Enter, false), "{text}");
+        assert_eq!(
+            step(&mut plan, &holding(shown, true)),
+            send(Key::Enter, false),
+            "{text}"
+        );
     }
     // a working agent takes a prompt too (queued by the TUI)
     let mut plan = Plan::new(Action::Prompt("next".to_owned()));
@@ -60,6 +84,38 @@ fn a_prompt_is_pasted_whole_then_entered_once_the_prompt_still_shows() {
     let mut plan = Plan::new(Action::Prompt("hi".to_owned()));
     step(&mut plan, &IDLE);
     assert_eq!(step(&mut plan, &dialog), Next::Done(AgentInputOutcome::Unconfirmed));
+}
+
+#[test]
+fn a_draft_in_the_prompt_gets_nothing_and_a_paste_that_did_not_land_gets_no_enter() {
+    // a draft left in the prompt at the terminal would go out with the prompt
+    for draft in ["draft ", "/comp"] {
+        for working in [false, true] {
+            let mut plan = Plan::new(Action::Prompt("new prompt".to_owned()));
+            assert_eq!(
+                step(&mut plan, &holding(draft, working)),
+                Next::Done(AgentInputOutcome::NotOnScreen),
+                "{draft:?}"
+            );
+            assert!(!plan.sent());
+        }
+    }
+    // after the paste: dropped, landed after something else, cut short, or a stand-in next to other text
+    for shown in [
+        "",
+        "draft new prompt",
+        "new",
+        "[Pasted text #1 +40 lines] more",
+        "draft [Pasted text #1 +40 lines]",
+    ] {
+        let mut plan = Plan::new(Action::Prompt("new prompt".to_owned()));
+        step(&mut plan, &IDLE);
+        assert_eq!(
+            step(&mut plan, &holding(shown, false)),
+            Next::Done(AgentInputOutcome::Unconfirmed),
+            "{shown:?}"
+        );
+    }
 }
 
 #[test]
@@ -159,8 +215,17 @@ fn languages() -> ChatQuestionItem {
     )
 }
 
+/// How text typed into the picker's "Type something." row shows.
+#[derive(Clone, Copy)]
+enum Typed<'a> {
+    /// After the placeholder.
+    After(&'a str),
+    /// In its place.
+    Instead(&'a str),
+}
+
 /// `screen`'s picker with its cursor on option `cursor` and the boxes `checked`, and `typed` in its last option.
-fn varied(screen: &Screen, cursor: Option<u8>, checked: &[bool], typed: Option<&str>) -> Screen {
+fn varied(screen: &Screen, cursor: Option<u8>, checked: &[bool], typed: Option<Typed<'_>>) -> Screen {
     let Screen::Question(picker) = screen else {
         panic!("not the picker")
     };
@@ -173,8 +238,10 @@ fn varied(screen: &Screen, cursor: Option<u8>, checked: &[bool], typed: Option<&
         if let Some(checked) = checked.get(at) {
             option.checked = Some(*checked);
         }
-        if let (Some(typed), true) = (typed, at == last) {
-            option.text = format!("{} {typed}", option.text);
+        match (typed, at == last) {
+            (Some(Typed::After(text)), true) => option.text = format!("{} {text}", option.text),
+            (Some(Typed::Instead(text)), true) => option.text = text.to_owned(),
+            _ => {}
         }
     }
     Screen::Question(picker)
@@ -191,10 +258,9 @@ fn a_lone_question_is_answered_by_its_digit_or_by_typed_text() {
     assert_eq!(step(&mut plan, &picker), send(Key::Digit(3), true), "Type something.");
     let focused = varied(&picker, Some(3), &[], None);
     assert_eq!(step(&mut plan, &focused), send(Key::Paste("Blue".to_owned()), true));
-    let typed = varied(&picker, Some(3), &[], Some("Blue"));
+    let typed = varied(&picker, Some(3), &[], Some(Typed::After("Blue")));
     assert_eq!(step(&mut plan, &typed), send(Key::Enter, true));
     assert_eq!(step(&mut plan, &IDLE), Next::Done(AgentInputOutcome::Sent));
-
     // the text did not show in the row: no Enter
     let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]));
     step(&mut plan, &picker);
@@ -233,6 +299,55 @@ fn two_questions_go_tab_by_tab_toggling_boxes_then_submit_on_the_review() {
     assert_eq!(step(&mut plan, &multi), send(Key::Tab, true));
     step(&mut plan, &review);
     assert_eq!(step(&mut plan, &review), Next::Done(AgentInputOutcome::Unconfirmed));
+}
+
+#[test]
+fn typed_text_may_follow_the_placeholder_or_take_its_place_and_a_draft_there_gets_nothing() {
+    let picker = screen("claude-44x36", Agent::Claude, "question");
+    let focused = varied(&picker, Some(3), &[], None);
+    // the text in the placeholder's place, or a long paste's stand-in there
+    for typed in [Typed::Instead("Blue"), Typed::Instead("[Pasted text #1 +3 lines]")] {
+        let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]));
+        step(&mut plan, &picker);
+        step(&mut plan, &focused);
+        let typed = varied(&picker, Some(3), &[], Some(typed));
+        assert_eq!(step(&mut plan, &typed), send(Key::Enter, true));
+        assert_eq!(step(&mut plan, &IDLE), Next::Done(AgentInputOutcome::Sent));
+    }
+    // something else in the row after the paste: no Enter
+    let mut plan = Plan::new(Action::Question(vec![color()], vec![answer(&[], Some("Blue"))]));
+    step(&mut plan, &picker);
+    step(&mut plan, &focused);
+    assert_eq!(
+        step(&mut plan, &varied(&picker, Some(3), &[], Some(Typed::Instead("Bl")))),
+        Next::Done(AgentInputOutcome::Unconfirmed)
+    );
+    // a draft typed into the row at the terminal, after the placeholder or in its place: nothing goes
+    for draft in [Typed::After("Gre"), Typed::Instead("Gre")] {
+        for answered in [answer(&["Red"], None), answer(&[], Some("Blue"))] {
+            let mut plan = Plan::new(Action::Question(vec![color()], vec![answered]));
+            assert_eq!(
+                step(&mut plan, &varied(&picker, None, &[], Some(draft))),
+                Next::Done(AgentInputOutcome::NotOnScreen)
+            );
+        }
+    }
+}
+
+#[test]
+fn free_text_in_a_multi_select_question_goes_through_its_row_then_tab() {
+    let multi = screen("claude-160x48", Agent::Claude, "question_multi");
+    let review = screen("claude-160x48", Agent::Claude, "question_submit");
+    // its digit, the paste, then Tab, whether the text followed the placeholder or took its place
+    for typed in [Typed::After("Latin"), Typed::Instead("Latin")] {
+        let mut plan = Plan::new(Action::Question(vec![languages()], vec![answer(&[], Some("Latin"))]));
+        assert_eq!(step(&mut plan, &multi), send(Key::Digit(4), true));
+        let focused = varied(&multi, Some(4), &[], None);
+        assert_eq!(step(&mut plan, &focused), send(Key::Paste("Latin".to_owned()), true));
+        let shown = varied(&multi, Some(4), &[], Some(typed));
+        assert_eq!(step(&mut plan, &shown), send(Key::Tab, true));
+        assert_eq!(step(&mut plan, &review), send(Key::Enter, true));
+    }
 }
 
 #[test]

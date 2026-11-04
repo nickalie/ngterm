@@ -22,14 +22,18 @@
 //! The keys (Task 1's recordings, `crates/ngterm-core/tests/fixtures/agent_chat/README.md`):
 //!
 //! - **Prompt**: a bracketed paste of the whole text, then Enter; `/name args` and Codex's `$skill` go the same way,
-//!   since both TUIs run a pasted command. It needs the prompt on screen and no dialog
-//!   ([`AgentInputOutcome::DialogOpen`]); the prompt is read again after the paste, before the Enter.
+//!   since both TUIs run a pasted command. It needs the prompt on screen, empty (a draft left in it at the terminal
+//!   would be sent along: [`AgentInputOutcome::NotOnScreen`]), and no dialog ([`AgentInputOutcome::DialogOpen`]).
+//!   The Enter goes only once the prompt holds the text pasted, or the stand-in a TUI shows for a long paste
+//!   (Claude's `[Pasted text #1 +12 lines]`, Codex's `[Pasted Content 1200 chars]`), and nothing else; otherwise the
+//!   paste is left unsent ([`AgentInputOutcome::Unconfirmed`]).
 //! - **Stop**: Escape, while a turn is running.
 //! - **Approval**: the option whose label is the card's, by its key: Claude's digit, Codex's letter or Escape.
 //! - **Question**: per question, its tab confirmed by its text and options; a digit picks a single-select option (the
 //!   picker moves on), digits toggle a multi-select question's boxes to the answer and Tab moves on; free text goes
-//!   through `Type something.` (its digit, then a paste, then Enter or Tab); the review tab's `1. Submit answers`
-//!   takes Enter.
+//!   through `Type something.` (its digit, then a paste, then Enter or Tab: the row must hold the text, after the
+//!   placeholder or in its place, or a paste's stand-in); the review tab's `1. Submit answers` takes Enter. A
+//!   `Type something.` row that holds text before the answer starts is someone's draft: nothing is sent.
 
 use std::time::Duration;
 
@@ -60,8 +64,8 @@ pub const UNSAFE_PASTE: &str = "the text cannot be pasted safely";
 pub enum AgentInputOutcome {
     /// The keys went to the program, and the screen showed what the action expected.
     Sent,
-    /// The screen does not show what the action answers (no such dialog, option or question, or a screen the core
-    /// can't read): nothing was sent. Offer "Answer in terminal".
+    /// The screen does not show what the action answers (no such dialog, option or question, a prompt that holds a
+    /// draft typed at the terminal, or a screen the core can't read): nothing was sent. Offer "Answer in terminal".
     NotOnScreen,
     /// A dialog is open, so a prompt or Stop would answer it: nothing was sent. Answer the dialog first.
     DialogOpen,
@@ -315,7 +319,7 @@ impl Plan {
 
     fn prompt(&mut self, text: String, screen: &Screen) -> Next {
         match (&self.step, screen) {
-            (Step::Start, Screen::Prompt { .. }) => {
+            (Step::Start, Screen::Prompt { composer, .. }) if composer.is_empty() => {
                 self.step = Step::Pasted;
                 Next::Send {
                     keys: vec![Key::Paste(text)],
@@ -323,7 +327,7 @@ impl Plan {
                 }
             }
             (Step::Start, screen) if screen.is_dialog() => Next::Done(AgentInputOutcome::DialogOpen),
-            (Step::Pasted, Screen::Prompt { .. }) => Next::Send {
+            (Step::Pasted, Screen::Prompt { composer, .. }) if holds_paste(composer, &text) => Next::Send {
                 keys: vec![Key::Enter],
                 look: false,
             },
@@ -362,7 +366,8 @@ impl Plan {
                 let Screen::Question(picker) = screen else {
                     return self.not_on_screen();
                 };
-                if !shows(picker, &items[asked.index]) {
+                let other = answers[asked.index].other.as_deref().map(str::trim);
+                if !shows(picker, &items[asked.index], asked.asking, other) {
                     return self.not_on_screen();
                 }
                 self.ask(items, answers, picker, asked)
@@ -406,12 +411,8 @@ impl Plan {
                 }
                 _ => self.not_on_screen(),
             },
+            // [`shows`] found the text in its row
             Asking::Typed => {
-                let shown = other
-                    .is_some_and(|text| typing.is_some_and(|option| squeeze(&option.text).contains(&squeeze(text))));
-                if !shown {
-                    return self.not_on_screen();
-                }
                 let key = if item.multi_select { Key::Tab } else { Key::Enter };
                 self.move_on(items, asked.index, key)
             }
@@ -469,7 +470,7 @@ fn look_after(key: Key) -> Next {
 
 fn interrupt(screen: &Screen) -> Next {
     match screen {
-        Screen::Prompt { working: true } => Next::Send {
+        Screen::Prompt { working: true, .. } => Next::Send {
             keys: vec![Key::Escape],
             look: false,
         },
@@ -493,9 +494,14 @@ fn digit_of(item: &ChatQuestionItem, label: &str) -> u8 {
     u8::try_from(at + 1).unwrap_or(u8::MAX)
 }
 
+/// "Type something.", whitespace aside.
+const TYPING: &str = "Typesomething";
+
 /// Whether `picker` is at `item`'s tab: its question, its options in order (each option's label and description as
-/// the screen wraps them), then "Type something.", boxed the way the question picks.
-fn shows(picker: &Picker, item: &ChatQuestionItem) -> bool {
+/// the screen wraps them), then the free-text row, boxed the way the question picks. That row shows the placeholder
+/// alone while the answer is picked (any more is a draft typed at the terminal) and once focused, and the text
+/// `other` once typed: after the placeholder or in its place, or as a paste's stand-in.
+fn shows(picker: &Picker, item: &ChatQuestionItem, asking: Asking, other: Option<&str>) -> bool {
     if !fits(&picker.question, &item.question) || picker.multi() != item.multi_select {
         return false;
     }
@@ -503,11 +509,43 @@ fn shows(picker: &Picker, item: &ChatQuestionItem) -> bool {
         let expected = format!("{} {}", option.label, option.description.as_deref().unwrap_or_default());
         fits(&shown.text, &expected)
     });
-    let typing = picker
-        .options
-        .get(item.options.len())
-        .is_some_and(|shown| squeeze(&shown.text).starts_with("Typesomething"));
+    let typing = picker.options.get(item.options.len()).is_some_and(|shown| {
+        let row = squeeze(&shown.text);
+        match (asking, other) {
+            (Asking::Picking, _) => untouched(&row),
+            (Asking::Focusing, _) => row.starts_with(TYPING),
+            (Asking::Typed, Some(text)) => row.contains(&squeeze(text)) || stand_in(&row).is_some(),
+            (Asking::Typed, None) => false,
+        }
+    });
     listed && picker.options.len() > item.options.len() && typing
+}
+
+/// Whether the free-text row (squeezed) shows its placeholder and nothing typed: `Type something.`, and in a
+/// multi-select question the `Submit` drawn under it.
+fn untouched(row: &str) -> bool {
+    row.strip_prefix(TYPING).is_some_and(|rest| {
+        let rest = rest.strip_prefix('.').unwrap_or(rest);
+        rest.is_empty() || rest == "Submit"
+    })
+}
+
+/// Where a TUI's stand-in for a long paste starts in `squeezed` (Claude's `[Pasted text #1 +12 lines]`, Codex's
+/// `[Pasted Content 1200 chars]`, whitespace aside).
+fn stand_in(squeezed: &str) -> Option<usize> {
+    ["[Pastedtext#", "[PastedContent"]
+        .iter()
+        .find_map(|start| squeezed.find(start))
+}
+
+/// Whether a prompt that was empty before the paste holds `text` now: the text itself (the screen wraps it where it
+/// likes), or nothing but a stand-in for it.
+fn holds_paste(composer: &str, text: &str) -> bool {
+    let shown = squeeze(composer);
+    if shown.is_empty() {
+        return false;
+    }
+    shown == squeeze(text) || (stand_in(&shown) == Some(0) && shown.ends_with(']') && shown.matches('[').count() == 1)
 }
 
 /// The labels the card offers for `agent`'s approval: the dialog's on `screen`, or the agent's usual ones.

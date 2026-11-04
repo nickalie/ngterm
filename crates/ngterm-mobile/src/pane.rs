@@ -122,6 +122,8 @@ pub(crate) struct Standing {
     pub(crate) terminal: Option<Arc<ngterm_term::Pane>>,
     /// The grid the view gave.
     pub(crate) size: GridSize,
+    /// The slot the pane's handles share while it stays shown: a pane hidden and shown again has another.
+    pub(crate) slot: Arc<PaneSlot>,
 }
 
 /// What handling a note made: events, and a listing the actor is to read ([`Panes::gone_checked`]).
@@ -375,6 +377,7 @@ impl<C: Connection> Panes<C> {
             live: shown.phase == Phase::Live,
             terminal: shown.slot.terminal(),
             size: shown.slot.size(),
+            slot: Arc::clone(&shown.slot),
         })
     }
 

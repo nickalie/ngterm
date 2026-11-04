@@ -3,12 +3,13 @@
 //! read from the screen as it stands.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use ngterm_core::live::lead::LeadRole;
 use tokio::time::Instant;
 
 use super::{Command, State};
-use crate::api::PaneInputError;
+use crate::api::{PaneInputError, PaneSlot};
 use crate::chat::ChatKey;
 use crate::chat::input::{
     ACTION_IN_FLIGHT, Action, AgentInputOutcome, InputTiming, NO_AGENT_TO_DRIVE, Next, Plan, approval_labels,
@@ -20,15 +21,20 @@ use crate::transport::Transport;
 /// Handles a chat action command.
 pub(super) fn command<T: Transport>(state: &Rc<State<T>>, command: Command) {
     match command {
-        Command::PaneInput { pane, action, reply } => {
+        Command::PaneInput {
+            pane,
+            slot,
+            action,
+            reply,
+        } => {
             let state = Rc::clone(state);
             tokio::task::spawn_local(async move {
                 // A caller that stopped waiting has nothing to be told; the action still ran its course.
-                let _ = reply.send(act(&state, &pane, action).await);
+                let _ = reply.send(act(&state, &pane, slot, action).await);
             });
         }
-        Command::ApprovalLabels { pane, reply } => {
-            let _ = reply.send(labels(state, &pane));
+        Command::ApprovalLabels { pane, slot, reply } => {
+            let _ = reply.send(labels(state, &pane, slot));
         }
         // The loop handles every other command itself.
         _ => {}
@@ -41,24 +47,42 @@ fn refused(reason: &str) -> PaneInputError {
     }
 }
 
-/// The pane `reference` names, and the agent its origin announced in it.
-fn target<T: Transport>(state: &State<T>, reference: &PaneRef) -> Result<(ChatKey, Option<Agent>), PaneInputError> {
-    let key = ChatKey::of(reference).map_err(|_| PaneInputError::Closed)?;
-    let agent = state.chats.borrow().agent(&key).and_then(Agent::of);
-    Ok((key, agent))
+/// The pane an action is on: as the core names it, and the slot of the handle that asked for it.
+struct On {
+    key: ChatKey,
+    slot: Arc<PaneSlot>,
 }
 
-fn standing<T: Transport>(state: &State<T>, key: &ChatKey) -> Option<Standing> {
+/// The pane `reference` names for the handle whose slot is `slot`, and the agent its origin announced in it.
+fn target<T: Transport>(
+    state: &State<T>,
+    reference: &PaneRef,
+    slot: Arc<PaneSlot>,
+) -> Result<(On, Option<Agent>), PaneInputError> {
+    let key = ChatKey::of(reference).map_err(|_| PaneInputError::Closed)?;
+    let agent = state.chats.borrow().agent(&key).and_then(Agent::of);
+    Ok((On { key, slot }, agent))
+}
+
+/// Where the pane stands, while it is the one the handle was given: a pane hidden since (and maybe shown again, with
+/// another slot) is `None`, as a hidden one is.
+fn standing<T: Transport>(state: &State<T>, on: &On) -> Option<Standing> {
+    let key = &on.key;
     state
         .panes
         .borrow()
         .standing(&key.machine_id, &key.session_id, key.pane)
+        .filter(|standing| Arc::ptr_eq(&standing.slot, &on.slot))
 }
 
 /// The card's labels: the dialog's on screen, or the agent's usual ones.
-fn labels<T: Transport>(state: &State<T>, reference: &PaneRef) -> Result<Vec<String>, PaneInputError> {
-    let (key, agent) = target(state, reference)?;
-    let standing = standing(state, &key).ok_or(PaneInputError::Closed)?;
+fn labels<T: Transport>(
+    state: &State<T>,
+    reference: &PaneRef,
+    slot: Arc<PaneSlot>,
+) -> Result<Vec<String>, PaneInputError> {
+    let (on, agent) = target(state, reference, slot)?;
+    let standing = standing(state, &on).ok_or(PaneInputError::Closed)?;
     let Some(agent) = agent else {
         return Ok(Vec::new());
     };
@@ -98,21 +122,22 @@ impl<T: Transport> Drop for Acting<T> {
 async fn act<T: Transport>(
     state: &Rc<State<T>>,
     reference: &PaneRef,
+    slot: Arc<PaneSlot>,
     action: Action,
 ) -> Result<AgentInputOutcome, PaneInputError> {
-    let (key, agent) = target(state, reference)?;
-    standing(state, &key).ok_or(PaneInputError::Closed)?;
+    let (on, agent) = target(state, reference, slot)?;
+    standing(state, &on).ok_or(PaneInputError::Closed)?;
     let agent = agent.ok_or_else(|| refused(NO_AGENT_TO_DRIVE))?;
-    let _acting = Acting::take(state, &key)?;
+    let _acting = Acting::take(state, &on.key)?;
     let timing = state.wiring.timing;
-    let Some(attach) = lead(state, &key, timing).await? else {
+    let Some(attach) = lead(state, &on, timing).await? else {
         return Ok(AgentInputOutcome::LeadRefused);
     };
     let mut plan = Plan::new(action);
     let mut busy = 0;
     loop {
-        let step = match settle(state, &key, attach, timing).await {
-            Ok(true) => look(state, &key, attach, agent, &mut plan),
+        let step = match settle(state, &on, attach, timing).await {
+            Ok(true) => look(state, &on, attach, agent, &mut plan),
             Ok(false) => Ok(Looked::Done(plan.stopped(AgentInputOutcome::LeadRefused))),
             Err(error) => Err(error),
         };
@@ -152,13 +177,10 @@ fn leads(standing: &Standing, attach: u64) -> bool {
 
 /// Takes the pane's lead, unless it holds it: the attach that leads, or `None` when the lead was not had (the claim
 /// reported another role, its attach was replaced, nothing came in time, or the pane can't claim).
-async fn lead<T: Transport>(
-    state: &Rc<State<T>>,
-    key: &ChatKey,
-    timing: InputTiming,
-) -> Result<Option<u64>, PaneInputError> {
+async fn lead<T: Transport>(state: &Rc<State<T>>, on: &On, timing: InputTiming) -> Result<Option<u64>, PaneInputError> {
+    let key = &on.key;
     drain(state, key);
-    let now = standing(state, key).ok_or(PaneInputError::Closed)?;
+    let now = standing(state, on).ok_or(PaneInputError::Closed)?;
     if leads(&now, now.key) {
         return Ok(Some(now.key));
     }
@@ -172,7 +194,7 @@ async fn lead<T: Transport>(
             .take_lead(&key.machine_id, &key.session_id, key.pane);
         state.emit_all(events);
     }
-    let claim = standing(state, key).ok_or(PaneInputError::Closed)?;
+    let claim = standing(state, on).ok_or(PaneInputError::Closed)?;
     if !claim.claiming {
         return Ok(None);
     }
@@ -180,7 +202,7 @@ async fn lead<T: Transport>(
     while Instant::now() < deadline {
         tokio::time::sleep(timing.poll).await;
         drain(state, key);
-        let now = standing(state, key).ok_or(PaneInputError::Closed)?;
+        let now = standing(state, on).ok_or(PaneInputError::Closed)?;
         if now.key != claim.key {
             return Ok(None);
         }
@@ -214,7 +236,7 @@ struct Mark {
 /// gone by. Whether the attach still leads.
 async fn settle<T: Transport>(
     state: &Rc<State<T>>,
-    key: &ChatKey,
+    on: &On,
     attach: u64,
     timing: InputTiming,
 ) -> Result<bool, PaneInputError> {
@@ -223,7 +245,7 @@ async fn settle<T: Transport>(
     let mut quiet_since = started;
     loop {
         tokio::time::sleep(timing.poll).await;
-        let now = standing(state, key).ok_or(PaneInputError::Closed)?;
+        let now = standing(state, on).ok_or(PaneInputError::Closed)?;
         let Some(terminal) = now.terminal.as_ref().filter(|_| leads(&now, attach)) else {
             return Ok(false);
         };
@@ -251,13 +273,13 @@ async fn settle<T: Transport>(
 /// its own threads.
 fn look<T: Transport>(
     state: &State<T>,
-    key: &ChatKey,
+    on: &On,
     attach: u64,
     agent: Agent,
     plan: &mut Plan,
 ) -> Result<Looked, PaneInputError> {
-    drain(state, key);
-    let now = standing(state, key).ok_or(PaneInputError::Closed)?;
+    drain(state, &on.key);
+    let now = standing(state, on).ok_or(PaneInputError::Closed)?;
     let Some(terminal) = now.terminal.as_ref().filter(|_| leads(&now, attach)) else {
         return Ok(Looked::Done(plan.stopped(AgentInputOutcome::LeadRefused)));
     };

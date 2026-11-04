@@ -16,6 +16,9 @@
 //!   `2. Cancel`.
 //! - **Codex's composer**: a row opening with `›` between blank rows, its footer under it; working while a line above
 //!   it says `esc to interrupt` (`• Working (0s • esc to interrupt)`).
+//! - **What a prompt holds**: the text of its input rows after the mark, faint cells left out. Both TUIs draw the
+//!   placeholder of an empty prompt faint (Claude's `Try "…"`, Codex's `Ask Codex to do anything`) and typed or
+//!   pasted text in a plain style, so an empty prompt holds nothing and a draft left at the terminal shows.
 //! - **Codex's approval**: the numbered options (`›` marks the picked one), each ending with its key in parentheses
 //!   (`(y)`, `(p)`, `(esc)`), and as the last line `Press enter to confirm or esc to cancel`.
 //!
@@ -23,7 +26,9 @@
 //! agent's screen, a follower's screen laid out for another grid. A prompt is only read as one when no dialog's marks
 //! are left near it, so a dialog the matcher can't read is never taken for a prompt to type into.
 
-use ngterm_term::Frame;
+use std::sync::Arc;
+
+use ngterm_term::{CellFlags, CellWidth, Frame, Row};
 
 /// An agent the matchers know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,8 +133,9 @@ impl Picker {
 /// What a pane's screen shows of its agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Screen {
-    /// The prompt, taking input: idle, or `working` on a turn.
-    Prompt { working: bool },
+    /// The prompt, taking input: idle, or `working` on a turn; `composer` is what its input rows hold (rows joined with
+    /// `\n`, the placeholder left out), empty when nothing was typed.
+    Prompt { working: bool, composer: String },
     /// A permission dialog.
     Permission(Dialog),
     /// The question picker at a question's tab.
@@ -182,10 +188,11 @@ const NEAR: usize = 6;
 /// The rows above a prompt searched for what is left of a dialog: as tall as a dialog gets on a phone.
 const ABOVE: usize = 24;
 
-/// A frame's rows as text, with its width.
+/// A frame's rows as text, with its width and the rows' cells.
 struct Rows {
     lines: Vec<String>,
     cols: usize,
+    cells: Vec<Arc<Row>>,
 }
 
 impl Rows {
@@ -193,7 +200,18 @@ impl Rows {
         Self {
             lines: frame.lines(),
             cols: usize::from(frame.cols),
+            cells: frame.rows.clone(),
         }
+    }
+
+    /// What the input rows `from..to` hold after the prompt's mark: their text from the second column on, a faint
+    /// (placeholder) or hidden cell taken as blank, each row trimmed, blank rows dropped.
+    fn typed(&self, from: usize, to: usize) -> String {
+        let lines: Vec<String> = (from..to.min(self.cells.len()))
+            .map(|index| plain(&self.cells[index]))
+            .filter(|line| !line.is_empty())
+            .collect();
+        lines.join("\n")
     }
 
     fn get(&self, index: usize) -> &str {
@@ -227,6 +245,21 @@ impl Rows {
     fn up_to_text(&self, index: usize, limit: usize) -> Option<usize> {
         (index.saturating_sub(limit)..=index).rev().find(|at| !self.blank(*at))
     }
+}
+
+/// `row`'s text from its second column on, trimmed: a faint (placeholder) or hidden cell is blank, a spacer cell (the
+/// rest of a wide glyph) nothing.
+fn plain(row: &Row) -> String {
+    let mut text = String::new();
+    for (column, cell) in row.cells().iter().enumerate().skip(1) {
+        if matches!(cell.width, CellWidth::SpacerTail | CellWidth::SpacerHead) {
+            continue;
+        }
+        let glyph = row.text(column);
+        let hidden = cell.flags.intersects(CellFlags::FAINT | CellFlags::INVISIBLE);
+        text.push_str(if hidden || glyph.is_empty() { " " } else { glyph });
+    }
+    text.trim().to_owned()
 }
 
 /// An option row: `[cursor] N. text`, with the column its number starts at.
@@ -323,7 +356,10 @@ fn claude(rows: &Rows) -> Screen {
     if let Some(picker) = claude_picker(rows) {
         return Screen::Question(picker);
     }
-    claude_prompt(rows).map_or(Screen::Unknown, |working| Screen::Prompt { working })
+    claude_prompt(rows).map_or(Screen::Unknown, |(working, composer)| Screen::Prompt {
+        working,
+        composer,
+    })
 }
 
 const CLAUDE_CURSOR: char = '❯';
@@ -449,8 +485,9 @@ fn claude_review(rows: &Rows) -> Option<bool> {
     (tail_ok && rows.get(tabs).contains("Submit")).then_some(submit.cursor)
 }
 
-/// Claude's prompt box: whether a turn is running, or `None` when the box is not the screen's bottom.
-fn claude_prompt(rows: &Rows) -> Option<bool> {
+/// Claude's prompt box: whether a turn is running and what the box holds, or `None` when the box is not the screen's
+/// bottom.
+fn claude_prompt(rows: &Rows) -> Option<(bool, String)> {
     let last = rows.last()?;
     let lower = (0..=last).rev().find(|index| rows.rule(*index))?;
     if last - lower > FOOTER_ROWS {
@@ -467,7 +504,7 @@ fn claude_prompt(rows: &Rows) -> Option<bool> {
     }
     let footer = (lower + 1..=last).any(|index| rows.get(index).contains("esc to interrupt"));
     let spinner = (upper.saturating_sub(NEAR)..upper).any(|index| spinning(rows.get(index)));
-    Some(footer || spinner)
+    Some((footer || spinner, rows.typed(upper + 1, lower)))
 }
 
 /// A turn's spinner line: a glyph, a word ending with `…` (`✶ Pontificating…`, `✢ Cogitating… (running …)`).
@@ -485,7 +522,10 @@ fn codex(rows: &Rows) -> Screen {
     if let Some(dialog) = codex_approval(rows) {
         return Screen::Permission(dialog);
     }
-    codex_prompt(rows).map_or(Screen::Unknown, |working| Screen::Prompt { working })
+    codex_prompt(rows).map_or(Screen::Unknown, |(working, composer)| Screen::Prompt {
+        working,
+        composer,
+    })
 }
 
 const CODEX_CURSOR: char = '›';
@@ -528,8 +568,8 @@ fn key_hint(text: &str) -> Option<(String, OptionKey)> {
     Some((text[..open].trim_end().to_owned(), key))
 }
 
-/// Codex's composer: whether a turn is running, or `None` when it is not on screen.
-fn codex_prompt(rows: &Rows) -> Option<bool> {
+/// Codex's composer: whether a turn is running and what it holds, or `None` when it is not on screen.
+fn codex_prompt(rows: &Rows) -> Option<(bool, String)> {
     let last = rows.last()?;
     // the composer: a `›` row (not an option), the rows its text wraps onto, a blank row, then the footer
     let composer = (0..=last).rev().find(|index| {
@@ -555,5 +595,5 @@ fn codex_prompt(rows: &Rows) -> Option<bool> {
         return None;
     }
     let working = (composer.saturating_sub(NEAR)..composer).any(|index| rows.get(index).contains("esc to interrupt"));
-    Some(working)
+    Some((working, rows.typed(composer, below)))
 }

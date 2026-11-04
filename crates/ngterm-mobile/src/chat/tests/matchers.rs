@@ -1,7 +1,7 @@
 //! The screen matchers on Task 1's PTY captures, replayed through libghostty-vt at each recorded grid: each agent's
 //! permission dialog with its option labels and keys, Claude's picker and its review, the idle prompt and a working
-//! turn; and the screens they must not read: a dialog scrolled away, one half drawn, one quoted by a shell, another
-//! agent's.
+//! turn, and what a prompt holds (its placeholder left out, a draft read); and the screens they must not read: a
+//! dialog scrolled away, one half drawn, one quoted by a shell, another agent's.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -60,6 +60,11 @@ impl Capture {
     fn read(&self, agent: Agent, state: &str) -> Screen {
         let term = self.term();
         term.feed(self.at(state));
+        Self::read_term(&term, agent)
+    }
+
+    /// What `term`'s screen shows of `agent`.
+    fn read_term(term: &Term, agent: Agent) -> Screen {
         agent.read(&term.frame())
     }
 }
@@ -309,23 +314,88 @@ fn picker_checked(screen: &Screen) -> Vec<Option<bool>> {
         .collect()
 }
 
+fn empty(working: bool) -> Screen {
+    Screen::Prompt {
+        working,
+        composer: String::new(),
+    }
+}
+
+const AGENTS: [(Agent, &str); 2] = [(Agent::Claude, "claude"), (Agent::Codex, "codex")];
+
 #[test]
 fn the_idle_prompt_and_a_working_turn_are_told_apart_at_every_width() {
-    for agent in [Agent::Claude, Agent::Codex] {
-        let name = if agent == Agent::Claude { "claude" } else { "codex" };
+    // the placeholder an empty prompt shows (faint) is not read as text in it
+    for (agent, name) in AGENTS {
         for (capture_name, capture) in captures(name) {
-            assert_eq!(
-                capture.read(agent, "idle"),
-                Screen::Prompt { working: false },
-                "{capture_name}"
-            );
-            assert_eq!(
-                capture.read(agent, "working"),
-                Screen::Prompt { working: true },
-                "{capture_name}"
-            );
+            assert_eq!(capture.read(agent, "idle"), empty(false), "{capture_name}");
+            assert_eq!(capture.read(agent, "working"), empty(true), "{capture_name}");
         }
     }
+}
+
+/// The bytes that put `text` in the prompt of `term`'s screen, after its mark, in `style` (an SGR), the rest of the
+/// row cleared.
+pub(crate) fn into_prompt(term: &Term, agent: Agent, style: &str, text: &str) -> Vec<u8> {
+    let mark = if agent == Agent::Claude { '❯' } else { '›' };
+    let row = term
+        .frame()
+        .lines()
+        .iter()
+        .rposition(|line| line.starts_with(mark))
+        .expect("a prompt row");
+    format!("\x1b[{};3H\x1b[0m\x1b[K\x1b[{style}m{text}\x1b[0m", row + 1).into_bytes()
+}
+
+#[test]
+fn a_draft_in_the_prompt_is_read_and_a_faint_hint_is_not() {
+    for (agent, name) in AGENTS {
+        for (capture_name, capture) in captures(name) {
+            for (state, working) in [("idle", false), ("working", true)] {
+                let term = capture.term();
+                term.feed(capture.at(state));
+                term.feed(&into_prompt(&term, agent, "0", "draft /comp"));
+                assert_eq!(
+                    agent.read(&term.frame()),
+                    Screen::Prompt {
+                        working,
+                        composer: "draft /comp".to_owned()
+                    },
+                    "{capture_name} {state}"
+                );
+                term.feed(&into_prompt(&term, agent, "2", "a hint"));
+                assert_eq!(
+                    agent.read(&term.frame()),
+                    empty(working),
+                    "{capture_name} {state}: faint"
+                );
+            }
+        }
+    }
+    // Claude's box grown to two input rows: both are read
+    let capture = Capture::load("claude-44x36");
+    let term = capture.term();
+    term.feed(capture.at("idle"));
+    let lines = term.frame().lines();
+    let input = lines.iter().rposition(|line| line.starts_with('❯')).unwrap();
+    let rule = "─".repeat(usize::from(capture.cols));
+    // the upper rule one row up, the input on the two rows under it (1-based rows)
+    term.feed(
+        format!(
+            "\x1b[{};1H{rule}\x1b[{};1H\x1b[2K❯ two\x1b[{};1H\x1b[2K  lines",
+            input - 1,
+            input,
+            input + 1
+        )
+        .as_bytes(),
+    );
+    assert_eq!(
+        Capture::read_term(&term, Agent::Claude),
+        Screen::Prompt {
+            working: false,
+            composer: "two\nlines".to_owned()
+        }
+    );
 }
 
 #[test]
@@ -361,20 +431,29 @@ fn a_dialog_that_scrolled_away_is_not_read() {
 
 #[test]
 fn a_shell_that_quotes_a_dialog_is_not_read() {
+    const CLAUDE: &str = " Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. No\r\n\r\n Esc to cancel · Tab to amend\r\n";
+    const CODEX: &str = "› 1. Yes, proceed (y)\r\n  2. No, and tell Codex what to do differently (esc)\r\n\r\n  Press enter to confirm or esc to cancel\r\n";
+    // a dialog recorded at a narrower grid: its rule is not the screen's width
+    let narrow = format!("{}\r\n Bash command\r\n\r\n{CLAUDE}", "─".repeat(40));
     let quotes = [
-        (
-            Agent::Claude,
-            " Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. No\r\n\r\n Esc to cancel · Tab to amend\r\n",
-        ),
-        (
-            Agent::Codex,
-            "› 1. Yes, proceed (y)\r\n  2. No, and tell Codex what to do differently (esc)\r\n\r\n  Press enter to confirm or esc to cancel\r\n",
-        ),
+        (Agent::Claude, CLAUDE.to_owned()),
+        (Agent::Claude, narrow),
+        (Agent::Codex, CODEX.to_owned()),
     ];
-    for (agent, quote) in quotes {
+    for (agent, quote) in &quotes {
+        // a shell prompt after it: the footer is not the last line
         let term = Term::new(80, 24);
         term.feed(format!("user@host:~$ cat dialog.txt\r\n{quote}user@host:~$ ").as_bytes());
-        assert_eq!(agent.read(&term.frame()), Screen::Unknown, "{agent:?}");
+        assert_eq!(agent.read(&term.frame()), Screen::Unknown, "{agent:?} {quote:?}");
+        // the quote ends the screen (`tail -f`, no prompt yet): Claude's needs the full-width rule over it, Codex's a
+        // blank row over its first option
+        let term = Term::new(80, 24);
+        term.feed(format!("user@host:~$ tail -f dialog.txt\r\n{quote}").as_bytes());
+        assert_eq!(
+            agent.read(&term.frame()),
+            Screen::Unknown,
+            "{agent:?} {quote:?} ending the screen"
+        );
     }
 }
 

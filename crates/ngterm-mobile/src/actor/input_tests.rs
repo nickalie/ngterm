@@ -1,8 +1,8 @@
 //! The chat's actions through the whole core, over the fake transport's channels: a pane's attach fed a recorded
 //! agent screen, its role reports, and the keys that come back down the channel. Leadership first (a follower claims,
 //! a leader doesn't, a claim refused or unanswered sends nothing, a dialog gone by the time the claim lands sends
-//! nothing), then each action's keys, the lead lost between a paste and its Enter, and reading the chat or switching
-//! it with the terminal never claiming or resizing.
+//! nothing), then each action's keys, the lead lost between a paste and its Enter, a handle whose pane was hidden,
+//! and reading the chat or switching it with the terminal never claiming or resizing.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
@@ -21,7 +21,8 @@ use super::pane_tests::{
 };
 use crate::api::{MobileEvent, Pane, PaneInputError, PaneSize};
 use crate::chat::input::{ACTION_IN_FLIGHT, AgentInputOutcome, InputTiming, NO_AGENT_TO_DRIVE};
-use crate::chat::tests::matchers::Capture;
+use crate::chat::matchers::Agent;
+use crate::chat::tests::matchers::{Capture, into_prompt};
 use crate::chat::{Side, commands_tail};
 use crate::pane::{PaneRole, without_escapes};
 use crate::transport::fake::{Opened, Script};
@@ -146,6 +147,18 @@ impl Agents {
     fn show(&self, peer: &ChannelPeer, state: &str) {
         send(peer, self.capture.at(state));
     }
+
+    /// Feeds `peer` `text` in the prompt of the capture's `state`, as the TUI draws what was pasted.
+    fn show_typed(&self, peer: &ChannelPeer, agent: Agent, state: &str, text: &str) {
+        self.show_in_prompt(peer, agent, state, "0", text);
+    }
+
+    /// Feeds `peer` `text` in `style` (an SGR) in the prompt of the capture's `state`.
+    fn show_in_prompt(&self, peer: &ChannelPeer, agent: Agent, state: &str, style: &str, text: &str) {
+        let term = self.capture.term();
+        term.feed(self.capture.at(state));
+        send(peer, &into_prompt(&term, agent, style, text));
+    }
 }
 
 fn outcome(
@@ -156,17 +169,23 @@ fn outcome(
         .expect("the action answers")
 }
 
+/// What the core sent down `peer` within a moment: the bytes, and the other inputs (a resize, a close) in order.
+fn drained(peer: &mut ChannelPeer) -> (Vec<u8>, Vec<ChannelInput>) {
+    thread::sleep(Duration::from_millis(300));
+    let (mut bytes, mut others) = (Vec::new(), Vec::new());
+    while let Some(input) = peer.try_input() {
+        match input {
+            ChannelInput::Data(data) => bytes.extend(data),
+            other => others.push(other),
+        }
+    }
+    (bytes, others)
+}
+
 /// The keys typed down `peer` within a moment: what the core sent, the terminal's replies to the program's queries
 /// taken out.
 fn typed(peer: &mut ChannelPeer) -> Vec<u8> {
-    thread::sleep(Duration::from_millis(300));
-    let mut bytes = Vec::new();
-    while let Some(input) = peer.try_input() {
-        if let ChannelInput::Data(data) = input {
-            bytes.extend(data);
-        }
-    }
-    without_escapes(&bytes)
+    without_escapes(&drained(peer).0)
 }
 
 /// The claiming attach the action opened, reported leader, showing the capture's `state`.
@@ -263,13 +282,44 @@ fn a_prompt_is_pasted_then_entered_and_a_second_action_waits_its_turn() {
             reason: ACTION_IN_FLIGHT.to_owned()
         })
     );
-    let (bytes, _) = inputs_until(&mut agents.first.peer, |bytes, _| bytes.ends_with(b"\r"));
+    let (pasted, _) = inputs_until(&mut agents.first.peer, |bytes, _| contains(bytes, b"\x1b[201~"));
     assert!(
-        bytes.ends_with(b"\x1b[200~/compact keep it short\x1b[201~\r"),
-        "a bracketed paste of the whole command, then Enter: {:?}",
-        String::from_utf8_lossy(&bytes)
+        pasted.ends_with(b"\x1b[200~/compact keep it short\x1b[201~"),
+        "a bracketed paste of the whole command: {:?}",
+        String::from_utf8_lossy(&pasted)
     );
+    // the TUI shows the pasted text in its prompt: then the Enter goes
+    agents.show_typed(&agents.first.peer, Agent::Claude, "idle", "/compact keep it short");
+    let (entered, _) = inputs_until(&mut agents.first.peer, |bytes, _| bytes.ends_with(b"\r"));
+    assert_eq!(without_escapes(&entered), b"\r", "Enter alone");
     assert_eq!(outcome(&prompt), Ok(AgentInputOutcome::Sent));
+}
+
+#[test]
+fn a_prompt_holding_a_draft_or_a_paste_that_never_shows_gets_no_enter() {
+    let mut agents = Agents::start("codex", "codex-44x36");
+    agents.first_is("leader");
+    // a draft typed at the terminal: nothing goes
+    agents.show(&agents.first.peer, "idle");
+    agents.show_typed(&agents.first.peer, Agent::Codex, "idle", "draft ");
+    assert_eq!(
+        block_on(agents.pane.send_prompt("new prompt".to_owned())),
+        Ok(AgentInputOutcome::NotOnScreen)
+    );
+    assert!(typed(&mut agents.first.peer).is_empty());
+
+    // the draft cleared (the placeholder back, faint), the paste goes, but the prompt never shows it: no Enter
+    agents.show_in_prompt(
+        &agents.first.peer,
+        Agent::Codex,
+        "idle",
+        "2",
+        "Ask Codex to do anything",
+    );
+    let prompt = agents.act(|pane| block_on(pane.send_prompt("new prompt".to_owned())));
+    inputs_until(&mut agents.first.peer, |bytes, _| contains(bytes, b"\x1b[201~"));
+    assert_eq!(outcome(&prompt), Ok(AgentInputOutcome::Unconfirmed));
+    assert!(!typed(&mut agents.first.peer).contains(&b'\r'), "no Enter");
 }
 
 #[test]
@@ -310,9 +360,56 @@ fn the_lead_lost_between_the_paste_and_its_enter_sends_no_enter() {
     let nonce = lead_of(&agents.first.command).nonce;
     send(&agents.first.peer, &role_title(&nonce, "follower", 2));
     assert_eq!(outcome(&prompt), Ok(AgentInputOutcome::Unconfirmed));
-    let (_, others) = inputs_until(&mut agents.first.peer, |_, _| true);
-    assert!(others.is_empty());
-    assert!(!typed(&mut agents.first.peer).contains(&b'\r'), "no Enter");
+    let (bytes, others) = drained(&mut agents.first.peer);
+    assert!(!without_escapes(&bytes).contains(&b'\r'), "no Enter");
+    assert!(
+        others.is_empty(),
+        "the attach is neither resized nor closed: {others:?}"
+    );
+}
+
+#[test]
+fn a_handle_whose_pane_was_hidden_is_closed_even_once_the_pane_is_shown_again() {
+    let mut agents = Agents::start("claude", "claude-44x36");
+    agents.first_is("leader");
+    agents.show(&agents.first.peer, "permission");
+    agents
+        .fixture
+        .core
+        .hide_pane(MACHINE.to_owned(), SESSION.to_owned(), PANE.to_owned())
+        .unwrap();
+    let shown_again = block_on(agents.fixture.core.show_pane(
+        MACHINE.to_owned(),
+        SESSION.to_owned(),
+        PANE.to_owned(),
+        grid(&agents.capture),
+    ))
+    .unwrap();
+    let mut second = agents.fixture.attach();
+    let nonce = lead_of(&second.command).nonce;
+    send(&second.peer, &role_title(&nonce, "leader", 1));
+    agents.show(&second.peer, "permission");
+
+    // the retired handle reaches nothing, though the pane it named is shown again with the dialog up
+    assert_eq!(
+        block_on(agents.pane.answer_approval("Yes".to_owned())),
+        Err(PaneInputError::Closed)
+    );
+    assert_eq!(block_on(agents.pane.approval_labels()), Err(PaneInputError::Closed));
+    assert!(typed(&mut second.peer).is_empty());
+
+    // the handle the pane was shown again with answers it
+    let answer = {
+        let (done, outcome) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = done.send(block_on(shown_again.answer_approval("Yes".to_owned())));
+        });
+        outcome
+    };
+    let (bytes, _) = inputs_until(&mut second.peer, |bytes, _| without_escapes(bytes).contains(&b'1'));
+    assert_eq!(without_escapes(&bytes), b"1");
+    send(&second.peer, b"\x1b[2J\x1b[H");
+    assert_eq!(outcome(&answer), Ok(AgentInputOutcome::Sent));
 }
 
 #[test]

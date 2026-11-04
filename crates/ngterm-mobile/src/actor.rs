@@ -56,7 +56,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{AbortHandle, LocalSet};
 
 use crate::api::PaneInputError;
-use crate::api::{EventSink, Machine, MachineState, MobileError, MobileEvent, Pane, PaneSize};
+use crate::api::{EventSink, Machine, MachineState, MobileError, MobileEvent, Pane, PaneSize, PaneSlot};
 use crate::chat::input::{Action, AgentInputOutcome, InputTiming};
 use crate::chat::{AgentCommand, ChatEvent, ChatKey, Chats};
 use crate::pane::{self, ClipboardReply, GoneCheck, Note, PaneRef, Panes, Target};
@@ -142,15 +142,17 @@ pub(crate) enum Command {
         pane: PaneRef,
         reply: oneshot::Sender<Result<Vec<AgentCommand>, MobileError>>,
     },
-    /// A chat action on a shown pane's agent ([`crate::chat::input`]).
+    /// A chat action on a shown pane's agent ([`crate::chat::input`]), from the handle whose slot is `slot`.
     PaneInput {
         pane: PaneRef,
+        slot: Arc<PaneSlot>,
         action: Action,
         reply: oneshot::Sender<Result<AgentInputOutcome, PaneInputError>>,
     },
-    /// The labels an approval card offers for a shown pane's dialog.
+    /// The labels an approval card offers for a shown pane's dialog, asked by the handle whose slot is `slot`.
     ApprovalLabels {
         pane: PaneRef,
+        slot: Arc<PaneSlot>,
         reply: oneshot::Sender<Result<Vec<String>, PaneInputError>>,
     },
     NetworkChanged,
