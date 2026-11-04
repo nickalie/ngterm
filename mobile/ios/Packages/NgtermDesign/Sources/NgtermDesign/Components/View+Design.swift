@@ -4,11 +4,12 @@ extension View {
     /// The app's prominent button: filled with the tint, its label in ``Palette/onTint``.
     ///
     /// The label reads in light, dark and Increase Contrast alike, where the system's white would not on the dark
-    /// side's copper.
+    /// side's copper. The large control size makes the button itself (what a tap lands in) at least 44 pt tall: a
+    /// frame around a `Button` would add room, not touch.
     public func prominentAction() -> some View {
         buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .foregroundStyle(Palette.onTint.color)
-            .frame(minHeight: Spacing.hitTarget)
     }
 
     /// The view under `cover` when there is one: hidden from VoiceOver, which reads the cover instead.

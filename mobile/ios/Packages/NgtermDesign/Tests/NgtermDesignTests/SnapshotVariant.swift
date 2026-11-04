@@ -4,8 +4,8 @@ import UIKit
 /// The variants every component is recorded in.
 ///
 /// Light and dark at the default text size, and light at an accessibility text size (AX3), where layouts that stack or
-/// wrap show it. Goldens are recorded on the pinned simulator runtime at a display scale of 2, so the phone and the
-/// tablet render them the same.
+/// wrap show it. Goldens are recorded on the pinned simulator runtime at a display scale of 2, one set per simulator
+/// (``SnapshotDevice``).
 internal enum SnapshotVariant: CaseIterable, Sendable {
     case accessibility
     case dark

@@ -4,7 +4,8 @@ import SwiftUI
 /// it calls for, and a slot for its sessions' statuses while it is connected.
 ///
 /// It shows what it is given and reads no app state; the list it sits in makes it a row, a card in an inset list. At an
-/// accessibility text size the badge goes under the name.
+/// accessibility text size the badge goes under the name. VoiceOver reads it as one element, its name a heading, with
+/// the action as the element's custom action.
 public struct MachineRow<Summary: View>: View {
     @Environment(\.dynamicTypeSize)
     private var typeSize
@@ -43,6 +44,13 @@ public struct MachineRow<Summary: View>: View {
         }
         .padding(.vertical, Spacing.xSmall)
         .frame(minHeight: Spacing.hitTarget)
+        // one element, its action a custom action of it (the line's button is hidden from VoiceOver)
+        .accessibilityElement(children: .combine)
+        .accessibilityActions {
+            if let action {
+                Button(action.title, action: action.perform)
+            }
+        }
     }
 
     /// A machine named `name` at `address` (`user@host:port`), its connection `tone` (with `toneLabel` in place of

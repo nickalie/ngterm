@@ -173,10 +173,10 @@ by themselves.
 | `StatusGlyph` | a status's glyph alone, sized with its text; hidden from VoiceOver |
 | `StatusBadge` | one of the app's tones: glyph and word (or a longer label) in its color, read as the words |
 | `AgentStatusBadge` | an origin's agent status, its color lifted to read on every ground |
-| `MachineRow` | a machine: name (a heading), connection badge, mono address, what the state means with its one action (`RowAction`) at the line's end, and a slot for its sessions' statuses. At accessibility sizes the badge goes under the name and the action under the line |
+| `MachineRow` | a machine: name (a heading), connection badge, mono address, what the state means with its one action (`RowAction`) at the line's end, and a slot for its sessions' statuses. At accessibility sizes the badge goes under the name and the action under the line. VoiceOver reads it as one element, with the action as its custom action |
 | `SessionRow` | a session: name, the Attached mark (link glyph and "Attached" in verdigris), its line (context, working directory, or "Companion of …"), its status slot, or "Ending" with a spinner; a companion is indented |
 | `StatePanel` | what a screen shows instead of content, on `ContentUnavailableView`: `.loading`, `.empty`, `.error`, `.offline`, each with the one action that moves on and at most one quieter one under it; the glyph (`idle` unless the state has a tone) is decorative, and the title is a heading of its own |
-| `Banner` | a strip about the whole screen while it stays usable: glyph, message, note, optional action and dismiss; announced to VoiceOver when it appears |
+| `Banner` | a strip about the whole screen while it stays usable: glyph, message, note, optional action and dismiss; the text wraps and the actions go under it when they don't fit beside it; announced to VoiceOver when it appears |
 | `Cover` | a veil (a system material) over a pane that can't be used as it is: glyph or spinner, title (a heading), what it means, the action that fixes it; it takes every touch, and `covered(by:)` hides the pane under it from VoiceOver |
 | `confirmingDestructive` | the system's confirmation dialog before what can't be undone; its destructive button repeats the action's words |
 | `prominentAction()` | the filled button: the tint, with `onTint` for its label |
@@ -210,7 +210,8 @@ compact (iPhone, Slide Over)     regular (iPad, Stage Manager large)
 - **Compact:** a stack, one column at a time, and the session view gets the whole screen.
 - **Regular:** the columns side by side, all three where they fit. An iPad held upright has room for two, so it opens
   on the sessions column and the session, with the machines behind the sidebar button; the empty sessions column says
-  "No machine selected" and offers **Show machines**.
+  "No machine selected" and offers **Show machines** (only while the machines are hidden: beside them it offers
+  nothing).
 - **State:** each window's navigation lives in its `ScaffoldModel` as long as the scene, so rotation, Split View and
   Stage Manager resizing change the layout and lose nothing.
 - **Settings** is a sheet from the machines' toolbar (the gear).
@@ -218,7 +219,10 @@ compact (iPhone, Slide Over)     regular (iPad, Stage Manager large)
 - **One window per session (iPad):** a session can have a window of its own (`WindowGroup(for: SessionWindowID.self)`).
   SwiftUI keeps one window per session, so opening it again focuses that window. A session with its own window shows
   nowhere else: a window's detail column then says so and offers **Show window** (`SessionWindows`), since two views
-  of one pane would fight over its size.
+  of one pane would fight over its size. The same holds between main windows (iPad allows several): a session shows
+  in one main window's detail at a time. Opening it in another takes it over, and the first one's detail says so and
+  offers **Show here**, which takes it back. When the window showing it lets it go (opens another session, shows
+  another machine, closes), the window that had it before takes it back, and only that one.
 
 ## App icon and launch screen
 

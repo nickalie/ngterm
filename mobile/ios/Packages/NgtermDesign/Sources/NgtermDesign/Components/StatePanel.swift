@@ -43,9 +43,7 @@ public struct StatePanel: View {
                     .prominentAction()
             }
             if let secondaryAction {
-                Button(secondaryAction.title, action: secondaryAction.perform)
-                    .buttonStyle(.borderless)
-                    .frame(minHeight: Spacing.hitTarget)
+                QuietButton(action: secondaryAction)
             }
         }
     }

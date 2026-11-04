@@ -38,10 +38,13 @@ public struct AppScaffold<Machines: View, Sessions: View, Session: View, Setting
                     title: String(localized: "No machine selected"),
                     systemImage: "server.rack",
                     message: String(localized: "Pick a machine to see its sessions."),
-                    // an iPad held upright has no room for the three columns, so the machines start hidden
-                    action: RowAction(String(localized: "Show machines")) {
-                        model.columnVisibility = .all
-                    }
+                    // an iPad held upright has no room for the three columns, so the machines start hidden; where
+                    // they show, the panel points at them and offers nothing
+                    action: model.areMachinesHidden
+                        ? RowAction(String(localized: "Show machines")) {
+                            model.columnVisibility = .all
+                        }
+                        : nil
                 )
             }
         } detail: {
