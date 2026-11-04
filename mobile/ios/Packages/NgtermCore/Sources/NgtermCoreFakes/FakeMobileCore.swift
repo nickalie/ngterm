@@ -9,15 +9,17 @@
     /// ``emitted``), and throws the failure a test queued with ``failNext(_:with:)`` from that method's next call. An
     /// async method's next call can be held open with ``hold(_:)``: it is recorded and takes its queued failure at
     /// once, then waits for the gate before going on. A cancel of the caller's task ends its wait at once, as the live
-    /// core's does, while the call goes on.
+    /// core's does, while the call goes on; a call whose task was cancelled before it is never made, so it is not
+    /// recorded and leaves its queued failure and gate to the next one.
     ///
     /// It follows the real core's rules (crates/ngterm-mobile, api.rs and actor.rs) where the app sees them:
     /// - ``connect(machine:)`` reports ``MachineState/connected`` when the machine was not connected (or was connected
     ///   as another record: an edited machine connects anew, one only renamed keeps its connection); a connect that
     ///   fails reports ``MachineState/unreachable(reason:)`` with the failure's reason before it throws
-    ///   ``MobileError/Unreachable(reason:)``. ``disconnect(machineId:)`` reports nothing and forgets the machine's
-    ///   listing; ``useKey(machineId:keyId:)`` puts the key in the record the machine is connected with and keeps the
-    ///   connection, so a connect with that key is no edit;
+    ///   ``MobileError/Unreachable(reason:)``. ``disconnect(machineId:)`` reports nothing, forgets the machine's
+    ///   listing and cancels every connect of it in flight, held or waiting on the user or not
+    ///   (``MobileError/Cancelled``); ``useKey(machineId:keyId:)`` puts the key in the record the machine is connected
+    ///   with and keeps the connection, so a connect with that key is no edit;
     /// - host keys, when the fake has a host key store and ``hostKeys`` names the key a machine's host offers: a pinned
     ///   key that matches connects; another pinned key reports
     ///   ``MobileEvent/hostKeyChanged(machineId:pinned:offered:)`` and fails (``hostKeyChanged``); no pin reports
@@ -151,10 +153,13 @@
 
         /// Hands `event` to ``events``, as the core's actor would.
         public func emit(_ event: MobileEvent) {
-            state.withLock { state in
-                state.emitted.append(event)
-                continuation.yield(event)
-            }
+            state.withLock { emit(event, in: &$0) }
+        }
+
+        /// Hands `event` to ``events`` under the lock already held on `state`.
+        internal func emit(_ event: MobileEvent, in state: inout FakeCoreState) {
+            state.emitted.append(event)
+            continuation.yield(event)
         }
 
         /// Records a synchronous call, and throws the failure queued for it.
@@ -170,13 +175,7 @@
 
         /// Records an async call, taking its queued failure and its gate for ``FakeHeldCall/pass()``.
         internal func recordHeld(_ method: String, _ args: [any Hashable & Sendable]) -> FakeHeldCall {
-            state.withLock { state in
-                state.recorded.append(FakeCall(method, args))
-                return FakeHeldCall(
-                    failure: state.failures.removeValue(forKey: method),
-                    hold: state.holds.removeValue(forKey: method)
-                )
-            }
+            state.withLock { $0.recordHeld(method, args) }
         }
 
         /// Reports `machineId` unreachable for `reason`, and throws it.

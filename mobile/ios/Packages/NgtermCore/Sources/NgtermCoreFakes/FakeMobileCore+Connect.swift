@@ -4,33 +4,43 @@
     // The fake core's connections: connect and disconnect, keys, host keys and sign-ins.
     extension FakeMobileCore {
         /// Connects `machine`, as the type's rules say.
-        public func connect(machine: Machine) async throws {
-            let call = recordHeld("connect", [machine])
+        nonisolated(nonsending) public func connect(machine: Machine) async throws {
             try await abandoningOnCancel { [self] in
+                let (call, attempt) = state.withLock { state in
+                    (state.recordHeld("connect", [machine]), state.attempts[machine.id, default: 0])
+                }
                 do {
                     try await call.pass()
                 } catch MobileError.Unreachable(let reason) {
+                    try goesOn(machine.id, attempt)
                     try unreachable(machine.id, reason)
                 }
+                try goesOn(machine.id, attempt)
                 guard !keepsConnection(machine) else {
                     return
                 }
                 state.withLock { $0.drop(machine.id) }
                 try await checkHostKey(machine)
+                try goesOn(machine.id, attempt)
                 try await checkSignIn(machine)
-                state.withLock { state in
+                try state.withLock { state throws(MobileError) in
+                    // checked under the lock that connects it: a disconnect comes before it (and cancels) or after
+                    guard state.attempts[machine.id, default: 0] == attempt else {
+                        throw MobileError.Cancelled
+                    }
                     state.connected.insert(machine.id)
                     state.records[machine.id] = machine
+                    emit(.machineState(machineId: machine.id, state: .connected), in: &state)
                 }
-                emit(.machineState(machineId: machine.id, state: .connected))
             }
         }
 
-        /// Forgets the connection and listing of `machineId`, hides its panes and cancels a connect waiting on the
-        /// user.
+        /// Forgets the connection and listing of `machineId`, hides its panes and cancels every connect of it in
+        /// flight.
         public func disconnect(machineId: String) throws {
             try record("disconnect", [machineId])
             let (question, signIn) = state.withLock { state in
+                state.attempts[machineId, default: 0] += 1
                 state.drop(machineId)
                 return (
                     state.questions.removeValue(forKey: machineId),
@@ -54,6 +64,13 @@
             try record("answerHostKey", [machineId, fingerprint, trust])
             let question = state.withLock { $0.questions.removeValue(forKey: machineId) }
             question?.answer.open(with: trust && fingerprint == question?.offered ? .accepted : .refused)
+        }
+
+        /// Throws ``MobileError/Cancelled`` once a disconnect of `machineId` overtook its connect made at `attempt`.
+        private func goesOn(_ machineId: String, _ attempt: UInt64) throws(MobileError) {
+            guard state.withLock({ $0.attempts[machineId, default: 0] }) == attempt else {
+                throw MobileError.Cancelled
+            }
         }
 
         /// Whether `machine` is connected as it is, up to its label.

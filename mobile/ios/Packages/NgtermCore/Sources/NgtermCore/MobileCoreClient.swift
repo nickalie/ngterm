@@ -5,7 +5,9 @@
 ///
 /// An async call that has an answer waits for it. A cancel of the caller's task ends that wait at once with
 /// `CancellationError`, and the core still carries out what it was asked (as on Android): a cancelled connect goes on
-/// connecting until ``disconnect(machineId:)``. A synchronous call hands its command to the core and returns; it throws
+/// connecting until ``disconnect(machineId:)``. An async call runs on its caller's executor and hands its command to
+/// the core before its caller waits, so whatever the caller does next (a ``disconnect(machineId:)`` after a cancelled
+/// connect, say) reaches the core after it. A synchronous call hands its command to the core and returns; it throws
 /// only ``MobileError/Stopped``.
 public protocol MobileCoreClient: AnyObject, Sendable {
     /// What the core tells the app on its own, in the order it told it: one stream for the core's life, for one
@@ -14,7 +16,7 @@ public protocol MobileCoreClient: AnyObject, Sendable {
 
     /// Connects `machine`, answered once it is connected; a lost connection is retried from then on until
     /// ``disconnect(machineId:)``.
-    func connect(machine: Machine) async throws
+    nonisolated(nonsending) func connect(machine: Machine) async throws
 
     /// Closes the connection to `machineId` and cancels a connect in flight (``MobileError/Cancelled``).
     func disconnect(machineId: String) throws
@@ -26,17 +28,17 @@ public protocol MobileCoreClient: AnyObject, Sendable {
     func answerHostKey(machineId: String, fingerprint: String, trust: Bool) throws
 
     /// `machineId`'s sessions, as its tree lists them; they also arrive as ``MobileEvent/tree(machineId:sessions:)``.
-    func listSessions(machineId: String) async throws -> [RemoteSession]
+    nonisolated(nonsending) func listSessions(machineId: String) async throws -> [RemoteSession]
 
     /// New Session on `machineId`, named `name` when given (a blank name is none).
-    func createSession(machineId: String, name: String?) async throws -> RemoteSession
+    nonisolated(nonsending) func createSession(machineId: String, name: String?) async throws -> RemoteSession
 
     /// End Session: `machineId` closes its session `sessionId`, with no undo.
-    func endSession(machineId: String, sessionId: String) async throws
+    nonisolated(nonsending) func endSession(machineId: String, sessionId: String) async throws
 
     /// Attaches `sessionId` of `machineId`: its presentation stream opens and stays up until
     /// ``detachSession(machineId:sessionId:)``.
-    func attachSession(machineId: String, sessionId: String) async throws
+    nonisolated(nonsending) func attachSession(machineId: String, sessionId: String) async throws
 
     /// Detaches `sessionId` of `machineId`: its stream ends and its shown panes are hidden.
     func detachSession(machineId: String, sessionId: String) throws
@@ -54,7 +56,12 @@ public protocol MobileCoreClient: AnyObject, Sendable {
     func answerAsk(machineId: String, sessionId: String, askId: String, reply: AskReply) throws
 
     /// Shows the pane `paneId` of `sessionId` at `size`; showing a shown pane hands back a handle on the same pane.
-    func showPane(machineId: String, sessionId: String, paneId: String, size: PaneSize) async throws -> any PaneClient
+    nonisolated(nonsending) func showPane(
+        machineId: String,
+        sessionId: String,
+        paneId: String,
+        size: PaneSize
+    ) async throws -> any PaneClient
 
     /// Hides a shown pane: its handles go dead (``PaneInputError/Closed``).
     func hidePane(machineId: String, sessionId: String, paneId: String) throws

@@ -41,6 +41,28 @@ internal struct AbandoningOnCancelTests {
         #expect(await ends.next() != nil, "the call ended")
     }
 
+    @Test("the call starts on the caller's executor, before the caller waits")
+    @MainActor
+    internal func callStartsBeforeTheCallerWaits() async {
+        let started = Counter()
+        let (opened, open) = AsyncStream.makeStream(of: Void.self)
+        // runs on the main actor up to its first suspension: the caller's wait for the call's answer
+        let caller = Task.immediate { @MainActor in
+            try await abandoningOnCancel {
+                started.add()
+                for await _ in opened {
+                    break
+                }
+            }
+        }
+        #expect(started.count == 1, "the call started before the caller waited")
+        caller.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await caller.value
+        }
+        open.finish()
+    }
+
     @Test("a task cancelled before the call never makes it")
     internal func cancelledTaskMakesNoCall() async {
         let made = Counter()
