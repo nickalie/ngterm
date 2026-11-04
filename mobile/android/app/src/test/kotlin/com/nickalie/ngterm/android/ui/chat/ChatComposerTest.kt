@@ -221,6 +221,8 @@ class ChatComposerTest {
         bed.test.core.catalogs[bed.ref("p1")] = claude.takeLast(1)
         bed.emit("p1", reset)
         assertEquals(listOf("frontend:design"), names())
+        // the held ask would answer with another list: were it let in, the menu would show it
+        bed.test.core.catalogs[bed.ref("p1")] = claude.take(1)
         gate.complete(Unit)
         assertEquals(listOf("frontend:design"), names())
 
@@ -360,6 +362,9 @@ class ChatComposerTest {
     fun theFieldTakesLineBreaksAsTypedAndRefusesOtherControls() {
         type("one\r\ntwo\rthree")
         assertEquals(TextFieldValue("one\ntwo\nthree", TextRange(13)), composer.draft)
+        // a word still being composed keeps its composition, on the same characters
+        type("one\r\ntwo\rthree", composition = TextRange(9, 14))
+        assertEquals(TextFieldValue("one\ntwo\nthree", TextRange(13), TextRange(8, 13)), composer.draft)
         type("one\ntwo\u001b[201~")
         assertEquals("one\ntwo\nthree", composer.draft.text)
         type("tab\there")

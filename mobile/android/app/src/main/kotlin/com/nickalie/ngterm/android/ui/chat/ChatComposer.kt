@@ -226,5 +226,9 @@ private fun TextFieldValue.withPlainBreaks(): TextFieldValue {
         }
         return offset - dropped
     }
-    return TextFieldValue(plain, TextRange(at(selection.start), at(selection.end)))
+    return TextFieldValue(
+        plain,
+        TextRange(at(selection.start), at(selection.end)),
+        composition?.let { TextRange(at(it.start), at(it.end)) },
+    )
 }

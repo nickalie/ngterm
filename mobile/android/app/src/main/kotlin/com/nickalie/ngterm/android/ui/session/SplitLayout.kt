@@ -137,7 +137,7 @@ fun PaneSlot(
             },
     ) {
         if (spot.chatView) {
-            ChatSlot(spot, grid, actions, focusRequester, Modifier.fillMaxSize().underCover(cover.veils))
+            ChatSlot(spot, focused, grid, actions, focusRequester, Modifier.fillMaxSize().underCover(cover.veils))
         } else {
             spot.state?.let { state ->
                 TerminalView(
@@ -192,10 +192,12 @@ private fun PaneSpot.cover(): PaneCover? =
 // a pane in chat view: its chat once open (the backlog's wait until then), and its terminal, not drawn, still given the
 // grid the slot would draw it at, so a chat action that takes control lays the program out for this device. A grid
 // that holds for a frame (the extra keys stepping aside: the room they leave is counted before the slot has grown
-// into it) is not given. The slot takes the input focus through [focusRequester] as the terminal would
+// into it) is not given. The slot takes the input focus through [focusRequester] as the terminal would; Back closes
+// the chat's `/` menu only in the [focused] (selected) pane
 @Composable
 private fun ChatSlot(
     spot: PaneSpot,
+    focused: Boolean,
     grid: PaneSize?,
     actions: PaneActions,
     focusRequester: FocusRequester?,
@@ -220,6 +222,7 @@ private fun ChatSlot(
                     onShowTerminal = { actions.onShowTerminal(spot.ref) },
                     modifier = Modifier.fillMaxSize(),
                     focusRequester = field,
+                    selected = focused,
                 )
             }
         } else {

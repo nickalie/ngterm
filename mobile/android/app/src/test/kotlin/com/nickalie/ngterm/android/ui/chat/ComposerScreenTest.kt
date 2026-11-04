@@ -1,6 +1,10 @@
 package com.nickalie.ngterm.android.ui.chat
 
+import androidx.activity.OnBackPressedDispatcher
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -26,6 +30,8 @@ import androidx.compose.ui.test.withKeyDown
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -148,5 +154,29 @@ class ComposerScreenTest {
         state.value = state.value.copy(phase = ChatPhase.Ended)
         show()
         field().assertDoesNotExist()
+    }
+
+    @Test
+    fun backClosesOnlyTheSelectedPanesMenu() {
+        // two panes of a split, each with its menu open; the one not selected composes last, so its handler would
+        // take Back first were it enabled
+        val selected = ChatSamples.composer("/")
+        val other = ChatSamples.composer("/")
+        lateinit var back: OnBackPressedDispatcher
+        val actions = ChatActions()
+        compose.setContent {
+            back = LocalOnBackPressedDispatcherOwner.current!!.onBackPressedDispatcher
+            NgtermTheme {
+                Column {
+                    ChatScreen(state.value, "build-01", actions, Modifier.weight(1f), selected, selected = true)
+                    ChatScreen(state.value, "build-01", actions, Modifier.weight(1f), other, selected = false)
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.runOnUiThread { back.onBackPressed() }
+        compose.waitForIdle()
+        assertNull(selected.menu)
+        assertNotNull(other.menu)
     }
 }

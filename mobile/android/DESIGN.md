@@ -767,7 +767,8 @@ The plan, reviewed against the brief:
 - **The `/` menu** (`SlashCommandMenu`): a `/` at the start of the field, with no space or line break after it, opens
   it over the foot of the rows and cards; what follows the `/` narrows it as it is typed (the IME's unfinished word
   included), ranked by the core's `filter_commands`, the palettes' ranking. A space, a line break or deleting the `/`
-  closes it, and so do Escape and Back until the text changes. Rows (56dp): the command as it goes in (`/compact`, a
+  closes it, and so do Escape and Back until the text changes (Back only the selected pane's: a split's other pane
+  keeps its menu open). Rows (56dp): the command as it goes in (`/compact`, a
   Codex skill's `$name`) in the terminal's face at 13 sp with its argument hint quiet after it, a line of what it does
   (bodySmall, one line), and its kind at the end (labelMedium: Built-in, Skill, Command, Plugin). About six show, the
   rest a scroll away; the highlighted row, the one Enter or Tab picks, is on `surfaceContainerHighest`. Picking one

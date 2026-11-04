@@ -32,7 +32,8 @@ import com.nickalie.ngterm.android.ui.theme.StatusTone
 
 /**
  * A pane's open [chat], live, read from [machine]; [onShowTerminal] shows the pane's terminal instead. Its prompt field
- * takes the input focus through [focusRequester]; its draft is kept while the app is put away ([KeepDraft]).
+ * takes the input focus through [focusRequester]; its draft is kept while the app is put away ([KeepDraft]). Back
+ * closes its `/` menu only while it is the [selected] pane.
  */
 @Composable
 fun ChatPane(
@@ -41,6 +42,7 @@ fun ChatPane(
     onShowTerminal: () -> Unit,
     modifier: Modifier = Modifier,
     focusRequester: FocusRequester = remember { FocusRequester() },
+    selected: Boolean = true,
 ) {
     val state by chat.state.collectAsStateWithLifecycle()
     val actions =
@@ -56,7 +58,7 @@ fun ChatPane(
             )
         }
     KeepDraft(chat.pane, chat.composer, state.conversation?.conversationId, chat::restoreDraft)
-    ChatScreen(state, machine, actions, modifier, chat.composer, focusRequester)
+    ChatScreen(state, machine, actions, modifier, chat.composer, focusRequester, selected)
 }
 
 /**
@@ -64,7 +66,8 @@ fun ChatPane(
  * way, nothing said yet, the chat ended), a strip over the rows while its link is back on its way, pinned at its foot
  * the last action's problem and the card the agent waits on (an approval before a question), and under them the
  * [composer] (none: the chat only reads), whose `/` menu opens over the foot of the rows and cards. The prompt field
- * takes the input focus through [focusRequester]. TalkBack names it "Chat with" the agent.
+ * takes the input focus through [focusRequester]; Back closes the menu only in the [selected] pane. TalkBack names it
+ * "Chat with" the agent.
  */
 @Composable
 fun ChatScreen(
@@ -74,6 +77,7 @@ fun ChatScreen(
     modifier: Modifier = Modifier,
     composer: ChatComposer? = null,
     focusRequester: FocusRequester = remember { FocusRequester() },
+    selected: Boolean = true,
 ) {
     val agent = state.conversation?.agent
     val name = stringResource(agentName(agent))
@@ -120,7 +124,7 @@ fun ChatScreen(
                     )
                 }
             }
-            writing?.let { Composer(it, state, actions, focusRequester) }
+            writing?.let { Composer(it, state, actions, focusRequester, selected = selected) }
         }
     }
 }

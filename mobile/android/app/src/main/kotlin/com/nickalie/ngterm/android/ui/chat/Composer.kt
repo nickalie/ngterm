@@ -55,7 +55,8 @@ import com.nickalie.ngterm.core.ffi.PaneRef
  * spinner. The field takes the input focus through [focusRequester].
  *
  * A hardware keyboard: Ctrl+Enter sends; while the `/` menu lists commands, Up and Down move its highlight and Enter
- * or Tab picks it; Escape (or Back) closes the menu.
+ * or Tab picks it; Escape (or Back) closes the menu. Back reaches only the [selected] pane's menu: a split's other
+ * pane may keep its own open, and Back must not close that one instead.
  */
 @Composable
 fun Composer(
@@ -64,10 +65,10 @@ fun Composer(
     actions: ChatActions,
     focusRequester: FocusRequester,
     modifier: Modifier = Modifier,
+    selected: Boolean = true,
 ) {
     val spacing = NgtermTheme.spacing
-    val menuOpen = composer.menu != null
-    BackHandler(enabled = menuOpen) { composer.dismissMenu() }
+    BackHandler(enabled = selected && composer.menu != null) { composer.dismissMenu() }
     val canSend = !state.busy && !state.awaitsCard && composer.draft.text.isNotBlank()
     Surface(modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceContainer) {
         // the field and its buttons centered in a reading width, as the rows above are
