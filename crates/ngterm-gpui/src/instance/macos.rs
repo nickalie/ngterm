@@ -109,9 +109,20 @@ mod tests {
         assert_eq!(std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777, 0o600);
         drop(primary);
         let _stale = UnixListener::bind(socket).unwrap();
-        assert!(matches!(
-            register("com.example.test", root.path(), send).unwrap(),
-            Registration::Primary(_)
-        ));
+        assert!(registers_as_primary(root.path(), &send), "the stale socket is recovered");
+    }
+
+    /// Whether a launch becomes the primary within two seconds. Tests in this binary start shells on PTYs, which
+    /// `fork` before they `exec`: until then the child holds a copy of every descriptor, the dropped primary's lock
+    /// included, and a launch in that window finds the lock taken and reaches the stale listener as a remote.
+    fn registers_as_primary(root: &Path, send: &BusRequests) -> bool {
+        (0..100).any(|_| {
+            let registered = register("com.example.test", root, send.clone()).unwrap();
+            let primary = matches!(registered, Registration::Primary(_));
+            if !primary {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            primary
+        })
     }
 }
