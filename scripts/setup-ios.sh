@@ -28,8 +28,8 @@
 # Usage: scripts/setup-ios.sh           set up what is missing
 #        scripts/setup-ios.sh --check   change nothing: when what a build needs (the pinned Xcode, the Rust iOS
 #                                       targets, the pinned simulator runtime and SwiftLint) is in place, print the
-#                                       DEVELOPER_DIR and PATH exports and exit 0, else list what is missing and exit 1
-#                                       (the iOS build evals them)
+#                                       DEVELOPER_DIR export (and the PATH one for a vendored SwiftLint) and exit 0,
+#                                       else list what is missing and exit 1 (the iOS build evals the exports)
 set -euo pipefail
 
 CHECK=0
@@ -139,13 +139,15 @@ check_build_toolchain() {
     missing+=("Xcode $IOS_XCODE_VERSION (found: $xcode): $XCODE_ADVICE")
     xcode=""
   fi
-  installed="$(installed_rust_targets)"
+  # a probe that fails (a rustup that can't fetch the pinned toolchain, a swiftlint that won't run) reports its piece
+  # as missing instead of ending the check under errexit
+  installed="$(installed_rust_targets)" || installed=""
   for target in "${RUST_TARGETS[@]}"; do
     grep -qx "$target" <<<"$installed" || missing+=("Rust target $target (rustup target add $target)")
   done
   runtime_installed || missing+=("the iOS $IOS_SIMULATOR_RUNTIME simulator runtime ($RUNTIME_ID)")
   if swiftlint="$(find_swiftlint)"; then
-    version="$(swiftlint_version_of "$swiftlint")"
+    version="$(swiftlint_version_of "$swiftlint")" || version=""
     [[ "$version" == "$SWIFTLINT_VERSION" ]] ||
       missing+=("SwiftLint $SWIFTLINT_VERSION (found: ${version:-no version} at $swiftlint)")
   else
@@ -157,7 +159,13 @@ check_build_toolchain() {
     return 1
   fi
   echo "the iOS toolchain is in place (Xcode $IOS_XCODE_VERSION at $xcode)" >&2
-  print_exports "$xcode" "$(dirname "$swiftlint")"
+  print_exports "$xcode" "$(vendored_swiftlint_dir)"
+}
+
+# The vendored SwiftLint's directory, for the PATH export, when it is there. A SwiftLint on PATH needs no export, and
+# exporting its directory (/opt/homebrew/bin, say) would put everything else there ahead of rustup's cargo.
+vendored_swiftlint_dir() {
+  [[ ! -x "$SWIFTLINT_DIR/swiftlint" ]] || echo "$SWIFTLINT_DIR"
 }
 
 print_exports() {
@@ -176,7 +184,7 @@ ensure_rust_targets() {
     return 0
   fi
   local installed target
-  installed="$(installed_rust_targets)"
+  installed="$(installed_rust_targets)" || installed=""
   for target in "${RUST_TARGETS[@]}"; do
     if ! grep -qx "$target" <<<"$installed"; then
       if (cd "$NATIVE_ROOT" && rustup target add "$target") >/dev/null 2>&1; then
@@ -293,7 +301,7 @@ echo >&2
 if ((${#DID[@]})); then
   echo "done:" >&2
   printf '  %s\n' "${DID[@]}" >&2
-else
+elif ((${#COULD_NOT[@]} == 0)); then
   echo "nothing to do: the iOS toolchain is already in place" >&2
 fi
 if ((${#COULD_NOT[@]})); then
@@ -302,8 +310,6 @@ if ((${#COULD_NOT[@]})); then
 fi
 echo >&2
 echo "export these (shell profile or CI env):" >&2
-SWIFTLINT_BIN=""
-[[ ! -x "$SWIFTLINT_DIR/swiftlint" ]] || SWIFTLINT_BIN="$SWIFTLINT_DIR"
-print_exports "$XCODE" "$SWIFTLINT_BIN"
+print_exports "$XCODE" "$(vendored_swiftlint_dir)"
 
 ((${#COULD_NOT[@]} == 0))
