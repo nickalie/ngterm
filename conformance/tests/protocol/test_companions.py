@@ -205,6 +205,19 @@ def _prints(ctl, sid, **pane):
     wait_until(printed)
 
 
+def _interrupts(ctl, sid):
+    """Types Ctrl-C into `sid` until `sleep` leaves its foreground. The foreground names a program from the moment its
+    process exists, and on Windows MSYS's `sleep` loses a Ctrl-C that arrives in its first few hundred milliseconds,
+    before its runtime handles one."""
+
+    def interrupted():
+        assert_ok(ctl.request("session.type", sid, text="\x03"))
+        ctl.wait_tree(lambda tree: (find_session(tree, sid).get("foreground") or [])[:1] != ["sleep"], timeout=2)
+        return True
+
+    wait_until(interrupted)
+
+
 @pytest.mark.parametrize("shells", ["plain", pytest.param("live", marks=LIVE)], indirect=True)
 @pytest.mark.covers("session.companion.new")
 def test_a_parent_whose_shell_exits_restarts_it(shells):
@@ -224,7 +237,7 @@ def test_a_parent_whose_shell_exits_restarts_it(shells):
     command = assert_ok(ctl.request("session.new", workspace=wid, cwd="/tmp", command="sleep 600", noSelect=True))["id"]
     _companion(ctl, command)
     ctl.wait_tree(lambda tree: (find_session(tree, command).get("foreground") or [])[:1] == ["sleep"])
-    assert_ok(ctl.request("session.type", command, text="\x03"))
+    _interrupts(ctl, command)
     _prints(ctl, command)
     node = find_session(ctl.tree(), command)
     assert (node.get("foreground") or [])[:1] != ["sleep"], node
