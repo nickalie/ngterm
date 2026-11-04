@@ -616,10 +616,15 @@ fn a_headless_origin_creates_a_page_companion_and_hands_it_to_the_presenter() {
     let attachment = attach(origin.fixture(), id);
     assert_eq!(attachment["page"], json!(wire(page)), "a viewer can attach it");
 
-    let closed = origin.fixture().session(SessionCmd::OverlayClose, Some(&wire(id)), Args::default());
+    let closed = origin
+        .fixture()
+        .session(SessionCmd::OverlayClose, Some(&wire(id)), Args::default());
     assert!(closed.ok, "{closed:?}");
     origin.fixture().core.commit();
-    assert!(origin.fixture().store().session(id).is_none(), "the page and its row ended");
+    assert!(
+        origin.fixture().store().session(id).is_none(),
+        "the page and its row ended"
+    );
     assert!(
         origin.fixture().core.take_released_pages().is_empty(),
         "nothing is queued for web views a headless origin does not have"
