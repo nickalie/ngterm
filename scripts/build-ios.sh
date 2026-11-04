@@ -121,8 +121,9 @@ release=()
 [[ "$PROFILE" == debug ]] || release=(--release)
 NATIVE_LIBS=""
 for target in "${IOS_TARGETS[@]}"; do
-  log="$(cargo rustc -p ngterm-mobile --lib --crate-type staticlib --target "$target" ${release[@]+"${release[@]}"} \
-    -- --print native-static-libs 2>&1)" || {
+  # --color never: a colored `note:` (CARGO_TERM_COLOR=always, as CI sets it) wouldn't match the sed below
+  log="$(cargo rustc --color never -p ngterm-mobile --lib --crate-type staticlib --target "$target" \
+    ${release[@]+"${release[@]}"} -- --print native-static-libs 2>&1)" || {
     echo "$log" >&2
     die "build-ios.sh: the $target archive failed to build"
   }
