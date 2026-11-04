@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use super::support::{self, last, parse_bytes, tool};
 use crate::agent_chat::claude::subagent_parent;
 use crate::agent_chat::event::{LINE_CAP, MALFORMED, OUTPUT_CAP, OVERSIZED};
 use crate::agent_chat::{
@@ -17,18 +18,6 @@ const AGENT_TOOL: &str = "toolu_017cp2PTnCapCdo5DxHUGE69";
 
 fn project_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/agent_chat/claude/projects/-home-user-project")
-}
-
-/// Every line of `bytes` through `parser`, each with its byte offset.
-fn parse_bytes(parser: &mut dyn TranscriptParser, bytes: &[u8]) -> Vec<ChatEvent> {
-    let mut events = Vec::new();
-    let mut cursor = 0;
-    for line in bytes.split_inclusive(|&b| b == b'\n') {
-        let body = line.strip_suffix(b"\n").unwrap_or(line);
-        events.extend(parser.parse_line(body, cursor));
-        cursor += line.len() as u64;
-    }
-    events
 }
 
 fn parse_fixture(parser: &mut dyn TranscriptParser, stem: &str) -> Vec<ChatEvent> {
@@ -48,52 +37,8 @@ fn subagent_events() -> Vec<ChatEvent> {
     parse_fixture(&mut ClaudeParser::subagent(parent), SUBAGENT)
 }
 
-fn ndjson(events: &[ChatEvent]) -> String {
-    events.iter().map(|event| event.to_ndjson() + "\n").collect()
-}
-
-/// The events equal the golden NDJSON next to the fixture. `UPDATE_GOLDEN=1` rewrites it (after a deliberate parser
-/// change; review the diff).
-fn assert_golden(stem: &str, events: &[ChatEvent]) {
-    let path = project_dir().join(format!("{stem}.golden.ndjson"));
-    let actual = ndjson(events);
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::write(&path, &actual).unwrap();
-    }
-    let golden = std::fs::read_to_string(&path).unwrap_or_default();
-    for (index, (want, got)) in golden.lines().zip(actual.lines()).enumerate() {
-        assert_eq!(got, want, "{}: event {index} differs from the golden", path.display());
-    }
-    assert_eq!(
-        actual.lines().count(),
-        golden.lines().count(),
-        "{}: event count",
-        path.display()
-    );
-}
-
-/// Every golden line reads back as the event it was written from: the NDJSON form round-trips.
-fn assert_round_trip(events: &[ChatEvent]) {
-    for event in events {
-        let line = event.to_ndjson();
-        let read: ChatEvent = serde_json::from_str(&line).unwrap();
-        assert_eq!(&read, event, "{line}");
-    }
-}
-
 fn golden_case(stem: &str, events: &[ChatEvent]) {
-    assert!(!events.is_empty(), "{stem}: no events");
-    assert_round_trip(events);
-    assert_golden(stem, events);
-    let unknown: Vec<_> = events
-        .iter()
-        .filter(|event| matches!(event.body, EventBody::Unknown { .. }))
-        .map(ChatEvent::to_ndjson)
-        .collect();
-    assert!(
-        unknown.is_empty(),
-        "{stem}: the recorded version's lines all parse: {unknown:#?}"
-    );
+    support::golden_case(&project_dir().join(format!("{stem}.golden.ndjson")), events);
 }
 
 #[test]
@@ -114,22 +59,6 @@ fn the_worker_run_matches_its_golden() {
 #[test]
 fn the_subagent_matches_its_golden() {
     golden_case(SUBAGENT, &subagent_events());
-}
-
-/// The last event with `id`: what the chat shows for that item once every line is read.
-fn last<'a>(events: &'a [ChatEvent], id: &str) -> &'a ChatEvent {
-    events
-        .iter()
-        .rev()
-        .find(|event| event.id == id)
-        .unwrap_or_else(|| panic!("no event {id}"))
-}
-
-fn tool(event: &ChatEvent) -> &Tool {
-    match &event.body {
-        EventBody::Tool(tool) => tool,
-        other => panic!("not a tool: {other:?}"),
-    }
 }
 
 fn user_texts(events: &[ChatEvent]) -> Vec<&str> {

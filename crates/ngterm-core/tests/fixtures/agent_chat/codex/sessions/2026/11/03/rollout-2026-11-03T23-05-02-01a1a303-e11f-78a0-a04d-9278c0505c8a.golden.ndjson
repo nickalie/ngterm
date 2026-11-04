@@ -1,0 +1,4 @@
+{"id":"conversation","cursor":0,"type":"conversation","agent":"codex","conversation_id":"01a1a303-e11f-78a0-a04d-9278c0505c8a","cwd":"/home/user/project"}
+{"id":"conversation","cursor":4124,"type":"conversation","agent":"codex","conversation_id":"01a1a303-e11f-78a0-a04d-9278c0505c8a","cwd":"/home/user/project","model":"gpt-5.6-luna"}
+{"id":"01a1a303-f0b0-7401-bff6-1a177dbc9d2b","cursor":8644,"type":"user","text":"Reply with just: fresh"}
+{"id":"msg_053bc11a366d6c6e016aea3e73dcb881918a435cbed7a0199f","cursor":9119,"type":"assistant","text":"fresh"}

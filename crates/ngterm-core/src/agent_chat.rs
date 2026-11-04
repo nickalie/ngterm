@@ -3,6 +3,7 @@
 //!
 //! - [`event`]: the event model and its NDJSON form.
 //! - [`claude`]: Claude Code's transcript lines.
+//! - [`codex`]: Codex's rollout lines.
 //!
 //! A parser reads one line at a time through [`TranscriptParser`], keeping what pairs a later line with an earlier
 //! one (a tool's result with its call). The formats are undocumented and drift between agent versions, so a line a
@@ -10,9 +11,11 @@
 //! `tests/fixtures/agent_chat/` record the versions read and what was found about each format.
 
 pub mod claude;
+pub mod codex;
 pub mod event;
 
 pub use claude::ClaudeParser;
+pub use codex::CodexParser;
 pub use event::{
     AgentKind, Approval, ChatEvent, EventBody, NoticeKind, Question, QuestionItem, QuestionOption, Tool, ToolKind,
     ToolStatus,
@@ -87,7 +90,97 @@ fn title_line(text: &str) -> String {
     cap(text.lines().next().unwrap_or_default().trim(), event::TITLE_CAP).0
 }
 
+/// The events one line makes.
+struct Out {
+    cursor: u64,
+    parent: Option<String>,
+    events: Vec<ChatEvent>,
+}
+
+impl Out {
+    fn new(cursor: u64, parent: Option<String>) -> Self {
+        Self {
+            cursor,
+            parent,
+            events: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, id: impl Into<String>, body: EventBody) {
+        self.events.push(ChatEvent {
+            id: id.into(),
+            cursor: self.cursor,
+            parent: self.parent.clone(),
+            body,
+        });
+    }
+}
+
+/// A tool whose call is not in the window: no name and no title.
+fn untitled_tool(kind: ToolKind, status: ToolStatus) -> Tool {
+    Tool {
+        name: String::new(),
+        kind,
+        title: String::new(),
+        status,
+        output: None,
+        diff: None,
+        truncated: None,
+    }
+}
+
+/// A call's result: its status and its output's first [`event::OUTPUT_CAP`] bytes.
+fn finish(tool: &mut Tool, status: ToolStatus, output: &str) {
+    tool.status = status;
+    let (output, cut) = cap(output, event::OUTPUT_CAP);
+    tool.output = (!output.is_empty()).then_some(output);
+    if cut {
+        tool.truncated = Some(true);
+    }
+}
+
+fn notice(kind: NoticeKind, text: &str, detail: Option<String>) -> EventBody {
+    EventBody::Notice {
+        kind,
+        text: text.to_owned(),
+        detail,
+    }
+}
+
+/// A compaction notice; `summary` is the compacted conversation's summary when the transcript has it.
+fn compaction(summary: Option<String>) -> EventBody {
+    notice(NoticeKind::Compaction, "Conversation compacted", summary)
+}
+
+/// The unified diff of `old` to `new` in file `path`.
+fn unified(path: &str, old: &str, new: &str) -> String {
+    similar::TextDiff::from_lines(old, new)
+        .unified_diff()
+        .context_radius(3)
+        .missing_newline_hint(false)
+        .header(path, path)
+        .to_string()
+}
+
+/// The text between `<name>` and `</name>`, trimmed.
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let start = text.find(&format!("<{name}>"))? + name.len() + 2;
+    let end = text[start..].find(&format!("</{name}>"))? + start;
+    Some(text[start..end].trim())
+}
+
+fn str_at<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
+    value.pointer(pointer).and_then(Value::as_str)
+}
+
+/// The string at `pointer`, unless it is missing or empty.
+fn non_empty<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
+    str_at(value, pointer).filter(|text| !text.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     mod claude;
+    mod codex;
+    mod support;
 }

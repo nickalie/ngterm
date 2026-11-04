@@ -28,8 +28,9 @@ use serde_json::Value;
 
 use super::event::{DIFF_CAP, OUTPUT_CAP};
 use super::{
-    AgentKind, ChatEvent, EventBody, Line, NoticeKind, Question, QuestionItem, QuestionOption, Tool, ToolKind,
-    ToolStatus, TranscriptParser, cap, decode_line, line_id, title_line,
+    AgentKind, ChatEvent, EventBody, Line, NoticeKind, Out, Question, QuestionItem, QuestionOption, Tool, ToolKind,
+    ToolStatus, TranscriptParser, cap, compaction, decode_line, finish, line_id, non_empty, notice, str_at, tag,
+    title_line, unified, untitled_tool,
 };
 
 /// Line types the chat has no use for (Task 1's fixture README lists them).
@@ -116,11 +117,7 @@ pub fn subagent_parent(meta_json: &[u8]) -> Option<String> {
 
 impl TranscriptParser for ClaudeParser {
     fn parse_line(&mut self, line: &[u8], cursor: u64) -> Vec<ChatEvent> {
-        let mut out = Out {
-            cursor,
-            parent: self.parent.clone(),
-            events: Vec::new(),
-        };
+        let mut out = Out::new(cursor, self.parent.clone());
         match decode_line(line, cursor) {
             Line::Blank => {}
             Line::Unknown(event) => out.push(event.id, event.body),
@@ -163,24 +160,6 @@ impl ClaudeParser {
         if shown.is_some_and(|event| !matches!(event.body, EventBody::User { .. })) {
             self.last_prompt = None;
         }
-    }
-}
-
-/// The events one line makes.
-struct Out {
-    cursor: u64,
-    parent: Option<String>,
-    events: Vec<ChatEvent>,
-}
-
-impl Out {
-    fn push(&mut self, id: impl Into<String>, body: EventBody) {
-        self.events.push(ChatEvent {
-            id: id.into(),
-            cursor: self.cursor,
-            parent: self.parent.clone(),
-            body,
-        });
     }
 }
 
@@ -311,15 +290,7 @@ impl ClaudeParser {
             Some(EventBody::Tool(tool)) => tool.clone(),
             Some(_) => return,
             None if self.called.contains(id) => return,
-            None => Tool {
-                name: String::new(),
-                kind: ToolKind::Other,
-                title: String::new(),
-                status,
-                output: None,
-                diff: None,
-                truncated: None,
-            },
+            None => untitled_tool(ToolKind::Other, status),
         };
         let output = tag(text, "result").or_else(|| tag(text, "summary"));
         finish(&mut tool, status, output.unwrap_or_default());
@@ -369,15 +340,7 @@ impl ClaudeParser {
                 out.push(id, EventBody::Tool(tool));
             }
             _ => {
-                let mut tool = Tool {
-                    name: String::new(),
-                    kind: ToolKind::Other,
-                    title: String::new(),
-                    status,
-                    output: None,
-                    diff: None,
-                    truncated: None,
-                };
+                let mut tool = untitled_tool(ToolKind::Other, status);
                 finish(&mut tool, status, output);
                 out.push(id, EventBody::Tool(tool));
             }
@@ -509,19 +472,6 @@ fn system(entry: &Value, out: &mut Out) {
     }
 }
 
-fn notice(kind: NoticeKind, text: &str, detail: Option<String>) -> EventBody {
-    EventBody::Notice {
-        kind,
-        text: text.to_owned(),
-        detail,
-    }
-}
-
-/// A compaction notice; the boundary line carries no summary, the summary line after it does.
-fn compaction(summary: Option<String>) -> EventBody {
-    notice(NoticeKind::Compaction, "Conversation compacted", summary)
-}
-
 /// A tool call as it shows before its result.
 fn running_tool(name: &str, input: &Value) -> Tool {
     let kind = tool_kind(name);
@@ -540,16 +490,6 @@ fn running_tool(name: &str, input: &Value) -> Tool {
         output: None,
         diff,
         truncated,
-    }
-}
-
-/// A call's result: its status and its output's first [`OUTPUT_CAP`] bytes.
-fn finish(tool: &mut Tool, status: ToolStatus, output: &str) {
-    tool.status = status;
-    let (output, cut) = cap(output, OUTPUT_CAP);
-    tool.output = (!output.is_empty()).then_some(output);
-    if cut {
-        tool.truncated = Some(true);
     }
 }
 
@@ -608,15 +548,6 @@ fn edit_diff(name: &str, input: &Value) -> Option<String> {
         "NotebookEdit" => Some(unified(path, "", str_at(input, "/new_source")?)),
         _ => None,
     }
-}
-
-fn unified(path: &str, old: &str, new: &str) -> String {
-    similar::TextDiff::from_lines(old, new)
-        .unified_diff()
-        .context_radius(3)
-        .missing_newline_hint(false)
-        .header(path, path)
-        .to_string()
 }
 
 /// An `AskUserQuestion` input's questions.
@@ -678,20 +609,4 @@ fn command_line(text: &str) -> Option<String> {
     } else {
         format!("{name} {args}")
     })
-}
-
-/// The text between `<name>` and `</name>`.
-fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
-    let start = text.find(&format!("<{name}>"))? + name.len() + 2;
-    let end = text[start..].find(&format!("</{name}>"))? + start;
-    Some(text[start..end].trim())
-}
-
-fn str_at<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
-    value.pointer(pointer).and_then(Value::as_str)
-}
-
-/// The string at `pointer`, unless it is missing or empty.
-fn non_empty<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
-    str_at(value, pointer).filter(|text| !text.is_empty())
 }

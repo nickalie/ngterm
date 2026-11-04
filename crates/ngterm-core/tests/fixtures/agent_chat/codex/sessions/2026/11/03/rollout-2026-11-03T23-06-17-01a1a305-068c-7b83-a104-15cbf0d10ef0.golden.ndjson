@@ -1,0 +1,4 @@
+{"id":"conversation","cursor":0,"type":"conversation","agent":"codex","conversation_id":"01a1a305-068c-7b83-a104-15cbf0d10ef0","cwd":"/home/user/project"}
+{"id":"conversation","cursor":4012,"type":"conversation","agent":"codex","conversation_id":"01a1a305-068c-7b83-a104-15cbf0d10ef0","cwd":"/home/user/project","model":"codex-auto-review"}
+{"id":"rs_0aadb5f1b9922d1b016aea3ec0dbfc819195bf77a922124c6e","cursor":12475,"type":"thinking","text":""}
+{"id":"msg_0aadb5f1b9922d1b016aea3ec0fb2881919a612e621a36bbe9","cursor":13181,"type":"assistant","text":"{\"risk_level\":\"low\",\"user_authorization\":\"high\",\"outcome\":\"allow\",\"rationale\":\"The user explicitly authorized this exact curl request; it is a routine read-only network operation to example.com with no sensitive data exfiltration.\"}"}

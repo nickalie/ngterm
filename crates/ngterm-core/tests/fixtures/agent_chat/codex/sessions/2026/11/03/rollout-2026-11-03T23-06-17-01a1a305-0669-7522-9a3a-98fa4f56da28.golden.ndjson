@@ -1,0 +1,8 @@
+{"id":"conversation","cursor":0,"type":"conversation","agent":"codex","conversation_id":"01a1a305-0669-7522-9a3a-98fa4f56da28","cwd":"/home/user/project"}
+{"id":"conversation","cursor":4122,"type":"conversation","agent":"codex","conversation_id":"01a1a305-0669-7522-9a3a-98fa4f56da28","cwd":"/home/user/project","model":"gpt-5.6-luna"}
+{"id":"01a1a305-17fb-77f2-9413-33856ef3a146","cursor":8730,"type":"user","text":"Run exactly this command, requesting escalated permissions up front because it needs the network: curl -sI https://example.com"}
+{"id":"rs_0348a0aed5f719b7016aea3ebf485c8191992768138a689d43","cursor":9309,"type":"thinking","text":""}
+{"id":"msg_0348a0aed5f719b7016aea3ebf5264819180fcca9c16ede017","cursor":10015,"type":"assistant","text":"I’m running the exact command with network access enabled."}
+{"id":"call_ccc99499ff3b45d7879c1d839067e8c2","cursor":11322,"type":"tool","name":"exec","kind":"shell","title":"curl -sI https://example.com","status":"running"}
+{"id":"call_ccc99499ff3b45d7879c1d839067e8c2","cursor":12876,"type":"tool","name":"exec_command","kind":"shell","title":"curl -sI https://example.com","status":"ok","output":"HTTP/2 200 \r\ndate: Tue, 03 Nov 2026 20:06:25 GMT\r\ncontent-type: text/html; charset=utf-8\r\nserver: cloudflare\r\nlast-modified: Sun, 01 Nov 2026 22:45:37 GMT\r\nallow: GET, HEAD\r\naccept-ranges: bytes\r\nage: 5346\r\ncf-cache-status: HIT\r\ncf-ray: a54dffd9adaaa88a-RIX\r\nalt-svc: h3=\":443\"; ma=86400\r\n\r\n"}
+{"id":"msg_0348a0aed5f719b7016aea3ec23a208191a5eb4e4dc12171b8","cursor":15592,"type":"assistant","text":"```text\nHTTP/2 200\ndate: Tue, 03 Nov 2026 20:06:25 GMT\ncontent-type: text/html; charset=utf-8\nserver: cloudflare\n```"}

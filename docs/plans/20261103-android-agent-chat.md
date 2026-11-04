@@ -358,15 +358,15 @@ with no output yet is a running call (Task 1's fixture README).
 **Files:**
 - Create: `crates/ngterm-core/src/agent_chat/codex.rs`, `crates/ngterm-core/src/agent_chat/tests/codex.rs`
 
-- [ ] write golden tests first, one per Codex fixture
-- [ ] map `session_meta` to `conversation`, the user and agent messages, reasoning to `thinking`, the tool items
+- [x] write golden tests first, one per Codex fixture
+- [x] map `session_meta` to `conversation`, the user and agent messages, reasoning to `thinking`, the tool items
       (Codex 0.166, Task 1: `CommandExecution` → shell, `FileChange` → edit with its `unified_diff`, `Extension`
       `web.search` → web, `CollabAgentToolCall` → task, and an `exec` `custom_tool_call` with no output yet → a running
       tool), and interrupts (`turn_aborted`) and errors to `notice`
-- [ ] when an `event_msg` and a `response_item` describe the same message, emit it once
-- [ ] test the error and edge cases: an unknown item type, a truncated last line, and a call with no output yet
+- [x] when an `event_msg` and a `response_item` describe the same message, emit it once
+- [x] test the error and edge cases: an unknown item type, a truncated last line, and a call with no output yet
       (`running`)
-- [ ] `cargo test -p ngterm-core agent_chat` must pass
+- [x] `cargo test -p ngterm-core agent_chat` must pass
 
 ### Task 5: The follower: backlog, paging and following
 
