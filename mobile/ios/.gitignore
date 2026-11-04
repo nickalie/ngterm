@@ -1,0 +1,4 @@
+# what scripts/build-ios.sh generates into the packages (the core's XCFramework and bindings, the shared fixtures and
+# fonts), and its build output (derived data, result bundles, archives, the lint's build log)
+/Packages/*/Generated/
+/build/

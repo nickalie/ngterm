@@ -1,0 +1,93 @@
+# The iOS app (mobile/ios) over the mobile core (crates/ngterm-mobile), on GitHub's `xcode-27` image, whose Xcode 27.2
+# and iOS 27.0 simulator runtime are the build/pins.env pins (the image's default Xcode is 27.1: scripts/setup-ios.sh
+# finds /Applications/Xcode_27.2.app and exports it as DEVELOPER_DIR, which scripts/build-ios.sh takes from it). The
+# core's own Rust checks on the hosts are cross-platform.yml's; this workflow runs what only Xcode can.
+#
+# `app`: the pinned Zig and the libghostty-vt prefix (scripts/build-ghostty-vt.sh, which setup-ios.sh then finds),
+# the iOS toolchain (scripts/setup-ios.sh: the Rust iOS targets, the phone and tablet simulators, SwiftLint), the
+# core's Rust tests on the phone simulator (ngterm-mobile's unit tests and ngterm-ghostty-vt's tests, through
+# scripts/ios-sim-runner.sh), then scripts/build-ios.sh lint test: the core for both iOS targets, its Swift bindings
+# and XCFramework, the lint gate (SwiftLint with its analyzer rules, swift-format, the suppression reasons, Swift 6
+# with warnings as errors), and the Unit and UI test plans on both simulators. The result bundles and the lint's build
+# log are kept when it fails.
+#
+# Path-filtered to what the app builds from: the mobile core and the crates it builds on, the workspace manifest, lock
+# file, toolchain and cargo config, mobile/ios/ and the fonts it shares with Android, the scripts, patches and pins of
+# its toolchain, and this file. Pushes to a `ci/**` branch run it too, and it can be run by hand.
+name: ios
+
+on:
+  pull_request:
+    paths: &paths
+      # the mobile core and its build closure (`cargo tree -p ngterm-mobile`)
+      - crates/ngterm-mobile/**
+      - crates/ngterm-term/**
+      - crates/ngterm-core/**
+      - crates/ngterm-host/**
+      - crates/ngterm-proto/**
+      - crates/ngterm-ghostty-vt/**
+      - crates/ngterm-ghostty-vt-sys/**
+      # the workspace's dependency pins, toolchain and cargo config
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .cargo/**
+      - mobile/ios/**
+      # the mono fonts build-ios.sh copies from their one source, the Android app's
+      - mobile/android/app/src/main/res/font/**
+      - scripts/build-ios.sh
+      - scripts/setup-ios.sh
+      - scripts/ios-sim-runner.sh
+      - scripts/build-ghostty-vt.sh
+      - scripts/lib/native.sh
+      - build/pins.env
+      - build/patches/ghostty-vt/**
+      - .github/workflows/ios.yml
+  push:
+    branches: [main, "ci/**"]
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  app:
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - name: rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Zig and the libghostty-vt prefix (build/pins.env)
+        run: scripts/build-ghostty-vt.sh
+      - name: iOS toolchain (build/pins.env)
+        run: scripts/setup-ios.sh
+      - name: the core's Rust tests on the iOS simulator
+        run: |
+          eval "$(scripts/setup-ios.sh --check)"
+          export CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUNNER="$PWD/scripts/ios-sim-runner.sh"
+          cargo test -p ngterm-mobile --lib --target aarch64-apple-ios-sim
+          cargo test -p ngterm-ghostty-vt --target aarch64-apple-ios-sim
+      - name: lint and test (SwiftLint, swift-format, the Unit and UI test plans on the phone and tablet)
+        run: scripts/build-ios.sh lint test
+      - name: upload the result bundles and the lint's build log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-results
+          path: |
+            mobile/ios/build/*.xcresult
+            mobile/ios/build/lint-analyze.log
+          if-no-files-found: ignore

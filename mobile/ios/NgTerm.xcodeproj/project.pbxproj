@@ -1,0 +1,509 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		4E0000000000000000000080 /* NgtermCore in Frameworks */ = {isa = PBXBuildFile; productRef = 4E0000000000000000000070 /* NgtermCore */; };
+		4E0000000000000000000081 /* NgtermCoreFakes in Frameworks */ = {isa = PBXBuildFile; productRef = 4E0000000000000000000071 /* NgtermCoreFakes */; };
+		4E0000000000000000000082 /* NgtermFeatures in Frameworks */ = {isa = PBXBuildFile; productRef = 4E0000000000000000000072 /* NgtermFeatures */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		4E0000000000000000000020 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4E0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4E0000000000000000000010;
+			remoteInfo = NgTerm;
+		};
+		4E0000000000000000000021 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4E0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4E0000000000000000000010;
+			remoteInfo = NgTerm;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		4E0000000000000000000030 /* NgTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NgTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4E0000000000000000000031 /* NgTermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NgTermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4E0000000000000000000032 /* NgTermUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NgTermUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4E0000000000000000000033 /* Unit.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = Unit.xctestplan; sourceTree = "<group>"; };
+		4E0000000000000000000034 /* UI.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = UI.xctestplan; sourceTree = "<group>"; };
+		4E00000000000000000000B0 /* NgtermCore */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Packages/NgtermCore; sourceTree = "<group>"; };
+		4E00000000000000000000B1 /* NgtermDesign */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Packages/NgtermDesign; sourceTree = "<group>"; };
+		4E00000000000000000000B2 /* NgtermTerminal */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Packages/NgtermTerminal; sourceTree = "<group>"; };
+		4E00000000000000000000B3 /* NgtermPlatform */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Packages/NgtermPlatform; sourceTree = "<group>"; };
+		4E00000000000000000000B4 /* NgtermFeatures */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = Packages/NgtermFeatures; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		4E0000000000000000000043 /* Exceptions for "NgTerm" folder in "NgTerm" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				NgTerm.entitlements,
+			);
+			target = 4E0000000000000000000010 /* NgTerm */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		4E0000000000000000000040 /* NgTerm */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				4E0000000000000000000043 /* Exceptions for "NgTerm" folder in "NgTerm" target */,
+			);
+			path = NgTerm;
+			sourceTree = "<group>";
+		};
+		4E0000000000000000000041 /* NgTermTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = NgTermTests;
+			sourceTree = "<group>";
+		};
+		4E0000000000000000000042 /* NgTermUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = NgTermUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4E0000000000000000000053 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4E0000000000000000000080 /* NgtermCore in Frameworks */,
+				4E0000000000000000000081 /* NgtermCoreFakes in Frameworks */,
+				4E0000000000000000000082 /* NgtermFeatures in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4E0000000000000000000054 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4E0000000000000000000055 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		4E0000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				4E0000000000000000000040 /* NgTerm */,
+				4E0000000000000000000004 /* Packages */,
+				4E0000000000000000000041 /* NgTermTests */,
+				4E0000000000000000000042 /* NgTermUITests */,
+				4E0000000000000000000033 /* Unit.xctestplan */,
+				4E0000000000000000000034 /* UI.xctestplan */,
+				4E0000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		4E0000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4E0000000000000000000030 /* NgTerm.app */,
+				4E0000000000000000000031 /* NgTermTests.xctest */,
+				4E0000000000000000000032 /* NgTermUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		4E0000000000000000000004 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				4E00000000000000000000B0 /* NgtermCore */,
+				4E00000000000000000000B1 /* NgtermDesign */,
+				4E00000000000000000000B2 /* NgtermTerminal */,
+				4E00000000000000000000B3 /* NgtermPlatform */,
+				4E00000000000000000000B4 /* NgtermFeatures */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4E0000000000000000000010 /* NgTerm */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4E00000000000000000000A1 /* Build configuration list for PBXNativeTarget "NgTerm" */;
+			buildPhases = (
+				4E0000000000000000000050 /* Sources */,
+				4E0000000000000000000053 /* Frameworks */,
+				4E0000000000000000000056 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				4E0000000000000000000040 /* NgTerm */,
+			);
+			name = NgTerm;
+			packageProductDependencies = (
+				4E0000000000000000000070 /* NgtermCore */,
+				4E0000000000000000000071 /* NgtermCoreFakes */,
+				4E0000000000000000000072 /* NgtermFeatures */,
+			);
+			productName = NgTerm;
+			productReference = 4E0000000000000000000030 /* NgTerm.app */;
+			productType = "com.apple.product-type.application";
+		};
+		4E0000000000000000000011 /* NgTermTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4E00000000000000000000A2 /* Build configuration list for PBXNativeTarget "NgTermTests" */;
+			buildPhases = (
+				4E0000000000000000000051 /* Sources */,
+				4E0000000000000000000054 /* Frameworks */,
+				4E0000000000000000000057 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4E0000000000000000000022 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				4E0000000000000000000041 /* NgTermTests */,
+			);
+			name = NgTermTests;
+			productName = NgTermTests;
+			productReference = 4E0000000000000000000031 /* NgTermTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		4E0000000000000000000012 /* NgTermUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4E00000000000000000000A3 /* Build configuration list for PBXNativeTarget "NgTermUITests" */;
+			buildPhases = (
+				4E0000000000000000000052 /* Sources */,
+				4E0000000000000000000055 /* Frameworks */,
+				4E0000000000000000000058 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4E0000000000000000000023 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				4E0000000000000000000042 /* NgTermUITests */,
+			);
+			name = NgTermUITests;
+			productName = NgTermUITests;
+			productReference = 4E0000000000000000000032 /* NgTermUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		4E0000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2720;
+				LastUpgradeCheck = 2720;
+				TargetAttributes = {
+					4E0000000000000000000010 = {
+						CreatedOnToolsVersion = 27.2;
+					};
+					4E0000000000000000000011 = {
+						CreatedOnToolsVersion = 27.2;
+						TestTargetID = 4E0000000000000000000010;
+					};
+					4E0000000000000000000012 = {
+						CreatedOnToolsVersion = 27.2;
+						TestTargetID = 4E0000000000000000000010;
+					};
+				};
+			};
+			buildConfigurationList = 4E00000000000000000000A0 /* Build configuration list for PBXProject "NgTerm" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 4E0000000000000000000002;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 4E0000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4E0000000000000000000010 /* NgTerm */,
+				4E0000000000000000000011 /* NgTermTests */,
+				4E0000000000000000000012 /* NgTermUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4E0000000000000000000056 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4E0000000000000000000057 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4E0000000000000000000058 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4E0000000000000000000050 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4E0000000000000000000051 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4E0000000000000000000052 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		4E0000000000000000000022 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4E0000000000000000000010 /* NgTerm */;
+			targetProxy = 4E0000000000000000000020 /* PBXContainerItemProxy */;
+		};
+		4E0000000000000000000023 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4E0000000000000000000010 /* NgTerm */;
+			targetProxy = 4E0000000000000000000021 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		4E0000000000000000000090 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_TREAT_WARNINGS_AS_ERRORS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.1.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		4E0000000000000000000091 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_TREAT_WARNINGS_AS_ERRORS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.1.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		4E0000000000000000000092 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = NgTerm/NgTerm.entitlements;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NgTerm/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = ngterm;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.nickalie.ngterm.ios;
+				PRODUCT_NAME = NgTerm;
+			};
+			name = Debug;
+		};
+		4E0000000000000000000093 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = NgTerm/NgTerm.entitlements;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = NgTerm/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = ngterm;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.nickalie.ngterm.ios;
+				PRODUCT_NAME = NgTerm;
+			};
+			name = Release;
+		};
+		4E0000000000000000000094 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nickalie.ngterm.ios.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NgTerm.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NgTerm";
+			};
+			name = Debug;
+		};
+		4E0000000000000000000095 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nickalie.ngterm.ios.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NgTerm.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NgTerm";
+			};
+			name = Release;
+		};
+		4E0000000000000000000096 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nickalie.ngterm.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				TEST_TARGET_NAME = NgTerm;
+			};
+			name = Debug;
+		};
+		4E0000000000000000000097 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nickalie.ngterm.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				TEST_TARGET_NAME = NgTerm;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4E00000000000000000000A0 /* Build configuration list for PBXProject "NgTerm" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4E0000000000000000000090 /* Debug */,
+				4E0000000000000000000091 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4E00000000000000000000A1 /* Build configuration list for PBXNativeTarget "NgTerm" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4E0000000000000000000092 /* Debug */,
+				4E0000000000000000000093 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4E00000000000000000000A2 /* Build configuration list for PBXNativeTarget "NgTermTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4E0000000000000000000094 /* Debug */,
+				4E0000000000000000000095 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4E00000000000000000000A3 /* Build configuration list for PBXNativeTarget "NgTermUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4E0000000000000000000096 /* Debug */,
+				4E0000000000000000000097 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4E0000000000000000000070 /* NgtermCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NgtermCore;
+		};
+		4E0000000000000000000071 /* NgtermCoreFakes */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NgtermCoreFakes;
+		};
+		4E0000000000000000000072 /* NgtermFeatures */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NgtermFeatures;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 4E0000000000000000000001 /* Project object */;
+}

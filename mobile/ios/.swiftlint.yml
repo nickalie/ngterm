@@ -1,0 +1,77 @@
+# SwiftLint over the iOS app (mobile/ios): scripts/build-ios.sh lint runs `swiftlint lint --strict` (every warning
+# fails) and `swiftlint analyze --strict` with the analyzer rules over a build log. Layout is swift-format's
+# (.swift-format); SwiftLint judges the rest.
+#
+# Every opt-in rule is on, except those under disabled_rules, each with why: it contradicts a rule kept on or
+# swift-format, or it is about a tool the app doesn't use. There is no baseline. A suppression names its rules and says
+# why on its own line (`// swiftlint:disable:next force_unwrapping - <why>`), which build-ios.sh lint checks, and
+# blanket_disable_command refuses a `disable` with no matching `enable`.
+
+included:
+  - NgTerm
+  - NgTermTests
+  - NgTermUITests
+  - Packages
+excluded:
+  # UniFFI's generated bindings, and what build-ios.sh copies in beside them
+  - Packages/*/Generated
+  - Packages/*/.build
+  - build
+  # SwiftPM's manifests: their top-level `let package` and settings are the manifest format, which the declaration
+  # rules for code (explicit_top_level_acl, prefixed_toplevel_constant) don't fit; swift-format still formats them
+  - Packages/*/Package.swift
+
+opt_in_rules:
+  - all
+
+disabled_rules:
+  # contradicts redundant_type_annotation, which is kept: a declaration states its type only where the value doesn't
+  - explicit_type_interface
+  # contradicts no_extension_access_modifier, which is kept (as is swift-format's NoAccessLevelOnExtensionDeclaration):
+  # with explicit_acl every member states its own access level
+  - extension_access_modifier
+  # contradicts opening_brace and swift-format, which keep a brace on its declaration's line
+  - contrasted_opening_brace
+  # the tests are Swift Testing and XCTest: Nimble and Quick are not dependencies, and prefer_nimble would refuse
+  # every XCTest assertion of the UI tests
+  - prefer_nimble
+  - nimble_operator
+  - quick_discouraged_call
+  - quick_discouraged_focused_test
+  - quick_discouraged_pending_test
+
+analyzer_rules:
+  - unused_declaration
+  - unused_import
+  - capture_variable
+  - typesafe_array_init
+  # explicit_self is left off: it contradicts redundant_self, which is kept
+
+# complexity limits in the spirit of the workspace's clippy.toml (too-many-lines 80, too-many-arguments 6,
+# cognitive complexity 15, nesting 5); --strict makes each warning level the limit
+cyclomatic_complexity:
+  warning: 15
+  ignores_case_statements: true
+function_body_length:
+  warning: 80
+closure_body_length:
+  warning: 40
+function_parameter_count:
+  warning: 6
+type_body_length:
+  warning: 300
+file_length:
+  warning: 500
+  ignore_comment_only_lines: true
+nesting:
+  type_level: 2
+  function_level: 5
+line_length:
+  # swift-format wraps at 120; a longer line is a string or URL it can't break
+  warning: 120
+  ignores_urls: true
+trailing_comma:
+  # as swift-format writes them (multiElementCollectionTrailingCommas): a multi-line collection ends with a comma
+  mandatory_comma: true
+large_tuple:
+  warning: 3
