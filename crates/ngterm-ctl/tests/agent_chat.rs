@@ -480,6 +480,44 @@ fn a_prompt_the_transcript_answered_before_the_record_was_read_is_never_shown() 
     Ok(())
 }
 
+/// A reconnect whose cursor is past the denial's result: the phone has that result, so the new process reads it only
+/// as context, while the record still holds the candidate (Claude's status stays `blocked` until its next hook). The
+/// prompt is never shown, at the interrupt notice after the result, at the end, or after more than the context's
+/// worth of assistant text (a denial with feedback, which the agent answers before any hook fires).
+#[test]
+fn a_reconnect_past_the_denials_result_never_shows_the_answered_prompt() -> TestResult {
+    const INTERRUPT_NOTICE: u64 = 73_460;
+    let dir = short_dir()?;
+    let socket = dir.path().join("ngterm.sock");
+    let bytes = transcript(MAIN)?;
+    let path = write_transcript(dir.path(), MAIN, slice(&bytes, 0, NEXT_PROMPT)?)?;
+    let _server = Scripted::serve(&socket, Some(record(&path, MAIN, Some(denied_txt(100.0)))?))?;
+    for after in [INTERRUPT_NOTICE, NEXT_PROMPT] {
+        let chat = Chat::spawn(dir.path(), &socket, &["--target", "S", "--after", &after.to_string()])?;
+        chat.until("live")?;
+        assert!(chat.silent_for(Duration::from_millis(1500)), "--after {after}");
+    }
+
+    let text = "feedback answered at length ".repeat(300);
+    let filler: Vec<String> = (0..40)
+        .map(|index| {
+            json!({"type": "assistant", "uuid": format!("filler-{index}"), "sessionId": MAIN,
+                "timestamp": "2026-11-03T19:56:13.000Z", "message": {"id": format!("msg_filler_{index}"),
+                "role": "assistant", "model": "claude-sonnet-5-5", "content": [{"type": "text", "text": text}]}})
+            .to_string()
+        })
+        .collect();
+    append(&path, (filler.join("\n") + "\n").as_bytes())?;
+    let end = fs::metadata(&path)?.len();
+    assert!(end - DENIED_RESULT > 2 * 128 * 1024, "past what the context reads");
+    for args in [["--after", &end.to_string()], ["--limit", "1"]] {
+        let chat = Chat::spawn(dir.path(), &socket, &[&["--target", "S"][..], &args].concat())?;
+        chat.until("live")?;
+        assert!(chat.silent_for(Duration::from_millis(1500)), "{args:?}");
+    }
+    Ok(())
+}
+
 fn merge(into: &mut Value, from: &Value) {
     if let (Some(into), Some(from)) = (into.as_object_mut(), from.as_object()) {
         into.extend(from.iter().map(|(key, value)| (key.clone(), value.clone())));

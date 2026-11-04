@@ -354,3 +354,40 @@ fn a_subagents_prompt_is_answered_by_its_own_result() {
         Some(vec![("approval_done", "approval-5", 850)])
     );
 }
+
+#[test]
+fn context_events_inform_the_calls_but_neither_answer_nor_move_the_position() {
+    let mut approvals = Approvals::new();
+    // a reconnect past the denial: the call and its result were parsed for context, not shown
+    approvals.context(&[
+        bash("toolu_1", 700, "touch denied.txt", ToolStatus::Running),
+        bash("toolu_1", 800, "touch denied.txt", ToolStatus::Error),
+        interrupt("n1", 900),
+    ]);
+    read(&mut approvals, &[live(1000)]);
+    assert!(approvals.observe(Some(&denied_txt(5.0))).is_empty());
+
+    let other = ControlAgentApproval {
+        title: "Create empty file other.txt".to_owned(),
+        detail: Some("touch other.txt".to_owned()),
+        ..denied_txt(6.0)
+    };
+    read(
+        &mut approvals,
+        &[bash("toolu_2", 1100, "touch other.txt", ToolStatus::Running)],
+    );
+    assert_eq!(
+        types(&approvals.observe(Some(&other))),
+        [("approval", "approval-6", 1100)]
+    );
+    // a later window's context (a subagent found while following) holds an interrupt and the same call finished
+    approvals.context(&[
+        interrupt("n2", 9000),
+        bash("toolu_2", 9100, "touch other.txt", ToolStatus::Error),
+    ]);
+    assert_eq!(
+        types(&approvals.observe(None)),
+        [("approval_done", "approval-6", 1100)],
+        "still shown, at the position the shown events reached"
+    );
+}

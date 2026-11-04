@@ -12,7 +12,7 @@ use tempfile::TempDir;
 
 use super::support::tool;
 use crate::agent_chat::event::{LINE_CAP, OVERSIZED};
-use crate::agent_chat::follow::{BACKLOG, CONTEXT, Clock, DISCOVERY_INTERVAL, Files, POLL_INTERVAL};
+use crate::agent_chat::follow::{BACKLOG, CONTEXT, Clock, DISCOVERY_INTERVAL, Files, POLL_INTERVAL, REACH};
 use crate::agent_chat::{AgentKind, ChatEvent, EventBody, Follower, ToolStatus};
 
 /// Files on disk, counting every byte read.
@@ -808,5 +808,161 @@ fn a_subagents_lines_without_ids_do_not_collide_with_other_files() {
             ("agent-a:line-0", Some("toolu_a")),
             ("agent-b:line-0", Some("toolu_b")),
         ]
+    );
+}
+
+/// A Claude `assistant` line of about 1 KiB.
+fn said_line(index: usize) -> String {
+    let text = format!("{index} {}", "y".repeat(960));
+    serde_json::json!({"type": "assistant", "uuid": format!("s{index}"),
+        "message": {"id": format!("m{index}"), "content": [{"type": "text", "text": text}]}})
+    .to_string()
+}
+
+/// A denied `touch denied.txt` call `id` and its result.
+fn denied_call(id: &str) -> [String; 2] {
+    [
+        serde_json::json!({"type": "assistant", "uuid": format!("{id}-call"), "message": {"content": [
+            {"type": "tool_use", "id": id, "name": "Bash", "input": {"command": "touch denied.txt"}}]}})
+        .to_string(),
+        serde_json::json!({"type": "user", "uuid": format!("{id}-result"), "message": {"content": [
+            {"type": "tool_result", "tool_use_id": id, "content": "rejected", "is_error": true}]}})
+        .to_string(),
+    ]
+}
+
+/// The record's prompt for the denied call.
+fn denied_prompt() -> ngterm_proto::ControlAgentApproval {
+    ngterm_proto::ControlAgentApproval {
+        tool: "Bash".to_owned(),
+        title: "Create empty file denied.txt".to_owned(),
+        detail: Some("touch denied.txt".to_owned()),
+        tool_use_id: None,
+        since: 1.0,
+    }
+}
+
+/// An earlier turn's `old_kib` KiB of assistant text, the user's prompt, the denied call `toolu_d` and its result,
+/// then `after_kib` KiB of assistant text; the file's size.
+fn denial_then_text(path: &Path, old_kib: usize, after_kib: usize) -> u64 {
+    let mut lines = vec![user("first")];
+    lines.extend((0..old_kib).map(said_line));
+    lines.push(user("go"));
+    lines.extend(denied_call("toolu_d"));
+    lines.extend((old_kib..old_kib + after_kib).map(said_line));
+    fs::write(path, lines.join("\n") + "\n").unwrap();
+    fs::metadata(path).unwrap().len()
+}
+
+/// The statuses of the events of tool use `id`.
+fn statuses(events: &[ChatEvent], id: &str) -> Vec<ToolStatus> {
+    events
+        .iter()
+        .filter(|event| event.id == id)
+        .map(|event| tool(event).status)
+        .collect()
+}
+
+#[test]
+fn the_lines_parsed_before_a_cursor_are_kept_unshown_for_the_caller() {
+    let dir = TempDir::new().unwrap();
+    let path = transcript(&dir);
+    let size = denial_then_text(&path, 0, 8);
+    let (mut follower, ..) = claude(&path);
+    let events = follower.after(size).unwrap();
+    assert!(statuses(&events, "toolu_d").is_empty(), "the phone has them");
+    assert_eq!(
+        statuses(&follower.take_unshown(), "toolu_d"),
+        [ToolStatus::Running, ToolStatus::Error]
+    );
+    assert!(follower.take_unshown().is_empty(), "taken once");
+    follower.backlog(1).unwrap();
+    assert_eq!(
+        statuses(&follower.take_unshown(), "toolu_d"),
+        [ToolStatus::Running, ToolStatus::Error]
+    );
+}
+
+#[test]
+fn a_live_prompt_reads_back_past_the_context_to_its_call_and_no_further_than_the_users_prompt() {
+    let dir = TempDir::new().unwrap();
+    let path = transcript(&dir);
+    // a 2 MiB earlier turn, then the denial, then 600 KiB of text: more than the context reads
+    let size = denial_then_text(&path, 2048, 600);
+    let (mut plain, ..) = claude(&path);
+    let shown = plain.after(size).unwrap();
+    assert!(
+        statuses(&plain.take_unshown(), "toolu_d").is_empty(),
+        "past the context"
+    );
+    let backlog = plain.backlog(1).unwrap();
+
+    let (mut follower, files, _) = claude(&path);
+    follower.expect(Some(&denied_prompt()));
+    assert_eq!(follower.after(size).unwrap(), shown, "what is shown is the same");
+    assert_eq!(
+        statuses(&follower.take_unshown(), "toolu_d"),
+        [ToolStatus::Running, ToolStatus::Error]
+    );
+    assert!(
+        files.read.get() < 1536 * 1024,
+        "the earlier turn is not read: {} of {size} bytes",
+        files.read.get()
+    );
+    assert_eq!(follower.backlog(1).unwrap(), backlog);
+    assert_eq!(
+        statuses(&follower.take_unshown(), "toolu_d"),
+        [ToolStatus::Running, ToolStatus::Error]
+    );
+    // the prompt gone, the context is the usual one again
+    follower.expect(None);
+    follower.after(size).unwrap();
+    assert!(statuses(&follower.take_unshown(), "toolu_d").is_empty());
+}
+
+#[test]
+fn a_live_prompt_reads_back_about_reach_bytes_at_most() {
+    let dir = TempDir::new().unwrap();
+    let path = transcript(&dir);
+    let lines: Vec<String> = (0..8192).map(said_line).collect();
+    fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let size = fs::metadata(&path).unwrap().len();
+    let (mut follower, files, _) = claude(&path);
+    follower.expect(Some(&denied_prompt()));
+    follower.after(size).unwrap();
+    assert!(
+        files.read.get() < REACH + CONTEXT,
+        "{} of {size} bytes read",
+        files.read.get()
+    );
+    assert!(follower.take_unshown().len() > 2048, "the lines read back are kept");
+}
+
+#[test]
+fn a_subagent_followed_from_its_end_parses_its_context_while_a_prompt_is_live() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("main.jsonl");
+    prompts(&path, 300);
+    let subagents = dir.path().join("main/subagents");
+    fs::create_dir_all(&subagents).unwrap();
+    fs::write(subagents.join("agent-x.meta.json"), r#"{"toolUseId":"toolu_x"}"#).unwrap();
+    // the denial, then more text than the one step a subagent followed from its end reads
+    let mut lines = denied_call("toolu_s").to_vec();
+    lines.extend((0..80).map(said_line));
+    fs::write(subagents.join("agent-x.jsonl"), lines.join("\n") + "\n").unwrap();
+    let (mut plain, ..) = claude(&path);
+    let shown = plain.backlog(10).unwrap();
+    assert!(statuses(&plain.take_unshown(), "toolu_s").is_empty());
+
+    let (mut follower, ..) = claude(&path);
+    follower.expect(Some(&denied_prompt()));
+    assert_eq!(follower.backlog(10).unwrap(), shown);
+    let unshown = follower.take_unshown();
+    assert_eq!(statuses(&unshown, "toolu_s"), [ToolStatus::Running, ToolStatus::Error]);
+    assert!(
+        unshown
+            .iter()
+            .filter(|event| event.id == "toolu_s")
+            .all(|event| event.parent.as_deref() == Some("toolu_x"))
     );
 }

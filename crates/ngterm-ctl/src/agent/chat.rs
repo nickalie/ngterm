@@ -102,6 +102,7 @@ impl Chat {
             return Ok(());
         }
         let ended = watch_stdin()?;
+        follower.expect(record.approval.as_ref());
         let first = match self.after {
             Some(after) => follower.after(after),
             None => follower.backlog(limit),
@@ -241,8 +242,12 @@ impl Stream<'_> {
     /// The events the record read again makes: a new transcript's `reset` and backlog, and its prompt's changes.
     fn recheck(&mut self, record: ControlAgent) -> Result<Vec<ChatEvent>, Failure> {
         let mut events = Vec::new();
-        if record.agent != self.record.agent || record.transcript_path != self.record.transcript_path {
+        let moved = record.agent != self.record.agent || record.transcript_path != self.record.transcript_path;
+        if moved {
             self.follower = follower(&record)?;
+        }
+        self.follower.expect(record.approval.as_ref());
+        if moved {
             let mut fresh = vec![ChatEvent {
                 id: "reset".to_owned(),
                 cursor: 0,
@@ -261,13 +266,23 @@ impl Stream<'_> {
         Ok(events)
     }
 
-    /// `events` with the `approval_done` each one makes right after it.
+    /// `events` with the `approval_done` each one makes right after it. The events the follower parsed and did not
+    /// show are weighed first, after the `reset` that leads `events` when the read started over.
     fn interleave(&mut self, events: Vec<ChatEvent>) -> Vec<ChatEvent> {
+        let mut unshown = Some(self.follower.take_unshown());
         let mut out = Vec::with_capacity(events.len());
         for event in events {
+            if !matches!(event.body, EventBody::Reset)
+                && let Some(unshown) = unshown.take()
+            {
+                self.approvals.context(&unshown);
+            }
             let done = self.approvals.read(&event);
             out.push(event);
             out.extend(done);
+        }
+        if let Some(unshown) = unshown {
+            self.approvals.context(&unshown);
         }
         out
     }

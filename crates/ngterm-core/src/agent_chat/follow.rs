@@ -29,6 +29,13 @@
 //!   spawn is older than the lines read (found by its rollout's `session_meta`). A subagent event's `cursor` is an
 //!   offset in its own file: paging goes by the events without `parent`, and the ids of its lines that name none are
 //!   prefixed with the file's name.
+//! - **Unshown** ([`Follower::take_unshown`]): the events a window parsed and did not show (its context's, for the main
+//!   transcript and each subagent's) are kept for the caller, which weighs a permission prompt's call against them
+//!   ([`Approvals::context`](super::approvals::Approvals::context)): a reconnect's cursor may be past the call's
+//!   result. While the record holds a prompt ([`Follower::expect`]), the backlog's subagents followed from their end
+//!   get that context too, and the main transcript's window reads further back until its lines hold the prompt's
+//!   call or a prompt of the user's (or about [`REACH`] bytes were read); those older lines are only kept unshown, so
+//!   the lines shown, and which subagents get a backlog, stay the same.
 //!
 //! A backlog and the events after a cursor end with a `live` event whose cursor is where following resumes. Following
 //! polls every [`POLL_INTERVAL`] by default, and looks for new subagents at most every [`DISCOVERY_INTERVAL`].
@@ -44,13 +51,15 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use lines::{BackScan, RawLine, Splitter};
+use ngterm_proto::ControlAgentApproval;
 use serde::Deserialize;
 use subagents::Look;
 
+use super::approvals::is_call;
 #[cfg(doc)]
 use super::event::LINE_CAP;
 use super::event::OVERSIZED;
-use super::{AgentKind, ChatEvent, ClaudeParser, CodexParser, EventBody, TranscriptParser, line_id, unknown};
+use super::{AgentKind, Approval, ChatEvent, ClaudeParser, CodexParser, EventBody, TranscriptParser, line_id, unknown};
 
 /// The events a backlog holds by default: the phone's first screenful and some.
 pub const BACKLOG: usize = 200;
@@ -63,6 +72,10 @@ pub const DISCOVERY_INTERVAL: Duration = Duration::from_secs(1);
 
 /// The bytes of older lines a window parses for pairing and does not show.
 pub const CONTEXT: u64 = 64 * 1024;
+
+/// How far before its end the main transcript's window reads back for a live prompt's call: past this, it stops at the
+/// next step (each step doubles what was read, as for the backlog).
+pub const REACH: u64 = 4 * 1024 * 1024;
 
 /// A backward scan's first step beyond the context it wants; each later step doubles what was read, so the lines are
 /// parsed at most about twice over in all.
@@ -146,6 +159,10 @@ pub struct Follower<F: Files = Disk, C: Clock = SystemClock> {
     known: HashSet<String>,
     polled_at: Option<Instant>,
     discovered_at: Option<Instant>,
+    /// The permission prompt the record holds, which a window reads back for.
+    prompt: Option<Approval>,
+    /// The events parsed and not shown since [`Follower::take_unshown`].
+    unshown: Vec<ChatEvent>,
 }
 
 impl Follower {
@@ -171,6 +188,8 @@ impl<F: Files, C: Clock> Follower<F, C> {
             known: HashSet::new(),
             polled_at: None,
             discovered_at: None,
+            prompt: None,
+            unshown: Vec::new(),
         }
     }
 
@@ -181,6 +200,18 @@ impl<F: Files, C: Clock> Follower<F, C> {
         self
     }
 
+    /// The permission prompt the pane's record holds now, if any: the windows read from here on read back for its
+    /// call (the module docs).
+    pub fn expect(&mut self, live: Option<&ControlAgentApproval>) {
+        self.prompt = live.map(Approval::from);
+    }
+
+    /// The events parsed and not shown since the last call, oldest first per transcript: the context of every window
+    /// read since. A `reset` comes before all of them.
+    pub fn take_unshown(&mut self) -> Vec<ChatEvent> {
+        std::mem::take(&mut self.unshown)
+    }
+
     /// The events of about the last `limit` events' lines, the backlogs of the subagents among them, then `live`;
     /// following resumes after them.
     ///
@@ -189,22 +220,28 @@ impl<F: Files, C: Clock> Follower<F, C> {
     pub fn backlog(&mut self, limit: usize) -> io::Result<Vec<ChatEvent>> {
         self.limit = limit;
         self.forget_subagents();
-        let (main, window) = Stream::start(
-            &self.files,
-            &self.path,
-            Spec::main(self.agent),
-            None,
-            &Want::backlog(limit),
-        )?;
+        self.unshown.clear();
+        let want = Want {
+            reach: self.prompt.clone(),
+            ..Want::backlog(limit)
+        };
+        let (main, window) = Stream::start(&self.files, &self.path, Spec::main(self.agent), None, &want)?;
         self.main = main;
         let shown = window.ids();
-        let mut events = window.shown();
+        let (mut events, unshown) = window.shown();
+        self.unshown.extend(unshown);
         let limit = self.limit;
+        // While a prompt is live, a subagent followed from its end still parses its context for the prompt's call.
+        let end = if self.prompt.is_some() {
+            Want::backlog(0)
+        } else {
+            Want::END
+        };
         let want = |parent: &str| {
             if shown.contains(parent) {
                 Want::backlog(limit)
             } else {
-                Want::END
+                end.clone()
             }
         };
         self.add_subagents(&want, Look::Scan, &mut events);
@@ -249,10 +286,10 @@ impl<F: Files, C: Clock> Follower<F, C> {
             return self.restart();
         }
         self.forget_subagents();
+        self.unshown.clear();
         let want = Want {
-            limit: 0,
-            context: CONTEXT,
-            since: None,
+            reach: self.prompt.clone(),
+            ..Want::backlog(0)
         };
         let (main, window) = Stream::start(&self.files, &self.path, Spec::main(self.agent), Some(cursor), &want)?;
         self.main = main;
@@ -263,13 +300,14 @@ impl<F: Files, C: Clock> Follower<F, C> {
         shown.extend(new.iter().map(|event| event.id.clone()));
         // The phone has every line before the cursor's: the subagents' lines since the last of them are new to it.
         let since = window.stamp.clone().unwrap_or_default();
-        let mut events = window.shown();
+        let (mut events, unshown) = window.shown();
+        self.unshown.extend(unshown);
         events.extend(new);
         let limit = self.limit;
         let want = |parent: &str| Want {
             limit: if shown.contains(parent) { limit } else { 0 },
-            context: CONTEXT,
             since: Some(since.clone()),
+            ..Want::backlog(0)
         };
         self.add_subagents(&want, Look::Scan, &mut events);
         events.push(marker(EventBody::Live, self.main.lines.start()));
@@ -298,7 +336,9 @@ impl<F: Files, C: Clock> Follower<F, C> {
                     let want = Want::backlog(self.limit);
                     if let Ok((fresh, window)) = Stream::start(&self.files, &stream.path, spec, None, &want) {
                         *stream = fresh;
-                        events.extend(window.events);
+                        let (shown, unshown) = window.parts();
+                        events.extend(shown);
+                        self.unshown.extend(unshown);
                     }
                 }
                 Err(_) => {}
@@ -364,7 +404,9 @@ impl<F: Files, C: Clock> Follower<F, C> {
             let Ok((stream, window)) = Stream::start(&self.files, &found.path, spec, None, &want) else {
                 continue;
             };
-            events.extend(window.events);
+            let (shown, unshown) = window.parts();
+            events.extend(shown);
+            self.unshown.extend(unshown);
             self.known.insert(found.key);
             self.subagents.push(stream);
         }
@@ -387,12 +429,14 @@ fn marker(body: EventBody, cursor: u64) -> ChatEvent {
 }
 
 /// What a window asks for: about `limit` events, every line stamped no earlier than `since` (to the minute; the
-/// unstamped lines among them too), and `context` bytes of older lines parsed before them.
+/// unstamped lines among them too), and `context` bytes of older lines parsed before them; for `reach`, older lines
+/// still, until the lines parsed hold its call or a prompt of the user's (about [`REACH`] bytes before the end at most).
 #[derive(Debug, Clone)]
 struct Want {
     limit: usize,
     context: u64,
     since: Option<String>,
+    reach: Option<Approval>,
 }
 
 impl Want {
@@ -401,6 +445,7 @@ impl Want {
         limit: 0,
         context: 0,
         since: None,
+        reach: None,
     };
 
     fn backlog(limit: usize) -> Self {
@@ -408,6 +453,7 @@ impl Want {
             limit,
             context: CONTEXT,
             since: None,
+            reach: None,
         }
     }
 }
@@ -506,17 +552,20 @@ impl Parser {
 }
 
 /// What a window read: the events of its newest lines, those of the older lines it parsed for context (the Codex
-/// rollout's first line's first), where following resumes, and the newest `timestamp` among the context lines.
+/// rollout's first line's first) and of the lines older still it read for a prompt's call ([`Want::reach`]), where
+/// the lines parsed start, where following resumes, and the newest `timestamp` among the context lines.
 #[derive(Debug, Default)]
 struct Window {
+    reach: Vec<ChatEvent>,
     context: Vec<ChatEvent>,
     events: Vec<ChatEvent>,
+    oldest: u64,
     next: u64,
     stamp: Option<String>,
 }
 
 impl Window {
-    /// The ids of every event parsed, context included.
+    /// The ids of every event parsed for the window and its context.
     fn ids(&self) -> HashSet<String> {
         self.context
             .iter()
@@ -525,21 +574,41 @@ impl Window {
             .collect()
     }
 
-    /// The window's events, led by the `conversation` the context announced last when they announce none: a parser
-    /// announces it once, so it is usually on a line before the window. It takes the first event's cursor (where
-    /// following resumes when there is none), so paging from the oldest cursor shown skips no line.
-    fn shown(self) -> Vec<ChatEvent> {
-        let announces = |event: &ChatEvent| matches!(event.body, EventBody::Conversation { .. });
-        if self.events.iter().any(announces) {
-            return self.events;
+    /// Whether the lines parsed hold `approval`'s call, or a prompt of the user's: a prompt still open was asked
+    /// after the user's last one.
+    fn holds(&self, approval: &Approval) -> bool {
+        self.reach
+            .iter()
+            .chain(&self.context)
+            .chain(&self.events)
+            .any(|event| matches!(event.body, EventBody::User { .. }) || is_call(approval, event))
+    }
+
+    /// The window's events, and the older ones it parsed (oldest first).
+    fn parts(self) -> (Vec<ChatEvent>, Vec<ChatEvent>) {
+        let mut unshown = self.reach;
+        unshown.extend(self.context);
+        (self.events, unshown)
+    }
+
+    /// The window's events, led by the `conversation` the older lines announced last when they announce none: a
+    /// parser announces it once, so it is usually on a line before the window. It takes the first event's cursor
+    /// (where following resumes when there is none), so paging from the oldest cursor shown skips no line. Then the
+    /// older events, as [`Window::parts`].
+    fn shown(self) -> (Vec<ChatEvent>, Vec<ChatEvent>) {
+        let announces = |event: &&ChatEvent| matches!(event.body, EventBody::Conversation { .. });
+        let next = self.next;
+        let (events, unshown) = self.parts();
+        if events.iter().any(|event| announces(&event)) {
+            return (events, unshown);
         }
-        let Some(mut conversation) = self.context.into_iter().rev().find(announces) else {
-            return self.events;
+        let Some(mut conversation) = unshown.iter().rev().find(announces).cloned() else {
+            return (events, unshown);
         };
-        conversation.cursor = self.events.first().map_or(self.next, |event| event.cursor);
-        let mut events = vec![conversation];
-        events.extend(self.events);
-        events
+        conversation.cursor = events.first().map_or(next, |event| event.cursor);
+        let mut shown = vec![conversation];
+        shown.extend(events);
+        (shown, unshown)
     }
 }
 
@@ -548,6 +617,8 @@ fn read_window<R: Read + Seek>(reader: &mut R, spec: &Spec, end: u64, want: &Wan
     let head = if spec.primed() { first_line(reader)? } else { None };
     let mut scan = BackScan::new(end);
     let mut step = want.context + STEP;
+    // Where the context starts once it is read: the lines before it are read only for `want.reach`.
+    let mut context_from = None;
     loop {
         scan.read(reader, step)?;
         let ready = scan.next().is_some() && scan.read_bytes() >= want.context;
@@ -558,9 +629,13 @@ fn read_window<R: Read + Seek>(reader: &mut R, spec: &Spec, end: u64, want: &Wan
                 None => Vec::new(),
             };
             let parsed: Vec<Vec<ChatEvent>> = scan.lines().map(|line| parser.parse(line)).collect();
-            if let Some(mut window) = cut(parsed, &scan, want) {
-                window.context.splice(0..0, head);
-                return Ok((window, parser));
+            if let Some(mut window) = cut(parsed, &scan, want, context_from) {
+                let reaching = want.reach.as_ref().is_some_and(|approval| !window.holds(approval));
+                if !reaching || scan.done() || scan.read_bytes() >= REACH {
+                    window.context.splice(0..0, head);
+                    return Ok((window, parser));
+                }
+                context_from.get_or_insert(window.oldest);
             }
         }
         step = scan.read_bytes().max(STEP);
@@ -568,9 +643,9 @@ fn read_window<R: Read + Seek>(reader: &mut R, spec: &Spec, end: u64, want: &Wan
 }
 
 /// Splits the lines' events (oldest first) into context and window: the window is the fewest newest lines making
-/// `want.limit` events and holding every line since `want.since`, with `want.context` bytes of lines before it.
-/// `None` while the scan has not read enough.
-fn cut(mut parsed: Vec<Vec<ChatEvent>>, scan: &BackScan, want: &Want) -> Option<Window> {
+/// `want.limit` events and holding every line since `want.since`, with `want.context` bytes of lines before it. The
+/// lines before `context_from` are the reach's. `None` while the scan has not read enough.
+fn cut(mut parsed: Vec<Vec<ChatEvent>>, scan: &BackScan, want: &Want, context_from: Option<u64>) -> Option<Window> {
     let lines: Vec<&RawLine> = scan.lines().collect();
     let mut start = parsed.len();
     let mut count = 0;
@@ -589,11 +664,15 @@ fn cut(mut parsed: Vec<Vec<ChatEvent>>, scan: &BackScan, want: &Want) -> Option<
     if !scan.done() && (count < want.limit || !since_found || window_start - oldest < want.context) {
         return None;
     }
-    let stamp = lines[..start].iter().rev().find_map(|line| stamp(line));
+    let reach = context_from.map_or(0, |from| lines[..start].partition_point(|line| line.cursor < from));
+    let stamp = lines[reach..start].iter().rev().find_map(|line| stamp(line));
     let events = parsed.split_off(start).into_iter().flatten().collect();
+    let context = parsed.split_off(reach).into_iter().flatten().collect();
     Some(Window {
-        context: parsed.into_iter().flatten().collect(),
+        reach: parsed.into_iter().flatten().collect(),
+        context,
         events,
+        oldest,
         next,
         stamp,
     })

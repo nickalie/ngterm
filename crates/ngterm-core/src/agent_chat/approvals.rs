@@ -12,6 +12,13 @@
 //!   agent's next prompt), and a candidate whose call they hold only finished is not shown. That is decided again at
 //!   each look at the record, not latched: a new prompt for the same call as an earlier finished one shows once the
 //!   transcript has written its call.
+//! - The calls read include the lines a window parsed and did not show ([`Approvals::context`]): a reconnect's cursor
+//!   may be past the result (the phone has it), while the record keeps the answered candidate as long as the status
+//!   stays `blocked`. While a prompt is live, the follower also reads back past its usual context until it holds the
+//!   prompt's call or the main agent's last prompt ([`Follower::expect`](super::Follower::expect)): a finished call
+//!   before that prompt is forgotten anyway, and a prompt of an earlier turn is no longer open. A subagent's
+//!   transcript gets the usual context only (reading each back to its start would cost every subagent's whole file):
+//!   a subagent's denial further back than that, with the record still holding its prompt, is not seen.
 //!
 //! A `PermissionRequest` payload names no tool use (Task 1's fixtures), so a result is matched to the prompt by the
 //! call: the tool's kind and its one-line title, which both read from the call's command, path or URL. The name is not
@@ -122,12 +129,7 @@ impl Approvals {
         if let (Some(live), Some(id)) = (live, id)
             && self.answered.as_ref() != Some(&id)
         {
-            let approval = Approval {
-                tool: live.tool.clone(),
-                title: live.title.clone(),
-                detail: live.detail.clone(),
-                tool_use_id: live.tool_use_id.clone(),
-            };
+            let approval = Approval::from(live);
             let owner = match self.seen(&approval) {
                 Seen::Finished => return events,
                 Seen::Running(parent) => Owner::Known(parent),
@@ -138,6 +140,15 @@ impl Approvals {
             self.shown = Some(shown);
         }
         events
+    }
+
+    /// Takes the events a window parsed before the ones it shows (oldest first, after the `reset` the read made, if
+    /// any): what they say of the calls, and nothing else. They neither answer the prompt shown nor move the
+    /// position: the viewer has them already, or never asked for them.
+    pub fn context(&mut self, events: &[ChatEvent]) {
+        for event in events {
+            self.note(event);
+        }
     }
 
     /// Keeps what `event` says of the calls: a tool's state, an interrupt ending the running ones (the main
@@ -240,6 +251,29 @@ impl Shown {
             Owner::Unknown => true,
             Owner::Known(parent) => *parent == event.parent,
         }
+    }
+}
+
+impl From<&ControlAgentApproval> for Approval {
+    fn from(live: &ControlAgentApproval) -> Self {
+        Self {
+            tool: live.tool.clone(),
+            title: live.title.clone(),
+            detail: live.detail.clone(),
+            tool_use_id: live.tool_use_id.clone(),
+        }
+    }
+}
+
+/// Whether `event` is the call `approval` asks about, or its result: by its tool use id when known, else by kind and
+/// title.
+pub(crate) fn is_call(approval: &Approval, event: &ChatEvent) -> bool {
+    let EventBody::Tool(tool) = &event.body else {
+        return false;
+    };
+    match &approval.tool_use_id {
+        Some(id) => event.id == *id,
+        None => same_call(approval, tool.kind, &tool.title),
     }
 }
 
