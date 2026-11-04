@@ -50,6 +50,13 @@
 //!   pane's `NGTERM_*` rather than those of the pane that started Codex's shared daemon, which upstream documents as a
 //!   limitation (umputun/agterm#711): `build/patches/agent-status/0005-codex-own-process.patch`, with the PowerShell
 //!   form in this build's own `resources/shell-integration/pwsh/ngterm.ps1`;
+//! - the adapters keep the pane's agent record for the Android chat view, which upstream has no counterpart for: the
+//!   four events the record needs pipe their payload to `ngtermctl agent hook <claude|codex> <event>` (Claude Code's
+//!   `SessionStart` and `SessionEnd` through the restore adapter, its `UserPromptSubmit` and `PermissionRequest`
+//!   through the Claude status adapter, which reads a payload's head for the event its state stands for; Codex's
+//!   `SessionStart`, `UserPromptSubmit` and `PermissionRequest` through its adapter), under the worker and subagent
+//!   guards, with `PostToolUse` and `Stop` making no call; the installer bakes `ngtermctl` into the Claude status
+//!   adapter's two forms for it (`build/patches/agent-status/0006-agent-transcript.patch`);
 //! - the skill speaks of the `live` group and the attach contract's `NGTERM_LIVE_*` variables where upstream's names
 //!   `zmx`, and it is named `ngterm` (frontmatter `name`, a description that also triggers on ngterm and `ngtermctl`),
 //!   its text, examples and `show-image.sh` running `ngtermctl` wherever upstream runs `agtermctl`, the far side of a

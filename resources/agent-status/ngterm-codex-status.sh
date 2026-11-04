@@ -5,6 +5,11 @@
 # that raw event as blocked therefore false-flags automatically reviewed tools. This hook keeps the
 # agent-specific workaround inside the installed hook package: one watcher per ngterm pane reads the
 # live visible footer for dialogs, while Stop checks the final assistant message for a question.
+#
+# ngterm's chat view (an ngterm extension): SessionStart, UserPromptSubmit and PermissionRequest also report to the
+# pane's agent record, piping the payload to `ngtermctl agent hook codex <event>`, so those three read the payload up
+# front and hand it on to the readers below. A subagent's events fire here with its `agent_id` and its own transcript:
+# only its permission prompt is reported, and `agent hook` keeps only the prompt of it.
 set -u
 
 [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
@@ -24,6 +29,27 @@ socket_args=()
 
 report_status() {
   "$status_wrapper" "$@" >/dev/null 2>&1 || true
+}
+
+payload=
+case "$action" in
+  session-start|user-prompt-submit|permission-request)
+    payload=$(cat)
+    exec <<<"$payload"
+    ;;
+esac
+
+# Pipes the payload to `ngtermctl agent hook codex <event>`; a subagent's event other than a permission prompt is left
+# out, since its transcript is not the pane's conversation.
+report_agent() {
+  local subagent_re='(^|[^\\])"agent_id"[[:space:]]*:[[:space:]]*"[^"]'
+  if [ "$1" != PermissionRequest ] && [[ $payload =~ $subagent_re ]]; then
+    return 0
+  fi
+  printf '%s' "$payload" | "${NGTERMCTL:-ngtermctl}" agent hook codex "$1" \
+    --target "$NGTERM_SESSION_ID" \
+    "${socket_args[@]+"${socket_args[@]}"}" \
+    "${pane_args[@]+"${pane_args[@]}"}" >/dev/null 2>&1 || true
 }
 
 assistant_message_contains_question() {
@@ -168,10 +194,12 @@ esac
 
 case "$action" in
   session-start)
+    report_agent SessionStart
     stop_watcher
     report_status idle
     ;;
   user-prompt-submit)
+    report_agent UserPromptSubmit
     report_status active --blink
     start_watcher
     ;;
@@ -181,6 +209,7 @@ case "$action" in
   permission-request)
     # Candidate only: keep watching while Auto Review decides. The watcher reports blocked only if
     # Codex subsequently leaves a real approval prompt visible for the user.
+    report_agent PermissionRequest
     start_watcher
     ;;
   stop)

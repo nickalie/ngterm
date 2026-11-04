@@ -1,6 +1,7 @@
 //! The restore adapter run for real: which `ngtermctl session restore` calls it makes for a hook's event, payload and
-//! environment. A stub `ngtermctl` records each call's argv; no `NGTERM_*` variable of a live instance reaches the
-//! script and nothing talks to an app. The POSIX script runs on Unix under `bash`; its PowerShell form
+//! environment, and the `ngtermctl agent hook` calls that keep the pane's agent record (the Android chat view) on the
+//! same conversation. A stub `ngtermctl` records each call's argv, and an `agent` call's stdin; no `NGTERM_*` variable
+//! of a live instance reaches the script and nothing talks to an app. The POSIX script runs on Unix under `bash`; its PowerShell form
 //! (`ngterm-agent-restore.ps1`) on Windows, under Windows PowerShell and, where it is installed, PowerShell 7, each
 //! run asserted to make the same calls.
 
@@ -34,7 +35,8 @@ fn claude_payload(event: &str, extra: &str) -> String {
     )
 }
 
-/// A scratch directory with a stub `ngtermctl` that appends each call's arguments, tab-separated, to `calls`.
+/// A scratch directory with a stub `ngtermctl` that appends each call's arguments, tab-separated, to `calls`, and
+/// writes an `agent` call's stdin over `agent-stdin`.
 struct Bench {
     dir: tempfile::TempDir,
 }
@@ -43,12 +45,15 @@ impl Bench {
     #[cfg(unix)]
     const STUB: (&str, &str) = (
         "ngtermctl",
-        "#!/usr/bin/env bash\n(IFS=$'\\t'; printf '%s\\n' \"$*\") >> \"$(dirname \"$0\")/calls\"\n",
+        "#!/usr/bin/env bash\ndir=$(dirname \"$0\")\n[ \"$1\" = agent ] && cat > \"$dir/agent-stdin\"\n\
+         (IFS=$'\\t'; printf '%s\\n' \"$*\") >> \"$dir/calls\"\n",
     );
     #[cfg(windows)]
     const STUB: (&str, &str) = (
         "ngtermctl.ps1",
-        "Add-Content -LiteralPath (Join-Path $PSScriptRoot 'calls') -Value ($args -join \"`t\")\r\n",
+        "if ($args[0] -ceq 'agent') {\r\n\
+         [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'agent-stdin'), (@($input) -join \"`n\"))\r\n}\r\n\
+         Add-Content -LiteralPath (Join-Path $PSScriptRoot 'calls') -Value ($args -join \"`t\")\r\n",
     );
 
     fn new() -> Self {
@@ -63,13 +68,34 @@ impl Bench {
         self.dir.path().join(name)
     }
 
-    /// The calls the stub recorded so far, each as its argument list.
-    fn calls(&self) -> Vec<Vec<String>> {
+    /// Every call the stub recorded so far, each as its argument list.
+    fn all_calls(&self) -> Vec<Vec<String>> {
         fs::read_to_string(self.path("calls"))
             .unwrap_or_default()
             .lines()
             .map(|line| line.split('\t').map(str::to_owned).collect())
             .collect()
+    }
+
+    /// The `session restore` calls the stub recorded so far.
+    fn calls(&self) -> Vec<Vec<String>> {
+        self.all_calls()
+            .into_iter()
+            .filter(|call| call.first().is_some_and(|word| word == "session"))
+            .collect()
+    }
+
+    /// The `agent hook` calls the stub recorded so far.
+    fn agent_calls(&self) -> Vec<Vec<String>> {
+        self.all_calls()
+            .into_iter()
+            .filter(|call| call.first().is_some_and(|word| word == "agent"))
+            .collect()
+    }
+
+    /// What the last `agent` call read on stdin.
+    fn agent_stdin(&self) -> String {
+        fs::read_to_string(self.path("agent-stdin")).unwrap_or_default()
     }
 
     /// The adapter with `args` under `shell` (Unix: `bash`), in a pane's environment from scratch: the pane variables,
@@ -130,11 +156,11 @@ impl Bench {
     /// Runs the adapter with `args` and `payload` on stdin under each shell, which must make the same calls; they are
     /// recorded once.
     fn run(&self, vars: &[(&str, &str)], removed: &[&str], args: &[&str], payload: &str) {
-        let before = self.calls();
+        let before = self.all_calls();
         let mut made: Option<Vec<Vec<String>>> = None;
         for shell in Self::shells() {
             Self::run_one(self.command(shell, vars, removed, args), payload);
-            let calls = self.calls()[before.len()..].to_vec();
+            let calls = self.all_calls()[before.len()..].to_vec();
             match &made {
                 Some(made) => assert_eq!(&calls, made, "{shell} differs, for {args:?} with {payload}"),
                 None => made = Some(calls),
@@ -309,5 +335,68 @@ fn outside_ngterm_the_adapter_does_nothing() {
         bench.run(&[CLI], &["NGTERM_SESSION_ID"], &[agent, event], &payload);
     }
     bench.run(&[CLI], &[], &[], "");
-    assert_eq!(bench.calls(), Vec::<Vec<String>>::new());
+    assert_eq!(bench.all_calls(), Vec::<Vec<String>>::new());
+}
+
+/// The `agent hook` call the adapter makes for `event`, addressed as the status hooks address theirs.
+fn agent_hook(event: &str) -> Vec<String> {
+    [
+        "agent",
+        "hook",
+        "claude",
+        event,
+        "--target",
+        SESSION,
+        "--pane",
+        "left",
+        "--pane-id",
+        PANE,
+        "--socket",
+        SOCKET,
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// Every start and every end, whatever its reason, hands the payload to `agent hook`: the start sets the pane's agent
+/// record, the end clears it when it is the record's conversation (the core checks that).
+#[test]
+fn a_claude_start_and_any_end_pipe_their_payload_to_agent_hook() {
+    let bench = Bench::new();
+    let pane = [CLI, ("NGTERM_PANE", "left")];
+    let start = claude_payload("SessionStart", r#","source":"clear""#);
+    bench.claude("start", &start, &pane);
+    assert_eq!(bench.agent_calls(), [agent_hook("SessionStart")]);
+    assert_eq!(bench.agent_stdin().trim_end(), start);
+    for reason in ["clear", "other", "prompt_input_exit"] {
+        let end = claude_payload("SessionEnd", &format!(r#","reason":"{reason}""#));
+        bench.claude("end", &end, &pane);
+        assert_eq!(bench.agent_stdin().trim_end(), end, "{reason}");
+    }
+    assert_eq!(bench.agent_calls()[1..], vec![agent_hook("SessionEnd"); 3]);
+    // the record follows a conversation whatever its id looks like: the pin's strict check is the pin's alone
+    bench.claude(
+        "start",
+        r#"{"session_id":"abc123","hook_event_name":"SessionStart"}"#,
+        &pane,
+    );
+    assert_eq!(bench.agent_calls().len(), 5);
+}
+
+/// The guards the pin has hold for the agent record too: a recorded `claude -p` worker's start, an SDK run and a
+/// subagent make no call.
+#[test]
+fn a_worker_or_a_subagent_makes_no_agent_call() {
+    let bench = Bench::new();
+    let worker = super::adapter_tests::fixture("claude/hooks/53-SessionStart.json");
+    bench.claude("start", &worker, &[("CLAUDE_CODE_ENTRYPOINT", "sdk-cli")]);
+    bench.claude(
+        "end",
+        &claude_payload("SessionEnd", ""),
+        &[("CLAUDE_CODE_ENTRYPOINT", "sdk-ts")],
+    );
+    bench.claude("start", &claude_payload("SessionStart", ""), &[]);
+    let subagent = claude_payload("SessionStart", r#","agent_id":"a1b2","agent_type":"Explore""#);
+    bench.claude("start", &subagent, &[CLI]);
+    assert_eq!(bench.all_calls(), Vec::<Vec<String>>::new());
 }

@@ -566,6 +566,8 @@ SUBCOMMANDS:
   live                    Inspect and manage the daemons behind live sessions.
   terminfo                The terminal's terminfo entry on other hosts.
   clipboard               The clipboard of the terminals showing this pane.
+  agent                   The coding agent a pane runs, for the Android chat
+                          view.
   version                 Print the version of the app serving the socket.
 
   See 'ngtermctl help <subcommand>' for detailed help.

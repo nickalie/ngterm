@@ -26,6 +26,14 @@
 # truthful-agent-lights cookbook recipe. Only a `completed` call reads
 # stdin, where Claude Code writes the payload as JSON; a key quoted inside a string value is escaped
 # (`\"background_tasks\"`), so the match cannot hit the last assistant message.
+#
+# ngterm's chat view (an ngterm extension): `UserPromptSubmit` and `PermissionRequest` also report to the pane's agent
+# record, piping the payload to `ngtermctl agent hook claude <event>` ahead of the status. Their state does not name
+# the event (`PostToolUse` posts `active` too), so an `active` or `blocked` call reads the payload's head for its
+# `hook_event_name`, and only those two events read the rest: a `PostToolUse` payload, which can hold a whole tool
+# output, stays unread. Only the interactive CLI reports (a `claude -p` worker runs with CLAUDE_CODE_ENTRYPOINT
+# `sdk-cli`, besides the walk above), and a subagent's prompt (`agent_id`) never does; a subagent's permission prompt
+# does, and `agent hook` keeps only the prompt of it.
 set -u
 
 [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
@@ -88,6 +96,35 @@ for _ in 1 2 3 4 5 6 7 8; do
   case "$base" in login | ngterm) break ;; esac # reached the pane boundary
   p=$ppid
 done
+
+# Pipes $payload to `ngtermctl agent hook claude <event>`, the pane addressed as the status wrapper addresses it.
+report_agent() {
+  local args=(agent hook claude "$1" --target "$NGTERM_SESSION_ID")
+  [ -n "${NGTERM_PANE:-}" ] && args+=(--pane "$NGTERM_PANE")
+  [ -n "${NGTERM_PANE_ID:-}" ] && args+=(--pane-id "$NGTERM_PANE_ID")
+  [ -n "${NGTERM_SOCKET:-}" ] && args+=(--socket "$NGTERM_SOCKET")
+  printf '%s' "$payload" | "${NGTERMCTL:-ngtermctl}" "${args[@]}" >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+  active | blocked)
+    if [ "${CLAUDE_CODE_ENTRYPOINT:-}" = cli ] && [ ! -t 0 ]; then
+      payload=
+      IFS= read -r -d '' -n 4096 -t 2 payload || true
+      record_re='"hook_event_name"[[:space:]]*:[[:space:]]*"(UserPromptSubmit|PermissionRequest)"'
+      subagent_re='(^|[^\\])"agent_id"[[:space:]]*:[[:space:]]*"[^"]'
+      if [[ $payload =~ $record_re ]]; then
+        event=${BASH_REMATCH[1]}
+        rest=
+        IFS= read -r -d '' -t 5 rest || true
+        payload=$payload$rest
+        if [ "$event" = PermissionRequest ] || ! [[ $payload =~ $subagent_re ]]; then
+          report_agent "$event"
+        fi
+      fi
+    fi
+    ;;
+esac
 
 if [ "${1:-}" = completed ] && [ ! -t 0 ]; then
   payload=

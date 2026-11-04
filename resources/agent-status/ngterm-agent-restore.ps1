@@ -11,6 +11,10 @@
 #
 # which both PowerShells take: `$?` is false after a native command that exits non-zero.
 #
+# ngterm's chat view: each start and each end also pipe the payload to `ngtermctl agent hook claude SessionStart|SessionEnd`
+# under the same guards, as the POSIX form does. The payload is read and handed on as UTF-8 whatever the console's code
+# page, so a path arrives as the agent wrote it.
+#
 # As a hook it must never disturb the agent: no output, always exit 0, and outside ngterm (NGTERM_SESSION_ID unset)
 # it does nothing. The payload is matched with a regular expression, as the POSIX form does with bash's.
 #
@@ -27,7 +31,8 @@ $hookEvent = if ($args.Count -gt 1) { $args[1] } else { '' }
 $payload = ''
 if ([Console]::IsInputRedirected) {
   try {
-    $read = [Console]::In.ReadToEndAsync()
+    $reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), (New-Object System.Text.UTF8Encoding $false))
+    $read = $reader.ReadToEndAsync()
     if ($read.Wait(5000)) { $payload = $read.Result }
   } catch { }
 }
@@ -48,17 +53,33 @@ function Get-SessionId {
   return $null
 }
 
+function Get-Ngtermctl {
+  if ($env:NGTERMCTL) { return $env:NGTERMCTL }
+  $baked = Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue
+  if ($baked) { return $baked }
+  return 'ngtermctl'
+}
+
 function Invoke-Restore([string[]] $restoreArgs) {
-  $ngtermctl = 'ngtermctl'
-  if ($env:NGTERMCTL) {
-    $ngtermctl = $env:NGTERMCTL
-  } elseif ((Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue)) {
-    $ngtermctl = $NgtermctlBaked
-  }
+  $ngtermctl = Get-Ngtermctl
   $cli = @('session', 'restore') + $restoreArgs + @('--target', $env:NGTERM_SESSION_ID)
   if ($env:NGTERM_PANE_ID) { $cli += @('--pane-id', $env:NGTERM_PANE_ID) }
   if ($env:NGTERM_SOCKET) { $cli += @('--socket', $env:NGTERM_SOCKET) }
   try { $null | & $ngtermctl @cli *> $null } catch { }
+}
+
+# Pipes the payload to `ngtermctl agent hook claude <event>`, the pane addressed as the status hooks address it.
+function Send-AgentHook([string] $agentEvent) {
+  $ngtermctl = Get-Ngtermctl
+  $cli = @('agent', 'hook', 'claude', $agentEvent, '--target', $env:NGTERM_SESSION_ID)
+  if ($env:NGTERM_PANE) { $cli += @('--pane', $env:NGTERM_PANE) }
+  if ($env:NGTERM_PANE_ID) { $cli += @('--pane-id', $env:NGTERM_PANE_ID) }
+  if ($env:NGTERM_SOCKET) { $cli += @('--socket', $env:NGTERM_SOCKET) }
+  try {
+    # a `New-Object` encoding is wrapped, which Windows PowerShell 5.1 does not take for a native command's input
+    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $payload | & $ngtermctl @cli *> $null
+  } catch { }
 }
 
 function Invoke-ClaudeHook {
@@ -66,10 +87,12 @@ function Invoke-ClaudeHook {
   if (Get-StringField 'agent_id') { return }
   switch -CaseSensitive ($hookEvent) {
     'start' {
+      Send-AgentHook 'SessionStart'
       $id = Get-SessionId
       if ($id) { Invoke-Restore @("claude --resume $id; if (-not `$?) { claude }") }
     }
     'end' {
+      Send-AgentHook 'SessionEnd'
       $reason = Get-StringField 'reason'
       if ($reason -ceq 'prompt_input_exit' -or $reason -ceq 'logout') { Invoke-Restore @('--clear') }
     }

@@ -187,6 +187,19 @@ fn assert_restore_adapter_installed(home: &Home) {
     );
 }
 
+/// The Claude status adapters run `ngtermctl agent hook` themselves, so both forms have `tool` baked in.
+fn assert_claude_adapters_baked(home: &Home, tool: &Path) {
+    let script_dir = home.path(".config/ngterm/agent-status");
+    let claude = fs::read_to_string(script_dir.join(config::CLAUDE_WRAPPER_NAME)).unwrap();
+    assert!(claude.contains(&format!("  NGTERMCTL='{}'", hooks::shell_path(tool))));
+    assert!(
+        claude.starts_with("#!/usr/bin/env bash\n"),
+        "the bake goes below the shebang"
+    );
+    let claude_ps1 = fs::read_to_string(script_dir.join(config::WINDOWS_CLAUDE_WRAPPER_NAME)).unwrap();
+    assert!(claude_ps1.contains(&format!("  $NgtermctlBaked = '{}'", hooks::shell_path(tool))));
+}
+
 fn assert_fresh_install_files(home: &Home) {
     let wrapper = home.path(".config/ngterm/agent-status").join(WRAPPER_NAME);
     #[cfg(unix)]
@@ -209,6 +222,7 @@ fn assert_fresh_install_files(home: &Home) {
             .unwrap()
             .contains(&format!("  $NgtermctlBaked = '{}'", hooks::shell_path(&tool)))
     );
+    assert_claude_adapters_baked(home, &tool);
     let form = config::HookForm::HOST;
     let dir = hooks::shell_path(&home.path(".config/ngterm/agent-status"));
     let command = serde_json::to_string(&format!(

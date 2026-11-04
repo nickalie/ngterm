@@ -29,6 +29,10 @@
 # a deliberate exit (reason `prompt_input_exit` or `logout`); a killed process (SIGHUP when ngterm quits) ends with
 # `other`, and `clear` and `resume` are followed by a SessionStart that re-pins, so all three keep it.
 #
+# ngterm's chat view: the pane's agent record follows the conversation the same way. Each start and each end (whatever
+# its reason) pipes the payload to `ngtermctl agent hook claude SessionStart|SessionEnd`, under the same guards: the
+# start sets the record, the end clears it when it names the record's conversation.
+#
 # As a hook it must never disturb the agent: no output (Claude Code adds a SessionStart hook's stdout to the
 # conversation), always exit 0, and outside ngterm (NGTERM_SESSION_ID unset) it does nothing. It needs no jq or
 # python: the payload is matched with bash's own regex.
@@ -70,16 +74,27 @@ restore() {
   "${NGTERMCTL:-ngtermctl}" "${args[@]}" </dev/null || true
 }
 
+# Pipes the payload to `ngtermctl agent hook claude <event>`, the pane addressed as the status hooks address it.
+agent_hook() {
+  local args=(agent hook claude "$1" --target "$NGTERM_SESSION_ID")
+  [ -n "${NGTERM_PANE:-}" ] && args+=(--pane "$NGTERM_PANE")
+  [ -n "${NGTERM_PANE_ID:-}" ] && args+=(--pane-id "$NGTERM_PANE_ID")
+  [ -n "${NGTERM_SOCKET:-}" ] && args+=(--socket "$NGTERM_SOCKET")
+  printf '%s' "$payload" | "${NGTERMCTL:-ngtermctl}" "${args[@]}" || true
+}
+
 claude_hook() {
   [ "${CLAUDE_CODE_ENTRYPOINT:-}" = cli ] || return 0
   [ -n "$(string_field agent_id)" ] && return 0
   local id reason
   case "$event" in
     start)
+      agent_hook SessionStart
       id=$(session_id) || return 0
       restore "claude --resume $id || claude"
       ;;
     end)
+      agent_hook SessionEnd
       reason=$(string_field reason) || return 0
       case "$reason" in prompt_input_exit | logout) restore --clear ;; esac
       ;;

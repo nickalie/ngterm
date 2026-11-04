@@ -755,8 +755,9 @@ pub fn apply(plan: &HooksPlan) -> Result<HooksOutcome, InstallError> {
     })
 }
 
-/// Copies the package over the script directory and bakes `ngtermctl` into the generic and Codex wrappers and the
-/// restore adapter, in both their forms (the Claude status adapters call the generic wrapper, so they need none).
+/// Copies the package over the script directory and bakes `ngtermctl` into every script that runs it: the generic and
+/// Codex wrappers, the restore adapter and the Claude status adapter (its `ngtermctl agent hook` call), in both their
+/// forms.
 fn install_package(plan: &HooksPlan) -> Result<(), InstallError> {
     files::copy_tree(&plan.package, &plan.script_dir).map_err(failed("install the scripts into", &plan.script_dir))?;
     let Some(tool) = &plan.bake else {
@@ -768,8 +769,10 @@ fn install_package(plan: &HooksPlan) -> Result<(), InstallError> {
         (config::WRAPPER_NAME, posix),
         (config::CODEX_WRAPPER_NAME, posix),
         (config::RESTORE_WRAPPER_NAME, posix),
+        (config::CLAUDE_WRAPPER_NAME, posix),
         (config::WINDOWS_WRAPPER_NAME, powershell),
         (config::WINDOWS_RESTORE_WRAPPER_NAME, powershell),
+        (config::WINDOWS_CLAUDE_WRAPPER_NAME, powershell),
     ] {
         let wrapper = plan.script_dir.join(name);
         let original = fs::read_to_string(&wrapper).map_err(failed("read", &wrapper))?;

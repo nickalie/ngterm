@@ -454,21 +454,29 @@ with no output yet is a running call (Task 1's fixture README).
 - Create: `build/patches/agent-status/0006-agent-transcript.patch`, through the `agterm-upstream-sync` skill's
   `scripts/sync-resources.sh` convention
 - Modify: `crates/ngterm-app/src/integrations/adapter_tests.rs`, the deviations list in `integrations/mod.rs`
+  (also `restore_tests.rs`, and `hooks.rs`, which now bakes `ngtermctl` into the Claude status adapter's two forms,
+  since that adapter calls `agent hook` itself; `tests.rs` asserts it)
 
-- [ ] write `ngtermctl agent hook` tests first: it reads stdin, passes `--target`, `--pane`, `--pane-id` and
+- [x] write `ngtermctl agent hook` tests first: it reads stdin, passes `--target`, `--pane`, `--pane-id` and
       `--socket` as the existing hooks do, and sends `agent.report`. Also test empty stdin, a malformed payload (a
       non-zero exit that never blocks the agent) and a missing socket.
-- [ ] write adapter tests first, with a stub `ngtermctl` on `PATH` that logs its argv and stdin:
+- [x] write adapter tests first, with a stub `ngtermctl` (`NGTERMCTL`, as the restore tests point theirs) that logs
+      its argv and stdin:
   - the four events pipe their payload to `agent hook`;
   - a `claude -p` worker and a subagent payload make no call (`CLAUDE_CODE_ENTRYPOINT`, `agent_id`, and the status
     adapter's process-topology guard); Codex's subagent events carry `agent_id` and the subagent's transcript path
     (Task 1);
   - `PostToolUse` and `Stop` make no new call;
-  - a Codex call that Auto Review approved never yields a live approval (end to end with the Task 6 dispatcher fake).
-- [ ] implement the calls in the POSIX scripts, then in the Claude PowerShell forms. Codex on Windows runs the POSIX
+  - a Codex call that Auto Review approved never yields a live approval (end to end with the Task 6 dispatcher fake:
+    `crates/ngterm-ctl/tests/agent_hook.rs` runs the real Codex adapter and status wrapper with this `ngtermctl` into
+    a core on the fakes).
+
+  A subagent's `PermissionRequest` (`agent_id`) is still reported: the dialog is on the pane's screen, and
+  `agent.report` keeps only its prompt (Task 6).
+- [x] implement the calls in the POSIX scripts, then in the Claude PowerShell forms. Codex on Windows runs the POSIX
       adapter through `WINDOWS_BASH`, so its test also runs under bash on Windows CI.
-- [ ] record the patch as 0006
-- [ ] `cargo test -p ngterm-ctl agent -p ngterm-app integrations` must pass
+- [x] record the patch as 0006
+- [x] `cargo test -p ngterm-ctl agent -p ngterm-app integrations` must pass
 
 ### Task 9: `ngtermctl agent chat`
 

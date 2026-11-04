@@ -17,6 +17,15 @@
 # of `completed`, so the row keeps pulsing until a Stop with nothing in flight, or the SessionEnd hook the installer
 # adds. Only a `completed` call reads stdin, where Claude Code writes the payload as JSON; a key quoted inside a string
 # value is escaped (`\"background_tasks\"`), so the match cannot hit the last assistant message.
+#
+# ngterm's chat view (an ngterm extension, as in the POSIX form): `UserPromptSubmit` and `PermissionRequest` also
+# report to the pane's agent record, piping the payload to `ngtermctl agent hook claude <event>` ahead of the status.
+# An `active` or `blocked` call of the interactive CLI (CLAUDE_CODE_ENTRYPOINT `cli`) reads the payload for its
+# `hook_event_name`; a subagent's prompt (`agent_id`) is left out, its permission prompt is not. The payload is read
+# and handed on as UTF-8 whatever the console's code page, so a path or a prompt arrives as the agent wrote it.
+#
+# ngtermctl resolution: $env:NGTERMCTL, else the path the installer bakes in ($NgtermctlBaked), else `ngtermctl` on
+# PATH.
 
 if (-not $env:NGTERM_SESSION_ID) { exit 0 }
 
@@ -90,6 +99,46 @@ function Test-Worker {
 }
 
 if (Test-Worker) { exit 0 }
+
+# The hook payload on stdin as UTF-8, or '' when none arrives within `$milliseconds`.
+function Read-Payload([int] $milliseconds) {
+  try {
+    $reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), (New-Object System.Text.UTF8Encoding $false))
+    $read = $reader.ReadToEndAsync()
+    if ($read.Wait($milliseconds)) { return $read.Result }
+  } catch { }
+  return ''
+}
+
+# Pipes `$payload` to `ngtermctl agent hook claude <event>`, the pane addressed as the status wrapper addresses it.
+function Send-AgentHook([string] $hookEvent, [string] $payload) {
+  $ngtermctl = 'ngtermctl'
+  if ($env:NGTERMCTL) {
+    $ngtermctl = $env:NGTERMCTL
+  } elseif ((Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue)) {
+    $ngtermctl = $NgtermctlBaked
+  }
+  $cli = @('agent', 'hook', 'claude', $hookEvent, '--target', $env:NGTERM_SESSION_ID)
+  if ($env:NGTERM_PANE) { $cli += @('--pane', $env:NGTERM_PANE) }
+  if ($env:NGTERM_PANE_ID) { $cli += @('--pane-id', $env:NGTERM_PANE_ID) }
+  if ($env:NGTERM_SOCKET) { $cli += @('--socket', $env:NGTERM_SOCKET) }
+  try {
+    # a `New-Object` encoding is wrapped, which Windows PowerShell 5.1 does not take for a native command's input
+    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $payload | & $ngtermctl @cli *> $null
+  } catch { }
+}
+
+if ($args.Count -gt 0 -and ($args[0] -ceq 'active' -or $args[0] -ceq 'blocked') -and
+  $env:CLAUDE_CODE_ENTRYPOINT -ceq 'cli' -and [Console]::IsInputRedirected) {
+  $payload = Read-Payload 5000
+  if ($payload -cmatch '"hook_event_name"\s*:\s*"(UserPromptSubmit|PermissionRequest)"') {
+    $hookEvent = $Matches[1]
+    if ($hookEvent -ceq 'PermissionRequest' -or $payload -cnotmatch '(^|[^\\])"agent_id"\s*:\s*"[^"]') {
+      Send-AgentHook $hookEvent $payload
+    }
+  }
+}
 
 if ($args.Count -gt 0 -and $args[0] -ceq 'completed' -and [Console]::IsInputRedirected) {
   $payload = ''

@@ -2,6 +2,7 @@
 //! socket subcommand takes upstream's `BasicOptions` (`--socket`, `--json`) after its own name, one request per run,
 //! and reports through [`output`]. Each command group lives in its own module.
 
+mod agent;
 mod ask;
 mod browser;
 mod client;
@@ -73,8 +74,9 @@ struct Ngtermctl {
     command: Command,
 }
 
-/// The subcommands, in upstream's `Ngtermctl.configuration.subcommands` order; later tasks add the groups. A command's
-/// abstract is an `about` attribute (clap derive drops a doc comment's final period), as upstream's `abstract:`.
+/// The subcommands, in upstream's `Ngtermctl.configuration.subcommands` order, this build's Rust-only `agent` before
+/// `version`. A command's abstract is an `about` attribute (clap derive drops a doc comment's final period), as
+/// upstream's `abstract:`.
 #[derive(Debug, Subcommand)]
 enum Command {
     Tree(tree::Tree),
@@ -100,6 +102,7 @@ enum Command {
     Live(live::Live),
     Terminfo(terminfo::Terminfo),
     Clipboard(clipboard::Clipboard),
+    Agent(agent::Agent),
     Version(version::Version),
 }
 
@@ -128,6 +131,7 @@ impl Command {
             Self::Recent(command) => command.check(),
             Self::Live(command) => command.check(),
             Self::Terminfo(command) => command.check(),
+            Self::Agent(command) => command.check(),
             Self::Pick(_) | Self::Clipboard(_) | Self::Version(_) => Ok(()),
         }
     }
@@ -157,6 +161,7 @@ impl Command {
             Self::Live(command) => command.execute(env),
             Self::Terminfo(command) => command.execute(),
             Self::Clipboard(command) => command.execute(),
+            Self::Agent(command) => command.execute(env),
             Self::Version(command) => command.run(env),
         }
     }

@@ -1,0 +1,319 @@
+The agent record of the Android chat view, an ngterm extension: the adapters that own the four events the record
+needs pipe the hook payload to `ngtermctl agent hook <claude|codex> <event>`, which parses it in Rust and sends
+`agent.report`. Claude Code's SessionStart and SessionEnd go through the restore adapter, under its guards (the
+interactive CLI only, no subagent), every end whatever its reason; its UserPromptSubmit and PermissionRequest through
+the Claude status adapter, which reads the payload's head for the event an `active` or `blocked` call stands for (so a
+PostToolUse payload stays unread), after its process-topology walk and only for the interactive CLI, a subagent's
+prompt left out. Codex's SessionStart, UserPromptSubmit and PermissionRequest go through its adapter, which reads
+those three payloads once and hands them on to its own readers; a subagent's events other than a permission prompt are
+left out. PostToolUse and Stop make no call. The PowerShell forms do the same, reading and handing on the payload as
+UTF-8. Applied after 0005-codex-own-process.patch.
+
+diff --git a/ngterm-agent-restore.ps1 b/ngterm-agent-restore.ps1
+index 7ec08adb..6a7947ba 100644
+--- a/ngterm-agent-restore.ps1
++++ b/ngterm-agent-restore.ps1
+@@ -11,6 +11,10 @@
+ #
+ # which both PowerShells take: `$?` is false after a native command that exits non-zero.
+ #
++# ngterm's chat view: each start and each end also pipe the payload to `ngtermctl agent hook claude SessionStart|SessionEnd`
++# under the same guards, as the POSIX form does. The payload is read and handed on as UTF-8 whatever the console's code
++# page, so a path arrives as the agent wrote it.
++#
+ # As a hook it must never disturb the agent: no output, always exit 0, and outside ngterm (NGTERM_SESSION_ID unset)
+ # it does nothing. The payload is matched with a regular expression, as the POSIX form does with bash's.
+ #
+@@ -27,7 +31,8 @@ $hookEvent = if ($args.Count -gt 1) { $args[1] } else { '' }
+ $payload = ''
+ if ([Console]::IsInputRedirected) {
+   try {
+-    $read = [Console]::In.ReadToEndAsync()
++    $reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), (New-Object System.Text.UTF8Encoding $false))
++    $read = $reader.ReadToEndAsync()
+     if ($read.Wait(5000)) { $payload = $read.Result }
+   } catch { }
+ }
+@@ -48,28 +53,46 @@ function Get-SessionId {
+   return $null
+ }
+ 
++function Get-Ngtermctl {
++  if ($env:NGTERMCTL) { return $env:NGTERMCTL }
++  $baked = Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue
++  if ($baked) { return $baked }
++  return 'ngtermctl'
++}
++
+ function Invoke-Restore([string[]] $restoreArgs) {
+-  $ngtermctl = 'ngtermctl'
+-  if ($env:NGTERMCTL) {
+-    $ngtermctl = $env:NGTERMCTL
+-  } elseif ((Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue)) {
+-    $ngtermctl = $NgtermctlBaked
+-  }
++  $ngtermctl = Get-Ngtermctl
+   $cli = @('session', 'restore') + $restoreArgs + @('--target', $env:NGTERM_SESSION_ID)
+   if ($env:NGTERM_PANE_ID) { $cli += @('--pane-id', $env:NGTERM_PANE_ID) }
+   if ($env:NGTERM_SOCKET) { $cli += @('--socket', $env:NGTERM_SOCKET) }
+   try { $null | & $ngtermctl @cli *> $null } catch { }
+ }
+ 
++# Pipes the payload to `ngtermctl agent hook claude <event>`, the pane addressed as the status hooks address it.
++function Send-AgentHook([string] $agentEvent) {
++  $ngtermctl = Get-Ngtermctl
++  $cli = @('agent', 'hook', 'claude', $agentEvent, '--target', $env:NGTERM_SESSION_ID)
++  if ($env:NGTERM_PANE) { $cli += @('--pane', $env:NGTERM_PANE) }
++  if ($env:NGTERM_PANE_ID) { $cli += @('--pane-id', $env:NGTERM_PANE_ID) }
++  if ($env:NGTERM_SOCKET) { $cli += @('--socket', $env:NGTERM_SOCKET) }
++  try {
++    # a `New-Object` encoding is wrapped, which Windows PowerShell 5.1 does not take for a native command's input
++    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
++    $payload | & $ngtermctl @cli *> $null
++  } catch { }
++}
++
+ function Invoke-ClaudeHook {
+   if ($env:CLAUDE_CODE_ENTRYPOINT -cne 'cli') { return }
+   if (Get-StringField 'agent_id') { return }
+   switch -CaseSensitive ($hookEvent) {
+     'start' {
++      Send-AgentHook 'SessionStart'
+       $id = Get-SessionId
+       if ($id) { Invoke-Restore @("claude --resume $id; if (-not `$?) { claude }") }
+     }
+     'end' {
++      Send-AgentHook 'SessionEnd'
+       $reason = Get-StringField 'reason'
+       if ($reason -ceq 'prompt_input_exit' -or $reason -ceq 'logout') { Invoke-Restore @('--clear') }
+     }
+diff --git a/ngterm-agent-restore.sh b/ngterm-agent-restore.sh
+index 64072303..9827f7ab 100755
+--- a/ngterm-agent-restore.sh
++++ b/ngterm-agent-restore.sh
+@@ -29,6 +29,10 @@
+ # a deliberate exit (reason `prompt_input_exit` or `logout`); a killed process (SIGHUP when ngterm quits) ends with
+ # `other`, and `clear` and `resume` are followed by a SessionStart that re-pins, so all three keep it.
+ #
++# ngterm's chat view: the pane's agent record follows the conversation the same way. Each start and each end (whatever
++# its reason) pipes the payload to `ngtermctl agent hook claude SessionStart|SessionEnd`, under the same guards: the
++# start sets the record, the end clears it when it names the record's conversation.
++#
+ # As a hook it must never disturb the agent: no output (Claude Code adds a SessionStart hook's stdout to the
+ # conversation), always exit 0, and outside ngterm (NGTERM_SESSION_ID unset) it does nothing. It needs no jq or
+ # python: the payload is matched with bash's own regex.
+@@ -70,16 +74,27 @@ restore() {
+   "${NGTERMCTL:-ngtermctl}" "${args[@]}" </dev/null || true
+ }
+ 
++# Pipes the payload to `ngtermctl agent hook claude <event>`, the pane addressed as the status hooks address it.
++agent_hook() {
++  local args=(agent hook claude "$1" --target "$NGTERM_SESSION_ID")
++  [ -n "${NGTERM_PANE:-}" ] && args+=(--pane "$NGTERM_PANE")
++  [ -n "${NGTERM_PANE_ID:-}" ] && args+=(--pane-id "$NGTERM_PANE_ID")
++  [ -n "${NGTERM_SOCKET:-}" ] && args+=(--socket "$NGTERM_SOCKET")
++  printf '%s' "$payload" | "${NGTERMCTL:-ngtermctl}" "${args[@]}" || true
++}
++
+ claude_hook() {
+   [ "${CLAUDE_CODE_ENTRYPOINT:-}" = cli ] || return 0
+   [ -n "$(string_field agent_id)" ] && return 0
+   local id reason
+   case "$event" in
+     start)
++      agent_hook SessionStart
+       id=$(session_id) || return 0
+       restore "claude --resume $id || claude"
+       ;;
+     end)
++      agent_hook SessionEnd
+       reason=$(string_field reason) || return 0
+       case "$reason" in prompt_input_exit | logout) restore --clear ;; esac
+       ;;
+diff --git a/ngterm-claude-status.ps1 b/ngterm-claude-status.ps1
+index f4fbea1b..4a901e4e 100644
+--- a/ngterm-claude-status.ps1
++++ b/ngterm-claude-status.ps1
+@@ -17,6 +17,15 @@
+ # of `completed`, so the row keeps pulsing until a Stop with nothing in flight, or the SessionEnd hook the installer
+ # adds. Only a `completed` call reads stdin, where Claude Code writes the payload as JSON; a key quoted inside a string
+ # value is escaped (`\"background_tasks\"`), so the match cannot hit the last assistant message.
++#
++# ngterm's chat view (an ngterm extension, as in the POSIX form): `UserPromptSubmit` and `PermissionRequest` also
++# report to the pane's agent record, piping the payload to `ngtermctl agent hook claude <event>` ahead of the status.
++# An `active` or `blocked` call of the interactive CLI (CLAUDE_CODE_ENTRYPOINT `cli`) reads the payload for its
++# `hook_event_name`; a subagent's prompt (`agent_id`) is left out, its permission prompt is not. The payload is read
++# and handed on as UTF-8 whatever the console's code page, so a path or a prompt arrives as the agent wrote it.
++#
++# ngtermctl resolution: $env:NGTERMCTL, else the path the installer bakes in ($NgtermctlBaked), else `ngtermctl` on
++# PATH.
+ 
+ if (-not $env:NGTERM_SESSION_ID) { exit 0 }
+ 
+@@ -91,6 +100,46 @@ function Test-Worker {
+ 
+ if (Test-Worker) { exit 0 }
+ 
++# The hook payload on stdin as UTF-8, or '' when none arrives within `$milliseconds`.
++function Read-Payload([int] $milliseconds) {
++  try {
++    $reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), (New-Object System.Text.UTF8Encoding $false))
++    $read = $reader.ReadToEndAsync()
++    if ($read.Wait($milliseconds)) { return $read.Result }
++  } catch { }
++  return ''
++}
++
++# Pipes `$payload` to `ngtermctl agent hook claude <event>`, the pane addressed as the status wrapper addresses it.
++function Send-AgentHook([string] $hookEvent, [string] $payload) {
++  $ngtermctl = 'ngtermctl'
++  if ($env:NGTERMCTL) {
++    $ngtermctl = $env:NGTERMCTL
++  } elseif ((Get-Variable -Name NgtermctlBaked -ValueOnly -ErrorAction SilentlyContinue)) {
++    $ngtermctl = $NgtermctlBaked
++  }
++  $cli = @('agent', 'hook', 'claude', $hookEvent, '--target', $env:NGTERM_SESSION_ID)
++  if ($env:NGTERM_PANE) { $cli += @('--pane', $env:NGTERM_PANE) }
++  if ($env:NGTERM_PANE_ID) { $cli += @('--pane-id', $env:NGTERM_PANE_ID) }
++  if ($env:NGTERM_SOCKET) { $cli += @('--socket', $env:NGTERM_SOCKET) }
++  try {
++    # a `New-Object` encoding is wrapped, which Windows PowerShell 5.1 does not take for a native command's input
++    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
++    $payload | & $ngtermctl @cli *> $null
++  } catch { }
++}
++
++if ($args.Count -gt 0 -and ($args[0] -ceq 'active' -or $args[0] -ceq 'blocked') -and
++  $env:CLAUDE_CODE_ENTRYPOINT -ceq 'cli' -and [Console]::IsInputRedirected) {
++  $payload = Read-Payload 5000
++  if ($payload -cmatch '"hook_event_name"\s*:\s*"(UserPromptSubmit|PermissionRequest)"') {
++    $hookEvent = $Matches[1]
++    if ($hookEvent -ceq 'PermissionRequest' -or $payload -cnotmatch '(^|[^\\])"agent_id"\s*:\s*"[^"]') {
++      Send-AgentHook $hookEvent $payload
++    }
++  }
++}
++
+ if ($args.Count -gt 0 -and $args[0] -ceq 'completed' -and [Console]::IsInputRedirected) {
+   $payload = ''
+   try {
+diff --git a/ngterm-claude-status.sh b/ngterm-claude-status.sh
+index 0560a8c5..d639246b 100755
+--- a/ngterm-claude-status.sh
++++ b/ngterm-claude-status.sh
+@@ -26,6 +26,14 @@
+ # truthful-agent-lights cookbook recipe. Only a `completed` call reads
+ # stdin, where Claude Code writes the payload as JSON; a key quoted inside a string value is escaped
+ # (`\"background_tasks\"`), so the match cannot hit the last assistant message.
++#
++# ngterm's chat view (an ngterm extension): `UserPromptSubmit` and `PermissionRequest` also report to the pane's agent
++# record, piping the payload to `ngtermctl agent hook claude <event>` ahead of the status. Their state does not name
++# the event (`PostToolUse` posts `active` too), so an `active` or `blocked` call reads the payload's head for its
++# `hook_event_name`, and only those two events read the rest: a `PostToolUse` payload, which can hold a whole tool
++# output, stays unread. Only the interactive CLI reports (a `claude -p` worker runs with CLAUDE_CODE_ENTRYPOINT
++# `sdk-cli`, besides the walk above), and a subagent's prompt (`agent_id`) never does; a subagent's permission prompt
++# does, and `agent hook` keeps only the prompt of it.
+ set -u
+ 
+ [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
+@@ -89,6 +97,35 @@ for _ in 1 2 3 4 5 6 7 8; do
+   p=$ppid
+ done
+ 
++# Pipes $payload to `ngtermctl agent hook claude <event>`, the pane addressed as the status wrapper addresses it.
++report_agent() {
++  local args=(agent hook claude "$1" --target "$NGTERM_SESSION_ID")
++  [ -n "${NGTERM_PANE:-}" ] && args+=(--pane "$NGTERM_PANE")
++  [ -n "${NGTERM_PANE_ID:-}" ] && args+=(--pane-id "$NGTERM_PANE_ID")
++  [ -n "${NGTERM_SOCKET:-}" ] && args+=(--socket "$NGTERM_SOCKET")
++  printf '%s' "$payload" | "${NGTERMCTL:-ngtermctl}" "${args[@]}" >/dev/null 2>&1 || true
++}
++
++case "${1:-}" in
++  active | blocked)
++    if [ "${CLAUDE_CODE_ENTRYPOINT:-}" = cli ] && [ ! -t 0 ]; then
++      payload=
++      IFS= read -r -d '' -n 4096 -t 2 payload || true
++      record_re='"hook_event_name"[[:space:]]*:[[:space:]]*"(UserPromptSubmit|PermissionRequest)"'
++      subagent_re='(^|[^\\])"agent_id"[[:space:]]*:[[:space:]]*"[^"]'
++      if [[ $payload =~ $record_re ]]; then
++        event=${BASH_REMATCH[1]}
++        rest=
++        IFS= read -r -d '' -t 5 rest || true
++        payload=$payload$rest
++        if [ "$event" = PermissionRequest ] || ! [[ $payload =~ $subagent_re ]]; then
++          report_agent "$event"
++        fi
++      fi
++    fi
++    ;;
++esac
++
+ if [ "${1:-}" = completed ] && [ ! -t 0 ]; then
+   payload=
+   IFS= read -r -d '' -t 2 payload || true # EOF ends the read: the payload carries no NUL
+diff --git a/ngterm-codex-status.sh b/ngterm-codex-status.sh
+index e7368f8d..aa63d170 100755
+--- a/ngterm-codex-status.sh
++++ b/ngterm-codex-status.sh
+@@ -5,6 +5,11 @@
+ # that raw event as blocked therefore false-flags automatically reviewed tools. This hook keeps the
+ # agent-specific workaround inside the installed hook package: one watcher per ngterm pane reads the
+ # live visible footer for dialogs, while Stop checks the final assistant message for a question.
++#
++# ngterm's chat view (an ngterm extension): SessionStart, UserPromptSubmit and PermissionRequest also report to the
++# pane's agent record, piping the payload to `ngtermctl agent hook codex <event>`, so those three read the payload up
++# front and hand it on to the readers below. A subagent's events fire here with its `agent_id` and its own transcript:
++# only its permission prompt is reported, and `agent hook` keeps only the prompt of it.
+ set -u
+ 
+ [ -n "${NGTERM_SESSION_ID:-}" ] || exit 0
+@@ -26,6 +31,27 @@ report_status() {
+   "$status_wrapper" "$@" >/dev/null 2>&1 || true
+ }
+ 
++payload=
++case "$action" in
++  session-start|user-prompt-submit|permission-request)
++    payload=$(cat)
++    exec <<<"$payload"
++    ;;
++esac
++
++# Pipes the payload to `ngtermctl agent hook codex <event>`; a subagent's event other than a permission prompt is left
++# out, since its transcript is not the pane's conversation.
++report_agent() {
++  local subagent_re='(^|[^\\])"agent_id"[[:space:]]*:[[:space:]]*"[^"]'
++  if [ "$1" != PermissionRequest ] && [[ $payload =~ $subagent_re ]]; then
++    return 0
++  fi
++  printf '%s' "$payload" | "${NGTERMCTL:-ngtermctl}" agent hook codex "$1" \
++    --target "$NGTERM_SESSION_ID" \
++    "${socket_args[@]+"${socket_args[@]}"}" \
++    "${pane_args[@]+"${pane_args[@]}"}" >/dev/null 2>&1 || true
++}
++
+ assistant_message_contains_question() {
+   local message prose question quoted_mark
+   # ngterm's Linux changes to this script: with no plutil, python3 or jq reads the payload's field, and awk, sed,
+@@ -168,10 +194,12 @@ esac
+ 
+ case "$action" in
+   session-start)
++    report_agent SessionStart
+     stop_watcher
+     report_status idle
+     ;;
+   user-prompt-submit)
++    report_agent UserPromptSubmit
+     report_status active --blink
+     start_watcher
+     ;;
+@@ -181,6 +209,7 @@ case "$action" in
+   permission-request)
+     # Candidate only: keep watching while Auto Review decides. The watcher reports blocked only if
+     # Codex subsequently leaves a real approval prompt visible for the user.
++    report_agent PermissionRequest
+     start_watcher
+     ;;
+   stop)

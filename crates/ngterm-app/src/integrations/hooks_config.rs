@@ -374,8 +374,8 @@ pub fn bake_ngtermctl_path(text: &str, tool_path: &str) -> String {
     insert_baked_block(text, block)
 }
 
-/// [`bake_ngtermctl_path`] for a PowerShell script ([`WINDOWS_WRAPPER_NAME`], [`WINDOWS_RESTORE_WRAPPER_NAME`]): the
-/// block sets `$NgtermctlBaked`, which the script calls unless `NGTERMCTL` is set, and drops a baked path that is gone,
+/// [`bake_ngtermctl_path`] for a PowerShell script ([`WINDOWS_WRAPPER_NAME`], [`WINDOWS_RESTORE_WRAPPER_NAME`],
+/// [`WINDOWS_CLAUDE_WRAPPER_NAME`]): the block sets `$NgtermctlBaked`, which the script calls unless `NGTERMCTL` is set, and drops a baked path that is gone,
 /// so the script falls back to `ngtermctl` on `PATH`.
 #[must_use]
 pub fn bake_ngtermctl_path_powershell(text: &str, tool_path: &str) -> String {
