@@ -420,7 +420,12 @@ mod tests {
             cli.keys().map(|name| name.as_str().unwrap().to_owned()).collect();
         let mut ours = std::collections::BTreeSet::new();
         catalog_names(&Ngtermctl::command(), &[], &mut ours);
-        assert_eq!(ours, expected);
+        // plus this build's Rust-only subcommands (conformance/docs/rust-build.md > Rust-only extensions)
+        let rust_only = ngterm_proto::command::RUST_ONLY_CLI;
+        assert_eq!(
+            ngterm_proto::command::check_rust_only(&ours, &expected, rust_only),
+            Ok(())
+        );
         assert!(ours.iter().all(|name| !name.contains("zmx")), "{ours:?}");
     }
 

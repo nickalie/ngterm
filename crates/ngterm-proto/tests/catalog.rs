@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::path::Path;
 
+use ngterm_proto::command::{RUST_ONLY_CLI, RUST_ONLY_COMMANDS, check_rust_only};
 use ngterm_proto::{Command, EventKind};
 use serde::Deserialize;
 use strum::IntoEnumIterator;
@@ -12,6 +13,7 @@ use strum::IntoEnumIterator;
 struct Catalog {
     commands: BTreeMap<String, Entry>,
     events: BTreeMap<String, Entry>,
+    cli: BTreeMap<String, serde_norway::Value>,
 }
 
 #[derive(Deserialize)]
@@ -50,11 +52,26 @@ fn the_catalog_names_no_zmx_and_the_live_group_is_ours() -> Result<(), Box<dyn E
     Ok(())
 }
 
+/// The protocol is upstream's commands, as the catalog lists them, plus this build's Rust-only extensions.
 #[test]
 fn command_wire_names_equal_catalog_commands() -> Result<(), Box<dyn Error>> {
     let catalog = load_catalog()?;
     let ours: BTreeSet<String> = Command::all().into_iter().map(|c| c.wire_name().to_owned()).collect();
-    assert_eq!(ours, listed(&catalog.commands));
+    check_rust_only(&ours, &listed(&catalog.commands), RUST_ONLY_COMMANDS)?;
+    Ok(())
+}
+
+/// The catalog is generated from upstream, so it never names a Rust-only command or subcommand, not even as removed
+/// upstream.
+#[test]
+fn the_catalog_names_no_rust_only_command() -> Result<(), Box<dyn Error>> {
+    let catalog = load_catalog()?;
+    for name in RUST_ONLY_COMMANDS {
+        assert!(!catalog.commands.contains_key(*name), "{name}");
+    }
+    for path in RUST_ONLY_CLI {
+        assert!(!catalog.cli.contains_key(*path), "{path}");
+    }
     Ok(())
 }
 

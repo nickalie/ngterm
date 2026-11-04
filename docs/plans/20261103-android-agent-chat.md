@@ -322,13 +322,13 @@ with no output yet is a running call (Task 1's fixture README).
   `crates/ngterm-proto/tests/catalog.rs`, `crates/ngterm-ctl/src/main.rs` (`the_command_tree_is_the_catalogs_cli`),
   `conformance/docs/rust-build.md` (Rust-only extensions: commands)
 
-- [ ] write the tests first:
+- [x] write the tests first:
   - both equality tests compare against the catalog plus an explicit Rust-only list (wire names and CLI paths);
   - a name in both the list and the catalog fails;
   - a Rust-only name missing from the list fails.
-- [ ] add the list (empty until Task 6) and document the rule in `rust-build.md`. The generated catalog is not hand
+- [x] add the list (empty until Task 6) and document the rule in `rust-build.md`. The generated catalog is not hand
       edited; it is regenerated from upstream.
-- [ ] `cargo test -p ngterm-proto -p ngterm-ctl` must pass
+- [x] `cargo test -p ngterm-proto -p ngterm-ctl` must pass
 
 ### Task 3: `agent_chat` event model and the Claude parser
 

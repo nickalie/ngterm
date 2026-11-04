@@ -203,6 +203,23 @@ suite, the same workflow runs `ngterm-session`'s PowerShell session tests (`test
 and working directory, the foreground read, a replay) on Linux, macOS and Windows, and `ngterm-core`'s replay round
 trip through a real `pwsh` where one is installed.
 
+### Commands
+
+A Rust-only command is a control command, or an `ngtermctl` subcommand, that upstream's protocol and `agtermctl` do
+not have. `catalog.yaml` is generated from upstream (`tools/gen_catalog.py`) and is never edited by hand, so it never
+lists one; the build lists its own in `ngterm-proto`'s `command.rs` instead: `RUST_ONLY_COMMANDS` (wire names) and
+`RUST_ONLY_CLI` (subcommand paths, as the catalog's `cli` keys them). The two catalog equality tests,
+`ngterm-proto`'s `command_wire_names_equal_catalog_commands` and `ngterm-ctl`'s `the_command_tree_is_the_catalogs_cli`,
+hold the build to the catalog plus that list (`check_rust_only`):
+
+- a name in both the list and the catalog fails: once upstream adds the command, it is upstream's, and the build
+  follows upstream's semantics;
+- a name the build has that neither the catalog nor the list names fails, so no extension lands unlisted;
+- a listed name the build lacks fails, and so does a name listed twice.
+
+A Rust-only command has no conformance id: the suite tests upstream's protocol, so the Rust crates' own tests cover
+it. No command is Rust-only yet.
+
 ## The `live` group
 
 The Rust build answers upstream's control-protocol group `zmx.*` as `live.*`, a deliberate deviation from upstream: no
