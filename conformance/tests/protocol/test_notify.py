@@ -3,7 +3,7 @@ own session bus, where nothing shows it; under CONFORMANCE_LINUX_DISPLAY=session
 desktop, so the module posts as few as it can and selects the notified session afterwards, which withdraws them."""
 
 import pytest
-from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session
+from agterm_conformance.match import assert_absent, assert_error, assert_ok, find_session, session_ids
 
 UNKNOWN = "zzz"
 
@@ -61,3 +61,32 @@ def test_notify_refusals_post_nothing(ctl, background, target, args, error):
     assert_absent(_node(ctl, background), "unseen")
     response = ctl.request("events.read", run=cursor.run, after=str(cursor.after), kinds=["notify"])
     assert assert_ok(response)["events"]["items"] == []
+
+
+@pytest.mark.requires("posix-shell", reason="the program printing the escape runs in a known shell")
+@pytest.mark.covers("session.type", "event:notify", "field:tree.session.unseen")
+@pytest.mark.parametrize(
+    ("printed", "title", "body"),
+    [
+        # OSC 9 carries a body alone: the title falls back to the session's name
+        ("'\\033]9;%s\\007' osc-nine", None, "osc-nine"),
+        ("'\\033]777;notify;%s;%s\\007' Build osc-777", "Build", "osc-777"),
+    ],
+    ids=["osc-9", "osc-777"],
+)
+def test_a_programs_desktop_notification_raises_the_badge(ctl, printed, title, body):
+    """A terminal's desktop notification (OSC 9, OSC 777) from a session in the background notifies as `notify` does."""
+    (home, *_) = session_ids(ctl.tree())
+    sid = assert_ok(ctl.request("session.new"))["id"]
+    try:
+        ctl.wait_mounted(sid, "left")
+        name = _node(ctl, sid)["name"]
+        cursor = ctl.events_baseline()
+        # printed once the session is in the background, so its pane is not the one in front
+        assert_ok(ctl.request("session.type", sid, text=f"(sleep 2; printf {printed}) &\n"))
+        assert_ok(ctl.request("session.select", home))
+        event = ctl.wait_event(cursor, "notify", {"session": sid})
+        assert event["payload"] == {"name": name, "title": title or name, "body": body}
+        assert _node(ctl, sid)["unseen"] == 1
+    finally:
+        ctl.request("session.close", sid)
