@@ -22,8 +22,9 @@ Codex discovery. Edit the shared source so both agents get the same workflow.
 - **Codex:** invoke `$agterm-upstream-sync [TARGET]`; later execute the plan with
   `$plan-exec-revmux docs/plans/<file>`.
 
-Read applicable `AGENTS.md` instructions and the checkout's `CLAUDE.md` (the shared architecture and check guidance)
-before starting. Use the current agent's file, search, shell and subagent tools; Claude tool names are not required.
+Read the checkout's `AGENTS.md` (the shared architecture and check guidance) and any more specific directory
+instructions before starting. Use the current agent's file, search, shell and subagent tools; Claude tool names are
+not required.
 
 Set `SKILL_DIR` to the absolute directory containing the loaded `SKILL.md`; either discovery path works.
 Its `scripts/` and `references/` are meant below. The scripts act on the
@@ -34,7 +35,7 @@ Keep scratch output (the classify report, analyses, logs, saved patches) in a `W
 when available, otherwise create one with `WORK=$(mktemp -d "${TMPDIR:-/tmp}/ngterm-upstream-sync.XXXXXX")`.
 Use the same absolute `WORK` path across tool calls and pass it to subagents that need the reports.
 
-**Sync-specific rules** (CLAUDE.md covers the rest):
+**Sync-specific rules** (AGENTS.md covers the rest):
 - `.upstream/agterm` is read-only apart from fetching and checking out the new tag.
 - Commits stay local: the user pushes, opens the PR and runs the macOS reference workflow.
 - The branch keeps building and keeps the ratchet green. Anything that would break either becomes a plan task
@@ -97,7 +98,7 @@ subagent's `absent` or `already-ported` claim goes into the plan, confirm it wit
 
 ## 4. Baseline
 
-Check the bump as CLAUDE.md > Choosing checks says, scoped to what it touched.
+Check the bump as AGENTS.md > Choosing checks says, scoped to what it touched.
 
 The usual expected reds are:
 - `ngterm-proto/tests/catalog.rs` and ngterm-ctl's `the_command_tree_is_the_catalogs_cli`, while the catalog lists

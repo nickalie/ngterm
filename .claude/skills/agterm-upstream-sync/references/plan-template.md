@@ -2,8 +2,8 @@
 
 The `plan-exec-revmux` skill (Claude: `/plan-exec-revmux`; Codex: `$plan-exec-revmux`) reads `## Overview` and
 `## Context`, then runs each `### Task N:` in a fresh subagent that sees only the plan and the repo (applicable
-AGENTS.md instructions and CLAUDE.md included). The `- [ ]` items are that subagent's work list. So each task names
-its own files and sources. Write the plan in English and drop sections that would stay empty.
+AGENTS.md instructions included). The `- [ ]` items are that subagent's work list. So each task names its own files
+and sources. Write the plan in English and drop sections that would stay empty.
 
 ````markdown
 # Upstream sync <old tag> -> <new tag>
@@ -26,10 +26,10 @@ its own files and sources. Write the plan in English and drop sections that woul
 
 ## Approach
 
-- Each task follows CLAUDE.md > Porting a command group: upstream's Swift sources and tests hold the exact strings.
-- Behavior that upstream builds on a macOS API gets a form for macOS, Linux and Windows (CLAUDE.md > Platforms), or
+- Each task follows AGENTS.md > Porting a command group: upstream's Swift sources and tests hold the exact strings.
+- Behavior that upstream builds on a macOS API gets a form for macOS, Linux and Windows (AGENTS.md > Platforms), or
   a recorded reason why an OS has no counterpart.
-- Checks per task follow CLAUDE.md > Choosing checks. A new conformance test must also pass on the macOS reference
+- Checks per task follow AGENTS.md > Choosing checks. A new conformance test must also pass on the macOS reference
   (`reference-macos.yml`), which the user runs.
 
 ## Implementation Steps

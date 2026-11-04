@@ -1,4 +1,4 @@
-//! The quick terminal panel on real displays, each the sandbox's own (CLAUDE.md > Never touch the user's running
+//! The quick terminal panel on real displays, each the sandbox's own (AGENTS.md > Never touch the user's running
 //! ngterm): the window host on a headless weston (`--fake-seat`, no layer-shell: the compositor refuses the layer
 //! surface and the panel falls back) and on a private Xvfb (GPUI's X11 backend, no window manager), and the layer
 //! surface under a niri nested in that weston. Each drives the GPUI build through its control socket (`quick`,

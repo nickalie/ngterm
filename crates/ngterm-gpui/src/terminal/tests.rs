@@ -3,7 +3,7 @@
 //! in GPUI's test windows over a real pane (spawn at the laid-out grid, glyph placement, two views of one pane, the
 //! cursor's blink), and the [`ngterm_host::Surface`] contract the fakes pin.
 //!
-//! Panes run `/bin/sh` scripts with no `NGTERM_*` or `AGTERM_*` variable inherited (CLAUDE.md > Never touch
+//! Panes run `/bin/sh` scripts with no `NGTERM_*` or `AGTERM_*` variable inherited (AGENTS.md > Never touch
 //! the user's running ngterm). GPUI's test platform draws nothing to a screen; its default text system is a fixed fake
 //! (1000 units per em, every ASCII advance 600, ascent 1025, descent -275), the real-font test uses GPUI's Linux text
 //! system.

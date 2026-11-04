@@ -2,7 +2,7 @@
 
 `classify-diff.py` sorts each changed upstream file into one of these areas. This file says what the area means for
 the port, where its Rust counterpart lives, and how it turns into plan work. Paths on the left are upstream's (in
-`.upstream/agterm`), on the right this repository's. The crate map is in `CLAUDE.md`; when this table and the code
+`.upstream/agterm`), on the right this repository's. The crate map is in `AGENTS.md`; when this table and the code
 disagree, the code wins: check with `ls`/`grep` before naming a Rust file in the plan.
 
 ## Contents
@@ -57,7 +57,7 @@ that group's change touches. The per-commit block in the classify report ("Commi
 
 ## Platforms
 
-Upstream is macOS only; ngterm targets all three OSes (CLAUDE.md > Platforms). A behavior upstream builds on a macOS
+Upstream is macOS only; ngterm targets all three OSes (AGENTS.md > Platforms). A behavior upstream builds on a macOS
 API (keyboard layouts, the Command key, pasteboard, Notification Center, dock, Finder) gets a counterpart per OS, or a
 recorded reason why an OS has none (a Homebrew cask fix, an AppKit bug workaround). Put OS-specific logic in an `any`
 crate where it can live, since CI builds only those on macOS and Windows.

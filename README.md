@@ -829,7 +829,7 @@ the `LIBGHOSTTY_VT_*` pins or their patches, `scripts/gen-ghostty-vt-bindings.sh
 
 ## Layout
 
-- `crates/`: the Cargo workspace (crate map in [CLAUDE.md](CLAUDE.md)).
+- `crates/`: the Cargo workspace (crate map in [AGENTS.md](AGENTS.md)).
 - `conformance/`: the suite, its catalog of upstream's commands, the ratchet lists `rust-passing.txt` and
   `rust-passing-windows.txt`, the code coverage floors `coverage-floor-linux.txt` and `coverage-floor-windows.txt`.
 - `build/`: `pins.env`, the ghostty-vt, gir, calloop, GPUI and portable-pty patches, the bundled skill's patches over

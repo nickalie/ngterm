@@ -3,7 +3,7 @@
 //! pane, on the window host (the test platform is no Wayland): shown, focused, hidden with its shell kept, shown
 //! again in a new window, dismissed by a focus loss and by the window manager's close, and gone with its shell.
 //!
-//! The pane runs `/bin/sh -c 'exec cat'` with no `NGTERM_*` or `AGTERM_*` variable inherited (CLAUDE.md >
+//! The pane runs `/bin/sh -c 'exec cat'` with no `NGTERM_*` or `AGTERM_*` variable inherited (AGENTS.md >
 //! Never touch the user's running ngterm).
 
 use std::sync::{Arc, Mutex};
