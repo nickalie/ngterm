@@ -765,12 +765,12 @@ fn sign_in_requested() -> MobileEvent {
     }
 }
 
-/// [`quick`] with a short network deadline, which a sign-in outlasts.
 /// How long a machine holding authentication holds it when that has to outlast [`signing_in`]'s connect deadline.
 const HOLD_PAST_CONNECT: Duration = Duration::from_secs(3);
 
-/// A connect deadline short enough to see run out, long enough for a debug build's handshake on a busy simulator (CI
-/// overran 300 ms); a machine that holds authentication past it holds it for [`HOLD_PAST_CONNECT`].
+/// [`quick`] with a connect deadline a sign-in outlasts: short enough to see run out, long enough for a debug build's
+/// handshake on a busy simulator (CI overran 300 ms); a machine that holds authentication past it holds it for
+/// [`HOLD_PAST_CONNECT`].
 fn signing_in() -> Timing {
     Timing {
         connect: Duration::from_secs(2),

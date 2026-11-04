@@ -51,6 +51,7 @@ usage() {
   die "usage: scripts/build-ios.sh [--profile release|debug] [--no-xcode] [lint|build|test|archive...]"
 }
 
+ARGS=("$@") # for the re-run under the build lock
 PROFILE=release
 XCODE=1
 ACTIONS=()
@@ -87,26 +88,15 @@ IOS_TARGETS=(aarch64-apple-ios aarch64-apple-ios-sim)
 
 # --- 1. the lock -----------------------------------------------------------------------------------------------------
 
-# A directory, since mkdir is atomic and macOS has no flock(1); it holds the owner's pid, so a lock whose owner died
-# (a killed build) is taken over instead of blocking every later build.
-LOCK="${XDG_CACHE_HOME:-$HOME/.cache}/ngterm/build-ios.lock"
-mkdir -p "$(dirname "$LOCK")"
-waited=0
-until mkdir "$LOCK" 2>/dev/null; do
-  owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
-  if [[ -n "$owner" ]] && ! kill -0 "$owner" 2>/dev/null; then
-    echo "build-ios.sh: taking over the lock of pid $owner, which is gone" >&2
-    rm -rf "$LOCK"
-    continue
-  fi
-  if ((!waited)); then
-    echo "build-ios.sh: waiting for the build lock ($LOCK) held by pid ${owner:-unknown}" >&2
-    waited=1
-  fi
-  sleep 5
-done
-echo "$$" >"$LOCK/pid"
-trap 'rm -rf "$LOCK"' EXIT
+# A flock(2) lock, which the kernel drops when its holder dies, so a killed build leaves no stale lock to take over:
+# the script runs itself again under lockf(1), which holds the lock (its child doesn't inherit the descriptor) until
+# that run ends. BUILD_IOS_LOCK_HELD marks the run under the lock.
+LOCK="${XDG_CACHE_HOME:-$HOME/.cache}/ngterm/build-ios.flock"
+if [[ "${BUILD_IOS_LOCK_HELD:-}" != "$LOCK" ]]; then
+  mkdir -p "$(dirname "$LOCK")"
+  lockf -ks -t 0 "$LOCK" true || echo "build-ios.sh: waiting for the build lock ($LOCK)" >&2
+  BUILD_IOS_LOCK_HELD="$LOCK" exec lockf -k "$LOCK" "$BASH" "$0" ${ARGS[@]+"${ARGS[@]}"}
+fi
 
 # --- 2. the toolchain ------------------------------------------------------------------------------------------------
 
