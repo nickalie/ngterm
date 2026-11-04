@@ -60,6 +60,60 @@ internal struct SessionWindowsTests {
         #expect(other.shownSessionPlacement == .here, "a scene that goes away frees its session")
     }
 
+    @Test("with three main windows, a session freed by its holder goes back to one of the others only")
+    internal func leavingASessionFreesItForOneWindow() {
+        let windows = SessionWindows()
+        let first = ScaffoldModel(windows: windows)
+        let second = ScaffoldModel(windows: windows)
+        var third: ScaffoldModel? = ScaffoldModel(windows: windows)
+        _ = first.open(docs)
+        _ = second.open(docs)
+        _ = third?.open(docs)
+        #expect(first.shownSessionPlacement == .otherWindow)
+        #expect(second.shownSessionPlacement == .otherWindow)
+        #expect(third?.shownSessionPlacement == .here)
+
+        _ = third?.open(api)
+        #expect(second.shownSessionPlacement == .here, "the window that had it last takes it back")
+        #expect(first.shownSessionPlacement == .otherWindow, "and only that one")
+
+        _ = third?.open(docs)
+        third?.show(machine: "nas")
+        #expect(second.shownSessionPlacement == .here, "showing another machine frees it for one window")
+        #expect(first.shownSessionPlacement == .otherWindow)
+
+        _ = third?.open(docs)
+        third = nil
+        #expect(second.shownSessionPlacement == .here, "a scene that goes away frees it for one window")
+        #expect(first.shownSessionPlacement == .otherWindow)
+
+        _ = first.open(docs)
+        #expect(first.shownSessionPlacement == .here, "a waiting window takes it over")
+        #expect(second.shownSessionPlacement == .otherWindow)
+        _ = first.open(api)
+        #expect(second.shownSessionPlacement == .here)
+        _ = second.open(api)
+        #expect(first.shownSessionPlacement == .otherWindow)
+        #expect(second.shownSessionPlacement == .here)
+    }
+
+    @Test("a session whose own window closes goes back to one main window only")
+    internal func closingTheOwnWindowHandsItToOneMainWindow() {
+        let windows = SessionWindows()
+        let first = ScaffoldModel(windows: windows)
+        let second = ScaffoldModel(windows: windows)
+        let third = ScaffoldModel(windows: windows)
+        _ = first.open(docs)
+        _ = second.open(docs)
+        _ = third.open(docs)
+        windows.opened(docs)
+        #expect([first, second, third].allSatisfy { $0.shownSessionPlacement == .ownWindow })
+        windows.closed(docs)
+        #expect(third.shownSessionPlacement == .here)
+        #expect(first.shownSessionPlacement == .otherWindow)
+        #expect(second.shownSessionPlacement == .otherWindow)
+    }
+
     @Test("a session with its own window shows in no main window, whichever had it")
     internal func ownWindowWinsOverMainWindows() {
         let windows = SessionWindows()

@@ -221,7 +221,8 @@ compact (iPhone, Slide Over)     regular (iPad, Stage Manager large)
   nowhere else: a window's detail column then says so and offers **Show window** (`SessionWindows`), since two views
   of one pane would fight over its size. The same holds between main windows (iPad allows several): a session shows
   in one main window's detail at a time. Opening it in another takes it over, and the first one's detail says so and
-  offers **Show here**, which takes it back.
+  offers **Show here**, which takes it back. When the window showing it lets it go (opens another session, shows
+  another machine, closes), the window that had it before takes it back, and only that one.
 
 ## App icon and launch screen
 
