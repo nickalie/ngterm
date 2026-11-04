@@ -1,14 +1,19 @@
-//! `ngterm-mobile`: the Rust core of ngterm's Android app, a remote-only viewer of ngterm machines (`ngterm-headless`
-//! on a server, or a desktop instance) over ssh. It speaks the protocol desktop's File ▸ Attach Remote speaks:
-//! `ngtermctl live tree` for a machine's sessions, `ngtermctl live present SESSION` for a session's presentation,
-//! `ngterm-session attach` per shown pane, and the control lines that create and end sessions. It runs no local
-//! sessions, so it builds `ngterm-term` without `local`, and with `screen-read`: the program's own screen and the keys
-//! sent only to the screen read, which the chat's actions answer an agent with (no desktop binary carries them). For
-//! a pane running Claude Code or Codex it also runs the origin's Rust-only `ngtermctl agent chat`, `agent commands` and
-//! `agent upload`.
+//! `ngterm-mobile`: the mobile apps' Rust core (ngterm's Android and iOS apps), a remote-only viewer of ngterm machines
+//! (`ngterm-headless` on a server, or a desktop instance) over ssh. It speaks the protocol desktop's File ▸ Attach
+//! Remote speaks: `ngtermctl live tree` for a machine's sessions, `ngtermctl live present SESSION` for a session's
+//! presentation, `ngterm-session attach` per shown pane, and the control lines that create and end sessions. It runs
+//! no local sessions, so it builds `ngterm-term` without `local`, and with `screen-read`: the program's own screen and
+//! the keys sent only to the screen read, which the chat's actions answer an agent with (no desktop binary carries
+//! them). For a pane running Claude Code or Codex it also runs the origin's Rust-only `ngtermctl agent chat`,
+//! `agent commands` and `agent upload`.
 //!
-//! Kotlin reaches it through `UniFFI` (proc-macro form); `scripts/build-android.sh` builds the `cdylib` and generates
-//! the bindings with the crate's own `uniffi-bindgen` binary (feature `bindgen`).
+//! The apps reach it through `UniFFI` (proc-macro form), each through its own bindings, which the crate's own
+//! `uniffi-bindgen` binary (feature `bindgen`) generates in library mode (`uniffi.toml` configures both):
+//! - Kotlin for Android: `scripts/build-android.sh` builds the `cdylib` the app loads and generates the bindings over
+//!   it.
+//! - Swift for iOS: the iOS build builds a `staticlib` per iOS target (`aarch64-apple-ios`, `aarch64-apple-ios-sim`),
+//!   giving the crate type on the command line, and generates the bindings over the host build of the library. The
+//!   crate holds no iOS-specific code.
 //!
 //! Module map: [`api`] (the facade, its records, events and callback interfaces), [`actor`] (the thread, its runtime
 //! and commands), [`transport`] (the ssh seam, its channels, the russh transport and the scripted fake behind the
@@ -25,18 +30,19 @@
 //!   transport, one connection per machine with its exec channels, the `!Send` presentation clients and their
 //!   one-second tick, so none of them is `Send` or locked.
 //! - The [`api`] objects are thin `Send + Sync` handles: a [`MobileCore`] call posts a command to the actor and awaits
-//!   its answer (a Kotlin `suspend fun`). A [`Pane`] handle's input goes to its terminal directly, on the caller's
-//!   thread, so typing never waits on the actor.
+//!   its answer (a Kotlin `suspend fun`, a Swift `async` function). A [`Pane`] handle's input goes to its terminal
+//!   directly, on the caller's thread, so typing never waits on the actor.
 //! - Each shown pane has a feeder thread (its channel into the terminal's `StreamFeed`, which blocks while the terminal
 //!   is behind and so holds the channel back) and a writer thread (the terminal's `StreamOut`: input, replies and
 //!   resizes, down the channel). Both report back to the actor.
 //! - Events reach the app through the [`EventSink`] on the actor's thread, never the caller's.
 //!
 //! Seams: the app implements three `UniFFI` callback interfaces, [`EventSink`] (every [`MobileEvent`]), [`KeyVault`]
-//! (the Keystore-wrapped private keys, unwrapped per connection and wiped after use) and [`HostKeyStore`] (host keys
-//! pinned on first use). Notifications, asks and the clipboard are events the app acts on, answered back through
-//! [`MobileCore`]. Inside the crate, [`transport::Transport`] is the seam between the actor and ssh: russh in the app,
-//! the scripted fake (feature `fakes`) in tests.
+//! (the private keys the platform keeps, wrapped by the Android Keystore or held in the iOS Keychain, handed over per
+//! connection and wiped after use) and [`HostKeyStore`] (host keys pinned on first use). Notifications, asks and the
+//! clipboard are events the app acts on, answered back through [`MobileCore`]. Inside the crate,
+//! [`transport::Transport`] is the seam between the actor and ssh: russh in the app, the scripted fake (feature
+//! `fakes`) in tests.
 
 uniffi::setup_scaffolding!();
 

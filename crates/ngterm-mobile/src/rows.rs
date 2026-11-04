@@ -1,7 +1,8 @@
 //! The packed row buffer: what [`crate::api::Pane::frame`] hands the app to draw a pane, the rows of the pane's
 //! `ngterm-term` frame that changed since the frame the view last drew, packed into one byte array so a frame crosses
-//! `UniFFI` as a single copy. The Kotlin reader (`RowBufferReader`) follows the layout below; the golden fixture
-//! `tests/fixtures/rows-golden.bin` keeps the two in step.
+//! `UniFFI` as a single copy. Each app's reader (`RowBufferReader`: the Kotlin one on Android, the Swift one on iOS)
+//! follows the layout below; the golden fixture `tests/fixtures/rows-golden.bin` keeps the writer and the readers in
+//! step.
 //!
 //! # Layout, version 1
 //!

@@ -1,6 +1,6 @@
 [package]
 name = "ngterm-mobile"
-description = "ngterm's mobile core: a remote-only viewer of ngterm machines over ssh (their live sessions, presentation and panes), exposed to Kotlin through UniFFI"
+description = "The mobile apps' Rust core: a remote-only viewer of ngterm machines over ssh (their live sessions, presentation and panes), exposed through UniFFI to Kotlin (Android) and Swift (iOS)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,11 +8,14 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-# `cdylib`: the `libngterm_mobile.so` the Android app loads through JNA; `lib`: the crate's own tests and binary.
+# `cdylib`: the `libngterm_mobile.so` the Android app loads through JNA; `lib`: the crate's own tests and binary. The
+# iOS app links a `staticlib`, a crate type its build gives on the command line (`cargo rustc --crate-type staticlib`),
+# so this list stays what Android and the host builds need.
 crate-type = ["lib", "cdylib"]
 
 [[bin]]
-# UniFFI's bindgen in library mode over the built `.so` (scripts/build-android.sh), which writes the Kotlin bindings.
+# UniFFI's bindgen in library mode over a build of the library, which writes the apps' bindings: Kotlin over the
+# Android `.so` (scripts/build-android.sh), Swift over the host build for iOS.
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
 required-features = ["bindgen"]

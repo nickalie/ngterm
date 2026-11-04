@@ -2,9 +2,10 @@
 //! PKCS#8, with its passphrase), and [`load`] turns the bytes a [`crate::KeyVault`] hands over back into a key for a
 //! connection.
 //!
-//! The private bytes the app stores are always an unencrypted OpenSSH key: the Android Keystore wraps them, so an
-//! imported key loses its passphrase here, once. Every private byte this module reads or writes on its own side is
-//! wiped once used ([`zeroize::Zeroizing`]); the bytes returned in a [`KeyPair`] are the app's to wrap and wipe.
+//! The private bytes the app stores are always an unencrypted OpenSSH key: the platform protects them (the Android
+//! Keystore wraps them, the iOS Keychain holds them), so an imported key loses its passphrase here, once. Every private
+//! byte this module reads or writes on its own side is wiped once used ([`zeroize::Zeroizing`]); the bytes returned in
+//! a [`KeyPair`] are the app's to store and wipe.
 
 use ::russh::keys::ssh_key::LineEnding;
 use ::russh::keys::{Algorithm, HashAlg, PrivateKey, decode_secret_key};
@@ -12,8 +13,8 @@ use ::russh::keys::{Algorithm, HashAlg, PrivateKey, decode_secret_key};
 /// A private key as the app stores it, with what it shows of it.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct KeyPair {
-    /// The unencrypted OpenSSH private key, for the app to wrap with the Keystore and hand back through
-    /// [`crate::KeyVault::load`].
+    /// The unencrypted OpenSSH private key, for the app to keep with the platform (the Android Keystore, the iOS
+    /// Keychain) and hand back through [`crate::KeyVault::load`].
     pub private_key: Vec<u8>,
     /// The public key as an `authorized_keys` line (`ssh-ed25519 AAAA… comment`).
     pub authorized_key: String,

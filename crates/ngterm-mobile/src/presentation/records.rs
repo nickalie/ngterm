@@ -1,7 +1,7 @@
 //! What an attached session's presentation stream tells the app, as `UniFFI` records: the origin's frames
-//! ([`ngterm_core::remote::frames`]) flattened for Kotlin. Enumerations the origin names on the wire (a status, a shape,
-//! a spinner, a position, an ask's style) travel as those wire names, and a pane as its identity (an upper-case UUID,
-//! or `scratch`), so the app reads them as the protocol documents them.
+//! ([`ngterm_core::remote::frames`]) flattened for the apps' bindings (Kotlin, Swift). Enumerations the origin names
+//! on the wire (a status, a shape, a spinner, a position, an ask's style) travel as those wire names, and a pane as its
+//! identity (an upper-case UUID, or `scratch`), so the app reads them as the protocol documents them.
 
 use ngterm_core::model::{AskAlignment, AskChoiceForm, AskInputForm, AskInputMode, AskStyle, RemoteConnection};
 use ngterm_core::pane_env::uuid_string;
