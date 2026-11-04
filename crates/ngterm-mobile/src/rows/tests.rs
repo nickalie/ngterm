@@ -1,5 +1,5 @@
 //! The packed row buffer, written from real stream terminals fed known VT bytes and read back with a decoder that
-//! follows the module docs' layout, as the Kotlin reader does; and the golden fixture both sides are held to.
+//! follows the module docs' layout, as the apps' readers (Kotlin, Swift) do; and the golden fixture all are held to.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -456,7 +456,7 @@ fn golden_buffer() -> Vec<u8> {
 }
 
 /// The writer still writes the fixture byte for byte. `UPDATE_GOLDEN=1` rewrites it (after a deliberate layout
-/// change, with [`VERSION`] bumped and the Kotlin reader following).
+/// change, with [`VERSION`] bumped and the apps' readers following).
 #[test]
 fn the_writer_matches_the_golden_fixture() {
     let buffer = golden_buffer();
@@ -467,8 +467,8 @@ fn the_writer_matches_the_golden_fixture() {
     assert!(buffer == golden, "the writer's buffer differs from the golden fixture");
 }
 
-/// The fixture's header and selection decode as the module docs lay them out: the values the Kotlin reader's test
-/// checks too.
+/// The fixture's header and selection decode as the module docs lay them out: the values the apps' reader tests
+/// check too.
 #[test]
 fn the_golden_fixtures_header() {
     let golden = std::fs::read(golden_path()).unwrap();

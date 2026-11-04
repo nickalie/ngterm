@@ -1,7 +1,16 @@
-# UniFFI's bindings of the mobile core (scripts/build-android.sh generates them in library mode).
+# UniFFI's bindings of the mobile apps' core, generated in library mode by the crate's own `uniffi-bindgen`: Kotlin for
+# the Android app (scripts/build-android.sh), Swift for the iOS app.
 [bindings.kotlin]
 # the Android app's core module (mobile/android/core) holds them under its own namespace
 package_name = "com.nickalie.ngterm.core.ffi"
 # Android's cleaner (android.system.SystemCleaner from API 34, behind a version check, else JNA's) in place of
 # java.lang.ref.Cleaner, which Android Lint refuses below API 33 whatever the runtime check around it
 android = true
+
+[bindings.swift]
+# the Swift module the iOS app's facade imports (the bindings' NgtermCoreBindings.swift); nothing else imports it
+module_name = "NgtermCoreBindings"
+# the C module over the static library's scaffolding: its header (NgtermCoreFFI.h) and module map
+# (NgtermCoreFFI.modulemap), staged as an XCFramework's Headers/ beside the iOS archives
+ffi_module_name = "NgtermCoreFFI"
+ffi_module_filename = "NgtermCoreFFI"

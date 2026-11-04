@@ -1,10 +1,11 @@
-//! The `UniFFI` facade the Kotlin app calls: [`MobileCore`] and its handles (a shown pane's [`Pane`]), the records and
-//! events they carry, and the callback interfaces the app implements ([`EventSink`], [`KeyVault`], [`HostKeyStore`]).
+//! The `UniFFI` facade the mobile apps call through their bindings (Kotlin on Android, Swift on iOS): [`MobileCore`]
+//! and its handles (a shown pane's [`Pane`]), the records and events they carry, and the callback interfaces the app
+//! implements ([`EventSink`], [`KeyVault`], [`HostKeyStore`]).
 //!
 //! Everything here is thin: a [`MobileCore`] call posts a command to the core's actor (`crate::actor`) and, when it
-//! has an answer, awaits it (a Kotlin `suspend fun`); what the actor learns on its own reaches the app as
-//! [`MobileEvent`]s through the [`EventSink`], on the actor's thread. `UniFFI` passes owned arguments, so a signature
-//! clippy would take by reference keeps its owned form under an item-level `#[expect]`.
+//! has an answer, awaits it (a Kotlin `suspend fun`, a Swift `async` function); what the actor learns on its own
+//! reaches the app as [`MobileEvent`]s through the [`EventSink`], on the actor's thread. `UniFFI` passes owned
+//! arguments, so a signature clippy would take by reference keeps its owned form under an item-level `#[expect]`.
 
 mod pane;
 
@@ -237,7 +238,8 @@ pub enum VaultError {
     /// No key has that id.
     #[error("no key {key_id}")]
     Missing { key_id: String },
-    /// The key exists but could not be unwrapped (the Keystore refused, the app's callback failed).
+    /// The key exists but could not be read (the Android Keystore or the iOS Keychain refused, the app's callback
+    /// failed).
     #[error("{reason}")]
     Unavailable { reason: String },
 }
@@ -255,8 +257,8 @@ pub trait EventSink: Send + Sync {
     fn on_event(&self, event: MobileEvent);
 }
 
-/// The app's private keys, wrapped by the Android Keystore: [`KeyVault::load`] unwraps one for a connection, which
-/// wipes the bytes once it has used them.
+/// The app's private keys, kept by the platform (wrapped by the Android Keystore, held in the iOS Keychain):
+/// [`KeyVault::load`] hands one over for a connection, which wipes the bytes once it has used them.
 #[uniffi::export(with_foreign)]
 pub trait KeyVault: Send + Sync {
     /// The OpenSSH private key bytes of `key_id`.
