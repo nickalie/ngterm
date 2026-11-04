@@ -493,6 +493,73 @@ fn a_resumed_task_keeps_its_tool_on_its_next_notification() {
     assert_eq!((done.status, done.output.as_deref()), (ToolStatus::Ok, Some("second")));
 }
 
+/// A `Bash` call `t1` and the result Claude Code writes when the command moves to the background.
+fn background_bash() -> [String; 2] {
+    let call = r#"{"type":"assistant","uuid":"a","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 60","run_in_background":true}}]}}"#;
+    let receipt = serde_json::json!({
+        "type": "user", "uuid": "u",
+        "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": false,
+            "content": "Command running in background with ID: b1."}]},
+        "toolUseResult": {"stdout": "", "stderr": "", "interrupted": false, "backgroundTaskId": "b1"},
+    });
+    [call.to_owned(), receipt.to_string()]
+}
+
+/// The notification Claude Code writes when a background command ends: a summary, no result.
+fn bash_notification(status: &str) -> String {
+    let text = format!(
+        "<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>t1</tool-use-id>\n\
+         <output-file>/tmp/b1.output</output-file>\n<status>{status}</status>\n\
+         <summary>Background command \"sleep 60\" {status} (exit code 0)</summary>\n</task-notification>"
+    );
+    user_line("n", &text)
+}
+
+#[test]
+fn a_background_command_runs_until_its_notification() {
+    let [call, receipt] = background_bash();
+    let launched = parse_owned(&[call.clone(), receipt.clone()]);
+    assert_eq!(tool(last(&launched, "t1")).status, ToolStatus::Running);
+
+    let events = parse_owned(&[call, receipt, bash_notification("completed")]);
+    let done = tool(last(&events, "t1"));
+    assert_eq!(
+        (done.name.as_str(), done.title.as_str(), done.kind),
+        ("Bash", "sleep 60", ToolKind::Shell)
+    );
+    assert_eq!(
+        (done.status, done.output.as_deref()),
+        (
+            ToolStatus::Ok,
+            Some("Background command \"sleep 60\" completed (exit code 0)")
+        )
+    );
+}
+
+#[test]
+fn a_notification_for_a_finished_call_makes_no_event() {
+    let [call, _] = background_bash();
+    let result = r#"{"type":"user","uuid":"u","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"done"}]}}"#;
+    let events = parse_owned(&[call, result.to_owned(), bash_notification("completed")]);
+    let done = tool(last(&events, "t1"));
+    assert_eq!((done.name.as_str(), done.output.as_deref()), ("Bash", Some("done")));
+}
+
+#[test]
+fn a_notification_with_no_call_in_the_window_still_shows() {
+    let events = parse_owned(&[bash_notification("failed")]);
+    assert_eq!(events.len(), 1);
+    let orphan = tool(last(&events, "t1"));
+    assert_eq!((orphan.name.as_str(), orphan.kind), ("", ToolKind::Other));
+    assert_eq!(
+        (orphan.status, orphan.output.as_deref()),
+        (
+            ToolStatus::Error,
+            Some("Background command \"sleep 60\" failed (exit code 0)")
+        )
+    );
+}
+
 #[test]
 fn a_malformed_line_is_unknown_and_the_next_still_parses() {
     let events = parse_lines(&[

@@ -4,7 +4,8 @@
 //! - `user` lines carry the prompt (a string, or text and image blocks) or `tool_result` blocks. `isMeta` lines,
 //!   local command output and command caveats are Claude's own context and make no event; a `<command-name>` line
 //!   shows as the `/command` it ran unless the prompt just before already said so (`/compact` writes both, with only
-//!   its compaction between); a `<task-notification>` completes its background task's tool, and a later one for the
+//!   its compaction between); a `<task-notification>` completes its background task's tool (an `Agent`, or a `Bash`
+//!   command run in the background) with its `<result>`, or its `<summary>` when it has none, and a later one for the
 //!   same task updates it; `[Request interrupted by user…]` is an interrupt notice; `isCompactSummary` holds a
 //!   compaction's summary.
 //! - `assistant` lines carry one content block each: `text`, `thinking` (written empty) or `tool_use`. A
@@ -16,7 +17,7 @@
 //! A subagent writes its own file, `<session-id>/subagents/agent-<id>.jsonl`, whose `.meta.json` names the parent's
 //! `Agent` tool use ([`subagent_parent`]); [`ClaudeParser::subagent`] reads it with every event under that tool.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -65,6 +66,8 @@ pub struct ClaudeParser {
     conversation: Option<(String, Option<String>)>,
     /// Calls with no result yet, and background tasks (whose tool a later notification updates), by tool use id.
     pending: HashMap<String, EventBody>,
+    /// Every call shown so far, by tool use id, so a notification for one no longer pending does not blank it.
+    called: HashSet<String>,
     /// The prompt just shown, trimmed, so a `<command-name>` line repeating it makes no second bubble. Anything else
     /// shown after it but its compaction clears it.
     last_prompt: Option<String>,
@@ -277,8 +280,10 @@ impl ClaudeParser {
         );
     }
 
-    /// A background task's `<task-notification>`: completes its tool with the task's result. The tool stays known, as
-    /// a resumed task notifies again.
+    /// A background task's `<task-notification>`: completes its tool with the task's result, or its summary when it
+    /// has none (a background `Bash` command's). The tool stays known, as a resumed task notifies again. A task whose
+    /// call is not in the window shows alone; one whose call was shown but is no longer pending makes no event, which
+    /// would blank that call's item.
     fn task_notification(&mut self, text: &str, out: &mut Out) {
         let Some(id) = tag(text, "tool-use-id") else { return };
         let status = if tag(text, "status") == Some("completed") {
@@ -288,9 +293,11 @@ impl ClaudeParser {
         };
         let mut tool = match self.pending.get(id) {
             Some(EventBody::Tool(tool)) => tool.clone(),
-            _ => Tool {
+            Some(_) => return,
+            None if self.called.contains(id) => return,
+            None => Tool {
                 name: String::new(),
-                kind: ToolKind::Task,
+                kind: ToolKind::Other,
                 title: String::new(),
                 status,
                 output: None,
@@ -298,7 +305,8 @@ impl ClaudeParser {
                 truncated: None,
             },
         };
-        finish(&mut tool, status, tag(text, "result").unwrap_or_default());
+        let output = tag(text, "result").or_else(|| tag(text, "summary"));
+        finish(&mut tool, status, output.unwrap_or_default());
         self.pending.insert(id.to_owned(), EventBody::Tool(tool.clone()));
         out.push(id, EventBody::Tool(tool));
     }
@@ -311,9 +319,11 @@ impl ClaudeParser {
         let is_error = block.get("is_error").and_then(Value::as_bool) == Some(true);
         let status = if is_error { ToolStatus::Error } else { ToolStatus::Ok };
         let output = content_text(block.get("content").unwrap_or(&Value::Null));
-        let launched = entry.pointer("/toolUseResult/isAsync").and_then(Value::as_bool) == Some(true);
+        let launched = entry.pointer("/toolUseResult/isAsync").and_then(Value::as_bool) == Some(true)
+            || str_at(entry, "/toolUseResult/backgroundTaskId").is_some_and(|task| !task.is_empty());
         match self.pending.remove(id) {
-            // A background task's launch receipt: the task runs on until its notification.
+            // A background task's launch receipt (an `Agent`'s `isAsync`, a `Bash` command's `backgroundTaskId`): the
+            // task runs on until its notification.
             Some(body) if launched && !is_error => {
                 self.pending.insert(id.to_owned(), body);
             }
@@ -402,6 +412,7 @@ impl ClaudeParser {
             EventBody::Tool(running_tool(name, input))
         };
         self.pending.insert(id.to_owned(), body.clone());
+        self.called.insert(id.to_owned());
         out.push(id, body);
     }
 }
