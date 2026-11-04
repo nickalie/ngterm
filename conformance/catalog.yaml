@@ -458,6 +458,7 @@ behaviors:
   split.divider-double-click: {status: uncovered}
   pane.typing: {status: uncovered}
   pane.binding-actions: {status: uncovered}
+  pane.wheel-scroll: {status: uncovered}
 exemptions:
   debug.appearance: refused outside UI-test mode; a UI-test-only hook with no CLI subcommand
   live.attach: a successful attach re-discovers the remote over ssh before creating anything, which the suite's no-network,
