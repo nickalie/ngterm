@@ -3,55 +3,20 @@
 //! (`resources/agent-status`) into a core, that a call Codex's Auto Review approved never shows as a live approval.
 //! Every run's environment is the test's own: no `NGTERM_*`, `CLAUDE*` or `CODEX*` variable of the caller's.
 
-use std::error::Error;
-use std::ffi::OsStr;
-use std::io::{self, BufRead, BufReader, Write};
+mod support;
+
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ngterm_core::model::WindowLibrary;
-use ngterm_core::{Core, CoreConfig, CoreState};
-use ngterm_host::MainLoop;
 use ngterm_host::fakes::FakeMainLoop;
-use ngterm_proto::{AppIdentity, Request, Response};
-use ngterm_server::{ControlServer, Reply};
+use ngterm_proto::Response;
 use serde_json::{Value, json};
-use tempfile::TempDir;
-
-type TestResult<T = ()> = Result<T, Box<dyn Error>>;
-
-const NGTERMCTL: &str = env!("CARGO_BIN_EXE_ngtermctl");
-
-/// A short temp dir: socket paths must stay under 104 bytes whatever `TMPDIR` is.
-fn short_dir() -> io::Result<TempDir> {
-    #[cfg(unix)]
-    let root = PathBuf::from("/tmp");
-    #[cfg(windows)]
-    let root = std::env::temp_dir();
-    tempfile::Builder::new().prefix("agh").tempdir_in(root)
-}
-
-/// A server on `socket` answering through `handler` on a fake main loop; it stops before its main loop goes.
-struct Server<S: 'static> {
-    _server: ControlServer,
-    _main_loop: Arc<FakeMainLoop<S>>,
-}
-
-fn serve_on<S, H>(socket: &Path, main_loop: FakeMainLoop<S>, handler: H) -> TestResult<Server<S>>
-where
-    S: 'static,
-    H: Fn(&mut S, Request) -> Reply + Send + Sync + 'static,
-{
-    let main_loop = Arc::new(main_loop);
-    let mut server = ControlServer::new(socket);
-    server.start(Arc::clone(&main_loop) as Arc<dyn MainLoop<S>>, handler)?;
-    Ok(Server {
-        _server: server,
-        _main_loop: main_loop,
-    })
-}
+use support::{
+    NGTERMCTL, Server, TestResult, fixtures, isolated, request, serve_core, serve_on, session_id, short_dir,
+};
 
 /// A server that answers every request with one result, counting them and keeping the last.
 struct Recording {
@@ -88,44 +53,6 @@ impl Recording {
     }
 }
 
-/// A core over a seeded library, built on its main loop's thread, which it never leaves.
-fn serve_core(socket: &Path) -> TestResult<Server<Core>> {
-    let main_loop = FakeMainLoop::spawn_with(|| {
-        Core::new(
-            CoreConfig {
-                app: AppIdentity::from_recorded("0.1.0", Some("abc1234")),
-                capabilities: vec!["posix-shell".to_owned()],
-            },
-            CoreState {
-                library: WindowLibrary::seeded("/home/u"),
-                ..CoreState::default()
-            },
-        )
-    })?;
-    serve_on(socket, main_loop, |core: &mut Core, request: Request| {
-        core.dispatch(&request).into()
-    })
-}
-
-/// Sends one request and returns its response.
-fn request(socket: &Path, request: &Value) -> TestResult<Response> {
-    let mut stream = ngterm_server::connect(socket)?;
-    stream.write_all(format!("{request}\n").as_bytes())?;
-    let mut reply = String::new();
-    BufReader::new(stream).read_line(&mut reply)?;
-    Ok(serde_json::from_str(&reply)?)
-}
-
-/// The seeded session's id.
-fn session_id(socket: &Path) -> TestResult<String> {
-    let tree = request(socket, &json!({"cmd": "tree"}))?;
-    let id = tree.result.ok_or("no tree")?["tree"]["workspaces"][0]["sessions"][0]["id"]
-        .as_str()
-        .ok_or("no session id")?
-        .to_owned();
-    Ok(id)
-}
-
 /// `agent.get`'s `agent` for the session's left pane, or the refusal.
 fn agent_get(socket: &Path, session: &str) -> TestResult<Result<Value, String>> {
     let response = request(
@@ -137,26 +64,6 @@ fn agent_get(socket: &Path, session: &str) -> TestResult<Result<Value, String>> 
     } else {
         Err(response.error.unwrap_or_default())
     })
-}
-
-/// Whether `name` is a variable of the caller's that must not reach a run: a live instance's, an agent's.
-fn foreign_var(name: &OsStr) -> bool {
-    let name = name.to_string_lossy();
-    ["NGTERM_", "AGTERM_", "CLAUDE", "CODEX"]
-        .iter()
-        .any(|prefix| name.starts_with(prefix))
-}
-
-/// `program` with the caller's foreign variables removed and a home under `root`.
-fn isolated(program: impl AsRef<OsStr>, root: &Path) -> Command {
-    let mut command = Command::new(program);
-    for (name, _) in std::env::vars_os() {
-        if foreign_var(&name) {
-            command.env_remove(name);
-        }
-    }
-    command.env("HOME", root.join("home"));
-    command
 }
 
 /// Runs `ngtermctl args` with `stdin` piped in.
@@ -180,10 +87,6 @@ fn outcome(output: &Output) -> (Option<i32>, String, String) {
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
-}
-
-fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../ngterm-core/tests/fixtures/agent_chat")
 }
 
 /// A recorded hook payload (`ngterm-core`'s `tests/fixtures/agent_chat`).

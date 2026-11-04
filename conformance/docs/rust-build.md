@@ -220,7 +220,9 @@ hold the build to the catalog plus that list (`check_rust_only`):
 A Rust-only command has no conformance id: the suite tests upstream's protocol, so the Rust crates' own tests cover
 it. Today the `agent.*` group is: `agent.report` and `agent.get`, the origin's per-pane agent record that the
 agent-status hooks fill and the Android chat view reads (`ngterm-core`'s `commands::agent`). Its CLI side is
-`ngtermctl agent hook`, which the hooks run with the payload on stdin (`ngterm-ctl`'s `agent.rs`).
+`ngtermctl agent hook`, which the hooks run with the payload on stdin (`ngterm-ctl`'s `agent.rs`), and
+`ngtermctl agent chat`, which the phone runs on the origin to read the record's transcript as NDJSON chat events
+(`agent/chat.rs`).
 
 ### Presentation kinds
 

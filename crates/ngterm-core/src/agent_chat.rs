@@ -6,12 +6,14 @@
 //! - [`codex`]: Codex's rollout lines.
 //! - [`follow`]: reading a transcript file for the chat: the backlog, older pages and following.
 //! - [`hook`]: an agent's hook payload, read for the origin's per-pane agent record (`agent.report`).
+//! - [`approvals`]: the permission prompts the chat interleaves with a transcript's events.
 //!
 //! A parser reads one line at a time through [`TranscriptParser`], keeping what pairs a later line with an earlier
 //! one (a tool's result with its call). The formats are undocumented and drift between agent versions, so a line a
 //! parser does not know becomes an `unknown` event rather than an error. The fixtures under
 //! `tests/fixtures/agent_chat/` record the versions read and what was found about each format.
 
+pub mod approvals;
 pub mod claude;
 pub mod codex;
 pub mod event;
@@ -25,6 +27,9 @@ pub use event::{
     ToolStatus,
 };
 pub use follow::Follower;
+
+/// `agent.get`'s refusal for a pane with no agent record; `agent chat` ends quietly on it once following.
+pub const NO_AGENT: &str = "no agent in this pane";
 
 use serde_json::Value;
 
@@ -197,6 +202,7 @@ fn non_empty<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
+    mod approvals;
     mod claude;
     mod codex;
     mod follow;

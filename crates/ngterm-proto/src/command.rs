@@ -383,7 +383,7 @@ pub const RUST_ONLY_COMMANDS: &[&str] = &["agent.report", "agent.get"];
 
 /// `ngtermctl` subcommand paths (`"live tree"`, as the catalog's `cli` keys them) beyond upstream's `agtermctl`: the
 /// CLI side of [`RUST_ONLY_COMMANDS`], held to the catalog the same way.
-pub const RUST_ONLY_CLI: &[&str] = &["agent hook"];
+pub const RUST_ONLY_CLI: &[&str] = &["agent hook", "agent chat"];
 
 /// Checks a build's names against the catalog's names plus a Rust-only list: the build has exactly the catalog's
 /// names and the listed ones, and no listed name is in the catalog or listed twice. The error names the first

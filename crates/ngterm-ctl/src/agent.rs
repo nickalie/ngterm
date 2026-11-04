@@ -6,6 +6,11 @@
 //! `agent.report`. Nothing large travels through the command line, which matters for Windows' length limit. As a hook
 //! it prints nothing on success (an agent adds a hook's output to its context) and fails with exit 1, which no agent
 //! reads as a block (exit 2 is Claude Code's and Codex's).
+//!
+//! `chat` ([`chat`]) is what the Android app runs on the origin under its ssh: the pane's conversation as NDJSON chat
+//! events, read from the transcript the record names.
+
+mod chat;
 
 use std::io::{self, IsTerminal, Read};
 use std::process::ExitCode;
@@ -45,6 +50,7 @@ pub struct Agent {
 #[derive(Debug, clap::Subcommand)]
 enum AgentCommand {
     Hook(Hook),
+    Chat(chat::Chat),
 }
 
 impl Agent {
@@ -52,6 +58,7 @@ impl Agent {
     pub fn check(&self) -> Result<(), String> {
         match &self.command {
             AgentCommand::Hook(command) => command.validate(),
+            AgentCommand::Chat(command) => command.validate(),
         }
     }
 
@@ -59,6 +66,7 @@ impl Agent {
     pub fn execute(&self, env: &dyn Env) -> Result<(), Failure> {
         match &self.command {
             AgentCommand::Hook(command) => command.run(env),
+            AgentCommand::Chat(command) => command.run(env),
         }
     }
 }

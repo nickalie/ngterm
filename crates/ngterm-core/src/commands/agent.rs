@@ -40,17 +40,14 @@ use uuid::Uuid;
 
 use super::{Outcome, args_of, not_found, parse_pane, unknown_pane_id, with_id};
 use crate::Core;
-use crate::agent_chat::AgentKind;
 use crate::agent_chat::hook::{HookEvent, check_transcript};
+use crate::agent_chat::{AgentKind, NO_AGENT};
 use crate::command_restore::PaneForeground;
 use crate::error::{ControlError, Noun};
 use crate::live::shell_integration::is_powershell;
 use crate::model::{AgentStatus, AppStore, Session, StatusPane, WindowLibrary};
 use crate::projection::epoch_seconds;
 use crate::resolve::{ACTIVE, Resolver};
-
-/// `agent.get`'s refusal for a pane with no record.
-pub(crate) const NO_AGENT: &str = "no agent in this pane";
 
 /// The tool whose `PermissionRequest` is a question, not an approval.
 const QUESTION_TOOL: &str = "AskUserQuestion";

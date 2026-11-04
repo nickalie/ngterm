@@ -483,8 +483,11 @@ with no output yet is a running call (Task 1's fixture README).
 **Files:**
 - Modify: `crates/ngterm-ctl/src/agent.rs`
 - Create: `crates/ngterm-ctl/tests/agent_chat.rs`
+- Created as well: `crates/ngterm-ctl/src/agent/chat.rs` (the subcommand), `crates/ngterm-core/src/agent_chat/approvals.rs`
+  and its tests (which transcript event answers a prompt, toolkit-neutral), `crates/ngterm-ctl/tests/support/mod.rs`
+  (the helpers `agent_hook.rs` and `agent_chat.rs` share)
 
-- [ ] write tests first against an in-process server with a recorded transcript:
+- [x] write tests first against an in-process server with a recorded transcript:
   - the default mode prints the backlog then `live`, and appended lines follow;
   - `--before` and `--after`;
   - a new record path emits `reset` and the new file;
@@ -493,9 +496,9 @@ with no output yet is a running call (Task 1's fixture README).
   - stdin EOF ends the process within a bound, on Unix and Windows;
   - approvals are interleaved as `approval` and `approval_done`, including `done` from the transcript's `tool_result`
     after a denial.
-- [ ] implement `agent chat --target SESSION [--pane left|right]`: `agent.get`, then `agent_chat::Follower`, with
+- [x] implement `agent chat --target SESSION [--pane left|right]`: `agent.get`, then `agent_chat::Follower`, with
       the record re-checked about once a second and stdin watched as in `stream_bridge.rs`
-- [ ] `cargo test -p ngterm-ctl agent` must pass
+- [x] `cargo test -p ngterm-ctl agent` must pass
 
 ### Task 10: `ngtermctl agent commands`: the slash-command catalog
 
