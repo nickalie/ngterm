@@ -17,6 +17,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -97,8 +98,9 @@ sealed interface ChatProblem {
 /**
  * What a pane's chat shows: its rows ([items], from [log]), where it stands ([phase]), the [conversation] its origin
  * named, whether older pages remain ([older]), the row the list keeps in place after a page went in above it
- * ([anchor], the row that was on top before), the cards pinned above the composer ([approval], [question]), whether
- * an action is on its way ([busy]), and why the last one did nothing ([problem], until shown).
+ * ([anchor], the top row of those shown before that the page left in place), the cards pinned above the composer
+ * ([approval], [question]), whether an action is on its way ([busy]), and why the last one did nothing ([problem],
+ * until shown).
  */
 data class ChatUiState(
     val log: ChatLog = ChatLog(),
@@ -135,6 +137,8 @@ class ChatViewModel internal constructor(
     val pane: PaneRef,
     private val core: MobileCoreInterface,
     private val handle: () -> PaneInterface?,
+    // how many times each machine's link has come up (MachineState.Connected), by id
+    private val connects: StateFlow<Map<String, Long>>,
     private val scope: CoroutineScope,
     private val onEnded: () -> Unit,
 ) {
@@ -143,13 +147,30 @@ class ChatViewModel internal constructor(
     /** The chat as the screen shows it. */
     val state: StateFlow<ChatUiState> = chat.asStateFlow()
 
-    /** Opens the pane's chat at the core; one that can't be opened ends, so the pane shows its terminal. */
+    /**
+     * Opens the pane's chat at the core. While the machine's link is down it is [ChatPhase.Reconnecting] and opens
+     * once the link is back; one that can't be opened otherwise (the origin offers no chat) ends, so the pane shows
+     * its terminal.
+     */
     internal fun open() {
         scope.launch {
-            try {
-                core.openChat(pane.machineId, pane.sessionId, pane.paneId)
-            } catch (_: MobileException) {
-                ended()
+            var opened = false
+            while (!opened) {
+                // the connects counted before asking: one after the core found the link down brings it back
+                val seen = connects.value[pane.machineId] ?: 0L
+                opened =
+                    try {
+                        core.openChat(pane.machineId, pane.sessionId, pane.paneId)
+                        true
+                    } catch (_: MobileException.NotConnected) {
+                        chat.update { it.copy(phase = ChatPhase.Reconnecting) }
+                        connects.first { (it[pane.machineId] ?: 0L) > seen }
+                        chat.update { it.copy(phase = ChatPhase.Loading) }
+                        false
+                    } catch (_: MobileException) {
+                        ended()
+                        return@launch
+                    }
             }
         }
     }
@@ -341,11 +362,17 @@ private fun ChatUiState.meta(event: ChatEvent): ChatUiState =
 
 private fun ChatUiState.withLog(log: ChatLog) = copy(log = log, question = log.openQuestion(dismissed))
 
-// an older page in above the rows, the top row kept in place
+// an older page in above the rows, the top row it leaves in place held there: a placeholder whose task the page
+// brought moves up to the task's place, so the first row the page didn't move is the anchor
 private fun ChatUiState.withPage(page: List<ChatEvent>): ChatUiState {
     if (page.isEmpty()) return copy(older = OlderPages.AtStart)
-    val top = items.firstOrNull { it !is ChatItem.Divider }?.key
-    return withLog(log.prepend(page)).copy(older = OlderPages.More, anchor = top)
+    val next = log.prepend(page)
+    val waiting = next.items.filterIsInstance<ChatItem.Subagent>().mapTo(hashSetOf()) { it.key }
+    val rows = next.items.mapTo(hashSetOf()) { it.key }
+    val shown = items.filter { it !is ChatItem.Divider }
+    val top =
+        shown.firstOrNull { it !is ChatItem.Subagent || it.key in waiting } ?: shown.firstOrNull { it.key in rows }
+    return withLog(next).copy(older = OlderPages.More, anchor = top?.key)
 }
 
 // the card [id] answered, here or elsewhere

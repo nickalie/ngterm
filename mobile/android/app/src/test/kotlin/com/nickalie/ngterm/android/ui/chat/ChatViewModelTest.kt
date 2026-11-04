@@ -12,6 +12,7 @@ import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.PaneInputException
 import com.nickalie.ngterm.core.ffi.QuestionAnswer
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -175,6 +176,81 @@ class ChatViewModelTest {
             bed.test.core.calls
                 .count { it.method == "loadOlder" },
         )
+    }
+
+    private fun pages(vararg pages: List<ChatEvent>) {
+        bed.test.core.olderPages[bed.ref("p1")] = ArrayDeque(pages.toList())
+    }
+
+    private fun keys() = state().items.map { it.key }
+
+    @Test
+    fun aPageThatBringsThePlaceholdersTaskAnchorsOnTheFirstRowItLeftInPlace() {
+        // the backlog starts partway through a subagent's run: its placeholder is the top row
+        emit(event("agent-2:line-0", reply("Found it"), parent = "old-task"), event("a1", reply("Done")), live)
+        assertEquals(listOf("e:old-task", "e:a1"), keys())
+        pages(
+            listOf(
+                event("u0", user("start")),
+                event("old-task", tool("Agent", "Find the bug", kind = ChatToolKind.TASK)),
+                event("u1", user("meanwhile")),
+            ),
+        )
+        chat.loadOlder()
+        assertEquals(listOf("u0", "old-task[agent-2:line-0]", "u1", "a1"), rows())
+        // the task's row has the placeholder's key; the list holds a1, the first row the page didn't move
+        assertTrue("e:old-task" in keys())
+        assertEquals("e:a1", state().anchor)
+    }
+
+    @Test
+    fun aPageThatTakesEveryShownRowAnchorsOnTheMovedOne() {
+        emit(event("agent-2:line-0", reply("Found it"), parent = "old-task"), live)
+        pages(
+            listOf(event("old-task", tool("Agent", "Find the bug", kind = ChatToolKind.TASK)), event("u1", user("x"))),
+        )
+        chat.loadOlder()
+        assertEquals(listOf("old-task[agent-2:line-0]", "u1"), rows())
+        assertEquals("e:old-task", state().anchor)
+        assertTrue(state().anchor in keys())
+    }
+
+    @Test
+    fun aResetWhileAPageIsOnItsWayDropsThatPage() {
+        emit(event("u1", user("old")), live)
+        pages(listOf(event("u0", user("older"))), listOf(event("v0", user("new start"))))
+        val gate = CompletableDeferred<Unit>()
+        bed.test.core.holds["loadOlder"] = gate
+        chat.loadOlder()
+        assertEquals(OlderPages.Loading, state().older)
+
+        emit(reset, event("v1", user("new")), live)
+        assertEquals(OlderPages.More, state().older)
+        gate.complete(Unit)
+        // the stale page is read, then dropped; the next one is the new conversation's
+        eventually {
+            bed.test.core.olderPages[bed.ref("p1")]
+                ?.size == 1
+        }
+        chat.loadOlder()
+        eventually { rows() == listOf("--", "v0", "v1") }
+        assertEquals("e:v1", state().anchor)
+    }
+
+    @Test
+    fun aPageCancelledByAResetWaitsForTheReset() {
+        emit(event("u1", user("old")), live)
+        bed.test.core.failNext("loadOlder", MobileException.Cancelled())
+        chat.loadOlder()
+        // the core's reset is on its way: no page is asked for until it lands
+        assertEquals(OlderPages.Loading, state().older)
+        assertEquals(listOf("u1"), rows())
+        emit(reset, event("v1", user("new")), live)
+        assertEquals(listOf("--", "v1"), rows())
+        assertEquals(OlderPages.More, state().older)
+        pages(listOf(event("v0", user("new start"))))
+        chat.loadOlder()
+        assertEquals(listOf("--", "v0", "v1"), rows())
     }
 
     @Test

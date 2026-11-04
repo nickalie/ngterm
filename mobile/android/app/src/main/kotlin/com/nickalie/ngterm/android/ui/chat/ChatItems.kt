@@ -5,7 +5,10 @@ import com.nickalie.ngterm.core.ffi.ChatEvent
 import com.nickalie.ngterm.core.ffi.ChatQuestion
 import com.nickalie.ngterm.core.ffi.ChatToolStatus
 
-/** One row of a pane's chat, as the list shows it. Its [key] stays the same through updates and older pages. */
+/**
+ * One row of a pane's chat, as the list shows it. Its [key] names its event, so it stays the same through updates,
+ * older pages and a [ChatItem.Subagent] becoming its task's [ChatItem.Entry]; the [ChatItem.Divider] has its own.
+ */
 sealed interface ChatItem {
     val key: String
 
@@ -18,18 +21,18 @@ sealed interface ChatItem {
         val body: ChatBody,
         val children: List<ChatItem> = emptyList(),
     ) : ChatItem {
-        override val key: String get() = "e:$id"
+        override val key: String get() = rowKey(id)
     }
 
     /**
      * A subagent's events whose task is not in the chat (its call is older than what was read), under the task's
-     * id ([parent]) until an older page brings the task, which then takes them.
+     * id ([parent]) until the task comes, which then takes them and this row's [key].
      */
     data class Subagent(
         val parent: String,
         val children: List<ChatItem>,
     ) : ChatItem {
-        override val key: String get() = "s:$parent"
+        override val key: String get() = rowKey(parent)
     }
 
     /** The pane's conversation switched here: what was shown before it is gone, and what follows is the new one. */
@@ -37,6 +40,9 @@ sealed interface ChatItem {
         override val key: String get() = "divider"
     }
 }
+
+// an event's row, the same whether its body is read (an Entry) or only its subagent's events are (a Subagent)
+private fun rowKey(id: String) = "e:$id"
 
 /** An `AskUserQuestion` still waiting for its answer: the chat event's [id] and the [question]. */
 data class OpenQuestion(
@@ -48,11 +54,15 @@ data class OpenQuestion(
  * A pane's chat folded into its rows ([items]), immutable: [append] takes the events the core streams, [prepend] an
  * older page, and [reset] starts over after the conversation switched ([switched] puts a [ChatItem.Divider] on top).
  *
- * - Events upsert by id: a later event with an id already shown updates its row in place. A tool result whose call
- *   was outside the origin's window comes with no name or title, and keeps the ones its call gave; an older page
- *   never undoes what a newer event said.
+ * - Events upsert by id: a later event with an id already shown updates its row in place, the newest word winning.
+ *   A tool result whose call was outside the origin's window comes with no name or title, and keeps the ones its
+ *   call gave.
+ * - An older page is folded on its own first, oldest to newest (the origin repeats an id there as it changed: a
+ *   tool's call, then its result), then goes in beneath the log: an id the log already holds keeps its place and
+ *   what the log's newer events said, the page filling in only what they left out.
  * - An event with a `parent` (a subagent's) folds under the row with that id (its task tool), in the order read;
- *   while that row isn't here, under a [ChatItem.Subagent] in its place.
+ *   while that row isn't here, under a [ChatItem.Subagent] in its place. The task, once it comes, takes the
+ *   placeholder's events and key: live in the placeholder's place, from an older page at its own place in the page.
  * - Only what the list shows is kept: prompts, replies, thinking, tools, questions and notices. The conversation's
  *   own record, approvals, `live`, `reset` and entries the origin couldn't read are the view model's or nobody's.
  */
@@ -92,21 +102,14 @@ class ChatLog private constructor(
     /** The log with [events] (newest last) taken in after what it shows. */
     fun append(events: List<ChatEvent>): ChatLog {
         val edit = Edit(this)
-        for (event in events.filter { it.body.listed() && it.parent != it.id }) {
-            val known = edit.bodies[event.id]
-            when {
-                known != null -> edit.bodies[event.id] = merge(older = known, newer = event.body)
-                event.id in edit.order -> edit.bodies[event.id] = event.body
-                else -> edit.add(event)
-            }
-        }
+        for (event in events.filter(::kept)) edit.newer(event)
         return edit.done()
     }
 
     /** The log with an older page ([events], oldest first) put before what it shows. */
     fun prepend(events: List<ChatEvent>): ChatLog {
         val page = Page(Edit(this))
-        for (event in events.filter { it.body.listed() && it.parent != it.id }) page.take(event)
+        for (event in folded(events.filter(::kept))) page.take(event)
         return page.done()
     }
 
@@ -129,25 +132,40 @@ class ChatLog private constructor(
         val parents = log.parents.toMutableMap()
         private val switched = log.switched
 
-        fun add(event: ChatEvent) {
+        // a live event: it updates its row, fills its placeholder in place, or goes in last
+        fun newer(event: ChatEvent) {
             val id = event.id
+            val known = bodies[id]
+            if (known != null) {
+                bodies[id] = merge(older = known, newer = event.body)
+                return
+            }
             bodies[id] = event.body
             val parent = event.parent
             if (parent == null) {
-                order += id
-                return
+                if (id !in order) order += id
+            } else {
+                // a placeholder whose task is itself a subagent's goes under that subagent's task
+                order.remove(id)
+                hang(id, parent)
             }
+        }
+
+        private fun hang(
+            id: String,
+            parent: String,
+        ) {
             parents[id] = parent
             children[parent] = children[parent].orEmpty() + id
-            // a parent neither shown nor a subagent's own event stands in for its task
-            if (parent !in bodies && parent !in order && parent !in parents) order += parent
+            // a parent with no body (every subagent event has one) stands in for its task
+            if (parent !in bodies && parent !in order) order += parent
         }
 
         fun done() = ChatLog(order.toList(), bodies.toMap(), children.toMap(), parents.toMap(), switched)
     }
 }
 
-// an older page going in: the rows it puts on top ([front]) and under each parent ([kids]), oldest first
+// an older page going in, folded by id: the rows it puts on top ([front]) and under each parent ([kids]), oldest first
 private class Page(
     private val edit: ChatLog.Edit,
 ) {
@@ -157,27 +175,19 @@ private class Page(
     fun take(event: ChatEvent) {
         val id = event.id
         val known = edit.bodies[id]
-        when {
-            known != null -> {
-                edit.bodies[id] = merge(older = event.body, newer = known)
-            }
-
-            // a task its subagent's events stood in for: it takes them, at its own place
-            id in edit.order -> {
-                edit.bodies[id] = event.body
-                edit.order.remove(id)
-                front += id
-            }
-
-            else -> {
-                edit.bodies[id] = event.body
-                val parent = event.parent
-                if (parent == null) top(id) else under(id, parent)
-            }
+        if (known != null) {
+            // the log's word is newer: the page fills in only what it left out, and the row keeps its place
+            edit.bodies[id] = merge(older = event.body, newer = known)
+            return
         }
+        edit.bodies[id] = event.body
+        // a task its subagent's events stood in for (in the log, or earlier in the page) takes them, at its own place
+        edit.order.remove(id)
+        front.remove(id)
+        val parent = event.parent
+        if (parent == null) top(id) else under(id, parent)
     }
 
-    // its subagent's events, read first, may have put it on top already
     private fun top(id: String) {
         if (id !in front) front += id
     }
@@ -196,6 +206,27 @@ private class Page(
         edit.order.addAll(0, front)
         return edit.done()
     }
+}
+
+// what the list keeps of the events: no event its own subagent's
+private fun kept(event: ChatEvent): Boolean = event.body.listed() && event.parent != event.id
+
+// a page's events by id, in the order each id first came, each one's latest word folded over its earlier ones
+private fun folded(events: List<ChatEvent>): Collection<ChatEvent> {
+    val byId = LinkedHashMap<String, ChatEvent>()
+    for (event in events) {
+        val before = byId[event.id]
+        byId[event.id] =
+            if (before == null) {
+                event
+            } else {
+                event.copy(
+                    body = merge(older = before.body, newer = event.body),
+                    parent = before.parent ?: event.parent,
+                )
+            }
+    }
+    return byId.values
 }
 
 // what the list shows: the rest is the view model's (the conversation, approvals, live, reset) or nobody's

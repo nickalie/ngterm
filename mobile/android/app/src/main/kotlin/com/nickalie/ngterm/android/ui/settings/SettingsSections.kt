@@ -82,8 +82,8 @@ internal fun NotificationsSection(
 }
 
 /**
- * How a pane running Claude Code or Codex shows: as a chat ([chatOn]) or as its terminal, with the switch in the
- * session's bar either way.
+ * How a pane running Claude Code or Codex shows: on ([chatOn]), as a chat with its terminal one switch away in the
+ * session's bar; off, always as its terminal, with no switch.
  */
 @Composable
 internal fun AgentsSection(

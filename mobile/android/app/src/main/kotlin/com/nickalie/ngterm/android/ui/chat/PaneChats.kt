@@ -7,6 +7,7 @@ import com.nickalie.ngterm.android.data.LiveSessions
 import com.nickalie.ngterm.android.data.SessionKey
 import com.nickalie.ngterm.android.data.session
 import com.nickalie.ngterm.android.ui.terminal.TerminalState
+import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.PaneRef
 import kotlinx.coroutines.CoroutineScope
@@ -29,8 +30,9 @@ enum class PaneView { Terminal, Chat }
 /**
  * Which panes show as a chat, and their chats. A pane whose origin announces an agent (`LiveSession.agents`) shows as
  * a chat while Settings' Agent chat view is on, unless its terminal was picked: by hand ([pick]), or because its chat
- * ended or couldn't open. A terminal so picked holds until the pane's next conversation (or the agent leaves); picking
- * the chat again lifts it. With the setting off every pane shows its terminal.
+ * ended or the origin couldn't open it (a link that is down only defers the open until it is back). A terminal so
+ * picked holds until the pane's next conversation (or the agent leaves); picking the chat again lifts it. With the
+ * setting off every pane shows its terminal.
  *
  * [views] has every pane with an agent while the setting is on. A pane in chat view that is shown ([shown]) has its
  * chat open in [chats], one [ChatViewModel] each, so the core's chat channels stay as few as the panes on screen; a
@@ -50,6 +52,9 @@ class PaneChats(
     private val viewState = MutableStateFlow<Map<PaneRef, PaneView>>(emptyMap())
     private val chatState = MutableStateFlow<Map<PaneRef, ChatViewModel>>(emptyMap())
     private val sessions = live.sessions
+
+    // how many times each machine's link has come up, by id: a chat asked for while it was down opens on the next
+    private val connects = MutableStateFlow<Map<String, Long>>(emptyMap())
 
     /** How each pane with an agent shows, by pane; a pane not here shows its terminal, with no switch. */
     val views: StateFlow<Map<PaneRef, PaneView>> = viewState.asStateFlow()
@@ -103,6 +108,12 @@ class PaneChats(
                 chatState.value[event.pane]?.take(event.state)
             }
 
+            is MobileEvent.MachineState -> {
+                if (event.state == MachineState.Connected) {
+                    connects.update { it + (event.machineId to (it[event.machineId] ?: 0L) + 1) }
+                }
+            }
+
             else -> {}
         }
     }
@@ -141,6 +152,7 @@ class PaneChats(
             pane = pane,
             core = connections.core,
             handle = { shown.value[pane]?.pane },
+            connects = connects,
             scope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext.job)),
             // a chat that ended, or never opened, leaves its terminal on screen until the next conversation
             onEnded = { hold(pane) },

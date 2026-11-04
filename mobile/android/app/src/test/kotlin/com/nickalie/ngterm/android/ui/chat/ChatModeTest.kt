@@ -9,6 +9,7 @@ import com.nickalie.ngterm.android.ui.session.OpenSession
 import com.nickalie.ngterm.android.ui.session.SessionViewModel
 import com.nickalie.ngterm.core.fake.FakeCall
 import com.nickalie.ngterm.core.ffi.ChatState
+import com.nickalie.ngterm.core.ffi.MachineState
 import com.nickalie.ngterm.core.ffi.MobileEvent
 import com.nickalie.ngterm.core.ffi.MobileException
 import com.nickalie.ngterm.core.ffi.RemoteLayout
@@ -178,5 +179,35 @@ class ChatModeTest {
         bed.agent("p1")
         eventually { bed.view("p1") == PaneView.Terminal && bed.chat("p1") == null }
         assertTrue(openChats().isEmpty())
+    }
+
+    @Test
+    fun aChatAskedForWhileTheLinkIsDownOpensOnceItIsBack() {
+        bed.attach("p1")
+        bed.show("p1")
+        bed.test.core.failNext("openChat", MobileException.NotConnected("m1"))
+        bed.agent("p1")
+        eventually {
+            bed
+                .chat("p1")
+                ?.state
+                ?.value
+                ?.phase == ChatPhase.Reconnecting
+        }
+        // no hold: the pane stays in chat view, its chat waiting for the link
+        assertEquals(PaneView.Chat, bed.view("p1"))
+        assertTrue(openChats().isEmpty())
+
+        bed.test.core.emit(MobileEvent.MachineState("m1", MachineState.Connected))
+        eventually { openChats() == setOf(bed.ref("p1")) }
+        assertEquals(PaneView.Chat, bed.view("p1"))
+        assertEquals(
+            ChatPhase.Loading,
+            bed
+                .chat("p1")
+                ?.state
+                ?.value
+                ?.phase,
+        )
     }
 }
