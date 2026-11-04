@@ -2,7 +2,7 @@
 //! bracketed paste and Enter (a slash command the same way), Stop's Escape, each dialog's option keys and the picker's
 //! digits, Tab and Enter.
 
-use super::matchers::{Capture, Term, tricky_drafts, with_draft};
+use super::matchers::{Capture, Term, marked_drafts, tricky_drafts, with_draft};
 use crate::api::PaneInputError;
 use crate::chat::input::{Action, AgentInputOutcome, Key, Next, Plan, QuestionAnswer, UNSAFE_PASTE};
 use crate::chat::matchers::{Agent, Picker, Screen};
@@ -100,7 +100,8 @@ fn a_paste_with_blank_lines_option_shaped_lines_or_long_lines_is_entered_once_sh
         (Agent::Codex, "codex-160x48"),
     ] {
         let capture = Capture::load(name);
-        for draft in tricky_drafts() {
+        // a paste quoting a dialog (its words, key hints, option rows) is the prompt's text, and is entered too
+        for draft in tricky_drafts().into_iter().chain(marked_drafts()) {
             let mut plan = Plan::new(Action::Prompt(draft.clone()));
             assert_eq!(step(&mut plan, &IDLE), send(Key::Paste(draft.clone()), true));
             let (term, _) = with_draft(&capture, agent, "idle", &draft);

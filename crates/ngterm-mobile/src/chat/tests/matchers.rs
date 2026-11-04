@@ -469,6 +469,20 @@ fn last_before(capture: &Capture, state: &str, marker: &[u8]) -> usize {
 
 #[test]
 fn a_half_drawn_dialog_is_never_read_as_a_prompt_or_a_partial_dialog() {
+    half_drawn_sweep(None);
+}
+
+#[test]
+fn a_half_drawn_dialog_over_a_prompt_quoting_a_dialog_is_never_read_as_a_prompt() {
+    // the prompt's own rows are left out of the dialog-words search: the dialog's rule and words around them still
+    // keep it from being read as a prompt while it is drawn over one that holds those words
+    half_drawn_sweep(Some("Explain Esc to cancel (y)"));
+}
+
+/// Replays each dialog's draw over the prompt cut by cut: no cut reads as a prompt once the dialog began, nor as any
+/// dialog but the whole one. With `draft`, the prompt holds it (in the plain style, the TUI's cursor kept) from
+/// before the draw.
+fn half_drawn_sweep(draft: Option<&str>) {
     let cases = [
         (Agent::Claude, "claude", "permission", "proceed"),
         (Agent::Claude, "claude", "question", "☐"),
@@ -481,11 +495,20 @@ fn a_half_drawn_dialog_is_never_read_as_a_prompt_or_a_partial_dialog() {
             // from before the dialog is drawn to its end: Claude draws it from the top over what was there, so the
             // old prompt box stays under it until the dialog reaches it
             let drawn = last_before(&capture, state, marker.as_bytes());
-            let start = drawn.saturating_sub(2048);
+            let mut start = drawn.saturating_sub(2048);
+            let typed = draft.map(|draft| {
+                let (at, typed) = typed_before(&capture, agent, start, draft, &capture_name);
+                start = at;
+                typed
+            });
             let step = ((end - start) / 30).max(1);
             for cut in (start..end).step_by(step) {
                 let term = capture.term();
-                term.feed(&capture.bytes[..cut]);
+                term.feed(&capture.bytes[..start]);
+                if let Some(typed) = &typed {
+                    term.feed(typed);
+                }
+                term.feed(&capture.bytes[start..cut]);
                 let frame = term.frame();
                 if frame.held {
                     // the screen before the program's update: what a pane shows until the update ends
@@ -513,6 +536,36 @@ fn a_half_drawn_dialog_is_never_read_as_a_prompt_or_a_partial_dialog() {
                 }
             }
         }
+    }
+}
+
+/// Where and with what bytes to type `draft` into the prompt the capture shows at byte `at`, or before it when an
+/// update the program holds (2026) is open there: at its start. The cursor is saved and restored around the bytes, so
+/// the TUI's own drawing goes on where it was; the prompt is checked to read as holding it (first, over the prompt's
+/// first row: the recorded prompt may run on below).
+fn typed_before(capture: &Capture, agent: Agent, at: usize, draft: &str, name: &str) -> (usize, Vec<u8>) {
+    const BEGIN: &[u8] = b"\x1b[?2026h";
+    let mut at = at;
+    loop {
+        let term = capture.term();
+        term.feed(&capture.bytes[..at]);
+        if term.frame().held {
+            at = capture.bytes[..at]
+                .windows(BEGIN.len())
+                .rposition(|window| window == BEGIN)
+                .expect("a held update begins");
+            continue;
+        }
+        let mut bytes = b"\x1b7".to_vec();
+        bytes.extend(into_prompt(&term, agent, "0", draft));
+        bytes.extend(b"\x1b8");
+        term.feed(&bytes);
+        let screen = agent.read(&term.frame());
+        assert!(
+            matches!(&screen, Screen::Prompt { composer, .. } if composer.starts_with(draft)),
+            "{name}: the draft is read: {screen:?}"
+        );
+        return (at, bytes);
     }
 }
 
@@ -644,11 +697,121 @@ fn a_draft_with_blank_lines_option_shaped_lines_or_long_wrapped_lines_is_read_wh
     }
 }
 
+/// Codex's approval as it could be drawn in the composer's place: option rows naming a dialog's keys, or with a
+/// dialog's words under them.
+const APPROVAL_SHAPED: [&str; 2] = [
+    "1. Yes, proceed (y)\n2. No (esc)",
+    "1. Yes, proceed\n2. No\nPress enter to confirm or esc to cancel",
+];
+
 #[test]
 fn a_codex_composer_shaped_like_its_approval_is_not_read() {
-    // option rows naming a dialog's keys: an approval drawn into the composer's place, not a prompt
-    for (capture_name, capture) in captures("codex") {
-        let (term, _) = with_draft(&capture, Agent::Codex, "idle", "1. Yes, proceed (y)\n2. No (esc)");
-        assert_eq!(Agent::Codex.read(&term.frame()), Screen::Unknown, "{capture_name}");
+    // an approval drawn into the composer's place, not a prompt, in either state; Claude's box has no such shape
+    // (a dialog never reaches its rows while its rules stand), so there the same text is a draft
+    for (state, working) in [("idle", false), ("working", true)] {
+        for draft in APPROVAL_SHAPED {
+            for (capture_name, capture) in captures("codex") {
+                let (term, _) = with_draft(&capture, Agent::Codex, state, draft);
+                assert_eq!(
+                    Agent::Codex.read(&term.frame()),
+                    Screen::Unknown,
+                    "{capture_name} {state} {draft:?}"
+                );
+            }
+            for (capture_name, capture) in captures("claude") {
+                let (term, held) = with_draft(&capture, Agent::Claude, state, draft);
+                assert_eq!(
+                    Agent::Claude.read(&term.frame()),
+                    Screen::Prompt {
+                        working,
+                        composer: held
+                    },
+                    "{capture_name} {state} {draft:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Drafts quoting what the matchers take for a dialog: each of its words (in a sentence and alone on a row), Codex's
+/// key hints, option rows with either agent's cursor, and whole dialogs quoted under a first line that is text.
+pub(crate) fn marked_drafts() -> Vec<String> {
+    let mut drafts: Vec<String> = [
+        "Esc to cancel",
+        "esc to cancel",
+        "Enter to select",
+        "Press enter to confirm",
+        "Do you want to proceed?",
+        "Ready to submit your answers?",
+    ]
+    .iter()
+    .flat_map(|mark| [format!("Explain {mark} here."), format!("What does this mean?\n{mark}")])
+    .collect();
+    drafts.extend(
+        [
+            "Explain Esc to cancel.",
+            "Should it run? (y)",
+            "Answer with (p) or (esc)",
+            "Pick one:\n❯ 1. Yes\n2. No",
+            "It asked:\nDo you want to proceed?\n❯ 1. Yes\n2. No\nEsc to cancel · Tab to amend",
+            "Codex showed:\n› 1. Yes, proceed (y)\n2. No, and tell Codex what to do differently (esc)\nPress enter to confirm or esc to cancel",
+            "Then:\nReady to submit your answers?\n❯ 1. Submit answers\n2. Cancel\nEnter to select · ↑/↓ to navigate · Esc to cancel",
+        ]
+        .map(str::to_owned),
+    );
+    drafts
+}
+
+#[test]
+fn a_draft_quoting_a_dialog_is_read_as_the_prompt_it_is() {
+    for (agent, name) in AGENTS {
+        for (capture_name, capture) in captures(name) {
+            for (state, working) in [("idle", false), ("working", true)] {
+                for draft in marked_drafts() {
+                    let (term, held) = with_draft(&capture, agent, state, &draft);
+                    assert_eq!(
+                        agent.read(&term.frame()),
+                        Screen::Prompt {
+                            working,
+                            composer: held.clone()
+                        },
+                        "{capture_name} {state} {draft:?}:\n{}",
+                        term.frame().lines().join("\n")
+                    );
+                    assert_eq!(squeeze(&held), squeeze(&draft), "{capture_name} {draft:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_dialogs_words_around_the_prompt_still_keep_it_from_being_read() {
+    // the prompt quotes a dialog; the same words above it (a dialog's question left over) or under it (its footer)
+    // are not its text: not a prompt
+    const DRAFT: &str = "Explain Esc to cancel.";
+    for (agent, name) in AGENTS {
+        for (capture_name, capture) in captures(name) {
+            for state in ["idle", "working"] {
+                let (term, _) = with_draft(&capture, agent, state, DRAFT);
+                let lines = term.frame().lines();
+                let mark = if agent == Agent::Claude { '❯' } else { '›' };
+                let row = lines.iter().rposition(|line| line.starts_with(mark)).unwrap();
+                let last = lines.iter().rposition(|line| !line.trim().is_empty()).unwrap();
+                for (at, words) in [
+                    (row - 3, " Do you want to proceed?"),
+                    (last, " Esc to cancel · Tab to amend"),
+                ] {
+                    let (marked, _) = with_draft(&capture, agent, state, DRAFT);
+                    marked.feed(format!("\x1b[{};1H\x1b[2K{words}", at + 1).as_bytes());
+                    assert_eq!(
+                        agent.read(&marked.frame()),
+                        Screen::Unknown,
+                        "{capture_name} {state} {words:?} at {at}:\n{}",
+                        marked.frame().lines().join("\n")
+                    );
+                }
+            }
+        }
     }
 }

@@ -27,8 +27,13 @@
 //!
 //! Anything else is [`Screen::Unknown`]: a dialog half drawn, scrolled away or quoted in a shell's output, another
 //! agent's screen, a follower's screen laid out for another grid. A prompt is only read as one when no dialog's marks
-//! are left near it, so a dialog the matcher can't read is never taken for a prompt to type into.
+//! are left near it, so a dialog the matcher can't read is never taken for a prompt to type into. Its own input rows
+//! (found by their frame first: Claude's between its rules, Codex's from the footer up) are left out of that search, so
+//! a prompt that quotes a dialog's words (`Explain Esc to cancel.`) is still read, and sent, as one; the rows around
+//! them are searched as before. One shape stays out: a Codex composer whose `›` row reads as an option while a row of
+//! it names a dialog's key (`(y)`, `(esc)`) or a dialog's words is taken for an approval drawn in its place.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use ngterm_term::{CellFlags, CellWidth, Frame, Row};
@@ -238,16 +243,24 @@ impl Rows {
 
     /// Whether a dialog's marks show on the rows `from..to`.
     fn marked(&self, from: usize, to: usize) -> bool {
-        (from..to.min(self.lines.len())).any(|index| {
-            let line = self.get(index);
-            DIALOG_MARKS.iter().any(|mark| line.contains(mark))
-        })
+        (from..to.min(self.lines.len())).any(|index| marks(self.get(index)))
+    }
+
+    /// Whether a dialog's marks show from row `from` to the screen's bottom, a prompt's own input rows `input` left
+    /// out: what was typed there may quote a dialog's words.
+    fn marked_around(&self, from: usize, input: Range<usize>) -> bool {
+        self.marked(from, input.start) || self.marked(input.end, self.lines.len())
     }
 
     /// The first row at or before `index` that is not blank, looking up at most `limit` rows.
     fn up_to_text(&self, index: usize, limit: usize) -> Option<usize> {
         (index.saturating_sub(limit)..=index).rev().find(|at| !self.blank(*at))
     }
+}
+
+/// Whether `line` holds a dialog's words.
+fn marks(line: &str) -> bool {
+    DIALOG_MARKS.iter().any(|mark| line.contains(mark))
 }
 
 /// `row`'s text from its second column on, trimmed: a faint (placeholder) or hidden cell is blank, a spacer cell (the
@@ -501,13 +514,16 @@ fn claude_prompt(rows: &Rows) -> Option<(bool, String)> {
         return None;
     }
     // a dialog drawn over the box from the top leaves the box's rows under it until it reaches them: its own rule
-    // or its words above the box mean the box is what is left of the screen before
-    if (0..upper).any(|index| rows.rule(index)) || rows.marked(upper.saturating_sub(ABOVE), rows.lines.len()) {
+    // or its words above or under the box mean the box is what is left of the screen before. The input rows between
+    // the rules are left out of the words' search: they hold what was typed, and no dialog reaches them while the
+    // box's upper rule (no other above it) and its `❯` row are still there
+    let input = upper + 1..lower;
+    if (0..upper).any(|index| rows.rule(index)) || rows.marked_around(upper.saturating_sub(ABOVE), input.clone()) {
         return None;
     }
     let footer = (lower + 1..=last).any(|index| rows.get(index).contains("esc to interrupt"));
     let spinner = (upper.saturating_sub(NEAR)..upper).any(|index| spinning(rows.get(index)));
-    Some((footer || spinner, rows.typed(upper + 1, lower)))
+    Some((footer || spinner, rows.typed(input.start, input.end)))
 }
 
 /// A turn's spinner line: a glyph, a word ending with `…` (`✶ Pontificating…`, `✢ Cogitating… (running …)`).
@@ -574,7 +590,9 @@ fn key_hint(text: &str) -> Option<(String, OptionKey)> {
 /// Codex's composer: whether a turn is running and what it holds, or `None` when it is not on screen.
 fn codex_prompt(rows: &Rows) -> Option<(bool, String)> {
     let (composer, below) = codex_composer(rows)?;
-    if rows.marked(composer.saturating_sub(ABOVE), rows.lines.len()) {
+    // the composer's own rows hold what was typed: a dialog's words there are text, unless the rows are shaped like
+    // an approval (below)
+    if rows.marked_around(composer.saturating_sub(ABOVE), composer..below) {
         return None;
     }
     // an option row with the cursor on it is a dialog's, unless it is the composer's own text (`› 1. Fix the bug`,
@@ -585,9 +603,16 @@ fn codex_prompt(rows: &Rows) -> Option<(bool, String)> {
     if options_near {
         return None;
     }
-    // a composer row shaped like an option is only text while nothing in it names a dialog's key: `(y)`, `(esc)`
+    // a composer row shaped like an option is only text while nothing in its rows names a dialog's key (`(y)`,
+    // `(esc)`) or holds a dialog's words: an approval drawn where the composer was (its footer not the screen's last
+    // run yet, a layout the approval matcher can't read) takes this shape, and Stop's Escape would answer it. Kept in
+    // either state: idle it costs only a prompt whose first line is numbered and that names a key or a dialog's words
+    // (pasted, not entered: Unconfirmed), working it keeps Escape off such an approval
     let keyed = option_row(rows.get(composer), CODEX_CURSOR).is_some()
-        && (composer..below).any(|index| key_hint(rows.get(index).trim()).is_some());
+        && (composer..below).any(|index| {
+            let line = rows.get(index);
+            key_hint(line.trim()).is_some() || marks(line)
+        });
     if keyed {
         return None;
     }
