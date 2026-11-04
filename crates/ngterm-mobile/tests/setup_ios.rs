@@ -2,9 +2,9 @@
 //! Xcode, both Rust iOS targets, the pinned simulator runtime and the pinned `SwiftLint` are in place, and otherwise
 //! names everything that is missing and exits non-zero. It never changes anything.
 //!
-//! Every case runs the real script with stub `uname`, `xcode-select`, `xcodebuild`, `xcrun`, `rustup` and `swiftlint`
-//! first on a `PATH` that holds nothing else but `/usr/bin` and `/bin`, in a cleared environment with a scratch `HOME`
-//! and vendor root, so nothing here depends on the host's toolchain, and the stubs log every call that would change
+//! Every case runs the real script with stub `uname`, `xcode-select`, `xcodebuild`, `xcrun` and `rustup` first on a
+//! `PATH` that holds nothing else but `/usr/bin` and `/bin`, and a stub `swiftlint` in the scratch vendor root or on that
+//! `PATH`, in a cleared environment with a scratch `HOME`, so nothing here depends on the host's toolchain, and the stubs log every call that would change
 //! something. Unix hosts only: the script is macOS-only, and the stub `uname` lets Linux run it too.
 #![cfg(unix)]
 
@@ -41,13 +41,25 @@ mod host {
         )
     }
 
+    /// Where the host's `SwiftLint` is and what `swiftlint version` does.
+    pub(super) enum Swiftlint {
+        Missing,
+        /// In the vendor root, reporting this version.
+        Vendored(String),
+        /// On `PATH`, reporting this version.
+        OnPath(String),
+        /// On `PATH`, but it won't run (exit 126, nothing printed).
+        Broken,
+    }
+
     /// What the stubs report: the host as the pins want it unless a case changes one field.
     pub(super) struct Host {
         pub(super) os: &'static str,
         pub(super) xcode: String,
         pub(super) runtimes: Vec<String>,
-        pub(super) rust_targets: Vec<&'static str>,
-        pub(super) swiftlint: Option<String>,
+        /// `None`: `rustup target list --installed` fails.
+        pub(super) rust_targets: Option<Vec<&'static str>>,
+        pub(super) swiftlint: Swiftlint,
     }
 
     impl Host {
@@ -56,8 +68,12 @@ mod host {
                 os: "Darwin",
                 xcode: pin("IOS_XCODE_VERSION"),
                 runtimes: vec![runtime_line(&pin("IOS_SIMULATOR_RUNTIME"))],
-                rust_targets: vec!["aarch64-apple-darwin", "aarch64-apple-ios", "aarch64-apple-ios-sim"],
-                swiftlint: Some(pin("SWIFTLINT_VERSION")),
+                rust_targets: Some(vec![
+                    "aarch64-apple-darwin",
+                    "aarch64-apple-ios",
+                    "aarch64-apple-ios-sim",
+                ]),
+                swiftlint: Swiftlint::Vendored(pin("SWIFTLINT_VERSION")),
             }
         }
     }
@@ -75,6 +91,7 @@ mod host {
         pub(super) output: Output,
         pub(super) log: String,
         pub(super) developer_dir: PathBuf,
+        pub(super) vendored_swiftlint: PathBuf,
     }
 
     impl Run {
@@ -89,6 +106,10 @@ mod host {
         pub(super) fn assert_fails_naming(&self, needles: &[&str]) {
             let stderr = self.stderr();
             assert!(!self.output.status.success(), "--check passed:\n{stderr}");
+            assert!(
+                stderr.contains("the iOS toolchain is incomplete"),
+                "the check ended before its report:\n{stderr}"
+            );
             for needle in needles {
                 assert!(stderr.contains(needle), "stderr lacks {needle:?}:\n{stderr}");
             }
@@ -141,20 +162,27 @@ mod host {
                     .join(" ")
             ),
         );
+        let list_targets = host.rust_targets.as_ref().map_or_else(
+            || "echo 'error: toolchain is not installed' >&2; exit 1".to_owned(),
+            |targets| format!("printf '%s\\n' {}; exit 0", targets.join(" ")),
+        );
         write_stub(
             &stubs,
             "rustup",
-            &format!(
-                "if [ \"$1 $2 $3\" = 'target list --installed' ]; then printf '%s\\n' {}; exit 0; fi\n{LOG_CALL}\n",
-                host.rust_targets.join(" ")
-            ),
+            &format!("if [ \"$1 $2 $3\" = 'target list --installed' ]; then {list_targets}; fi\n{LOG_CALL}\n"),
         );
-        if let Some(version) = &host.swiftlint {
-            write_stub(
-                &stubs,
-                "swiftlint",
-                &format!("[ \"$1\" = version ] && echo {version}\n"),
-            );
+        let vendored_swiftlint = scratch
+            .path()
+            .join(format!("vendor/swiftlint-{}", pin("SWIFTLINT_VERSION")));
+        let version_stub = |version: &str| format!("[ \"$1\" = version ] && echo {version}\n");
+        match &host.swiftlint {
+            Swiftlint::Missing => {}
+            Swiftlint::Vendored(version) => {
+                fs::create_dir_all(&vendored_swiftlint).unwrap();
+                write_stub(&vendored_swiftlint, "swiftlint", &version_stub(version));
+            }
+            Swiftlint::OnPath(version) => write_stub(&stubs, "swiftlint", &version_stub(version)),
+            Swiftlint::Broken => write_stub(&stubs, "swiftlint", "echo 'bad CPU type in executable' >&2\nexit 126\n"),
         }
         let log = scratch.path().join("calls.log");
         fs::write(&log, "").unwrap();
@@ -174,11 +202,12 @@ mod host {
             output,
             log: fs::read_to_string(&log).unwrap(),
             developer_dir,
+            vendored_swiftlint,
         }
     }
 }
 
-use host::{Host, check, pin, runtime_line};
+use host::{Host, Swiftlint, check, pin, runtime_line};
 
 #[test]
 fn the_pinned_toolchain_passes_and_prints_the_exports() {
@@ -189,12 +218,45 @@ fn the_pinned_toolchain_passes_and_prints_the_exports() {
         stdout.contains(&format!("export DEVELOPER_DIR=\"{}\"", run.developer_dir.display())),
         "{stdout}"
     );
-    assert!(stdout.contains("export PATH=\""), "{stdout}");
     assert!(
-        stdout.contains(":$PATH\""),
-        "the PATH addition must keep $PATH:\n{stdout}"
+        stdout.contains(&format!("export PATH=\"{}:$PATH\"", run.vendored_swiftlint.display())),
+        "the vendored SwiftLint goes ahead of $PATH, which it keeps:\n{stdout}"
     );
     assert_eq!(run.log, "", "--check changed something");
+}
+
+#[test]
+fn a_swiftlint_on_path_passes_without_a_path_export() {
+    let run = check(&Host {
+        swiftlint: Swiftlint::OnPath(pin("SWIFTLINT_VERSION")),
+        ..Host::pinned()
+    });
+    assert!(run.output.status.success(), "{}", run.stderr());
+    let stdout = run.stdout();
+    assert!(stdout.contains("export DEVELOPER_DIR=\""), "{stdout}");
+    assert!(
+        !stdout.contains("export PATH="),
+        "a SwiftLint already on PATH needs no export, and its directory must not shadow rustup's cargo:\n{stdout}"
+    );
+}
+
+#[test]
+fn a_failing_rustup_is_reported_as_missing_targets() {
+    let run = check(&Host {
+        rust_targets: None,
+        ..Host::pinned()
+    });
+    run.assert_fails_naming(&["aarch64-apple-ios", "aarch64-apple-ios-sim"]);
+    assert_eq!(run.log, "", "--check changed something");
+}
+
+#[test]
+fn a_swiftlint_that_wont_run_is_reported_as_missing() {
+    let run = check(&Host {
+        swiftlint: Swiftlint::Broken,
+        ..Host::pinned()
+    });
+    run.assert_fails_naming(&[&format!("SwiftLint {}", pin("SWIFTLINT_VERSION")), "no version"]);
 }
 
 #[test]
@@ -210,7 +272,7 @@ fn another_xcode_fails() {
 #[test]
 fn a_missing_rust_ios_target_fails() {
     let run = check(&Host {
-        rust_targets: vec!["aarch64-apple-darwin", "aarch64-apple-ios"],
+        rust_targets: Some(vec!["aarch64-apple-darwin", "aarch64-apple-ios"]),
         ..Host::pinned()
     });
     run.assert_fails_naming(&["aarch64-apple-ios-sim"]);
@@ -244,7 +306,7 @@ fn an_unavailable_simulator_runtime_fails() {
 #[test]
 fn another_swiftlint_fails() {
     let run = check(&Host {
-        swiftlint: Some("0.60.0".into()),
+        swiftlint: Swiftlint::OnPath("0.60.0".into()),
         ..Host::pinned()
     });
     run.assert_fails_naming(&[&format!("SwiftLint {}", pin("SWIFTLINT_VERSION")), "0.60.0"]);
@@ -253,7 +315,7 @@ fn another_swiftlint_fails() {
 #[test]
 fn a_missing_swiftlint_fails() {
     let run = check(&Host {
-        swiftlint: None,
+        swiftlint: Swiftlint::Missing,
         ..Host::pinned()
     });
     run.assert_fails_naming(&[&format!("SwiftLint {}", pin("SWIFTLINT_VERSION")), "not found"]);
@@ -264,8 +326,8 @@ fn every_missing_piece_is_named_at_once() {
     let run = check(&Host {
         xcode: "26.6".into(),
         runtimes: Vec::new(),
-        rust_targets: vec!["aarch64-apple-darwin"],
-        swiftlint: None,
+        rust_targets: Some(vec!["aarch64-apple-darwin"]),
+        swiftlint: Swiftlint::Missing,
         ..Host::pinned()
     });
     run.assert_fails_naming(&[
