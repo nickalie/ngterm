@@ -9,6 +9,7 @@
 
 use std::io::{self, IsTerminal, Read};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use ngterm_core::agent_chat::AgentKind;
 use ngterm_core::agent_chat::hook::{HookEvent, report};
@@ -22,6 +23,12 @@ use crate::{BasicOptions, Failure, TargetOptions, client, output};
 /// The most a hook payload may hold. A permission prompt for a file write carries the file, so this is generous; a
 /// payload past it is refused rather than read to the end.
 const PAYLOAD_CAP: u64 = 64 * 1024 * 1024;
+
+/// The most a report waits on the control socket, its reply included. The agent waits on its hook (a permission
+/// dialog is not shown until it returns), so an instance whose main loop has stalled loses the report instead of
+/// holding the agent up; one that is responsive answers in milliseconds. The server's own per-request deadlines are
+/// as long.
+const REPORT_DEADLINE: Duration = Duration::from_secs(5);
 
 /// `ngtermctl agent <subcommand>`.
 #[derive(Debug, clap::Args)]
@@ -106,7 +113,7 @@ impl Hook {
         let Some(report) = report(agent, event, &payload).map_err(Failure::Local)? else {
             return Ok(());
         };
-        let reply = client::send(&self.options.socket_path(env), &self.request(report))?;
+        let reply = client::send_within(&self.options.socket_path(env), &self.request(report), REPORT_DEADLINE)?;
         if self.options.json || !reply.response.ok {
             output::print_response(&reply, self.options.json, false);
         }

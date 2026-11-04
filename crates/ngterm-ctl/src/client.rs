@@ -9,6 +9,7 @@
 use std::fmt;
 use std::io::{self, ErrorKind, Read};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use ngterm_proto::{ControlResult, ControlTree, MAX_REQUEST_LINE_BYTES, Request, Response};
 pub use ngterm_server::Connection;
@@ -216,6 +217,17 @@ pub fn send_all(stream: &Connection, mut data: &[u8]) -> io::Result<()> {
 
 /// Sends `request` as one newline-terminated JSON line to `path` and decodes the one response line.
 pub fn send(path: &Path, request: &Request) -> Result<Reply, ClientError> {
+    exchange(path, request, None)
+}
+
+/// [`send`], giving up once `limit` has passed since the connection was made: the write and every read of the reply
+/// wait at most what is left of it. For a caller that must not hang on an instance whose main loop has stalled (an
+/// agent's hook, which the agent waits on), where a lost reply costs less than the wait.
+pub fn send_within(path: &Path, request: &Request, limit: Duration) -> Result<Reply, ClientError> {
+    exchange(path, request, Some(limit))
+}
+
+fn exchange(path: &Path, request: &Request, limit: Option<Duration>) -> Result<Reply, ClientError> {
     let mut data =
         serde_json::to_vec(request).map_err(|error| ClientError::new(format!("could not encode request: {error}")))?;
     // the server rejects a line over the shared cap and closes the connection: say so before writing instead of
@@ -228,13 +240,53 @@ pub fn send(path: &Path, request: &Request) -> Result<Reply, ClientError> {
     }
     data.push(b'\n');
     let mut stream = connect(path)?;
+    let deadline = limit.map(|limit| Instant::now() + limit);
+    if let Some(limit) = limit {
+        stream
+            .set_write_timeout(Some(limit.max(MIN_WAIT)))
+            .map_err(|error| ClientError::new(format!("cannot bound the write: {}", os_message(&error))))?;
+    }
     // main restores SIGPIPE's default action for stdout, so the request goes out with MSG_NOSIGNAL: a write to a
     // hung-up peer (one that rejected the line) is an EPIPE error here, not a silent death
     send_all(&stream, &data).map_err(|error| ClientError::new(format!("write failed: {}", os_message(&error))))?;
-    let raw = read_line(&mut stream).ok_or_else(|| ClientError::new(format!("no response from {}", path.display())))?;
+    let raw = match deadline {
+        None => read_line(&mut stream),
+        Some(deadline) => read_line(&mut Bounded {
+            stream: &stream,
+            deadline,
+        }),
+    };
+    let raw = raw.ok_or_else(|| match (limit, deadline) {
+        (Some(limit), Some(deadline)) if Instant::now() >= deadline => ClientError::new(format!(
+            "no response from {} within {} ms",
+            path.display(),
+            limit.as_millis()
+        )),
+        _ => ClientError::new(format!("no response from {}", path.display())),
+    })?;
     let response =
         decode_response(&raw).map_err(|error| ClientError::new(format!("could not decode response: {error}")))?;
     Ok(Reply { response, raw })
+}
+
+/// The shortest wait a socket timeout is given: std refuses a zero one.
+const MIN_WAIT: Duration = Duration::from_millis(1);
+
+/// A connection read until `deadline`: each read waits at most what is left, and fails as timed out once nothing is.
+struct Bounded<'a> {
+    stream: &'a Connection,
+    deadline: Instant,
+}
+
+impl Read for Bounded<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(ErrorKind::TimedOut.into());
+        }
+        self.stream.set_read_timeout(Some(left.max(MIN_WAIT)))?;
+        (&*self.stream).read(buf)
+    }
 }
 
 /// Decodes a response line as upstream's `JSONDecoder().decode(ControlResponse.self, …)`: a result field this build
@@ -406,6 +458,40 @@ mod tests {
                 missing.display()
             )
         );
+    }
+
+    /// A peer that never answers ends a bounded read at its deadline, on every OS (a pipe's read timeout is a timer).
+    #[test]
+    fn a_bounded_read_gives_up_at_its_deadline() {
+        let (ours, _theirs) = ngterm_server::endpoint::pair().unwrap();
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(200);
+        let line = read_line(&mut Bounded {
+            stream: &ours,
+            deadline,
+        });
+        assert_eq!(line, None);
+        assert!(Instant::now() >= deadline);
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    }
+
+    /// An instance that takes the connection but never replies (its main loop stalled) fails a bounded send once its
+    /// limit has passed, saying so, rather than holding the caller.
+    #[cfg(unix)]
+    #[test]
+    fn a_bounded_send_to_a_stalled_instance_fails_at_its_limit() {
+        let dir = tempfile::Builder::new().prefix("agc").tempdir_in("/tmp").unwrap();
+        let path = dir.path().join("stalled.sock");
+        // listening, never accepting: the connect lands in the backlog and the request in the socket's buffer
+        let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let request: Request = serde_json::from_str(r#"{"cmd":"version"}"#).unwrap();
+        let started = Instant::now();
+        let error = send_within(&path, &request, Duration::from_millis(200)).unwrap_err();
+        assert_eq!(
+            error.message,
+            format!("no response from {} within 200 ms", path.display())
+        );
+        assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
     }
 
     #[cfg(unix)]
