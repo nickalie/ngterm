@@ -766,9 +766,14 @@ fn sign_in_requested() -> MobileEvent {
 }
 
 /// [`quick`] with a short network deadline, which a sign-in outlasts.
+/// How long a machine holding authentication holds it when that has to outlast [`signing_in`]'s connect deadline.
+const HOLD_PAST_CONNECT: Duration = Duration::from_secs(3);
+
+/// A connect deadline short enough to see run out, long enough for a debug build's handshake on a busy simulator (CI
+/// overran 300 ms); a machine that holds authentication past it holds it for [`HOLD_PAST_CONNECT`].
 fn signing_in() -> Timing {
     Timing {
-        connect: Duration::from_millis(300),
+        connect: Duration::from_secs(2),
         ..quick()
     }
 }
@@ -777,17 +782,14 @@ fn signing_in() -> Timing {
 fn a_machine_holding_authentication_for_a_sign_in_keeps_the_connect_waiting() {
     run(async {
         let mut fixture = fixture(signing_in());
-        let server = TestServer::start_holding_auth(&fixture.public, SIGN_IN_BANNER, Duration::from_millis(1200)).await;
+        let server = TestServer::start_holding_auth(&fixture.public, SIGN_IN_BANNER, HOLD_PAST_CONNECT).await;
         fixture.hosts.pin("m1".to_owned(), server.fingerprint());
         let started = std::time::Instant::now();
 
         let connected = fixture.transport.connect(&machine(server.port)).await;
 
         assert!(connected.is_ok(), "{:?}", connected.err());
-        assert!(
-            started.elapsed() >= Duration::from_millis(1200),
-            "it waited for the machine"
-        );
+        assert!(started.elapsed() >= HOLD_PAST_CONNECT, "it waited for the machine");
         assert_eq!(fixture.events.try_recv().ok(), Some(sign_in_requested()));
         assert!(fixture.events.try_recv().is_err(), "asked once");
     });
@@ -860,7 +862,7 @@ fn a_banner_without_a_link_changes_nothing() {
     run(async {
         let mut fixture = fixture(signing_in());
         let banner = "Authorized use only.\n";
-        let held = TestServer::start_holding_auth(&fixture.public, banner, Duration::from_millis(1200)).await;
+        let held = TestServer::start_holding_auth(&fixture.public, banner, HOLD_PAST_CONNECT).await;
         let prompt = TestServer::start_holding_auth(&fixture.public, banner, Duration::ZERO).await;
 
         fixture.hosts.pin("m1".to_owned(), held.fingerprint());
@@ -875,7 +877,8 @@ fn a_banner_without_a_link_changes_nothing() {
         );
 
         fixture.hosts.pin("m1".to_owned(), prompt.fingerprint());
-        assert!(fixture.transport.connect(&machine(prompt.port)).await.is_ok());
+        let connected = fixture.transport.connect(&machine(prompt.port)).await;
+        assert!(connected.is_ok(), "{:?}", connected.err());
         assert!(fixture.events.try_recv().is_err(), "nothing is asked");
     });
 }
@@ -883,11 +886,9 @@ fn a_banner_without_a_link_changes_nothing() {
 #[test]
 fn a_link_the_machine_does_not_wait_on_asks_nothing() {
     run(async {
-        // quick()'s connect deadline, not signing_in()'s 300 ms: the handshake before the banner counts against it,
-        // and a debug build's on a busy simulator can take that long; this test is about the grace alone
         let mut fixture = fixture(Timing {
             sign_in_grace: Duration::from_millis(500),
-            ..quick()
+            ..signing_in()
         });
         let banner = "Authorized use only: see https://example.com/policy.\n";
         let server = TestServer::start_holding_auth(&fixture.public, banner, Duration::from_millis(100)).await;
