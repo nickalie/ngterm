@@ -16,6 +16,7 @@ let package = Package(
         .package(path: "../NgtermDesign"),
         .package(path: "../NgtermTerminal"),
         .package(path: "../NgtermPlatform"),
+        .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", exact: "1.19.7"),
     ],
     targets: [
         .target(
@@ -27,7 +28,17 @@ let package = Package(
                 .product(name: "NgtermPlatform", package: "NgtermPlatform"),
             ],
             swiftSettings: strict
-        )
+        ),
+        .testTarget(
+            name: "NgtermFeaturesTests",
+            dependencies: [
+                "NgtermFeatures",
+                .product(name: "NgtermDesign", package: "NgtermDesign"),
+                .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
+            ],
+            exclude: ["__Snapshots__"],
+            swiftSettings: strict
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

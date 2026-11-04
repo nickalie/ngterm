@@ -38,6 +38,13 @@
         "identifier" : "NgtermDesignTests",
         "name" : "NgtermDesignTests"
       }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:Packages\/NgtermFeatures",
+        "identifier" : "NgtermFeaturesTests",
+        "name" : "NgtermFeaturesTests"
+      }
     }
   ],
   "version" : 1

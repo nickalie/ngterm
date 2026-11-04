@@ -1,17 +1,30 @@
+import NgtermDesign
+import NgtermFeatures
 import SwiftUI
 
-/// The app's first screen until its features land: the name and the core's version.
+/// A main window: the app's frame over its own navigation.
+///
+/// The columns hold placeholders until their features land.
 internal struct RootView: View {
-    internal let coreVersion: String
+    private let coreVersion: String
+    @State private var model: ScaffoldModel
 
     internal var body: some View {
-        VStack {
-            Text(verbatim: "ngterm")
-                .font(.largeTitle)
-            Text(verbatim: "core \(coreVersion)")
-                .font(.footnote.monospaced())
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("core-version")
+        AppScaffold(model: model) {
+            MachinesPlaceholder()
+        } sessions: { _ in
+            StatePanel.loading(String(localized: "Reading the machine's sessions"))
+        } session: { _ in
+            StatePanel.loading(String(localized: "Opening the session"))
+        } settings: {
+            SettingsPlaceholder(coreVersion: coreVersion)
+        } onboarding: {
+            EmptyView()
         }
+    }
+
+    internal init(coreVersion: String, windows: SessionWindows) {
+        self.coreVersion = coreVersion
+        _model = State(initialValue: ScaffoldModel(windows: windows))
     }
 }

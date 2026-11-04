@@ -10,6 +10,7 @@
 		4E0000000000000000000080 /* NgtermCore in Frameworks */ = {isa = PBXBuildFile; productRef = 4E0000000000000000000070 /* NgtermCore */; };
 		4E0000000000000000000081 /* NgtermCoreFakes in Frameworks */ = {isa = PBXBuildFile; productRef = 4E0000000000000000000071 /* NgtermCoreFakes */; };
 		4E0000000000000000000082 /* NgtermFeatures in Frameworks */ = {isa = PBXBuildFile; productRef = 4E0000000000000000000072 /* NgtermFeatures */; };
+		4E0000000000000000000083 /* NgtermDesign in Frameworks */ = {isa = PBXBuildFile; productRef = 4E0000000000000000000073 /* NgtermDesign */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -82,6 +83,7 @@
 				4E0000000000000000000080 /* NgtermCore in Frameworks */,
 				4E0000000000000000000081 /* NgtermCoreFakes in Frameworks */,
 				4E0000000000000000000082 /* NgtermFeatures in Frameworks */,
+				4E0000000000000000000083 /* NgtermDesign in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -160,6 +162,7 @@
 				4E0000000000000000000070 /* NgtermCore */,
 				4E0000000000000000000071 /* NgtermCoreFakes */,
 				4E0000000000000000000072 /* NgtermFeatures */,
+				4E0000000000000000000073 /* NgtermDesign */,
 			);
 			productName = NgTerm;
 			productReference = 4E0000000000000000000030 /* NgTerm.app */;
@@ -368,13 +371,14 @@
 		4E0000000000000000000092 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = NgTerm/NgTerm.entitlements;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = NgTerm/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = ngterm;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -389,13 +393,14 @@
 		4E0000000000000000000093 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = NgTerm/NgTerm.entitlements;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = NgTerm/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = ngterm;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -502,6 +507,10 @@
 		4E0000000000000000000072 /* NgtermFeatures */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = NgtermFeatures;
+		};
+		4E0000000000000000000073 /* NgtermDesign */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NgtermDesign;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
