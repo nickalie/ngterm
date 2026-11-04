@@ -953,9 +953,12 @@ fn a_lost_link_waits_probes_with_backoff_and_attaches_the_pane_again() {
         surface,
         Some(json!({"failures": 1, "reason": "ssh: connect to host origin port 22: Connection refused"}))
     );
-    assert_eq!(
-        viewer.fixture.core.pane_reconnect_note(&token).as_deref(),
-        Some("ssh: connect to host origin port 22: Connection refused")
+    let note = viewer.fixture.core.pane_reconnect_note(&token, Instant::now());
+    assert!(
+        note.as_deref()
+            .is_some_and(|note| note.starts_with("1 failed attempt · ")
+                && note.ends_with(" · ssh: connect to host origin port 22: Connection refused")),
+        "{note:?}"
     );
     assert!(viewer.fixture.core.take_pane_replacements().is_empty());
     *viewer.runner.probe_status.lock().unwrap() = 0;

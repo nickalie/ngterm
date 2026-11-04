@@ -264,12 +264,12 @@ impl Core {
         Uuid::parse_str(token).is_ok_and(|pane| self.remote.viewer.reconnects.waiting(pane))
     }
 
-    /// What ssh said on the last failed probe of the pane carrying `token` (upstream's `RemoteReconnectNote`), never
-    /// the outcome of the attach after a probe that answered.
+    /// The reconnect strip of the pane carrying `token` at `now` (upstream's `RemoteReconnectNote`, with the failed
+    /// probes and the next one's countdown): see [`ReconnectBook::note`].
     #[must_use]
-    pub fn pane_reconnect_note(&self, token: &str) -> Option<String> {
+    pub fn pane_reconnect_note(&self, token: &str, now: Instant) -> Option<String> {
         let pane = Uuid::parse_str(token).ok()?;
-        self.remote.viewer.reconnects.readback(pane)?.reason
+        self.remote.viewer.reconnects.note(pane, now)
     }
 
     /// The `reconnect` read-back of the pane `pane`.

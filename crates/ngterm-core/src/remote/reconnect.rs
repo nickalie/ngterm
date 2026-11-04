@@ -71,6 +71,9 @@ pub struct ReconnectEntry {
     /// The origin reported lead roles, so the fresh attach will too and may be covered until it does.
     pub cover: bool,
     failures: u32,
+    /// Failed probes in this wait: unlike `failures`, a retry on demand keeps them; a wait after a probe answered starts
+    /// over, as the host did answer.
+    attempts: u32,
     /// What the last failed probe's ssh said, `None` when it said nothing. It describes that probe only, never the
     /// attach that follows a probe that answered.
     reason: Option<String>,
@@ -114,6 +117,7 @@ impl ReconnectBook {
             host: host.to_owned(),
             cover,
             failures: 0,
+            attempts: 0,
             reason: None,
             retry_at: now,
             probing: false,
@@ -153,6 +157,7 @@ impl ReconnectBook {
         if !ok {
             entry.probing = false;
             entry.failures += 1;
+            entry.attempts += 1;
             entry.reason = reason(stderr);
             entry.retry_at = now + retry_delay(entry.failures);
             return None;
@@ -169,6 +174,29 @@ impl ReconnectBook {
             failures: i64::from(entry.failures),
             reason: entry.reason.clone(),
         })
+    }
+
+    /// The strip a waiting pane shows once a probe failed: the failed probes so far, when the next one runs and what
+    /// ssh said last, so a host that stays down reads as retried, not hung. The count and the countdown lead, as a
+    /// narrow pane cuts the line's end. `None` before the first failure.
+    #[must_use]
+    pub fn note(&self, pane: Uuid, now: Instant) -> Option<String> {
+        let entry = self.entries.get(&pane).filter(|entry| entry.attempts > 0)?;
+        let said = entry.reason.as_deref().map_or_else(
+            || format!("no answer from {}", entry.host),
+            |reason| reason.strip_prefix("ssh: ").unwrap_or(reason).to_owned(),
+        );
+        let attempts = match entry.attempts {
+            1 => "1 failed attempt".to_owned(),
+            count => format!("{count} failed attempts"),
+        };
+        let left = entry.retry_at.saturating_duration_since(now);
+        let next = if entry.probing || left.is_zero() {
+            "trying again…".to_owned()
+        } else {
+            format!("next try in {}", countdown(left))
+        };
+        Some(format!("{attempts} · {next} · ssh: {said}"))
     }
 
     /// Due now with the backoff over; a probe already running is not started twice.
@@ -208,6 +236,16 @@ impl NetworkReports {
         let retry = self.reported && available;
         self.reported = true;
         retry
+    }
+}
+
+/// `left` rounded up to whole seconds: `42s` under a minute, `4:05` from one.
+fn countdown(left: Duration) -> String {
+    let seconds = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
     }
 }
 
@@ -378,6 +416,68 @@ mod tests {
         book.due(f.at(1.0));
         assert!(book.finished(f.pane, true, "", f.at(1.0)).is_some());
         assert_eq!(book.readback(f.pane), None);
+    }
+
+    #[test]
+    fn the_note_counts_failed_probes_past_a_retry_and_counts_down_to_the_next() {
+        let f = Fixture::new();
+        let mut book = f.waiting(false);
+        assert_eq!(book.note(f.pane, f.t0), None, "nothing failed yet");
+        book.due(f.t0);
+        book.finished(
+            f.pane,
+            false,
+            "ssh: connect to host mini port 22: Connection timed out\n",
+            f.t0,
+        );
+        assert_eq!(
+            book.note(f.pane, f.at(0.2)).as_deref(),
+            Some("1 failed attempt · next try in 1s · ssh: connect to host mini port 22: Connection timed out")
+        );
+        let mut now = f.t0;
+        for _ in 0..8 {
+            now = f.at(1000.0 + now.duration_since(f.t0).as_secs_f64());
+            book.due(now);
+            book.finished(f.pane, false, "", now);
+        }
+        assert_eq!(
+            book.note(f.pane, now + secs(1.5)).as_deref(),
+            Some("9 failed attempts · next try in 4:15 · ssh: no answer from mini")
+        );
+        book.retry_now(f.pane, now);
+        assert_eq!(
+            book.note(f.pane, now).as_deref(),
+            Some("9 failed attempts · trying again… · ssh: no answer from mini"),
+            "a retry on demand starts the backoff over but keeps the count"
+        );
+        book.due(now);
+        assert_eq!(
+            book.note(f.pane, now + secs(5.0)).as_deref(),
+            Some("9 failed attempts · trying again… · ssh: no answer from mini")
+        );
+        book.finished(f.pane, false, "Permission denied (publickey).", now + secs(5.0));
+        assert_eq!(
+            book.note(f.pane, now + secs(5.0)).as_deref(),
+            Some("10 failed attempts · next try in 1s · ssh: Permission denied (publickey).")
+        );
+    }
+
+    #[test]
+    fn a_link_lost_soon_after_a_probe_answered_shows_no_strip_until_a_probe_fails_again() {
+        let f = Fixture::new();
+        let mut book = f.waiting(false);
+        book.due(f.t0);
+        book.finished(f.pane, false, "", f.t0);
+        book.due(f.at(1.0));
+        assert!(book.finished(f.pane, true, "", f.at(1.0)).is_some());
+        book.wait(f.pane, f.session, "mini", false, f.at(2.0));
+        assert_eq!(book.note(f.pane, f.at(2.0)), None, "the host answered the last probe");
+        book.due(f.at(4.0));
+        book.finished(f.pane, false, "", f.at(4.0));
+        assert_eq!(
+            book.note(f.pane, f.at(4.0)).as_deref(),
+            Some("1 failed attempt · next try in 4s · ssh: no answer from mini")
+        );
     }
 
     #[test]
