@@ -232,8 +232,13 @@ from a subagent's transcript, `parent` (the task tool's id):
 **`agent chat` modes:**
 
 - the default: read backward from the end until about 200 events, then `live` and follow;
-- `--before CURSOR --limit N`: one older page, then exit;
-- `--after CURSOR`: everything after the cursor, then `live` and follow (used on reconnect).
+- `--before CURSOR --limit N`: one older page (whole lines, so a page never splits one line's events; empty at the
+  start), then exit;
+- `--after CURSOR`: everything from the line at the cursor on, then `live` and follow (used on reconnect). The
+  cursor's own line is sent again, since the phone may have got its events in part; ids make that idempotent. A
+  cursor past the end is a `reset` and a backlog.
+- A subagent event's `cursor` is an offset in the subagent's own file, so the phone pages by the events without
+  `parent` (Task 5).
 
 Following polls the file size every 250 ms and buffers a partial last line. A file that shrinks or is replaced means a
 `reset`. Subagent entries fold under their task tool's id. Claude writes them as separate files,
@@ -371,9 +376,11 @@ with no output yet is a running call (Task 1's fixture README).
 ### Task 5: The follower: backlog, paging and following
 
 **Files:**
-- Create: `crates/ngterm-core/src/agent_chat/follow.rs`, `crates/ngterm-core/src/agent_chat/tests/follow.rs`
+- Create: `crates/ngterm-core/src/agent_chat/follow.rs`, `crates/ngterm-core/src/agent_chat/follow/{lines,subagents}.rs`,
+  `crates/ngterm-core/src/agent_chat/tests/follow.rs`
+- Modify: `crates/ngterm-core/src/agent_chat/codex.rs` (`CodexParser::spawned_threads`, for finding subagent rollouts)
 
-- [ ] write tests first on temp files, read through a byte-counting reader:
+- [x] write tests first on temp files, read through a byte-counting reader:
   - the backlog finds the last N events by reading backward, including a tool call whose result lies past the window
     start;
   - `--before` and `--after` cursors;
@@ -383,9 +390,9 @@ with no output yet is a running call (Task 1's fixture README).
     timed);
   - a line over 8 MiB becomes `unknown{oversized}` without being buffered whole;
   - extra subagent sources, if Task 1 found separate files.
-- [ ] implement a toolkit-neutral `Follower` over `Read + Seek` plus a size probe, with an injectable clock and poll
+- [x] implement a toolkit-neutral `Follower` over `Read + Seek` plus a size probe, with an injectable clock and poll
       interval (250 ms by default), the same code on every OS
-- [ ] `cargo test -p ngterm-core agent_chat` must pass
+- [x] `cargo test -p ngterm-core agent_chat` must pass
 
 ### Task 6: The origin's agent record, `agent.report` and `agent.get`
 

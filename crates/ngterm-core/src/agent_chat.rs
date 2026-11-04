@@ -4,6 +4,7 @@
 //! - [`event`]: the event model and its NDJSON form.
 //! - [`claude`]: Claude Code's transcript lines.
 //! - [`codex`]: Codex's rollout lines.
+//! - [`follow`]: reading a transcript file for the chat: the backlog, older pages and following.
 //!
 //! A parser reads one line at a time through [`TranscriptParser`], keeping what pairs a later line with an earlier
 //! one (a tool's result with its call). The formats are undocumented and drift between agent versions, so a line a
@@ -13,6 +14,7 @@
 pub mod claude;
 pub mod codex;
 pub mod event;
+pub mod follow;
 
 pub use claude::ClaudeParser;
 pub use codex::CodexParser;
@@ -20,6 +22,7 @@ pub use event::{
     AgentKind, Approval, ChatEvent, EventBody, NoticeKind, Question, QuestionItem, QuestionOption, Tool, ToolKind,
     ToolStatus,
 };
+pub use follow::Follower;
 
 use serde_json::Value;
 
@@ -182,5 +185,6 @@ fn non_empty<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
 mod tests {
     mod claude;
     mod codex;
+    mod follow;
     mod support;
 }

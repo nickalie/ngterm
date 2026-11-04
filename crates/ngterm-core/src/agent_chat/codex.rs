@@ -136,6 +136,14 @@ impl CodexParser {
     pub fn task_for_thread(&self, thread: &str) -> Option<&str> {
         self.agents.get(thread).map(String::as_str)
     }
+
+    /// Every subagent spawned so far: its thread id (or agent path) and the event id of the task tool it runs under,
+    /// for finding the subagents' rollouts.
+    pub fn spawned_threads(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.agents
+            .iter()
+            .map(|(thread, task)| (thread.as_str(), task.as_str()))
+    }
 }
 
 impl TranscriptParser for CodexParser {
