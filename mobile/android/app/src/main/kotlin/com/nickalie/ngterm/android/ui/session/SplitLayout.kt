@@ -24,7 +24,10 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -44,6 +47,7 @@ import com.nickalie.ngterm.android.ui.terminal.TerminalState
 import com.nickalie.ngterm.android.ui.terminal.TerminalTextSize
 import com.nickalie.ngterm.android.ui.terminal.TerminalView
 import com.nickalie.ngterm.android.ui.terminal.gridFor
+import com.nickalie.ngterm.android.ui.terminal.move
 import com.nickalie.ngterm.android.ui.terminal.rememberTerminalFont
 import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.ffi.PaneRef
@@ -132,7 +136,7 @@ fun PaneSlot(
             },
     ) {
         if (spot.chatView) {
-            ChatSlot(spot, grid, actions, Modifier.fillMaxSize().underCover(cover.veils))
+            ChatSlot(spot, grid, actions, focusRequester, Modifier.fillMaxSize().underCover(cover.veils))
         } else {
             spot.state?.let { state ->
                 TerminalView(
@@ -158,6 +162,17 @@ fun PaneSlot(
     }
 }
 
+// a chat takes the input focus in its terminal's place (the session view moves it to the selected pane), and of a
+// hardware keyboard's keys only the chords that move between panes and sessions, ahead of a field typed in: the rest
+// are the field's
+private fun Modifier.chatKeys(
+    keyboard: TerminalKeyboard,
+    requester: FocusRequester?,
+): Modifier =
+    onPreviewKeyEvent { keyboard.move(it.nativeKeyEvent) }
+        .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
+        .focusTarget()
+
 // what covers the slot: a chat only a failed show's, since reading a chat never takes control
 private fun PaneSpot.cover(): PaneCover? =
     PaneCover.of(live, state != null, failure)?.takeIf { !chatView || it is PaneCover.Failed }
@@ -165,12 +180,13 @@ private fun PaneSpot.cover(): PaneCover? =
 // a pane in chat view: its chat once open (the backlog's wait until then), and its terminal, not drawn, still given the
 // grid the slot would draw it at, so a chat action that takes control lays the program out for this device. A grid
 // that holds for a frame (the extra keys stepping aside: the room they leave is counted before the slot has grown
-// into it) is not given
+// into it) is not given. The slot takes the input focus through [focusRequester] as the terminal would
 @Composable
 private fun ChatSlot(
     spot: PaneSpot,
     grid: PaneSize?,
     actions: PaneActions,
+    focusRequester: FocusRequester?,
     modifier: Modifier = Modifier,
 ) {
     val state = spot.state
@@ -180,11 +196,21 @@ private fun ChatSlot(
         state.resize(grid)
     }
     val chat = spot.chat
-    if (chat != null) {
-        ChatPane(chat, actions.machine, onShowTerminal = { actions.onShowTerminal(spot.ref) }, modifier = modifier)
-    } else {
-        Box(modifier.background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
-            ChatLoading(actions.machine)
+    Box(modifier.chatKeys(actions.keyboard, focusRequester)) {
+        if (chat != null) {
+            ChatPane(
+                chat,
+                actions.machine,
+                onShowTerminal = { actions.onShowTerminal(spot.ref) },
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Box(
+                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+                contentAlignment = Alignment.Center,
+            ) {
+                ChatLoading(actions.machine)
+            }
         }
     }
 }

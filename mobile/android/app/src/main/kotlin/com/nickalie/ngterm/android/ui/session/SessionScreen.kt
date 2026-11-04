@@ -171,10 +171,11 @@ private fun Panes(
         layout != null && spots.isNotEmpty() -> {
             val ids = spots.map { it.ref.paneId }
             val requesters = remember(ids) { ids.associateWith { FocusRequester() } }
-            val ready = spots.firstOrNull { it.ref.paneId == focused }?.state != null
+            val selected = spots.firstOrNull { it.ref.paneId == focused }
+            val ready = selected?.state != null
             // the pane that has the input focus, which may still be one the selection has left
             var holder by remember { mutableStateOf<String?>(null) }
-            FollowFocus(focused, ready, holder, requesters)
+            FollowFocus(focused, ready, selected?.chatView == true, holder, requesters)
             // stacked halves share the extra keys' room between them
             val stacked = !compact && spots.size == 2 && layout.shown && layout.axis == STACKED
             val slotReserve = if (stacked) reserve / 2 else reserve
@@ -275,12 +276,13 @@ private fun SessionKeyboard(
 // is up or a hardware keyboard is attached, the selected pane takes it, so typing goes on there; otherwise a pane the
 // selection left ([holder]) lets it go without the soft keyboard opening, so the next tap on any pane focuses it
 // afresh. While the selected pane can't take it, a hardware keyboard's focus stays where it is, typing nowhere, so its
-// chords still move away
+// chords still move away. A pane switched between its terminal and its chat ([chat]) takes it again in its new view
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FollowFocus(
     focused: String?,
     ready: Boolean,
+    chat: Boolean,
     holder: String?,
     requesters: Map<String, FocusRequester>,
 ) {
@@ -288,7 +290,7 @@ private fun FollowFocus(
     val hardware = hardwareKeyboardAttached()
     val now by rememberUpdatedState(FocusFacts(imeUp || hardware, hardware, holder))
     val focusManager = LocalFocusManager.current
-    LaunchedEffect(focused, ready) {
+    LaunchedEffect(focused, ready, chat) {
         if (focused == null) return@LaunchedEffect
         // the pane's view joins the composition in this frame: its requester is attached in the next
         withFrameNanos { }

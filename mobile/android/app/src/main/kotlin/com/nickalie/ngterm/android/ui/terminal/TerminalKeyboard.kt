@@ -57,7 +57,7 @@ internal fun interface PendingComposition {
 @Stable
 class TerminalKeyboard(
     shortcuts: TerminalShortcuts = TerminalShortcuts(),
-    private val layout: KeyLayout = KeyLayout.Device,
+    internal val layout: KeyLayout = KeyLayout.Device,
 ) {
     /** The chords' actions. */
     var shortcuts: TerminalShortcuts by mutableStateOf(shortcuts)
@@ -95,7 +95,7 @@ class TerminalKeyboard(
     var alt by mutableStateOf(Sticky.Off)
         private set
 
-    private val chords = HeldChords()
+    internal val chords = HeldChords()
     private val pending = PendingInput(layout)
 
     /** The input method's composition waiting to commit, which a key from elsewhere commits first. */
@@ -277,8 +277,15 @@ internal class InputConnections {
     }
 }
 
+/**
+ * A key event from a hardware keyboard where no terminal types (a chat): only the chords that move between panes and
+ * sessions are taken, any other key (text, a field's own chords) is left to what has the focus.
+ */
+fun TerminalKeyboard.move(event: KeyEvent): Boolean =
+    chords.take(event, KeyMapping.fromEvent(event, layout)?.text.orEmpty(), null, shortcuts)
+
 /** A hardware keyboard's app chords ([TerminalShortcut]) as they are pressed, held and let go. */
-private class HeldChords {
+internal class HeldChords {
     // keys whose press ran a chord: their repeats and release are the chord's too, not the program's
     private val keys = mutableSetOf<Int>()
 

@@ -6,17 +6,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -25,6 +20,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
@@ -34,6 +32,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.nickalie.ngterm.android.R
 import com.nickalie.ngterm.android.ui.components.StatusGlyph
@@ -232,22 +231,27 @@ fun SubagentRow(
     }
 }
 
-// a subagent's steps, behind a rule at their start
+// a subagent's steps, behind a rule at their start: drawn beside the steps, not measured with them, since a step can
+// be a reply whose Markdown table answers no intrinsic size
 @Composable
 private fun Steps(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    Row(modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-        Box(
-            Modifier
-                .width(2.dp)
-                .fillMaxHeight()
-                .background(MaterialTheme.colorScheme.outlineVariant),
-        )
-        Column(Modifier.weight(1f).padding(start = NgtermTheme.spacing.sm)) { content() }
-    }
+    val rule = MaterialTheme.colorScheme.outlineVariant
+    Column(
+        modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val width = RuleWidth.toPx()
+                val x = if (layoutDirection == LayoutDirection.Rtl) size.width - width else 0f
+                drawRect(rule, topLeft = Offset(x, 0f), size = Size(width, size.height))
+            }.padding(start = RuleWidth + NgtermTheme.spacing.sm),
+    ) { content() }
 }
+
+// the rule a subagent's steps sit behind
+private val RuleWidth = 2.dp
 
 /** A tool's output on a plate, in the terminal's face, scrolling sideways as the terminal would cut it. */
 @Composable

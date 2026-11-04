@@ -671,12 +671,15 @@ The plan, reviewed against the brief:
   slot gives it, so switching never resizes the pane, and a chat action that takes control lays the program out for
   this device. No cover goes over a chat (reading never takes control) except a pane that couldn't be shown, whose
   Retry stays. The extra keys type into no chat: they step aside while every pane on screen is a chat, and the
-  terminal's grid still leaves them their room.
+  terminal's grid still leaves them their room. The chat takes the input focus in its terminal's place, so a hardware
+  keyboard's Ctrl+Shift arrows still move between panes and sessions, ahead of a question's field; its other keys are
+  the field's.
 - **The list** (`ChatList`): oldest at the top, one column 640dp at most, centered, with the phone's 16dp gutter. It
-  opens at the newest row and follows new ones while it is at the end; scrolling away lets it be. Which rows are open
+  opens at the newest row and follows new ones while it is at the end; a finger on it lets it be at once (a row that
+  comes mid-fling doesn't pull it back), and a scroll that stops at the end follows again. Which rows are open
   survives scrolling and rotation.
 - **Prompts** (`PromptBubble`): at the end of the line on `surfaceContainerHigh`, 12dp corners, bodyLarge, no wider
-  than 480dp, with "With 2 images" under them when they carried any. TalkBack reads "You: …".
+  than 480dp, with "With 2 images" under them when they carried any. TalkBack reads "You: …", then the images.
 - **Replies** (`ReplyText`, mikepenz multiplatform-markdown-renderer): full width on the ground, paragraphs and lists
   in bodyLarge, headings at the title sizes (never the display ones: a reply is not a page), links copper and
   underlined, quotes in `onSurfaceVariant`. Code blocks are the terminal's face at 13 sp on a `surfaceContainerLow`
@@ -688,8 +691,9 @@ The plan, reviewed against the brief:
   Failed on the Error triangle. A line that holds something is a 48dp target: a tap opens its diff, its output (the
   terminal's face at 12 sp on a plate, scrolling sideways) and "Cut short here: the terminal has the rest." when the
   origin cut them, indented to the title; the title then shows whole.
-- **Diffs** (`DiffView`): the file's header lines and the hunks' `@@` lines quiet (`onSurfaceVariant`, the headers
-  bold), added lines verdigris, removed lines oxide, kept lines `onSurface`; at most 400 lines, then how many more.
+- **Diffs** (`DiffView`): each file's header lines (a diff of several edits or files has one per block) and the hunks'
+  `@@` lines quiet (`onSurfaceVariant`, the headers bold), added lines verdigris, removed lines oxide, kept lines
+  `onSurface`; at most 400 lines, then how many more.
 - **Thinking:** one quiet line, the three-dot glyph and "Thinking" (Claude) or Codex's summary title in bodyMedium
   `onSurfaceVariant`; a tap shows a long title whole.
 - **Subagents:** the task's line says "2 steps" under its title; a tap shows the steps (every kind of row) behind a 2dp
@@ -701,10 +705,11 @@ The plan, reviewed against the brief:
   shows its summary), an API error (the alert glyph, in oxide), a summary (the page).
 - **A new conversation** (the origin's reset): "New conversation" (labelMedium, a heading) and a rule; what came
   before is gone.
-- **Earlier messages:** the list's first row asks for the page before as soon as it is on screen: "Loading earlier
-  messages" with a 16dp spinner, then the page goes in above and the row that was on top stays where it was. At the
-  start it says "Start of the conversation" over the working directory in mono; a page that failed gives the core's
-  reason in oxide and Retry.
+- **Earlier messages:** the list's first row asks for the page before as soon as it is on screen, however it got
+  there (a jump or a finger), and a new conversation's once its first row is in: "Loading earlier messages" with a
+  16dp spinner, then the page goes in above and the row that was on top stays where it was. At the start it says
+  "Start of the conversation" over the working directory in mono; a page that failed gives the core's reason in oxide
+  and Retry.
 - **Needs-you cards** (`NeedsYouCard`), pinned under the list, an approval before a question: the ask sheet's tone
   (`surfaceContainerHigh`) and 20dp top corners, rising from the chat's foot as the sheet does from the screen's; the
   attention diamond over the title (titleMedium, a heading). It takes at most 60% of the chat's height and scrolls

@@ -1,5 +1,6 @@
 package com.nickalie.ngterm.android.ui.chat
 
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -28,6 +29,8 @@ import com.nickalie.ngterm.android.ui.theme.NgtermTheme
 import com.nickalie.ngterm.core.ffi.ChatBody
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 
 /** The key of the list's first row: earlier messages, the conversation's start, or why they couldn't be read. */
 internal const val OLDER_KEY = "older"
@@ -51,6 +54,7 @@ fun ChatList(
     val readable = NgtermTheme.spacing.readableWidth
     FollowEnd(listState, items)
     KeepAnchor(listState, state.anchor, items)
+    AskOlder(listState, state.older, state.log.isEmpty, actions.onLoadOlder)
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxSize(),
@@ -64,7 +68,6 @@ fun ChatList(
                 onRetry = actions.onLoadOlder,
                 modifier = Modifier.widthIn(max = readable),
             )
-            AskOlder(listState, state.older, actions.onLoadOlder)
         }
         items(items, key = { it.key }, contentType = { it.contentType }) { item ->
             ChatRow(
@@ -77,29 +80,39 @@ fun ChatList(
     }
 }
 
-// asks for the page before once the header is on screen (not only composed ahead of it), whenever more may remain
+// asks for the page before whenever more may remain and the header is on screen (laid out, not only composed ahead of
+// it by the list's prefetch): watched for as long as that holds, so a header that scrolls in later is seen too. An
+// empty log (a new conversation's, after a reset) has nothing before it to ask for: its first row asks
 @Composable
 private fun AskOlder(
     listState: LazyListState,
     older: OlderPages,
+    empty: Boolean,
     onLoadOlder: () -> Unit,
 ) {
     val load by rememberUpdatedState(onLoadOlder)
-    LaunchedEffect(older) {
-        if (older != OlderPages.More) return@LaunchedEffect
+    LaunchedEffect(listState, older, empty) {
+        if (older != OlderPages.More || empty) return@LaunchedEffect
         // a page that just went in moves the list in this frame: look once it is laid out
         withFrameNanos { }
-        if (listState.layoutInfo.visibleItemsInfo.any { it.key == OLDER_KEY }) load()
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.any { it.key == OLDER_KEY } }.first { it }
+        load()
     }
 }
 
-// while the list is at its end (where it opens), a new or changed last row keeps it there; a scroll away lets it be
+// while the list is at its end (where it opens), a new or changed last row keeps it there; a finger on the list lets
+// it be at once (a new row mid-fling doesn't pull it back), and where a scroll stops says whether it follows again
 @Composable
 private fun FollowEnd(
     listState: LazyListState,
     items: List<ChatItem>,
 ) {
     var following by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions
+            .filterIsInstance<DragInteraction.Start>()
+            .collect { following = false }
+    }
     LaunchedEffect(listState) {
         // each scroll that ends (not the list's start, before it is scrolled to its end) says where it stopped
         snapshotFlow { listState.isScrollInProgress }

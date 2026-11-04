@@ -50,22 +50,106 @@ data class DiffLines(
 const val DIFF_LINE_LIMIT = 400
 
 /**
- * [diff]'s lines, each with what it is: a file's header lines until its first hunk (a `---` or `+++` inside a hunk is
- * a removed or added line), then the hunks' lines by their first character. At most [limit] lines.
+ * [diff]'s lines, each with what it is: a file's header lines until its first hunk, then the hunks' lines by their
+ * first character. A `---` or `+++` inside a hunk is a removed or added line; once a hunk has all the lines its `@@`
+ * counts (or, with no counts, at a `---` line right over a `+++` one) a new file's header starts, as in the core's
+ * diffs that join one per edit or file. At most [limit] lines.
  */
 fun diffLines(
     diff: String,
     limit: Int = DIFF_LINE_LIMIT,
 ): DiffLines {
     val all = diff.trimEnd('\n').lines()
-    var header = true
+    val reader = DiffReader()
     val lines =
-        all.take(limit).map { line ->
-            if (line.startsWith("diff ")) header = true
-            if (line.startsWith("@@")) header = false
-            DiffLine(kind(line, header), line)
+        all.take(limit).mapIndexed {
+            index,
+            line,
+            ->
+            DiffLine(reader.kind(line, all.getOrNull(index + 1)), line)
         }
     return DiffLines(lines, (all.size - limit).coerceAtLeast(0))
+}
+
+// where a unified diff's reading stands: in a file's header, or in a hunk with the old and new lines it has left
+// (null when its `@@` gave no counts)
+private class DiffReader {
+    private var header = true
+    private var left: IntArray? = null
+
+    fun kind(
+        line: String,
+        next: String?,
+    ): DiffLineKind {
+        when {
+            line.startsWith("diff ") -> header = true
+            line.startsWith("@@") -> start(line)
+            !header -> header = hunkOver(line, next)
+        }
+        return kind(line, header)
+    }
+
+    private fun start(line: String) {
+        header = false
+        left =
+            HUNK.find(line)?.groupValues?.let { groups ->
+                intArrayOf(groups[OLD_COUNT].ifEmpty { "1" }.toInt(), groups[NEW_COUNT].ifEmpty { "1" }.toInt())
+            }
+    }
+
+    // whether [line] starts a new file's header rather than going on with the hunk; counts it against the hunk if not
+    private fun hunkOver(
+        line: String,
+        next: String?,
+    ): Boolean {
+        val counts = left
+        return when {
+            counts == null -> {
+                line.startsWith("--- ") && next?.startsWith("+++ ") == true
+            }
+
+            // "\ No newline at end of file" follows the line it is about, inside the hunk
+            line.startsWith('\\') -> {
+                false
+            }
+
+            counts[0] <= 0 && counts[1] <= 0 -> {
+                true
+            }
+
+            else -> {
+                counts.countLine(line)
+                false
+            }
+        }
+    }
+
+    private companion object {
+        val HUNK = Regex("""^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@""")
+
+        // the groups of HUNK that count the hunk's old and new lines (1 when left out)
+        const val OLD_COUNT = 2
+        const val NEW_COUNT = 4
+    }
+}
+
+// a hunk's [line] counted against the old and new lines it has left: a removed line is the old side's, an added one
+// the new side's, a kept one both's
+private fun IntArray.countLine(line: String) {
+    when (line.firstOrNull()) {
+        '-' -> {
+            this[0]--
+        }
+
+        '+' -> {
+            this[1]--
+        }
+
+        else -> {
+            this[0]--
+            this[1]--
+        }
+    }
 }
 
 private fun kind(

@@ -17,6 +17,7 @@ import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTouchInput
@@ -402,6 +403,36 @@ class SessionViewTest {
         waitFor { described("Terminal") && described("Escape") }
         // switching the view never resized the pane: its terminal kept its grid behind the chat
         assertEquals(sized, panes.getValue("P1").sizes.toList())
+    }
+
+    @Test
+    @Config(qualifiers = "+qwerty")
+    fun aHardwareChordMovesAwayFromAPaneShowingItsChatAndBack() {
+        compose.activity.resources.configuration.hardKeyboardHidden = Configuration.HARDKEYBOARDHIDDEN_NO
+        openSplit()
+        waitFor { described("Terminal") }
+        // the focused pane switches to its chat: the chat takes the focus in its terminal's place
+        test.core.emit(MobileEvent.PaneAgent("m1", "s1", "P1", "claude", "c1"))
+        waitFor { described("Chat with The agent") }
+        compose.waitForIdle()
+        clearInputs()
+        keyChord(Key.DirectionRight)
+        compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
+        keyChord(Key.DirectionLeft)
+        compose.onNodeWithContentDescription("Pane 1 of 2").assertIsSelected()
+        // a chat types into no terminal, but its chords still move
+        compose.onRoot().performKeyInput { pressKey(Key.A) }
+        keyChord(Key.DirectionRight)
+        compose.onNodeWithContentDescription("Pane 2 of 2").assertIsSelected()
+        assertTrue(nothingReached("P1"))
+    }
+
+    // a chord sent to whatever has the input focus (a chat's focus has no semantics node of its own)
+    private fun keyChord(arrow: Key) {
+        compose.onRoot().performKeyInput {
+            withKeysDown(listOf(Key.CtrlLeft, Key.ShiftLeft)) { pressKey(arrow) }
+        }
+        compose.waitForIdle()
     }
 
     @Test

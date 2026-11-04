@@ -57,6 +57,50 @@ class ChatPartsTest {
         assertEquals(0, diffLines(diff).more)
     }
 
+    @Test
+    fun eachJoinedBlocksHeaderIsAHeaderOnceTheHunkBeforeItHasItsLines() {
+        // a MultiEdit's one diff per edit, as the core joins them: the second block's --- and +++ are its header
+        val edits =
+            "--- a.md\n+++ a.md\n@@ -1,2 +1,2 @@\n keep\n-old\n+new\n" +
+                "--- a.md\n+++ a.md\n@@ -9 +9 @@\n--- rule\n+++ rule\n\\ No newline at end of file"
+        assertEquals(
+            listOf(
+                DiffLineKind.File,
+                DiffLineKind.File,
+                DiffLineKind.Hunk,
+                DiffLineKind.Context,
+                DiffLineKind.Removed,
+                DiffLineKind.Added,
+                DiffLineKind.File,
+                DiffLineKind.File,
+                DiffLineKind.Hunk,
+                DiffLineKind.Removed,
+                DiffLineKind.Added,
+                DiffLineKind.Context,
+            ),
+            diffLines(edits).lines.map { it.kind },
+        )
+    }
+
+    @Test
+    fun aHunkWithNoCountsEndsAtADashLineOverAPlusLine() {
+        val patch = "--- a.rs\n+++ a.rs\n@@\n-old\n+new\n--- b.rs\n+++ b.rs\n@@\n+added"
+        assertEquals(
+            listOf(
+                DiffLineKind.File,
+                DiffLineKind.File,
+                DiffLineKind.Hunk,
+                DiffLineKind.Removed,
+                DiffLineKind.Added,
+                DiffLineKind.File,
+                DiffLineKind.File,
+                DiffLineKind.Hunk,
+                DiffLineKind.Added,
+            ),
+            diffLines(patch).lines.map { it.kind },
+        )
+    }
+
     private val single =
         ChatQuestionItem(
             "Which database?",

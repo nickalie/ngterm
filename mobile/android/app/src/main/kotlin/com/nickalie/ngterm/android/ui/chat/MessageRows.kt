@@ -29,7 +29,8 @@ import com.nickalie.ngterm.core.ffi.ChatQuestion
 
 /**
  * A prompt the user sent: a bubble at the end of the line on the container tone, at most most of the width, with how
- * many images went with it. TalkBack reads it as "You: …", since its side of the screen is what says whose it is.
+ * many images went with it. TalkBack reads it as "You: …" (then how many images), since its side of the screen is what
+ * says whose it is.
  */
 @Composable
 fun PromptBubble(
@@ -37,7 +38,9 @@ fun PromptBubble(
     images: Int,
     modifier: Modifier = Modifier,
 ) {
-    val spoken = stringResource(R.string.chat_you_said, text)
+    val said = stringResource(R.string.chat_you_said, text)
+    val carried = if (images > 0) pluralStringResource(R.plurals.chat_images, images, images) else null
+    val spoken = carried?.let { "$said. $it" } ?: said
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Column(
             modifier =
@@ -49,9 +52,9 @@ fun PromptBubble(
                     .clearAndSetSemantics { contentDescription = spoken },
         ) {
             Text(text.trim(), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-            if (images > 0) {
+            if (carried != null) {
                 Text(
-                    pluralStringResource(R.plurals.chat_images, images, images),
+                    carried,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
