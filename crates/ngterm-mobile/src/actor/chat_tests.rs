@@ -730,6 +730,100 @@ fn a_conversation_switched_while_away_resumes_by_the_cursors_conversation_and_st
     });
 }
 
+/// An event a subagent's transcript gave, under the task tool `parent`.
+fn subagent(id: &str, cursor: u64, parent: &str, text: &str) -> String {
+    line(
+        id,
+        cursor,
+        &serde_json::json!({"type": "assistant", "text": text, "parent": parent}),
+    )
+}
+
+/// A channel lost mid-way.
+fn lost() -> ChannelEnd {
+    ChannelEnd::Lost("connection reset".to_owned())
+}
+
+/// The channel ends with `end`; the chat's retry is due.
+async fn retried(chat: ChannelPeer, end: ChannelEnd) {
+    chat.end(end).await;
+    settle().await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    settle().await;
+}
+
+/// The resume cursor moves only once a launch is caught up: a channel lost before the `live` (after the main lines,
+/// before the subagents' catch-up) resumes where that launch began, so the origin sends every subagent's lines since
+/// then again, and what was delivered is not shown twice. A catch-up begun with no cursor (the first launch, a
+/// `reset`) resumes from its first main event, never from a plain backlog that could start later; a catch-up lost
+/// before any main event of its own starts over with a plain backlog.
+#[test]
+fn a_channel_lost_before_live_resumes_where_its_catch_up_began() {
+    local(async {
+        let mut fixture = Fixture::start().await;
+        fixture.open(LEFT).await.unwrap();
+        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        // the first launch: lost after main lines, before the subagents' backlogs and the `live`
+        let first = [
+            conversation("c1", 50),
+            assistant("line-50", 50, "a"),
+            assistant("line-150", 150, "b"),
+        ];
+        feed(&chat, &first).await;
+        retried(chat, lost()).await;
+        assert_eq!(fixture.reported().1, [ChatState::Reconnecting]);
+        let chat = fixture.chat(&resumed(Side::Left, 50, "c1"));
+        let again = [subagent("sub-1", 10, "toolu_1", "early"), live(200)];
+        feed(&chat, &[first.as_slice(), &again].concat()).await;
+        assert_eq!(texts(&fixture.reported().0), ["sub-1:early", "live"]);
+
+        // following moves the cursor by each main event
+        feed(&chat, &[assistant("line-200", 200, "c")]).await;
+        assert_eq!(texts(&fixture.reported().0), ["line-200:c"]);
+        retried(chat, FAILED).await;
+        let chat = fixture.chat(&resumed(Side::Left, 200, "c1"));
+
+        // a resume lost after the main lines it caught up on, before a subagent's: it resumes from 200 again
+        let main = [
+            conversation("c1", 200),
+            assistant("line-200", 200, "c"),
+            assistant("line-300", 300, "d"),
+            assistant("line-400", 400, "e"),
+        ];
+        feed(&chat, &main).await;
+        assert_eq!(texts(&fixture.reported().0), ["line-300:d", "line-400:e"]);
+        retried(chat, FAILED).await;
+        let chat = fixture.chat(&resumed(Side::Left, 200, "c1"));
+        let again = [subagent("sub-2", 20, "toolu_1", "while away"), live(500)];
+        feed(&chat, &[main.as_slice(), &again].concat()).await;
+        assert_eq!(
+            texts(&fixture.reported().0),
+            ["sub-2:while away", "live"],
+            "the subagent's line written before line-400 arrives, and nothing twice"
+        );
+
+        // a `reset` while following starts a catch-up: lost in it, the resume is the new conversation's first event
+        let fresh = [
+            reset(),
+            conversation("c2", 0),
+            assistant("line-0", 0, "x"),
+            assistant("line-90", 90, "y"),
+        ];
+        feed(&chat, &fresh).await;
+        fixture.reported();
+        retried(chat, FAILED).await;
+        let chat = fixture.chat(&resumed(Side::Left, 0, "c2"));
+
+        // a `reset` lost before any main event of its own: a plain backlog, the app having dropped what it showed
+        feed(&chat, &[reset()]).await;
+        assert_eq!(texts(&fixture.reported().0), ["reset"]);
+        retried(chat, FAILED).await;
+        let chat = fixture.chat(&chat_tail(SESSION, Side::Left, None));
+        feed(&chat, &[conversation("c3", 0), assistant("line-0", 0, "z"), live(60)]).await;
+        assert_eq!(texts(&fixture.reported().0), ["conversation:c3", "line-0:z", "live"]);
+    });
+}
+
 /// A chat whose events named no conversation (an agent before its first prompt) resumes with an empty one, which
 /// the origin never takes for the pane's, and has no older page to read.
 #[test]

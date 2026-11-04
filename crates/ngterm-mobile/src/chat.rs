@@ -10,10 +10,10 @@
 //! - **The channel.** [`Chats::open`] runs `ngtermctl agent chat --target SESSION --pane SIDE` for a shown pane, and
 //!   only for one: the app opens it while the pane shows as a chat and closes it on hide, so a session costs at most
 //!   one chat channel per shown pane besides the pane's own attach (the ssh server's `MaxSessions` counts them). Its
-//!   NDJSON lines arrive as [`MobileEvent::Chat`], a batch per read, in order. The chat keeps the newest cursor of the
-//!   main transcript's events (a subagent's cursor is in its own file) to resume from, and the oldest to page from.
+//!   NDJSON lines arrive as [`MobileEvent::Chat`], a batch per read, in order. The chat keeps a cursor of the main
+//!   transcript (a subagent's cursor is in its own file) to resume from, and the oldest to page from.
 //! - **Resuming.** A lost channel (a lost connection, an origin command that failed after the backlog arrived) is
-//!   [`ChatState::Reconnecting`] and resumes with `--after` the newest cursor: at once when the machine is back, or on
+//!   [`ChatState::Reconnecting`] and resumes with `--after` the resume cursor: at once when the machine is back, or on
 //!   the presentation stream's backoff ([`retry_delay`]) for a failed command, up to [`MAX_FAILURES`] in a row. The
 //!   origin sends the cursor's line again, and an event identical to one already delivered (its id, parent and body:
 //!   not its cursor, which a carried `conversation` changes) is dropped here, so the app sees no repeats and no gaps.
@@ -24,6 +24,18 @@
 //!   answers a `reset` and the new backlog, which start the chat over as a `reset` on a live channel does. The
 //!   presentation stream's [`MobileEvent::PaneAgent`] plays no part in it: it may come before the channel is back,
 //!   after it or not at all.
+//! - **The resume cursor.** Each launch, and each `reset`, starts a catch-up that its `live` ends: the main
+//!   transcript's lines, then the subagents' (the backlogs of those among them, and what every subagent wrote since
+//!   the main line before the cursor, by its stamp to the minute), then `live`. Until the `live` the cursor stays
+//!   where the launch began, so a channel lost in a catch-up resumes there again and the origin sends every
+//!   subagent's lines since then again: moved to a main event already delivered, the resume would read the subagents
+//!   only from that event's stamp on and skip what they wrote before it and had not sent yet. A catch-up that began
+//!   with no cursor (the first launch, a `reset`) takes its first main event's: resuming from what the app holds
+//!   first sends all of it again, never less, where a plain backlog may start later and leave a gap. The `live`
+//!   sets the cursor to where the origin follows from; while following, each main event moves it on. The origin
+//!   writes each poll's lines at once (a poll interval apart), the main transcript's first, so a channel lost within
+//!   one write may leave that poll's subagent lines unsent: they were written after the poll before, and are sent
+//!   again unless the main line before the cursor, read in the same poll, is stamped a minute later.
 //! - **The end.** The command's exit 0 (the record cleared: the agent ended), its "no agent in this pane", a failure
 //!   before the first `live` (an origin without `ngtermctl agent chat`) or too many failures in a row end the chat:
 //!   [`ChatState::Ended`], with no error, and the app shows the terminal.
@@ -376,8 +388,11 @@ struct Chat<C> {
     /// `None` while the machine's connection is down.
     connection: Option<Rc<C>>,
     link: Option<Link>,
-    /// The newest cursor of the main transcript's events: a reconnect resumes there.
+    /// Where a reconnect resumes (the module docs): while catching up, where the launch began (or its first main
+    /// event, when it began with none); then the `live`'s, and the newest main event's since.
     resume: Option<u64>,
+    /// Between a launch (or a `reset`) and its `live`: the origin is still sending what it caught up on.
+    catching_up: bool,
     /// The oldest: an older page ends there.
     oldest: Option<u64>,
     /// The conversation the cursors are in: what the last main `conversation` event since the last `reset` named.
@@ -404,6 +419,7 @@ impl<C: Connection> Chat<C> {
             self.link = None;
             return;
         };
+        self.catching_up = true;
         *last_launch += 1;
         let launch = *last_launch;
         let (stop, stopped) = mpsc::unbounded_channel();
@@ -431,12 +447,14 @@ impl<C: Connection> Chat<C> {
                     self.oldest = None;
                     self.conversation = None;
                     self.delivered.clear();
+                    self.catching_up = true;
                 }
                 EventBody::Live => {
                     self.started = true;
                     self.reconnecting = false;
                     self.failures = 0;
                     self.track(&event);
+                    self.catching_up = false;
                 }
                 body => {
                     if let (EventBody::Conversation { conversation_id, .. }, None) = (body, &event.parent) {
@@ -454,12 +472,18 @@ impl<C: Connection> Chat<C> {
         (shown, reset)
     }
 
-    /// Moves the cursors by a main-transcript event.
+    /// Moves the cursors by a main-transcript event (the module docs).
     fn track(&mut self, event: &wire::ChatEvent) {
-        if event.parent.is_none() {
-            self.resume = Some(self.resume.map_or(event.cursor, |resume| resume.max(event.cursor)));
-            self.oldest = Some(self.oldest.map_or(event.cursor, |oldest| oldest.min(event.cursor)));
+        if event.parent.is_some() {
+            return;
         }
+        let at = event.cursor;
+        self.oldest = Some(self.oldest.map_or(at, |oldest| oldest.min(at)));
+        self.resume = Some(match (&event.body, self.resume) {
+            (EventBody::Live, _) | (_, None) => at,
+            (_, Some(resume)) if self.catching_up => resume,
+            (_, Some(resume)) => resume.max(at),
+        });
     }
 
     /// The channel ended: whether that ends the chat; otherwise it is retried, and the app told once.
@@ -649,6 +673,7 @@ impl<C: Connection> Chats<C> {
             connection: Some(connection),
             link: None,
             resume: None,
+            catching_up: true,
             oldest: None,
             conversation: None,
             started: false,
