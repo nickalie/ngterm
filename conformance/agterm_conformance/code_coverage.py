@@ -6,10 +6,18 @@ After the suite, the runner calls this inside the build's `cargo llvm-cov show-e
 
 It refuses (exit 2, the reason on stderr after `code coverage:`) a run that left no `*.profraw` in the profile
 directory, and a stage whose programs are not the instrumented build's own byte for byte (`--release-dir`, the
-binaries whose coverage maps `cargo llvm-cov report` reads): its profiles would be read against the wrong maps. Otherwise it merges the profiles with `cargo llvm-cov report`
-into `OUT/lcov.info`, `OUT/html/` and `OUT/summary.json`, and writes `OUT/summary.md`: line, region and function % per
-workspace crate and their total. `vendor/` (patched dependencies), the `-sys` crates and their generated bindings are
-left out (`EXCLUDE`).
+binaries whose coverage maps the report reads): its profiles would be read against the wrong maps. Otherwise it merges
+the profiles (`llvm-profdata merge`), reads them against each staged program on its own (`llvm-cov export`) and joins
+those: a line, a region or a function counts as run when any program ran it. It writes `OUT/lcov.info` and
+`OUT/summary.json` from the join, `OUT/html/` (`cargo llvm-cov report --html`, a browsing aid only) and
+`OUT/summary.md`: line, region and function % per workspace crate and their total. `vendor/` (patched dependencies),
+the `-sys` crates and their generated bindings are left out (`EXCLUDE`).
+
+Why each program on its own: given several objects, llvm-cov keeps the first record it meets of a function and drops
+the rest. A function every program links but only some run (a small one inlined into its callers, such as
+`ngterm_proto::Request::new` in `ngtermctl`) has an unused, never-counted record in the others, so whichever object
+comes first decides; `cargo llvm-cov report` takes every program of the target directory (the Android library and the
+programs the suite never starts too) in the filesystem's order, and a run's counts vanished that way.
 """
 
 from __future__ import annotations
@@ -152,7 +160,7 @@ def render(rows: Mapping[str, CrateCoverage], notes: Iterable[str] = ()) -> str:
 
 
 def _cargo(runner: Runner, repo: Path, *args: str) -> list[str]:
-    """Runs one `cargo llvm-cov report`; returns llvm-cov's mismatch warnings."""
+    """Runs one `cargo llvm-cov report` (the html); returns llvm-cov's mismatch warnings."""
     command = ["cargo", "llvm-cov", "report", "--release", "--color", "never", "--ignore-filename-regex", EXCLUDE,
                *args]
     try:
@@ -166,21 +174,163 @@ def _cargo(runner: Runner, repo: Path, *args: str) -> list[str]:
     return [line.strip() for line in output.splitlines() if MISMATCH.search(line)]
 
 
+def llvm_tool(name: str, runner: Runner = subprocess.run) -> str:
+    """The toolchain's `llvm-tools` program `name` (`llvm-cov`, `llvm-profdata`) where cargo-llvm-cov finds it: the
+    `LLVM_COV` / `LLVM_PROFDATA` override, else the `bin` directory beside the host's target libdir."""
+    override = os.environ.get(name.upper().replace("-", "_"))
+    if override:
+        return override
+    try:
+        done = runner(["rustc", "--print", "target-libdir"], capture_output=True, text=True, check=False)
+    except OSError as error:
+        raise ReportError(f"cannot run rustc to find {name}: {error}") from None
+    if done.returncode != 0 or not (done.stdout or "").strip():
+        raise ReportError(f"rustc --print target-libdir exited {done.returncode}: cannot find {name}")
+    suffix = ".exe" if sys.platform == "win32" else ""
+    return os.fspath(Path(done.stdout.strip()).parent / "bin" / f"{name}{suffix}")
+
+
+def _llvm(runner: Runner, command: list[str]) -> subprocess.CompletedProcess[str]:
+    """Runs one llvm tool; refuses with its exit and the tail of its error output."""
+    try:
+        done = runner(command, capture_output=True, text=True, check=False)
+    except OSError as error:
+        raise ReportError(f"cannot run {Path(command[0]).name}: {error}") from None
+    if done.returncode != 0:
+        tail = "\n".join(_ANSI.sub("", done.stderr or "").strip().splitlines()[-5:])
+        raise ReportError(f"{Path(command[0]).name} {' '.join(command[1:2])} exited {done.returncode}: {tail}")
+    return done
+
+
+# llvm-cov's region kind of plain code (`CounterMappingRegion::CodeRegion`), the only kind its region % counts.
+CODE_REGION = 0
+
+
+@dataclass
+class FileJoin:
+    """One source file's counts joined over the programs: the highest any program gave."""
+
+    lines: dict[int, int] = field(default_factory=dict)
+    # lcov's function records by name: (first line, count)
+    functions: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # code regions by their span (start line and column, end line and column)
+    regions: dict[tuple[int, int, int, int], int] = field(default_factory=dict)
+    # whether a function, by its start (line, column), ran in one of its instantiations: llvm-cov's function %
+    starts: dict[tuple[int, int], bool] = field(default_factory=dict)
+
+    def summary(self) -> dict[str, dict[str, int]]:
+        def counts(values: Iterable[int]) -> dict[str, int]:
+            listed = list(values)
+            return {"count": len(listed), "covered": sum(1 for value in listed if value)}
+
+        return {
+            "lines": counts(self.lines.values()),
+            "regions": counts(self.regions.values()),
+            "functions": counts(int(ran) for ran in self.starts.values()),
+        }
+
+
+def join_lcov(files: dict[str, FileJoin], text: str) -> None:
+    """Joins one program's `llvm-cov export -format=lcov` into `files`."""
+    current: FileJoin | None = None
+    starts: dict[str, int] = {}
+    for line in text.splitlines():
+        if line.startswith("SF:"):
+            current = files.setdefault(line[3:], FileJoin())
+            starts = {}
+        elif current is None:
+            continue
+        elif line.startswith("DA:"):
+            number, count = (int(part) for part in line[3:].split(",")[:2])
+            current.lines[number] = max(current.lines.get(number, 0), count)
+        elif line.startswith("FN:"):
+            number, name = line[3:].split(",", 1)
+            starts[name] = int(number)
+        elif line.startswith("FNDA:"):
+            count, name = line[5:].split(",", 1)
+            start, seen = current.functions.get(name, (starts.get(name, 0), 0))
+            current.functions[name] = (start, max(seen, int(count)))
+        elif line == "end_of_record":
+            current = None
+
+
+def join_regions(files: dict[str, FileJoin], export: Mapping[str, Any]) -> None:
+    """Joins one program's `llvm-cov export -format=text` functions into `files`: their code regions and starts."""
+    for data in export.get("data", []):
+        for function in data.get("functions", []):
+            names = function.get("filenames") or []
+            regions = function.get("regions") or []
+            if not names or not regions:
+                continue
+            for start_line, start_col, end_line, end_col, count, file_id, *rest in regions:
+                if not rest or rest[-1] != CODE_REGION or file_id >= len(names):
+                    continue
+                join = files.setdefault(names[file_id], FileJoin())
+                span = (start_line, start_col, end_line, end_col)
+                join.regions[span] = max(join.regions.get(span, 0), count)
+            head = regions[0]
+            join = files.setdefault(names[head[5]] if head[5] < len(names) else names[0], FileJoin())
+            start = (head[0], head[1])
+            join.starts[start] = join.starts.get(start, False) or int(function.get("count", 0)) > 0
+
+
+def render_lcov(files: Mapping[str, FileJoin]) -> str:
+    out: list[str] = []
+    for name, join in sorted(files.items()):
+        if not join.lines and not join.functions:
+            continue
+        functions = sorted(join.functions.items(), key=lambda item: (item[1][0], item[0]))
+        out.append(f"SF:{name}")
+        out += [f"FN:{start},{function}" for function, (start, _count) in functions]
+        out += [f"FNDA:{count},{function}" for function, (_start, count) in functions]
+        out += [f"FNF:{len(functions)}", f"FNH:{sum(1 for _name, (_start, count) in functions if count)}"]
+        out += [f"DA:{number},{count}" for number, count in sorted(join.lines.items())]
+        out += [f"LF:{len(join.lines)}", f"LH:{sum(1 for count in join.lines.values() if count)}", "end_of_record"]
+    return "".join(f"{line}\n" for line in out)
+
+
+def joined_export(
+    profiles: Sequence[Path], objects: Sequence[Path], out: Path, runner: Runner = subprocess.run
+) -> tuple[dict[str, Any], str, list[str]]:
+    """The merged profiles read against each of `objects` on its own and joined: an `llvm-cov export` shaped summary
+    (`files` with `filename` and `summary`), the joined lcov and llvm-cov's warnings."""
+    profdata = out / "merged.profdata"
+    inputs = out / "profiles.txt"
+    inputs.write_text("".join(f"{os.fspath(path)}\n" for path in profiles), encoding="utf-8")
+    profdata_tool = llvm_tool("llvm-profdata", runner)
+    _llvm(runner, [profdata_tool, "merge", "-sparse", f"--input-files={inputs}", "-o", os.fspath(profdata)])
+    llvm_cov = llvm_tool("llvm-cov", runner)
+    files: dict[str, FileJoin] = {}
+    warnings: list[str] = []
+    for obj in objects:
+        common = [f"-instr-profile={profdata}", f"-ignore-filename-regex={EXCLUDE}", os.fspath(obj)]
+        lcov = _llvm(runner, [llvm_cov, "export", "-format=lcov", *common])
+        text = _llvm(runner, [llvm_cov, "export", "-format=text", *common])
+        for done in (lcov, text):
+            notes = _ANSI.sub("", done.stderr or "").splitlines()
+            warnings += [f"{obj.name}: {note.strip()}" for note in notes if MISMATCH.search(note)]
+        join_lcov(files, lcov.stdout or "")
+        try:
+            join_regions(files, json.loads(text.stdout or "{}"))
+        except json.JSONDecodeError as error:
+            raise ReportError(f"unreadable llvm-cov export of {obj.name}: {error}") from None
+    listed = [{"filename": name, "summary": join.summary()} for name, join in sorted(files.items())]
+    return {"data": [{"files": listed}]}, render_lcov(files), warnings
+
+
 def report(
     profiles: Path, stage_bin: Path, release: Path, repo: Path, out: Path, runner: Runner = subprocess.run
 ) -> str:
     """Checks the inputs, writes the reports into `out` and returns the summary's markdown."""
-    check_profiles(profiles)
+    found = check_profiles(profiles)
     check_binaries(stage_bin, release)
     out.mkdir(parents=True, exist_ok=True)
-    summary_json = out / "summary.json"
-    warnings = _cargo(runner, repo, "--json", "--summary-only", "--output-path", os.fspath(summary_json))
-    warnings += _cargo(runner, repo, "--lcov", "--output-path", os.fspath(out / "lcov.info"))
-    warnings += _cargo(runner, repo, "--html", "--output-dir", os.fspath(out))
-    try:
-        export = json.loads(summary_json.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ReportError(f"unreadable llvm-cov summary {summary_json}: {error}") from None
+    objects = [release / binary.name for binary in stage_binaries(stage_bin)]
+    export, lcov, warnings = joined_export(found, objects, out, runner)
+    (out / "summary.json").write_text(json.dumps(export), encoding="utf-8")
+    (out / "lcov.info").write_text(lcov, encoding="utf-8")
+    # the html reads every object at once, so its own warnings describe that first-record view, not the summary
+    _cargo(runner, repo, "--html", "--output-dir", os.fspath(out))
     markdown = render(crate_rows(export, repo.resolve()), dict.fromkeys(warnings))
     (out / "summary.md").write_text(markdown, encoding="utf-8")
     return markdown

@@ -253,8 +253,11 @@ cargo-llvm-cov and the toolchain's `llvm-tools` component:
   start) writes a profile pooled per binary into `target/llvm-cov-target` (`agterm_conformance/llvm_profiles.py`); one
   the harness had to end past its exit (a kill, a SIGTERM without a quit, the Windows job's close) writes none and is
   listed in `DIR/lost-profiles.txt`, so a drop can be told from lost data;
-- report: `cargo llvm-cov report` into `DIR/coverage/` (`lcov.info`, `html/`, `summary.md`: line, region and function %
-  per workspace crate and the total, `vendor/` and the `-sys` crates left out; `agterm_conformance/code_coverage.py`),
+- report: the profiles merged and read against each staged program on its own, then joined: a line, region or
+  function counts as run when any program ran it (llvm-cov given several programs at once keeps the first record of a
+  function it meets, often a program's unused one, and drops the run's counts). Into `DIR/coverage/` (`lcov.info`,
+  `html/` from `cargo llvm-cov report` as a browsing aid only, `summary.md`: line, region and function % per workspace
+  crate and the total, `vendor/` and the `-sys` crates left out; `agterm_conformance/code_coverage.py`),
   its table in `report.md`. A run that left no profile, or a stage that is not the instrumented build's, exits 2.
 
 The runners still judge a coverage run's ratchet and exit with that verdict; the CI coverage jobs ignore its exit 1

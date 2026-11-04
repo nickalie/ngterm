@@ -98,7 +98,7 @@ fi
 [[ -z "$stage" || -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
 # absolute: the build runs from the repo and the harness's children from their instance homes
 target="$(cygpath -ua "${CARGO_TARGET_DIR:-$repo/target}")"
-# --coverage: the instrumented build's own target dir, where its profiles go and `cargo llvm-cov report` reads them.
+# --coverage: the instrumented build's own target dir, where its profiles go and the report reads them.
 cov_target="$target/llvm-cov-target"
 if [[ -n "$coverage" && -n "$stage" ]] && ! "$python" -m agterm_conformance.llvm_profiles "$(win "$stage/bin")"; then
     exit 2

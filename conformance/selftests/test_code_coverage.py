@@ -120,24 +120,47 @@ def test_a_stage_without_the_builds_programs_is_a_mismatch(tmp_path: Path) -> No
         code_coverage.check_binaries(tmp_path / "bin", tmp_path)
 
 
-class FakeCargo:
-    """`cargo llvm-cov report`: writes what each format asks for, as the real one does."""
 
-    def __init__(self, export: dict[str, Any], stderr: str = "", returncode: int = 0) -> None:
-        self.export, self.stderr, self.returncode = export, stderr, returncode
+def lcov_record(source: str, functions: dict[str, tuple[int, int]], lines: dict[int, int]) -> str:
+    out = [f"SF:{source}"]
+    out += [f"FN:{start},{name}" for name, (start, _count) in functions.items()]
+    out += [f"FNDA:{count},{name}" for name, (_start, count) in functions.items()]
+    out += [f"DA:{number},{count}" for number, count in lines.items()]
+    return "\n".join([*out, "end_of_record"]) + "\n"
+
+
+def regions_export(source: str, functions: list[tuple[str, int, list[tuple[int, int, int, int, int]]]]) -> str:
+    """`llvm-cov export -format=text`'s functions: (name, count, code regions as start and end line/col and count)."""
+    return json.dumps({"data": [{"functions": [
+        {"name": name, "count": count, "filenames": [source],
+         "regions": [[*span, region_count, 0, 0, code_coverage.CODE_REGION] for *span, region_count in regions]}
+        for name, count, regions in functions
+    ]}]})
+
+
+class FakeTools:
+    """rustc, llvm-profdata, llvm-cov export (each object's `lcov` and `text` from `exports`) and `cargo llvm-cov
+    report --html`, as the real ones answer."""
+
+    def __init__(self, exports: dict[str, tuple[str, str]], stderr: str = "", failing: str = "") -> None:
+        self.exports, self.stderr, self.failing = exports, stderr, failing
         self.calls: list[list[str]] = []
 
     def __call__(self, command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         self.calls.append(command)
-        if self.returncode == 0:
-            if "--output-path" in command:
-                target = Path(command[command.index("--output-path") + 1])
-                target.write_text(json.dumps(self.export) if "--json" in command else "TN:\n")
-            if "--html" in command:
-                html = Path(command[command.index("--output-dir") + 1]) / "html"
-                html.mkdir(parents=True, exist_ok=True)
-                (html / "index.html").write_text("<html></html>")
-        return subprocess.CompletedProcess(command, self.returncode, "", self.stderr)
+        tool = Path(command[0]).stem
+        if tool == self.failing:
+            return subprocess.CompletedProcess(command, 1, "", "error: no input files\n")
+        if tool == "rustc":
+            return subprocess.CompletedProcess(command, 0, "/toolchain/lib/rustlib/host/lib\n", "")
+        if tool == "llvm-cov":
+            lcov, text = self.exports[Path(command[-1]).name]
+            return subprocess.CompletedProcess(command, 0, lcov if "-format=lcov" in command else text, self.stderr)
+        if "--html" in command:
+            html = Path(command[command.index("--output-dir") + 1]) / "html"
+            html.mkdir(parents=True, exist_ok=True)
+            (html / "index.html").write_text("<html></html>")
+        return subprocess.CompletedProcess(command, 0, "", "")
 
 
 @pytest.fixture
@@ -146,22 +169,62 @@ def inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
     profiles.mkdir()
     (profiles / "conformance-1_0.profraw").write_bytes(b"raw")
     stage, release = stage_and_release(tmp_path, b"the build", b"the build")
+    (stage / "ngtermctl").write_bytes(b"the cli")
+    (release / "ngtermctl").write_bytes(b"the cli")
     return profiles, stage, release
 
 
-def test_the_report_writes_lcov_html_and_the_summary(
-    tmp_path: Path, repo: Path, inputs: tuple[Path, Path, Path]
-) -> None:
-    cargo = FakeCargo(export(repo, ("crates/ngterm-core/src/lib.rs", summary((4, 1)))))
-    out = tmp_path / "out"
-    markdown = code_coverage.report(*inputs, repo, out, runner=cargo)
-    assert "| ngterm-core | 25.00% (1/4) |" in markdown
-    assert (out / "summary.md").read_text() == markdown
-    assert (out / "lcov.info").is_file() and (out / "html" / "index.html").is_file()
-    for command in cargo.calls:
-        assert command[:6] == ["cargo", "llvm-cov", "report", "--release", "--color", "never"]
-        assert command[command.index("--ignore-filename-regex") + 1] == code_coverage.EXCLUDE
+def exports(repo: Path) -> dict[str, tuple[str, str]]:
+    """`Request::new` in both programs: the app holds its unused record, the cli the run one."""
+    source = str(repo / "crates/ngterm-core/src/lib.rs")
+    unused = lcov_record(source, {"new": (1, 0), "main": (5, 1)}, {1: 0, 2: 0, 5: 1, 6: 1})
+    run = lcov_record(source, {"new": (1, 3)}, {1: 3, 2: 3, 5: 0})
+    return {
+        "ngterm": (unused, regions_export(source, [("new", 0, [(1, 1, 2, 2, 0)]), ("main", 1, [(5, 1, 6, 2, 1)])])),
+        "ngtermctl": (run, regions_export(source, [("new", 3, [(1, 1, 2, 2, 3)])])),
+    }
 
+
+def test_the_report_joins_each_programs_counts(
+    tmp_path: Path, repo: Path, inputs: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for override in ("LLVM_COV", "LLVM_PROFDATA"):
+        monkeypatch.delenv(override, raising=False)
+    tools = FakeTools(exports(repo))
+    out = tmp_path / "out"
+    markdown = code_coverage.report(*inputs, repo, out, runner=tools)
+    # each line, region and function counts as run when either program ran it: nothing of `new` is lost to the app's
+    # unused record, whichever object comes first
+    assert "| ngterm-core | 100.00% (4/4) | 100.00% (2/2) | 100.00% (2/2) |" in markdown
+    assert (out / "summary.md").read_text() == markdown
+    lcov = (out / "lcov.info").read_text()
+    assert "FNDA:3,new\n" in lcov and "DA:1,3\nDA:2,3\nDA:5,1\nDA:6,1\n" in lcov and "LH:4\n" in lcov
+    assert (out / "html" / "index.html").is_file()
+    exported = [command for command in tools.calls if Path(command[0]).stem == "llvm-cov"]
+    assert [Path(command[-1]).name for command in exported] == ["ngterm", "ngterm", "ngtermctl", "ngtermctl"]
+    for command in exported:
+        assert f"-ignore-filename-regex={code_coverage.EXCLUDE}" in command
+        assert command[0] == str(Path("/toolchain/lib/rustlib/host/bin/llvm-cov" +
+                                      (".exe" if code_coverage.sys.platform == "win32" else "")))
+    merge = next(command for command in tools.calls if Path(command[0]).stem == "llvm-profdata")
+    assert merge[1:3] == ["merge", "-sparse"]
+    assert (out / "profiles.txt").read_text() == f"{inputs[0] / 'conformance-1_0.profraw'}\n"
+
+
+def test_an_llvm_tool_override_is_taken(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLVM_COV", "/opt/llvm/bin/llvm-cov")
+    assert code_coverage.llvm_tool("llvm-cov", runner=FakeTools({})) == "/opt/llvm/bin/llvm-cov"
+
+
+def test_join_regions_counts_code_regions_only_and_functions_by_their_start(repo: Path) -> None:
+    files: dict[str, code_coverage.FileJoin] = {}
+    source = str(repo / "crates/ngterm-core/src/lib.rs")
+    export = json.loads(regions_export(source, [("a::<u8>", 0, [(1, 1, 3, 2, 0)]), ("a::<u16>", 2, [(1, 1, 3, 2, 2)])]))
+    export["data"][0]["functions"][0]["regions"].append([2, 1, 2, 9, 0, 0, 0, 2])  # a skipped region
+    code_coverage.join_regions(files, export)
+    # two instantiations of one function: one function, run; one code region, run
+    assert files[source].summary() == {"lines": {"count": 0, "covered": 0}, "regions": {"count": 1, "covered": 1},
+                                       "functions": {"count": 1, "covered": 1}}
 
 def test_the_exclusions_match_vendor_and_sys_crates_on_both_separators() -> None:
     for path in ("/r/vendor/gpui/src/a.rs", r"D:\r\vendor\gpui\a.rs", "/r/crates/ngterm-wpe-sys/src/lib.rs",
@@ -171,20 +234,27 @@ def test_the_exclusions_match_vendor_and_sys_crates_on_both_separators() -> None
         assert not re.search(code_coverage.EXCLUDE, path), path
 
 
-def test_llvm_covs_mismatch_warning_is_noted_once_in_the_summary(
+
+def test_llvm_covs_mismatch_warning_is_noted_once_per_program_in_the_summary(
     tmp_path: Path, repo: Path, inputs: tuple[Path, Path, Path]
 ) -> None:
     # the staged build's own binaries share functions built differently: llvm-cov warns about a few of them
-    cargo = FakeCargo(export(repo), stderr="\x1b[0;31mwarning\x1b[0m: 4 functions have mismatched data\n")
-    markdown = code_coverage.report(*inputs, repo, tmp_path / "out", runner=cargo)
-    assert markdown.endswith("| total | n/a | n/a | n/a |\n\nllvm-cov: warning: 4 functions have mismatched data\n")
+    tools = FakeTools({"ngterm": ("", "{}"), "ngtermctl": ("", "{}")},
+                      stderr="\x1b[0;31mwarning\x1b[0m: 4 functions have mismatched data\n")
+    markdown = code_coverage.report(*inputs, repo, tmp_path / "out", runner=tools)
+    assert markdown.endswith(
+        "| total | n/a | n/a | n/a |\n\nllvm-cov: ngterm: warning: 4 functions have mismatched data\n"
+        "\nllvm-cov: ngtermctl: warning: 4 functions have mismatched data\n"
+    )
 
 
-def test_a_failing_cargo_names_its_exit_and_output(tmp_path: Path, repo: Path, inputs: tuple[Path, Path, Path]) -> None:
-    cargo = FakeCargo({}, stderr="error: no input files\n", returncode=1)
+@pytest.mark.parametrize("tool", ["llvm-profdata", "llvm-cov", "cargo"])
+def test_a_failing_tool_names_its_exit_and_output(
+    tmp_path: Path, repo: Path, inputs: tuple[Path, Path, Path], tool: str
+) -> None:
+    tools = FakeTools({"ngterm": ("", "{}"), "ngtermctl": ("", "{}")}, failing=tool)
     with pytest.raises(ReportError, match="exited 1: error: no input files"):
-        code_coverage.report(*inputs, repo, tmp_path / "out", runner=cargo)
-
+        code_coverage.report(*inputs, repo, tmp_path / "out", runner=tools)
 
 def test_main_exits_2_with_the_reason(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "profiles").mkdir()

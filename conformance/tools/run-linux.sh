@@ -20,8 +20,8 @@
 # --workspace), stages into target/conformance-stage-cov, and gives every process of the build a pooled
 # LLVM_PROFILE_FILE in target/llvm-cov-target (agterm_conformance/llvm_profiles.py); a --stage not built so exits 2.
 # The processes the harness had to end past their exit are listed in DIR/lost-profiles.txt. After the suite
-# `cargo llvm-cov report` merges the profiles into DIR/coverage (lcov.info, html/, summary.md: line, region and
-# function % per workspace crate, vendor/ and the -sys crates excluded); a run that left no profile, or a stage that
+# the profiles are merged, read against each staged program and joined into DIR/coverage (lcov.info, html/,
+# summary.md: line, region and function % per workspace crate, vendor/ and the -sys crates excluded); a run that left no profile, or a stage that
 # is not the instrumented build, exits 2 with the reason (agterm_conformance/code_coverage.py).
 # Without the app's binary in the stage every test skips and parity reads 0%.
 # Writes report.md (with the ui ids a passing test exercised), junit.xml, pytest.log and nodeids.jsonl into DIR.
@@ -128,7 +128,7 @@ for layer in "${layers[@]}"; do
 done
 
 [[ -z "$stage" || -d "$stage" ]] || { echo "no staged tree at $stage" >&2; exit 2; }
-# --coverage: the instrumented build's own target dir, where its profiles go and `cargo llvm-cov report` reads them.
+# --coverage: the instrumented build's own target dir, where its profiles go and the report reads them.
 # Absolute: the build runs from the repo and the harness's children from their instance homes.
 target_root="$(realpath -m -- "${CARGO_TARGET_DIR:-$repo/target}")"
 cov_target="$target_root/llvm-cov-target"

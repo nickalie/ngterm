@@ -422,5 +422,5 @@ handler, so a process that ends past its handlers writes its profile first: `ngt
 (`__llvm_profile_write_file`, then the counters reset) runs in the app's `exit_now` before `_exit` or `TerminateProcess`
 of itself, in `ngterm-headless`'s relaunch before its `exec`, and in `ngterm-wpe`'s `exit_process` (its own `_exit`, the
 HTML worker's too); nothing in a build without `cfg(coverage)`. A `process::exit` or a return from `main` needs nothing.
-After the suite `cargo llvm-cov report` merges the profiles against the staged binaries, which must be the build's own
+After the suite the report reads the merged profiles against each staged binary, which must be the build's own
 byte for byte (`agterm_conformance/code_coverage.py`).
