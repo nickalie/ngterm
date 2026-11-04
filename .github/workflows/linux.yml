@@ -238,10 +238,11 @@ jobs:
   # - zsh and fish: upstream wraps a pane in zmx only for one of these login shells, so the build claims
   #   `live-sessions` too and the live tests run: `--must-pass live-sessions` (every test upstream holds to Live
   #   sessions) and `--must-pass live-any-shell`.
-# - coverage: the bash entry again on an instrumented build (run-linux.sh --coverage: cargo-llvm-cov and the toolchain's
+# - coverage: the zsh entry again on an instrumented build (run-linux.sh --coverage: cargo-llvm-cov and the toolchain's
 #   llvm-tools), every layer, judged by conformance/coverage-floor-linux.txt (tools/check_coverage.py: line % per
-#   workspace crate) and nothing else: instrumentation slows the app, so the ratchet stays the entries above. Its report
-#   (coverage/ with lcov.info and html/, traces/) is uploaded as rust-linux-coverage-conformance.
+#   workspace crate) and nothing else: instrumentation slows the app, so the ratchet stays the entries above. zsh, as
+#   its run is the widest: it runs every test the bash one does, and the live tests besides (`live-sessions`). Its
+#   report (coverage/ with lcov.info and html/, traces/) is uploaded as rust-linux-coverage-conformance.
   conformance:
     needs: linux
     runs-on: ubuntu-26.04
@@ -259,7 +260,7 @@ jobs:
           - shell: fish
             out: rust-linux-fish
             must-pass: --must-pass live-sessions --must-pass live-any-shell
-          - shell: bash
+          - shell: zsh
             out: rust-linux-coverage
             coverage: true
     container:

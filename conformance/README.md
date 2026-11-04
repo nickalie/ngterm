@@ -333,9 +333,9 @@ that could reach it:
   the WPE crates and the app with its HTML overlays; then the staged build under the suite in the same Arch container,
   on the distribution's lavapipe, held by the ratchet, once per login shell (`conformance`, a matrix, every layer, the
   ui layer through `atspi`), each with `--must-pass live-any-shell`: bash, fish and zsh (the last two with
-  `--must-pass live-sessions` too); the matrix's `coverage` entry runs the bash leg's suite on the instrumented build
-  (`--coverage`) and judges `coverage-floor-linux.txt` only, its report and `coverage/` uploaded as
-  `rust-linux-coverage-conformance`.
+  `--must-pass live-sessions` too); the matrix's `coverage` entry runs the zsh leg's suite (the widest: the bash leg's
+  tests and the live ones) on the instrumented build (`--coverage`) and judges `coverage-floor-linux.txt` only, its
+  report and `coverage/` uploaded as `rust-linux-coverage-conformance`.
 - `cross-platform`'s `windows` job (`windows-2025`): the harness's Windows self-tests (the pipe transport, the client,
   the launch and stop, the UIA driver's mappings), then `tools/run-windows.sh` with `--must-pass live-any-shell` (the
   login shell is Windows PowerShell): protocol, cli, behaviors and ui (UI Automation and `SendInput`,
