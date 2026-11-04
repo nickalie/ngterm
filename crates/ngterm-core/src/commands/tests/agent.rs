@@ -220,6 +220,54 @@ fn a_new_prompt_or_conversation_drops_the_candidate() {
 }
 
 #[test]
+fn a_candidate_its_pane_moved_past_never_goes_live_on_a_later_block() {
+    let (mut fixture, session, token) = one_pane();
+    let left = || pane_args(&token, "left");
+    let codex = |event: &str| conversation("codex", event, CODEX_A, "cccc");
+    assert!(send_report(&mut fixture, session, left(), codex("SessionStart")).ok);
+    // Auto Review approved it: no dialog, the command's PostToolUse writes active, then the turn ends with a question
+    let approved = AgentReport {
+        approval: permission("Bash", "curl example.com").approval,
+        ..codex("PermissionRequest")
+    };
+    assert!(send_report(&mut fixture, session, left(), approved).ok);
+    status(&mut fixture, session, "active", "left");
+    status(&mut fixture, session, "blocked", "left");
+    assert_eq!(agent_of(&get(&mut fixture, session, left())).get("approval"), None);
+}
+
+#[test]
+fn a_write_another_panes_block_refuses_still_ends_the_writers_candidate() {
+    let (mut fixture, session, left_token) = one_pane();
+    let _ = split(&mut fixture, session);
+    let left = || pane_args(&left_token, "left");
+    assert!(send_report(&mut fixture, session, left(), start(CLAUDE_A, "aaaa")).ok);
+    assert!(send_report(&mut fixture, session, left(), permission("Bash", "ls")).ok);
+    status(&mut fixture, session, "blocked", "right");
+    let refused = fixture.session(
+        SessionCmd::Status,
+        Some(&wire(session)),
+        args(|a| {
+            a.status = Some("active".to_owned());
+            a.pane = Some("left".to_owned());
+        }),
+    );
+    assert!(!refused.ok, "{refused:?}");
+    status(&mut fixture, session, "idle", "right");
+    status(&mut fixture, session, "blocked", "left");
+    assert_eq!(agent_of(&get(&mut fixture, session, left())).get("approval"), None);
+    // the other pane's writes leave a candidate alone
+    status(&mut fixture, session, "idle", "left");
+    assert!(send_report(&mut fixture, session, left(), permission("Bash", "date")).ok);
+    status(&mut fixture, session, "active", "right");
+    status(&mut fixture, session, "blocked", "left");
+    assert_eq!(
+        agent_of(&get(&mut fixture, session, left()))["approval"]["detail"],
+        "date"
+    );
+}
+
+#[test]
 fn another_panes_block_is_not_this_panes_approval() {
     let (mut fixture, session, left_token) = one_pane();
     let right_token = split(&mut fixture, session);
@@ -513,4 +561,31 @@ fn a_pane_back_at_its_shell_clears_the_record() {
     // and it stays cleared once the next program runs, until a hook reports again
     probe.set_foreground_pid(Some(101));
     assert_eq!(get(&mut fixture, session, left()), failure("no agent in this pane"));
+}
+
+#[test]
+fn a_powershell_without_job_control_settles_nothing_on_linux_and_macos() {
+    use crate::command_restore::PaneForeground;
+    use crate::commands::agent::agent_exited;
+    let shell = |name: &str| PaneForeground::ForegroundShell(name.to_owned());
+    for windows in [false, true] {
+        assert!(agent_exited(Some(&shell("zsh")), windows));
+        assert_eq!(agent_exited(Some(&shell("pwsh")), windows), windows);
+        assert_eq!(agent_exited(Some(&shell("powershell")), windows), windows);
+        assert!(!agent_exited(
+            Some(&PaneForeground::Program(vec!["claude".to_owned()])),
+            windows
+        ));
+        assert!(!agent_exited(None, windows));
+    }
+    // `claude` started from an interactive PowerShell, which leads the group it runs in
+    let (mut fixture, session, token, probe) = agent_in_a_shell();
+    let table = FakeProcessTable::default();
+    table.insert(stat(100, 1, 100, 100), Some(&["pwsh", "-NoLogo"]));
+    table.insert(stat(101, 100, 100, 100), Some(&["claude"]));
+    fixture.core.set_process_table(Box::new(table), Some("pwsh".to_owned()));
+    probe.set_foreground_pid(Some(100));
+    let left = || pane_args(&token, "left");
+    assert!(send_report(&mut fixture, session, left(), start(CLAUDE_A, "aaaa")).ok);
+    assert_eq!(get(&mut fixture, session, left()).ok, !cfg!(windows));
 }

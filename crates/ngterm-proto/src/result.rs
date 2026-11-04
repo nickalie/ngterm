@@ -138,7 +138,8 @@ pub struct ControlAgent {
     /// The conversation's transcript file.
     pub transcript_path: String,
     pub conversation_id: String,
-    /// When the record last changed, epoch seconds.
+    /// When the conversation was last set (a new transcript or id), epoch seconds; an approval coming or going leaves
+    /// it unchanged.
     pub updated_at: f64,
     /// The permission prompt the agent shows now; absent when none is live.
     #[serde(default)]

@@ -131,6 +131,7 @@ fn status(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         .pane_id
         .and_then(|token| session.pane_role_for_token(token))
         .or(update.pane);
+    let writer = super::agent::status_writer(session, status_pane);
     let indicator = AgentIndicator {
         status: update.status,
         blink: args.blink.unwrap_or(false),
@@ -139,7 +140,10 @@ fn status(core: &mut Core, target: Option<&str>, args: &Args) -> Outcome {
         shape: update.shape,
         status_pane,
     };
-    if let StatusWriteResult::Refused { owner } = store.apply_control_status(indicator, id) {
+    let written = store.apply_control_status(indicator, id);
+    // the pane's agent moved on, even when another pane's block refuses its write
+    core.note_agent_status_write(writer, update.status);
+    if let StatusWriteResult::Refused { owner } = written {
         return Err(ControlError::rejected(format!(
             "blocked status owned by pane {} (write from that pane to change it)",
             owner.as_str()

@@ -278,7 +278,7 @@ pub struct AgentApproval {
     pub tool: String,
     /// One line: the agent's own description of the call, else its command, path or URL.
     pub title: String,
-    /// The command, path or URL in full.
+    /// The command, path or URL, cut to its first 4 KiB at a character boundary (unmarked).
     pub detail: Option<String>,
     /// The tool use the prompt is for, when the payload names it.
     pub tool_use_id: Option<String>,

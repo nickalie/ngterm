@@ -14,10 +14,17 @@
 //! - `SessionEnd` clears the record when it names the record's conversation: Codex ends every thread it loaded when
 //!   the CLI exits, earlier runs' included.
 //!
-//! A candidate is an approval only while the pane's status is `blocked`, which the existing adapters set and clear
-//! (Codex's watcher reports `blocked` only for a prompt on screen, so a call Auto Review approved never shows); once
-//! it was seen blocked, the status leaving `blocked` ends it. Whether the agent still runs is read lazily: `agent.get`
-//! on a pane whose foreground is back to a shell clears the record, since no event fires when the program exits.
+//! A candidate is an approval only while the pane's status is `blocked`, which the existing adapters set and clear;
+//! once it was seen blocked, the status leaving `blocked` ends it. A `session.status` write from the pane that is not
+//! `blocked` ends it too, shown or not ([`Core::note_agent_status_write`]): the agent moved on, so no dialog of its
+//! is open. That ends a call Codex's Auto Review approved, which fires `PermissionRequest` but never sets `blocked`
+//! (the watcher reports `blocked` only for a prompt on screen): the command's `PostToolUse` writes `active` before a
+//! later, unrelated block (a question at `Stop`, a `request_user_input` prompt) could make it live. One case is left
+//! open: a call the guardian denies runs no tool, so a turn that ends at once with a question finds it still there.
+//!
+//! Whether the agent still runs is read lazily: `agent.get` on a pane whose foreground is back to a shell clears the
+//! record, since no event fires when the program exits. A PowerShell on Linux or macOS settles nothing: it has no job
+//! control, so its group reads as the shell while the programs it started run in it (`restore::capture`).
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -33,6 +40,7 @@ use crate::agent_chat::AgentKind;
 use crate::agent_chat::hook::{HookEvent, check_transcript};
 use crate::command_restore::PaneForeground;
 use crate::error::{ControlError, Noun};
+use crate::live::shell_integration::is_powershell;
 use crate::model::{AgentStatus, Session, StatusPane, WindowLibrary};
 use crate::projection::epoch_seconds;
 use crate::resolve::{ACTIVE, Resolver};
@@ -90,6 +98,13 @@ impl AgentRecord {
         }
     }
 
+    /// A `session.status` write of `status` from this record's pane: anything but `blocked` ends the candidate.
+    fn note_status_write(&mut self, status: AgentStatus) {
+        if status != AgentStatus::Blocked {
+            self.candidate = None;
+        }
+    }
+
     /// The approval live now: a candidate while the pane is `blocked`.
     fn live_approval(&self, blocked: bool) -> Option<&Candidate> {
         self.candidate.as_ref().filter(|_| blocked)
@@ -111,6 +126,28 @@ fn pane_blocked(session: &Session, role: StatusPane) -> bool {
             .normalized_pane(session.split.exists)
             .unwrap_or(StatusPane::Left)
             == role
+}
+
+/// The identity of `session`'s pane a status tag names, as [`AgentIndicator::normalized_pane`] folds it (an untagged
+/// one is the main pane's); `None` for the scratch pane.
+///
+/// [`AgentIndicator::normalized_pane`]: crate::model::AgentIndicator::normalized_pane
+pub(crate) fn status_writer(session: &Session, tag: Option<StatusPane>) -> Option<Uuid> {
+    match (tag, session.split_pane_identity) {
+        (Some(StatusPane::Right), Some(split)) if session.split.exists => Some(split),
+        (None | Some(StatusPane::Left | StatusPane::Right), _) => Some(session.pane_identity),
+        (Some(StatusPane::Scratch), _) => None,
+    }
+}
+
+/// Whether `foreground` shows that the pane's agent exited: a shell holds the foreground again. A PowerShell on Linux
+/// or macOS has no job control, so it reads as its shell while the agent it started runs in its group
+/// (`restore::capture`'s module docs); on Windows the pane's stand-in is its oldest program, so a shell there is one.
+pub(super) fn agent_exited(foreground: Option<&PaneForeground>, windows: bool) -> bool {
+    match foreground {
+        Some(PaneForeground::ForegroundShell(name)) => windows || !is_powershell(name),
+        Some(PaneForeground::Program(_)) | None => false,
+    }
 }
 
 /// The open session and role of the pane `identity` names.
@@ -289,10 +326,7 @@ fn get(core: &mut Core, request: &Request) -> Outcome {
     let pane = addressed(core, request)?;
     core.sync_agent_records();
     let (session, role) = locate(core.library(), pane.identity).ok_or_else(|| ControlError::rejected(NO_AGENT))?;
-    let back_to_shell = matches!(
-        core.pane_foreground(session, role),
-        Some(PaneForeground::ForegroundShell(_))
-    );
+    let back_to_shell = agent_exited(core.pane_foreground(session, role).as_ref(), cfg!(windows));
     let blocked = pane_blocked(session, role);
     if back_to_shell {
         core.agents.by_pane.remove(&pane.identity);
@@ -340,6 +374,14 @@ impl Core {
                 }
                 None => false,
             });
+    }
+
+    /// A `session.status` write of `status` from the pane `writer` names ([`status_writer`]), applied or refused: one
+    /// that is not `blocked` ends that pane's candidate (the module docs).
+    pub(crate) fn note_agent_status_write(&mut self, writer: Option<Uuid>, status: AgentStatus) {
+        if let Some(record) = writer.and_then(|identity| self.agents.by_pane.get_mut(&identity)) {
+            record.note_status_write(status);
+        }
     }
 
     /// How many panes hold an agent record (tests).
