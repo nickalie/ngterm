@@ -115,25 +115,31 @@ public final class MachinesModel {
         }
         failure = nil
         graph.connections.disconnect(machineId: machineId)
+        // a pin the Keychain keeps is harmless: no other machine has its id (a new one's is a fresh UUID), and Undo
+        // sets it again
         try? graph.pins.remove(machineId: machineId)
         removal = Removal(machine: machines[index], index: index, pin: pin)
     }
 
     /// Puts the machine last removed back, with its pin, and connects it again.
+    ///
+    /// A machine the store can't put back stays removed, with its undo still on offer, and ``failure`` says why.
     public func undoRemove() {
         guard let undone = removal else {
             return
-        }
-        removal = nil
-        // the pin first: the machine is shown, and connected, with it
-        if let pin = undone.pin {
-            try? graph.pins.set(machineId: undone.machine.id, fingerprint: pin)
         }
         do {
             try graph.machines.restore(undone.machine, at: undone.index)
         } catch {
             failure = String(localized: "The machine couldn't be put back: \(error.description)")
             return
+        }
+        removal = nil
+        failure = nil
+        // the pin before the connect, which checks the host key against it; one the Keychain won't take back only
+        // means the connect asks about the key again
+        if let pin = undone.pin {
+            try? graph.pins.set(machineId: undone.machine.id, fingerprint: pin)
         }
         graph.connections.connect(undone.machine.core)
     }
@@ -174,7 +180,7 @@ public final class MachinesModel {
         do {
             try graph.pins.remove(machineId: machineId)
         } catch {
-            failure = String(localized: "The pinned key couldn't be removed: \(error.localizedDescription)")
+            failure = String(localized: "The pinned key couldn't be removed: \(ErrorWords.of(error))")
             return
         }
         graph.connections.disconnect(machineId: machineId)

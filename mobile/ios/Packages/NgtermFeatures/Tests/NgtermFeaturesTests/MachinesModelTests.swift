@@ -1,6 +1,7 @@
 import Foundation
 import NgtermCoreFakes
 import NgtermPlatform
+import Security
 import Testing
 
 @testable import NgtermFeatures
@@ -87,6 +88,41 @@ internal struct MachinesModelTests {
         #expect(model.removal == nil)
         model.remove(machineId: "absent")
         #expect(model.removal == nil)
+    }
+
+    @Test("an undo the store can't write keeps the removal on offer and the pin out, and can be tried again")
+    internal func undoFails() async throws {
+        defer { test.remove() }
+        let key = try await test.seedKey()
+        try test.seed(TestGraph.machine(id: "a", label: "build-01", host: "build-01.lan", keyId: key.id))
+        try test.seed(TestGraph.machine(id: "b", label: "studio", host: "studio.lan", keyId: key.id))
+        test.pins.set(machineId: "a", fingerprint: "SHA256:a")
+        let model = MachinesModel(graph: test.graph)
+        model.remove(machineId: "a")
+        // a file where the store's directory was: nothing can be written until it goes
+        try FileManager.default.removeItem(at: test.directory)
+        try Data().write(to: test.directory)
+        model.undoRemove()
+        #expect(model.failure?.hasPrefix("The machine couldn't be put back") == true)
+        #expect(model.removal?.machine.id == "a")
+        #expect(model.items.map(\.id) == ["b"])
+        #expect(test.pins.pinned(machineId: "a") == nil)
+        #expect(test.connects() == 0)
+        try FileManager.default.removeItem(at: test.directory)
+        model.undoRemove()
+        #expect(model.failure == nil)
+        #expect(model.removal == nil)
+        #expect(model.items.map(\.id) == ["a", "b"])
+        #expect(test.pins.pinned(machineId: "a") == "SHA256:a")
+        await Wait.until { test.connects() == 1 }
+    }
+
+    @Test("a Keychain refusal reads in its own words, not as a bare error code")
+    internal func keychainWords() {
+        let refusal = KeychainError(status: errSecInteractionNotAllowed)
+        #expect(ErrorWords.of(refusal) == refusal.description)
+        #expect(ErrorWords.of(refusal).hasSuffix("(\(errSecInteractionNotAllowed))"))
+        #expect(!ErrorWords.of(refusal).contains("KeychainError"))
     }
 
     @Test("a first connect asks about the host key, and trusting it pins it; a later connect keeps the record")

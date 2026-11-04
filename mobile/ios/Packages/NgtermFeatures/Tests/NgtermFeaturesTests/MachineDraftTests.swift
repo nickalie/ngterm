@@ -26,6 +26,25 @@ internal struct MachineDraftTests {
         )
     }
 
+    @Test("a newline at a field's end (a Return in a wrapping field, a paste) is trimmed, as Kotlin's trim() does")
+    internal func newlines() {
+        let returned = Self.with { draft in
+            draft.label = "Build box\n"
+            draft.host = "build-01.lan\n"
+            draft.port = "22\n"
+            draft.user = "\tnick\r\n"
+        }
+        #expect(returned.problems.isEmpty)
+        let trimmed = StoredMachine(
+            id: "m1", label: "Build box", host: "build-01.lan", port: 22, user: "nick", keyId: "k1"
+        )
+        #expect(returned.machine(id: "m1") == trimmed)
+        // a name of only a newline is none: the list shows the host
+        #expect(Self.with { $0.label = "\n" }.machine(id: "m1")?.title == "build-01.lan")
+        // one inside the host is still a space in it
+        #expect(Self.with { $0.host = "build\n01" }.problems == [.host: .hostHasSpace])
+    }
+
     @Test(
         "each field says what is wrong with it",
         arguments: [

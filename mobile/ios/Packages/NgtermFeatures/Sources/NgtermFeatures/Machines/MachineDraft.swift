@@ -19,9 +19,9 @@ public struct MachineDraft: Hashable, Sendable {
     /// What is wrong with it, at most one problem per field.
     public var problems: [MachineField: FieldProblem] {
         let found = [
-            Self.hostProblem(host.trimmingCharacters(in: .whitespaces)),
-            Self.portProblem(port.trimmingCharacters(in: .whitespaces)),
-            Self.userProblem(user.trimmingCharacters(in: .whitespaces)),
+            Self.hostProblem(host.trimmingCharacters(in: .whitespacesAndNewlines)),
+            Self.portProblem(port.trimmingCharacters(in: .whitespacesAndNewlines)),
+            Self.userProblem(user.trimmingCharacters(in: .whitespacesAndNewlines)),
             keyId.isEmpty ? FieldProblem.keyMissing : nil,
         ]
         return Dictionary(uniqueKeysWithValues: found.compactMap(\.self).map { ($0.field, $0) })
@@ -84,15 +84,15 @@ public struct MachineDraft: Hashable, Sendable {
 
     /// The machine it describes, as `id`; `nil` while it has ``problems``.
     public func machine(id: String) -> StoredMachine? {
-        guard problems.isEmpty, let number = UInt16(port.trimmingCharacters(in: .whitespaces)) else {
+        guard problems.isEmpty, let number = UInt16(port.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             return nil
         }
         return StoredMachine(
             id: id,
-            label: label.trimmingCharacters(in: .whitespaces),
-            host: host.trimmingCharacters(in: .whitespaces),
+            label: label.trimmingCharacters(in: .whitespacesAndNewlines),
+            host: host.trimmingCharacters(in: .whitespacesAndNewlines),
             port: number,
-            user: user.trimmingCharacters(in: .whitespaces),
+            user: user.trimmingCharacters(in: .whitespacesAndNewlines),
             keyId: keyId
         )
     }

@@ -32,7 +32,7 @@ public struct StoredMachine: Codable, Hashable, Sendable, Identifiable {
 
     /// What the list shows for it: its name, or its host when it has none.
     public var title: String {
-        label.trimmingCharacters(in: .whitespaces).isEmpty ? host : label
+        label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? host : label
     }
 
     /// Its ssh address as `user@host:port`, in the form people compare.
