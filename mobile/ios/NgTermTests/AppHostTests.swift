@@ -13,8 +13,17 @@ internal struct AppHostTests {
     }
 
     @Test("the app runs on the linked core unless the fake one is asked for")
+    @MainActor
     internal func coreChoice() {
         #expect(CoreChoice(arguments: []).version == CoreInfo.version)
         #expect(CoreChoice(arguments: [CoreChoice.fakeArgument]).version != CoreInfo.version)
+    }
+
+    @Test("the fake core's world starts on the first run, or past it with the key argument")
+    @MainActor
+    internal func fakeWorldKey() {
+        #expect(CoreChoice(arguments: [CoreChoice.fakeArgument]).graph.keys.keys.isEmpty)
+        let keyed = CoreChoice(arguments: [CoreChoice.fakeArgument, CoreChoice.fakeKeyArgument])
+        #expect(keyed.graph.keys.keys.count == 1)
     }
 }

@@ -56,7 +56,7 @@ public struct Banner: View {
             if let note {
                 Text(note)
                     .font(Typography.note)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Palette.secondaryText.color)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -76,7 +76,7 @@ public struct Banner: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Palette.secondaryText.color)
             .accessibilityLabel(dismiss.title)
         }
     }

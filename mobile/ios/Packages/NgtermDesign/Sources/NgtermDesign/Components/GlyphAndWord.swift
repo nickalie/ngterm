@@ -12,7 +12,7 @@ internal struct GlyphAndWord: View {
             Text(word)
                 .font(Typography.statusWord)
                 .foregroundStyle(color)
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(word)

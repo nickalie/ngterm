@@ -174,4 +174,19 @@ internal struct ComponentSnapshotTests {
         snapshot(pane.covered(by: driven), named: "cover", variant: variant, height: height)
         snapshot(pane.covered(by: attaching), named: "cover-attaching", variant: variant, height: height)
     }
+
+    @Test("plates and inline problems", arguments: SnapshotVariant.allCases)
+    internal func plates(variant: SnapshotVariant) {
+        let gallery = VStack(alignment: .leading, spacing: Spacing.medium) {
+            ValuePlate(
+                "Public key", value: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForScreenshotsOnly ngterm@iPhone"
+            ) {
+                CopyButton("ssh-ed25519 AAAA")
+            }
+            ValuePlate("Fingerprint", value: "SHA256:q0Gm4d1Xb7pKc2yT9wVZ5eRj8sHnLfA3uMiO6tYvB1E")
+            InlineProblem("Enter a port from 1 to 65535.")
+        }
+        .padding(Spacing.large)
+        snapshot(gallery, named: "plates", variant: variant)
+    }
 }

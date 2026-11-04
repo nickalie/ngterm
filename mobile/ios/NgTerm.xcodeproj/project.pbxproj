@@ -11,6 +11,7 @@
 		4E0000000000000000000081 /* NgtermCoreFakes in Frameworks */ = {isa = PBXBuildFile; productRef = 4E0000000000000000000071 /* NgtermCoreFakes */; };
 		4E0000000000000000000082 /* NgtermFeatures in Frameworks */ = {isa = PBXBuildFile; productRef = 4E0000000000000000000072 /* NgtermFeatures */; };
 		4E0000000000000000000083 /* NgtermDesign in Frameworks */ = {isa = PBXBuildFile; productRef = 4E0000000000000000000073 /* NgtermDesign */; };
+		4E0000000000000000000084 /* NgtermPlatform in Frameworks */ = {isa = PBXBuildFile; productRef = 4E0000000000000000000074 /* NgtermPlatform */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -84,6 +85,7 @@
 				4E0000000000000000000081 /* NgtermCoreFakes in Frameworks */,
 				4E0000000000000000000082 /* NgtermFeatures in Frameworks */,
 				4E0000000000000000000083 /* NgtermDesign in Frameworks */,
+				4E0000000000000000000084 /* NgtermPlatform in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -163,6 +165,7 @@
 				4E0000000000000000000071 /* NgtermCoreFakes */,
 				4E0000000000000000000072 /* NgtermFeatures */,
 				4E0000000000000000000073 /* NgtermDesign */,
+				4E0000000000000000000074 /* NgtermPlatform */,
 			);
 			productName = NgTerm;
 			productReference = 4E0000000000000000000030 /* NgTerm.app */;
@@ -511,6 +514,10 @@
 		4E0000000000000000000073 /* NgtermDesign */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = NgtermDesign;
+		};
+		4E0000000000000000000074 /* NgtermPlatform */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NgtermPlatform;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

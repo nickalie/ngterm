@@ -59,6 +59,7 @@ grounds as UIKit resolves them, in all four appearances.
 | `attention` | `#984a19` | `#f0904f` | `#7c3c14` | `#f5b98f` | waiting on you |
 | `failed` (oxide) | `#a83226` | `#f2867a` | `#8f2a20` | `#f7b6af` | failed |
 | `idle` | `#47535a` | `#a9b4b9` | `#444f56` | `#bec7ca` | nothing happening |
+| `secondaryText` | `#58585e` | `#a0a0a6` | `#4a4a50` | `#c8c8ce` | secondary text: an address, a row's line, a note, a plate's label, a form's hint |
 | `brandCopper` | `#cf6e31` | | | | the icon's fill only, never text |
 
 The light and dark values are Android's (`ui/theme/Color.kt`). The Increase Contrast values keep each hue and move
@@ -66,14 +67,16 @@ its lightness until it reaches 7:1.
 
 Promises:
 
-- Every text token (`tint`, `healthy` and the six status colors) reaches **4.5:1** on every system ground: the plain
+- Every text token (`tint`, `healthy`, `secondaryText` and the six status colors) reaches **4.5:1** on every system ground: the plain
   and grouped backgrounds at all three levels. With **Increase Contrast** it reaches **7:1**.
 - `onTint` reaches the same on `tint`. The system's white label on the dark side's copper would not (2.6:1), so a
   prominent button is `prominentAction()`, not a bare `.borderedProminent`.
 - An origin's status color is the user's choice. It is lifted toward white or black until it reads on every ground at
   once (`RGB.readable(on:minimum:)`); the word goes with it anyway.
-- Text, secondary text, separators and fills are the system's (`.primary`, `.secondary`), which follow Increase
-  Contrast themselves.
+- Text, separators and fills are the system's (`.primary`), which follow Increase Contrast themselves. Secondary
+  text is `secondaryText`, not the system's `.secondary`: that grey stays under 4.5:1 on the grouped grounds (the
+  accessibility audit says "nearly passed"), and so do the system's form headers and footers, which the app writes as
+  its own (`FormHint`).
 
 ### Status
 
@@ -132,6 +135,8 @@ accessibility sizes. Sentence case everywhere; no all-caps labels.
 | `note` | footnote | a banner's or a cover's explanation |
 | `coverTitle` | title 3, semibold | a cover's title |
 | `address` | Atkinson Hyperlegible Mono at footnote, scaling with it | `user@host:port` |
+| `plateLabel` | footnote, semibold | a plate's label ("Public key", "Fingerprint") |
+| `plateValue` | Atkinson Hyperlegible Mono at callout, scaling with it | a plate's value, and the form's host, port and user |
 
 Screen titles, list headers, buttons and empty states use the system's own styles.
 
@@ -172,15 +177,18 @@ by themselves.
 |---|---|
 | `StatusGlyph` | a status's glyph alone, sized with its text; hidden from VoiceOver |
 | `StatusBadge` | one of the app's tones: glyph and word (or a longer label) in its color, read as the words |
-| `AgentStatusBadge` | an origin's agent status, its color lifted to read on every ground |
+| `AgentStatusBadge` | an origin's agent status, its color lifted to read on every ground; a label may say more ("2 waiting") |
 | `MachineRow` | a machine: name (a heading), connection badge, mono address, what the state means with its one action (`RowAction`) at the line's end, and a slot for its sessions' statuses. At accessibility sizes the badge goes under the name and the action under the line. VoiceOver reads it as one element, with the action as its custom action |
 | `SessionRow` | a session: name, the Attached mark (link glyph and "Attached" in verdigris), its line (context, working directory, or "Companion of …"), its status slot, or "Ending" with a spinner; a companion is indented |
-| `StatePanel` | what a screen shows instead of content, on `ContentUnavailableView`: `.loading`, `.empty`, `.error`, `.offline`, each with the one action that moves on and at most one quieter one under it; the glyph (`idle` unless the state has a tone) is decorative, and the title is a heading of its own |
+| `StatePanel` | what a screen shows instead of content, on `ContentUnavailableView`, scrolling when it doesn't fit (the largest text sizes): `.loading`, `.empty`, `.error`, `.offline`, each with the one action that moves on and at most one quieter one under it; the glyph (`idle` unless the state has a tone) is decorative, and the title is a heading of its own |
 | `Banner` | a strip about the whole screen while it stays usable: glyph, message, note, optional action and dismiss; the text wraps and the actions go under it when they don't fit beside it; announced to VoiceOver when it appears |
 | `Cover` | a veil (a system material) over a pane that can't be used as it is: glyph or spinner, title (a heading), what it means, the action that fixes it; it takes every touch, and `covered(by:)` hides the pane under it from VoiceOver |
 | `confirmingDestructive` | the system's confirmation dialog before what can't be undone; its destructive button repeats the action's words |
 | `prominentAction()` | the filled button: the tint, with `onTint` for its label |
 | `ngtermTheme()` | the tint and the fonts on a view tree |
+| `ValuePlate` | a value compared character by character (a key's line, a fingerprint, a command) under its label, mono and selectable, with its actions under it, on the grouped ground's raised surface |
+| `CopyButton` | puts a value on the clipboard, then says Copied for 2 s (VoiceOver says it too) |
+| `InlineProblem` | what is wrong, said where it happened (under a field, under a step): the failed glyph and the fix, in `failed` |
 
 Rules the components hold to:
 
@@ -223,6 +231,62 @@ compact (iPhone, Slide Over)     regular (iPad, Stage Manager large)
   in one main window's detail at a time. Opening it in another takes it over, and the first one's detail says so and
   offers **Show here**, which takes it back. When the window showing it lets it go (opens another session, shows
   another machine, closes), the window that had it before takes it back, and only that one.
+
+## Screens
+
+### First run (`Onboarding/`)
+
+A full-screen cover while the app has no key, in a `NavigationStack`, its column at most 520 pt wide:
+
+- **Welcome:** the key glyph in the tint, "Set up a key" (large title, a heading), what the key is for, and the
+  Keychain note beside a verdigris lock. **Create a key** is the prominent action (a spinner and "Creating a key"
+  while it runs, and no second tap); **Import a key** is the quiet one, the tint on the ground (a tinted fill under
+  it stays under 4.5:1). A key that couldn't be made says why under the text
+  (`InlineProblem`).
+- **Import a key** (pushed): a scroll view of grouped fields, not a `Form` (a list lets go of the rows larger text
+  pushes off the screen, which the accessibility audit reads as text that doesn't scale). The private key in a mono `TextEditor`, Choose file (the system's file importer,
+  64 KB at most), the passphrase (`SecureField` with Show and Hide), and **Import key**. A problem shows under the field
+  it is about: the key's under the key, the passphrase's under the passphrase. The key and the passphrase live in the
+  screen's state only.
+- **Add this key to your machines:** the three numbered steps, the public key's plate with Copy and Share
+  (`ShareLink`), the fingerprint, the plate of the command that appends it, and **Done**, which ends the first run.
+  The machine form pushes the same screen without Done.
+
+### Machines (`Machines/`)
+
+The first column: an inset grouped `List` of `MachineRow`s, its selection the machine whose sessions show.
+
+- **Each row** reads its link: Connected (and its sessions' statuses: a badge per status with its count, then the
+  idle count, or "No sessions"), Connecting, Offline with **Connect**, Reconnecting in *n* s (counting down each
+  second) with **Retry now**, Unreachable with the core's reason and **Retry**, "Needs you" while a host key or a
+  sign-in waits on its sheet, and "Host key changed" with **Review**.
+- **Add machine** is the toolbar's `+`. A row's context menu has Connect or Disconnect, Edit, and Remove; swiping it
+  removes it at once, and a banner at the list's end offers **Undo** for 10 s (the machine comes back where it was,
+  with its pinned key). Removing doesn't confirm: Undo is the safety.
+- **States:** empty ("No machines yet", with Add machine), offline (a banner over the list or the empty state; the
+  list stays usable), and error (a change the store couldn't write: a failed banner at the list's end, dismissible).
+  The stores read at launch, so the list has no loading state.
+
+**Add machine / Edit machine** is a sheet with a `Form`: name, host, port and user (the last three mono), the key (a
+choice only when the app has more than one, each with where it came from and its fingerprint) with **Show public
+key**, and, editing, the pinned host key. Cancel and Save are the toolbar's. A field says what is wrong with it once
+it has been left or Save was tried, under it, in the words of the fix ("Put the port in Port, not in the host.").
+
+### Connect prompts
+
+Sheets over the app, one at a time (a host key first, then a sign-in), each a page of the same shape (`PromptPage`):
+the tone's glyph, the question as a heading, the machine's mono address (read by VoiceOver in words: "nick at
+build-01.lan, port 22"), what it means, then its plates and actions.
+
+- **Trust build-01?** The fingerprint, the command that prints the machine's own (with Copy), **Trust and connect**
+  and **Don't connect**. Swiping the sheet away is Don't connect.
+- **build-01 asks you to sign in:** the machine's message with its link (tappable, and Copy link), "Waiting for you to
+  sign in" with a spinner, **Open link** and **Don't connect**. The link opens in Safari's view inside the app
+  (`SFSafariViewController`), so the app stays in the foreground while the user signs in; the sheet goes by itself
+  once the connect ends either way.
+- **build-01's host key changed** (from the row's Review): what that can mean, both fingerprints, the advice, **Back to
+  machines** as the prominent action and **Remove pinned key** as the destructive one, behind
+  `confirmingDestructive`.
 
 ## App icon and launch screen
 

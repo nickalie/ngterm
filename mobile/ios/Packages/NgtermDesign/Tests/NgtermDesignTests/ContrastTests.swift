@@ -8,7 +8,7 @@ import Testing
 @Suite("contrast")
 internal struct ContrastTests {
     private static let textTokens: [(name: String, token: ColorToken)] =
-        [("tint", Palette.tint), ("healthy", Palette.healthy)]
+        [("tint", Palette.tint), ("healthy", Palette.healthy), ("secondaryText", Palette.secondaryText)]
         + StatusTone.ordered.map { tone in ("\(tone)", tone.color) }
 
     private func expectContrast(

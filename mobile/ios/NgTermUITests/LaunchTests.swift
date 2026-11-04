@@ -5,7 +5,8 @@ internal final class LaunchTests: XCTestCase {
     @MainActor
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-ngterm-fake-core"]
+        // with a key, so the first run is over (FirstRunTests walk through it)
+        app.launchArguments = ["-ngterm-fake-core", "-ngterm-fake-key"]
         app.launch()
         let firstScreen = app.buttons
             .matching(NSPredicate(format: "identifier == 'settings' OR label == 'Show machines'"))
@@ -35,25 +36,12 @@ internal final class LaunchTests: XCTestCase {
         XCTAssertTrue(version.label.contains("0.0.0-fake"), version.label)
     }
 
-    // Audits every screen, setting aside only what the system's navigation bar draws: its Liquid Glass buttons keep a
-    // fixed size by design (the large content viewer shows them at large text sizes), and the audit measures their
-    // text against the glass rather than the tint, whose contrast ContrastTests checks against every ground.
-    @MainActor
-    private func audit(_ app: XCUIApplication) throws {
-        try app.performAccessibilityAudit { issue in
-            guard let element = issue.element, [.dynamicType, .contrast].contains(issue.auditType) else {
-                return false
-            }
-            return app.navigationBars.allElementsBoundByIndex.contains { bar in bar.frame.contains(element.frame) }
-        }
-    }
-
     @MainActor
     internal func testTheFramePassesTheAccessibilityAudit() throws {
         let app = launch()
-        try audit(app)
+        try FakeApp.audit(app)
         openSettings(in: app)
-        try audit(app)
+        try FakeApp.audit(app)
     }
 
     deinit {

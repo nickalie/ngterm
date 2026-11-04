@@ -27,7 +27,7 @@ public struct SessionRow<Status: View>: View {
             if let line {
                 Text(line)
                     .font(Typography.detail)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Palette.secondaryText.color)
                     .lineLimit(Spacing.rowLines)
             }
             if isEnding {
@@ -36,7 +36,7 @@ public struct SessionRow<Status: View>: View {
                         .controlSize(.mini)
                     Text(String(localized: "Ending", bundle: .module))
                         .font(Typography.statusWord)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Palette.secondaryText.color)
                 }
                 .accessibilityElement(children: .combine)
             } else {
