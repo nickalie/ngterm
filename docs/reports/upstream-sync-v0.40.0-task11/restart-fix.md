@@ -16,9 +16,10 @@ The asynchronous interval needs three safeguards:
 - Claim the old attachment's exit and temporarily forget its lead before starting the worker. An `unowned` report
   cannot start a competing attachment. An unconfirmed kill restores the previous lead by pane identity, including
   after a swap or soft close while the worker waits.
-- While that claim is held, another restart of the same pane follows the existing five-second shell wait and
-  100 ms polling interval. It can then restart the first replacement, without sharing or clearing another kill's
-  claim. The existing timeout response is preserved.
+- A separate scoped permit serializes restarts of the same pane through the final new-shell observation. The
+  frontend can release the old terminal's exit claim when it installs the replacement while the permit still makes
+  a second restart follow the existing five-second shell wait and 100 ms polling interval. A restart's final poll
+  therefore cannot clear another kill's claim. The existing timeout response is preserved.
 - A map active only during the pending host kill records the first suppressed exit's session and timestamp.
   Success discards it; failure releases the claim and replays the recorded exit through normal pane-exit handling
   at the token's current location. Thus an unconfirmed kill cannot swallow the only exit event and leave a dead pane.
@@ -46,5 +47,13 @@ Validation:
 
 Review correction: blocked-kill regressions now swap a pane before both stale and failed kill results, verify its
 recorded exit closes the correct pane, and check lead restoration after a swap or soft close. The live module passes
-54 tests, including these two new cases; scoped strict core clippy passes. These checks follow the full runtime
-verification above; no full-suite runtime rerun is claimed for this correction.
+54 tests at the minor-fix commit, including these two new cases; scoped strict core clippy passes.
+
+The separate pre-existing overlap correction extends serialization beyond frontend installation through the final
+restart reply. Its deterministic regression pauses A after replacement installation, polls B, finishes A's new-shell
+observation, then verifies B's kill still claims its exit and preserves the pane and replacement lead. The permit is
+owned by the pending continuation, so every refusal, kill failure, rebuild failure, old-program timeout, new-shell
+timeout and successful reply releases it. A dropped callback or panic unwinding releases it too; a waiting restart
+owns no permit and cannot release another restart's. Replacement callbacks still release only the old exit claim.
+Additional regressions cover a dropped new-shell poll followed by another restart, retry after failed kills, and
+expired waiter/owner deadlines without sleeps. Targeted final results are in [verification.md](verification.md).

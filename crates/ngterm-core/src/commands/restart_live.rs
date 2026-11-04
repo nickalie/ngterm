@@ -9,8 +9,10 @@
 //! killed, and only once it is gone does the new terminal start, so it cannot meet a held port or lock. The pane's exit
 //! is claimed from the kill on, so the dying client cannot close the pane the restart rebuilds.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use ngterm_host::{KillOutcome, ProcessRecord, Surface};
@@ -82,17 +84,65 @@ fn listed_shell(core: &Core, daemon: &str, other_than: Option<i32>) -> Option<i3
 }
 
 fn find_old_shell(core: &mut Core, job: Job, deadline: Instant) -> Dispatched {
-    // A pending kill still lists the old daemon. A second restart waits for the first one's replacement instead
-    // of killing that same daemon and sharing its exit claim (upstream's synchronous kill excludes that overlap).
-    let old = if core.live.claimed_exits.contains(&job.token) {
+    // The frontend releases the old terminal's exit claim before the first restart finishes observing its new shell.
+    // Serialize through that final observation too, so its polls cannot release a later restart's claim.
+    let busy = core
+        .live
+        .restarting
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .contains(&job.token);
+    let old = if busy || core.live.claimed_exits.contains(&job.token) {
         None
     } else {
         listed_shell(core, &job.daemon, None)
     };
     match old {
-        Some(old) => end_old_shell(core, job, old),
+        Some(old) => {
+            let guard = RestartGuard::new(core, job.token.clone());
+            hold_restart(end_old_shell(core, job, old), guard)
+        }
         None if Instant::now() < deadline => later(move |core| find_old_shell(core, job, deadline)),
         None => failure("the pane's shell is not running"),
+    }
+}
+
+/// Owns the serialization through every pending phase; even a dropped callback releases it.
+struct RestartGuard {
+    token: String,
+    active: Arc<Mutex<HashSet<String>>>,
+}
+
+impl RestartGuard {
+    fn new(core: &Core, token: String) -> Self {
+        let active = Arc::clone(&core.live.restarting);
+        active
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(token.clone());
+        Self { token, active }
+    }
+}
+
+impl Drop for RestartGuard {
+    fn drop(&mut self) {
+        self.active
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.token);
+    }
+}
+
+fn hold_restart(dispatched: Dispatched, guard: RestartGuard) -> Dispatched {
+    match dispatched {
+        Dispatched::Done(response) => {
+            drop(guard);
+            Dispatched::Done(response)
+        }
+        Dispatched::Pending { after, resume } => Dispatched::Pending {
+            after,
+            resume: Box::new(move |core| hold_restart(resume(core), guard)),
+        },
     }
 }
 
@@ -372,5 +422,42 @@ fn close_ended_pane(core: &mut Core, job: &Job) {
         && let Some(store) = library.store_mut(window)
     {
         store.finalize_pending_close_of_session(job.session);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CoreConfig, CoreState};
+
+    fn job() -> Job {
+        Job {
+            session: Uuid::nil(),
+            pane: StatusPane::Left,
+            token: Uuid::nil().to_string(),
+            identity: Uuid::nil(),
+            daemon: "missing".to_owned(),
+            command: Some("exit".to_owned()),
+        }
+    }
+
+    #[test]
+    fn restart_timeouts_release_only_their_own_serialization() {
+        let mut core = Core::new(
+            CoreConfig {
+                app: ngterm_proto::AppIdentity::from_recorded("0.1.0", None),
+                capabilities: Vec::new(),
+            },
+            CoreState::default(),
+        );
+        let guard = RestartGuard::new(&core, job().token);
+        let expired = Instant::now();
+        let waiter = find_old_shell(&mut core, job(), expired);
+        assert!(!waiter.finish_now(&mut core).ok);
+        assert!(core.live.restarting.lock().unwrap().contains(&job().token));
+        let observed = await_new_shell(&mut core, job(), 100, None, expired);
+        let observed = hold_restart(observed, guard);
+        assert!(!observed.finish_now(&mut core).ok);
+        assert!(core.live.restarting.lock().unwrap().is_empty());
     }
 }

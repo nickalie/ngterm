@@ -94,3 +94,25 @@ Windows ConPTY remain platform-runner checks. Successful external SSH group
 attachment was not attempted; its narrow catalog exemption and core fake-runner
 receipt tests remain the evidence. No platform runtime or skipped case is counted
 as a passing ratchet addition. The user's live ngterm was never contacted.
+
+## Post-review restart verification
+
+The 988-case full pass above preceded the review fixes. Review confirmed two restart defects: failed asynchronous
+kills lost lead restoration and recorded exits after a swap or soft close; a pre-existing overlapping-restart race
+allowed A's final shell poll to release B's exit claim. The first fix restores by pane identity and replays exits by
+their current token location. The second holds a scoped serialization permit through the final restart reply,
+including error, timeout and dropped-callback cleanup. They land in separate commits; [restart-fix.md](restart-fix.md)
+describes the deterministic regressions and cleanup audit.
+
+After both fixes, targeted core checks passed: 55 live-module tests, 38 tests matching `restart` (overlapping scope),
+18 message-module tests and 4 lifecycle tests, each with zero failures or ignores. Strict `cargo clippy -p ngterm-core --all-targets
+--all-features -- -D warnings`, global formatting, locked metadata, source lint report and diff checks passed.
+
+The canonical runner rebuilt and staged the final source, then reran shell replacement, foreground replay and
+shutdown-message disposal: **3 passed, 0 failed, 0 skipped, 0 reruns, 993 deselected**, in 27.13 seconds. The partial
+ratchet and private-instance cleanup checks passed; no ratchet entry changed. The launch stripped inherited
+NGTERM_/AGTERM_ variables and used private state, explicit instance sockets and headless displays. Its first
+preflight stopped before building or launching because the venv lacked `gi`; using the documented system AT-SPI
+Python path resolved it. [review-r1-runtime.md](review-r1-runtime.md) and [review-r1-nodeids.jsonl](review-r1-nodeids.jsonl)
+record the successful run. Its recorded HEAD is the minor-fix commit with the major fix dirty before commit.
+The full 988-case suite was not rerun after review; the final-head evidence is the affected checks listed here.

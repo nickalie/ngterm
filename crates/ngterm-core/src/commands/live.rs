@@ -23,7 +23,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use ngterm_host::SessionHost;
@@ -106,6 +106,8 @@ pub(crate) struct LiveRuntime {
     pub(crate) claimed_exits: HashSet<String>,
     /// Only while a restart's host kill runs: the first claimed exit, replayed if the kill is not confirmed.
     pub(crate) pending_kill_exits: HashMap<String, Option<(Uuid, Instant)>>,
+    /// Restarts holding a pane until their final reply, independently of the old terminal's exit claim.
+    pub(crate) restarting: Arc<Mutex<HashSet<String>>>,
     /// Pane terminals commands asked the frontend to replace, in order.
     replacements: Vec<PaneReplacement>,
     /// The lead state each pane in a replacement had before it, by pane token, until the frontend reports the

@@ -1198,27 +1198,23 @@ fn overlapping_restarts_wait_for_the_previous_kill_and_replacement() {
         })),
     };
     let second = live.core().begin(&request);
-    let Dispatched::Pending { resume, .. } = second else {
-        panic!("the second restart did not wait")
-    };
-    let second = resume(live.core());
-    assert!(
-        matches!(wait.try_recv(), Err(mpsc::TryRecvError::Empty)),
-        "a second kill started"
-    );
-    assert!(live.core().live.claimed_exits.contains(&token));
-    assert!(!report(&mut live, &token, &nonce, "unowned", 2));
-    assert!(live.core().take_pane_replacements().is_empty());
+    let second = resume_restart(live.core(), second);
+    assert_restart_waiting(&mut live, &wait, &token, &nonce);
     release.send(()).unwrap();
-    let first = finish_restart_as(&mut live, first, 200);
+    let first = install_restart_as(&mut live, first, 200);
+    assert!(!live.core().live.claimed_exits.contains(&token));
+    // A installed its replacement, but has not polled for its new shell yet. B must still wait here.
+    let second = resume_restart(live.core(), second);
+    assert!(matches!(wait.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    let first = first.finish_now(live.core());
     assert_eq!(result(&first)["restart"]["oldPid"], 100);
     assert_eq!(result(&first)["restart"]["newPid"], 200);
-    let Dispatched::Pending { resume, .. } = second else {
-        panic!("the second restart stopped waiting")
-    };
-    let second = resume(live.core());
+    let second = resume_restart(live.core(), second);
     wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
     assert!(live.core().live.claimed_exits.contains(&token));
+    let session = live.session;
+    assert!(!live.core().pane_exited(session, &token));
+    assert!(live.fixture.store().session(session).is_some());
     release.send(()).unwrap();
     let second = finish_restart_as(&mut live, second, 300);
     assert_eq!(result(&second)["restart"]["oldPid"], 200);
@@ -1227,7 +1223,74 @@ fn overlapping_restarts_wait_for_the_previous_kill_and_replacement() {
         live.host.kills(),
         [(daemon_name(live.left), true), (daemon_name(live.left), true)]
     );
-    assert!(live.core().live.claimed_exits.is_empty());
+    assert_restart_idle(live.core());
+    let identity = live.left;
+    assert!(live.core().live.leads.snapshot(identity).is_some());
+}
+
+fn assert_restart_waiting(live: &mut Live, wait: &mpsc::Receiver<()>, token: &str, nonce: &str) {
+    assert!(
+        matches!(wait.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "a second kill started"
+    );
+    assert!(live.core().live.claimed_exits.contains(token));
+    assert!(!report(live, token, nonce, "unowned", 2));
+    assert!(live.core().take_pane_replacements().is_empty());
+}
+
+fn resume_restart(core: &mut Core, dispatched: Dispatched) -> Dispatched {
+    let Dispatched::Pending { resume, .. } = dispatched else {
+        panic!("restart was not pending")
+    };
+    resume(core)
+}
+
+fn assert_restart_idle(core: &Core) {
+    assert!(core.live.claimed_exits.is_empty());
+    assert!(core.live.pending_kill_exits.is_empty());
+    assert!(core.live.restarting.lock().unwrap().is_empty());
+}
+
+/// Stop just after the frontend installs a replacement, before the restart's first new-shell observation.
+fn install_restart_as(live: &mut Live, mut dispatched: Dispatched, leader: i32) -> Dispatched {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        assert!(std::time::Instant::now() < deadline, "restart did not rebuild");
+        let Dispatched::Pending { resume, .. } = dispatched else {
+            panic!("restart ended before rebuilding")
+        };
+        dispatched = resume(live.core());
+        let replacements = live.core().take_pane_replacements();
+        if let Some(replacement) = replacements.first() {
+            assert_eq!(replacements.len(), 1);
+            live.core().pane_replaced(replacement);
+            live.host
+                .set_record(&daemon_name(live.left), Some(1), Some(leader), None);
+            return dispatched;
+        }
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn a_dropped_restart_poll_releases_the_pane_for_another_restart() {
+    let mut live = live();
+    let first = begin_restart(&mut live);
+    let first = install_restart_as(&mut live, first, 200);
+    drop(first);
+    assert!(live.core().live.restarting.lock().unwrap().is_empty());
+    let request = Request {
+        cmd: Command::Session(SessionCmd::Restart),
+        target: Some(wire(live.session)),
+        args: Some(args(|a| {
+            (a.pane, a.command) = (Some("left".to_owned()), Some("cat".to_owned()));
+        })),
+    };
+    let second = live.core().begin(&request);
+    let response = finish_restart_as(&mut live, second, 300);
+    assert_eq!(result(&response)["restart"]["oldPid"], 200);
+    assert_eq!(result(&response)["restart"]["newPid"], 300);
+    assert!(live.core().live.restarting.lock().unwrap().is_empty());
 }
 
 /// The frontend installs each replacement and its new leader, while pending worker results arrive independently.
@@ -1386,6 +1449,11 @@ fn a_failed_restart_kill_releases_its_exit_claim_and_keeps_the_pane() {
         assert_eq!(live.core().pane_lead(&token), Some("leader"));
         assert!(live.fixture.store().session(live.session).is_some());
         assert!(live.core().take_pane_replacements().is_empty());
+        assert!(live.core().live.restarting.lock().unwrap().is_empty());
+        live.host.set_kill_outcome(&daemon, None);
+        let retry = begin_restart(&mut live);
+        assert!(finish_restart_as(&mut live, retry, 200).ok);
+        assert!(live.core().live.restarting.lock().unwrap().is_empty());
     }
 }
 
