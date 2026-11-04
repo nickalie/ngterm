@@ -10,8 +10,9 @@
 //! The archive needs no system library beyond the C runtime Rust links anyway: on Linux and macOS
 //! (`libghostty-vt-static.pc` lists no `Libs.private` at `LIBGHOSTTY_VT_REV`) and on Windows MSVC, where
 //! `ghostty-vt-static.lib` links alone (the link test, on the `windows-2025` runner and in the Win11 VM). On Apple
-//! the archive is linked from a directory of its own, built for the deployment target rustc links for (the link
-//! test reads each member's `LC_BUILD_VERSION`). On Android (built through cargo-ndk) the archive is built for
+//! the archive is linked from a directory of its own, built for the deployment target rustc links for (macOS's, or
+//! iOS's on device and simulator); each member's `LC_BUILD_VERSION` is checked against it, for macOS by the link test,
+//! for iOS here after the build (with `otool -l` on the host, since the simulator can't run it). On Android (built through cargo-ndk) the archive is built for
 //! cargo-ndk's API level, at least 24, against the NDK cargo-ndk links with: Ghostty's build writes Zig's libc file
 //! for that NDK's bionic sysroot.
 
@@ -58,6 +59,7 @@ fn build() -> Result<(), String> {
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
     let target = std::env::var("TARGET").map_err(|err| format!("TARGET: {err}"))?;
     let macos_deployment_target = std::env::var("MACOSX_DEPLOYMENT_TARGET").ok();
+    let ios_deployment_target = std::env::var("IPHONEOS_DEPLOYMENT_TARGET").ok();
     let jobs = std::env::var("NUM_JOBS").ok();
     let android_platform = std::env::var("ANDROID_PLATFORM").ok();
     let android_ndk = zig_build::android_ndk(
@@ -70,6 +72,7 @@ fn build() -> Result<(), String> {
         out_dir: &out_dir,
         target: &target,
         macos_deployment_target: macos_deployment_target.as_deref(),
+        ios_deployment_target: ios_deployment_target.as_deref(),
         android_platform: android_platform.as_deref(),
         android_ndk: android_ndk.as_deref(),
         jobs: jobs.as_deref(),
@@ -99,6 +102,9 @@ fn build() -> Result<(), String> {
             build.archive.display()
         ));
     }
+    if let Some((platform, deployment)) = zig_build::ios_build_version(&target, &build.zig_target) {
+        check_ios_archive(&build.archive, platform, &deployment)?;
+    }
     let name = build.archive.file_name().ok_or("the archive has no file name")?;
     if build.archive.parent() != Some(build.link_dir.as_path()) {
         std::fs::create_dir_all(&build.link_dir)
@@ -120,6 +126,26 @@ fn build() -> Result<(), String> {
     );
     println!("cargo::rustc-env=NGTERM_GHOSTTY_VT_ZIG_TARGET={}", build.zig_target);
     Ok(())
+}
+
+/// An iOS archive carries the platform of its target and no newer iOS than it was built for, read with `otool -l` on
+/// the (macOS) host, since no test running inside the simulator can (`zig_build::check_ios_archive`).
+fn check_ios_archive(archive: &Path, platform: u32, deployment: &str) -> Result<(), String> {
+    let output = Command::new("otool")
+        .arg("-l")
+        .arg(archive)
+        .output()
+        .map_err(|err| format!("cannot run otool on {}: {err}", archive.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "otool -l {} failed ({}): {}",
+            archive.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    zig_build::check_ios_archive(&String::from_utf8_lossy(&output.stdout), platform, deployment)
+        .map_err(|err| format!("{}: {err}", archive.display()))
 }
 
 /// The stamp's zig must still be the pinned one: the prefix was prepared with it, and an unpinned zig never builds.

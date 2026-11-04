@@ -14,7 +14,8 @@
 #
 # The prefix holds:
 # - src/: the patched source tree, with the Zig packages a libghostty-vt build needs prefetched into its zig-pkg/ for
-#   every target the build script maps (ZIG_TARGETS below), so `zig build` there needs no network;
+#   every target the build script maps (ZIG_TARGETS below; iOS's on a Mac with Xcode's iOS SDK alone, since they
+#   configure nowhere else), so `zig build` there needs no network;
 # - include/ghostty/: the headers, copied from the tree (what its install step installs), for the bindings generator;
 # - share/doc/ghostty-vt/LICENSE, share/ngterm/ghostty-vt-PINS (the LIBGHOSTTY_VT_ pin lines it was prepared from);
 # - share/ngterm/ghostty-vt-STAMP: its inputs as `name=value` lines, which the build script reads: the pinned zig it
@@ -51,7 +52,20 @@ PATCHES="$NATIVE_ROOT/build/patches/ghostty-vt"
 # The Zig triples of ngterm-ghostty-vt-sys's target map (crates/ngterm-ghostty-vt-sys/zig_build.rs ZIG_TARGETS, which a
 # test keeps equal to this list), without their OS version suffixes: the packages each one's build needs are fetched.
 ZIG_TARGETS=(x86_64-linux-gnu aarch64-linux-gnu x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos
-  x86_64-windows-msvc aarch64-windows-msvc aarch64-linux-android x86_64-linux-android)
+  x86_64-windows-msvc aarch64-windows-msvc aarch64-linux-android x86_64-linux-android
+  aarch64-ios aarch64-ios-simulator)
+
+# Whether Zig triple $1 configures on this host: any but an iOS one, which needs Xcode's SDK of it (iphoneos on device,
+# iphonesimulator on the simulator) on a macOS host.
+ios_sdk_present() {
+  local sdk
+  case "$1" in
+    *-ios-simulator) sdk=iphonesimulator ;;
+    *-ios) sdk=iphoneos ;;
+    *) return 0 ;;
+  esac
+  [[ "$(host_os)" == macos ]] && xcrun --sdk "$sdk" --show-sdk-path >/dev/null 2>&1
+}
 
 case "${1:-}" in
   --print-prefix)
@@ -130,9 +144,17 @@ find "$TREE" -name '*.orig' -type f -exec rm -f {} +
 # needs into the tree's zig-pkg/. The local cache is scratch: the tree is left as the build script will read it.
 # An Android configuration needs an NDK to exist (Ghostty's pkg/android-ndk looks one up), though it only joins paths
 # into it: an empty directory stands in, so the prefix is prepared the same with or without an NDK installed.
+# An iOS configuration resolves its libc from Xcode's SDK of it (Ghostty's pkg/apple-sdk, through `xcrun --sdk`), which
+# Zig doesn't bundle, so it runs only on a macOS host whose Xcode has that SDK (ios_sdk_present) and is skipped
+# elsewhere: Linux, Windows, or a Mac with the command-line tools alone. Its packages are the macOS configurations' (no
+# lazy dependency of libghostty-vt's build is iOS-only), so a prefix prepared without it still builds for iOS.
 echo "fetching libghostty-vt's Zig packages with zig $LIBGHOSTTY_VT_ZIG_VERSION..." >&2
 mkdir "$BUILD_DIR/android-ndk"
 for target in "${ZIG_TARGETS[@]}"; do
+  if ! ios_sdk_present "$target"; then
+    echo "skipping $target: its configuration needs Xcode's iOS SDK, which this host lacks" >&2
+    continue
+  fi
   (
     cd "$TREE"
     ANDROID_NDK_HOME="$(native_path "$BUILD_DIR/android-ndk")" \
